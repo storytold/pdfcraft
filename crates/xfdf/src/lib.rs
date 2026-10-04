@@ -256,7 +256,7 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
                 out.push_str("<inklist>");
                 for g in ink {
                     let v = nums_of(doc, Some(&g));
-                    let pts: Vec<String> = v.chunks_exact(2).map(|p| format!("{},{}", n(p[0]), n(p[1]))).collect();
+                    let pts: Vec<String> = v.as_chunks::<2>().0.iter().map(|p| format!("{},{}", n(p[0]), n(p[1]))).collect();
                     let _ = write!(out, "<gesture>{}</gesture>", pts.join(";"));
                 }
                 out.push_str("</inklist>");

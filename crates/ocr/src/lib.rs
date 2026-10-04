@@ -114,7 +114,7 @@ impl Ocr {
         }
         // ocrs wants 1 or 3 channels.
         let rgb: std::borrow::Cow<[u8]> = if pixels.len() == (width * height * 4) as usize {
-            pixels.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
+            pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
         } else {
             pixels.into()
         };

@@ -714,7 +714,8 @@ fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotError> {
             if quads.is_empty() || !quads.iter().all(|q| finite(q)) {
                 return Err(bad("text area (no quadrilaterals)"));
             }
-            bounds(quads.iter().flat_map(|q| q.chunks_exact(2).map(|p| [p[0], p[1]]).collect::<Vec<_>>())).ok_or_else(|| bad("text area"))?
+            bounds(quads.iter().flat_map(|q| q.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect::<Vec<_>>()))
+                .ok_or_else(|| bad("text area"))?
         }
         Shape::Rectangle { rect }
         | Shape::Oval { rect }
@@ -1479,7 +1480,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                     color = Some([f(i - 3), f(i - 2), f(i - 1)]);
                 }
             }
-            let quads = nums(b"QuadPoints").chunks_exact(8).map(|q| <[f32; 8]>::try_from(q).unwrap_or_default()).collect();
+            let quads = nums(b"QuadPoints").as_chunks::<8>().0.to_vec();
             let in_reply_to = d.get(b"IRT").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
             out.push(Summary {
                 page,
@@ -1653,7 +1654,7 @@ pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]
         .iter()
         .map(|s| {
             let v: Vec<f64> = doc.resolve(s).as_array().map(|a| a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect()).unwrap_or_default();
-            v.chunks_exact(2).map(|p| [p[0], p[1]]).collect()
+            v.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect()
         })
         .collect();
     // Distance from a point to the eraser's path (segments, or a single point).

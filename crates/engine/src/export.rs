@@ -105,7 +105,7 @@ impl Exporter {
 /// Premultiplied RGBA → PNG (straight alpha).
 pub fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>, String> {
     let mut rgba = premultiplied.to_vec();
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         let a = u32::from(px[3]);
         if a != 0 && a != 255 {
             for c in &mut px[..3] {
@@ -155,7 +155,9 @@ impl ImageFormat {
 /// Premultiplied RGBA composited over white → RGB.
 fn over_white(premultiplied: &[u8]) -> Vec<u8> {
     premultiplied
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|p| {
             let k = 255 - p[3];
             [p[0].saturating_add(k), p[1].saturating_add(k), p[2].saturating_add(k)]

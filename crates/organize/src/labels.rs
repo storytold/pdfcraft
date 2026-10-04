@@ -131,7 +131,7 @@ pub fn page_label_ranges(doc: &Document) -> Vec<LabelRange> {
         let node = doc.resolve(&node);
         let Some(d) = node.as_dict() else { continue };
         if let Some(nums) = d.get(b"Nums").map(|n| doc.resolve(n)).and_then(|n| n.as_array().cloned()) {
-            for pair in nums.chunks_exact(2) {
+            for pair in nums.as_chunks::<2>().0 {
                 let (Some(start), Some(spec)) = (pair[0].as_int(), doc.resolve(&pair[1]).as_dict().cloned()) else { continue };
                 if start < 0 {
                     continue;

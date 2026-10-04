@@ -200,7 +200,7 @@ pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage
             }
         }
         xs.sort_by(|a, b| a.total_cmp(b));
-        for pair in xs.chunks_exact(2) {
+        for pair in xs.as_chunks::<2>().0 {
             let (from, to) = (pair[0].round().max(0.0) as usize, (pair[1].round() as usize).min(w));
             for x in from..to {
                 img[(x, y)] = Color32::BLACK;

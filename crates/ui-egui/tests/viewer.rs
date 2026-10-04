@@ -252,7 +252,7 @@ fn marquee_zoom_and_snapshot() {
     drag(&mut h, at(15.0, 175.0), at(180.0, 140.0));
     let (w, hgt, px) = h.state().last_snapshot.clone().expect("a snapshot");
     assert!(w > 50 && hgt > 10, "{w} × {hgt}");
-    assert!(px.chunks_exact(4).any(|p| p[0] < 100), "the text is in it");
+    assert!(px.as_chunks::<4>().0.iter().any(|p| p[0] < 100), "the text is in it");
     // Marquee zoom on a small area zooms in, centred on it.
     let before = h.state().views[i].zoom;
     h.state_mut().set_option("quick", "marquee-zoom").unwrap();

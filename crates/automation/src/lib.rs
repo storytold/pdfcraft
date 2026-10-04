@@ -1506,7 +1506,7 @@ fn outline(items: &[printcraft_render::OutlineItem]) -> Value {
 
 fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>> {
     let mut rgba = premultiplied.to_vec();
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         let a = u32::from(px[3]);
         if a != 0 && a != 255 {
             for c in &mut px[..3] {

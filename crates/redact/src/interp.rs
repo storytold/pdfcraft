@@ -227,7 +227,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
                 let pts: Vec<(f64, f64)> = match o {
                     b"re" => op.nums::<4>().map(|[x, y, w, h]| vec![(x, y), (x + w, y), (x, y + h), (x + w, y + h)]).unwrap_or_default(),
                     b"h" | b"W" | b"W*" => Vec::new(),
-                    _ => op.operands.iter().filter_map(Object::as_f64).collect::<Vec<_>>().chunks_exact(2).map(|p| (p[0], p[1])).collect(),
+                    _ => op.operands.iter().filter_map(Object::as_f64).collect::<Vec<_>>().as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect(),
                 };
                 for (x, y) in pts {
                     let (u, v) = gs.ctm.apply(x, y);

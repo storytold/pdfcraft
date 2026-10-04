@@ -215,7 +215,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
         _ if markup => {
             let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
             let col = stroke?;
-            for quad in q.chunks_exact(8) {
+            for quad in q.as_chunks::<8>().0.iter() {
                 let p = |i: usize| (quad[2 * i], quad[2 * i + 1]);
                 let (p1, p2, p3, p4) = (p(0), p(1), p(2), p(3));
                 let h = (p1.0 - p3.0).hypot(p1.1 - p3.1);
@@ -268,7 +268,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
             let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
             let col = stroke.unwrap_or([0.89, 0.13, 0.13]);
             c.push_str(&format!("{}1 w\n", rg_stroke(col)));
-            for quad in q.chunks_exact(8) {
+            for quad in q.as_chunks::<8>().0.iter() {
                 c.push_str(&format!(
                     "{} {} m {} {} l {} {} l {} {} l h S\n",
                     n(quad[0]),
@@ -326,7 +326,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
         }
         b"Polygon" | b"PolyLine" => {
             let v = nums(d, b"Vertices").filter(|v| v.len() >= 4 && v.len() % 2 == 0)?;
-            let pts: Vec<(f64, f64)> = v.chunks_exact(2).map(|p| (p[0], p[1])).collect();
+            let pts: Vec<(f64, f64)> = v.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
             let col = stroke;
             let closed = subtype == b"Polygon";
             let fill = if closed { color(d, b"IC")? } else { None };
@@ -388,7 +388,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
             c.push_str(&format!("{}{} w 1 J 1 j\n", rg_stroke(col), n(w)));
             for s in list {
                 let pts: Vec<f64> = s.as_array()?.iter().map(|o| o.as_f64()).collect::<Option<_>>()?;
-                let pts: Vec<(f64, f64)> = pts.chunks_exact(2).map(|p| (p[0], p[1])).collect();
+                let pts: Vec<(f64, f64)> = pts.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
                 let Some(first) = pts.first() else { continue };
                 c.push_str(&format!("{} {} m\n", n(first.0), n(first.1)));
                 if pts.len() == 1 {
@@ -408,7 +408,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 c.push_str(&rg(stroke.unwrap_or([0.0; 3])));
                 for contour in outline {
                     let v: Vec<f64> = contour.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect()).unwrap_or_default();
-                    for (i, p) in v.chunks_exact(2).enumerate() {
+                    for (i, p) in v.as_chunks::<2>().0.iter().enumerate() {
                         c.push_str(&format!("{} {} {}\n", n(x0 + p[0] * w), n(y0 + p[1] * h), if i == 0 { "m" } else { "l" }));
                     }
                     if v.len() >= 6 {
@@ -515,7 +515,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                     return None;
                 }
                 let lw = bw.max(0.5);
-                let pts: Vec<(f64, f64)> = cl.chunks_exact(2).map(|p| (p[0], p[1])).collect();
+                let pts: Vec<(f64, f64)> = cl.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
                 c.push_str(&format!("{}{}{} w 1 J 1 j\n", rg_stroke(text_color), rg(bg.unwrap_or([1.0; 3])), n(lw)));
                 for (i, p) in pts.iter().enumerate() {
                     c.push_str(&format!("{} {} {}\n", n(p.0), n(p.1), if i == 0 { "m" } else { "l" }));

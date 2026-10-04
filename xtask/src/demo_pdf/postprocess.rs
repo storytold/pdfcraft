@@ -364,7 +364,7 @@ fn collect_outline(doc: &Document, node: ObjectId, out: &mut Vec<ObjectId>) {
 /// Decode a PDF text string (UTF-16BE with BOM, else treated as Latin-1).
 fn decode_text(bytes: &[u8]) -> String {
     if let Some(rest) = bytes.strip_prefix(&[0xfe, 0xff]) {
-        let units: Vec<u16> = rest.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+        let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
         String::from_utf16_lossy(&units)
     } else {
         bytes.iter().map(|&b| b as char).collect()

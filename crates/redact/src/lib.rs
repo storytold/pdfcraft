@@ -141,7 +141,9 @@ pub fn marks(doc: &Document) -> Vec<Mark> {
                 .and_then(|q| doc.resolve(q).as_array().map(|a| a.iter().filter_map(Object::as_f64).collect()))
                 .unwrap_or_default();
             let mut rects: Vec<[f64; 4]> = quads
-                .chunks_exact(8)
+                .as_chunks::<8>()
+                .0
+                .iter()
                 .map(|q| {
                     let xs = [q[0], q[2], q[4], q[6]];
                     let ys = [q[1], q[3], q[5], q[7]];

@@ -266,10 +266,13 @@ fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
 /// 8-bit RGBA pixels → an image (gray when every pixel is, with a soft mask when any pixel is
 /// not opaque).
 fn rgba_image(rgba: &[u8], (w, h): (u32, u32), dpi: (f64, f64)) -> Embedded {
-    let gray = rgba.chunks_exact(4).all(|p| p[0] == p[1] && p[1] == p[2]);
-    let opaque = rgba.chunks_exact(4).all(|p| p[3] == 255);
-    let colour: Vec<u8> =
-        if gray { rgba.chunks_exact(4).map(|p| p[0]).collect() } else { rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect() };
+    let gray = rgba.as_chunks::<4>().0.iter().all(|p| p[0] == p[1] && p[1] == p[2]);
+    let opaque = rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 255);
+    let colour: Vec<u8> = if gray {
+        rgba.as_chunks::<4>().0.iter().map(|p| p[0]).collect()
+    } else {
+        rgba.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect()
+    };
     let mut d = Dict::new();
     d.set(b"ColorSpace".to_vec(), Object::name(if gray { "DeviceGray" } else { "DeviceRGB" }));
     d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
@@ -281,7 +284,7 @@ fn rgba_image(rgba: &[u8], (w, h): (u32, u32), dpi: (f64, f64)) -> Embedded {
         m.set(b"Height".to_vec(), Object::Int(h as i64));
         m.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
         m.set(b"BitsPerComponent".to_vec(), Object::Int(8));
-        (m, rgba.chunks_exact(4).map(|p| p[3]).collect())
+        (m, rgba.as_chunks::<4>().0.iter().map(|p| p[3]).collect())
     });
     Embedded { dict: d, data: colour, filtered: false, smask, px: (w, h), dpi }
 }
@@ -351,7 +354,7 @@ fn tiff_pages(name: &str, bytes: &[u8]) -> Result<Vec<Embedded>, CreateError> {
             }
             C::RGBA(8 | 16) => rgba_image(&data, (w, h), dpi),
             C::GrayA(8 | 16) => {
-                let rgba: Vec<u8> = data.chunks_exact(2).flat_map(|p| [p[0], p[0], p[0], p[1]]).collect();
+                let rgba: Vec<u8> = data.as_chunks::<2>().0.iter().flat_map(|p| [p[0], p[0], p[0], p[1]]).collect();
                 rgba_image(&rgba, (w, h), dpi)
             }
             other => return Err(bad(format!("{other:?} TIFF images aren't supported yet"))),

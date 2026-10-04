@@ -140,7 +140,7 @@ impl<'a> Tlv<'a> {
             tag::UTF8_STRING | tag::PRINTABLE_STRING | tag::IA5_STRING => Some(String::from_utf8_lossy(self.value).into_owned()),
             tag::T61_STRING => Some(self.value.iter().map(|b| *b as char).collect()),
             tag::BMP_STRING => {
-                let units: Vec<u16> = self.value.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+                let units: Vec<u16> = self.value.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
                 Some(String::from_utf16_lossy(&units))
             }
             _ => None,

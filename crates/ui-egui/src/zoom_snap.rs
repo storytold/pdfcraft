@@ -149,7 +149,7 @@ pub(crate) fn ink_bounds(w: usize, h: usize, rgba: &[u8]) -> Option<[f32; 4]> {
     let ink = |p: &[u8]| p[3] > 16 && (p[0] < 240 || p[1] < 240 || p[2] < 240);
     let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
     for (y, row) in rgba.chunks_exact(w * 4).take(h).enumerate() {
-        for (x, p) in row.chunks_exact(4).enumerate() {
+        for (x, p) in row.as_chunks::<4>().0.iter().enumerate() {
             if ink(p) {
                 x0 = x0.min(x);
                 x1 = x1.max(x + 1);

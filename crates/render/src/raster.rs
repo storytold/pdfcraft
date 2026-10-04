@@ -742,7 +742,7 @@ trailer << /Root 1 0 R >>
         assert_eq!((looped.width, looped.height), (40, 40));
         let plain = render(pdf("1 0 d0 0 0 1 1 re f"));
         assert!(plain.error.is_none(), "{:?}", plain.error);
-        assert!(plain.rgba.chunks_exact(4).any(|p| p[0] < 128), "a normal Type 3 glyph still paints");
+        assert!(plain.rgba.as_chunks::<4>().0.iter().any(|p| p[0] < 128), "a normal Type 3 glyph still paints");
     }
 
     /// From `cargo xtask fuzz`: an inline image claiming /W 4294967295 over four bytes of data

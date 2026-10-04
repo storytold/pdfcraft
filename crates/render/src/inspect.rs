@@ -586,7 +586,7 @@ impl<'a> Inspector<'a> {
                 let quads = match d.get(b"QuadPoints").map(|o| self.resolve(o)) {
                     Ok(Object::Array(q)) => {
                         let v: Vec<f32> = q.iter().map(|o| o.as_float().unwrap_or(0.0)).collect();
-                        v.chunks_exact(8).map(|c| <[f32; 8]>::try_from(c).unwrap_or_default()).collect()
+                        v.as_chunks::<8>().0.to_vec()
                     }
                     _ => Vec::new(),
                 };

@@ -230,7 +230,7 @@ fn unpack(data: &[u8], w: usize, h: usize, n: usize, bpc: usize) -> Option<Vec<u
         let r = &data[y * row..(y + 1) * row];
         match bpc {
             8 => out.extend_from_slice(&r[..w * n]),
-            16 => out.extend(r.chunks_exact(2).take(w * n).map(|c| c[0])),
+            16 => out.extend(r.as_chunks::<2>().0.iter().take(w * n).map(|c| c[0])),
             _ => {
                 let per = 8 / bpc;
                 let m = (1u8 << bpc) - 1;
@@ -275,7 +275,7 @@ fn png(w: u32, h: u32, rgb: &[u8], alpha: Option<&[u8]>) -> Result<Vec<u8>, Stri
         let data: Vec<u8> = match alpha {
             Some(a) => {
                 enc.set_color(png::ColorType::Rgba);
-                rgb.chunks_exact(3).zip(a).flat_map(|(c, a)| [c[0], c[1], c[2], *a]).collect()
+                rgb.as_chunks::<3>().0.iter().zip(a).flat_map(|(c, a)| [c[0], c[1], c[2], *a]).collect()
             }
             None => {
                 enc.set_color(png::ColorType::Rgb);
