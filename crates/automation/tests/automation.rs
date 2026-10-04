@@ -1063,8 +1063,12 @@ fn organizing_with_filters_bookmark_splits_and_extract_options() {
     ok(&mut a, "bookmark_add", json!({ "doc": doc, "title": "Start", "page": 1 }));
     ok(&mut a, "bookmark_add", json!({ "doc": doc, "title": "End/Part", "page": 3 }));
     let s = ok(&mut a, "doc_split", json!({ "doc": doc, "bookmarks": true, "out_dir": "parts" }));
-    let files: Vec<String> =
-        s["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap().rsplit('/').next().unwrap().to_string()).collect();
+    let files: Vec<String> = s["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| std::path::Path::new(f["path"].as_str().unwrap()).file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
     assert_eq!(files, ["a-Start.pdf", "a-End_Part.pdf"]);
     let s = ok(&mut a, "doc_split", json!({ "doc": doc, "max_mb": 0.0001, "out_dir": "sized" }));
     assert_eq!(s["files"].as_array().unwrap().len(), 3, "tiny limit: a page per file");
