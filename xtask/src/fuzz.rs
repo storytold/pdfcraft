@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 
-use crate::gates::root;
+use crate::gates::{release_cli, root};
 
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
@@ -225,9 +225,26 @@ enum Outcome {
     Hang,
 }
 
+/// Address-space cap for each child on Linux, in KiB (4 GiB). An input that makes us allocate
+/// without bound then fails its allocation in the child (an abort, kept as a crash finding)
+/// instead of exhausting the machine: on CI that killed the runner and lost the findings.
+const CHILD_ADDRESS_SPACE_KIB: u64 = 4 * 1024 * 1024;
+
+/// The child process, under the address-space cap where the shell can set one (Linux; macOS
+/// does not support `ulimit -v` and Windows has no `sh`).
+fn child_command(exe: &Path) -> Command {
+    if cfg!(target_os = "linux") {
+        let mut c = Command::new("sh");
+        c.args(["-c", &format!("ulimit -v {CHILD_ADDRESS_SPACE_KIB} && exec \"$0\" \"$@\"")]).arg(exe);
+        c
+    } else {
+        Command::new(exe)
+    }
+}
+
 fn run_one(exe: &Path, file: &Path, timeout: Duration) -> (Outcome, String) {
     let child =
-        Command::new(exe).args(["check-one", &file.to_string_lossy(), "--dpi", "18", "--edit"]).stdout(Stdio::null()).stderr(Stdio::piped()).spawn();
+        child_command(exe).args(["check-one", &file.to_string_lossy(), "--dpi", "18", "--edit"]).stdout(Stdio::null()).stderr(Stdio::piped()).spawn();
     let Ok(mut child) = child else { return (Outcome::Ok, String::new()) };
     let start = Instant::now();
     loop {
@@ -242,7 +259,11 @@ fn run_one(exe: &Path, file: &Path, timeout: Duration) -> (Outcome, String) {
                     let _ = e.read_to_string(&mut err);
                 }
                 // Keep the first panic location or abort message: it identifies the bug.
-                let what = err.lines().find(|l| l.contains("panicked at") || l.contains("overflow") || l.contains("fatal")).unwrap_or("").trim();
+                let what = err
+                    .lines()
+                    .find(|l| l.contains("panicked at") || l.contains("overflow") || l.contains("fatal") || l.contains("memory allocation"))
+                    .unwrap_or("")
+                    .trim();
                 // Drop the per-process thread id ("thread 'main' (12345)") so runs compare equal.
                 let what: String = what
                     .split(" (")
@@ -314,7 +335,11 @@ pub fn run(args: &[String]) -> Result<()> {
     if !status.success() {
         bail!("building printcraft-cli failed");
     }
-    let exe = root().join("target/release/printcraft-cli");
+    let exe = release_cli();
+    if !exe.is_file() {
+        // Every run would fail to start and count as a pass.
+        bail!("{} not found after building it", exe.display());
+    }
     let out = root().join("fuzz-out");
     let work = out.join("work");
     let findings = out.join("findings");

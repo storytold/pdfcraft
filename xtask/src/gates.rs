@@ -12,6 +12,13 @@ pub fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("xtask has a parent dir").to_path_buf()
 }
 
+/// The release `printcraft-cli` that `cargo build --release -p printcraft-cli` produced: under
+/// `CARGO_TARGET_DIR` when it is set (parallel agents use their own), else `target/`.
+pub fn release_cli() -> PathBuf {
+    let target = std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), |d| root().join(d));
+    target.join("release").join(format!("printcraft-cli{}", std::env::consts::EXE_SUFFIX))
+}
+
 fn cargo() -> Command {
     let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     c.current_dir(root());
@@ -157,7 +164,7 @@ pub fn check(args: &[String]) -> anyhow::Result<()> {
     }
     run_args(&["build", "--release", "-p", "printcraft-cli"])?;
     let report = root().join("target/check-pdfjs.json");
-    let mut c = Command::new(root().join("target/release/printcraft-cli"));
+    let mut c = Command::new(release_cli());
     c.args(["check"]).arg(&corpus).args(["--timeout", "20", "--dpi", "36", "--json"]).arg(&report);
     run(c, "printcraft-cli check corpus/pdfjs")?;
     let results: Vec<serde_json::Value> = serde_json::from_str(&std::fs::read_to_string(&report)?)?;
@@ -210,7 +217,7 @@ pub fn text_oracle(args: &[String]) -> anyhow::Result<()> {
     let mut files: Vec<PathBuf> =
         std::fs::read_dir(&corpus)?.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "pdf")).collect();
     files.sort();
-    let cli = root().join("target/release/printcraft-cli");
+    let cli = release_cli();
     let mut scores = Vec::new();
     let mut worst: Vec<(f64, String)> = Vec::new();
     for f in files.iter().take(limit) {
