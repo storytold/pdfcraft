@@ -1,0 +1,9 @@
+# Byte-exact fixtures and assets: never convert line endings (Windows checkouts use
+# core.autocrlf=true, which changes the signed bytes of a PDF and breaks its signature).
+*.pdf binary
+*.p12 binary
+*.pem -text
+*.pfb binary
+*.ttf binary
+*.icc binary
+*.png binary
