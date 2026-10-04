@@ -1,9 +1,15 @@
-# Byte-exact fixtures and assets: never convert line endings (Windows checkouts use
-# core.autocrlf=true, which changes the signed bytes of a PDF and breaks its signature).
+# Every checkout is byte-identical to the repository: no line-ending conversion, ever.
+# Windows checkouts default to core.autocrlf=true, which rewrote signed PDFs (breaking their
+# signatures) and assets whose SHA-256 ATTRIBUTION.toml records (cargo xtask assets).
+* -text
+
+# Not text at all: no textual diffs or merges either.
 *.pdf binary
 *.p12 binary
-*.pem -text
 *.pfb binary
 *.ttf binary
 *.icc binary
+*.icns binary
+*.ico binary
 *.png binary
+*.brotli binary
