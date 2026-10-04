@@ -763,11 +763,14 @@ impl Document {
             Some(a) => a.iter().filter_map(Object::as_int).collect(),
             None => vec![0, size],
         };
-        let raw = s.decoded()?;
         let row = w[0] + w[1] + w[2];
         if row == 0 {
             return Err(CosError::Syntax { offset: off, detail: "xref stream row width 0".into() });
         }
+        // One row per object, and a document has at most 8,388,607 indirect objects (the classic
+        // implementation limit): decoding more than that (about 200 MB at the widest rows) is a
+        // decompression bomb, not cross-reference data. The section is then reconstructed.
+        let raw = s.decoded_within(MAX_XREF_OBJECTS.saturating_mul(row))?;
         let field = |r: &[u8], from: usize, len: usize, default: u64| -> u64 {
             if len == 0 {
                 return default;
@@ -907,6 +910,10 @@ fn generated_id(seed: &[u8; 32]) -> Vec<u8> {
     }
     out
 }
+
+/// The most indirect objects a document can have (the classic implementation limit, ISO
+/// 32000-1 Annex C): it bounds how much data a cross-reference stream can hold.
+const MAX_XREF_OBJECTS: usize = 8_388_607;
 
 #[cfg(test)]
 mod tests {
@@ -1049,5 +1056,30 @@ mod tests {
         assert!(doc.revisions().is_empty());
         assert!(!doc.repair_log().is_empty());
         assert_eq!(doc.root(), Some(ObjRef::new(1, 0)));
+    }
+
+    #[test]
+    fn a_decompression_bomb_in_an_xref_stream_is_refused_and_the_file_reconstructed() {
+        // 32 MiB of rows behind two FlateDecode filters (a few hundred bytes in the file) for
+        // /W [1 1 1]: at 3 bytes a row that is more than 8,388,607 objects' worth, so it is not
+        // decoded (in full: the limit applies while inflating) and the objects are found by
+        // reconstruction instead.
+        let bomb = printcraft_filters::encode_flate(&printcraft_filters::encode_flate(&vec![0u8; 32 << 20]));
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let o1 = bytes.len();
+        bytes.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        let o2 = bytes.len();
+        bytes.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n");
+        let x = bytes.len();
+        bytes.extend_from_slice(
+            format!("3 0 obj\n<< /Type /XRef /Size 4 /W [1 1 1] /Root 1 0 R /Filter [/FlateDecode /FlateDecode] /Length {} >>\nstream\n", bomb.len())
+                .as_bytes(),
+        );
+        bytes.extend_from_slice(&bomb);
+        bytes.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{x}\n%%EOF\n").as_bytes());
+        assert!(o1 < o2 && o2 < x);
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        assert_eq!(doc.root(), Some(ObjRef::new(1, 0)));
+        assert!(doc.repair_log().iter().any(|l| l.contains("limit")), "{:?}", doc.repair_log());
     }
 }

@@ -510,6 +510,10 @@ impl Renderer {
                         };
                         xs = xs.max(min_x_scale).min(max_x_scale);
                         ys = ys.max(min_y_scale).min(max_y_scale);
+                        // PrintCraft patch: the cell pixmap is `step × scale` pixels, which only the
+                        // u16 cast below bounded (a fuzzed /XStep far beyond /BBox gave 65535² cells).
+                        xs = tiling_cell_scale(xs, t.x_step, MAX_PIXMAP_SIZE);
+                        ys = tiling_cell_scale(ys, t.y_step, MAX_PIXMAP_SIZE);
 
                         let x_step = xs * t.x_step;
                         let y_step = ys * t.y_step;
@@ -1146,4 +1150,16 @@ fn convert_blend_mode(blend_mode: BlendMode) -> peniko::BlendMode {
     };
 
     peniko::BlendMode::new(mix, Compose::SrcOver)
+}
+
+/// PrintCraft patch: the scale for a tiling cell, lowered so that the cell pixmap (`|step| ×
+/// scale` pixels a side) stays within `max_pixels`. Geometry is unchanged (the pattern transform
+/// is derived from the scale); an over-large step only renders at lower resolution.
+pub fn tiling_cell_scale(scale: f32, step: f32, max_pixels: f32) -> f32 {
+    let step = step.abs();
+    if step.is_finite() && step > 0.0 && scale * step > max_pixels {
+        max_pixels / step
+    } else {
+        scale
+    }
 }

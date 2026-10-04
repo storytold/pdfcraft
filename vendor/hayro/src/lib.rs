@@ -60,6 +60,8 @@ use vello_cpu::color::palette::css::WHITE;
 use vello_cpu::{Level, Pixmap, RenderMode};
 
 mod renderer;
+/// PrintCraft patch: exported for its regression test.
+pub use renderer::tiling_cell_scale;
 
 /// A cache used by the renderer.
 ///

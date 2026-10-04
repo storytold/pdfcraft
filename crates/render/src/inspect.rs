@@ -16,6 +16,15 @@ use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
 
 use crate::OpenError;
 
+/// lopdf decodes object and cross-reference streams while it loads, with no limit unless one is
+/// set: a few hundred bytes of nested FlateDecode then inflate to gigabytes. Real object and
+/// xref streams are far below this.
+const LOAD_STREAM_LIMIT: usize = 256 << 20;
+
+fn load_options(password: Option<&str>) -> LoadOptions {
+    LoadOptions { password: password.map(str::to_owned), max_decompressed_size: Some(LOAD_STREAM_LIMIT), ..LoadOptions::default() }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct DocInfo {
     pub title: Option<String>,
@@ -249,7 +258,7 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
         Ok(p) => info.pages = p,
         Err(p) => return Err(OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p)))),
     }
-    let options = LoadOptions { password: password.map(str::to_owned), ..LoadOptions::default() };
+    let options = load_options(password);
     let structure = catch_unwind(AssertUnwindSafe(|| match Document::load_mem_with_options(&bytes, options) {
         Ok(doc) => {
             let mut tmp = DocInfo::default();
@@ -854,7 +863,7 @@ pub fn pretty_date(s: &str) -> String {
 /// Fetch an attachment's bytes (decoded). Capped at 1 GiB to defuse decompression bombs.
 pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -> Result<Vec<u8>, String> {
     let run = || -> Result<Vec<u8>, String> {
-        let options = LoadOptions { password: password.map(str::to_owned), ..LoadOptions::default() };
+        let options = load_options(password);
         let doc = Document::load_mem_with_options(bytes, options).map_err(|e| e.to_string())?;
         let insp = Inspector::new(&doc);
         let spec: &Object = match &att.source {
@@ -886,6 +895,16 @@ pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn png_predictor_rows_longer_than_the_data_are_refused_before_allocating() {
+        // Vendored lopdf patch: a fuzzed `/Columns 4294967295` allocated two 4 GiB rows before
+        // reading any data. A row that cannot fit in the data is refused up front.
+        let e = lopdf::filters::png::decode_frame(&[2, 0, 0, 0], 1, 64 << 20).unwrap_err();
+        assert!(e.to_string().contains("longer than the data"), "{e}");
+        // A real frame still decodes: two 3-byte rows, the second Up-filtered.
+        assert_eq!(lopdf::filters::png::decode_frame(&[0, 1, 2, 3, 2, 1, 1, 1], 1, 3).unwrap(), [1, 2, 3, 2, 3, 4]);
+    }
+
     #[test]
     fn view_and_user_space_round_trip_for_every_rotation() {
         for rotation in [0u16, 90, 180, 270] {

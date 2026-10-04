@@ -215,11 +215,17 @@ impl Stream {
     /// decoded before the damage is returned). Streams with image codecs fail with
     /// `CosError::Filter` (keep them encoded). Use `decoded_strict` to detect damage.
     pub fn decoded(&self) -> Result<Vec<u8>, CosError> {
+        self.decoded_within(MAX_DECODED)
+    }
+
+    /// Like [`Stream::decoded`], for a stream whose decoded size has a tighter bound than
+    /// [`MAX_DECODED`]: decoding past `max` bytes is an error.
+    pub fn decoded_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
         let chain = self.filters();
         if chain.is_empty() {
             return Ok(self.raw.as_ref().clone());
         }
-        printcraft_filters::decode_tolerant(&chain, &self.raw, MAX_DECODED).map(|(v, _)| v).map_err(|e| CosError::Filter(e.to_string()))
+        printcraft_filters::decode_tolerant(&chain, &self.raw, max.min(MAX_DECODED)).map(|(v, _)| v).map_err(|e| CosError::Filter(e.to_string()))
     }
 
     /// Decoded data; any corruption is an error.
