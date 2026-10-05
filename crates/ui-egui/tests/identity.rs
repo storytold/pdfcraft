@@ -39,9 +39,19 @@ fn the_identity_name_signs_new_comments_and_is_remembered() {
     h.state_mut().set_option("dialog", "none").unwrap();
     h.state_mut().views[0].select_text(0, 4, 8);
     assert!(h.state_mut().execute("comment.highlight"));
-    h.run_steps(2);
-    let doc = h.state().session.get(h.state().views[0].id).unwrap();
-    assert_eq!(doc.info.annotations.first().and_then(|a| a.author.as_deref()), Some("Grace Hopper"));
+    // Wait for the edit to land in the document (it applies on a later frame).
+    let author = |h: &Harness<'static, PrintCraftApp>| {
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        doc.info.annotations.first().and_then(|a| a.author.clone())
+    };
+    for _ in 0..100 {
+        if author(&h).is_some() {
+            break;
+        }
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(author(&h).as_deref(), Some("Grace Hopper"));
     // It survives a restart; an empty or missing name keeps the default, and a huge one is cut.
     let mut restored = PrintCraftApp::new();
     restored.restore(&h.state().persist());
