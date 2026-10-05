@@ -127,6 +127,7 @@ M0 → M1 → M2 → M3 → M4 must happen in order. After M4, M5–M12 can run 
 
 Newest first. One line per session: the date, what moved, and the new overall percentage.
 
+- **2026-10-05 (community, #47):** Interface language: Preferences ▸ Interface language switches English/Japanese and persists (`ui.set language=ja|en`, reported by `ui.state`). Core menu labels are translated; dialogs, panels and more languages remain open (misc.prefs-language: partial).
 - **2026-10-05 (session 13):** Landed community PRs #3–#7 and the never-crash rollout (#11–#25); CI green on every job for the first time in 30+ runs (clippy 1.99, Windows line endings, perf-test noise); nightly fuzz job made to finish (child memory cap) and its findings fixed: 7 out-of-memory crashes (#27, #29, #30) and 11 hangs (in review); issue #8 (integrated GPU, keyboard save prompt); Help ▸ Check for updates (manual only). Added the honest assessment and gap list above. P0 88%, P1 52%; 804 features 49.5% shipped (53.3% weighted). ≈ 30–35%.
 - **2026-10-03 (session 12, later):** Forms (merge data into a spreadsheet, Actions tab, automatic field detection and naming), Compare files (new `compare` crate: text and visual differences, panel, report, comments), Action Wizard (built-in and custom actions over files), PDF/A verify and Save as PDF/A (new `preflight` crate), Export to Word/HTML/RTF (new `export` crate). P0 88%, P1 52%; 803 features 49.6% shipped (53.3% weighted). ≈ 39%.
 - **2026-10-03 (session 12):** Edit text and images in place (lines, paragraphs, formatting, existing images), Scan & OCR (new `ocr` crate on ocrs with CC-BY-SA models fetched by `cargo xtask models`: searchable image, page ranges, multiple files), Acrobat JavaScript (new `js` crate on boa: custom field scripts in Acrobat's event order, button scripts, document JavaScripts, console, Enable JavaScript preference, sandbox limits). 110+ tools; P0 88%, P1 48%; 803 features 47.9% shipped (51.1% weighted). ≈ 37%.
@@ -195,5 +196,3 @@ Newest first. One line per session: the date, what moved, and the new overall pe
   - Robustness sweep (963 of 983 files open, 0 crashes), text layer, find and select, tiles, web build, polish.
   - Overall ≈ 3–4%.
 - **2026-09-30 (session 1):** planning complete; viewer vertical slice.
-
-- Interface localization: Preferences > Interface language switches English/Japanese and persists. `ui.set {key: language, value: ja|en}` reaches the same setting; `ui.state` reports it. Core menu labels are translated, while dialog/panel breadth and additional languages remain open (misc.prefs-language: partial).
