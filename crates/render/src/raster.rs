@@ -921,6 +921,57 @@ trailer << /Root 1 0 R >>
         assert!(ops >= 200 * 4, "every image and its q/cm/Q are read: {ops}");
     }
 
+    /// From the nightly `cargo xtask fuzz`: a JBIG2 image whose stream declares a page and a
+    /// generic region of 65535 × 65535 pixels (each side within JBIG2's limit) behind a small
+    /// /Width and /Height: decoding its 4.3 billion pixels one by one took minutes. Vendored
+    /// hayro-jbig2 patch: at most 2^28 pixels per bitmap, and 2^26 per symbol dictionary.
+    #[test]
+    fn jbig2_regions_of_billions_of_pixels_are_refused() {
+        // Embedded JBIG2 segments (ISO 14492 §7.2): page information, then an immediate generic
+        // region, both 65535 × 65535, followed by arithmetic-coded data.
+        let mut jbig2 = Vec::new();
+        let mut segment = |number: u32, kind: u8, data: &[u8]| {
+            jbig2.extend_from_slice(&number.to_be_bytes());
+            jbig2.extend_from_slice(&[kind, 0, 1]);
+            jbig2.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+            jbig2.extend_from_slice(data);
+        };
+        let side = 65535u32.to_be_bytes();
+        let mut page = Vec::new();
+        page.extend_from_slice(&side);
+        page.extend_from_slice(&side);
+        page.extend_from_slice(&[0; 8]); // resolution
+        page.extend_from_slice(&[0, 0, 0]); // flags, striping
+        segment(0, 48, &page);
+        let mut region = Vec::new();
+        region.extend_from_slice(&side);
+        region.extend_from_slice(&side);
+        region.extend_from_slice(&[0; 9]); // x, y, combination operator
+        region.push(0); // arithmetic coding, template 0
+        region.extend_from_slice(&[3, 0xff, 0xfd, 0xff, 2, 0xfe, 0xfe, 0xfe]); // AT pixels
+        region.extend_from_slice(&[0x5a; 64]);
+        segment(1, 38, &region);
+        let content = b"q 20 0 0 20 5 5 cm /Im1 Do Q 1 0 0 rg 0 0 4 4 re f";
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+        pdf.extend_from_slice(content);
+        pdf.extend_from_slice(b"\nendstream endobj\n");
+        pdf.extend_from_slice(
+            format!("5 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 8 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n", jbig2.len())
+                .as_bytes(),
+        );
+        pdf.extend_from_slice(&jbig2);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("a huge JBIG2 region must not stall the renderer");
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
+    }
+
     /// From `cargo xtask fuzz`: an inline image claiming /W 4294967295 over four bytes of data
     /// hung in resampling (vendored hayro patch: `MAX_IMAGE_PIXELS`).
     #[test]
