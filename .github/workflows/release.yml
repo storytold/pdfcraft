@@ -201,6 +201,44 @@ jobs:
           path: dist/release/*
           if-no-files-found: error
 
+  freebsd:
+    name: FreeBSD x86_64
+    needs: version
+    # GitHub has no FreeBSD runners: build in a FreeBSD VM (see .github/workflows/freebsd.yml).
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 180
+    env:
+      PRINTCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      PRINTCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      VERSION_OVERRIDE: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and package in a FreeBSD VM (tar.gz)
+        # vmactions/freebsd-vm v1.5.9, pinned by commit (it runs our build).
+        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc
+        with:
+          release: "14.3"
+          usesh: true
+          mem: 12288
+          envs: "PRINTCRAFT_VERSION PRINTCRAFT_BUILD_DATE VERSION_OVERRIDE"
+          prepare: |
+            pkg install -y bash curl git cmake pkgconf llvm19 perl5 \
+              libxkbcommon wayland libX11 libXrandr libXi libXcursor mesa-libs gtk3
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          run: |
+            set -e
+            . "$HOME/.cargo/env"
+            git config --global --add safe.directory "$PWD"
+            export LIBCLANG_PATH=/usr/local/llvm19/lib CARGO_BUILD_JOBS=4
+            if [ -n "$VERSION_OVERRIDE" ]; then cargo xtask version set "$PRINTCRAFT_VERSION"; fi
+            packaging/freebsd/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-freebsd-x86_64
+          path: dist/release/*
+          if-no-files-found: error
+
   web:
     name: Web (wasm)
     needs: version
@@ -236,7 +274,7 @@ jobs:
 
   release:
     name: Draft GitHub Release
-    needs: [version, macos, windows, linux, web]
+    needs: [version, macos, windows, linux, freebsd, web]
     runs-on: ubuntu-latest
     environment: release
     permissions:
