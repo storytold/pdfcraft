@@ -225,15 +225,15 @@ enum Outcome {
     Hang,
 }
 
-/// Address-space cap for each child on Linux, in KiB (4 GiB). An input that makes us allocate
+/// Address-space cap for each child on Linux and FreeBSD, in KiB (4 GiB). An input that makes us allocate
 /// without bound then fails its allocation in the child (an abort, kept as a crash finding)
 /// instead of exhausting the machine: on CI that killed the runner and lost the findings.
 const CHILD_ADDRESS_SPACE_KIB: u64 = 4 * 1024 * 1024;
 
-/// The child process, under the address-space cap where the shell can set one (Linux; macOS
-/// does not support `ulimit -v` and Windows has no `sh`).
+/// The child process, under the address-space cap where the shell can set one (Linux and
+/// FreeBSD; macOS does not support `ulimit -v` and Windows has no `sh`).
 fn child_command(exe: &Path) -> Command {
-    if cfg!(target_os = "linux") {
+    if cfg!(any(target_os = "linux", target_os = "freebsd")) {
         let mut c = Command::new("sh");
         c.args(["-c", &format!("ulimit -v {CHILD_ADDRESS_SPACE_KIB} && exec \"$0\" \"$@\"")]).arg(exe);
         c
