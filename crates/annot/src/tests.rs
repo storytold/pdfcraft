@@ -279,6 +279,80 @@ fn text_box_text_and_colour_changes_are_drawn() {
     assert!(rc.starts_with("<?xml") && rc.contains("<p dir=\"ltr\">Caf\u{e9} (draft) \u{2014} 100%</p>") && rc.contains("color:#FF0000"), "{rc}");
 }
 
+/// The rectangle a text box needs for `text` (the appearance's padding plus the 2 pt slack):
+/// the wrap width and top edge stay, the height fits the wrapped lines.
+fn expected_box(top: f64, w: f64, text: &str, size: f64, border: f64) -> [f64; 4] {
+    let pad = 2.0 + border;
+    let lines = appearance::wrap(text, size, w - 2.0 * pad).len().max(1) as f64;
+    [0.0, top - lines * size * 1.2 - 2.0 * pad - 2.0, w, 0.0]
+}
+
+#[test]
+fn editing_a_text_box_refits_its_rectangle() {
+    let mut doc = fixture();
+    let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [100.0, 680.0, 304.0, 692.0], font_size: 12.0 }), &meta("t")).unwrap();
+    // The style's border is 2 pt wide, so the text is padded by 2 + 2.
+    let long = "the quick brown fox jumps over the lazy dog and keeps going";
+    set_contents(&mut doc, 0, t, long, &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    let r = rect(d);
+    assert_eq!((r[0], r[2], r[3]), (100.0, 304.0, 692.0), "width and top edge stay");
+    let want = expected_box(692.0, 204.0, long, 12.0, 2.0);
+    assert_eq!(r[1], want[1], "the height fits the wrapped lines");
+    // The appearance covers the new rectangle, and every wrapped line is drawn.
+    let n = d.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    let bbox: Vec<f64> = doc.get(n).as_dict().unwrap().get(b"BBox").unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect();
+    assert_eq!(bbox, r);
+    assert_eq!(ap_content(&doc, d).matches(" Tj").count(), appearance::wrap(long, 12.0, 204.0 - 2.0 * 4.0).len(), "nothing is clipped");
+    // Shorter text shrinks the box back to one line.
+    set_contents(&mut doc, 0, t, "Hi", &meta("")).unwrap();
+    let r = rect(&list(&doc, 0)[t]);
+    assert_eq!(r, [100.0, expected_box(692.0, 204.0, "Hi", 12.0, 2.0)[1], 304.0, 692.0]);
+}
+
+#[test]
+fn editing_a_callout_refits_the_box_and_keeps_the_leader() {
+    let mut doc = fixture();
+    let c = add_annotation(
+        &mut doc,
+        &new(0, Shape::Callout { rect: [300.0, 600.0, 500.0, 612.0], knee: [260.0, 560.0], point: [200.0, 520.0], font_size: 12.0 }),
+        &meta("c"),
+    )
+    .unwrap();
+    let long = "the quick brown fox jumps over the lazy dog and keeps going";
+    set_contents(&mut doc, 0, c, long, &meta("")).unwrap();
+    let d = &list(&doc, 0)[c];
+    let outer = rect(d);
+    let f = |k: &[u8]| -> Vec<f64> { d.get(k).unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect() };
+    let cl = f(b"CL");
+    // The leader line keeps its start and knee; the attach point follows the re-fitted box.
+    assert_eq!(&cl[..4], &[200.0, 520.0, 260.0, 560.0]);
+    let want = expected_box(612.0, 200.0, long, 12.0, 2.0);
+    assert_eq!((cl[4], cl[5]), callout_attach([300.0, want[1], 500.0, 612.0], [260.0, 560.0]).into());
+    // The text box (recovered from /Rect and /RD) keeps its width and top edge.
+    let tb = [outer[0] + f(b"RD")[0], outer[1] + f(b"RD")[1], outer[2] - f(b"RD")[2], outer[3] - f(b"RD")[3]];
+    assert_eq!((tb[0], tb[2], tb[3]), (300.0, 500.0, 612.0));
+    assert_eq!(tb[1], want[1]);
+    // /Rect still grows to hold the leader line: its padded bounds are [186, 506, 274, 574].
+    assert_eq!((outer[0], outer[2], outer[3]), (186.0, 500.0, 612.0));
+    assert_eq!(ap_content(&doc, d).matches(" Tj").count(), appearance::wrap(long, 12.0, 200.0 - 2.0 * 4.0).len(), "nothing is clipped");
+}
+
+#[test]
+fn a_locked_text_box_still_refits_its_text() {
+    let mut doc = fixture();
+    let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [100.0, 680.0, 304.0, 692.0], font_size: 12.0 }), &meta("t")).unwrap();
+    set_locked(&mut doc, 0, t, true).unwrap();
+    // Resizing is refused, but the text (and its re-fit) stays editable, as in Acrobat.
+    assert!(matches!(set_rect(&mut doc, 0, t, [0.0, 0.0, 50.0, 50.0], &meta("")), Err(AnnotError::Invalid(_))));
+    let long = "the quick brown fox jumps over the lazy dog";
+    set_contents(&mut doc, 0, t, long, &meta("")).unwrap();
+    let r = rect(&list(&doc, 0)[t]);
+    assert_eq!(r[3], 692.0);
+    let want = expected_box(692.0, 204.0, long, 12.0, 2.0);
+    assert_eq!(r[1], want[1], "the box grew to fit the wrapped lines");
+}
+
 #[test]
 fn unknown_keys_survive_edits() {
     let mut doc = fixture();

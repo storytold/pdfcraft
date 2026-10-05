@@ -1150,7 +1150,8 @@ pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Resul
     set_annots(doc, p, kept)
 }
 
-/// Change a comment's text. Text boxes are redrawn to show it.
+/// Change a comment's text. Text boxes are redrawn to show it, and their rectangle follows the
+/// new text: the wrap width and top edge stay, the height fits the wrapped lines.
 pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     let free_text = annot_dict(doc, r).name(b"Subtype") == Some(b"FreeText");
@@ -1165,9 +1166,44 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
         touch(d, meta);
     })?;
     if free_text {
-        set_appearance(doc, r)?;
+        // The box grows and shrinks with the text instead of clipping it. A locked box keeps its
+        // text editable (as in Acrobat), so the re-fit ignores the lock.
+        match fitted_box(doc, r, text) {
+            Some(rect) => apply_text_box(doc, r, rect, meta)?,
+            None => set_appearance(doc, r)?,
+        }
     }
     Ok(())
+}
+
+/// The rectangle a FreeText annotation's text box needs for `text`: the current wrap width and
+/// top edge stay and the height fits the wrapped lines, as at creation. `None` keeps the old
+/// rectangle (the box can't be measured, so only the appearance is redrawn).
+fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
+    let d = annot_dict(doc, r);
+    let nums = |key: &[u8]| -> Option<Vec<f64>> { d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect() };
+    let (_, size) = appearance::parse_da(&d);
+    let pad = 2.0 + border_width_of(&d);
+    let rect = nums(b"Rect").filter(|v| v.len() == 4 && v.iter().all(|x| x.is_finite()))?;
+    let rect = [rect[0], rect[1], rect[2], rect[3]];
+    // A callout re-fits its text box (`/Rect` inset by `/RD`); the leader line keeps its place.
+    let tb = if d.contains(b"CL") {
+        let rd = nums(b"RD").filter(|v| v.len() == 4 && v.iter().all(|x| *x >= 0.0))?;
+        [rect[0] + rd[0], rect[1] + rd[1], rect[2] - rd[2], rect[3] - rd[3]]
+    } else {
+        rect
+    };
+    let (x0, top) = (tb[0].min(tb[2]), tb[1].max(tb[3]));
+    let w = tb[2] - tb[0];
+    let w = if w.is_finite() && w >= 1.0 {
+        w
+    } else {
+        // No usable old width: fall back to the creation-time width (at most 300 pt).
+        let longest = text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
+        (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
+    };
+    let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64;
+    Some([x0, top - lines * size * 1.2 - 2.0 * pad - 2.0, x0 + w, top])
 }
 
 /// Reply to a comment; returns the reply's index in the page's `/Annots`.
@@ -1326,10 +1362,17 @@ pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], m
     if !matches!(subtype.as_str(), "Square" | "Circle" | "FreeText") {
         return Err(AnnotError::Invalid(format!("{subtype} comments can't be resized")));
     }
+    apply_text_box(doc, r, rect, meta)
+}
+
+/// Store `rect` as a FreeText annotation's text box (or a square's/oval's rectangle): a callout's
+/// leader line re-attaches and `/Rect` grows to hold it, and the appearance is redrawn.
+fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta) -> Result<(), AnnotError> {
     let rect = normalize(rect);
     if !finite(&rect) || rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
         return Err(AnnotError::Invalid("invalid rectangle (too small)".into()));
     }
+    let d = annot_dict(doc, r);
     // A callout's rectangle is its text box: the leader line re-attaches and `/Rect` grows to hold it.
     let callout = d.get(b"CL").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect::<Vec<f64>>()).filter(|l| l.len() == 6);
     let (outer, cl) = match callout {

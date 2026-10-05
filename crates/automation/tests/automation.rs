@@ -417,6 +417,17 @@ fn comments_through_tools() {
     assert_eq!(undo["undone"], "Edit comment");
     ok(&mut a, "edit_redo", json!({ "doc": doc }));
 
+    // Editing a text box re-fits its rectangle to the new text: the wrap width and top edge
+    // stay, the height follows the wrapped lines.
+    let tb = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "FreeText").unwrap().clone();
+    let long = "the quick brown fox jumps over the lazy dog ".repeat(3);
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": tb["page"], "index": tb["index"], "contents": long.trim_end() }));
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let tb = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "FreeText").unwrap().clone();
+    let r: Vec<f64> = tb["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    assert_eq!((r[0], r[1], r[2] - r[0]), (10.0, 200.0, 180.0), "width and top edge stay: {r:?}");
+    assert!(r[3] - r[1] > 40.0, "the box grew to fit the wrapped lines: {r:?}");
+
     // The rendered page shows the rectangle's border.
     let png = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
     assert!(matches!(png[0], Content::Png { .. }));

@@ -3566,8 +3566,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.callout"]
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn", "crates/ui-egui/tests/comments.rs::polygons_clouds_connected_lines_callouts_and_inserted_text", "crates/automation/tests/automation.rs::drawing_comments_through_tools"]
-notes = "drag from the target to the box; resizing re-attaches the leader"
+evidence = ["crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn", "crates/annot/src/tests.rs::editing_a_callout_refits_the_box_and_keeps_the_leader", "crates/ui-egui/tests/comments.rs::polygons_clouds_connected_lines_callouts_and_inserted_text", "crates/automation/tests/automation.rs::drawing_comments_through_tools"]
+notes = "drag from the target to the box; resizing re-attaches the leader, and so does editing the text"
 
 [[feature]]
 id = "comment.pencil"
@@ -3854,8 +3854,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.list"]
 tools = ["comment_edit"]
-evidence = ["crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/automation/tests/automation.rs::comments_through_tools"]
-notes = "double-click a comment or card, or Edit in the menus"
+evidence = ["crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/annot/src/tests.rs::editing_a_text_box_refits_its_rectangle", "crates/automation/tests/automation.rs::comments_through_tools"]
+notes = "double-click a comment or card, or Edit in the menus; a text box's rectangle follows the new text (wrap width and top edge stay, the height fits the wrapped lines)"
 
 [[feature]]
 id = "comment.copy-comment-text"
