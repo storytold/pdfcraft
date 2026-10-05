@@ -529,3 +529,28 @@ fn erasing_part_of_a_drawing() {
     drag_pt(&mut h, (40.0, 60.0), (260.0, 60.0));
     assert!(comments(&h).is_empty(), "{:?}", comments(&h));
 }
+
+#[test]
+fn hovering_a_comment_shows_its_author_and_text() {
+    // A square comment by Ada over the first page's text.
+    let pdf = String::from_utf8_lossy(TEXT_FIXTURE).replace("/Contents 5 0 R /Resources", "/Contents 5 0 R /Annots [8 0 R] /Resources").replace(
+        "trailer",
+        "8 0 obj << /Type /Annot /Subtype /Square /Rect [50 50 150 120] /C [1 0 0] /T (Ada) /Contents (Check this figure) >> endobj\ntrailer",
+    );
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PrintCraftApp::new();
+        app.open_bytes("hover.pdf", None, pdf.into_bytes()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        // No Comments panel: the comment's text should only appear in the hover popup.
+        app.set_option("panel", "none").unwrap();
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    assert!(h.query_by_label_contains("Check this figure").is_none(), "no popup before hovering");
+    let p = at(&h, 100.0, 85.0);
+    h.hover_at(p);
+    h.run_steps(3);
+    h.get_by_label_contains("Check this figure");
+    h.get_by_label_contains("Ada");
+}

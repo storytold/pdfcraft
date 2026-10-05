@@ -643,11 +643,11 @@ title = "Open files by drag and drop"
 area = "A"
 tier = "P1"
 milestone = "M3"
-status = "partial"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = "desktop drop is handled; no test yet"
+evidence = ["crates/ui-egui/tests/ui.rs::dropping_a_pdf_on_the_window_opens_it"]
+notes = "desktop: the dropped file opens in a tab (by path, or its bytes); web: read asynchronously"
 
 [[feature]]
 id = "core.recent-files"
@@ -1151,11 +1151,11 @@ title = "Show comment text on hover"
 area = "B"
 tier = "P1"
 milestone = "M3"
-status = "partial"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = "no test yet"
+evidence = ["crates/ui-egui/tests/comments.rs::hovering_a_comment_shows_its_author_and_text"]
+notes = "a popup with the author and the comment text, as Acrobat shows"
 
 [[feature]]
 id = "view.document-tabs"

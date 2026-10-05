@@ -212,3 +212,31 @@ fn selection_works_in_every_view_rotation() {
         assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick brown"), "rotation {deg}");
     }
 }
+
+/// A file dropped on the window, as the windowing layer hands it over.
+#[derive(Debug)]
+struct Dropped {
+    path: std::path::PathBuf,
+    bytes: Vec<u8>,
+}
+
+impl egui::DroppedFile for Dropped {
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        Ok(self.bytes.clone())
+    }
+}
+
+#[test]
+fn dropping_a_pdf_on_the_window_opens_it() {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| PrintCraftApp::new());
+    h.run_steps(3);
+    assert!(h.state().views.is_empty());
+    let file: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: "dropped.pdf".into(), bytes: FIXTURE.to_vec() });
+    h.input_mut().dropped_files.push(file);
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 1, "the dropped PDF opens in a tab");
+    h.get_by_label_contains("dropped.pdf");
+}
