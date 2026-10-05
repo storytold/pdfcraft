@@ -30,6 +30,7 @@ pub enum CommentTool {
     Highlight,
     Underline,
     StrikeOut,
+    Squiggly,
     Ink,
     Line,
     Arrow,
@@ -48,7 +49,7 @@ pub enum CommentTool {
 /// The quick-bar flyout groups, in Acrobat's order: Comment ▸, Highlight ▸, Draw ▸.
 pub const GROUPS: [&[CommentTool]; 3] = [
     &[CommentTool::Note, CommentTool::TextBox, CommentTool::Callout, CommentTool::Attach],
-    &[CommentTool::Highlight, CommentTool::Underline, CommentTool::StrikeOut, CommentTool::Caret, CommentTool::ReplaceText],
+    &[CommentTool::Highlight, CommentTool::Underline, CommentTool::StrikeOut, CommentTool::Squiggly, CommentTool::Caret, CommentTool::ReplaceText],
     &[
         CommentTool::Ink,
         CommentTool::Line,
@@ -62,7 +63,7 @@ pub const GROUPS: [&[CommentTool]; 3] = [
     ],
 ];
 
-pub const ALL: [CommentTool; 18] = [
+pub const ALL: [CommentTool; 19] = [
     CommentTool::Eraser,
     CommentTool::ReplaceText,
     CommentTool::Attach,
@@ -76,6 +77,7 @@ pub const ALL: [CommentTool; 18] = [
     CommentTool::Highlight,
     CommentTool::Underline,
     CommentTool::StrikeOut,
+    CommentTool::Squiggly,
     CommentTool::Ink,
     CommentTool::Line,
     CommentTool::Arrow,
@@ -91,6 +93,7 @@ impl CommentTool {
             Self::Highlight => "comment.highlight",
             Self::Underline => "comment.underline",
             Self::StrikeOut => "comment.strikeout",
+            Self::Squiggly => "comment.squiggly",
             Self::Ink => "comment.ink",
             Self::Line => "comment.line",
             Self::Arrow => "comment.arrow",
@@ -118,6 +121,7 @@ impl CommentTool {
             Self::Highlight => "Highlight",
             Self::Underline => "Underline",
             Self::StrikeOut => "Strikethrough",
+            Self::Squiggly => "Squiggly underline",
             Self::Ink => "Draw",
             Self::Line => "Line",
             Self::Arrow => "Arrow",
@@ -141,6 +145,7 @@ impl CommentTool {
             Self::Highlight => "highlighter",
             Self::Underline => "underline",
             Self::StrikeOut => "strikethrough",
+            Self::Squiggly => "spline",
             Self::Ink => "pencil",
             Self::Line => "minus",
             Self::Arrow => "move-right",
@@ -166,6 +171,7 @@ impl CommentTool {
             Self::Highlight => Some(Markup::Highlight),
             Self::Underline => Some(Markup::Underline),
             Self::StrikeOut => Some(Markup::StrikeOut),
+            Self::Squiggly => Some(Markup::Squiggly),
             _ => None,
         }
     }
@@ -190,7 +196,7 @@ impl CommentTool {
         match self {
             Self::Note => Shape::Note { at: [0.0; 2], icon: NoteIcon::Comment },
             Self::TextBox => Shape::TextBox { rect: [0.0; 4], font_size: 12.0 },
-            Self::Highlight | Self::Underline | Self::StrikeOut => {
+            Self::Highlight | Self::Underline | Self::StrikeOut | Self::Squiggly => {
                 Shape::TextMarkup { kind: self.markup().unwrap_or(Markup::Highlight), quads: Vec::new() }
             }
             Self::Ink => Shape::Ink { strokes: Vec::new() },
@@ -286,6 +292,7 @@ pub fn tool_for(a: &Annotation) -> Option<CommentTool> {
         ("Highlight", _) => CommentTool::Highlight,
         ("Underline", _) => CommentTool::Underline,
         ("StrikeOut", _) => CommentTool::StrikeOut,
+        ("Squiggly", _) => CommentTool::Squiggly,
         ("Ink", _) => CommentTool::Ink,
         ("Line", _) => CommentTool::Line,
         ("Square", _) => CommentTool::Rectangle,

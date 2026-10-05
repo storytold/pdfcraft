@@ -554,3 +554,17 @@ fn hovering_a_comment_shows_its_author_and_text() {
     h.get_by_label_contains("Check this figure");
     h.get_by_label_contains("Ada");
 }
+
+#[test]
+fn the_squiggly_tool_marks_selected_text() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    assert!(h.state_mut().execute("comment.squiggly"));
+    h.run_steps(2);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert_eq!((c[0].subtype.as_str(), c[0].quads.len()), ("Squiggly", 1));
+    // It sits with the other text markup in the Highlight ▸ flyout, and edits as itself.
+    assert!(printcraft_ui_egui::comments::GROUPS[1].contains(&printcraft_ui_egui::comments::CommentTool::Squiggly));
+    assert_eq!(printcraft_ui_egui::comments::tool_for(&c[0]), Some(printcraft_ui_egui::comments::CommentTool::Squiggly));
+}

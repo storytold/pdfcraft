@@ -3515,11 +3515,11 @@ title = "Squiggly underline"
 area = "E"
 tier = "P2"
 milestone = "M5"
-status = "partial"
-commands = []
+status = "shipped"
+commands = ["comment.squiggly"]
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::every_tool_creates_a_drawable_comment"]
-notes = "engine and agent tool; no toolbar entry yet"
+evidence = ["crates/annot/src/tests.rs::every_tool_creates_a_drawable_comment", "crates/ui-egui/tests/comments.rs::the_squiggly_tool_marks_selected_text"]
+notes = "Highlight ▸ Squiggly underline (with Underline and Strikethrough), the agent tool and the engine"
 
 [[feature]]
 id = "comment.replace-text"

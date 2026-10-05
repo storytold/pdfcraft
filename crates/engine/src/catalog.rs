@@ -210,6 +210,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                     item("Highlight text", "highlighter", "comment.highlight", Ready),
                     item("Underline", "underline", "comment.underline", Ready),
                     item("Strikethrough", "strikethrough", "comment.strikeout", Ready),
+                    item("Squiggly underline", "spline", "comment.squiggly", Ready),
                     item("Text box", "type", "comment.freetext", Ready),
                 ],
             },
