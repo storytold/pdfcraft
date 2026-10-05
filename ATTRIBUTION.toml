@@ -1967,6 +1967,28 @@ usage = "UI monospace font; demo PDF code"
 sha256 = "e6fd0d7e91550b3ed2b735d4312474362c4716edc4fc0577a0f61ed782d5aed1"
 
 [[asset]]
+path = "assets/fonts/ShipporiMincho-Regular.ttf"
+title = "Shippori Mincho Regular"
+author = "The Shippori Mincho Project Authors (FONTDASU)"
+source = "https://raw.githubusercontent.com/google/fonts/9710da1eacb3be272583c3224dcb70f9da6eadbb/ofl/shipporimincho/ShipporiMincho-Regular.ttf"
+licence = "OFL-1.1"
+licence_file = "assets/fonts/OFL-ShipporiMincho.txt"
+kind = "font"
+usage = "Japanese fallback glyphs in edited PDF text and the edit-text UI"
+sha256 = "769b5269f0f9bc6534b352c0e6bd856a566e03ff788f107191c2d835863570b2"
+
+[[asset]]
+path = "assets/fonts/OFL-ShipporiMincho.txt"
+title = "SIL Open Font License 1.1 for Shippori Mincho"
+author = "The Shippori Mincho Project Authors (FONTDASU)"
+source = "https://raw.githubusercontent.com/google/fonts/9710da1eacb3be272583c3224dcb70f9da6eadbb/ofl/shipporimincho/OFL.txt"
+licence = "OFL-1.1"
+licence_file = "assets/fonts/OFL-ShipporiMincho.txt"
+kind = "licence"
+usage = "License for Shippori Mincho fallback font"
+sha256 = "41fba056279be5f45ff9a99e44b7b53897b42732f5806d8e666e0ab49ac6bd38"
+
+[[asset]]
 path = "vendor/hayro-interpret/assets/FoxitDingbats.pfb"
 title = "FoxitDingbats (standard-14 substitute font)"
 author = "Foxit Software Inc. / PDFium Authors"

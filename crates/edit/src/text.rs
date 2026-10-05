@@ -16,6 +16,7 @@ use std::rc::Rc;
 use printcraft_content::{Matrix, Op, parse, serialize_ops};
 use printcraft_cos::{Dict, Document, Object, PdfString, Stream};
 use printcraft_fonts::pdf::Metrics;
+use printcraft_fonts::{GlyphError, shippori_glyph};
 
 use crate::EditError;
 
@@ -448,6 +449,14 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
 /// Text → the bytes that show it in the chosen font.
 type Encoder = Box<dyn Fn(&str) -> Option<Vec<u8>>>;
 
+fn is_win_ansi_char(c: char) -> bool {
+    matches!(c, '\u{20}'..='\u{7e}' | '\u{a0}'..='\u{ff}' | '€' | '‚' | '„' | '…' | '‘' | '’' | '“' | '”' | '•' | '–' | '—' | '™' | '\t')
+}
+
+fn needs_type3(text: &str) -> bool {
+    text.chars().any(|c| !is_win_ansi_char(c))
+}
+
 fn source_family(base_font: &str) -> crate::added::Family {
     let name = base_font.to_ascii_lowercase();
     if ["courier", "mono", "consolas", "menlo", "monaco", "lucida console"].iter().any(|s| name.contains(s)) {
@@ -461,6 +470,112 @@ fn source_family(base_font: &str) -> crate::added::Family {
 
 const SUBSTITUTE_NAME: &str = "PCEdHelv";
 const SUBSTITUTE: &[u8] = SUBSTITUTE_NAME.as_bytes();
+const MAX_TYPE3_GLYPHS: usize = 240;
+
+#[derive(Clone)]
+struct Type3Fallback {
+    name: String,
+    codes: Vec<(char, u8, f64)>,
+}
+
+fn pdf_num(v: f64) -> String {
+    if v.fract() == 0.0 { format!("{v:.0}") } else { format!("{v:.4}").trim_end_matches('0').trim_end_matches('.').to_string() }
+}
+
+fn type3_path(ch: char) -> Result<(Vec<u8>, f64), EditError> {
+    let glyph = shippori_glyph(ch).map_err(|e| match e {
+        GlyphError::Missing => EditError::Invalid(format!("Japanese fallback font has no glyph for U+{:04X}", ch as u32)),
+        GlyphError::TooComplex => EditError::Invalid(format!("Japanese fallback glyph U+{:04X} is too complex", ch as u32)),
+    })?;
+    let scale = 1000.0;
+    let mut out = format!("{} 0 0 0 0 1000 1000 d1\n", pdf_num(glyph.width * scale)).into_bytes();
+    for contour in glyph.contours {
+        let Some(first) = contour.first() else { continue };
+        out.extend_from_slice(format!("{} {} m\n", pdf_num(first[0] * scale), pdf_num(first[1] * scale)).as_bytes());
+        for p in contour.iter().skip(1) {
+            out.extend_from_slice(format!("{} {} l\n", pdf_num(p[0] * scale), pdf_num(p[1] * scale)).as_bytes());
+        }
+        out.extend_from_slice(b"h\n");
+    }
+    out.extend_from_slice(b"f\n");
+    Ok((out, glyph.width))
+}
+
+fn unicode_hex(ch: char) -> String {
+    let mut units = [0u16; 2];
+    let encoded = ch.encode_utf16(&mut units);
+    encoded.iter().map(|u| format!("{u:04X}")).collect()
+}
+
+fn type3_font(doc: &mut Document, fonts_res: &mut Dict, text: &str) -> Result<Type3Fallback, EditError> {
+    let mut chars = Vec::new();
+    for ch in text.chars() {
+        if !chars.contains(&ch) {
+            if chars.len() >= MAX_TYPE3_GLYPHS {
+                return Err(EditError::Invalid("Japanese replacement has too many unique characters".into()));
+            }
+            chars.push(ch);
+        }
+    }
+    if chars.is_empty() {
+        return Err(EditError::Invalid("replacement text is empty".into()));
+    }
+    let mut codes = Vec::with_capacity(chars.len());
+    let mut charprocs = Dict::new();
+    let mut widths = Vec::with_capacity(chars.len());
+    let mut differences = vec![Object::Int(1)];
+    let mut cmap = String::from(
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapType 2 def\n1 begincodespacerange\n<01> <FF>\nendcodespacerange\n",
+    );
+    cmap.push_str(&format!("{} beginbfchar\n", chars.len()));
+    for (i, ch) in chars.into_iter().enumerate() {
+        let code = u8::try_from(i + 1).map_err(|_| EditError::Invalid("Japanese replacement has too many unique characters".into()))?;
+        let glyph_name = format!("g{code:02X}");
+        let (path, width) = type3_path(ch)?;
+        let mut pd = Dict::new();
+        pd.set(b"Length".to_vec(), path.len() as i64);
+        let proc_ref = doc.add(Object::Stream(Stream::from_raw(pd, path)));
+        charprocs.set(glyph_name.as_bytes().to_vec(), Object::Ref(proc_ref));
+        differences.push(Object::name(&glyph_name));
+        widths.push(Object::Real((width * 1000.0).round()));
+        cmap.push_str(&format!("<{code:02X}> <{}>\n", unicode_hex(ch)));
+        codes.push((ch, code, width));
+    }
+    cmap.push_str("endbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+    let mut cmap_dict = Dict::new();
+    cmap_dict.set(b"Length".to_vec(), cmap.len() as i64);
+    let cmap_ref = doc.add(Object::Stream(Stream::from_raw(cmap_dict, cmap.into_bytes())));
+    let mut encoding = Dict::new();
+    encoding.set(b"Type".to_vec(), Object::name("Encoding"));
+    encoding.set(b"Differences".to_vec(), Object::Array(differences));
+    let mut font = Dict::new();
+    font.set(b"Type".to_vec(), Object::name("Font"));
+    font.set(b"Subtype".to_vec(), Object::name("Type3"));
+    font.set(b"Name".to_vec(), Object::name("PCJapanese"));
+    font.set(b"FontBBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(-300), Object::Int(1000), Object::Int(1000)]));
+    font.set(
+        b"FontMatrix".to_vec(),
+        Object::Array(vec![Object::Real(0.001), Object::Int(0), Object::Int(0), Object::Real(0.001), Object::Int(0), Object::Int(0)]),
+    );
+    font.set(b"FirstChar".to_vec(), Object::Int(1));
+    font.set(b"LastChar".to_vec(), Object::Int(codes.len() as i64));
+    font.set(b"Widths".to_vec(), Object::Array(widths));
+    font.set(b"Encoding".to_vec(), Object::Dict(encoding));
+    font.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
+    font.set(b"ToUnicode".to_vec(), Object::Ref(cmap_ref));
+    let mut name = String::from("PCJp");
+    let mut suffix = 0usize;
+    while fonts_res.contains(name.as_bytes()) {
+        suffix = suffix.saturating_add(1);
+        name = format!("PCJp{suffix}");
+    }
+    fonts_res.set(name.as_bytes().to_vec(), Object::Dict(font));
+    Ok(Type3Fallback { name, codes })
+}
+
+fn type3_encode(fallback: &Type3Fallback, text: &str) -> Option<Vec<u8>> {
+    text.chars().map(|ch| fallback.codes.iter().find(|(c, _, _)| *c == ch).map(|(_, code, _)| *code)).collect()
+}
 
 /// Replace the text of line `line` (an index into [`text_lines`]) on `page` with `text`.
 pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) -> Result<LineEdit, EditError> {
@@ -492,27 +607,38 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
     match reused {
         Some(bytes) => replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))])),
         None => {
-            let win = printcraft_fonts::win_ansi(&text);
-            // WinAnsi turns what it can't show into '?'; refuse rather than print the wrong thing.
-            let back: String = win.iter().map(|b| char::from_u32(u32::from(*b)).unwrap_or('?')).collect();
-            if text.chars().zip(back.chars()).any(|(a, b)| b == '?' && a != '?') {
-                return Err(EditError::Invalid(format!("\"{text}\" has characters neither {} nor Helvetica can show", target.base_font)));
+            if needs_type3(&text) {
+                let fallback = type3_font(doc, &mut fonts_res, &text)?;
+                let bytes = type3_encode(&fallback, &text)
+                    .ok_or_else(|| EditError::Invalid(format!("\"{text}\" can't be shown by the Japanese fallback")))?;
+                let size = font_size_before(&ops, first).unwrap_or(target.size);
+                replacement.push(Op::new("Tf", vec![Object::name(&fallback.name), printcraft_content::num(size)]));
+                replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
+                replacement.push(Op::new("Tf", vec![Object::name(&target.font), printcraft_content::num(size)]));
+                substituted = Some("Shippori Mincho Type3".into());
+            } else {
+                let win = printcraft_fonts::win_ansi(&text);
+                // WinAnsi turns what it can't show into '?'; refuse rather than print the wrong thing.
+                let back: String = win.iter().map(|b| char::from_u32(u32::from(*b)).unwrap_or('?')).collect();
+                if text.chars().zip(back.chars()).any(|(a, b)| b == '?' && a != '?') {
+                    return Err(EditError::Invalid(format!("\"{text}\" has characters neither {} nor Helvetica can show", target.base_font)));
+                }
+                // The size in text space: the current Tf's size.
+                let size = font_size_before(&ops, first).unwrap_or(target.size);
+                let family = source_family(&target.base_font);
+                let base = family.base_font(target.bold, target.italic);
+                let substitute_name = format!("PCEd{}", base.replace('-', ""));
+                replacement.push(Op::new("Tf", vec![Object::name(&substitute_name), printcraft_content::num(size)]));
+                replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(win))]));
+                replacement.push(Op::new("Tf", vec![Object::name(&target.font), printcraft_content::num(size)]));
+                substituted = Some(base.to_string());
+                let mut f = Dict::new();
+                f.set(b"Type".to_vec(), Object::name("Font"));
+                f.set(b"Subtype".to_vec(), Object::name("Type1"));
+                f.set(b"BaseFont".to_vec(), Object::name(base));
+                f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+                fonts_res.set(substitute_name.into_bytes(), Object::Dict(f));
             }
-            // The size in text space: the current Tf's size.
-            let size = font_size_before(&ops, first).unwrap_or(target.size);
-            let family = source_family(&target.base_font);
-            let base = family.base_font(target.bold, target.italic);
-            let substitute_name = format!("PCEd{}", base.replace('-', ""));
-            replacement.push(Op::new("Tf", vec![Object::name(&substitute_name), printcraft_content::num(size)]));
-            replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(win))]));
-            replacement.push(Op::new("Tf", vec![Object::name(&target.font), printcraft_content::num(size)]));
-            substituted = Some(base.to_string());
-            let mut f = Dict::new();
-            f.set(b"Type".to_vec(), Object::name("Font"));
-            f.set(b"Subtype".to_vec(), Object::name("Type1"));
-            f.set(b"BaseFont".to_vec(), Object::name(base));
-            f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-            fonts_res.set(substitute_name.into_bytes(), Object::Dict(f));
         }
     }
     // Rebuild: the line's first operator becomes the replacement, its others go. Copies of the
@@ -712,6 +838,7 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     let o_state = ts_state.clone();
     let metrics = fonts_res.get(font_name.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()).map(|d| Metrics::from_dict(doc, &d));
     let reuse = style.family.is_none() && metrics.as_ref().is_some_and(|m| m.encode(&text).is_some());
+    let type3 = if !reuse && needs_type3(&text) { Some(type3_font(doc, &mut fonts_res, &text)?) } else { None };
     // The standard font used when the paragraph's own can't be (chosen, or substituted).
     let (family, bold, italic) = style.family.unwrap_or((source_family(&b.base_font), b.bold, b.italic));
     let std_width = move |s: &str, size: f64| -> f64 {
@@ -738,6 +865,10 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
                         .sum::<f64>()
                 })
                 .unwrap_or(0.0),
+            _ if let Some(fallback) = &type3 => {
+                fallback.codes.iter().map(|(ch, _, width)| s.chars().filter(|c| c == ch).count() as f64 * width * size).sum::<f64>()
+                    + s.chars().count() as f64 * o_state.char_spacing
+            }
             _ => std_width(s, size) + s.chars().count() as f64 * o_state.char_spacing,
         };
         t * o_state.scale * k
@@ -747,6 +878,11 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     let new_font = !reuse;
     let (show_font, encode): (String, Encoder) = if let Some(m) = metrics.clone().filter(|_| reuse) {
         (font_name.clone(), Box::new(move |s: &str| m.encode(s)))
+    } else if let Some(fallback) = type3.clone() {
+        let name = fallback.name.clone();
+        let encoder = fallback.clone();
+        substituted = Some("Shippori Mincho Type3".into());
+        (name, Box::new(move |s: &str| type3_encode(&encoder, s)))
     } else {
         let win = printcraft_fonts::win_ansi(&text);
         let back: String = win.iter().map(|c| char::from_u32(u32::from(*c)).unwrap_or('?')).collect();

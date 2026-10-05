@@ -280,6 +280,27 @@ fn descriptor_text_page() -> Document {
 }
 
 #[test]
+fn japanese_line_uses_unicode_type3_fallback() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let replacement = "25362738こんにちは、お元気ですか？ 2.3444";
+    let result = text::replace_line(&mut doc, 0, 0, replacement).unwrap();
+    assert_eq!(result.substituted.as_deref(), Some("Shippori Mincho Type3"));
+    let bytes = page_content_bytes(&doc, 0);
+    let content = String::from_utf8_lossy(&bytes);
+    assert!(content.contains("/PCJp"), "{content}");
+    let reopened = reopen(&doc);
+    assert_eq!(text::text_lines(&reopened, 0).unwrap()[0].text, replacement);
+}
+
+#[test]
+fn japanese_paragraph_uses_unicode_type3_fallback() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let replacement = "こんにちは、お元気ですか？ 2.3444 日本語の文章";
+    text::replace_block(&mut doc, 0, 0, replacement).unwrap();
+    let reopened = reopen(&doc);
+    assert_eq!(text::text_blocks(&reopened, 0).unwrap()[0].text, replacement);
+}
+#[test]
 fn font_descriptor_style_is_exposed_even_with_a_neutral_name() {
     let doc = descriptor_text_page();
     let lines = text::text_lines(&doc, 0).unwrap();

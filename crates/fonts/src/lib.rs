@@ -8,7 +8,7 @@
 mod encodings;
 pub mod pdf;
 mod script;
-pub use script::{ScriptOutline, script_outline};
+pub use script::{GlyphError, GlyphOutline, SHIPPORI_MINCHO, ScriptOutline, script_outline, shippori_glyph};
 
 /// Approximate advance of `s` in Helvetica (or Arial) at `size` points.
 pub fn helvetica_width(s: &str, size: f64) -> f64 {

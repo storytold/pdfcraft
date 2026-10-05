@@ -4,7 +4,7 @@
 
 Every asset PrintCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with SHA-256 hashes, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (242)
+## In this repository (244)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -186,6 +186,8 @@ Every asset PrintCraft includes, bundles or uses to build its published material
 | `assets/fonts/Inter-Medium.ttf` | Inter Medium | The Inter Project Authors (Rasmus Andersson) | OFL-1.1 | https://github.com/rsms/inter | UI font, embedded in the app; demo PDF labels |
 | `assets/fonts/Inter-SemiBold.ttf` | Inter SemiBold | The Inter Project Authors (Rasmus Andersson) | OFL-1.1 | https://github.com/rsms/inter | UI font, embedded in the app; demo PDF labels |
 | `assets/fonts/JetBrainsMono-Regular.ttf` | JetBrains Mono Regular | The JetBrains Mono Project Authors | OFL-1.1 | https://github.com/JetBrains/JetBrainsMono | UI monospace font; demo PDF code |
+| `assets/fonts/ShipporiMincho-Regular.ttf` | Shippori Mincho Regular | The Shippori Mincho Project Authors (FONTDASU) | OFL-1.1 | https://raw.githubusercontent.com/google/fonts/9710da1eacb3be272583c3224dcb70f9da6eadbb/ofl/shipporimincho/ShipporiMincho-Regular.ttf | Japanese fallback glyphs in edited PDF text and the edit-text UI |
+| `assets/fonts/OFL-ShipporiMincho.txt` | SIL Open Font License 1.1 for Shippori Mincho | The Shippori Mincho Project Authors (FONTDASU) | OFL-1.1 | https://raw.githubusercontent.com/google/fonts/9710da1eacb3be272583c3224dcb70f9da6eadbb/ofl/shipporimincho/OFL.txt | License for Shippori Mincho fallback font |
 | `vendor/hayro-interpret/assets/FoxitDingbats.pfb` | FoxitDingbats (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Renders non-embedded standard-14 fonts (vendored hayro-interpret) |
 | `vendor/hayro-interpret/assets/FoxitFixed.pfb` | FoxitFixed (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Renders non-embedded standard-14 fonts (vendored hayro-interpret) |
 | `vendor/hayro-interpret/assets/FoxitFixedBold.pfb` | FoxitFixedBold (standard-14 substitute font) | Foxit Software Inc. / PDFium Authors | BSD-3-Clause | https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/) | Renders non-embedded standard-14 fonts (vendored hayro-interpret) |
