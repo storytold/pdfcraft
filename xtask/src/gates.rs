@@ -12,11 +12,15 @@ pub fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("xtask has a parent dir").to_path_buf()
 }
 
-/// The release `printcraft-cli` that `cargo build --release -p printcraft-cli` produced: under
-/// `CARGO_TARGET_DIR` when it is set (parallel agents use their own), else `target/`.
+/// Cargo's target directory: `CARGO_TARGET_DIR` when it is set (parallel agents use their own),
+/// else `target/`.
+pub fn target_dir() -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), |d| root().join(d))
+}
+
+/// The release `printcraft-cli` that `cargo build --release -p printcraft-cli` produced.
 pub fn release_cli() -> PathBuf {
-    let target = std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), |d| root().join(d));
-    target.join("release").join(format!("printcraft-cli{}", std::env::consts::EXE_SUFFIX))
+    target_dir().join("release").join(format!("printcraft-cli{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn cargo() -> Command {
@@ -163,7 +167,7 @@ pub fn check(args: &[String]) -> anyhow::Result<()> {
         bail!("corpus missing: run `cargo xtask corpus` first");
     }
     run_args(&["build", "--release", "-p", "printcraft-cli"])?;
-    let report = root().join("target/check-pdfjs.json");
+    let report = target_dir().join("check-pdfjs.json");
     let mut c = Command::new(release_cli());
     c.args(["check"]).arg(&corpus).args(["--timeout", "20", "--dpi", "36", "--json"]).arg(&report);
     run(c, "printcraft-cli check corpus/pdfjs")?;

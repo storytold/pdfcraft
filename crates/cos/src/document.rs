@@ -13,21 +13,29 @@ use crate::object::{Dict, ObjRef, Object};
 use crate::parser::{Lexer, is_whitespace, parse_indirect};
 
 thread_local! {
-    static LOAD_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// The objects being loaded on this thread, innermost last (see `Document::try_get`).
+    static LOADING: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Indirect `/Length` values resolved during the current outermost load: a damaged file
+    /// retries a parse several ways, and each retry would resolve the same lengths again
+    /// (exponential in the chain of streams whose lengths point at further streams).
+    static LENGTHS: std::cell::RefCell<HashMap<u32, Option<i64>>> = std::cell::RefCell::new(HashMap::new());
 }
 
-/// Nesting counter for object loads on this thread (see `Document::try_get`).
+/// Marks an object as being loaded on this thread. Loading can re-enter (indirect stream
+/// `/Length`, object streams): an object already being loaded is a cycle, and the nesting is
+/// bounded as well.
 struct LoadGuard;
 
 impl LoadGuard {
-    const MAX: u32 = 32;
+    const MAX: usize = 32;
 
-    fn enter() -> Option<Self> {
-        LOAD_DEPTH.with(|d| {
-            if d.get() >= Self::MAX {
+    fn enter(num: u32) -> Option<Self> {
+        LOADING.with(|l| {
+            let mut l = l.borrow_mut();
+            if l.len() >= Self::MAX || l.contains(&num) {
                 return None;
             }
-            d.set(d.get() + 1);
+            l.push(num);
             Some(LoadGuard)
         })
     }
@@ -35,7 +43,14 @@ impl LoadGuard {
 
 impl Drop for LoadGuard {
     fn drop(&mut self) {
-        LOAD_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        let outermost = LOADING.with(|l| {
+            let mut l = l.borrow_mut();
+            l.pop();
+            l.is_empty()
+        });
+        if outermost {
+            LENGTHS.with(|m| m.borrow_mut().clear());
+        }
     }
 }
 
@@ -471,7 +486,7 @@ impl Document {
         // Loading can re-enter (indirect stream `/Length`, object streams); damaged files make
         // cycles such as `6 0 obj << /Length 6 0 R >>`. Bound the nesting on every path.
         let _guard =
-            LoadGuard::enter().ok_or_else(|| CosError::Syntax { offset: 0, detail: format!("reference cycle while loading object {num}") })?;
+            LoadGuard::enter(num).ok_or_else(|| CosError::Syntax { offset: 0, detail: format!("reference cycle while loading object {num}") })?;
         let obj = self.load(num, 0)?;
         let obj = Arc::new(obj);
         self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, obj.clone());
@@ -485,16 +500,24 @@ impl Document {
         match self.entries.get(&num) {
             None | Some(XrefEntry::Free { .. }) => Ok(Object::Null),
             Some(XrefEntry::InFile { offset, .. }) => {
-                let resolve = |r: ObjRef| self.try_get(r.num).ok().and_then(|o| o.as_int());
+                let resolve = |r: ObjRef| {
+                    if let Some(known) = LENGTHS.with(|m| m.borrow().get(&r.num).copied()) {
+                        return known;
+                    }
+                    let length = self.try_get(r.num).ok().and_then(|o| o.as_int());
+                    LENGTHS.with(|m| m.borrow_mut().insert(r.num, length));
+                    length
+                };
                 let off = *offset as usize;
-                match parse_indirect(&self.data, off, &resolve) {
-                    Ok((id, o)) if id.num == num => Ok(self.decrypted(id, o)),
-                    // Offsets relative to a shifted header, or simply wrong: try both fixes.
-                    _ => match parse_indirect(&self.data, off + self.header_offset, &resolve) {
-                        Ok((id, o)) if id.num == num => Ok(self.decrypted(id, o)),
-                        _ => self.scan_for(num).map(|(id, o)| self.decrypted(id, o)).ok_or(CosError::MissingObject(num)),
-                    },
-                }
+                let at = |off: usize| match parse_indirect(&self.data, off, &resolve) {
+                    Ok((id, o)) if id.num == num => Some(self.decrypted(id, o)),
+                    _ => None,
+                };
+                // Offsets relative to a shifted header, or simply wrong: try both fixes.
+                at(off)
+                    .or_else(|| if self.header_offset == 0 { None } else { at(off.saturating_add(self.header_offset)) })
+                    .or_else(|| self.scan_for(num).map(|(id, o)| self.decrypted(id, o)))
+                    .ok_or(CosError::MissingObject(num))
             }
             Some(XrefEntry::InStream { stream, index }) => {
                 let stm = self.objstm(*stream)?;
@@ -1081,5 +1104,24 @@ mod tests {
         let doc = Document::open(Arc::new(bytes)).unwrap();
         assert_eq!(doc.root(), Some(ObjRef::new(1, 0)));
         assert!(doc.repair_log().iter().any(|l| l.contains("limit")), "{:?}", doc.repair_log());
+    }
+
+    #[test]
+    fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
+        // From the nightly fuzz job: `6 0 obj << /Length 6 0 R >> stream` with no `endstream`
+        // after it. Every parse attempt failed, and each attempt resolved the length by loading
+        // object 6 again, retrying the same ways down to the nesting limit: about 2^32 parses.
+        // Objects being loaded are now a seen-set, lengths are memoised, and the second parse
+        // only runs when the header is shifted.
+        let mut bytes = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n".to_vec();
+        bytes.extend_from_slice(b"6 0 obj\n<< /Length 6 0 R >>\nstream\nno end marker follows\n");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            if let Ok(doc) = Document::open(Arc::new(bytes)) {
+                let _ = doc.try_get(6);
+            }
+            let _ = tx.send(());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(20)).expect("loading must not retry exponentially");
     }
 }

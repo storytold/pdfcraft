@@ -23,6 +23,32 @@ pub(crate) const MAX_NESTED_INTERPRETATION_DEPTH: u32 = 50;
 /// inherits, which recursed until the stack overflowed (found by fuzzing).
 pub(crate) const MAX_PAINT_NESTING: u32 = 16;
 
+/// PrintCraft patch: how many nested paints (a form inside a form, a Type 3 glyph or tiling
+/// pattern painted from inside another one) one page may do. Nesting depth alone doesn't bound
+/// the work: a glyph that shows ten glyphs of its own font, nested sixteen deep, is 10^16
+/// paints (a fuzzed file hung). Ordinary pages stay far below this.
+pub(crate) const MAX_NESTED_PAINTS: u32 = 50_000;
+
+std::thread_local! {
+    static NESTED_PAINTS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
+}
+
+/// PrintCraft patch: count a paint at `depth` (top-level ones are free); `false` once this
+/// page's budget is spent, and the paint is skipped.
+pub(crate) fn take_nested_paint(depth: u32) -> bool {
+    if depth < 2 {
+        return true;
+    }
+    NESTED_PAINTS.with(|n| {
+        let used = n.get();
+        if used >= MAX_NESTED_PAINTS {
+            return false;
+        }
+        n.set(used + 1);
+        true
+    })
+}
+
 /// A cache used by the interpreter.
 ///
 /// Ideally, such a cache should be constructed once per PDF and then reused across
@@ -75,6 +101,8 @@ impl<'a> Context<'a> {
         settings: InterpreterSettings,
     ) -> Self {
         let state = State::new(initial_transform);
+        // PrintCraft patch: a page (or other top-level content) starts with a fresh budget.
+        NESTED_PAINTS.with(|n| n.set(0));
 
         Self::new_with(initial_transform, bbox, cache, xref, settings, state, 0)
     }
@@ -298,6 +326,11 @@ impl<'a> Context<'a> {
     pub(crate) fn begin_nested_interpretation(&mut self) -> bool {
         if self.nesting_depth >= MAX_NESTED_INTERPRETATION_DEPTH {
             warn!("interpreter nesting depth exceeded");
+
+            return false;
+        }
+        if !take_nested_paint(self.nesting_depth + 1) {
+            warn!("nested paint budget exceeded");
 
             return false;
         }

@@ -125,7 +125,9 @@ impl<'a> Type3<'a> {
     ) -> Option<()> {
         // PrintCraft patch: a glyph procedure may show text in this same font (through
         // inherited resources), recursing until the stack overflowed.
-        if glyph.nesting_depth > crate::context::MAX_PAINT_NESTING {
+        if glyph.nesting_depth > crate::context::MAX_PAINT_NESTING
+            || !crate::context::take_nested_paint(glyph.nesting_depth)
+        {
             return None;
         }
         let mut state = glyph.state.clone();

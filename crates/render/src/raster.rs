@@ -868,6 +868,59 @@ trailer << /Root 1 0 R >>
         assert_eq!(&page.rgba[((20 * 40 + 2) * 4)..][..4], &[255, 255, 255, 255], "beyond the butt cap");
     }
 
+    /// From the nightly `cargo xtask fuzz`: a Type 3 glyph that shows several glyphs of its own
+    /// font. The nesting cap bounds the depth but not the breadth: eight glyphs per glyph, sixteen
+    /// deep, is 8^16 paints. Vendored hayro-interpret patch: nested paints (forms, Type 3 glyphs,
+    /// tiling patterns inside one another) share a per-page budget.
+    #[test]
+    fn type3_glyphs_that_fan_out_into_themselves_finish() {
+        let pdf = "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 53 >> stream
+BT /F1 20 Tf 10 10 Td (A) Tj ET 1 0 0 rg 0 0 4 4 re f
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /FirstChar 65 /LastChar 65 /Widths [1]
+  /Encoding << /Differences [65 /a] >> /CharProcs << /a 6 0 R >> >> endobj
+6 0 obj << /Length 48 >> stream
+1 0 d0 BT /F1 1 Tf (AAAAAAAA) Tj ET 0 0 1 1 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf.as_bytes().to_vec()), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("a self-multiplying Type 3 glyph must not stall the renderer");
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
+    }
+
+    /// From the nightly `cargo xtask fuzz`: many small inline images, each with "EI" (followed
+    /// by a space) inside its data, and no text anywhere. To decide whether such an "EI" ends the
+    /// data, the parser re-read the rest of the stream as content, and that re-read did the same
+    /// for every inline image it met, nesting through the whole stream: 50 images (3 KB) ran for
+    /// over ten minutes. Vendored hayro-syntax patch: the re-read doesn't nest, and the search is
+    /// bounded.
+    #[test]
+    fn inline_images_with_ei_in_their_data_parse_in_linear_time() {
+        let image = b"q 1 0 0 1 0 0 cm\nBI\n/IM true\n/W 8\n/H 2\n/BPC 1\nID \x01 EI \x02\nEI Q\n";
+        let content: Vec<u8> = image.iter().copied().cycle().take(image.len() * 200).collect();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut iter = hayro::hayro_syntax::content::TypedIter::new(&content);
+            let mut ops = 0usize;
+            while iter.next().is_some() {
+                ops += 1;
+            }
+            let _ = tx.send(ops);
+        });
+        let ops = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("inline images must not stall the parser");
+        assert!(ops >= 200 * 4, "every image and its q/cm/Q are read: {ops}");
+    }
+
     /// From `cargo xtask fuzz`: an inline image claiming /W 4294967295 over four bytes of data
     /// hung in resampling (vendored hayro patch: `MAX_IMAGE_PIXELS`).
     #[test]
