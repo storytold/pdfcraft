@@ -213,6 +213,44 @@ fn closing_a_dirty_tab_can_save_first() {
 }
 
 #[test]
+fn the_save_prompt_answers_to_the_keyboard() {
+    // Issue #8: Enter saves; ⌘D / Ctrl+D, Alt+D and Alt+N don't save; Escape cancels. While the
+    // prompt is open, ⌘D is not Document properties.
+    for (m, key) in [(Modifiers::COMMAND, Key::D), (Modifiers::ALT, Key::D), (Modifiers::ALT, Key::N)] {
+        let mut h = organize(2);
+        h.get_by_label("Rotate clockwise").click();
+        h.run_steps(3);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::W);
+        h.run_steps(3);
+        h.get_by_label_contains("Save changes to “doc.pdf”");
+        h.key_press_modifiers(m, key);
+        h.run_steps(3);
+        assert!(h.state().views.is_empty(), "{m:?}+{key:?} doesn't save and closes");
+        assert!(h.state().dialog.is_none(), "{m:?}+{key:?} ran no command underneath");
+    }
+    let mut h = organize(2);
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(3);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::W);
+    h.run_steps(3);
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 1, "Escape cancels");
+    assert!(h.state().close_request.is_none());
+
+    let out = temp_path("enter-saves.pdf");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::W);
+    h.run_steps(3);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().views.is_empty(), "Enter saves and closes");
+    let saved = printcraft_render::inspect(std::sync::Arc::new(std::fs::read(&out).unwrap()), None).unwrap();
+    assert_eq!(saved.pages[0].rotation, 90);
+    let _ = std::fs::remove_file(out);
+}
+
+#[test]
 fn clean_tabs_close_without_asking() {
     let mut h = harness(1, |_| {});
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);

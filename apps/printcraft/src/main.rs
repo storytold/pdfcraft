@@ -71,7 +71,8 @@ fn main() -> eframe::Result {
     }
     // eframe would otherwise derive the settings folder from the app id: keep it under "PrintCraft".
     let persistence_path = eframe::storage_dir("PrintCraft").map(|d| d.join("app.ron"));
-    let native = eframe::NativeOptions { viewport, persistence_path, ..Default::default() };
+    let mut native = eframe::NativeOptions { viewport, persistence_path, ..Default::default() };
+    prefer_integrated_gpu(&mut native);
     eframe::run_native(
         "PrintCraft",
         native,
@@ -124,4 +125,17 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
         f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
     f.write_all(json.as_bytes())
+}
+
+/// Draw on the integrated GPU unless `WGPU_POWER_PREF` says otherwise. A PDF viewer has no use
+/// for a discrete GPU, and on hybrid-graphics laptops (NVIDIA Optimus) the discrete one can lose
+/// or corrupt its memory across suspend and screen lock, leaving the window illegible (issue #8).
+/// It also saves battery. Machines with one GPU are unaffected.
+fn prefer_integrated_gpu(native: &mut eframe::NativeOptions) {
+    if std::env::var_os("WGPU_POWER_PREF").is_some() {
+        return;
+    }
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut native.wgpu_options.wgpu_setup {
+        setup.power_preference = eframe::wgpu::PowerPreference::LowPower;
+    }
 }

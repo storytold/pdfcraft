@@ -1061,6 +1061,15 @@ impl PrintCraftApp {
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::Key;
+        // "Save changes?" is modal: its keys are its own (⌘D is Don't save there, not Document
+        // properties; Escape cancels it rather than clearing a selection), and nothing may run
+        // underneath it. They are read here, before the canvas can consume them.
+        if self.close_request.is_some() {
+            if let Some(choice) = dialogs::save_prompt_key(ctx) {
+                self.resolve_close(ctx, choice);
+            }
+            return;
+        }
         self.registry_shortcuts(ctx);
         if self.full_screen && ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.set_full_screen(ctx, false);

@@ -1252,6 +1252,24 @@ fn draft_changes(app: &PrintCraftApp) -> Option<Vec<Edit>> {
     Some(edits)
 }
 
+/// The "Save changes?" prompt's keys (issue #8), read before anything else can take them: Enter
+/// saves (the default button) and Escape cancels; Don't save takes ⌘D / Ctrl+D, the macOS
+/// convention, or Alt+D / Alt+N, the mnemonics Windows and Linux desktops use for it.
+pub(crate) fn save_prompt_key(ctx: &egui::Context) -> Option<Option<bool>> {
+    use egui::{Key, Modifiers};
+    ctx.input_mut(|i| {
+        if i.consume_key(Modifiers::NONE, Key::Enter) {
+            Some(Some(true))
+        } else if i.consume_key(Modifiers::NONE, Key::Escape) {
+            Some(None)
+        } else if [(Modifiers::COMMAND, Key::D), (Modifiers::ALT, Key::D), (Modifiers::ALT, Key::N)].into_iter().any(|(m, k)| i.consume_key(m, k)) {
+            Some(Some(false))
+        } else {
+            None
+        }
+    })
+}
+
 /// "Save changes?" when closing a tab or quitting with unsaved edits.
 fn save_prompt(app: &mut PrintCraftApp, ctx: &egui::Context) {
     let Some(req) = app.close_request else { return };
