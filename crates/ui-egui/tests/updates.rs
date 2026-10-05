@@ -12,11 +12,10 @@ fn source(answer: Result<&str, &str>) -> UpdateSource {
     Arc::new(move || answer.clone().map(|v| Release { url: format!("https://github.com/storytold/printcraft/releases/tag/{v}"), version: v }))
 }
 
-fn harness(answer: Result<&str, &str>, at_start: bool) -> Harness<'static, PrintCraftApp> {
+fn harness(answer: Result<&str, &str>) -> Harness<'static, PrintCraftApp> {
     Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PrintCraftApp::new();
         app.update_source = Some(source(answer));
-        app.check_updates_at_start = at_start;
         app
     })
 }
@@ -48,7 +47,7 @@ fn versions_compare_by_number() {
 
 #[test]
 fn a_newer_release_is_offered_for_download() {
-    let mut h = harness(Ok("v99.0.0"), false);
+    let mut h = harness(Ok("v99.0.0"));
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
     h.get_by_label_contains("PrintCraft 99.0.0 is available");
@@ -60,42 +59,39 @@ fn a_newer_release_is_offered_for_download() {
 
 #[test]
 fn an_up_to_date_or_failed_check_says_so() {
-    let mut h = harness(Ok(concat!("v", env!("CARGO_PKG_VERSION"))), false);
+    let mut h = harness(Ok(concat!("v", env!("CARGO_PKG_VERSION"))));
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
     h.get_by_label_contains("is up to date");
     assert!(h.query_by_label("Download").is_none());
 
-    let mut h = harness(Err("couldn't reach GitHub"), false);
+    let mut h = harness(Err("couldn't reach GitHub"));
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
     h.get_by_label_contains("Couldn't check for updates: couldn't reach GitHub");
 }
 
 #[test]
-fn the_check_at_start_is_opt_in_and_quiet_unless_there_is_news() {
-    // Off (the default): nothing is asked.
-    let mut h = harness(Ok("v99.0.0"), false);
+fn nothing_is_asked_until_the_user_checks() {
+    // No check at start (the owner's decision): the source is only called from the command.
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = calls.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+        let mut app = PrintCraftApp::new();
+        // Settings from a build that had the startup option are ignored.
+        app.restore(r#"{"check_updates_at_start": true}"#);
+        let counted = counted.clone();
+        app.update_source = Some(Arc::new(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Release { version: "v99.0.0".into(), url: "https://github.com/storytold/printcraft/releases/tag/v99.0.0".into() })
+        }));
+        app
+    });
     settle(&mut h);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert!(h.query_by_label_contains("is available").is_none());
-    // On, with a newer release: the dialog appears by itself.
-    let mut h = harness(Ok("v99.0.0"), true);
+    h.state_mut().execute("help.check_updates");
     settle(&mut h);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     h.get_by_label_contains("PrintCraft 99.0.0 is available");
-    // On, up to date or failing: silent.
-    for answer in [Ok(concat!("v", env!("CARGO_PKG_VERSION"))), Err("offline")] {
-        let mut h = harness(answer, true);
-        settle(&mut h);
-        for message in ["is up to date", "Couldn't check for updates", "is available"] {
-            assert!(h.query_by_label_contains(message).is_none(), "{answer:?}: {message}");
-        }
-    }
-    // The preference is remembered.
-    let mut app = PrintCraftApp::new();
-    app.check_updates_at_start = true;
-    let mut restored = PrintCraftApp::new();
-    restored.restore(&app.persist());
-    assert!(restored.check_updates_at_start);
-    restored.restore("{}");
-    assert!(restored.check_updates_at_start, "missing keys change nothing");
 }

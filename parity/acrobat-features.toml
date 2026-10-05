@@ -1687,15 +1687,15 @@ notes = ""
 
 [[feature]]
 id = "view.check-for-updates"
-title = "Help ▸ Check for updates (and an optional check at start)"
+title = "Help ▸ Check for updates"
 area = "B"
 tier = "P2"
 milestone = "M3"
 status = "partial"
 commands = ["help.check_updates"]
 tools = []
-evidence = ["crates/ui-egui/tests/updates.rs::a_newer_release_is_offered_for_download", "crates/ui-egui/tests/updates.rs::the_check_at_start_is_opt_in_and_quiet_unless_there_is_news", "apps/printcraft/src/updates.rs::answers_are_read_and_only_our_release_pages_are_offered"]
-notes = "asks GitHub Releases and offers the release page; the check at start is opt-in. Missing: installing the update in place (needs signed release artifacts)"
+evidence = ["crates/ui-egui/tests/updates.rs::a_newer_release_is_offered_for_download", "crates/ui-egui/tests/updates.rs::nothing_is_asked_until_the_user_checks", "apps/printcraft/src/updates.rs::answers_are_read_and_only_our_release_pages_are_offered"]
+notes = "asks GitHub Releases on request and offers the release page. By the owner's decision there is no check at start and no in-place install (Acrobat has both)"
 
 [[feature]]
 id = "view.single-key-accelerators"

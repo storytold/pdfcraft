@@ -283,8 +283,6 @@ pub struct PrintCraftApp {
     pub dialog: Option<Dialog>,
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
     pub update_source: Option<updates::UpdateSource>,
-    /// Check for updates when PrintCraft starts (opt-in; persisted).
-    pub check_updates_at_start: bool,
     pub(crate) updates: updates::Updates,
     pub palette_open: bool,
     pub palette_query: String,
@@ -456,7 +454,6 @@ impl PrintCraftApp {
             follow_system_theme: false,
             dialog: None,
             update_source: None,
-            check_updates_at_start: false,
             updates: updates::Updates::default(),
             palette_open: false,
             palette_query: String::new(),
@@ -833,7 +830,6 @@ impl PrintCraftApp {
             "custom_stamps": stamps_ui::encode(&self.custom_stamps),
             "javascript": self.session.javascript(),
             "actions": actions_ui::encode(&self.custom_actions),
-            "check_updates_at_start": self.check_updates_at_start,
         })
         .to_string()
     }
@@ -849,9 +845,6 @@ impl PrintCraftApp {
         }
         if let Ok(t) = serde_json::from_value::<ThemeKind>(v["theme"].clone()) {
             self.theme = t;
-        }
-        if let Some(b) = v["check_updates_at_start"].as_bool() {
-            self.check_updates_at_start = b;
         }
         if let Ok(s) = serde_json::from_value::<Vec<Vec<[f32; 2]>>>(v["signature"].clone())
             && s.iter().all(|st| st.iter().all(|p| p.iter().all(|x| x.is_finite())))

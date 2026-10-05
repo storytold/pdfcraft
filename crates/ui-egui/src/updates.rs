@@ -3,8 +3,7 @@
 //! The desktop app supplies how to ask ([`PrintCraftApp::update_source`]), so this crate has no
 //! network code; without a source (the web build, tests) the command opens the releases page.
 //! PrintCraft never downloads or installs anything itself: the user downloads the new version.
-//! A check when PrintCraft starts is opt-in (it contacts GitHub without being asked) and stays
-//! silent unless a newer version exists.
+//! It asks only when the user does: there is no check at start (the owner's decision).
 
 use std::sync::Arc;
 
@@ -52,10 +51,7 @@ pub(crate) enum Check {
     #[default]
     Idle,
     #[cfg(not(target_arch = "wasm32"))]
-    Running {
-        rx: std::sync::mpsc::Receiver<Result<Release, String>>,
-        manual: bool,
-    },
+    Running(std::sync::mpsc::Receiver<Result<Release, String>>),
     Done(Result<Release, String>),
 }
 
@@ -64,24 +60,19 @@ pub(crate) struct Updates {
     pub(crate) check: Check,
     /// The Updates dialog is showing.
     pub(crate) open: bool,
-    /// The check at start has been considered (first frame, once the context is known).
-    started: bool,
 }
 
 impl PrintCraftApp {
-    /// Check for a newer release. `manual` (Help ▸ Check for updates) shows the outcome, whatever
-    /// it is; otherwise (at start) the dialog only appears when a newer version exists.
-    pub fn check_for_updates(&mut self, manual: bool) {
+    /// Help ▸ Check for updates: ask for the latest release and show the outcome.
+    pub fn check_for_updates(&mut self) {
         let Some(source) = self.update_source.clone() else {
-            if manual {
-                self.open_url(RELEASES_PAGE);
-            }
+            self.open_url(RELEASES_PAGE);
             return;
         };
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if matches!(self.updates.check, Check::Running { .. }) {
-                self.updates.open |= manual;
+            self.updates.open = true;
+            if matches!(self.updates.check, Check::Running(_)) {
                 return;
             }
             let (tx, rx) = std::sync::mpsc::channel();
@@ -93,36 +84,24 @@ impl PrintCraftApp {
                     ctx.request_repaint();
                 }
             });
-            self.updates.check = Check::Running { rx, manual };
-            self.updates.open = manual;
+            self.updates.check = Check::Running(rx);
         }
         #[cfg(target_arch = "wasm32")]
         {
             let _ = source;
-            if manual {
-                self.open_url(RELEASES_PAGE);
-            }
+            self.open_url(RELEASES_PAGE);
         }
     }
 
-    /// Start the opt-in check at start (first frame), and pick up a finished check (each frame).
+    /// Pick up a finished check (each frame).
     pub(crate) fn poll_updates(&mut self) {
-        if !self.updates.started {
-            self.updates.started = true;
-            if self.check_updates_at_start {
-                self.check_for_updates(false);
-            }
-        }
         #[cfg(not(target_arch = "wasm32"))]
-        if let Check::Running { rx, manual } = &self.updates.check {
-            let manual = *manual;
+        if let Check::Running(rx) = &self.updates.check {
             let result = match rx.try_recv() {
                 Ok(r) => r,
                 Err(std::sync::mpsc::TryRecvError::Empty) => return,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("the update check stopped unexpectedly".into()),
             };
-            let newer = result.as_ref().is_ok_and(|r| is_newer(&r.version, env!("CARGO_PKG_VERSION")));
-            self.updates.open |= manual || newer;
             self.updates.check = Check::Done(result);
         }
     }
@@ -149,7 +128,7 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 ui.label("No check has run yet.");
             }
             #[cfg(not(target_arch = "wasm32"))]
-            Check::Running { .. } => {
+            Check::Running(_) => {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label("Checking for a newer version…");
@@ -172,11 +151,6 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
             }
         }
         ui.add_space(10.0);
-        ui.scope(|ui| {
-            // The light theme's field colour is the dialog's own white: outline the box.
-            ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::new(1.0, t.text_muted);
-            ui.checkbox(&mut app.check_updates_at_start, "Check for updates when PrintCraft starts");
-        });
         ui.label(
             egui::RichText::new("Asks GitHub for the latest release. Nothing is downloaded or installed automatically.").color(t.text_muted).small(),
         );
