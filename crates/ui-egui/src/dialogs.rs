@@ -12,6 +12,7 @@ const INFO_KEYS: [&str; 4] = ["Title", "Author", "Subject", "Keywords"];
 pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
     password(app, ctx);
     save_prompt(app, ctx);
+    crate::updates::dialog(app, ctx);
     let Some(dialog) = app.dialog else {
         app.props_draft = None;
         app.view_draft = None;

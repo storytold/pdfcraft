@@ -300,6 +300,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("help.app_page", "PrintCraft web page", HELP, None, Nothing, "globe"),
     c("help.github", "PrintCraft on GitHub", HELP, None, Nothing, "code-xml"),
     c("help.website", "ArtCraft website", HELP, None, Nothing, "external-link"),
+    c("help.check_updates", "Check for updates…", HELP, None, Nothing, "cloud"),
     c("help.about", "About PrintCraft", HELP, None, Nothing, "info"),
 ];
 

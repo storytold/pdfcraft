@@ -15,6 +15,8 @@
 
 use printcraft_ui_egui::PrintCraftApp;
 
+mod updates;
+
 /// Freedesktop app id: the `.desktop` file name and the hicolor icon name.
 const APP_ID: &str = "ai.storyteller.printcraft";
 
@@ -82,6 +84,7 @@ fn main() -> eframe::Result {
                 app.restore(&json);
             }
             app.integrated_titlebar = integrated;
+            app.update_source = Some(std::sync::Arc::new(updates::latest_release));
             app.keychain_ids = cfg!(target_os = "macos");
             if let Some(file) = &control_file {
                 let client = app.attach_control(&cc.egui_ctx);
