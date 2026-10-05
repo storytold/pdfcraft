@@ -821,6 +821,53 @@ trailer << /Root 1 0 R >>
         page(&format!("q 20 0 0 20 5 5 cm /Im1 Do Q {red}"), fax);
     }
 
+    /// From the nightly `cargo xtask fuzz`: a FlateDecode predictor with `/Columns
+    /// 9223372036854775807` wrapped to a 2^61-byte row allocation (an abort on any machine), and
+    /// a line width of 9223372036854775807 made stroke expansion allocate 10 GB. Vendored hayro
+    /// patches: saturating predictor rows refused when longer than the data, and stroke widths
+    /// clamped to a few canvases. The page still renders, with the huge stroke covering it.
+    #[test]
+    fn absurd_predictor_columns_and_line_widths_render() {
+        let render = |streams: &[&str]| {
+            let mut objs = String::new();
+            let mut refs = Vec::new();
+            for (i, s) in streams.iter().enumerate() {
+                let n = 4 + i;
+                refs.push(format!("{n} 0 R"));
+                objs.push_str(&format!("{n} 0 obj {s} endobj\n"));
+            }
+            let pdf = format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents [{}] >> endobj
+{objs}trailer << /Root 1 0 R >>
+%%EOF",
+                refs.join(" ")
+            );
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+            });
+            let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("must not stall the renderer");
+            assert!(page.error.is_none(), "{:?}", page.error);
+            page
+        };
+        let plain = |content: &str| format!("<< /Length {} >> stream\n{content}\nendstream", content.len());
+        // Stored (uncompressed) zlib data, so the stream needs no encoder: header, one final
+        // stored block of two bytes, checksum.
+        let predicted = "<< /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 9223372036854775807 >> /Length 13 >> stream\nx\u{1}\u{1}\u{2}\u{0}\u{fd}\u{ff}\u{0}\u{0}\u{0}\u{1}\u{0}\u{1}\nendstream";
+        let page = render(&[predicted, &plain("1 0 0 rg 0 0 4 4 re f")]);
+        assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the other content stream draws");
+        let page = render(&[&plain("1 0 0 RG 9223372036854775807 w 10 20 m 30 20 l S")]);
+        // Butt caps: the stroke covers the band over the segment (x 10 to 30) top to bottom.
+        for (x, y) in [(20, 0), (20, 39), (12, 0), (28, 39)] {
+            assert_eq!(&page.rgba[((y * 40 + x) * 4)..][..4], &[255, 0, 0, 255], "({x}, {y}) under the huge stroke");
+        }
+        assert_eq!(&page.rgba[((20 * 40 + 2) * 4)..][..4], &[255, 255, 255, 255], "beyond the butt cap");
+    }
+
     /// From `cargo xtask fuzz`: an inline image claiming /W 4294967295 over four bytes of data
     /// hung in resampling (vendored hayro patch: `MAX_IMAGE_PIXELS`).
     #[test]

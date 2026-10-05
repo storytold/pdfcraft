@@ -716,12 +716,12 @@ struct PredictorParams {
 }
 
 impl PredictorParams {
-    fn bits_per_pixel(&self) -> u8 {
-        self.bits_per_component * self.colors
-    }
-
     fn row_length_in_bytes(&self) -> usize {
-        (self.columns * self.bits_per_pixel() as usize).div_ceil(8)
+        // PrintCraft patch: saturating, and in usize (colors × bits overflowed u8): a fuzzed
+        // `/Columns 9223372036854775807` wrapped to a 2^61-byte row.
+        self.columns
+            .saturating_mul(usize::from(self.bits_per_component) * usize::from(self.colors))
+            .div_ceil(8)
     }
 }
 
@@ -759,10 +759,20 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
 
             let total_row_len = if is_png_predictor {
                 // + 1 Because each row must start with the predictor that is used for PNG predictors.
-                row_len + 1
+                row_len.saturating_add(1)
             } else {
                 row_len
             };
+
+            // PrintCraft patch: a zero-width row divided by zero below, and a row longer than the
+            // data was allocated before finding there is nothing to read (no rows: empty output,
+            // as before).
+            if row_len == 0 {
+                return None;
+            }
+            if total_row_len > data.len() {
+                return Some(Vec::new());
+            }
 
             let num_rows = data.len() / total_row_len;
 
@@ -775,7 +785,8 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
             let (bit_size, chunk_len) = if is_png_predictor {
                 (
                     8,
-                    (params.colors * params.bits_per_component).div_ceil(8) as usize,
+                    // PrintCraft patch: in usize (the u8 product overflowed).
+                    (usize::from(params.colors) * usize::from(params.bits_per_component)).div_ceil(8),
                 )
             } else {
                 (params.bits_per_component, params.colors as usize)
