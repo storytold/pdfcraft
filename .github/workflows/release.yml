@@ -220,19 +220,21 @@ jobs:
         with:
           release: "14.3"
           usesh: true
+          cpu: 4
           mem: 12288
           envs: "PRINTCRAFT_VERSION PRINTCRAFT_BUILD_DATE VERSION_OVERRIDE"
+          # The same packages as the FreeBSD CI workflow, plus bash for the packaging script.
           prepare: |
-            pkg install -y bash curl git cmake pkgconf llvm19 perl5 \
-              libxkbcommon wayland libX11 libXrandr libXi libXcursor mesa-libs gtk3
+            pkg install -y bash git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
           run: |
             set -e
             . "$HOME/.cargo/env"
             git config --global --add safe.directory "$PWD"
-            export LIBCLANG_PATH=/usr/local/llvm19/lib CARGO_BUILD_JOBS=4
             if [ -n "$VERSION_OVERRIDE" ]; then cargo xtask version set "$PRINTCRAFT_VERSION"; fi
             packaging/freebsd/package.sh
+            # Only dist/ comes back out of the VM: copying the target dir back fails on large builds.
+            rm -rf target
       - uses: actions/upload-artifact@v4
         with:
           name: release-freebsd-x86_64
