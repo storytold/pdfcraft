@@ -131,3 +131,12 @@ impl Filter {
         res
     }
 }
+
+/// PrintCraft patch: whether a CCITT image of `columns` × `rows` may be decoded. The decoder sizes
+/// its line buffers from `/Columns`, which a fuzzed file set to 4294967295 (a 4 GiB allocation);
+/// real fax lines are a few thousand pixels wide.
+pub fn ccitt_size_ok(columns: u32, rows: u32) -> bool {
+    const MAX_COLUMNS: u32 = 1 << 20;
+    const MAX_PIXELS: u64 = 1 << 28;
+    columns > 0 && columns <= MAX_COLUMNS && u64::from(columns) * u64::from(rows.max(1)) <= MAX_PIXELS
+}

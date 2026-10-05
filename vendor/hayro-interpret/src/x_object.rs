@@ -399,6 +399,12 @@ fn decode_context<'a>(
     obj: &ImageXObject<'a>,
     target_dimension: Option<(u32, u32)>,
 ) -> Option<DecodeContext<'a>> {
+    // PrintCraft patch: images and masks over `MAX_IMAGE_PIXELS` are not decoded at all (the
+    // renderer skips them anyway): a fuzzed `/W 4294967295` stencil mask allocated gigabytes here.
+    if !image_size_ok(obj.width, obj.height) {
+        (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure);
+        return None;
+    }
     let dict = obj.stream.dict();
     let dict_bpc = dict
         .get::<u8>(BPC)
@@ -967,4 +973,10 @@ fn apply_decode_array(
     }
 
     Some(decoded_arr)
+}
+
+/// PrintCraft patch: whether an image or mask of `width` × `height` may be decoded (at most
+/// 2^28 pixels, the renderer's `MAX_IMAGE_PIXELS`).
+pub fn image_size_ok(width: u32, height: u32) -> bool {
+    width > 0 && height > 0 && u64::from(width) * u64::from(height) <= 1 << 28
 }

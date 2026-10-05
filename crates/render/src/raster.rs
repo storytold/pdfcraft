@@ -780,6 +780,47 @@ trailer << /Root 1 0 R >>
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255]);
     }
 
+    /// From the nightly `cargo xtask fuzz` (CI caps each child at 4 GiB): a stencil mask claiming
+    /// /W 4294967295 and a CCITT image claiming /Columns 4294967295 each allocated 4 GiB while
+    /// decoding (locally: 9.6 GB and 4.3 GB). Vendored hayro patches `image_size_ok` and
+    /// `ccitt_size_ok` refuse such sizes before decoding; the rest of the page still draws.
+    #[test]
+    fn absurd_mask_and_fax_sizes_are_refused_before_decoding() {
+        assert!(hayro::hayro_interpret::image_size_ok(8000, 8000));
+        assert!(!hayro::hayro_interpret::image_size_ok(4_294_967_295, 2));
+        assert!(!hayro::hayro_interpret::image_size_ok(0, 10));
+        assert!(hayro::hayro_syntax::ccitt_size_ok(1728, 2200), "a fax page");
+        assert!(!hayro::hayro_syntax::ccitt_size_ok(4_294_967_295, 26));
+        assert!(!hayro::hayro_syntax::ccitt_size_ok(1 << 19, 1 << 12));
+        let page = |content: &str, xobject: &str| {
+            let pdf = format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj {xobject} endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+                content.len()
+            );
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+            });
+            let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("an absurd image must not stall the renderer");
+            assert!(page.error.is_none(), "{:?}", page.error);
+            assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
+        };
+        let red = "1 0 0 rg 0 0 4 4 re f";
+        page(&format!("q 20 0 0 20 5 5 cm BI /W 4294967295 /H 2 /IM true /BPC 1 ID \u{0}\u{ff}\u{ff}\u{0} EI Q {red}"), "<< >>");
+        let fax = "<< /Type /XObject /Subtype /Image /Width 81 /Height 26 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /Columns 4294967295 /Rows 26 /K -1 >> /Length 4 >> stream\n\u{0}\u{0}\u{0}\u{0}\nendstream";
+        page(&format!("q 20 0 0 20 5 5 cm /Im1 Do Q {red}"), fax);
+    }
+
     /// From `cargo xtask fuzz`: an inline image claiming /W 4294967295 over four bytes of data
     /// hung in resampling (vendored hayro patch: `MAX_IMAGE_PIXELS`).
     #[test]

@@ -34,6 +34,11 @@ pub(crate) fn decode(
         invert_black: params.get::<bool>(BLACK_IS_1).unwrap_or(false),
     };
 
+    // PrintCraft patch: refuse absurd sizes before the decoder allocates for them.
+    if !super::ccitt_size_ok(settings.columns, settings.rows) {
+        return None;
+    }
+
     // Whenever possible (if we don't have an indexed color space), we convert
     // the data as 8-bit instead of 1-bit, so that it can be easier converted
     // into an RGBA8 image.
