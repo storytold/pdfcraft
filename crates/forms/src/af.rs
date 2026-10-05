@@ -209,7 +209,7 @@ impl Parser<'_> {
                             } else {
                                 u32::from(code)
                             };
-                            let ch = char::from_u32(code).map_or('\u{FFFD}', |ch| ch);
+                            let ch = char::from_u32(code).unwrap_or('\u{FFFD}');
                             let mut encoded = [0u8; 4];
                             out.extend_from_slice(ch.encode_utf8(&mut encoded).as_bytes());
                         }
