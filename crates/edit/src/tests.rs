@@ -254,6 +254,59 @@ fn text_page(content: &str) -> Document {
     Document::open(Arc::new(out)).unwrap()
 }
 
+fn descriptor_text_page() -> Document {
+    let content = "BT /F1 12 Tf 72 700 Td (ab) Tj ET";
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+NeutralFace /FirstChar 97 /LastChar 98 /Widths [500 500] /FontDescriptor 6 0 R /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /FontDescriptor /FontName /NeutralFace /Flags 262208 /ItalicAngle -12 /FontWeight 700 /Ascent 900 /Descent -250 >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+#[test]
+fn font_descriptor_style_is_exposed_even_with_a_neutral_name() {
+    let doc = descriptor_text_page();
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].bold && lines[0].italic, "{:?}", lines[0]);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert!(blocks[0].bold && blocks[0].italic, "{:?}", blocks[0]);
+}
+
+#[test]
+fn mixed_font_runs_are_not_merged_into_one_source_style() {
+    let doc = text_page("BT /F1 12 Tf 72 700 Td (Regular) Tj /F2 12 Tf 150 700 Td (Subset) Tj ET");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.len(), 2);
+    assert_ne!(lines[0].font, lines[1].font);
+}
+
+#[test]
+fn missing_glyphs_preserve_source_style_in_fallback() {
+    let mut doc = descriptor_text_page();
+    let result = text::replace_line(&mut doc, 0, 0, "Styled €").unwrap();
+    assert_eq!(result.substituted.as_deref(), Some("Helvetica-BoldOblique"));
+    let bytes = page_content_bytes(&doc, 0);
+    let content = String::from_utf8_lossy(&bytes);
+    assert!(content.contains("/PCEdHelveticaBoldOblique 12 Tf"), "{content}");
+}
+
 #[test]
 fn text_lines_are_found_and_replaced_in_place() {
     let mut doc =
@@ -264,7 +317,6 @@ fn text_lines_are_found_and_replaced_in_place() {
     assert!((lines[0].rect[0] - 72.0).abs() < 0.01 && lines[0].rect[1] < 700.0 && lines[0].rect[3] > 700.0, "{:?}", lines[0].rect);
     assert!((lines[0].size - 12.0).abs() < 1e-9 && lines[0].base_font == "Helvetica");
     let second = lines[1].rect;
-    // Same font: reused; the next line stays where it was.
     let r = text::replace_line(&mut doc, 0, 0, "Goodbye, café").unwrap();
     assert_eq!(r.substituted, None);
     let doc = reopen(&doc);

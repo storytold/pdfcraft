@@ -117,7 +117,7 @@ impl LineEditor {
 }
 
 /// The look shown for a paragraph: the family and weight guessed from its PDF font name.
-fn source_look(base_font: &str, size: f64, color: [f64; 3]) -> printcraft_engine::AddedText {
+fn source_look(base_font: &str, size: f64, color: [f64; 3], detected_bold: bool, detected_italic: bool) -> printcraft_engine::AddedText {
     use printcraft_engine::FontFamily as F;
     let name = base_font.to_ascii_lowercase();
     let family = if ["courier", "mono", "consolas", "menlo", "monaco", "lucida console"].iter().any(|s| name.contains(s)) {
@@ -129,8 +129,8 @@ fn source_look(base_font: &str, size: f64, color: [f64; 3]) -> printcraft_engine
     };
     printcraft_engine::AddedText {
         family,
-        bold: ["bold", "black", "heavy", "semibold", "demi"].iter().any(|s| name.contains(s)),
-        italic: ["italic", "oblique", "slanted"].iter().any(|s| name.contains(s)),
+        bold: detected_bold || ["bold", "black", "heavy", "semibold", "demi"].iter().any(|s| name.contains(s)),
+        italic: detected_italic || ["italic", "oblique", "slanted"].iter().any(|s| name.contains(s)),
         size: (size * 10.0).round() / 10.0,
         color,
         ..Default::default()
@@ -138,13 +138,14 @@ fn source_look(base_font: &str, size: f64, color: [f64; 3]) -> printcraft_engine
 }
 
 fn look_of(b: &printcraft_engine::TextBlock) -> printcraft_engine::AddedText {
-    source_look(&b.base_font, b.size, b.color)
+    source_look(&b.base_font, b.size, b.color, b.bold, b.italic)
 }
 
 fn editor_font(look: &printcraft_engine::AddedText, size: f32) -> FontId {
-    let family = match look.family {
-        printcraft_engine::FontFamily::Courier => FontFamily::Monospace,
-        printcraft_engine::FontFamily::Times | printcraft_engine::FontFamily::Helvetica => FontFamily::Proportional,
+    let family = match (look.family, look.bold) {
+        (printcraft_engine::FontFamily::Courier, _) => FontFamily::Monospace,
+        (_, true) => FontFamily::Name("semibold".into()),
+        (_, false) => FontFamily::Proportional,
     };
     FontId::new(size, family)
 }

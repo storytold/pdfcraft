@@ -30,6 +30,8 @@ pub struct TextLine {
     pub font: String,
     pub base_font: String,
     pub size: f64,
+    pub bold: bool,
+    pub italic: bool,
     /// The current fill colour as RGB.
     pub color: [f64; 3],
     /// Whether new text in this font can only be shown by substituting another font (no
@@ -106,6 +108,8 @@ pub struct TextBlock {
     pub rect: [f64; 4],
     pub base_font: String,
     pub size: f64,
+    pub bold: bool,
+    pub italic: bool,
     /// The text fill colour as RGB, used by the visual editor and preserved when no colour
     /// override is requested.
     pub color: [f64; 3],
@@ -207,6 +211,8 @@ struct Shown {
     font: Vec<u8>,
     base_font: String,
     size: f64,
+    bold: bool,
+    italic: bool,
     decodable: bool,
 }
 
@@ -363,6 +369,8 @@ fn interpret(doc: &Document, ops: &[Op], fonts_res: &Dict, cache: &mut HashMap<V
                     font: name,
                     base_font: m.base_font.clone(),
                     size: if size_user > 0.0 { size_user } else { ts.size },
+                    bold: m.bold,
+                    italic: m.italic,
                     decodable,
                 });
             }
@@ -385,7 +393,14 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
         let mut last: Option<(usize, f64, f64, f64)> = None; // (bt, baseline, end_x, size)
         for s in shown {
             let joins = last.is_some_and(|(bt, base, end, size)| {
-                bt == s.bt && (s.baseline - base).abs() < size * 0.3 && s.start_x > end - size && s.start_x - end < size * 3.0
+                bt == s.bt
+                    && lines.last().is_some_and(|l| l.font.as_bytes() == s.font.as_slice())
+                    && lines.last().is_some_and(|l| {
+                        (s.size - l.size).abs() < 0.01 && s.bold == l.bold && s.italic == l.italic && fill_color(&s.state.fill) == l.color
+                    })
+                    && (s.baseline - base).abs() < size * 0.3
+                    && s.start_x > end - size
+                    && s.start_x - end < size * 3.0
             });
             if joins && let Some(l) = lines.last_mut() {
                 let gap = s.start_x - last.map_or(s.start_x, |x| x.2);
@@ -404,6 +419,8 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
                     font: String::from_utf8_lossy(&s.font).into_owned(),
                     base_font: s.base_font.clone(),
                     size: s.size,
+                    bold: s.bold,
+                    italic: s.italic,
                     color: fill_color(&s.state.fill),
                     decodable: s.decodable,
                     stream: si,
@@ -431,7 +448,17 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
 /// Text → the bytes that show it in the chosen font.
 type Encoder = Box<dyn Fn(&str) -> Option<Vec<u8>>>;
 
-/// The substitute font's resource name.
+fn source_family(base_font: &str) -> crate::added::Family {
+    let name = base_font.to_ascii_lowercase();
+    if ["courier", "mono", "consolas", "menlo", "monaco", "lucida console"].iter().any(|s| name.contains(s)) {
+        crate::added::Family::Courier
+    } else if !name.contains("sans") && ["times", "serif", "roman", "cambria", "georgia", "palatino", "garamond"].iter().any(|s| name.contains(s)) {
+        crate::added::Family::Times
+    } else {
+        crate::added::Family::Helvetica
+    }
+}
+
 const SUBSTITUTE_NAME: &str = "PCEdHelv";
 const SUBSTITUTE: &[u8] = SUBSTITUTE_NAME.as_bytes();
 
@@ -473,16 +500,19 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
             }
             // The size in text space: the current Tf's size.
             let size = font_size_before(&ops, first).unwrap_or(target.size);
-            replacement.push(Op::new("Tf", vec![Object::name(SUBSTITUTE_NAME), printcraft_content::num(size)]));
+            let family = source_family(&target.base_font);
+            let base = family.base_font(target.bold, target.italic);
+            let substitute_name = format!("PCEd{}", base.replace('-', ""));
+            replacement.push(Op::new("Tf", vec![Object::name(&substitute_name), printcraft_content::num(size)]));
             replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(win))]));
             replacement.push(Op::new("Tf", vec![Object::name(&target.font), printcraft_content::num(size)]));
-            substituted = Some("Helvetica".to_string());
+            substituted = Some(base.to_string());
             let mut f = Dict::new();
             f.set(b"Type".to_vec(), Object::name("Font"));
             f.set(b"Subtype".to_vec(), Object::name("Type1"));
-            f.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+            f.set(b"BaseFont".to_vec(), Object::name(base));
             f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-            fonts_res.set(SUBSTITUTE.to_vec(), Object::Dict(f));
+            fonts_res.set(substitute_name.into_bytes(), Object::Dict(f));
         }
     }
     // Rebuild: the line's first operator becomes the replacement, its others go. Copies of the
@@ -566,6 +596,10 @@ fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
                 let g = prev.origin.baseline - l.origin.baseline;
                 prev.stream == l.stream
                     && prev.font == l.font
+                    && prev.base_font == l.base_font
+                    && prev.bold == l.bold
+                    && prev.italic == l.italic
+                    && prev.color == l.color
                     && (prev.size - l.size).abs() < 0.01
                     && aligned(prev, l)
                     && g > l.size * 0.8
@@ -593,6 +627,8 @@ fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
                 rect: l.rect,
                 base_font: l.base_font.clone(),
                 size: l.size,
+                bold: l.bold,
+                italic: l.italic,
                 color: l.color,
                 lines: vec![i],
             });
@@ -677,7 +713,7 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     let metrics = fonts_res.get(font_name.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()).map(|d| Metrics::from_dict(doc, &d));
     let reuse = style.family.is_none() && metrics.as_ref().is_some_and(|m| m.encode(&text).is_some());
     // The standard font used when the paragraph's own can't be (chosen, or substituted).
-    let (family, bold, italic) = style.family.unwrap_or((crate::added::Family::Helvetica, false, false));
+    let (family, bold, italic) = style.family.unwrap_or((source_family(&b.base_font), b.bold, b.italic));
     let std_width = move |s: &str, size: f64| -> f64 {
         match family {
             crate::added::Family::Courier => s.chars().count() as f64 * 0.6 * size,

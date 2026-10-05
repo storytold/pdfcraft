@@ -50,6 +50,10 @@ pub struct Metrics {
     /// `/BaseFont`, and whether it is a subset (`ABCDEF+Name`: other glyphs are missing).
     pub base_font: String,
     pub subset: bool,
+    /// Whether the PDF identifies this face as bold or italic. These come from the
+    /// font name and, when present, `/FontDescriptor` flags/weight/angle.
+    pub bold: bool,
+    pub italic: bool,
     /// Bytes per code for writing new text (1 for simple fonts, else the codespace length).
     code_len: usize,
 }
@@ -74,6 +78,15 @@ fn hex_bytes(tok: &str) -> Option<Vec<u8>> {
 
 fn be(b: &[u8]) -> u32 {
     b.iter().fold(0u32, |a, x| (a << 8) | u32::from(*x))
+}
+
+fn style_from_name(name: &str) -> (bool, bool) {
+    let name = name.to_ascii_lowercase();
+    let name = name.split_once('+').map_or(name.as_str(), |(_, n)| n);
+    (
+        ["bold", "black", "heavy", "semibold", "demi"].iter().any(|s| name.contains(s)),
+        ["italic", "oblique", "slanted"].iter().any(|s| name.contains(s)),
+    )
 }
 
 /// Codespace ranges and CID mappings from an embedded CMap stream.
@@ -141,6 +154,8 @@ impl Metrics {
             unicode: (32..127u8).map(|c| (u32::from(c), char::from(c).to_string())).collect(),
             base_font: "Helvetica".into(),
             subset: false,
+            bold: false,
+            italic: false,
             code_len: 1,
         }
     }
@@ -149,6 +164,9 @@ impl Metrics {
         let mut m = Self::read_metrics(doc, font);
         let base = String::from_utf8_lossy(font.name(b"BaseFont").unwrap_or(b"")).into_owned();
         m.subset = base.len() > 7 && base.as_bytes()[6] == b'+' && base[..6].bytes().all(|b| b.is_ascii_uppercase());
+        let (bold, italic) = style_from_name(&base);
+        m.bold |= bold;
+        m.italic |= italic;
         m.base_font = base;
         m.code_len = match &m.codes {
             Codes::One => 1,
@@ -226,9 +244,7 @@ impl Metrics {
                         m.descent = (bbox[1] * fm[3]).min(-0.1);
                     }
                 }
-                return m;
-            }
-            if m.widths.is_empty() {
+            } else if m.widths.is_empty() {
                 let base = String::from_utf8_lossy(font.name(b"BaseFont").unwrap_or(b"")).to_ascii_lowercase();
                 m.std14 = Some(if base.contains("courier") {
                     Std14::Courier
@@ -242,6 +258,11 @@ impl Metrics {
             }
         }
         if let Some(d) = descriptor {
+            let flags = d.get(b"Flags").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(0.0).max(0.0) as u32;
+            let angle = d.get(b"ItalicAngle").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(0.0);
+            let weight = d.get(b"FontWeight").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(0.0);
+            m.italic |= flags & 64 != 0 || angle.abs() > 0.1;
+            m.bold |= flags & 262_144 != 0 || weight >= 600.0;
             let a = d.get(b"Ascent").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(0.0) / 1000.0;
             let de = d.get(b"Descent").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(0.0) / 1000.0;
             // Fonts often claim 0; never shrink the glyph box below a sensible minimum.
