@@ -57,6 +57,7 @@ mod print_ui;
 pub use print_ui::{Handling as PrintHandling, PrintDraft, Which as PrintWhich};
 mod redact_ui;
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft};
+pub mod i18n;
 mod protect;
 mod recovery;
 pub mod theme;
@@ -278,6 +279,7 @@ pub struct PrintCraftApp {
     /// Comment author, per-tool colours and widths, pin.
     pub comment_prefs: comments::CommentPrefs,
     pub theme: ThemeKind,
+    pub language: i18n::Language,
     /// Follow the operating system's light/dark setting.
     pub follow_system_theme: bool,
     pub dialog: Option<Dialog>,
@@ -451,6 +453,7 @@ impl PrintCraftApp {
             quick_tool: QuickTool::Select,
             comment_prefs: Default::default(),
             theme: ThemeKind::Light,
+            language: i18n::Language::default(),
             follow_system_theme: false,
             dialog: None,
             update_source: None,
@@ -820,6 +823,7 @@ impl PrintCraftApp {
         serde_json::json!({
             "recent": self.recent,
             "theme": self.theme,
+            "language": self.language,
             // Drawn signatures keep their original form (older settings read the same).
             "signature": match &self.signature { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
             "signature_text": match &self.signature { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
@@ -845,6 +849,9 @@ impl PrintCraftApp {
         }
         if let Ok(t) = serde_json::from_value::<ThemeKind>(v["theme"].clone()) {
             self.theme = t;
+        }
+        if let Ok(language) = serde_json::from_value::<i18n::Language>(v["language"].clone()) {
+            self.language = language;
         }
         if let Ok(s) = serde_json::from_value::<Vec<Vec<[f32; 2]>>>(v["signature"].clone())
             && s.iter().all(|st| st.iter().all(|p| p.iter().all(|x| x.is_finite())))
@@ -882,6 +889,9 @@ impl PrintCraftApp {
     pub fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
         let view = self.active.and_then(|i| self.views.get_mut(i));
         match (key, view) {
+            ("language", _) => {
+                self.language = i18n::Language::parse(value).ok_or("language must be en or ja")?;
+            }
             ("theme", _) => {
                 self.follow_system_theme = value == "system";
                 self.pending_theme = Some(if value == "dark" { ThemeKind::Dark } else { ThemeKind::Light });

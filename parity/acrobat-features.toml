@@ -9779,11 +9779,11 @@ title = "Preferences: language"
 area = "N"
 tier = "P1"
 milestone = "M14"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/src/i18n.rs::language_persists_and_invalid_input_keeps_current_language"]
+notes = "Preferences switches English/Japanese and persists; ui.set language en|ja and ui.state expose it. Core menu labels translated; broader dialog/panel translations and additional languages remain open."
 
 [[feature]]
 id = "misc.prefs-reading"

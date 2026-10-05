@@ -225,13 +225,21 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &T
 
 /// Preferences (the JavaScript category for now). Returns `true` to close.
 pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
-    ui.label(egui::RichText::new("Preferences").font(theme::semibold(18.0)));
+    ui.label(egui::RichText::new(app.language.tr("Preferences")).font(theme::semibold(18.0)));
+    ui.horizontal(|ui| {
+        ui.label(app.language.tr("Interface language"));
+        egui::ComboBox::from_id_salt("interface-language").selected_text(app.language.name()).show_ui(ui, |ui| {
+            for language in crate::i18n::Language::ALL {
+                ui.selectable_value(&mut app.language, language, language.name());
+            }
+        });
+    });
     ui.add_space(8.0);
     ui.label(egui::RichText::new("JavaScript").font(theme::semibold(13.0)));
     egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let mut on = app.session.javascript();
-        if ui.checkbox(&mut on, "Enable Acrobat JavaScript").changed() {
+        if ui.checkbox(&mut on, app.language.tr("Enable Acrobat JavaScript")).changed() {
             app.session.set_javascript(on);
         }
         ui.label(

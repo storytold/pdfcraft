@@ -195,3 +195,5 @@ Newest first. One line per session: the date, what moved, and the new overall pe
   - Robustness sweep (963 of 983 files open, 0 crashes), text layer, find and select, tiles, web build, polish.
   - Overall ≈ 3–4%.
 - **2026-09-30 (session 1):** planning complete; viewer vertical slice.
+
+- Interface localization: Preferences > Interface language switches English/Japanese and persists. `ui.set {key: language, value: ja|en}` reaches the same setting; `ui.state` reports it. Core menu labels are translated, while dialog/panel breadth and additional languages remain open (misc.prefs-language: partial).

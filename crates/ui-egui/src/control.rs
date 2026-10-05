@@ -563,6 +563,7 @@ impl Host for crate::PrintCraftApp {
             "dialog": self.dialog.map(|d| format!("{d:?}")),
             "palette_open": self.palette_open,
             "theme": format!("{:?}", self.theme),
+            "language": self.language,
             "notice": self.toast.as_ref().map(|t| t.0.clone()),
             "password_prompt": self.password_prompt.is_some(),
             "close_prompt": self.close_request.is_some(),

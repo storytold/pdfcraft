@@ -117,6 +117,7 @@ pub fn install_fonts(ctx: &egui::Context) {
     fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "Inter".to_owned());
     fonts.families.entry(FontFamily::Proportional).or_default().push("ShipporiMincho".to_owned());
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".to_owned());
+    fonts.families.entry(FontFamily::Monospace).or_default().push("ShipporiMincho".to_owned());
     let fallback: Vec<String> = fonts.families[&FontFamily::Proportional].clone();
     for (fam, primary) in [("medium", "Inter-Medium"), ("semibold", "Inter-SemiBold")] {
         let mut stack = vec![primary.to_owned()];
