@@ -116,24 +116,29 @@ impl LineEditor {
     }
 }
 
-/// The look shown for a paragraph: the family and weight guessed from its font's name.
-fn look_of(b: &printcraft_engine::TextBlock) -> printcraft_engine::AddedText {
+/// The look shown for a paragraph: the family and weight guessed from its PDF font name.
+fn source_look(base_font: &str, size: f64, color: [f64; 3]) -> printcraft_engine::AddedText {
     use printcraft_engine::FontFamily as F;
-    let name = b.base_font.to_ascii_lowercase();
+    let name = base_font.to_ascii_lowercase();
+    let family = if ["courier", "mono", "consolas", "menlo", "monaco", "lucida console"].iter().any(|s| name.contains(s)) {
+        F::Courier
+    } else if !name.contains("sans") && ["times", "serif", "roman", "cambria", "georgia", "palatino", "garamond"].iter().any(|s| name.contains(s)) {
+        F::Times
+    } else {
+        F::Helvetica
+    };
     printcraft_engine::AddedText {
-        family: if name.contains("times") || name.contains("serif") && !name.contains("sans") {
-            F::Times
-        } else if name.contains("courier") || name.contains("mono") {
-            F::Courier
-        } else {
-            F::Helvetica
-        },
-        bold: name.contains("bold") || name.contains("black") || name.contains("heavy"),
-        italic: name.contains("italic") || name.contains("oblique"),
-        size: (b.size * 10.0).round() / 10.0,
-        color: b.color,
+        family,
+        bold: ["bold", "black", "heavy", "semibold", "demi"].iter().any(|s| name.contains(s)),
+        italic: ["italic", "oblique", "slanted"].iter().any(|s| name.contains(s)),
+        size: (size * 10.0).round() / 10.0,
+        color,
         ..Default::default()
     }
+}
+
+fn look_of(b: &printcraft_engine::TextBlock) -> printcraft_engine::AddedText {
+    source_look(&b.base_font, b.size, b.color)
 }
 
 fn editor_font(look: &printcraft_engine::AddedText, size: f32) -> FontId {

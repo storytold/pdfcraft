@@ -592,6 +592,74 @@ fn copying_cutting_and_pasting_pages() {
     assert_eq!(page_texts(h.state()).len(), 5);
 }
 
+fn source_font_fixture() -> Vec<u8> {
+    let body = "BT /F1 18 Tf 20 220 Td (Serif) Tj ET BT /F2 18 Tf 20 120 Td (Mono) Tj ET";
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 300 300] >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Times-BoldItalic >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources << /Font << /F1 3 0 R /F2 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Oblique >>".into(),
+        "<< /Producer (PrintCraft) >>".into(),
+        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+fn open_source_font_fixture() -> Harness<'static, PrintCraftApp> {
+    Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PrintCraftApp::new();
+        app.open_bytes("fonts.pdf", None, source_font_fixture()).expect("font fixture opens");
+        app
+    })
+}
+
+#[test]
+fn clicking_existing_text_selects_its_source_font_style() {
+    let mut h = open_source_font_fixture();
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let page = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let click = |x: f32, y: f32| egui::pos2(page.left() + x / 300.0 * page.width(), page.top() + (300.0 - y) / 300.0 * page.height());
+
+    let serif = click(25.0, 228.0);
+    h.hover_at(serif);
+    h.run_steps(1);
+    h.drag_at(serif);
+    h.run_steps(1);
+    h.drop_at(serif);
+    h.run_steps(3);
+    let ed = h.state().views[0].line_editor.clone().expect("serif editor opens");
+    assert_eq!(ed.look.family, printcraft_engine::FontFamily::Times);
+    assert!(ed.look.bold && ed.look.italic, "source style: {:?}", ed.look);
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    let mono = click(25.0, 128.0);
+    h.hover_at(mono);
+    h.run_steps(1);
+    h.drag_at(mono);
+    h.run_steps(1);
+    h.drop_at(mono);
+    h.run_steps(3);
+    let ed = h.state().views[0].line_editor.clone().expect("mono editor opens");
+    assert_eq!(ed.look.family, printcraft_engine::FontFamily::Courier);
+    assert!(!ed.look.bold && ed.look.italic, "source style: {:?}", ed.look);
+}
+
 #[test]
 fn editing_existing_text_in_place() {
     let mut h = harness(1, |_| {});
