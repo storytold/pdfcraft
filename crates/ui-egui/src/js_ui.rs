@@ -223,7 +223,7 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &T
     close
 }
 
-/// Preferences (the JavaScript category for now). Returns `true` to close.
+/// Preferences: interface language, identity and JavaScript. Returns `true` to close.
 pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new(app.language.tr("Preferences")).font(theme::semibold(18.0)));
     ui.horizontal(|ui| {
@@ -233,6 +233,14 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &T
                 ui.selectable_value(&mut app.language, language, language.name());
             }
         });
+    });
+    ui.add_space(8.0);
+    // Identity: the author of new comments (Acrobat: Preferences ▸ Identity).
+    ui.label(egui::RichText::new(app.language.tr("Identity")).font(theme::semibold(13.0)));
+    ui.horizontal(|ui| {
+        let label = ui.label(app.language.tr("Name on new comments"));
+        ui.add(egui::TextEdit::singleline(&mut app.comment_prefs.author).desired_width(220.0).char_limit(crate::MAX_AUTHOR_CHARS))
+            .labelled_by(label.id);
     });
     ui.add_space(8.0);
     ui.label(egui::RichText::new("JavaScript").font(theme::semibold(13.0)));

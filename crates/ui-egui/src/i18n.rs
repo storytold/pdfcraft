@@ -47,6 +47,8 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Preferences", "環境設定"),
     ("Preferences…", "環境設定…"),
     ("Interface language", "表示言語"),
+    ("Identity", "個人情報"),
+    ("Name on new comments", "新しい注釈の作成者名"),
     ("Open…", "開く…"),
     ("New blank PDF", "空白の PDF を作成"),
     ("Create PDF from file…", "ファイルから PDF を作成…"),

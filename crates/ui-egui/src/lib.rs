@@ -58,6 +58,9 @@ pub use print_ui::{Handling as PrintHandling, PrintDraft, Which as PrintWhich};
 mod redact_ui;
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft};
 pub mod i18n;
+
+/// The longest author name kept (Preferences ▸ Identity, restored settings).
+pub(crate) const MAX_AUTHOR_CHARS: usize = 200;
 mod protect;
 mod recovery;
 pub mod theme;
@@ -824,6 +827,7 @@ impl PrintCraftApp {
             "recent": self.recent,
             "theme": self.theme,
             "language": self.language,
+            "author": self.comment_prefs.author,
             // Drawn signatures keep their original form (older settings read the same).
             "signature": match &self.signature { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
             "signature_text": match &self.signature { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
@@ -852,6 +856,11 @@ impl PrintCraftApp {
         }
         if let Ok(language) = serde_json::from_value::<i18n::Language>(v["language"].clone()) {
             self.language = language;
+        }
+        // An empty or missing name keeps the login-name default; settings are untrusted, so the
+        // name is cut to a sane length.
+        if let Some(author) = v["author"].as_str().map(str::trim).filter(|a| !a.is_empty()) {
+            self.comment_prefs.author = author.chars().take(MAX_AUTHOR_CHARS).collect();
         }
         if let Ok(s) = serde_json::from_value::<Vec<Vec<[f32; 2]>>>(v["signature"].clone())
             && s.iter().all(|st| st.iter().all(|p| p.iter().all(|x| x.is_finite())))

@@ -3803,11 +3803,11 @@ title = "Author name from identity preferences"
 area = "E"
 tier = "P1"
 milestone = "M5"
-status = "partial"
+status = "shipped"
 commands = []
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/comments.rs::dragging_over_text_with_the_highlighter_highlights_it"]
-notes = "the login name, as Acrobat defaults to; no Identity preferences yet"
+evidence = ["crates/ui-egui/tests/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/ui-egui/tests/identity.rs::the_identity_name_signs_new_comments_and_is_remembered"]
+notes = "Preferences ▸ Identity: the name on new comments (default the login name, as Acrobat), remembered across restarts"
 
 [[feature]]
 id = "comment.reply"
@@ -9639,7 +9639,7 @@ status = "partial"
 commands = ["app.preferences"]
 tools = ["js_enabled"]
 evidence = ["crates/ui-egui/tests/javascript.rs::document_scripts_and_preferences"]
-notes = "Preferences dialog with the JavaScript category; other categories still live in their tools."
+notes = "Preferences dialog with Interface language, Identity and JavaScript; other categories still live in their tools, and it isn't generated from a schema yet."
 
 [[feature]]
 id = "misc.prefs-general"
