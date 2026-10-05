@@ -1070,7 +1070,7 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.full_screen"]
 tools = []
-evidence = ["crates/ui-egui/tests/commands.rs::every_registered_command_is_implemented"]
+evidence = ["crates/ui-egui/tests/commands.rs::full_screen_toggles_by_shortcut_and_command_and_escape_leaves"]
 notes = ""
 
 [[feature]]
@@ -1682,7 +1682,7 @@ milestone = "M3"
 status = "shipped"
 commands = ["help.about"]
 tools = []
-evidence = ["crates/ui-egui/tests/commands.rs::every_registered_command_is_implemented"]
+evidence = ["crates/ui-egui/tests/commands.rs::the_about_dialog_shows_the_running_version"]
 notes = ""
 
 [[feature]]

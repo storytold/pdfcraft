@@ -198,3 +198,28 @@ fn the_shortcuts_dialog_lists_the_real_bindings() {
     h.get_by_label(if mac { "⇧⌘S" } else { "Ctrl+Shift+S" });
     h.get_by_label("Save as");
 }
+
+#[test]
+fn full_screen_toggles_by_shortcut_and_command_and_escape_leaves() {
+    let mut h = harness();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(2);
+    assert!(h.state().full_screen, "⌘L / Ctrl+L enters full screen");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().full_screen, "Escape leaves full screen");
+    h.state_mut().execute("view.full_screen");
+    h.run_steps(2);
+    assert!(h.state().full_screen);
+    h.state_mut().execute("view.full_screen");
+    h.run_steps(2);
+    assert!(!h.state().full_screen, "the command toggles back");
+}
+
+#[test]
+fn the_about_dialog_shows_the_running_version() {
+    let mut h = harness();
+    h.state_mut().execute("help.about");
+    h.run_steps(3);
+    h.get_by_label_contains(&format!("Version {}", env!("CARGO_PKG_VERSION")));
+}
