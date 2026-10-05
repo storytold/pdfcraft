@@ -142,7 +142,7 @@ impl CffFontBlob {
     }
 
     pub(crate) fn glyph_index_by_cid(&self, cid: u16) -> Option<GlyphId> {
-        self.charset()?.glyph_id(Sid::new(cid)).ok()
+        self.charset()?.glyph_id(Sid::new(cid))
     }
 
     pub(crate) fn glyph_index(&self, code: u8) -> Option<GlyphId> {

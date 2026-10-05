@@ -89,7 +89,7 @@ version = "2"
 version = "1"
 
 [dependencies.skrifa]
-version = "0.42.0"
+version = "0.47.0"
 
 [dependencies.smallvec]
 version = "1"

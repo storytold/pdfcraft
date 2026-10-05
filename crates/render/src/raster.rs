@@ -972,6 +972,36 @@ trailer << /Root 1 0 R >>
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
     }
 
+    /// From the nightly `cargo xtask fuzz`: an embedded Type 1 font program holding a long run of
+    /// integers. read-fonts 0.39 (through skrifa 0.42) looked ahead after every integer by
+    /// parsing the next token, which looked ahead again, recursing through the whole run: a long
+    /// run hung, and 20,000 numbers overflowed the stack and aborted the process. Fixed upstream:
+    /// the vendored hayro-interpret now uses skrifa 0.47 (read-fonts 0.44).
+    #[test]
+    fn type1_font_programs_with_long_runs_of_numbers_load_quickly() {
+        let mut font = b"%!PS-AdobeFont-1.0: Fuzz 001\n/FontMatrix [0.001 0 0 0.001 0 0] readonly def\n".to_vec();
+        for _ in 0..20_000 {
+            font.extend_from_slice(b"1 ");
+        }
+        let content = b"BT /F1 12 Tf 5 20 Td (Hi) Tj ET 1 0 0 rg 0 0 4 4 re f";
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+        pdf.extend_from_slice(content);
+        pdf.extend_from_slice(b"\nendstream endobj\n5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Fuzz /FontDescriptor 6 0 R >> endobj\n");
+        pdf.extend_from_slice(b"6 0 obj << /Type /FontDescriptor /FontName /Fuzz /Flags 32 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile 7 0 R >> endobj\n");
+        pdf.extend_from_slice(format!("7 0 obj << /Length {} /Length1 {} /Length2 0 /Length3 0 >> stream\n", font.len(), font.len()).as_bytes());
+        pdf.extend_from_slice(&font);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("a Type 1 font must not stall the renderer");
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
+    }
+
     /// From `cargo xtask fuzz`: an inline image claiming /W 4294967295 over four bytes of data
     /// hung in resampling (vendored hayro patch: `MAX_IMAGE_PIXELS`).
     #[test]
