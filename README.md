@@ -355,34 +355,16 @@ cargo xtask screenshots                           # regenerate every screenshot 
 
 PrintCraft is young and moving fast. The aim is a workbench where you can view, organize, annotate, fill, sign and edit PDFs, at parity with Acrobat Pro.
 
-**Available today:**
-- viewing, search and navigation;
-- organizing pages, combining, extracting and splitting; bookmarks and page labels;
-- commenting: sticky notes, highlight / underline / strikethrough, text boxes, freehand drawing, lines, arrows, rectangles and ovals, with replies, status, colours, moving, resizing and a searchable Comments panel;
-- filling in forms: text fields, check boxes, radio buttons, combo and list boxes, Tab between fields, Clear form;
-- password protection: a password to open, permissions (printing, changes, copying), AES-256, removing security;
-- document information;
-- opening encrypted documents, honouring their permissions, and saving them encrypted;
-- undo and safe saving;
-- autosave with crash recovery;
-- a single command registry behind menus, shortcuts and the palette;
-- agent control through the CLI and an opt-in MCP server.
+**Where it stands (October 2026), honestly:** about half of Acrobat Pro's offline features are in (88% of the must-haves), but that is roughly a third of the work, because the hardest parts are still ahead.
 
-**On the roadmap:**
+- **Good today:** viewing and search; organizing, combining and splitting; most kinds of comment; filling and authoring forms (with sandboxed JavaScript); passwords, redaction and sanitizing; basic digital signatures; printing; the Accessibility Checker; agent control through the CLI and MCP.
+- **Still borrowed:** pages are drawn by the `hayro` crate while our own renderer is built.
+- **Thin or missing:** reliable editing of existing text (especially CJK), OCR beyond Latin script, Office import/export, signature timestamps and long-term validation, PDF/A/X/UA preflight, XFA forms, localization and signed installers.
+- **Hardening:** fuzzing still turns up crashes and hangs on hostile files; each one is fixed with a regression test. Quality has not yet been compared with Acrobat side by side.
 
-| Next up | Milestone |
-|---|---|
-| Page boxes | M4 |
-| Callouts, clouds, stamps, FDF/XFDF, comment summaries | M5 |
-| Authoring forms, JavaScript (formatting, calculations) | M6 |
-| Editing text and images in place, headers, watermarks | M7 |
-| Certificate security, redaction, sanitizing | M8 |
-| Digital signatures (PAdES) | M9 |
-| OCR, export to Office formats, printing | M10 |
-| Optimize, preflight, PDF/A | M11 |
-| Accessibility, compare, measure | M12 |
+**Next, in order:** our own renderer, hardening and a fidelity harness against Acrobat, editing existing content, then the Pro workflows (signatures, OCR, Office, preflight, XFA) and 1.0 polish.
 
-The full plan, with progress and estimates, is in **[ROADMAP.md](ROADMAP.md)**.
+The honest assessment by area, what's lacking and where we're going are in **[ROADMAP.md](ROADMAP.md#honest-assessment-2026-10-05)**, with the full plan, progress and estimates.
 
 ---
 

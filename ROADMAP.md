@@ -12,17 +12,17 @@ Detailed task lists and acceptance tests are in `plan/execution-plan.md` (local-
 
 The unit is **wall-clock hours of agent work** (Claude Opus 5.5 coding continuously; human review time not included).
 
-**Where we are (2026-10-03, measured by `cargo xtask parity` over 803 tracked Acrobat Pro features):**
+**Where we are (2026-10-05, measured by `cargo xtask parity` over 804 tracked Acrobat Pro features; 23 more are Adobe-cloud-only and out of scope):**
 
 | Tier | Features | Shipped | Partial | Shipped % | Weighted % (partial = ½) |
 |---|---|---|---|---|---|
 | P0 (must-have for 1.0) | 250 | 221 | 25 | 88.4% | 93.4% |
 | P1 | 325 | 168 | 33 | 51.7% | 56.8% |
-| P2 | 185 | 9 | 2 | 4.9% | 5.4% |
+| P2 | 186 | 9 | 3 | 4.8% | 5.6% |
 | P3 | 43 | 0 | 0 | 0% | 0% |
-| **All** | **803** | **398** | **60** | **49.6%** | **53.3%** |
+| **All** | **804** | **398** | **61** | **49.5%** | **53.3%** |
 
-**Effort-weighted parity: ≈ 35%.** Feature counts overstate progress: the remaining features include the hardest ones (in-place text editing and reflow, our own renderer and font engine, OCR, a JavaScript engine, XFA, PDF/A/X/UA preflight, Office export). Weighting each milestone by its estimated size gives about a third of the total work done.
+**Effort-weighted parity: ≈ 30–35%.** Feature counts overstate progress: the remaining features include the hardest ones (our own renderer and font engine, editing existing text and reflow, OCR beyond Latin, XFA, PDF/A/X/UA preflight, Office export, long-term signature validation). Weighting each milestone by its estimated size gives about a third of the total work done. See **[Honest assessment](#honest-assessment-2026-10-05)** for what the numbers don't show.
 
 **Observed throughput:** about 72k lines of kept, tested Rust (plus 97 agent tools and ≈ 600 tests) in roughly 65–75 agent-hours since 2026-09-30, about 1.0k lines per agent-hour, with corpus, oracle and visual checks. That is faster than the original plan assumed, so the hour estimates below are revised down from the first plan (2,000–4,000 h).
 
@@ -33,6 +33,55 @@ The unit is **wall-clock hours of agent work** (Claude Opus 5.5 coding continuou
 | With human review, integration and pauses | — | ≈ 2–4 months |
 
 **How the estimate is built:** each milestone's remaining fraction (table below) times its size, re-based on the measured rate. The long poles are M2 (own renderer, ≈ 150–250 h), M7 (editing existing text and images, ≈ 150–250 h), M10 OCR and Office export (≈ 100–150 h), M6 JavaScript engine (≈ 60–100 h), M11 PDF/A/X/UA preflight (≈ 80–140 h) and M12 XFA/compare (≈ 80–140 h). The last 5–10% (odd real-world files, pixel-level polish against Acrobat) costs about as much as a mid-sized milestone.
+
+## Honest assessment (2026-10-05)
+
+Read this before choosing work. The feature table above counts what exists; this section says how solid it is.
+
+| Dimension | State | In one line |
+|---|---|---|
+| Feature count | 49.5% shipped (P0 88%, P1 52%, P2 5%, P3 0%) | A typical viewer, annotator, form-filler or page organizer is mostly covered |
+| Effort | ≈ 30–35% | The remaining work is the hardest: M2 15%, M7 17%, M11 18%, M12 20%, M14 0% |
+| Foundations | Weakest | Rendering is still the bootstrap `hayro`; the inspector is `lopdf`; 18 vendored patches carried |
+| Robustness | Early beta | Each 15-minute fuzz run found new out-of-memory crashes or hangs until 2026-10-05 |
+| Acrobat fidelity | Unmeasured | No systematic side-by-side comparison with Acrobat, visual or behavioural |
+| Product readiness | 0.2.0 | No code signing, localization, performance budgets or keyboard-only operation yet |
+
+**By area** (shipped share of each area's features):
+
+| Area | Shipped | What's strong / what's missing |
+|---|---|---|
+| A Core | 73% | Parser, repair, encryption, incremental saves. Missing: lazy loading (`ByteSource`), own image codecs, PDF 2.0 extras, Arlington validation |
+| F Forms | 68% | Filling, authoring, AF scripts, sandboxed JavaScript, data exchange. Missing: XFA, wider JavaScript object model |
+| M Accessibility | 62% | Checker (all 32 rules). Missing: autotag, Tags/Order/Content panels, Reading Order tool, keyboard-only operation |
+| D Organize | 55% | Pages, combine, split, bookmarks, labels. Missing: replace pages, transitions |
+| E Comments | 55% | All markup types with appearances, XFDF/FDF, summaries. Missing: replace-text proposals, summary layouts |
+| B View | 54% | Shell, find, panels, tiles, web build. **Rendering is borrowed (`hayro`)**, so the 7 rendering P0s are only partial |
+| G Protect | 52% | Passwords, permissions, redaction, sanitize. Missing: certificate security, redaction codes |
+| H Sign | 45% | PAdES B-B signing and validation. Missing: timestamps (B-T), LTV (DSS/OCSP/CRL), FieldMDP, Windows store, PKCS #11 |
+| C Edit | 44% | Added text and images stay editable; header/footer/watermark. Missing: robust editing of existing text and images (fonts, subsets, reflow) |
+| L Print | 36% | Acrobat-style sizing, n-up, booklet, CUPS. Missing: Windows and web printing, production options |
+| J Create | 31% | From images, text, clipboard; Word/HTML/RTF export. Missing: Office import, Excel/PowerPoint export |
+| K Optimize | 26% | Reduce File Size, Optimizer. Missing: preflight, PDF/X/UA, transparency/fonts panels |
+| N Misc | 24% | CLI, MCP, UI control channel, Action Wizard. Missing: AI providers, performance budgets |
+| I OCR | 19% | Searchable image for Latin script. Missing: other scripts and accents, editable-text output, deskew |
+
+**What "shipped" means, and doesn't.** A feature is shipped when it exists and at least one specific test covers it. 159 of 398 shipped features rest on exactly one test, and only about 5 cite an external oracle (`pdftotext`, `pdfsig`, OpenSSL, a corpus). Shipped does not mean "as good as Acrobat".
+
+**Robustness, measured.** `main`'s CI was red for 30+ runs until 2026-10-04 (a clippy lint, Windows line endings, flaky perf tests). Once the nightly fuzz job could finish, three 15-minute runs found 7 out-of-memory crashes (one aborted on every platform) and 11 hangs, 7 of them in our own `cos` parser rather than `hayro`. All are fixed or in review, but expect more: keep the nightly fuzz job green and turn every finding into a synthetic test.
+
+## Where we're lacking and where we're going
+
+The gaps that matter most, in priority order. Agents: prefer these over adding P2/P3 features, and check `parity/acrobat-features.toml` notes for the specifics of each.
+
+1. **Our own renderer (M2).** Replace `hayro` with the `model` crate, our font engine and the DisplayList devices (ADR-0004). It turns the 7 rendering P0 partials into shipped features and removes most vendored patches. The largest single lever.
+2. **Hardening.** Keep the nightly fuzz job green; fix every crash and hang with a synthetic regression test; finish lazy loading so large files aren't read whole; set performance budgets (`misc.performance-budgets`).
+3. **Measure fidelity against Acrobat.** Build a side-by-side harness (render, text, form behaviour) over synthetic fixtures (`plan/acrobat/`, clean-room rules apply). Until then, parity numbers count features, not quality.
+4. **Editing existing content (M7).** Fonts, subsets, reflow and CJK. The most visible gap for Pro users.
+5. **Pro workflows.** Signatures with timestamps and LTV (M9), OCR beyond Latin (M10), Office import/export (M10), preflight and PDF/A/X/UA (M11), XFA (M12).
+6. **1.0 polish (M14).** Code-signed installers, localization, keyboard-only operation, a full screen-reader audit.
+
+Decided against for now (owner, 2026-10-05): self-installing updates and an update check at start. Help ▸ Check for updates is manual only.
 
 ## Milestones
 
@@ -57,7 +106,7 @@ Hours are for a single agent (low–high). "Done" is the estimated fraction of t
 | M14 | 1.0 polish: performance, localization, installers | 120–250 | 0% | 120–250 | |
 | | **Total (original plan sizing)** | **2,085–3,840** | **≈ 35%** | **≈ 1,350–2,500 at the planned rate; ≈ 600–1,100 at the measured rate** | |
 
-**Overall progress: about 35% of the effort (45% of features shipped).** The viewer and the core are far ahead of the editing features, because the viewer was built first so progress could be seen.
+**Overall progress: about 30–35% of the effort (49.5% of features shipped).** The viewer and the core are far ahead of the editing features, because the viewer was built first so progress could be seen; rendering itself is still borrowed from `hayro`. See [Honest assessment](#honest-assessment-2026-10-05).
 
 ## Critical path
 
@@ -71,11 +120,14 @@ M0 → M1 → M2 → M3 → M4 must happen in order. After M4, M5–M12 can run 
 - The rendering long tail: Type3 fonts, broken fonts, shadings.
 - Correctness of PDF/A and PDF/UA conversion.
 - CPU rendering performance on the web.
+- Hostile input: every fuzz run so far has found new crashes or hangs.
+- Unmeasured fidelity: without an Acrobat comparison harness, quality gaps surface as user reports.
 
 ## Log
 
 Newest first. One line per session: the date, what moved, and the new overall percentage.
 
+- **2026-10-05 (session 13):** Landed community PRs #3–#7 and the never-crash rollout (#11–#25); CI green on every job for the first time in 30+ runs (clippy 1.99, Windows line endings, perf-test noise); nightly fuzz job made to finish (child memory cap) and its findings fixed: 7 out-of-memory crashes (#27, #29, #30) and 11 hangs (in review); issue #8 (integrated GPU, keyboard save prompt); Help ▸ Check for updates (manual only). Added the honest assessment and gap list above. P0 88%, P1 52%; 804 features 49.5% shipped (53.3% weighted). ≈ 30–35%.
 - **2026-10-03 (session 12, later):** Forms (merge data into a spreadsheet, Actions tab, automatic field detection and naming), Compare files (new `compare` crate: text and visual differences, panel, report, comments), Action Wizard (built-in and custom actions over files), PDF/A verify and Save as PDF/A (new `preflight` crate), Export to Word/HTML/RTF (new `export` crate). P0 88%, P1 52%; 803 features 49.6% shipped (53.3% weighted). ≈ 39%.
 - **2026-10-03 (session 12):** Edit text and images in place (lines, paragraphs, formatting, existing images), Scan & OCR (new `ocr` crate on ocrs with CC-BY-SA models fetched by `cargo xtask models`: searchable image, page ranges, multiple files), Acrobat JavaScript (new `js` crate on boa: custom field scripts in Acrobat's event order, button scripts, document JavaScripts, console, Enable JavaScript preference, sandbox limits). 110+ tools; P0 88%, P1 48%; 803 features 47.9% shipped (51.1% weighted). ≈ 37%.
 - **2026-10-02 (session 11, later):** Sign with macOS Keychain identities, Add alternate text, Advanced Search panel, space audit and link clean-up in the Optimizer, hybrid-reference files, signed documents protected from rewrites, redaction cleans the tags, custom stamps, image fields, Combine files with page choice. 97 tools; P0 82%, P1 45%. ≈ 30%.
