@@ -549,3 +549,30 @@ fn justify_underline_and_spacing() {
     let w2 = text::text_lines(&doc, 0).unwrap()[0].rect;
     assert!(((w2[2] - w2[0]) - (w0[2] - w0[0]) / 2.0).abs() < 1.0, "{w0:?} → {w2:?}");
 }
+
+#[test]
+fn a_line_drawn_twice_is_replaced_everywhere() {
+    // Fake bold: a line drawn twice at the same spot (each copy its own text object). The two
+    // copies group apart, but editing one replaces both — a surviving copy would show the old
+    // text under the new.
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello) Tj ET BT /F1 12 Tf 72 700 Td (Hello) Tj ET");
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 2, "the copies group apart");
+    text::replace_block(&mut doc, 0, 0, "Hello world").unwrap();
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Hello world"], "one line, replaced");
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert_eq!(content.matches("(Hello").count(), 1, "the second copy's operators are gone: {content}");
+    // Copies in one text object (the matrix re-issued at the same spot) go too.
+    let mut doc = text_page("BT /F1 12 Tf 1 0 0 1 72 700 Tm (Hi) Tj 1 0 0 1 72.3 700 Tm (Hi) Tj ET");
+    text::replace_line(&mut doc, 0, 0, "Hey").unwrap();
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Hey"], "one line, replaced");
+    // A neighbouring line is not coincident and stays (40 pt spacing groups apart at 12 pt).
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello) Tj 0 -40 Td (world) Tj ET");
+    text::replace_block(&mut doc, 0, 0, "Hello there").unwrap();
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Hello there", "world"]);
+}

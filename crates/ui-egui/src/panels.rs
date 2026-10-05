@@ -288,6 +288,11 @@ fn format_section(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let edit = printcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };
             if app.apply_edit(edit) {
                 ed.applied();
+                if let Some(doc) = app.session.get(app.views[i].id)
+                    && let Some(block) = doc.text_blocks(ed.page).get(ed.block)
+                {
+                    ed.refresh_source(block);
+                }
             }
             app.views[i].line_editor = Some(ed);
         }

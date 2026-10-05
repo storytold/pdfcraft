@@ -30,6 +30,8 @@ pub struct TextLine {
     pub font: String,
     pub base_font: String,
     pub size: f64,
+    /// The current fill colour as RGB.
+    pub color: [f64; 3],
     /// Whether new text in this font can only be shown by substituting another font (no
     /// Unicode mapping for the line, so nothing could be reused).
     pub decodable: bool,
@@ -104,6 +106,9 @@ pub struct TextBlock {
     pub rect: [f64; 4],
     pub base_font: String,
     pub size: f64,
+    /// The text fill colour as RGB, used by the visual editor and preserved when no colour
+    /// override is requested.
+    pub color: [f64; 3],
     /// Indexes into [`text_lines`].
     pub lines: Vec<usize>,
 }
@@ -157,6 +162,31 @@ fn content_streams(doc: &Document, page: &Dict) -> Vec<(Object, Vec<u8>)> {
 
 fn page_dict(doc: &Document, page: usize) -> Result<printcraft_model::Page, EditError> {
     printcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
+}
+
+fn fill_color(fill: &[Op]) -> [f64; 3] {
+    let Some(op) = fill.iter().rev().find(|op| matches!(op.op.as_slice(), b"g" | b"rg" | b"k")) else {
+        return [0.0, 0.0, 0.0];
+    };
+    match op.op.as_slice() {
+        b"g" => {
+            let v = op.operands.first().and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0);
+            [v, v, v]
+        }
+        b"rg" => [
+            op.operands.first().and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0),
+            op.operands.get(1).and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0),
+            op.operands.get(2).and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0),
+        ],
+        b"k" => {
+            let c = op.operands.first().and_then(Object::as_f64).unwrap_or(0.0);
+            let m = op.operands.get(1).and_then(Object::as_f64).unwrap_or(0.0);
+            let y = op.operands.get(2).and_then(Object::as_f64).unwrap_or(0.0);
+            let k = op.operands.get(3).and_then(Object::as_f64).unwrap_or(0.0);
+            [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)]
+        }
+        _ => [0.0, 0.0, 0.0],
+    }
 }
 
 /// The text-showing operators of one stream with their text, font, box and baseline.
@@ -366,6 +396,7 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
                 l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
                 l.ops.push(s.op);
                 l.decodable &= s.decodable;
+                l.color = fill_color(&s.state.fill);
             } else {
                 lines.push(TextLine {
                     text: s.text.clone(),
@@ -373,6 +404,7 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
                     font: String::from_utf8_lossy(&s.font).into_owned(),
                     base_font: s.base_font.clone(),
                     size: s.size,
+                    color: fill_color(&s.state.fill),
                     decodable: s.decodable,
                     stream: si,
                     ops: vec![s.op],
@@ -453,13 +485,14 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
             fonts_res.set(SUBSTITUTE.to_vec(), Object::Dict(f));
         }
     }
-    // Rebuild: the line's first operator becomes the replacement, its others go.
-    let drop: std::collections::HashSet<usize> = target.ops[1..].iter().copied().collect();
+    // Rebuild: the line's first operator becomes the replacement, its others go. Copies of the
+    // line drawn in the same area go too, so the replacement is all that shows.
+    let drops = coincident_ops(&lines, std::slice::from_ref(&target.rect));
     let mut new_ops = Vec::with_capacity(ops.len() + replacement.len());
     for (i, op) in ops.drain(..).enumerate() {
         if i == first {
             new_ops.append(&mut replacement);
-        } else if !drop.contains(&i) {
+        } else if !drops.get(&target.stream).is_some_and(|d| d.contains(&i)) {
             new_ops.push(op);
         }
     }
@@ -486,6 +519,27 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
 /// The size of the last `Tf` before operator `at`.
 fn font_size_before(ops: &[Op], at: usize) -> Option<f64> {
     ops[..at].iter().rev().find(|o| o.is("Tf")).and_then(|o| o.num(1))
+}
+
+/// The operators of every line drawn in the same area as one of `rects`, grouped by content
+/// stream. Documents sometimes draw a line more than once (fake bold, an invisible text layer),
+/// and a surviving copy would show the old text under the replaced line. Copies overlap a
+/// member's rect by more than half of the smaller rect; neighbouring lines share no area.
+fn coincident_ops(lines: &[TextLine], rects: &[[f64; 4]]) -> std::collections::HashMap<usize, std::collections::HashSet<usize>> {
+    let area = |r: [f64; 4]| ((r[2] - r[0]) * (r[3] - r[1])).max(0.0);
+    let mut drop = std::collections::HashMap::new();
+    for l in lines {
+        let covered = rects.iter().any(|m| {
+            let ix = (m[2].min(l.rect[2]) - m[0].max(l.rect[0])).max(0.0);
+            let iy = (m[3].min(l.rect[3]) - m[1].max(l.rect[1])).max(0.0);
+            let small = area(*m).min(area(l.rect));
+            small > 0.0 && ix * iy / small > 0.5
+        });
+        if covered {
+            drop.entry(l.stream).or_insert_with(std::collections::HashSet::new).extend(l.ops.iter().copied());
+        }
+    }
+    drop
 }
 
 /// The paragraphs on a page (0-based).
@@ -534,7 +588,14 @@ fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
             b.lines.push(i);
         } else {
             gap = None;
-            blocks.push(TextBlock { text: l.text.trim().to_string(), rect: l.rect, base_font: l.base_font.clone(), size: l.size, lines: vec![i] });
+            blocks.push(TextBlock {
+                text: l.text.trim().to_string(),
+                rect: l.rect,
+                base_font: l.base_font.clone(),
+                size: l.size,
+                color: l.color,
+                lines: vec![i],
+            });
         }
     }
     blocks
@@ -673,6 +734,7 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     let lead = match style.line_spacing {
         Some(m) => size * m.clamp(0.5, 5.0),
         None if members.len() > 1 => (members[0].origin.baseline - members[1].origin.baseline) / k * size / old_size,
+        None if o_state.leading > 0.0 => o_state.leading,
         None => size * 1.2,
     };
     let n = printcraft_content::num;
@@ -746,16 +808,20 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
         block_ops.push(Op::new("Q", vec![]));
     }
     block_ops.push(Op::new("Q", vec![]));
-    let drop: std::collections::HashSet<usize> = members.iter().flat_map(|l| l.ops.iter().copied()).collect();
+    // The paragraph's operators go, and so does anything drawn in the same area (a fake-bold
+    // second copy, an invisible text layer): the new text is all that may show.
+    let mut drop: std::collections::HashMap<usize, std::collections::HashSet<usize>> =
+        members.iter().flat_map(|l| [(l.stream, l.ops.iter().copied().collect::<std::collections::HashSet<_>>())]).collect();
+    let member_rects: Vec<[f64; 4]> = members.iter().map(|l| l.rect).collect();
+    for (stream, ops) in coincident_ops(&lines, &member_rects) {
+        drop.entry(stream).or_default().extend(ops);
+    }
     // Text shown earlier in the same text object stays first: the paragraph then goes where it
     // was, between two halves of the text object, so it keeps its place in reading order.
     let start = first.ops.first().copied().unwrap_or(o.bt_op);
-    let split = ops
-        .get(o.bt_op..start)
-        .unwrap_or_default()
-        .iter()
-        .enumerate()
-        .any(|(i, op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&(o.bt_op + i)));
+    let split = ops.get(o.bt_op..start).unwrap_or_default().iter().enumerate().any(|(i, op)| {
+        matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.get(&first.stream).is_some_and(|d| d.contains(&(o.bt_op + i)))
+    });
     // What the text after the paragraph expects: the state at its BT (or where it was split).
     let after = if split { &o.state } else { &o.bt_state };
     block_ops.extend(after.ops().into_iter().filter(|op| !op.is("Tf") || after.font.is_some()));
@@ -770,7 +836,8 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
         if i == at {
             new_ops.append(&mut block_ops);
         }
-        if !drop.contains(&i) {
+        let keep = drop.get(&first.stream).is_none_or(|d| !d.contains(&i));
+        if keep {
             new_ops.push(op);
         }
     }

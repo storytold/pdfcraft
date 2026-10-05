@@ -3,7 +3,7 @@
 //! box, Esc cancels). Click an image to select it: drag to move, drag a corner to resize (keeping
 //! its proportions), right-click for rotate, flip, replace, save and delete; Delete removes it.
 
-use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
+use egui::{Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Stroke};
 use printcraft_engine::Edit;
 use printcraft_render::DocInfo;
 
@@ -19,6 +19,14 @@ pub struct LineEditor {
     pub text: String,
     original: String,
     rect: Rect,
+    /// The original PDF rectangle, in user space. It is converted again each frame so the editor
+    /// stays attached while the page is zoomed, scrolled, or rotated.
+    source_rect: [f32; 4],
+    multiline: bool,
+    /// How far the editor box may grow to the right (screen pixels): a single-line paragraph
+    /// rewraps growing to the page's edge, a multi-line one keeps its width.
+    max_width: f32,
+    /// Current screen-space size. Recomputed from the current page transform before painting.
     size: f32,
     focus: bool,
     /// The Format text panel's values, and what the paragraph had (to send only changes).
@@ -71,6 +79,12 @@ pub(crate) fn extras_panel(ui: &mut egui::Ui, e: &mut Extras) -> bool {
 }
 
 impl LineEditor {
+    /// How far the box may grow to the right, when the paragraph is a single line (a multi-line
+    /// paragraph rewraps to its own width and the box doesn't grow).
+    pub fn growth(&self) -> Option<f32> {
+        (self.max_width > self.rect.width()).then_some(self.max_width)
+    }
+
     /// The formatting the panel changed.
     pub fn style(&self) -> printcraft_engine::BlockStyle {
         let (l, o) = (&self.look, &self.look0);
@@ -94,6 +108,12 @@ impl LineEditor {
         self.original = self.text.clone();
         self.focus = true;
     }
+
+    /// Adopt the rewritten paragraph's current geometry before the next overlay frame.
+    pub(crate) fn refresh_source(&mut self, block: &printcraft_engine::TextBlock) {
+        self.source_rect = block.rect.map(|v| v as f32);
+        self.multiline = block.lines.len() > 1;
+    }
 }
 
 /// The look shown for a paragraph: the family and weight guessed from its font's name.
@@ -111,8 +131,25 @@ fn look_of(b: &printcraft_engine::TextBlock) -> printcraft_engine::AddedText {
         bold: name.contains("bold") || name.contains("black") || name.contains("heavy"),
         italic: name.contains("italic") || name.contains("oblique"),
         size: (b.size * 10.0).round() / 10.0,
+        color: b.color,
         ..Default::default()
     }
+}
+
+fn editor_font(look: &printcraft_engine::AddedText, size: f32) -> FontId {
+    let family = match look.family {
+        printcraft_engine::FontFamily::Courier => FontFamily::Monospace,
+        printcraft_engine::FontFamily::Times | printcraft_engine::FontFamily::Helvetica => FontFamily::Proportional,
+    };
+    FontId::new(size, family)
+}
+
+fn color32(color: [f64; 3]) -> Color32 {
+    Color32::from_rgb(
+        (color[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
 }
 
 /// A selected page image, and what the pointer is doing to it.
@@ -157,6 +194,21 @@ pub(crate) fn image_input(
     }
     let pointer = ui.input(|i| i.pointer.hover_pos());
     let selected = view.image_selection.as_ref().filter(|s| s.page == page).map(|s| s.index).filter(|i| *i < boxes.len());
+    for (i, b) in boxes.iter().enumerate() {
+        let selected_box = selected == Some(i);
+        let hovered = ui.input(|inp| inp.pointer.hover_pos()).is_some_and(|p| b.contains(p));
+        let stroke = if selected_box {
+            Stroke::new(1.5, ACCENT)
+        } else if hovered {
+            Stroke::new(1.5, ACCENT.gamma_multiply(0.7))
+        } else {
+            Stroke::new(0.75, ACCENT.gamma_multiply(0.35))
+        };
+        if selected_box {
+            painter.rect_filled(*b, CornerRadius::ZERO, ACCENT.gamma_multiply(0.04));
+        }
+        painter.rect_stroke(*b, CornerRadius::ZERO, stroke, egui::StrokeKind::Outside);
+    }
     // The selected image: frame, corner handles, dragging.
     if let Some(i) = selected {
         let b = boxes[i];
@@ -272,23 +324,38 @@ pub(crate) fn page_input(
 ) -> bool {
     let boxes: Vec<Rect> = lines.iter().map(|l| xf.user_rect(info, page, l.rect.map(|v| v as f32)).expand(2.0)).collect();
     let painter = ui.painter();
-    for b in &boxes {
-        painter.rect_stroke(*b, CornerRadius::same(2), Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
+    let active = view.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
+    for (i, b) in boxes.iter().enumerate() {
+        if active == Some(i) {
+            painter.rect_filled(b.expand(1.0), CornerRadius::same(2), ACCENT.gamma_multiply(0.08));
+            painter.rect_stroke(*b, CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+        } else {
+            painter.rect_stroke(*b, CornerRadius::same(2), Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
+        }
     }
     let Some(p) = ui.input(|i| i.pointer.hover_pos()).filter(|p| xf.rect.contains(*p)) else { return false };
-    let Some(hit) = boxes.iter().position(|b| b.contains(p)) else { return false };
-    painter.rect_stroke(boxes[hit], CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+    let Some(hit) = boxes.iter().rposition(|b| b.contains(p)) else { return false };
+    if active != Some(hit) {
+        painter.rect_stroke(boxes[hit], CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+    }
     ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
     if resp.clicked() {
         let l = &lines[hit];
         // Screen pixels per point, from the box's width.
         let scale = (boxes[hit].width() - 4.0) / ((l.rect[2] - l.rect[0]).max(1.0) as f32);
+        // How far the editor box may grow: a single-line paragraph's rewrite grows to the
+        // page's right edge, a multi-line paragraph rewraps to its own width.
+        let right = xf.rect.right().min(view.viewport_rect().right()) - 6.0;
+        let max_width = if l.lines.len() == 1 { (right - boxes[hit].left()).max(boxes[hit].width()) } else { boxes[hit].width() };
         view.line_editor = Some(LineEditor {
             page,
             block: hit,
             text: l.text.clone(),
             original: l.text.clone(),
             rect: boxes[hit],
+            source_rect: l.rect.map(|v| v as f32),
+            multiline: l.lines.len() > 1,
+            max_width,
             size: (l.size as f32 * scale).clamp(8.0, 72.0),
             focus: true,
             look: look_of(l),
@@ -301,23 +368,46 @@ pub(crate) fn page_input(
 }
 
 /// The inline editor; returns the edit once the text is applied.
-pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView) -> Option<Edit> {
+pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -> Option<Edit> {
     // Clicks outside the document (the Format text panel) keep the paragraph open.
     let outside = ctx.input(|i| i.pointer.latest_pos()).is_some_and(|p| !view.viewport_rect().contains(p));
+    let page = view.line_editor.as_ref()?.page;
+    let xf = view.page_xform(page)?;
+    let viewport_right = view.viewport_rect().right();
     let ed = view.line_editor.as_mut()?;
+    // Reproject the source box every frame. The page may have been zoomed, scrolled or rotated
+    // while the format panel was open.
+    ed.rect = xf.user_rect(info, ed.page, ed.source_rect).expand(2.0);
+    let right = xf.rect.right().min(viewport_right) - 6.0;
+    ed.max_width = if ed.multiline { ed.rect.width() } else { (right - ed.rect.left()).max(ed.rect.width()) };
+    let scale = (ed.rect.width() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(1.0)).max(0.01);
+    ed.size = (ed.look.size as f32 * scale).clamp(8.0, 72.0);
+    let font = editor_font(&ed.look, ed.size);
+    let text_color = color32(ed.look.color);
     let mut done = None;
     egui::Area::new(egui::Id::new("edit-text-line")).order(egui::Order::Foreground).fixed_pos(Pos2::new(ed.rect.left(), ed.rect.top())).show(
         ctx,
         |ui| {
+            // The box follows the text as you type: as wide as the longest drafted line needs
+            // (up to what the rewrite allows), so new content grows the box instead of wrapping
+            // inside the old one.
+            let mut width = ed.rect.width().max(120.0);
+            if ed.max_width > width {
+                let needed = ui.fonts_mut(|f| {
+                    ed.text.lines().map(|l| f.layout_no_wrap(l.to_owned(), font.clone(), text_color).size().x).fold(0.0_f32, f32::max)
+                }) + 8.0;
+                width = width.max(needed).min(ed.max_width);
+            }
             egui::Frame::NONE.fill(Color32::WHITE).stroke(Stroke::new(1.5, ACCENT)).inner_margin(egui::Margin::symmetric(2, 0)).show(ui, |ui| {
+                let rows = ed.text.lines().count().max(1);
                 let r = ui.add(
                     egui::TextEdit::multiline(&mut ed.text)
                         .id(egui::Id::new("edit-text-line-input"))
-                        .font(egui::FontId::proportional(ed.size))
-                        .text_color(Color32::BLACK)
+                        .font(font.clone())
+                        .text_color(text_color)
                         .frame(egui::Frame::NONE)
-                        .desired_width(ed.rect.width().max(120.0))
-                        .desired_rows(((ed.rect.height() / (ed.size * 1.2)).round() as usize).max(1)),
+                        .desired_width(width)
+                        .desired_rows(rows),
                 );
                 if ed.focus {
                     r.request_focus();

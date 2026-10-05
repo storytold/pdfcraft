@@ -608,6 +608,8 @@ fn editing_existing_text_in_place() {
     h.run_steps(3);
     let ed = h.state().views[0].line_editor.clone().expect("the line opens for editing");
     assert_eq!((ed.page, ed.block, ed.text.as_str()), (0, 0, "Page 1"));
+    // A single-line paragraph's box may grow to the page's edge as the text does.
+    assert!(ed.growth().is_some(), "the editor box may grow");
     h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Chapter One".into();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
@@ -617,6 +619,63 @@ fn editing_existing_text_in_place() {
     assert_eq!(doc.can_undo(), Some("Edit text"));
     assert_eq!(doc.text_lines(0)[0].text, "Chapter One");
     assert_eq!(texts_of(s, 0), ["Chapter One"], "the page shows it");
+}
+
+/// One page whose only line is drawn twice at the same spot (fake bold, as many generated
+/// documents do).
+fn double_drawn() -> Vec<u8> {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>".into(),
+        format!(
+            "<< /Length {} >>\nstream\nBT /F1 24 Tf 20 150 Td (Page 1) Tj ET BT /F1 24 Tf 20 150 Td (Page 1) Tj ET\nendstream",
+            "BT /F1 24 Tf 20 150 Td (Page 1) Tj ET BT /F1 24 Tf 20 150 Td (Page 1) Tj ET".len()
+        ),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn editing_a_double_drawn_line_replaces_every_copy() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PrintCraftApp::new();
+        app.open_bytes("bold.pdf", None, double_drawn()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let at = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(3);
+    let ed = h.state().views[0].line_editor.clone().expect("the line opens for editing");
+    assert_eq!(ed.text, "Page 1");
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Replaced".into();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+    h.run_steps(4);
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().text_lines(0).len(), 1, "one line");
+    assert_eq!(texts_of(s, 0), ["Replaced"], "no copy of the old text shows under it");
 }
 
 #[test]
