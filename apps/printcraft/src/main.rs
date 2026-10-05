@@ -74,7 +74,7 @@ fn main() -> eframe::Result {
     // eframe would otherwise derive the settings folder from the app id: keep it under "PrintCraft".
     let persistence_path = eframe::storage_dir("PrintCraft").map(|d| d.join("app.ron"));
     let mut native = eframe::NativeOptions { viewport, persistence_path, ..Default::default() };
-    prefer_integrated_gpu(&mut native);
+    configure_gpu(&mut native);
     eframe::run_native(
         "PrintCraft",
         native,
@@ -130,15 +130,42 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
     f.write_all(json.as_bytes())
 }
 
-/// Draw on the integrated GPU unless `WGPU_POWER_PREF` says otherwise. A PDF viewer has no use
-/// for a discrete GPU, and on hybrid-graphics laptops (NVIDIA Optimus) the discrete one can lose
-/// or corrupt its memory across suspend and screen lock, leaving the window illegible (issue #8).
-/// It also saves battery. Machines with one GPU are unaffected.
-fn prefer_integrated_gpu(native: &mut eframe::NativeOptions) {
-    if std::env::var_os("WGPU_POWER_PREF").is_some() {
-        return;
-    }
-    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut native.wgpu_options.wgpu_setup {
+/// How wgpu finds a GPU. Each choice yields to its wgpu environment variable.
+///
+/// - Draw on the integrated GPU unless `WGPU_POWER_PREF` says otherwise. A PDF viewer has no use
+///   for a discrete GPU, and on hybrid-graphics laptops (NVIDIA Optimus) the discrete one can lose
+///   or corrupt its memory across suspend and screen lock, leaving the window illegible (issue #8).
+///   It also saves battery. Machines with one GPU are unaffected.
+/// - On Windows, use Direct3D 12, falling back to OpenGL, and never load Vulkan drivers unless
+///   `WGPU_BACKEND` asks for them. Creating a Vulkan instance loads every installed Vulkan driver
+///   into the process, and a faulty one (an Intel driver in issue #37) crashed PrintCraft before
+///   its window appeared. D3D12 is the native, best-supported backend there.
+fn configure_gpu(native: &mut eframe::NativeOptions) {
+    let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut native.wgpu_options.wgpu_setup else { return };
+    if std::env::var_os("WGPU_POWER_PREF").is_none() {
         setup.power_preference = eframe::wgpu::PowerPreference::LowPower;
+    }
+    if cfg!(target_os = "windows") && std::env::var_os("WGPU_BACKEND").is_none() {
+        setup.instance_descriptor.backends = eframe::wgpu::Backends::DX12 | eframe::wgpu::Backends::GL;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn gpu_backends_avoid_vulkan_on_windows_and_prefer_low_power() {
+        let mut native = eframe::NativeOptions::default();
+        super::configure_gpu(&mut native);
+        let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &native.wgpu_options.wgpu_setup else {
+            panic!("default setup creates its own instance")
+        };
+        if std::env::var_os("WGPU_POWER_PREF").is_none() {
+            assert_eq!(setup.power_preference, eframe::wgpu::PowerPreference::LowPower);
+        }
+        if cfg!(target_os = "windows") && std::env::var_os("WGPU_BACKEND").is_none() {
+            let backends = setup.instance_descriptor.backends;
+            assert!(backends.contains(eframe::wgpu::Backends::DX12), "{backends:?}");
+            assert!(!backends.contains(eframe::wgpu::Backends::VULKAN), "issue #37: {backends:?}");
+        }
     }
 }
