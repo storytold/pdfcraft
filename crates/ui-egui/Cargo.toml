@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+printcraft-fonts = { workspace = true }
 printcraft-engine = { workspace = true }
 printcraft-render = { workspace = true }
 egui = { workspace = true }

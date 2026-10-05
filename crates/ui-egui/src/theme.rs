@@ -113,7 +113,8 @@ pub fn install_fonts(ctx: &egui::Context) {
     add(&mut fonts, "Inter-Medium", include_bytes!("../../../assets/fonts/Inter-Medium.ttf"));
     add(&mut fonts, "Inter-SemiBold", include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"));
     add(&mut fonts, "JetBrainsMono", include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"));
-    add(&mut fonts, "ShipporiMincho", include_bytes!("../../../assets/fonts/ShipporiMincho-Regular.ttf"));
+    // The same bytes printcraft-fonts embeds for Japanese text in PDFs: one 8.7 MB copy, not two.
+    add(&mut fonts, "ShipporiMincho", printcraft_fonts::SHIPPORI_MINCHO);
     fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "Inter".to_owned());
     fonts.families.entry(FontFamily::Proportional).or_default().push("ShipporiMincho".to_owned());
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".to_owned());

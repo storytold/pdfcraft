@@ -4088,6 +4088,7 @@ dependencies = [
  "png 0.18.1",
  "printcraft-cos",
  "printcraft-engine",
+ "printcraft-fonts",
  "printcraft-model",
  "printcraft-render",
  "rfd",
