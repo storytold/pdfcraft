@@ -152,6 +152,21 @@ impl Arg {
 /// than recursed into (a hostile file could otherwise overflow the stack).
 const MAX_NESTING: usize = 64;
 
+fn hex4(bytes: &[u8]) -> Option<u16> {
+    if bytes.len() != 4 {
+        return None;
+    }
+    bytes.iter().try_fold(0u16, |value, byte| {
+        let digit = match byte {
+            b'0'..=b'9' => byte - b'0',
+            b'a'..=b'f' => byte - b'a' + 10,
+            b'A'..=b'F' => byte - b'A' + 10,
+            _ => return None,
+        };
+        value.checked_mul(16)?.checked_add(u16::from(digit))
+    })
+}
+
 struct Parser<'a> {
     s: &'a [u8],
     i: usize,
@@ -176,11 +191,30 @@ impl Parser<'_> {
                 b'\\' if self.i < self.s.len() => {
                     let e = self.s[self.i];
                     self.i += 1;
-                    out.push(match e {
-                        b'n' => b'\n',
-                        b't' => b'\t',
-                        other => other,
-                    });
+                    match e {
+                        b'n' => out.push(b'\n'),
+                        b'r' => out.push(b'\r'),
+                        b't' => out.push(b'\t'),
+                        b'u' => {
+                            let code = hex4(self.s.get(self.i..self.i.checked_add(4)?)?)?;
+                            self.i += 4;
+                            let code = if (0xD800..=0xDBFF).contains(&code) && self.s.get(self.i..self.i.checked_add(6)?)?.starts_with(b"\\u") {
+                                let low = hex4(self.s.get(self.i.checked_add(2)?..self.i.checked_add(6)?)?)?;
+                                if (0xDC00..=0xDFFF).contains(&low) {
+                                    self.i += 6;
+                                    0x10000 + ((u32::from(code) - 0xD800) << 10) + (u32::from(low) - 0xDC00)
+                                } else {
+                                    u32::from(code)
+                                }
+                            } else {
+                                u32::from(code)
+                            };
+                            let ch = char::from_u32(code).map_or('\u{FFFD}', |ch| ch);
+                            let mut encoded = [0u8; 4];
+                            out.extend_from_slice(ch.encode_utf8(&mut encoded).as_bytes());
+                        }
+                        other => out.push(other),
+                    }
                 }
                 c if c == q => return Some(String::from_utf8_lossy(&out).into_owned()),
                 c => out.push(c),
@@ -364,7 +398,15 @@ fn js_str(s: &str) -> String {
                 o.push(c);
             }
             '\n' => o.push_str("\\n"),
-            c => o.push(c),
+            '\r' => o.push_str("\\r"),
+            '\t' => o.push_str("\\t"),
+            c if c.is_ascii() && !c.is_control() => o.push(c),
+            c => {
+                let mut units = [0u16; 2];
+                for unit in c.encode_utf16(&mut units) {
+                    o.push_str(&format!("\\u{unit:04X}"));
+                }
+            }
         }
     }
     o.push('"');
@@ -955,6 +997,12 @@ mod tests {
             let (fj, _) = format_js(&f).unwrap();
             assert_eq!(parse_format(&fj), Some(f));
         }
+        let euro = format_js(&Format::Number { decimals: 2, sep: 2, neg: 0, currency: "€".into(), prepend: true }).unwrap().0;
+        assert!(euro.contains("\\u20AC"), "{euro}");
+        assert!(!euro.contains('€'), "{euro}");
+        let pound = format_js(&Format::Number { decimals: 2, sep: 0, neg: 0, currency: "£".into(), prepend: true }).unwrap().0;
+        assert!(pound.contains("\\u00A3"), "{pound}");
+        assert!(!pound.contains('£'), "{pound}");
         let c = Calculate::Simple { op: CalcOp::Product, fields: vec!["q".into(), "p".into()] };
         assert_eq!(parse_calculate(&calculate_js(&c).unwrap()), Some(c));
         let c = Calculate::Notation("a + b".into());
