@@ -3767,11 +3767,11 @@ title = "Comment properties bar"
 area = "E"
 tier = "P1"
 milestone = "M5"
-status = "partial"
+status = "shipped"
 commands = ["comment.note"]
 tools = ["comment_edit"]
-evidence = ["crates/annot/src/tests.rs::restyle_and_resize_redraw_the_appearance"]
-notes = "quick-bar colour swatches and line thickness per tool, colour from the context menu; no opacity control in the UI yet"
+evidence = ["crates/annot/src/tests.rs::restyle_and_resize_redraw_the_appearance", "crates/ui-egui/tests/comments.rs::the_opacity_set_for_a_tool_goes_into_its_new_comments"]
+notes = "quick-bar colour swatches, opacity (10–100 %) and line thickness per tool; colour from the context menu"
 
 [[feature]]
 id = "comment.lock-comment"

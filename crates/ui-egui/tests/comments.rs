@@ -568,3 +568,33 @@ fn the_squiggly_tool_marks_selected_text() {
     assert!(printcraft_ui_egui::comments::GROUPS[1].contains(&printcraft_ui_egui::comments::CommentTool::Squiggly));
     assert_eq!(printcraft_ui_egui::comments::tool_for(&c[0]), Some(printcraft_ui_egui::comments::CommentTool::Squiggly));
 }
+
+#[test]
+fn the_opacity_set_for_a_tool_goes_into_its_new_comments() {
+    use printcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|app| app.comment_prefs.set_opacity(CommentTool::StrikeOut, 0.5));
+    // Clamped: an invisible comment can't be found again.
+    h.state_mut().comment_prefs.set_opacity(CommentTool::Underline, 0.0);
+    assert!((h.state().comment_prefs.style(CommentTool::Underline).opacity - 0.1).abs() < 1e-9);
+    h.state_mut().views[0].select_text(0, 4, 8);
+    assert!(h.state_mut().execute("comment.strikeout"));
+    h.run_steps(2);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1, "{c:?}");
+    // The new comment carries /CA 0.5 (read back from the document's bytes).
+    let bytes = h.state().session.get(h.state().views[0].id).unwrap().bytes.as_ref().clone();
+    let doc = printcraft_cos::Document::open(std::sync::Arc::new(bytes)).unwrap();
+    let opacities: Vec<f64> = doc
+        .object_numbers()
+        .into_iter()
+        .filter_map(|n| doc.try_get(n).ok())
+        .filter_map(|o| o.as_dict().cloned())
+        .filter(|d| d.name(b"Subtype") == Some(b"StrikeOut"))
+        .filter_map(|d| d.get(b"CA").and_then(|v| v.as_f64()))
+        .collect();
+    assert_eq!(opacities, [0.5]);
+    // The quick bar offers the control.
+    h.state_mut().set_option("quick", "strikeout").unwrap();
+    h.run_steps(2);
+    h.get_by_label("Opacity");
+}

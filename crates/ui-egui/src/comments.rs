@@ -275,6 +275,13 @@ impl CommentPrefs {
         }
     }
 
+    /// The tool's opacity, 10–100 % (an invisible comment can't be found again).
+    pub fn set_opacity(&mut self, tool: CommentTool, o: f64) {
+        if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            s.opacity = if o.is_finite() { o.clamp(0.1, 1.0) } else { 1.0 };
+        }
+    }
+
     pub fn set_style(&mut self, tool: CommentTool, style: Style) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             *s = style;
@@ -1253,7 +1260,7 @@ pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
     picked
 }
 
-/// The comment tools' extra quick-bar controls: pin, colour and thickness.
+/// The comment tools' extra quick-bar controls: pin, colour, opacity and thickness.
 pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) {
     let style = prefs.style(tool);
     if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { "Keep tool selected: on" } else { "Keep tool selected" }).clicked() {
@@ -1267,6 +1274,15 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
         if let Some(c) = swatch_grid(ui, Some(style.color)) {
             prefs.set_color(tool, c);
             ui.close();
+        }
+    });
+    let resp = icons::button(ui, "blend", 32.0, false, "Opacity");
+    egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.set_min_width(180.0);
+        let mut percent = (style.opacity * 100.0).round();
+        ui.label(egui::RichText::new("Opacity").font(theme::semibold(12.0)));
+        if ui.add(egui::Slider::new(&mut percent, 10.0..=100.0).step_by(5.0).suffix(" %")).changed() {
+            prefs.set_opacity(tool, percent / 100.0);
         }
     });
     if tool.has_width() {
