@@ -5,7 +5,7 @@ exclude = ["vendor"]
 default-members = ["crates/*", "apps/printcraft", "apps/printcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.90"
@@ -13,33 +13,33 @@ repository = "https://github.com/storytold/printcraft"
 
 [workspace.dependencies]
 # internal
-printcraft-geom = { path = "crates/geom", version = "0.1.0" }
-printcraft-filters = { path = "crates/filters", version = "0.1.0" }
-printcraft-cos = { path = "crates/cos", version = "0.1.0" }
-printcraft-crypt = { path = "crates/crypt", version = "0.1.0" }
-printcraft-organize = { path = "crates/organize", version = "0.1.0" }
-printcraft-annot = { path = "crates/annot", version = "0.1.0" }
-printcraft-fonts = { path = "crates/fonts", version = "0.1.0" }
-printcraft-model = { path = "crates/model", version = "0.1.0" }
-printcraft-content = { path = "crates/content", version = "0.1.0" }
-printcraft-redact = { path = "crates/redact", version = "0.1.0" }
-printcraft-print = { path = "crates/print", version = "0.1.0" }
-printcraft-xfdf = { path = "crates/xfdf", version = "0.1.0" }
-printcraft-sign = { path = "crates/sign", version = "0.1.0" }
-printcraft-optimize = { path = "crates/optimize", version = "0.1.0" }
-printcraft-a11y = { path = "crates/a11y", version = "0.1.0" }
-printcraft-ocr = { path = "crates/ocr", version = "0.1.0" }
-printcraft-js = { path = "crates/js", version = "0.1.0" }
-printcraft-compare = { path = "crates/compare", version = "0.1.0" }
-printcraft-preflight = { path = "crates/preflight", version = "0.1.0" }
-printcraft-export = { path = "crates/export", version = "0.1.0" }
-printcraft-edit = { path = "crates/edit", version = "0.1.0" }
-printcraft-create = { path = "crates/create", version = "0.1.0" }
-printcraft-forms = { path = "crates/forms", version = "0.1.0" }
-printcraft-render = { path = "crates/render", version = "0.1.0" }
-printcraft-engine = { path = "crates/engine", version = "0.1.0" }
-printcraft-ui-egui = { path = "crates/ui-egui", version = "0.1.0" }
-printcraft-automation = { path = "crates/automation", version = "0.1.0", default-features = false }
+printcraft-geom = { path = "crates/geom", version = "0.2.0" }
+printcraft-filters = { path = "crates/filters", version = "0.2.0" }
+printcraft-cos = { path = "crates/cos", version = "0.2.0" }
+printcraft-crypt = { path = "crates/crypt", version = "0.2.0" }
+printcraft-organize = { path = "crates/organize", version = "0.2.0" }
+printcraft-annot = { path = "crates/annot", version = "0.2.0" }
+printcraft-fonts = { path = "crates/fonts", version = "0.2.0" }
+printcraft-model = { path = "crates/model", version = "0.2.0" }
+printcraft-content = { path = "crates/content", version = "0.2.0" }
+printcraft-redact = { path = "crates/redact", version = "0.2.0" }
+printcraft-print = { path = "crates/print", version = "0.2.0" }
+printcraft-xfdf = { path = "crates/xfdf", version = "0.2.0" }
+printcraft-sign = { path = "crates/sign", version = "0.2.0" }
+printcraft-optimize = { path = "crates/optimize", version = "0.2.0" }
+printcraft-a11y = { path = "crates/a11y", version = "0.2.0" }
+printcraft-ocr = { path = "crates/ocr", version = "0.2.0" }
+printcraft-js = { path = "crates/js", version = "0.2.0" }
+printcraft-compare = { path = "crates/compare", version = "0.2.0" }
+printcraft-preflight = { path = "crates/preflight", version = "0.2.0" }
+printcraft-export = { path = "crates/export", version = "0.2.0" }
+printcraft-edit = { path = "crates/edit", version = "0.2.0" }
+printcraft-create = { path = "crates/create", version = "0.2.0" }
+printcraft-forms = { path = "crates/forms", version = "0.2.0" }
+printcraft-render = { path = "crates/render", version = "0.2.0" }
+printcraft-engine = { path = "crates/engine", version = "0.2.0" }
+printcraft-ui-egui = { path = "crates/ui-egui", version = "0.2.0" }
+printcraft-automation = { path = "crates/automation", version = "0.2.0", default-features = false }
 
 # pdf
 hayro = "0.7.1"

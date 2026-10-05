@@ -1686,6 +1686,18 @@ evidence = ["crates/ui-egui/tests/commands.rs::every_registered_command_is_imple
 notes = ""
 
 [[feature]]
+id = "view.check-for-updates"
+title = "Help ▸ Check for updates (and an optional check at start)"
+area = "B"
+tier = "P2"
+milestone = "M3"
+status = "partial"
+commands = ["help.check_updates"]
+tools = []
+evidence = ["crates/ui-egui/tests/updates.rs::a_newer_release_is_offered_for_download", "crates/ui-egui/tests/updates.rs::the_check_at_start_is_opt_in_and_quiet_unless_there_is_news", "apps/printcraft/src/updates.rs::answers_are_read_and_only_our_release_pages_are_offered"]
+notes = "asks GitHub Releases and offers the release page; the check at start is opt-in. Missing: installing the update in place (needs signed release artifacts)"
+
+[[feature]]
 id = "view.single-key-accelerators"
 title = "Single-key tool accelerators"
 area = "B"

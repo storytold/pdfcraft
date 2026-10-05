@@ -41,6 +41,8 @@ mod ocg;
 mod soft_mask;
 mod types;
 mod x_object;
+/// PrintCraft patch: exported for its regression test.
+pub use x_object::image_size_ok;
 
 pub mod color;
 pub mod encode;

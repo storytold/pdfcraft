@@ -60,6 +60,7 @@ pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, Se
 mod protect;
 mod recovery;
 pub mod theme;
+pub mod updates;
 mod widgets;
 
 use printcraft_engine::{DocId, Session};
@@ -280,6 +281,11 @@ pub struct PrintCraftApp {
     /// Follow the operating system's light/dark setting.
     pub follow_system_theme: bool,
     pub dialog: Option<Dialog>,
+    /// How to ask for the latest release (the desktop app sets it; see `updates`).
+    pub update_source: Option<updates::UpdateSource>,
+    /// Check for updates when PrintCraft starts (opt-in; persisted).
+    pub check_updates_at_start: bool,
+    pub(crate) updates: updates::Updates,
     pub palette_open: bool,
     pub palette_query: String,
     pub all_tools_expanded: bool,
@@ -449,6 +455,9 @@ impl PrintCraftApp {
             theme: ThemeKind::Light,
             follow_system_theme: false,
             dialog: None,
+            update_source: None,
+            check_updates_at_start: false,
+            updates: updates::Updates::default(),
             palette_open: false,
             palette_query: String::new(),
             all_tools_expanded: false,
@@ -824,6 +833,7 @@ impl PrintCraftApp {
             "custom_stamps": stamps_ui::encode(&self.custom_stamps),
             "javascript": self.session.javascript(),
             "actions": actions_ui::encode(&self.custom_actions),
+            "check_updates_at_start": self.check_updates_at_start,
         })
         .to_string()
     }
@@ -839,6 +849,9 @@ impl PrintCraftApp {
         }
         if let Ok(t) = serde_json::from_value::<ThemeKind>(v["theme"].clone()) {
             self.theme = t;
+        }
+        if let Some(b) = v["check_updates_at_start"].as_bool() {
+            self.check_updates_at_start = b;
         }
         if let Ok(s) = serde_json::from_value::<Vec<Vec<[f32; 2]>>>(v["signature"].clone())
             && s.iter().all(|st| st.iter().all(|p| p.iter().all(|x| x.is_finite())))
@@ -1061,6 +1074,15 @@ impl PrintCraftApp {
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::Key;
+        // "Save changes?" is modal: its keys are its own (⌘D is Don't save there, not Document
+        // properties; Escape cancels it rather than clearing a selection), and nothing may run
+        // underneath it. They are read here, before the canvas can consume them.
+        if self.close_request.is_some() {
+            if let Some(choice) = dialogs::save_prompt_key(ctx) {
+                self.resolve_close(ctx, choice);
+            }
+            return;
+        }
         self.registry_shortcuts(ctx);
         if self.full_screen && ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.set_full_screen(ctx, false);
@@ -1114,6 +1136,7 @@ impl eframe::App for PrintCraftApp {
         self.guard_quit(ctx);
         let now = ctx.input(|i| i.time);
         self.autosave_tick(now);
+        self.poll_updates();
         self.shortcuts(ctx);
         self.process_pending_edits();
         self.poll_export();

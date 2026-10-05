@@ -77,6 +77,14 @@ impl Renderer {
             line_width *= threshold;
         }
 
+        // PrintCraft patch: a stroke far wider than the canvas looks the same as one a few canvases
+        // wide, but its geometry grows with the width: a fuzzed `/LW 9223372036854775807`
+        // allocated 10 GB in stroke expansion.
+        let widest = 4.0 * (f32::from(self.ctx.width()) + f32::from(self.ctx.height()));
+        if min_factor.is_finite() && min_factor > 0.0 && line_width * min_factor > widest {
+            line_width = widest / min_factor;
+        }
+
         let stroke = kurbo::Stroke {
             width: line_width as f64,
             join: stroke_props.line_join,

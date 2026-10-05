@@ -780,6 +780,94 @@ trailer << /Root 1 0 R >>
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255]);
     }
 
+    /// From the nightly `cargo xtask fuzz` (CI caps each child at 4 GiB): a stencil mask claiming
+    /// /W 4294967295 and a CCITT image claiming /Columns 4294967295 each allocated 4 GiB while
+    /// decoding (locally: 9.6 GB and 4.3 GB). Vendored hayro patches `image_size_ok` and
+    /// `ccitt_size_ok` refuse such sizes before decoding; the rest of the page still draws.
+    #[test]
+    fn absurd_mask_and_fax_sizes_are_refused_before_decoding() {
+        assert!(hayro::hayro_interpret::image_size_ok(8000, 8000));
+        assert!(!hayro::hayro_interpret::image_size_ok(4_294_967_295, 2));
+        assert!(!hayro::hayro_interpret::image_size_ok(0, 10));
+        assert!(hayro::hayro_syntax::ccitt_size_ok(1728, 2200), "a fax page");
+        assert!(!hayro::hayro_syntax::ccitt_size_ok(4_294_967_295, 26));
+        assert!(!hayro::hayro_syntax::ccitt_size_ok(1 << 19, 1 << 12));
+        let page = |content: &str, xobject: &str| {
+            let pdf = format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj {xobject} endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+                content.len()
+            );
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+            });
+            let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("an absurd image must not stall the renderer");
+            assert!(page.error.is_none(), "{:?}", page.error);
+            assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
+        };
+        let red = "1 0 0 rg 0 0 4 4 re f";
+        page(&format!("q 20 0 0 20 5 5 cm BI /W 4294967295 /H 2 /IM true /BPC 1 ID \u{0}\u{ff}\u{ff}\u{0} EI Q {red}"), "<< >>");
+        let fax = "<< /Type /XObject /Subtype /Image /Width 81 /Height 26 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /Columns 4294967295 /Rows 26 /K -1 >> /Length 4 >> stream\n\u{0}\u{0}\u{0}\u{0}\nendstream";
+        page(&format!("q 20 0 0 20 5 5 cm /Im1 Do Q {red}"), fax);
+    }
+
+    /// From the nightly `cargo xtask fuzz`: a FlateDecode predictor with `/Columns
+    /// 9223372036854775807` wrapped to a 2^61-byte row allocation (an abort on any machine), and
+    /// a line width of 9223372036854775807 made stroke expansion allocate 10 GB. Vendored hayro
+    /// patches: saturating predictor rows refused when longer than the data, and stroke widths
+    /// clamped to a few canvases. The page still renders, with the huge stroke covering it.
+    #[test]
+    fn absurd_predictor_columns_and_line_widths_render() {
+        let render = |streams: &[&str]| {
+            let mut objs = String::new();
+            let mut refs = Vec::new();
+            for (i, s) in streams.iter().enumerate() {
+                let n = 4 + i;
+                refs.push(format!("{n} 0 R"));
+                objs.push_str(&format!("{n} 0 obj {s} endobj\n"));
+            }
+            let pdf = format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents [{}] >> endobj
+{objs}trailer << /Root 1 0 R >>
+%%EOF",
+                refs.join(" ")
+            );
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+            });
+            let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("must not stall the renderer");
+            assert!(page.error.is_none(), "{:?}", page.error);
+            page
+        };
+        let plain = |content: &str| format!("<< /Length {} >> stream\n{content}\nendstream", content.len());
+        // Stored (uncompressed) zlib data, so the stream needs no encoder: header, one final
+        // stored block of two bytes, checksum.
+        let predicted = "<< /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 9223372036854775807 >> /Length 13 >> stream\nx\u{1}\u{1}\u{2}\u{0}\u{fd}\u{ff}\u{0}\u{0}\u{0}\u{1}\u{0}\u{1}\nendstream";
+        let page = render(&[predicted, &plain("1 0 0 rg 0 0 4 4 re f")]);
+        assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the other content stream draws");
+        let page = render(&[&plain("1 0 0 RG 9223372036854775807 w 10 20 m 30 20 l S")]);
+        // Butt caps: the stroke covers the band over the segment (x 10 to 30) top to bottom.
+        for (x, y) in [(20, 0), (20, 39), (12, 0), (28, 39)] {
+            assert_eq!(&page.rgba[((y * 40 + x) * 4)..][..4], &[255, 0, 0, 255], "({x}, {y}) under the huge stroke");
+        }
+        assert_eq!(&page.rgba[((20 * 40 + 2) * 4)..][..4], &[255, 255, 255, 255], "beyond the butt cap");
+    }
+
     /// From `cargo xtask fuzz`: an inline image claiming /W 4294967295 over four bytes of data
     /// hung in resampling (vendored hayro patch: `MAX_IMAGE_PIXELS`).
     #[test]
