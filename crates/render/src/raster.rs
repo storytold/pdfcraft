@@ -135,25 +135,22 @@ fn render_page<'a>(pdf: &'a Pdf, cache: &RenderCache<'a>, settings: &Interpreter
         if !(w.is_finite() && h.is_finite()) || w < 0.5 || h < 0.5 {
             return Err(format!("page {} has an empty or invalid page box ({w}×{h} pt)", req.page + 1));
         }
-        let rs = match req.tile {
+        let rs = if let Some(t) = req.tile {
             // Tiles are bounded by construction, so the page itself may be arbitrarily large.
-            Some(t) => {
-                let scale = req.scale.clamp(0.01, 400.0);
-                let (tw, th) = (t.w.clamp(1, 4096), t.h.clamp(1, 4096));
-                RenderSettings {
-                    x_scale: scale,
-                    y_scale: scale,
-                    width: Some(tw as u16),
-                    height: Some(th as u16),
-                    x_offset: t.x as f32,
-                    y_offset: t.y as f32,
-                    bg_color: WHITE,
-                }
+            let scale = req.scale.clamp(0.01, 400.0);
+            let (tw, th) = (t.w.clamp(1, 4096), t.h.clamp(1, 4096));
+            RenderSettings {
+                x_scale: scale,
+                y_scale: scale,
+                width: Some(tw as u16),
+                height: Some(th as u16),
+                x_offset: t.x as f32,
+                y_offset: t.y as f32,
+                bg_color: WHITE,
             }
-            None => {
-                let scale = effective_scale(w, h, req.scale);
-                RenderSettings { x_scale: scale, y_scale: scale, bg_color: WHITE, ..Default::default() }
-            }
+        } else {
+            let scale = effective_scale(w, h, req.scale);
+            RenderSettings { x_scale: scale, y_scale: scale, bg_color: WHITE, ..Default::default() }
         };
         let pixmap = render(page, cache, settings, &rs);
         Ok((u32::from(pixmap.width()), u32::from(pixmap.height()), pixmap.data_as_u8_slice().to_vec(), None))

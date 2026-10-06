@@ -255,20 +255,19 @@ impl Automation {
                     let rect = rect_to_user(&info, a.need::<4>("rect", "a callout (its text box)")?);
                     let t = a.need::<2>("to", "a callout (the point it points at)")?;
                     let point = to_user(&info, t[0], t[1]);
-                    let knee = match a.nums::<2>("knee")? {
-                        Some(k) => to_user(&info, k[0], k[1]),
+                    let knee = if let Some(k) = a.nums::<2>("knee")? {
+                        to_user(&info, k[0], k[1])
+                    } else {
                         // Halfway between the point and the box, level with the box's middle.
-                        None => {
-                            let mid = f64::midpoint(rect[1], rect[3]);
-                            let side = if point[0] < rect[0] {
-                                rect[0]
-                            } else if point[0] > rect[2] {
-                                rect[2]
-                            } else {
-                                f64::midpoint(rect[0], rect[2])
-                            };
-                            [f64::midpoint(point[0], side), mid]
-                        }
+                        let mid = f64::midpoint(rect[1], rect[3]);
+                        let side = if point[0] < rect[0] {
+                            rect[0]
+                        } else if point[0] > rect[2] {
+                            rect[2]
+                        } else {
+                            f64::midpoint(rect[0], rect[2])
+                        };
+                        [f64::midpoint(point[0], side), mid]
                     };
                     Shape::Callout { rect, knee, point, font_size: a.opt_num("font_size")?.unwrap_or(10.0) }
                 }
