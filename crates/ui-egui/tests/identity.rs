@@ -35,8 +35,16 @@ fn the_identity_name_signs_new_comments_and_is_remembered() {
     h.get_by_role_and_label(Role::TextInput, "Name on new comments").type_text("Grace Hopper");
     h.run_steps(2);
     assert_eq!(h.state().comment_prefs.author, "Grace Hopper");
-    // New comments carry it.
+    // New comments carry it. Wait for the page (and its text) to finish loading first: selecting
+    // text that hasn't loaded selects nothing, and no highlight is made (seen on slow CI runners).
     h.state_mut().set_option("dialog", "none").unwrap();
+    for _ in 0..200 {
+        h.run_steps(2);
+        if !h.state().render_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     h.state_mut().views[0].select_text(0, 4, 8);
     assert!(h.state_mut().execute("comment.highlight"));
     // Wait for the edit to land in the document (it applies on a later frame).
