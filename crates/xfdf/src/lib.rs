@@ -298,7 +298,9 @@ fn xfdf_fields(doc: &Document, out: &mut String) {
         }
         let mut node = &mut root;
         for part in f.name.split('.') {
-            let i = if let Some(i) = node.kids.iter().position(|(k, _)| k == part) { i } else {
+            let i = if let Some(i) = node.kids.iter().position(|(k, _)| k == part) {
+                i
+            } else {
                 node.kids.push((part.to_string(), Node::default()));
                 node.kids.len() - 1
             };
@@ -605,7 +607,9 @@ fn place(doc: &mut Document, page_ref: ObjRef, d: Dict) -> Result<ObjRef, DataEr
     let mut kept = Vec::new();
     for a in annots {
         let same = nm.is_some()
-            && a.as_ref().and_then(|r| doc.get(r).as_dict().and_then(|x| x.get(b"NM").and_then(|n| n.as_string().map(printcraft_cos::PdfString::to_text)))) == nm;
+            && a.as_ref()
+                .and_then(|r| doc.get(r).as_dict().and_then(|x| x.get(b"NM").and_then(|n| n.as_string().map(printcraft_cos::PdfString::to_text))))
+                == nm;
         if !same {
             kept.push(a);
         }
@@ -847,8 +851,7 @@ fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
             .children()
             .filter(roxmltree::Node::is_element)
             .map(|c| {
-                let name =
-                    c.attributes().find(|a| a.name() == "original").map_or_else(|| c.tag_name().name().to_string(), |a| a.value().to_string());
+                let name = c.attributes().find(|a| a.name() == "original").map_or_else(|| c.tag_name().name().to_string(), |a| a.value().to_string());
                 (name, vec![c.text().unwrap_or("").to_string()])
             })
             .collect()

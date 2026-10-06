@@ -904,7 +904,9 @@ impl Document {
                 trailer = Some(d);
             }
         }
-        let trailer = if let Some(t) = trailer { t } else {
+        let trailer = if let Some(t) = trailer {
+            t
+        } else {
             let catalog = self
                 .entries
                 .keys()
@@ -1068,7 +1070,10 @@ mod tests {
         let doc = Document::open(Arc::new(out)).unwrap();
         assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
         let hidden = doc.get(ObjRef::new(3, 0));
-        assert_eq!(hidden.as_dict().and_then(|d| d.get(b"Hidden").and_then(|h| h.as_string().map(super::super::object::PdfString::to_text))), Some("yes".into()));
+        assert_eq!(
+            hidden.as_dict().and_then(|d| d.get(b"Hidden").and_then(|h| h.as_string().map(super::super::object::PdfString::to_text))),
+            Some("yes".into())
+        );
     }
 
     #[test]

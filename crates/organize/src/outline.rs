@@ -88,7 +88,8 @@ pub fn bookmarks(doc: &Document) -> Vec<Bookmark> {
             .map(|r| {
                 let item = doc.get(r);
                 let d = item.as_dict().cloned().unwrap_or_default();
-                let title = d.get(b"Title").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(printcraft_cos::PdfString::to_text)).unwrap_or_default();
+                let title =
+                    d.get(b"Title").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(printcraft_cos::PdfString::to_text)).unwrap_or_default();
                 let open = d.int(b"Count").is_some_and(|c| c > 0);
                 Bookmark { obj: r, title, open, children: build(doc, r, seen) }
             })

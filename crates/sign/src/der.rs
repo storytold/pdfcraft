@@ -221,7 +221,8 @@ impl Time {
     /// Seconds since 1970-01-01 (proleptic Gregorian).
     #[must_use]
     pub fn unix(&self) -> i64 {
-        let (y, m) = if self.month <= 2 { (i64::from(self.year) - 1, i64::from(self.month) + 9) } else { (i64::from(self.year), i64::from(self.month) - 3) };
+        let (y, m) =
+            if self.month <= 2 { (i64::from(self.year) - 1, i64::from(self.month) + 9) } else { (i64::from(self.year), i64::from(self.month) - 3) };
         let era = y.div_euclid(400);
         let yoe = y - era * 400;
         let doy = (153 * m + 2) / 5 + i64::from(self.day) - 1;

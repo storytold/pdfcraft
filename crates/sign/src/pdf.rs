@@ -750,10 +750,8 @@ pub fn sign(doc: &Document, id: &DigitalId, opts: &SignOptions) -> Result<Vec<u8
     } else {
         let page = *pages.get(opts.page).ok_or_else(|| SignError::Pdf(format!("page {} does not exist", opts.page + 1)))?;
         let taken: HashSet<String> = sig_fields(&doc).into_iter().map(|f| f.name).collect();
-        let fname = opts
-            .new_field_name
-            .clone()
-            .unwrap_or_else(|| (1..).map(|i| format!("Signature{i}")).find(|n| !taken.contains(n)).unwrap_or_default());
+        let fname =
+            opts.new_field_name.clone().unwrap_or_else(|| (1..).map(|i| format!("Signature{i}")).find(|n| !taken.contains(n)).unwrap_or_default());
         let rect = opts.rect.unwrap_or([0.0; 4]);
         let mut w = Dict::new();
         w.set(b"Type".to_vec(), Object::name("Annot"));

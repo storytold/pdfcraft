@@ -137,7 +137,10 @@ const fn ct(
     CommandSpec { id, label, menu, shortcut, needs, in_text: false, icon }
 }
 
-use Needs::{Nothing, Document, Assembly, Undo, Redo, Annotate, FillForms, HasComments, Modification, HasFields, HasRedactions, Marks, Security, ProtectedSecurity};
+use Needs::{
+    Annotate, Assembly, Document, FillForms, HasComments, HasFields, HasRedactions, Marks, Modification, Nothing, ProtectedSecurity, Redo, Security,
+    Undo,
+};
 
 const FILE: Option<&str> = Some("File");
 const EDIT: Option<&str> = Some("Edit");

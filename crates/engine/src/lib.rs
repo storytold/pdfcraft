@@ -1460,7 +1460,9 @@ fn run_edit(doc: &mut printcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -
         }
         Edit::AddImage { page, rect, name, bytes } => {
             let (image, natural) = printcraft_create::image_xobject(doc, name, bytes)?;
-            let rect = if let Some(r) = rect { *r } else {
+            let rect = if let Some(r) = rect {
+                *r
+            } else {
                 let p = printcraft_model::pages(doc).swap_remove(*page);
                 let (pw, ph) = p.display_size(doc);
                 let k = ((pw * 0.8) / natural.0).min((ph * 0.8) / natural.1).min(1.0);

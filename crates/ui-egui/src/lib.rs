@@ -813,11 +813,15 @@ impl PrintCraftApp {
         let when = printcraft_engine::catalog::TOOL_GROUPS
             .iter()
             .flat_map(|g| g.sections.iter().flat_map(|s| s.items.iter()))
-            .find(|i| i.command == command).map_or_else(|| "is not available yet".into(), |i| match i.availability {
-                printcraft_engine::catalog::Availability::Planned(m) => format!("ships in milestone {m}"),
-                printcraft_engine::catalog::Availability::Provider => "needs an AI provider (off by default)".to_string(),
-                printcraft_engine::catalog::Availability::Ready => "is available".to_string(),
-            });
+            .find(|i| i.command == command)
+            .map_or_else(
+                || "is not available yet".into(),
+                |i| match i.availability {
+                    printcraft_engine::catalog::Availability::Planned(m) => format!("ships in milestone {m}"),
+                    printcraft_engine::catalog::Availability::Provider => "needs an AI provider (off by default)".to_string(),
+                    printcraft_engine::catalog::Availability::Ready => "is available".to_string(),
+                },
+            );
         self.notify(format!("`{command}` {when}"));
     }
 

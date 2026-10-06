@@ -114,7 +114,9 @@ fn read(doc: &Document, o: &Object, pages: &[printcraft_cos::ObjRef]) -> Option<
     let d = a.as_dict()?;
     Some(match d.name(b"S")? {
         b"JavaScript" => FieldAction::JavaScript(crate::script(doc, o).unwrap_or_default()),
-        b"URI" => FieldAction::Uri(d.get(b"URI").and_then(|u| doc.resolve(u).as_string().map(printcraft_cos::PdfString::to_text)).unwrap_or_default()),
+        b"URI" => {
+            FieldAction::Uri(d.get(b"URI").and_then(|u| doc.resolve(u).as_string().map(printcraft_cos::PdfString::to_text)).unwrap_or_default())
+        }
         b"ResetForm" => FieldAction::Reset(d.get(b"Fields").map(|f| texts(doc, f)).unwrap_or_default()),
         b"Named" => FieldAction::Named(d.name(b"N").map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_default()),
         b"GoTo" => {
@@ -130,9 +132,9 @@ fn read(doc: &Document, o: &Object, pages: &[printcraft_cos::ObjRef]) -> Option<
             d.get(b"F")
                 .map(|f| doc.resolve(f))
                 .and_then(|f| {
-                    f.as_string()
-                        .map(printcraft_cos::PdfString::to_text)
-                        .or_else(|| f.as_dict().and_then(|fd| fd.get(b"F")).and_then(|x| doc.resolve(x).as_string().map(printcraft_cos::PdfString::to_text)))
+                    f.as_string().map(printcraft_cos::PdfString::to_text).or_else(|| {
+                        f.as_dict().and_then(|fd| fd.get(b"F")).and_then(|x| doc.resolve(x).as_string().map(printcraft_cos::PdfString::to_text))
+                    })
                 })
                 .unwrap_or_default(),
         ),

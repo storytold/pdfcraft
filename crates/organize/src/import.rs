@@ -399,7 +399,9 @@ fn register_fields(dst: &mut Document, fields: &[ObjRef]) -> Result<(), Organize
         }
     }
     form.set(b"Fields".to_vec(), Object::Array(list));
-    if let Some(r) = form_ref { dst.set(r, Object::Dict(form)) } else {
+    if let Some(r) = form_ref {
+        dst.set(r, Object::Dict(form))
+    } else {
         let r = dst.add(form);
         dst.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Ref(r)))?;
     }

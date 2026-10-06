@@ -365,7 +365,13 @@ fn popup_cycles_copy_once_and_structure_links_are_removed() {
     assert!(!note.contains(b"StructParent"));
     let popup = out.get(note.reference(b"Popup").unwrap()).as_dict().cloned().unwrap();
     assert_eq!(
-        out.get(popup.reference(b"Parent").unwrap()).as_dict().unwrap().get(b"Contents").and_then(|c| c.as_string()).map(printcraft_cos::PdfString::to_text).as_deref(),
+        out.get(popup.reference(b"Parent").unwrap())
+            .as_dict()
+            .unwrap()
+            .get(b"Contents")
+            .and_then(|c| c.as_string())
+            .map(printcraft_cos::PdfString::to_text)
+            .as_deref(),
         Some("note")
     );
     // Nothing unrelated was dragged in: no pages A1/A2, no other content streams.

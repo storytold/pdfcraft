@@ -991,7 +991,10 @@ fn erase(cx: &PageCx<'_>, path: &[[f64; 2]]) -> Option<Edit> {
         .filter(|a| a.subtype == "Ink" && !a.locked)
         .filter(|a| {
             let r = a.rect;
-            f64::from(r[0]) <= b[2] + radius && f64::from(r[2]) >= b[0] - radius && f64::from(r[1]) <= b[3] + radius && f64::from(r[3]) >= b[1] - radius
+            f64::from(r[0]) <= b[2] + radius
+                && f64::from(r[2]) >= b[0] - radius
+                && f64::from(r[1]) <= b[3] + radius
+                && f64::from(r[3]) >= b[1] - radius
         })
         .map(|a| a.index)
         .collect();
@@ -1191,14 +1194,12 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
             });
             ui.menu_button("Colour", |ui| {
                 if let Some(c) = swatch_grid(ui, a.color.map(|c| c.map(f64::from))) {
-                    action =
-                        Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation { page, index, color: Some(c), opacity: None, width: None })));
+                    action = Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation { page, index, color: Some(c), opacity: None, width: None })));
                     ui.close();
                 }
             });
         });
-        let thread: Vec<&printcraft_render::Annotation> =
-            info.annotations.iter().filter(|r| a.name.is_some() && r.in_reply_to == a.name).collect();
+        let thread: Vec<&printcraft_render::Annotation> = info.annotations.iter().filter(|r| a.name.is_some() && r.in_reply_to == a.name).collect();
         let marked = crate::comments_panel::is_marked(&thread);
         if ui.add_enabled(allowed, egui::Button::new(if marked { "Remove checkmark" } else { "Mark with checkmark" })).clicked() {
             action = Some(CanvasAction::Edit(Box::new(Edit::MarkAnnotation { page, index, marked: !marked, author: prefs.author.clone() })));

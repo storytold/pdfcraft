@@ -528,8 +528,14 @@ fn walk(
     if let Some(m) = d.get(b"MaxLen").and_then(|o| doc.resolve(o).as_int()) {
         inh.max_len = usize::try_from(m).ok();
     }
-    let kids: Vec<ObjRef> =
-        d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default().iter().filter_map(printcraft_cos::Object::as_ref).collect();
+    let kids: Vec<ObjRef> = d
+        .get(b"Kids")
+        .map(|k| doc.resolve(k))
+        .and_then(|k| k.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(printcraft_cos::Object::as_ref)
+        .collect();
     // Kids with /T are fields; kids without are this field's widgets.
     let field_kids: Vec<ObjRef> = kids.iter().copied().filter(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T"))).collect();
     if !field_kids.is_empty() {

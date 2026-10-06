@@ -1184,7 +1184,12 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                     let (w, h) = kind.size();
                     let corners = [(f64::from(vx) - w / 2.0, f64::from(vy) - h / 2.0), (f64::from(vx) + w / 2.0, f64::from(vy) + h / 2.0)];
                     let u: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
-                    let rect = [f64::from(u[0][0].min(u[1][0])), f64::from(u[0][1].min(u[1][1])), f64::from(u[0][0].max(u[1][0])), f64::from(u[0][1].max(u[1][1]))];
+                    let rect = [
+                        f64::from(u[0][0].min(u[1][0])),
+                        f64::from(u[0][1].min(u[1][1])),
+                        f64::from(u[0][0].max(u[1][0])),
+                        f64::from(u[0][1].max(u[1][1])),
+                    ];
                     let by = (kind.group() == printcraft_engine::StampGroup::Dynamic).then(|| by_line.clone());
                     let shape = printcraft_engine::Shape::Stamp { rect, stamp: kind, by };
                     view.pending_edit = Some(printcraft_engine::Edit::AddAnnotation(printcraft_engine::NewAnnotation {

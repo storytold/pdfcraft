@@ -53,7 +53,11 @@ fn one_page(content: &[u8], extra_res: &str, extra: Vec<Vec<u8>>) -> Document {
 }
 
 fn mark(doc: &mut Document, page: usize, rects: &[[f64; 4]], overlay: &str) {
-    let shape = Shape::Redact { quads: rects.iter().map(|r| rect_quad(*r)).collect(), overlay: overlay.into(), look: printcraft_annot::OverlayLook::default() };
+    let shape = Shape::Redact {
+        quads: rects.iter().map(|r| rect_quad(*r)).collect(),
+        overlay: overlay.into(),
+        look: printcraft_annot::OverlayLook::default(),
+    };
     let style = Style::default_for(&shape);
     add_annotation(doc, &NewAnnotation { page, shape, style, contents: String::new(), author: "Tester".into() }, &Meta::default()).unwrap();
 }

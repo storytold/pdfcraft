@@ -310,10 +310,13 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
                 b"Tf" => {
                     gs.size = op.num(1).unwrap_or(gs.size);
                     if let Some(name) = op.name(0) {
-                        gs.font = if let Some(f) = scope.fonts.get(name) { f.clone() } else {
+                        gs.font = if let Some(f) = scope.fonts.get(name) {
+                            f.clone()
+                        } else {
                             let m = fonts_res
                                 .get(name)
-                                .and_then(|f| doc.resolve(f).as_dict().cloned()).map_or_else(|| fallback.clone(), |d| Rc::new(Metrics::from_dict(doc, &d)));
+                                .and_then(|f| doc.resolve(f).as_dict().cloned())
+                                .map_or_else(|| fallback.clone(), |d| Rc::new(Metrics::from_dict(doc, &d)));
                             scope.fonts.insert(name.to_vec(), m.clone());
                             m
                         };

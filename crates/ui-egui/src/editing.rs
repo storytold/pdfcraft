@@ -271,12 +271,16 @@ impl PrintCraftApp {
         let Some(req) = self.close_request.take() else { return };
         let index = match req {
             CloseRequest::Tab(i) => i,
-            CloseRequest::Quit | CloseRequest::All => if let Some(i) = self.first_dirty() { i } else {
-                if req == CloseRequest::Quit {
-                    self.quit(ctx);
+            CloseRequest::Quit | CloseRequest::All => {
+                if let Some(i) = self.first_dirty() {
+                    i
+                } else {
+                    if req == CloseRequest::Quit {
+                        self.quit(ctx);
+                    }
+                    return;
                 }
-                return;
-            },
+            }
         };
         match choice {
             None => {} // cancelled: nothing closes

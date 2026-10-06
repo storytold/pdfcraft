@@ -343,7 +343,12 @@ impl Automation {
                             // Top-left-origin points → user space.
                             let info = &self.doc(&a)?.info.pages[page];
                             let (u0, u1) = (info.view_to_user(r[0] as f32, r[1] as f32), info.view_to_user(r[2] as f32, r[3] as f32));
-                            ImageEdit::Move([f64::from(u0[0].min(u1[0])), f64::from(u0[1].min(u1[1])), f64::from(u0[0].max(u1[0])), f64::from(u0[1].max(u1[1]))])
+                            ImageEdit::Move([
+                                f64::from(u0[0].min(u1[0])),
+                                f64::from(u0[1].min(u1[1])),
+                                f64::from(u0[0].max(u1[0])),
+                                f64::from(u0[1].max(u1[1])),
+                            ])
                         }
                         "rotate" => ImageEdit::Rotate(a.opt_int("quarters")?.unwrap_or(1) as i32),
                         "flip_horizontal" => ImageEdit::Flip { horizontal: true },

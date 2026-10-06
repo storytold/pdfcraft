@@ -191,7 +191,7 @@ impl StampKind {
 
     #[must_use]
     pub fn group(self) -> StampGroup {
-        use StampKind::{DynApproved, DynConfidential, DynReceived, DynReviewed, DynRevised, Accepted, InitialHere, Rejected, SignHere, Witness};
+        use StampKind::{Accepted, DynApproved, DynConfidential, DynReceived, DynReviewed, DynRevised, InitialHere, Rejected, SignHere, Witness};
         match self {
             DynApproved | DynConfidential | DynReceived | DynReviewed | DynRevised => StampGroup::Dynamic,
             Accepted | InitialHere | Rejected | SignHere | Witness => StampGroup::SignHere,
@@ -202,7 +202,11 @@ impl StampKind {
     /// The text on the stamp.
     #[must_use]
     pub fn label(self) -> &'static str {
-        use StampKind::{Approved, DynApproved, Completed, Confidential, DynConfidential, Draft, Final, ForComment, ForPublicRelease, InformationOnly, NotApproved, NotForPublicRelease, PreliminaryResults, Void, Accepted, InitialHere, Rejected, SignHere, Witness, DynReceived, DynReviewed, DynRevised};
+        use StampKind::{
+            Accepted, Approved, Completed, Confidential, Draft, DynApproved, DynConfidential, DynReceived, DynReviewed, DynRevised, Final,
+            ForComment, ForPublicRelease, InformationOnly, InitialHere, NotApproved, NotForPublicRelease, PreliminaryResults, Rejected, SignHere,
+            Void, Witness,
+        };
         match self {
             Approved | DynApproved => "APPROVED",
             Completed => "COMPLETED",
@@ -230,7 +234,11 @@ impl StampKind {
     /// `/Name`: the standard stamp names of ISO 32000-2 Table 184 where one exists.
     #[must_use]
     pub fn name(self) -> &'static str {
-        use StampKind::{Approved, Confidential, Draft, Final, ForComment, ForPublicRelease, NotApproved, NotForPublicRelease, Completed, InformationOnly, PreliminaryResults, Void, Accepted, InitialHere, Rejected, SignHere, Witness, DynApproved, DynConfidential, DynReceived, DynReviewed, DynRevised};
+        use StampKind::{
+            Accepted, Approved, Completed, Confidential, Draft, DynApproved, DynConfidential, DynReceived, DynReviewed, DynRevised, Final,
+            ForComment, ForPublicRelease, InformationOnly, InitialHere, NotApproved, NotForPublicRelease, PreliminaryResults, Rejected, SignHere,
+            Void, Witness,
+        };
         match self {
             Approved => "Approved",
             Confidential => "Confidential",
@@ -265,7 +273,10 @@ impl StampKind {
     /// The stamp's colour: green for approval, red for refusal and restriction, blue otherwise.
     #[must_use]
     pub fn color(self) -> Rgb {
-        use StampKind::{Approved, Completed, Final, Accepted, DynApproved, DynReceived, DynReviewed, NotApproved, Rejected, Void, Confidential, NotForPublicRelease, DynConfidential, SignHere, InitialHere, Witness};
+        use StampKind::{
+            Accepted, Approved, Completed, Confidential, DynApproved, DynConfidential, DynReceived, DynReviewed, Final, InitialHere, NotApproved,
+            NotForPublicRelease, Rejected, SignHere, Void, Witness,
+        };
         match self {
             Approved | Completed | Final | Accepted | DynApproved | DynReceived | DynReviewed => [0.13, 0.55, 0.13],
             NotApproved | Rejected | Void | Confidential | NotForPublicRelease | DynConfidential => [0.80, 0.10, 0.10],
@@ -1395,7 +1406,11 @@ fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta) ->
     }
     let d = annot_dict(doc, r);
     // A callout's rectangle is its text box: the leader line re-attaches and `/Rect` grows to hold it.
-    let callout = d.get(b"CL").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(printcraft_cos::Object::as_f64).collect::<Vec<f64>>()).filter(|l| l.len() == 6);
+    let callout = d
+        .get(b"CL")
+        .and_then(|o| o.as_array())
+        .map(|a| a.iter().filter_map(printcraft_cos::Object::as_f64).collect::<Vec<f64>>())
+        .filter(|l| l.len() == 6);
     let (outer, cl) = match callout {
         Some(mut l) => {
             let attach = callout_attach(rect, [l[2], l[3]]);
@@ -1634,7 +1649,8 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let obj = doc.resolve(&entry);
     let d = obj.as_dict()?;
     let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
-    let c: Vec<f64> = d.get(b"C").and_then(|o| o.as_array().map(|a| a.iter().filter_map(printcraft_cos::Object::as_f64).collect())).unwrap_or_default();
+    let c: Vec<f64> =
+        d.get(b"C").and_then(|o| o.as_array().map(|a| a.iter().filter_map(printcraft_cos::Object::as_f64).collect())).unwrap_or_default();
     let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { (c.len() == 3).then(|| [c[0], c[1], c[2]]) };
     let width = matches!(subtype.as_str(), "Square" | "Circle" | "Line" | "Ink" | "Polygon" | "PolyLine")
         .then(|| d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(printcraft_cos::Object::as_f64).unwrap_or(1.0));

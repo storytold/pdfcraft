@@ -17,7 +17,8 @@ impl Automation {
         };
         let overlay = a.opt_str("overlay")?.unwrap_or("").to_string();
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
-        let mut style = Style::default_for(&Shape::Redact { quads: Vec::new(), overlay: String::new(), look: printcraft_engine::OverlayLook::default() });
+        let mut style =
+            Style::default_for(&Shape::Redact { quads: Vec::new(), overlay: String::new(), look: printcraft_engine::OverlayLook::default() });
         if let Some(c) = a.opt_str("fill")? {
             style.fill = Some(parse_color(c)?);
         }
@@ -115,7 +116,9 @@ impl Automation {
     }
 
     pub(crate) fn doc_remove_hidden(&mut self, a: &Args) -> Result<Value> {
-        let edit = if a.get("categories").is_none() { Edit::Sanitize } else {
+        let edit = if a.get("categories").is_none() {
+            Edit::Sanitize
+        } else {
             let which = a
                 .strs("categories")?
                 .into_iter()

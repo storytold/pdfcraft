@@ -161,16 +161,18 @@ impl PrintCraftApp {
                 return false;
             }
         };
-        if let Some(printer) = self.print_draft.printer.clone() { match spool::submit(&bytes, &self.print_draft.job(&name)) {
-            Ok(msg) => {
-                self.notify(if msg.is_empty() { format!("Sent to {printer}") } else { format!("Sent to {printer}: {msg}") });
-                true
+        if let Some(printer) = self.print_draft.printer.clone() {
+            match spool::submit(&bytes, &self.print_draft.job(&name)) {
+                Ok(msg) => {
+                    self.notify(if msg.is_empty() { format!("Sent to {printer}") } else { format!("Sent to {printer}: {msg}") });
+                    true
+                }
+                Err(e) => {
+                    self.notify(e.to_string());
+                    false
+                }
             }
-            Err(e) => {
-                self.notify(e.to_string());
-                false
-            }
-        } } else {
+        } else {
             let path = match self.save_override.clone() {
                 Some(p) => Some(std::path::PathBuf::from(p)),
                 #[cfg(not(target_arch = "wasm32"))]

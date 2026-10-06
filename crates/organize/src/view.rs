@@ -93,7 +93,11 @@ pub fn initial_view(doc: &Document) -> InitialView {
             Some(b"TwoColumnRight") => Layout::TwoUpContinuousCoverPage,
             _ => Layout::Default,
         },
-        language: c.get(b"Lang").map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(printcraft_cos::PdfString::to_text)).filter(|s| !s.is_empty()),
+        language: c
+            .get(b"Lang")
+            .map(|o| doc.resolve(o))
+            .and_then(|o| o.as_string().map(printcraft_cos::PdfString::to_text))
+            .filter(|s| !s.is_empty()),
         ..InitialView::default()
     };
     if let Some(vp) = c.get(b"ViewerPreferences").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()) {

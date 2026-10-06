@@ -140,7 +140,11 @@ pub fn page_label_ranges(doc: &Document) -> Vec<LabelRange> {
                 entries.push(LabelRange {
                     start: start as usize,
                     style: spec.name(b"S").map_or(LabelStyle::None, LabelStyle::from_name),
-                    prefix: spec.get(b"P").map(|p| doc.resolve(p)).and_then(|p| p.as_string().map(printcraft_cos::PdfString::to_text)).unwrap_or_default(),
+                    prefix: spec
+                        .get(b"P")
+                        .map(|p| doc.resolve(p))
+                        .and_then(|p| p.as_string().map(printcraft_cos::PdfString::to_text))
+                        .unwrap_or_default(),
                     first: spec.int(b"St").unwrap_or(1).clamp(1, i64::from(u32::MAX)) as u32,
                 });
             }

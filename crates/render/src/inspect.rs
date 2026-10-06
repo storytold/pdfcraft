@@ -772,7 +772,8 @@ impl<'a> Inspector<'a> {
                 let base = f
                     .get(b"BaseFont")
                     .ok()
-                    .and_then(|o| o.as_name().ok()).map_or_else(|| "(unnamed)".into(), |n| String::from_utf8_lossy(n).into_owned());
+                    .and_then(|o| o.as_name().ok())
+                    .map_or_else(|| "(unnamed)".into(), |n| String::from_utf8_lossy(n).into_owned());
                 let kind = self.name(f, b"Subtype").unwrap_or_default();
                 let encoding = match f.get(b"Encoding").map(|o| self.resolve(o)) {
                     Ok(Object::Name(n)) => Some(String::from_utf8_lossy(n).into_owned()),

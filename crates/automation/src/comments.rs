@@ -167,7 +167,8 @@ impl Automation {
                     quads
                         .iter()
                         .map(|q| {
-                            let v: Vec<f64> = q.as_array().ok_or_else(wrong)?.iter().map(serde_json::Value::as_f64).collect::<Option<_>>().ok_or_else(wrong)?;
+                            let v: Vec<f64> =
+                                q.as_array().ok_or_else(wrong)?.iter().map(serde_json::Value::as_f64).collect::<Option<_>>().ok_or_else(wrong)?;
                             let v: [f64; 8] = v.try_into().map_err(|_| wrong())?;
                             let mut out = [0.0; 8];
                             for i in 0..4 {

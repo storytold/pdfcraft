@@ -540,7 +540,8 @@ pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocV
             ui.horizontal(|ui| {
                 let name = crate::comments::SWATCHES
                     .iter()
-                    .find(|(_, s)| c.is_some_and(|c| (0..3).all(|i| (s[i] as f32 - c[i]).abs() < 0.02))).map_or_else(|| if key.is_empty() { "No colour".into() } else { format!("#{key}") }, |(n, _)| n.to_string());
+                    .find(|(_, s)| c.is_some_and(|c| (0..3).all(|i| (s[i] as f32 - c[i]).abs() < 0.02)))
+                    .map_or_else(|| if key.is_empty() { "No colour".into() } else { format!("#{key}") }, |(n, _)| n.to_string());
                 toggle(ui, &mut cv.hidden_colors, key, &name);
                 if let Some(c) = c {
                     let (r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());

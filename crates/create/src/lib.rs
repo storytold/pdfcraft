@@ -229,7 +229,9 @@ fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = dec.read_info().map_err(|e| bad(e.to_string()))?;
     let dpi = match reader.info().pixel_dims {
-        Some(png::PixelDimensions { xppu, yppu, unit: png::Unit::Meter }) if xppu > 0 && yppu > 0 => (f64::from(xppu) * 0.0254, f64::from(yppu) * 0.0254),
+        Some(png::PixelDimensions { xppu, yppu, unit: png::Unit::Meter }) if xppu > 0 && yppu > 0 => {
+            (f64::from(xppu) * 0.0254, f64::from(yppu) * 0.0254)
+        }
         _ => (72.0, 72.0),
     };
     let mut buf = vec![0; reader.output_buffer_size().ok_or_else(|| bad("image too large".into()))?];

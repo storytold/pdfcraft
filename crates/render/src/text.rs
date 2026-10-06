@@ -207,9 +207,7 @@ impl<'a> Device<'a> for TextDevice {
             eprintln!("{kind} {text:?} transform={:?} glyph_transform={:?}", transform.as_coeffs(), glyph_transform.as_coeffs());
         }
         let advance = match glyph {
-            Glyph::Outline(g) => {
-                g.advance_width().filter(|a| *a > 0.0).map_or_else(|| g.outline().bounding_box().width().max(500.0), f64::from)
-            }
+            Glyph::Outline(g) => g.advance_width().filter(|a| *a > 0.0).map_or_else(|| g.outline().bounding_box().width().max(500.0), f64::from),
             Glyph::Type3(g) => g.advance_width().filter(|a| a.is_finite() && *a > 0.0).map_or(600.0, f64::from),
         };
         // The baseline direction in view space (y down), to the nearest quarter turn.

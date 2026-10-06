@@ -114,7 +114,10 @@ pub fn declared(doc: &Document) -> Declared {
     if let Some(list) = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()) {
         for oi in list {
             if let Some(od) = doc.resolve(&oi).as_dict() {
-                let id = od.get(b"OutputConditionIdentifier").and_then(|v| doc.resolve(v).as_string().map(printcraft_cos::PdfString::to_text)).unwrap_or_default();
+                let id = od
+                    .get(b"OutputConditionIdentifier")
+                    .and_then(|v| doc.resolve(v).as_string().map(printcraft_cos::PdfString::to_text))
+                    .unwrap_or_default();
                 d.output_intents.push(id);
             }
         }

@@ -91,7 +91,14 @@ pub struct RotateDraft {
 
 impl Default for RotateDraft {
     fn default() -> Self {
-        RotateDraft { degrees: 90, which: 0, from: 1, to: 1, parity: printcraft_engine::PageParity::default(), orientation: printcraft_engine::PageOrientation::default() }
+        RotateDraft {
+            degrees: 90,
+            which: 0,
+            from: 1,
+            to: 1,
+            parity: printcraft_engine::PageParity::default(),
+            orientation: printcraft_engine::PageOrientation::default(),
+        }
     }
 }
 
@@ -474,7 +481,9 @@ impl PrintCraftApp {
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let path = if let Some(p) = self.save_override.clone() { Some(std::path::PathBuf::from(p)) } else {
+            let path = if let Some(p) = self.save_override.clone() {
+                Some(std::path::PathBuf::from(p))
+            } else {
                 let d = rfd::FileDialog::new()
                     .set_title(if comments { "Export comments" } else { "Export form data" })
                     .set_file_name(format!("{stem}.xfdf"));
