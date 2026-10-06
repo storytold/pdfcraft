@@ -336,7 +336,32 @@ pub fn oid(dotted: &str) -> Vec<u8> {
     tlv(tag::OID, &body)
 }
 
-/// An unsigned big-endian integer.
+/// Encode a dotted OID supplied by a caller. Unlike [`oid`], this validates every arc and
+/// never panics on malformed input.
+pub fn try_oid(dotted: &str) -> Result<Vec<u8>, SignError> {
+    let mut arcs = dotted.split('.').map(|a| a.parse::<u64>().map_err(|_| bad("invalid OID arc")));
+    let first = arcs.next().ok_or_else(|| bad("empty OID"))??;
+    let second = arcs.next().ok_or_else(|| bad("OID needs two arcs"))??;
+    if first > 2 || (first < 2 && second >= 40) {
+        return Err(bad("invalid OID prefix"));
+    }
+    let mut body = Vec::new();
+    let mut push = |mut v: u64| {
+        let mut tmp = vec![(v & 0x7F) as u8];
+        v >>= 7;
+        while v > 0 {
+            tmp.push(0x80 | (v & 0x7F) as u8);
+            v >>= 7;
+        }
+        tmp.reverse();
+        body.extend(tmp);
+    };
+    push(first * 40 + second);
+    for arc in arcs {
+        push(arc?);
+    }
+    Ok(tlv(tag::OID, &body))
+}
 pub fn uint(bytes: &[u8]) -> Vec<u8> {
     let b: &[u8] = match bytes.iter().position(|x| *x != 0) {
         Some(i) => &bytes[i..],

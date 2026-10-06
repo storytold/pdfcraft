@@ -5975,11 +5975,11 @@ title = "Add a document timestamp (RFC 3161)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/sign/tests/pdf.rs::a_document_timestamp_covers_the_file_and_validates", "crates/automation/tests/automation.rs::timestamping_through_tools_with_a_local_tsa"]
+notes = "doc_timestamp appends a standalone /ETSI.RFC3161 signature dictionary over the whole file; validation discovers and verifies these (imprint, token signature, TSA cert validity) and reports the trusted time. No UI dialog yet."
 
 [[feature]]
 id = "sign.timestamp-servers"
@@ -5987,11 +5987,11 @@ title = "Configure timestamp servers"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/automation/tests/automation.rs::timestamping_through_tools_with_a_local_tsa"]
+notes = "sign_timestamp_server sets or clears the default RFC 3161 server (runtime preference, like the trusted certificates); URLs must be https, or http on the loopback; nothing dials unless a tool stamps. No preferences-file persistence yet."
 
 [[feature]]
 id = "sign.pades-bt"
@@ -5999,11 +5999,11 @@ title = "PAdES B-T (signature timestamp)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/sign/tests/pdf.rs::signing_with_a_timestamp_embeds_a_verified_rfc3161_token", "crates/automation/tests/automation.rs::timestamping_through_tools_with_a_local_tsa"]
+notes = "sign_document with timestamp: true embeds an RFC 3161 token (PAdES B-T) from the configured or named server over the signature value; the token is verified at validation time and the trusted time is reported. Live TSA deployments still need their own server; no UI dialog yet."
 
 [[feature]]
 id = "sign.ltv"
@@ -6011,11 +6011,11 @@ title = "Long-term validation (DSS/VRI)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/sign/tests/pdf.rs::embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid", "crates/automation/tests/automation.rs::ltv_through_tools_embeds_a_fetched_revocation_list"]
+notes = "sign_ltv fetches revocation evidence for every signer chain (OCSP from AIA, CRLs from distribution points or explicit urls) and embeds it in the catalog /DSS with /VRI per signature, deduplicating blobs; unreachable servers come back as warnings. No per-server allowlist UI."
 
 [[feature]]
 id = "sign.pades-blta"
@@ -6023,11 +6023,11 @@ title = "PAdES B-LT and B-LTA"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/sign/tests/pdf.rs::sign_then_ltv_then_timestamp_makes_a_b_lta_file"]
+notes = "The B-LT/B-LTA chain works with caller-supplied evidence: sign, embed DSS (B-LT), then append a document timestamp over the result (B-LTA); earlier signatures stay valid with the store classified as a permitted change. Missing: OCSP/CRL verification of the evidence, re-timestamping automation."
 
 [[feature]]
 id = "sign.ocsp-crl"
@@ -6035,11 +6035,11 @@ title = "Revocation checking (OCSP and CRL)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/sign/tests/crypto.rs::crls_verify_and_report_revocation", "crates/sign/tests/crypto.rs::ocsp_responses_verify_and_match_the_certificate", "crates/automation/tests/automation.rs::ltv_through_tools_embeds_a_fetched_revocation_list"]
+notes = "CRLs and OCSP responses are parsed and verified (issuer/responder signature, delegated responder OCSP-signing EKU, CertID hash match, window) and checked against the DSS during validation; the fetched-CRL path runs end to end through a loopback server in the automation test (the OCSP fetch path is the same client). No OS trust store integration for TSA chains yet."
 
 [[feature]]
 id = "sign.validate-all"
@@ -6167,11 +6167,11 @@ title = "Verification time (signing time, timestamp, now)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/sign/tests/pdf.rs::signing_with_a_timestamp_embeds_a_verified_rfc3161_token"]
+notes = "Validation prefers the verified RFC 3161 timestamp time over /M when checking certificate validity and reports it as trusted time. Missing: an explicit verification-time option (verify at a chosen date / now) in the validation API."
 
 [[feature]]
 id = "sign.changes-after-signing"

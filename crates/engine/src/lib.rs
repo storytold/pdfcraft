@@ -1689,6 +1689,8 @@ pub struct Session {
     trust: Arc<TrustStore>,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
     js_off: bool,
+    /// The default RFC 3161 timestamp server (Preferences ▸ Signatures ▸ Timestamp servers).
+    timestamp_server: Option<String>,
 }
 
 /// Validate the signature fields of `cos` (written as `bytes`).
@@ -2368,6 +2370,17 @@ impl Session {
         }
     }
 
+    /// The configured default RFC 3161 timestamp server, if any.
+    pub fn timestamp_server(&self) -> Option<&str> {
+        self.timestamp_server.as_deref()
+    }
+
+    /// Set (or clear) the default RFC 3161 timestamp server. Runtime preference, like the
+    /// trusted certificates; the server is contacted only when a tool stamps something.
+    pub fn set_timestamp_server(&mut self, url: Option<String>) {
+        self.timestamp_server = url;
+    }
+
     /// The signing time as a PDF date in local time with its offset (`D:…+02'00'`).
     pub fn signing_date(&self) -> String {
         let offset = if self.clock.is_some() { 0 } else { local_utc_offset() };
@@ -2391,6 +2404,40 @@ impl Session {
             opts.date = self.signing_date();
         }
         Ok(Arc::new(printcraft_sign::sign(&editor.cos, id, &opts)?))
+    }
+
+    /// [`Session::sign`], embedding an RFC 3161 signature timestamp (PAdES B-T) produced by
+    /// `tsa`. The transport lives with the caller; the engine never opens a socket.
+    pub fn sign_with_timestamp(
+        &self,
+        doc: DocId,
+        id: &printcraft_sign::DigitalId,
+        mut opts: SignOptions,
+        tsa: &dyn printcraft_sign::TimestampAuthority,
+    ) -> Result<Arc<Vec<u8>>, EditError> {
+        let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        if opts.date.is_empty() {
+            opts.date = self.signing_date();
+        }
+        Ok(Arc::new(printcraft_sign::sign_with_timestamp(&editor.cos, id, &opts, tsa)?))
+    }
+
+    /// Append a standalone document timestamp (RFC 3161, `/ETSI.RFC3161`) covering the file's
+    /// current state. An empty `date` takes the session clock; the transport is the caller's.
+    pub fn timestamp_document(&self, doc: DocId, tsa: &dyn printcraft_sign::TimestampAuthority, date: String) -> Result<Arc<Vec<u8>>, EditError> {
+        let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        let date = if date.is_empty() { self.signing_date() } else { date };
+        Ok(Arc::new(printcraft_sign::timestamp_document(&editor.cos, tsa, &date)?))
+    }
+
+    /// Embed revocation evidence into the catalog's `/DSS` with `/VRI` entries per signature
+    /// (PAdES B-LT): an incremental update that never rewrites signed bytes.
+    pub fn embed_ltv(&self, doc: DocId, evidence: &printcraft_sign::dss::Evidence) -> Result<Arc<Vec<u8>>, EditError> {
+        let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        Ok(Arc::new(printcraft_sign::dss::embed(&editor.cos, evidence)?))
     }
 
     /// Record that the signed file `bytes` was saved (to `path`): like [`Session::mark_saved`],

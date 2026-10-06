@@ -22,5 +22,11 @@ default = ["mcp"]
 # The MCP server module. Opt-in at run time either way; disable to leave it out of the build.
 mcp = ["dep:base64"]
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Timestamp/revocation fetching for the explicitly configured tools (same stack as the
+# app's update check): ureq over rustls with the OS's root certificates.
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"] }
+rustls-native-certs = "0.8"
+
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["jpeg"] }

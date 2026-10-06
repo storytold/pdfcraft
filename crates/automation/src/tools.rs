@@ -547,7 +547,7 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("sign.digital")
             .with(schema(json!({}), &[])),
-        t("sign_document", "Sign a document", "Sign with a digital ID (a .p12/.pfx path, or on macOS a Keychain identity: \"keychain:<common name or fingerprint>\" from sign_keychain_ids) and save the signed file to `out` (signing always saves, as in Acrobat; the document then shows the signed file). Sign an existing empty signature field (`field`), or a new one on `page` at `rect` (omit rect for an invisible signature). certify: no_changes, form_fill or comments makes a certification signature. PAdES B-B, SHA-256 (SHA-384 for P-384 keys).")
+        t("sign_document", "Sign a document", "Sign with a digital ID (a .p12/.pfx path, or on macOS a Keychain identity: \"keychain:<common name or fingerprint>\" from sign_keychain_ids) and save the signed file to `out` (signing always saves, as in Acrobat; the document then shows the signed file). Sign an existing empty signature field (`field`), or a new one on `page` at `rect` (omit rect for an invisible signature). certify: no_changes, form_fill or comments makes a certification signature. PAdES B-B, SHA-256 (SHA-384 for P-384 keys); timestamp: true adds an RFC 3161 signature timestamp (PAdES B-T) from the configured or named timestamp server.")
             .cmd("sign.digital")
             .with(schema(
                 json!({
@@ -561,10 +561,24 @@ pub fn tools() -> Vec<ToolDef> {
                     "location": { "type": "string" },
                     "contact": { "type": "string" },
                     "certify": { "type": "string", "enum": ["no_changes", "form_fill", "comments"] },
+                    "timestamp": { "type": "boolean", "description": "Add an RFC 3161 signature timestamp (PAdES B-T)." },
+                    "timestamp_server": { "type": "string", "description": "Timestamp server URL, overriding the configured default. https, or http on the loopback." },
                     "out": { "type": "string", "description": "Where to save the signed document." },
                 }),
                 &["doc", "id", "out"],
             )),
+        t("sign_timestamp_server", "Configure timestamp servers", "Set the default RFC 3161 timestamp server (url) used when signing with a timestamp or adding a document timestamp, or clear it (clear: true). https, or http on the loopback only. The server is contacted only when a tool stamps something; nothing dials on its own. Omitting both url and clear returns the current server.").with(schema(
+            json!({ "url": { "type": "string", "format": "uri" }, "clear": { "type": "boolean" } }),
+            &[],
+        )),
+        t("doc_timestamp", "Add a document timestamp", "Append a standalone RFC 3161 timestamp (/ETSI.RFC3161) covering the whole file (Acrobat: Certificates ▸ Add a timestamp) and save to out. Uses url or the configured timestamp server; the document is then revalidated.").with(schema(
+            json!({ "doc": doc(), "url": { "type": "string", "format": "uri" }, "out": { "type": "string", "description": "Where to save the stamped document." } }),
+            &["doc", "out"],
+        )),
+        t("sign_ltv", "Embed long-term validation evidence", "Fetch revocation evidence for every signer's chain (OCSP from AIA URLs, CRLs from distribution points, plus urls as extra CRL sources for the signer) and embed it in the catalog /DSS with /VRI per signature (PAdES B-LT), saving to out. Unreachable servers are reported as warnings; nothing is fetched unless this tool runs.").with(schema(
+            json!({ "doc": doc(), "urls": { "type": "array", "items": { "type": "string" } }, "out": { "type": "string", "description": "Where to save the updated document." } }),
+            &["doc", "out"],
+        )),
         t("sign_trust", "Trust certificates", "Add certificates (.cer/.crt/.pem/.der, or the certificates in a .p12 with `password`) to the trusted certificates used to validate signatures, or clear the list (clear: true). Every open document is revalidated. Returns the trusted list.").with(schema(
             json!({ "paths": { "type": "array", "items": { "type": "string" } }, "password": { "type": "string" }, "clear": { "type": "boolean" } }),
             &[],

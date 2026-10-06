@@ -18,6 +18,7 @@ mod forms;
 mod links;
 #[cfg(feature = "mcp")]
 pub mod mcp;
+mod net;
 mod printing;
 mod redact;
 mod signing;
@@ -542,6 +543,9 @@ impl Automation {
                 json!({ "count": ids.len(), "ids": ids })
             }
             "sign_trust" => self.sign_trust(&a)?,
+            "sign_timestamp_server" => self.sign_timestamp_server(&a)?,
+            "doc_timestamp" => self.doc_timestamp(&a)?,
+            "sign_ltv" => self.sign_ltv(&a)?,
             "comment_mark" => self.comment_mark(&a)?,
             "comment_lock" => self.comment_lock(&a)?,
             "comments_hide" => self.comments_hide(&a)?,

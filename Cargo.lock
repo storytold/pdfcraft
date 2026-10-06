@@ -3808,7 +3808,9 @@ dependencies = [
  "printcraft-engine",
  "printcraft-organize",
  "printcraft-render",
+ "rustls-native-certs",
  "serde_json",
+ "ureq",
 ]
 
 [[package]]

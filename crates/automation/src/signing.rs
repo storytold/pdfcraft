@@ -2,7 +2,10 @@
 //! document, and manage trusted certificates. Rectangles are points from the top-left of the
 //! displayed page.
 
+use printcraft_engine::sign::dss::Evidence;
 use printcraft_engine::sign::{self, Certificate, DigitalId, Modification, Name, PrivateKey};
+
+use super::net;
 use printcraft_engine::{SignOptions, SignatureInfo, SignatureStatus};
 use serde_json::{Value, json};
 
@@ -65,8 +68,10 @@ impl Automation {
             "visible": s.visible,
             "revision": s.revision,
             "sub_filter": s.sub_filter,
+            "doc_timestamp": s.doc_timestamp,
             "algorithm": s.algorithm,
             "timestamp": s.timestamp,
+            "timestamp_time": s.timestamp_time.map(|t| t.to_string()),
             "modification": modification,
             "changes": changes,
             "details": s.details,
@@ -175,7 +180,21 @@ impl Automation {
             certify,
             ..SignOptions::default()
         };
-        let signed = self.session.sign(doc_id, &id, opts).map_err(failed)?;
+        // An RFC 3161 signature timestamp (PAdES B-T) from the configured or named server.
+        let want_ts = a.opt_bool("timestamp")?.unwrap_or(false);
+        let ts_url = a.opt_str("timestamp_server")?.map(str::to_string).or_else(|| self.session.timestamp_server().map(str::to_string));
+        let signed = match (want_ts, ts_url) {
+            (true, Some(url)) => {
+                let client = net::TsaClient::new(url).map_err(failed)?;
+                self.session.sign_with_timestamp(doc_id, &id, opts, &client).map_err(failed)?
+            }
+            (true, None) => {
+                return Err(bad(
+                    "timestamp requested but no timestamp server is configured (pass timestamp_server or set one with sign_timestamp_server)",
+                ));
+            }
+            (false, _) => self.session.sign(doc_id, &id, opts).map_err(failed)?,
+        };
         write_atomic(&out, &signed)?;
         let path = out.to_string_lossy().into_owned();
         self.session.mark_signed(doc_id, signed.clone(), Some(path.clone())).map_err(failed)?;
@@ -214,5 +233,111 @@ impl Automation {
         }
         self.session.set_trusted_certificates(certs);
         Ok(json!({ "trusted": self.session.trusted_certificates().iter().map(cert_json).collect::<Vec<_>>() }))
+    }
+
+    /// Configure the default RFC 3161 timestamp server (runtime preference).
+    pub(crate) fn sign_timestamp_server(&mut self, a: &Args) -> Result<Value> {
+        if a.opt_bool("clear")?.unwrap_or(false) {
+            self.session.set_timestamp_server(None);
+        }
+        if let Ok(Some(url)) = a.opt_str("url") {
+            net::TsaClient::new(url.to_string()).map_err(failed)?;
+            self.session.set_timestamp_server(Some(url.to_string()));
+        }
+        Ok(json!({ "server": self.session.timestamp_server().map(str::to_string) }))
+    }
+
+    /// Append a standalone RFC 3161 document timestamp (Acrobat: Add a timestamp).
+    pub(crate) fn doc_timestamp(&mut self, a: &Args) -> Result<Value> {
+        let url = a
+            .opt_str("url")?
+            .map(str::to_string)
+            .or_else(|| self.session.timestamp_server().map(str::to_string))
+            .ok_or_else(|| bad("no timestamp server: pass url or set one with sign_timestamp_server"))?;
+        let client = net::TsaClient::new(url).map_err(failed)?;
+        let doc = self.doc(a)?;
+        let doc_id = doc.id;
+        let stamped = self.session.timestamp_document(doc_id, &client, String::new()).map_err(failed)?;
+        let out = self.resolve(a.str("out")?, true)?;
+        write_atomic(&out, &stamped)?;
+        let path = out.to_string_lossy().into_owned();
+        self.session.mark_signed(doc_id, stamped.clone(), Some(path.clone())).map_err(failed)?;
+        let doc = self.doc(a)?;
+        let stamp = doc.signatures.iter().find(|s| s.doc_timestamp).cloned();
+        Ok(json!({ "path": path, "bytes": stamped.len(), "timestamp": stamp.map(|s| self.sig_json(a, &s)).transpose()? }))
+    }
+
+    /// Fetch revocation evidence for the signer chains and embed a DSS/VRI (PAdES B-LT).
+    pub(crate) fn sign_ltv(&mut self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let doc_id = doc.id;
+        let urls: Vec<String> = match a.get("urls") {
+            None => Vec::new(),
+            Some(v) => v
+                .as_array()
+                .ok_or_else(|| bad("urls must be an array"))?
+                .iter()
+                .map(|u| u.as_str().map(str::to_string).ok_or_else(|| bad("urls must be strings")))
+                .collect::<Result<_>>()?,
+        };
+        let mut evidence = Evidence::default();
+        let mut warnings: Vec<String> = Vec::new();
+        let mut seen: Vec<Vec<u8>> = Vec::new();
+        for s in doc.signatures.iter().filter(|s| s.signed && !s.chain.is_empty()) {
+            for (i, cert) in s.chain.iter().enumerate() {
+                if seen.iter().any(|r| r == &cert.raw) || seen.len() >= 8 {
+                    continue;
+                }
+                seen.push(cert.raw.clone());
+                evidence.certs.push(cert.raw.clone());
+                let issuer = s.chain.get(i + 1).unwrap_or(cert);
+                let mut fetched = 0;
+                for u in cert.ocsp_urls.iter().take(2) {
+                    if fetched >= 3 {
+                        break;
+                    }
+                    let sent = printcraft_engine::sign::revocation::build_ocsp_request(cert, issuer).map_err(failed).and_then(|req| {
+                        net::post_bytes(u, "application/ocsp-request", "application/ocsp-response", &req)
+                            .map_err(|e| crate::ToolError::InvalidArgs(e.to_string()))
+                    });
+                    match sent {
+                        Ok(bytes) => {
+                            evidence.ocsps.push(bytes);
+                            fetched += 1;
+                        }
+                        Err(e) => warnings.push(format!("OCSP {u}: {e}")),
+                    }
+                }
+                for u in cert.crl_urls.iter().take(2).chain(if i == 0 { urls.iter() } else { [].iter() }) {
+                    if fetched >= 3 {
+                        break;
+                    }
+                    match net::fetch(u) {
+                        Ok(bytes) => {
+                            evidence.crls.push(bytes);
+                            fetched += 1;
+                        }
+                        Err(e) => warnings.push(format!("CRL {u}: {e}")),
+                    }
+                }
+            }
+        }
+        if evidence.certs.is_empty() && evidence.ocsps.is_empty() && evidence.crls.is_empty() {
+            return Err(bad("nothing to embed: no chain certificates or reachable revocation locations (pass urls for the signer's CRL)"));
+        }
+        let ltv = self.session.embed_ltv(doc_id, &evidence).map_err(failed)?;
+        let out = self.resolve(a.str("out")?, true)?;
+        write_atomic(&out, &ltv)?;
+        let path = out.to_string_lossy().into_owned();
+        let doc = self.doc(a)?;
+        let statuses: Vec<Value> = doc
+            .signatures
+            .iter()
+            .filter(|s| s.signed)
+            .map(|s| Ok(json!({ "field": s.field, "status": match s.status { SignatureStatus::Valid => "valid", SignatureStatus::Unknown => "unknown", SignatureStatus::Invalid => "invalid" }, "revocation_notes": s.details.iter().filter(|d| d.contains("revocation") || d.contains("revoked")).cloned().collect::<Vec<_>>() })))
+            .collect::<Result<_>>()?;
+        Ok(
+            json!({ "path": path, "bytes": ltv.len(), "embedded": { "certificates": evidence.certs.len(), "ocsps": evidence.ocsps.len(), "crls": evidence.crls.len() }, "warnings": warnings, "signatures": statuses }),
+        )
     }
 }

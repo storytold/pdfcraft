@@ -120,6 +120,14 @@ pub struct Certificate {
     /// Key usage bits (bit 0 = digitalSignature, 1 = nonRepudiation, 5 = keyCertSign), if present.
     pub key_usage: Option<u16>,
     pub subject_key_id: Option<Vec<u8>>,
+    /// Authority key identifier (2.5.29.35), when present.
+    pub authority_key_id: Option<Vec<u8>>,
+    /// Extended key usage OIDs (2.5.29.37), when present.
+    pub extended_key_usage: Option<Vec<String>>,
+    /// OCSP responder URLs from the Authority Information Access (1.3.6.1.5.5.7.1.1).
+    pub ocsp_urls: Vec<String>,
+    /// CRL distribution point URLs (2.5.29.31).
+    pub crl_urls: Vec<String>,
 }
 
 impl Certificate {
@@ -141,6 +149,10 @@ impl Certificate {
         let mut is_ca = false;
         let mut key_usage = None;
         let mut subject_key_id = None;
+        let mut authority_key_id = None;
+        let mut extended_key_usage = None;
+        let mut ocsp_urls = Vec::new();
+        let mut crl_urls = Vec::new();
         for t in f {
             if t.tag != tag::ctx(3) {
                 continue;
@@ -170,6 +182,48 @@ impl Certificate {
                         }
                     }
                     "2.5.29.14" => subject_key_id = Some(Tlv::parse_all(value.value)?.value.to_vec()),
+                    // AuthorityKeyIdentifier: the [0] keyIdentifier inside.
+                    "2.5.29.35" => {
+                        authority_key_id =
+                            Tlv::parse_all(value.value)?.children()?.into_iter().find(|t| t.tag == tag::ctx(0)).map(|t| t.value.to_vec());
+                    }
+                    // ExtendedKeyUsage: a SEQUENCE OF OID.
+                    "2.5.29.37" => {
+                        let oids: Option<Vec<String>> =
+                            Tlv::parse_all(value.value)?.children()?.into_iter().map(|t| t.oid()).collect::<Result<_, _>>().ok();
+                        extended_key_usage = oids;
+                    }
+                    // Authority Information Access: OCSP and CA-issuer locations.
+                    "1.3.6.1.5.5.7.1.1" => {
+                        for access in Tlv::parse_all(value.value)?.children()? {
+                            let a = access.children()?;
+                            if a.len() >= 2 && a[0].oid().ok().as_deref() == Some("1.3.6.1.5.5.7.48.1") && a[1].tag == tag::ctx_prim(6) {
+                                ocsp_urls.push(String::from_utf8_lossy(a[1].value).into_owned());
+                            }
+                        }
+                    }
+                    // CRL distribution points: full-name URIs.
+                    "2.5.29.31" => {
+                        for dp in Tlv::parse_all(value.value)?.children()? {
+                            for field in dp.children()? {
+                                if field.tag != tag::ctx(0) {
+                                    continue;
+                                }
+                                // distributionPoint [0] DistributionPointName, whose fullName
+                                // choice is [0] IMPLICIT GeneralNames.
+                                let Ok(name) = field.inner() else { continue };
+                                if name.tag != tag::ctx(0) {
+                                    continue;
+                                }
+                                let Ok(names) = Tlv::parse_all(name.value) else { continue };
+                                for n in names.children()? {
+                                    if n.tag == tag::ctx_prim(6) {
+                                        crl_urls.push(String::from_utf8_lossy(n.value).into_owned());
+                                    }
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -188,6 +242,10 @@ impl Certificate {
             is_ca,
             key_usage,
             subject_key_id,
+            authority_key_id,
+            extended_key_usage,
+            ocsp_urls,
+            crl_urls,
         })
     }
 

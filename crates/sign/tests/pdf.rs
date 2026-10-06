@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use printcraft_cos::{Document, Object, PdfString, SaveOptions, write_incremental};
-use printcraft_sign::{Modification, SignOptions, Status, TrustStore, pkcs12, signatures};
+use printcraft_sign::{Modification, SignError, SignOptions, Status, Time, TimestampAuthority, TrustStore, der, pkcs12, signatures};
 
 fn data(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/data/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
@@ -168,6 +168,185 @@ fn invisible_signatures_and_refusals() {
     assert!(!s.visible);
     assert!(printcraft_sign::sign(&open(&fixture()), &id, &SignOptions { page: 5, ..opts() }).is_err());
     assert_eq!(printcraft_sign::pdf::display_date("D:20261002120000+01'00'"), "2026.10.02 12:00:00 +01'00'");
+}
+
+/// A deterministic TSA: signs an RFC 3161 response locally with a test digital ID at a fixed
+/// time. No sockets; the whole stamping path runs in-process.
+struct TestTsa {
+    id: pkcs12::DigitalId,
+    time: Time,
+}
+
+impl TimestampAuthority for TestTsa {
+    fn timestamp(&self, request: &[u8]) -> Result<Vec<u8>, SignError> {
+        let q = printcraft_sign::timestamp::parse_request(request)?;
+        printcraft_sign::timestamp::respond(
+            &self.id.key,
+            &self.id.certificate,
+            &self.id.chain,
+            printcraft_sign::DigestAlg::Sha256,
+            &q,
+            "1.2.3.4",
+            self.time,
+            7,
+        )
+    }
+}
+
+#[test]
+fn signing_with_a_timestamp_embeds_a_verified_rfc3161_token() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let signed = printcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &opts(), &tsa).unwrap();
+    assert!(signed.starts_with(&fixture()), "still an incremental update");
+    let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
+    let s = signatures(&open(&signed), &signed, &TrustStore { certs: vec![anchor] }).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert!(s.timestamp, "{:?}", s.details);
+    assert_eq!(s.timestamp_time, Some(tsa.time), "the token's generation time, verified over the signature value");
+    assert!(s.details.iter().any(|d| d.contains("trusted time")), "{:?}", s.details);
+    // Untrusted, the signature stays intact-but-unknown; the timestamp is still reported.
+    let s = signatures(&open(&signed), &signed, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Unknown);
+    assert_eq!(s.timestamp_time, Some(tsa.time));
+}
+
+#[test]
+fn a_malformed_timestamp_response_fails_signing_without_a_file() {
+    struct Bad;
+    impl TimestampAuthority for Bad {
+        fn timestamp(&self, _request: &[u8]) -> Result<Vec<u8>, SignError> {
+            Ok(b"not der".to_vec())
+        }
+    }
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    assert!(printcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &opts(), &Bad).is_err());
+}
+
+#[test]
+fn a_document_timestamp_covers_the_file_and_validates() {
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let stamped = printcraft_sign::timestamp_document(&open(&fixture()), &tsa, "D:20261006120000Z").unwrap();
+    assert!(stamped.starts_with(&fixture()), "an incremental update");
+    let s = signatures(&open(&stamped), &stamped, &TrustStore::default()).into_iter().find(|s| s.doc_timestamp).unwrap();
+    assert!(s.doc_timestamp && s.timestamp);
+    assert_eq!(s.sub_filter.as_deref(), Some("ETSI.RFC3161"));
+    assert_eq!(s.timestamp_time, Some(tsa.time));
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert_eq!(s.modification, Modification::None);
+    assert_eq!(s.signed_len, stamped.len());
+    // A later byte change breaks the timestamp's imprint.
+    let mut tampered = stamped.clone();
+    let i = tampered.windows(13).position(|w| w == b"Contract text").unwrap();
+    tampered[i] = b'K';
+    let s = signatures(&open(&tampered), &tampered, &TrustStore::default()).into_iter().find(|s| s.doc_timestamp).unwrap();
+    assert_eq!(s.status, Status::Invalid);
+    // Combined with a field signature: both are listed, the stamp covers both revisions.
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let signed = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let both = printcraft_sign::timestamp_document(&open(&signed), &tsa, "D:20261006130000Z").unwrap();
+    let all = signatures(&open(&both), &both, &TrustStore::default());
+    let field = all.iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
+    let allowed = match &field.modification {
+        Modification::Allowed(k) => k,
+        other => panic!("{other:?}"),
+    };
+    assert!(allowed.contains(&"signature".to_string()), "{allowed:?}");
+    let stamp = all.iter().find(|s| s.doc_timestamp).unwrap();
+    assert_eq!(stamp.status, Status::Valid, "{:?}", stamp.details);
+}
+
+#[test]
+fn embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid() {
+    use printcraft_sign::dss::{self, Evidence};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let signed = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let evidence =
+        Evidence { certs: vec![id.certificate.raw.clone()], ocsps: vec![b"synthetic ocsp".to_vec()], crls: vec![b"synthetic crl".to_vec()] };
+    let ltv = dss::embed(&open(&signed), &evidence).unwrap();
+    assert!(ltv.starts_with(&signed), "incremental");
+    let doc = open(&ltv);
+    // The store is in the catalog with one certificate and the /VRI entry for the signature.
+    let root = doc.root().unwrap();
+    let dss_dict: printcraft_cos::Dict =
+        doc.get(root).as_dict().unwrap().get(b"DSS").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap();
+    assert_eq!(dss_dict.name(b"Type"), Some(b"DSS".as_slice()));
+    assert!(dss_dict.contains(b"Certs") && dss_dict.contains(b"OCSPs") && dss_dict.contains(b"CRLs") && dss_dict.contains(b"VRI"));
+    // The earlier signature still validates; the DSS counts as a permitted change.
+    let s = signatures(&doc, &ltv, &TrustStore::default()).into_iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
+    assert_eq!(s.status, Status::Unknown);
+    let allowed = match &s.modification {
+        Modification::Allowed(k) => k,
+        other => panic!("{other:?}"),
+    };
+    assert!(allowed.contains(&"document security store".to_string()), "{allowed:?}");
+    // Embedding twice keeps one certificate (byte-identical dedup) and stays valid.
+    let twice = dss::embed(&doc, &evidence).unwrap();
+    let doc2 = open(&twice);
+    let dss2: printcraft_cos::Dict =
+        doc2.get(doc2.root().unwrap()).as_dict().unwrap().get(b"DSS").map(|d| doc2.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap();
+    let certs = dss2.get(b"Certs").map(|c| doc2.resolve(c)).and_then(|c| c.as_array().cloned()).unwrap();
+    assert_eq!(certs.len(), 1, "byte-identical evidence is not duplicated");
+}
+
+#[test]
+fn sign_then_ltv_then_timestamp_makes_a_b_lta_file() {
+    use printcraft_sign::dss::{self, Evidence};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let signed = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let ltv = dss::embed(&open(&signed), &Evidence { certs: vec![id.certificate.raw.clone()], ocsps: Vec::new(), crls: Vec::new() }).unwrap();
+    let lta = printcraft_sign::timestamp_document(&open(&ltv), &tsa, "D:20261006120000Z").unwrap();
+    let all = signatures(&open(&lta), &lta, &TrustStore::default());
+    assert_eq!(all.iter().filter(|s| s.signed).count(), 2);
+    let field = all.iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
+    assert_eq!(field.status, Status::Unknown);
+    let allowed = match &field.modification {
+        Modification::Allowed(k) => k,
+        other => panic!("{other:?}"),
+    };
+    assert!(allowed.contains(&"document security store".to_string()) && allowed.contains(&"signature".to_string()), "{allowed:?}");
+    assert!(!allowed.contains(&"page content".to_string()), "{allowed:?}");
+    let stamp = all.iter().find(|s| s.doc_timestamp).unwrap();
+    assert_eq!(stamp.status, Status::Valid, "{:?}", stamp.details);
+}
+
+#[test]
+fn an_embedded_verified_revocation_invalidates_the_signature() {
+    use printcraft_sign::dss::{self, Evidence};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let signed = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    // The signer's own CRL (self-signed test identity) revokes its certificate, in a window
+    // that covers the signing date (October 2026).
+    let (this, next) =
+        (Time { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0 }, Time { year: 2027, month: 1, day: 1, hour: 0, minute: 0, second: 0 });
+    let alg = id.key.signature_algorithm(printcraft_sign::DigestAlg::Sha256);
+    let tbs = der::seq(&[
+        &der::int(1),
+        &alg,
+        &id.certificate.subject.raw,
+        &this.encode(),
+        &next.encode(),
+        &der::seq(&[&der::seq(&[
+            &der::uint(&id.certificate.serial),
+            &Time { year: 2026, month: 6, day: 1, hour: 8, minute: 0, second: 0 }.encode(),
+        ])]),
+    ]);
+    let sig = id.key.sign(printcraft_sign::DigestAlg::Sha256, &tbs).unwrap();
+    let crl = der::seq(&[&tbs, &alg, &der::bit_string(&sig)]);
+    let ltv = dss::embed(&open(&signed), &Evidence { certs: Vec::new(), ocsps: Vec::new(), crls: vec![crl] }).unwrap();
+    let s = signatures(&open(&ltv), &ltv, &TrustStore::default()).into_iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.contains("revoked") && d.contains("CRL")), "{:?}", s.details);
 }
 
 #[test]

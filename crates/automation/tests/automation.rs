@@ -1515,3 +1515,167 @@ fn exporting_to_word_html_and_rtf() {
     assert!(std::fs::read_to_string(dir.join("a.rtf")).unwrap().contains("Page 2"));
     assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "a.xyz" })).is_err());
 }
+
+// ── Timestamping and LTV through tools, against loopback servers ───────────────────────────
+
+use printcraft_engine::sign::{self, Certificate, Name, PrivateKey, Time};
+
+const TSA_TIME: Time = Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 };
+
+/// A minimal loopback HTTP server answering RFC 3161 requests with tokens signed by `id`.
+fn spawn_tsa() -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let key = PrivateKey::generate_p256().unwrap();
+        let cert = Certificate::self_signed(
+            &Name::build("Loopback TSA", "", "Test", "", ""),
+            &key,
+            Time { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0 },
+            5,
+            &[7; 8],
+        )
+        .unwrap();
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+            // Read the header block, then exactly Content-Length bytes.
+            let mut buf = Vec::new();
+            let mut byte = [0u8; 1];
+            while !buf.ends_with(b"\r\n\r\n") && buf.len() < 16 * 1024 {
+                if stream.read_exact(&mut byte).is_err() {
+                    break;
+                }
+                buf.push(byte[0]);
+            }
+            let head = String::from_utf8_lossy(&buf);
+            let len: usize =
+                head.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").and_then(|v| v.trim().parse().ok())).unwrap_or(0);
+            let mut body = vec![0u8; len];
+            if stream.read_exact(&mut body).is_err() {
+                continue;
+            }
+            let Ok(q) = sign::timestamp::parse_request(&body) else { continue };
+            let Ok(resp) = sign::timestamp::respond(&key, &cert, &[], sign::DigestAlg::Sha256, &q, "1.2.3.4", TSA_TIME, 7) else { continue };
+            let http = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/timestamp-reply\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                resp.len()
+            );
+            if stream.write_all(http.as_bytes()).is_err() || stream.write_all(&resp).is_err() {
+                break;
+            }
+        }
+    });
+    format!("http://{addr}/tsa")
+}
+
+/// A loopback HTTP server serving one prebuilt DER blob (a CRL) to any GET.
+fn spawn_blob(blob: Vec<u8>) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+            let mut buf = Vec::new();
+            let mut byte = [0u8; 1];
+            while !buf.ends_with(b"\r\n\r\n") && buf.len() < 16 * 1024 {
+                if stream.read_exact(&mut byte).is_err() {
+                    break;
+                }
+                buf.push(byte[0]);
+            }
+            let http =
+                format!("HTTP/1.1 200 OK\r\nContent-Type: application/pkix-crl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", blob.len());
+            if stream.write_all(http.as_bytes()).is_err() || stream.write_all(&blob).is_err() {
+                break;
+            }
+        }
+    });
+    format!("http://{addr}/crl")
+}
+
+#[test]
+fn timestamping_through_tools_with_a_local_tsa() {
+    let dir = workdir("timestamping");
+    let mut a = auto(&dir);
+    let url = spawn_tsa();
+    let r = ok(&mut a, "sign_timestamp_server", json!({ "url": url }));
+    assert!(r["server"].is_string(), "{r}");
+    // Plain http off the loopback is refused at configuration time.
+    assert!(matches!(a.call("sign_timestamp_server", &json!({ "url": "http://example.com/tsa" })), Err(ToolError::Failed(_))));
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada", "key": "p256", "password": "secret1", "path": "ada.p12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // A timestamp server outside the loopback must be https; plain http is refused up front.
+    assert!(matches!(
+        a.call(
+            "sign_document",
+            &json!({ "doc": doc, "id": "ada.p12", "password": "secret1", "timestamp": true, "timestamp_server": "http://example.com/tsa", "out": "x.pdf" })
+        ),
+        Err(ToolError::Failed(_))
+    ));
+    // PAdES B-T through the configured server.
+    ok(&mut a, "sign_document", json!({ "doc": doc, "id": "ada.p12", "password": "secret1", "timestamp": true, "out": "bt.pdf" }));
+    let bt = ok(&mut a, "doc_open", json!({ "path": "bt.pdf" }))["doc"].as_u64().unwrap();
+    let sigs = ok(&mut a, "sign_list", json!({ "doc": bt }))["signatures"].as_array().unwrap().clone();
+    let signed = sigs.iter().find(|s| s["signed"] == true).unwrap();
+    assert_eq!(signed["timestamp"], true);
+    assert_eq!(signed["timestamp_time"], "2026.10.06 12:00:00 UTC", "{signed}");
+    // A standalone document timestamp (B-LTA building block) through the same server.
+    ok(&mut a, "doc_timestamp", json!({ "doc": bt, "out": "lta.pdf" }));
+    let lta = ok(&mut a, "doc_open", json!({ "path": "lta.pdf" }))["doc"].as_u64().unwrap();
+    let sigs = ok(&mut a, "sign_list", json!({ "doc": lta }))["signatures"].as_array().unwrap().clone();
+    let stamp = sigs.iter().find(|s| s["doc_timestamp"] == true).expect("document timestamp listed");
+    assert_eq!(stamp["status"], "valid", "{stamp}");
+    assert_eq!(stamp["timestamp_time"], "2026.10.06 12:00:00 UTC", "{stamp}");
+}
+
+#[test]
+fn ltv_through_tools_embeds_a_fetched_revocation_list() {
+    let dir = workdir("ltv");
+    let mut a = auto(&dir);
+    // The signing identity, created here so its key can sign the CRL too.
+    let key = PrivateKey::generate_p256().unwrap();
+    let cert = Certificate::self_signed(
+        &Name::build("Ada", "", "Test", "", ""),
+        &key,
+        Time { year: 2023, month: 1, day: 1, hour: 0, minute: 0, second: 0 },
+        5,
+        &[3; 8],
+    )
+    .unwrap();
+    // A CRL from the signer's own (self-signed) issuer that revokes the signer, with a window
+    // covering the session clock.
+    let alg = key.signature_algorithm(sign::DigestAlg::Sha256);
+    let tbs = printcraft_engine::sign::der::seq(&[
+        &printcraft_engine::sign::der::int(1),
+        &alg,
+        &cert.subject.raw,
+        &Time { year: 2023, month: 1, day: 1, hour: 0, minute: 0, second: 0 }.encode(),
+        &Time { year: 2025, month: 1, day: 1, hour: 0, minute: 0, second: 0 }.encode(),
+        &printcraft_engine::sign::der::seq(&[&printcraft_engine::sign::der::seq(&[
+            &printcraft_engine::sign::der::uint(&cert.serial),
+            &Time { year: 2023, month: 6, day: 1, hour: 8, minute: 0, second: 0 }.encode(),
+        ])]),
+    ]);
+    let sig = key.sign(sign::DigestAlg::Sha256, &tbs).unwrap();
+    let crl = printcraft_engine::sign::der::seq(&[&tbs, &alg, &printcraft_engine::sign::der::bit_string(&sig)]);
+    let url = spawn_blob(crl);
+    let id =
+        sign::pkcs12::write(&sign::DigitalId { key, certificate: cert.clone(), chain: Vec::new(), friendly_name: Some("Ada".into()) }, "secret1")
+            .unwrap();
+    std::fs::write(dir.join("ada.p12"), id).unwrap();
+
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "sign_document", json!({ "doc": doc, "id": "ada.p12", "password": "secret1", "out": "signed.pdf" }));
+    let signed = ok(&mut a, "doc_open", json!({ "path": "signed.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "sign_ltv", json!({ "doc": signed, "urls": [url], "out": "ltv.pdf" }));
+    assert_eq!(r["embedded"]["crls"], 1, "{r}");
+    let ltv = ok(&mut a, "doc_open", json!({ "path": "ltv.pdf" }))["doc"].as_u64().unwrap();
+    let sigs = ok(&mut a, "sign_list", json!({ "doc": ltv }))["signatures"].as_array().unwrap().clone();
+    let s = sigs.iter().find(|s| s["signed"] == true).unwrap();
+    assert_eq!(s["status"], "invalid", "a verified revocation invalidates: {s}");
+    assert!(s["details"].as_array().unwrap().iter().any(|d| d.as_str().unwrap().contains("revoked")), "{s}");
+}
