@@ -1477,6 +1477,8 @@ fn info(d: &Document) -> Value {
         "creator": i.creator, "producer": i.producer,
         "tagged": i.tagged,
         "has_javascript": i.has_javascript,
+        // XFA forms aren't read yet: "static" (fields work, XFA data ignored) or "dynamic" (placeholder pages).
+        "xfa": i.xfa.map(|x| match x { printcraft_render::Xfa::Static => "static", printcraft_render::Xfa::Dynamic => "dynamic" }),
         "security": security,
         "pages": i.pages.iter().enumerate().map(|(n, p)| json!({
             "page": n + 1, "label": p.label, "width": p.width, "height": p.height, "rotation": p.rotation,

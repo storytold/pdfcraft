@@ -38,6 +38,8 @@ pub struct DocInfo {
     pub encrypted: bool,
     pub tagged: bool,
     pub has_javascript: bool,
+    /// The form is (also) an XFA form, which isn't read yet (`form.xfa-*` in the parity list).
+    pub xfa: Option<Xfa>,
     pub pages: Vec<PageInfo>,
     pub outline: Vec<OutlineItem>,
     pub annotations: Vec<Annotation>,
@@ -47,6 +49,17 @@ pub struct DocInfo {
     pub fonts: Vec<FontInfo>,
     pub attachments: Vec<Attachment>,
     pub warnings: Vec<String>,
+}
+
+/// What kind of XFA form a document has (`/AcroForm /XFA`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Xfa {
+    /// The pages and fields are ordinary PDF; the XFA packets describe the same form (and hold
+    /// its data, which Acrobat shows in preference to the fields).
+    Static,
+    /// The form is laid out from the XFA packets at open (`/NeedsRendering`, or no fields): the
+    /// PDF pages are only a placeholder.
+    Dynamic,
 }
 
 #[derive(Clone, Debug)]
@@ -341,6 +354,10 @@ impl<'a> Inspector<'a> {
             }
         }
         info.has_javascript |= info.fields.iter().any(|f| f.has_actions);
+        let needs_rendering = catalog.get(b"NeedsRendering").ok().and_then(|o| self.resolve(o).as_bool().ok()).unwrap_or(false);
+        if catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o)).is_some_and(|form| form.get(b"XFA").is_ok()) {
+            info.xfa = Some(if needs_rendering || info.fields.is_empty() { Xfa::Dynamic } else { Xfa::Static });
+        }
         self.layers(catalog, &mut info.layers);
         self.fonts(&mut info.fonts);
         if let Some(names) = catalog.get(b"Names").ok().and_then(|o| self.dict(o)) {

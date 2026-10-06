@@ -112,6 +112,7 @@ fn info(args: &[String]) -> Result<(), String> {
         "first_page_pt": info.pages.first().map(|p| [p.width, p.height]),
         "title": info.title, "author": info.author, "producer": info.producer, "creator": info.creator,
         "encrypted": info.encrypted, "tagged": info.tagged, "javascript": info.has_javascript,
+        "xfa": info.xfa.map(|x| match x { printcraft_render::Xfa::Static => "static", printcraft_render::Xfa::Dynamic => "dynamic" }),
         "bookmarks": info.outline.len(), "annotations": info.annotations.len(), "fields": info.fields.len(),
         "links": info.links.len(), "layers": info.layers.len(), "attachments": info.attachments.len(),
         "page_labels": info.pages.iter().take(8).map(|p| p.label.clone()).collect::<Vec<_>>(),

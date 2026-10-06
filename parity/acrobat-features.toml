@@ -5095,7 +5095,7 @@ status = "planned"
 commands = []
 tools = []
 evidence = []
-notes = ""
+notes = "not read yet; detected on open (DocInfo.xfa, doc_info \"xfa\") and a notice says the fields can be filled but Acrobat may show the XFA values instead (#60)"
 
 [[feature]]
 id = "form.xfa-dynamic"
@@ -5107,7 +5107,7 @@ status = "planned"
 commands = []
 tools = []
 evidence = []
-notes = ""
+notes = "not rendered yet; detected on open and a notice says the page shown is the file's placeholder (#60)"
 
 [[feature]]
 id = "form.xfa-formcalc"

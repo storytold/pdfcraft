@@ -1839,6 +1839,18 @@ fn notices(
     let mut open_repairs = false;
     let msg = if secured {
         Some(("lock", "This document is secured. Some changes are restricted by its security settings.".to_string(), false))
+    } else if info.xfa == Some(printcraft_render::Xfa::Dynamic) {
+        Some((
+            "triangle-alert",
+            "This is a dynamic XFA form, which PrintCraft can't display yet. What you see is the file's placeholder page.".to_string(),
+            false,
+        ))
+    } else if info.xfa == Some(printcraft_render::Xfa::Static) {
+        Some((
+            "triangle-alert",
+            "This form also contains XFA data, which PrintCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.".to_string(),
+            true,
+        ))
     } else if !info.fields.is_empty() {
         Some(("text-cursor-input", format!("This document contains {} interactive form fields.", info.fields.len()), true))
     } else if repaired {
