@@ -435,7 +435,10 @@ pub enum SplitBy {
 #[must_use]
 pub fn split_ranges(page_count: usize, by: &SplitBy) -> Vec<std::ops::Range<usize>> {
     let mut cuts: Vec<usize> = match by {
-        SplitBy::PageCount(n) => (1..).map(|i| i * (*n).max(1)).take_while(|c| *c < page_count).collect(),
+        SplitBy::PageCount(n) => {
+            let step = (*n).max(1);
+            (1..page_count.div_ceil(step)).map(|i| i * step).collect()
+        }
         SplitBy::Before(v) => v.iter().copied().filter(|c| *c > 0 && *c < page_count).collect(),
     };
     cuts.sort_unstable();
