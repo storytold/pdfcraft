@@ -867,34 +867,6 @@ fn eval_notation(src: &str, value_of: &dyn Fn(&str) -> f64) -> Option<f64> {
         N(f64),
         Op(char),
     }
-    let mut toks = Vec::new();
-    let cs: Vec<char> = src.chars().collect();
-    let mut i = 0;
-    while i < cs.len() {
-        let c = cs[i];
-        if c.is_whitespace() {
-            i += 1;
-        } else if "+-*/()".contains(c) {
-            toks.push(T::Op(c));
-            i += 1;
-        } else if c.is_ascii_digit() || c == '.' {
-            let s = i;
-            while i < cs.len() && (cs[i].is_ascii_digit() || cs[i] == '.') {
-                i += 1;
-            }
-            toks.push(T::N(cs[s..i].iter().collect::<String>().parse().ok()?));
-        } else {
-            let mut name = String::new();
-            while i < cs.len() && !(cs[i].is_whitespace() || "+-*/()".contains(cs[i])) {
-                if cs[i] == '\\' && i + 1 < cs.len() {
-                    i += 1;
-                }
-                name.push(cs[i]);
-                i += 1;
-            }
-            toks.push(T::N(value_of(&name)));
-        }
-    }
     // Recursive descent, `d` levels deep (at most MAX_NESTING).
     fn expr(t: &[T], i: &mut usize, d: usize) -> Option<f64> {
         let mut v = term(t, i, d)?;
@@ -934,6 +906,34 @@ fn eval_notation(src: &str, value_of: &dyn Fn(&str) -> f64) -> Option<f64> {
                 Some(v)
             }
             _ => None,
+        }
+    }
+    let mut toks = Vec::new();
+    let cs: Vec<char> = src.chars().collect();
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        if c.is_whitespace() {
+            i += 1;
+        } else if "+-*/()".contains(c) {
+            toks.push(T::Op(c));
+            i += 1;
+        } else if c.is_ascii_digit() || c == '.' {
+            let s = i;
+            while i < cs.len() && (cs[i].is_ascii_digit() || cs[i] == '.') {
+                i += 1;
+            }
+            toks.push(T::N(cs[s..i].iter().collect::<String>().parse().ok()?));
+        } else {
+            let mut name = String::new();
+            while i < cs.len() && !(cs[i].is_whitespace() || "+-*/()".contains(cs[i])) {
+                if cs[i] == '\\' && i + 1 < cs.len() {
+                    i += 1;
+                }
+                name.push(cs[i]);
+                i += 1;
+            }
+            toks.push(T::N(value_of(&name)));
         }
     }
     let mut i = 0;

@@ -152,11 +152,6 @@ pub fn flatten(doc: &mut Document, pages: &[usize], comments: bool, fields: bool
 
 /// Remove flattened widgets from the `AcroForm` field tree, and fields left without widgets.
 fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>) -> Result<(), EditError> {
-    let Some(root) = doc.root() else { return Ok(()) };
-    let Some(af) = doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) else { return Ok(()) };
-    let af_ref = af.as_ref();
-    let mut af_dict = doc.resolve(&af).as_dict().cloned().unwrap_or_default();
-    let fields = af_dict.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
     // Returns whether the node survives.
     fn keep(doc: &mut Document, r: ObjRef, widgets: &HashSet<ObjRef>, depth: usize) -> bool {
         if widgets.contains(&r) || depth > 64 {
@@ -170,6 +165,11 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>) -> Result<(), Edi
         }
         !survivors.is_empty()
     }
+    let Some(root) = doc.root() else { return Ok(()) };
+    let Some(af) = doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) else { return Ok(()) };
+    let af_ref = af.as_ref();
+    let mut af_dict = doc.resolve(&af).as_dict().cloned().unwrap_or_default();
+    let fields = af_dict.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
     let survivors: Vec<Object> = fields.iter().filter(|f| f.as_ref().is_none_or(|r| keep(doc, r, widgets, 0))).cloned().collect();
     af_dict.set(b"Fields".to_vec(), Object::Array(survivors));
     match af_ref {

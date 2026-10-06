@@ -27,13 +27,13 @@ fn harness() -> Harness<'static, PrintCraftApp> {
 }
 
 fn outline(h: &Harness<'static, PrintCraftApp>) -> Vec<(String, Option<usize>, usize)> {
-    let id = h.state().views[0].id;
     fn flat(items: &[printcraft_render::OutlineItem], depth: usize, out: &mut Vec<(String, Option<usize>, usize)>) {
         for i in items {
             out.push((i.title.clone(), i.page, depth));
             flat(&i.children, depth + 1, out);
         }
     }
+    let id = h.state().views[0].id;
     let mut out = Vec::new();
     flat(&h.state().session.get(id).unwrap().info.outline, 0, &mut out);
     out

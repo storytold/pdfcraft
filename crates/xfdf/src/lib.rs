@@ -291,6 +291,16 @@ fn xfdf_fields(doc: &Document, out: &mut String) {
         values: Vec<String>,
         kids: Vec<(String, Node)>,
     }
+    fn write_node(name: &str, node: &Node, out: &mut String) {
+        let _ = write!(out, "<field name=\"{}\">", esc(name));
+        for v in &node.values {
+            let _ = write!(out, "<value>{}</value>", esc(v));
+        }
+        for (k, kid) in &node.kids {
+            write_node(k, kid, out);
+        }
+        out.push_str("</field>\n");
+    }
     let mut root = Node::default();
     for f in printcraft_forms::fields(doc) {
         if matches!(f.kind, FieldKind::PushButton | FieldKind::Signature) {
@@ -310,16 +320,6 @@ fn xfdf_fields(doc: &Document, out: &mut String) {
             FieldKind::CheckBox | FieldKind::Radio if f.value.is_empty() => vec!["Off".into()],
             _ => f.value.clone(),
         };
-    }
-    fn write_node(name: &str, node: &Node, out: &mut String) {
-        let _ = write!(out, "<field name=\"{}\">", esc(name));
-        for v in &node.values {
-            let _ = write!(out, "<value>{}</value>", esc(v));
-        }
-        for (k, kid) in &node.kids {
-            write_node(k, kid, out);
-        }
-        out.push_str("</field>\n");
     }
     for (k, kid) in &root.kids {
         write_node(k, kid, out);

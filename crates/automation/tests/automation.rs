@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "mcp")]
+use base64::Engine as _;
+#[cfg(feature = "mcp")]
 use printcraft_automation::mcp::McpServer;
 use printcraft_automation::{Automation, Content, ToolError, tools};
 use serde_json::{Value, json};
@@ -271,7 +273,6 @@ fn mcp_session_over_stdio() {
     assert_eq!(replies[2]["result"]["isError"], false);
     let img = &replies[3]["result"]["content"][0];
     assert_eq!((img["type"].as_str(), img["mimeType"].as_str()), (Some("image"), Some("image/png")));
-    use base64::Engine as _;
     let png = base64::engine::general_purpose::STANDARD.decode(img["data"].as_str().unwrap()).unwrap();
     assert_eq!(&png[1..4], b"PNG");
 }
@@ -312,7 +313,6 @@ fn mcp_resources_expose_open_documents() {
     let info: Value = serde_json::from_str(read(&mut s, "printcraft://doc/1/info")["text"].as_str().unwrap()).unwrap();
     assert_eq!(info["pages"].as_array().unwrap().len(), 3);
     let img = read(&mut s, "printcraft://doc/1/page/1/image?dpi=36");
-    use base64::Engine as _;
     let png = base64::engine::general_purpose::STANDARD.decode(img["blob"].as_str().unwrap()).unwrap();
     assert_eq!(&png[1..4], b"PNG");
     assert_eq!(rpc(&mut s, 7, "resources/read", json!({ "uri": "printcraft://doc/1/page/9/image" }))["error"]["code"], -32602);

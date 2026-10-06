@@ -18,6 +18,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use printcraft_ui_egui::PrintCraftApp;
+use std::io::Write as _;
 
 mod updates;
 
@@ -124,7 +125,6 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    use std::io::Write;
     let mut f = opts.open(path)?;
     #[cfg(unix)]
     {

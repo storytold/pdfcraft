@@ -978,6 +978,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                     }
                 }
                 _ => {
+                    use printcraft_engine::field_flags as ff;
                     ui.horizontal(|ui| {
                         let l = ui.label("Item:");
                         let r = ui.add(egui::TextEdit::singleline(&mut d.new_option).desired_width(240.0)).labelled_by(l.id);
@@ -1015,7 +1016,6 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                     if d.options.is_empty() {
                         ui.label(egui::RichText::new("Add the choices people pick from.").color(t.text_muted));
                     }
-                    use printcraft_engine::field_flags as ff;
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.label("Default:");

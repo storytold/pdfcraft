@@ -1,5 +1,6 @@
 //! Modal dialogs: Document Properties, Keyboard Shortcuts, About.
 
+use crate::SplitMode as M;
 use std::fmt::Write as _;
 
 use egui::{Align, Layout};
@@ -385,7 +386,6 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 let selected: Vec<usize> = app.views[vi].selected.iter().copied().filter(|p| *p > 0).collect();
                 let marks = app.session.bookmark_splits(id);
                 let draft = &mut app.split_draft;
-                use crate::SplitMode as M;
                 if selected.is_empty() && draft.mode == M::Selection {
                     draft.mode = M::Pages;
                 }

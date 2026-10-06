@@ -407,12 +407,13 @@ mod tests {
 /// by more than `tolerance`; differing cells of a coarse grid are joined into regions.
 #[must_use]
 pub fn visual_regions(a: (&[u8], u32, u32), b: (&[u8], u32, u32), tolerance: u8) -> Vec<[u32; 4]> {
+    const CELL: u32 = 8;
     let (pa, wa, ha) = a;
+
     let (pb, wb, hb) = b;
     if wa == 0 || ha == 0 || wb == 0 || hb == 0 {
         return Vec::new();
     }
-    const CELL: u32 = 8;
     let (gw, gh) = (wa.div_ceil(CELL), ha.div_ceil(CELL));
     let mut grid = vec![false; (gw * gh) as usize];
     for y in 0..ha {

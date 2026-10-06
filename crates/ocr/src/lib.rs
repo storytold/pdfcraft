@@ -12,6 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
+use ocrs::TextItem;
 pub use printcraft_fonts::helvetica_width;
 
 /// The model files, as named in ATTRIBUTION.toml.
@@ -130,7 +131,6 @@ impl Ocr {
         let found = self.engine.detect_words(&input).map_err(|e| err(&e))?;
         let lines = self.engine.find_text_lines(&input, &found);
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
-        use ocrs::TextItem;
         Ok(read
             .into_iter()
             .flatten()

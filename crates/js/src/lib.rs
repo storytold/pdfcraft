@@ -29,7 +29,7 @@ use std::fmt::Write as _;
 
 use boa_engine::object::builtins::{JsArray, JsFunction};
 use boa_engine::object::{FunctionObjectBuilder, ObjectInitializer};
-use boa_engine::property::Attribute;
+use boa_engine::property::{Attribute, PropertyDescriptor};
 use boa_engine::{Context, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Source, js_string};
 
 /// The kinds of field, as `field.type` names them.
@@ -323,6 +323,40 @@ macro_rules! getter {
 }
 
 fn field_object(ctx: &mut Context, name: &str) -> JsObject {
+    fn get_item_at(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let f = read(c, name)?;
+        let i = arg(args, 0).to_number(c)?;
+        // bExportValue defaults to true.
+        let export = args.get(1).is_none_or(JsValue::to_boolean);
+        let i = if i < 0.0 { f.options.len().saturating_sub(1) } else { i as usize };
+        let o = f.options.get(i).ok_or_else(|| error(format!("{} has no item {i}", f.name)))?;
+        Ok(s(if export { &o.0 } else { &o.1 }))
+    }
+    fn is_box_checked(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let f = read(c, name)?;
+        let i = arg(args, 0).to_number(c)? as usize;
+        let on = f.options.get(i).is_some_and(|o| f.value.first() == Some(&o.0));
+        Ok(JsValue::from(on))
+    }
+    fn check_this_box(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let f = read(c, name)?;
+        let i = arg(args, 0).to_number(c)? as usize;
+        let on = args.get(1).is_none_or(JsValue::to_boolean);
+        let export = f.options.get(i).map(|o| o.0.clone()).ok_or_else(|| error(format!("{} has no widget {i}", f.name)))?;
+        write(c, name, |f| {
+            if on {
+                f.value = vec![export];
+            } else if f.value.first() == Some(&export) {
+                f.value.clear();
+            }
+        })?;
+        Ok(JsValue::undefined())
+    }
+    fn set_focus(_: &JsValue, _: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        host(c)?.borrow_mut().requests.push(Request::Focus(name.to_std_string_escaped()));
+        Ok(JsValue::undefined())
+    }
+
     let n = JsString::from(name);
     let value_get = getter!(ctx, n, |f, c| value_of(&f, c));
     let value_set = {
@@ -404,40 +438,6 @@ fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
     };
-
-    fn get_item_at(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
-        let f = read(c, name)?;
-        let i = arg(args, 0).to_number(c)?;
-        // bExportValue defaults to true.
-        let export = args.get(1).is_none_or(JsValue::to_boolean);
-        let i = if i < 0.0 { f.options.len().saturating_sub(1) } else { i as usize };
-        let o = f.options.get(i).ok_or_else(|| error(format!("{} has no item {i}", f.name)))?;
-        Ok(s(if export { &o.0 } else { &o.1 }))
-    }
-    fn is_box_checked(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
-        let f = read(c, name)?;
-        let i = arg(args, 0).to_number(c)? as usize;
-        let on = f.options.get(i).is_some_and(|o| f.value.first() == Some(&o.0));
-        Ok(JsValue::from(on))
-    }
-    fn check_this_box(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
-        let f = read(c, name)?;
-        let i = arg(args, 0).to_number(c)? as usize;
-        let on = args.get(1).is_none_or(JsValue::to_boolean);
-        let export = f.options.get(i).map(|o| o.0.clone()).ok_or_else(|| error(format!("{} has no widget {i}", f.name)))?;
-        write(c, name, |f| {
-            if on {
-                f.value = vec![export];
-            } else if f.value.first() == Some(&export) {
-                f.value.clear();
-            }
-        })?;
-        Ok(JsValue::undefined())
-    }
-    fn set_focus(_: &JsValue, _: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
-        host(c)?.borrow_mut().requests.push(Request::Focus(name.to_std_string_escaped()));
-        Ok(JsValue::undefined())
-    }
 
     let rw = Attribute::CONFIGURABLE | Attribute::ENUMERABLE;
     let get_item_at = NativeFunction::from_copy_closure_with_captures(get_item_at, n.clone());
@@ -904,7 +904,6 @@ fn install(ctx: &mut Context) -> JsResult<()> {
         io.property(JsString::from(k.as_str()), s(v), Attribute::all());
     }
     let info = io.build();
-    use boa_engine::property::PropertyDescriptor;
     global.define_property_or_throw(js_string!("numFields"), PropertyDescriptor::builder().get(nf).configurable(true), ctx)?;
     global.define_property_or_throw(js_string!("pageNum"), PropertyDescriptor::builder().get(pg).set(ps).configurable(true), ctx)?;
     ctx.register_global_property(js_string!("numPages"), JsValue::from(pages as f64), rw)?;

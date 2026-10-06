@@ -1,6 +1,7 @@
 //! The UI control channel (M3.9): an agent can see the widget tree, click, type, press keys,
 //! run commands, change view options and take screenshots of the running app.
 
+use base64::Engine as _;
 use std::sync::{Arc, Mutex};
 
 use egui_kittest::Harness;
@@ -159,7 +160,6 @@ fn screenshots_of_window_and_region() {
     let shot = ok(&mut h, &c, "ui.screenshot", json!({}));
     let ppp = shot["pixels_per_point"].as_f64().unwrap();
     assert_eq!(shot["width"].as_f64().unwrap(), (1400.0 * ppp).round());
-    use base64::Engine as _;
     let png = base64::engine::general_purpose::STANDARD.decode(shot["png_base64"].as_str().unwrap()).unwrap();
     assert_eq!(&png[1..4], b"PNG");
     let region = ok(&mut h, &c, "ui.screenshot", json!({ "region": [10, 20, 110, 70] }));

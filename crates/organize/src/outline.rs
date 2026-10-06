@@ -80,8 +80,6 @@ pub(crate) fn items(doc: &Document) -> Vec<ObjRef> {
 /// The bookmark tree.
 #[must_use]
 pub fn bookmarks(doc: &Document) -> Vec<Bookmark> {
-    let Some(root) = outline_root(doc) else { return Vec::new() };
-    let mut seen = HashSet::from([root]);
     fn build(doc: &Document, parent: ObjRef, seen: &mut HashSet<ObjRef>) -> Vec<Bookmark> {
         children_of(doc, parent, seen)
             .into_iter()
@@ -95,6 +93,8 @@ pub fn bookmarks(doc: &Document) -> Vec<Bookmark> {
             })
             .collect()
     }
+    let Some(root) = outline_root(doc) else { return Vec::new() };
+    let mut seen = HashSet::from([root]);
     build(doc, root, &mut seen)
 }
 
@@ -165,8 +165,6 @@ fn relink(doc: &mut Document, parent: ObjRef, kids: &[ObjRef]) -> Result<()> {
 /// Recompute every `/Count` (§12.3.3: open items count their visible descendants, closed items
 /// the negative of what opening them would show; the root counts all visible items).
 fn recount(doc: &mut Document) -> Result<()> {
-    let Some(root) = outline_root(doc) else { return Ok(()) };
-    let mut seen = HashSet::from([root]);
     // Returns the number of items visible below `node` when `node` is open.
     fn visit(doc: &mut Document, node: ObjRef, is_root: bool, seen: &mut HashSet<ObjRef>) -> Result<i64> {
         let kids = children_of(doc, node, seen);
@@ -186,6 +184,8 @@ fn recount(doc: &mut Document) -> Result<()> {
         put(doc, node, b"Count", count.map(Object::Int))?;
         Ok(visible)
     }
+    let Some(root) = outline_root(doc) else { return Ok(()) };
+    let mut seen = HashSet::from([root]);
     visit(doc, root, true, &mut seen)?;
     Ok(())
 }

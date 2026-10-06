@@ -286,6 +286,8 @@ pub fn duplicate_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Orga
 /// `src`. As in Acrobat, only what the page shows changes (contents, resources and page boxes);
 /// the original pages' links, comments, form widgets and the bookmarks pointing at them stay.
 pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_pages: &[usize]) -> Result<(), OrganizeError> {
+    const SHOWN: [&[u8]; 8] = [b"Contents", b"Resources", b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox", b"Rotate"];
+
     let n = page_count(doc)?;
     check(targets, n)?;
     if targets.len() != src_pages.len() || targets.is_empty() {
@@ -293,7 +295,7 @@ pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_
     }
     let imported = import_pages(doc, src, src_pages, n)?;
     let all = walk(doc)?;
-    const SHOWN: [&[u8]; 8] = [b"Contents", b"Resources", b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox", b"Rotate"];
+
     for (t, new) in targets.iter().zip(&imported) {
         // The imported page with its inherited attributes resolved.
         let (_, inherited) = all.iter().find(|(r, _)| r == new).cloned().unwrap_or((*new, Dict::new()));
