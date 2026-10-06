@@ -229,7 +229,7 @@ fn protected(user: &str, owner: &str, permissions: i32) -> Arc<Vec<u8>> {
         seed: [7; 32],
     })
     .unwrap();
-    Arc::new(printcraft_cos::write_full(&doc, &Default::default()).unwrap())
+    Arc::new(printcraft_cos::write_full(&doc, &printcraft_cos::SaveOptions::default()).unwrap())
 }
 
 #[test]
@@ -291,7 +291,7 @@ fn owner_password_of_older_revisions_opens_the_viewer_too() {
             seed: [1; 32],
         })
         .unwrap();
-        let bytes = Arc::new(printcraft_cos::write_full(&doc, &Default::default()).unwrap());
+        let bytes = Arc::new(printcraft_cos::write_full(&doc, &printcraft_cos::SaveOptions::default()).unwrap());
         let mut s = Session::new();
         let id = s.open("x.pdf", None, bytes, Some("o")).unwrap_or_else(|e| panic!("{alg:?}: {e}"));
         let d = s.get(id).unwrap();
@@ -917,7 +917,7 @@ fn added_images_rotate_flip_and_crop_as_drawn() {
     s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "rb.png".into(), bytes: Arc::new(png) }).unwrap();
     let colour_at = |s: &Session, x: u32, y_from_top: u32| -> [u8; 3] {
         let doc = s.get(id).unwrap();
-        let mut r = printcraft_render::PageRenderer::new(doc.bytes.clone(), Default::default());
+        let mut r = printcraft_render::PageRenderer::new(doc.bytes.clone(), printcraft_render::RenderConfig::default());
         let out = r.render(printcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
         let i = ((y_from_top * out.width + x) * 4) as usize;
         [out.rgba[i], out.rgba[i + 1], out.rgba[i + 2]]

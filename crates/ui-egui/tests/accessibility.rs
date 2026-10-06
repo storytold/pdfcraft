@@ -25,8 +25,8 @@ fn right_click(h: &mut Harness<'static, PrintCraftApp>, label: &str) {
     let at = h.get_by_label(label).rect().center();
     h.hover_at(at);
     h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
-    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::default() });
     h.run_steps(2);
 }
 

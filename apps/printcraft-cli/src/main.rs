@@ -340,7 +340,7 @@ fn check(args: &[String]) -> Result<(), String> {
     let dpi = flag(args, "--dpi").unwrap_or("36").to_string();
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut results = Vec::new();
-    let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::default();
     for (n, f) in files.iter().enumerate() {
         let r = run_child(&exe, f, &dpi, timeout);
         let status = r["status"].as_str().unwrap_or("?").to_string();

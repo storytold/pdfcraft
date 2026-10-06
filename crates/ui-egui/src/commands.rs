@@ -85,7 +85,7 @@ impl PrintCraftApp {
             "file.properties" => self.dialog = Some(Dialog::Properties(PropsTab::Description)),
             "protect.properties" => self.dialog = Some(Dialog::Properties(PropsTab::Security)),
             "protect.password" => {
-                self.protect_draft = Default::default();
+                self.protect_draft = crate::protect::ProtectDraft::default();
                 self.dialog = Some(Dialog::Protect);
             }
             "protect.remove" => {
@@ -242,7 +242,7 @@ impl PrintCraftApp {
             "ocr.recognize" => self.dialog = Some(Dialog::RecognizeText),
             "tools.js_console" => self.dialog = Some(Dialog::JsConsole),
             "tools.document_js" => {
-                self.doc_js = Default::default();
+                self.doc_js = crate::js_ui::DocJsDraft::default();
                 self.dialog = Some(Dialog::DocumentJs);
             }
             "app.preferences" => self.dialog = Some(Dialog::Preferences),

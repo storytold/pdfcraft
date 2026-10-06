@@ -91,7 +91,7 @@ pub struct RotateDraft {
 
 impl Default for RotateDraft {
     fn default() -> Self {
-        RotateDraft { degrees: 90, which: 0, from: 1, to: 1, parity: Default::default(), orientation: Default::default() }
+        RotateDraft { degrees: 90, which: 0, from: 1, to: 1, parity: printcraft_engine::PageParity::default(), orientation: printcraft_engine::PageOrientation::default() }
     }
 }
 

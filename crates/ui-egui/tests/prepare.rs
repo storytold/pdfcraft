@@ -233,8 +233,8 @@ fn duplicating_a_field_onto_every_page() {
     assert!(n >= 2, "the fixture has {n} pages");
     h.hover_at(p);
     h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
-    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::default() });
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::default() });
     h.run_steps(3);
     h.get_by_label("Duplicate…").click();
     h.run_steps(2);

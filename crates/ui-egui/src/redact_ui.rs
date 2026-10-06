@@ -26,7 +26,7 @@ pub struct RedactPrefs {
 
 impl Default for RedactPrefs {
     fn default() -> Self {
-        Self { fill: Some([0.0, 0.0, 0.0]), use_overlay: false, overlay: String::new(), look: Default::default() }
+        Self { fill: Some([0.0, 0.0, 0.0]), use_overlay: false, overlay: String::new(), look: printcraft_engine::OverlayLook::default() }
     }
 }
 

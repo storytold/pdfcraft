@@ -112,7 +112,7 @@ fn every_registered_command_is_implemented() {
             let shape = Shape::Redact {
                 quads: vec![printcraft_engine::rect_quad([10.0, 10.0, 50.0, 50.0])],
                 overlay: String::new(),
-                look: Default::default(),
+                look: printcraft_engine::OverlayLook::default(),
             };
             app.apply_edit(Edit::AddAnnotation(NewAnnotation {
                 page: 0,

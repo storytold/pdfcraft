@@ -67,7 +67,7 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
 impl Automation {
     pub(crate) fn content_list(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
-        let mut per_page: std::collections::HashMap<usize, usize> = Default::default();
+        let mut per_page: std::collections::HashMap<usize, usize> = std::collections::HashMap::default();
         let items: Vec<Value> = doc
             .added
             .iter()

@@ -194,7 +194,7 @@ fn data_files_merge_into_a_spreadsheet() {
     let fdf = export_fdf(&src, false, true, "form.pdf");
     let mut other = blank();
     set_value(&mut other, "Name", &FieldValue::Text("Grace \"Amazing\" Hopper, RADM".into())).unwrap();
-    let pdf = printcraft_cos::write_full(&other, &Default::default()).unwrap();
+    let pdf = printcraft_cos::write_full(&other, &printcraft_cos::SaveOptions::default()).unwrap();
     let rows: Vec<_> = [xfdf.as_bytes(), &fdf[..], &pdf[..]].iter().map(|b| data_values(b).unwrap()).collect();
     assert_eq!(rows[0], rows[1], "XFDF and FDF carry the same values");
     let csv = merge_csv(&rows);

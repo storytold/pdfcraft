@@ -18,5 +18,5 @@ fn main() {
         seed: [1; 32],
     })
     .unwrap();
-    std::fs::write(output, printcraft_cos::write_full(&doc, &Default::default()).unwrap()).unwrap();
+    std::fs::write(output, printcraft_cos::write_full(&doc, &printcraft_cos::SaveOptions::default()).unwrap()).unwrap();
 }

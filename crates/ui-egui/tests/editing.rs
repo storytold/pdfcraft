@@ -52,7 +52,7 @@ fn organize(pages: usize) -> Harness<'static, PrintCraftApp> {
 /// Page labels of the active document, read back from its current bytes.
 fn page_texts(app: &PrintCraftApp) -> Vec<String> {
     let doc = app.session.get(app.views[0].id).unwrap();
-    let mut r = PageRenderer::new(doc.bytes.clone(), Default::default());
+    let mut r = PageRenderer::new(doc.bytes.clone(), printcraft_render::RenderConfig::default());
     (0..r.page_count())
         .map(|p| {
             let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
@@ -344,7 +344,7 @@ fn edit_menu_names_the_step_to_undo() {
 
 fn texts_of(app: &PrintCraftApp, tab: usize) -> Vec<String> {
     let doc = app.session.get(app.views[tab].id).unwrap();
-    let mut r = PageRenderer::new(doc.bytes.clone(), Default::default());
+    let mut r = PageRenderer::new(doc.bytes.clone(), printcraft_render::RenderConfig::default());
     (0..r.page_count())
         .map(|p| {
             let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
@@ -482,7 +482,7 @@ fn protected(user: &str, owner: &str, permissions: i32) -> Vec<u8> {
         seed: [4; 32],
     })
     .unwrap();
-    printcraft_cos::write_full(&doc, &Default::default()).unwrap()
+    printcraft_cos::write_full(&doc, &printcraft_cos::SaveOptions::default()).unwrap()
 }
 
 #[test]

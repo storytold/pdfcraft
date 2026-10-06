@@ -161,7 +161,7 @@ fn encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password()
         seed: [2; 32],
     })
     .unwrap();
-    let bytes = printcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let bytes = printcraft_cos::write_full(&doc, &printcraft_cos::SaveOptions::default()).unwrap();
     let s = store("encrypted");
     crashed_session(&s, bytes, Some("pw"), None);
     let meta = s.list().remove(0);
@@ -202,7 +202,7 @@ fn incomplete_entries_are_ignored_and_cleaned_up() {
 fn control_click_effects_are_visible_when_the_reply_arrives() {
     let s = store("control");
     crashed_session(&s, fixture(2), None, None);
-    let slot: std::sync::Arc<std::sync::Mutex<Option<printcraft_ui_egui::control::ControlClient>>> = Default::default();
+    let slot: std::sync::Arc<std::sync::Mutex<Option<printcraft_ui_egui::control::ControlClient>>> = std::sync::Arc::default();
     let (slot2, s2) = (slot.clone(), s.clone());
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
         let mut app = PrintCraftApp::new();

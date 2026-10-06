@@ -17,7 +17,7 @@ impl Automation {
         };
         let overlay = a.opt_str("overlay")?.unwrap_or("").to_string();
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
-        let mut style = Style::default_for(&Shape::Redact { quads: Vec::new(), overlay: String::new(), look: Default::default() });
+        let mut style = Style::default_for(&Shape::Redact { quads: Vec::new(), overlay: String::new(), look: printcraft_engine::OverlayLook::default() });
         if let Some(c) = a.opt_str("fill")? {
             style.fill = Some(parse_color(c)?);
         }
@@ -69,7 +69,7 @@ impl Automation {
         let edits: Vec<Edit> = marks
             .iter()
             .map(|(page, quads)| {
-                let shape = Shape::Redact { quads: quads.clone(), overlay: overlay.clone(), look: Default::default() };
+                let shape = Shape::Redact { quads: quads.clone(), overlay: overlay.clone(), look: printcraft_engine::OverlayLook::default() };
                 Edit::AddAnnotation(NewAnnotation { page: *page, shape, style: style.clone(), contents: String::new(), author: author.clone() })
             })
             .collect();

@@ -1819,7 +1819,7 @@ impl Session {
             sig_cache,
             editor,
             config,
-            js_output: Default::default(),
+            js_output: js::JsOutput::default(),
         });
         Ok(id)
     }
@@ -2227,7 +2227,7 @@ impl Session {
             let res =
                 r.render(printcraft_render::RenderRequest { page, kind: printcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
             let Some(text) = res.text else { continue };
-            let found: std::cell::RefCell<Vec<(std::ops::Range<usize>, String)>> = Default::default();
+            let found: std::cell::RefCell<Vec<(std::ops::Range<usize>, String)>> = std::cell::RefCell::default();
             let hits = text.find_with(|chars| {
                 let urls = printcraft_annot::links::find_urls(chars);
                 let ranges = urls.iter().map(|u| u.0.clone()).collect();

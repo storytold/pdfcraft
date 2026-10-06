@@ -1186,7 +1186,7 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
         app.boxes_draft.seeded = None;
     }
     if protect_now && app.apply_edit(app.protect_draft.edit()) {
-        app.protect_draft = Default::default();
+        app.protect_draft = crate::protect::ProtectDraft::default();
         app.notify("Password protection will be applied when you save");
     }
     if apply_number && let Some(edit) = number_now {

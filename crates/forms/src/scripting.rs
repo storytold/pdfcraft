@@ -117,7 +117,7 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
             };
             let mut tmp = f.clone();
             tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
-            tmp.actions = Default::default();
+            tmp.actions = crate::af::Actions::default();
             crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
         }
         let mut ff = f.flags;

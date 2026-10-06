@@ -692,7 +692,7 @@ fn page_shapes_reads_boxes_and_rules() {
     let mut doc = fixture();
     let page = printcraft_model::pages(&doc)[0].obj;
     let s = doc.add(printcraft_cos::Object::Stream(printcraft_cos::Stream::flate(
-        Default::default(),
+        printcraft_cos::Dict::default(),
         b"q 2 0 0 2 0 0 cm 10 10 6 6 re S 20 50 m 120 50 l S 0 0 m 5 5 l S 30 300 100 0.5 re f Q",
     )));
     doc.update_dict(page, |d| d.set(b"Contents".to_vec(), printcraft_cos::Object::Ref(s))).unwrap();
