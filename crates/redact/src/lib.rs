@@ -4,7 +4,7 @@
 //! creates them. [`apply`] then removes everything under the marks, for good:
 //! - text glyphs (the rest of each line keeps its position), inline images, and paths that the
 //!   marks cover; images and vectors partly under a mark lose the covered part;
-//! - content inside form XObjects (rewritten as new objects, so pages sharing them keep theirs);
+//! - content inside form `XObjects` (rewritten as new objects, so pages sharing them keep theirs);
 //! - comments, links and form fields whose rectangle overlaps a mark;
 //! - the marks themselves, replaced by boxes in their fill colour (with their overlay text)
 //!   drawn into the page.
@@ -128,6 +128,7 @@ pub(crate) fn annots_of(doc: &Document, page: &Dict) -> Vec<Object> {
 }
 
 /// Every redaction mark in the document, page by page.
+#[must_use]
 pub fn marks(doc: &Document) -> Vec<Mark> {
     let mut out = Vec::new();
     for (pi, p) in printcraft_model::pages(doc).iter().enumerate() {
@@ -166,7 +167,7 @@ pub fn marks(doc: &Document) -> Vec<Mark> {
             if rects.is_empty() {
                 continue;
             }
-            let overlay = d.get(b"OverlayText").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text())).unwrap_or_default();
+            let overlay = d.get(b"OverlayText").and_then(|t| doc.resolve(t).as_string().map(printcraft_cos::PdfString::to_text)).unwrap_or_default();
             out.push(Mark { page: pi, obj: r, rects, fill: color(doc, d, b"IC"), overlay, look: overlay_look(doc, d) });
         }
     }
@@ -196,7 +197,7 @@ pub(crate) fn page_streams(doc: &Document, page: &Dict, index: usize) -> Result<
 /// The boxes and overlay text drawn for the applied marks.
 fn overlay_content(marks: &[&Mark]) -> Vec<u8> {
     let n = |v: f64| {
-        let s = format!("{:.3}", v);
+        let s = format!("{v:.3}");
         s.trim_end_matches('0').trim_end_matches('.').to_string()
     };
     let mut c: Vec<u8> = Vec::new();
@@ -240,7 +241,7 @@ fn overlay_content(marks: &[&Mark]) -> Vec<u8> {
                 vec![m.overlay.clone()]
             };
             let block = lines.len() as f64 * size * 1.2;
-            let mut y = r[1] + (h + block) / 2.0 - size * 0.95;
+            let mut y = r[1] + f64::midpoint(h, block) - size * 0.95;
             c.extend(
                 format!("q {} {} {} {} re W n BT {} {} {} rg /{res} {} Tf ", n(r[0]), n(r[1]), n(w), n(h), n(cr), n(cg), n(cb), n(size)).bytes(),
             );

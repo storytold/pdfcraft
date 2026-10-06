@@ -1,4 +1,4 @@
-//! printcraft-ui-egui — the first PrintCraft shell (L7).
+//! printcraft-ui-egui — the first `PrintCraft` shell (L7).
 //!
 //! Layout grammar follows plan/acrobat/02-ui-ux.md §1: tab strip, mode bar, left tool panel,
 //! floating quick-action bar, document area, right panel + right rail with page navigation.
@@ -202,7 +202,7 @@ pub enum Dialog {
     RecognizeText,
     /// The JavaScript console (⌘J).
     JsConsole,
-    /// Document JavaScripts.
+    /// Document `JavaScripts`.
     DocumentJs,
     /// Preferences.
     Preferences,
@@ -343,7 +343,7 @@ pub struct PrintCraftApp {
     /// Compare files: the chosen older document and the last result.
     pub compare_old: Option<DocId>,
     pub compare: Option<compare_ui::CompareState>,
-    /// The JavaScript console and the Document JavaScripts draft.
+    /// The JavaScript console and the Document `JavaScripts` draft.
     pub js_console: js_ui::JsConsole,
     pub doc_js: js_ui::DocJsDraft,
     pub a11y: a11y_ui::A11yState,
@@ -444,6 +444,7 @@ impl Default for PrintCraftApp {
 }
 
 impl PrintCraftApp {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             session: Session::new(),
@@ -552,6 +553,7 @@ impl PrintCraftApp {
 
     /// Fields are being edited (Prepare a form is open or a field tool is picked), unless the
     /// form is being previewed.
+    #[must_use]
     pub fn is_preparing(&self) -> bool {
         ((self.left_open && self.left == LeftPanel::Tool("form")) || matches!(self.quick_tool, QuickTool::Field(_))) && !self.form_preview
     }
@@ -645,7 +647,7 @@ impl PrintCraftApp {
             self.open_path(&p);
             return;
         }
-        let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+        let name = f.path().file_name().map_or_else(|| "dropped.pdf".into(), |n| n.to_string_lossy().into_owned());
         match f.bytes() {
             Ok(bytes) => {
                 if let Err(e) = self.open_bytes(&name, None, bytes) {
@@ -722,7 +724,7 @@ impl PrintCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_path(&mut self, path: &str) {
-        let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
+        let name = std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned());
         match std::fs::read(path) {
             Ok(bytes) => {
                 if let Err(e) = self.open_bytes(&name, Some(path.to_string()), bytes) {
@@ -771,6 +773,7 @@ impl PrintCraftApp {
         };
     }
 
+    #[must_use]
     pub fn active_ids(&self) -> Option<(usize, DocId)> {
         self.active.and_then(|i| self.views.get(i).map(|v| (i, v.id)))
     }
@@ -810,13 +813,11 @@ impl PrintCraftApp {
         let when = printcraft_engine::catalog::TOOL_GROUPS
             .iter()
             .flat_map(|g| g.sections.iter().flat_map(|s| s.items.iter()))
-            .find(|i| i.command == command)
-            .map(|i| match i.availability {
+            .find(|i| i.command == command).map_or_else(|| "is not available yet".into(), |i| match i.availability {
                 printcraft_engine::catalog::Availability::Planned(m) => format!("ships in milestone {m}"),
                 printcraft_engine::catalog::Availability::Provider => "needs an AI provider (off by default)".to_string(),
                 printcraft_engine::catalog::Availability::Ready => "is available".to_string(),
-            })
-            .unwrap_or_else(|| "is not available yet".into());
+            });
         self.notify(format!("`{command}` {when}"));
     }
 
@@ -888,8 +889,9 @@ impl PrintCraftApp {
     }
 
     /// `true` while any open document still waits for page renders (used by headless capture).
+    #[must_use]
     pub fn render_pending(&self) -> bool {
-        self.views.iter().any(|v| v.render_pending())
+        self.views.iter().any(canvas::DocView::render_pending)
     }
 
     /// Apply a named view option (`--page 3`, `--panel bookmarks`, `--theme dark`, …).
@@ -1112,13 +1114,13 @@ impl eframe::App for PrintCraftApp {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ctx = Some(ctx.clone());
-        if !self.styled {
+        if self.styled {
+            self.fonts_ready = true;
+        } else {
             egui_extras::install_image_loaders(ctx);
             theme::install_fonts(ctx);
             theme::apply(ctx, self.theme);
             self.styled = true;
-        } else {
-            self.fonts_ready = true;
         }
         if let Some(k) = self.pending_theme.take() {
             self.set_theme(ctx, k);

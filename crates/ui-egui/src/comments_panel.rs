@@ -130,7 +130,7 @@ pub(crate) fn show(
                 let text = std::mem::take(&mut view.comments.add_box);
                 edit = Some(Edit::AddAnnotation(printcraft_engine::NewAnnotation {
                     page,
-                    shape: Shape::Note { at: [at[0] as f64, at[1] as f64], icon: NoteIcon::Comment },
+                    shape: Shape::Note { at: [f64::from(at[0]), f64::from(at[1])], icon: NoteIcon::Comment },
                     style: prefs.style(CommentTool::Note),
                     contents: text.trim().to_string(),
                     author: prefs.author.clone(),
@@ -186,7 +186,7 @@ pub(crate) fn show(
     // Group headers follow the sort key (no headers when sorted by date).
     let group_of = |a: &Annotation| -> Option<String> {
         match sort {
-            SortBy::Page => Some(format!("Page {}", info.pages.get(a.page).map(|p| p.label.as_str()).unwrap_or("?"))),
+            SortBy::Page => Some(format!("Page {}", info.pages.get(a.page).map_or("?", |p| p.label.as_str()))),
             SortBy::Author => Some(a.author.clone().unwrap_or_else(|| "Unknown author".into())),
             SortBy::Type => Some(kind_label(a).to_string()),
             SortBy::Color => Some(if a.color.is_some() { format!("#{}", color_key(a)) } else { "No colour".into() }),
@@ -236,7 +236,7 @@ fn card(
     let mut edit = None;
     let key = (a.page, a.index);
     let selected = view.comments.selected == Some(key);
-    let color = a.color.map(|c| color32(c.map(f64::from))).unwrap_or(t.accent);
+    let color = a.color.map_or(t.accent, |c| color32(c.map(f64::from)));
     let status = thread.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.as_deref());
     let marked = is_marked(thread);
     let replies: Vec<&&Annotation> = thread.iter().filter(|r| r.state.is_none()).collect();
@@ -452,9 +452,9 @@ fn avatar(ui: &mut egui::Ui, t: &Tokens, icon: Option<&str>, text: Option<&str>,
 
 /// Darken very light annotation colours (e.g. note yellow) so their glyph stays legible.
 fn legible(c: Color32, t: &Tokens) -> Color32 {
-    let lum = 0.2126 * c.r() as f32 + 0.7152 * c.g() as f32 + 0.0722 * c.b() as f32;
+    let lum = 0.2126 * f32::from(c.r()) + 0.7152 * f32::from(c.g()) + 0.0722 * f32::from(c.b());
     if !t.dark() && lum > 150.0 {
-        Color32::from_rgb((c.r() as f32 * 0.55) as u8, (c.g() as f32 * 0.55) as u8, (c.b() as f32 * 0.55) as u8)
+        Color32::from_rgb((f32::from(c.r()) * 0.55) as u8, (f32::from(c.g()) * 0.55) as u8, (f32::from(c.b()) * 0.55) as u8)
     } else {
         c
     }
@@ -540,9 +540,7 @@ pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocV
             ui.horizontal(|ui| {
                 let name = crate::comments::SWATCHES
                     .iter()
-                    .find(|(_, s)| c.is_some_and(|c| (0..3).all(|i| (s[i] as f32 - c[i]).abs() < 0.02)))
-                    .map(|(n, _)| n.to_string())
-                    .unwrap_or_else(|| if key.is_empty() { "No colour".into() } else { format!("#{key}") });
+                    .find(|(_, s)| c.is_some_and(|c| (0..3).all(|i| (s[i] as f32 - c[i]).abs() < 0.02))).map_or_else(|| if key.is_empty() { "No colour".into() } else { format!("#{key}") }, |(n, _)| n.to_string());
                 toggle(ui, &mut cv.hidden_colors, key, &name);
                 if let Some(c) = c {
                     let (r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());

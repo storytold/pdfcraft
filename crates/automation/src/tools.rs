@@ -46,7 +46,7 @@ fn color() -> Value {
     json!({ "type": "string", "description": "#RRGGBB or a name: yellow, red, orange, green, blue, purple, pink, black, gray, white." })
 }
 
-/// Properties that pick one comment: its `id` (from comment_list), or `page` + `index`.
+/// Properties that pick one comment: its `id` (from `comment_list`), or `page` + `index`.
 fn comment_ref(mut extra: Value) -> Value {
     if let Some(props) = extra.as_object_mut() {
         props.insert("doc".into(), doc());
@@ -104,6 +104,7 @@ impl T {
 }
 
 /// Every tool, in a stable order.
+#[must_use]
 pub fn tools() -> Vec<ToolDef> {
     let save_out = json!({ "type": "string", "description": "File to write. Omit to open the result as a new unsaved document instead." });
     let open = json!({ "type": "boolean", "description": "Also open the result as a new document (default: only when out is omitted)." });

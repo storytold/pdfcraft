@@ -49,6 +49,7 @@ impl LabelStyle {
     }
 
     /// Format `n` (≥ 1) in this style.
+    #[must_use]
     pub fn format(self, n: u32) -> String {
         match self {
             Self::Decimal => n.to_string(),
@@ -139,8 +140,8 @@ pub fn page_label_ranges(doc: &Document) -> Vec<LabelRange> {
                 entries.push(LabelRange {
                     start: start as usize,
                     style: spec.name(b"S").map_or(LabelStyle::None, LabelStyle::from_name),
-                    prefix: spec.get(b"P").map(|p| doc.resolve(p)).and_then(|p| p.as_string().map(|s| s.to_text())).unwrap_or_default(),
-                    first: spec.int(b"St").unwrap_or(1).clamp(1, u32::MAX as i64) as u32,
+                    prefix: spec.get(b"P").map(|p| doc.resolve(p)).and_then(|p| p.as_string().map(printcraft_cos::PdfString::to_text)).unwrap_or_default(),
+                    first: spec.int(b"St").unwrap_or(1).clamp(1, i64::from(u32::MAX)) as u32,
                 });
             }
         }

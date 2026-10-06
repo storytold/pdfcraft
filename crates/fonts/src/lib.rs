@@ -13,6 +13,7 @@ pub use craft::{CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_japanese_font,
 pub use script::{GlyphError, GlyphOutline, ScriptOutline, japanese_glyph, script_outline};
 
 /// Approximate advance of `s` in Helvetica (or Arial) at `size` points.
+#[must_use]
 pub fn helvetica_width(s: &str, size: f64) -> f64 {
     let units: f64 = s
         .chars()
@@ -36,6 +37,7 @@ pub fn helvetica_width(s: &str, size: f64) -> f64 {
 
 /// Greedy line breaking within `width` points (paragraphs split on newlines; words longer
 /// than a line are broken by character).
+#[must_use]
 pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
     let mut lines = Vec::new();
     for para in text.split(['\n', '\r']) {
@@ -61,7 +63,8 @@ pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
     lines
 }
 
-/// Encode text in WinAnsiEncoding (ISO 32000-2 Annex D); unmappable characters become `?`.
+/// Encode text in `WinAnsiEncoding` (ISO 32000-2 Annex D); unmappable characters become `?`.
+#[must_use]
 pub fn win_ansi(s: &str) -> Vec<u8> {
     s.chars()
         .map(|c| match c {
@@ -86,6 +89,7 @@ pub fn win_ansi(s: &str) -> Vec<u8> {
 }
 
 /// Bytes as a PDF literal string, `(` … `)`, with delimiters escaped.
+#[must_use]
 pub fn literal(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len() + 2);
     out.push(b'(');

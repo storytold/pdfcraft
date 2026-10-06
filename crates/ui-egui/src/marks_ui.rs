@@ -32,6 +32,7 @@ impl Default for PageRange {
 
 impl PageRange {
     /// The pages (0-based) the range selects in a document of `count` pages.
+    #[must_use]
     pub fn pages(&self, count: usize) -> Vec<usize> {
         let (a, b) = if self.all { (1, count) } else { (self.from.max(1), self.to.min(count)) };
         (a..=b)
@@ -143,7 +144,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
     let current = app.views[i].current;
     let Some(doc) = app.session.get(id) else { return (false, true) };
     let count = doc.info.pages.len();
-    let page = doc.info.pages.get(current).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
+    let page = doc.info.pages.get(current).map_or((612.0, 792.0), |p| (f64::from(p.width), f64::from(p.height)));
     let d = &mut app.marks_draft;
     let verb = if d.replace { "Update" } else { "Add" };
     let title = match kind {
@@ -411,7 +412,7 @@ fn file_source(ui: &mut egui::Ui, d: &mut MarksDraft, kind: MarkKind) {
                 Err(_) => d.file = None,
             }
         }
-        ui.label(d.file.as_ref().map(|f| f.0.clone()).unwrap_or_else(|| "No file chosen".into()));
+        ui.label(d.file.as_ref().map_or_else(|| "No file chosen".into(), |f| f.0.clone()));
         if d.file.as_ref().is_some_and(|f| f.1.starts_with(b"%PDF")) {
             ui.label("Page number");
             ui.add(egui::DragValue::new(&mut d.file_page).range(1..=9999));

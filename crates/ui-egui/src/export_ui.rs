@@ -39,7 +39,7 @@ impl Default for ExportDraft {
 pub type ExportStatus = Arc<Mutex<Option<(usize, usize, Option<String>)>>>;
 
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind: ExportKind) -> (bool, bool) {
-    let count = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.info.pages.len()).unwrap_or(0);
+    let count = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.info.pages.len());
     let d = &mut app.export_draft;
     ui.label(
         egui::RichText::new(match kind {

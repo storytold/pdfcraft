@@ -16,6 +16,7 @@ pub enum Pattern {
 pub const PATTERNS: [Pattern; 5] = [Pattern::Phone, Pattern::Email, Pattern::CreditCard, Pattern::Ssn, Pattern::Date];
 
 impl Pattern {
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Pattern::Phone => "Phone Numbers",
@@ -26,6 +27,7 @@ impl Pattern {
         }
     }
 
+    #[must_use]
     pub fn id(self) -> &'static str {
         match self {
             Pattern::Phone => "phone",
@@ -36,6 +38,7 @@ impl Pattern {
         }
     }
 
+    #[must_use]
     pub fn from_id(id: &str) -> Option<Self> {
         PATTERNS.into_iter().find(|p| p.id() == id)
     }
@@ -218,6 +221,7 @@ fn date(s: &[char], i: usize) -> Option<usize> {
 }
 
 /// Character ranges of `text` matching `pattern`.
+#[must_use]
 pub fn find(pattern: Pattern, text: &[char]) -> Vec<Range<usize>> {
     let f: fn(&[char], usize) -> Option<usize> = match pattern {
         Pattern::Phone => phone,

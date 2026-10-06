@@ -78,6 +78,7 @@ pub(crate) fn items(doc: &Document) -> Vec<ObjRef> {
 }
 
 /// The bookmark tree.
+#[must_use]
 pub fn bookmarks(doc: &Document) -> Vec<Bookmark> {
     let Some(root) = outline_root(doc) else { return Vec::new() };
     let mut seen = HashSet::from([root]);
@@ -87,7 +88,7 @@ pub fn bookmarks(doc: &Document) -> Vec<Bookmark> {
             .map(|r| {
                 let item = doc.get(r);
                 let d = item.as_dict().cloned().unwrap_or_default();
-                let title = d.get(b"Title").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(|s| s.to_text())).unwrap_or_default();
+                let title = d.get(b"Title").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(printcraft_cos::PdfString::to_text)).unwrap_or_default();
                 let open = d.int(b"Count").is_some_and(|c| c > 0);
                 Bookmark { obj: r, title, open, children: build(doc, r, seen) }
             })
@@ -231,7 +232,7 @@ pub fn rename_bookmark(doc: &mut Document, path: &[usize], title: &str) -> Resul
     put(doc, r, b"Title", Some(Object::String(PdfString::text(title))))
 }
 
-/// Point a bookmark at `page` (0-based), replacing its destination or GoTo action.
+/// Point a bookmark at `page` (0-based), replacing its destination or `GoTo` action.
 pub fn set_bookmark_page(doc: &mut Document, path: &[usize], page: usize) -> Result<()> {
     let dest = destination(doc, page)?;
     let (r, _) = resolve_path(doc, path)?;

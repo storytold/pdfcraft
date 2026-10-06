@@ -150,7 +150,7 @@ fn tool_detail(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'stat
     let mut run = None;
     // Redact a PDF has Acrobat's footer: Clear all / Redact all.
     let footer = g.id == "redact";
-    let marks = if footer { app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks()) } else { 0 };
+    let marks = if footer { app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, printcraft_engine::Document::redaction_marks) } else { 0 };
     let list_h = if footer { (ui.available_height() - 52.0).max(80.0) } else { ui.available_height() };
     egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(list_h).show(ui, |ui| {
         for s in g.sections {
@@ -520,7 +520,7 @@ pub fn right_panel(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                                         ui.add(egui::Label::new(egui::RichText::new(&a.name).font(theme::medium(13.0))).truncate());
                                         let mut meta = a.size.map(human_size).unwrap_or_default();
                                         if let printcraft_render::AttachmentSource::Annotation { page, .. } = a.source {
-                                            meta = format!("{meta}  ·  on page {}", info.pages.get(page).map(|p| p.label.as_str()).unwrap_or("?"));
+                                            meta = format!("{meta}  ·  on page {}", info.pages.get(page).map_or("?", |p| p.label.as_str()));
                                         }
                                         if let Some(d) = &a.description {
                                             meta = format!("{meta}  ·  {d}");
@@ -802,7 +802,7 @@ fn fields(
     pages.sort();
     pages.dedup();
     for p in pages {
-        let label = p.map(|p| format!("Page {}", info.pages[p].label)).unwrap_or_else(|| "Unplaced".into());
+        let label = p.map_or_else(|| "Unplaced".into(), |p| format!("Page {}", info.pages[p].label));
         ui.add_space(4.0);
         ui.label(egui::RichText::new(label).font(theme::semibold(12.5)).color(t.text_muted));
         for f in ordered.iter().copied().filter(|f| f.page == p) {

@@ -6,7 +6,7 @@
 //! password, quadding, auto font size (`0 Tf`), combo boxes and list boxes (selection shown).
 //!
 //! The `/DA` font is used when the form's `/DR` defines it as a simple font; text is encoded in
-//! WinAnsi. Otherwise (composite fonts, missing resources) Helvetica is used, so text is always
+//! `WinAnsi`. Otherwise (composite fonts, missing resources) Helvetica is used, so text is always
 //! visible. Widths use the approximate Helvetica metrics of `printcraft-fonts`.
 
 use printcraft_cos::{Dict, Document, Object, Stream};
@@ -22,6 +22,7 @@ fn n(v: f64) -> String {
 }
 
 /// Format a number for content streams (up to three decimals).
+#[must_use]
 pub fn fmt(v: f64) -> String {
     n(v)
 }
@@ -35,6 +36,7 @@ pub struct Da {
     pub color: String,
 }
 
+#[must_use]
 pub fn parse_da(da: &str) -> Da {
     let toks: Vec<&str> = da.split_whitespace().collect();
     let mut out = Da { font: "Helv".into(), size: 0.0, color: "0 g".into() };
@@ -171,12 +173,14 @@ fn frame(doc: &Document, wd: &Dict, w: f64, h: f64) -> (String, f64) {
 }
 
 /// The appearance of a text or choice field's widget showing `values`.
+#[must_use]
 pub fn field_appearance(doc: &Document, f: &Field, w: &Widget, values: &[String]) -> Stream {
     field_appearance_as(doc, f, w, values, true)
 }
 
 /// [`field_appearance`], where `format` false means `values` are already what to show (a
 /// custom Format script ran).
+#[must_use]
 pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> Stream {
     // The Format event: what is shown, not what is stored.
     let formatted: Vec<String>;
@@ -193,7 +197,7 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     let wobj = doc.get(w.obj);
     let wd = wobj.as_dict().cloned().unwrap_or_default();
     let (width, height) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
-    let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
+    let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(printcraft_cos::PdfString::to_text)).as_deref().unwrap_or(&f.da));
     let (font_name, font_obj) = match dr_font(doc, &da.font) {
         Some(o) => (da.font.clone(), o),
         None => ("Helv".to_string(), helvetica()),
@@ -217,70 +221,67 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
         }
     };
     let mut size = da.size;
-    match f.kind {
-        FieldKind::List => {
-            // Every option, one per line from the top; selected ones highlighted.
-            if size == 0.0 {
-                size = 12.0;
+    if f.kind == FieldKind::List {
+        // Every option, one per line from the top; selected ones highlighted.
+        if size == 0.0 {
+            size = 12.0;
+        }
+        let line = size * 1.15;
+        let top = wd.get(b"TI").and_then(|o| doc.resolve(o).as_int()).unwrap_or(0).max(0) as usize;
+        let mut y = height - pad;
+        for (export, display) in f.options.iter().skip(top) {
+            if y - line < 0.0 {
+                break;
             }
-            let line = size * 1.15;
-            let top = wd.get(b"TI").and_then(|o| doc.resolve(o).as_int()).unwrap_or(0).max(0) as usize;
-            let mut y = height - pad;
-            for (export, display) in f.options.iter().skip(top) {
-                if y - line < 0.0 {
+            if values.contains(export) {
+                c.push_str(&format!("0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line)));
+            }
+            show(&mut body, pad, y - line + size * 0.25, display);
+            y -= line;
+        }
+    } else {
+        let text: String = if f.kind == FieldKind::Combo {
+            values.iter().map(|v| f.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone())).collect::<Vec<_>>().join(", ")
+        } else {
+            values.first().cloned().unwrap_or_default()
+        };
+        let text = if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text };
+        let comb = f.has(flags::COMB) && !f.has(flags::MULTILINE) && !f.has(flags::PASSWORD) && f.max_len.is_some_and(|m| m > 0);
+        if f.kind == FieldKind::Text && f.has(flags::MULTILINE) {
+            if size == 0.0 {
+                // Auto size: the largest size (≤ 12) whose wrapped lines fit the height.
+                size = 12.0;
+                while size > 4.0 && wrap(&text, size, inner_w).len() as f64 * size * 1.15 > height - 2.0 * pad {
+                    size -= 0.5;
+                }
+            }
+            let mut y = height - pad - size * 0.85;
+            for line in wrap(&text, size, inner_w) {
+                if y < -size {
                     break;
                 }
-                if values.contains(export) {
-                    c.push_str(&format!("0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line)));
-                }
-                show(&mut body, pad, y - line + size * 0.25, display);
-                y -= line;
+                show(&mut body, x_for(&line, size), y, &line);
+                y -= size * 1.15;
             }
-        }
-        _ => {
-            let text: String = if f.kind == FieldKind::Combo {
-                values.iter().map(|v| f.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone())).collect::<Vec<_>>().join(", ")
-            } else {
-                values.first().cloned().unwrap_or_default()
-            };
-            let text = if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text };
-            let comb = f.has(flags::COMB) && !f.has(flags::MULTILINE) && !f.has(flags::PASSWORD) && f.max_len.is_some_and(|m| m > 0);
-            if f.kind == FieldKind::Text && f.has(flags::MULTILINE) {
-                if size == 0.0 {
-                    // Auto size: the largest size (≤ 12) whose wrapped lines fit the height.
-                    size = 12.0;
-                    while size > 4.0 && wrap(&text, size, inner_w).len() as f64 * size * 1.15 > height - 2.0 * pad {
-                        size -= 0.5;
-                    }
+        } else {
+            if size == 0.0 {
+                size = ((height - 2.0 * pad) / 1.15).clamp(4.0, 12.0);
+                let tw = helvetica_width(&text, size);
+                if tw > inner_w && !comb {
+                    size = (size * inner_w / tw).max(4.0);
                 }
-                let mut y = height - pad - size * 0.85;
-                for line in wrap(&text, size, inner_w) {
-                    if y < -size {
-                        break;
-                    }
-                    show(&mut body, x_for(&line, size), y, &line);
-                    y -= size * 1.15;
+            }
+            // Centre Helvetica's ascent (0.718) and descent (0.207) vertically.
+            let y = (height - 0.925 * size) / 2.0 + 0.207 * size;
+            if comb {
+                let cells = f.max_len.unwrap_or(1).max(1);
+                let cell = width / cells as f64;
+                for (i, ch) in text.chars().take(cells).enumerate() {
+                    let s = ch.to_string();
+                    show(&mut body, cell * i as f64 + (cell - helvetica_width(&s, size)) / 2.0, y, &s);
                 }
             } else {
-                if size == 0.0 {
-                    size = ((height - 2.0 * pad) / 1.15).clamp(4.0, 12.0);
-                    let tw = helvetica_width(&text, size);
-                    if tw > inner_w && !comb {
-                        size = (size * inner_w / tw).max(4.0);
-                    }
-                }
-                // Centre Helvetica's ascent (0.718) and descent (0.207) vertically.
-                let y = (height - 0.925 * size) / 2.0 + 0.207 * size;
-                if comb {
-                    let cells = f.max_len.unwrap_or(1).max(1);
-                    let cell = width / cells as f64;
-                    for (i, ch) in text.chars().take(cells).enumerate() {
-                        let s = ch.to_string();
-                        show(&mut body, cell * i as f64 + (cell - helvetica_width(&s, size)) / 2.0, y, &s);
-                    }
-                } else {
-                    show(&mut body, x_for(&text, size), y, &text);
-                }
+                show(&mut body, x_for(&text, size), y, &text);
             }
         }
     }

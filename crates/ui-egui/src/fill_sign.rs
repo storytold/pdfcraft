@@ -45,6 +45,7 @@ pub struct SigDraft {
 }
 
 impl SigDraft {
+    #[must_use]
     pub fn new(initials: bool, name: &str) -> Self {
         let text = if initials { name.split_whitespace().filter_map(|w| w.chars().next()).collect() } else { name.trim().to_string() };
         Self { strokes: Vec::new(), text, drawing: false, initials }
@@ -54,12 +55,14 @@ impl SigDraft {
         if self.drawing { self.strokes.iter().any(|s| s.len() > 1) } else { !self.text.trim().is_empty() }
     }
 
+    #[must_use]
     pub fn saved(&self) -> SavedSig {
         if self.drawing { SavedSig::Drawn(self.strokes.clone()) } else { SavedSig::Typed(self.text.trim().to_string()) }
     }
 }
 
 impl FillTool {
+    #[must_use]
     pub fn command(self) -> &'static str {
         match self {
             FillTool::Text => "sign.fill.text",
@@ -73,10 +76,12 @@ impl FillTool {
         }
     }
 
+    #[must_use]
     pub fn from_command(id: &str) -> Option<Self> {
         FILL_TOOLS.into_iter().find(|t| t.command() == id)
     }
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             FillTool::Text => "Add text",
@@ -90,6 +95,7 @@ impl FillTool {
         }
     }
 
+    #[must_use]
     pub fn icon(self) -> &'static str {
         match self {
             FillTool::Text => "type",
@@ -128,7 +134,7 @@ pub const TEXT_SIZE: f64 = 10.0;
 fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
     let (vx, vy) = xf.screen_to_view(p);
     let u = info.pages[page].view_to_user(vx, vy);
-    [u[0] as f64, u[1] as f64]
+    [f64::from(u[0]), f64::from(u[1])]
 }
 
 fn new(page: usize, shape: Shape, contents: String, author: &str) -> Edit {
@@ -137,6 +143,7 @@ fn new(page: usize, shape: Shape, contents: String, author: &str) -> Edit {
 }
 
 /// A typewriter annotation sized to its text.
+#[must_use]
 pub fn typed(page: usize, at: [f64; 2], text: &str, author: &str) -> Edit {
     let rect = crate::comments::text_box_rect(at, text, TEXT_SIZE);
     new(page, Shape::Typewriter { rect, font_size: TEXT_SIZE }, text.to_string(), author)
@@ -144,6 +151,7 @@ pub fn typed(page: usize, at: [f64; 2], text: &str, author: &str) -> Edit {
 
 /// Place a saved signature (strokes normalised to a 0–1 box, y up) with its left edge at `at`,
 /// 150 pt wide.
+#[must_use]
 pub fn signature_at(page: usize, at: [f64; 2], strokes: &[Vec<[f32; 2]>], author: &str) -> Option<Edit> {
     let w = 150.0;
     let (min_y, max_y) = strokes.iter().flatten().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p[1]), b.max(p[1])));
@@ -160,11 +168,13 @@ pub fn signature_at(page: usize, at: [f64; 2], strokes: &[Vec<[f32; 2]>], author
 }
 
 /// Place typed text in the script font with its left edge at `at`, `height` points tall.
+#[must_use]
 pub fn typed_signature_at(page: usize, at: [f64; 2], text: &str, height: f64, author: &str) -> Option<Edit> {
     printcraft_engine::typed_signature_shape(at, text, height).map(|shape| new(page, shape, String::new(), author))
 }
 
 /// Place a saved signature or initials.
+#[must_use]
 pub fn place(page: usize, at: [f64; 2], sig: &SavedSig, initials: bool, author: &str) -> Option<Edit> {
     match sig {
         SavedSig::Drawn(strokes) => signature_at(page, at, strokes, author),
@@ -186,7 +196,7 @@ pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage
     let polys: Vec<Vec<(f64, f64)>> = o
         .contours
         .iter()
-        .map(|c| c.iter().map(|p| (x0 + p[0] * k, h as f64 * 0.5 + (o.ascent + o.descent) / 2.0 * k - p[1] * k)).collect())
+        .map(|c| c.iter().map(|p| (x0 + p[0] * k, h as f64 * 0.5 + f64::midpoint(o.ascent, o.descent) * k - p[1] * k)).collect())
         .collect();
     for y in 0..h {
         let sy = y as f64 + 0.5;
@@ -199,7 +209,7 @@ pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage
                 }
             }
         }
-        xs.sort_by(|a, b| a.total_cmp(b));
+        xs.sort_by(f64::total_cmp);
         for pair in xs.as_chunks::<2>().0 {
             let (from, to) = (pair[0].round().max(0.0) as usize, (pair[1].round() as usize).min(w));
             for x in from..to {

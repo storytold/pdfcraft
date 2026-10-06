@@ -1,4 +1,4 @@
-//! RunLengthDecode (ISO 32000-2 §7.4.5): a length byte L of 0–127 copies the next
+//! `RunLengthDecode` (ISO 32000-2 §7.4.5): a length byte L of 0–127 copies the next
 //! L + 1 bytes, 129–255 repeats the next byte 257 − L times, 128 is EOD.
 //! A missing EOD is tolerated; a truncated run is corrupt.
 

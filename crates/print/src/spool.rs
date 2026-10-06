@@ -36,6 +36,7 @@ impl Default for Job {
 }
 
 /// Parse `lpstat -p -d` output.
+#[must_use]
 pub fn parse_lpstat(out: &str) -> Vec<Printer> {
     let default = out.lines().find_map(|l| l.strip_prefix("system default destination:")).map(|s| s.trim().to_string());
     out.lines()
@@ -46,6 +47,7 @@ pub fn parse_lpstat(out: &str) -> Vec<Printer> {
 }
 
 /// The `lp` arguments for a job printing `file`.
+#[must_use]
 pub fn lp_args(job: &Job, file: &str) -> Vec<String> {
     let mut a = Vec::new();
     if let Some(p) = &job.printer {
@@ -71,6 +73,7 @@ pub fn lp_args(job: &Job, file: &str) -> Vec<String> {
 }
 
 /// The printers the system knows (empty when there are none or no spooler).
+#[must_use]
 pub fn printers() -> Vec<Printer> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {

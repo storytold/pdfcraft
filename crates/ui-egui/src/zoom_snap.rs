@@ -113,7 +113,7 @@ impl PrintCraftApp {
     pub fn snapshot(&mut self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32), String> {
         let view = &self.views[index];
         let doc = self.session.get(view.id).ok_or("no document")?;
-        let ppp = self.ctx.as_ref().map_or(2.0, |c| c.pixels_per_point());
+        let ppp = self.ctx.as_ref().map_or(2.0, egui::Context::pixels_per_point);
         let scale = (view.zoom * ppp).clamp(0.5, 8.0);
         let tile = Tile {
             x: (view_rect[0] * scale).floor().max(0.0) as u32,
@@ -121,7 +121,7 @@ impl PrintCraftApp {
             w: ((view_rect[2] - view_rect[0]) * scale).ceil().max(1.0) as u32,
             h: ((view_rect[3] - view_rect[1]) * scale).ceil().max(1.0) as u32,
         };
-        if (tile.w as u64) * (tile.h as u64) > 64_000_000 {
+        if u64::from(tile.w) * u64::from(tile.h) > 64_000_000 {
             return Err("the area is too large at this zoom".into());
         }
         let config = RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..RenderConfig::default() };

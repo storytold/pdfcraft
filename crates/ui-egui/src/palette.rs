@@ -51,7 +51,7 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 Hit {
                     group: None,
                     label,
-                    detail: spec.shortcut.map(|k| k.label(mac)).unwrap_or_else(|| spec.menu.unwrap_or("Command").to_string()),
+                    detail: spec.shortcut.map_or_else(|| spec.menu.unwrap_or("Command").to_string(), |k| k.label(mac)),
                     icon: spec.icon,
                     command: Some(spec.id),
                     ready: app.command_enabled(spec),

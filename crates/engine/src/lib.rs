@@ -60,6 +60,7 @@ pub use printcraft_fonts::{ScriptOutline, script_outline};
 
 /// Fill & Sign: `text` in the script font as a typed signature, its left edge at `at` (user
 /// space, vertically centred) and `height` points tall. `None` for text with no outlines.
+#[must_use]
 pub fn typed_signature_shape(at: [f64; 2], text: &str, height: f64) -> Option<Shape> {
     let o = script_outline(text);
     let span = (o.ascent - o.descent).max(0.1);
@@ -426,7 +427,7 @@ impl Document {
 }
 
 fn render_threads() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 8) - 1
+    std::thread::available_parallelism().map_or(4, std::num::NonZero::get).clamp(2, 8) - 1
 }
 
 /// A file to combine: its name (the bookmark title), bytes, and page range (`None`: all).
@@ -532,6 +533,7 @@ impl Default for Protection {
 
 impl Protection {
     /// The `/P` permission bits (ISO 32000-2 Table 22), as Acrobat maps its choices.
+    #[must_use]
     pub fn permission_bits(&self) -> i32 {
         let bit = |n: u32| 1i32 << (n - 1);
         if self.permissions_password.is_none() {
@@ -566,7 +568,7 @@ impl Protection {
             (Some(a), Some(b)) if a == b => return bad("the open password and the permissions password must be different"),
             _ => {}
         }
-        if [&self.open_password, &self.permissions_password].into_iter().flatten().any(|p| p.is_empty()) {
+        if [&self.open_password, &self.permissions_password].into_iter().flatten().any(std::string::String::is_empty) {
             return bad("passwords can't be empty");
         }
         if self.algorithm != printcraft_cos::Algorithm::Aes256
@@ -802,14 +804,14 @@ pub enum Edit {
     MarkDecorative {
         figure: u32,
     },
-    /// Document JavaScripts: add, replace (`script`) or remove (`None`) the document-level
+    /// Document `JavaScripts`: add, replace (`script`) or remove (`None`) the document-level
     /// script `name`.
     SetDocumentScript {
         name: String,
         script: Option<String>,
     },
     /// Field Properties ▸ a custom script: set or remove field `name`'s JavaScript for `event`
-    /// (keystroke, format, validate, calculate or mouse_up).
+    /// (keystroke, format, validate, calculate or `mouse_up`).
     SetFieldScript {
         name: String,
         event: String,
@@ -975,6 +977,7 @@ pub enum Edit {
 
 impl Edit {
     /// Label for the Edit menu and history ("Undo Rotate pages").
+    #[must_use]
     pub fn label(&self) -> String {
         match self {
             Edit::RotatePages { pages, .. } => plural("Rotate page", pages.len()),
@@ -1230,7 +1233,7 @@ impl EditCtx {
         #[cfg(not(target_arch = "wasm32"))]
         if now.is_some() {
             // Real clock: mix in sub-second time so ids from two sessions don't collide.
-            seed ^= std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos() as u64).unwrap_or(0) << 32;
+            seed ^= std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| u64::from(d.subsec_nanos())) << 32;
         }
         Self { js: None, date: now.map(printcraft_cos::pdf_date), today: (1970, 1, 1), seed, count: 0 }
     }
@@ -1437,14 +1440,14 @@ fn run_edit(doc: &mut printcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -
             if let Some(f) = file {
                 s.source = Some(mark_source(doc, f)?);
             }
-            printcraft_edit::add_watermark(doc, pages, &s, *replace)?
+            printcraft_edit::add_watermark(doc, pages, &s, *replace)?;
         }
         Edit::AddBackground { pages, settings, replace, file } => {
             let mut s = settings.clone();
             if let Some(f) = file {
                 s.source = Some(mark_source(doc, f)?);
             }
-            printcraft_edit::add_background(doc, pages, &s, *replace)?
+            printcraft_edit::add_background(doc, pages, &s, *replace)?;
         }
         Edit::RemoveMarks { kind } => {
             let n = printcraft_model::pages(doc).len();
@@ -1457,15 +1460,12 @@ fn run_edit(doc: &mut printcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -
         }
         Edit::AddImage { page, rect, name, bytes } => {
             let (image, natural) = printcraft_create::image_xobject(doc, name, bytes)?;
-            let rect = match rect {
-                Some(r) => *r,
-                None => {
-                    let p = printcraft_model::pages(doc).swap_remove(*page);
-                    let (pw, ph) = p.display_size(doc);
-                    let k = ((pw * 0.8) / natural.0).min((ph * 0.8) / natural.1).min(1.0);
-                    let (w, h) = (natural.0 * k, natural.1 * k);
-                    [(pw - w) / 2.0, (ph - h) / 2.0, (pw + w) / 2.0, (ph + h) / 2.0]
-                }
+            let rect = if let Some(r) = rect { *r } else {
+                let p = printcraft_model::pages(doc).swap_remove(*page);
+                let (pw, ph) = p.display_size(doc);
+                let k = ((pw * 0.8) / natural.0).min((ph * 0.8) / natural.1).min(1.0);
+                let (w, h) = (natural.0 * k, natural.1 * k);
+                [(pw - w) / 2.0, (ph - h) / 2.0, f64::midpoint(pw, w), f64::midpoint(ph, h)]
             };
             printcraft_edit::add_content(doc, *page, &AddedContent::Image(printcraft_edit::AddedImage::new(rect, image)))?;
         }
@@ -1489,7 +1489,7 @@ fn run_edit(doc: &mut printcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -
             printcraft_annot::links::add(doc, *page, *rect, action, style)?;
         }
         Edit::SetLink { page, index, rect, action, style } => {
-            printcraft_annot::links::set(doc, *page, *index, *rect, action.as_ref(), style.as_ref())?
+            printcraft_annot::links::set(doc, *page, *index, *rect, action.as_ref(), style.as_ref())?;
         }
         Edit::DeleteLink { page, index } => printcraft_annot::links::delete(doc, *page, *index)?,
         Edit::RemoveLinks { pages } => {
@@ -1697,6 +1697,7 @@ fn signatures_of(cos: &printcraft_cos::Document, bytes: &[u8], trust: &TrustStor
 }
 
 impl Session {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -1708,6 +1709,7 @@ impl Session {
     }
 
     /// Seconds since the Unix epoch from the session clock (0 when unknown).
+    #[must_use]
     pub fn now_secs(&self) -> i64 {
         self.now().unwrap_or(0)
     }
@@ -1725,6 +1727,7 @@ impl Session {
     /// Today's date in local time: (year, month, day). With an injected clock (tests) the clock
     /// is taken as local time.
     /// A dynamic stamp's second line: "By Ada at 2:14 pm, Oct 02, 2026" (local time).
+    #[must_use]
     pub fn stamp_by_line(&self, author: &str) -> String {
         let offset = if self.clock.is_some() { 0 } else { local_utc_offset() };
         let d = self.now().map(|t| printcraft_cos::pdf_date(t + offset)).unwrap_or_default();
@@ -1769,7 +1772,7 @@ impl Session {
             Ok(info) => (info, password.map(str::to_owned)),
             Err(OpenError::WrongPassword) => {
                 let user = match &cos {
-                    Ok(Ok(d)) => d.security().and_then(|s| s.recovered_user_password()),
+                    Ok(Ok(d)) => d.security().and_then(printcraft_cos::SecurityHandler::recovered_user_password),
                     _ => None,
                 };
                 let user: String = user.ok_or(OpenError::WrongPassword)?.iter().map(|b| char::from(*b)).collect();
@@ -2023,7 +2026,7 @@ impl Session {
                 .map_err(|e| EditError::Reopen(e.to_string()))?;
         }
         if let Some(p) = path {
-            doc.name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
+            doc.name = std::path::Path::new(&p).file_name().map_or_else(|| p.clone(), |n| n.to_string_lossy().into_owned());
             doc.path = Some(p);
         }
         doc.dirty = false;
@@ -2259,6 +2262,7 @@ impl Session {
     }
 
     /// Top-level bookmarks as split points: (first page of each part, its bookmark's title).
+    #[must_use]
     pub fn bookmark_splits(&self, id: DocId) -> Vec<(usize, String)> {
         let Some(doc) = self.get(id) else { return Vec::new() };
         let mut out: Vec<(usize, String)> = doc.info.outline.iter().filter_map(|o| Some((o.page?, o.title.clone()))).collect();
@@ -2325,7 +2329,7 @@ impl Session {
             return false;
         }
         l.visible = visible;
-        let overrides: Vec<(i32, i32, bool)> = doc.info.layers.iter().map(|l| (l.id.0 as i32, l.id.1 as i32, l.visible)).collect();
+        let overrides: Vec<(i32, i32, bool)> = doc.info.layers.iter().map(|l| (l.id.0 as i32, i32::from(l.id.1), l.visible)).collect();
         doc.config.layers = Arc::new(overrides);
         doc.renderer = RenderPool::new(doc.bytes.clone(), render_threads(), doc.config.clone());
         true
@@ -2353,6 +2357,7 @@ impl Session {
     }
 
     /// The certificates trusted for signing.
+    #[must_use]
     pub fn trusted_certificates(&self) -> &[printcraft_sign::Certificate] {
         &self.trust.certs
     }
@@ -2369,6 +2374,7 @@ impl Session {
     }
 
     /// The signing time as a PDF date in local time with its offset (`D:…+02'00'`).
+    #[must_use]
     pub fn signing_date(&self) -> String {
         let offset = if self.clock.is_some() { 0 } else { local_utc_offset() };
         let local = printcraft_cos::pdf_date(self.now().unwrap_or(0) + offset);
@@ -2409,10 +2415,12 @@ impl Session {
         self.docs.retain(|d| d.id != id);
     }
 
+    #[must_use]
     pub fn get(&self, id: DocId) -> Option<&Document> {
         self.docs.iter().find(|d| d.id == id)
     }
 
+    #[must_use]
     pub fn docs(&self) -> &[Document] {
         &self.docs
     }
@@ -2427,7 +2435,7 @@ pub struct MarkFile {
     pub page: usize,
 }
 
-/// Bring a mark's picture into `doc`: a PDF page as a form XObject, or an image.
+/// Bring a mark's picture into `doc`: a PDF page as a form `XObject`, or an image.
 fn mark_source(doc: &mut printcraft_cos::Document, f: &MarkFile) -> Result<printcraft_edit::MarkSource, EditError> {
     let head = &f.bytes[..f.bytes.len().min(1024)];
     if head.windows(5).any(|w| w == b"%PDF-") {
@@ -2462,6 +2470,7 @@ pub enum SummarySort {
 
 impl SummarySort {
     pub const ALL: [SummarySort; 4] = [SummarySort::Page, SummarySort::Author, SummarySort::Date, SummarySort::Type];
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             SummarySort::Page => "Page",
@@ -2470,12 +2479,14 @@ impl SummarySort {
             SummarySort::Type => "Type",
         }
     }
+    #[must_use]
     pub fn parse(s: &str) -> Option<SummarySort> {
         Self::ALL.into_iter().find(|k| k.name().eq_ignore_ascii_case(s))
     }
 }
 
 /// Acrobat's name for a comment type, as comment lists show it.
+#[must_use]
 pub fn comment_type_name(subtype: &str) -> &str {
     match subtype {
         "Text" => "Sticky Note",
@@ -2500,6 +2511,7 @@ pub fn comment_type_name(subtype: &str) -> &str {
 }
 
 /// [`comment_type_name`], telling callouts, clouds and typewriter text apart by `/IT`.
+#[must_use]
 pub fn comment_kind(a: &printcraft_render::Annotation) -> &str {
     match a.intent.as_deref() {
         Some("FreeTextCallout") => "Callout",
@@ -2512,6 +2524,7 @@ pub fn comment_kind(a: &printcraft_render::Annotation) -> &str {
 /// The text of a comment summary: one block per comment (replies indented under it), with a
 /// "Page N" heading when sorted by page. Checkmarks and status replies are left out, as are
 /// pop-ups; the number is the comment's position on its page.
+#[must_use]
 pub fn comment_summary(name: &str, all: &[printcraft_render::Annotation], sort: SummarySort) -> String {
     use std::fmt::Write;
     let top: Vec<&printcraft_render::Annotation> = all.iter().filter(|a| a.in_reply_to.is_none() && a.state.is_none()).collect();
@@ -2587,6 +2600,7 @@ pub enum PageOrientation {
 }
 
 /// The pages of `pages` (0-based) that pass the filters.
+#[must_use]
 pub fn filter_pages(info: &printcraft_render::DocInfo, pages: &[usize], parity: PageParity, orientation: PageOrientation) -> Vec<usize> {
     pages
         .iter()

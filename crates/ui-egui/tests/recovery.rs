@@ -40,7 +40,7 @@ fn store(tag: &str) -> RecoveryStore {
 }
 
 fn files_in(s: &RecoveryStore) -> usize {
-    std::fs::read_dir(s.dir()).map(|d| d.count()).unwrap_or(0)
+    std::fs::read_dir(s.dir()).map_or(0, std::iter::Iterator::count)
 }
 
 /// A session that edits a document, autosaves, and then "crashes" (is dropped).

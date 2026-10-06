@@ -93,29 +93,37 @@ impl Permissions {
     fn bit(&self, n: u32) -> bool {
         self.owner || (self.bits >> (n - 1)) & 1 == 1
     }
+    #[must_use]
     pub fn print(&self) -> bool {
         self.bit(3)
     }
     /// Modify contents other than the operations below.
+    #[must_use]
     pub fn modify(&self) -> bool {
         self.bit(4)
     }
+    #[must_use]
     pub fn copy(&self) -> bool {
         self.bit(5)
     }
+    #[must_use]
     pub fn annotate(&self) -> bool {
         self.bit(6)
     }
+    #[must_use]
     pub fn fill_forms(&self) -> bool {
         self.bit(9) || self.bit(6)
     }
+    #[must_use]
     pub fn extract_for_accessibility(&self) -> bool {
         self.bit(10)
     }
     /// Insert, rotate or delete pages; create bookmarks and thumbnails.
+    #[must_use]
     pub fn assemble(&self) -> bool {
         self.bit(11) || self.bit(4)
     }
+    #[must_use]
     pub fn print_high_quality(&self) -> bool {
         self.bit(12)
     }
@@ -176,6 +184,7 @@ impl SecurityHandler {
         Ok(Self { dict, key, auth, recovered_user })
     }
 
+    #[must_use]
     pub fn auth(&self) -> Auth {
         self.auth
     }
@@ -183,24 +192,29 @@ impl SecurityHandler {
     /// For R2–R4 documents opened with the owner password: the user password, which owner
     /// authentication recovers (Algorithm 7). Lets components that only accept user passwords
     /// open the document too.
+    #[must_use]
     pub fn recovered_user_password(&self) -> Option<Vec<u8>> {
         self.recovered_user.clone()
     }
 
+    #[must_use]
     pub fn permissions(&self) -> Permissions {
         Permissions { bits: self.dict.p, owner: self.auth == Auth::Owner }
     }
 
+    #[must_use]
     pub fn dict(&self) -> &EncryptDict {
         &self.dict
     }
 
     /// The file encryption key (for tests and diagnostics).
+    #[must_use]
     pub fn file_key(&self) -> &[u8] {
         &self.key
     }
 
     /// Whether `/Metadata` streams are encrypted.
+    #[must_use]
     pub fn encrypts_metadata(&self) -> bool {
         self.dict.encrypt_metadata
     }
@@ -209,7 +223,7 @@ impl SecurityHandler {
         if name == b"Identity" || name.is_empty() {
             return Method::Identity;
         }
-        self.dict.crypt_filters.iter().find(|(n, _)| n == name).map(|(_, m)| *m).unwrap_or(Method::Identity)
+        self.dict.crypt_filters.iter().find(|(n, _)| n == name).map_or(Method::Identity, |(_, m)| *m)
     }
 
     /// The method for strings or a kind of stream.
@@ -276,23 +290,28 @@ impl SecurityHandler {
         }
     }
 
+    #[must_use]
     pub fn decrypt_string(&self, num: u32, generation: u16, data: &[u8]) -> Vec<u8> {
         self.apply(self.method(None), num, generation, data, false)
     }
 
+    #[must_use]
     pub fn encrypt_string(&self, num: u32, generation: u16, data: &[u8]) -> Vec<u8> {
         self.apply(self.method(None), num, generation, data, true)
     }
 
+    #[must_use]
     pub fn decrypt_stream(&self, num: u32, generation: u16, data: &[u8], kind: StreamKind) -> Vec<u8> {
         self.apply(self.method(Some(kind)), num, generation, data, false)
     }
 
+    #[must_use]
     pub fn encrypt_stream(&self, num: u32, generation: u16, data: &[u8], kind: StreamKind) -> Vec<u8> {
         self.apply(self.method(Some(kind)), num, generation, data, true)
     }
 
     /// Whether strings are encrypted at all (false with `/StrF /Identity`).
+    #[must_use]
     pub fn encrypts_strings(&self) -> bool {
         self.method(None) != Method::Identity
     }
@@ -300,14 +319,14 @@ impl SecurityHandler {
 
 // ── Passwords ──────────────────────────────────────────────────────────────────────────────────
 
-/// Revisions 2–4 use PDFDocEncoding passwords; characters outside Latin-1 are dropped.
+/// Revisions 2–4 use `PDFDocEncoding` passwords; characters outside Latin-1 are dropped.
 fn legacy_password(pw: &str) -> Vec<u8> {
     pw.chars().filter_map(|c| u8::try_from(u32::from(c)).ok()).take(32).collect()
 }
 
-/// Revisions 5–6: SASLprep (RFC 4013), UTF-8, at most 127 bytes.
+/// Revisions 5–6: `SASLprep` (RFC 4013), UTF-8, at most 127 bytes.
 fn sasl_password(pw: &str) -> Vec<u8> {
-    let prepped = stringprep::saslprep(pw).map(|c| c.into_owned()).unwrap_or_else(|_| pw.to_string());
+    let prepped = stringprep::saslprep(pw).map_or_else(|_| pw.to_string(), std::borrow::Cow::into_owned);
     let mut bytes = prepped.into_bytes();
     bytes.truncate(127);
     bytes

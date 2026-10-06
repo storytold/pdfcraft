@@ -8,6 +8,7 @@ pub use printcraft_compare::{Change, Comparison, Kind, Side};
 use crate::{DocId, Edit, EditError, Markup, NewAnnotation, NoteIcon, Session, Shape};
 
 /// Acrobat's compare colours: replaced blue, inserted green, deleted red.
+#[must_use]
 pub fn colour(kind: Kind) -> crate::Rgb {
     match kind {
         Kind::Replaced => [0.2, 0.45, 0.95],
@@ -76,7 +77,7 @@ impl Session {
             for r in printcraft_compare::visual_regions((&y.rgba, y.width, y.height), (&x.rgba, x.width, x.height), 24) {
                 let p = info.view_to_user(r[0] as f32 / s, r[1] as f32 / s);
                 let q = info.view_to_user(r[2] as f32 / s, r[3] as f32 / s);
-                out.push((page, [p[0].min(q[0]) as f64, p[1].min(q[1]) as f64, p[0].max(q[0]) as f64, p[1].max(q[1]) as f64]));
+                out.push((page, [f64::from(p[0].min(q[0])), f64::from(p[1].min(q[1])), f64::from(p[0].max(q[0])), f64::from(p[1].max(q[1]))]));
             }
         }
         Ok(out)
@@ -132,6 +133,7 @@ pub enum OfficeFormat {
 }
 
 impl OfficeFormat {
+    #[must_use]
     pub fn extension(self) -> &'static str {
         match self {
             OfficeFormat::Docx => "docx",
@@ -140,6 +142,7 @@ impl OfficeFormat {
         }
     }
 
+    #[must_use]
     pub fn from_extension(ext: &str) -> Option<OfficeFormat> {
         match ext.to_ascii_lowercase().as_str() {
             "docx" => Some(OfficeFormat::Docx),
@@ -183,7 +186,7 @@ impl crate::Document {
                         Some(printcraft_export::Image { ext: if ext == "jpg" { "jpg" } else { "png" }, bytes, rect: im.rect })
                     })
                     .collect();
-                printcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images }
+                printcraft_export::Page { width: f64::from(info.width), height: f64::from(info.height), blocks, images }
             })
             .collect()
     }

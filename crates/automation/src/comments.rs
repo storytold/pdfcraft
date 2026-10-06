@@ -30,7 +30,7 @@ pub(crate) fn parse_color(s: &str) -> Result<Rgb> {
     if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(ToolError::InvalidArgs(format!("{s:?} is not a colour (use #RRGGBB or a name)")));
     }
-    let c = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).map(|v| v as f64 / 255.0).unwrap_or(0.0);
+    let c = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).map_or(0.0, |v| f64::from(v) / 255.0);
     Ok([c(0), c(2), c(4)])
 }
 
@@ -41,7 +41,7 @@ fn hex(c: [f32; 3]) -> String {
 
 fn to_user(p: &PageInfo, x: f64, y: f64) -> [f64; 2] {
     let [ux, uy] = p.view_to_user(x as f32, y as f32);
-    [ux as f64, uy as f64]
+    [f64::from(ux), f64::from(uy)]
 }
 
 fn rect_to_user(p: &PageInfo, r: [f64; 4]) -> [f64; 4] {
@@ -167,7 +167,7 @@ impl Automation {
                     quads
                         .iter()
                         .map(|q| {
-                            let v: Vec<f64> = q.as_array().ok_or_else(wrong)?.iter().map(|x| x.as_f64()).collect::<Option<_>>().ok_or_else(wrong)?;
+                            let v: Vec<f64> = q.as_array().ok_or_else(wrong)?.iter().map(serde_json::Value::as_f64).collect::<Option<_>>().ok_or_else(wrong)?;
                             let v: [f64; 8] = v.try_into().map_err(|_| wrong())?;
                             let mut out = [0.0; 8];
                             for i in 0..4 {
@@ -226,7 +226,7 @@ impl Automation {
                             s.as_array()
                                 .ok_or_else(wrong)?
                                 .iter()
-                                .map(|p| match p.as_array().map(|p| p.iter().map(|v| v.as_f64()).collect::<Vec<_>>()).as_deref() {
+                                .map(|p| match p.as_array().map(|p| p.iter().map(serde_json::Value::as_f64).collect::<Vec<_>>()).as_deref() {
                                     Some([Some(x), Some(y)]) => Ok(to_user(&info, *x, *y)),
                                     _ => Err(wrong()),
                                 })
@@ -240,7 +240,7 @@ impl Automation {
                     let pts = a.get("points").and_then(|p| p.as_array()).ok_or_else(wrong)?;
                     let vertices = pts
                         .iter()
-                        .map(|p| match p.as_array().map(|p| p.iter().map(|v| v.as_f64()).collect::<Vec<_>>()).as_deref() {
+                        .map(|p| match p.as_array().map(|p| p.iter().map(serde_json::Value::as_f64).collect::<Vec<_>>()).as_deref() {
                             Some([Some(x), Some(y)]) => Ok(to_user(&info, *x, *y)),
                             _ => Err(wrong()),
                         })
@@ -258,15 +258,15 @@ impl Automation {
                         Some(k) => to_user(&info, k[0], k[1]),
                         // Halfway between the point and the box, level with the box's middle.
                         None => {
-                            let mid = (rect[1] + rect[3]) / 2.0;
+                            let mid = f64::midpoint(rect[1], rect[3]);
                             let side = if point[0] < rect[0] {
                                 rect[0]
                             } else if point[0] > rect[2] {
                                 rect[2]
                             } else {
-                                (rect[0] + rect[2]) / 2.0
+                                f64::midpoint(rect[0], rect[2])
                             };
-                            [(point[0] + side) / 2.0, mid]
+                            [f64::midpoint(point[0], side), mid]
                         }
                     };
                     Shape::Callout { rect, knee, point, font_size: a.opt_num("font_size")?.unwrap_or(10.0) }
@@ -463,7 +463,7 @@ impl Automation {
         let path = self.resolve(a.str("path")?, false)?;
         let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let name = a.opt_str("name")?.map(str::to_owned).unwrap_or_else(|| file.rsplit_once('.').map_or(file.clone(), |(s, _)| s.to_owned()));
+        let name = a.opt_str("name")?.map_or_else(|| file.rsplit_once('.').map_or(file.clone(), |(s, _)| s.to_owned()), str::to_owned);
         let [x, y] = a.need::<2>("at", "a stamp (its centre)")?;
         let [ux, uy] = to_user(&info, x, y);
         let edit = Edit::AddCustomStamp {

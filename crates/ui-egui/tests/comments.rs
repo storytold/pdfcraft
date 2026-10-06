@@ -1,4 +1,4 @@
-//! Commenting in the real shell (egui_kittest): tools, gestures, selection, the composer and
+//! Commenting in the real shell (`egui_kittest)`: tools, gestures, selection, the composer and
 //! the Comments panel.
 
 use egui::{Pos2, pos2};
@@ -47,7 +47,7 @@ fn settle(h: &mut Harness<'static, PrintCraftApp>) {
     }
 }
 
-/// A point on page 1 in PDF user space → screen (no rotation; MediaBox 300×200).
+/// A point on page 1 in PDF user space → screen (no rotation; `MediaBox` 300×200).
 fn at(h: &Harness<'static, PrintCraftApp>, x: f32, y: f32) -> Pos2 {
     let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
     pos2(r.left() + x / 300.0 * r.width(), r.top() + (200.0 - y) / 200.0 * r.height())
@@ -590,7 +590,7 @@ fn the_opacity_set_for_a_tool_goes_into_its_new_comments() {
         .filter_map(|n| doc.try_get(n).ok())
         .filter_map(|o| o.as_dict().cloned())
         .filter(|d| d.name(b"Subtype") == Some(b"StrikeOut"))
-        .filter_map(|d| d.get(b"CA").and_then(|v| v.as_f64()))
+        .filter_map(|d| d.get(b"CA").and_then(printcraft_cos::Object::as_f64))
         .collect();
     assert_eq!(opacities, [0.5]);
     // The quick bar offers the control.

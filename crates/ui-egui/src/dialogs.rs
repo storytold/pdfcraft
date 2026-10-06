@@ -379,7 +379,7 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 ui.label(egui::RichText::new("Split document").font(theme::semibold(18.0)));
                 ui.add_space(8.0);
                 let Some((vi, id)) = app.active_ids() else { return };
-                let n = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
+                let n = app.session.get(id).map_or(0, |d| d.info.pages.len());
                 let selected: Vec<usize> = app.views[vi].selected.iter().copied().filter(|p| *p > 0).collect();
                 let marks = app.session.bookmark_splits(id);
                 let draft = &mut app.split_draft;
@@ -433,7 +433,7 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 }
             }
             Dialog::ReplacePages => {
-                let count = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.info.pages.len()).unwrap_or(1).max(1);
+                let count = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len()).max(1);
                 let Some(d) = app.replace_draft.as_mut() else {
                     close = true;
                     return;
@@ -506,7 +506,7 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 return;
             }
             Dialog::RedactApply => {
-                let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
+                let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, printcraft_engine::Document::redaction_marks);
                 let (ok, cancel) = crate::redact_ui::apply_body(ui, marks, &t);
                 if ok {
                     redact_now = Some(dialog);
@@ -655,7 +655,7 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 optimize_now = ok;
                 close = ok || cancel;
                 if std::mem::take(&mut app.optimize_draft.audit) {
-                    app.space_audit = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.audit_space()).unwrap_or_default();
+                    app.space_audit = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(printcraft_engine::Document::audit_space).unwrap_or_default();
                     next = Dialog::AuditSpace;
                 }
                 return;
@@ -741,7 +741,7 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                     return;
                 };
                 let Some(doc) = app.session.get(id) else { return };
-                let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
+                let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
                 let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
                 let thumbs: std::collections::HashMap<usize, egui::TextureId> =
                     (0..sizes.len()).filter_map(|p| app.views[i].thumb_id(p).map(|t| (p, t))).collect();
@@ -892,7 +892,7 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 ui.label(egui::RichText::new("Number pages").font(theme::semibold(18.0)));
                 ui.add_space(8.0);
                 let Some((_, id)) = app.active_ids() else { return };
-                let n = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(1).max(1);
+                let n = app.session.get(id).map_or(1, |d| d.info.pages.len()).max(1);
                 let d = &mut app.number_draft;
                 d.to = d.to.clamp(1, n);
                 d.from = d.from.clamp(1, d.to);
@@ -957,7 +957,7 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 ui.add_space(6.0);
                 ui.label("PrintCraft didn't shut down normally. These documents had changes that were autosaved:");
                 ui.add_space(8.0);
-                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
                 egui::Grid::new("recoverable").num_columns(2).spacing([18.0, 6.0]).show(ui, |ui| {
                     for m in &app.recoverable {
                         ui.label(egui::RichText::new(&m.name).font(theme::medium(13.0)));
@@ -1142,7 +1142,7 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
             }
         }
         Some(Dialog::RedactApply) => {
-            let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
+            let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, printcraft_engine::Document::redaction_marks);
             if app.apply_edit(Edit::ApplyRedactions { pages: None }) {
                 app.notify(format!("Applied {marks} redaction mark{}. Save to remove the content from the file.", if marks == 1 { "" } else { "s" }));
             }
@@ -1175,12 +1175,12 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
         app.start_export(kind);
     }
     if marks_now && let (Dialog::Marks(kind), Some((_, id))) = (dialog, app.active_ids()) {
-        let count = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
+        let count = app.session.get(id).map_or(0, |d| d.info.pages.len());
         let edit = crate::marks_ui::edit(&app.marks_draft, kind, count);
         app.apply_edit(edit);
     }
     if boxes_now && let Some((i, id)) = app.active_ids() {
-        let count = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
+        let count = app.session.get(id).map_or(0, |d| d.info.pages.len());
         let edit = app.boxes_draft.edit(app.views[i].current, count);
         app.apply_edit(edit);
         app.boxes_draft.seeded = None;

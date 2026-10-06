@@ -10,7 +10,7 @@
 //! anything is drawn on top, the page's original content is wrapped in `q … Q` (two tiny streams)
 //! so its graphics state can't leak into the mark.
 //!
-//! Text uses standard Helvetica (WinAnsi) added to the page resources as `/PCHelv`.
+//! Text uses standard Helvetica (`WinAnsi`) added to the page resources as `/PCHelv`.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -72,14 +72,14 @@ impl Default for HeaderFooter {
     }
 }
 
-/// A picture for a background or watermark (Acrobat: Source ▸ File): an XObject already in
+/// A picture for a background or watermark (Acrobat: Source ▸ File): an `XObject` already in
 /// the document, an image (drawn into a unit square) or a form (a page of a PDF).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MarkSource {
     pub xobject: printcraft_cos::ObjRef,
     /// Its natural size in points.
     pub size: (f64, f64),
-    /// An image XObject (unit square); otherwise a form whose `/Matrix` maps it to `size`.
+    /// An image `XObject` (unit square); otherwise a form whose `/Matrix` maps it to `size`.
     pub image: bool,
 }
 
@@ -185,6 +185,7 @@ fn rgb(c: Rgb) -> String {
 const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 /// Expand `<<…>>` tokens for page `index` (0-based within the range) of `count`.
+#[must_use]
 pub fn expand(template: &str, page_number: u32, count: usize, bates: u64, cx: &Context) -> String {
     let (y, m, d) = cx.date;
     let mut out = String::new();
@@ -566,6 +567,7 @@ pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Resu
 }
 
 /// Which kinds of marks the document has (for enabling Update/Remove).
+#[must_use]
 pub fn marks_present(doc: &Document) -> Vec<MarkKind> {
     let mut found = Vec::new();
     for page in page_list(doc) {

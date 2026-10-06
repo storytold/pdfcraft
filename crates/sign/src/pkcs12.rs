@@ -52,7 +52,7 @@ fn bad(what: &str) -> SignError {
     SignError::Malformed(format!("PKCS #12: {what}"))
 }
 
-/// The password as a BMPString with its terminating NUL (RFC 7292 Appendix B.1).
+/// The password as a `BMPString` with its terminating NUL (RFC 7292 Appendix B.1).
 fn bmp(password: &str) -> Vec<u8> {
     let mut v: Vec<u8> = password.encode_utf16().flat_map(u16::to_be_bytes).collect();
     v.extend([0, 0]);
@@ -88,7 +88,7 @@ fn pkcs12_kdf(alg: DigestAlg, password: &[u8], salt: &[u8], id: u8, iterations: 
             // chunk = (chunk + b + 1) mod 2^(8v)
             let mut carry = 1u16;
             for k in (0..v).rev() {
-                let s = chunk[k] as u16 + b[k] as u16 + carry;
+                let s = u16::from(chunk[k]) + u16::from(b[k]) + carry;
                 chunk[k] = s as u8;
                 carry = s >> 8;
             }
@@ -164,7 +164,7 @@ fn pbkdf2(prf: DigestAlg, password: &[u8], salt: &[u8], rounds: u32, len: usize)
     out
 }
 
-/// Decrypt `ct` with the password-based scheme `alg` (an AlgorithmIdentifier).
+/// Decrypt `ct` with the password-based scheme `alg` (an `AlgorithmIdentifier`).
 fn pbe_decrypt(alg: &Tlv<'_>, password: &str, ct: &[u8]) -> Result<Vec<u8>, SignError> {
     let parts = alg.children()?;
     let o = parts.first().ok_or_else(|| bad("algorithm"))?.oid()?;
@@ -174,7 +174,7 @@ fn pbe_decrypt(alg: &Tlv<'_>, password: &str, ct: &[u8]) -> Result<Vec<u8>, Sign
             let p = params.children()?;
             let [kdf, scheme] = p.as_slice() else { return Err(bad("PBES2 parameters")) };
             let kdf = kdf.children()?;
-            if kdf.first().map(|o| o.oid()).transpose()?.as_deref() != Some(PBKDF2) {
+            if kdf.first().map(super::der::Tlv::oid).transpose()?.as_deref() != Some(PBKDF2) {
                 return Err(SignError::Unsupported("PBES2 key derivation other than PBKDF2".into()));
             }
             let kp = kdf.get(1).ok_or_else(|| bad("PBKDF2 parameters"))?.children()?;
@@ -197,7 +197,7 @@ fn pbe_decrypt(alg: &Tlv<'_>, password: &str, ct: &[u8]) -> Result<Vec<u8>, Sign
                 },
             };
             let sc = scheme.children()?;
-            let cipher = match sc.first().map(|o| o.oid()).transpose()?.as_deref() {
+            let cipher = match sc.first().map(super::der::Tlv::oid).transpose()?.as_deref() {
                 Some(AES128_CBC) => Cipher::Aes128,
                 Some(AES192_CBC) => Cipher::Aes192,
                 Some(AES256_CBC) => Cipher::Aes256,
@@ -286,7 +286,7 @@ fn bags(safe_contents: &[u8], password: &str, out: &mut Vec<Bag>) -> Result<(), 
 pub fn open(bytes: &[u8], password: &str) -> Result<DigitalId, SignError> {
     let pfx = Tlv::parse_all(bytes).map_err(|_| bad("not a PKCS #12 file"))?.children()?;
     let auth_safe = pfx.get(1).ok_or_else(|| bad("authSafe"))?.children()?;
-    if auth_safe.first().map(|o| o.oid()).transpose()?.as_deref() != Some(DATA) {
+    if auth_safe.first().map(super::der::Tlv::oid).transpose()?.as_deref() != Some(DATA) {
         return Err(SignError::Unsupported("public-key protected PKCS #12 files".into()));
     }
     let content = auth_safe.get(1).ok_or_else(|| bad("authSafe content"))?.inner()?.expect(tag::OCTET_STRING, "authSafe")?.value;
@@ -299,7 +299,7 @@ pub fn open(bytes: &[u8], password: &str) -> Result<DigitalId, SignError> {
         let alg = DigestAlg::from_oid(&alg_oid).ok_or_else(|| SignError::Unsupported(format!("MAC digest {alg_oid}")))?;
         let expected = digest_info.get(1).ok_or_else(|| bad("MAC"))?.value;
         let salt = m.get(1).ok_or_else(|| bad("MAC salt"))?.value;
-        let iterations = m.get(2).map(|i| i.u64()).transpose()?.unwrap_or(1) as u32;
+        let iterations = m.get(2).map(super::der::Tlv::u64).transpose()?.unwrap_or(1) as u32;
         let key_len = alg.digest(&[]).len();
         let key = pkcs12_kdf(alg, &bmp(password), salt, 3, iterations, key_len);
         if hmac(alg, &key, content)? != expected {
@@ -376,7 +376,7 @@ pub fn write(id: &DigitalId, password: &str) -> Result<Vec<u8>, SignError> {
             .encrypt_padded_vec::<Pkcs7>(plain);
         let kdf = der::seq(&[
             &der::oid(PBKDF2),
-            &der::seq(&[&der::octets(&salt), &der::int(ITER as u64), &der::seq(&[&der::oid(HMAC_SHA256), &der::null()])]),
+            &der::seq(&[&der::octets(&salt), &der::int(u64::from(ITER)), &der::seq(&[&der::oid(HMAC_SHA256), &der::null()])]),
         ]);
         let alg = der::seq(&[&der::oid(PBES2), &der::seq(&[&kdf, &der::seq(&[&der::oid(AES256_CBC), &der::octets(&iv)])])]);
         Ok(der::seq(&[&alg, &der::octets(&ct)]))
@@ -408,6 +408,6 @@ pub fn write(id: &DigitalId, password: &str) -> Result<Vec<u8>, SignError> {
     let salt = random(16)?;
     let mac_key = pkcs12_kdf(DigestAlg::Sha256, &bmp(password), &salt, 3, ITER, 32);
     let mac = hmac(DigestAlg::Sha256, &mac_key, &auth_safe)?;
-    let mac_data = der::seq(&[&der::seq(&[&DigestAlg::Sha256.algorithm(), &der::octets(&mac)]), &der::octets(&salt), &der::int(ITER as u64)]);
+    let mac_data = der::seq(&[&der::seq(&[&DigestAlg::Sha256.algorithm(), &der::octets(&mac)]), &der::octets(&salt), &der::int(u64::from(ITER))]);
     Ok(der::seq(&[&der::int(3), &der::seq(&[&der::oid(DATA), &der::explicit(0, &der::octets(&auth_safe))]), &mac_data]))
 }

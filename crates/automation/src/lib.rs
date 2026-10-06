@@ -1,4 +1,4 @@
-//! printcraft-automation — agent control for PrintCraft (architecture §13).
+//! printcraft-automation — agent control for `PrintCraft` (architecture §13).
 //!
 //! - **Layer:** L7. Headless: depends on the engine, never on a UI toolkit.
 //! - [`Automation`] is a tool set over an engine [`Session`]: open, inspect, render, extract and
@@ -77,7 +77,7 @@ const MAX_DPI: f64 = 600.0;
 /// Page texts of one document version: (the working bytes, one slot per page).
 type TextCache = (Arc<Vec<u8>>, Vec<Option<Arc<PageText>>>);
 
-/// A headless PrintCraft session driven by tool calls.
+/// A headless `PrintCraft` session driven by tool calls.
 pub struct Automation {
     session: Session,
     root: Option<PathBuf>,
@@ -94,6 +94,7 @@ impl Default for Automation {
 }
 
 impl Automation {
+    #[must_use]
     pub fn new() -> Self {
         Self { session: Session::new(), root: None, renderers: HashMap::new(), texts: HashMap::new() }
     }
@@ -110,6 +111,7 @@ impl Automation {
         self
     }
 
+    #[must_use]
     pub fn session(&self) -> &Session {
         &self.session
     }
@@ -210,7 +212,7 @@ impl Automation {
                     other => return Err(ToolError::InvalidArgs(format!("unknown style {other:?}"))),
                 };
                 let prefix = a.opt_str("prefix")?.unwrap_or_default().to_string();
-                let first = a.opt_int("start")?.unwrap_or(1).clamp(1, u32::MAX as i64) as u32;
+                let first = a.opt_int("start")?.unwrap_or(1).clamp(1, i64::from(u32::MAX)) as u32;
                 let mut out = self.apply(&a, Edit::NumberPages { from: from as usize - 1, to: to as usize - 1, style, prefix, first })?;
                 out["labels"] = json!(self.doc(&a)?.info.pages.iter().map(|p| p.label.clone()).collect::<Vec<_>>());
                 out
@@ -281,7 +283,7 @@ impl Automation {
                 let page = self.page(&a)?;
                 let doc = self.doc(&a)?;
                 let info = &doc.info.pages[page];
-                let r = |x: f32| (x as f64 * 100.0).round() / 100.0;
+                let r = |x: f32| (f64::from(x) * 100.0).round() / 100.0;
                 let lines: Vec<Value> = doc
                     .text_lines(page)
                     .iter()
@@ -303,7 +305,7 @@ impl Automation {
                 let page = self.page(&a)?;
                 let doc = self.doc(&a)?;
                 let info = &doc.info.pages[page];
-                let r = |x: f32| (x as f64 * 100.0).round() / 100.0;
+                let r = |x: f32| (f64::from(x) * 100.0).round() / 100.0;
                 let list: Vec<Value> = doc
                     .page_images(page)
                     .iter()
@@ -341,7 +343,7 @@ impl Automation {
                             // Top-left-origin points → user space.
                             let info = &self.doc(&a)?.info.pages[page];
                             let (u0, u1) = (info.view_to_user(r[0] as f32, r[1] as f32), info.view_to_user(r[2] as f32, r[3] as f32));
-                            ImageEdit::Move([u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64])
+                            ImageEdit::Move([f64::from(u0[0].min(u1[0])), f64::from(u0[1].min(u1[1])), f64::from(u0[0].max(u1[0])), f64::from(u0[1].max(u1[1]))])
                         }
                         "rotate" => ImageEdit::Rotate(a.opt_int("quarters")?.unwrap_or(1) as i32),
                         "flip_horizontal" => ImageEdit::Flip { horizontal: true },
@@ -364,7 +366,7 @@ impl Automation {
                 let page = self.page(&a)?;
                 let doc = self.doc(&a)?;
                 let info = &doc.info.pages[page];
-                let r = |x: f32| (x as f64 * 100.0).round() / 100.0;
+                let r = |x: f32| (f64::from(x) * 100.0).round() / 100.0;
                 let blocks: Vec<Value> = doc
                     .text_blocks(page)
                     .iter()
@@ -691,7 +693,7 @@ impl Automation {
                 o => return Err(bad(format!("binding is left or right, not {o:?}"))),
             };
         }
-        let mut out = if v != before { self.apply(a, Edit::SetInitialView(Box::new(v.clone())))? } else { json!({}) };
+        let mut out = if v == before { json!({}) } else { self.apply(a, Edit::SetInitialView(Box::new(v.clone())))? };
         out["initial_view"] = json!({
             "navigation": format!("{:?}", v.navigation),
             "layout": format!("{:?}", v.layout),
@@ -836,7 +838,7 @@ impl Automation {
                     hf.margins = <[f64; 4]>::try_from(m).map_err(|_| ToolError::InvalidArgs("margins must be 4 numbers".into()))?;
                 }
                 if let Some(s) = a.opt_int("start_number")? {
-                    hf.start_number = s.clamp(1, u32::MAX as i64) as u32;
+                    hf.start_number = s.clamp(1, i64::from(u32::MAX)) as u32;
                 }
                 Edit::AddHeaderFooter { pages, settings: hf, replace }
             }
@@ -965,7 +967,7 @@ impl Automation {
             }
             other => return Err(ToolError::InvalidArgs(format!("unknown source {other:?}"))),
         };
-        let name = a.opt_str("name")?.map(str::to_owned).unwrap_or(name);
+        let name = a.opt_str("name")?.map_or(name, str::to_owned);
         let id = self.session.open_new(name, bytes).map_err(failed)?;
         Ok(summary(self.session.get(id).ok_or_else(|| failed("the document vanished"))?))
     }
@@ -1000,7 +1002,7 @@ impl Automation {
                 }
                 let p = &doc.info.pages[pages[0]];
                 let (u0, u1) = (p.view_to_user(r[0] as f32, r[1] as f32), p.view_to_user(r[2] as f32, r[3] as f32));
-                BoxSpec::Rect([u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64])
+                BoxSpec::Rect([f64::from(u0[0].min(u1[0])), f64::from(u0[1].min(u1[1])), f64::from(u0[0].max(u1[0])), f64::from(u0[1].max(u1[1]))])
             }
             (None, None) => BoxSpec::Remove,
         };
@@ -1052,7 +1054,7 @@ impl Automation {
         let at = self.position(a, "at")?;
         // Default to the size of the neighbouring page, as Acrobat does; Letter for empty files.
         let near = doc.info.pages.get(at.saturating_sub(1)).or(doc.info.pages.first());
-        let (w, h) = near.map(|p| (f64::from(p.width), f64::from(p.height))).unwrap_or((612.0, 792.0));
+        let (w, h) = near.map_or((612.0, 792.0), |p| (f64::from(p.width), f64::from(p.height)));
         let width = a.opt_num("width")?.unwrap_or(w);
         let height = a.opt_num("height")?.unwrap_or(h);
         if !(1.0..=14400.0).contains(&width) || !(1.0..=14400.0).contains(&height) {
@@ -1089,7 +1091,7 @@ impl Automation {
     fn page_extract(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, name) = (doc.id, format!("{} (extract)", doc.name));
-        let stem = Path::new(&doc.name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "page".into());
+        let stem = Path::new(&doc.name).file_stem().map_or_else(|| "page".into(), |s| s.to_string_lossy().into_owned());
         let pages = self.pages(a, "pages")?;
         let mut out = if a.opt_bool("separate")?.unwrap_or(false) {
             // Each page as its own file.
@@ -1138,7 +1140,7 @@ impl Automation {
     fn doc_split(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let id = doc.id;
-        let stem = Path::new(&doc.name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "part".into());
+        let stem = Path::new(&doc.name).file_stem().map_or_else(|| "part".into(), |s| s.to_string_lossy().into_owned());
         let bookmarks = a.opt_bool("bookmarks")?.unwrap_or(false);
         let max_mb = a.opt_num("max_mb")?;
         let chosen = [a.get("every").is_some(), a.get("before").is_some(), bookmarks, max_mb.is_some()].iter().filter(|x| **x).count();
@@ -1549,7 +1551,7 @@ fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[u
         }
     };
     let config = RenderConfig { password, ..Default::default() };
-    let workers = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(8) };
+    let workers = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, std::num::NonZero::get).min(8) };
     // Small jobs aren't worth a second parse of the document.
     if workers == 1 || pages.len() < 8 {
         let mut r = PageRenderer::new(bytes.clone(), config);

@@ -37,6 +37,7 @@ pub fn extract_images(src: &ExportSource, pages: &[usize], min_side: u32) -> Res
 }
 
 /// The file name for the `index`-th (1-based) exported image: `<stem>_Page_<n>_Image_<index>.<ext>`.
+#[must_use]
 pub fn image_file_name(stem: &str, image: &printcraft_create::ExtractedImage, index: usize) -> String {
     format!("{stem}_Page_{}_Image_{index:04}.{}", image.page + 1, image.extension)
 }
@@ -46,6 +47,7 @@ impl Exporter {
         Self::from_source(doc.export_source())
     }
 
+    #[must_use]
     pub fn from_source(src: ExportSource) -> Self {
         Self { renderer: PageRenderer::new(src.bytes, src.config), pages: src.pages }
     }
@@ -135,6 +137,7 @@ pub enum ImageFormat {
 }
 
 impl ImageFormat {
+    #[must_use]
     pub fn extension(self) -> &'static str {
         match self {
             ImageFormat::Png => "png",
@@ -143,6 +146,7 @@ impl ImageFormat {
         }
     }
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             ImageFormat::Png => "PNG",

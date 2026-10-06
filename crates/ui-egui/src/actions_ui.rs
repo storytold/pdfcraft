@@ -1,4 +1,4 @@
-//! Action Wizard: the actions (PrintCraft's and your own), running one over files in the
+//! Action Wizard: the actions (`PrintCraft`'s and your own), running one over files in the
 //! background, and creating or editing an action's steps. Your actions are remembered.
 
 use std::sync::{Arc, Mutex};
@@ -30,6 +30,7 @@ pub struct RunProgress {
 
 impl PrintCraftApp {
     /// Built-in actions, then the user's.
+    #[must_use]
     pub fn all_actions(&self) -> Vec<Action> {
         let mut v = builtin();
         v.extend(self.custom_actions.iter().cloned());

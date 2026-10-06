@@ -892,7 +892,7 @@ fn dragging_a_paragraph_moves_it_and_its_edge_rewraps_it() {
     let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
     // Move "Page 1" 30 pt right and 50 pt up.
     let before = block(&h);
-    let mid = screen((before.rect[0] + before.rect[2]) / 2.0, (before.rect[1] + before.rect[3]) / 2.0);
+    let mid = screen(f64::midpoint(before.rect[0], before.rect[2]), f64::midpoint(before.rect[1], before.rect[3]));
     drag(&mut h, mid, mid + egui::vec2(30.0 * k, -50.0 * k));
     assert!(h.state().views[0].line_editor.is_none(), "dragging moves the box; it doesn't open it for typing");
     let moved = block(&h);
@@ -901,7 +901,7 @@ fn dragging_a_paragraph_moves_it_and_its_edge_rewraps_it() {
     assert!(near(moved.rect[0], before.rect[0] + 30.0) && near(moved.rect[1], before.rect[1] + 50.0), "{:?} → {:?}", before.rect, moved.rect);
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Edit text"));
     // Drag the handle on its right edge in to about 45 pt wide: "Page" and "1" rewrap onto two lines.
-    let edge = screen(moved.rect[2], (moved.rect[1] + moved.rect[3]) / 2.0) + egui::vec2(2.0, 0.0);
+    let edge = screen(moved.rect[2], f64::midpoint(moved.rect[1], moved.rect[3])) + egui::vec2(2.0, 0.0);
     let narrower = (moved.rect[2] - moved.rect[0] - 45.0) as f32 * k;
     drag(&mut h, edge, edge - egui::vec2(narrower, 0.0));
     let s = h.state();

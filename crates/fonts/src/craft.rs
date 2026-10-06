@@ -1,6 +1,6 @@
 //! Fonts from the optional craft-fonts build input (<https://github.com/storytold/craft-fonts>).
 //!
-//! `build.rs` embeds every font in craft-fonts' manifest when PrintCraft is built with
+//! `build.rs` embeds every font in craft-fonts' manifest when `PrintCraft` is built with
 //! `CRAFT_FONTS_DIR=<checkout>`; otherwise [`CRAFT_FONTS`] is empty and everything here returns
 //! nothing. Callers must work either way.
 
@@ -17,18 +17,21 @@ include!(concat!(env!("OUT_DIR"), "/craft_fonts.rs"));
 
 impl CraftFont {
     /// Whether the font is meant for `script` (ISO 15924, e.g. `"Jpan"`).
+    #[must_use]
     pub fn covers(&self, script: &str) -> bool {
         self.scripts.contains(&script)
     }
 
-    /// A unique name for registering the face with a font system ("BIZ UDPGothic Bold").
+    /// A unique name for registering the face with a font system ("BIZ `UDPGothic` Bold").
+    #[must_use]
     pub fn name(&self) -> String {
         format!("{} {}", self.family, self.style)
     }
 }
 
-/// The `Jpan` craft-fonts faces in the order the interface prefers them: BIZ UDPGothic (a UI
+/// The `Jpan` craft-fonts faces in the order the interface prefers them: BIZ `UDPGothic` (a UI
 /// face) first, then the rest in manifest order. Empty without craft-fonts.
+#[must_use]
 pub fn ui_japanese_fonts() -> Vec<&'static CraftFont> {
     let mut fonts: Vec<&CraftFont> = CRAFT_FONTS.iter().filter(|f| f.covers("Jpan")).collect();
     // Stable: manifest order within each group.
@@ -37,7 +40,8 @@ pub fn ui_japanese_fonts() -> Vec<&'static CraftFont> {
 }
 
 /// The face for Japanese text written into PDFs (serif document text): Shippori Mincho, then
-/// BIZ UDMincho, then any other regular `Jpan` face. `None` without craft-fonts.
+/// BIZ `UDMincho`, then any other regular `Jpan` face. `None` without craft-fonts.
+#[must_use]
 pub fn document_japanese_font() -> Option<&'static CraftFont> {
     let jpan = || CRAFT_FONTS.iter().filter(|f| f.covers("Jpan"));
     ["Shippori Mincho", "BIZ UDMincho"]
@@ -75,7 +79,7 @@ const fn find(family: &str, style: &str) -> Option<&'static [u8]> {
 }
 
 /// Shippori Mincho Regular from craft-fonts, the preferred face for Japanese document text.
-/// `None` when PrintCraft was built without craft-fonts.
+/// `None` when `PrintCraft` was built without craft-fonts.
 pub static SHIPPORI_MINCHO: Option<&[u8]> = find("Shippori Mincho", "Regular");
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-//! printcraft-geom — L0 geometry primitives shared by every PrintCraft crate.
+//! printcraft-geom — L0 geometry primitives shared by every `PrintCraft` crate.
 //!
 //! PDF user space is y-up with the origin at the bottom-left of the page; view space is y-down.
 //! `PageRect` is always in PDF user space (points, 1/72 inch).
@@ -15,12 +15,15 @@ pub struct PageRect {
 }
 
 impl PageRect {
+    #[must_use]
     pub fn new(x0: f32, y0: f32, x1: f32, y1: f32) -> Self {
         Self { x0: x0.min(x1), y0: y0.min(y1), x1: x0.max(x1), y1: y0.max(y1) }
     }
+    #[must_use]
     pub fn width(&self) -> f32 {
         self.x1 - self.x0
     }
+    #[must_use]
     pub fn height(&self) -> f32 {
         self.y1 - self.y0
     }
@@ -37,6 +40,7 @@ pub enum Rotation {
 }
 
 impl Rotation {
+    #[must_use]
     pub fn from_degrees(deg: i64) -> Self {
         match deg.rem_euclid(360) {
             90 => Self::R90,
@@ -45,6 +49,7 @@ impl Rotation {
             _ => Self::R0,
         }
     }
+    #[must_use]
     pub fn swaps_axes(self) -> bool {
         matches!(self, Self::R90 | Self::R270)
     }

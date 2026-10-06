@@ -19,6 +19,7 @@ pub enum Trigger {
 impl Trigger {
     pub const ALL: [Trigger; 6] = [Trigger::MouseUp, Trigger::MouseDown, Trigger::MouseEnter, Trigger::MouseExit, Trigger::OnFocus, Trigger::OnBlur];
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Trigger::MouseUp => "Mouse Up",
@@ -31,6 +32,7 @@ impl Trigger {
     }
 
     /// Snake-case id (agents).
+    #[must_use]
     pub fn id(self) -> &'static str {
         match self {
             Trigger::MouseUp => "mouse_up",
@@ -42,6 +44,7 @@ impl Trigger {
         }
     }
 
+    #[must_use]
     pub fn from_id(id: &str) -> Option<Trigger> {
         Trigger::ALL.into_iter().find(|t| t.id() == id)
     }
@@ -68,7 +71,7 @@ pub enum FieldAction {
     Uri(String),
     /// Reset a form: the listed fields, or every field when empty.
     Reset(Vec<String>),
-    /// Execute a menu item (a named action: Print, NextPage, PrevPage, FirstPage, LastPage).
+    /// Execute a menu item (a named action: Print, `NextPage`, `PrevPage`, `FirstPage`, `LastPage`).
     Named(String),
     /// Go to a page view (0-based page).
     GoTo(usize),
@@ -82,6 +85,7 @@ pub enum FieldAction {
 
 impl FieldAction {
     /// How the Actions tab lists it.
+    #[must_use]
     pub fn describe(&self) -> String {
         match self {
             FieldAction::JavaScript(_) => "Run a JavaScript".into(),
@@ -99,7 +103,7 @@ impl FieldAction {
 
 fn texts(doc: &Document, o: &Object) -> Vec<String> {
     match &*doc.resolve(o) {
-        Object::Array(a) => a.iter().filter_map(|x| doc.resolve(x).as_string().map(|s| s.to_text())).collect(),
+        Object::Array(a) => a.iter().filter_map(|x| doc.resolve(x).as_string().map(printcraft_cos::PdfString::to_text)).collect(),
         Object::String(s) => vec![s.to_text()],
         _ => Vec::new(),
     }
@@ -110,7 +114,7 @@ fn read(doc: &Document, o: &Object, pages: &[printcraft_cos::ObjRef]) -> Option<
     let d = a.as_dict()?;
     Some(match d.name(b"S")? {
         b"JavaScript" => FieldAction::JavaScript(crate::script(doc, o).unwrap_or_default()),
-        b"URI" => FieldAction::Uri(d.get(b"URI").and_then(|u| doc.resolve(u).as_string().map(|s| s.to_text())).unwrap_or_default()),
+        b"URI" => FieldAction::Uri(d.get(b"URI").and_then(|u| doc.resolve(u).as_string().map(printcraft_cos::PdfString::to_text)).unwrap_or_default()),
         b"ResetForm" => FieldAction::Reset(d.get(b"Fields").map(|f| texts(doc, f)).unwrap_or_default()),
         b"Named" => FieldAction::Named(d.name(b"N").map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_default()),
         b"GoTo" => {
@@ -127,8 +131,8 @@ fn read(doc: &Document, o: &Object, pages: &[printcraft_cos::ObjRef]) -> Option<
                 .map(|f| doc.resolve(f))
                 .and_then(|f| {
                     f.as_string()
-                        .map(|s| s.to_text())
-                        .or_else(|| f.as_dict().and_then(|fd| fd.get(b"F")).and_then(|x| doc.resolve(x).as_string().map(|s| s.to_text())))
+                        .map(printcraft_cos::PdfString::to_text)
+                        .or_else(|| f.as_dict().and_then(|fd| fd.get(b"F")).and_then(|x| doc.resolve(x).as_string().map(printcraft_cos::PdfString::to_text)))
                 })
                 .unwrap_or_default(),
         ),

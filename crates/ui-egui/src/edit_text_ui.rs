@@ -195,7 +195,7 @@ fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
     let p = &info.pages[page];
     let (a, b) = (xf.screen_to_view(r.min), xf.screen_to_view(r.max));
     let (u, v) = (p.view_to_user(a.0, a.1), p.view_to_user(b.0, b.1));
-    [u[0].min(v[0]) as f64, u[1].min(v[1]) as f64, u[0].max(v[0]) as f64, u[1].max(v[1]) as f64]
+    [f64::from(u[0].min(v[0])), f64::from(u[1].min(v[1])), f64::from(u[0].max(v[0])), f64::from(u[1].max(v[1]))]
 }
 
 /// Images on a page: select, move, resize, right-click. Returns `true` when the pointer was used.

@@ -1,6 +1,6 @@
 //! Embeds the fonts of the optional craft-fonts build input (`CRAFT_FONTS_DIR`) as `CRAFT_FONTS`.
 //! The recipe is craft-fonts' `docs/integration.md`; unset, `CRAFT_FONTS` is empty. It only reads
-//! the local checkout (no network). On wasm32 it embeds only the UI face (BIZ UDPGothic Regular),
+//! the local checkout (no network). On wasm32 it embeds only the UI face (BIZ `UDPGothic` Regular),
 //! to keep the web build within hosting limits (Cloudflare Pages: 25 MiB per file).
 
 use std::fmt::Write as _;

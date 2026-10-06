@@ -188,7 +188,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
                 ui.add(egui::TextEdit::singleline(&mut e.subject).desired_width(280.0)).labelled_by(l.id);
                 ui.end_row();
                 ui.label("Modified");
-                ui.label(e.modified.as_deref().map(printcraft_render::pretty_date).unwrap_or_else(|| "—".into()));
+                ui.label(e.modified.as_deref().map_or_else(|| "—".into(), printcraft_render::pretty_date));
                 ui.end_row();
             });
         }

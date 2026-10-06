@@ -50,7 +50,7 @@ impl PrintCraftApp {
                     }
                 ),
                 commands::Needs::Security | commands::Needs::ProtectedSecurity if self.active.is_some() => {
-                    if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.allows_security_change()) {
+                    if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(printcraft_engine::Document::allows_security_change) {
                         "This document isn't password-protected".to_string()
                     } else {
                         "Only the document's owner can change its security (open it with the permissions password)".to_string()
@@ -194,7 +194,7 @@ impl PrintCraftApp {
                 if let (Some(i), Some(&last)) = (active, targets.last())
                     && let Some(p) = self.session.get(self.views[i].id).and_then(|d| d.info.pages.get(last))
                 {
-                    let (w, h) = ((p.crop[2] - p.crop[0]).abs().max(1.0) as f64, (p.crop[3] - p.crop[1]).abs().max(1.0) as f64);
+                    let (w, h) = (f64::from((p.crop[2] - p.crop[0]).abs().max(1.0)), f64::from((p.crop[3] - p.crop[1]).abs().max(1.0)));
                     self.apply_edit(Edit::InsertBlankPage { at: last + 1, width: w, height: h });
                 }
             }
@@ -308,7 +308,7 @@ impl PrintCraftApp {
             }
             "redact.properties" => self.dialog = Some(Dialog::RedactProps),
             "redact.apply" => {
-                let marks = active.and_then(|i| self.session.get(self.views[i].id)).map_or(0, |d| d.redaction_marks());
+                let marks = active.and_then(|i| self.session.get(self.views[i].id)).map_or(0, printcraft_engine::Document::redaction_marks);
                 if marks == 0 {
                     self.notify("There are no redaction marks to apply");
                 } else {
@@ -371,7 +371,7 @@ impl PrintCraftApp {
             "comment.hide_all" => {
                 if let Some(i) = active {
                     let id = self.views[i].id;
-                    let hide = !self.session.get(id).is_some_and(|d| d.comments_hidden());
+                    let hide = !self.session.get(id).is_some_and(printcraft_engine::Document::comments_hidden);
                     if self.session.set_hide_comments(id, hide) {
                         self.views[i].invalidate_content();
                     }
@@ -453,7 +453,7 @@ impl PrintCraftApp {
                 if let Some(i) = active {
                     let n = self.session.get(self.views[i].id).map_or(1, |d| d.info.pages.len());
                     self.rotate_draft.to = n;
-                    self.rotate_draft.which = if self.views[i].selected.is_empty() { 0 } else { 1 };
+                    self.rotate_draft.which = u8::from(!self.views[i].selected.is_empty());
                 }
                 self.dialog = Some(Dialog::RotatePages);
             }
@@ -471,7 +471,7 @@ impl PrintCraftApp {
         use egui::{Key, KeyboardShortcut, Modifiers};
         let typing = ctx.egui_wants_keyboard_input();
         let mut specs: Vec<&CommandSpec> = COMMANDS.iter().filter(|c| c.shortcut.is_some()).collect();
-        specs.sort_by_key(|c| std::cmp::Reverse(c.shortcut.map(|s| s.modifier_count()).unwrap_or(0)));
+        specs.sort_by_key(|c| std::cmp::Reverse(c.shortcut.map_or(0, |s| s.modifier_count())));
         for spec in specs {
             let Some(s) = spec.shortcut else { continue };
             if typing && !spec.in_text {

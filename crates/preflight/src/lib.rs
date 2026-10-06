@@ -9,14 +9,14 @@
 //! - an output intent (`GTS_PDFA1`) with an ICC profile when device colour is used;
 //! - every font embedded;
 //! - annotations: allowed types, printable, not hidden, with appearance streams;
-//! - actions: none of the forbidden kinds (JavaScript, Launch, Sound, Movie, ResetForm,
-//!   ImportData, Hide, SetOCGState, Rendition, Trans, GoTo3DView); no additional actions on the
+//! - actions: none of the forbidden kinds (JavaScript, Launch, Sound, Movie, `ResetForm`,
+//!   `ImportData`, Hide, `SetOCGState`, Rendition, Trans, `GoTo3DView`); no additional actions on the
 //!   catalog, pages, fields or widgets; `NeedAppearances` not true;
-//! - images: no `Interpolate`, no `Alternates`, no OPI; no PostScript XObjects;
+//! - images: no `Interpolate`, no `Alternates`, no OPI; no PostScript `XObjects`;
 //! - embedded files: PDF/A-2 only allows embedded PDF/A files; PDF/A-3 needs `AFRelationship`.
 //!
 //! [`convert`] fixes what can be fixed without changing how pages look (XMP, the sRGB output
-//! intent, forbidden actions, annotation flags, Interpolate, NeedAppearances, encryption) and
+//! intent, forbidden actions, annotation flags, Interpolate, `NeedAppearances`, encryption) and
 //! returns what remains. Fonts that aren't embedded can't be fixed here.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -34,6 +34,7 @@ pub enum Level {
 }
 
 impl Level {
+    #[must_use]
     pub fn part(self) -> u8 {
         match self {
             Level::A2b => 2,
@@ -41,6 +42,7 @@ impl Level {
         }
     }
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Level::A2b => "PDF/A-2b",
@@ -48,6 +50,7 @@ impl Level {
         }
     }
 
+    #[must_use]
     pub fn from_id(id: &str) -> Option<Level> {
         match id.to_ascii_lowercase().replace(['/', '-', ' '], "").as_str() {
             "pdfa2b" | "a2b" | "2b" => Some(Level::A2b),
@@ -98,6 +101,7 @@ fn metadata(doc: &Document) -> Option<String> {
 }
 
 /// What the document declares about its standards.
+#[must_use]
 pub fn declared(doc: &Document) -> Declared {
     let mut d = Declared::default();
     if let Some(x) = metadata(doc) {
@@ -110,7 +114,7 @@ pub fn declared(doc: &Document) -> Declared {
     if let Some(list) = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()) {
         for oi in list {
             if let Some(od) = doc.resolve(&oi).as_dict() {
-                let id = od.get(b"OutputConditionIdentifier").and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())).unwrap_or_default();
+                let id = od.get(b"OutputConditionIdentifier").and_then(|v| doc.resolve(v).as_string().map(printcraft_cos::PdfString::to_text)).unwrap_or_default();
                 d.output_intents.push(id);
             }
         }
@@ -267,7 +271,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
                 issue("6.3.2", format!("A {name} annotation isn't set to print, or is hidden"), page, true);
             }
             let has_ap = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).is_some_and(|a| a.get(b"N").is_some());
-            if !has_ap && !matches!(sub, Some(b"Popup") | Some(b"Link")) {
+            if !has_ap && !matches!(sub, Some(b"Popup" | b"Link")) {
                 let zero = d.get(b"Rect").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned()).is_some_and(|a| {
                     let v: Vec<f64> = a.iter().filter_map(|n| doc.resolve(n).as_f64()).collect();
                     v.len() == 4 && (v[2] - v[0]).abs() < 1e-6 && (v[3] - v[1]).abs() < 1e-6
@@ -339,7 +343,7 @@ fn check_font(doc: &Document, d: &Dict, issue: &mut impl FnMut(&'static str, Str
     if sub == Some(b"Type3") {
         return;
     }
-    let name = d.name(b"BaseFont").map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_else(|| "a font".into());
+    let name = d.name(b"BaseFont").map_or_else(|| "a font".into(), |n| String::from_utf8_lossy(n).into_owned());
     let descriptor = if sub == Some(b"Type0") {
         d.get(b"DescendantFonts")
             .map(|x| doc.resolve(x))
@@ -360,7 +364,7 @@ fn check_font(doc: &Document, d: &Dict, issue: &mut impl FnMut(&'static str, Str
 
 fn info(doc: &Document, key: &str) -> Option<String> {
     let i = doc.trailer().get(b"Info").map(|i| doc.resolve(i))?;
-    i.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text()))
+    i.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(printcraft_cos::PdfString::to_text))
 }
 
 /// What [`convert`] did.
@@ -465,7 +469,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, printcraft_co
     for p in printcraft_model::pages(doc) {
         let mut changed = false;
         doc.update_dict(p.obj, |d| changed = d.remove(b"AA").is_some())?;
-        actions += changed as usize;
+        actions += usize::from(changed);
     }
     for (r, o) in objects(doc) {
         let Some(d) = dict_of(&o).cloned() else { continue };
@@ -487,7 +491,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, printcraft_co
         if matches!(&*o, Object::Dict(_)) && (is_annot || d.get(b"FT").is_some()) {
             let mut nd = d.clone();
             let mut changed = strip_actions(doc, &mut nd);
-            actions += changed as usize;
+            actions += usize::from(changed);
             if is_annot && sub.as_deref() != Some(b"Popup") {
                 let f = nd.int(b"F").unwrap_or(0);
                 let want = (f | 4) & !(1 | 2 | 32);

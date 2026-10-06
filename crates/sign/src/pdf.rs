@@ -5,11 +5,11 @@
 //! string, which a security handler would have transformed), recomputes the digest, checks the
 //! signature and the signer's chain against the trust store, and diffs later revisions against
 //! the signed one to classify changes made after signing (form fill, comments, further
-//! signatures, or anything else) under the DocMDP permissions.
+//! signatures, or anything else) under the `DocMDP` permissions.
 //!
 //! **Signing** adds or fills a signature field, writes the document incrementally with a
 //! zero-filled `/Contents` and a fixed-width `/ByteRange`, then patches both in place: the
-//! PAdES B-B recipe (`ETSI.CAdES.detached`).
+//! `PAdES` B-B recipe (`ETSI.CAdES.detached`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -142,7 +142,7 @@ pub struct SignatureInfo {
     pub location: Option<String>,
     pub contact: Option<String>,
     pub sub_filter: Option<String>,
-    /// DocMDP permissions when this is a certification signature (1–3).
+    /// `DocMDP` permissions when this is a certification signature (1–3).
     pub certify: Option<u8>,
     /// 1-based revision the signature covers.
     pub revision: usize,
@@ -159,6 +159,7 @@ pub struct SignatureInfo {
 
 impl SignatureInfo {
     /// The one-line summary under the signature in the Signatures panel.
+    #[must_use]
     pub fn summary(&self) -> &'static str {
         if !self.signed {
             return "Unsigned signature field";
@@ -250,6 +251,7 @@ fn nums(doc: &Document, d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
 }
 
 /// List and validate every signature field. `bytes` is the file as stored (the ranges index it).
+#[must_use]
 pub fn list(doc: &Document, bytes: &[u8], trust: &TrustStore) -> Vec<SignatureInfo> {
     list_cached(doc, bytes, trust, &DigestCache::default())
 }
@@ -305,6 +307,7 @@ fn page_index(doc: &Document, p: ObjRef) -> Option<usize> {
 }
 
 /// Validate one signature dictionary.
+#[must_use]
 pub fn validate(doc: &Document, bytes: &[u8], trust: &TrustStore, field: &str) -> Option<SignatureInfo> {
     list(doc, bytes, trust).into_iter().find(|s| s.field == field)
 }
@@ -425,18 +428,18 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
         }
         problems = true;
     }
-    if !trusted {
+    if trusted {
+        info.details.push("The signer's identity is valid.".into());
+        if !problems {
+            info.status = Status::Valid;
+        }
+    } else {
         info.details.push(
             "The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates."
                 .into(),
         );
         if !problems {
             info.status = Status::Unknown;
-        }
-    } else {
-        info.details.push("The signer's identity is valid.".into());
-        if !problems {
-            info.status = Status::Valid;
         }
     }
     if info.timestamp {
@@ -446,7 +449,7 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
     }
 }
 
-/// What later revisions changed, classified as Acrobat reports it, under DocMDP `p` (or none:
+/// What later revisions changed, classified as Acrobat reports it, under `DocMDP` `p` (or none:
 /// an approval signature permits form fill, comments and further signatures).
 fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Modification {
     let Some(old) = old else {
@@ -553,14 +556,14 @@ fn acroform(doc: &Document) -> Option<Dict> {
     doc.resolve(&c).as_dict().cloned()
 }
 
-/// An AcroForm change that only adds signature fields (and sets `/SigFlags`) is signing.
-/// Without `before`, the signed revision's AcroForm (wherever it was) is the reference.
+/// An `AcroForm` change that only adds signature fields (and sets `/SigFlags`) is signing.
+/// Without `before`, the signed revision's `AcroForm` (wherever it was) is the reference.
 fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dict>) -> &'static str {
     let fallback = acroform(old).unwrap_or_default();
     let before = before.unwrap_or(&fallback);
     let strip = |d: &Dict| -> Vec<(Vec<u8>, Object)> {
         let mut v: Vec<(Vec<u8>, Object)> =
-            d.iter().filter(|(k, _)| !matches!(k.as_slice(), b"Fields" | b"SigFlags")).map(|(k, o)| (k.to_vec(), o.clone())).collect();
+            d.iter().filter(|(k, _)| !matches!(k.as_slice(), b"Fields" | b"SigFlags")).map(|(k, o)| (k.clone(), o.clone())).collect();
         v.sort_by(|a, b| a.0.cmp(&b.0));
         v
     };
@@ -575,7 +578,7 @@ fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dic
 fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) -> &'static str {
     let ty = d.name(b"Type");
     let without = |x: &Dict, keys: &[&[u8]]| -> Vec<(Vec<u8>, Object)> {
-        let mut v: Vec<(Vec<u8>, Object)> = x.iter().filter(|(k, _)| !keys.contains(&k.as_slice())).map(|(k, o)| (k.to_vec(), o.clone())).collect();
+        let mut v: Vec<(Vec<u8>, Object)> = x.iter().filter(|(k, _)| !keys.contains(&k.as_slice())).map(|(k, o)| (k.clone(), o.clone())).collect();
         v.sort_by(|a, b| a.0.cmp(&b.0));
         v
     };
@@ -673,7 +676,7 @@ pub struct SignOptions {
     pub contact: Option<String>,
     /// The signing time as a PDF date (`/M`), from the caller's clock.
     pub date: String,
-    /// Certify with these DocMDP permissions (1 no changes, 2 form fill and signing, 3 also comments).
+    /// Certify with these `DocMDP` permissions (1 no changes, 2 form fill and signing, 3 also comments).
     pub certify: Option<u8>,
     pub appearance: Appearance,
 }
@@ -713,7 +716,7 @@ pub fn sign(doc: &Document, id: &DigitalId, opts: &SignOptions) -> Result<Vec<u8
     if let Some(p) = opts.certify {
         let mut tp = Dict::new();
         tp.set(b"Type".to_vec(), Object::name("TransformParams"));
-        tp.set(b"P".to_vec(), Object::Int(p.clamp(1, 3) as i64));
+        tp.set(b"P".to_vec(), Object::Int(i64::from(p.clamp(1, 3))));
         tp.set(b"V".to_vec(), Object::name("1.2"));
         let mut sr = Dict::new();
         sr.set(b"Type".to_vec(), Object::name("SigRef"));
@@ -734,73 +737,70 @@ pub fn sign(doc: &Document, id: &DigitalId, opts: &SignOptions) -> Result<Vec<u8
         .field
         .as_deref()
         .map(|n| sig_fields(&doc).into_iter().find(|f| f.name == n).ok_or_else(|| SignError::Pdf(format!("there is no signature field {n:?}"))));
-    let (widget, rect) = match existing {
-        Some(f) => {
-            let f = f?;
-            if f.dict.contains(b"V") {
-                return Err(SignError::Pdf(format!("the field {:?} is already signed", f.name)));
-            }
-            let fr = f.r.ok_or_else(|| SignError::Pdf("the field is not an indirect object".into()))?;
-            doc.update_dict(fr, |d| d.set(b"V".to_vec(), Object::Ref(sig)))?;
-            let (wr, wd) = f.widgets.first().cloned().ok_or_else(|| SignError::Pdf("the field has no widget".into()))?;
-            let rect = nums(&doc, &wd, b"Rect").filter(|r| r.len() == 4).map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]);
-            (wr.unwrap_or(fr), rect.unwrap_or([0.0; 4]))
+    let (widget, rect) = if let Some(f) = existing {
+        let f = f?;
+        if f.dict.contains(b"V") {
+            return Err(SignError::Pdf(format!("the field {:?} is already signed", f.name)));
         }
-        None => {
-            let page = *pages.get(opts.page).ok_or_else(|| SignError::Pdf(format!("page {} does not exist", opts.page + 1)))?;
-            let taken: HashSet<String> = sig_fields(&doc).into_iter().map(|f| f.name).collect();
-            let fname = opts
-                .new_field_name
-                .clone()
-                .unwrap_or_else(|| (1..).map(|i| format!("Signature{i}")).find(|n| !taken.contains(n)).unwrap_or_default());
-            let rect = opts.rect.unwrap_or([0.0; 4]);
-            let mut w = Dict::new();
-            w.set(b"Type".to_vec(), Object::name("Annot"));
-            w.set(b"Subtype".to_vec(), Object::name("Widget"));
-            w.set(b"FT".to_vec(), Object::name("Sig"));
-            w.set(b"T".to_vec(), PdfString::text(&fname));
-            w.set(b"V".to_vec(), Object::Ref(sig));
-            w.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|x| Object::Real(*x)).collect()));
-            w.set(b"P".to_vec(), Object::Ref(page));
-            // Print + Locked.
-            w.set(b"F".to_vec(), Object::Int(4 | 128));
-            let wr = doc.add(Object::Dict(w));
-            // Page /Annots (indirect arrays are updated in place).
-            let pd = doc.get(page).as_dict().cloned().unwrap_or_default();
-            match pd.get(b"Annots") {
-                Some(Object::Ref(ar)) => {
-                    let mut a = doc.get(*ar).as_array().cloned().unwrap_or_default();
-                    a.push(Object::Ref(wr));
-                    doc.set(*ar, Object::Array(a));
-                }
-                other => {
-                    let mut a = other.and_then(|o| o.as_array().cloned()).unwrap_or_default();
-                    a.push(Object::Ref(wr));
-                    doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(a)))?;
-                }
+        let fr = f.r.ok_or_else(|| SignError::Pdf("the field is not an indirect object".into()))?;
+        doc.update_dict(fr, |d| d.set(b"V".to_vec(), Object::Ref(sig)))?;
+        let (wr, wd) = f.widgets.first().cloned().ok_or_else(|| SignError::Pdf("the field has no widget".into()))?;
+        let rect = nums(&doc, &wd, b"Rect").filter(|r| r.len() == 4).map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]);
+        (wr.unwrap_or(fr), rect.unwrap_or([0.0; 4]))
+    } else {
+        let page = *pages.get(opts.page).ok_or_else(|| SignError::Pdf(format!("page {} does not exist", opts.page + 1)))?;
+        let taken: HashSet<String> = sig_fields(&doc).into_iter().map(|f| f.name).collect();
+        let fname = opts
+            .new_field_name
+            .clone()
+            .unwrap_or_else(|| (1..).map(|i| format!("Signature{i}")).find(|n| !taken.contains(n)).unwrap_or_default());
+        let rect = opts.rect.unwrap_or([0.0; 4]);
+        let mut w = Dict::new();
+        w.set(b"Type".to_vec(), Object::name("Annot"));
+        w.set(b"Subtype".to_vec(), Object::name("Widget"));
+        w.set(b"FT".to_vec(), Object::name("Sig"));
+        w.set(b"T".to_vec(), PdfString::text(&fname));
+        w.set(b"V".to_vec(), Object::Ref(sig));
+        w.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|x| Object::Real(*x)).collect()));
+        w.set(b"P".to_vec(), Object::Ref(page));
+        // Print + Locked.
+        w.set(b"F".to_vec(), Object::Int(4 | 128));
+        let wr = doc.add(Object::Dict(w));
+        // Page /Annots (indirect arrays are updated in place).
+        let pd = doc.get(page).as_dict().cloned().unwrap_or_default();
+        match pd.get(b"Annots") {
+            Some(Object::Ref(ar)) => {
+                let mut a = doc.get(*ar).as_array().cloned().unwrap_or_default();
+                a.push(Object::Ref(wr));
+                doc.set(*ar, Object::Array(a));
             }
-            // AcroForm /Fields and /SigFlags (signatures exist, append only).
-            let catalog = doc.get(root).as_dict().cloned().unwrap_or_default();
-            let (af_ref, mut af) = match catalog.get(b"AcroForm") {
-                Some(Object::Ref(r)) => (Some(*r), doc.get(*r).as_dict().cloned().unwrap_or_default()),
-                Some(Object::Dict(d)) => (None, d.clone()),
-                _ => (None, Dict::new()),
-            };
-            let mut fields = match af.get(b"Fields") {
-                Some(Object::Ref(r)) => doc.get(*r).as_array().cloned().unwrap_or_default(),
-                Some(Object::Array(a)) => a.clone(),
-                _ => Vec::new(),
-            };
-            fields.push(Object::Ref(wr));
-            af.set(b"Fields".to_vec(), Object::Array(fields));
-            af.set(b"SigFlags".to_vec(), Object::Int(3));
-            match af_ref {
-                Some(r) => doc.set(r, Object::Dict(af)),
-                // Inline (or new) AcroForms stay in the catalog.
-                None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(af)))?,
+            other => {
+                let mut a = other.and_then(|o| o.as_array().cloned()).unwrap_or_default();
+                a.push(Object::Ref(wr));
+                doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(a)))?;
             }
-            (wr, rect)
         }
+        // AcroForm /Fields and /SigFlags (signatures exist, append only).
+        let catalog = doc.get(root).as_dict().cloned().unwrap_or_default();
+        let (af_ref, mut af) = match catalog.get(b"AcroForm") {
+            Some(Object::Ref(r)) => (Some(*r), doc.get(*r).as_dict().cloned().unwrap_or_default()),
+            Some(Object::Dict(d)) => (None, d.clone()),
+            _ => (None, Dict::new()),
+        };
+        let mut fields = match af.get(b"Fields") {
+            Some(Object::Ref(r)) => doc.get(*r).as_array().cloned().unwrap_or_default(),
+            Some(Object::Array(a)) => a.clone(),
+            _ => Vec::new(),
+        };
+        fields.push(Object::Ref(wr));
+        af.set(b"Fields".to_vec(), Object::Array(fields));
+        af.set(b"SigFlags".to_vec(), Object::Int(3));
+        match af_ref {
+            Some(r) => doc.set(r, Object::Dict(af)),
+            // Inline (or new) AcroForms stay in the catalog.
+            None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(af)))?,
+        }
+        (wr, rect)
     };
     if opts.field.is_some() {
         doc.update_dict(root, |c| {
@@ -841,8 +841,8 @@ pub fn sign(doc: &Document, id: &DigitalId, opts: &SignOptions) -> Result<Vec<u8
     Ok(out)
 }
 
-/// Find the placeholders in the written file: the offset of the ByteRange numbers, and the
-/// `<…>` hex string's span. The ByteRange marker is unique; the Contents placeholder is the one
+/// Find the placeholders in the written file: the offset of the `ByteRange` numbers, and the
+/// `<…>` hex string's span. The `ByteRange` marker is unique; the Contents placeholder is the one
 /// in the same object (a full save may renumber objects, so they are not found by number).
 fn locate(out: &[u8], reserve: usize) -> Result<(usize, (usize, usize)), SignError> {
     let mark = format!("0 {} {} {}", BR_MARK[0], BR_MARK[1], BR_MARK[2]);
@@ -859,6 +859,7 @@ fn locate(out: &[u8], reserve: usize) -> Result<(usize, (usize, usize)), SignErr
 }
 
 /// "2026.10.02 14:03:11 +02'00'" from a PDF date.
+#[must_use]
 pub fn display_date(pdf: &str) -> String {
     let s = pdf.strip_prefix("D:").unwrap_or(pdf);
     let g = |r: std::ops::Range<usize>| s.get(r).unwrap_or("00");
@@ -913,7 +914,7 @@ fn appearance(rect: [f64; 4], name: &str, cert: &Certificate, opts: &SignOptions
             size = size.min(fit / longest).max(4.0);
             let words = wrap(name, size, fit);
             let total = words.len() as f64 * size * 1.1;
-            let mut y = (h + total) / 2.0 - size * 0.85;
+            let mut y = f64::midpoint(h, total) - size * 0.85;
             for l in &words {
                 out.extend(format!("/Helv {} Tf 1 0 0 1 {} {} Tm ", fmt(size), fmt(pad), fmt(y)).bytes());
                 out.extend(literal(&win_ansi(l)));

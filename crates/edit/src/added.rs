@@ -23,6 +23,7 @@ pub enum Family {
 }
 
 impl Family {
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Family::Helvetica => "Helvetica",
@@ -32,6 +33,7 @@ impl Family {
     }
 
     /// The standard-14 font name for this family and style.
+    #[must_use]
     pub fn base_font(self, bold: bool, italic: bool) -> &'static str {
         match (self, bold, italic) {
             (Family::Helvetica, false, false) => "Helvetica",
@@ -63,6 +65,7 @@ impl Family {
 
     /// Approximate advance width of `s` (standard-14 metrics are not bundled: Helvetica widths,
     /// scaled for Times; Courier is monospaced).
+    #[must_use]
     pub fn width(self, s: &str, size: f64, bold: bool) -> f64 {
         let w = match self {
             Family::Courier => s.chars().count() as f64 * 0.6 * size,
@@ -116,7 +119,7 @@ impl Default for AddedText {
 pub struct AddedImage {
     /// Display space.
     pub rect: [f64; 4],
-    /// The image XObject.
+    /// The image `XObject`.
     pub image: ObjRef,
     /// Quarter turns counter-clockwise (0–3).
     pub rotation: u8,
@@ -127,6 +130,7 @@ pub struct AddedImage {
 }
 
 impl AddedImage {
+    #[must_use]
     pub fn new(rect: [f64; 4], image: ObjRef) -> Self {
         AddedImage { rect, image, rotation: 0, flip_h: false, flip_v: false, crop: [0.0; 4] }
     }
@@ -160,6 +164,7 @@ pub enum Content {
 }
 
 impl Content {
+    #[must_use]
     pub fn rect(&self) -> [f64; 4] {
         match self {
             Content::Text(t) => t.rect,
@@ -168,6 +173,7 @@ impl Content {
     }
 
     /// The same item moved/resized to `rect` (text keeps its computed height).
+    #[must_use]
     pub fn with_rect(&self, rect: [f64; 4]) -> Content {
         match self {
             Content::Text(t) => Content::Text(AddedText { rect, ..t.clone() }),
@@ -194,6 +200,7 @@ fn norm(r: [f64; 4]) -> [f64; 4] {
 }
 
 /// The lines of a text item after wrapping to its box width.
+#[must_use]
 pub fn lines(t: &AddedText) -> Vec<String> {
     let width = (t.rect[2] - t.rect[0]).max(t.size);
     let mut out = Vec::new();
@@ -214,6 +221,7 @@ pub fn lines(t: &AddedText) -> Vec<String> {
 }
 
 /// The box a text item occupies (height from its lines).
+#[must_use]
 pub fn text_rect(t: &AddedText) -> [f64; 4] {
     let r = norm(t.rect);
     let h = lines(t).len().max(1) as f64 * t.size * 1.2;
@@ -349,7 +357,7 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
             let c = nums(doc, d.get(b"Color"));
             Some(Content::Text(AddedText {
                 rect,
-                text: d.get(b"Text").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text())).unwrap_or_default(),
+                text: d.get(b"Text").and_then(|t| doc.resolve(t).as_string().map(printcraft_cos::PdfString::to_text)).unwrap_or_default(),
                 family,
                 bold,
                 italic,
@@ -415,7 +423,7 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
     let mut pres = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     for (k, v) in res.iter() {
         let mut sub = pres.get(k).map(|s| doc.resolve(s)).and_then(|s| s.as_dict().cloned()).unwrap_or_default();
-        for (n2, o) in v.as_dict().into_iter().flat_map(|d| d.iter()) {
+        for (n2, o) in v.as_dict().into_iter().flat_map(printcraft_cos::Dict::iter) {
             sub.set(n2.clone(), o.clone());
         }
         pres.set(k.clone(), Object::Dict(sub));
@@ -425,24 +433,22 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
     sd.set(b"PCMark".to_vec(), Object::name(TAG));
     sd.set(b"PCAdded".to_vec(), Object::Dict(params(c)));
     let stream = Stream::flate(sd, &content);
-    match obj {
-        Some(r) => {
-            doc.set(r, Object::Stream(stream));
-            Ok(r)
-        }
-        None => {
-            // place_tagged appends a new stream; recover its reference.
-            let p = page_list(doc).swap_remove(page);
-            place_tagged(doc, &p, TAG, content.clone(), false)?;
-            let p = page_list(doc).swap_remove(page);
-            let r = contents(doc, &p)?.last().and_then(Object::as_ref).ok_or_else(|| EditError::Invalid("could not add the content".into()))?;
-            doc.set(r, Object::Stream(stream));
-            Ok(r)
-        }
+    if let Some(r) = obj {
+        doc.set(r, Object::Stream(stream));
+        Ok(r)
+    } else {
+        // place_tagged appends a new stream; recover its reference.
+        let p = page_list(doc).swap_remove(page);
+        place_tagged(doc, &p, TAG, content.clone(), false)?;
+        let p = page_list(doc).swap_remove(page);
+        let r = contents(doc, &p)?.last().and_then(Object::as_ref).ok_or_else(|| EditError::Invalid("could not add the content".into()))?;
+        doc.set(r, Object::Stream(stream));
+        Ok(r)
     }
 }
 
 /// Every added item, page by page, in drawing order.
+#[must_use]
 pub fn list_added(doc: &Document) -> Vec<Added> {
     let mut out = Vec::new();
     for (pi, p) in page_list(doc).iter().enumerate() {

@@ -142,7 +142,7 @@ fn catalog(doc: &Document) -> Dict {
 }
 
 fn text_of(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
-    d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text())).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
+    d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(printcraft_cos::PdfString::to_text)).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
 }
 
 fn doc_finding(message: impl Into<String>) -> Vec<Finding> {
@@ -264,7 +264,7 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                         && let Some(f) = doc.get(*r).as_dict()
                         && !maps_to_unicode(doc, f)
                     {
-                        let name = f.name(b"BaseFont").map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_else(|| "(unnamed)".into());
+                        let name = f.name(b"BaseFont").map_or_else(|| "(unnamed)".into(), |n| String::from_utf8_lossy(n).into_owned());
                         out.push(Finding { page: Some(*p), message: format!("Font {name} on page {} doesn't map its characters to Unicode", p + 1) });
                     }
                 }
@@ -314,7 +314,7 @@ fn full_name(doc: &Document, field: ObjRef) -> String {
     parts.join(".")
 }
 
-/// Whether text in this font can be mapped to Unicode (ToUnicode, a standard encoding, or a
+/// Whether text in this font can be mapped to Unicode (`ToUnicode`, a standard encoding, or a
 /// predefined CJK character collection).
 fn maps_to_unicode(doc: &Document, f: &Dict) -> bool {
     if f.contains(b"ToUnicode") {
@@ -335,14 +335,11 @@ fn maps_to_unicode(doc: &Document, f: &Dict) -> bool {
             !identity && known
         }
         Some(b"Type3") => enc.is_some(),
-        _ => match enc.as_deref() {
-            Some(Object::Name(_) | Object::Dict(_)) => true,
-            _ => {
-                // No encoding: the font's built-in one, which is standard unless it is symbolic.
-                let flags = f.get(b"FontDescriptor").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().and_then(|d| d.int(b"Flags"))).unwrap_or(32);
-                let base = f.name(b"BaseFont").unwrap_or(b"");
-                flags & 4 == 0 || matches!(base, b"Symbol" | b"ZapfDingbats")
-            }
+        _ => if let Some(Object::Name(_) | Object::Dict(_)) = enc.as_deref() { true } else {
+            // No encoding: the font's built-in one, which is standard unless it is symbolic.
+            let flags = f.get(b"FontDescriptor").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().and_then(|d| d.int(b"Flags"))).unwrap_or(32);
+            let base = f.name(b"BaseFont").unwrap_or(b"");
+            flags & 4 == 0 || matches!(base, b"Symbol" | b"ZapfDingbats")
         },
     }
 }

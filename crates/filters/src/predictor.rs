@@ -1,4 +1,4 @@
-//! Predictor functions for FlateDecode and LZWDecode (ISO 32000-2 §7.4.4.4).
+//! Predictor functions for `FlateDecode` and `LZWDecode` (ISO 32000-2 §7.4.4.4).
 //!
 //! - Predictor 2: TIFF 6.0 horizontal differencing (Section 14), per component, for
 //!   1, 2, 4, 8 and 16 bits per component.
@@ -140,7 +140,7 @@ fn predict(tag: u8, cur: &[u8], up: &[u8], i: usize, bpp: usize) -> u8 {
     match tag {
         1 => a,
         2 => b,
-        3 => ((u16::from(a) + u16::from(b)) / 2) as u8,
+        3 => u16::midpoint(u16::from(a), u16::from(b)) as u8,
         4 => paeth(a, b, c),
         _ => 0,
     }

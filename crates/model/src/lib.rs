@@ -23,6 +23,7 @@ fn rect(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
 
 impl Page {
     /// The visible region (crop box clipped to the media box), in user space.
+    #[must_use]
     pub fn crop(&self, doc: &Document) -> [f64; 4] {
         let media = rect(doc, self.dict.get(b"MediaBox")).unwrap_or([0.0, 0.0, 612.0, 792.0]);
         match rect(doc, self.dict.get(b"CropBox")) {
@@ -35,11 +36,13 @@ impl Page {
     }
 
     /// Clockwise rotation when displayed: 0, 90, 180 or 270.
+    #[must_use]
     pub fn rotation(&self, doc: &Document) -> i64 {
         self.dict.get(b"Rotate").and_then(|o| doc.resolve(o).as_int()).unwrap_or(0).rem_euclid(360) / 90 * 90
     }
 
     /// The displayed size (width, height) in points.
+    #[must_use]
     pub fn display_size(&self, doc: &Document) -> (f64, f64) {
         let c = self.crop(doc);
         let (w, h) = (c[2] - c[0], c[3] - c[1]);
@@ -48,6 +51,7 @@ impl Page {
 
     /// The matrix `[a b c d e f]` from display space (origin at the bottom-left of the page as
     /// shown, y up, after `/Rotate`) to user space.
+    #[must_use]
     pub fn view_matrix(&self, doc: &Document) -> [f64; 6] {
         let [x0, y0, x1, y1] = self.crop(doc);
         match self.rotation(doc) {
@@ -61,6 +65,7 @@ impl Page {
 
 /// Leaf pages in document order, with inherited attributes resolved. Cycles and absurdly deep
 /// trees are cut off rather than followed.
+#[must_use]
 pub fn pages(doc: &Document) -> Vec<Page> {
     let Some(root) = doc.root() else { return Vec::new() };
     let Some(top) = doc.get(root).as_dict().and_then(|d| d.reference(b"Pages")) else { return Vec::new() };

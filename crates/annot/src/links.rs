@@ -11,7 +11,7 @@ pub enum LinkAction {
     /// A page of this document (0-based), shown fitting the window (`/Fit`).
     Page(usize),
     Uri(String),
-    /// Something PrintCraft doesn't edit yet (named destination, JavaScript…): kept as is.
+    /// Something `PrintCraft` doesn't edit yet (named destination, JavaScript…): kept as is.
     Other(String),
 }
 
@@ -49,6 +49,7 @@ impl Highlight {
         }
     }
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Highlight::None => "None",
@@ -130,6 +131,7 @@ fn style_of(doc: &Document, d: &Dict) -> LinkStyle {
 }
 
 /// Every link in the document.
+#[must_use]
 pub fn list(doc: &Document) -> Vec<LinkItem> {
     let Ok(pages) = page_refs(doc) else { return Vec::new() };
     let mut out = Vec::new();
@@ -298,6 +300,7 @@ pub fn remove_all(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize, 
 
 /// Find web addresses in text: `http(s)://…`, `www.…` and bare e-mail addresses become
 /// `mailto:`. Returns character ranges and the URI for each.
+#[must_use]
 pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
     let text: String = chars.iter().collect();
     let lower = text.to_lowercase();

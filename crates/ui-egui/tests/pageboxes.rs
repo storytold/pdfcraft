@@ -1,4 +1,4 @@
-//! Crop tool, Set Page Boxes and Duplicate pages in the real shell (egui_kittest).
+//! Crop tool, Set Page Boxes and Duplicate pages in the real shell (`egui_kittest`).
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;

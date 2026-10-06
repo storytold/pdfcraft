@@ -1,4 +1,4 @@
-//! printcraft-cli — headless PrintCraft.
+//! printcraft-cli — headless `PrintCraft`.
 //!
 //! ```text
 //! printcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
@@ -158,7 +158,7 @@ fn edit(args: &[String]) -> Result<(), String> {
     let mut edits = Vec::new();
     let mut i = 0;
     while i < args.len() {
-        let value = args.get(i + 1).map(String::as_str).unwrap_or("");
+        let value = args.get(i + 1).map_or("", String::as_str);
         match args[i].as_str() {
             "--rotate" => {
                 let (pages, deg) = value.split_once(':').ok_or("--rotate PAGES:DEGREES")?;
@@ -188,7 +188,7 @@ fn edit(args: &[String]) -> Result<(), String> {
 }
 
 fn file_stem(path: &str) -> String {
-    Path::new(path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
+    Path::new(path).file_stem().map_or_else(|| path.to_string(), |s| s.to_string_lossy().into_owned())
 }
 
 fn combine(args: &[String]) -> Result<(), String> {

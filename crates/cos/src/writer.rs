@@ -212,7 +212,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
         let rows = offsets.iter().map(|(n, (o, g, used))| (*n, if *used { Row::InFile(*o, *g) } else { Row::Free(*g) })).collect();
         write_xref_stream(&mut out, &mut trailer, rows, size);
     } else {
-        trailer.set(b"Size".to_vec(), Object::Int(size as i64));
+        trailer.set(b"Size".to_vec(), Object::Int(i64::from(size)));
         let xref_at = out.len();
         write_xref_table(&mut out, &offsets, prev.is_none());
         out.extend_from_slice(b"trailer\n");
@@ -319,7 +319,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     if opts.object_streams {
         write_xref_stream(&mut out, &mut trailer, rows, next);
     } else {
-        trailer.set(b"Size".to_vec(), Object::Int(next as i64));
+        trailer.set(b"Size".to_vec(), Object::Int(i64::from(next)));
         let offsets: BTreeMap<u32, (u64, u16, bool)> =
             rows.iter().filter_map(|(n, r)| if let Row::InFile(o, g) = r { Some((*n, (*o, *g, true))) } else { None }).collect();
         let xref_at = out.len();
@@ -343,7 +343,7 @@ fn collect_refs(o: &Object, f: &mut impl FnMut(ObjRef)) {
 
 fn renumber(o: &Object, map: &HashMap<ObjRef, u32>) -> Object {
     match o {
-        Object::Ref(r) => map.get(r).map(|n| Object::Ref(ObjRef::new(*n, 0))).unwrap_or(Object::Null),
+        Object::Ref(r) => map.get(r).map_or(Object::Null, |n| Object::Ref(ObjRef::new(*n, 0))),
         Object::Array(a) => Object::Array(a.iter().map(|x| renumber(x, map)).collect()),
         Object::Dict(d) => Object::Dict(d.iter().map(|(k, v)| (k.clone(), renumber(v, map))).collect()),
         Object::Stream(s) => Object::Stream(Stream { dict: s.dict.iter().map(|(k, v)| (k.clone(), renumber(v, map))).collect(), raw: s.raw.clone() }),
@@ -397,7 +397,7 @@ fn write_xref_stream(out: &mut Vec<u8>, trailer: &mut Dict, mut rows: BTreeMap<u
         while j + 1 < nums.len() && nums[j + 1] == nums[j] + 1 {
             j += 1;
         }
-        index.push(Object::Int(nums[i] as i64));
+        index.push(Object::Int(i64::from(nums[i])));
         index.push(Object::Int((j - i + 1) as i64));
         i = j + 1;
     }
@@ -414,7 +414,7 @@ fn write_xref_stream(out: &mut Vec<u8>, trailer: &mut Dict, mut rows: BTreeMap<u
     }
     let mut d = trailer.clone();
     d.set(b"Type".to_vec(), Object::name("XRef"));
-    d.set(b"Size".to_vec(), Object::Int(num as i64 + 1));
+    d.set(b"Size".to_vec(), Object::Int(i64::from(num) + 1));
     d.set(b"W".to_vec(), Object::Array(vec![Object::Int(1), Object::Int(w2 as i64), Object::Int(w3 as i64)]));
     d.set(b"Index".to_vec(), Object::Array(index));
     let mut stream = Stream::flate(d, &data);
@@ -424,22 +424,19 @@ fn write_xref_stream(out: &mut Vec<u8>, trailer: &mut Dict, mut rows: BTreeMap<u
     stream.dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
     write_indirect(num, 0, &Object::Stream(stream), out);
     let _ = write!(out, "startxref\n{xref_at}\n%%EOF\n");
-    trailer.set(b"Size".to_vec(), Object::Int(num as i64 + 1));
+    trailer.set(b"Size".to_vec(), Object::Int(i64::from(num) + 1));
 }
 
 fn stamp_mod_date(doc: &mut Document, opts: &SaveOptions) {
     let Some(date) = &opts.mod_date else { return };
     let date = Object::String(PdfString::literal(date.as_bytes().to_vec()));
-    match doc.trailer().get(b"Info").cloned() {
-        Some(Object::Ref(r)) => {
-            let _ = doc.update_dict(r, |d| d.set(b"ModDate".to_vec(), date.clone()));
-        }
-        _ => {
-            let mut info = Dict::new();
-            info.set(b"ModDate".to_vec(), date);
-            let r = doc.add(info);
-            doc.trailer_mut().set(b"Info".to_vec(), Object::Ref(r));
-        }
+    if let Some(Object::Ref(r)) = doc.trailer().get(b"Info").cloned() {
+        let _ = doc.update_dict(r, |d| d.set(b"ModDate".to_vec(), date.clone()));
+    } else {
+        let mut info = Dict::new();
+        info.set(b"ModDate".to_vec(), date);
+        let r = doc.add(info);
+        doc.trailer_mut().set(b"Info".to_vec(), Object::Ref(r));
     }
 }
 
@@ -451,7 +448,7 @@ fn ensure_id(trailer: &mut Dict, opts: &SaveOptions, content: &[u8]) {
     // FNV-1a over a sample of the content and the seed: stable, dependency-free.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ opts.id_seed;
     for b in content.iter().step_by((content.len() / 4096).max(1)).chain(content.iter().rev().take(64)) {
-        h ^= *b as u64;
+        h ^= u64::from(*b);
         h = h.wrapping_mul(0x0100_0000_01b3);
     }
     let mut id = Vec::with_capacity(16);
@@ -462,6 +459,7 @@ fn ensure_id(trailer: &mut Dict, opts: &SaveOptions, content: &[u8]) {
 }
 
 /// A PDF date string for "now" given seconds since the Unix epoch (UTC).
+#[must_use]
 pub fn pdf_date(unix_secs: i64) -> String {
     let days = unix_secs.div_euclid(86_400);
     let secs = unix_secs.rem_euclid(86_400);

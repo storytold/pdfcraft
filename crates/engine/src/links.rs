@@ -1,7 +1,7 @@
-//! Where PrintCraft and the ArtCraft community live on the web. One table, so the Help menu, the
+//! Where `PrintCraft` and the `ArtCraft` community live on the web. One table, so the Help menu, the
 //! About dialog, the home screen, the CLI and the README agree.
 
-/// The app's name in ArtCraft URLs (`getartcraft.com/apps/{APP}`, `github.com/storytold/{APP}`).
+/// The app's name in `ArtCraft` URLs (`getartcraft.com/apps/{APP}`, `github.com/storytold/{APP}`).
 pub const APP: &str = "printcraft";
 
 pub const DISCORD: &str = "https://discord.gg/artcraft";
@@ -27,6 +27,7 @@ pub const LINKS: &[Link] = &[
     Link { command: "help.website", label: "ArtCraft website", url: WEBSITE, icon: "external-link" },
 ];
 
+#[must_use]
 pub fn for_command(id: &str) -> Option<&'static Link> {
     LINKS.iter().find(|l| l.command == id)
 }

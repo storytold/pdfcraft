@@ -1,8 +1,8 @@
 //! Digests, public keys (verification everywhere) and private keys (signing).
 //!
-//! Verification uses RustCrypto. RSA private-key operations use `aws-lc-rs` on native targets
+//! Verification uses `RustCrypto`. RSA private-key operations use `aws-lc-rs` on native targets
 //! (constant-time; ADR-0009: the `rsa` crate is never used for private keys there). ECDSA
-//! signing uses RustCrypto with deterministic nonces (RFC 6979).
+//! signing uses `RustCrypto` with deterministic nonces (RFC 6979).
 
 use crate::SignError;
 use crate::der::{self, Tlv, tag};
@@ -38,6 +38,7 @@ pub enum DigestAlg {
 }
 
 impl DigestAlg {
+    #[must_use]
     pub fn from_oid(o: &str) -> Option<DigestAlg> {
         Some(match o {
             oid::SHA1 => DigestAlg::Sha1,
@@ -48,6 +49,7 @@ impl DigestAlg {
         })
     }
 
+    #[must_use]
     pub fn oid(self) -> &'static str {
         match self {
             DigestAlg::Sha1 => oid::SHA1,
@@ -57,6 +59,7 @@ impl DigestAlg {
         }
     }
 
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             DigestAlg::Sha1 => "SHA-1",
@@ -67,6 +70,7 @@ impl DigestAlg {
     }
 
     /// The digest of the concatenation of `parts`.
+    #[must_use]
     pub fn digest(self, parts: &[&[u8]]) -> Vec<u8> {
         fn run<D: sha2::Digest>(parts: &[&[u8]]) -> Vec<u8> {
             let mut h = D::new();
@@ -84,6 +88,7 @@ impl DigestAlg {
     }
 
     /// The `AlgorithmIdentifier` (no parameters, as RFC 5754 recommends).
+    #[must_use]
     pub fn algorithm(self) -> Vec<u8> {
         der::algorithm(self.oid(), None)
     }
@@ -150,7 +155,7 @@ impl PublicKey {
                 let [n, e] = k.as_slice() else { return Err(SignError::Malformed("RSAPublicKey".into())) };
                 Ok(PublicKey::Rsa { n: n.uint_bytes().to_vec(), e: e.uint_bytes().to_vec() })
             }
-            oid::EC => match alg.get(1).map(|c| c.oid()).transpose()?.as_deref() {
+            oid::EC => match alg.get(1).map(super::der::Tlv::oid).transpose()?.as_deref() {
                 Some(oid::P256) => Ok(PublicKey::P256(bits.to_vec())),
                 Some(oid::P384) => Ok(PublicKey::P384(bits.to_vec())),
                 other => Err(SignError::Unsupported(format!("elliptic curve {}", other.unwrap_or("?")))),
@@ -160,6 +165,7 @@ impl PublicKey {
     }
 
     /// The `SubjectPublicKeyInfo` encoding.
+    #[must_use]
     pub fn spki(&self) -> Vec<u8> {
         match self {
             PublicKey::Rsa { n, e } => {
@@ -172,6 +178,7 @@ impl PublicKey {
     }
 
     /// "RSA 2048-bit", "ECDSA P-256"…
+    #[must_use]
     pub fn describe(&self) -> String {
         match self {
             PublicKey::Rsa { n, .. } => format!("RSA {}-bit", n.len() * 8),
@@ -227,7 +234,7 @@ enum Inner {
     External(std::sync::Arc<dyn ExternalKey>),
 }
 
-/// A private key PrintCraft can't read, only ask to sign (OS key stores, tokens).
+/// A private key `PrintCraft` can't read, only ask to sign (OS key stores, tokens).
 pub trait ExternalKey: Send + Sync {
     /// Sign `msg`, hashing it with `alg` (PKCS #1 v1.5 for RSA, DER-encoded ECDSA).
     fn sign(&self, alg: DigestAlg, msg: &[u8]) -> Result<Vec<u8>, SignError>;
@@ -248,13 +255,14 @@ impl std::fmt::Debug for PrivateKey {
 }
 
 impl PrivateKey {
-    /// A key held outside PrintCraft's memory (its public half is `public`). It can't be
+    /// A key held outside `PrintCraft`'s memory (its public half is `public`). It can't be
     /// exported to a PKCS #12 file.
     pub fn external(public: PublicKey, key: std::sync::Arc<dyn ExternalKey>) -> PrivateKey {
         PrivateKey { inner: Inner::External(key), public, pkcs8: Vec::new() }
     }
 
     /// Whether the key lives outside the app (and so can't be exported).
+    #[must_use]
     pub fn is_external(&self) -> bool {
         matches!(self.inner, Inner::External(_))
     }
@@ -287,7 +295,7 @@ impl PrivateKey {
                 // ECPrivateKey: version, privateKey OCTET STRING, [0] parameters, [1] publicKey.
                 let ec = Tlv::parse_all(key.value)?.children()?;
                 let d = ec.get(1).ok_or_else(|| SignError::Malformed("ECPrivateKey".into()))?.expect(tag::OCTET_STRING, "EC private key")?.value;
-                let curve = match alg.get(1).map(|c| c.oid()).transpose()? {
+                let curve = match alg.get(1).map(super::der::Tlv::oid).transpose()? {
                     Some(c) => c,
                     None => ec
                         .iter()
@@ -351,15 +359,18 @@ impl PrivateKey {
         }
     }
 
+    #[must_use]
     pub fn public_key(&self) -> &PublicKey {
         &self.public
     }
 
+    #[must_use]
     pub fn pkcs8(&self) -> &[u8] {
         &self.pkcs8
     }
 
     /// The signature `AlgorithmIdentifier` this key writes with `alg`.
+    #[must_use]
     pub fn signature_algorithm(&self, alg: DigestAlg) -> Vec<u8> {
         match (&self.public, alg) {
             (PublicKey::Rsa { .. }, DigestAlg::Sha1) => der::algorithm(oid::RSA_SHA1, Some(&der::null())),
@@ -374,6 +385,7 @@ impl PrivateKey {
     }
 
     /// The digest a signature with this key should use: SHA-256, or SHA-384 for P-384.
+    #[must_use]
     pub fn preferred_digest(&self) -> DigestAlg {
         match self.public {
             PublicKey::P384(_) => DigestAlg::Sha384,

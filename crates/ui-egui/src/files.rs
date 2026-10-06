@@ -49,7 +49,7 @@ impl Default for SplitDraft {
     }
 }
 
-/// Acrobat's Split by: number of pages, file size, top-level bookmarks (and PrintCraft's
+/// Acrobat's Split by: number of pages, file size, top-level bookmarks (and `PrintCraft`'s
 /// before-selected-pages).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SplitMode {
@@ -122,7 +122,7 @@ impl PrintCraftApp {
             let paths = if multiple { dialog.pick_files().unwrap_or_default() } else { dialog.pick_file().into_iter().collect() };
             let mut files = Vec::new();
             for p in paths {
-                let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file.pdf".into());
+                let name = p.file_name().map_or_else(|| "file.pdf".into(), |n| n.to_string_lossy().into_owned());
                 match std::fs::read(&p) {
                     Ok(b) => files.push((name, b)),
                     Err(e) => {
@@ -208,7 +208,7 @@ impl PrintCraftApp {
     /// Insert all pages of a PDF after the organize selection (or the current page).
     pub fn insert_pages_from(&mut self, name: &str, bytes: Vec<u8>) {
         let Some(i) = self.active else { return };
-        let at = self.views[i].target_pages().last().map(|p| p + 1).unwrap_or(0);
+        let at = self.views[i].target_pages().last().map_or(0, |p| p + 1);
         self.apply_edit(Edit::InsertPagesFrom { name: name.to_string(), bytes: Arc::new(bytes), pages: None, at });
     }
 
@@ -302,7 +302,7 @@ impl PrintCraftApp {
     /// downloads (web). Returns the number of files written.
     pub fn split_active(&mut self, plan: &SplitPlan) -> usize {
         let Some((_, id)) = self.active_ids() else { return 0 };
-        let stem = self.session.get(id).map(|d| strip_pdf(&d.name).to_string()).unwrap_or_else(|| "document".into());
+        let stem = self.session.get(id).map_or_else(|| "document".into(), |d| strip_pdf(&d.name).to_string());
         let (parts, titles) = match plan {
             SplitPlan::By(by) => (self.session.split(id, by), Vec::new()),
             SplitPlan::Size(max) => (self.session.split_by_size(id, *max), Vec::new()),
@@ -474,23 +474,20 @@ impl PrintCraftApp {
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let path = match self.save_override.clone() {
-                Some(p) => Some(std::path::PathBuf::from(p)),
-                None => {
-                    let d = rfd::FileDialog::new()
-                        .set_title(if comments { "Export comments" } else { "Export form data" })
-                        .set_file_name(format!("{stem}.xfdf"));
-                    let d = if comments {
-                        d.add_filter("XFDF", &["xfdf"]).add_filter("FDF", &["fdf"])
-                    } else {
-                        d.add_filter("XFDF", &["xfdf"])
-                            .add_filter("FDF", &["fdf"])
-                            .add_filter("XML", &["xml"])
-                            .add_filter("CSV", &["csv"])
-                            .add_filter("Text", &["txt"])
-                    };
-                    d.save_file()
-                }
+            let path = if let Some(p) = self.save_override.clone() { Some(std::path::PathBuf::from(p)) } else {
+                let d = rfd::FileDialog::new()
+                    .set_title(if comments { "Export comments" } else { "Export form data" })
+                    .set_file_name(format!("{stem}.xfdf"));
+                let d = if comments {
+                    d.add_filter("XFDF", &["xfdf"]).add_filter("FDF", &["fdf"])
+                } else {
+                    d.add_filter("XFDF", &["xfdf"])
+                        .add_filter("FDF", &["fdf"])
+                        .add_filter("XML", &["xml"])
+                        .add_filter("CSV", &["csv"])
+                        .add_filter("Text", &["txt"])
+                };
+                d.save_file()
             };
             let Some(path) = path else { return };
             let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();

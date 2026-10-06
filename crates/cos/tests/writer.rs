@@ -72,7 +72,7 @@ fn incremental_saves_stack_on_an_xref_stream_file() {
     // Edit an object that lives in an object stream.
     let info = doc.trailer().reference(b"Info").unwrap();
     doc.update_dict(info, |d: &mut Dict| {
-        d.set(b"Title".to_vec(), Object::String(printcraft_cos::PdfString { bytes: b"Second".to_vec(), hex: false }))
+        d.set(b"Title".to_vec(), Object::String(printcraft_cos::PdfString { bytes: b"Second".to_vec(), hex: false }));
     })
     .unwrap();
     let added = doc.add(Object::Int(42));

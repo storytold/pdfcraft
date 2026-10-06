@@ -182,7 +182,7 @@ pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Organiz
 }
 
 /// Bookmarks, and links on the `keep` pages, that go to one of the `gone` pages lose that
-/// destination (/Dest, or a GoTo /A), rather than pointing at nothing.
+/// destination (/Dest, or a `GoTo` /A), rather than pointing at nothing.
 fn drop_destinations_to(doc: &mut Document, gone: &[ObjRef], keep: &[(ObjRef, Dict)]) -> Result<(), OrganizeError> {
     let mut holders = outline::items(doc);
     for (p, _) in keep {
@@ -217,7 +217,7 @@ fn drop_destinations_to(doc: &mut Document, gone: &[ObjRef], keep: &[(ObjRef, Di
     Ok(())
 }
 
-/// Take widgets out of the form: out of their field's /Kids, or out of /AcroForm /Fields when
+/// Take widgets out of the form: out of their field's /Kids, or out of /`AcroForm` /Fields when
 /// they are fields themselves. A field left without kids goes too.
 fn drop_widgets(doc: &mut Document, mut widgets: Vec<ObjRef>) -> Result<(), OrganizeError> {
     let unlink = |list: Option<&Object>, w: ObjRef| -> Option<Vec<Object>> {
@@ -334,9 +334,10 @@ pub fn insert_blank_page(doc: &mut Document, at: usize, width: f64, height: f64)
 pub const INFO_KEYS: [&str; 4] = ["Title", "Author", "Subject", "Keywords"];
 
 /// Read a document-information entry as text.
+#[must_use]
 pub fn info(doc: &Document, key: &str) -> Option<String> {
     let info = doc.trailer().get(b"Info").map(|o| doc.resolve(o))?;
-    info.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text()))
+    info.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(printcraft_cos::PdfString::to_text))
 }
 
 /// Set (or clear, with an empty value) a document-information entry.

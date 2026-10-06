@@ -97,7 +97,7 @@ fn inspect_and_click_by_label_and_id() {
 
     // Clicking a point works too (here: the Read tab's centre).
     let [x0, y0, x1, y1] = [0, 1, 2, 3].map(|i| rect[i].as_f64().unwrap());
-    ok(&mut h, &c, "ui.click", json!({ "x": (x0 + x1) / 2.0, "y": (y0 + y1) / 2.0 }));
+    ok(&mut h, &c, "ui.click", json!({ "x": f64::midpoint(x0, x1), "y": f64::midpoint(y0, y1) }));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read");
 
     let err = call(&mut h, &c, "ui.click", json!({ "label": "No such button" })).unwrap_err();
@@ -147,7 +147,7 @@ fn drawing_a_comment_by_drag_and_its_context_menu() {
     assert_eq!(st["active"]["selected_comment"], json!({ "page": 1, "index": 1 }), "{st}");
     assert_eq!(st["documents"][0]["dirty"], true);
     // A right-click on it offers the comment menu.
-    ok(&mut h, &c, "ui.click", json!({ "x": (a[0] + b[0]) / 2.0, "y": (a[1] + b[1]) / 2.0, "button": "secondary" }));
+    ok(&mut h, &c, "ui.click", json!({ "x": f64::midpoint(a[0], b[0]), "y": f64::midpoint(a[1], b[1]), "button": "secondary" }));
     let menu = ok(&mut h, &c, "ui.inspect", json!({ "query": "Set status" }));
     assert!(menu["count"].as_u64().unwrap() >= 1, "{menu}");
     assert!(call(&mut h, &c, "ui.drag", json!({ "from": [1, 2] })).unwrap_err().contains("to must be"));

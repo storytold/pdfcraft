@@ -75,6 +75,7 @@ pub struct ControlClient {
 
 impl ControlClient {
     /// Queue a request; the reply arrives on the returned receiver once the app has handled it.
+    #[must_use]
     pub fn send(&self, method: &str, params: Value) -> Receiver<Reply> {
         let (reply, rx) = channel();
         let req = ControlRequest { method: method.into(), params, reply };
@@ -155,6 +156,7 @@ pub struct Control {
 }
 
 /// Install the control channel on `ctx`: returns the app half and a client.
+#[must_use]
 pub fn attach(ctx: &egui::Context) -> (Control, ControlClient) {
     let shared = Arc::new(Mutex::new(Shared::default()));
     ctx.add_plugin(ControlPlugin { shared: shared.clone() });
@@ -245,7 +247,7 @@ impl Control {
     }
 
     fn passes(&self) -> u64 {
-        self.shared.lock().map(|s| s.passes).unwrap_or(0)
+        self.shared.lock().map_or(0, |s| s.passes)
     }
 
     fn inject(&self, batches: Vec<Vec<egui::Event>>) -> u32 {
@@ -598,7 +600,7 @@ impl Host for crate::PrintCraftApp {
         if self.views.len() > before || self.password_prompt.is_some() {
             Ok(json!({ "opened": path, "password_prompt": self.password_prompt.is_some() }))
         } else {
-            Err(self.toast.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| format!("couldn't open {path}")))
+            Err(self.toast.as_ref().map_or_else(|| format!("couldn't open {path}"), |t| t.0.clone()))
         }
     }
 
@@ -647,7 +649,14 @@ pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
                             let id = msg.get("id").cloned().unwrap_or(Value::Null);
                             let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
                             let params = msg.get("params").cloned().unwrap_or(Value::Null);
-                            if !authed {
+                            if authed {
+                                let rx = client.send(method, params);
+                                match rx.recv_timeout(std::time::Duration::from_secs(30)) {
+                                    Ok(Ok(v)) => (json!({ "jsonrpc": "2.0", "id": id, "result": v }), false),
+                                    Ok(Err(e)) => (rpc_error(id, -32000, &e), false),
+                                    Err(_) => (rpc_error(id, -32002, "the app did not answer within 30 s"), false),
+                                }
+                            } else {
                                 let ok =
                                     method == "auth" && params.get("token").and_then(Value::as_str).is_some_and(|t| constant_time_eq(t, &expected));
                                 authed = ok;
@@ -656,17 +665,10 @@ pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
                                 } else {
                                     (rpc_error(id, -32001, "authenticate first: auth {token}"), true)
                                 }
-                            } else {
-                                let rx = client.send(method, params);
-                                match rx.recv_timeout(std::time::Duration::from_secs(30)) {
-                                    Ok(Ok(v)) => (json!({ "jsonrpc": "2.0", "id": id, "result": v }), false),
-                                    Ok(Err(e)) => (rpc_error(id, -32000, &e), false),
-                                    Err(_) => (rpc_error(id, -32002, "the app did not answer within 30 s"), false),
-                                }
                             }
                         }
                     };
-                    if writeln!(write, "{reply}").and_then(|_| write.flush()).is_err() || close {
+                    if writeln!(write, "{reply}").and_then(|()| write.flush()).is_err() || close {
                         break;
                     }
                 }

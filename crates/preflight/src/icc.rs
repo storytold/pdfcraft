@@ -45,6 +45,7 @@ fn curve() -> Vec<u8> {
 }
 
 /// The profile's bytes.
+#[must_use]
 pub fn srgb() -> Vec<u8> {
     // sRGB primaries, Bradford-adapted to the D50 profile connection space.
     let tags: Vec<(&[u8; 4], Vec<u8>)> = vec![

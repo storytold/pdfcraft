@@ -7,7 +7,7 @@
 //! page, so the source page tree does not come along. It rewires what points *back* into the
 //! document:
 //! - an annotation's `/P` points at its new page;
-//! - link and GoTo destinations that target a copied page point at the copy. Links to pages that
+//! - link and `GoTo` destinations that target a copied page point at the copy. Links to pages that
 //!   were not copied are dropped, so they don't dangle;
 //! - form-field widgets keep their field hierarchy, and the top-level fields are registered in the
 //!   destination `/AcroForm`;
@@ -126,7 +126,7 @@ impl Copier<'_> {
         }
     }
 
-    /// Rewrite `/P`, `/Dest` and GoTo actions on copied annotations.
+    /// Rewrite `/P`, `/Dest` and `GoTo` actions on copied annotations.
     fn fix_annotations(&self, dst: &mut Document, annot_pages: &HashMap<ObjRef, ObjRef>) -> Result<(), OrganizeError> {
         for &a in &self.annots {
             let src_dict = dst.get(a).as_dict().cloned();
@@ -399,12 +399,9 @@ fn register_fields(dst: &mut Document, fields: &[ObjRef]) -> Result<(), Organize
         }
     }
     form.set(b"Fields".to_vec(), Object::Array(list));
-    match form_ref {
-        Some(r) => dst.set(r, Object::Dict(form)),
-        None => {
-            let r = dst.add(form);
-            dst.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Ref(r)))?;
-        }
+    if let Some(r) = form_ref { dst.set(r, Object::Dict(form)) } else {
+        let r = dst.add(form);
+        dst.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Ref(r)))?;
     }
     Ok(())
 }
@@ -433,6 +430,7 @@ pub enum SplitBy {
 }
 
 /// The page ranges (0-based, end-exclusive) a split produces.
+#[must_use]
 pub fn split_ranges(page_count: usize, by: &SplitBy) -> Vec<std::ops::Range<usize>> {
     let mut cuts: Vec<usize> = match by {
         SplitBy::PageCount(n) => (1..).map(|i| i * (*n).max(1)).take_while(|c| *c < page_count).collect(),
@@ -523,7 +521,7 @@ fn set_attachments(dst: &mut Document, mut entries: Vec<(Vec<u8>, Object)>) -> R
         return Ok(());
     }
     let mut seen = std::collections::HashSet::new();
-    for (k, _) in entries.iter_mut() {
+    for (k, _) in &mut entries {
         let base = k.clone();
         let mut n = 2;
         while !seen.insert(k.clone()) {
@@ -663,7 +661,7 @@ fn copy_outline_level(
     Some((*made.first()?, *made.last()?, total))
 }
 
-/// Page `page` of `src` as a form XObject in `dst` (its content and resources, no annotations),
+/// Page `page` of `src` as a form `XObject` in `dst` (its content and resources, no annotations),
 /// for backgrounds and watermarks taken from a PDF. The form's `/BBox` is the page's crop box
 /// and its `/Matrix` undoes the page rotation, so it draws upright as displayed. Returns the
 /// form and its displayed size in points.
@@ -697,7 +695,7 @@ pub fn page_as_form(dst: &mut Document, src: &Document, page: usize) -> Result<(
         }
     }
     let mut copier = Copier { src, map: HashMap::new(), pages: HashMap::new(), annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() };
-    let resources = d.get(b"Resources").map(|r| copier.copy_value(dst, r, None)).unwrap_or(Object::Dict(Dict::new()));
+    let resources = d.get(b"Resources").map_or(Object::Dict(Dict::new()), |r| copier.copy_value(dst, r, None));
     register_layers(dst, src, &copier.ocgs)?;
     let mut fd = Dict::new();
     fd.set(b"Type".to_vec(), Object::name("XObject"));

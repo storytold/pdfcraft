@@ -42,6 +42,7 @@ pub struct Models {
 
 impl Models {
     /// The models in `dir`, if both files are there.
+    #[must_use]
     pub fn in_dir(dir: &Path) -> Option<Models> {
         let m = Models { detection: dir.join(DETECTION_MODEL), recognition: dir.join(RECOGNITION_MODEL) };
         (m.detection.is_file() && m.recognition.is_file()).then_some(m)
@@ -49,11 +50,13 @@ impl Models {
 
     /// Look for the models: `$PRINTCRAFT_MODELS`, then `models/` beside the executable (and
     /// `Resources/models` in a macOS bundle), then the source tree's `assets/models/`.
+    #[must_use]
     pub fn find() -> Option<Models> {
         Self::search_dirs().iter().find_map(|d| Self::in_dir(d))
     }
 
     /// The directories [`Models::find`] looks in, in order.
+    #[must_use]
     pub fn search_dirs() -> Vec<PathBuf> {
         let mut dirs = Vec::new();
         if let Some(d) = std::env::var_os("PRINTCRAFT_MODELS") {
@@ -82,6 +85,7 @@ pub struct Line {
 }
 
 impl Line {
+    #[must_use]
     pub fn text(&self) -> String {
         self.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ")
     }
@@ -178,8 +182,9 @@ fn num(v: f64) -> String {
 }
 
 /// Page content that writes `words` as invisible text in `/PCHelv` (standard Helvetica,
-/// WinAnsiEncoding), each word stretched to its box so selection and search highlight the
+/// `WinAnsiEncoding`), each word stretched to its box so selection and search highlight the
 /// right place. Marked content `/OCR` so it can be told apart from the page's own text.
+#[must_use]
 pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
     let mut out = b"/OCR BMC\nBT\n3 Tr\n/PCHelv 1 Tf\n".to_vec();
     for w in words {
@@ -210,7 +215,7 @@ mod tests {
     #[test]
     fn places_words_through_the_mapping() {
         // 2 pixels per point, page 612 × 792, y flipped.
-        let to_user = |x: f32, y: f32| [x as f64 / 2.0, 792.0 - y as f64 / 2.0];
+        let to_user = |x: f32, y: f32| [f64::from(x) / 2.0, 792.0 - f64::from(y) / 2.0];
         let w = PlacedWord::place(&Word { text: "Hello".into(), rect: [100.0, 200.0, 300.0, 240.0] }, to_user);
         assert_eq!(w.origin, [50.0, 672.0]);
         assert_eq!(w.across, [100.0, 0.0]);
@@ -230,7 +235,7 @@ mod tests {
     #[test]
     fn rotated_pages_keep_the_reading_direction() {
         // A page turned 90°: image x runs up the page.
-        let to_user = |x: f32, y: f32| [y as f64, x as f64];
+        let to_user = |x: f32, y: f32| [f64::from(y), f64::from(x)];
         let w = PlacedWord::place(&Word { text: "Up".into(), rect: [0.0, 0.0, 50.0, 10.0] }, to_user);
         assert_eq!(w.across, [0.0, 50.0]);
         assert_eq!(w.up, [-10.0, 0.0]);

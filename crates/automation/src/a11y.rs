@@ -112,7 +112,7 @@ impl Automation {
                 let rect = f.page.zip(f.bbox).and_then(|(p, b)| {
                     let info = doc.info.pages.get(p)?;
                     let (u, v) = (info.user_to_view(b[0] as f32, b[1] as f32), info.user_to_view(b[2] as f32, b[3] as f32));
-                    let r = |x: f32| (x as f64 * 100.0).round() / 100.0;
+                    let r = |x: f32| (f64::from(x) * 100.0).round() / 100.0;
                     Some([r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))])
                 });
                 json!({ "figure": f.obj.num, "page": f.page.map(|p| p + 1), "alt": f.alt, "rect": rect })
@@ -160,7 +160,7 @@ impl Automation {
         let ocr = printcraft_engine::ocr::engine().map_err(failed)?;
         let mut out = Vec::new();
         for p in a.strs("paths")? {
-            let name = std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document.pdf".into());
+            let name = std::path::Path::new(p).file_name().map_or_else(|| "document.pdf".into(), |n| n.to_string_lossy().into_owned());
             let result =
                 self.resolve(p, false).map_err(|e| e.to_string()).and_then(|src| std::fs::read(&src).map_err(|e| e.to_string())).and_then(|bytes| {
                     printcraft_engine::ocr::recognize_file(&name, std::sync::Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true)
@@ -331,7 +331,7 @@ impl Automation {
         std::fs::create_dir_all(&folder).map_err(|e| failed(e.to_string()))?;
         let mut out = Vec::new();
         for p in a.strs("paths")? {
-            let name = std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document.pdf".into());
+            let name = std::path::Path::new(p).file_name().map_or_else(|| "document.pdf".into(), |n| n.to_string_lossy().into_owned());
             let result = self
                 .resolve(p, false)
                 .map_err(|e| e.to_string())

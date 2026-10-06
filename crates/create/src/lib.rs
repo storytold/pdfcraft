@@ -72,7 +72,7 @@ pub fn blank(width: f64, height: f64, pages: usize) -> Result<Document, CreateEr
 
 // ── images ──────────────────────────────────────────────────────────────────────────────────
 
-/// An image ready to embed: its XObject dictionary, encoded data, optional soft mask, and size
+/// An image ready to embed: its `XObject` dictionary, encoded data, optional soft mask, and size
 /// in pixels and dots per inch.
 struct Embedded {
     dict: Dict,
@@ -98,7 +98,7 @@ fn jp2_boxes(b: &[u8]) -> Vec<([u8; 4], &[u8])> {
     let mut out = Vec::new();
     let mut i = 0usize;
     while i + 8 <= b.len() {
-        let len = be32(b, i).unwrap_or(0) as u64;
+        let len = u64::from(be32(b, i).unwrap_or(0));
         let ty = [b[i + 4], b[i + 5], b[i + 6], b[i + 7]];
         let (head, len) = match len {
             0 => (8, (b.len() - i) as u64),
@@ -133,7 +133,7 @@ fn jpx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
             && let Some((_, r)) = jp2_boxes(res).into_iter().find(|(t, _)| t == b"resc" || t == b"resd")
             && r.len() >= 10
         {
-            let part = |n: u16, d: u16, e: i8| if d == 0 { 0.0 } else { n as f64 / d as f64 * 10f64.powi(e as i32) * 0.0254 };
+            let part = |n: u16, d: u16, e: i8| if d == 0 { 0.0 } else { f64::from(n) / f64::from(d) * 10f64.powi(i32::from(e)) * 0.0254 };
             let (v, hz) = (
                 part(be16(r, 0).unwrap_or(0), be16(r, 2).unwrap_or(0), r[8] as i8),
                 part(be16(r, 4).unwrap_or(0), be16(r, 6).unwrap_or(0), r[9] as i8),
@@ -180,7 +180,7 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
         match marker {
             // APP0 JFIF density.
             0xE0 if seg.starts_with(b"JFIF\0") && seg.len() >= 12 => {
-                let (unit, x, y) = (seg[7], u16::from_be_bytes([seg[8], seg[9]]) as f64, u16::from_be_bytes([seg[10], seg[11]]) as f64);
+                let (unit, x, y) = (seg[7], f64::from(u16::from_be_bytes([seg[8], seg[9]])), f64::from(u16::from_be_bytes([seg[10], seg[11]])));
                 if x > 0.0 && y > 0.0 {
                     dpi = match unit {
                         1 => (x, y),
@@ -194,7 +194,7 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
                 if seg.len() < 6 {
                     return Err(bad("bad frame header"));
                 }
-                size = Some((u16::from_be_bytes([seg[3], seg[4]]) as u32, u16::from_be_bytes([seg[1], seg[2]]) as u32));
+                size = Some((u32::from(u16::from_be_bytes([seg[3], seg[4]])), u32::from(u16::from_be_bytes([seg[1], seg[2]]))));
                 comps = seg[5];
                 break;
             }
@@ -229,7 +229,7 @@ fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = dec.read_info().map_err(|e| bad(e.to_string()))?;
     let dpi = match reader.info().pixel_dims {
-        Some(png::PixelDimensions { xppu, yppu, unit: png::Unit::Meter }) if xppu > 0 && yppu > 0 => (xppu as f64 * 0.0254, yppu as f64 * 0.0254),
+        Some(png::PixelDimensions { xppu, yppu, unit: png::Unit::Meter }) if xppu > 0 && yppu > 0 => (f64::from(xppu) * 0.0254, f64::from(yppu) * 0.0254),
         _ => (72.0, 72.0),
     };
     let mut buf = vec![0; reader.output_buffer_size().ok_or_else(|| bad("image too large".into()))?];
@@ -260,8 +260,8 @@ fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
         let mut m = Dict::new();
         m.set(b"Type".to_vec(), Object::name("XObject"));
         m.set(b"Subtype".to_vec(), Object::name("Image"));
-        m.set(b"Width".to_vec(), Object::Int(w as i64));
-        m.set(b"Height".to_vec(), Object::Int(h as i64));
+        m.set(b"Width".to_vec(), Object::Int(i64::from(w)));
+        m.set(b"Height".to_vec(), Object::Int(i64::from(h)));
         m.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
         m.set(b"BitsPerComponent".to_vec(), Object::Int(8));
         (m, alpha)
@@ -286,8 +286,8 @@ fn rgba_image(rgba: &[u8], (w, h): (u32, u32), dpi: (f64, f64)) -> Embedded {
         let mut m = Dict::new();
         m.set(b"Type".to_vec(), Object::name("XObject"));
         m.set(b"Subtype".to_vec(), Object::name("Image"));
-        m.set(b"Width".to_vec(), Object::Int(w as i64));
-        m.set(b"Height".to_vec(), Object::Int(h as i64));
+        m.set(b"Width".to_vec(), Object::Int(i64::from(w)));
+        m.set(b"Height".to_vec(), Object::Int(i64::from(h)));
         m.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
         m.set(b"BitsPerComponent".to_vec(), Object::Int(8));
         (m, rgba.as_chunks::<4>().0.iter().map(|p| p[3]).collect())
@@ -393,16 +393,16 @@ fn embed(name: &str, bytes: &[u8]) -> Result<Vec<Embedded>, CreateError> {
     }
 }
 
-/// Embed an image file (its first page, for TIFFs) as an image XObject in `doc`. Returns the
+/// Embed an image file (its first page, for TIFFs) as an image `XObject` in `doc`. Returns the
 /// object and the image's natural size in points (from its resolution).
 pub fn image_xobject(doc: &mut Document, name: &str, bytes: &[u8]) -> Result<(ObjRef, (f64, f64)), CreateError> {
     let img = embed(name, bytes)?.into_iter().next().ok_or_else(|| CreateError::Image(name.into(), "the file has no image".into()))?;
-    let size = (img.px.0 as f64 * 72.0 / img.dpi.0, img.px.1 as f64 * 72.0 / img.dpi.1);
+    let size = (f64::from(img.px.0) * 72.0 / img.dpi.0, f64::from(img.px.1) * 72.0 / img.dpi.1);
     let mut d = img.dict;
     d.set(b"Type".to_vec(), Object::name("XObject"));
     d.set(b"Subtype".to_vec(), Object::name("Image"));
-    d.set(b"Width".to_vec(), Object::Int(img.px.0 as i64));
-    d.set(b"Height".to_vec(), Object::Int(img.px.1 as i64));
+    d.set(b"Width".to_vec(), Object::Int(i64::from(img.px.0)));
+    d.set(b"Height".to_vec(), Object::Int(i64::from(img.px.1)));
     if let Some((m, alpha)) = img.smask {
         let mr = doc.add(Object::Stream(Stream::flate(m, &alpha)));
         d.set(b"SMask".to_vec(), Object::Ref(mr));
@@ -418,7 +418,7 @@ pub fn from_images(images: &[(String, Vec<u8>)]) -> Result<Document, CreateError
     }
     let mut doc = Document::new_empty();
     for img in images.iter().map(|(name, bytes)| embed(name, bytes)).collect::<Result<Vec<_>, _>>()?.into_iter().flatten() {
-        let (mut w, mut h) = (img.px.0 as f64 * 72.0 / img.dpi.0, img.px.1 as f64 * 72.0 / img.dpi.1);
+        let (mut w, mut h) = (f64::from(img.px.0) * 72.0 / img.dpi.0, f64::from(img.px.1) * 72.0 / img.dpi.1);
         // Keep huge images within the largest page PDF allows.
         let k = (MAX_SIDE / w.max(h)).min(1.0);
         w *= k;
@@ -426,8 +426,8 @@ pub fn from_images(images: &[(String, Vec<u8>)]) -> Result<Document, CreateError
         let mut d = img.dict;
         d.set(b"Type".to_vec(), Object::name("XObject"));
         d.set(b"Subtype".to_vec(), Object::name("Image"));
-        d.set(b"Width".to_vec(), Object::Int(img.px.0 as i64));
-        d.set(b"Height".to_vec(), Object::Int(img.px.1 as i64));
+        d.set(b"Width".to_vec(), Object::Int(i64::from(img.px.0)));
+        d.set(b"Height".to_vec(), Object::Int(i64::from(img.px.1)));
         if let Some((m, alpha)) = img.smask {
             let mr = doc.add(Object::Stream(Stream::flate(m, &alpha)));
             d.set(b"SMask".to_vec(), Object::Ref(mr));

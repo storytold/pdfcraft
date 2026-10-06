@@ -18,6 +18,7 @@ pub enum PageBox {
 }
 
 impl PageBox {
+    #[must_use]
     pub fn key(self) -> &'static [u8] {
         match self {
             PageBox::Media => b"MediaBox",
@@ -28,6 +29,7 @@ impl PageBox {
         }
     }
 
+    #[must_use]
     pub fn from_name(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().trim_end_matches("box") {
             "media" => Some(Self::Media),
@@ -70,8 +72,8 @@ pub fn page_boxes(doc: &Document) -> Result<Vec<[[f64; 4]; 5]>, OrganizeError> {
             let d = obj.as_dict().cloned().unwrap_or_default();
             let own = |k: &[u8]| rect_of(d.get(k).or_else(|| inherited.get(k)), doc);
             let media = own(b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
-            let crop = own(b"CropBox").map(|c| intersect(c, media)).unwrap_or(media);
-            let child = |k: &[u8]| rect_of(d.get(k), doc).map(|c| intersect(c, media)).unwrap_or(crop);
+            let crop = own(b"CropBox").map_or(media, |c| intersect(c, media));
+            let child = |k: &[u8]| rect_of(d.get(k), doc).map_or(crop, |c| intersect(c, media));
             [media, crop, child(b"BleedBox"), child(b"TrimBox"), child(b"ArtBox")]
         })
         .collect())

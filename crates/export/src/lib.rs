@@ -154,12 +154,11 @@ fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
         let joins = rows
             .last()
             .and_then(|row| row.first())
-            .map(|(_, fi)| {
+            .is_some_and(|(_, fi)| {
                 let rb = &blocks[*fi];
                 let overlap = rb.rect[3].min(b.rect[3]) - rb.rect[1].max(b.rect[1]);
                 overlap > 0.5 * (rb.rect[3] - rb.rect[1]).min(b.rect[3] - b.rect[1])
-            })
-            .unwrap_or(false);
+            });
         if joins {
             if let Some(row) = rows.last_mut() {
                 row.push((ci, bi));
@@ -179,7 +178,7 @@ fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
         used.sort_unstable();
         used.dedup();
         let mut edges: Vec<f64> = used.iter().filter_map(|&i| col_of.get(i).copied().flatten()).filter_map(|ci| cols.get(ci)).map(|c| c.0).collect();
-        edges.sort_by(|a, b| a.total_cmp(b));
+        edges.sort_by(f64::total_cmp);
         edges.dedup_by(|a, b| (*a - *b).abs() <= COL_TOL);
         let ncols = edges.len();
         let ok = (ncols >= 3 || (ncols == 2 && run.len() >= 3)) && ncols <= MAX_COLS;
@@ -191,9 +190,7 @@ fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
         let mut rows_out = Vec::new();
         let mut slots: Vec<Option<Cell>> = vec![None; ncols];
         for row in run.drain(..) {
-            for slot in slots.iter_mut() {
-                *slot = None;
-            }
+            slots.fill(None);
             for (_ci, bi) in row {
                 let b = &blocks[bi];
                 let Some(slot) = edges.iter().position(|e| (*e - b.rect[0]).abs() <= COL_TOL) else { continue };
@@ -211,16 +208,13 @@ fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
             let mut materialized = Vec::with_capacity(ncols);
             let mut column = 0;
             while column < ncols {
-                match slots[column].take() {
-                    Some(mut cell) => {
-                        cell.span = cell.span.min(ncols - column).max(1);
-                        column += cell.span;
-                        materialized.push(cell);
-                    }
-                    None => {
-                        column += 1;
-                        materialized.push(Cell { text: String::new(), size: 11.0, bold: false, italic: false, span: 1 });
-                    }
+                if let Some(mut cell) = slots[column].take() {
+                    cell.span = cell.span.min(ncols - column).max(1);
+                    column += cell.span;
+                    materialized.push(cell);
+                } else {
+                    column += 1;
+                    materialized.push(Cell { text: String::new(), size: 11.0, bold: false, italic: false, span: 1 });
                 }
             }
             while materialized.last().is_some_and(|cell| cell.text.is_empty()) && materialized.iter().any(|cell| cell.span > 1) {
@@ -246,7 +240,7 @@ fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
     let run_edges = |run: &[Vec<(usize, usize)>]| -> Vec<f64> {
         let mut es: Vec<f64> =
             run.iter().flatten().filter_map(|(_, i)| col_of.get(*i).copied().flatten()).filter_map(|ci| cols.get(ci)).map(|c| c.0).collect();
-        es.sort_by(|a, b| a.total_cmp(b));
+        es.sort_by(f64::total_cmp);
         es.dedup_by(|a, b| (*a - *b).abs() <= COL_TOL);
         es
     };
@@ -315,7 +309,7 @@ fn base64(data: &[u8]) -> String {
     const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut s = String::with_capacity(data.len().div_ceil(3) * 4);
     for c in data.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        let n = u32::from(c[0]) << 16 | u32::from(*c.get(1).unwrap_or(&0)) << 8 | u32::from(*c.get(2).unwrap_or(&0));
         s.push(A[(n >> 18) as usize & 63] as char);
         s.push(A[(n >> 12) as usize & 63] as char);
         s.push(if c.len() > 1 { A[(n >> 6) as usize & 63] as char } else { '=' });
@@ -326,6 +320,7 @@ fn base64(data: &[u8]) -> String {
 
 /// One HTML file: headings and paragraphs, tables as real `<table>` elements, images inline, a
 /// rule between pages.
+#[must_use]
 pub fn html(pages: &[Page], title: &str) -> String {
     let mut s = format!(
         "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>body{{max-width:46em;margin:2em auto;font-family:sans-serif;line-height:1.45}}\
@@ -437,6 +432,7 @@ fn docx_table(t: &Table) -> String {
 
 /// A Word document (.docx, Office Open XML): Heading 1/2 and Normal paragraphs, images inline at
 /// their size on the page, page breaks between pages.
+#[must_use]
 pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
     let mut body = String::new();
     let mut media: Vec<(String, &Image)> = Vec::new();
@@ -561,6 +557,7 @@ fn rtf_text(s: &str) -> String {
 
 /// Rich Text Format: paragraphs with their sizes and bold/italic, real table rows, page breaks
 /// between pages (images are left out).
+#[must_use]
 pub fn rtf(pages: &[Page]) -> String {
     let mut s = String::from("{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Helvetica;}}\n");
     for it in items(pages) {
@@ -734,7 +731,7 @@ mod tests {
         let blocks: Vec<Block> = (0..n)
             .map(|i| {
                 let (row, col) = (i / 2, i / 2 + i % 2);
-                let (x, y) = (10.0 + col as f64 * 20.0, 10_000.0 - row as f64 * 14.0);
+                let (x, y) = (10.0 + f64::from(col) * 20.0, 10_000.0 - f64::from(row) * 14.0);
                 Block { text: "x".into(), rect: [x, y, x + 8.0, y + 12.0], size: 11.0, bold: false, italic: false }
             })
             .collect();

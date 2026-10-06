@@ -25,6 +25,7 @@ pub enum Kind {
 }
 
 impl Kind {
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Kind::Inserted => "Inserted",
@@ -64,11 +65,13 @@ pub struct Comparison {
 }
 
 impl Comparison {
+    #[must_use]
     pub fn count(&self, kind: Kind) -> usize {
         self.changes.iter().filter(|c| c.kind == kind).count()
     }
 
     /// Whether the documents' text is the same.
+    #[must_use]
     pub fn identical(&self) -> bool {
         self.changes.is_empty()
     }
@@ -130,7 +133,7 @@ fn anchors(a: &[u64], b: &[u64]) -> Vec<(usize, usize)> {
         }
     }
     let mut pairs: Vec<(usize, usize)> = count.values().filter(|e| e.0 == 1 && e.1 == 1).map(|e| (e.2, e.3)).collect();
-    pairs.sort();
+    pairs.sort_unstable();
     // LIS on the b positions (patience sorting with back links).
     let mut tails: Vec<usize> = Vec::new();
     let mut prev = vec![usize::MAX; pairs.len()];
@@ -251,6 +254,7 @@ fn side(words: &[&Word], neighbour: Option<&Word>) -> Side {
 }
 
 /// Compare two documents' words.
+#[must_use]
 pub fn compare(old: &[Word], new: &[Word]) -> Comparison {
     let a: Vec<u64> = old.iter().map(|w| hash(&w.text)).collect();
     let b: Vec<u64> = new.iter().map(|w| hash(&w.text)).collect();
@@ -269,15 +273,12 @@ pub fn compare(old: &[Word], new: &[Word]) -> Comparison {
         }
         let (mut del, mut ins): (Vec<&Word>, Vec<&Word>) = (Vec::new(), Vec::new());
         while k < ops.len() && ops[k] != Op::Equal {
-            match ops[k] {
-                Op::Delete => {
-                    del.push(&old[i]);
-                    i += 1;
-                }
-                _ => {
-                    ins.push(&new[j]);
-                    j += 1;
-                }
+            if ops[k] == Op::Delete {
+                del.push(&old[i]);
+                i += 1;
+            } else {
+                ins.push(&new[j]);
+                j += 1;
             }
             k += 1;
         }
@@ -295,6 +296,7 @@ pub fn compare(old: &[Word], new: &[Word]) -> Comparison {
 }
 
 /// The compare report's text: a summary, then each change with its pages.
+#[must_use]
 pub fn report(c: &Comparison, old_name: &str, new_name: &str) -> String {
     let mut s = format!(
         "Compare Report\n\nOld file: {old_name}\nNew file: {new_name}\n\n{} changes: {} replaced, {} inserted, {} deleted.\n",
@@ -401,6 +403,7 @@ mod tests {
 /// `[x0, y0, x1, y1]` (y down) in `a`'s image. Both images are RGBA; `b` is sampled at the
 /// same relative position when sizes differ. Pixels count as different when a channel differs
 /// by more than `tolerance`; differing cells of a coarse grid are joined into regions.
+#[must_use]
 pub fn visual_regions(a: (&[u8], u32, u32), b: (&[u8], u32, u32), tolerance: u8) -> Vec<[u32; 4]> {
     let (pa, wa, ha) = a;
     let (pb, wb, hb) = b;
@@ -411,9 +414,9 @@ pub fn visual_regions(a: (&[u8], u32, u32), b: (&[u8], u32, u32), tolerance: u8)
     let (gw, gh) = (wa.div_ceil(CELL), ha.div_ceil(CELL));
     let mut grid = vec![false; (gw * gh) as usize];
     for y in 0..ha {
-        let yb = (y as u64 * hb as u64 / ha as u64) as u32;
+        let yb = (u64::from(y) * u64::from(hb) / u64::from(ha)) as u32;
         for x in 0..wa {
-            let xb = (x as u64 * wb as u64 / wa as u64) as u32;
+            let xb = (u64::from(x) * u64::from(wb) / u64::from(wa)) as u32;
             let ia = ((y * wa + x) * 4) as usize;
             let ib = ((yb * wb + xb) * 4) as usize;
             let (Some(ca), Some(cb)) = (pa.get(ia..ia + 3), pb.get(ib..ib + 3)) else { continue };
@@ -440,8 +443,8 @@ pub fn visual_regions(a: (&[u8], u32, u32), b: (&[u8], u32, u32), tolerance: u8)
             y1 = y1.max(cy);
             for dy in -2i64..=2 {
                 for dx in -2i64..=2 {
-                    let (nx, ny) = (cx as i64 + dx, cy as i64 + dy);
-                    if nx < 0 || ny < 0 || nx >= gw as i64 || ny >= gh as i64 {
+                    let (nx, ny) = (i64::from(cx) + dx, i64::from(cy) + dy);
+                    if nx < 0 || ny < 0 || nx >= i64::from(gw) || ny >= i64::from(gh) {
                         continue;
                     }
                     let n = (ny as u32 * gw + nx as u32) as usize;

@@ -91,7 +91,7 @@ impl Automation {
                 .ok_or_else(|| bad(format!("unknown paper {p:?} (Letter, Legal, Tabloid, A3, A4, A5)")))?,
         };
         let settings = print::Settings { pages, paper, orientation, layout, content };
-        let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
+        let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
         let sheets = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?.len();
         let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
         let mut out = json!({ "sheets": sheets, "pages": settings.pages.len(), "bytes": bytes.len() });

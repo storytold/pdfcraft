@@ -1,4 +1,4 @@
-//! Prepare a form in the real shell (egui_kittest): field tools, placing, selecting, moving,
+//! Prepare a form in the real shell (`egui_kittest)`: field tools, placing, selecting, moving,
 //! Field Properties and deleting.
 
 use egui::Pos2;
@@ -245,7 +245,7 @@ fn duplicating_a_field_onto_every_page() {
     let doc = s.session.get(s.views[0].id).unwrap();
     let f = doc.form.iter().find(|f| f.name == "city").unwrap();
     let mut pages: Vec<usize> = f.widgets.iter().filter_map(|w| w.page).collect();
-    pages.sort();
+    pages.sort_unstable();
     assert_eq!(pages, (0..n).collect::<Vec<_>>());
     assert_eq!(doc.can_undo(), Some("Duplicate field"));
 }

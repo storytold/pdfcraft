@@ -5,7 +5,7 @@
 //! that are byte-for-byte the same resource after copying are merged into one, and references
 //! are rewritten to it.
 //!
-//! - Only **resource-like** objects are merged: streams (font files, images, form XObjects, ICC
+//! - Only **resource-like** objects are merged: streams (font files, images, form `XObjects`, ICC
 //!   profiles, functions…), font, font-descriptor, graphics-state, pattern, shading, function and
 //!   encoding dictionaries, and colour-space arrays. Objects whose *identity* matters (pages,
 //!   annotations, form fields, layers, outline items, structure elements) are never merged.

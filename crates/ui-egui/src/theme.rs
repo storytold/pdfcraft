@@ -42,6 +42,7 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    #[must_use]
     pub fn for_kind(kind: ThemeKind) -> Self {
         match kind {
             ThemeKind::Light => Self {
@@ -95,10 +96,12 @@ impl Tokens {
         }
     }
 
+    #[must_use]
     pub fn get(ctx: &egui::Context) -> Self {
         ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("printcraft-theme"))).unwrap_or_else(|| Self::for_kind(ThemeKind::Light))
     }
 
+    #[must_use]
     pub fn dark(&self) -> bool {
         self.kind == ThemeKind::Dark
     }
@@ -108,9 +111,10 @@ pub fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(font_definitions());
 }
 
-/// The interface fonts: Inter (and JetBrains Mono for code) first, then egui's defaults, then
-/// the Japanese faces of the optional craft-fonts build input (BIZ UDPGothic first) as the last
+/// The interface fonts: Inter (and `JetBrains` Mono for code) first, then egui's defaults, then
+/// the Japanese faces of the optional craft-fonts build input (BIZ `UDPGothic` first) as the last
 /// fallback in every family. Without craft-fonts there is no Japanese face.
+#[must_use]
 pub fn font_definitions() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
@@ -139,12 +143,15 @@ pub fn font_definitions() -> FontDefinitions {
     fonts
 }
 
+#[must_use]
 pub fn regular(size: f32) -> FontId {
     FontId::proportional(size)
 }
+#[must_use]
 pub fn medium(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("medium".into()))
 }
+#[must_use]
 pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
 }

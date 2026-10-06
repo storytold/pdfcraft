@@ -1,4 +1,4 @@
-//! Export a PDF ▸ Image and Text from the real shell (egui_kittest).
+//! Export a PDF ▸ Image and Text from the real shell (`egui_kittest`).
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;

@@ -71,6 +71,7 @@ fn catalog(doc: &Document) -> Result<(printcraft_cos::ObjRef, Dict), OrganizeErr
 }
 
 /// The document's initial view as stored.
+#[must_use]
 pub fn initial_view(doc: &Document) -> InitialView {
     let Ok((_, c)) = catalog(doc) else { return InitialView::default() };
     let name = |d: &Dict, k: &[u8]| d.get(k).map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(<[u8]>::to_vec));
@@ -92,7 +93,7 @@ pub fn initial_view(doc: &Document) -> InitialView {
             Some(b"TwoColumnRight") => Layout::TwoUpContinuousCoverPage,
             _ => Layout::Default,
         },
-        language: c.get(b"Lang").map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text())).filter(|s| !s.is_empty()),
+        language: c.get(b"Lang").map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(printcraft_cos::PdfString::to_text)).filter(|s| !s.is_empty()),
         ..InitialView::default()
     };
     if let Some(vp) = c.get(b"ViewerPreferences").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()) {
@@ -127,7 +128,7 @@ pub fn initial_view(doc: &Document) -> InitialView {
             Some(b"FitH") => Magnification::FitWidth,
             Some(b"FitV") => Magnification::FitHeight,
             Some(b"FitB" | b"FitBH" | b"FitBV") => Magnification::FitVisible,
-            Some(b"XYZ") => match d.get(4).and_then(|z| z.as_f64()) {
+            Some(b"XYZ") => match d.get(4).and_then(printcraft_cos::Object::as_f64) {
                 Some(z) if z > 0.0 && (z - 1.0).abs() < 1e-6 => Magnification::ActualSize,
                 Some(z) if z > 0.0 => Magnification::Percent(z * 100.0),
                 _ => Magnification::Default,
@@ -140,6 +141,7 @@ pub fn initial_view(doc: &Document) -> InitialView {
 
 /// Whether viewers should show the document title rather than the file name
 /// (`/ViewerPreferences /DisplayDocTitle`), without reading the rest of the initial view.
+#[must_use]
 pub fn displays_doc_title(doc: &Document) -> bool {
     let Ok((_, c)) = catalog(doc) else { return false };
     c.get(b"ViewerPreferences")

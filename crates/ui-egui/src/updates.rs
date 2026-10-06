@@ -2,7 +2,7 @@
 //!
 //! The desktop app supplies how to ask ([`PrintCraftApp::update_source`]), so this crate has no
 //! network code; without a source (the web build, tests) the command opens the releases page.
-//! PrintCraft never downloads or installs anything itself: the user downloads the new version.
+//! `PrintCraft` never downloads or installs anything itself: the user downloads the new version.
 //! It asks only when the user does: there is no check at start (the owner's decision).
 
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use egui::{Align, Layout};
 
 use crate::{PrintCraftApp, theme, widgets};
 
-/// Where every PrintCraft release is listed.
+/// Where every `PrintCraft` release is listed.
 pub const RELEASES_PAGE: &str = "https://github.com/storytold/printcraft/releases";
 
 /// The latest published release.
@@ -28,6 +28,7 @@ pub type UpdateSource = Arc<dyn Fn() -> Result<Release, String> + Send + Sync>;
 
 /// Whether release `latest` (a tag such as `v0.2.0`) is newer than version `current` (`0.1.1`).
 /// Pre-release and build suffixes are ignored; a version that doesn't parse is never newer.
+#[must_use]
 pub fn is_newer(latest: &str, current: &str) -> bool {
     matches!((parse(latest), parse(current)), (Some(l), Some(c)) if l > c)
 }

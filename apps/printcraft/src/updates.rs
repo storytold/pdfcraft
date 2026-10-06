@@ -1,4 +1,4 @@
-//! Asks GitHub for the latest PrintCraft release (Help ▸ Check for updates, issue #28).
+//! Asks GitHub for the latest `PrintCraft` release (Help ▸ Check for updates, issue #28).
 
 use std::time::Duration;
 

@@ -80,7 +80,7 @@ pub struct SignDraft {
     pub rect: Option<[f64; 4]>,
     /// Sign this empty signature field instead.
     pub field: Option<String>,
-    /// Certify (DocMDP) with these permissions: 1 none, 2 form fill and signing, 3 also comments.
+    /// Certify (`DocMDP`) with these permissions: 1 none, 2 form fill and signing, 3 also comments.
     pub certify: Option<u8>,
     pub step: SignStep,
     pub selected: Option<usize>,
@@ -150,7 +150,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
                     info.pages[page].view_to_user(vx, vy)
                 };
                 let (a, b) = (user(r.left_top()), user(r.right_bottom()));
-                let rect = [a[0].min(b[0]) as f64, a[1].min(b[1]) as f64, a[0].max(b[0]) as f64, a[1].max(b[1]) as f64];
+                let rect = [f64::from(a[0].min(b[0])), f64::from(a[1].min(b[1])), f64::from(a[0].max(b[0])), f64::from(a[1].max(b[1]))];
                 view.sign.drawn = Some((page, rect));
             }
         }
@@ -174,7 +174,7 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
     DigitalIdEntry {
         path: path.to_string(),
         name: c.display_name(),
-        issuer: c.issuer.common_name().map(str::to_string).unwrap_or_else(|| c.issuer.display()),
+        issuer: c.issuer.common_name().map_or_else(|| c.issuer.display(), str::to_string),
         email: c.subject.email().unwrap_or("").to_string(),
         expires: format!("{:04}.{:02}.{:02}", c.not_after.year, c.not_after.month, c.not_after.day),
     }
@@ -935,7 +935,7 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
                         ("Issued by", c.issuer.display()),
                         ("Valid from", c.not_before.to_string()),
                         ("Valid to", c.not_after.to_string()),
-                        ("Intended usage", c.key_usage.map(key_usage).unwrap_or_else(|| "Any".into())),
+                        ("Intended usage", c.key_usage.map_or_else(|| "Any".into(), key_usage)),
                     ],
                 ),
                 CertTab::Details => grid(
@@ -949,7 +949,7 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
                         ("Validity ends", c.not_after.to_string()),
                         ("Public key", c.public_key.describe()),
                         ("Basic constraints", if c.is_ca { "Certificate authority".into() } else { "End entity".into() }),
-                        ("Key usage", c.key_usage.map(key_usage).unwrap_or_else(|| "Not present".into())),
+                        ("Key usage", c.key_usage.map_or_else(|| "Not present".into(), key_usage)),
                         ("Self-signed", if c.is_self_signed() { "Yes".into() } else { "No".into() }),
                         ("SHA-1 digest", hex(&sign::keys::DigestAlg::Sha1.digest(&[&c.raw]))),
                         ("SHA-256 digest", hex(&sign::keys::DigestAlg::Sha256.digest(&[&c.raw]))),

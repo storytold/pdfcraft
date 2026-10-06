@@ -40,6 +40,7 @@ pub struct Candidate {
 }
 
 /// The rectangles and horizontal segments a page draws (stroked or filled), in user space.
+#[must_use]
 pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
     let mut out = Shapes::default();
     let Some(p) = printcraft_model::pages(doc).into_iter().nth(page) else { return out };
@@ -81,7 +82,7 @@ pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
                 cur = op.nums::<2>().map(|[x, y]| {
                     let (a, b) = ctm.apply(x, y);
                     [a, b]
-                })
+                });
             }
             b"l" => {
                 if let (Some(a), Some([x, y])) = (cur, op.nums::<2>()) {
@@ -97,7 +98,7 @@ pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
                 for r in path_boxes.drain(..) {
                     // A very flat filled rectangle is a rule.
                     if r[3] - r[1] < 1.5 && r[2] - r[0] > 1.0 {
-                        out.rules.push([r[0], (r[1] + r[3]) / 2.0, r[2], (r[1] + r[3]) / 2.0]);
+                        out.rules.push([r[0], f64::midpoint(r[1], r[3]), r[2], f64::midpoint(r[1], r[3])]);
                     } else {
                         out.boxes.push(r);
                     }
@@ -117,7 +118,7 @@ pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
 }
 
 fn mid(r: [f64; 4]) -> f64 {
-    (r[1] + r[3]) / 2.0
+    f64::midpoint(r[1], r[3])
 }
 
 /// A label's words made into a field name: letters, digits and spaces, no trailing colon.
@@ -173,7 +174,7 @@ fn label_for(words: &[Word], rect: [f64; 4], right_of: bool) -> String {
         .iter()
         .filter(|w| w.rect[1] >= rect[3] - 1.0 && w.rect[1] - rect[3] < 24.0 && w.rect[0] < rect[2] && w.rect[2] > rect[0] - 4.0)
         .collect();
-    let Some(line) = above.iter().map(|w| mid(w.rect)).min_by(|a, b| a.total_cmp(b)) else { return String::new() };
+    let Some(line) = above.iter().map(|w| mid(w.rect)).min_by(f64::total_cmp) else { return String::new() };
     let mut on: Vec<&&Word> = above.iter().filter(|w| (mid(w.rect) - line).abs() < 3.0).collect();
     on.sort_by(|a, b| a.rect[0].total_cmp(&b.rect[0]));
     clean(&on.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" "))
@@ -181,6 +182,7 @@ fn label_for(words: &[Word], rect: [f64; 4], right_of: bool) -> String {
 
 /// Propose fields for a page. `existing` are the page's widget rectangles (no candidate
 /// overlaps them); names are unique against `taken`.
+#[must_use]
 pub fn detect(words: &[Word], shapes: &Shapes, existing: &[[f64; 4]], taken: &[String]) -> Vec<Candidate> {
     let mut out: Vec<Candidate> = Vec::new();
     let overlaps = |a: [f64; 4], b: [f64; 4]| a[0] < b[2] - 1.0 && b[0] < a[2] - 1.0 && a[1] < b[3] - 1.0 && b[1] < a[3] - 1.0;

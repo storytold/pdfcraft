@@ -1,6 +1,6 @@
 //! Text extraction (bootstrap for `printcraft-text`, architecture §8).
 //!
-//! A hayro `Device` that ignores paint and records every glyph: its Unicode value (ToUnicode →
+//! A hayro `Device` that ignores paint and records every glyph: its Unicode value (`ToUnicode` →
 //! encoding → glyph name fallbacks, handled by hayro) and its box in *page view space*, i.e.
 //! points with the origin at the top-left of the displayed page, rotation applied, y down. The UI
 //! maps view space to the screen with a single scale.
@@ -34,11 +34,13 @@ pub struct PageText {
 }
 
 impl PageText {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.glyphs.is_empty()
     }
 
     /// Text of glyphs `range` with spaces and line breaks reconstructed.
+    #[must_use]
     pub fn text_of(&self, range: std::ops::Range<usize>) -> String {
         let mut s = String::new();
         let mut prev_line = None;
@@ -57,17 +59,20 @@ impl PageText {
         s
     }
 
+    #[must_use]
     pub fn plain_text(&self) -> String {
         self.text_of(0..self.glyphs.len())
     }
 
     /// Case-insensitive search. Returns glyph ranges of every match (words may span line breaks,
     /// which count as a single space).
+    #[must_use]
     pub fn find(&self, needle: &str) -> Vec<std::ops::Range<usize>> {
         self.find_opts(needle, false, false)
     }
 
     /// Search with Acrobat's find options: case-sensitive, whole words only.
+    #[must_use]
     pub fn find_opts(&self, needle: &str, case_sensitive: bool, whole_words: bool) -> Vec<std::ops::Range<usize>> {
         let fold = |s: &str| if case_sensitive { s.to_string() } else { s.to_lowercase() };
         let needle: Vec<char> = fold(needle).split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
@@ -120,6 +125,7 @@ impl PageText {
     }
 
     /// Index of the glyph nearest to a view-space point (for selection anchors).
+    #[must_use]
     pub fn nearest(&self, x: f32, y: f32) -> Option<usize> {
         self.glyphs
             .iter()
@@ -147,6 +153,7 @@ impl PageText {
     }
 
     /// Merge the boxes of `range` into one rectangle per line (for highlighting).
+    #[must_use]
     pub fn line_rects(&self, range: std::ops::Range<usize>) -> Vec<[f32; 4]> {
         let mut out: Vec<(u32, [f32; 4])> = Vec::new();
         for i in range {
@@ -189,7 +196,7 @@ impl<'a> Device<'a> for TextDevice {
             hayro::hayro_interpret::hayro_cmap::BfString::Char(c) => c.to_string(),
             hayro::hayro_interpret::hayro_cmap::BfString::String(s) => s,
         };
-        if text.chars().all(|c| c.is_control()) {
+        if text.chars().all(char::is_control) {
             return;
         }
         // Glyph space → view space. Glyph space uses 1000 units per em for outline glyphs; the em
@@ -201,9 +208,9 @@ impl<'a> Device<'a> for TextDevice {
         }
         let advance = match glyph {
             Glyph::Outline(g) => {
-                g.advance_width().filter(|a| *a > 0.0).map(f64::from).unwrap_or_else(|| g.outline().bounding_box().width().max(500.0))
+                g.advance_width().filter(|a| *a > 0.0).map_or_else(|| g.outline().bounding_box().width().max(500.0), f64::from)
             }
-            Glyph::Type3(g) => g.advance_width().filter(|a| a.is_finite() && *a > 0.0).map(f64::from).unwrap_or(600.0),
+            Glyph::Type3(g) => g.advance_width().filter(|a| a.is_finite() && *a > 0.0).map_or(600.0, f64::from),
         };
         // The baseline direction in view space (y down), to the nearest quarter turn.
         let (dx, dy) = (t.as_coeffs()[0], t.as_coeffs()[1]);
@@ -243,7 +250,7 @@ pub(crate) fn extract_page(pdf: &Pdf, page: usize, settings: &InterpreterSetting
     // as in Acrobat, and match what other extractors report.
     let settings = settings.clone();
     let initial = p.initial_transform(true).to_kurbo();
-    let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, w as f64, h as f64), &cache, p.xref(), settings);
+    let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, f64::from(w), f64::from(h)), &cache, p.xref(), settings);
     let mut dev = TextDevice { glyphs: Vec::new(), directions: [0; 4] };
     interpret_page(p, &mut ctx, &mut dev);
     // Lay out in the frame where most text runs left to right, so a page shown rotated (by
@@ -307,7 +314,7 @@ struct Seg {
 
 impl Seg {
     fn cy(&self) -> f32 {
-        (self.bbox[1] + self.bbox[3]) / 2.0
+        f32::midpoint(self.bbox[1], self.bbox[3])
     }
 }
 
@@ -353,7 +360,7 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
         return PageText::default();
     }
     let height = |i: usize| (glyphs[i].rect[3] - glyphs[i].rect[1]).max(0.1);
-    let cy = |i: usize| (glyphs[i].rect[1] + glyphs[i].rect[3]) / 2.0;
+    let cy = |i: usize| f32::midpoint(glyphs[i].rect[1], glyphs[i].rect[3]);
 
     // 1. Segments in content order.
     let mut segs: Vec<Seg> = Vec::new();

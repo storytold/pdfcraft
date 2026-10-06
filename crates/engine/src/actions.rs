@@ -34,6 +34,7 @@ pub enum Step {
 
 impl Step {
     /// Every step, with an empty argument where it takes one (for the step picker).
+    #[must_use]
     pub fn all() -> Vec<Step> {
         vec![
             Step::RecognizeText,
@@ -52,6 +53,7 @@ impl Step {
     }
 
     /// A stable id (agents, saved actions).
+    #[must_use]
     pub fn id(&self) -> &'static str {
         match self {
             Step::RecognizeText => "recognize_text",
@@ -69,6 +71,7 @@ impl Step {
         }
     }
 
+    #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
             Step::RecognizeText => "Recognize text",
@@ -87,6 +90,7 @@ impl Step {
     }
 
     /// The step's text argument, if it takes one.
+    #[must_use]
     pub fn arg(&self) -> Option<&str> {
         match self {
             Step::AddWatermark(s) | Step::AddHeader(s) | Step::AddFooter(s) | Step::SetTitle(s) | Step::RunJavaScript(s) => Some(s),
@@ -102,6 +106,7 @@ impl Step {
     }
 
     /// Build a step from its id and argument.
+    #[must_use]
     pub fn from_id(id: &str, arg: &str) -> Option<Step> {
         let mut s = Step::all().into_iter().find(|s| s.id() == id)?;
         if let Some(a) = s.arg_mut() {
@@ -117,11 +122,12 @@ pub struct Action {
     pub name: String,
     pub description: String,
     pub steps: Vec<Step>,
-    /// One of PrintCraft's own actions (can't be edited or deleted).
+    /// One of `PrintCraft`'s own actions (can't be edited or deleted).
     pub builtin: bool,
 }
 
 /// The built-in actions.
+#[must_use]
 pub fn builtin() -> Vec<Action> {
     let a = |name: &str, description: &str, steps: Vec<Step>| Action { name: name.into(), description: description.into(), steps, builtin: true };
     vec![

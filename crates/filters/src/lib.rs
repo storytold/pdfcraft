@@ -1,6 +1,6 @@
 //! PDF stream filters (ISO 32000-2 §7.4).
 //!
-//! Layer L0, standalone: this crate depends on no other PrintCraft crate.
+//! Layer L0, standalone: this crate depends on no other `PrintCraft` crate.
 //!
 //! Decoding covers the general-purpose filters (`FlateDecode`, `LZWDecode` with
 //! TIFF/PNG predictors, `ASCIIHexDecode`, `ASCII85Decode`, `RunLengthDecode`).
@@ -43,6 +43,7 @@ impl Filter {
     /// Parses a filter name. Accepts the full names (ISO 32000-2 Table 6) and the
     /// inline-image abbreviations (Table 92): `Fl`, `LZW`, `AHx`, `A85`, `RL`, `DCT`, `CCF`.
     /// A leading `/` is ignored.
+    #[must_use]
     pub fn from_name(name: &[u8]) -> Filter {
         let n = name.strip_prefix(b"/").unwrap_or(name);
         match n {
@@ -61,6 +62,7 @@ impl Filter {
     }
 
     /// The full PDF name (without the leading `/`).
+    #[must_use]
     pub fn name(&self) -> &str {
         match self {
             Filter::Flate => "FlateDecode",
@@ -78,6 +80,7 @@ impl Filter {
     }
 
     /// True for the image codecs (DCT, JPX, JBIG2, CCITT fax).
+    #[must_use]
     pub fn is_image_codec(&self) -> bool {
         matches!(self, Filter::Dct | Filter::Jpx | Filter::Jbig2 | Filter::CcittFax)
     }
@@ -194,8 +197,8 @@ fn with_predictor(step: Step, params: &Params, name: &'static str) -> Step {
     }
 }
 
-/// Encodes `data` with `filter`. Supported: Flate (zlib, level 6), LZW, ASCIIHex,
-/// ASCII85, RunLength. For Flate and LZW, `params.predictor >= 2` applies the
+/// Encodes `data` with `filter`. Supported: Flate (zlib, level 6), LZW, `ASCIIHex`,
+/// ASCII85, `RunLength`. For Flate and LZW, `params.predictor >= 2` applies the
 /// predictor first (TIFF 2, PNG 10–15; 15 chooses the per-row optimum).
 pub fn encode(filter: &Filter, params: &Params, data: &[u8]) -> Result<Vec<u8>, FilterError> {
     match filter {
@@ -209,6 +212,7 @@ pub fn encode(filter: &Filter, params: &Params, data: &[u8]) -> Result<Vec<u8>, 
 }
 
 /// zlib (RFC 1950) at compression level 6.
+#[must_use]
 pub fn encode_flate(data: &[u8]) -> Vec<u8> {
     flate::encode(data)
 }

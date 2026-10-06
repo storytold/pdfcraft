@@ -46,7 +46,7 @@ impl Flatten {
     }
 
     fn pt(&self, x: f32, y: f32) -> [f64; 2] {
-        [self.dx + x as f64 * self.scale, y as f64 * self.scale]
+        [self.dx + f64::from(x) * self.scale, f64::from(y) * self.scale]
     }
 
     fn last(&self) -> [f64; 2] {
@@ -116,10 +116,10 @@ pub fn japanese_glyph(ch: char) -> Result<GlyphOutline, GlyphError> {
     let Ok(font) = FontRef::new(face.bytes) else { return Err(GlyphError::Missing) };
     let loc = LocationRef::default();
     let metrics = font.metrics(Size::unscaled(), loc);
-    let scale = 1.0 / metrics.units_per_em.max(1) as f64;
+    let scale = 1.0 / f64::from(metrics.units_per_em.max(1));
     let Some(gid) = font.charmap().map(ch) else { return Err(GlyphError::Missing) };
     let advances = font.glyph_metrics(Size::unscaled(), loc);
-    let width = advances.advance_width(gid).unwrap_or(0.0) as f64 * scale;
+    let width = f64::from(advances.advance_width(gid).unwrap_or(0.0)) * scale;
     if !width.is_finite() || width <= 0.0 || width > 2.0 {
         return Err(GlyphError::Missing);
     }
@@ -136,25 +136,26 @@ pub fn japanese_glyph(ch: char) -> Result<GlyphOutline, GlyphError> {
         if !p[0].is_finite() || !p[1].is_finite() {
             return Err(GlyphError::Missing);
         }
-        if !any {
-            bbox = [p[0], p[1], p[0], p[1]];
-            any = true;
-        } else {
+        if any {
             bbox[0] = bbox[0].min(p[0]);
             bbox[1] = bbox[1].min(p[1]);
             bbox[2] = bbox[2].max(p[0]);
             bbox[3] = bbox[3].max(p[1]);
+        } else {
+            bbox = [p[0], p[1], p[0], p[1]];
+            any = true;
         }
     }
     Ok(GlyphOutline { contours: pen.contours, width, bbox })
 }
 
 /// The outlines of `text` in the script font (characters it lacks are skipped).
+#[must_use]
 pub fn script_outline(text: &str) -> ScriptOutline {
     let Ok(font) = FontRef::new(FONT) else { return ScriptOutline::default() };
     let loc = LocationRef::default();
     let metrics = font.metrics(Size::unscaled(), loc);
-    let scale = 1.0 / metrics.units_per_em.max(1) as f64;
+    let scale = 1.0 / f64::from(metrics.units_per_em.max(1));
     let charmap = font.charmap();
     let glyphs = font.outline_glyphs();
     let advances = font.glyph_metrics(Size::unscaled(), loc);
@@ -165,10 +166,10 @@ pub fn script_outline(text: &str) -> ScriptOutline {
             let _ = g.draw(DrawSettings::unhinted(Size::unscaled(), loc), &mut pen);
             pen.close();
         }
-        pen.dx += advances.advance_width(gid).unwrap_or(0.0) as f64 * scale;
+        pen.dx += f64::from(advances.advance_width(gid).unwrap_or(0.0)) * scale;
     }
     pen.close();
-    ScriptOutline { contours: pen.contours, width: pen.dx, ascent: metrics.ascent as f64 * scale, descent: metrics.descent as f64 * scale }
+    ScriptOutline { contours: pen.contours, width: pen.dx, ascent: f64::from(metrics.ascent) * scale, descent: f64::from(metrics.descent) * scale }
 }
 
 #[cfg(test)]

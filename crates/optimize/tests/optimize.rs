@@ -21,8 +21,8 @@ fn image(doc: &mut Document, w: u32, h: u32, n: usize, jpeg: bool, smask: Option
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("XObject"));
     d.set(b"Subtype".to_vec(), Object::name("Image"));
-    d.set(b"Width".to_vec(), Object::Int(w as i64));
-    d.set(b"Height".to_vec(), Object::Int(h as i64));
+    d.set(b"Width".to_vec(), Object::Int(i64::from(w)));
+    d.set(b"Height".to_vec(), Object::Int(i64::from(h)));
     d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
     d.set(b"ColorSpace".to_vec(), Object::name(if n == 1 { "DeviceGray" } else { "DeviceRGB" }));
     if let Some(m) = smask {
@@ -106,7 +106,7 @@ fn images_are_measured_where_drawn_and_downsampled() {
     let report = optimize(&mut doc, &Settings::default()).unwrap();
     assert_eq!(report.images, 5, "{report:?}");
     assert_eq!(report.images_resampled, 2, "{report:?}");
-    assert!(report.thumbnails == 2);
+    assert_eq!(report.thumbnails, 2);
     let b = stream(&doc, big);
     assert_eq!((b.dict.int(b"Width"), b.dict.int(b"Height"), b.dict.name(b"Filter")), (Some(300), Some(300), Some(&b"DCTDecode"[..])));
     let m = stream(&doc, masked);

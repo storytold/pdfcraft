@@ -83,7 +83,7 @@ fn comment_view(doc: &Document) -> Vec<String> {
                 "{} p{} {:?} by {:?}: {:?} reply_to={:?}",
                 s.subtype,
                 s.page,
-                s.rect.map(|v| v.round()),
+                s.rect.map(f32::round),
                 s.author,
                 s.contents,
                 s.in_reply_to.is_some()

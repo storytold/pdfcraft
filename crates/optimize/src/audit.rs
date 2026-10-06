@@ -49,6 +49,7 @@ impl SpaceCategory {
         SpaceCategory::DocumentOverhead,
     ];
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             SpaceCategory::Images => "Images",
@@ -160,6 +161,7 @@ fn size(doc: &Document, num: u32) -> u64 {
 
 /// Audit the space a document uses; `file_len` is the size of the file on disk (the rest is
 /// overhead).
+#[must_use]
 pub fn audit_space(doc: &Document, file_len: u64) -> Vec<SpaceUse> {
     let mut a = Audit { doc, owner: HashMap::new() };
     let cat = doc.root().and_then(|r| doc.get(r).as_dict().cloned()).unwrap_or_default();

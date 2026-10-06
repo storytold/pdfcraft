@@ -7,7 +7,7 @@
 //! (`Td`, `T*` and friends move from the line matrix, which showing text doesn't change).
 //!
 //! The new text uses the line's own font when every character has a code and a glyph in it;
-//! otherwise it is set in Helvetica (WinAnsi), and the result says the font was substituted.
+//! otherwise it is set in Helvetica (`WinAnsi`), and the result says the font was substituted.
 //! Reflowing a paragraph to a new width is not done here (see `edit.text-reflow`).
 
 use std::collections::HashMap;
@@ -122,6 +122,7 @@ pub struct TextBlock {
 
 impl TextLine {
     /// The baseline's height in user space.
+    #[must_use]
     pub fn origin_baseline(&self) -> f64 {
         self.origin.baseline
     }
@@ -267,9 +268,7 @@ fn interpret(doc: &Document, ops: &[Op], fonts_res: &Dict, cache: &mut HashMap<V
                         Rc::new(
                             fonts_res
                                 .get(name)
-                                .and_then(|f| doc.resolve(f).as_dict().cloned())
-                                .map(|d| Metrics::from_dict(doc, &d))
-                                .unwrap_or_else(Metrics::fallback),
+                                .and_then(|f| doc.resolve(f).as_dict().cloned()).map_or_else(Metrics::fallback, |d| Metrics::from_dict(doc, &d)),
                         )
                     });
                     ts.font = Some((name.to_vec(), m.clone()));
@@ -723,7 +722,7 @@ pub fn text_blocks(doc: &Document, page: usize) -> Result<Vec<TextBlock>, EditEr
 /// Lines that share a left edge, a centre or a right edge (left, centred or right-aligned text).
 fn aligned(a: &TextLine, b: &TextLine) -> bool {
     let tol = b.size.max(1.0);
-    let centre = |r: [f64; 4]| (r[0] + r[2]) / 2.0;
+    let centre = |r: [f64; 4]| f64::midpoint(r[0], r[2]);
     (a.origin.x - b.origin.x).abs() < tol || (centre(a.rect) - centre(b.rect)).abs() < tol || (a.rect[2] - b.rect[2]).abs() < tol
 }
 
@@ -885,13 +884,12 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
         let t = match (&metrics, reuse) {
             (Some(m), true) => m
                 .encode(s)
-                .map(|bytes| {
+                .map_or(0.0, |bytes| {
                     m.codes(&bytes)
                         .iter()
                         .map(|(c, l)| m.width(*c) * size + o_state.char_spacing + if m.is_space(*c, *l) { o_state.word_spacing } else { 0.0 })
                         .sum::<f64>()
-                })
-                .unwrap_or(0.0),
+                }),
             _ if let Some(fallback) = &type3 => {
                 fallback.codes.iter().map(|(ch, _, width)| s.chars().filter(|c| c == ch).count() as f64 * width * size).sum::<f64>()
                     + s.chars().count() as f64 * o_state.char_spacing

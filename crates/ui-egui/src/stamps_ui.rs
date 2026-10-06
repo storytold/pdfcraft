@@ -161,7 +161,7 @@ impl PrintCraftApp {
             return;
         }
         let name = file.rsplit_once('.').map_or(file.as_str(), |(s, _)| s).to_string();
-        let category = self.custom_stamps.last().map(|s| s.category.clone()).unwrap_or_else(|| "My stamps".into());
+        let category = self.custom_stamps.last().map_or_else(|| "My stamps".into(), |s| s.category.clone());
         self.stamp_draft = crate::stamps_ui::StampDraft { file, data: Arc::new(bytes), category, name };
         self.dialog = Some(Dialog::CreateStamp);
     }

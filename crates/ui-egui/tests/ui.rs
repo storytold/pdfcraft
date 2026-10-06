@@ -1,4 +1,4 @@
-//! Headless UI tests (egui_kittest + AccessKit). They drive the real app shell without a window.
+//! Headless UI tests (`egui_kittest` + AccessKit). They drive the real app shell without a window.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;

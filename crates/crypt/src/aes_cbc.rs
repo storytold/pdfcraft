@@ -44,6 +44,7 @@ impl Cipher {
 
 /// Encrypt; with `pad`, PKCS#5 padding is added (otherwise `data` must be whole blocks, and a
 /// trailing partial block is zero-padded).
+#[must_use]
 pub fn aes_cbc_encrypt(key: &[u8], iv: &[u8; 16], data: &[u8], pad: bool) -> Vec<u8> {
     let c = Cipher::new(key);
     let mut buf = data.to_vec();
@@ -65,6 +66,7 @@ pub fn aes_cbc_encrypt(key: &[u8], iv: &[u8; 16], data: &[u8], pad: bool) -> Vec
 }
 
 /// Decrypt; with `pad`, PKCS#5 padding is removed when valid.
+#[must_use]
 pub fn aes_cbc_decrypt(key: &[u8], iv: &[u8; 16], data: &[u8], pad: bool) -> Vec<u8> {
     let c = Cipher::new(key);
     let blocks = data.as_chunks::<16>().0;

@@ -1,4 +1,4 @@
-//! Acrobat JavaScript in the shell (egui_kittest): the console, Document JavaScripts, a button
+//! Acrobat JavaScript in the shell (`egui_kittest)`: the console, Document `JavaScripts`, a button
 //! script and Preferences ▸ JavaScript.
 
 use egui_kittest::Harness;

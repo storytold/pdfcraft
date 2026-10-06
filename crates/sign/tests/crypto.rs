@@ -26,7 +26,7 @@ fn decode_base64(s: &str) -> Vec<u8> {
     bytes
         .chunks(4)
         .flat_map(|c| {
-            let n = c.iter().enumerate().fold(0u32, |acc, (i, v)| acc | (*v as u32) << (18 - 6 * i));
+            let n = c.iter().enumerate().fold(0u32, |acc, (i, v)| acc | u32::from(*v) << (18 - 6 * i));
             let k = c.len() * 6 / 8;
             (0..k).map(move |i| (n >> (16 - 8 * i)) as u8)
         })

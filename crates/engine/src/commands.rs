@@ -65,6 +65,7 @@ impl Shortcut {
     }
 
     /// How the shortcut is written in menus: `⇧⌘S` on macOS, `Ctrl+Shift+S` elsewhere.
+    #[must_use]
     pub fn label(&self, mac: bool) -> String {
         if mac {
             let mut s = String::new();
@@ -93,6 +94,7 @@ impl Shortcut {
     }
 
     /// Number of modifiers (more specific shortcuts are matched first).
+    #[must_use]
     pub fn modifier_count(&self) -> usize {
         usize::from(self.command) + usize::from(self.shift) + usize::from(self.mac_ctrl)
     }
@@ -135,7 +137,7 @@ const fn ct(
     CommandSpec { id, label, menu, shortcut, needs, in_text: false, icon }
 }
 
-use Needs::*;
+use Needs::{Nothing, Document, Assembly, Undo, Redo, Annotate, FillForms, HasComments, Modification, HasFields, HasRedactions, Marks, Security, ProtectedSecurity};
 
 const FILE: Option<&str> = Some("File");
 const EDIT: Option<&str> = Some("Edit");
@@ -305,6 +307,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("help.about", "About PrintCraft", HELP, None, Nothing, "info"),
 ];
 
+#[must_use]
 pub fn command(id: &str) -> Option<&'static CommandSpec> {
     COMMANDS.iter().find(|c| c.id == id)
 }
@@ -315,20 +318,21 @@ pub fn menu(menu: &str) -> impl Iterator<Item = &'static CommandSpec> + '_ {
 }
 
 /// Whether `spec` can run now, for the document `active` (the focused tab).
+#[must_use]
 pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) -> bool {
     let doc = active.and_then(|id| session.get(id));
     match spec.needs {
         Nothing => true,
         Document => doc.is_some(),
-        Assembly => doc.is_some_and(|d| d.allows_assembly()),
-        Modification => doc.is_some_and(|d| d.allows_modification()),
-        Annotate => doc.is_some_and(|d| d.allows_annotation()),
+        Assembly => doc.is_some_and(super::Document::allows_assembly),
+        Modification => doc.is_some_and(super::Document::allows_modification),
+        Annotate => doc.is_some_and(super::Document::allows_annotation),
         FillForms => doc.is_some_and(|d| d.allows_form_filling() && !d.form.is_empty()),
         Marks(k) => doc.is_some_and(|d| d.allows_modification() && d.marks.contains(&k)),
         HasComments => doc.is_some_and(|d| d.allows_modification() && !d.info.annotations.is_empty()),
         HasFields => doc.is_some_and(|d| d.allows_modification() && !d.form.is_empty()),
         HasRedactions => doc.is_some_and(|d| d.allows_modification() && d.redaction_marks() > 0),
-        Security => doc.is_some_and(|d| d.allows_security_change()),
+        Security => doc.is_some_and(super::Document::allows_security_change),
         ProtectedSecurity => doc.is_some_and(|d| d.allows_security_change() && d.security_summary().is_some()),
         Undo => doc.is_some_and(|d| d.can_undo().is_some()),
         Redo => doc.is_some_and(|d| d.can_redo().is_some()),
@@ -336,11 +340,12 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
 }
 
 /// The label to show for `spec` now ("Undo Rotate page" rather than "Undo").
+#[must_use]
 pub fn current_label(spec: &CommandSpec, session: &Session, active: Option<DocId>) -> String {
     let doc = active.and_then(|id| session.get(id));
     match (spec.id, doc) {
-        ("edit.undo", Some(d)) => d.can_undo().map(|l| format!("Undo {l}")).unwrap_or_else(|| spec.label.into()),
-        ("edit.redo", Some(d)) => d.can_redo().map(|l| format!("Redo {l}")).unwrap_or_else(|| spec.label.into()),
+        ("edit.undo", Some(d)) => d.can_undo().map_or_else(|| spec.label.into(), |l| format!("Undo {l}")),
+        ("edit.redo", Some(d)) => d.can_redo().map_or_else(|| spec.label.into(), |l| format!("Redo {l}")),
         _ => spec.label.into(),
     }
 }

@@ -1,4 +1,11 @@
+msrv = "1.90"
+
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
 allow-indexing-slicing-in-tests = true
+
+# Tests deliberately compare rendering output against recorded values and use
+# short destructuring names (x0, y1, w) for rectangles; the noise isn't worth
+# renaming just to satisfy a lint.
+too-many-lines-threshold = 100

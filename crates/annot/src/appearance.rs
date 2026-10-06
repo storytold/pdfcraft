@@ -1,4 +1,4 @@
-//! Appearance streams (§12.5.5) for the comment types PrintCraft creates, execution plan M5.2.
+//! Appearance streams (§12.5.5) for the comment types `PrintCraft` creates, execution plan M5.2.
 //!
 //! [`build`] draws a normal appearance (`/AP /N`) from the annotation dictionary alone, so the
 //! same code serves new comments and restyled ones. Drawings are in page space with
@@ -6,8 +6,8 @@
 //! It returns `None` for anything it cannot draw faithfully (cloudy borders, unknown line
 //! endings, indirect geometry), so callers never replace an appearance with a worse one.
 //!
-//! The note icons are PrintCraft's own drawings (AGENTS.md §1). Text boxes use the standard
-//! Helvetica font with WinAnsi encoding; line breaking uses [`text_width`], an approximation of
+//! The note icons are `PrintCraft`'s own drawings (AGENTS.md §1). Text boxes use the standard
+//! Helvetica font with `WinAnsi` encoding; line breaking uses [`text_width`], an approximation of
 //! Helvetica's proportions by character class (no font program or metrics file is bundled).
 
 use printcraft_cos::{Dict, Object, PdfString, Stream};
@@ -17,11 +17,13 @@ use printcraft_fonts::{literal, win_ansi};
 use crate::{NOTE_SIZE, Rgb, n};
 
 /// Length of an arrowhead for a line of width `w`.
+#[must_use]
 pub fn arrow_size(w: f64) -> f64 {
     6.0 + 3.0 * w.max(0.0)
 }
 
 /// Nominal radius of a cloudy border's bumps for a line of width `w` (intensity 1).
+#[must_use]
 pub fn cloud_radius(w: f64) -> f64 {
     6.0 + 1.5 * w.max(0.0)
 }
@@ -47,6 +49,7 @@ fn line_end(c: &mut String, kind: &[u8], tip: (f64, f64), from: (f64, f64), w: f
 
 /// A closed cloudy outline through `pts` (§12.5.4 `/BE /S /C`): each edge becomes a row of
 /// half-circle bumps of about `r`, bulging outwards.
+#[must_use]
 pub fn cloud_path(pts: &[(f64, f64)], r: f64) -> String {
     let area: f64 = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a.0 * b.1 - b.0 * a.1).sum();
     // Outward normal of an edge: to the right of travel for counter-clockwise outlines.
@@ -77,14 +80,14 @@ pub fn cloud_path(pts: &[(f64, f64)], r: f64) -> String {
 }
 
 fn nums(d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
-    d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect()
+    d.get(key)?.as_array()?.iter().map(printcraft_cos::Object::as_f64).collect()
 }
 
 /// `/C`-style colour arrays: none (transparent), gray, RGB or CMYK.
 fn color(d: &Dict, key: &[u8]) -> Option<Option<Rgb>> {
     let c = match d.get(key) {
         None => return Some(None),
-        Some(o) => o.as_array()?.iter().map(|o| o.as_f64()).collect::<Option<Vec<f64>>>()?,
+        Some(o) => o.as_array()?.iter().map(printcraft_cos::Object::as_f64).collect::<Option<Vec<f64>>>()?,
     };
     Some(match c.as_slice() {
         [] => None,
@@ -96,7 +99,7 @@ fn color(d: &Dict, key: &[u8]) -> Option<Option<Rgb>> {
 }
 
 fn border_width(d: &Dict) -> f64 {
-    if let Some(w) = d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()) {
+    if let Some(w) = d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(printcraft_cos::Object::as_f64) {
         return w.max(0.0);
     }
     match nums(d, b"Border") {
@@ -124,6 +127,7 @@ fn rg_stroke(c: Rgb) -> String {
 }
 
 /// `/DA` of a text box: (text colour, font size). Defaults to black 12 pt.
+#[must_use]
 pub fn parse_da(d: &Dict) -> (Rgb, f64) {
     let da = d.get(b"DA").and_then(|o| o.as_string()).map(|s| String::from_utf8_lossy(&s.bytes).into_owned()).unwrap_or_default();
     let toks: Vec<&str> = da.split_whitespace().collect();
@@ -189,7 +193,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
     if cloudy && subtype != b"Polygon" {
         return None;
     }
-    let opacity = d.get(b"CA").and_then(|o| o.as_f64()).unwrap_or(1.0).clamp(0.0, 1.0);
+    let opacity = d.get(b"CA").and_then(printcraft_cos::Object::as_f64).unwrap_or(1.0).clamp(0.0, 1.0);
     let stroke = color(d, b"C")?;
     let w = border_width(d);
     let mut res = Dict::new();
@@ -202,20 +206,20 @@ pub fn build(d: &Dict) -> Option<Stream> {
     match subtype.as_slice() {
         b"Text" => {
             let col = stroke.unwrap_or([1.0, 0.82, 0.0]);
-            let icon = d.name(b"Name").map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_else(|| "Note".into());
+            let icon = d.name(b"Name").map_or_else(|| "Note".into(), |n| String::from_utf8_lossy(n).into_owned());
             c.push_str(&note_icon(&icon, col));
             return Some(form([0.0, 0.0, NOTE_SIZE, NOTE_SIZE], c.as_bytes(), res));
         }
         b"FileAttachment" => {
             let col = stroke.unwrap_or([0.0, 0.47, 0.84]);
-            let icon = d.name(b"Name").map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_else(|| "PushPin".into());
+            let icon = d.name(b"Name").map_or_else(|| "PushPin".into(), |n| String::from_utf8_lossy(n).into_owned());
             c.push_str(&attach_icon(&icon, col));
             return Some(form([0.0, 0.0, NOTE_SIZE, NOTE_SIZE], c.as_bytes(), res));
         }
         _ if markup => {
             let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
             let col = stroke?;
-            for quad in q.as_chunks::<8>().0.iter() {
+            for quad in q.as_chunks::<8>().0 {
                 let p = |i: usize| (quad[2 * i], quad[2 * i + 1]);
                 let (p1, p2, p3, p4) = (p(0), p(1), p(2), p(3));
                 let h = (p1.0 - p3.0).hypot(p1.1 - p3.1);
@@ -268,7 +272,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
             let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
             let col = stroke.unwrap_or([0.89, 0.13, 0.13]);
             c.push_str(&format!("{}1 w\n", rg_stroke(col)));
-            for quad in q.as_chunks::<8>().0.iter() {
+            for quad in q.as_chunks::<8>().0 {
                 c.push_str(&format!(
                     "{} {} m {} {} l {} {} l {} {} l h S\n",
                     n(quad[0]),
@@ -341,7 +345,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 c.push_str(&format!("{}{} w 1 J 1 j\n{}", rg_stroke(s), n(w), dash(d)));
             }
             if cloudy {
-                let intensity = d.get(b"BE").and_then(|b| b.as_dict()).and_then(|b| b.get(b"I")).and_then(|i| i.as_f64()).unwrap_or(1.0);
+                let intensity = d.get(b"BE").and_then(|b| b.as_dict()).and_then(|b| b.get(b"I")).and_then(printcraft_cos::Object::as_f64).unwrap_or(1.0);
                 c.push_str(&cloud_path(&pts, cloud_radius(w) * intensity.clamp(0.5, 2.0)));
             } else {
                 for (i, p) in pts.iter().enumerate() {
@@ -362,7 +366,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
             // A filled caret: two curved flanks meeting at the top centre.
             let col = stroke.unwrap_or([0.0, 0.47, 0.84]);
             let [x0, y0, x1, y1] = rect;
-            let (cx, h) = ((x0 + x1) / 2.0, y1 - y0);
+            let (cx, h) = (f64::midpoint(x0, x1), y1 - y0);
             c.push_str(&format!(
                 "{}{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c h f\n",
                 rg(col),
@@ -387,7 +391,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
             let list = d.get(b"InkList")?.as_array()?;
             c.push_str(&format!("{}{} w 1 J 1 j\n", rg_stroke(col), n(w)));
             for s in list {
-                let pts: Vec<f64> = s.as_array()?.iter().map(|o| o.as_f64()).collect::<Option<_>>()?;
+                let pts: Vec<f64> = s.as_array()?.iter().map(printcraft_cos::Object::as_f64).collect::<Option<_>>()?;
                 let pts: Vec<(f64, f64)> = pts.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
                 let Some(first) = pts.first() else { continue };
                 c.push_str(&format!("{} {} m\n", n(first.0), n(first.1)));
@@ -712,7 +716,7 @@ fn stamp(kind: crate::StampKind, rect: [f64; 4], col: Rgb, by: Option<&str>, opa
 /// An ellipse inscribed in a rectangle, as four Bézier arcs.
 fn ellipse(x0: f64, y0: f64, x1: f64, y1: f64) -> String {
     let k = 0.552_284_75;
-    let (cx, cy, rx, ry) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (x1 - x0) / 2.0, (y1 - y0) / 2.0);
+    let (cx, cy, rx, ry) = (f64::midpoint(x0, x1), f64::midpoint(y0, y1), (x1 - x0) / 2.0, (y1 - y0) / 2.0);
     let (ox, oy) = (rx * k, ry * k);
     let mut s = format!("{} {} m\n", n(cx + rx), n(cy));
     for [a, b, c, d, e, f] in [
@@ -727,9 +731,9 @@ fn ellipse(x0: f64, y0: f64, x1: f64, y1: f64) -> String {
     s
 }
 
-/// PrintCraft's note icons, drawn in a 20 × 20 box: a speech bubble for `/Comment`, a page
+/// `PrintCraft`'s note icons, drawn in a 20 × 20 box: a speech bubble for `/Comment`, a page
 /// with a folded corner for everything else, both filled with the note colour.
-/// File attachment icons in a 20 × 20 box: PrintCraft's own drawings.
+/// File attachment icons in a 20 × 20 box: `PrintCraft`'s own drawings.
 fn attach_icon(name: &str, col: Rgb) -> String {
     let mut s = format!("{}{}1.2 w 1 j 1 J\n", rg(col), rg_stroke(col));
     match name {

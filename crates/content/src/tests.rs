@@ -45,7 +45,7 @@ fn damage_is_skipped_not_fatal() {
     assert_eq!(names, [&b"RG"[..], b"m", b"l", b"S"]);
     assert!(p.skipped >= 2);
     assert!(parse(b"").ops.is_empty());
-    assert!(parse(b"BI /W 1").ops.len() == 1);
+    assert_eq!(parse(b"BI /W 1").ops.len(), 1);
 }
 
 #[test]

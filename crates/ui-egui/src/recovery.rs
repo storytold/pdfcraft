@@ -43,6 +43,7 @@ impl RecoveryStore {
     /// The platform's per-user data folder: `~/Library/Application Support/PrintCraft/Recovery`
     /// (macOS), `%LOCALAPPDATA%\PrintCraft\Recovery` (Windows), or
     /// `$XDG_DATA_HOME/printcraft/recovery` / `~/.local/share/printcraft/recovery` (others).
+    #[must_use]
     pub fn default_dir() -> Option<PathBuf> {
         let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
         if cfg!(target_os = "macos") {
@@ -54,6 +55,7 @@ impl RecoveryStore {
         }
     }
 
+    #[must_use]
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -73,6 +75,7 @@ impl RecoveryStore {
     }
 
     /// Complete entries, newest first. Incomplete leftovers (bytes without metadata) are removed.
+    #[must_use]
     pub fn list(&self) -> Vec<RecoveryMeta> {
         let Ok(dir) = std::fs::read_dir(&self.dir) else { return Vec::new() };
         let mut out = Vec::new();
@@ -111,7 +114,7 @@ impl RecoveryStore {
 }
 
 fn now_secs() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 impl PrintCraftApp {

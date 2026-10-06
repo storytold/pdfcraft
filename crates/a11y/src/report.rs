@@ -8,6 +8,7 @@ fn esc(s: &str) -> String {
 }
 
 /// The report for `file_name`, dated `date` (as the caller formats it).
+#[must_use]
 pub fn report_html(report: &Report, file_name: &str, date: &str) -> String {
     let mut h = String::new();
     h.push_str("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>Accessibility Report</title>\n<style>\n");

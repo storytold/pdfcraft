@@ -92,7 +92,7 @@ fn mcids(d: &Dict) -> Vec<i64> {
         Object::Int(n) => out.push(*n),
         Object::Dict(m) if m.name(b"Type") == Some(b"MCR") => {
             if let Some(n) = m.get(b"MCID").and_then(Object::as_int) {
-                out.push(n)
+                out.push(n);
             }
         }
         _ => {}
@@ -213,6 +213,7 @@ fn content_bbox(doc: &Document, page: &Dict, ids: &HashSet<i64>) -> Option<[f64;
 }
 
 /// The figures, in document order.
+#[must_use]
 pub fn figures(doc: &Document) -> Vec<Figure> {
     let Some(root) = tree_root(doc) else { return Vec::new() };
     let role_map = root.get(b"RoleMap").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
@@ -223,7 +224,7 @@ pub fn figures(doc: &Document) -> Vec<Figure> {
         .filter(|(_, d, _)| d.name(b"S").is_some_and(|s| standard(doc, &role_map, s) == b"Figure"))
         .map(|(obj, d, pg)| {
             let page = pg.and_then(|p| index.get(&p).copied());
-            let alt = d.get(b"Alt").map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text()));
+            let alt = d.get(b"Alt").map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(printcraft_cos::PdfString::to_text));
             let ids: HashSet<i64> = mcids(&d).into_iter().collect();
             let bbox = page.and_then(|p| content_bbox(doc, &pages[p].dict, &ids));
             Figure { obj, page, alt, bbox }
@@ -264,7 +265,7 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
     if let Some(page) = pg.and_then(|p| pages.iter().find(|x| x.obj == p)).filter(|_| !ids.is_empty()) {
         let mut ops = printcraft_content::parse(&page_content(doc, &page.dict)).ops;
         let mut changed = false;
-        for op in ops.iter_mut() {
+        for op in &mut ops {
             let ours = op.op == b"BDC"
                 && matches!(op.operands.get(1), Some(Object::Dict(m)) if m.get(b"MCID").and_then(Object::as_int).is_some_and(|n| ids.contains(&n)));
             if ours {
@@ -306,7 +307,7 @@ fn clear_parent_tree(doc: &mut Document, key: i64, obj: ObjRef) -> Result<(), Al
         if pair[0].as_int() == Some(key) {
             match &pair[1] {
                 Object::Array(a) => {
-                    pair[1] = Object::Array(a.iter().map(|x| if x.as_ref() == Some(obj) { Object::Null } else { x.clone() }).collect())
+                    pair[1] = Object::Array(a.iter().map(|x| if x.as_ref() == Some(obj) { Object::Null } else { x.clone() }).collect());
                 }
                 Object::Ref(r) => {
                     if let Some(a) = doc.get(*r).as_array().cloned() {

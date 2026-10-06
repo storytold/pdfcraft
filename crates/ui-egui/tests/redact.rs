@@ -1,4 +1,4 @@
-//! Redact a PDF in the real shell (egui_kittest): the Redact tool, Redact pages, the apply
+//! Redact a PDF in the real shell (`egui_kittest)`: the Redact tool, Redact pages, the apply
 //! confirmation and Clear all.
 
 use egui::Pos2;

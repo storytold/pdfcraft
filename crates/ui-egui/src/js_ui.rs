@@ -1,5 +1,5 @@
 //! Acrobat JavaScript in the shell: what scripts ask for (alerts, printing, navigation, links),
-//! the JavaScript console (⌘J), Document JavaScripts, and Preferences ▸ JavaScript.
+//! the JavaScript console (⌘J), Document `JavaScripts`, and Preferences ▸ JavaScript.
 
 use egui::{Align, Layout};
 use printcraft_engine::js::{JsOutput, Request};
@@ -15,7 +15,7 @@ pub struct JsConsole {
     pub log: Vec<String>,
 }
 
-/// Document JavaScripts: the script being edited.
+/// Document `JavaScripts`: the script being edited.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DocJsDraft {
     pub name: String,
@@ -175,11 +175,11 @@ pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Token
     false
 }
 
-/// Document JavaScripts: list, edit, add and delete. Returns `true` to close.
+/// Document `JavaScripts`: list, edit, add and delete. Returns `true` to close.
 pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new("Document JavaScripts").font(theme::semibold(18.0)));
     ui.add_space(6.0);
-    let scripts = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.document_scripts()).unwrap_or_default();
+    let scripts = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(printcraft_engine::Document::document_scripts).unwrap_or_default();
     let mut edit: Option<Edit> = None;
     ui.horizontal(|ui| {
         ui.label("Script Name:");

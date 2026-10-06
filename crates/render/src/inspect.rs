@@ -17,7 +17,7 @@ use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
 use crate::OpenError;
 
 /// lopdf decodes object and cross-reference streams while it loads, with no limit unless one is
-/// set: a few hundred bytes of nested FlateDecode then inflate to gigabytes. Real object and
+/// set: a few hundred bytes of nested `FlateDecode` then inflate to gigabytes. Real object and
 /// xref streams are far below this.
 const LOAD_STREAM_LIMIT: usize = 256 << 20;
 
@@ -78,6 +78,7 @@ pub struct PageInfo {
 impl PageInfo {
     /// A point in view space (points, y down, after `/Rotate`; what the text layer uses) →
     /// PDF user space.
+    #[must_use]
     pub fn view_to_user(&self, x: f32, y: f32) -> [f32; 2] {
         let [cx0, cy0, cx1, cy1] = self.crop;
         let (a, b) = (x / self.width.max(1e-3), y / self.height.max(1e-3));
@@ -91,6 +92,7 @@ impl PageInfo {
     }
 
     /// PDF user space → view space (the inverse of [`Self::view_to_user`]).
+    #[must_use]
     pub fn user_to_view(&self, x: f32, y: f32) -> [f32; 2] {
         let [cx0, cy0, cx1, cy1] = self.crop;
         let (u, v) = ((x - cx0) / (cx1 - cx0).max(1e-3), (cy1 - y) / (cy1 - cy0).max(1e-3));
@@ -105,12 +107,13 @@ impl PageInfo {
 
     /// A view-space rectangle as a text-markup quad in user space: top-left, top-right,
     /// bottom-left, bottom-right as read on screen.
+    #[must_use]
     pub fn view_rect_to_quad(&self, r: [f32; 4]) -> [f64; 8] {
         let mut q = [0.0; 8];
         for (i, (x, y)) in [(r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3])].into_iter().enumerate() {
             let [ux, uy] = self.view_to_user(x, y);
-            q[2 * i] = ux as f64;
-            q[2 * i + 1] = uy as f64;
+            q[2 * i] = f64::from(ux);
+            q[2 * i + 1] = f64::from(uy);
         }
         q
     }
@@ -166,6 +169,7 @@ pub struct Annotation {
 
 impl Annotation {
     /// A checkmark reply (`/StateModel /Marked`): "Marked" or "Unmarked" rather than a review status.
+    #[must_use]
     pub fn is_mark(&self) -> bool {
         matches!(self.state.as_deref(), Some("Marked" | "Unmarked"))
     }
@@ -216,16 +220,16 @@ pub struct Attachment {
 pub enum AttachmentSource {
     /// Document-level: `/Names /EmbeddedFiles` entry with this key.
     Document { key: String },
-    /// A FileAttachment annotation: page index and position in the page's `/Annots`.
+    /// A `FileAttachment` annotation: page index and position in the page's `/Annots`.
     Annotation { page: usize, index: usize },
 }
 
 /// A font used by the document (Document Properties ▸ Fonts).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FontInfo {
-    /// BaseFont without the subset tag.
+    /// `BaseFont` without the subset tag.
     pub name: String,
-    /// Type1, TrueType, Type0, Type3, MMType1, CIDFontType0/2 …
+    /// Type1, TrueType, Type0, Type3, `MMType1`, CIDFontType0/2 …
     pub kind: String,
     pub embedded: bool,
     pub subset: bool,
@@ -374,7 +378,7 @@ impl<'a> Inspector<'a> {
     // ── object helpers ──────────────────────────────────────────────────────────────────────
 
     fn resolve(&self, o: &'a Object) -> &'a Object {
-        self.doc.dereference(o).map(|(_, o)| o).unwrap_or(o)
+        self.doc.dereference(o).map_or(o, |(_, o)| o)
     }
 
     fn dict(&self, o: &'a Object) -> Option<&'a Dictionary> {
@@ -434,7 +438,7 @@ impl<'a> Inspector<'a> {
 
     /// A name tree's leaves keyed by their raw key bytes (first occurrence wins).
     fn name_tree_raw(&self, node: &'a Dictionary, seen: &mut HashSet<*const Dictionary>, depth: u32, out: &mut HashMap<Vec<u8>, &'a Object>) {
-        if depth > 32 || !seen.insert(node as *const _) {
+        if depth > 32 || !seen.insert(std::ptr::from_ref(node)) {
             return;
         }
         if let Ok(Object::Array(pairs)) = node.get(b"Names").map(|o| self.resolve(o)) {
@@ -460,7 +464,7 @@ impl<'a> Inspector<'a> {
 
     fn name_tree(&self, node: &'a Dictionary, seen: &mut HashSet<*const Dictionary>, depth: u32) -> Vec<(String, &'a Object)> {
         let mut out = Vec::new();
-        if depth > 32 || !seen.insert(node as *const _) {
+        if depth > 32 || !seen.insert(std::ptr::from_ref(node)) {
             return out;
         }
         if let Ok(Object::Array(pairs)) = node.get(b"Names").map(|o| self.resolve(o)) {
@@ -768,9 +772,7 @@ impl<'a> Inspector<'a> {
                 let base = f
                     .get(b"BaseFont")
                     .ok()
-                    .and_then(|o| o.as_name().ok())
-                    .map(|n| String::from_utf8_lossy(n).into_owned())
-                    .unwrap_or_else(|| "(unnamed)".into());
+                    .and_then(|o| o.as_name().ok()).map_or_else(|| "(unnamed)".into(), |n| String::from_utf8_lossy(n).into_owned());
                 let kind = self.name(f, b"Subtype").unwrap_or_default();
                 let encoding = match f.get(b"Encoding").map(|o| self.resolve(o)) {
                     Ok(Object::Name(n)) => Some(String::from_utf8_lossy(n).into_owned()),
@@ -868,6 +870,7 @@ fn alpha(n: usize) -> String {
 
 /// `D:20260930104512-04'00'` → `2026-09-30 10:45`.
 /// A PDF date (`D:20261001123000Z`) as "2026-10-01 12:30"; other strings unchanged.
+#[must_use]
 pub fn pretty_date(s: &str) -> String {
     let d = s.trim_start_matches("D:");
     if d.len() >= 12 && d[..12].bytes().all(|b| b.is_ascii_digit()) {
@@ -988,7 +991,7 @@ trailer << /Root 1 0 R >>
     }
 }
 
-/// "1.7" from the parser's version name ("Pdf17", "V1_7", …).
+/// "1.7" from the parser's version name ("Pdf17", "`V1_7`", …).
 fn version_label(name: &str) -> String {
     let digits: Vec<char> = name.chars().filter(char::is_ascii_digit).collect();
     match digits[..] {

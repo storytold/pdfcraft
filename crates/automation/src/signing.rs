@@ -50,7 +50,7 @@ impl Automation {
         Ok(json!({
             "field": s.field,
             "signed": s.signed,
-            "status": if !s.signed { "unsigned" } else { match s.status { SignatureStatus::Valid => "valid", SignatureStatus::Unknown => "unknown", SignatureStatus::Invalid => "invalid" } },
+            "status": if s.signed { match s.status { SignatureStatus::Valid => "valid", SignatureStatus::Unknown => "unknown", SignatureStatus::Invalid => "invalid" } } else { "unsigned" },
             "summary": s.summary(),
             "signer": s.signer,
             "certificate": s.certificate.as_ref().map(cert_json),
@@ -146,7 +146,7 @@ impl Automation {
             Some(r) => {
                 let p = &doc.info.pages[page];
                 let (u0, u1) = (p.view_to_user(r[0] as f32, r[1] as f32), p.view_to_user(r[2] as f32, r[3] as f32));
-                let u = [u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64];
+                let u = [f64::from(u0[0].min(u1[0])), f64::from(u0[1].min(u1[1])), f64::from(u0[0].max(u1[0])), f64::from(u0[1].max(u1[1]))];
                 if u[2] - u[0] < 4.0 || u[3] - u[1] < 4.0 {
                     return Err(bad("the signature rectangle is too small"));
                 }

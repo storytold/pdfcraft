@@ -17,7 +17,7 @@ fn crc32(data: &[u8]) -> u32 {
     });
     let mut c = 0xFFFF_FFFFu32;
     for b in data {
-        c = table[((c ^ *b as u32) & 0xFF) as usize] ^ (c >> 8);
+        c = table[((c ^ u32::from(*b)) & 0xFF) as usize] ^ (c >> 8);
     }
     c ^ 0xFFFF_FFFF
 }
@@ -73,6 +73,7 @@ impl Zip {
         self.count += 1;
     }
 
+    #[must_use]
     pub fn finish(mut self) -> Vec<u8> {
         let start = self.out.len() as u32;
         let size = self.central.len() as u32;

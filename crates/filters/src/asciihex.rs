@@ -1,4 +1,4 @@
-//! ASCIIHexDecode (ISO 32000-2 §7.4.2): pairs of hex digits, white space ignored,
+//! `ASCIIHexDecode` (ISO 32000-2 §7.4.2): pairs of hex digits, white space ignored,
 //! `>` is EOD, an odd final digit is padded with 0. A missing EOD is tolerated.
 
 use crate::{Failure, Step, is_pdf_whitespace};

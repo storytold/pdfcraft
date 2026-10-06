@@ -46,7 +46,7 @@ fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect
 fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
     let (vx, vy) = xf.screen_to_view(p);
     let u = info.pages[page].view_to_user(vx, vy);
-    [u[0] as f64, u[1] as f64]
+    [f64::from(u[0]), f64::from(u[1])]
 }
 
 /// Link tool input on one page. Returns `true` when the gesture belongs to the tool.

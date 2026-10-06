@@ -1,4 +1,4 @@
-//! Compare files in the real shell (egui_kittest): the dialog, the Compare panel, marks and
+//! Compare files in the real shell (`egui_kittest)`: the dialog, the Compare panel, marks and
 //! the report.
 
 use egui_kittest::Harness;
@@ -40,7 +40,7 @@ fn compare_two_versions() {
     assert_eq!(h.state().session.get(h.state().active_ids().unwrap().1).unwrap().name, "Compare Report.pdf");
 }
 
-/// Writes a screenshot of the Compare panel when PRINTCRAFT_SHOT is set (for review).
+/// Writes a screenshot of the Compare panel when `PRINTCRAFT_SHOT` is set (for review).
 #[test]
 fn compare_panel_screenshot() {
     let Ok(out) = std::env::var("PRINTCRAFT_SHOT") else { return };

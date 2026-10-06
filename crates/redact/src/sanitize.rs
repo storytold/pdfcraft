@@ -10,7 +10,7 @@ use printcraft_cos::{Dict, Document, ObjRef, Object};
 use crate::interp::{Mode, Scope, process};
 use crate::{RedactError, Report, annots_of, page_streams};
 
-/// The categories of Acrobat's Remove Hidden Information panel that PrintCraft handles.
+/// The categories of Acrobat's Remove Hidden Information panel that `PrintCraft` handles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Hidden {
     /// Document information (`/Info`) and XMP metadata streams.
@@ -45,6 +45,7 @@ pub const HIDDEN: [Hidden; 9] = [
 ];
 
 impl Hidden {
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Hidden::Metadata => "Metadata",
@@ -59,6 +60,7 @@ impl Hidden {
         }
     }
 
+    #[must_use]
     pub fn id(self) -> &'static str {
         match self {
             Hidden::Metadata => "metadata",
@@ -73,6 +75,7 @@ impl Hidden {
         }
     }
 
+    #[must_use]
     pub fn from_id(id: &str) -> Option<Self> {
         HIDDEN.into_iter().find(|h| h.id() == id)
     }
@@ -197,6 +200,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
 }
 
 /// How many items each category would remove (categories with nothing are included as 0).
+#[must_use]
 pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
     let cat = catalog(doc).map(|c| c.1).unwrap_or_default();
     let pages = printcraft_model::pages(doc);
@@ -209,7 +213,7 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
         .map(|h| {
             let n = match h {
                 Hidden::Metadata => {
-                    let info = doc.trailer().get(b"Info").and_then(|i| doc.resolve(i).as_dict().map(|d| d.len())).unwrap_or(0);
+                    let info = doc.trailer().get(b"Info").and_then(|i| doc.resolve(i).as_dict().map(printcraft_cos::Dict::len)).unwrap_or(0);
                     let xmp = usize::from(cat.contains(b"Metadata")) + pages.iter().filter(|p| p.dict.contains(b"Metadata")).count();
                     info + xmp
                 }

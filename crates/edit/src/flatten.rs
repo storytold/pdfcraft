@@ -132,7 +132,7 @@ pub fn flatten(doc: &mut Document, pages: &[usize], comments: bool, fields: bool
             place_tagged(doc, &page, "Flattened", content.into_bytes(), false)?;
         }
         let page_now = page_list(doc)[i].clone();
-        match page_now.dict.get(b"Annots").and_then(|a| a.as_ref()).filter(|r| doc.get(*r).as_array().is_some()) {
+        match page_now.dict.get(b"Annots").and_then(printcraft_cos::Object::as_ref).filter(|r| doc.get(*r).as_array().is_some()) {
             Some(r) => doc.set(r, Object::Array(kept)),
             None => doc.update_dict(page.obj, |d| {
                 if kept.is_empty() {
@@ -149,7 +149,7 @@ pub fn flatten(doc: &mut Document, pages: &[usize], comments: bool, fields: bool
     Ok(drawn)
 }
 
-/// Remove flattened widgets from the AcroForm field tree, and fields left without widgets.
+/// Remove flattened widgets from the `AcroForm` field tree, and fields left without widgets.
 fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>) -> Result<(), EditError> {
     let Some(root) = doc.root() else { return Ok(()) };
     let Some(af) = doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) else { return Ok(()) };

@@ -1,4 +1,4 @@
-//! Action Wizard in the real shell (egui_kittest): run a built-in action on files, create an
+//! Action Wizard in the real shell (`egui_kittest)`: run a built-in action on files, create an
 //! action, and remember it.
 
 use egui_kittest::Harness;

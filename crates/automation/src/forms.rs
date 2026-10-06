@@ -296,7 +296,7 @@ impl Automation {
         // Top-left-origin points on the displayed page → user space.
         let p = &doc.info.pages[page];
         let (u0, u1) = (p.view_to_user(r[0] as f32, r[1] as f32), p.view_to_user(r[2] as f32, r[3] as f32));
-        let rect = [u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64];
+        let rect = [f64::from(u0[0].min(u1[0])), f64::from(u0[1].min(u1[1])), f64::from(u0[0].max(u1[0])), f64::from(u0[1].max(u1[1]))];
         if rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
             return Err(ToolError::InvalidArgs("rect is empty".into()));
         }
@@ -327,7 +327,7 @@ impl Automation {
                 let page = f.widgets.first().and_then(|w| w.page).ok_or_else(|| failed(format!("{name} is not on a page")))?;
                 let p = &doc.info.pages[page];
                 let (u0, u1) = (p.view_to_user(r[0] as f32, r[1] as f32), p.view_to_user(r[2] as f32, r[3] as f32));
-                Some((0, [u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64]))
+                Some((0, [f64::from(u0[0].min(u1[0])), f64::from(u0[1].min(u1[1])), f64::from(u0[0].max(u1[0])), f64::from(u0[1].max(u1[1]))]))
             }
         };
         let props = FieldProps {
@@ -434,7 +434,7 @@ impl Automation {
         let doc = self.doc(a)?;
         let mut seq: Vec<(usize, &str)> =
             doc.form.iter().flat_map(|f| f.widgets.iter().filter(|w| w.page.is_some()).map(move |w| (w.tab, f.name.as_str()))).collect();
-        seq.sort();
+        seq.sort_unstable();
         seq.dedup_by(|x, y| x.1 == y.1);
         Ok(json!(seq.iter().map(|x| x.1).collect::<Vec<_>>()))
     }

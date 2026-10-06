@@ -74,6 +74,7 @@ pub enum NoteIcon {
 }
 
 impl NoteIcon {
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             NoteIcon::Comment => "Comment",
@@ -86,6 +87,7 @@ impl NoteIcon {
         }
     }
 
+    #[must_use]
     pub fn from_name(n: &str) -> Option<Self> {
         [Self::Comment, Self::Note, Self::Help, Self::Insert, Self::Key, Self::NewParagraph, Self::Paragraph].into_iter().find(|i| i.name() == n)
     }
@@ -101,7 +103,8 @@ pub enum FillMark {
 }
 
 impl FillMark {
-    /// The `/Name` of the stamp PrintCraft draws for it.
+    /// The `/Name` of the stamp `PrintCraft` draws for it.
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             FillMark::Check => "PCCheck",
@@ -111,6 +114,7 @@ impl FillMark {
         }
     }
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             FillMark::Check => "Checkmark",
@@ -121,7 +125,7 @@ impl FillMark {
     }
 }
 
-/// The stamps of Acrobat's stamp palette (drawn in PrintCraft's own style).
+/// The stamps of Acrobat's stamp palette (drawn in `PrintCraft`'s own style).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StampKind {
     // Standard business.
@@ -185,8 +189,9 @@ impl StampKind {
         StampKind::Void,
     ];
 
+    #[must_use]
     pub fn group(self) -> StampGroup {
-        use StampKind::*;
+        use StampKind::{DynApproved, DynConfidential, DynReceived, DynReviewed, DynRevised, Accepted, InitialHere, Rejected, SignHere, Witness};
         match self {
             DynApproved | DynConfidential | DynReceived | DynReviewed | DynRevised => StampGroup::Dynamic,
             Accepted | InitialHere | Rejected | SignHere | Witness => StampGroup::SignHere,
@@ -195,8 +200,9 @@ impl StampKind {
     }
 
     /// The text on the stamp.
+    #[must_use]
     pub fn label(self) -> &'static str {
-        use StampKind::*;
+        use StampKind::{Approved, DynApproved, Completed, Confidential, DynConfidential, Draft, Final, ForComment, ForPublicRelease, InformationOnly, NotApproved, NotForPublicRelease, PreliminaryResults, Void, Accepted, InitialHere, Rejected, SignHere, Witness, DynReceived, DynReviewed, DynRevised};
         match self {
             Approved | DynApproved => "APPROVED",
             Completed => "COMPLETED",
@@ -222,8 +228,9 @@ impl StampKind {
     }
 
     /// `/Name`: the standard stamp names of ISO 32000-2 Table 184 where one exists.
+    #[must_use]
     pub fn name(self) -> &'static str {
-        use StampKind::*;
+        use StampKind::{Approved, Confidential, Draft, Final, ForComment, ForPublicRelease, NotApproved, NotForPublicRelease, Completed, InformationOnly, PreliminaryResults, Void, Accepted, InitialHere, Rejected, SignHere, Witness, DynApproved, DynConfidential, DynReceived, DynReviewed, DynRevised};
         match self {
             Approved => "Approved",
             Confidential => "Confidential",
@@ -250,13 +257,15 @@ impl StampKind {
         }
     }
 
+    #[must_use]
     pub fn from_name(n: &[u8]) -> Option<Self> {
         Self::ALL.into_iter().find(|k| k.name().as_bytes() == n)
     }
 
     /// The stamp's colour: green for approval, red for refusal and restriction, blue otherwise.
+    #[must_use]
     pub fn color(self) -> Rgb {
-        use StampKind::*;
+        use StampKind::{Approved, Completed, Final, Accepted, DynApproved, DynReceived, DynReviewed, NotApproved, Rejected, Void, Confidential, NotForPublicRelease, DynConfidential, SignHere, InitialHere, Witness};
         match self {
             Approved | Completed | Final | Accepted | DynApproved | DynReceived | DynReviewed => [0.13, 0.55, 0.13],
             NotApproved | Rejected | Void | Confidential | NotForPublicRelease | DynConfidential => [0.80, 0.10, 0.10],
@@ -266,6 +275,7 @@ impl StampKind {
     }
 
     /// The stamp's size (points) for its label, as placed with a click.
+    #[must_use]
     pub fn size(self) -> (f64, f64) {
         let w = appearance::text_width(self.label(), 16.0) * 1.12 + 24.0;
         let h = if self.group() == StampGroup::Dynamic { 42.0 } else { 30.0 };
@@ -304,12 +314,12 @@ pub enum Shape {
     Ink {
         strokes: Vec<Vec<[f64; 2]>>,
     },
-    /// A text box (FreeText) showing the comment's contents.
+    /// A text box (`FreeText`) showing the comment's contents.
     TextBox {
         rect: [f64; 4],
         font_size: f64,
     },
-    /// Fill & Sign text typed onto the page (FreeText, typewriter intent, no border).
+    /// Fill & Sign text typed onto the page (`FreeText`, typewriter intent, no border).
     Typewriter {
         rect: [f64; 4],
         font_size: f64,
@@ -335,7 +345,7 @@ pub enum Shape {
         rect: [f64; 4],
         contours: Vec<Vec<[f64; 2]>>,
     },
-    /// A custom stamp: a picture already in the document (an image XObject, or a form XObject
+    /// A custom stamp: a picture already in the document (an image `XObject`, or a form `XObject`
     /// whose `/Matrix` maps it to `size` points) filling `rect`, named `name`.
     CustomStamp {
         rect: [f64; 4],
@@ -362,7 +372,7 @@ pub enum Shape {
         vertices: Vec<[f64; 2]>,
     },
     /// A text callout: a text box at `rect` with a leader line from `point` (arrowhead) via
-    /// `knee` to the box (FreeText, `/IT /FreeTextCallout`, `/CL`).
+    /// `knee` to the box (`FreeText`, `/IT /FreeTextCallout`, `/CL`).
     Callout {
         rect: [f64; 4],
         knee: [f64; 2],
@@ -395,6 +405,7 @@ pub enum AttachIcon {
 
 impl AttachIcon {
     pub const ALL: [AttachIcon; 4] = [AttachIcon::PushPin, AttachIcon::Paperclip, AttachIcon::Graph, AttachIcon::Tag];
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             AttachIcon::PushPin => "PushPin",
@@ -403,6 +414,7 @@ impl AttachIcon {
             AttachIcon::Tag => "Tag",
         }
     }
+    #[must_use]
     pub fn from_name(n: &str) -> Option<AttachIcon> {
         Self::ALL.into_iter().find(|i| i.name().eq_ignore_ascii_case(n))
     }
@@ -410,12 +422,14 @@ impl AttachIcon {
 
 /// A rectangle `[x0 y0 x1 y1]` as a quad in Acrobat's order (top-left, top-right, bottom-left,
 /// bottom-right).
+#[must_use]
 pub fn rect_quad(r: [f64; 4]) -> [f64; 8] {
     let [x0, y0, x1, y1] = normalize(r);
     [x0, y1, x1, y1, x0, y0, x1, y0]
 }
 
 impl Shape {
+    #[must_use]
     pub fn subtype(&self) -> &'static str {
         match self {
             Shape::Note { .. } => "Text",
@@ -447,6 +461,7 @@ pub enum OverlayFont {
 impl OverlayFont {
     pub const ALL: [OverlayFont; 3] = [OverlayFont::Helvetica, OverlayFont::Times, OverlayFont::Courier];
 
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             OverlayFont::Helvetica => "Helvetica",
@@ -456,6 +471,7 @@ impl OverlayFont {
     }
 
     /// The `/DA` font resource name (Acrobat's form font names).
+    #[must_use]
     pub fn resource(self) -> &'static str {
         match self {
             OverlayFont::Helvetica => "Helv",
@@ -464,6 +480,7 @@ impl OverlayFont {
         }
     }
 
+    #[must_use]
     pub fn from_resource(n: &str) -> OverlayFont {
         match n {
             "TiRo" | "Times-Roman" | "TimesRoman" => OverlayFont::Times,
@@ -513,6 +530,7 @@ impl Default for Style {
 
 impl Style {
     /// The default look of each commenting tool.
+    #[must_use]
     pub fn default_for(shape: &Shape) -> Self {
         let (color, width) = match shape {
             Shape::Note { .. } => ([1.0, 0.82, 0.0], 1.0),
@@ -571,6 +589,7 @@ pub enum ReviewState {
 }
 
 impl ReviewState {
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             ReviewState::None => "None",
@@ -581,6 +600,7 @@ impl ReviewState {
         }
     }
 
+    #[must_use]
     pub fn from_name(n: &str) -> Option<Self> {
         [Self::None, Self::Accepted, Self::Rejected, Self::Cancelled, Self::Completed].into_iter().find(|s| s.name().eq_ignore_ascii_case(n))
     }
@@ -604,7 +624,7 @@ pub fn page_refs(doc: &Document) -> Result<Vec<ObjRef>, AnnotError> {
         match d.get(b"Kids").map(|k| doc.resolve(k)) {
             Some(kids) if d.name(b"Type") != Some(b"Page") => {
                 if let Some(a) = kids.as_array() {
-                    stack.extend(a.iter().rev().filter_map(|k| k.as_ref()));
+                    stack.extend(a.iter().rev().filter_map(printcraft_cos::Object::as_ref));
                 }
             }
             _ => out.push(node),
@@ -741,7 +761,7 @@ fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotError> {
             grow(bounds([*from, *to].into_iter()).unwrap_or_default(), pad + 1.0)
         }
         Shape::Ink { strokes } | Shape::Signature { strokes } => {
-            if strokes.iter().all(|s| s.is_empty()) || !strokes.iter().flatten().all(|p| finite(p)) {
+            if strokes.iter().all(std::vec::Vec::is_empty) || !strokes.iter().flatten().all(|p| finite(p)) {
                 return Err(bad("drawing (no points)"));
             }
             grow(bounds(strokes.iter().flatten().copied()).unwrap_or_default(), half + 1.0)
@@ -833,9 +853,10 @@ fn subject(shape: &Shape) -> &'static str {
 }
 
 /// Where a callout's leader line meets its text box: the middle of the side facing `knee`.
+#[must_use]
 pub fn callout_attach(rect: [f64; 4], knee: [f64; 2]) -> [f64; 2] {
     let [x0, y0, x1, y1] = normalize(rect);
-    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let (cx, cy) = (f64::midpoint(x0, x1), f64::midpoint(y0, y1));
     if knee[0] < x0 {
         [x0, cy]
     } else if knee[0] > x1 {
@@ -892,7 +913,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                     b"DA".to_vec(),
                     PdfString::literal(format!("{} {} {} rg /{} {} Tf", n(r), n(g), n(b), look.font.resource(), n(size)).into_bytes()),
                 );
-                d.set(b"Q".to_vec(), Object::Int(look.align.min(2) as i64));
+                d.set(b"Q".to_vec(), Object::Int(i64::from(look.align.min(2))));
                 if look.repeat {
                     d.set(b"Repeat".to_vec(), Object::Bool(true));
                 }
@@ -935,7 +956,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             d.set(b"PCOutline".to_vec(), Object::Array(list));
         }
         Shape::CustomStamp { name, picture, image, size, .. } => {
-            let clean: String = name.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+            let clean: String = name.chars().filter(char::is_ascii_alphanumeric).collect();
             d.set(b"Name".to_vec(), Object::name(&format!("PCCustom{clean}")));
             d.set(b"PCPicture".to_vec(), Object::Ref(*picture));
             d.set(b"PCPictureImage".to_vec(), Object::Bool(*image));
@@ -1176,12 +1197,12 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
     Ok(())
 }
 
-/// The rectangle a FreeText annotation's text box needs for `text`: the current wrap width and
+/// The rectangle a `FreeText` annotation's text box needs for `text`: the current wrap width and
 /// top edge stay and the height fits the wrapped lines, as at creation. `None` keeps the old
 /// rectangle (the box can't be measured, so only the appearance is redrawn).
 fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
     let d = annot_dict(doc, r);
-    let nums = |key: &[u8]| -> Option<Vec<f64>> { d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect() };
+    let nums = |key: &[u8]| -> Option<Vec<f64>> { d.get(key)?.as_array()?.iter().map(printcraft_cos::Object::as_f64).collect() };
     let (_, size) = appearance::parse_da(&d);
     let pad = 2.0 + border_width_of(&d);
     let rect = nums(b"Rect").filter(|v| v.len() == 4 && v.iter().all(|x| x.is_finite()))?;
@@ -1365,7 +1386,7 @@ pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], m
     apply_text_box(doc, r, rect, meta)
 }
 
-/// Store `rect` as a FreeText annotation's text box (or a square's/oval's rectangle): a callout's
+/// Store `rect` as a `FreeText` annotation's text box (or a square's/oval's rectangle): a callout's
 /// leader line re-attaches and `/Rect` grows to hold it, and the appearance is redrawn.
 fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta) -> Result<(), AnnotError> {
     let rect = normalize(rect);
@@ -1374,7 +1395,7 @@ fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta) ->
     }
     let d = annot_dict(doc, r);
     // A callout's rectangle is its text box: the leader line re-attaches and `/Rect` grows to hold it.
-    let callout = d.get(b"CL").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect::<Vec<f64>>()).filter(|l| l.len() == 6);
+    let callout = d.get(b"CL").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(printcraft_cos::Object::as_f64).collect::<Vec<f64>>()).filter(|l| l.len() == 6);
     let (outer, cl) = match callout {
         Some(mut l) => {
             let attach = callout_attach(rect, [l[2], l[3]]);
@@ -1402,7 +1423,7 @@ fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta) ->
 }
 
 fn border_width_of(d: &Dict) -> f64 {
-    d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0).max(0.0)
+    d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(printcraft_cos::Object::as_f64).unwrap_or(1.0).max(0.0)
 }
 
 /// Change a comment's colour, opacity and/or line width, and redraw it.
@@ -1493,6 +1514,7 @@ fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
 }
 
 /// Every comment (not links, form widgets or pop-ups), ordered by page and then top edge.
+#[must_use]
 pub fn summaries(doc: &Document) -> Vec<Summary> {
     let mut out = Vec::new();
     let Ok(pages) = page_refs(doc) else { return out };
@@ -1605,21 +1627,22 @@ pub struct Props {
 }
 
 /// The current properties of the comment at `(page, index)`.
+#[must_use]
 pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let p = page_ref(doc, page).ok()?;
     let entry = annots(doc, p).get(index).cloned()?;
     let obj = doc.resolve(&entry);
     let d = obj.as_dict()?;
     let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
-    let c: Vec<f64> = d.get(b"C").and_then(|o| o.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect())).unwrap_or_default();
+    let c: Vec<f64> = d.get(b"C").and_then(|o| o.as_array().map(|a| a.iter().filter_map(printcraft_cos::Object::as_f64).collect())).unwrap_or_default();
     let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { (c.len() == 3).then(|| [c[0], c[1], c[2]]) };
     let width = matches!(subtype.as_str(), "Square" | "Circle" | "Line" | "Ink" | "Polygon" | "PolyLine")
-        .then(|| d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0));
+        .then(|| d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(printcraft_cos::Object::as_f64).unwrap_or(1.0));
     Some(Props {
         author: text_value(doc, d, b"T").unwrap_or_default(),
         subject: text_value(doc, d, b"Subj").unwrap_or_default(),
         color,
-        opacity: d.get(b"CA").and_then(|o| o.as_f64()).unwrap_or(1.0),
+        opacity: d.get(b"CA").and_then(printcraft_cos::Object::as_f64).unwrap_or(1.0),
         width,
         icon: (subtype == "Text").then(|| d.name(b"Name").and_then(|n| NoteIcon::from_name(&String::from_utf8_lossy(n))).unwrap_or(NoteIcon::Note)),
         modified: text_value(doc, d, b"M"),
@@ -1753,7 +1776,7 @@ pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]
         delete_annotation(doc, page, index)?;
         return Ok(true);
     }
-    let width = d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0);
+    let width = d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(printcraft_cos::Object::as_f64).unwrap_or(1.0);
     let rect = grow(bounds(kept.iter().flatten().copied()).unwrap_or_default(), width / 2.0 + 1.0);
     doc.update_dict(r, |d| {
         d.set(b"InkList".to_vec(), Object::Array(kept.iter().map(|s| num_array(&s.concat())).collect()));

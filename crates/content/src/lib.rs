@@ -26,10 +26,12 @@ pub struct Op {
 }
 
 impl Op {
+    #[must_use]
     pub fn new(op: &str, operands: Vec<Object>) -> Self {
         Op { op: op.as_bytes().to_vec(), operands, inline: None, span: 0..0 }
     }
 
+    #[must_use]
     pub fn is(&self, op: &str) -> bool {
         self.op == op.as_bytes()
     }
@@ -40,6 +42,7 @@ impl Op {
     }
 
     /// The last `n` operands as numbers (operators take their operands from the end).
+    #[must_use]
     pub fn nums<const N: usize>(&self) -> Option<[f64; N]> {
         let k = self.operands.len().checked_sub(N)?;
         let mut out = [0.0; N];
@@ -71,6 +74,7 @@ fn is_delim(b: u8) -> bool {
 }
 
 /// Parse a (decoded) content stream.
+#[must_use]
 pub fn parse(data: &[u8]) -> Parsed {
     let mut out = Parsed::default();
     let mut lx = Lexer::new(data, 0);
@@ -200,6 +204,7 @@ pub fn write_op(op: &Op, out: &mut Vec<u8>) {
 }
 
 /// Write operators back to a content stream.
+#[must_use]
 pub fn serialize_ops(ops: &[Op]) -> Vec<u8> {
     let mut out = Vec::new();
     for op in ops {
@@ -209,10 +214,12 @@ pub fn serialize_ops(ops: &[Op]) -> Vec<u8> {
 }
 
 /// A number operand, written as an integer when it is one.
+#[must_use]
 pub fn num(v: f64) -> Object {
     if v.fract() == 0.0 && v.abs() < 1e15 { Object::Int(v as i64) } else { Object::Real((v * 10_000.0).round() / 10_000.0) }
 }
 
+#[must_use]
 pub fn string(bytes: Vec<u8>) -> Object {
     Object::String(PdfString::literal(bytes))
 }
@@ -230,10 +237,12 @@ impl Default for Matrix {
 impl Matrix {
     pub const IDENTITY: Matrix = Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
 
+    #[must_use]
     pub fn translate(x: f64, y: f64) -> Self {
         Matrix([1.0, 0.0, 0.0, 1.0, x, y])
     }
 
+    #[must_use]
     pub fn from_operands(v: &[Object]) -> Option<Self> {
         if v.len() != 6 {
             return None;
@@ -246,17 +255,20 @@ impl Matrix {
     }
 
     /// `self` then `then` (`self × then` in PDF's row-vector convention).
+    #[must_use]
     pub fn then(&self, then: &Matrix) -> Matrix {
         let [a, b, c, d, e, f] = self.0;
         let [a2, b2, c2, d2, e2, f2] = then.0;
         Matrix([a * a2 + b * c2, a * b2 + b * d2, c * a2 + d * c2, c * b2 + d * d2, e * a2 + f * c2 + e2, e * b2 + f * d2 + f2])
     }
 
+    #[must_use]
     pub fn apply(&self, x: f64, y: f64) -> (f64, f64) {
         let [a, b, c, d, e, f] = self.0;
         (a * x + c * y + e, b * x + d * y + f)
     }
 
+    #[must_use]
     pub fn invert(&self) -> Option<Matrix> {
         let [a, b, c, d, e, f] = self.0;
         let det = a * d - b * c;
@@ -268,6 +280,7 @@ impl Matrix {
     }
 
     /// The bounding box of a rectangle `[x0 y0 x1 y1]` after this transform.
+    #[must_use]
     pub fn bbox(&self, r: [f64; 4]) -> [f64; 4] {
         let pts = [self.apply(r[0], r[1]), self.apply(r[2], r[1]), self.apply(r[0], r[3]), self.apply(r[2], r[3])];
         let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
@@ -279,11 +292,13 @@ impl Matrix {
 }
 
 /// Do two rectangles overlap by more than `eps` in both directions?
+#[must_use]
 pub fn overlaps(a: [f64; 4], b: [f64; 4], eps: f64) -> bool {
     a[0].max(b[0]) + eps < a[2].min(b[2]) && a[1].max(b[1]) + eps < a[3].min(b[3])
 }
 
 /// Is `inner` inside `outer` (within `eps`)?
+#[must_use]
 pub fn contains(outer: [f64; 4], inner: [f64; 4], eps: f64) -> bool {
     inner[0] >= outer[0] - eps && inner[1] >= outer[1] - eps && inner[2] <= outer[2] + eps && inner[3] <= outer[3] + eps
 }

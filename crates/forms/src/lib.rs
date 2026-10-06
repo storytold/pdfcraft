@@ -1,4 +1,4 @@
-//! printcraft-forms — interactive forms (AcroForm, ISO 32000-2 §12.7), execution plan M6.1–M6.2.
+//! printcraft-forms — interactive forms (`AcroForm`, ISO 32000-2 §12.7), execution plan M6.1–M6.2.
 //!
 //! - [`fields`]: the field tree flattened to terminal fields, each with its widgets (page,
 //!   rectangle, on-state), inherited attributes (`/FT`, `/Ff`, `/V`, `/DV`, `/DA`, `/Q`,
@@ -128,20 +128,24 @@ pub struct Field {
 }
 
 impl Field {
+    #[must_use]
     pub fn has(&self, flag: u32) -> bool {
         self.flags & flag != 0
     }
 
+    #[must_use]
     pub fn read_only(&self) -> bool {
         self.has(flags::READ_ONLY)
     }
 
     /// Locked (Field Properties ▸ General ▸ Locked): its properties can't be changed.
+    #[must_use]
     pub fn locked(&self) -> bool {
         self.widgets.iter().any(|w| w.locked)
     }
 
     /// The value as one string: text, the state name, or the selected display texts.
+    #[must_use]
     pub fn display_value(&self) -> String {
         match self.kind {
             FieldKind::Combo | FieldKind::List => self
@@ -320,7 +324,7 @@ pub(crate) fn page_refs(doc: &Document) -> Vec<ObjRef> {
         match d.get(b"Kids").map(|k| doc.resolve(k)) {
             Some(kids) if d.name(b"Type") != Some(b"Page") => {
                 if let Some(a) = kids.as_array() {
-                    stack.extend(a.iter().rev().filter_map(|k| k.as_ref()));
+                    stack.extend(a.iter().rev().filter_map(printcraft_cos::Object::as_ref));
                 }
             }
             _ => out.push(node),
@@ -329,7 +333,8 @@ pub(crate) fn page_refs(doc: &Document) -> Vec<ObjRef> {
     out
 }
 
-/// The AcroForm dictionary.
+/// The `AcroForm` dictionary.
+#[must_use]
 pub fn acroform(doc: &Document) -> Option<Dict> {
     let root = doc.root()?;
     let cat = doc.get(root);
@@ -350,6 +355,7 @@ struct Inherited {
 }
 
 /// Every terminal field, in tree order.
+#[must_use]
 pub fn fields(doc: &Document) -> Vec<Field> {
     let Some(af) = acroform(doc) else { return Vec::new() };
     let mut page_of = std::collections::HashMap::new();
@@ -523,7 +529,7 @@ fn walk(
         inh.max_len = usize::try_from(m).ok();
     }
     let kids: Vec<ObjRef> =
-        d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default().iter().filter_map(|k| k.as_ref()).collect();
+        d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default().iter().filter_map(printcraft_cos::Object::as_ref).collect();
     // Kids with /T are fields; kids without are this field's widgets.
     let field_kids: Vec<ObjRef> = kids.iter().copied().filter(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T"))).collect();
     if !field_kids.is_empty() {
@@ -652,7 +658,7 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
         let Some(f) = now.iter().find(|f| f.name == name) else { continue };
         let lookup = |n: &str| -> Vec<String> {
             let prefix = format!("{n}.");
-            now.iter().filter(|x| x.name == n || x.name.starts_with(&prefix)).flat_map(|x| x.value.first().cloned()).collect()
+            now.iter().filter(|x| x.name == n || x.name.starts_with(&prefix)).filter_map(|x| x.value.first().cloned()).collect()
         };
         let current = f.value.first().cloned().unwrap_or_default();
         let v = if let Some(js) = &f.actions.scripts.calculate {
@@ -878,7 +884,7 @@ pub fn move_in_tab_order(doc: &mut Document, name: &str, earlier: bool) -> Resul
     // The page's fields in their current tab order (a field counts once, at its first widget).
     let mut order: Vec<(usize, &str)> =
         all.iter().filter_map(|g| g.widgets.iter().filter(|w| w.page == Some(page)).map(|w| w.tab).min().map(|t| (t, g.name.as_str()))).collect();
-    order.sort();
+    order.sort_unstable();
     let names: Vec<&str> = order.iter().map(|(_, n)| *n).collect();
     let Some(i) = names.iter().position(|n| *n == name) else { return invalid(format!("{name} is not on a page")) };
     let j = if earlier { i.checked_sub(1) } else { Some(i + 1).filter(|j| *j < names.len()) };
@@ -901,7 +907,7 @@ pub fn move_in_tab_order(doc: &mut Document, name: &str, earlier: bool) -> Resul
     let new_list: Vec<Object> = list
         .iter()
         .map(|o| match o.as_ref() {
-            Some(r) if set.contains(&r) => next.next().map(Object::Ref).unwrap_or_else(|| o.clone()),
+            Some(r) if set.contains(&r) => next.next().map_or_else(|| o.clone(), Object::Ref),
             _ => o.clone(),
         })
         .collect();

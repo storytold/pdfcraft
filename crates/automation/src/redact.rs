@@ -38,7 +38,7 @@ impl Automation {
             let info = &self.doc(a)?.info;
             for &p in &pages {
                 let c = info.pages[p].crop;
-                marks.push((p, vec![rect_quad([c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64])]));
+                marks.push((p, vec![rect_quad([f64::from(c[0]), f64::from(c[1]), f64::from(c[2]), f64::from(c[3])])]));
             }
         } else {
             let find = a.opt_str("find")?.map(str::to_owned);
@@ -115,19 +115,16 @@ impl Automation {
     }
 
     pub(crate) fn doc_remove_hidden(&mut self, a: &Args) -> Result<Value> {
-        let edit = match a.get("categories") {
-            None => Edit::Sanitize,
-            Some(_) => {
-                let which = a
-                    .strs("categories")?
-                    .into_iter()
-                    .map(|c| Hidden::from_id(c).ok_or_else(|| ToolError::InvalidArgs(format!("unknown category {c:?} (see doc_hidden_info)"))))
-                    .collect::<Result<Vec<_>>>()?;
-                if which.is_empty() {
-                    return Err(ToolError::InvalidArgs("categories is empty".into()));
-                }
-                Edit::RemoveHidden { which }
+        let edit = if a.get("categories").is_none() { Edit::Sanitize } else {
+            let which = a
+                .strs("categories")?
+                .into_iter()
+                .map(|c| Hidden::from_id(c).ok_or_else(|| ToolError::InvalidArgs(format!("unknown category {c:?} (see doc_hidden_info)"))))
+                .collect::<Result<Vec<_>>>()?;
+            if which.is_empty() {
+                return Err(ToolError::InvalidArgs("categories is empty".into()));
             }
+            Edit::RemoveHidden { which }
         };
         let before: usize = self.doc(a)?.hidden_info().iter().map(|c| c.1).sum();
         let mut out = self.apply(a, edit)?;

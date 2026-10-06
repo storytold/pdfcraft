@@ -41,7 +41,7 @@ fn esc(s: &str) -> String {
 /// A PDF date (`D:YYYYMMDDHHmmSSOHH'mm'`) as an XMP (ISO 8601) date.
 pub fn iso_date(pdf: &str) -> Option<String> {
     let d = pdf.trim().trim_start_matches("D:");
-    let digits: String = d.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = d.chars().take_while(char::is_ascii_digit).collect();
     if digits.len() < 4 {
         return None;
     }
@@ -51,7 +51,7 @@ pub fn iso_date(pdf: &str) -> Option<String> {
     let tz = match rest.chars().next() {
         Some('Z') | None => "Z".to_string(),
         Some(sign @ ('+' | '-')) => {
-            let t: String = rest[1..].chars().filter(|c| c.is_ascii_digit()).collect();
+            let t: String = rest[1..].chars().filter(char::is_ascii_digit).collect();
             format!("{sign}{}:{}", t.get(0..2).unwrap_or("00"), t.get(2..4).unwrap_or("00"))
         }
         _ => "Z".to_string(),
@@ -61,7 +61,7 @@ pub fn iso_date(pdf: &str) -> Option<String> {
 
 fn info(doc: &Document, key: &str) -> Option<String> {
     let i = doc.trailer().get(b"Info").map(|i| doc.resolve(i))?;
-    i.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())).filter(|s| !s.is_empty())
+    i.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(printcraft_cos::PdfString::to_text)).filter(|s| !s.is_empty())
 }
 
 /// The XMP packet for `doc` declaring `level`, from its document information.

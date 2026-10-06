@@ -14,7 +14,7 @@ pub enum Availability {
     Ready,
     /// Planned; ships in the named milestone.
     Planned(&'static str),
-    /// Cloud-only in Acrobat; PrintCraft offers an optional pluggable provider instead.
+    /// Cloud-only in Acrobat; `PrintCraft` offers an optional pluggable provider instead.
     Provider,
 }
 
@@ -515,6 +515,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
     },
 ];
 
+#[must_use]
 pub fn group(id: &str) -> Option<&'static ToolGroup> {
     TOOL_GROUPS.iter().find(|g| g.id == id)
 }

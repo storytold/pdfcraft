@@ -423,7 +423,7 @@ fn comments_are_added_drawn_threaded_and_undone() {
     s.apply(id, Edit::SetAnnotationStatus { page: 1, index: 0, state: ReviewState::Completed, author: "Ada".into() }).unwrap();
     let a = &s.get(id).unwrap().info.annotations;
     assert_eq!(a.len(), 3);
-    assert!(a.iter().filter(|r| r.in_reply_to.as_deref() == Some(nm.as_str())).count() == 2);
+    assert_eq!(a.iter().filter(|r| r.in_reply_to.as_deref() == Some(nm.as_str())).count(), 2);
     assert!(a.iter().any(|r| r.state.as_deref() == Some("Completed")));
     assert_ne!(a[1].name, a[2].name, "every comment gets its own id");
 
@@ -718,7 +718,7 @@ fn redaction_marks_apply_for_good_and_undo() {
     assert_eq!(page_texts(&s2, id2), ["Page", "Page 2"]);
     s.undo(id).unwrap();
     assert_eq!(page_texts(&s, id), ["Page 1", "Page 2"]);
-    assert_eq!(s.apply(id, Edit::ClearRedactions).map(|_| s.get(id).unwrap().redaction_marks()), Ok(0));
+    assert_eq!(s.apply(id, Edit::ClearRedactions).map(|()| s.get(id).unwrap().redaction_marks()), Ok(0));
     assert!(matches!(s.apply(id, Edit::ApplyRedactions { pages: None }), Err(EditError::Redact(_))));
 }
 
@@ -1135,7 +1135,7 @@ fn probe_edit_latency_on_a_large_signed_document() {
     eprintln!("mark_signed (reopen + validate): {:?}", t.elapsed());
     for k in 0..3 {
         let t = std::time::Instant::now();
-        s.apply(id, rect_comment(0, [10.0 + k as f64, 10.0, 50.0, 50.0])).unwrap();
+        s.apply(id, rect_comment(0, [10.0 + f64::from(k), 10.0, 50.0, 50.0])).unwrap();
         eprintln!("comment edit {k}: {:?}", t.elapsed());
     }
 }

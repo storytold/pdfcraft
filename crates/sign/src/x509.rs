@@ -37,27 +37,33 @@ impl Name {
         self.attrs.iter().find(|(o, _)| o == oid).map(|(_, v)| v.as_str())
     }
 
+    #[must_use]
     pub fn common_name(&self) -> Option<&str> {
         self.get(CN)
     }
 
+    #[must_use]
     pub fn organization(&self) -> Option<&str> {
         self.get(O)
     }
 
+    #[must_use]
     pub fn unit(&self) -> Option<&str> {
         self.get(OU)
     }
 
+    #[must_use]
     pub fn email(&self) -> Option<&str> {
         self.get(EMAIL)
     }
 
+    #[must_use]
     pub fn country(&self) -> Option<&str> {
         self.get(C)
     }
 
     /// "CN=Ada Lovelace, O=Example, E=ada@example.com"
+    #[must_use]
     pub fn display(&self) -> String {
         self.attrs
             .iter()
@@ -79,6 +85,7 @@ impl Name {
     }
 
     /// A name from its parts (empty ones left out), in the usual order.
+    #[must_use]
     pub fn build(cn: &str, ou: &str, o: &str, email: &str, country: &str) -> Name {
         let mut rdns: Vec<Vec<u8>> = Vec::new();
         let mut attrs = Vec::new();
@@ -192,11 +199,13 @@ impl Certificate {
     }
 
     /// Issued by itself (subject = issuer and its own key verifies it).
+    #[must_use]
     pub fn is_self_signed(&self) -> bool {
         self.issuer.raw == self.subject.raw && self.signed_by(&self.public_key)
     }
 
     /// Whether `key` verifies this certificate's signature.
+    #[must_use]
     pub fn signed_by(&self, key: &PublicKey) -> bool {
         let Ok(alg) = Tlv::parse_all(&self.sig_alg) else { return false };
         let Ok((scheme, Some(digest))) = keys::signature_algorithm(&alg) else { return false };
@@ -204,20 +213,23 @@ impl Certificate {
     }
 
     /// Valid at `t`.
+    #[must_use]
     pub fn valid_at(&self, t: Time) -> bool {
         self.not_before <= t && t <= self.not_after
     }
 
     /// The display name Acrobat uses: the common name, else the organization, else the DN.
     pub fn display_name(&self) -> String {
-        self.subject.common_name().or(self.subject.organization()).map(str::to_string).unwrap_or_else(|| self.subject.display())
+        self.subject.common_name().or(self.subject.organization()).map_or_else(|| self.subject.display(), str::to_string)
     }
 
     /// SHA-256 fingerprint as upper-case hex pairs.
+    #[must_use]
     pub fn fingerprint(&self) -> String {
         DigestAlg::Sha256.digest(&[&self.raw]).iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ")
     }
 
+    #[must_use]
     pub fn serial_hex(&self) -> String {
         self.serial.iter().map(|b| format!("{b:02X}")).collect()
     }
@@ -264,6 +276,7 @@ impl Certificate {
 
 /// The chain from `leaf` up through `pool`, as far as issuers can be found and their keys
 /// verify the certificate below. Stops at a self-signed certificate.
+#[must_use]
 pub fn build_chain<'a>(leaf: &'a Certificate, pool: &'a [Certificate]) -> Vec<&'a Certificate> {
     let mut chain = vec![leaf];
     while chain.len() < 10 {
@@ -306,11 +319,12 @@ pub fn load_certificates(bytes: &[u8]) -> Result<Vec<Certificate>, SignError> {
 }
 
 /// The certificate as PEM text (Export certificate).
+#[must_use]
 pub fn to_pem(cert: &Certificate) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut s = String::new();
     for c in cert.raw.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        let n = u32::from(c[0]) << 16 | u32::from(*c.get(1).unwrap_or(&0)) << 8 | u32::from(*c.get(2).unwrap_or(&0));
         for i in 0..4 {
             s.push(if i <= c.len() { T[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
         }
@@ -321,14 +335,14 @@ pub fn to_pem(cert: &Certificate) -> String {
 
 fn base64(s: &str) -> Option<Vec<u8>> {
     let val = |c: u8| -> Option<u32> {
-        Some(match c {
+        Some(u32::from(match c {
             b'A'..=b'Z' => c - b'A',
             b'a'..=b'z' => c - b'a' + 26,
             b'0'..=b'9' => c - b'0' + 52,
             b'+' => 62,
             b'/' => 63,
             _ => return None,
-        } as u32)
+        }))
     };
     let digits: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=').collect();
     let mut out = Vec::with_capacity(digits.len() * 3 / 4);

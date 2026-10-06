@@ -1,5 +1,5 @@
 //! Community links: the Discord button is one click away everywhere; Help menu, About dialog and
-//! home screen open the ArtCraft and PrintCraft pages.
+//! home screen open the `ArtCraft` and `PrintCraft` pages.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;

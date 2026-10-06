@@ -1,5 +1,6 @@
 //! RC4 (used by PDF security handler revisions 2–4). Encryption and decryption are the same.
 
+#[must_use]
 pub fn rc4(key: &[u8], data: &[u8]) -> Vec<u8> {
     if key.is_empty() {
         return data.to_vec();

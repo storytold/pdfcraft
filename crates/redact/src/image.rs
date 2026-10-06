@@ -1,7 +1,7 @@
 //! Clearing the pixels of an image under redaction regions. The image is decoded, every pixel
 //! whose centre maps into a region is set to zero (no ink for image masks), and the result is
 //! written as a new Flate image; the original object is untouched (other pages may use it).
-//! Images whose codec PrintCraft can't decode (DCT, JPX, JBIG2, CCITT) return `None`, and the
+//! Images whose codec `PrintCraft` can't decode (DCT, JPX, JBIG2, CCITT) return `None`, and the
 //! caller removes the whole image instead; that is fail-closed.
 
 use printcraft_content::{Matrix, overlaps};

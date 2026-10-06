@@ -1,4 +1,4 @@
-//! Edit a PDF ▸ Add content in the real shell (egui_kittest): type text onto a page, move it,
+//! Edit a PDF ▸ Add content in the real shell (`egui_kittest)`: type text onto a page, move it,
 //! restyle it from the panel, add an image, delete with the keyboard.
 
 use egui::Pos2;

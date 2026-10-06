@@ -128,7 +128,7 @@ fn commit(view: &mut DocView, form: &[FormField]) {
     let Some(focus) = view.forms.focus.take() else { return };
     let Some(f) = form.iter().find(|f| f.name == focus.name) else { return };
     let value = match f.kind {
-        FormFieldKind::Text if f.value.first().map(String::as_str).unwrap_or("") != focus.text => FieldValue::Text(focus.text),
+        FormFieldKind::Text if f.value.first().map_or("", String::as_str) != focus.text => FieldValue::Text(focus.text),
         FormFieldKind::List if f.has(field_flags::MULTI_SELECT) && focus.picked != f.value => FieldValue::Choice(focus.picked),
         _ => return,
     };
@@ -164,10 +164,10 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
                 });
                 // Weekday of the 1st (0 = Sunday), Zeller-style via days since 1970-01-01 (a Thursday).
                 let days_from_civil = |y: i32, m: u32, d: u32| -> i64 {
-                    let (y, m) = if m <= 2 { (y as i64 - 1, m as i64 + 9) } else { (y as i64, m as i64 - 3) };
+                    let (y, m) = if m <= 2 { (i64::from(y) - 1, i64::from(m) + 9) } else { (i64::from(y), i64::from(m) - 3) };
                     let era = y.div_euclid(400);
                     let yoe = y - era * 400;
-                    let doy = (153 * m + 2) / 5 + d as i64 - 1;
+                    let doy = (153 * m + 2) / 5 + i64::from(d) - 1;
                     era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468
                 };
                 let first = (days_from_civil(y, m, 1) + 4).rem_euclid(7) as usize;
@@ -381,6 +381,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
 }
 
 /// Where a field's widget is on screen (tests and automation).
+#[must_use]
 pub fn field_screen_rect(view: &DocView, info: &DocInfo, f: &FormField, widget: usize) -> Option<Rect> {
     let w = f.widgets.get(widget)?;
     let page = w.page?;

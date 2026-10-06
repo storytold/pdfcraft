@@ -1,4 +1,4 @@
-//! PrintCraft desktop app.
+//! `PrintCraft` desktop app.
 //!
 //! Usage: `printcraft [options] [files…]`
 //!
@@ -142,7 +142,7 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
 ///   It also saves battery. Machines with one GPU are unaffected.
 /// - On Windows, use Direct3D 12, falling back to OpenGL, and never load Vulkan drivers unless
 ///   `WGPU_BACKEND` asks for them. Creating a Vulkan instance loads every installed Vulkan driver
-///   into the process, and a faulty one (an Intel driver in issue #37) crashed PrintCraft before
+///   into the process, and a faulty one (an Intel driver in issue #37) crashed `PrintCraft` before
 ///   its window appeared. D3D12 is the native, best-supported backend there.
 fn configure_gpu(native: &mut eframe::NativeOptions) {
     let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut native.wgpu_options.wgpu_setup else { return };

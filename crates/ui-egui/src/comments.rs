@@ -86,6 +86,7 @@ pub const ALL: [CommentTool; 19] = [
 ];
 
 impl CommentTool {
+    #[must_use]
     pub fn command(self) -> &'static str {
         match self {
             Self::Note => "comment.note",
@@ -110,10 +111,12 @@ impl CommentTool {
         }
     }
 
+    #[must_use]
     pub fn from_command(id: &str) -> Option<Self> {
         ALL.into_iter().find(|t| t.command() == id)
     }
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Note => "Add a sticky note",
@@ -138,6 +141,7 @@ impl CommentTool {
         }
     }
 
+    #[must_use]
     pub fn icon(self) -> &'static str {
         match self {
             Self::Note => "message-square-plus",
@@ -162,10 +166,12 @@ impl CommentTool {
         }
     }
 
+    #[must_use]
     pub fn group(self) -> usize {
         GROUPS.iter().position(|g| g.contains(&self)).unwrap_or(0)
     }
 
+    #[must_use]
     pub fn markup(self) -> Option<Markup> {
         match self {
             Self::Highlight => Some(Markup::Highlight),
@@ -177,16 +183,19 @@ impl CommentTool {
     }
 
     /// Tools that draw with a drag gesture.
+    #[must_use]
     pub fn draws(self) -> bool {
         matches!(self, Self::Ink | Self::Line | Self::Arrow | Self::Rectangle | Self::Oval | Self::Eraser)
     }
 
     /// Tools that place points one click at a time (double-click or Enter finishes).
+    #[must_use]
     pub fn clicks_points(self) -> bool {
         matches!(self, Self::Polygon | Self::PolyLine | Self::Cloud)
     }
 
     /// Whether the line-thickness control applies.
+    #[must_use]
     pub fn has_width(self) -> bool {
         self.draws() || self.clicks_points()
     }
@@ -230,6 +239,7 @@ pub const SWATCHES: [(&str, Rgb); 10] = [
     ("Black", [0.0, 0.0, 0.0]),
 ];
 
+#[must_use]
 pub fn color32(c: Rgb) -> Color32 {
     let b = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     Color32::from_rgb(b(c[0]), b(c[1]), b(c[2]))
@@ -259,6 +269,7 @@ impl Default for CommentPrefs {
 }
 
 impl CommentPrefs {
+    #[must_use]
     pub fn style(&self, tool: CommentTool) -> Style {
         self.styles.iter().find(|(t, _)| *t == tool).map(|(_, s)| s.clone()).unwrap_or_default()
     }
@@ -290,6 +301,7 @@ impl CommentPrefs {
 }
 
 /// The tool that makes comments like `a` (for Make Current Properties Default).
+#[must_use]
 pub fn tool_for(a: &Annotation) -> Option<CommentTool> {
     Some(match (a.subtype.as_str(), a.intent.as_deref()) {
         ("Text", _) => CommentTool::Note,
@@ -434,7 +446,7 @@ impl PageCx<'_> {
     fn to_user(&self, p: Pos2) -> [f64; 2] {
         let (vx, vy) = self.xf.screen_to_view(p);
         let u = self.info.pages[self.page].view_to_user(vx, vy);
-        [u[0] as f64, u[1] as f64]
+        [f64::from(u[0]), f64::from(u[1])]
     }
 
     fn to_screen(&self, p: [f64; 2]) -> Pos2 {
@@ -557,7 +569,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
                 let p = clamp_to(page_rect, p);
                 let u = cx.to_user(p);
                 if matches!(*tool, CommentTool::Ink | CommentTool::Eraser) {
-                    let last = points.last().map(|l| cx.to_screen(*l)).unwrap_or(p);
+                    let last = points.last().map_or(p, |l| cx.to_screen(*l));
                     if last.distance(p) >= 1.5 {
                         points.push(u);
                     }
@@ -819,7 +831,7 @@ fn select_input(
         cv.selected = Some((cx.page, a.index));
         cv.composer = Some(Composer {
             page: cx.page,
-            at: [a.rect[2] as f64, a.rect[3] as f64],
+            at: [f64::from(a.rect[2]), f64::from(a.rect[3])],
             kind: ComposerKind::Edit(a.index),
             text: a.contents.clone().unwrap_or_default(),
             focus: true,
@@ -971,7 +983,7 @@ fn drawn_shape(tool: CommentTool, points: &[[f64; 2]]) -> Option<Shape> {
 
 /// Eraser: rub out drawings along `path` (user space); one undo step for all of them.
 fn erase(cx: &PageCx<'_>, path: &[[f64; 2]]) -> Option<Edit> {
-    let zoom = (cx.xf.rect.width() / cx.xf.pw.max(1.0)) as f64;
+    let zoom = f64::from(cx.xf.rect.width() / cx.xf.pw.max(1.0));
     let radius = (6.0 / zoom).max(1.0);
     let b = path.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]);
     let mut hits: Vec<usize> = cx
@@ -979,7 +991,7 @@ fn erase(cx: &PageCx<'_>, path: &[[f64; 2]]) -> Option<Edit> {
         .filter(|a| a.subtype == "Ink" && !a.locked)
         .filter(|a| {
             let r = a.rect;
-            (r[0] as f64) <= b[2] + radius && (r[2] as f64) >= b[0] - radius && (r[1] as f64) <= b[3] + radius && (r[3] as f64) >= b[1] - radius
+            f64::from(r[0]) <= b[2] + radius && f64::from(r[2]) >= b[0] - radius && f64::from(r[1]) <= b[3] + radius && f64::from(r[3]) >= b[1] - radius
         })
         .map(|a| a.index)
         .collect();
@@ -1088,9 +1100,9 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             } else if point[0] > rect[2] {
                 rect[2]
             } else {
-                (rect[0] + rect[2]) / 2.0
+                f64::midpoint(rect[0], rect[2])
             };
-            let knee = [(point[0] + side) / 2.0, (rect[1] + rect[3]) / 2.0];
+            let knee = [f64::midpoint(point[0], side), f64::midpoint(rect[1], rect[3])];
             Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size: 10.0 }, text))
         }
         ComposerKind::Replace => {
@@ -1150,79 +1162,76 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
 pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs, allowed: bool) -> Option<CanvasAction> {
     let mut action = None;
     let selected = view.comments.selected.and_then(|(p, i)| info.annotations.iter().find(|a| a.page == p && a.index == i && a.in_reply_to.is_none()));
-    match selected {
-        Some(a) => {
-            let (page, index) = (a.page, a.index);
-            if ui.add_enabled(allowed, egui::Button::new("Edit text…")).clicked() {
-                view.comments.composer = Some(Composer {
-                    page,
-                    at: [a.rect[2] as f64, a.rect[3] as f64],
-                    kind: ComposerKind::Edit(index),
-                    text: a.contents.clone().unwrap_or_default(),
-                    focus: true,
-                });
-                ui.close();
-            }
-            if ui.add_enabled(allowed, egui::Button::new("Reply")).clicked() {
-                view.comments.reveal = true;
-                action = Some(CanvasAction::OpenComments);
-                ui.close();
-            }
-            ui.add_enabled_ui(allowed, |ui| {
-                ui.menu_button("Set status", |ui| {
-                    for s in [ReviewState::None, ReviewState::Accepted, ReviewState::Cancelled, ReviewState::Completed, ReviewState::Rejected] {
-                        if ui.button(s.name()).clicked() {
-                            action =
-                                Some(CanvasAction::Edit(Box::new(Edit::SetAnnotationStatus { page, index, state: s, author: prefs.author.clone() })));
-                            ui.close();
-                        }
-                    }
-                });
-                ui.menu_button("Colour", |ui| {
-                    if let Some(c) = swatch_grid(ui, a.color.map(|c| c.map(f64::from))) {
+    if let Some(a) = selected {
+        let (page, index) = (a.page, a.index);
+        if ui.add_enabled(allowed, egui::Button::new("Edit text…")).clicked() {
+            view.comments.composer = Some(Composer {
+                page,
+                at: [f64::from(a.rect[2]), f64::from(a.rect[3])],
+                kind: ComposerKind::Edit(index),
+                text: a.contents.clone().unwrap_or_default(),
+                focus: true,
+            });
+            ui.close();
+        }
+        if ui.add_enabled(allowed, egui::Button::new("Reply")).clicked() {
+            view.comments.reveal = true;
+            action = Some(CanvasAction::OpenComments);
+            ui.close();
+        }
+        ui.add_enabled_ui(allowed, |ui| {
+            ui.menu_button("Set status", |ui| {
+                for s in [ReviewState::None, ReviewState::Accepted, ReviewState::Cancelled, ReviewState::Completed, ReviewState::Rejected] {
+                    if ui.button(s.name()).clicked() {
                         action =
-                            Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation { page, index, color: Some(c), opacity: None, width: None })));
+                            Some(CanvasAction::Edit(Box::new(Edit::SetAnnotationStatus { page, index, state: s, author: prefs.author.clone() })));
                         ui.close();
                     }
-                });
+                }
             });
-            let thread: Vec<&printcraft_render::Annotation> =
-                info.annotations.iter().filter(|r| a.name.is_some() && r.in_reply_to == a.name).collect();
-            let marked = crate::comments_panel::is_marked(&thread);
-            if ui.add_enabled(allowed, egui::Button::new(if marked { "Remove checkmark" } else { "Mark with checkmark" })).clicked() {
-                action = Some(CanvasAction::Edit(Box::new(Edit::MarkAnnotation { page, index, marked: !marked, author: prefs.author.clone() })));
-                ui.close();
-            }
-            if ui.button("Copy text").clicked() {
-                ui.ctx().copy_text(a.contents.clone().unwrap_or_default());
-                ui.close();
-            }
-            ui.separator();
-            if ui.add_enabled(allowed && !a.locked, egui::Button::new("Delete")).clicked() {
-                view.comments.selected = None;
-                action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotation { page, index })));
-                ui.close();
-            }
-            if ui.add_enabled(allowed, egui::Button::new("Properties…")).clicked() {
-                action = Some(CanvasAction::Properties(page, index));
-                ui.close();
-            }
-            if ui.add_enabled(tool_for(a).is_some(), egui::Button::new("Make Current Properties Default")).clicked() {
-                view.comments.default_request = Some((page, index));
-                ui.close();
-            }
+            ui.menu_button("Colour", |ui| {
+                if let Some(c) = swatch_grid(ui, a.color.map(|c| c.map(f64::from))) {
+                    action =
+                        Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation { page, index, color: Some(c), opacity: None, width: None })));
+                    ui.close();
+                }
+            });
+        });
+        let thread: Vec<&printcraft_render::Annotation> =
+            info.annotations.iter().filter(|r| a.name.is_some() && r.in_reply_to == a.name).collect();
+        let marked = crate::comments_panel::is_marked(&thread);
+        if ui.add_enabled(allowed, egui::Button::new(if marked { "Remove checkmark" } else { "Mark with checkmark" })).clicked() {
+            action = Some(CanvasAction::Edit(Box::new(Edit::MarkAnnotation { page, index, marked: !marked, author: prefs.author.clone() })));
+            ui.close();
         }
-        None => {
-            if let Some((page, at)) = view.comments.context_at
-                && ui.add_enabled(allowed, egui::Button::new("Add a sticky note here")).clicked()
-            {
-                view.comments.composer = Some(Composer { page, at, kind: ComposerKind::Note, text: String::new(), focus: true });
-                ui.close();
-            }
-            if ui.button("Comments panel").clicked() {
-                action = Some(CanvasAction::OpenComments);
-                ui.close();
-            }
+        if ui.button("Copy text").clicked() {
+            ui.ctx().copy_text(a.contents.clone().unwrap_or_default());
+            ui.close();
+        }
+        ui.separator();
+        if ui.add_enabled(allowed && !a.locked, egui::Button::new("Delete")).clicked() {
+            view.comments.selected = None;
+            action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotation { page, index })));
+            ui.close();
+        }
+        if ui.add_enabled(allowed, egui::Button::new("Properties…")).clicked() {
+            action = Some(CanvasAction::Properties(page, index));
+            ui.close();
+        }
+        if ui.add_enabled(tool_for(a).is_some(), egui::Button::new("Make Current Properties Default")).clicked() {
+            view.comments.default_request = Some((page, index));
+            ui.close();
+        }
+    } else {
+        if let Some((page, at)) = view.comments.context_at
+            && ui.add_enabled(allowed, egui::Button::new("Add a sticky note here")).clicked()
+        {
+            view.comments.composer = Some(Composer { page, at, kind: ComposerKind::Note, text: String::new(), focus: true });
+            ui.close();
+        }
+        if ui.button("Comments panel").clicked() {
+            action = Some(CanvasAction::OpenComments);
+            ui.close();
         }
     }
     action
@@ -1299,6 +1308,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
 }
 
 /// Status badge icon and label for a review state name.
+#[must_use]
 pub fn status_badge(state: &str) -> Option<(&'static str, &'static str, Color32)> {
     match state {
         "Accepted" => Some(("thumbs-up", "Accepted", Color32::from_rgb(0x2D, 0x9D, 0x5B))),

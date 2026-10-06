@@ -17,7 +17,7 @@ fn bytes_of(doc: &Document, d: &Dict, key: &[u8]) -> Vec<u8> {
 /// Read the handler parameters from an `/Encrypt` dictionary.
 pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
     let int = |k: &[u8], default: i64| d.get(k).map(|v| doc.resolve(v)).and_then(|v| v.as_int()).unwrap_or(default);
-    let name = |k: &[u8]| d.get(k).and_then(|v| v.as_name()).map(|n| n.to_vec()).unwrap_or_else(|| b"Identity".to_vec());
+    let name = |k: &[u8]| d.get(k).and_then(|v| v.as_name()).map_or_else(|| b"Identity".to_vec(), <[u8]>::to_vec);
     let mut crypt_filters = Vec::new();
     if let Some(cf) = d.get(b"CF").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()) {
         for (k, v) in cf.iter() {
@@ -47,7 +47,7 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
         _ => int(b"Length", 40),
     };
     EncryptDict {
-        filter: d.name(b"Filter").map(|n| n.to_vec()).unwrap_or_default(),
+        filter: d.name(b"Filter").map(<[u8]>::to_vec).unwrap_or_default(),
         v,
         r: int(b"R", 0),
         length_bits,
@@ -61,7 +61,7 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
         crypt_filters,
         stm_f: name(b"StmF"),
         str_f: name(b"StrF"),
-        ef_f: d.get(b"EFF").and_then(|v| v.as_name()).map(|n| n.to_vec()).unwrap_or_default(),
+        ef_f: d.get(b"EFF").and_then(|v| v.as_name()).map(<[u8]>::to_vec).unwrap_or_default(),
     }
 }
 
@@ -78,7 +78,7 @@ fn named_crypt_filter(dict: &Dict) -> Option<Vec<u8>> {
         Some(Object::Array(a)) => a.get(i).and_then(|p| p.as_dict().cloned()),
         _ => None,
     };
-    Some(parms.and_then(|p| p.name(b"Name").map(|n| n.to_vec())).unwrap_or_else(|| b"Identity".to_vec()))
+    Some(parms.and_then(|p| p.name(b"Name").map(<[u8]>::to_vec)).unwrap_or_else(|| b"Identity".to_vec()))
 }
 
 /// Decrypt (`decrypt = true`) or encrypt every string and stream in an indirect object.

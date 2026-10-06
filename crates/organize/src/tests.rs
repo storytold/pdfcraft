@@ -4,7 +4,7 @@ use printcraft_cos::{Document, Object, SaveOptions, write_full, write_incrementa
 
 use super::*;
 
-/// A 3-page document with a nested page tree. MediaBox and Rotate are inherited from the root,
+/// A 3-page document with a nested page tree. `MediaBox` and Rotate are inherited from the root,
 /// Resources from an intermediate node; each page's content says which page it is.
 fn fixture() -> Vec<u8> {
     let objs: Vec<Vec<u8>> = vec![
@@ -239,7 +239,7 @@ fn body(text: &str) -> String {
     format!("<< /Length {} >>\nstream\n{s}\nendstream", s.len())
 }
 
-/// Document A: pages A1–A3 sharing one font. A1 links to A3 (GoTo action), A2 links to A1
+/// Document A: pages A1–A3 sharing one font. A1 links to A3 (`GoTo` action), A2 links to A1
 /// (/Dest) and carries a text field widget; A3 has a note with a popup (a reference cycle).
 fn doc_a() -> Document {
     let b: Vec<String> = vec![
@@ -262,7 +262,7 @@ fn doc_a() -> Document {
     open(build(&b, "/Root 1 0 R /Info 15 0 R"))
 }
 
-/// Document B: pages B1, B2 in a nested tree with MediaBox and Rotate inherited from the root.
+/// Document B: pages B1, B2 in a nested tree with `MediaBox` and Rotate inherited from the root.
 fn doc_b() -> Document {
     let b: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
@@ -310,9 +310,9 @@ fn combine_concatenates_with_a_bookmark_per_file() {
     let cat = out.get(out.root().unwrap()).as_dict().cloned().unwrap();
     let outlines = out.get(cat.reference(b"Outlines").unwrap()).as_dict().cloned().unwrap();
     let first = out.get(outlines.reference(b"First").unwrap()).as_dict().cloned().unwrap();
-    assert_eq!(first.get(b"Title").and_then(|t| t.as_string()).map(|s| s.to_text()).as_deref(), Some("Report A"));
+    assert_eq!(first.get(b"Title").and_then(|t| t.as_string()).map(printcraft_cos::PdfString::to_text).as_deref(), Some("Report A"));
     let second = out.get(first.reference(b"Next").unwrap()).as_dict().cloned().unwrap();
-    assert_eq!(second.get(b"Title").and_then(|t| t.as_string()).map(|s| s.to_text()).as_deref(), Some("Report B"));
+    assert_eq!(second.get(b"Title").and_then(|t| t.as_string()).map(printcraft_cos::PdfString::to_text).as_deref(), Some("Report B"));
     let dest_page = second.get(b"Dest").and_then(|d| d.as_array()).and_then(|a| a[0].as_ref()).unwrap();
     assert_eq!(dest_page, pages(&out).unwrap()[3].obj);
 }
@@ -352,7 +352,7 @@ fn form_fields_come_along_and_are_registered() {
     let fields = out.resolve(form.as_dict().unwrap().get(b"Fields").unwrap()).as_array().cloned().unwrap();
     assert_eq!(fields.len(), 1);
     let field = out.resolve(&fields[0]).as_dict().cloned().unwrap();
-    assert_eq!(field.get(b"V").and_then(|v| v.as_string()).map(|s| s.to_text()).as_deref(), Some("Ada"));
+    assert_eq!(field.get(b"V").and_then(|v| v.as_string()).map(printcraft_cos::PdfString::to_text).as_deref(), Some("Ada"));
     assert_eq!(field.reference(b"P"), Some(pages(&out).unwrap()[0].obj));
 }
 
@@ -365,7 +365,7 @@ fn popup_cycles_copy_once_and_structure_links_are_removed() {
     assert!(!note.contains(b"StructParent"));
     let popup = out.get(note.reference(b"Popup").unwrap()).as_dict().cloned().unwrap();
     assert_eq!(
-        out.get(popup.reference(b"Parent").unwrap()).as_dict().unwrap().get(b"Contents").and_then(|c| c.as_string()).map(|s| s.to_text()).as_deref(),
+        out.get(popup.reference(b"Parent").unwrap()).as_dict().unwrap().get(b"Contents").and_then(|c| c.as_string()).map(printcraft_cos::PdfString::to_text).as_deref(),
         Some("note")
     );
     // Nothing unrelated was dragged in: no pages A1/A2, no other content streams.
@@ -453,7 +453,7 @@ fn layers_are_registered_with_their_default_state() {
     let props = out.resolve(catalog(&out).get(b"OCProperties").unwrap()).as_dict().cloned().unwrap();
     let ocgs = props.get(b"OCGs").and_then(|o| o.as_array()).unwrap().clone();
     assert_eq!(ocgs.len(), 1);
-    let name = out.resolve(&ocgs[0]).as_dict().unwrap().get(b"Name").and_then(|n| n.as_string()).map(|s| s.to_text());
+    let name = out.resolve(&ocgs[0]).as_dict().unwrap().get(b"Name").and_then(|n| n.as_string()).map(printcraft_cos::PdfString::to_text);
     assert_eq!(name.as_deref(), Some("Draft marks"));
     let d = props.get(b"D").and_then(|d| d.as_dict()).unwrap();
     assert_eq!(d.get(b"OFF").and_then(|o| o.as_array()).unwrap(), &ocgs, "stays off by default");
@@ -470,7 +470,7 @@ fn combine_nests_source_bookmarks_and_keeps_attachments() {
     let file = out.get(outlines.reference(b"First").unwrap()).as_dict().cloned().unwrap();
     assert!(file.int(b"Count").unwrap() < 0, "source bookmarks start collapsed");
     let chapter = out.get(file.reference(b"First").unwrap()).as_dict().cloned().unwrap();
-    assert_eq!(chapter.get(b"Title").and_then(|t| t.as_string()).map(|s| s.to_text()).as_deref(), Some("Chapter one"));
+    assert_eq!(chapter.get(b"Title").and_then(|t| t.as_string()).map(printcraft_cos::PdfString::to_text).as_deref(), Some("Chapter one"));
     let section = out.get(chapter.reference(b"First").unwrap()).as_dict().cloned().unwrap();
     let dest = section.get(b"Dest").and_then(|d| d.as_array()).expect("GoTo (named) became an explicit destination");
     assert_eq!(dest[0].as_ref(), Some(pages(&out).unwrap()[1].obj));

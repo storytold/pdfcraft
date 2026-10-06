@@ -1,4 +1,4 @@
-//! Headless screenshot of the real PrintCraft shell (egui_kittest + wgpu, no window needed).
+//! Headless screenshot of the real `PrintCraft` shell (`egui_kittest` + wgpu, no window needed).
 //!
 //! ```text
 //! cargo run -p printcraft-ui-egui --example shot -- out.png [file.pdf] [--size 1440x900] [--scale 2] [--page 3 --panel pages …]
@@ -62,7 +62,7 @@ fn main() -> Result<(), String> {
     }
     let mut image = harness.render()?;
     if let Some(w) = width.filter(|w| *w < image.width()) {
-        let h = (image.height() as f64 * w as f64 / image.width() as f64).round() as u32;
+        let h = (f64::from(image.height()) * f64::from(w) / f64::from(image.width())).round() as u32;
         image = image::imageops::resize(&image, w, h, image::imageops::FilterType::Lanczos3);
     }
     image.save(&out).map_err(|e| e.to_string())?;

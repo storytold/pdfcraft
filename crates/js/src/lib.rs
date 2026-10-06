@@ -44,6 +44,7 @@ pub enum FieldType {
 }
 
 impl FieldType {
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             FieldType::Text => "text",
@@ -122,11 +123,13 @@ pub struct Event {
 
 impl Event {
     /// A field event (`event.type` = "Field").
+    #[must_use]
     pub fn field(name: &str, target: &str, value: &str) -> Event {
         Event { name: name.into(), kind: "Field".into(), target: Some(target.into()), value: value.into(), change: String::new(), will_commit: true }
     }
 
-    /// A document event (`event.type` = "Doc"), e.g. Open or WillSave.
+    /// A document event (`event.type` = "Doc"), e.g. Open or `WillSave`.
+    #[must_use]
     pub fn doc(name: &str) -> Event {
         Event { name: name.into(), kind: "Doc".into(), target: None, value: String::new(), change: String::new(), will_commit: false }
     }
@@ -152,7 +155,7 @@ pub enum Request {
     /// `this.pageNum = n` (0-based).
     GoToPage(usize),
     LaunchUrl(String),
-    /// `this.submitForm(url)`: never sent on PrintCraft's own.
+    /// `this.submitForm(url)`: never sent on `PrintCraft`'s own.
     Submit(String),
     /// `field.setFocus()`.
     Focus(String),
@@ -811,22 +814,22 @@ fn printx(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
         match f {
             '?' => {
                 if let Some(c) = take(&mut j, &|_| true) {
-                    push(&mut out, c, case)
+                    push(&mut out, c, case);
                 }
             }
             'X' => {
                 if let Some(c) = take(&mut j, &|c| c.is_alphanumeric()) {
-                    push(&mut out, c, case)
+                    push(&mut out, c, case);
                 }
             }
             'A' => {
                 if let Some(c) = take(&mut j, &|c| c.is_alphabetic()) {
-                    push(&mut out, c, case)
+                    push(&mut out, c, case);
                 }
             }
             '9' => {
                 if let Some(c) = take(&mut j, &|c| c.is_ascii_digit()) {
-                    push(&mut out, c, case)
+                    push(&mut out, c, case);
                 }
             }
             '*' => {

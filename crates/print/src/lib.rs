@@ -111,6 +111,7 @@ impl Default for Layout {
 
 impl Layout {
     /// Acrobat's pages-per-sheet choices as a grid (columns × rows on a portrait sheet).
+    #[must_use]
     pub fn multiple(per_sheet: usize) -> Layout {
         let (cols, rows) = match per_sheet {
             2 => (1, 2),
@@ -425,7 +426,7 @@ fn appearance(doc: &Document, d: &Dict) -> Option<ObjRef> {
     }
 }
 
-/// Algorithm 8.1: the matrix placing an appearance form (BBox × Matrix) onto the annotation rect.
+/// Algorithm 8.1: the matrix placing an appearance form (`BBox` × Matrix) onto the annotation rect.
 fn appearance_matrix(doc: &Document, form: &Dict, rect: [f64; 4]) -> Option<Matrix> {
     let nums =
         |k: &[u8]| -> Option<Vec<f64>> { Some(doc.resolve(form.get(k)?).as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect()) };
@@ -447,7 +448,7 @@ fn appearance_matrix(doc: &Document, form: &Dict, rect: [f64; 4]) -> Option<Matr
     Some(m.then(&a))
 }
 
-/// A Form XObject holding page `index` as it prints (user space; BBox = crop box).
+/// A Form `XObject` holding page `index` as it prints (user space; `BBox` = crop box).
 fn page_form(doc: &mut Document, index: usize, content: Content) -> Result<ObjRef, PrintError> {
     let page = printcraft_model::pages(doc).swap_remove(index);
     let crop = page.crop(doc);
@@ -513,13 +514,10 @@ pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError
         let mut c = String::new();
         let mut xo = Dict::new();
         for (i, pl) in sheet.placed.iter().enumerate() {
-            let form = match forms.get(&pl.page) {
-                Some(f) => *f,
-                None => {
-                    let f = page_form(&mut doc, pl.page, settings.content)?;
-                    forms.insert(pl.page, f);
-                    f
-                }
+            let form = if let Some(f) = forms.get(&pl.page) { *f } else {
+                let f = page_form(&mut doc, pl.page, settings.content)?;
+                forms.insert(pl.page, f);
+                f
             };
             let name = format!("P{i}");
             xo.set(name.clone().into_bytes(), Object::Ref(form));
@@ -587,6 +585,7 @@ pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError
 }
 
 /// Which source pages land on each sheet (for previews and the sheet count).
+#[must_use]
 pub fn sheet_pages(sheets: &[Sheet]) -> Vec<Vec<usize>> {
     sheets.iter().map(|s| s.placed.iter().map(|p| p.page).collect()).collect()
 }

@@ -23,10 +23,12 @@ pub mod tag {
     pub const SEQUENCE: u8 = 0x30;
     pub const SET: u8 = 0x31;
     /// `[n]` context-specific, constructed (EXPLICIT, or IMPLICIT over a constructed type).
+    #[must_use]
     pub const fn ctx(n: u8) -> u8 {
         0xA0 | n
     }
     /// `[n]` context-specific, primitive (IMPLICIT over a primitive type).
+    #[must_use]
     pub const fn ctx_prim(n: u8) -> u8 {
         0x80 | n
     }
@@ -115,10 +117,11 @@ impl<'a> Tlv<'a> {
         if self.tag != tag::INTEGER || self.value.is_empty() || self.value.len() > 9 || self.value[0] & 0x80 != 0 {
             return Err(bad("expected a small non-negative INTEGER"));
         }
-        Ok(self.value.iter().fold(0u64, |acc, b| (acc << 8) | *b as u64))
+        Ok(self.value.iter().fold(0u64, |acc, b| (acc << 8) | u64::from(*b)))
     }
 
     /// The magnitude of an INTEGER (leading zero dropped).
+    #[must_use]
     pub fn uint_bytes(&self) -> &'a [u8] {
         match self.value {
             [0, rest @ ..] if !rest.is_empty() => rest,
@@ -135,6 +138,7 @@ impl<'a> Tlv<'a> {
     }
 
     /// A string type as text (UTF-8, Printable, IA5, T61 as Latin-1, BMP).
+    #[must_use]
     pub fn text(&self) -> Option<String> {
         match self.tag {
             tag::UTF8_STRING | tag::PRINTABLE_STRING | tag::IA5_STRING => Some(String::from_utf8_lossy(self.value).into_owned()),
@@ -147,7 +151,7 @@ impl<'a> Tlv<'a> {
         }
     }
 
-    /// UTCTime / GeneralizedTime as (year, month, day, hour, minute, second) in UTC.
+    /// `UTCTime` / `GeneralizedTime` as (year, month, day, hour, minute, second) in UTC.
     pub fn time(&self) -> Result<Time, SignError> {
         let s = std::str::from_utf8(self.value).map_err(|_| bad("time"))?;
         let s = s.strip_suffix('Z').ok_or_else(|| bad("times must be in UTC (Z)"))?;
@@ -185,6 +189,7 @@ pub struct Time {
 
 impl Time {
     /// From a PDF date (`D:YYYYMMDDHHmmSS±HH'mm'`), converted to UTC.
+    #[must_use]
     pub fn from_pdf(s: &str) -> Option<Time> {
         let s = s.strip_prefix("D:").unwrap_or(s);
         let d = |r: std::ops::Range<usize>, default: u32| s.get(r).map_or(Some(default), |x| x.parse::<u32>().ok());
@@ -208,21 +213,24 @@ impl Time {
     }
 
     /// As a PDF date in UTC (`D:YYYYMMDDHHmmSSZ`).
+    #[must_use]
     pub fn to_pdf(&self) -> String {
         format!("D:{:04}{:02}{:02}{:02}{:02}{:02}Z", self.year, self.month, self.day, self.hour, self.minute, self.second)
     }
 
     /// Seconds since 1970-01-01 (proleptic Gregorian).
+    #[must_use]
     pub fn unix(&self) -> i64 {
-        let (y, m) = if self.month <= 2 { (self.year as i64 - 1, self.month as i64 + 9) } else { (self.year as i64, self.month as i64 - 3) };
+        let (y, m) = if self.month <= 2 { (i64::from(self.year) - 1, i64::from(self.month) + 9) } else { (i64::from(self.year), i64::from(self.month) - 3) };
         let era = y.div_euclid(400);
         let yoe = y - era * 400;
-        let doy = (153 * m + 2) / 5 + self.day as i64 - 1;
+        let doy = (153 * m + 2) / 5 + i64::from(self.day) - 1;
         let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
         let days = era * 146_097 + doe - 719_468;
-        days * 86_400 + self.hour as i64 * 3600 + self.minute as i64 * 60 + self.second as i64
+        days * 86_400 + i64::from(self.hour) * 3600 + i64::from(self.minute) * 60 + i64::from(self.second)
     }
 
+    #[must_use]
     pub fn from_unix(t: i64) -> Time {
         let days = t.div_euclid(86_400);
         let secs = t.rem_euclid(86_400);
@@ -234,15 +242,17 @@ impl Time {
         let mp = (5 * doy + 2) / 153;
         let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
         let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-        let year = (yoe + era * 400 + if month <= 2 { 1 } else { 0 }) as u32;
+        let year = (yoe + era * 400 + i64::from(month <= 2)) as u32;
         Time { year, month, day, hour: (secs / 3600) as u32, minute: (secs % 3600 / 60) as u32, second: (secs % 60) as u32 }
     }
 
+    #[must_use]
     pub fn add_seconds(&self, s: i64) -> Time {
         Time::from_unix(self.unix() + s)
     }
 
-    /// UTCTime before 2050, GeneralizedTime from then on (RFC 5280 §4.1.2.5).
+    /// `UTCTime` before 2050, `GeneralizedTime` from then on (RFC 5280 §4.1.2.5).
+    #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         if (1950..2050).contains(&self.year) {
             let s = format!("{:02}{:02}{:02}{:02}{:02}{:02}Z", self.year % 100, self.month, self.day, self.hour, self.minute, self.second);
@@ -264,7 +274,7 @@ fn oid_to_string(v: &[u8]) -> Result<String, SignError> {
     let mut arcs: Vec<u64> = Vec::new();
     let mut acc = 0u64;
     for (i, b) in v.iter().enumerate() {
-        acc = acc.checked_mul(128).ok_or_else(|| bad("OID arc too large"))? | (b & 0x7F) as u64;
+        acc = acc.checked_mul(128).ok_or_else(|| bad("OID arc too large"))? | u64::from(b & 0x7F);
         if b & 0x80 == 0 {
             if arcs.is_empty() {
                 let first = (acc / 40).min(2);
@@ -284,6 +294,7 @@ fn oid_to_string(v: &[u8]) -> Result<String, SignError> {
 // ── writing ─────────────────────────────────────────────────────────────────────────────────
 
 /// One element: identifier, definite length, contents.
+#[must_use]
 pub fn tlv(tag: u8, value: &[u8]) -> Vec<u8> {
     let mut out = vec![tag];
     let n = value.len();
@@ -298,17 +309,20 @@ pub fn tlv(tag: u8, value: &[u8]) -> Vec<u8> {
     out
 }
 
+#[must_use]
 pub fn seq(parts: &[&[u8]]) -> Vec<u8> {
     tlv(tag::SEQUENCE, &parts.concat())
 }
 
 /// A SET OF, in DER order (sorted encodings, X.690 §11.6).
+#[must_use]
 pub fn set_of(parts: &[&[u8]]) -> Vec<u8> {
     let mut v: Vec<&[u8]> = parts.to_vec();
     v.sort();
     tlv(tag::SET, &v.concat())
 }
 
+#[must_use]
 pub fn explicit(n: u8, inner: &[u8]) -> Vec<u8> {
     tlv(tag::ctx(n), inner)
 }
@@ -316,6 +330,7 @@ pub fn explicit(n: u8, inner: &[u8]) -> Vec<u8> {
 /// The encoding of an OID constant (callers pass only literals from this crate).
 // The documented never-crash exception: every caller passes a literal that always parses.
 #[allow(clippy::expect_used)]
+#[must_use]
 pub fn oid(dotted: &str) -> Vec<u8> {
     let arcs: Vec<u64> = dotted.split('.').map(|a| a.parse().expect("valid OID constant")).collect();
     let mut body = Vec::new();
@@ -337,6 +352,7 @@ pub fn oid(dotted: &str) -> Vec<u8> {
 }
 
 /// An unsigned big-endian integer.
+#[must_use]
 pub fn uint(bytes: &[u8]) -> Vec<u8> {
     let b: &[u8] = match bytes.iter().position(|x| *x != 0) {
         Some(i) => &bytes[i..],
@@ -351,41 +367,50 @@ pub fn uint(bytes: &[u8]) -> Vec<u8> {
     }
 }
 
+#[must_use]
 pub fn int(n: u64) -> Vec<u8> {
     uint(&n.to_be_bytes())
 }
 
+#[must_use]
 pub fn octets(b: &[u8]) -> Vec<u8> {
     tlv(tag::OCTET_STRING, b)
 }
 
+#[must_use]
 pub fn bit_string(b: &[u8]) -> Vec<u8> {
     let mut v = vec![0];
     v.extend_from_slice(b);
     tlv(tag::BIT_STRING, &v)
 }
 
+#[must_use]
 pub fn null() -> Vec<u8> {
     vec![tag::NULL, 0]
 }
 
+#[must_use]
 pub fn utf8(s: &str) -> Vec<u8> {
     tlv(tag::UTF8_STRING, s.as_bytes())
 }
 
+#[must_use]
 pub fn printable(s: &str) -> Vec<u8> {
     tlv(tag::PRINTABLE_STRING, s.as_bytes())
 }
 
+#[must_use]
 pub fn ia5(s: &str) -> Vec<u8> {
     tlv(tag::IA5_STRING, s.as_bytes())
 }
 
+#[must_use]
 pub fn boolean(b: bool) -> Vec<u8> {
     tlv(tag::BOOLEAN, &[if b { 0xFF } else { 0 }])
 }
 
 /// `AlgorithmIdentifier` with optional parameters.
+#[must_use]
 pub fn algorithm(oid_s: &str, params: Option<&[u8]>) -> Vec<u8> {
     match params {
         Some(p) => seq(&[&oid(oid_s), p]),

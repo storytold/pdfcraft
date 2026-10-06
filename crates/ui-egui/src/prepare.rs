@@ -44,6 +44,7 @@ pub const FIELD_TOOLS: [FieldTool; 9] = [
 ];
 
 impl FieldTool {
+    #[must_use]
     pub fn command(self) -> &'static str {
         match self {
             FieldTool::Text => "form.add.text",
@@ -58,10 +59,12 @@ impl FieldTool {
         }
     }
 
+    #[must_use]
     pub fn from_command(id: &str) -> Option<Self> {
         FIELD_TOOLS.into_iter().find(|t| t.command() == id)
     }
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             FieldTool::Text => "Text field",
@@ -78,6 +81,7 @@ impl FieldTool {
 
     /// The field a click or drag creates. Radio buttons dropped next to a selected radio group
     /// join it with the next free choice.
+    #[must_use]
     pub fn new_field(self, join: Option<&FormField>) -> NewField {
         match self {
             FieldTool::Text => NewField::Text { multiline: false },
@@ -101,6 +105,7 @@ impl FieldTool {
     }
 
     /// Width and height in points of a field placed with a single click.
+    #[must_use]
     pub fn default_size(self) -> (f64, f64) {
         match self {
             FieldTool::CheckBox | FieldTool::Radio => (14.0, 14.0),
@@ -142,7 +147,7 @@ fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect
 fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
     let (vx, vy) = xf.screen_to_view(p);
     let u = info.pages[page].view_to_user(vx, vy);
-    [u[0] as f64, u[1] as f64]
+    [f64::from(u[0]), f64::from(u[1])]
 }
 
 /// A screen rect → a normalised user-space rect.
@@ -376,6 +381,7 @@ pub enum Arrange {
 }
 
 impl Arrange {
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Arrange::AlignLeft | Arrange::AlignRight | Arrange::AlignTop | Arrange::AlignBottom | Arrange::AlignCenterH | Arrange::AlignCenterV => {
@@ -388,6 +394,7 @@ impl Arrange {
 }
 
 /// The edits that arrange the selected widgets (user space; the anchor stays put).
+#[must_use]
 pub fn arrange(form: &[FormField], anchor: &(String, usize), others: &[(String, usize)], op: Arrange) -> Option<Edit> {
     let rect_of = |k: &(String, usize)| form.iter().find(|f| f.name == k.0).and_then(|f| f.widgets.get(k.1)).map(|w| w.rect);
     let a = rect_of(anchor)?;
@@ -428,11 +435,11 @@ pub fn arrange(form: &[FormField], anchor: &(String, usize), others: &[(String, 
                     Arrange::AlignTop => [r[0], a[3] - h, r[2], a[3]],
                     Arrange::AlignBottom => [r[0], a[1], r[2], a[1] + h],
                     Arrange::AlignCenterH => {
-                        let cx = (a[0] + a[2]) / 2.0;
+                        let cx = f64::midpoint(a[0], a[2]);
                         [cx - w / 2.0, r[1], cx + w / 2.0, r[3]]
                     }
                     Arrange::AlignCenterV => {
-                        let cy = (a[1] + a[3]) / 2.0;
+                        let cy = f64::midpoint(a[1], a[3]);
                         [r[0], cy - h / 2.0, r[2], cy + h / 2.0]
                     }
                     Arrange::SameWidth => [r[0], r[1], r[0] + aw, r[3]],
@@ -664,6 +671,7 @@ fn da_size(da: &str) -> f64 {
 }
 
 impl FieldDraft {
+    #[must_use]
     pub fn new(f: &FormField, widget: usize) -> Self {
         let r = f.widgets.get(widget).map(|w| w.rect).unwrap_or_default();
         let mut d = FieldDraft {
@@ -700,6 +708,7 @@ impl FieldDraft {
         d
     }
 
+    #[must_use]
     pub fn title(&self) -> &'static str {
         match self.kind {
             FormFieldKind::Text => "Text Field Properties",
@@ -725,6 +734,7 @@ impl FieldDraft {
     }
 
     /// The properties that changed (`None` when nothing did).
+    #[must_use]
     pub fn props(&self) -> Option<FieldProps> {
         let o = self.original.as_ref().as_ref()?;
         let ch = |a: bool, b: bool| (a != b).then_some(a);
@@ -776,10 +786,10 @@ const OPTION_FLAGS: [u32; 10] = {
 fn flag_box(ui: &mut egui::Ui, flags: &mut u32, bit: u32, inverted: bool, label: &str) {
     let mut on = (*flags & bit != 0) != inverted;
     if ui.checkbox(&mut on, label).changed() {
-        if on != inverted {
-            *flags |= bit;
-        } else {
+        if on == inverted {
             *flags &= !bit;
+        } else {
+            *flags |= bit;
         }
     }
 }

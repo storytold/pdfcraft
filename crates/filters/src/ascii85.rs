@@ -1,4 +1,4 @@
-//! ASCII85Decode (ISO 32000-2 §7.4.3): groups of five characters `!`..`u` encode four
+//! `ASCII85Decode` (ISO 32000-2 §7.4.3): groups of five characters `!`..`u` encode four
 //! bytes base-85, `z` stands for four zero bytes, `~>` is EOD, white space is ignored and
 //! a final partial group of n characters (2–5) yields n − 1 bytes. A leading `<~` and a
 //! missing EOD are tolerated.
@@ -87,7 +87,7 @@ pub(crate) fn encode(data: &[u8]) -> Vec<u8> {
             *d = (v % 85) as u8 + b'!';
             v /= 85;
         }
-        put(&mut out, &digits[..chunk.len() + 1]);
+        put(&mut out, &digits[..=chunk.len()]);
     }
     out.extend_from_slice(b"~>");
     out

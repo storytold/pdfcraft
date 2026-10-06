@@ -82,7 +82,7 @@ pub(crate) struct Elem {
     pub ty: Vec<u8>,
     pub parent: Option<usize>,
     pub children: Vec<usize>,
-    /// Has /Alt (or /ActualText, which also replaces the content).
+    /// Has /Alt (or /`ActualText`, which also replaces the content).
     pub alt: bool,
     /// Marked content or an object reference directly under it.
     pub content: bool,
@@ -94,7 +94,7 @@ pub(crate) struct Elem {
 
 #[derive(Debug, Default)]
 pub(crate) struct Tree {
-    /// A /StructTreeRoot exists.
+    /// A /`StructTreeRoot` exists.
     pub exists: bool,
     pub elems: Vec<Elem>,
     /// Top-level elements in order.

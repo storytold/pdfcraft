@@ -56,7 +56,7 @@ fn tree_entries(doc: &Document, node: &Object) -> Vec<(Vec<u8>, Object)> {
     out
 }
 
-/// The destination of a link, bookmark or action dictionary: `/Dest`, or a GoTo's `/D`.
+/// The destination of a link, bookmark or action dictionary: `/Dest`, or a `GoTo`'s `/D`.
 fn destination(doc: &Document, d: &Dict) -> Option<Object> {
     if let Some(dest) = d.get(b"Dest") {
         return Some(doc.resolve(dest).as_ref().clone());
@@ -69,7 +69,7 @@ fn destination(doc: &Document, d: &Dict) -> Option<Object> {
 fn dest_name(o: &Object) -> Option<Vec<u8>> {
     match o {
         Object::String(s) => Some(s.bytes.clone()),
-        Object::Name(n) => Some(n.to_vec()),
+        Object::Name(n) => Some(n.clone()),
         _ => None,
     }
 }

@@ -1,6 +1,6 @@
 //! Export a PDF ▸ Image ▸ Export all images, and Edit ▸ Save image as: the images that pages
 //! use, as files. JPEG images are written unchanged; other images are decoded and written as
-//! PNG (with their soft mask as alpha). Images PrintCraft can't decode yet (JPEG 2000, JBIG2,
+//! PNG (with their soft mask as alpha). Images `PrintCraft` can't decode yet (JPEG 2000, JBIG2,
 //! CCITT, separations) are reported, never silently left out.
 
 use std::collections::HashSet;
@@ -32,6 +32,7 @@ const MAX_PIXELS: u64 = 100_000_000;
 
 /// The images of `pages` (0-based; each image once, on the first page using it), skipping
 /// those with fewer than `min_side` pixels on their shorter side.
+#[must_use]
 pub fn extract_images(doc: &Document, pages: &[usize], min_side: u32) -> ImageExport {
     let all = printcraft_model::pages(doc);
     let mut out = ImageExport::default();
@@ -49,7 +50,7 @@ pub fn extract_images(doc: &Document, pages: &[usize], min_side: u32) -> ImageEx
             let obj = doc.get(r);
             let Object::Stream(s) = &*obj else { continue };
             let (w, h) = (s.dict.int(b"Width").unwrap_or(0), s.dict.int(b"Height").unwrap_or(0));
-            if w <= 0 || h <= 0 || (w.min(h) as u64) < min_side as u64 {
+            if w <= 0 || h <= 0 || (w.min(h) as u64) < u64::from(min_side) {
                 continue;
             }
             match image(doc, s) {
@@ -61,7 +62,7 @@ pub fn extract_images(doc: &Document, pages: &[usize], min_side: u32) -> ImageEx
     out
 }
 
-/// One image XObject as a file: JPEG as is, else PNG ("Save image as").
+/// One image `XObject` as a file: JPEG as is, else PNG ("Save image as").
 pub fn image_file(doc: &Document, image: ObjRef) -> Result<(&'static str, Vec<u8>), String> {
     match &*doc.get(image) {
         Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => self::image(doc, s),
@@ -69,7 +70,7 @@ pub fn image_file(doc: &Document, image: ObjRef) -> Result<(&'static str, Vec<u8
     }
 }
 
-/// The image XObjects reachable from `res`, through form XObjects, in resource order.
+/// The image `XObjects` reachable from `res`, through form `XObjects`, in resource order.
 fn collect(doc: &Document, res: &Dict, depth: usize, forms: &mut HashSet<ObjRef>, out: &mut Vec<ObjRef>) {
     if depth > 12 {
         return;
@@ -93,7 +94,7 @@ fn collect(doc: &Document, res: &Dict, depth: usize, forms: &mut HashSet<ObjRef>
 
 fn filters(s: &Stream) -> Vec<Vec<u8>> {
     match s.dict.get(b"Filter") {
-        Some(Object::Name(n)) => vec![n.to_vec()],
+        Some(Object::Name(n)) => vec![n.clone()],
         Some(Object::Array(a)) => a.iter().filter_map(|f| f.as_name().map(<[u8]>::to_vec)).collect(),
         _ => Vec::new(),
     }
@@ -134,7 +135,7 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
     let mut rgb = Vec::with_capacity(w * h * 3);
     for px in samples.chunks_exact(n) {
         let v = |i: usize| {
-            let x = (px[i] as u32 * 255 / max) as u8;
+            let x = (u32::from(px[i]) * 255 / max) as u8;
             if invert { 255 - x } else { x }
         };
         match &space {
@@ -245,7 +246,7 @@ fn unpack(data: &[u8], w: usize, h: usize, n: usize, bpc: usize) -> Option<Vec<u
 }
 
 fn cmyk(c: u8, m: u8, y: u8, k: u8) -> [u8; 3] {
-    let f = |x: u8| ((255 - x as u32) * (255 - k as u32) / 255) as u8;
+    let f = |x: u8| ((255 - u32::from(x)) * (255 - u32::from(k)) / 255) as u8;
     [f(c), f(m), f(y)]
 }
 
@@ -263,7 +264,7 @@ fn soft_mask(doc: &Document, s: &Stream, w: usize, h: usize) -> Option<Vec<u8>> 
     }
     let px = unpack(&m.decoded().ok()?, w, h, 1, bpc)?;
     let max = (1u32 << bpc.min(8)) - 1;
-    Some(px.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect())
+    Some(px.into_iter().map(|v| (u32::from(v) * 255 / max) as u8).collect())
 }
 
 fn png(w: u32, h: u32, rgb: &[u8], alpha: Option<&[u8]>) -> Result<Vec<u8>, String> {
@@ -272,15 +273,12 @@ fn png(w: u32, h: u32, rgb: &[u8], alpha: Option<&[u8]>) -> Result<Vec<u8>, Stri
         let mut enc = png::Encoder::new(&mut out, w, h);
         enc.set_depth(png::BitDepth::Eight);
         enc.set_compression(png::Compression::Fast);
-        let data: Vec<u8> = match alpha {
-            Some(a) => {
-                enc.set_color(png::ColorType::Rgba);
-                rgb.as_chunks::<3>().0.iter().zip(a).flat_map(|(c, a)| [c[0], c[1], c[2], *a]).collect()
-            }
-            None => {
-                enc.set_color(png::ColorType::Rgb);
-                rgb.to_vec()
-            }
+        let data: Vec<u8> = if let Some(a) = alpha {
+            enc.set_color(png::ColorType::Rgba);
+            rgb.as_chunks::<3>().0.iter().zip(a).flat_map(|(c, a)| [c[0], c[1], c[2], *a]).collect()
+        } else {
+            enc.set_color(png::ColorType::Rgb);
+            rgb.to_vec()
         };
         let mut wr = enc.write_header().map_err(|e| e.to_string())?;
         wr.write_image_data(&data).map_err(|e| e.to_string())?;

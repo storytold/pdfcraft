@@ -59,7 +59,7 @@ fn image_row(ui: &mut egui::Ui, id: &str, title: &str, s: &mut ImageSettings) {
         });
         if let Compression::Jpeg(q) = &mut s.compression {
             ui.label("Quality");
-            let name = QUALITIES.iter().min_by_key(|(_, v)| (*v as i32 - *q as i32).abs()).map_or("Medium", |(n, _)| n);
+            let name = QUALITIES.iter().min_by_key(|(_, v)| (i32::from(*v) - i32::from(*q)).abs()).map_or("Medium", |(n, _)| n);
             egui::ComboBox::from_id_salt((id, "quality")).selected_text(name).show_ui(ui, |ui| {
                 for (n, v) in QUALITIES {
                     ui.selectable_value(q, v, n);

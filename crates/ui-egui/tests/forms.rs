@@ -1,4 +1,4 @@
-//! Filling in a form in the real shell (egui_kittest): typing, Tab, check boxes, radios, choices.
+//! Filling in a form in the real shell (`egui_kittest)`: typing, Tab, check boxes, radios, choices.
 
 use egui_kittest::Harness;
 use printcraft_ui_egui::PrintCraftApp;

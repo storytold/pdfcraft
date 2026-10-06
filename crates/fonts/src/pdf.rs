@@ -14,7 +14,7 @@ use printcraft_cos::{Dict, Document, Object};
 enum Codes {
     One,
     Two,
-    /// Codespace ranges `(length, low, high)` from an embedded CMap.
+    /// Codespace ranges `(length, low, high)` from an embedded `CMap`.
     Ranges(Vec<(usize, Vec<u8>, Vec<u8>)>),
 }
 
@@ -35,7 +35,7 @@ pub struct Metrics {
     /// Composite fonts: CID → width, and CID ranges with one width.
     cid_widths: HashMap<u32, f64>,
     cid_ranges: Vec<(u32, u32, f64)>,
-    /// Code → CID for embedded non-identity CMaps (`cidrange` / `cidchar`).
+    /// Code → CID for embedded non-identity `CMaps` (`cidrange` / `cidchar`).
     cid_map: Vec<(u32, u32, u32)>,
     default: f64,
     std14: Option<Std14>,
@@ -89,7 +89,7 @@ fn style_from_name(name: &str) -> (bool, bool) {
     )
 }
 
-/// Codespace ranges and CID mappings from an embedded CMap stream.
+/// Codespace ranges and CID mappings from an embedded `CMap` stream.
 #[allow(clippy::type_complexity)]
 fn parse_cmap(data: &[u8]) -> (Vec<(usize, Vec<u8>, Vec<u8>)>, Vec<(u32, u32, u32)>) {
     let text = String::from_utf8_lossy(data);
@@ -137,6 +137,7 @@ fn parse_cmap(data: &[u8]) -> (Vec<(usize, Vec<u8>, Vec<u8>)>, Vec<(u32, u32, u3
 
 impl Metrics {
     /// Metrics for text without a usable font (Helvetica-like).
+    #[must_use]
     pub fn fallback() -> Self {
         Metrics {
             codes: Codes::One,
@@ -160,6 +161,7 @@ impl Metrics {
         }
     }
 
+    #[must_use]
     pub fn from_dict(doc: &Document, font: &Dict) -> Self {
         let mut m = Self::read_metrics(doc, font);
         let base = String::from_utf8_lossy(font.name(b"BaseFont").unwrap_or(b"")).into_owned();
@@ -273,6 +275,7 @@ impl Metrics {
     }
 
     /// Split a string into `(code, byte length)`.
+    #[must_use]
     pub fn codes(&self, s: &[u8]) -> Vec<(u32, usize)> {
         let mut out = Vec::with_capacity(s.len());
         let mut i = 0;
@@ -300,6 +303,7 @@ impl Metrics {
     }
 
     /// The advance of `code` in text space per unit of font size.
+    #[must_use]
     pub fn width(&self, code: u32) -> f64 {
         if self.composite {
             let cid = self.cid(code);
@@ -322,6 +326,7 @@ impl Metrics {
     }
 
     /// Word spacing applies to the single-byte code 32 (§9.3.3).
+    #[must_use]
     pub fn is_space(&self, code: u32, len: usize) -> bool {
         code == 32 && len == 1
     }
@@ -329,6 +334,7 @@ impl Metrics {
 
 impl Metrics {
     /// The text a string shows (codes without a known meaning are left out).
+    #[must_use]
     pub fn decode(&self, s: &[u8]) -> String {
         self.codes(s).into_iter().filter_map(|(c, _)| self.unicode.get(&c).cloned()).collect()
     }
@@ -352,6 +358,7 @@ impl Metrics {
 
     /// The bytes that show `text` in this font, or `None` if some character has no code or
     /// no glyph in it (the caller then substitutes another font).
+    #[must_use]
     pub fn encode(&self, text: &str) -> Option<Vec<u8>> {
         let mut reverse: HashMap<&str, u32> = HashMap::new();
         for (code, t) in &self.unicode {
@@ -370,13 +377,13 @@ impl Metrics {
     }
 }
 
-/// UTF-16BE (with surrogates) from CMap hex bytes.
+/// UTF-16BE (with surrogates) from `CMap` hex bytes.
 fn utf16(b: &[u8]) -> String {
     let units: Vec<u16> = b.chunks(2).map(|c| u16::from_be_bytes([c[0], *c.get(1).unwrap_or(&0)])).collect();
     String::from_utf16_lossy(&units)
 }
 
-/// `bfchar`/`bfrange` entries of a ToUnicode CMap.
+/// `bfchar`/`bfrange` entries of a `ToUnicode` `CMap`.
 fn parse_to_unicode(data: &[u8], out: &mut HashMap<u32, String>) {
     let text = String::from_utf8_lossy(data);
     // Tokenise, keeping arrays' brackets as tokens.
@@ -442,7 +449,7 @@ pub fn glyph_unicode(name: &str) -> Option<char> {
     u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
 }
 
-/// Code → Unicode for a font: its ToUnicode CMap, else (simple fonts) its encoding.
+/// Code → Unicode for a font: its `ToUnicode` `CMap`, else (simple fonts) its encoding.
 fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> HashMap<u32, String> {
     let mut out = HashMap::new();
     if !composite {

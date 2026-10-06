@@ -71,6 +71,10 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 dbg_macro = "warn"
 todo = "warn"
+# Full pedantic. `-D warnings` in `cargo xtask ci` turns these into errors, so
+# every lint below has to stay clean; when one is genuinely wrong for this
+# codebase, allow it in clippy.toml with a reason rather than in the source.
+pedantic = { level = "warn", priority = -1 }
 
 [profile.dev.package."*"]
 opt-level = 2

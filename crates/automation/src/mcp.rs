@@ -1,6 +1,6 @@
 //! A Model Context Protocol server over the automation tools.
 //!
-//! **Opt-in only.** Nothing in PrintCraft starts this server on its own: it runs when a user
+//! **Opt-in only.** Nothing in `PrintCraft` starts this server on its own: it runs when a user
 //! launches `printcraft-cli mcp` (usually by adding that command to their agent's MCP
 //! configuration), and stops when its input closes. It opens no network port; the transport is
 //! newline-delimited JSON-RPC 2.0 over stdin/stdout.
@@ -36,10 +36,12 @@ pub struct McpServer {
 }
 
 impl McpServer {
+    #[must_use]
     pub fn new(automation: Automation) -> Self {
         Self { automation }
     }
 
+    #[must_use]
     pub fn automation(&self) -> &Automation {
         &self.automation
     }

@@ -73,7 +73,7 @@ impl Automation {
             .iter()
             .map(|it| {
                 let index = per_page.entry(it.page).or_default();
-                let ph = doc.info.pages[it.page].height as f64;
+                let ph = f64::from(doc.info.pages[it.page].height);
                 let mut v =
                     json!({ "page": it.page + 1, "index": *index + 1, "rect": to_view(it.content.rect(), ph).map(|x| (x * 100.0).round() / 100.0) });
                 *index += 1;
@@ -96,7 +96,7 @@ impl Automation {
 
     pub(crate) fn page_add_text(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
-        let ph = self.doc(a)?.info.pages[page].height as f64;
+        let ph = f64::from(self.doc(a)?.info.pages[page].height);
         let rect = match (rect_arg(a, "rect")?, a.get("at")) {
             (Some(r), _) => to_display(r, ph),
             (None, Some(v)) => {
@@ -116,7 +116,7 @@ impl Automation {
 
     pub(crate) fn page_add_image(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
-        let ph = self.doc(a)?.info.pages[page].height as f64;
+        let ph = f64::from(self.doc(a)?.info.pages[page].height);
         let path = self.resolve(a.str("path")?, false)?;
         let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -133,7 +133,7 @@ impl Automation {
         let page = self.page(a)?;
         let doc = self.doc(a)?;
         let index = a.int("index")?;
-        let ph = doc.info.pages[page].height as f64;
+        let ph = f64::from(doc.info.pages[page].height);
         let it = doc
             .added
             .iter()

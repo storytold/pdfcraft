@@ -1,4 +1,4 @@
-//! LZWDecode (ISO 32000-2 §7.4.4.2): variable-width codes of 9–12 bits, MSB first,
+//! `LZWDecode` (ISO 32000-2 §7.4.4.2): variable-width codes of 9–12 bits, MSB first,
 //! 256 = clear-table, 257 = EOD, first free code 258. With `EarlyChange` 1 (the
 //! default) the code width grows one code early.
 //!

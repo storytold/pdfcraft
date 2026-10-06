@@ -35,6 +35,7 @@ impl Category {
     pub const ALL: [Category; 7] =
         [Category::Document, Category::PageContent, Category::Forms, Category::AlternateText, Category::Tables, Category::Lists, Category::Headings];
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Category::Document => "Document",
@@ -122,25 +123,30 @@ impl Rule {
     ];
 
     /// The stable id used by automation (`permission-flag`, `tagged-content`, …).
+    #[must_use]
     pub fn id(self) -> &'static str {
         self.info().0
     }
 
+    #[must_use]
     pub fn category(self) -> Category {
         self.info().1
     }
 
     /// The short name shown in the results.
+    #[must_use]
     pub fn name(self) -> &'static str {
         self.info().2
     }
 
     /// What the rule checks, as the options dialog words it.
+    #[must_use]
     pub fn description(self) -> &'static str {
         self.info().3
     }
 
     /// Whether only a person can judge it.
+    #[must_use]
     pub fn manual(self) -> bool {
         matches!(
             self,
@@ -149,15 +155,18 @@ impl Rule {
     }
 
     /// Checked unless deselected (Acrobat leaves colour contrast off).
+    #[must_use]
     pub fn on_by_default(self) -> bool {
         self != Rule::ColorContrast
     }
 
     /// A short explanation of why the rule matters and how to satisfy it ("Explain").
+    #[must_use]
     pub fn explanation(self) -> &'static str {
         self.info().4
     }
 
+    #[must_use]
     pub fn from_id(id: &str) -> Option<Rule> {
         Rule::ALL.into_iter().find(|r| r.id() == id)
     }
@@ -394,6 +403,7 @@ pub enum Status {
 }
 
 impl Status {
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Status::Passed => "Passed",
@@ -439,10 +449,12 @@ pub struct Report {
 }
 
 impl Report {
+    #[must_use]
     pub fn result(&self, rule: Rule) -> Option<&RuleResult> {
         self.results.iter().find(|r| r.rule == rule)
     }
 
+    #[must_use]
     pub fn count(&self, status: Status) -> usize {
         self.results.iter().filter(|r| r.status == status).count()
     }
@@ -457,6 +469,7 @@ impl Report {
 const MAX_FINDINGS: usize = 200;
 
 /// Run the full check.
+#[must_use]
 pub fn check(doc: &Document, options: &Options) -> Report {
     let pages = printcraft_model::pages(doc);
     let page_list: Vec<usize> = match &options.pages {

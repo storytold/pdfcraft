@@ -1,4 +1,4 @@
-//! CMS SignedData (RFC 5652) as PDF signatures use it: detached (`adbe.pkcs7.detached`,
+//! CMS `SignedData` (RFC 5652) as PDF signatures use it: detached (`adbe.pkcs7.detached`,
 //! `ETSI.CAdES.detached`) or with the digest encapsulated (`adbe.pkcs7.sha1`).
 
 use crate::SignError;
@@ -32,7 +32,7 @@ pub struct SignerInfo {
     pub message_digest: Option<Vec<u8>>,
     pub content_type: Option<String>,
     pub signing_time: Option<Time>,
-    /// ESS signing-certificate(-v2) present (CAdES).
+    /// ESS signing-certificate(-v2) present (`CAdES`).
     pub signing_certificate: bool,
     pub scheme: Scheme,
     /// The digest named by the signature algorithm, when it names one.
@@ -55,7 +55,7 @@ fn bad(what: &str) -> SignError {
 }
 
 impl SignedData {
-    /// Parse a `ContentInfo` holding SignedData. Bytes after it (a PDF placeholder's zero
+    /// Parse a `ContentInfo` holding `SignedData`. Bytes after it (a PDF placeholder's zero
     /// padding) are ignored.
     pub fn parse(bytes: &[u8]) -> Result<SignedData, SignError> {
         let (ci, _) = Tlv::parse(bytes)?;
@@ -101,6 +101,7 @@ impl SignedData {
     }
 
     /// The signer's certificate among those carried.
+    #[must_use]
     pub fn signer_certificate(&self) -> Option<&Certificate> {
         self.certificates.iter().find(|c| match &self.signer.sid {
             SignerId::IssuerSerial { issuer, serial } => &c.issuer.raw == issuer && strip(&c.serial) == strip(serial),
@@ -110,6 +111,7 @@ impl SignedData {
 
     /// Check the signature value with `cert`'s key. `content_digest` is the digest of the
     /// signed content (the document byte ranges) when there are no signed attributes.
+    #[must_use]
     pub fn verify_signature(&self, cert: &Certificate, content_digest: &[u8]) -> bool {
         let s = &self.signer;
         let alg = s.scheme_digest.unwrap_or(s.digest);
@@ -196,8 +198,8 @@ fn attribute(o: &str, value: &[u8]) -> Vec<u8> {
     der::seq(&[&der::oid(o), &der::set_of(&[value])])
 }
 
-/// A detached CAdES signature (PAdES B-B): signed attributes content-type, message-digest and
-/// signing-certificate-v2 (no signing-time: PAdES takes the time from the signature
+/// A detached `CAdES` signature (`PAdES` B-B): signed attributes content-type, message-digest and
+/// signing-certificate-v2 (no signing-time: `PAdES` takes the time from the signature
 /// dictionary's `/M`). `chain` holds further certificates to embed (issuers).
 pub fn sign_detached(
     key: &PrivateKey,

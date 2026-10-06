@@ -1,4 +1,4 @@
-//! Fill & Sign in the real shell (egui_kittest): text, marks, date and a drawn signature.
+//! Fill & Sign in the real shell (`egui_kittest)`: text, marks, date and a drawn signature.
 
 use egui::{Pos2, pos2};
 use egui_kittest::Harness;

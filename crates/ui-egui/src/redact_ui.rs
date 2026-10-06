@@ -31,6 +31,7 @@ impl Default for RedactPrefs {
 }
 
 impl RedactPrefs {
+    #[must_use]
     pub fn mark(&self, page: usize, quads: Vec<[f64; 8]>, author: &str) -> Edit {
         let shape = Shape::Redact { quads, overlay: if self.use_overlay { self.overlay.clone() } else { String::new() }, look: self.look };
         let mut style = Style::default_for(&shape);
@@ -75,7 +76,7 @@ pub type AreaDrag = Option<(usize, Pos2)>;
 fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
     let (vx, vy) = xf.screen_to_view(p);
     let u = info.pages[page].view_to_user(vx, vy);
-    [u[0] as f64, u[1] as f64]
+    [f64::from(u[0]), f64::from(u[1])]
 }
 
 /// Redact tool input on a page. Presses on text are left to text selection (the selection is
@@ -185,7 +186,7 @@ impl PrintCraftApp {
             .iter()
             .map(|&p| {
                 let c = doc.info.pages[p].crop;
-                self.redact_prefs.mark(p, vec![rect_quad([c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64])], &author)
+                self.redact_prefs.mark(p, vec![rect_quad([f64::from(c[0]), f64::from(c[1]), f64::from(c[2]), f64::from(c[3])])], &author)
             })
             .collect();
         match <[Edit; 1]>::try_from(edits) {
@@ -378,7 +379,7 @@ pub(crate) fn hidden_body(ui: &mut egui::Ui, d: &mut HiddenDraft, t: &Tokens) ->
     ui.label(egui::RichText::new("Select the items to remove from this document.").color(t.text_muted));
     ui.add_space(8.0);
     let total: usize = d.found.iter().map(|f| f.1).sum();
-    for (h, n, on) in d.found.iter_mut() {
+    for (h, n, on) in &mut d.found {
         ui.add_enabled_ui(*n > 0, |ui| {
             ui.horizontal(|ui| {
                 ui.checkbox(on, h.label());

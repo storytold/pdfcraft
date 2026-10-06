@@ -1,5 +1,5 @@
-//! Vector icons: embedded Lucide SVGs, recoloured to white, rasterized by egui_extras at the exact
-//! on-screen pixel size, and tinted per use (PhotoCraft lesson: never use Unicode glyphs as icons).
+//! Vector icons: embedded Lucide SVGs, recoloured to white, rasterized by `egui_extras` at the exact
+//! on-screen pixel size, and tinted per use (`PhotoCraft` lesson: never use Unicode glyphs as icons).
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -22,6 +22,7 @@ fn white_icons() -> &'static HashMap<&'static str, Arc<[u8]>> {
     })
 }
 
+#[must_use]
 pub fn exists(name: &str) -> bool {
     white_icons().contains_key(name)
 }

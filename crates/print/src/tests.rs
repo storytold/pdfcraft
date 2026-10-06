@@ -57,7 +57,7 @@ fn close(a: f64, b: f64) -> bool {
 
 #[test]
 fn page_selection() {
-    let labels: Vec<String> = ["i", "ii", "1", "2", "A-1"].iter().map(|s| s.to_string()).collect();
+    let labels: Vec<String> = ["i", "ii", "1", "2", "A-1"].iter().map(std::string::ToString::to_string).collect();
     assert_eq!(select_pages(5, None, &labels, Subset::All, false).unwrap(), [0, 1, 2, 3, 4]);
     assert_eq!(select_pages(5, Some("1-2, 5"), &[], Subset::All, false).unwrap(), [0, 1, 4]);
     assert_eq!(select_pages(5, Some("4-"), &[], Subset::All, false).unwrap(), [3, 4]);

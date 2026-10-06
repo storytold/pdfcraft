@@ -192,22 +192,26 @@ pub enum ViewAction {
 
 impl DocView {
     /// Where `page` is drawn on screen this frame (`None` when it is not on screen).
+    #[must_use]
     pub fn page_screen_rect(&self, page: usize) -> Option<Rect> {
         self.screen_xforms.iter().find(|(p, _)| *p == page).map(|(_, xf)| xf.rect)
     }
 
     /// The document area on screen.
+    #[must_use]
     pub fn viewport_rect(&self) -> Rect {
         self.viewport_screen
     }
 
     /// Pages that could not be rendered, with the reason (for automation; 0-based pages).
+    #[must_use]
     pub fn page_errors(&self) -> Vec<(usize, &str)> {
         let mut v: Vec<(usize, &str)> = self.errors.iter().map(|(p, e)| (*p, e.as_str())).collect();
         v.sort_unstable_by_key(|(p, _)| *p);
         v
     }
 
+    #[must_use]
     pub fn new(id: DocId, info: &DocInfo) -> Self {
         Self {
             id,
@@ -289,6 +293,7 @@ impl DocView {
     }
 
     /// Pages an organize command acts on: the selection, or the current page.
+    #[must_use]
     pub fn target_pages(&self) -> Vec<usize> {
         if self.selected.is_empty() { vec![self.current] } else { self.selected.iter().copied().collect() }
     }
@@ -301,6 +306,7 @@ impl DocView {
         }
     }
 
+    #[must_use]
     pub fn render_pending(&self) -> bool {
         !self.last_queue.is_empty()
     }
@@ -350,6 +356,7 @@ impl DocView {
     }
 
     /// Pages drawn last frame and their screen rectangles.
+    #[must_use]
     pub fn visible_page_rects(&self) -> Vec<(usize, Rect)> {
         self.screen_xforms.iter().map(|(p, xf)| (*p, xf.rect)).collect()
     }
@@ -370,7 +377,7 @@ impl DocView {
 
     /// A page's thumbnail texture, when rendered (the print preview uses them).
     pub(crate) fn thumb_id(&self, page: usize) -> Option<egui::TextureId> {
-        self.thumbs.get(&page).map(|t| t.id())
+        self.thumbs.get(&page).map(egui::TextureHandle::id)
     }
 
     pub(crate) fn page_text(&self, page: usize) -> Option<Arc<PageText>> {
@@ -456,14 +463,14 @@ impl DocView {
             .and_then(|f| f.current.and_then(|c| f.matches.get(c)))
             .and_then(|(p, r)| self.texts.get(p).and_then(|t| t.glyphs.get(r.start)).map(|g| g.rect[1]))
             .zip(self.page_heights.get(page).copied())
-            .map(|(y, h)| ((y - 60.0) / h).clamp(0.0, 1.0))
-            .unwrap_or(0.0);
+            .map_or(0.0, |(y, h)| ((y - 60.0) / h).clamp(0.0, 1.0));
         self.goto = Some((page, frac));
         self.current = page;
     }
 
     /// Screen position of the centre of glyph `glyph` on `page`, if that page is on screen and its
     /// text layer is loaded (used by UI tests and automation to aim pointer input).
+    #[must_use]
     pub fn glyph_screen_pos(&self, page: usize, glyph: usize) -> Option<Pos2> {
         let (_, xf) = self.screen_xforms.iter().find(|(p, _)| *p == page)?;
         let g = self.texts.get(&page)?.glyphs.get(glyph)?;
@@ -471,12 +478,14 @@ impl DocView {
     }
 
     /// Selected text, if any (⌘C).
+    #[must_use]
     pub fn selected_text(&self) -> Option<String> {
         let s = self.selection?;
         let t = self.texts.get(&s.page)?;
         Some(t.text_of(s.range())).filter(|x| !x.is_empty())
     }
 
+    #[must_use]
     pub fn thumb(&self, page: usize) -> Option<&TextureHandle> {
         self.thumbs.get(&page)
     }
@@ -637,15 +646,12 @@ impl DocView {
             n += 1;
             got = true;
             if r.request.kind == RequestKind::Text {
-                match r.text {
-                    Some(t) => {
-                        self.texts.insert(r.request.page, t);
-                        self.refresh_find_page(r.request.page);
-                    }
-                    None => {
-                        log::warn!("page {} text: {}", r.request.page + 1, r.error.unwrap_or_default());
-                        self.text_failed.insert(r.request.page);
-                    }
+                if let Some(t) = r.text {
+                    self.texts.insert(r.request.page, t);
+                    self.refresh_find_page(r.request.page);
+                } else {
+                    log::warn!("page {} text: {}", r.request.page + 1, r.error.unwrap_or_default());
+                    self.text_failed.insert(r.request.page);
                 }
                 continue;
             }
@@ -756,6 +762,7 @@ pub struct PageXform {
 }
 
 impl PageXform {
+    #[must_use]
     pub fn norm_to_screen(&self, u: f32, v: f32) -> Pos2 {
         let (a, b) = match self.rot {
             90 => (1.0 - v, u),
@@ -766,6 +773,7 @@ impl PageXform {
         pos2(self.rect.left() + a * self.rect.width(), self.rect.top() + b * self.rect.height())
     }
 
+    #[must_use]
     pub fn screen_to_norm(&self, p: Pos2) -> (f32, f32) {
         let (a, b) = ((p.x - self.rect.left()) / self.rect.width().max(1e-3), (p.y - self.rect.top()) / self.rect.height().max(1e-3));
         match self.rot {
@@ -777,17 +785,20 @@ impl PageXform {
     }
 
     /// Screen point → view space (points).
+    #[must_use]
     pub fn screen_to_view(&self, p: Pos2) -> (f32, f32) {
         let (u, v) = self.screen_to_norm(p);
         (u * self.pw, v * self.ph)
     }
 
     /// A view-space rect [x0, y0, x1, y1] → screen rect.
+    #[must_use]
     pub fn view_rect(&self, g: [f32; 4]) -> Rect {
         Rect::from_two_pos(self.norm_to_screen(g[0] / self.pw, g[1] / self.ph), self.norm_to_screen(g[2] / self.pw, g[3] / self.ph))
     }
 
     /// A PDF user-space rect (crop box, document `/Rotate`) → screen rect.
+    #[must_use]
     pub fn user_rect(&self, info: &DocInfo, page: usize, r: [f32; 4]) -> Rect {
         let p = &info.pages[page];
         let [cx0, cy0, cx1, cy1] = p.crop;
@@ -941,7 +952,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
     view.fit_zoom(info);
 
     // Pinch / ctrl+scroll zoom, anchored on the current page.
-    let zoom_delta = ui.input(|i| i.zoom_delta());
+    let zoom_delta = ui.input(egui::InputState::zoom_delta);
     if (zoom_delta - 1.0).abs() > 0.001 && ui.rect_contains_pointer(avail) {
         let z = view.zoom * zoom_delta;
         match ui.input(|i| i.pointer.hover_pos()) {
@@ -966,7 +977,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
             let r = rects[visible_pages[0]];
             (r.top() - MARGIN, r.height() + 2.0 * MARGIN)
         }
-        _ => (0.0, rects.last().map(|r| r.bottom() + MARGIN).unwrap_or(0.0)),
+        _ => (0.0, rects.last().map_or(0.0, |r| r.bottom() + MARGIN)),
     };
 
     let mut scroll = egui::ScrollArea::both().auto_shrink([false, false]).scroll_source(egui::scroll_area::ScrollSource {
@@ -1116,20 +1127,17 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                 } else {
                     (scale, tag)
                 };
-                match view.pages.get(&i) {
-                    Some(p) => {
-                        xf.paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
-                        if p.tag != want_tag {
-                            wanted.push((i, want_scale, want_tag, None));
-                        }
-                    }
-                    None => {
+                if let Some(p) = view.pages.get(&i) {
+                    xf.paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
+                    if p.tag != want_tag {
                         wanted.push((i, want_scale, want_tag, None));
-                        let now = ui.input(|inp| inp.time);
-                        let since = *view.waiting_since.entry(i).or_insert(now);
-                        let msg = if now - since > 6.0 { "Still rendering — this page is unusually complex…" } else { "Rendering…" };
-                        painter.text(r.center(), Align2::CENTER_CENTER, msg, theme::regular(12.0), t.text_faint);
                     }
+                } else {
+                    wanted.push((i, want_scale, want_tag, None));
+                    let now = ui.input(|inp| inp.time);
+                    let since = *view.waiting_since.entry(i).or_insert(now);
+                    let msg = if now - since > 6.0 { "Still rendering — this page is unusually complex…" } else { "Rendering…" };
+                    painter.text(r.center(), Align2::CENTER_CENTER, msg, theme::regular(12.0), t.text_faint);
                 }
                 if tiled && r.intersects(visible) {
                     // Device-pixel geometry of the scaled page, and the visible part of it
@@ -1174,9 +1182,9 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                     // Centred on the click, upright as the page is shown.
                     let (vx, vy) = xf.screen_to_view(p);
                     let (w, h) = kind.size();
-                    let corners = [(vx as f64 - w / 2.0, vy as f64 - h / 2.0), (vx as f64 + w / 2.0, vy as f64 + h / 2.0)];
+                    let corners = [(f64::from(vx) - w / 2.0, f64::from(vy) - h / 2.0), (f64::from(vx) + w / 2.0, f64::from(vy) + h / 2.0)];
                     let u: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
-                    let rect = [u[0][0].min(u[1][0]) as f64, u[0][1].min(u[1][1]) as f64, u[0][0].max(u[1][0]) as f64, u[0][1].max(u[1][1]) as f64];
+                    let rect = [f64::from(u[0][0].min(u[1][0])), f64::from(u[0][1].min(u[1][1])), f64::from(u[0][0].max(u[1][0])), f64::from(u[0][1].max(u[1][1]))];
                     let by = (kind.group() == printcraft_engine::StampGroup::Dynamic).then(|| by_line.clone());
                     let shape = printcraft_engine::Shape::Stamp { rect, stamp: kind, by };
                     view.pending_edit = Some(printcraft_engine::Edit::AddAnnotation(printcraft_engine::NewAnnotation {
@@ -1198,7 +1206,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                     // Centred on the click at its natural size (the engine sizes it).
                     let (vx, vy) = xf.screen_to_view(p);
                     let u = info.pages[i].view_to_user(vx, vy);
-                    let (x, y) = (u[0] as f64, u[1] as f64);
+                    let (x, y) = (f64::from(u[0]), f64::from(u[1]));
                     view.pending_edit = Some(printcraft_engine::Edit::AddCustomStamp {
                         page: i,
                         rect: [x, y, x, y],
@@ -1390,7 +1398,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                     if sr.contains(p) {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         let label = match &l.target {
-                            LinkTarget::Page(n) => format!("Go to page {}", info.pages.get(*n).map(|p| p.label.as_str()).unwrap_or("?")),
+                            LinkTarget::Page(n) => format!("Go to page {}", info.pages.get(*n).map_or("?", |p| p.label.as_str())),
                             LinkTarget::Uri(u) => u.clone(),
                             LinkTarget::Other(s) => format!("{s} action"),
                         };
@@ -1723,7 +1731,7 @@ fn run_button(app: &mut PrintCraftApp, index: usize, ctx: &egui::Context, name: 
         B::GoTo(p) => app.views[index].go_to_page(p.min(pages.saturating_sub(1))),
         B::Alert(m) => app.notify(m),
         B::Submit(url) => {
-            app.notify(format!("{name} submits the form to {url}; PrintCraft doesn't send form data. Save the document to keep your entries."))
+            app.notify(format!("{name} submits the form to {url}; PrintCraft doesn't send form data. Save the document to keep your entries."));
         }
         B::ImportIcon => app.choose_field_image(name),
         B::Script(js) => {
@@ -1780,7 +1788,7 @@ fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: 
                             if searched < pages { format!("Searching… {searched}/{pages}") } else { "No matches".into() }
                         } else {
                             let more = if searched < pages { "+" } else { "" };
-                            format!("{} of {}{more}", find.current.map(|c| c + 1).unwrap_or(0), find.matches.len())
+                            format!("{} of {}{more}", find.current.map_or(0, |c| c + 1), find.matches.len())
                         };
                         ui.label(egui::RichText::new(status).font(theme::regular(12.0)).color(t.text_muted));
                         if icons::button(ui, "chevron-up", 26.0, false, "Previous (⇧⌘G)").clicked() {
@@ -2081,7 +2089,7 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, ui: &mut
                 }
                 if icons::button(ui, "file-plus", 30.0, false, "Insert a blank page after the selection").clicked() {
                     let c = info.pages[last].crop;
-                    let (w, h) = ((c[2] - c[0]).abs().max(1.0) as f64, (c[3] - c[1]).abs().max(1.0) as f64);
+                    let (w, h) = (f64::from((c[2] - c[0]).abs().max(1.0)), f64::from((c[3] - c[1]).abs().max(1.0)));
                     view.pending_edit = Some(Edit::InsertBlankPage { at: last + 1, width: w, height: h });
                 }
                 if icons::button(ui, "file-input", 30.0, false, "Insert pages from a file…").clicked() {
@@ -2272,7 +2280,7 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, pool: &RenderPool, editable
                     Some((_, r)) => r.left() + 3.0,
                     None => cells.last().map_or(0.0, |(_, r)| r.right() - 3.0),
                 };
-                let row = cells.iter().find(|(i, _)| *i == gap).or(cells.last()).map(|(_, r)| r.y_range()).unwrap_or(egui::Rangef::new(0.0, 0.0));
+                let row = cells.iter().find(|(i, _)| *i == gap).or(cells.last()).map_or(egui::Rangef::new(0.0, 0.0), |(_, r)| r.y_range());
                 ui.painter().line_segment([pos2(x, row.min + 10.0), pos2(x, row.max - 10.0)], Stroke::new(3.0, t.accent));
                 ui.painter().text(
                     p + vec2(14.0, 14.0),

@@ -28,6 +28,7 @@ pub struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
+    #[must_use]
     pub fn new(data: &'a [u8], pos: usize) -> Self {
         Self { data, pos: pos.min(data.len()) }
     }
@@ -202,11 +203,11 @@ impl<'a> Lexer<'a> {
                         }
                         b'\n' => {}
                         b'0'..=b'7' => {
-                            let mut v = (e - b'0') as u32;
+                            let mut v = u32::from(e - b'0');
                             for _ in 0..2 {
                                 match self.peek() {
                                     Some(d @ b'0'..=b'7') => {
-                                        v = v * 8 + (d - b'0') as u32;
+                                        v = v * 8 + u32::from(d - b'0');
                                         self.pos += 1;
                                     }
                                     _ => break,
@@ -302,8 +303,8 @@ impl<'a> Lexer<'a> {
                 let g = self.token();
                 if g.iter().all(u8::is_ascii_digit) && self.eat_keyword(b"R") {
                     let generation = std::str::from_utf8(g).ok().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-                    if n <= u32::MAX as i64 {
-                        return Ok(Object::Ref(ObjRef::new(n as u32, generation.min(u16::MAX as u32) as u16)));
+                    if n <= i64::from(u32::MAX) {
+                        return Ok(Object::Ref(ObjRef::new(n as u32, generation.min(u32::from(u16::MAX)) as u16)));
                     }
                 }
                 let _ = gstart;
@@ -368,7 +369,7 @@ pub fn parse_indirect(data: &[u8], offset: usize, resolve_length: &dyn Fn(ObjRef
     if !lx.eat_keyword(b"obj") {
         return Err(CosError::Syntax { offset: lx.pos, detail: "expected 'obj'".into() });
     }
-    let id = ObjRef::new(num.min(u32::MAX as u64) as u32, generation.min(u16::MAX as u64) as u16);
+    let id = ObjRef::new(num.min(u64::from(u32::MAX)) as u32, generation.min(u64::from(u16::MAX)) as u16);
     let obj = match lx.object() {
         Ok(o) => o,
         // "N G obj endobj" (empty) is treated as null.
@@ -382,7 +383,7 @@ pub fn parse_indirect(data: &[u8], offset: usize, resolve_length: &dyn Fn(ObjRef
         // The keyword is followed by CRLF or LF (a lone CR is tolerated).
         match (data.get(lx.pos), data.get(lx.pos + 1)) {
             (Some(b'\r'), Some(b'\n')) => lx.pos += 2,
-            (Some(b'\n'), _) | (Some(b'\r'), _) => lx.pos += 1,
+            (Some(b'\n' | b'\r'), _) => lx.pos += 1,
             _ => {}
         }
         let start = lx.pos;

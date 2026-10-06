@@ -1,4 +1,4 @@
-//! FlateDecode (ISO 32000-2 §7.4.4): zlib (RFC 1950) wrapping deflate (RFC 1951).
+//! `FlateDecode` (ISO 32000-2 §7.4.4): zlib (RFC 1950) wrapping deflate (RFC 1951).
 //!
 //! Real-world quirks handled:
 //! - the Adler-32 trailer is not required (some producers omit or corrupt it), because the

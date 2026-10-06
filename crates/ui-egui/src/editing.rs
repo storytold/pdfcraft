@@ -261,6 +261,7 @@ impl PrintCraftApp {
     }
 
     /// The first tab with unsaved changes.
+    #[must_use]
     pub fn first_dirty(&self) -> Option<usize> {
         self.views.iter().position(|v| self.session.get(v.id).is_some_and(|d| d.dirty))
     }
@@ -270,14 +271,11 @@ impl PrintCraftApp {
         let Some(req) = self.close_request.take() else { return };
         let index = match req {
             CloseRequest::Tab(i) => i,
-            CloseRequest::Quit | CloseRequest::All => match self.first_dirty() {
-                Some(i) => i,
-                None => {
-                    if req == CloseRequest::Quit {
-                        self.quit(ctx);
-                    }
-                    return;
+            CloseRequest::Quit | CloseRequest::All => if let Some(i) = self.first_dirty() { i } else {
+                if req == CloseRequest::Quit {
+                    self.quit(ctx);
                 }
+                return;
             },
         };
         match choice {
@@ -356,7 +354,7 @@ pub fn write_atomically(path: &str, bytes: &[u8]) -> std::io::Result<()> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn short_name(path: &str) -> String {
-    std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
+    std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned())
 }
 
 /// Offer bytes as a browser download.

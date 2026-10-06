@@ -12,6 +12,7 @@ pub enum Language {
 impl Language {
     pub const ALL: [Self; 2] = [Self::En, Self::Ja];
 
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Self::En => "English",
@@ -19,6 +20,7 @@ impl Language {
         }
     }
 
+    #[must_use]
     pub fn parse(code: &str) -> Option<Self> {
         match code {
             "en" => Some(Self::En),
@@ -27,6 +29,7 @@ impl Language {
         }
     }
 
+    #[must_use]
     pub fn tr(self, text: &str) -> &str {
         if self == Self::Ja
             && let Some((_, japanese)) = JAPANESE.iter().find(|(english, _)| *english == text)

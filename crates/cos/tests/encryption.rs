@@ -59,7 +59,7 @@ fn content(doc: &Document) -> String {
 
 fn title(doc: &Document) -> Option<String> {
     let info = doc.resolve(doc.trailer().get(b"Info")?);
-    info.as_dict()?.get(b"Title").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text()))
+    info.as_dict()?.get(b"Title").and_then(|t| doc.resolve(t).as_string().map(printcraft_cos::PdfString::to_text))
 }
 
 const ALL: [Algorithm; 4] = [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128, Algorithm::Aes256];

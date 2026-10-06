@@ -120,6 +120,7 @@ impl std::fmt::Debug for Document {
 impl Document {
     /// A new document with an empty page tree (for split / extract / combine). It has no
     /// original bytes, so saving always writes a full file.
+    #[must_use]
     pub fn new_empty() -> Self {
         let mut doc = Document {
             data: Arc::new(Vec::new()),
@@ -269,13 +270,15 @@ impl Document {
     }
 
     /// The security handler, when the document is encrypted.
+    #[must_use]
     pub fn security(&self) -> Option<&printcraft_crypt::SecurityHandler> {
         self.security.as_deref()
     }
 
     /// What the opening password allows (`None` for unencrypted documents: everything).
+    #[must_use]
     pub fn permissions(&self) -> Option<printcraft_crypt::Permissions> {
-        self.security().map(|s| s.permissions())
+        self.security().map(printcraft_crypt::SecurityHandler::permissions)
     }
 
     /// Make the next save a full rewrite: earlier revisions (which still hold what an edit
@@ -285,11 +288,13 @@ impl Document {
     }
 
     /// The next save must rewrite the whole file (see [`Document::require_full_save`]).
+    #[must_use]
     pub fn full_save_required(&self) -> bool {
         self.full_save
     }
 
     /// Security was set or removed since the document was opened (the next save applies it).
+    #[must_use]
     pub fn encryption_changed(&self) -> bool {
         self.encryption_changed
     }
@@ -302,6 +307,7 @@ impl Document {
 
     /// The security the next save writes: protection applied with `set_encryption`, none after
     /// `remove_encryption`, otherwise the security the document was opened with.
+    #[must_use]
     pub fn output_handler(&self) -> Option<&printcraft_crypt::SecurityHandler> {
         self.output_security().0
     }
@@ -384,14 +390,17 @@ impl Document {
         }
     }
 
+    #[must_use]
     pub fn bytes(&self) -> &Arc<Vec<u8>> {
         &self.data
     }
 
+    #[must_use]
     pub fn version(&self) -> &str {
         &self.version
     }
 
+    #[must_use]
     pub fn trailer(&self) -> &Dict {
         &self.trailer
     }
@@ -400,6 +409,7 @@ impl Document {
         &mut self.trailer
     }
 
+    #[must_use]
     pub fn revisions(&self) -> &[Revision] {
         &self.revisions
     }
@@ -408,6 +418,7 @@ impl Document {
     /// end-of-line) that closes its cross-reference section. `data[..end]` is that revision as it
     /// was saved. A linearized file's first-page section belongs to the revision it precedes, so
     /// ends only ever increase. Empty for a reconstructed file.
+    #[must_use]
     pub fn revision_ends(&self) -> Vec<usize> {
         let d = &self.data[..];
         let mut ends: Vec<usize> = Vec::with_capacity(self.revisions.len());
@@ -426,30 +437,36 @@ impl Document {
         ends
     }
 
+    #[must_use]
     pub fn repair_log(&self) -> &[String] {
         &self.repair_log
     }
 
     /// `true` when there are unsaved edits.
+    #[must_use]
     pub fn is_modified(&self) -> bool {
         !self.overlay.is_empty()
     }
 
     /// Object numbers changed since the document was opened (or last saved).
+    #[must_use]
     pub fn modified_objects(&self) -> Vec<u32> {
         self.overlay.keys().copied().collect()
     }
 
     /// Where object `num` is stored in the file (ignoring unsaved edits).
+    #[must_use]
     pub fn xref_entry(&self, num: u32) -> Option<XrefEntry> {
-        self.entries.get(&num).cloned()
+        self.entries.get(&num).copied()
     }
 
     /// Object `num` has an unsaved edit.
+    #[must_use]
     pub fn is_edited(&self, num: u32) -> bool {
         self.overlay.contains_key(&num)
     }
 
+    #[must_use]
     pub fn root(&self) -> Option<ObjRef> {
         self.trailer.reference(b"Root")
     }
@@ -457,11 +474,13 @@ impl Document {
     // ── object access ───────────────────────────────────────────────────────────────────────
 
     /// Fetch an object by reference. Missing objects are `Null` (ISO 32000-2 §7.3.10).
+    #[must_use]
     pub fn get(&self, r: ObjRef) -> Arc<Object> {
         self.try_get(r.num).unwrap_or_else(|_| Arc::new(Object::Null))
     }
 
     /// Follow a reference if `o` is one; otherwise return `o` itself.
+    #[must_use]
     pub fn resolve(&self, o: &Object) -> Arc<Object> {
         match o {
             Object::Ref(r) => self.get(*r),
@@ -470,6 +489,7 @@ impl Document {
     }
 
     /// Resolve and return a dictionary (a stream's dictionary counts).
+    #[must_use]
     pub fn dict(&self, o: &Object) -> Option<Dict> {
         self.resolve(o).as_dict().cloned()
     }
@@ -606,6 +626,7 @@ impl Document {
     }
 
     /// Current generation of an object number.
+    #[must_use]
     pub fn generation(&self, num: u32) -> u16 {
         match self.overlay.get(&num) {
             Some(Slot::Set(g, _)) => *g,
@@ -630,6 +651,7 @@ impl Document {
     }
 
     /// All object numbers known (file and overlay), excluding freed ones.
+    #[must_use]
     pub fn object_numbers(&self) -> Vec<u32> {
         let mut set: HashSet<u32> = self.entries.iter().filter(|(_, e)| !matches!(e, XrefEntry::Free { .. })).map(|(n, _)| *n).collect();
         for (n, s) in &self.overlay {
@@ -752,7 +774,7 @@ impl Document {
                     let kind = lx.token();
                     let num = (start + i) as u32;
                     let offset = std::str::from_utf8(o).ok().and_then(|s| s.parse::<u64>().ok());
-                    let generation = std::str::from_utf8(g).ok().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0).min(u16::MAX as u32) as u16;
+                    let generation = std::str::from_utf8(g).ok().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0).min(u32::from(u16::MAX)) as u16;
                     let entry = match (kind, offset) {
                         (b"n", Some(offset)) => XrefEntry::InFile { offset, generation },
                         (b"f", _) => XrefEntry::Free { next_generation: generation },
@@ -798,7 +820,7 @@ impl Document {
             if len == 0 {
                 return default;
             }
-            r[from..from + len].iter().fold(0u64, |acc, b| acc << 8 | *b as u64)
+            r[from..from + len].iter().fold(0u64, |acc, b| acc << 8 | u64::from(*b))
         };
         let mut rows = raw.chunks_exact(row);
         for pair in index.chunks(2) {
@@ -810,9 +832,9 @@ impl Document {
                 let b = field(r, w[0] + w[1], w[2], 0);
                 let num = (*start + i).max(0) as u32;
                 let entry = match t {
-                    0 => XrefEntry::Free { next_generation: b.min(u16::MAX as u64) as u16 },
-                    1 => XrefEntry::InFile { offset: a, generation: b.min(u16::MAX as u64) as u16 },
-                    2 => XrefEntry::InStream { stream: a.min(u32::MAX as u64) as u32, index: b.min(u32::MAX as u64) as u32 },
+                    0 => XrefEntry::Free { next_generation: b.min(u64::from(u16::MAX)) as u16 },
+                    1 => XrefEntry::InFile { offset: a, generation: b.min(u64::from(u16::MAX)) as u16 },
+                    2 => XrefEntry::InStream { stream: a.min(u64::from(u32::MAX)) as u32, index: b.min(u64::from(u32::MAX)) as u32 },
                     _ => continue, // reserved types are treated as null references (§7.5.8.3)
                 };
                 if matches!(entry, XrefEntry::InFile { offset: 0, .. }) {
@@ -882,19 +904,16 @@ impl Document {
                 trailer = Some(d);
             }
         }
-        let trailer = match trailer {
-            Some(t) => t,
-            None => {
-                let catalog = self
-                    .entries
-                    .keys()
-                    .copied()
-                    .find(|n| matches!(self.try_get(*n).as_deref(), Ok(Object::Dict(d)) if d.name(b"Type") == Some(b"Catalog")));
-                let Some(c) = catalog else { return Err(CosError::Syntax { offset: 0, detail: "no document catalog found".into() }) };
-                let mut t = Dict::new();
-                t.set(b"Root".to_vec(), Object::Ref(ObjRef::new(c, self.generation(c))));
-                t
-            }
+        let trailer = if let Some(t) = trailer { t } else {
+            let catalog = self
+                .entries
+                .keys()
+                .copied()
+                .find(|n| matches!(self.try_get(*n).as_deref(), Ok(Object::Dict(d)) if d.name(b"Type") == Some(b"Catalog")));
+            let Some(c) = catalog else { return Err(CosError::Syntax { offset: 0, detail: "no document catalog found".into() }) };
+            let mut t = Dict::new();
+            t.set(b"Root".to_vec(), Object::Ref(ObjRef::new(c, self.generation(c))));
+            t
         };
         let mut trailer = trailer;
         for k in [&b"Prev"[..], b"XRefStm"] {
@@ -1049,7 +1068,7 @@ mod tests {
         let doc = Document::open(Arc::new(out)).unwrap();
         assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
         let hidden = doc.get(ObjRef::new(3, 0));
-        assert_eq!(hidden.as_dict().and_then(|d| d.get(b"Hidden").and_then(|h| h.as_string().map(|s| s.to_text()))), Some("yes".into()));
+        assert_eq!(hidden.as_dict().and_then(|d| d.get(b"Hidden").and_then(|h| h.as_string().map(super::super::object::PdfString::to_text))), Some("yes".into()));
     }
 
     #[test]

@@ -227,7 +227,7 @@ fn added_text_and_images_are_page_content_that_stays_editable() {
     assert!(marks_present(&doc).is_empty());
 }
 
-/// One page with Helvetica (WinAnsi) and a subset font that has only the glyphs it uses.
+/// One page with Helvetica (`WinAnsi`) and a subset font that has only the glyphs it uses.
 fn text_page(content: &str) -> Document {
     let objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
@@ -453,7 +453,7 @@ fn page_content_bytes(doc: &Document, page: usize) -> Vec<u8> {
     }
 }
 
-/// A page drawing image XObject /Im0 at 100,100 size 200 × 100 (pixels 4 × 2).
+/// A page drawing image `XObject` /Im0 at 100,100 size 200 × 100 (pixels 4 × 2).
 fn image_page() -> Document {
     let content = "q 200 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Caption) Tj ET";
     let objs: Vec<String> = vec![
@@ -543,10 +543,10 @@ fn paragraphs_take_new_formatting() {
     assert_eq!(blocks[0].text, before.text, "same words");
     assert_eq!((blocks[0].base_font.as_str(), blocks[0].size), ("Times-Bold", 12.0));
     // Centred in the paragraph's width.
-    let mid = (before.rect[0] + before.rect[2]) / 2.0;
+    let mid = f64::midpoint(before.rect[0], before.rect[2]);
     for i in &blocks[0].lines {
         let r = lines[*i].rect;
-        assert!(((r[0] + r[2]) / 2.0 - mid).abs() < 2.0, "line {:?} centred on {mid}", lines[*i].text);
+        assert!((f64::midpoint(r[0], r[2]) - mid).abs() < 2.0, "line {:?} centred on {mid}", lines[*i].text);
     }
     assert!(String::from_utf8_lossy(&page_content_bytes(&doc, 0)).contains("1 0 0 rg"));
     // Right alignment keeps lines flush with the right edge.

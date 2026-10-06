@@ -49,6 +49,7 @@ pub enum CalcOp {
 }
 
 impl CalcOp {
+    #[must_use]
     pub fn code(self) -> &'static str {
         match self {
             CalcOp::Sum => "SUM",
@@ -59,6 +60,7 @@ impl CalcOp {
         }
     }
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             CalcOp::Sum => "sum (+)",
@@ -105,6 +107,7 @@ pub struct Scripts {
 }
 
 impl Actions {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.format == Format::None && self.validate == Validate::None && self.calculate == Calculate::None
     }
@@ -303,7 +306,7 @@ fn call(js: &str, name: &str) -> Option<Vec<Arg>> {
     p.list(b')')
 }
 
-/// Acrobat's AFDate_Format(n) / AFTime_Format(n) presets.
+/// Acrobat's `AFDate_Format(n)` / `AFTime_Format(n)` presets.
 pub const DATE_PRESETS: [&str; 14] = [
     "m/d",
     "m/d/yy",
@@ -357,6 +360,7 @@ pub fn parse_format(js: &str) -> Option<Format> {
     None
 }
 
+#[must_use]
 pub fn parse_validate(js: &str) -> Option<Validate> {
     let args = call(js, "AFRange_Validate")?;
     let flag = |i: usize| args.get(i).is_some_and(Arg::truthy);
@@ -414,6 +418,7 @@ fn js_str(s: &str) -> String {
 }
 
 /// The (format, keystroke) scripts for a format.
+#[must_use]
 pub fn format_js(f: &Format) -> Option<(String, String)> {
     Some(match f {
         Format::None => return None,
@@ -429,6 +434,7 @@ pub fn format_js(f: &Format) -> Option<(String, String)> {
     })
 }
 
+#[must_use]
 pub fn validate_js(v: &Validate) -> Option<String> {
     match v {
         Validate::None => None,
@@ -438,6 +444,7 @@ pub fn validate_js(v: &Validate) -> Option<String> {
     }
 }
 
+#[must_use]
 pub fn calculate_js(c: &Calculate) -> Option<String> {
     match c {
         Calculate::None => None,
@@ -452,8 +459,9 @@ pub fn calculate_js(c: &Calculate) -> Option<String> {
 
 // ── running them ────────────────────────────────────────────────────────────────────────────
 
-/// AFMakeNumber: a number from typed text (currency symbols, group separators, spaces and a
+/// `AFMakeNumber`: a number from typed text (currency symbols, group separators, spaces and a
 /// trailing % ignored; a comma decimal separator accepted).
+#[must_use]
 pub fn make_number(s: &str) -> Option<f64> {
     let t: String = s.trim().chars().filter(|c| !c.is_whitespace() && !matches!(c, '$' | '€' | '£' | '¥' | '\'' | '%')).collect();
     if t.is_empty() {
@@ -472,6 +480,7 @@ pub fn make_number(s: &str) -> Option<f64> {
 }
 
 /// A number as JavaScript prints it (integers without a fraction).
+#[must_use]
 pub fn js_number(v: f64) -> String {
     if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
 }
@@ -566,8 +575,9 @@ fn order(fmt: &str) -> Vec<char> {
     out
 }
 
-/// Parse typed text against a date/time format (AFDate_KeystrokeEx's leniency: any
+/// Parse typed text against a date/time format (`AFDate_KeystrokeEx`'s leniency: any
 /// separators, month names, two-digit years). `None` when it isn't a valid date.
+#[must_use]
 pub fn parse_date(text: &str, fmt: &str) -> Option<DateTime> {
     let t = text.trim();
     if t.is_empty() {
@@ -652,6 +662,7 @@ pub fn parse_date(text: &str, fmt: &str) -> Option<DateTime> {
 }
 
 /// Format a date/time with Acrobat's date format letters.
+#[must_use]
 pub fn format_date(dt: DateTime, fmt: &str) -> String {
     let chars: Vec<char> = fmt.chars().collect();
     let mut out = String::new();
@@ -766,6 +777,7 @@ fn apply_mask(mask: &str, text: &str) -> Option<String> {
 }
 
 /// The text shown for a value (the Format event).
+#[must_use]
 pub fn format_value(f: &Format, value: &str) -> String {
     if value.is_empty() {
         return String::new();
@@ -953,7 +965,7 @@ pub fn calculate(c: &Calculate, values: &dyn Fn(&str) -> Vec<String>) -> Option<
             Some(if v.is_finite() { js_number(v) } else { "0".into() })
         }
         Calculate::Notation(expr) => {
-            let v = eval_notation(expr, &|name| values(name).first().map(num).unwrap_or(0.0))?;
+            let v = eval_notation(expr, &|name| values(name).first().map_or(0.0, num))?;
             Some(js_number(v))
         }
     }
@@ -1061,7 +1073,7 @@ mod tests {
                 _ => vec![],
             }
         };
-        let simple = |op, f: &[&str]| calculate(&Calculate::Simple { op, fields: f.iter().map(|s| s.to_string()).collect() }, &vals);
+        let simple = |op, f: &[&str]| calculate(&Calculate::Simple { op, fields: f.iter().map(std::string::ToString::to_string).collect() }, &vals);
         assert_eq!(simple(CalcOp::Sum, &["a", "b"]), Some("5.5".into()));
         assert_eq!(simple(CalcOp::Product, &["a", "b"]), Some("7".into()));
         assert_eq!(simple(CalcOp::Average, &["row"]), Some("2".into()), "groups count every child");
@@ -1074,7 +1086,7 @@ mod tests {
 
 // ── push buttons ────────────────────────────────────────────────────────────────────────────
 
-/// What clicking a push button does (its mouse-up action), as far as PrintCraft can run it
+/// What clicking a push button does (its mouse-up action), as far as `PrintCraft` can run it
 /// without a JavaScript engine.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ButtonAction {
@@ -1083,18 +1095,18 @@ pub enum ButtonAction {
         fields: Vec<String>,
         exclude: bool,
     },
-    /// A named action: Print, NextPage, PrevPage, FirstPage, LastPage, …
+    /// A named action: Print, `NextPage`, `PrevPage`, `FirstPage`, `LastPage`, …
     Named(String),
     Uri(String),
     /// Go to a page (0-based) in this document.
     GoTo(usize),
     /// `app.alert("…")`.
     Alert(String),
-    /// Submit the form to a URL (not sent: PrintCraft never posts form data on its own).
+    /// Submit the form to a URL (not sent: `PrintCraft` never posts form data on its own).
     Submit(String),
     /// `event.target.buttonImportIcon()`: choose an image for the button (an image field).
     ImportIcon,
-    /// A script PrintCraft can't run yet.
+    /// A script `PrintCraft` can't run yet.
     Script(String),
 }
 

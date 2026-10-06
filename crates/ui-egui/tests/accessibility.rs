@@ -1,4 +1,4 @@
-//! Prepare for accessibility ▸ Check for accessibility in the real shell (egui_kittest): the
+//! Prepare for accessibility ▸ Check for accessibility in the real shell (`egui_kittest)`: the
 //! options dialog, the results panel, Fix, Skip Rule and the report.
 
 use egui_kittest::Harness;

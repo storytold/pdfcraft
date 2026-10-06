@@ -18,7 +18,7 @@ impl Automation {
         let r = <[f64; 4]>::try_from(r).map_err(|_| bad("rect must be 4 numbers"))?;
         let p = &self.doc(a)?.info.pages[page];
         let (u0, u1) = (p.view_to_user(r[0] as f32, r[1] as f32), p.view_to_user(r[2] as f32, r[3] as f32));
-        Ok(Some([u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64]))
+        Ok(Some([f64::from(u0[0].min(u1[0])), f64::from(u0[1].min(u1[1])), f64::from(u0[0].max(u1[0])), f64::from(u0[1].max(u1[1]))]))
     }
 
     fn link_action(&self, a: &Args) -> Result<Option<LinkAction>> {

@@ -117,6 +117,7 @@ impl PrintDraft {
         Ok(print::Settings { pages, paper: PAPERS[self.paper.min(PAPERS.len() - 1)].1, orientation: self.orientation, layout, content: self.content })
     }
 
+    #[must_use]
     pub fn job(&self, title: &str) -> spool::Job {
         spool::Job {
             printer: self.printer.clone(),
@@ -160,38 +161,35 @@ impl PrintCraftApp {
                 return false;
             }
         };
-        match self.print_draft.printer.clone() {
-            Some(printer) => match spool::submit(&bytes, &self.print_draft.job(&name)) {
-                Ok(msg) => {
-                    self.notify(if msg.is_empty() { format!("Sent to {printer}") } else { format!("Sent to {printer}: {msg}") });
+        if let Some(printer) = self.print_draft.printer.clone() { match spool::submit(&bytes, &self.print_draft.job(&name)) {
+            Ok(msg) => {
+                self.notify(if msg.is_empty() { format!("Sent to {printer}") } else { format!("Sent to {printer}: {msg}") });
+                true
+            }
+            Err(e) => {
+                self.notify(e.to_string());
+                false
+            }
+        } } else {
+            let path = match self.save_override.clone() {
+                Some(p) => Some(std::path::PathBuf::from(p)),
+                #[cfg(not(target_arch = "wasm32"))]
+                None => {
+                    let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF");
+                    rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem} (print).pdf")).save_file()
+                }
+                #[cfg(target_arch = "wasm32")]
+                None => None,
+            };
+            let Some(path) = path else { return false };
+            match std::fs::write(&path, &bytes) {
+                Ok(()) => {
+                    self.notify(format!("Saved the print-ready PDF to {}", path.display()));
                     true
                 }
                 Err(e) => {
-                    self.notify(e.to_string());
+                    self.notify(format!("Could not save: {e}"));
                     false
-                }
-            },
-            None => {
-                let path = match self.save_override.clone() {
-                    Some(p) => Some(std::path::PathBuf::from(p)),
-                    #[cfg(not(target_arch = "wasm32"))]
-                    None => {
-                        let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF");
-                        rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem} (print).pdf")).save_file()
-                    }
-                    #[cfg(target_arch = "wasm32")]
-                    None => None,
-                };
-                let Some(path) = path else { return false };
-                match std::fs::write(&path, &bytes) {
-                    Ok(()) => {
-                        self.notify(format!("Saved the print-ready PDF to {}", path.display()));
-                        true
-                    }
-                    Err(e) => {
-                        self.notify(format!("Could not save: {e}"));
-                        false
-                    }
                 }
             }
         }
@@ -415,34 +413,31 @@ pub(crate) fn body(
                         // UVs of the visible part (texture y runs down from the page top).
                         let uv = |x: f64, y: f64| pos2((x / dw) as f32, (1.0 - y / dh) as f32);
                         let uvs = [uv(x0, y0), uv(x1, y0), uv(x1, y1), uv(x0, y1)];
-                        match thumb(pl.page) {
-                            Some(tex) => {
-                                let mut mesh = egui::Mesh::with_texture(tex);
-                                for (p, u) in corners.iter().zip(uvs) {
-                                    mesh.vertices.push(egui::epaint::Vertex {
-                                        pos: *p,
-                                        uv: u,
-                                        color: if d.grayscale { Color32::from_gray(235) } else { Color32::WHITE },
-                                    });
-                                }
-                                mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
-                                painter.add(egui::Shape::mesh(mesh));
+                        if let Some(tex) = thumb(pl.page) {
+                            let mut mesh = egui::Mesh::with_texture(tex);
+                            for (p, u) in corners.iter().zip(uvs) {
+                                mesh.vertices.push(egui::epaint::Vertex {
+                                    pos: *p,
+                                    uv: u,
+                                    color: if d.grayscale { Color32::from_gray(235) } else { Color32::WHITE },
+                                });
                             }
-                            None => {
-                                painter.add(egui::Shape::convex_polygon(
-                                    corners.to_vec(),
-                                    Color32::from_gray(245),
-                                    Stroke::new(0.5, Color32::from_gray(180)),
-                                ));
-                                let c = corners.iter().fold(vec2(0.0, 0.0), |a, p| a + p.to_vec2()) / 4.0;
-                                painter.text(
-                                    c.to_pos2(),
-                                    egui::Align2::CENTER_CENTER,
-                                    (pl.page + 1).to_string(),
-                                    theme::regular(11.0),
-                                    Color32::from_gray(120),
-                                );
-                            }
+                            mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+                            painter.add(egui::Shape::mesh(mesh));
+                        } else {
+                            painter.add(egui::Shape::convex_polygon(
+                                corners.to_vec(),
+                                Color32::from_gray(245),
+                                Stroke::new(0.5, Color32::from_gray(180)),
+                            ));
+                            let c = corners.iter().fold(vec2(0.0, 0.0), |a, p| a + p.to_vec2()) / 4.0;
+                            painter.text(
+                                c.to_pos2(),
+                                egui::Align2::CENTER_CENTER,
+                                (pl.page + 1).to_string(),
+                                theme::regular(11.0),
+                                Color32::from_gray(120),
+                            );
                         }
                     }
                     for b in &sheet.borders {

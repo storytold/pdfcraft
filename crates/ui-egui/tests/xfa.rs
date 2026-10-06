@@ -5,7 +5,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use printcraft_ui_egui::PrintCraftApp;
 
-/// A one-page PDF with a proper xref; `acroform` is the catalog's /AcroForm (or empty), `extra`
+/// A one-page PDF with a proper xref; `acroform` is the catalog's /`AcroForm` (or empty), `extra`
 /// more catalog entries, `objects` extra objects numbered from 5.
 fn pdf(acroform: &str, extra: &str, objects: &[&str]) -> Vec<u8> {
     let mut objs: Vec<String> = vec![
@@ -14,7 +14,7 @@ fn pdf(acroform: &str, extra: &str, objects: &[&str]) -> Vec<u8> {
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R >>".into(),
         "<< /Length 0 >>\nstream\n\nendstream".into(),
     ];
-    objs.extend(objects.iter().map(|o| o.to_string()));
+    objs.extend(objects.iter().map(std::string::ToString::to_string));
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {

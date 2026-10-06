@@ -43,6 +43,7 @@ pub enum Format {
 }
 
 impl Format {
+    #[must_use]
     pub fn from_extension(ext: &str) -> Option<Format> {
         Some(match ext.to_ascii_lowercase().as_str() {
             "xfdf" => Format::Xfdf,
@@ -240,7 +241,7 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
             if let Some(le) = d.get(b"LE").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())
                 && le.len() == 2
             {
-                let name = |o: &Object| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned()).unwrap_or_else(|| "None".into());
+                let name = |o: &Object| o.as_name().map_or_else(|| "None".into(), |x| String::from_utf8_lossy(x).into_owned());
                 let _ = write!(attrs, " head=\"{}\" tail=\"{}\"", name(&le[0]), name(&le[1]));
             }
             if let Some(irt) = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| names.get(&r)) {
@@ -297,12 +298,9 @@ fn xfdf_fields(doc: &Document, out: &mut String) {
         }
         let mut node = &mut root;
         for part in f.name.split('.') {
-            let i = match node.kids.iter().position(|(k, _)| k == part) {
-                Some(i) => i,
-                None => {
-                    node.kids.push((part.to_string(), Node::default()));
-                    node.kids.len() - 1
-                }
+            let i = if let Some(i) = node.kids.iter().position(|(k, _)| k == part) { i } else {
+                node.kids.push((part.to_string(), Node::default()));
+                node.kids.len() - 1
             };
             node = &mut node.kids[i].1;
         }
@@ -327,6 +325,7 @@ fn xfdf_fields(doc: &Document, out: &mut String) {
 }
 
 /// XFDF with the document's comments and/or field values.
+#[must_use]
 pub fn export_xfdf(doc: &Document, comments: bool, fields: bool, file: &str) -> String {
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xml:space=\"preserve\">\n");
     if comments {
@@ -370,7 +369,7 @@ pub fn export_fdf(doc: &Document, comments: bool, fields: bool, file: &str) -> V
                 FieldKind::List if f.value.len() > 1 => {
                     printcraft_cos::serialize(&Object::Array(f.value.iter().map(|v| Object::String(PdfString::text(v))).collect()), &mut body);
                 }
-                _ => body.extend(pdf_string(f.value.first().map(String::as_str).unwrap_or(""))),
+                _ => body.extend(pdf_string(f.value.first().map_or("", String::as_str))),
             }
             body.extend_from_slice(b" >> ");
         }
@@ -425,6 +424,7 @@ fn xml_name(name: &str) -> String {
 }
 
 /// Form data as XML, CSV or tab-delimited text (Acrobat's Export data formats).
+#[must_use]
 pub fn export_data(doc: &Document, format: Format) -> String {
     let fields: Vec<(String, String)> = printcraft_forms::fields(doc)
         .into_iter()
@@ -490,14 +490,14 @@ fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)], report: &m
         // Read-only fields still take imported data, as in Acrobat.
         let ro = f.read_only();
         if ro {
-            let _ = doc.update_dict(f.obj, |d| d.set(b"Ff".to_vec(), Object::Int((f.flags & !printcraft_forms::flags::READ_ONLY) as i64)));
+            let _ = doc.update_dict(f.obj, |d| d.set(b"Ff".to_vec(), Object::Int(i64::from(f.flags & !printcraft_forms::flags::READ_ONLY))));
         }
         match printcraft_forms::set_value(doc, name, &v) {
             Ok(()) => report.fields += 1,
             Err(_) => report.rejected.push(name.clone()),
         }
         if ro {
-            let _ = doc.update_dict(f.obj, |d| d.set(b"Ff".to_vec(), Object::Int(f.flags as i64)));
+            let _ = doc.update_dict(f.obj, |d| d.set(b"Ff".to_vec(), Object::Int(i64::from(f.flags))));
         }
     }
 }
@@ -569,7 +569,7 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
             Object::Array(vec![Object::name(node.attribute("head").unwrap_or("None")), Object::name(node.attribute("tail").unwrap_or("None"))]),
         );
     }
-    for child in node.children().filter(|c| c.is_element()) {
+    for child in node.children().filter(roxmltree::Node::is_element) {
         match child.tag_name().name() {
             "contents" => {
                 d.set(b"Contents".to_vec(), PdfString::text(&child.text().unwrap_or("").replace("\r\n", "\r").replace('\n', "\r")));
@@ -594,7 +594,7 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
 /// Put an annotation dictionary on a page, replacing one with the same `/NM`. Returns its
 /// reference.
 fn place(doc: &mut Document, page_ref: ObjRef, d: Dict) -> Result<ObjRef, DataError> {
-    let nm = d.get(b"NM").and_then(|n| n.as_string().map(|s| s.to_text()));
+    let nm = d.get(b"NM").and_then(|n| n.as_string().map(printcraft_cos::PdfString::to_text));
     let annots: Vec<Object> = doc
         .get(page_ref)
         .as_dict()
@@ -605,7 +605,7 @@ fn place(doc: &mut Document, page_ref: ObjRef, d: Dict) -> Result<ObjRef, DataEr
     let mut kept = Vec::new();
     for a in annots {
         let same = nm.is_some()
-            && a.as_ref().and_then(|r| doc.get(r).as_dict().and_then(|x| x.get(b"NM").and_then(|n| n.as_string().map(|s| s.to_text())))) == nm;
+            && a.as_ref().and_then(|r| doc.get(r).as_dict().and_then(|x| x.get(b"NM").and_then(|n| n.as_string().map(printcraft_cos::PdfString::to_text)))) == nm;
         if !same {
             kept.push(a);
         }
@@ -630,7 +630,7 @@ fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, DataError> {
     let mut by_name: HashMap<String, ObjRef> = HashMap::new();
     let mut later: Vec<(ObjRef, String)> = Vec::new();
     if let Some(annots) = root.children().find(|c| c.has_tag_name("annots")) {
-        for node in annots.children().filter(|c| c.is_element()) {
+        for node in annots.children().filter(roxmltree::Node::is_element) {
             let tag = node.tag_name().name().to_ascii_lowercase();
             let Some((subtype, _)) = SUBTYPES.iter().find(|(_, t)| *t == tag) else { continue };
             let Some(page) = node.attribute("page").and_then(|p| p.parse::<usize>().ok()).and_then(|p| pages.get(p).copied()) else { continue };
@@ -722,13 +722,13 @@ fn walk_fdf(fdf: &Document, list: &[Object], prefix: &str, out: &mut Vec<(String
     }
     for f in list {
         let Some(d) = fdf.resolve(f).as_dict().cloned() else { continue };
-        let Some(t) = d.get(b"T").and_then(|t| fdf.resolve(t).as_string().map(|s| s.to_text())) else { continue };
+        let Some(t) = d.get(b"T").and_then(|t| fdf.resolve(t).as_string().map(printcraft_cos::PdfString::to_text)) else { continue };
         let full = if prefix.is_empty() { t } else { format!("{prefix}.{t}") };
         if let Some(v) = d.get(b"V").map(|v| fdf.resolve(v)) {
             let vals: Vec<String> = match &*v {
                 Object::String(s) => vec![s.to_text()],
                 Object::Name(n) => vec![String::from_utf8_lossy(n).into_owned()],
-                Object::Array(a) => a.iter().filter_map(|x| fdf.resolve(x).as_string().map(|s| s.to_text())).collect(),
+                Object::Array(a) => a.iter().filter_map(|x| fdf.resolve(x).as_string().map(printcraft_cos::PdfString::to_text)).collect(),
                 _ => Vec::new(),
             };
             out.push((full.clone(), vals));
@@ -788,6 +788,7 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
 
 /// Merge Data Files into Spreadsheet: one CSV row per file, one column per field name (in the
 /// order they first appear).
+#[must_use]
 pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
     let mut columns: Vec<&str> = Vec::new();
     for f in files {
@@ -844,10 +845,10 @@ fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
         let xml = roxmltree::Document::parse(t).map_err(|e| DataError::Malformed(e.to_string()))?;
         xml.root_element()
             .children()
-            .filter(|c| c.is_element())
+            .filter(roxmltree::Node::is_element)
             .map(|c| {
                 let name =
-                    c.attributes().find(|a| a.name() == "original").map(|a| a.value().to_string()).unwrap_or_else(|| c.tag_name().name().to_string());
+                    c.attributes().find(|a| a.name() == "original").map_or_else(|| c.tag_name().name().to_string(), |a| a.value().to_string());
                 (name, vec![c.text().unwrap_or("").to_string()])
             })
             .collect()

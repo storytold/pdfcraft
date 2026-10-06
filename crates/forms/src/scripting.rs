@@ -21,6 +21,7 @@ pub enum FieldEvent {
 
 impl FieldEvent {
     /// `event.name`.
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             FieldEvent::Keystroke => "Keystroke",
@@ -128,7 +129,7 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
             }
         }
         if ff != f.flags {
-            doc.update_dict(f.obj, |d| d.set(b"Ff".to_vec(), Object::Int(ff as i64)))?;
+            doc.update_dict(f.obj, |d| d.set(b"Ff".to_vec(), Object::Int(i64::from(ff))))?;
         }
         if let Some(display) = c.display {
             for w in &f.widgets {
@@ -158,13 +159,15 @@ pub fn apply_script_changes(doc: &mut Document, changes: &[FieldChange], scripts
     Ok(())
 }
 
-/// Document-level JavaScripts (the catalog's `/Names /JavaScript` tree), in name order: they
+/// Document-level `JavaScripts` (the catalog's `/Names /JavaScript` tree), in name order: they
 /// define the functions field scripts call.
+#[must_use]
 pub fn document_scripts(doc: &Document) -> Vec<String> {
     document_scripts_named(doc).into_iter().map(|(_, js)| js).collect()
 }
 
 /// [`document_scripts`] with their names.
+#[must_use]
 pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     let Some(root) = doc.root() else { return Vec::new() };
     let cat = doc.get(root);

@@ -1,4 +1,4 @@
-//! Scan & OCR ▸ Recognize text in the real shell (egui_kittest): the dialog, the run and its
+//! Scan & OCR ▸ Recognize text in the real shell (`egui_kittest)`: the dialog, the run and its
 //! result (skipped without the OCR models: `cargo xtask models`).
 
 use egui_kittest::Harness;

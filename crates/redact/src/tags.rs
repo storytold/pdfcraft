@@ -61,19 +61,16 @@ pub(crate) fn touched(before: &[u8], after: &[u8]) -> (HashSet<i64>, HashSet<i64
     let mut changed = HashSet::new();
     let mut empty = HashSet::new();
     for (id, (ops, _)) in &b {
-        match a.get(id) {
-            Some((new, draws)) => {
-                if new != ops {
-                    changed.insert(*id);
-                }
-                if !draws {
-                    empty.insert(*id);
-                }
-            }
-            None => {
+        if let Some((new, draws)) = a.get(id) {
+            if new != ops {
                 changed.insert(*id);
+            }
+            if !draws {
                 empty.insert(*id);
             }
+        } else {
+            changed.insert(*id);
+            empty.insert(*id);
         }
     }
     (changed, empty)

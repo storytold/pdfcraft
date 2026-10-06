@@ -42,7 +42,7 @@ fn content_bytes(doc: &Document, contents: &Object) -> Vec<u8> {
 }
 
 /// Walk one content stream, recording each image's displayed resolution (pixels per inch, the
-/// smaller of the two axes) and descending into form XObjects.
+/// smaller of the two axes) and descending into form `XObjects`.
 fn walk(doc: &Document, data: &[u8], resources: &Dict, ctm: Matrix, depth: usize, seen: &mut HashSet<ObjRef>, out: &mut HashMap<ObjRef, f64>) {
     if depth > 12 {
         return;
@@ -86,10 +86,10 @@ fn walk(doc: &Document, data: &[u8], resources: &Dict, ctm: Matrix, depth: usize
                             continue;
                         }
                         let m = s.dict.get(b"Matrix").map(|m| doc.resolve(m)).and_then(|m| m.as_array().map(|a| Matrix::from_operands(a))).flatten();
-                        let res =
-                            s.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_else(|| resources.clone());
+                        let own = s.dict.get(b"Resources").map(|r| doc.resolve(r));
+                        let res = own.as_ref().and_then(|r| r.as_dict()).unwrap_or(resources);
                         let inner = m.unwrap_or(Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])).then(&top);
-                        walk(doc, &s.decoded().unwrap_or_default(), &res, inner, depth + 1, seen, out);
+                        walk(doc, &s.decoded().unwrap_or_default(), res, inner, depth + 1, seen, out);
                     }
                     _ => {}
                 }
@@ -100,6 +100,7 @@ fn walk(doc: &Document, data: &[u8], resources: &Dict, ctm: Matrix, depth: usize
 }
 
 /// The effective resolution (ppi) of every image drawn by `pages`: the smallest over its uses.
+#[must_use]
 pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef, f64> {
     let mut out = HashMap::new();
     let mut seen = HashSet::new();
@@ -112,7 +113,7 @@ pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef
     out
 }
 
-/// Colour components of a colour space PrintCraft resamples: gray (1) or RGB (3).
+/// Colour components of a colour space `PrintCraft` resamples: gray (1) or RGB (3).
 fn components(doc: &Document, cs: &Object) -> Option<usize> {
     let cs = doc.resolve(cs);
     match &*cs {
@@ -216,8 +217,8 @@ fn image_stream(old: &Dict, px: &[u8], n: usize, w: u32, h: u32, compression: Co
     for k in [&b"Filter"[..], b"DecodeParms", b"Length", b"DL"] {
         d.remove(k);
     }
-    d.set(b"Width".to_vec(), Object::Int(w as i64));
-    d.set(b"Height".to_vec(), Object::Int(h as i64));
+    d.set(b"Width".to_vec(), Object::Int(i64::from(w)));
+    d.set(b"Height".to_vec(), Object::Int(i64::from(h)));
     d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
     let use_jpeg = match compression {
         Compression::Jpeg(_) => true,
@@ -249,7 +250,7 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
     }
     let was_dct = is_dct(s)?;
     let (w, h) = (d.int(b"Width")? as u32, d.int(b"Height")? as u32);
-    if w == 0 || h == 0 || (w as u64) * (h as u64) > MAX_PIXELS {
+    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
         return None;
     }
     let resize = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0;
@@ -258,17 +259,17 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
         return None;
     }
     // Tiny images (icons, rules) don't benefit and JPEG would blur them.
-    if !resize && (w as u64) * (h as u64) < 64 * 64 {
+    if !resize && u64::from(w) * u64::from(h) < 64 * 64 {
         return None;
     }
     let (nw, nh) = if resize {
         let k = settings.target_ppi / ppi;
-        (((w as f64 * k).round() as u32).max(1), ((h as f64 * k).round() as u32).max(1))
+        (((f64::from(w) * k).round() as u32).max(1), ((f64::from(h) * k).round() as u32).max(1))
     } else {
         (w, h)
     };
     let px = pixels(s, n)?;
-    let px = if (nw, nh) != (w, h) { resample(&px, n, w, h, nw, nh)? } else { px };
+    let px = if (nw, nh) == (w, h) { px } else { resample(&px, n, w, h, nw, nh)? };
     let new = image_stream(d, &px, n, nw, nh, settings.compression, was_dct)?;
     // A soft mask must keep the image's dimensions: resample it with the image (lossless).
     let mut smask = None;

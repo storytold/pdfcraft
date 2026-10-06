@@ -41,6 +41,7 @@ pub struct OcrPage {
 }
 
 impl OcrPage {
+    #[must_use]
     pub fn text(&self) -> String {
         self.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ")
     }
@@ -49,7 +50,7 @@ impl OcrPage {
 /// The recogniser, loaded once (it takes a moment) and shared.
 pub fn engine() -> Result<Arc<Ocr>, String> {
     static OCR: Mutex<Option<Arc<Ocr>>> = Mutex::new(None);
-    let mut slot = OCR.lock().unwrap_or_else(|e| e.into_inner());
+    let mut slot = OCR.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(o) = slot.as_ref() {
         return Ok(o.clone());
     }
@@ -59,6 +60,7 @@ pub fn engine() -> Result<Arc<Ocr>, String> {
 }
 
 /// Whether the recognition models are installed.
+#[must_use]
 pub fn available() -> bool {
     Models::find().is_some()
 }
@@ -115,7 +117,7 @@ impl OcrJob {
             let scale = shot.width as f32 / info.width.max(1e-3);
             let to_user = |x: f32, y: f32| {
                 let [u, v] = info.view_to_user(x / scale, y / scale);
-                [u as f64, v as f64]
+                [f64::from(u), f64::from(v)]
             };
             let words = lines.iter().flat_map(|l| &l.words).map(|w| PlacedWord::place(w, to_user)).collect();
             out.push(OcrPage { page, words, skipped: None });
@@ -127,6 +129,7 @@ impl OcrJob {
 
 impl Session {
     /// Capture what recognising `pages` (0-based; empty = all) of document `id` needs.
+    #[must_use]
     pub fn ocr_job(&self, id: DocId, pages: &[usize], settings: OcrSettings) -> Option<OcrJob> {
         let doc = self.get(id)?;
         let all = doc.info.pages.len();
@@ -142,7 +145,7 @@ impl Session {
                     .map(|i| {
                         let m = i.matrix;
                         let (w, h) = (m[0].hypot(m[1]), m[2].hypot(m[3]));
-                        (i.width as f64 / w.max(1e-6)).max(i.height as f64 / h.max(1e-6)) as f32
+                        (f64::from(i.width) / w.max(1e-6)).max(f64::from(i.height) / h.max(1e-6)) as f32
                     })
                     .reduce(f32::max)
             })
@@ -183,6 +186,7 @@ pub struct FileResult {
 }
 
 impl FileResult {
+    #[must_use]
     pub fn words(&self) -> usize {
         self.pages.iter().map(|p| p.words.len()).sum()
     }

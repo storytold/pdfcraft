@@ -1,5 +1,5 @@
 //! The content interpreter that applies (or verifies) redaction on one content scope: a page's
-//! streams or a form XObject's.
+//! streams or a form `XObject`'s.
 //!
 //! It tracks just enough graphics state to place every glyph, image and path in user space:
 //! the CTM stack, the text state (font, size, spacing, scaling, rise, leading) and the text
@@ -11,7 +11,7 @@
 //!   inline images under a region are removed;
 //! - vectors: fully covered paths are removed; partly covered ones are clipped so nothing shows
 //!   inside the regions; shadings are clipped the same way;
-//! - form XObjects under a region are rewritten recursively into new objects (copy-on-write, so
+//! - form `XObjects` under a region are rewritten recursively into new objects (copy-on-write, so
 //!   other pages using the original are untouched).
 //!
 //! In verify mode nothing changes; glyphs and inline images that still overlap a region are
@@ -52,7 +52,7 @@ struct Gs {
 pub(crate) struct Output {
     /// The rewritten streams (`None` = unchanged).
     pub streams: Vec<Option<Vec<u8>>>,
-    /// New XObjects the rewritten content refers to: (resource name, object).
+    /// New `XObjects` the rewritten content refers to: (resource name, object).
     pub xobjects: Vec<(Vec<u8>, ObjRef)>,
     /// Glyphs / inline images still overlapping a region (verify mode).
     pub residue: usize,
@@ -67,7 +67,7 @@ pub(crate) struct Scope<'a> {
     /// Sanitize: optional content groups (and membership dictionaries) that are off; content
     /// marked with them is removed.
     pub hidden_layers: Vec<ObjRef>,
-    /// Content removed from hidden layers (blocks and XObjects).
+    /// Content removed from hidden layers (blocks and `XObjects`).
     pub layer_blocks: usize,
     fonts: HashMap<Vec<u8>, Rc<Metrics>>,
     used_names: Vec<Vec<u8>>,
@@ -89,7 +89,7 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Sanitizing visits every form XObject (not only those under a region).
+    /// Sanitizing visits every form `XObject` (not only those under a region).
     fn everywhere(&self) -> bool {
         self.hidden_text.is_some() || !self.hidden_layers.is_empty()
     }
@@ -310,17 +310,12 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
                 b"Tf" => {
                     gs.size = op.num(1).unwrap_or(gs.size);
                     if let Some(name) = op.name(0) {
-                        gs.font = match scope.fonts.get(name) {
-                            Some(f) => f.clone(),
-                            None => {
-                                let m = fonts_res
-                                    .get(name)
-                                    .and_then(|f| doc.resolve(f).as_dict().cloned())
-                                    .map(|d| Rc::new(Metrics::from_dict(doc, &d)))
-                                    .unwrap_or_else(|| fallback.clone());
-                                scope.fonts.insert(name.to_vec(), m.clone());
-                                m
-                            }
+                        gs.font = if let Some(f) = scope.fonts.get(name) { f.clone() } else {
+                            let m = fonts_res
+                                .get(name)
+                                .and_then(|f| doc.resolve(f).as_dict().cloned()).map_or_else(|| fallback.clone(), |d| Rc::new(Metrics::from_dict(doc, &d)));
+                            scope.fonts.insert(name.to_vec(), m.clone());
+                            m
                         };
                     }
                 }

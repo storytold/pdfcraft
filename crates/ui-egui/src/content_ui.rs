@@ -50,14 +50,14 @@ pub fn default_style() -> AddedText {
 
 /// Display-space rect → screen.
 fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
-    let ph = info.pages[page].height as f64;
+    let ph = f64::from(info.pages[page].height);
     xf.view_rect([r[0] as f32, (ph - r[3]) as f32, r[2] as f32, (ph - r[1]) as f32])
 }
 
 /// Screen point → display space.
 fn to_display(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
     let (vx, vy) = xf.screen_to_view(p);
-    [vx as f64, info.pages[page].height as f64 - vy as f64]
+    [f64::from(vx), f64::from(info.pages[page].height) - f64::from(vy)]
 }
 
 fn on_page(added: &[Added], page: usize) -> Vec<(usize, &Added)> {
@@ -524,7 +524,7 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &printcraft_engine
         let turn = |i: &mut printcraft_engine::AddedImage, k: u8| {
             i.rotation = (i.rotation + k) % 4;
             // The box turns with the picture, around its centre.
-            let (cx, cy, w, h) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0, r[2] - r[0], r[3] - r[1]);
+            let (cx, cy, w, h) = (f64::midpoint(r[0], r[2]), f64::midpoint(r[1], r[3]), r[2] - r[0], r[3] - r[1]);
             i.rect = [cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0];
         };
         if crate::icons::button(ui, "rotate-ccw", 28.0, false, "Rotate counterclockwise").clicked() {

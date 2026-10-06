@@ -67,7 +67,7 @@ fn ap_content(doc: &Document, d: &Dict) -> String {
 }
 
 fn text(d: &Dict, k: &[u8]) -> String {
-    d.get(k).and_then(|o| o.as_string()).map(|s| s.to_text()).unwrap_or_default()
+    d.get(k).and_then(|o| o.as_string()).map(printcraft_cos::PdfString::to_text).unwrap_or_default()
 }
 
 fn rect(d: &Dict) -> Vec<f64> {
@@ -246,7 +246,7 @@ fn restyle_and_resize_redraw_the_appearance() {
     let ap = ap_content(&doc2, d);
     assert!(ap.contains("1 0 0 RG") && ap.contains("4 w") && ap.contains("/GS0 gs"), "{ap}");
     assert!(ap.contains("2 2 196 96 re"), "inset by half the border: {ap}");
-    assert_eq!(d.get(b"CA").and_then(|o| o.as_f64()), Some(0.5));
+    assert_eq!(d.get(b"CA").and_then(printcraft_cos::Object::as_f64), Some(0.5));
     // A stamp's appearance can't be regenerated, so restyling it changes nothing.
     let before = list(&doc, 1)[0].clone();
     assert_eq!(set_style(&mut doc, 1, 0, Some([0.0; 3]), None, None, &meta("")), Err(AnnotError::Unsupported("Stamp".into())));
@@ -642,7 +642,7 @@ fn files_attach_as_comments() {
 #[test]
 fn the_eraser_cuts_strokes_and_removes_empty_drawings() {
     let mut doc = fixture();
-    let line = |y: f64| (0..=10).map(|k| [100.0 + k as f64 * 20.0, y]).collect::<Vec<_>>();
+    let line = |y: f64| (0..=10).map(|k| [100.0 + f64::from(k) * 20.0, y]).collect::<Vec<_>>();
     let shape = Shape::Ink { strokes: vec![line(500.0), line(400.0)] };
     let i = add_annotation(&mut doc, &new(0, shape), &meta("i")).unwrap();
     // A vertical swipe through the middle of both lines.
@@ -652,7 +652,7 @@ fn the_eraser_cuts_strokes_and_removes_empty_drawings() {
     assert_eq!(strokes, 4, "each line cut in two");
     assert!(!erase_ink(&mut doc, 0, i, &[[600.0, 100.0]], 5.0, &meta("e")).unwrap(), "nothing under the eraser");
     // Rubbing out everything deletes the drawing.
-    let all: Vec<[f64; 2]> = (0..=20).map(|k| [100.0 + k as f64 * 10.0, 500.0]).chain((0..=20).map(|k| [100.0 + k as f64 * 10.0, 400.0])).collect();
+    let all: Vec<[f64; 2]> = (0..=20).map(|k| [100.0 + f64::from(k) * 10.0, 500.0]).chain((0..=20).map(|k| [100.0 + f64::from(k) * 10.0, 400.0])).collect();
     erase_ink(&mut doc, 0, i, &all[..21], 8.0, &meta("e")).unwrap();
     erase_ink(&mut doc, 0, i, &all[21..], 8.0, &meta("e")).unwrap();
     assert!(!list(&doc, 0).iter().any(|d| d.name(b"Subtype") == Some(b"Ink")));

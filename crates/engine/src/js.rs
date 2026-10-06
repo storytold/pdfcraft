@@ -22,6 +22,7 @@ pub struct JsOutput {
 }
 
 impl JsOutput {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.alerts.is_empty() && self.console.is_empty() && self.requests.is_empty() && self.errors.is_empty()
     }
@@ -69,6 +70,7 @@ fn display(doc: &printcraft_cos::Document, f: &Field) -> i32 {
 }
 
 /// A form field as scripts see it.
+#[must_use]
 pub fn field_state(doc: &printcraft_cos::Document, f: &Field) -> printcraft_js::FieldState {
     let mut s = printcraft_js::FieldState::new(f.name.clone(), kind(f.kind), f.value.clone());
     s.default = f.default.clone();
@@ -111,6 +113,7 @@ pub struct JsRunner {
 }
 
 impl JsRunner {
+    #[must_use]
     pub fn new(cos: &printcraft_cos::Document, file_name: &str) -> JsRunner {
         let doc =
             printcraft_js::DocInfo { file_name: file_name.to_string(), num_pages: printcraft_model::pages(cos).len(), page: 0, info: info(cos) };
@@ -150,6 +153,7 @@ impl Scripts for JsRunner {
 }
 
 /// A document-level JavaScript: its name and source.
+#[must_use]
 pub fn document_scripts(cos: &printcraft_cos::Document) -> Vec<(String, String)> {
     printcraft_forms::document_scripts_named(cos)
 }
@@ -160,7 +164,7 @@ impl crate::Document {
         self.editor.as_ref().and_then(|e| printcraft_forms::field_actions(&e.cos, name).ok()).unwrap_or_default()
     }
 
-    /// Document JavaScripts (name, source), in name order.
+    /// Document `JavaScripts` (name, source), in name order.
     pub fn document_scripts(&self) -> Vec<(String, String)> {
         self.editor.as_ref().map(|e| document_scripts(&e.cos)).unwrap_or_default()
     }
@@ -172,6 +176,7 @@ impl Session {
         self.js_off = !on;
     }
 
+    #[must_use]
     pub fn javascript(&self) -> bool {
         !self.js_off
     }
@@ -268,7 +273,7 @@ pub(crate) fn page_words(text: &printcraft_render::PageText, info: &printcraft_r
         .map(|(text, r)| {
             let a = info.view_to_user(r[0], r[1]);
             let b = info.view_to_user(r[2], r[3]);
-            let rect = [a[0].min(b[0]) as f64, a[1].min(b[1]) as f64, a[0].max(b[0]) as f64, a[1].max(b[1]) as f64];
+            let rect = [f64::from(a[0].min(b[0])), f64::from(a[1].min(b[1])), f64::from(a[0].max(b[0])), f64::from(a[1].max(b[1]))];
             (text, rect)
         })
         .collect()

@@ -105,6 +105,7 @@ pub struct RenderedPage {
 }
 
 /// Clamp a requested scale so the output respects `MAX_SIDE` and `MAX_PIXELS`.
+#[must_use]
 pub fn effective_scale(width_pt: f32, height_pt: f32, scale: f32) -> f32 {
     let (w, h) = (width_pt.max(1.0), height_pt.max(1.0));
     let by_side = MAX_SIDE / w.max(h);
@@ -155,7 +156,7 @@ fn render_page<'a>(pdf: &'a Pdf, cache: &RenderCache<'a>, settings: &Interpreter
             }
         };
         let pixmap = render(page, cache, settings, &rs);
-        Ok((pixmap.width() as u32, pixmap.height() as u32, pixmap.data_as_u8_slice().to_vec(), None))
+        Ok((u32::from(pixmap.width()), u32::from(pixmap.height()), pixmap.data_as_u8_slice().to_vec(), None))
     }));
     match result {
         Ok(Ok(v)) => Ok(v),
@@ -181,14 +182,16 @@ pub struct PageRenderer {
 }
 
 impl PageRenderer {
+    #[must_use]
     pub fn new(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
         let pdf = parse(&bytes, config.password.as_deref());
         let settings = config.settings();
         Self { bytes, config, pdf, settings }
     }
 
+    #[must_use]
     pub fn page_count(&self) -> usize {
-        self.pdf.as_ref().map(|p| p.pages().len()).unwrap_or(0)
+        self.pdf.as_ref().map_or(0, |p| p.pages().len())
     }
 
     /// Render one page. Never panics.
@@ -209,7 +212,7 @@ fn parse(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Option<Pdf> {
 }
 
 pub(crate) fn panic_message(p: &Box<dyn std::any::Any + Send>) -> String {
-    p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown panic".into())
+    p.downcast_ref::<&str>().map(std::string::ToString::to_string).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown panic".into())
 }
 
 /// How long one page may render before the pool gives up on it (the watchdog).
@@ -232,7 +235,7 @@ struct Shared {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Renders pages on worker threads, most urgent request first.
@@ -260,6 +263,7 @@ pub struct RenderPool {
 }
 
 impl RenderPool {
+    #[must_use]
     pub fn new(bytes: Arc<Vec<u8>>, threads: usize, config: RenderConfig) -> Self {
         let (results_tx, results) = channel();
         let threads = if cfg!(target_arch = "wasm32") { 0 } else { threads.max(1) };
@@ -313,6 +317,7 @@ impl RenderPool {
     }
 
     /// A pool without worker threads: renders inside `try_recv` (the web path; also used in tests).
+    #[must_use]
     pub fn new_inline(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
         let mut pool = Self::new(bytes.clone(), 0, config.clone());
         if pool.inline.is_none() {
@@ -560,7 +565,7 @@ trailer << /Root 1 0 R >>
         assert!((14_400.0 * s).powi(2) <= MAX_PIXELS * 1.01);
     }
 
-    /// A checkbox whose `/AP /N` is a state dictionary must draw the `/AS` state; a NoView
+    /// A checkbox whose `/AP /N` is a state dictionary must draw the `/AS` state; a `NoView`
     /// annotation must not draw at all. (Regression test for the vendored hayro patch.)
     #[test]
     fn widget_appearance_states() {
@@ -745,7 +750,7 @@ trailer << /Root 1 0 R >>
         assert!(plain.rgba.as_chunks::<4>().0.iter().any(|p| p[0] < 128), "a normal Type 3 glyph still paints");
     }
 
-    /// From `cargo xtask fuzz`: a tiling pattern whose /XStep and /YStep dwarf its /BBox got a
+    /// From `cargo xtask fuzz`: a tiling pattern whose /`XStep` and /`YStep` dwarf its /`BBox` got a
     /// cell pixmap of `step × scale` pixels, bounded only by u16 (2 GB and more). The vendored
     /// hayro patch `tiling_cell_scale` keeps the cell within 3000 pixels a side.
     #[test]
@@ -821,7 +826,7 @@ trailer << /Root 1 0 R >>
         page(&format!("q 20 0 0 20 5 5 cm /Im1 Do Q {red}"), fax);
     }
 
-    /// From the nightly `cargo xtask fuzz`: a FlateDecode predictor with `/Columns
+    /// From the nightly `cargo xtask fuzz`: a `FlateDecode` predictor with `/Columns
     /// 9223372036854775807` wrapped to a 2^61-byte row allocation (an abort on any machine), and
     /// a line width of 9223372036854775807 made stroke expansion allocate 10 GB. Vendored hayro
     /// patches: saturating predictor rows refused when longer than the data, and stroke widths

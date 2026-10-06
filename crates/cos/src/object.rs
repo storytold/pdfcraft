@@ -17,6 +17,7 @@ pub struct ObjRef {
 }
 
 impl ObjRef {
+    #[must_use]
     pub const fn new(num: u32, generation: u16) -> Self {
         Self { num, generation }
     }
@@ -40,7 +41,8 @@ impl PdfString {
         Self { bytes: bytes.into(), hex: false }
     }
 
-    /// A text string (ISO 32000-2 §7.9.2.2): PDFDocEncoding when possible, else UTF-16BE with BOM.
+    /// A text string (ISO 32000-2 §7.9.2.2): `PDFDocEncoding` when possible, else UTF-16BE with BOM.
+    #[must_use]
     pub fn text(s: &str) -> Self {
         if s.chars().all(|c| (' '..='~').contains(&c) || c == '\n' || c == '\r' || c == '\t') {
             return Self::literal(s.as_bytes().to_vec());
@@ -52,7 +54,8 @@ impl PdfString {
         Self { bytes, hex: false }
     }
 
-    /// Decode a text string: UTF-16BE (BOM), UTF-8 (BOM, PDF 2.0) or PDFDocEncoding.
+    /// Decode a text string: UTF-16BE (BOM), UTF-8 (BOM, PDF 2.0) or `PDFDocEncoding`.
+    #[must_use]
     pub fn to_text(&self) -> String {
         let b = &self.bytes;
         if b.len() >= 2 && b[0] == 0xFE && b[1] == 0xFF {
@@ -66,7 +69,7 @@ impl PdfString {
     }
 }
 
-/// PDFDocEncoding → Unicode (ISO 32000-2 Annex D). Bytes 0x18–0x1F and 0x80–0xA0 differ from Latin-1.
+/// `PDFDocEncoding` → Unicode (ISO 32000-2 Annex D). Bytes 0x18–0x1F and 0x80–0xA0 differ from Latin-1.
 fn pdfdoc_char(c: u8) -> char {
     const HIGH: [char; 33] = [
         '•', '†', '‡', '…', '—', '–', 'ƒ', '⁄', '‹', '›', '−', '‰', '„', '“', '”', '‘', '’', '‚', '™', 'ﬁ', 'ﬂ', 'Ł', 'Œ', 'Š', 'Ÿ', 'Ž', 'ı', 'ł',
@@ -90,10 +93,12 @@ pub struct Dict {
 }
 
 impl Dict {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn get(&self, key: &[u8]) -> Option<&Object> {
         self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
@@ -117,6 +122,7 @@ impl Dict {
         Some(self.entries.remove(i).1)
     }
 
+    #[must_use]
     pub fn contains(&self, key: &[u8]) -> bool {
         self.get(key).is_some()
     }
@@ -125,10 +131,12 @@ impl Dict {
         self.entries.iter().map(|(k, v)| (k, v))
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -168,11 +176,13 @@ pub const MAX_DECODED: usize = 1 << 30;
 
 impl Stream {
     /// A new stream from already-encoded bytes (`/Length` is set at write time).
+    #[must_use]
     pub fn from_raw(dict: Dict, raw: Vec<u8>) -> Self {
         Self { dict, raw: Arc::new(raw) }
     }
 
     /// A new stream holding `data` compressed with Flate.
+    #[must_use]
     pub fn flate(mut dict: Dict, data: &[u8]) -> Self {
         dict.set(b"Filter".to_vec(), Object::Name(b"FlateDecode".to_vec()));
         dict.remove(b"DecodeParms");
@@ -253,10 +263,12 @@ pub enum Object {
 }
 
 impl Object {
+    #[must_use]
     pub fn name(n: &str) -> Self {
         Object::Name(n.as_bytes().to_vec())
     }
 
+    #[must_use]
     pub fn as_int(&self) -> Option<i64> {
         match self {
             Object::Int(i) => Some(*i),
@@ -265,6 +277,7 @@ impl Object {
         }
     }
 
+    #[must_use]
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Object::Int(i) => Some(*i as f64),
@@ -273,6 +286,7 @@ impl Object {
         }
     }
 
+    #[must_use]
     pub fn as_name(&self) -> Option<&[u8]> {
         match self {
             Object::Name(n) => Some(n),
@@ -280,6 +294,7 @@ impl Object {
         }
     }
 
+    #[must_use]
     pub fn as_ref(&self) -> Option<ObjRef> {
         match self {
             Object::Ref(r) => Some(*r),
@@ -287,6 +302,7 @@ impl Object {
         }
     }
 
+    #[must_use]
     pub fn as_dict(&self) -> Option<&Dict> {
         match self {
             Object::Dict(d) => Some(d),
@@ -303,6 +319,7 @@ impl Object {
         }
     }
 
+    #[must_use]
     pub fn as_array(&self) -> Option<&Vec<Object>> {
         match self {
             Object::Array(a) => Some(a),
@@ -310,6 +327,7 @@ impl Object {
         }
     }
 
+    #[must_use]
     pub fn as_string(&self) -> Option<&PdfString> {
         match self {
             Object::String(s) => Some(s),
@@ -325,7 +343,7 @@ impl From<i64> for Object {
 }
 impl From<i32> for Object {
     fn from(v: i32) -> Self {
-        Object::Int(v as i64)
+        Object::Int(i64::from(v))
     }
 }
 impl From<f64> for Object {

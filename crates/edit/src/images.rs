@@ -1,6 +1,6 @@
-//! Edit a PDF ▸ edit existing images: the images a page draws (image XObjects painted by `Do`
+//! Edit a PDF ▸ edit existing images: the images a page draws (image `XObjects` painted by `Do`
 //! in its own content streams), and changing one: move/resize/rotate/flip (the `Do` is wrapped in
-//! `q … cm … Q` with the extra transform), replace (it draws another XObject in the same place),
+//! `q … cm … Q` with the extra transform), replace (it draws another `XObject` in the same place),
 //! or delete. Only the stream that draws it is rewritten, as a new object.
 
 use printcraft_content::{Matrix, Op, parse, serialize_ops};
@@ -15,7 +15,7 @@ pub struct PageImage {
     pub rect: [f64; 4],
     /// The placement: the unit square → user space.
     pub matrix: [f64; 6],
-    /// The XObject resource name and object.
+    /// The `XObject` resource name and object.
     pub name: String,
     pub object: Option<ObjRef>,
     /// Pixel size.
@@ -104,12 +104,13 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
 pub enum ImageChange {
     /// Apply a user-space transform after its placement (move, resize, rotate, flip).
     Transform([f64; 6]),
-    /// Draw this image XObject instead, in the same place.
+    /// Draw this image `XObject` instead, in the same place.
     Replace(ObjRef),
     Delete,
 }
 
 /// The user-space transform that maps box `from` onto box `to` (move and resize).
+#[must_use]
 pub fn rect_to_rect(from: [f64; 4], to: [f64; 4]) -> [f64; 6] {
     let (fw, fh) = ((from[2] - from[0]).max(1e-6), (from[3] - from[1]).max(1e-6));
     let (sx, sy) = ((to[2] - to[0]) / fw, (to[3] - to[1]) / fh);
@@ -117,8 +118,9 @@ pub fn rect_to_rect(from: [f64; 4], to: [f64; 4]) -> [f64; 6] {
 }
 
 /// Turn the image a quarter turn clockwise (`quarters` = 1, 2, 3) about its centre, or flip it.
+#[must_use]
 pub fn turn_about_centre(rect: [f64; 4], quarters: i32, flip_h: bool, flip_v: bool) -> [f64; 6] {
-    let (cx, cy) = ((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0);
+    let (cx, cy) = (f64::midpoint(rect[0], rect[2]), f64::midpoint(rect[1], rect[3]));
     let (a, b, c, d) = match quarters.rem_euclid(4) {
         1 => (0.0, -1.0, 1.0, 0.0),
         2 => (-1.0, 0.0, 0.0, -1.0),

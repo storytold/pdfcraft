@@ -1,4 +1,4 @@
-//! The Print dialog in the real shell (egui_kittest): settings, preview sheets, Save as PDF.
+//! The Print dialog in the real shell (`egui_kittest)`: settings, preview sheets, Save as PDF.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
