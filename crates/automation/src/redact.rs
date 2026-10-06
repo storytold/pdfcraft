@@ -2,6 +2,7 @@
 //! (removing what they cover for good) or clear them.
 
 use printcraft_engine::{Edit, Hidden, NewAnnotation, RedactPattern, Shape, Style, find_pattern, rect_quad};
+use printcraft_render::DocInfo;
 use serde_json::{Value, json};
 
 use crate::comments::{DEFAULT_AUTHOR, parse_color};
@@ -133,6 +134,56 @@ impl Automation {
         let mut out = self.apply(a, edit)?;
         let after: usize = self.doc(a)?.hidden_info().iter().map(|c| c.1).sum();
         out["removed"] = json!(before.saturating_sub(after));
+        Ok(out)
+    }
+
+    pub(crate) fn doc_audit_redactions(&self, a: &Args) -> Result<Value> {
+        let findings = self.doc(a)?.audit_redactions();
+        let items: Vec<Value> = findings
+            .into_iter()
+            .map(|f| {
+                json!({
+                    "page": f.page + 1,
+                    "kind": f.kind.id(),
+                    "rect": f.rect,
+                    "covered_text": f.covered_text,
+                })
+            })
+            .collect();
+        Ok(json!({ "findings": items, "count": items.len() }))
+    }
+
+    pub(crate) fn doc_sanitize_share(&mut self, a: &Args) -> Result<Value> {
+        fn metadata_of(info: &DocInfo) -> Vec<Value> {
+            [
+                ("Title", &info.title),
+                ("Author", &info.author),
+                ("Subject", &info.subject),
+                ("Keywords", &info.keywords),
+                ("Creator", &info.creator),
+                ("Producer", &info.producer),
+            ]
+            .into_iter()
+            .filter_map(|(k, v)| v.as_ref().map(|v| json!({ "key": k, "value": v })))
+            .collect()
+        }
+        let before_meta = metadata_of(&self.doc(a)?.info);
+        let before: Vec<Value> =
+            self.doc(a)?.hidden_info().into_iter().map(|(h, n)| json!({ "category": h.id(), "label": h.label(), "count": n })).collect();
+        let mut out = self.apply(a, Edit::Sanitize)?;
+        let after_meta = metadata_of(&self.doc(a)?.info);
+        let after: Vec<Value> =
+            self.doc(a)?.hidden_info().into_iter().map(|(h, n)| json!({ "category": h.id(), "label": h.label(), "count": n })).collect();
+        let removed_meta: Vec<Value> = before_meta.iter().filter(|m| !after_meta.contains(m)).cloned().collect();
+        let removed: usize = before
+            .iter()
+            .map(|b| {
+                let cat = b["category"].as_str().unwrap_or("");
+                let after_n = after.iter().find(|x| x["category"].as_str() == Some(cat)).and_then(|x| x["count"].as_u64()).unwrap_or(0);
+                b["count"].as_u64().unwrap_or(0).saturating_sub(after_n)
+            })
+            .sum::<u64>() as usize;
+        out["sanitize_report"] = json!({ "metadata_before": before_meta, "metadata_after": after_meta, "metadata_removed": removed_meta, "categories_before": before, "categories_after": after, "removed_total": removed });
         Ok(out)
     }
 }

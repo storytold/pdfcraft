@@ -10,6 +10,9 @@
 //! printcraft-cli extract <in.pdf> --pages 1,3,5 --out out.pdf
 //! printcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
 //! printcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
+//! printcraft-cli audit  <file.pdf> [--password PW]            find faux redactions (exit 1 when found)
+//! printcraft-cli sanitize <in.pdf> --out out.pdf [--password PW]
+//!                                                        remove hidden info, print before/after diff
 //! printcraft-cli tools                                       automation tools and their JSON Schemas
 //! printcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
 //! printcraft-cli run    --script steps.json [--root DIR]      [{"tool": "doc_open", "args": {…}}, …]
@@ -52,6 +55,8 @@ fn main() -> ExitCode {
             Some("split") => split(&args[1..]),
             Some("check") => check(&args[1..]),
             Some("check-one") => check_one(&args[1..]),
+            Some("audit") => return audit(&args[1..]),
+            Some("sanitize") => sanitize(&args[1..]),
             Some("tools") => tools(),
             Some("run") => run(&args[1..]),
             Some("ui") => ui(&args[1..]),
@@ -64,7 +69,7 @@ fn main() -> ExitCode {
                 println!("Source:  {}", printcraft_engine::links::GITHUB);
                 Ok(())
             }
-            _ => Err("usage: printcraft-cli <info|render|text|edit|combine|extract|split|check|tools|run|mcp|ui> …  (see source header for options)\nhelp and feedback: https://discord.gg/artcraft"
+            _ => Err("usage: printcraft-cli <info|render|text|edit|combine|extract|split|check|audit|sanitize|tools|run|mcp|ui> …  (see source header for options)\nhelp and feedback: https://discord.gg/artcraft"
                 .into()),
         };
     match result {
@@ -140,6 +145,78 @@ fn text(args: &[String]) -> Result<(), String> {
         }
         println!("{}", out.text.map(|t| t.plain_text()).unwrap_or_default());
     }
+    Ok(())
+}
+
+/// Audit a document for faux redactions. Prints the findings as JSON; exits 1 when any are
+/// found so scripts and CI can gate on it, 0 when the document is clean.
+fn audit(args: &[String]) -> ExitCode {
+    let path = match positional(args).first() {
+        Some(p) => *p,
+        None => {
+            eprintln!("printcraft-cli: audit: missing file");
+            return ExitCode::FAILURE;
+        }
+    };
+    let bytes = match read(path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("printcraft-cli: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let doc = match printcraft_cos::Document::open_with_password(bytes, flag(args, "--password")) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("printcraft-cli: {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let findings = match printcraft_audit::audit_redactions(&doc) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("printcraft-cli: {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let items: Vec<serde_json::Value> = findings
+        .into_iter()
+        .map(|f| {
+            serde_json::json!({
+                "page": f.page + 1,
+                "kind": f.kind.id(),
+                "rect": f.rect,
+                "covered_text": f.covered_text,
+            })
+        })
+        .collect();
+    println!("{}", serde_json::json!({ "file": path, "findings": items, "count": items.len() }));
+    if items.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        eprintln!("printcraft-cli: audit: {} faux redaction(s) found", items.len());
+        ExitCode::FAILURE
+    }
+}
+
+/// Sanitize a document for sharing: remove every hidden-information category, save a full
+/// rewrite, and print the before/after diff proving what was removed.
+fn sanitize(args: &[String]) -> Result<(), String> {
+    let path = *positional(args).first().ok_or("sanitize: missing file")?;
+    let out = flag(args, "--out").ok_or("sanitize: missing --out")?;
+    let mut doc = printcraft_cos::Document::open_with_password(read(path)?, flag(args, "--password")).map_err(|e| format!("{path}: {e}"))?;
+    let report = printcraft_audit::sanitize_for_sharing(&mut doc).map_err(|e| e.to_string())?;
+    let bytes = printcraft_cos::write_full(&doc, &printcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?;
+    std::fs::write(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}"))?;
+    let json = serde_json::json!({
+        "file": path,
+        "out": out,
+        "removed_total": report.removed_total,
+        "lines": report.lines(),
+        "categories": report.categories.iter().map(|c| serde_json::json!({ "id": c.id, "label": c.label, "before": c.before, "after": c.after })).collect::<Vec<_>>(),
+        "metadata_removed": report.metadata_before.iter().filter(|m| !report.metadata_after.contains(m)).collect::<Vec<_>>(),
+    });
+    println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default());
     Ok(())
 }
 

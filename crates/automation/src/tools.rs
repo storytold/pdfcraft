@@ -363,6 +363,20 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
+        t(
+            "doc_audit_redactions",
+            "Audit faux redactions",
+            "Find faux redactions: opaque filled rectangles drawn over text that is still extractable, and /Redact annotations that were marked but never applied. Each finding reports the 1-based page, the kind (covered-text or unapplied-mark), the rectangle, and the hidden text. A properly applied redaction removes the text and never flags.",
+        )
+        .ro()
+        .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t(
+            "doc_sanitize_share",
+            "Sanitize for sharing",
+            "Remove every hidden-information category (Sanitize Document) and return a verifiable before/after diff: metadata removed by key and value, per-category counts before and after, and the total removed. The next save rewrites the whole file so earlier revisions leave with it. Undoable until saved.",
+        )
+        .destructive()
+        .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("printers", "List printers", "The printers the system's print spooler knows (CUPS on macOS and Linux), with the default marked.").ro().with(schema(json!({}), &[])),
         t(
             "doc_print",

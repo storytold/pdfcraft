@@ -3811,6 +3811,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "printcraft-audit"
+version = "0.2.1"
+dependencies = [
+ "printcraft-content",
+ "printcraft-cos",
+ "printcraft-edit",
+ "printcraft-model",
+ "printcraft-redact",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "printcraft-automation"
 version = "0.2.1"
 dependencies = [
@@ -3828,6 +3840,7 @@ name = "printcraft-cli"
 version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
+ "printcraft-audit",
  "printcraft-automation",
  "printcraft-cos",
  "printcraft-engine",
@@ -3906,6 +3919,7 @@ dependencies = [
  "png 0.18.1",
  "printcraft-a11y",
  "printcraft-annot",
+ "printcraft-audit",
  "printcraft-compare",
  "printcraft-cos",
  "printcraft-create",

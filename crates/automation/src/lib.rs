@@ -501,6 +501,8 @@ impl Automation {
             "content_delete" => self.content_delete(&a)?,
             "doc_print" => self.doc_print(&a)?,
             "doc_remove_hidden" => self.doc_remove_hidden(&a)?,
+            "doc_audit_redactions" => self.doc_audit_redactions(&a)?,
+            "doc_sanitize_share" => self.doc_sanitize_share(&a)?,
             "fill_sign_add" => self.fill_sign_add(&a)?,
             "comment_list" => self.comment_list(&a)?,
             "comment_add" => self.comment_add(&a)?,

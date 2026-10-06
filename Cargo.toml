@@ -23,6 +23,7 @@ printcraft-fonts = { path = "crates/fonts", version = "0.2.0" }
 printcraft-model = { path = "crates/model", version = "0.2.0" }
 printcraft-content = { path = "crates/content", version = "0.2.0" }
 printcraft-redact = { path = "crates/redact", version = "0.2.0" }
+printcraft-audit = { path = "crates/audit", version = "0.2.1" }
 printcraft-print = { path = "crates/print", version = "0.2.0" }
 printcraft-xfdf = { path = "crates/xfdf", version = "0.2.0" }
 printcraft-sign = { path = "crates/sign", version = "0.2.0" }

@@ -1,0 +1,21 @@
+[package]
+name = "printcraft-audit"
+description = "Verification tooling: audit documents for faux redactions (opaque covers over extractable text) and sanitize-for-sharing reports with before/after diffs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+printcraft-cos = { workspace = true }
+printcraft-content = { workspace = true }
+printcraft-edit = { workspace = true }
+printcraft-redact = { workspace = true }
+printcraft-model = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]

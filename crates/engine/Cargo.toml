@@ -17,6 +17,7 @@ printcraft-annot = { workspace = true }
 printcraft-forms = { workspace = true }
 printcraft-edit = { workspace = true }
 printcraft-redact = { workspace = true }
+printcraft-audit = { workspace = true }
 printcraft-print = { workspace = true }
 printcraft-xfdf = { workspace = true }
 printcraft-sign = { workspace = true }

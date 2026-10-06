@@ -5702,6 +5702,30 @@ evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_remov
 notes = "every category, then a full rewrite on save"
 
 [[feature]]
+id = "protect.audit-faux-redactions"
+title = "Audit: detect faux redactions (opaque covers over extractable text, unapplied marks)"
+area = "G"
+tier = "P2"
+milestone = "M8"
+status = "shipped"
+commands = []
+tools = ["doc_audit_redactions"]
+evidence = ["crates/audit/src/tests.rs::faux_redaction_is_found", "crates/audit/src/tests.rs::unapplied_redact_mark_is_found", "crates/audit/src/tests.rs::clean_document_has_no_findings"]
+notes = "Fork addition (ejbarraza/printcraft): new printcraft-audit crate. Flags filled rectangles (re + fill, opaque) covering extractable text and /Redact annotations never applied; translucent covers are not flagged. A properly applied redaction removes the text and never flags."
+
+[[feature]]
+id = "protect.sanitize-share-report"
+title = "Sanitize for sharing: before/after diff proving what was removed"
+area = "G"
+tier = "P2"
+milestone = "M8"
+status = "shipped"
+commands = []
+tools = ["doc_sanitize_share"]
+evidence = ["crates/audit/src/tests.rs::sanitize_report_diffs_metadata", "crates/audit/src/tests.rs::sanitize_clean_document_reports_nothing"]
+notes = "Fork addition (ejbarraza/printcraft): wraps the hidden-information removal with a verifiable report (metadata key=value removed, per-category before/after counts). CLI: printcraft-cli sanitize."
+
+[[feature]]
 id = "protect.remove-hidden-on-close"
 title = "Remove hidden information when closing or sending"
 area = "G"

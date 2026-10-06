@@ -17,6 +17,7 @@ printcraft-render = { workspace = true }
 serde_json = { workspace = true }
 printcraft-engine = { workspace = true }
 printcraft-cos = { workspace = true }
+printcraft-audit = { workspace = true }
 printcraft-automation = { workspace = true }
 base64 = "0.22"
 
