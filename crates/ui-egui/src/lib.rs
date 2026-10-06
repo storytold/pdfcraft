@@ -517,7 +517,7 @@ impl PrintCraftApp {
             window_title: String::new(),
             recovery: None,
             recoverable: Vec::new(),
-            recovery_keys: Default::default(),
+            recovery_keys: std::collections::HashMap::default(),
             last_autosave: 0.0,
             pending_recovered: None,
             allow_quit: false,

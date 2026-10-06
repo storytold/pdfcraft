@@ -358,24 +358,23 @@ impl PrintCraftApp {
             }
             PanelAction::Fix(rule) => {
                 let Some((_, id)) = self.active_ids() else { return };
-                match rule {
-                    // The language is chosen in Document Properties ▸ Advanced.
-                    Rule::PrimaryLanguage => self.dialog = Some(Dialog::Properties(PropsTab::Advanced)),
-                    _ => {
-                        let edit = self.session.get(id).map(|d| d.accessibility_fix(rule, None));
-                        match edit {
-                            Some(Ok(e)) => {
-                                if self.apply_edit(e) {
-                                    self.run_accessibility_check();
-                                    // The title can then be edited.
-                                    if rule == Rule::Title {
-                                        self.dialog = Some(Dialog::Properties(PropsTab::Description));
-                                    }
+                // The language is chosen in Document Properties ▸ Advanced.
+                if rule == Rule::PrimaryLanguage {
+                    self.dialog = Some(Dialog::Properties(PropsTab::Advanced));
+                } else {
+                    let edit = self.session.get(id).map(|d| d.accessibility_fix(rule, None));
+                    match edit {
+                        Some(Ok(e)) => {
+                            if self.apply_edit(e) {
+                                self.run_accessibility_check();
+                                // The title can then be edited.
+                                if rule == Rule::Title {
+                                    self.dialog = Some(Dialog::Properties(PropsTab::Description));
                                 }
                             }
-                            Some(Err(e)) => self.notify(e),
-                            None => {}
                         }
+                        Some(Err(e)) => self.notify(e),
+                        None => {}
                     }
                 }
             }
@@ -397,7 +396,12 @@ pub struct AltDraft {
 
 impl std::fmt::Debug for AltDraft {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AltDraft").field("figures", &self.figures.len()).field("index", &self.index).finish()
+        f.debug_struct("AltDraft")
+            .field("figures", &self.figures.len())
+            .field("index", &self.index)
+            .field("texts", &self.texts.len())
+            .field("decorative", &self.decorative.len())
+            .finish()
     }
 }
 

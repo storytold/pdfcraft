@@ -8,7 +8,6 @@
 //! malformed page yields a `RenderedPage` with `error` set, and the worker rebuilds its parser and
 //! cache before continuing, so one bad page can never take down the app or poison later pages.
 
-use std::fmt::Write as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
@@ -256,7 +255,7 @@ pub struct RenderPool {
     results_tx: Sender<RenderedPage>,
     bytes: Arc<Vec<u8>>,
     config: RenderConfig,
-    _workers: Mutex<Vec<JoinHandle<()>>>,
+    worker_handles: Mutex<Vec<JoinHandle<()>>>,
     /// Errors produced by the watchdog, handed out by `try_recv`.
     abandoned: Mutex<Vec<RenderedPage>>,
     stuck_after: std::time::Duration,
@@ -278,7 +277,7 @@ impl RenderPool {
             results_tx,
             bytes: bytes.clone(),
             config: config.clone(),
-            _workers: Mutex::new(Vec::new()),
+            worker_handles: Mutex::new(Vec::new()),
             abandoned: Mutex::new(Vec::new()),
             stuck_after: STUCK_AFTER,
             replacements_left: Mutex::new(threads),
@@ -287,7 +286,7 @@ impl RenderPool {
         for _ in 0..threads {
             pool.spawn_worker();
         }
-        if lock(&pool._workers).is_empty() {
+        if lock(&pool.worker_handles).is_empty() {
             pool.inline = Some(std::cell::RefCell::new(PageRenderer::new(bytes, config)));
         }
         pool
@@ -309,7 +308,7 @@ impl RenderPool {
             match std::thread::Builder::new().name(format!("printcraft-render-{id}")).spawn(move || worker(id, bytes, config, shared, wrx, out)) {
                 Ok(h) => {
                     lock(&self.wake).push(wtx);
-                    lock(&self._workers).push(h);
+                    lock(&self.worker_handles).push(h);
                     true
                 }
                 Err(e) => {
@@ -326,7 +325,7 @@ impl RenderPool {
         let mut pool = Self::new(bytes.clone(), 0, config.clone());
         if pool.inline.is_none() {
             // Native `new` always spawns at least one worker; drop to inline explicitly.
-            pool = Self { shared: Arc::default(), wake: Mutex::new(Vec::new()), _workers: Mutex::new(Vec::new()), ..pool };
+            pool = Self { shared: Arc::default(), wake: Mutex::new(Vec::new()), worker_handles: Mutex::new(Vec::new()), ..pool };
             pool.inline = Some(std::cell::RefCell::new(PageRenderer::new(bytes, config)));
         }
         pool
@@ -465,6 +464,8 @@ fn worker(id: usize, bytes: Arc<Vec<u8>>, config: RenderConfig, shared: Arc<Shar
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     #[test]
     fn watchdog_skips_a_stuck_page_and_keeps_rendering() {
         use super::*;

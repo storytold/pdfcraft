@@ -697,8 +697,11 @@ fn preparing_a_form_adds_renames_and_deletes_fields() {
 fn redaction_marks_apply_for_good_and_undo() {
     let (mut s, id) = session_with(2);
     // "Page 1" at 24 pt from x 20: the "1" starts near x 82.7 (Helvetica widths).
-    let shape =
-        Shape::Redact { quads: vec![printcraft_annot::rect_quad([80.0, 140.0, 100.0, 180.0])], overlay: String::new(), look: Default::default() };
+    let shape = Shape::Redact {
+        quads: vec![printcraft_annot::rect_quad([80.0, 140.0, 100.0, 180.0])],
+        overlay: String::new(),
+        look: printcraft_annot::OverlayLook::default(),
+    };
     let mark =
         Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Ada".into() });
     s.apply(id, mark).unwrap();

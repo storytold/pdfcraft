@@ -509,7 +509,7 @@ pub fn right_panel(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                         a11y_action = crate::a11y_ui::panel(ui, &t, a11y, id);
                     }
                     RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
-                    RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
+                    RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare.as_ref(), id),
                     RightPanel::Attachments => {
                         if info.attachments.is_empty() {
                             empty(ui, &t, "paperclip", "This document has no attachments.");

@@ -113,7 +113,15 @@ pub struct Document {
 
 impl std::fmt::Debug for Document {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Document").field("bytes", &self.data.len()).field("objects", &self.entries.len()).field("edits", &self.overlay.len()).finish()
+        f.debug_struct("Document")
+            .field("bytes", &self.data.len())
+            .field("objects", &self.entries.len())
+            .field("edits", &self.overlay.len())
+            .field("version", &self.version)
+            .field("encrypted", &self.security.is_some())
+            .field("encryption_changed", &self.encryption_changed)
+            .field("full_save", &self.full_save)
+            .finish()
     }
 }
 

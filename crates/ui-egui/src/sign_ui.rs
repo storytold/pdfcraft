@@ -369,8 +369,8 @@ fn title(ui: &mut egui::Ui, text: &str) {
     ui.add_space(8.0);
 }
 
-fn error(ui: &mut egui::Ui, err: &Option<String>) {
-    if let Some(e) = err.as_ref().filter(|e| !e.is_empty()) {
+fn error(ui: &mut egui::Ui, err: Option<&String>) {
+    if let Some(e) = err.filter(|e| !e.is_empty()) {
         ui.colored_label(Color32::from_rgb(0xD7, 0x37, 0x3F), e);
         ui.add_space(4.0);
     }
@@ -498,7 +498,7 @@ fn configure(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
         });
     }
     ui.add_space(6.0);
-    error(ui, &d.error);
+    error(ui, d.error.as_ref());
     ui.horizontal(|ui| {
         if !app.digital_ids.is_empty() && widgets::pill_button(ui, "Back", false).clicked() {
             d.step = SignStep::Choose;
@@ -625,7 +625,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
         ui.end_row();
     });
     ui.add_space(6.0);
-    error(ui, &d.error);
+    error(ui, d.error.as_ref());
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, "Back", false).clicked() {
             d.step = SignStep::Choose;

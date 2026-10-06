@@ -194,7 +194,7 @@ fn content_bbox(doc: &Document, page: &Dict, ids: &HashSet<i64>) -> Option<[f64;
                     Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form") => {
                         let bb: Vec<f64> =
                             s.dict.get(b"BBox").and_then(|b| b.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect())).unwrap_or_default();
-                        let m = Matrix::from_operands(s.dict.get(b"Matrix").and_then(|m| m.as_array()).map(Vec::as_slice).unwrap_or(&[]))
+                        let m = Matrix::from_operands(s.dict.get(b"Matrix").and_then(|m| m.as_array()).map_or(&[][..], Vec::as_slice))
                             .unwrap_or(Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
                         match bb[..] {
                             [a, b, c, d] => m.then(&top).bbox([a, b, c, d]),

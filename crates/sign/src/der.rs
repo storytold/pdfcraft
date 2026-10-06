@@ -329,7 +329,12 @@ pub fn explicit(n: u8, inner: &[u8]) -> Vec<u8> {
 }
 
 /// The encoding of an OID constant (callers pass only literals from this crate).
-// The documented never-crash exception: every caller passes a literal that always parses.
+///
+/// # Panics
+///
+/// Panics if `dotted` is not a dotted decimal OID constant. This is the documented
+/// never-crash exception (AGENTS.md §4): every caller passes a literal, so the input
+/// cannot be malformed.
 #[allow(clippy::expect_used)]
 #[must_use]
 pub fn oid(dotted: &str) -> Vec<u8> {

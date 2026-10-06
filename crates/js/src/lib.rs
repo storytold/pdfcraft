@@ -259,7 +259,7 @@ fn strings(v: &JsValue, ctx: &mut Context) -> JsResult<Vec<String>> {
     Ok(if v.is_undefined() || v.is_null() { Vec::new() } else { vec![text(v, ctx)?] })
 }
 
-fn colour(c: &Option<Vec<String>>, ctx: &mut Context) -> JsValue {
+fn colour(c: Option<&[String]>, ctx: &mut Context) -> JsValue {
     match c {
         None => JsArray::from_iter([s("T")], ctx).into(),
         Some(parts) => {
@@ -386,7 +386,7 @@ fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         let idx: Vec<JsValue> = f.options.iter().enumerate().filter(|(_, o)| f.value.contains(&o.0)).map(|(i, _)| JsValue::from(i as f64)).collect();
         if idx.len() == 1 { idx[0].clone() } else { JsArray::from_iter(idx, c).into() }
     });
-    let text_color_get = getter!(ctx, n, |f, c| colour(&f.text_color, c));
+    let text_color_get = getter!(ctx, n, |f, c| colour(f.text_color.as_deref(), c));
     let text_color_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
             let v = strings(&arg(args, 0), c)?;
@@ -395,7 +395,7 @@ fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
     };
-    let fill_color_get = getter!(ctx, n, |f, c| colour(&f.fill_color, c));
+    let fill_color_get = getter!(ctx, n, |f, c| colour(f.fill_color.as_deref(), c));
     let fill_color_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
             let v = strings(&arg(args, 0), c)?;

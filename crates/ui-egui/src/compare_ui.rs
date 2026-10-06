@@ -77,8 +77,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
 }
 
 /// The Compare panel.
-pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &Option<CompareState>, id: DocId) -> Option<PanelAction> {
-    let Some(s) = state.as_ref().filter(|s| s.new == id) else {
+pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: Option<&CompareState>, id: DocId) -> Option<PanelAction> {
+    let Some(s) = state.filter(|s| s.new == id) else {
         ui.label(egui::RichText::new("Compare this file with an older version: Compare files… in All tools.").color(t.text_muted));
         return None;
     };

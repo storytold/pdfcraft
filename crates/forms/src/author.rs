@@ -897,7 +897,7 @@ pub fn delete_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
         Ok(())
     };
     if let Some(p) = parent {
-        remove_from(doc, p, b"Kids")?
+        remove_from(doc, p, b"Kids")?;
     } else {
         let root = doc.root().ok_or(FormError::NoForm)?;
         match doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) {
