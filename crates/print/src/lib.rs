@@ -530,9 +530,9 @@ pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError
             let to_display = Matrix(views[pl.page]).invert().unwrap_or_default();
             let [ua, ub, uc, ud, ue, uf] = to_display.0;
             let [x0, y0, x1, y1] = pl.clip;
-            let _ = write!(
+            let _ = writeln!(
                 c,
-                "q {} {} {} {} {} {} cm {} {} {} {} re W n {} {} {} {} {} {} cm /{name} Do Q\n",
+                "q {} {} {} {} {} {} cm {} {} {} {} re W n {} {} {} {} {} {} cm /{name} Do Q",
                 n(a),
                 n(b),
                 n(cc),
@@ -554,10 +554,10 @@ pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError
         if !sheet.borders.is_empty() || !sheet.lines.is_empty() {
             c.push_str("q 0 G 0.5 w\n");
             for r in &sheet.borders {
-                let _ = write!(c, "{} {} {} {} re S\n", n(r[0]), n(r[1]), n(r[2] - r[0]), n(r[3] - r[1]));
+                let _ = writeln!(c, "{} {} {} {} re S", n(r[0]), n(r[1]), n(r[2] - r[0]), n(r[3] - r[1]));
             }
             for l in &sheet.lines {
-                let _ = write!(c, "{} {} m {} {} l S\n", n(l[0]), n(l[1]), n(l[2]), n(l[3]));
+                let _ = writeln!(c, "{} {} m {} {} l S", n(l[0]), n(l[1]), n(l[2]), n(l[3]));
             }
             c.push_str("Q\n");
         }

@@ -46,7 +46,7 @@ fn line_end(c: &mut String, kind: &[u8], tip: (f64, f64), from: (f64, f64), w: f
     let a = (tip.0 + s * (ux * cos - uy * sin), tip.1 + s * (ux * sin + uy * cos));
     let b = (tip.0 + s * (ux * cos + uy * sin), tip.1 + s * (-ux * sin + uy * cos));
     let op = if kind == b"ClosedArrow" { "h B" } else { "S" };
-    let _ = write!(c, "{} {} m {} {} l {} {} l {op}\n", n(a.0), n(a.1), n(tip.0), n(tip.1), n(b.0), n(b.1));
+    let _ = writeln!(c, "{} {} m {} {} l {} {} l {op}", n(a.0), n(a.1), n(tip.0), n(tip.1), n(b.0), n(b.1));
 }
 
 /// A closed cloudy outline through `pts` (§12.5.4 `/BE /S /C`): each edge becomes a row of
@@ -61,7 +61,7 @@ pub fn cloud_path(pts: &[(f64, f64)], r: f64) -> String {
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
         let len = dx.hypot(dy);
         if i == 0 {
-            let _ = write!(c, "{} {} m\n", n(a.0), n(a.1));
+            let _ = writeln!(c, "{} {} m", n(a.0), n(a.1));
         }
         if len < 1e-6 {
             continue;
@@ -74,7 +74,7 @@ pub fn cloud_path(pts: &[(f64, f64)], r: f64) -> String {
         for j in 0..k {
             let p0 = (a.0 + ux * step * j as f64, a.1 + uy * step * j as f64);
             let p1 = (a.0 + ux * step * (j + 1) as f64, a.1 + uy * step * (j + 1) as f64);
-            let _ = write!(c, "{} {} {} {} {} {} c\n", n(p0.0 + nx * h), n(p0.1 + ny * h), n(p1.0 + nx * h), n(p1.1 + ny * h), n(p1.0), n(p1.1));
+            let _ = writeln!(c, "{} {} {} {} {} {} c", n(p0.0 + nx * h), n(p0.1 + ny * h), n(p1.0 + nx * h), n(p1.1 + ny * h), n(p1.0), n(p1.1));
         }
     }
     c.push_str("h\n");
@@ -230,9 +230,9 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 match subtype.as_slice() {
                     b"Highlight" => {
                         c.push_str(&rg(col));
-                        let _ = write!(
+                        let _ = writeln!(
                             c,
-                            "{} {} m {} {} l {} {} l {} {} l h f\n",
+                            "{} {} m {} {} l {} {} l {} {} l h f",
                             n(p1.0),
                             n(p1.1),
                             n(p2.0),
@@ -247,7 +247,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                         let lw = (h * 0.07).clamp(0.5, 3.0);
                         let t = if subtype == b"Underline" { 0.08 } else { 0.42 };
                         let (a, b) = (at(p3, p1, t), at(p4, p2, t));
-                        let _ = write!(c, "{}{} w\n{} {} m {} {} l S\n", rg_stroke(col), n(lw), n(a.0), n(a.1), n(b.0), n(b.1));
+                        let _ = writeln!(c, "{}{} w\n{} {} m {} {} l S", rg_stroke(col), n(lw), n(a.0), n(a.1), n(b.0), n(b.1));
                     }
                     _ => {
                         // Squiggly: a zigzag along the bottom of the quad.
@@ -256,14 +256,14 @@ pub fn build(d: &Dict) -> Option<Stream> {
                         let len = (p4.0 - p3.0).hypot(p4.1 - p3.1);
                         let step = (h / 4.0).max(1.5);
                         let steps = ((len / step).ceil() as usize).clamp(1, 10_000);
-                        let _ = write!(c, "{}{} w 1 j\n", rg_stroke(col), n(lw));
+                        let _ = writeln!(c, "{}{} w 1 j", rg_stroke(col), n(lw));
                         for i in 0..=steps {
                             let t = i as f64 / steps as f64;
                             let base = (p3.0 + (p4.0 - p3.0) * t, p3.1 + (p4.1 - p3.1) * t);
                             let up = if i % 2 == 0 { amp * 2.0 } else { 0.0 };
                             let (ux, uy) = if h > 0.0 { ((p1.0 - p3.0) / h, (p1.1 - p3.1) / h) } else { (0.0, 1.0) };
                             let (x, y) = (base.0 + ux * up, base.1 + uy * up);
-                            let _ = write!(c, "{} {} {}\n", n(x), n(y), if i == 0 { "m" } else { "l" });
+                            let _ = writeln!(c, "{} {} {}", n(x), n(y), if i == 0 { "m" } else { "l" });
                         }
                         c.push_str("S\n");
                     }
@@ -274,11 +274,11 @@ pub fn build(d: &Dict) -> Option<Stream> {
             // While marked: the outline of each area (the fill comes when applied).
             let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
             let col = stroke.unwrap_or([0.89, 0.13, 0.13]);
-            let _ = write!(c, "{}1 w\n", rg_stroke(col));
+            let _ = writeln!(c, "{}1 w", rg_stroke(col));
             for quad in q.as_chunks::<8>().0 {
-                let _ = write!(
+                let _ = writeln!(
                     c,
-                    "{} {} m {} {} l {} {} l {} {} l h S\n",
+                    "{} {} m {} {} l {} {} l {} {} l h S",
                     n(quad[0]),
                     n(quad[1]),
                     n(quad[2]),
@@ -304,7 +304,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 let _ = write!(c, "{}{} w\n{}", rg_stroke(s), n(w), dash(d));
             }
             if subtype == b"Square" {
-                let _ = write!(c, "{} {} {} {} re\n", n(x0), n(y0), n(x1 - x0), n(y1 - y0));
+                let _ = writeln!(c, "{} {} {} {} re", n(x0), n(y0), n(x1 - x0), n(y1 - y0));
             } else {
                 c.push_str(&ellipse(x0, y0, x1, y1));
             }
@@ -327,7 +327,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
             }
             let fill = color(d, b"IC")?.unwrap_or(col);
             let _ = write!(c, "{}{}{} w 1 J 1 j\n{}", rg_stroke(col), rg(fill), n(w), dash(d));
-            let _ = write!(c, "{} {} m {} {} l S\n[] 0 d\n", n(l[0]), n(l[1]), n(l[2]), n(l[3]));
+            let _ = writeln!(c, "{} {} m {} {} l S\n[] 0 d", n(l[0]), n(l[1]), n(l[2]), n(l[3]));
             for (end, (tip, from)) in ends.iter().zip([((l[0], l[1]), (l[2], l[3])), ((l[2], l[3]), (l[0], l[1]))]) {
                 line_end(&mut c, end, tip, from, w);
             }
@@ -354,7 +354,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 c.push_str(&cloud_path(&pts, cloud_radius(w) * intensity.clamp(0.5, 2.0)));
             } else {
                 for (i, p) in pts.iter().enumerate() {
-                    let _ = write!(c, "{} {} {}\n", n(p.0), n(p.1), if i == 0 { "m" } else { "l" });
+                    let _ = writeln!(c, "{} {} {}", n(p.0), n(p.1), if i == 0 { "m" } else { "l" });
                 }
                 if closed {
                     c.push_str("h\n");
@@ -372,9 +372,9 @@ pub fn build(d: &Dict) -> Option<Stream> {
             let col = stroke.unwrap_or([0.0, 0.47, 0.84]);
             let [x0, y0, x1, y1] = rect;
             let (cx, h) = (f64::midpoint(x0, x1), y1 - y0);
-            let _ = write!(
+            let _ = writeln!(
                 c,
-                "{}{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c h f\n",
+                "{}{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c h f",
                 rg(col),
                 n(x0),
                 n(y0),
@@ -395,17 +395,17 @@ pub fn build(d: &Dict) -> Option<Stream> {
         b"Ink" => {
             let col = stroke?;
             let list = d.get(b"InkList")?.as_array()?;
-            let _ = write!(c, "{}{} w 1 J 1 j\n", rg_stroke(col), n(w));
+            let _ = writeln!(c, "{}{} w 1 J 1 j", rg_stroke(col), n(w));
             for s in list {
                 let pts: Vec<f64> = s.as_array()?.iter().map(printcraft_cos::Object::as_f64).collect::<Option<_>>()?;
                 let pts: Vec<(f64, f64)> = pts.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
                 let Some(first) = pts.first() else { continue };
-                let _ = write!(c, "{} {} m\n", n(first.0), n(first.1));
+                let _ = writeln!(c, "{} {} m", n(first.0), n(first.1));
                 if pts.len() == 1 {
-                    let _ = write!(c, "{} {} l\n", n(first.0 + 0.01), n(first.1));
+                    let _ = writeln!(c, "{} {} l", n(first.0 + 0.01), n(first.1));
                 }
                 for p in &pts[1..] {
-                    let _ = write!(c, "{} {} l\n", n(p.0), n(p.1));
+                    let _ = writeln!(c, "{} {} l", n(p.0), n(p.1));
                 }
                 c.push_str("S\n");
             }
@@ -419,7 +419,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 for contour in outline {
                     let v: Vec<f64> = contour.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect()).unwrap_or_default();
                     for (i, p) in v.as_chunks::<2>().0.iter().enumerate() {
-                        let _ = write!(c, "{} {} {}\n", n(x0 + p[0] * w), n(y0 + p[1] * h), if i == 0 { "m" } else { "l" });
+                        let _ = writeln!(c, "{} {} {}", n(x0 + p[0] * w), n(y0 + p[1] * h), if i == 0 { "m" } else { "l" });
                     }
                     if v.len() >= 6 {
                         c.push_str("h\n");
@@ -439,7 +439,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                     let size = nums(d, b"PCPictureSize").filter(|s| s.len() == 2 && s[0] > 0.0 && s[1] > 0.0)?;
                     format!("{} 0 0 {} {} {} cm", n(w / size[0]), n(h / size[1]), n(x0), n(y0))
                 };
-                let _ = write!(c, "q {place} /Pic Do Q\n");
+                let _ = writeln!(c, "q {place} /Pic Do Q");
                 let mut xo = Dict::new();
                 xo.set(b"Pic".to_vec(), Object::Ref(pic));
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
@@ -453,9 +453,9 @@ pub fn build(d: &Dict) -> Option<Stream> {
             let lw = w.min(h) * 0.12;
             match name {
                 b"PCCheck" => {
-                    let _ = write!(
+                    let _ = writeln!(
                         c,
-                        "{}{} w 1 J 1 j\n{} {} m {} {} l {} {} l S\n",
+                        "{}{} w 1 J 1 j\n{} {} m {} {} l {} {} l S",
                         rg_stroke(col),
                         n(lw),
                         n(x0 + w * 0.15),
@@ -467,9 +467,9 @@ pub fn build(d: &Dict) -> Option<Stream> {
                     );
                 }
                 b"PCCross" => {
-                    let _ = write!(
+                    let _ = writeln!(
                         c,
-                        "{}{} w 1 J\n{} {} m {} {} l {} {} m {} {} l S\n",
+                        "{}{} w 1 J\n{} {} m {} {} l {} {} m {} {} l S",
                         rg_stroke(col),
                         n(lw),
                         n(x0 + w * 0.18),
@@ -489,9 +489,9 @@ pub fn build(d: &Dict) -> Option<Stream> {
                     c.push_str("f\n");
                 }
                 b"PCLine" => {
-                    let _ = write!(
+                    let _ = writeln!(
                         c,
-                        "{}{} w 1 J\n{} {} m {} {} l S\n",
+                        "{}{} w 1 J\n{} {} m {} {} l S",
                         rg_stroke(col),
                         n(h.clamp(0.5, 2.0)),
                         n(x0),
@@ -535,21 +535,21 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 }
                 let lw = bw.max(0.5);
                 let pts: Vec<(f64, f64)> = cl.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
-                let _ = write!(c, "{}{}{} w 1 J 1 j\n", rg_stroke(text_color), rg(bg.unwrap_or([1.0; 3])), n(lw));
+                let _ = writeln!(c, "{}{}{} w 1 J 1 j", rg_stroke(text_color), rg(bg.unwrap_or([1.0; 3])), n(lw));
                 for (i, p) in pts.iter().enumerate() {
-                    let _ = write!(c, "{} {} {}\n", n(p.0), n(p.1), if i == 0 { "m" } else { "l" });
+                    let _ = writeln!(c, "{} {} {}", n(p.0), n(p.1), if i == 0 { "m" } else { "l" });
                 }
                 c.push_str("S\n");
                 line_end(&mut c, &end, pts[0], pts[1], lw);
             }
             if let Some(bg) = bg {
-                let _ = write!(c, "{}{} {} {} {} re f\n", rg(bg), n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1]));
+                let _ = writeln!(c, "{}{} {} {} {} re f", rg(bg), n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1]));
             }
             if bw > 0.0 {
                 let h = bw / 2.0;
-                let _ = write!(
+                let _ = writeln!(
                     c,
-                    "{}{} w\n{}{} {} {} {} re S\n[] 0 d\n",
+                    "{}{} w\n{}{} {} {} {} re S\n[] 0 d",
                     rg_stroke(text_color),
                     n(bw),
                     dash(d),
@@ -620,9 +620,9 @@ fn stamp(kind: crate::StampKind, rect: [f64; 4], col: Rgb, by: Option<&str>, opa
     if kind.group() == crate::StampGroup::SignHere {
         // A tag pointing left, filled, with white text.
         let tip = h * 0.45;
-        let _ = write!(
+        let _ = writeln!(
             c,
-            "{}{}{} w 1 j\n{} {} m {} {} l {} {} l {} {} l {} {} l h B\n",
+            "{}{}{} w 1 j\n{} {} m {} {} l {} {} l {} {} l {} {} l h B",
             rg(col),
             rg_stroke(col),
             n(lw),
@@ -643,9 +643,9 @@ fn stamp(kind: crate::StampKind, rect: [f64; 4], col: Rgb, by: Option<&str>, opa
         let k = 0.552_284_75 * r;
         let (a0, b0, a1, b1) = (x0 + inset, y0 + inset, x1 - inset, y1 - inset);
         let tint = col.map(|v| 1.0 - (1.0 - v) * 0.12);
-        let _ = write!(
+        let _ = writeln!(
             c,
-            "{}{}{} w\n{} {} m {} {} l {} {} {} {} {} {} c {} {} l {} {} {} {} {} {} c {} {} l {} {} {} {} {} {} c {} {} l {} {} {} {} {} {} c h B\n",
+            "{}{}{} w\n{} {} m {} {} l {} {} {} {} {} {} c {} {} l {} {} {} {} {} {} c {} {} l {} {} {} {} {} {} c {} {} l {} {} {} {} {} {} c h B",
             rg(tint),
             rg_stroke(col),
             n(lw),
@@ -744,7 +744,7 @@ fn ellipse(x0: f64, y0: f64, x1: f64, y1: f64) -> String {
         [cx - rx, cy - oy, cx - ox, cy - ry, cx, cy - ry],
         [cx + ox, cy - ry, cx + rx, cy - oy, cx + rx, cy],
     ] {
-        let _ = write!(s, "{} {} {} {} {} {} c\n", n(a), n(b), n(c), n(d), n(e), n(f));
+        let _ = writeln!(s, "{} {} {} {} {} {} c", n(a), n(b), n(c), n(d), n(e), n(f));
     }
     s.push_str("h\n");
     s

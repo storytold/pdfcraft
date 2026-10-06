@@ -70,28 +70,28 @@ fn info(doc: &Document, key: &str) -> Option<String> {
 pub fn packet(doc: &Document, level: crate::Level) -> String {
     let mut props = String::new();
     if let Some(t) = info(doc, "Title") {
-        let _ = write!(props, "   <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:title>\n", esc(&t));
+        let _ = writeln!(props, "   <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:title>", esc(&t));
     }
     if let Some(a) = info(doc, "Author") {
-        let _ = write!(props, "   <dc:creator><rdf:Seq><rdf:li>{}</rdf:li></rdf:Seq></dc:creator>\n", esc(&a));
+        let _ = writeln!(props, "   <dc:creator><rdf:Seq><rdf:li>{}</rdf:li></rdf:Seq></dc:creator>", esc(&a));
     }
     if let Some(s) = info(doc, "Subject") {
-        let _ = write!(props, "   <dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:description>\n", esc(&s));
+        let _ = writeln!(props, "   <dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:description>", esc(&s));
     }
     if let Some(k) = info(doc, "Keywords") {
-        let _ = write!(props, "   <pdf:Keywords>{}</pdf:Keywords>\n", esc(&k));
+        let _ = writeln!(props, "   <pdf:Keywords>{}</pdf:Keywords>", esc(&k));
     }
     if let Some(p) = info(doc, "Producer") {
-        let _ = write!(props, "   <pdf:Producer>{}</pdf:Producer>\n", esc(&p));
+        let _ = writeln!(props, "   <pdf:Producer>{}</pdf:Producer>", esc(&p));
     }
     if let Some(c) = info(doc, "Creator") {
-        let _ = write!(props, "   <xmp:CreatorTool>{}</xmp:CreatorTool>\n", esc(&c));
+        let _ = writeln!(props, "   <xmp:CreatorTool>{}</xmp:CreatorTool>", esc(&c));
     }
     if let Some(d) = info(doc, "CreationDate").and_then(|d| iso_date(&d)) {
-        let _ = write!(props, "   <xmp:CreateDate>{d}</xmp:CreateDate>\n");
+        let _ = writeln!(props, "   <xmp:CreateDate>{d}</xmp:CreateDate>");
     }
     if let Some(d) = info(doc, "ModDate").and_then(|d| iso_date(&d)) {
-        let _ = write!(props, "   <xmp:ModifyDate>{d}</xmp:ModifyDate>\n");
+        let _ = writeln!(props, "   <xmp:ModifyDate>{d}</xmp:ModifyDate>");
     }
     format!(
         "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\

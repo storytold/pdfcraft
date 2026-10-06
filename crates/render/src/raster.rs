@@ -843,7 +843,7 @@ trailer << /Root 1 0 R >>
             for (i, s) in streams.iter().enumerate() {
                 let n = 4 + i;
                 refs.push(format!("{n} 0 R"));
-                let _ = write!(objs, "{n} 0 obj {s} endobj\n");
+                let _ = writeln!(objs, "{n} 0 obj {s} endobj");
             }
             let pdf = format!(
                 "%PDF-1.7

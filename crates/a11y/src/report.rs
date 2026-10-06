@@ -20,7 +20,7 @@ pub fn report_html(report: &Report, file_name: &str, date: &str) -> String {
          th{background:#f2f2f2}.Failed{color:#b3261e;font-weight:600}.Passed{color:#1e7b34}ul{margin:4px 0 0;padding-left:18px}\n",
     );
     h.push_str("</style></head><body>\n<h1>Accessibility Report</h1>\n");
-    let _ = write!(h, "<p>Filename: <b>{}</b><br>Report created: {}</p>\n", esc(file_name), esc(date));
+    let _ = writeln!(h, "<p>Filename: <b>{}</b><br>Report created: {}</p>", esc(file_name), esc(date));
     h.push_str("<h2>Summary</h2>\n<p>");
     h.push_str(if report.count(Status::Failed) > 0 {
         "The checker found problems which may prevent the document from being fully accessible."
@@ -29,11 +29,11 @@ pub fn report_html(report: &Report, file_name: &str, date: &str) -> String {
     });
     h.push_str("</p>\n<ul>\n");
     for s in [Status::Manual, Status::Skipped, Status::Passed, Status::Failed] {
-        let _ = write!(h, "<li>{}: {}</li>\n", s.label(), report.count(s));
+        let _ = writeln!(h, "<li>{}: {}</li>", s.label(), report.count(s));
     }
     h.push_str("</ul>\n<h2>Detailed Report</h2>\n");
     for c in Category::ALL {
-        let _ = write!(h, "<h3>{}</h3>\n<table><tr><th>Rule Name</th><th>Status</th><th>Description</th></tr>\n", c.label());
+        let _ = writeln!(h, "<h3>{}</h3>\n<table><tr><th>Rule Name</th><th>Status</th><th>Description</th></tr>", c.label());
         for r in report.in_category(c) {
             let _ = write!(
                 h,

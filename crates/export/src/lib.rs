@@ -339,10 +339,10 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                 }
                 match lvl {
                     0 => {
-                        let _ = write!(s, "<p>{t}</p>\n");
+                        let _ = writeln!(s, "<p>{t}</p>");
                     }
                     l => {
-                        let _ = write!(s, "<h{l}>{t}</h{l}>\n");
+                        let _ = writeln!(s, "<h{l}>{t}</h{l}>");
                     }
                 }
             }
@@ -367,7 +367,7 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
             }
             Item::Img(im) => {
                 let mime = if im.ext == "jpg" { "image/jpeg" } else { "image/png" };
-                let _ = write!(s, "<p><img alt=\"\" src=\"data:{mime};base64,{}\"></p>\n", base64(&im.bytes));
+                let _ = writeln!(s, "<p><img alt=\"\" src=\"data:{mime};base64,{}\"></p>", base64(&im.bytes));
             }
             Item::PageBreak => s.push_str("<hr>\n"),
         }
@@ -576,7 +576,7 @@ pub fn rtf(pages: &[Page]) -> String {
                 if b.italic {
                     fmt.push_str("\\i");
                 }
-                let _ = write!(s, "{{\\pard{fmt} {}\\par}}\n", rtf_text(&b.text));
+                let _ = writeln!(s, "{{\\pard{fmt} {}\\par}}", rtf_text(&b.text));
             }
             Item::Table(t) => {
                 let mut edges = t.cols.clone();

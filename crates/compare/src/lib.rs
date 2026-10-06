@@ -311,12 +311,12 @@ pub fn report(c: &Comparison, old_name: &str, new_name: &str) -> String {
         s.push_str("\nThe documents' text is identical.\n");
     }
     for (n, ch) in c.changes.iter().enumerate() {
-        let _ = write!(s, "\n{}. {} (old page {}, new page {})\n", n + 1, ch.kind.label(), ch.old.page + 1, ch.new.page + 1);
+        let _ = writeln!(s, "\n{}. {} (old page {}, new page {})", n + 1, ch.kind.label(), ch.old.page + 1, ch.new.page + 1);
         if !ch.old.text.is_empty() {
-            let _ = write!(s, "   Old: {}\n", ch.old.text);
+            let _ = writeln!(s, "   Old: {}", ch.old.text);
         }
         if !ch.new.text.is_empty() {
-            let _ = write!(s, "   New: {}\n", ch.new.text);
+            let _ = writeln!(s, "   New: {}", ch.new.text);
         }
     }
     s

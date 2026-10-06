@@ -544,7 +544,7 @@ fn type3_font(doc: &mut Document, fonts_res: &mut Dict, text: &str) -> Result<Ty
     let mut cmap = String::from(
         "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapType 2 def\n1 begincodespacerange\n<01> <FF>\nendcodespacerange\n",
     );
-    let _ = write!(cmap, "{} beginbfchar\n", chars.len());
+    let _ = writeln!(cmap, "{} beginbfchar", chars.len());
     for (i, ch) in chars.into_iter().enumerate() {
         let code = u8::try_from(i + 1).map_err(|_| EditError::Invalid("Japanese replacement has too many unique characters".into()))?;
         let glyph_name = format!("g{code:02X}");
@@ -555,7 +555,7 @@ fn type3_font(doc: &mut Document, fonts_res: &mut Dict, text: &str) -> Result<Ty
         charprocs.set(glyph_name.as_bytes().to_vec(), Object::Ref(proc_ref));
         differences.push(Object::name(&glyph_name));
         widths.push(Object::Real((width * 1000.0).round()));
-        let _ = write!(cmap, "<{code:02X}> <{}>\n", unicode_hex(ch));
+        let _ = writeln!(cmap, "<{code:02X}> <{}>", unicode_hex(ch));
         codes.push((ch, code, width));
     }
     cmap.push_str("endbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
