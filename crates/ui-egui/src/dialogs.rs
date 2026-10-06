@@ -12,6 +12,7 @@ const INFO_KEYS: [&str; 4] = ["Title", "Author", "Subject", "Keywords"];
 pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     password(app, ctx);
     save_prompt(app, ctx);
+    link_prompt(app, ctx);
     crate::updates::dialog(app, ctx);
     let Some(dialog) = app.dialog else {
         app.props_draft = None;
@@ -1312,6 +1313,57 @@ fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     if let Some(c) = choice {
         app.resolve_close(ctx, c);
+    }
+}
+
+/// "Open this web page?" when a document's link, button or script asks to open an address
+/// (#90, #91). Shows where the address really goes and the whole address; Cancel is the default,
+/// and Escape or clicking outside cancels.
+fn link_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    let Some(pending) = app.pending_link.clone() else { return };
+    let t = Tokens::get(ctx);
+    let email = pending.url.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("mailto:"));
+    let (title, open) = if email { ("Write this email?", "Open email app") } else { ("Open this web page?", "Open link") };
+    let mut choice: Option<bool> = None;
+    let modal = egui::Modal::new(egui::Id::new("link_prompt")).show(ctx, |ui| {
+        ui.set_width(460.0);
+        ui.horizontal(|ui| {
+            ui.add(crate::icons::image("external-link", 22.0, t.accent));
+            ui.label(egui::RichText::new(title).font(theme::semibold(16.0)));
+        });
+        ui.add_space(6.0);
+        let what = if email { "your email app with this address" } else { "this address in your browser" };
+        ui.label(format!("{} in this document wants to open {what}:", pending.origin.noun()));
+        ui.add_space(6.0);
+        if let Some(host) = pdfcraft_engine::links::host(&pending.url) {
+            ui.label(egui::RichText::new(host).font(theme::semibold(14.0)));
+        }
+        egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
+            ui.add(egui::Label::new(egui::RichText::new(&pending.url).monospace().small()).wrap().selectable(true));
+        });
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(
+                "Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.",
+            )
+            .color(t.text_muted)
+            .small(),
+        );
+        ui.add_space(14.0);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if widgets::pill_button(ui, "Cancel", true).clicked() {
+                choice = Some(false);
+            }
+            if widgets::pill_button(ui, open, false).clicked() {
+                choice = Some(true);
+            }
+        });
+    });
+    if choice.is_none() && modal.should_close() {
+        choice = Some(false);
+    }
+    if let Some(open) = choice {
+        app.resolve_pending_link(open);
     }
 }
 

@@ -1600,7 +1600,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     match clicked_link {
         Some(LinkTarget::Page(p)) => view.go_to_page(p),
-        Some(LinkTarget::Uri(u)) => ui.ctx().open_url(egui::OpenUrl::new_tab(u)),
+        Some(LinkTarget::Uri(u)) => app.request_document_url(&u, crate::LinkOrigin::Link),
         Some(LinkTarget::Other(s)) => app.notify(format!("{s} actions run in the JavaScript engine (M6)")),
         None => {}
     }
@@ -1687,13 +1687,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         app.notify(n);
     }
     if let Some((name, action)) = app.views[index].forms.button.take() {
-        run_button(app, index, ui.ctx(), &name, action);
+        run_button(app, index, &name, action);
     }
     quick_bar(app, avail, ui);
 }
 
 /// Run a push button's action (the ones that need no JavaScript engine).
-fn run_button(app: &mut PdfCraftApp, index: usize, ctx: &egui::Context, name: &str, action: pdfcraft_engine::form_scripts::ButtonAction) {
+fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action: pdfcraft_engine::form_scripts::ButtonAction) {
     use pdfcraft_engine::form_scripts::ButtonAction as B;
     let pages = app.session.get(app.views[index].id).map_or(0, |d| d.info.pages.len());
     match action {
@@ -1716,7 +1716,7 @@ fn run_button(app: &mut PdfCraftApp, index: usize, ctx: &egui::Context, name: &s
             "LastPage" => app.views[index].go_to_page(pages.saturating_sub(1)),
             other => app.notify(format!("{name}: the {other} action isn't supported yet")),
         },
-        B::Uri(u) => ctx.open_url(egui::OpenUrl::new_tab(u)),
+        B::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Button),
         B::GoTo(p) => app.views[index].go_to_page(p.min(pages.saturating_sub(1))),
         B::Alert(m) => app.notify(m),
         B::Submit(url) => {

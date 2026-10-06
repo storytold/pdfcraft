@@ -440,6 +440,36 @@ pub struct PdfCraftApp {
     pub replace_draft: Option<files::ReplaceDraft>,
     /// The last web link the app asked the system to open (tests and automation).
     pub last_opened_url: Option<String>,
+    /// A document asked to open this address; the user hasn't answered yet (#90, #91).
+    pub pending_link: Option<PendingLink>,
+}
+
+/// Where in a document a request to open an address came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkOrigin {
+    /// A link on the page.
+    Link,
+    /// A push button's URI action.
+    Button,
+    /// A script (`app.launchURL`).
+    Script,
+}
+
+impl LinkOrigin {
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Link => "A link",
+            Self::Button => "A button",
+            Self::Script => "A script",
+        }
+    }
+}
+
+/// An address a document asked to open, waiting for the user to allow or cancel it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingLink {
+    pub url: String,
+    pub origin: LinkOrigin,
 }
 
 /// Settings for the Number pages dialog.
@@ -543,6 +573,7 @@ impl PdfCraftApp {
             control: None,
             bookmark_rename: None,
             last_opened_url: None,
+            pending_link: None,
             protect_draft: Default::default(),
             boxes_draft: Default::default(),
             marks_draft: Default::default(),
@@ -799,12 +830,40 @@ impl PdfCraftApp {
         client
     }
 
-    /// Open a web link in the system browser (a new tab on the web).
+    /// Open a web link in the system browser (a new tab on the web). Only for PdfCraft's own
+    /// links; an address that came from a document goes through [`Self::request_document_url`].
     pub fn open_url(&mut self, url: &str) {
         if let Some(ctx) = &self.ctx {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
         self.last_opened_url = Some(url.to_string());
+    }
+
+    /// A document asks to open `url` (a link, a button's URI action or `app.launchURL`). Web and
+    /// email addresses wait for the user to allow them; anything else is refused with a notice
+    /// (#90, #91). While one request is waiting, further ones are dropped, so a script can't
+    /// queue up a stream of dialogs.
+    pub fn request_document_url(&mut self, url: &str, origin: LinkOrigin) {
+        match pdfcraft_engine::links::document_url(url) {
+            Ok(url) => {
+                if self.pending_link.is_none() {
+                    self.pending_link = Some(PendingLink { url, origin });
+                }
+            }
+            Err(e) => self.notify(format!(
+                "{} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.",
+                origin.noun()
+            )),
+        }
+    }
+
+    /// The user's answer to [`Self::pending_link`]: open it, or drop it.
+    pub fn resolve_pending_link(&mut self, open: bool) {
+        if let Some(p) = self.pending_link.take()
+            && open
+        {
+            self.open_url(&p.url);
+        }
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
