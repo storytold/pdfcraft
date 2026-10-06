@@ -1,6 +1,8 @@
 //! Left tool panel (All tools + tool sub-panels, generated from the engine catalogue) and the
 //! right-hand panels (Comments, Bookmarks, Pages, Fields, Layers, Attachments).
 
+use std::fmt::Write as _;
+
 use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, pos2, vec2};
 use printcraft_engine::catalog::{self, Availability, TOOL_GROUPS, ToolGroup};
 use printcraft_render::{DocInfo, FieldKind, OutlineItem};
@@ -150,7 +152,8 @@ fn tool_detail(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'stat
     let mut run = None;
     // Redact a PDF has Acrobat's footer: Clear all / Redact all.
     let footer = g.id == "redact";
-    let marks = if footer { app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, printcraft_engine::Document::redaction_marks) } else { 0 };
+    let marks =
+        if footer { app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, printcraft_engine::Document::redaction_marks) } else { 0 };
     let list_h = if footer { (ui.available_height() - 52.0).max(80.0) } else { ui.available_height() };
     egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(list_h).show(ui, |ui| {
         for s in g.sections {
@@ -829,7 +832,7 @@ fn fields(
             }
             let mut tip = format!("{:?} field", f.kind);
             if let Some(tt) = &f.tooltip {
-                tip.push_str(&format!(" — {tt}"));
+                let _ = write!(tip, " — {tt}");
             }
             if f.has_actions {
                 tip.push_str("\nHas JavaScript actions (run in M6)");

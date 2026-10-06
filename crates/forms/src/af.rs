@@ -408,7 +408,7 @@ fn js_str(s: &str) -> String {
             c => {
                 let mut units = [0u16; 2];
                 for unit in c.encode_utf16(&mut units) {
-                    o.push_str(&format!("\\u{unit:04X}"));
+                    let _ = write!(o, "\\u{unit:04X}");
                 }
             }
         }

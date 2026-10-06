@@ -11,6 +11,7 @@
 //! Reflowing a paragraph to a new width is not done here (see `edit.text-reflow`).
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::rc::Rc;
 
 use printcraft_content::{Matrix, Op, parse, serialize_ops};
@@ -268,7 +269,8 @@ fn interpret(doc: &Document, ops: &[Op], fonts_res: &Dict, cache: &mut HashMap<V
                         Rc::new(
                             fonts_res
                                 .get(name)
-                                .and_then(|f| doc.resolve(f).as_dict().cloned()).map_or_else(Metrics::fallback, |d| Metrics::from_dict(doc, &d)),
+                                .and_then(|f| doc.resolve(f).as_dict().cloned())
+                                .map_or_else(Metrics::fallback, |d| Metrics::from_dict(doc, &d)),
                         )
                     });
                     ts.font = Some((name.to_vec(), m.clone()));
@@ -542,7 +544,7 @@ fn type3_font(doc: &mut Document, fonts_res: &mut Dict, text: &str) -> Result<Ty
     let mut cmap = String::from(
         "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapType 2 def\n1 begincodespacerange\n<01> <FF>\nendcodespacerange\n",
     );
-    cmap.push_str(&format!("{} beginbfchar\n", chars.len()));
+    let _ = write!(cmap, "{} beginbfchar\n", chars.len());
     for (i, ch) in chars.into_iter().enumerate() {
         let code = u8::try_from(i + 1).map_err(|_| EditError::Invalid("Japanese replacement has too many unique characters".into()))?;
         let glyph_name = format!("g{code:02X}");
@@ -553,7 +555,7 @@ fn type3_font(doc: &mut Document, fonts_res: &mut Dict, text: &str) -> Result<Ty
         charprocs.set(glyph_name.as_bytes().to_vec(), Object::Ref(proc_ref));
         differences.push(Object::name(&glyph_name));
         widths.push(Object::Real((width * 1000.0).round()));
-        cmap.push_str(&format!("<{code:02X}> <{}>\n", unicode_hex(ch)));
+        let _ = write!(cmap, "<{code:02X}> <{}>\n", unicode_hex(ch));
         codes.push((ch, code, width));
     }
     cmap.push_str("endbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
@@ -882,14 +884,12 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     };
     let advance = |s: &str| -> f64 {
         let t = match (&metrics, reuse) {
-            (Some(m), true) => m
-                .encode(s)
-                .map_or(0.0, |bytes| {
-                    m.codes(&bytes)
-                        .iter()
-                        .map(|(c, l)| m.width(*c) * size + o_state.char_spacing + if m.is_space(*c, *l) { o_state.word_spacing } else { 0.0 })
-                        .sum::<f64>()
-                }),
+            (Some(m), true) => m.encode(s).map_or(0.0, |bytes| {
+                m.codes(&bytes)
+                    .iter()
+                    .map(|(c, l)| m.width(*c) * size + o_state.char_spacing + if m.is_space(*c, *l) { o_state.word_spacing } else { 0.0 })
+                    .sum::<f64>()
+            }),
             _ if let Some(fallback) = &type3 => {
                 fallback.codes.iter().map(|(ch, _, width)| s.chars().filter(|c| c == ch).count() as f64 * width * size).sum::<f64>()
                     + s.chars().count() as f64 * o_state.char_spacing

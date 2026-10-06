@@ -1,6 +1,7 @@
 //! Action Wizard: the actions (`PrintCraft`'s and your own), running one over files in the
 //! background, and creating or editing an action's steps. Your actions are remembered.
 
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
@@ -73,7 +74,7 @@ impl PrintCraftApp {
             }
             let mut msg = format!("{}: {ok} file{} done", action.name, if ok == 1 { "" } else { "s" });
             if !failed.is_empty() {
-                msg.push_str(&format!("; failed: {}", failed.join("; ")));
+                let _ = write!(msg, "; failed: {}", failed.join("; "));
             }
             if let Ok(mut s) = p.lock() {
                 s.done = s.total;

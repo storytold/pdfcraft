@@ -5,6 +5,8 @@
 //! check boxes), a thin grey border and a white background, and appearance streams generated
 //! immediately so every viewer shows the empty field.
 
+use std::fmt::Write as _;
+
 use printcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use printcraft_fonts::{helvetica_width, literal, win_ansi};
 
@@ -434,7 +436,9 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
     }
     let widget = doc.add(Object::Dict(w));
     if let NewField::Radio { export, .. } = kind {
-        let group = if let Some(g) = &radio_group { g.obj } else {
+        let group = if let Some(g) = &radio_group {
+            g.obj
+        } else {
             let mut g = Dict::new();
             g.set(b"FT".to_vec(), Object::name("Btn"));
             g.set(b"Ff".to_vec(), Object::Int(i64::from(flags::RADIO | flags::NO_TOGGLE_TO_OFF)));
@@ -452,15 +456,8 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
             kids.push(Object::Ref(widget));
             d.set(b"Kids".to_vec(), Object::Array(kids));
         })?;
-        let w = Widget {
-            obj: widget,
-            page: Some(page),
-            rect,
-            on_state: Some(export.clone()),
-            state: Some("Off".into()),
-            tab: usize::MAX,
-            locked: false,
-        };
+        let w =
+            Widget { obj: widget, page: Some(page), rect, on_state: Some(export.clone()), state: Some("Off".into()), tab: usize::MAX, locked: false };
         let ap = appearance::check_box_states(doc, &w, FieldKind::Radio, export);
         doc.update_dict(widget, |d| d.set(b"AP".to_vec(), Object::Dict(ap)))?;
     } else {
@@ -519,10 +516,10 @@ fn frame_only(doc: &Document, w: &Widget) -> (String, f64, f64) {
     };
     let mut c = String::new();
     if let Some(bg) = col(b"BG") {
-        c.push_str(&format!("{bg} rg 0 0 {width:.3} {height:.3} re f\n"));
+        let _ = write!(c, "{bg} rg 0 0 {width:.3} {height:.3} re f\n");
     }
     if let Some(bc) = col(b"BC") {
-        c.push_str(&format!("{bc} RG 1 w 0.5 0.5 {:.3} {:.3} re S\n", width - 1.0, height - 1.0));
+        let _ = write!(c, "{bc} RG 1 w 0.5 0.5 {:.3} {:.3} re S\n", width - 1.0, height - 1.0);
     }
     (c, width, height)
 }
@@ -899,7 +896,9 @@ pub fn delete_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
         doc.set(holder, Object::Dict(d));
         Ok(())
     };
-    if let Some(p) = parent { remove_from(doc, p, b"Kids")? } else {
+    if let Some(p) = parent {
+        remove_from(doc, p, b"Kids")?
+    } else {
         let root = doc.root().ok_or(FormError::NoForm)?;
         match doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) {
             Some(Object::Ref(af)) => remove_from(doc, af, b"Fields")?,

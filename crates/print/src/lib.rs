@@ -17,6 +17,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use std::fmt::Write as _;
+
 use printcraft_content::Matrix;
 use printcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
 
@@ -514,7 +516,9 @@ pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError
         let mut c = String::new();
         let mut xo = Dict::new();
         for (i, pl) in sheet.placed.iter().enumerate() {
-            let form = if let Some(f) = forms.get(&pl.page) { *f } else {
+            let form = if let Some(f) = forms.get(&pl.page) {
+                *f
+            } else {
                 let f = page_form(&mut doc, pl.page, settings.content)?;
                 forms.insert(pl.page, f);
                 f
@@ -526,7 +530,8 @@ pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError
             let to_display = Matrix(views[pl.page]).invert().unwrap_or_default();
             let [ua, ub, uc, ud, ue, uf] = to_display.0;
             let [x0, y0, x1, y1] = pl.clip;
-            c.push_str(&format!(
+            let _ = write!(
+                c,
                 "q {} {} {} {} {} {} cm {} {} {} {} re W n {} {} {} {} {} {} cm /{name} Do Q\n",
                 n(a),
                 n(b),
@@ -544,15 +549,15 @@ pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError
                 n(ud),
                 n(ue),
                 n(uf)
-            ));
+            );
         }
         if !sheet.borders.is_empty() || !sheet.lines.is_empty() {
             c.push_str("q 0 G 0.5 w\n");
             for r in &sheet.borders {
-                c.push_str(&format!("{} {} {} {} re S\n", n(r[0]), n(r[1]), n(r[2] - r[0]), n(r[3] - r[1])));
+                let _ = write!(c, "{} {} {} {} re S\n", n(r[0]), n(r[1]), n(r[2] - r[0]), n(r[3] - r[1]));
             }
             for l in &sheet.lines {
-                c.push_str(&format!("{} {} m {} {} l S\n", n(l[0]), n(l[1]), n(l[2]), n(l[3])));
+                let _ = write!(c, "{} {} m {} {} l S\n", n(l[0]), n(l[1]), n(l[2]), n(l[3]));
             }
             c.push_str("Q\n");
         }

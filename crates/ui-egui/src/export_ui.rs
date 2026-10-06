@@ -3,6 +3,7 @@
 //! On the desktop the export runs on a worker thread and reports progress in the notice bar;
 //! on the web it runs in place and downloads the files.
 
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
@@ -149,7 +150,7 @@ fn run(
         let n = out.images.len();
         let mut msg = format!("Exported {n} image{}", if n == 1 { "" } else { "s" });
         if !out.skipped.is_empty() {
-            msg.push_str(&format!(" ({} not exported: {})", out.skipped.len(), out.skipped[0].2));
+            let _ = write!(msg, " ({} not exported: {})", out.skipped.len(), out.skipped[0].2);
         }
         return msg;
     }

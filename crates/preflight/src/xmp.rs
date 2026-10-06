@@ -1,6 +1,8 @@
 //! XMP metadata for PDF/A: the identification schema and the document information, kept
 //! consistent (ISO 19005-2 §6.6).
 
+use std::fmt::Write as _;
+
 use printcraft_cos::Document;
 
 /// The value of a simple XMP property, written either as an attribute (`pdfaid:part="2"`) or
@@ -68,28 +70,28 @@ fn info(doc: &Document, key: &str) -> Option<String> {
 pub fn packet(doc: &Document, level: crate::Level) -> String {
     let mut props = String::new();
     if let Some(t) = info(doc, "Title") {
-        props.push_str(&format!("   <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:title>\n", esc(&t)));
+        let _ = write!(props, "   <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:title>\n", esc(&t));
     }
     if let Some(a) = info(doc, "Author") {
-        props.push_str(&format!("   <dc:creator><rdf:Seq><rdf:li>{}</rdf:li></rdf:Seq></dc:creator>\n", esc(&a)));
+        let _ = write!(props, "   <dc:creator><rdf:Seq><rdf:li>{}</rdf:li></rdf:Seq></dc:creator>\n", esc(&a));
     }
     if let Some(s) = info(doc, "Subject") {
-        props.push_str(&format!("   <dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:description>\n", esc(&s)));
+        let _ = write!(props, "   <dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:description>\n", esc(&s));
     }
     if let Some(k) = info(doc, "Keywords") {
-        props.push_str(&format!("   <pdf:Keywords>{}</pdf:Keywords>\n", esc(&k)));
+        let _ = write!(props, "   <pdf:Keywords>{}</pdf:Keywords>\n", esc(&k));
     }
     if let Some(p) = info(doc, "Producer") {
-        props.push_str(&format!("   <pdf:Producer>{}</pdf:Producer>\n", esc(&p)));
+        let _ = write!(props, "   <pdf:Producer>{}</pdf:Producer>\n", esc(&p));
     }
     if let Some(c) = info(doc, "Creator") {
-        props.push_str(&format!("   <xmp:CreatorTool>{}</xmp:CreatorTool>\n", esc(&c)));
+        let _ = write!(props, "   <xmp:CreatorTool>{}</xmp:CreatorTool>\n", esc(&c));
     }
     if let Some(d) = info(doc, "CreationDate").and_then(|d| iso_date(&d)) {
-        props.push_str(&format!("   <xmp:CreateDate>{d}</xmp:CreateDate>\n"));
+        let _ = write!(props, "   <xmp:CreateDate>{d}</xmp:CreateDate>\n");
     }
     if let Some(d) = info(doc, "ModDate").and_then(|d| iso_date(&d)) {
-        props.push_str(&format!("   <xmp:ModifyDate>{d}</xmp:ModifyDate>\n"));
+        let _ = write!(props, "   <xmp:ModifyDate>{d}</xmp:ModifyDate>\n");
     }
     format!(
         "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\

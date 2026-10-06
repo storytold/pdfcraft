@@ -8,6 +8,7 @@
 //! malformed page yields a `RenderedPage` with `error` set, and the worker rebuilds its parser and
 //! cache before continuing, so one bad page can never take down the app or poison later pages.
 
+use std::fmt::Write as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
@@ -212,7 +213,10 @@ fn parse(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Option<Pdf> {
 }
 
 pub(crate) fn panic_message(p: &Box<dyn std::any::Any + Send>) -> String {
-    p.downcast_ref::<&str>().map(std::string::ToString::to_string).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown panic".into())
+    p.downcast_ref::<&str>()
+        .map(std::string::ToString::to_string)
+        .or_else(|| p.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".into())
 }
 
 /// How long one page may render before the pool gives up on it (the watchdog).
@@ -839,7 +843,7 @@ trailer << /Root 1 0 R >>
             for (i, s) in streams.iter().enumerate() {
                 let n = 4 + i;
                 refs.push(format!("{n} 0 R"));
-                objs.push_str(&format!("{n} 0 obj {s} endobj\n"));
+                let _ = write!(objs, "{n} 0 obj {s} endobj\n");
             }
             let pdf = format!(
                 "%PDF-1.7

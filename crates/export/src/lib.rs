@@ -7,6 +7,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use std::fmt::Write as _;
+
 mod zip;
 
 pub use zip::Zip;
@@ -151,14 +153,11 @@ fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
             continue;
         }
         let Some(ci) = column_at(b.rect[0]) else { continue };
-        let joins = rows
-            .last()
-            .and_then(|row| row.first())
-            .is_some_and(|(_, fi)| {
-                let rb = &blocks[*fi];
-                let overlap = rb.rect[3].min(b.rect[3]) - rb.rect[1].max(b.rect[1]);
-                overlap > 0.5 * (rb.rect[3] - rb.rect[1]).min(b.rect[3] - b.rect[1])
-            });
+        let joins = rows.last().and_then(|row| row.first()).is_some_and(|(_, fi)| {
+            let rb = &blocks[*fi];
+            let overlap = rb.rect[3].min(b.rect[3]) - rb.rect[1].max(b.rect[1]);
+            overlap > 0.5 * (rb.rect[3] - rb.rect[1]).min(b.rect[3] - b.rect[1])
+        });
         if joins {
             if let Some(row) = rows.last_mut() {
                 row.push((ci, bi));
@@ -339,8 +338,12 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                     t = format!("<strong>{t}</strong>");
                 }
                 match lvl {
-                    0 => s.push_str(&format!("<p>{t}</p>\n")),
-                    l => s.push_str(&format!("<h{l}>{t}</h{l}>\n")),
+                    0 => {
+                        let _ = write!(s, "<p>{t}</p>\n");
+                    }
+                    l => {
+                        let _ = write!(s, "<h{l}>{t}</h{l}>\n");
+                    }
                 }
             }
             Item::Table(t) => {
@@ -356,7 +359,7 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                             body = format!("<strong>{body}</strong>");
                         }
                         let span = if c.span > 1 { format!(" colspan=\"{}\"", c.span) } else { String::new() };
-                        s.push_str(&format!("<td{span}>{body}</td>"));
+                        let _ = write!(s, "<td{span}>{body}</td>");
                     }
                     s.push_str("</tr>\n");
                 }
@@ -364,7 +367,7 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
             }
             Item::Img(im) => {
                 let mime = if im.ext == "jpg" { "image/jpeg" } else { "image/png" };
-                s.push_str(&format!("<p><img alt=\"\" src=\"data:{mime};base64,{}\"></p>\n", base64(&im.bytes)));
+                let _ = write!(s, "<p><img alt=\"\" src=\"data:{mime};base64,{}\"></p>\n", base64(&im.bytes));
             }
             Item::PageBreak => s.push_str("<hr>\n"),
         }
@@ -382,7 +385,7 @@ fn run_xml(text: &str, size: f64, bold: bool, italic: bool) -> String {
     if italic {
         rpr.push_str("<w:i/>");
     }
-    rpr.push_str(&format!("<w:sz w:val=\"{}\"/>", (size * 2.0).round().clamp(2.0, 3276.0) as i64));
+    let _ = write!(rpr, "<w:sz w:val=\"{}\"/>", (size * 2.0).round().clamp(2.0, 3276.0) as i64);
     format!("<w:r><w:rPr>{rpr}</w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r>", esc(text))
 }
 
@@ -406,7 +409,7 @@ fn docx_table(t: &Table) -> String {
     }
     s.push_str("</w:tblBorders></w:tblPr><w:tblGrid>");
     for w in &widths {
-        s.push_str(&format!("<w:gridCol w:w=\"{w}\"/>"));
+        let _ = write!(s, "<w:gridCol w:w=\"{w}\"/>");
     }
     s.push_str("</w:tblGrid>");
     for row in &t.rows {
@@ -414,10 +417,11 @@ fn docx_table(t: &Table) -> String {
         for c in row {
             let span = if c.span > 1 { format!("<w:gridSpan w:val=\"{}\"/>", c.span) } else { String::new() };
             let w: i64 = widths.iter().take(c.span.min(widths.len())).sum();
-            s.push_str(&format!(
+            let _ = write!(
+                s,
                 "<w:tc><w:tcPr><w:tcW w:w=\"{w}\" w:type=\"dxa\"/>{span}</w:tcPr><w:p>{}</w:p></w:tc>",
                 run_xml(&c.text, c.size, c.bold, c.italic)
-            ));
+            );
         }
         // Pad the grid so every row covers all columns (Word rejects short rows).
         let used: usize = row.iter().map(|c| c.span).sum();
@@ -447,7 +451,7 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
                     2 => "<w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr>",
                     _ => "",
                 };
-                body.push_str(&format!("<w:p>{style}{}</w:p>", run(b)));
+                let _ = write!(body, "<w:p>{style}{}</w:p>", run(b));
             }
             Item::Table(t) => {
                 if after_table {
@@ -462,14 +466,15 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
                 let (w, h) = ((im.rect[2] - im.rect[0]).max(1.0), (im.rect[3] - im.rect[1]).max(1.0));
                 let k = (468.0 / w).min(1.0);
                 let (cx, cy) = ((w * k * 12700.0) as i64, (h * k * 12700.0) as i64);
-                body.push_str(&format!(
+                let _ = write!(
+                    body,
                     "<w:p><w:r><w:drawing><wp:inline><wp:extent cx=\"{cx}\" cy=\"{cy}\"/><wp:docPr id=\"{n}\" name=\"Picture {n}\"/>\
 <a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">\
 <pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:nvPicPr><pic:cNvPr id=\"{n}\" name=\"{name}\"/><pic:cNvPicPr/></pic:nvPicPr>\
 <pic:blipFill><a:blip r:embed=\"rIdImg{n}\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>\
 <pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>\
 </a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
-                ));
+                );
                 media.push((name, im));
             }
             Item::PageBreak => body.push_str("<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>"),
@@ -506,10 +511,11 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
 <Relationship Id=\"rIdStyles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>",
     );
     for (i, (name, _)) in media.iter().enumerate() {
-        doc_rels.push_str(&format!(
+        let _ = write!(
+            doc_rels,
             "<Relationship Id=\"rIdImg{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/{name}\"/>",
             i + 1
-        ));
+        );
     }
     doc_rels.push_str("</Relationships>");
     let styles = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\
@@ -547,7 +553,7 @@ fn rtf_text(s: &str) -> String {
                 // \uN with a ? fallback; UTF-16 units as signed 16-bit numbers.
                 let mut buf = [0u16; 2];
                 for u in c.encode_utf16(&mut buf) {
-                    o.push_str(&format!("\\u{}?", *u as i16));
+                    let _ = write!(o, "\\u{}?", *u as i16);
                 }
             }
         }
@@ -570,7 +576,7 @@ pub fn rtf(pages: &[Page]) -> String {
                 if b.italic {
                     fmt.push_str("\\i");
                 }
-                s.push_str(&format!("{{\\pard{fmt} {}\\par}}\n", rtf_text(&b.text)));
+                let _ = write!(s, "{{\\pard{fmt} {}\\par}}\n", rtf_text(&b.text));
             }
             Item::Table(t) => {
                 let mut edges = t.cols.clone();
@@ -584,7 +590,7 @@ pub fn rtf(pages: &[Page]) -> String {
                     for c in row {
                         column += c.span.max(1);
                         if let Some(x) = cellx.get(column.min(cellx.len()).saturating_sub(1)) {
-                            s.push_str(&format!("\\cellx{x}"));
+                            let _ = write!(s, "\\cellx{x}");
                         }
                     }
                     for c in row {
@@ -595,7 +601,7 @@ pub fn rtf(pages: &[Page]) -> String {
                         if c.italic {
                             fmt.push_str("\\i");
                         }
-                        s.push_str(&format!("{{{fmt} {}}}\\cell", rtf_text(&c.text)));
+                        let _ = write!(s, "{{{fmt} {}}}\\cell", rtf_text(&c.text));
                     }
                     s.push_str("\\row\n");
                 }

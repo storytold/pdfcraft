@@ -9,6 +9,8 @@
 //! `WinAnsi`. Otherwise (composite fonts, missing resources) Helvetica is used, so text is always
 //! visible. Widths use the approximate Helvetica metrics of `printcraft-fonts`.
 
+use std::fmt::Write as _;
+
 use printcraft_cos::{Dict, Document, Object, Stream};
 use printcraft_fonts::{helvetica_width, literal, win_ansi, wrap};
 
@@ -108,7 +110,7 @@ fn frame(doc: &Document, wd: &Dict, w: f64, h: f64) -> (String, f64) {
     let mk = wd.get(b"MK").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned());
     let mut c = String::new();
     if let Some(bg) = color_array(doc, mk.as_ref(), b"BG") {
-        c.push_str(&format!("{bg}\n0 0 {} {} re f\n", n(w), n(h)));
+        let _ = write!(c, "{bg}\n0 0 {} {} re f\n", n(w), n(h));
     }
     let bs = wd.get(b"BS").map(|b| doc.resolve(b)).and_then(|b| b.as_dict().cloned());
     let bw = bs.as_ref().and_then(|b| b.get(b"W")).and_then(|x| doc.resolve(x).as_f64()).unwrap_or(1.0).max(0.0);
@@ -118,11 +120,12 @@ fn frame(doc: &Document, wd: &Dict, w: f64, h: f64) -> (String, f64) {
         let style = bs.as_ref().and_then(|b| b.name(b"S").map(<[u8]>::to_vec)).unwrap_or_default();
         if style == b"U" {
             // Underline: only the bottom edge.
-            c.push_str(&format!("{}\n{} w\n0 {} m {} {} l S\n", stroke_op(&bc), n(bw), n(bw / 2.0), n(w), n(bw / 2.0)));
+            let _ = write!(c, "{}\n{} w\n0 {} m {} {} l S\n", stroke_op(&bc), n(bw), n(bw / 2.0), n(w), n(bw / 2.0));
             return (c, bw);
         }
         let dashed = style == b"D";
-        c.push_str(&format!(
+        let _ = write!(
+            c,
             "{}\n{} w\n{}{} {} {} {} re S\n[] 0 d\n",
             stroke_op(&bc),
             n(bw),
@@ -131,14 +134,15 @@ fn frame(doc: &Document, wd: &Dict, w: f64, h: f64) -> (String, f64) {
             n(bw / 2.0),
             n(w - bw),
             n(h - bw)
-        ));
+        );
         if style == b"B" || style == b"I" {
             // Beveled: a light top-left and a darker bottom-right inside the border; inset:
             // grey top-left and light grey bottom-right.
             let (tl, br) = if style == b"B" { ("1 g", "0.5 g") } else { ("0.5 g", "0.75 g") };
             let (x0, y0, x1, y1) = (bw, bw, w - bw, h - bw);
             let k = bw;
-            c.push_str(&format!(
+            let _ = write!(
+                c,
                 "{tl}\n{} {} m {} {} l {} {} l {} {} l {} {} l {} {} l f\n{br}\n{} {} m {} {} l {} {} l {} {} l {} {} l {} {} l f\n",
                 n(x0),
                 n(y0),
@@ -164,7 +168,7 @@ fn frame(doc: &Document, wd: &Dict, w: f64, h: f64) -> (String, f64) {
                 n(y0 + k),
                 n(x1 - k),
                 n(y1 - k)
-            ));
+            );
             return (c, 2.0 * bw);
         }
         return (c, bw);
@@ -234,7 +238,7 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
                 break;
             }
             if values.contains(export) {
-                c.push_str(&format!("0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line)));
+                let _ = write!(c, "0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line));
             }
             show(&mut body, pad, y - line + size * 0.25, display);
             y -= line;

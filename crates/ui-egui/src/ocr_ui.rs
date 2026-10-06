@@ -2,6 +2,7 @@
 //! and the background run with its progress. Recognition happens on a worker thread; the result
 //! is applied as one undoable edit when it is done.
 
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
@@ -227,7 +228,7 @@ impl PrintCraftApp {
             }
             let mut msg = format!("Recognized {words} words in {ok} file{}", if ok == 1 { "" } else { "s" });
             if !failed.is_empty() {
-                msg.push_str(&format!("; failed: {}", failed.join("; ")));
+                let _ = write!(msg, "; failed: {}", failed.join("; "));
             }
             if let Ok(mut s) = p.lock() {
                 s.done = s.total;
@@ -311,7 +312,7 @@ impl PrintCraftApp {
                 let mut msg =
                     format!("Recognized {words} word{} on {read} page{}", if words == 1 { "" } else { "s" }, if read == 1 { "" } else { "s" });
                 if skipped > 0 {
-                    msg.push_str(&format!("; {skipped} page{} already had text", if skipped == 1 { "" } else { "s" }));
+                    let _ = write!(msg, "; {skipped} page{} already had text", if skipped == 1 { "" } else { "s" });
                 }
                 self.notify(msg);
             }

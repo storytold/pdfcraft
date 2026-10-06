@@ -9,6 +9,7 @@
 //! form's field tree.
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 
 use printcraft_cos::{Dict, Document, ObjRef, Object};
 
@@ -83,7 +84,7 @@ pub fn flatten(doc: &mut Document, pages: &[usize], comments: bool, fields: bool
                 let form = doc.get(ap).as_dict().cloned().unwrap_or_default();
                 if let Some(m) = placement(doc, &form, rect) {
                     let name = format!("PCFl{drawn}");
-                    content.push_str(&format!("q {} {} {} {} {} {} cm /{name} Do Q\n", n(m[0]), n(m[1]), n(m[2]), n(m[3]), n(m[4]), n(m[5])));
+                    let _ = write!(content, "q {} {} {} {} {} {} cm /{name} Do Q\n", n(m[0]), n(m[1]), n(m[2]), n(m[3]), n(m[4]), n(m[5]));
                     xobjects.set(name.into_bytes(), Object::Ref(ap));
                     drawn += 1;
                 }

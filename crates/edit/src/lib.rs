@@ -14,6 +14,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use std::fmt::Write as _;
+
 use printcraft_cos::{Dict, Document, Object, Stream};
 use printcraft_fonts::{helvetica_width, literal, win_ansi};
 
@@ -427,7 +429,7 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
                 let y = if header { h - top - size * 0.8 - li as f64 * line_h } else { bottom + (lines.len() - 1 - li) as f64 * line_h };
                 body.extend(text_op(x, y, line));
                 if hf.underline {
-                    underlines.push_str(&format!("{} {} {} {} re f\n", n(x), n(y - size * 0.15), n(tw), n((size * 0.06).max(0.4))));
+                    let _ = write!(underlines, "{} {} {} {} re f\n", n(x), n(y - size * 0.15), n(tw), n((size * 0.06).max(0.4)));
                 }
             }
         }
@@ -466,7 +468,7 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
         let (w, h) = page.display_size(doc);
         if let Some(src) = &wm.source {
             let mut content = begin(MarkKind::Watermark, "Watermark", page.view_matrix(doc));
-            content.push_str(&format!("/PCGS{} gs\n", (opacity * 100.0).round() as i64));
+            let _ = write!(content, "/PCGS{} gs\n", (opacity * 100.0).round() as i64);
             content.push_str(&picture(src, (w, h), wm.scale, wm.rotation, wm.offset));
             content.push_str(END);
             add_resources(doc, &page, Some(opacity), None)?;
@@ -524,10 +526,12 @@ pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, repl
         let mut content = begin(MarkKind::Background, "Background", page.view_matrix(doc));
         match &bg.source {
             Some(src) => {
-                content.push_str(&format!("/PCGS{} gs\n", (opacity * 100.0).round() as i64));
+                let _ = write!(content, "/PCGS{} gs\n", (opacity * 100.0).round() as i64);
                 content.push_str(&picture(src, (w, h), bg.scale, 0.0, [0.0; 2]));
             }
-            None => content.push_str(&format!("/PCGS{} gs\n{}\n0 0 {} {} re f\n", (opacity * 100.0).round() as i64, rgb(bg.color), n(w), n(h))),
+            None => {
+                let _ = write!(content, "/PCGS{} gs\n{}\n0 0 {} {} re f\n", (opacity * 100.0).round() as i64, rgb(bg.color), n(w), n(h));
+            }
         }
         content.push_str(END);
         add_resources(doc, &page, Some(opacity), None)?;

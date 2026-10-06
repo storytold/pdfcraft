@@ -1,5 +1,7 @@
 //! Modal dialogs: Document Properties, Keyboard Shortcuts, About.
 
+use std::fmt::Write as _;
+
 use egui::{Align, Layout};
 
 use crate::theme::{self, Tokens};
@@ -297,7 +299,7 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                             for f in &i.fonts {
                                 let mut detail = f.kind.clone();
                                 if let Some(e) = &f.encoding {
-                                    detail.push_str(&format!(" · {e}"));
+                                    let _ = write!(detail, " · {e}");
                                 }
                                 detail.push_str(if f.subset {
                                     " · Embedded subset"
@@ -655,7 +657,8 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 optimize_now = ok;
                 close = ok || cancel;
                 if std::mem::take(&mut app.optimize_draft.audit) {
-                    app.space_audit = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(printcraft_engine::Document::audit_space).unwrap_or_default();
+                    app.space_audit =
+                        app.active_ids().and_then(|(_, id)| app.session.get(id)).map(printcraft_engine::Document::audit_space).unwrap_or_default();
                     next = Dialog::AuditSpace;
                 }
                 return;
