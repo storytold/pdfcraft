@@ -65,6 +65,19 @@ if (-not $SkipBuild) {
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"
+
+# The PE optional header's Subsystem field: 2 = Windows GUI, 3 = console. The app must be GUI (no
+# console window opens with it, #57); the CLI must stay console so its output reaches the terminal.
+function Get-PeSubsystem([string] $Path) {
+  $bytes = [System.IO.File]::ReadAllBytes($Path)
+  $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+  return [BitConverter]::ToUInt16($bytes, $pe + 0x5C)
+}
+foreach ($check in @(@('printcraft.exe', 2), @('printcraft-cli.exe', 3))) {
+  $subsystem = Get-PeSubsystem (Join-Path $Bin $check[0])
+  if ($subsystem -ne $check[1]) { throw "$($check[0]) has PE subsystem $subsystem, expected $($check[1])" }
+  Write-Output "ok $($check[0]): PE subsystem $subsystem"
+}
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null

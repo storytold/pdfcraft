@@ -17,15 +17,17 @@
       Scope="perMachine"
       Compressed="yes"
       Language="1033">
-    <SummaryInformation Description="PrintCraft image editor" Manufacturer="Learning Machines LLC" />
+    <SummaryInformation Description="PrintCraft PDF workbench" Manufacturer="Learning Machines LLC" />
     <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
          (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
     <MajorUpgrade AllowSameVersionUpgrades="yes"
         DowngradeErrorMessage="A newer version of PrintCraft is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
-    <Icon Id="PrintcraftIcon" SourceFile="$(var.IconPath)" />
-    <Property Id="ARPPRODUCTICON" Value="PrintcraftIcon" />
+    <!-- Windows Installer requires an Icon id ending in .ico or .exe, or advertised shortcuts and
+         Add/Remove Programs show a blank icon (#57). -->
+    <Icon Id="PrintcraftIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="PrintcraftIcon.ico" />
     <Property Id="ARPURLINFOABOUT" Value="https://getartcraft.com/apps/printcraft" />
     <Property Id="ARPURLUPDATEINFO" Value="https://getartcraft.com/apps/printcraft" />
     <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
@@ -45,8 +47,8 @@
       <Component Id="PrintcraftApp" Guid="E724C1C6-091F-4E21-A685-80D089FDBE21">
         <File Id="PrintcraftExe" Source="$(var.BinDir)\printcraft.exe" KeyPath="yes">
           <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="PrintCraft"
-              Description="PrintCraft image editor" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
-              Icon="PrintcraftIcon" IconIndex="0" />
+              Description="PrintCraft PDF workbench" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
+              Icon="PrintcraftIcon.ico" IconIndex="0" />
         </File>
 
         <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\printcraft.exe" Value="[#PrintcraftExe]" Type="string" />
