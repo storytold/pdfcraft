@@ -1097,7 +1097,7 @@ impl PrintCraftApp {
         // underneath it. They are read here, before the canvas can consume them.
         if self.close_request.is_some() {
             if let Some(choice) = dialogs::save_prompt_key(ctx) {
-                self.resolve_close(ctx, choice);
+                self.resolve_close(ctx, choice.resolve());
             }
             return;
         }

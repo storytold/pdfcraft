@@ -85,18 +85,20 @@ fn nums(d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
     d.get(key)?.as_array()?.iter().map(printcraft_cos::Object::as_f64).collect()
 }
 
-/// `/C`-style colour arrays: none (transparent), gray, RGB or CMYK.
-fn color(d: &Dict, key: &[u8]) -> Option<Option<Rgb>> {
+/// `/C`-style colour arrays: none (transparent), gray, RGB or CMYK. `Err` = the value is
+/// malformed and no appearance can be drawn; `Ok(None)` = there is no colour.
+#[allow(clippy::result_unit_err)]
+fn color(d: &Dict, key: &[u8]) -> Result<Option<Rgb>, ()> {
     let c = match d.get(key) {
-        None => return Some(None),
-        Some(o) => o.as_array()?.iter().map(printcraft_cos::Object::as_f64).collect::<Option<Vec<f64>>>()?,
+        None => return Ok(None),
+        Some(o) => o.as_array().ok_or(())?.iter().map(printcraft_cos::Object::as_f64).collect::<Option<Vec<f64>>>().ok_or(())?,
     };
-    Some(match c.as_slice() {
+    Ok(match c.as_slice() {
         [] => None,
         [g] => Some([*g; 3]),
         [r, g, b] => Some([*r, *g, *b]),
         [c, m, y, k] => Some([(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)]),
-        _ => return None,
+        _ => return Err(()),
     })
 }
 
@@ -196,7 +198,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
         return None;
     }
     let opacity = d.get(b"CA").and_then(printcraft_cos::Object::as_f64).unwrap_or(1.0).clamp(0.0, 1.0);
-    let stroke = color(d, b"C")?;
+    let stroke = color(d, b"C").ok()?;
     let w = border_width(d);
     let mut res = Dict::new();
     let mut c = String::new();
@@ -291,7 +293,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
             }
         }
         b"Square" | b"Circle" => {
-            let fill = color(d, b"IC")?;
+            let fill = color(d, b"IC").ok()?;
             if stroke.is_none() && fill.is_none() {
                 return Some(form(rect, c.as_bytes(), res));
             }
@@ -325,7 +327,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
             if ends.len() != 2 || ends.iter().any(|e| !matches!(e.as_slice(), b"None" | b"OpenArrow" | b"ClosedArrow")) {
                 return None;
             }
-            let fill = color(d, b"IC")?.unwrap_or(col);
+            let fill = color(d, b"IC").ok()?.unwrap_or(col);
             let _ = write!(c, "{}{}{} w 1 J 1 j\n{}", rg_stroke(col), rg(fill), n(w), dash(d));
             let _ = writeln!(c, "{} {} m {} {} l S\n[] 0 d", n(l[0]), n(l[1]), n(l[2]), n(l[3]));
             for (end, (tip, from)) in ends.iter().zip([((l[0], l[1]), (l[2], l[3])), ((l[2], l[3]), (l[0], l[1]))]) {
@@ -337,7 +339,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
             let pts: Vec<(f64, f64)> = v.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
             let col = stroke;
             let closed = subtype == b"Polygon";
-            let fill = if closed { color(d, b"IC")? } else { None };
+            let fill = if closed { color(d, b"IC").ok()? } else { None };
             if subtype == b"PolyLine" && d.get(b"LE").is_some_and(|e| e.as_array().is_none_or(|a| a.iter().any(|x| x.as_name() != Some(b"None")))) {
                 // Line endings on connected lines aren't drawn yet.
                 return None;

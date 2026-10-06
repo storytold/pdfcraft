@@ -1256,18 +1256,37 @@ fn draft_changes(app: &PrintCraftApp) -> Option<Vec<Edit>> {
     Some(edits)
 }
 
+/// The answer to "Save changes?": save, discard the changes, or cancel the close.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Answer {
+    Save,
+    Discard,
+    Cancel,
+}
+
+impl Answer {
+    /// As `PrintCraftApp::resolve_close` takes it: save, discard, or cancel.
+    pub(crate) fn resolve(self) -> Option<bool> {
+        match self {
+            Answer::Save => Some(true),
+            Answer::Discard => Some(false),
+            Answer::Cancel => None,
+        }
+    }
+}
+
 /// The "Save changes?" prompt's keys (issue #8), read before anything else can take them: Enter
 /// saves (the default button) and Escape cancels; Don't save takes ⌘D / Ctrl+D, the macOS
 /// convention, or Alt+D / Alt+N, the mnemonics Windows and Linux desktops use for it.
-pub(crate) fn save_prompt_key(ctx: &egui::Context) -> Option<Option<bool>> {
+pub(crate) fn save_prompt_key(ctx: &egui::Context) -> Option<Answer> {
     use egui::{Key, Modifiers};
     ctx.input_mut(|i| {
         if i.consume_key(Modifiers::NONE, Key::Enter) {
-            Some(Some(true))
+            Some(Answer::Save)
         } else if i.consume_key(Modifiers::NONE, Key::Escape) {
-            Some(None)
+            Some(Answer::Cancel)
         } else if [(Modifiers::COMMAND, Key::D), (Modifiers::ALT, Key::D), (Modifiers::ALT, Key::N)].into_iter().any(|(m, k)| i.consume_key(m, k)) {
-            Some(Some(false))
+            Some(Answer::Discard)
         } else {
             None
         }
@@ -1287,7 +1306,7 @@ fn save_prompt(app: &mut PrintCraftApp, ctx: &egui::Context) {
         return;
     };
     let t = Tokens::get(ctx);
-    let mut choice: Option<Option<bool>> = None;
+    let mut choice: Option<Answer> = None;
     let modal = egui::Modal::new(egui::Id::new("save_prompt")).show(ctx, |ui| {
         ui.set_width(420.0);
         ui.horizontal(|ui| {
@@ -1299,22 +1318,22 @@ fn save_prompt(app: &mut PrintCraftApp, ctx: &egui::Context) {
         ui.add_space(14.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if widgets::pill_button(ui, "Save", true).clicked() {
-                choice = Some(Some(true));
+                choice = Some(Answer::Save);
             }
             if widgets::pill_button(ui, "Cancel", false).clicked() {
-                choice = Some(None);
+                choice = Some(Answer::Cancel);
             }
             ui.add_space(24.0);
             if widgets::pill_button(ui, "Don't save", false).clicked() {
-                choice = Some(Some(false));
+                choice = Some(Answer::Discard);
             }
         });
     });
     if choice.is_none() && modal.should_close() {
-        choice = Some(None);
+        choice = Some(Answer::Cancel);
     }
     if let Some(c) = choice {
-        app.resolve_close(ctx, c);
+        app.resolve_close(ctx, c.resolve());
     }
 }
 

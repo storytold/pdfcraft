@@ -407,15 +407,18 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
                         continue;
                     }
                 }
-                b"Do" => {
-                    if let Some(new) = xobject(doc, scope, &op, &gs, resources, &mut xobjects, &mut out) {
+                b"Do" => match xobject(doc, scope, &op, &gs, resources, &mut xobjects, &mut out) {
+                    DoAction::Leave => {}
+                    DoAction::Drop => {
                         changed = true;
-                        if let Some(n) = new {
-                            ops.push(n);
-                        }
                         continue;
                     }
-                }
+                    DoAction::Replace(n) => {
+                        changed = true;
+                        ops.push(n);
+                        continue;
+                    }
+                },
                 _ => {}
             }
             ops.push(op);
@@ -502,50 +505,51 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
     (out, removed)
 }
 
-/// `Do`: `None` = leave the operator alone; `Some(None)` = drop it; `Some(Some(op))` = replace it.
-fn xobject(
-    doc: &mut Document,
-    scope: &mut Scope<'_>,
-    op: &Op,
-    gs: &Gs,
-    resources: &Dict,
-    xobjects: &mut Dict,
-    out: &mut Output,
-) -> Option<Option<Op>> {
-    let name = op.name(0)?.to_vec();
-    let r = xobjects.get(&name)?.as_ref()?;
+/// What the interpreter should do with a `Do` operator.
+enum DoAction {
+    /// Leave the operator as it is.
+    Leave,
+    /// Drop it (the `XObject` is gone, or must not be shown).
+    Drop,
+    /// Use this rewritten operator instead.
+    Replace(Op),
+}
+
+fn xobject(doc: &mut Document, scope: &mut Scope<'_>, op: &Op, gs: &Gs, resources: &Dict, xobjects: &mut Dict, out: &mut Output) -> DoAction {
+    let Some(name) = op.name(0).map(<[u8]>::to_vec) else { return DoAction::Leave };
+    let Some(r) = xobjects.get(&name).and_then(Object::as_ref) else { return DoAction::Leave };
     let obj = doc.get(r);
-    let Object::Stream(s) = &*obj else { return None };
+    let Object::Stream(s) = &*obj else { return DoAction::Leave };
     match s.dict.name(b"Subtype") {
         _ if s.dict.get(b"OC").is_some_and(|oc| scope.layer_hidden(doc, oc)) => {
             if scope.mode == Mode::Verify {
-                return None;
+                return DoAction::Leave;
             }
             scope.layer_blocks += 1;
-            Some(None)
+            DoAction::Drop
         }
         Some(b"Image") => {
             let b = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
             if !scope.hits(b) || scope.mode == Mode::Verify {
-                return None;
+                return DoAction::Leave;
             }
             if scope.covered(b) {
                 scope.report.images_removed += 1;
-                return Some(None);
+                return DoAction::Drop;
             }
             match image::clear(doc, s, &gs.ctm, scope.rects) {
-                Ok(None) => None,
+                Ok(None) => DoAction::Leave,
                 Ok(Some(new)) => {
                     let nr = doc.add(Object::Stream(new));
                     let n = fresh_name(scope, xobjects);
                     xobjects.set(n.clone(), Object::Ref(nr));
                     out.xobjects.push((n.clone(), nr));
                     scope.report.images_cleared += 1;
-                    Some(Some(Op::new("Do", vec![Object::Name(n)])))
+                    DoAction::Replace(Op::new("Do", vec![Object::Name(n)]))
                 }
                 Err(()) => {
                     scope.report.images_removed += 1;
-                    Some(None)
+                    DoAction::Drop
                 }
             }
         }
@@ -560,22 +564,22 @@ fn xobject(
                 && !scope.everywhere()
                 && !scope.hits(fctm.bbox(bb))
             {
-                return None;
+                return DoAction::Leave;
             }
             if scope.depth >= MAX_DEPTH {
                 if scope.mode == Mode::Verify {
-                    return None;
+                    return DoAction::Leave;
                 }
                 scope.report.forms_removed += 1;
-                return Some(None);
+                return DoAction::Drop;
             }
             let data = match s.decoded() {
                 Ok(d) => d,
                 Err(_) if scope.mode == Mode::Apply => {
                     scope.report.forms_removed += 1;
-                    return Some(None);
+                    return DoAction::Drop;
                 }
-                Err(_) => return None,
+                Err(_) => return DoAction::Leave,
             };
             let own = s.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned());
             let res = own.clone().unwrap_or_else(|| resources.clone());
@@ -586,11 +590,11 @@ fn xobject(
             scope.fonts = saved_fonts;
             out.residue += inner.residue;
             if scope.mode == Mode::Verify {
-                return None;
+                return DoAction::Leave;
             }
             let new_data = inner.streams.into_iter().next().flatten();
             if new_data.is_none() && inner.xobjects.is_empty() {
-                return None;
+                return DoAction::Leave;
             }
             let mut dict = s.dict.clone();
             dict.remove(b"Length");
@@ -612,9 +616,9 @@ fn xobject(
             xobjects.set(n.clone(), Object::Ref(nr));
             out.xobjects.push((n.clone(), nr));
             scope.report.forms_rewritten += 1;
-            Some(Some(Op::new("Do", vec![Object::Name(n)])))
+            DoAction::Replace(Op::new("Do", vec![Object::Name(n)]))
         }
-        _ => None,
+        _ => DoAction::Leave,
     }
 }
 

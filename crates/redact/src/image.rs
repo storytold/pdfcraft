@@ -37,10 +37,6 @@ fn components(doc: &Document, s: &Stream) -> Option<usize> {
 /// `Err(())` when the image can't be cleared (the caller removes it).
 #[allow(clippy::result_unit_err)]
 pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]) -> Result<Option<Stream>, ()> {
-    decode_and_clear(doc, s, ctm, rects).ok_or(())
-}
-
-fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]) -> Option<Option<Stream>> {
     let supported = |n: &[u8]| {
         matches!(
             n,
@@ -54,22 +50,22 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
         _ => false,
     };
     if !ok {
-        return None;
+        return Err(());
     }
-    let (w, h) = (s.dict.int(b"Width")?, s.dict.int(b"Height")?);
+    let (w, h) = (s.dict.int(b"Width").ok_or(())?, s.dict.int(b"Height").ok_or(())?);
     if w <= 0 || h <= 0 || (w as u64) * (h as u64) > MAX_PIXELS {
-        return None;
+        return Err(());
     }
     let (w, h) = (w as usize, h as usize);
     let mask = matches!(s.dict.get(b"ImageMask"), Some(Object::Bool(true)));
-    let (ncomp, bpc) = if mask { (1, 1) } else { (components(doc, s)?, s.dict.int(b"BitsPerComponent")? as usize) };
+    let (ncomp, bpc) = if mask { (1, 1) } else { (components(doc, s).ok_or(())?, s.dict.int(b"BitsPerComponent").ok_or(())? as usize) };
     if !matches!(bpc, 1 | 2 | 4 | 8 | 16) {
-        return None;
+        return Err(());
     }
-    let mut data = s.decoded().ok()?;
+    let mut data = s.decoded().map_err(|_| ())?;
     let row = (w * ncomp * bpc).div_ceil(8);
     if data.len() < row * h {
-        return None;
+        return Err(());
     }
     data.truncate(row * h);
     // Image masks: a sample of 0 paints unless /Decode is [1 0]; cleared samples must not paint.
@@ -109,10 +105,10 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
         }
     }
     if cleared == 0 {
-        return Some(None);
+        return Ok(None);
     }
     let mut dict = s.dict.clone();
     dict.remove(b"Length");
     dict.remove(b"DecodeParms");
-    Some(Some(Stream::flate(dict, &data)))
+    Ok(Some(Stream::flate(dict, &data)))
 }
