@@ -1705,6 +1705,7 @@ impl Session {
     }
 
     /// Use a fixed clock (tests) instead of the system time.
+    #[must_use]
     pub fn with_clock(mut self, clock: fn() -> i64) -> Self {
         self.clock = Some(clock);
         self

@@ -106,6 +106,7 @@ impl Automation {
     }
 
     /// Use a fixed clock for saves (deterministic output in tests).
+    #[must_use]
     pub fn with_clock(mut self, clock: fn() -> i64) -> Self {
         self.session = std::mem::take(&mut self.session).with_clock(clock);
         self
