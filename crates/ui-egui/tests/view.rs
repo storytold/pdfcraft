@@ -15,6 +15,18 @@ const PAGES: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
+/// Tests that render pixels (`h.render()`) take this first, so only one wgpu device compiles
+/// shaders at a time. On machines without a GPU, wgpu falls back to Microsoft's WARP, whose ARM64
+/// pixel-shader JIT crashes (access violation in `d3d10warp!PixelJitProgram::ClassifyVars`) when
+/// two devices compile at once, as on GitHub's Windows 11 ARM64 runner. Hold it for the whole
+/// test (declared before the harness, so it's released after the device is dropped).
+static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn gpu() -> std::sync::MutexGuard<'static, ()> {
+    // A test that panicked while holding it leaves nothing to clean up.
+    GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn harness(options: &'static [(&'static str, &'static str)]) -> Harness<'static, PrintCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PrintCraftApp::new();
@@ -145,6 +157,7 @@ fn field_list_jumps_to_a_fields_page() {
 #[test]
 fn highlight_fields_tints_the_field_area() {
     use egui_kittest::kittest::Queryable;
+    let _gpu = gpu();
     let mut h = form_harness();
     h.state_mut().set_option("panel", "none").unwrap();
     for _ in 0..100 {
@@ -204,6 +217,7 @@ fn the_hand_tool_pans_by_dragging() {
 
 #[test]
 fn required_fields_get_a_red_border_when_highlighting() {
+    let _gpu = gpu();
     let mut h = form_harness();
     h.state_mut().set_option("panel", "none").unwrap();
     h.state_mut().set_option("fields", "on").unwrap();
