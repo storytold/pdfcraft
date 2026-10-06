@@ -146,6 +146,8 @@ pub struct DocView {
     /// Edit text & images: the images per page (by document generation), and the selected one.
     pub(crate) edit_images: HashMap<usize, (u64, Vec<printcraft_engine::PageImage>)>,
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
+    /// A paragraph box being dragged (moved, or resized from its right edge) in Edit text.
+    pub block_drag: Option<crate::edit_text_ui::BlockDrag>,
     /// Commenting state: selected comment, gestures, composer.
     pub comments: crate::comments::CommentView,
     /// Form filling state: the focused field.
@@ -250,6 +252,7 @@ impl DocView {
             line_editor: None,
             edit_images: HashMap::new(),
             image_selection: None,
+            block_drag: None,
             pending_action: None,
             comments: Default::default(),
             forms: Default::default(),

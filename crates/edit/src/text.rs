@@ -93,6 +93,8 @@ struct Origin {
     tlm: [f64; 6],
     /// Text-space units → user space (the scale of the text rendering matrix's y axis).
     k: f64,
+    /// The CTM there (current space → page space), for moving the paragraph in page space.
+    ctm: [f64; 6],
     baseline: f64,
     x: f64,
     state: TextState,
@@ -430,6 +432,7 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
                         tm: s.tm.0,
                         tlm: s.tlm.0,
                         k: (s.tm.then(&s.state.ctm).0[2].powi(2) + s.tm.then(&s.state.ctm).0[3].powi(2)).sqrt(),
+                        ctm: s.state.ctm.0,
                         baseline: s.baseline,
                         x: s.start_x,
                         state: TextState::of(&s.state),
@@ -806,6 +809,10 @@ pub struct BlockStyle {
     /// Character spacing (points) and horizontal scaling (percent).
     pub char_spacing: Option<f64>,
     pub scale: Option<f64>,
+    /// Move the paragraph by `[dx, dy]` in user space (dragging its box).
+    pub offset: Option<[f64; 2]>,
+    /// Rewrap to this width in user space (dragging the box's edge).
+    pub width: Option<f64>,
 }
 
 /// Rewrite paragraph `block` with new text (or its own) and formatting, rewrapped to its width.
@@ -848,12 +855,19 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
             crate::added::Family::Helvetica => printcraft_fonts::helvetica_width(s, size) * if bold { 1.05 } else { 1.0 },
         }
     };
-    // A paragraph keeps its width; a single line grows to the right, up to the page's margin.
-    let mut width = (b.rect[2] - b.rect[0]).max(size * k);
-    if members.len() == 1 {
-        let crop = p.crop(doc);
-        width = width.max(crop[2] - 36.0 - b.rect[0]);
+    let [dx, dy] = style.offset.unwrap_or([0.0, 0.0]);
+    if !(dx.is_finite() && dy.is_finite()) {
+        return Err(EditError::Invalid("the paragraph can't be moved that far".into()));
     }
+    // A paragraph keeps its width (or takes the one asked for); a single line grows to the right,
+    // up to the page's margin.
+    let width = match style.width {
+        // Capped at the largest page PDF allows (14 400 pt).
+        Some(w) if w.is_finite() => w.clamp(size * k, 14_400.0),
+        Some(_) => return Err(EditError::Invalid("the paragraph's width must be a number".into())),
+        None if members.len() == 1 => (b.rect[2] - b.rect[0]).max(size * k).max(p.crop(doc)[2] - 36.0 - (b.rect[0] + dx)),
+        None => (b.rect[2] - b.rect[0]).max(size * k),
+    };
     let advance = |s: &str| -> f64 {
         let t = match (&metrics, reuse) {
             (Some(m), true) => m
@@ -911,7 +925,18 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     };
     let n = printcraft_content::num;
     // In its own graphics state, so a new colour (or anything else) stops at the paragraph.
-    let mut block_ops = vec![Op::new("q", vec![]), Op::new("BT", vec![])];
+    let mut block_ops = vec![Op::new("q", vec![])];
+    // Moved: a translation inside that state. The move is in page space, so it is taken back
+    // through the CTM's linear part into the space the paragraph is drawn in.
+    if dx != 0.0 || dy != 0.0 {
+        let c = o.ctm;
+        let back = Matrix([c[0], c[1], c[2], c[3], 0.0, 0.0])
+            .invert()
+            .ok_or_else(|| EditError::Invalid("the paragraph is drawn in a space it can't be moved in".into()))?;
+        let (ax, ay) = back.apply(dx, dy);
+        block_ops.push(Op::new("cm", vec![n(1.0), n(0.0), n(0.0), n(1.0), n(ax), n(ay)]));
+    }
+    block_ops.push(Op::new("BT", vec![]));
     let mut state = o_state.clone();
     state.word_spacing = 0.0;
     state.font = Some((show_font, size));

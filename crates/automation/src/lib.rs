@@ -398,8 +398,13 @@ impl Automation {
                     line_spacing: a.opt_num("line_spacing")?,
                     char_spacing: a.opt_num("char_spacing")?,
                     scale: a.opt_num("scale")?,
+                    width: a.opt_num("width")?,
                     ..Default::default()
                 };
+                let (dx, dy) = (a.opt_num("dx")?, a.opt_num("dy")?);
+                if dx.is_some() || dy.is_some() {
+                    style.offset = Some([dx.unwrap_or(0.0), dy.unwrap_or(0.0)]);
+                }
                 if let Some(f) = a.opt_str("font")? {
                     let family = match f {
                         "helvetica" => printcraft_engine::FontFamily::Helvetica,

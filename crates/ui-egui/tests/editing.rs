@@ -862,3 +862,52 @@ fn the_format_panel_restyles_the_paragraph_being_edited() {
     assert_eq!(doc.text_blocks(0)[0].base_font, "Helvetica-Bold");
     assert!(s.views[0].line_editor.as_ref().is_some_and(|e| e.extras.underline));
 }
+
+/// Drag with the pointer from `from` to `to` in a few steps.
+fn drag(h: &mut Harness<'static, PrintCraftApp>, from: egui::Pos2, to: egui::Pos2) {
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=5 {
+        h.hover_at(from + (to - from) * (k as f32 / 5.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(4);
+}
+
+#[test]
+fn dragging_a_paragraph_moves_it_and_its_edge_rewraps_it() {
+    let mut h = harness(1, |_| {});
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let block = |h: &Harness<'static, PrintCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(0)[0].clone()
+    };
+    // User space (200 × 300 page) → screen.
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
+    // Move "Page 1" 30 pt right and 50 pt up.
+    let before = block(&h);
+    let mid = screen((before.rect[0] + before.rect[2]) / 2.0, (before.rect[1] + before.rect[3]) / 2.0);
+    drag(&mut h, mid, mid + egui::vec2(30.0 * k, -50.0 * k));
+    assert!(h.state().views[0].line_editor.is_none(), "dragging moves the box; it doesn't open it for typing");
+    let moved = block(&h);
+    assert_eq!(moved.text, "Page 1");
+    let near = |a: f64, b: f64| (a - b).abs() < 1.5;
+    assert!(near(moved.rect[0], before.rect[0] + 30.0) && near(moved.rect[1], before.rect[1] + 50.0), "{:?} → {:?}", before.rect, moved.rect);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Edit text"));
+    // Drag the handle on its right edge in to about 45 pt wide: "Page" and "1" rewrap onto two lines.
+    let edge = screen(moved.rect[2], (moved.rect[1] + moved.rect[3]) / 2.0) + egui::vec2(2.0, 0.0);
+    let narrower = (moved.rect[2] - moved.rect[0] - 45.0) as f32 * k;
+    drag(&mut h, edge, edge - egui::vec2(narrower, 0.0));
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let lines: Vec<String> = doc.text_lines(0).iter().map(|l| l.text.clone()).collect();
+    assert_eq!(lines, ["Page", "1"], "rewrapped to the narrower box");
+    assert!(near(doc.text_lines(0)[0].rect[0], moved.rect[0]), "it keeps its place");
+    assert!(h.state().views[0].line_editor.is_none());
+}

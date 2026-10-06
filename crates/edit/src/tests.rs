@@ -649,3 +649,45 @@ fn a_line_drawn_twice_is_replaced_everywhere() {
     let lines = text::text_lines(&doc, 0).unwrap();
     assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Hello there", "world"]);
 }
+
+#[test]
+fn paragraphs_move_and_rewrap_to_a_new_width() {
+    let para = "BT /F1 10 Tf 12 TL 100 700 Td (One two three four five six seven) Tj T* (eight nine ten eleven twelve) Tj ET";
+    let close = |a: f64, b: f64| (a - b).abs() < 0.5;
+    // Moved 50 right and 200 down, same words and wrapping.
+    let mut doc = text_page(para);
+    let before = text::text_blocks(&doc, 0).unwrap()[0].clone();
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { offset: Some([50.0, -200.0]), ..Default::default() }).unwrap();
+    let doc = reopen(&doc);
+    let after = text::text_blocks(&doc, 0).unwrap()[0].clone();
+    assert_eq!((after.text.as_str(), after.lines.len()), (before.text.as_str(), before.lines.len()));
+    assert!(close(after.rect[0], before.rect[0] + 50.0) && close(after.rect[1], before.rect[1] - 200.0), "{:?} → {:?}", before.rect, after.rect);
+    // Drawn at half scale: the move is still in page space.
+    let mut doc = text_page(&format!("q 0.5 0 0 0.5 0 0 cm {} Q", para.replace("100 700 Td", "200 1400 Td")));
+    let before = text::text_blocks(&doc, 0).unwrap()[0].clone();
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { offset: Some([30.0, 40.0]), ..Default::default() }).unwrap();
+    let after = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+    assert!(close(after.rect[0], before.rect[0] + 30.0) && close(after.rect[1], before.rect[1] + 40.0), "{:?} → {:?}", before.rect, after.rect);
+    // A narrower box rewraps into more lines that fit it; a wider one into fewer.
+    let mut doc = text_page(para);
+    let left = text::text_blocks(&doc, 0).unwrap()[0].rect[0];
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(80.0), ..Default::default() }).unwrap();
+    let narrow = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+    assert!(narrow.lines.len() > 2, "{narrow:?}");
+    assert!(narrow.rect[2] <= left + 80.5, "{narrow:?}");
+    let mut doc = text_page(para);
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(400.0), ..Default::default() }).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].lines.len(), 1);
+    // Untrusted numbers (the automation tools pass them through) are refused, not drawn.
+    let mut doc = text_page(para);
+    for style in [
+        text::BlockStyle { offset: Some([f64::NAN, 0.0]), ..Default::default() },
+        text::BlockStyle { offset: Some([0.0, f64::INFINITY]), ..Default::default() },
+        text::BlockStyle { width: Some(f64::NAN), ..Default::default() },
+    ] {
+        assert!(text::rewrite_block(&mut doc, 0, 0, None, &style).is_err(), "{style:?}");
+    }
+    // A zero width is clamped to one character's width rather than looping or vanishing.
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(0.0), ..Default::default() }).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap().iter().map(|b| b.text.split_whitespace().count()).sum::<usize>(), 12);
+}
