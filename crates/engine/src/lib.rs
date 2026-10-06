@@ -353,7 +353,7 @@ impl Document {
     /// The document's security may be changed (Protect, Remove security): it is editable and,
     /// if encrypted, was opened with the owner password.
     pub fn allows_security_change(&self) -> bool {
-        self.editable() && self.permissions().is_none_or(|p| unrestricted(&p))
+        self.editable() && self.permissions().is_none_or(unrestricted)
     }
 
     /// A summary of the document's security for Document Properties ▸ Security, including
@@ -1103,13 +1103,13 @@ fn annotation_noun(s: &Shape) -> &'static str {
 
 /// Opened as owner, or nothing is restricted (no permissions password was set): security may
 /// be changed, as in Acrobat.
-fn unrestricted(p: &printcraft_cos::Permissions) -> bool {
+fn unrestricted(p: printcraft_cos::Permissions) -> bool {
     const ALL: i32 = 0b1111_0011_1100; // bits 3–6 and 9–12
     p.owner || p.bits & ALL == ALL
 }
 
 /// Whether the opening password allows an edit (§7.6.4.2, Table 22).
-fn check_permission(edit: &Edit, p: &printcraft_cos::Permissions) -> Result<(), EditError> {
+fn check_permission(edit: &Edit, p: printcraft_cos::Permissions) -> Result<(), EditError> {
     match edit {
         Edit::RotatePages { .. }
         | Edit::DeletePages { .. }
@@ -1844,7 +1844,7 @@ impl Session {
         let signed = doc.is_signed();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
         if let Some(p) = editor.cos.permissions() {
-            check_permission(&edit, &p)?;
+            check_permission(&edit, p)?;
         }
         let mut next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {

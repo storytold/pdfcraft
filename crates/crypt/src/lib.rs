@@ -90,7 +90,7 @@ pub struct Permissions {
 }
 
 impl Permissions {
-    fn bit(&self, n: u32) -> bool {
+    fn bit(self, n: u32) -> bool {
         self.owner || (self.bits >> (n - 1)) & 1 == 1
     }
     #[must_use]
