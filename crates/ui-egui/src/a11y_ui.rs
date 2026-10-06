@@ -397,10 +397,12 @@ pub struct AltDraft {
 impl std::fmt::Debug for AltDraft {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AltDraft")
+            .field("doc", &self.doc)
             .field("figures", &self.figures.len())
             .field("index", &self.index)
             .field("texts", &self.texts.len())
             .field("decorative", &self.decorative.len())
+            .field("preview", &self.preview.as_ref().map(|(i, _)| i))
             .finish()
     }
 }

@@ -114,13 +114,23 @@ pub struct Document {
 impl std::fmt::Debug for Document {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Document")
-            .field("bytes", &self.data.len())
-            .field("objects", &self.entries.len())
-            .field("edits", &self.overlay.len())
+            .field("data", &self.data.len())
+            .field("entries", &self.entries.len())
+            .field("trailer", &self.trailer)
+            .field("revisions", &self.revisions.len())
+            .field("repair_log", &self.repair_log)
+            .field("cache", &self.cache.lock().map_or(0, |m| m.len()))
+            .field("objstms", &self.objstms.lock().map_or(0, |m| m.len()))
+            .field("overlay", &self.overlay.len())
+            .field("next_num", &self.next_num)
+            .field("header_offset", &self.header_offset)
             .field("version", &self.version)
-            .field("encrypted", &self.security.is_some())
+            .field("security", &self.security.is_some())
+            .field("encrypt_num", &self.encrypt_num)
             .field("encryption_changed", &self.encryption_changed)
             .field("full_save", &self.full_save)
+            .field("out_security", &self.out_security.is_some())
+            .field("out_encrypt_num", &self.out_encrypt_num)
             .finish()
     }
 }
