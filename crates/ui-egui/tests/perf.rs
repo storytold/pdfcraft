@@ -2,6 +2,8 @@
 //! continuously must keep the UI's own per-frame work far below a 60 fps frame. Rendering runs on
 //! worker threads and is not part of the measurement.
 
+use std::fmt::Write as _;
+
 use egui_kittest::Harness;
 use printcraft_ui_egui::PrintCraftApp;
 
@@ -70,8 +72,10 @@ fn big(n: usize) -> Vec<u8> {
             5 + 3 * i,
             6 + 3 * i
         ));
-        let body: String =
-            (0..40).map(|l| format!("BT /F1 10 Tf 72 {} Td (Page {} line {l} with some words to lay out) Tj ET\n", 720 - l * 15, i + 1)).collect();
+        let mut body = String::new();
+        for l in 0..40 {
+            let _ = write!(body, "BT /F1 10 Tf 72 {} Td (Page {} line {l} with some words to lay out) Tj ET\n", 720 - l * 15, i + 1);
+        }
         objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
         objs.push("<< /Type /Annot /Subtype /Square /Rect [72 72 144 144] /C [1 0 0] /T (Ada) /Contents (Check) >>".into());
     }

@@ -515,7 +515,11 @@ fn type3_path(ch: char) -> Result<(Vec<u8>, f64), EditError> {
 fn unicode_hex(ch: char) -> String {
     let mut units = [0u16; 2];
     let encoded = ch.encode_utf16(&mut units);
-    encoded.iter().map(|u| format!("{u:04X}")).collect()
+    let mut out = String::with_capacity(encoded.len() * 4);
+    for u in encoded.iter() {
+        let _ = write!(out, "{u:04X}");
+    }
+    out
 }
 
 /// This build has no Japanese face to draw replacement text with.

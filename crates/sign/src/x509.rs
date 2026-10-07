@@ -1,6 +1,8 @@
 //! X.509 certificates (RFC 5280): the fields signing and validation need, signature checks
 //! along a chain, and a self-signed certificate builder for new digital IDs.
 
+use std::fmt::Write as _;
+
 use crate::SignError;
 use crate::der::{self, Time, Tlv, tag};
 use crate::keys::{self, DigestAlg, PrivateKey, PublicKey};
@@ -236,7 +238,11 @@ impl Certificate {
 
     #[must_use]
     pub fn serial_hex(&self) -> String {
-        self.serial.iter().map(|b| format!("{b:02X}")).collect()
+        let mut out = String::with_capacity(self.serial.len() * 2);
+        for b in &self.serial {
+            let _ = write!(out, "{b:02X}");
+        }
+        out
     }
 
     /// A self-signed certificate for `key`: what Acrobat's "Create a new digital ID ▸ save to

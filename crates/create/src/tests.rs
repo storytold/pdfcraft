@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use printcraft_cos::{SaveOptions, write_full};
@@ -85,7 +86,10 @@ fn images_become_pages_at_their_resolution() {
 
 #[test]
 fn text_is_wrapped_and_paginated() {
-    let long: String = (0..200).map(|i| format!("Line {i} of a plain text file\n")).collect();
+    let mut long = String::new();
+    for i in 0..200 {
+        let _ = writeln!(long, "Line {i} of a plain text file");
+    }
     let doc = reopen(&from_text("notes", &format!("{long}\u{c}After a form feed"), LETTER, 11.0).unwrap());
     let p = pages(&doc);
     assert!(p.len() >= 5, "{} pages", p.len());

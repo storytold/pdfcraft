@@ -2,6 +2,7 @@
 //! sign through the Security framework. The private key never leaves the Keychain; macOS may
 //! ask the user to allow `PrintCraft` to use it.
 
+use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -35,7 +36,11 @@ impl ExternalKey for KeychainKey {
 #[must_use]
 pub fn reference(c: &Certificate) -> String {
     let d = DigestAlg::Sha256.digest(&[&c.raw]);
-    format!("keychain:{}", d.iter().map(|b| format!("{b:02x}")).collect::<String>())
+    let mut hex = String::with_capacity(d.len() * 2);
+    for b in d {
+        let _ = write!(hex, "{b:02x}");
+    }
+    format!("keychain:{hex}")
 }
 
 /// The identity a reference (or a certificate common name) names.

@@ -102,6 +102,7 @@ pub fn merge_data_files(files: &[(String, Vec<u8>)]) -> Result<String, String> {
 
 pub type SplitPart = (usize, usize, Arc<Vec<u8>>);
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use printcraft_cos::{SaveOptions, write_full, write_incremental};
@@ -1533,7 +1534,10 @@ fn run_edit(doc: &mut printcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -
             let seed = cx.entropy();
             // Without a permissions password nothing is restricted, so the owner password is a
             // random one nobody needs.
-            let random_owner: String = cx.entropy().iter().map(|b| format!("{b:02x}")).collect();
+            let mut random_owner = String::with_capacity(64);
+            for b in cx.entropy() {
+                let _ = write!(random_owner, "{b:02x}");
+            }
             let params = printcraft_cos::NewEncryption {
                 algorithm: p.algorithm,
                 user_password: p.open_password.as_deref().unwrap_or(""),

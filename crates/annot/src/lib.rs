@@ -14,6 +14,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use std::fmt::Write as _;
+
 use printcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 
 pub mod appearance;
@@ -1141,7 +1143,10 @@ fn rich_text(d: &mut Dict) {
         _ => "left",
     };
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
-    let body: String = text.split('\n').map(|line| format!("<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')))).collect();
+    let mut body = String::new();
+    for line in text.split('\n') {
+        let _ = write!(body, "<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')));
+    }
     let style = format!(
         "font-size:{}pt;text-align:{align};color:{hex};font-weight:normal;font-style:normal;font-family:Helvetica;font-stretch:normal",
         n(size)

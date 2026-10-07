@@ -27,6 +27,7 @@
 //! - `ui.screenshot {region?}`: PNG of the window (base64), optionally cropped to a rect.
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Write as _;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
@@ -698,5 +699,9 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 fn random_token() -> std::io::Result<String> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).map_err(|e| std::io::Error::other(e.to_string()))?;
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    let mut token = String::with_capacity(32);
+    for b in bytes {
+        let _ = write!(token, "{b:02x}");
+    }
+    Ok(token)
 }
