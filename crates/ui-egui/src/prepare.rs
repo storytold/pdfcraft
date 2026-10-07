@@ -205,7 +205,7 @@ pub(crate) fn page_input(
     view: &mut DocView,
 ) -> Outcome {
     let mut out = Outcome { consumed: false, properties: false, placed: false };
-    let pointer = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
+    let hover = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
     let prep = &mut view.prepare;
 
     // A grab in progress on this page.
@@ -215,7 +215,7 @@ pub(crate) fn page_input(
         out.consumed = true;
         if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
             prep.grab = None;
-            let end = pointer.unwrap_or(start);
+            let end = hover.unwrap_or(start);
             match grab {
                 Grab::Draw(from) => {
                     let Some(tool) = tool else { return out };
@@ -250,7 +250,7 @@ pub(crate) fn page_input(
         return out;
     }
 
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return out };
+    let Some(p) = hover.filter(|p| xf.rect.contains(*p)) else { return out };
     if !allowed {
         return out;
     }
@@ -462,7 +462,7 @@ pub fn arrange(form: &[FormField], anchor: &(String, usize), others: &[(String, 
 /// rectangle being drawn or dragged.
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, form: &[FormField], view: &DocView) {
     let prep = &view.prepare;
-    let pointer = ui.input(|i| i.pointer.hover_pos());
+    let hover = ui.input(|i| i.pointer.hover_pos());
     let grab = prep.grab.filter(|(gp, ..)| *gp == page);
     let zoom = (xf.rect.width() / xf.pw.max(1.0)).clamp(0.5, 3.0);
     for f in form {
@@ -470,7 +470,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
             let mut r = screen_rect(xf, info, page, w.rect);
             let selected = prep.selected.as_ref().is_some_and(|(n, i)| n == &f.name && *i == wi);
             let also = prep.also.iter().any(|(n, i)| n == &f.name && *i == wi);
-            if selected && let (Some((_, g, start)), Some(p)) = (grab, pointer) {
+            if selected && let (Some((_, g, start)), Some(p)) = (grab, hover) {
                 r = dragged(r, g, p - start);
             }
             painter.rect_filled(r, CornerRadius::ZERO, FIELD_FILL);
@@ -498,7 +498,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
             }
         }
     }
-    if let (Some((_, Grab::Draw(from), _)), Some(p)) = (grab, pointer) {
+    if let (Some((_, Grab::Draw(from), _)), Some(p)) = (grab, hover) {
         let r = Rect::from_two_pos(from, p).intersect(xf.rect);
         painter.rect_filled(r, CornerRadius::ZERO, FIELD_FILL);
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Inside);

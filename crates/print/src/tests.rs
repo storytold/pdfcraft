@@ -159,8 +159,8 @@ fn imposed_pdf_has_the_sheets_and_honours_comments_and_forms() {
     let all = streams(&printed).join("\n");
     assert!(all.contains("(Page 1)") && all.contains("(Page 3)"));
     // Markups: the printable square and the stamp, not the note without the Print flag.
-    let page1 = streams(&printed).into_iter().find(|s| s.contains("(Page 1)")).unwrap();
-    assert_eq!(page1.matches(" Do Q").count(), 2, "{page1}");
+    let first_page = streams(&printed).into_iter().find(|s| s.contains("(Page 1)")).unwrap();
+    assert_eq!(first_page.matches(" Do Q").count(), 2, "{first_page}");
     let doc_only = impose(&doc, &Settings { content: Content::Document, ..settings(vec![0], Layout::Size(SizeMode::Fit)) }).unwrap();
     let p = streams(&Document::open(Arc::new(doc_only)).unwrap()).into_iter().find(|s| s.contains("(Page 1)")).unwrap();
     assert_eq!(p.matches(" Do Q").count(), 0);

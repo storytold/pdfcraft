@@ -215,7 +215,7 @@ pub(crate) fn image_input(
     for b in &boxes {
         painter.rect_stroke(*b, CornerRadius::ZERO, Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
     }
-    let pointer = ui.input(|i| i.pointer.hover_pos());
+    let hover = ui.input(|i| i.pointer.hover_pos());
     let selected = view.image_selection.as_ref().filter(|s| s.page == page).map(|s| s.index).filter(|i| *i < boxes.len());
     for (i, b) in boxes.iter().enumerate() {
         let selected_box = selected == Some(i);
@@ -259,7 +259,7 @@ pub(crate) fn image_input(
             }
         }
         if let Some((start, opposite)) = view.image_selection.as_ref().and_then(|s| s.drag)
-            && let Some(p) = pointer
+            && let Some(p) = hover
         {
             let preview = match opposite {
                 // Resize from the opposite corner, keeping the aspect ratio.
@@ -291,7 +291,7 @@ pub(crate) fn image_input(
             return true;
         }
     }
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
+    let Some(p) = hover.filter(|p| xf.rect.contains(*p)) else { return false };
     let Some(hit) = boxes.iter().rposition(|b| b.contains(p)) else { return false };
     if selected != Some(hit) {
         painter.rect_stroke(boxes[hit], CornerRadius::ZERO, Stroke::new(1.5, ACCENT.gamma_multiply(0.7)), egui::StrokeKind::Outside);

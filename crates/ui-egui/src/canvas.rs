@@ -1078,7 +1078,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
         view.screen_xforms.clear();
         let mut current = view.current;
         let mut best_overlap = -1.0f32;
-        let pointer = ui.input(|i| i.pointer.hover_pos());
+        let hover = ui.input(|i| i.pointer.hover_pos());
         for &i in &visible_pages {
             let r = rects[i].translate(origin.to_vec2());
             if !r.intersects(visible.expand(400.0)) {
@@ -1118,11 +1118,11 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                 });
                 painter.galley(pos2(r.center().x - msg.size().x / 2.0, r.center().y), msg, Color32::BLACK);
             } else {
-                let (pw_pt, ph_pt) = (info.pages[i].width.max(1.0), info.pages[i].height.max(1.0));
-                let tiled = pw_pt.max(ph_pt) * scale > TILE_THRESHOLD;
+                let (width_pt, height_pt) = (info.pages[i].width.max(1.0), info.pages[i].height.max(1.0));
+                let tiled = width_pt.max(height_pt) * scale > TILE_THRESHOLD;
                 // Whole-page raster: sharp when small, a low-res backdrop when tiled.
                 let (want_scale, want_tag) = if tiled {
-                    let bs = BASE_SIDE / pw_pt.max(ph_pt);
+                    let bs = BASE_SIDE / width_pt.max(height_pt);
                     (bs, (bs * 1000.0) as u64)
                 } else {
                     (scale, tag)
@@ -1142,7 +1142,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                 if tiled && r.intersects(visible) {
                     // Device-pixel geometry of the scaled page, and the visible part of it
                     // (found by mapping the visible screen corners back into the page).
-                    let (dw, dh) = ((pw_pt * scale).round() as u32, (ph_pt * scale).round() as u32);
+                    let (dw, dh) = ((width_pt * scale).round() as u32, (height_pt * scale).round() as u32);
                     let vis = r.intersect(visible);
                     let corners = [vis.left_top(), vis.right_top(), vis.right_bottom(), vis.left_bottom()].map(|c| xf.screen_to_norm(c));
                     let (u0, u1) = corners.iter().fold((1.0f32, 0.0f32), |(a, b), c| (a.min(c.0), b.max(c.0)));
@@ -1157,7 +1157,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                                 continue;
                             }
                             match view.tiles.get(&(i, tx, ty)) {
-                                Some((ttag, tex)) if *ttag == tag => {
+                                Some((tile_tag, tex)) if *tile_tag == tag => {
                                     let (fw, fh) = (dw as f32, dh as f32);
                                     xf.paint_image(
                                         painter,
@@ -1327,7 +1327,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
                 if selects_text
                     && !consumed
-                    && let Some(p) = pointer.filter(|p| r.contains(*p))
+                    && let Some(p) = hover.filter(|p| r.contains(*p))
                 {
                     let (vx, vy) = xf.screen_to_view(p);
                     let over_text = text.glyphs.iter().any(|g| vx >= g.rect[0] && vx <= g.rect[2] && vy >= g.rect[1] && vy <= g.rect[3]);
@@ -1404,7 +1404,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
             }
             // Link hover + click.
-            if let Some(p) = pointer {
+            if let Some(p) = hover {
                 for l in info.links.iter().filter(|l| l.page == i) {
                     let sr = xf.user_rect(info, i, l.rect);
                     if sr.contains(p) {

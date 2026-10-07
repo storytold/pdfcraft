@@ -121,7 +121,7 @@ pub(crate) fn page_input(
     view: &mut DocView,
 ) -> Outcome {
     let mut out = Outcome { consumed: false, done: false };
-    let pointer = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
+    let hover = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
     let cv = &mut view.content;
     if let Some((gp, grab, start)) = cv.grab
         && gp == page
@@ -129,7 +129,7 @@ pub(crate) fn page_input(
         out.consumed = true;
         if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
             cv.grab = None;
-            let end = pointer.unwrap_or(start);
+            let end = hover.unwrap_or(start);
             if let Some((sp, si)) = cv.selected
                 && sp == page
                 && let Some((_, a)) = on_page(added, page).into_iter().find(|(i, _)| *i == si)
@@ -150,7 +150,7 @@ pub(crate) fn page_input(
         }
         return out;
     }
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return out };
+    let Some(p) = hover.filter(|p| xf.rect.contains(*p)) else { return out };
     let items = on_page(added, page);
     let hit = items.iter().rev().find(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(p)).map(|(i, a)| (*i, *a));
     let selected_rect = cv
@@ -220,7 +220,7 @@ pub(crate) fn page_input(
 /// Outlines of added items (hover and selection with handles) and the box being dragged.
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, added: &[Added], view: &DocView) {
     let cv = &view.content;
-    let pointer = ui.input(|i| i.pointer.hover_pos());
+    let hover = ui.input(|i| i.pointer.hover_pos());
     for (i, a) in on_page(added, page) {
         if cv.draft.as_ref().is_some_and(|d| d.page == page && d.index == Some(i)) {
             continue;
@@ -228,7 +228,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
         let mut r = screen_rect(xf, info, page, a.content.rect());
         let selected = cv.selected == Some((page, i));
         if selected
-            && let (Some((gp, g, start)), Some(p)) = (cv.grab, pointer)
+            && let (Some((gp, g, start)), Some(p)) = (cv.grab, hover)
             && gp == page
         {
             r = dragged(r, g, p - start, matches!(a.content, AddedContent::Image(_)));
@@ -238,7 +238,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
             for (c, ..) in handles(r.expand(1.0)) {
                 painter.circle(c, 3.5, Color32::WHITE, Stroke::new(1.5, SELECT_BLUE));
             }
-        } else if pointer.is_some_and(|p| r.expand(2.0).contains(p)) {
+        } else if hover.is_some_and(|p| r.expand(2.0).contains(p)) {
             painter.rect_stroke(r.expand(1.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
         }
     }

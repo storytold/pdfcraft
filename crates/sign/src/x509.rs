@@ -258,7 +258,7 @@ impl Certificate {
         let sig_alg = key.signature_algorithm(alg);
         let until = Time { year: from.year + years, ..from };
         let spki = key.public_key().spki();
-        let ski = DigestAlg::Sha1.digest(&[&spki]);
+        let subject_key_id = DigestAlg::Sha1.digest(&[&spki]);
         let ext = |o: &str, critical: bool, value: &[u8]| {
             if critical {
                 der::seq(&[&der::oid(o), &der::boolean(true), &der::octets(value)])
@@ -270,7 +270,7 @@ impl Certificate {
         let key_usage = der::tlv(tag::BIT_STRING, &[6, 0b1100_0000]);
         let extensions = der::seq(&[
             &ext("2.5.29.15", true, &key_usage),
-            &ext("2.5.29.14", false, &der::octets(&ski)),
+            &ext("2.5.29.14", false, &der::octets(&subject_key_id)),
             // extKeyUsage: emailProtection and Adobe's document signing (1.2.840.113583.1.1.5).
             &ext("2.5.29.37", false, &der::seq(&[&der::oid("1.3.6.1.5.5.7.3.4"), &der::oid("1.2.840.113583.1.1.5")])),
         ]);

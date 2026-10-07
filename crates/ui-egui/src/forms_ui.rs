@@ -73,8 +73,8 @@ pub(crate) fn page_input(
     allowed: bool,
     view: &mut DocView,
 ) -> bool {
-    let pointer = ui.input(|i| i.pointer.hover_pos());
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
+    let hover = ui.input(|i| i.pointer.hover_pos());
+    let Some(p) = hover.filter(|p| xf.rect.contains(*p)) else { return false };
     let hit = form.iter().find_map(|f| {
         f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && widget_rect(xf, info, page, w.rect).contains(p)).map(|(i, w)| (f, i, w))
     });
@@ -208,14 +208,14 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
 
 /// Paint focus and hover frames on a page.
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, form: &[FormField], view: &DocView) {
-    let pointer = ui.input(|i| i.pointer.hover_pos());
+    let hover = ui.input(|i| i.pointer.hover_pos());
     for f in form {
         for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page)) {
             let r = widget_rect(xf, info, page, w.rect);
             let focused = view.forms.focus.as_ref().is_some_and(|x| x.name == f.name && x.widget == wi);
             if focused {
                 painter.rect_stroke(r.expand(1.0), CornerRadius::same(2), Stroke::new(2.0, FOCUS_BLUE), egui::StrokeKind::Outside);
-            } else if fillable(f) && pointer.is_some_and(|p| r.contains(p)) {
+            } else if fillable(f) && hover.is_some_and(|p| r.contains(p)) {
                 painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, FOCUS_BLUE.gamma_multiply(0.8)), egui::StrokeKind::Outside);
             }
         }

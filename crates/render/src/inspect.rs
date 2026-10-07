@@ -679,15 +679,15 @@ impl<'a> Inspector<'a> {
             return;
         }
         let Some(d) = self.dict(o) else { return };
-        let (parent_name, parent_ft, parent_ff) = parent.unwrap_or(("", None, None));
+        let (parent_name, parent_field_type, parent_field_flags) = parent.unwrap_or(("", None, None));
         let partial = self.text(d, b"T");
         let full = match (&partial, parent_name.is_empty()) {
             (Some(t), true) => t.clone(),
             (Some(t), false) => format!("{parent_name}.{t}"),
             (None, _) => parent_name.to_string(),
         };
-        let ft = self.name(d, b"FT").or(parent_ft);
-        let ff = d.get(b"Ff").ok().and_then(|x| x.as_i64().ok()).or(parent_ff);
+        let ft = self.name(d, b"FT").or(parent_field_type);
+        let ff = d.get(b"Ff").ok().and_then(|x| x.as_i64().ok()).or(parent_field_flags);
         // Non-terminal: has kids that are fields (they carry /T). Widgets-only kids are terminal.
         let kids = match d.get(b"Kids").map(|k| self.resolve(k)) {
             Ok(Object::Array(k)) => k.as_slice(),

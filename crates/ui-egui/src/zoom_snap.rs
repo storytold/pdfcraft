@@ -13,9 +13,9 @@ pub type Marquee = (usize, Rect, [f32; 4]);
 
 /// Drag a rectangle on page `page` (Marquee Zoom, Snapshot).
 pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, page: usize, view: &mut DocView) {
-    let pointer = ui.input(|i| i.pointer.hover_pos());
+    let hover = ui.input(|i| i.pointer.hover_pos());
     let origin = ui.input(|i| i.pointer.press_origin());
-    if pointer.is_some_and(|p| xf.rect.contains(p)) {
+    if hover.is_some_and(|p| xf.rect.contains(p)) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
     if resp.drag_started()
@@ -25,7 +25,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
     }
     if let Some((p, start)) = view.marquee
         && p == page
-        && let Some(end) = pointer
+        && let Some(end) = hover
     {
         let end = Pos2::new(end.x.clamp(xf.rect.left(), xf.rect.right()), end.y.clamp(xf.rect.top(), xf.rect.bottom()));
         let r = Rect::from_two_pos(start, end);
@@ -37,7 +37,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
         }
     }
     if resp.clicked()
-        && let Some(p) = pointer.filter(|p| xf.rect.contains(*p))
+        && let Some(p) = hover.filter(|p| xf.rect.contains(*p))
     {
         let v = xf.screen_to_view(p);
         view.marquee_done = Some((page, Rect::from_min_size(p, egui::Vec2::ZERO), [v.0, v.1, v.0, v.1]));

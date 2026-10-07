@@ -26,9 +26,9 @@ pub(crate) fn page_input(
     view: &mut DocView,
     allowed: bool,
 ) -> bool {
-    let pointer = ui.input(|i| i.pointer.hover_pos());
+    let hover = ui.input(|i| i.pointer.hover_pos());
     let origin = ui.input(|i| i.pointer.press_origin());
-    if pointer.is_some_and(|p| xf.rect.contains(p)) {
+    if hover.is_some_and(|p| xf.rect.contains(p)) {
         ui.ctx().set_cursor_icon(if allowed { egui::CursorIcon::Crosshair } else { egui::CursorIcon::NotAllowed });
     }
     if !allowed {
@@ -41,7 +41,7 @@ pub(crate) fn page_input(
     }
     if let Some((p, start)) = view.crop_drag
         && p == page
-        && let Some(end) = pointer
+        && let Some(end) = hover
     {
         let end = Pos2::new(end.x.clamp(xf.rect.left(), xf.rect.right()), end.y.clamp(xf.rect.top(), xf.rect.bottom()));
         let r = Rect::from_two_pos(start, end);
@@ -65,5 +65,5 @@ pub(crate) fn page_input(
             }
         }
     }
-    resp.double_clicked() && pointer.is_some_and(|p| xf.rect.contains(p))
+    resp.double_clicked() && hover.is_some_and(|p| xf.rect.contains(p))
 }

@@ -91,13 +91,13 @@ pub(crate) fn page_input(
     over_text: impl Fn(Pos2) -> bool,
     view: &mut DocView,
 ) -> bool {
-    let pointer = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
+    let hover = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
     if let Some((dp, start)) = view.redact_drag
         && dp == page
     {
         if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
             view.redact_drag = None;
-            let end = pointer.unwrap_or(start);
+            let end = hover.unwrap_or(start);
             let r = Rect::from_two_pos(start, end).intersect(xf.rect);
             if r.width() >= 3.0 && r.height() >= 3.0 {
                 let (a, b) = (to_user(xf, info, page, r.min), to_user(xf, info, page, r.max));
@@ -106,7 +106,7 @@ pub(crate) fn page_input(
         }
         return true;
     }
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
+    let Some(p) = hover.filter(|p| xf.rect.contains(*p)) else { return false };
     if !over_text(p) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }

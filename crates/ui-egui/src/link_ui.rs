@@ -59,14 +59,14 @@ pub(crate) fn page_input(
     links: &[LinkItem],
     view: &mut DocView,
 ) -> bool {
-    let pointer = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
+    let hover = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
     let lv = &mut view.links;
     if let Some((dp, start)) = lv.drag
         && dp == page
     {
         if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
             lv.drag = None;
-            let end = pointer.unwrap_or(start);
+            let end = hover.unwrap_or(start);
             let r = Rect::from_two_pos(start, end).intersect(xf.rect);
             if r.width() >= 4.0 && r.height() >= 4.0 {
                 let (a, b) = (to_user(xf, info, page, r.min), to_user(xf, info, page, r.max));
@@ -75,7 +75,7 @@ pub(crate) fn page_input(
         }
         return true;
     }
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
+    let Some(p) = hover.filter(|p| xf.rect.contains(*p)) else { return false };
     let hit = links.iter().filter(|l| l.page == page).find(|l| screen_rect(xf, info, page, l.rect).expand(2.0).contains(p));
     ui.ctx().set_cursor_icon(if hit.is_some() { egui::CursorIcon::PointingHand } else { egui::CursorIcon::Crosshair });
     if resp.clicked() || resp.double_clicked() {

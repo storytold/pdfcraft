@@ -533,14 +533,14 @@ fn resized(r: Rect, (hx, hy): (i8, i8), d: egui::Vec2) -> Rect {
 /// Comment input on one page, before text selection runs. Returns `true` when the pointer
 /// gesture belongs to commenting (text selection must ignore it).
 pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mut DocView) -> bool {
-    let pointer = ui.input(|i| i.pointer.hover_pos());
+    let hover = ui.input(|i| i.pointer.hover_pos());
     let origin = ui.input(|i| i.pointer.press_origin());
     let page_rect = cx.xf.rect;
     let pressed_here = origin.is_some_and(|o| page_rect.contains(o));
-    let over_page = pointer.is_some_and(|p| page_rect.contains(p));
+    let over_page = hover.is_some_and(|p| page_rect.contains(p));
     let cv = &mut view.comments;
     if resp.secondary_clicked()
-        && let Some(p) = pointer.filter(|p| page_rect.contains(*p))
+        && let Some(p) = hover.filter(|p| page_rect.contains(*p))
     {
         cv.context_at = Some((cx.page, cx.to_user(p)));
         cv.selected = cx.hit(p).map(|a| (cx.page, a.index));
@@ -562,7 +562,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             }
             if let Some(Gesture::Draw { page, tool, points }) = cv.gesture.as_mut()
                 && *page == cx.page
-                && let Some(p) = pointer
+                && let Some(p) = hover
             {
                 let p = clamp_to(page_rect, p);
                 let u = cx.to_user(p);
@@ -599,7 +599,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             let finish = resp.double_clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter));
             if resp.clicked()
                 && over_page
-                && let Some(p) = pointer
+                && let Some(p) = hover
             {
                 let u = cx.to_user(p);
                 match cv.gesture.as_mut() {
@@ -654,7 +654,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             }
             if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
                 && *page == cx.page
-                && let Some(p) = pointer
+                && let Some(p) = hover
             {
                 points.truncate(1);
                 points.push(cx.to_user(clamp_to(page_rect, p)));
@@ -681,7 +681,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             }
             if resp.clicked()
                 && over_page
-                && let Some(p) = pointer
+                && let Some(p) = hover
             {
                 cv.attach_at = Some((cx.page, cx.to_user(p)));
                 cv.selected = None;
@@ -697,7 +697,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             }
             if resp.clicked()
                 && over_page
-                && let Some(p) = pointer
+                && let Some(p) = hover
             {
                 cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind: ComposerKind::Caret, text: String::new(), focus: true });
                 cv.selected = None;
@@ -713,7 +713,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             }
             if resp.clicked()
                 && over_page
-                && let Some(p) = pointer
+                && let Some(p) = hover
             {
                 let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox };
                 cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
@@ -721,7 +721,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             }
             true
         }
-        QuickTool::Select => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
+        QuickTool::Select => select_input(ui, resp, cx, view, hover, origin, pressed_here),
         _ => false,
     }
 }
@@ -736,7 +736,7 @@ fn select_input(
     resp: &egui::Response,
     cx: &PageCx<'_>,
     view: &mut DocView,
-    pointer: Option<Pos2>,
+    hover: Option<Pos2>,
     origin: Option<Pos2>,
     pressed_here: bool,
 ) -> bool {
@@ -749,7 +749,7 @@ fn select_input(
         HANDLES.into_iter().find(|h| handle_pos(r, *h).distance(p) <= 7.0)
     };
     let mut consumed = false;
-    if let Some(p) = pointer {
+    if let Some(p) = hover {
         if let Some(h) = handle_at(p) {
             ui.ctx().set_cursor_icon(match h {
                 (0, _) => egui::CursorIcon::ResizeVertical,
@@ -784,7 +784,7 @@ fn select_input(
         consumed = true;
     }
     if resp.drag_stopped()
-        && let Some(p) = pointer
+        && let Some(p) = hover
     {
         match cv.gesture.clone() {
             Some(Gesture::Move { page, index, from }) if page == cx.page => {
@@ -810,9 +810,9 @@ fn select_input(
         }
     }
     // (egui clears the press origin on release, so clicks are located by the pointer.)
-    let on_page = pointer.is_some_and(|p| cx.xf.rect.contains(p));
+    let on_page = hover.is_some_and(|p| cx.xf.rect.contains(p));
     if resp.clicked() && on_page {
-        match pointer.and_then(|p| cx.hit(p)) {
+        match hover.and_then(|p| cx.hit(p)) {
             Some(a) => {
                 cv.selected = Some((cx.page, a.index));
                 cv.reveal = true;
@@ -824,7 +824,7 @@ fn select_input(
     if resp.double_clicked()
         && on_page
         && cx.allowed
-        && let Some(a) = pointer.and_then(|p| cx.hit(p))
+        && let Some(a) = hover.and_then(|p| cx.hit(p))
     {
         cv.selected = Some((cx.page, a.index));
         cv.composer = Some(Composer {
@@ -868,10 +868,10 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
 /// Paint comment selection, hover and gesture previews on a page.
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
     let cv = &view.comments;
-    let pointer = ui.input(|i| i.pointer.hover_pos());
+    let hover = ui.input(|i| i.pointer.hover_pos());
     if cx.tool == QuickTool::Select
         && cv.gesture.is_none()
-        && let Some(a) = pointer.and_then(|p| cx.hit(p))
+        && let Some(a) = hover.and_then(|p| cx.hit(p))
         && cv.selected != Some((cx.page, a.index))
     {
         for r in cx.screen_rects(a) {
@@ -889,7 +889,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             return paint_gesture(painter, cx, view);
         }
         let mut r = cx.screen_rect(a).expand(2.0);
-        if let (Some(p), Some(g)) = (pointer, &cv.gesture) {
+        if let (Some(p), Some(g)) = (hover, &cv.gesture) {
             match g {
                 Gesture::Move { page, index: gi, from } if *page == cx.page && *gi == index => r = r.translate(p - *from),
                 Gesture::Resize { page, index: gi, handle, from } if *page == cx.page && *gi == index => r = resized(r, *handle, p - *from),

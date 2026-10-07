@@ -239,15 +239,15 @@ pub(crate) fn page_input(
     author: &str,
     today: (i64, u32, u32),
 ) -> Option<FillAction> {
-    let pointer = ui.input(|i| i.pointer.hover_pos())?;
-    if !xf.rect.contains(pointer) {
+    let hover = ui.input(|i| i.pointer.hover_pos())?;
+    if !xf.rect.contains(hover) {
         return None;
     }
     ui.ctx().set_cursor_icon(if tool == FillTool::Text { egui::CursorIcon::Text } else { egui::CursorIcon::Crosshair });
     if !resp.clicked() {
         return None;
     }
-    let at = to_user(xf, info, page, pointer);
+    let at = to_user(xf, info, page, hover);
     match tool {
         FillTool::Text => {
             view.fill_text = Some(TypeBox { page, at: [at[0], at[1] + TEXT_SIZE * 0.6], text: String::new(), focus: true });

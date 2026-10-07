@@ -309,14 +309,14 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
             for k in 0..n4 / 4 {
                 let front = (at(n4 - 1 - 2 * k), at(2 * k));
                 let back = (at(2 * k + 1), at(n4 - 2 - 2 * k));
-                let mut sides = Vec::new();
+                let mut faces = Vec::new();
                 if subset != BookletSubset::BackOnly {
-                    sides.push(front);
+                    faces.push(front);
                 }
                 if subset != BookletSubset::FrontOnly {
-                    sides.push(back);
+                    faces.push(back);
                 }
-                for (l, r) in sides {
+                for (l, r) in faces {
                     let (l, r) = if binding == Binding::Right { (r, l) } else { (l, r) };
                     let mut sheet = Sheet { size, ..Sheet::default() };
                     for (p, cell) in [(l, cells[0]), (r, cells[1])] {
@@ -344,9 +344,9 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                     return Err(PrintError::Invalid("the overlap is larger than the tile".into()));
                 }
                 let (sw, sh) = (d.0 * s, d.1 * s);
-                let (stepx, stepy) = (tw - overlap, th - overlap);
-                let nx = (((sw - overlap) / stepx).ceil() as usize).max(1);
-                let ny = (((sh - overlap) / stepy).ceil() as usize).max(1);
+                let (step_w, step_h) = (tw - overlap, th - overlap);
+                let nx = (((sw - overlap) / step_w).ceil() as usize).max(1);
+                let ny = (((sh - overlap) / step_h).ceil() as usize).max(1);
                 if nx * ny > 1024 {
                     return Err(PrintError::Invalid("the poster would need more than 1024 sheets".into()));
                 }
@@ -354,8 +354,8 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                 for ty in 0..ny {
                     for tx in 0..nx {
                         // The window into the scaled page (scaled display space, y up).
-                        let wx0 = tx as f64 * stepx;
-                        let wy1 = sh - ty as f64 * stepy;
+                        let wx0 = tx as f64 * step_w;
+                        let wy1 = sh - ty as f64 * step_h;
                         let matrix = Matrix([s, 0.0, 0.0, s, MARGIN - wx0, size.1 - MARGIN - wy1]);
                         let clip = [wx0 / s, (wy1 - th) / s, (wx0 + tw) / s, wy1 / s];
                         let mut sheet = Sheet { size, placed: vec![Placement { page: p, matrix, clip }], ..Sheet::default() };

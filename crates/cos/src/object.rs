@@ -196,7 +196,7 @@ impl Stream {
             Some(Object::Array(a)) => a.iter().filter_map(Object::as_name).collect(),
             _ => Vec::new(),
         };
-        let parms: Vec<Option<&Dict>> = match self.dict.get(b"DecodeParms") {
+        let decode_parms: Vec<Option<&Dict>> = match self.dict.get(b"DecodeParms") {
             Some(Object::Dict(d)) => vec![Some(d)],
             Some(Object::Array(a)) => a.iter().map(Object::as_dict).collect(),
             _ => Vec::new(),
@@ -207,7 +207,7 @@ impl Stream {
             // `/Crypt` is applied by the security handler when the object is loaded (§7.4.10).
             .filter(|(_, n)| *n != b"Crypt")
             .map(|(i, n)| {
-                let p = parms.get(i).copied().flatten();
+                let p = decode_parms.get(i).copied().flatten();
                 let get = |k: &[u8], d: i64| p.and_then(|p| p.int(k)).unwrap_or(d);
                 let params = Params {
                     predictor: get(b"Predictor", 1),
