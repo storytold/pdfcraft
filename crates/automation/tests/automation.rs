@@ -55,7 +55,7 @@ fn ok(a: &mut Automation, tool: &str, args: Value) -> Value {
     match a.call(tool, &args) {
         Ok(mut c) => match c.remove(0) {
             Content::Json(v) => v,
-            other => panic!("{tool}: expected JSON, got {other:?}"),
+            other @ Content::Png { .. } => panic!("{tool}: expected JSON, got {other:?}"),
         },
         Err(e) => panic!("{tool} {args}: {e}"),
     }
@@ -845,7 +845,7 @@ fn preparing_a_form_through_tools() {
     assert_eq!(add(&mut a, json!({ "doc": doc, "page": 2, "type": "image", "rect": [20, 20, 120, 120] })), "Image1");
     let png = |a: &mut Automation| match a.call("page_render", &json!({ "doc": doc, "page": 2, "dpi": 36 })).unwrap().remove(0) {
         Content::Png { data, .. } => data,
-        other => panic!("{other:?}"),
+        other @ Content::Json(_) => panic!("{other:?}"),
     };
     let before = png(&mut a);
     ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "pics", "dpi": 18, "pages": [1] }));

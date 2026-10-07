@@ -308,7 +308,7 @@ fn format_section(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let doc = app.session.get(id)?;
         match &doc.added.iter().filter(|a| a.page == page).nth(index)?.content {
             printcraft_engine::AddedContent::Image(img) => Some((page, index, img.clone())),
-            _ => None,
+            printcraft_engine::AddedContent::Text(_) => None,
         }
     });
     if let Some((page, index, img)) = image {
@@ -329,7 +329,7 @@ fn format_section(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let a = doc.added.iter().filter(|a| a.page == page).nth(index)?;
         match &a.content {
             printcraft_engine::AddedContent::Text(text) => Some((page, index, text.clone())),
-            _ => None,
+            printcraft_engine::AddedContent::Image(_) => None,
         }
     });
     match selected {

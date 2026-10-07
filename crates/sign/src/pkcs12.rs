@@ -337,7 +337,7 @@ pub fn open(bytes: &[u8], password: &str) -> Result<DigitalId, SignError> {
         .iter()
         .find_map(|b| match &b.kind {
             BagKind::Key(k) => Some((b, k)),
-            _ => None,
+            BagKind::Cert(_) => None,
         })
         .ok_or_else(|| bad("no private key"))?;
     let key = PrivateKey::from_pkcs8(pkcs8)?;
@@ -345,7 +345,7 @@ pub fn open(bytes: &[u8], password: &str) -> Result<DigitalId, SignError> {
         .iter()
         .filter_map(|b| match &b.kind {
             BagKind::Cert(c) => Certificate::parse(c).ok().map(|c| (c, b)),
-            _ => None,
+            BagKind::Key(_) => None,
         })
         .collect();
     // The signer's certificate: the same local key id, else the one with the key's public key.

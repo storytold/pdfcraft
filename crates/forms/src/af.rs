@@ -915,7 +915,7 @@ fn eval_notation(src: &str, value_of: &dyn Fn(&str) -> f64) -> Option<f64> {
                 (toks.get(*pos) == Some(&T::Op(')'))).then(|| *pos += 1)?;
                 Some(inner)
             }
-            _ => None,
+            T::Op(_) => None,
         }
     }
     let mut toks = Vec::new();
