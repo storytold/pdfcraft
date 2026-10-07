@@ -9806,7 +9806,7 @@ milestone = "M14"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/src/i18n.rs::language_persists_and_invalid_input_keeps_current_language"]
+evidence = ["crates/ui-egui/src/i18n/tests.rs::language_persists_and_invalid_input_keeps_current_language"]
 notes = "Preferences switches English/Japanese and persists; ui.set language en|ja and ui.state expose it. Core menu labels translated; broader dialog/panel translations and additional languages remain open."
 
 [[feature]]
@@ -9931,15 +9931,15 @@ notes = ""
 
 [[feature]]
 id = "misc.localization"
-title = "Localization (Fluent catalogs)"
+title = "Localization (translation catalogs)"
 area = "N"
 tier = "P1"
 milestone = "M14"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/src/i18n/tests.rs::bundled_catalogs_are_consistent", "crates/ui-egui/tests/control.rs::language_switch_preserves_document_and_command_ids"]
+notes = "Foundation only: registry-backed settings, TSV catalogs, contextual and command-id lookup, named parameters, plural rules and catalog validation. Existing 49 Japanese translations migrated unchanged; no new language or translation. Broad UI coverage, locale matching and locale-aware formats remain open."
 
 [[feature]]
 id = "misc.rtl-ui"

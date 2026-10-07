@@ -11,6 +11,17 @@
 # Adobe-authored non-visual technical data allowed by AGENTS.md §1.1.
 
 [[asset]]
+path = "crates/ui-egui/src/i18n/ja.tsv"
+title = "Japanese interface translation catalog"
+author = "PrintCraft contributors"
+source = "https://github.com/storytold/printcraft/blob/1c78ff479ce5cf5cbcf7af5100378c9311b95162/crates/ui-egui/src/i18n.rs"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Existing 49 Japanese UI translations, migrated unchanged to a compiled-in TSV catalog"
+sha256 = "7167322abb15472485c24650df20ac59f7c4d06589d4c45a60a607019235d254"
+
+[[asset]]
 path = "assets/icons/accessibility.svg"
 title = "Lucide icon \"accessibility\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"

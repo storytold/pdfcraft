@@ -1,0 +1,55 @@
+# Japanese interface catalog. UTF-8: context<TAB>source<TAB>translation.
+# Migrated unchanged from src/i18n.rs at 1c78ff4; no new translations.
+# Empty context: plain text; @id: command ID; @plural: one|other source.
+# Escapes: \n, \t, \\. Preserve named {placeholders} and trailing ….
+# Original PrintCraft translations, licensed MIT OR Apache-2.0.
+
+	Menu	メニュー
+	File	ファイル
+	Edit	編集
+	Pages	ページ
+	View	表示
+	Help	ヘルプ
+	Preferences	環境設定
+	Preferences…	環境設定…
+	Interface language	表示言語
+	Identity	個人情報
+	Name on new comments	新しい注釈の作成者名
+	Open…	開く…
+	New blank PDF	空白の PDF を作成
+	Create PDF from file…	ファイルから PDF を作成…
+	Create PDF from images…	画像から PDF を作成…
+	Create PDF from clipboard	クリップボードから PDF を作成
+	Combine files…	ファイルを結合…
+	Save	保存
+	Save as…	別名で保存…
+	Close file	ファイルを閉じる
+	Close all	すべて閉じる
+	Revert	保存済みの状態に戻す
+	Print…	印刷…
+	Document properties…	文書のプロパティ…
+	Undo	取り消し
+	Redo	やり直し
+	Find…	検索…
+	Advanced search…	高度な検索…
+	Copy pages	ページをコピー
+	Cut pages	ページを切り取り
+	Paste pages	ページを貼り付け
+	Fit visible	表示範囲に合わせる
+	Marquee zoom	範囲指定ズーム
+	Take a snapshot	スナップショットを作成
+	Full screen mode	全画面表示
+	Read mode	閲覧モード
+	Switch light / dark theme	明るい／暗いテーマを切り替え
+	Comments panel	コメントパネル
+	Form fields panel	フォームフィールドパネル
+	Clear form	フォームをクリア
+	Find tools and commands…	ツールとコマンドを検索…
+	Zoom	ズーム
+	Actual size	実際のサイズ
+	Zoom to page level	ページ全体を表示
+	Fit to width	幅に合わせる
+	Display theme	表示テーマ
+	Side panels	サイドパネル
+	Enable Acrobat JavaScript	Acrobat JavaScript を有効にする
+	OK	OK

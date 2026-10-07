@@ -4,6 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use printcraft_ui_egui::PrintCraftApp;
 use printcraft_ui_egui::control::{ControlClient, Reply};
 use serde_json::{Value, json};
@@ -61,6 +62,37 @@ fn call(h: &mut Harness<'static, PrintCraftApp>, c: &ControlClient, method: &str
 
 fn ok(h: &mut Harness<'static, PrintCraftApp>, c: &ControlClient, method: &str, params: Value) -> Value {
     call(h, c, method, params).unwrap_or_else(|e| panic!("{method}: {e}"))
+}
+
+#[test]
+fn language_switch_preserves_document_and_command_ids() {
+    let (mut h, c) = harness();
+    let doc = h.state().views[0].id;
+    h.state_mut().session.apply(doc, printcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
+    assert_eq!(documents[0]["dirty"], true);
+    let commands = ok(&mut h, &c, "ui.commands", json!({}));
+    for code in ["ja", "en"] {
+        ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": code }));
+        h.run_steps(2);
+        let state = ok(&mut h, &c, "ui.state", json!({}));
+        assert_eq!(state["language"], code);
+        assert_eq!(state["documents"], documents);
+        assert_eq!(ok(&mut h, &c, "ui.commands", json!({})), commands);
+
+        let language = printcraft_ui_egui::i18n::Language::parse(code).unwrap();
+        h.get_by_label(language.tr("Menu")).click();
+        h.run_steps(2);
+        h.get_by_label(&format!("{} ⏵", language.tr("File"))).hover();
+        h.run_steps(3);
+        h.get_by_label_contains(language.tr("Open…"));
+        ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
+        ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
+        h.run_steps(2);
+    }
+    let error = call(&mut h, &c, "ui.set", json!({ "key": "language", "value": "xx" })).unwrap_err();
+    assert!(error.contains("en, ja"), "{error}");
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "en");
 }
 
 #[test]
