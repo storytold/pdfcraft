@@ -519,29 +519,30 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &printcraft_engine
     let mut out = None;
     widgets::section_title(ui, "Edit image");
     ui.horizontal(|ui| {
-        let mut i = img.clone();
-        let r = i.rect;
+        let mut edited = img.clone();
+        let rect = edited.rect;
         let turn = |i: &mut printcraft_engine::AddedImage, k: u8| {
             i.rotation = (i.rotation + k) % 4;
             // The box turns with the picture, around its centre.
-            let (cx, cy, w, h) = (f64::midpoint(r[0], r[2]), f64::midpoint(r[1], r[3]), r[2] - r[0], r[3] - r[1]);
-            i.rect = [cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0];
+            let (mid_x, mid_y, width, height) =
+                (f64::midpoint(rect[0], rect[2]), f64::midpoint(rect[1], rect[3]), rect[2] - rect[0], rect[3] - rect[1]);
+            i.rect = [mid_x - height / 2.0, mid_y - width / 2.0, mid_x + height / 2.0, mid_y + width / 2.0];
         };
         if crate::icons::button(ui, "rotate-ccw", 28.0, false, "Rotate counterclockwise").clicked() {
-            turn(&mut i, 1);
-            out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
+            turn(&mut edited, 1);
+            out = Some(ImageAction::Update(AddedContent::Image(edited.clone())));
         }
         if crate::icons::button(ui, "rotate-cw", 28.0, false, "Rotate clockwise").clicked() {
-            turn(&mut i, 3);
-            out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
+            turn(&mut edited, 3);
+            out = Some(ImageAction::Update(AddedContent::Image(edited.clone())));
         }
         if crate::icons::button(ui, "flip-horizontal-2", 28.0, false, "Flip horizontal").clicked() {
-            i.flip_h = !i.flip_h;
-            out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
+            edited.flip_h = !edited.flip_h;
+            out = Some(ImageAction::Update(AddedContent::Image(edited.clone())));
         }
         if crate::icons::button(ui, "flip-vertical-2", 28.0, false, "Flip vertical").clicked() {
-            i.flip_v = !i.flip_v;
-            out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
+            edited.flip_v = !edited.flip_v;
+            out = Some(ImageAction::Update(AddedContent::Image(edited.clone())));
         }
         if crate::icons::button(ui, "replace", 28.0, false, "Replace image").clicked() {
             out = Some(ImageAction::Replace);

@@ -189,15 +189,15 @@ fn content_bbox(doc: &Document, page: &Dict, ids: &HashSet<i64>) -> Option<[f64;
                 path.clear();
             }
             b"Do" if inside => {
-                let Some(r) = op.name(0).and_then(|n| xobjects.get(n)).and_then(Object::as_ref) else { continue };
-                let unit = match &*doc.get(r) {
+                let Some(name) = op.name(0).and_then(|key| xobjects.get(key)).and_then(Object::as_ref) else { continue };
+                let unit = match &*doc.get(name) {
                     Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form") => {
                         let bb: Vec<f64> =
                             s.dict.get(b"BBox").and_then(|b| b.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect())).unwrap_or_default();
-                        let m = Matrix::from_operands(s.dict.get(b"Matrix").and_then(|m| m.as_array()).map_or(&[][..], Vec::as_slice))
+                        let matrix = Matrix::from_operands(s.dict.get(b"Matrix").and_then(|m| m.as_array()).map_or(&[][..], Vec::as_slice))
                             .unwrap_or(Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
                         match bb[..] {
-                            [a, b, c, d] => m.then(&top).bbox([a, b, c, d]),
+                            [x0, y0, x1, y1] => matrix.then(&top).bbox([x0, y0, x1, y1]),
                             _ => continue,
                         }
                     }

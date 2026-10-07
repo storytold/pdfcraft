@@ -387,11 +387,11 @@ fn number_pages_shows_in_the_viewer_and_undoes() {
 /// RGBA of the pixel at PDF point (x, y) on `page`, rendered at 1 px/pt (page height 300).
 fn pixel(s: &Session, id: DocId, page: usize, x: u32, y: u32) -> [u8; 4] {
     let doc = s.get(id).unwrap();
-    let mut r = printcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
-    let out = r.render(printcraft_render::RenderRequest { page, scale: 1.0, ..Default::default() });
+    let mut renderer = printcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+    let out = renderer.render(printcraft_render::RenderRequest { page, scale: 1.0, ..Default::default() });
     assert!(out.error.is_none(), "{:?}", out.error);
-    let i = (((300 - y) * out.width + x) * 4) as usize;
-    out.rgba[i..i + 4].try_into().unwrap()
+    let at = (((300 - y) * out.width + x) * 4) as usize;
+    out.rgba[at..at + 4].try_into().unwrap()
 }
 
 fn rect_comment(page: usize, rect: [f64; 4]) -> Edit {
@@ -1015,10 +1015,10 @@ fn links_from_urls_and_link_edits() {
     assert_eq!(d.info.links.len(), 1, "the viewer follows it");
     assert!(s.find_urls(id).is_empty(), "already linked");
     // Link Properties and delete.
-    let l = s.get(id).unwrap().links[0].clone();
-    s.apply(id, Edit::SetLink { page: 0, index: l.index, rect: None, action: Some(LinkAction::Page(0)), style: None }).unwrap();
+    let link = s.get(id).unwrap().links[0].clone();
+    s.apply(id, Edit::SetLink { page: 0, index: link.index, rect: None, action: Some(LinkAction::Page(0)), style: None }).unwrap();
     assert_eq!(s.get(id).unwrap().links[0].action, LinkAction::Page(0));
-    s.apply(id, Edit::DeleteLink { page: 0, index: l.index }).unwrap();
+    s.apply(id, Edit::DeleteLink { page: 0, index: link.index }).unwrap();
     assert!(s.get(id).unwrap().links.is_empty());
     assert!(s.apply(id, Edit::RemoveLinks { pages: None }).is_err(), "nothing left to remove");
 }

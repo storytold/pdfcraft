@@ -67,22 +67,22 @@ fn walk(doc: &Document, data: &[u8], resources: &Dict, ctm: Matrix, depth: usize
             }
             b"Do" => {
                 let Some(name) = op.name(0) else { continue };
-                let Some(r) = xobjects.get(name).and_then(Object::as_ref) else { continue };
-                let obj = doc.get(r);
+                let Some(xref) = xobjects.get(name).and_then(Object::as_ref) else { continue };
+                let obj = doc.get(xref);
                 let Object::Stream(s) = &*obj else { continue };
                 match s.dict.name(b"Subtype") {
                     Some(b"Image") => {
-                        let (w, h) = (s.dict.int(b"Width").unwrap_or(0) as f64, s.dict.int(b"Height").unwrap_or(0) as f64);
-                        let [a, b, c, d, ..] = top.0;
-                        let (sx, sy) = ((a * a + b * b).sqrt(), (c * c + d * d).sqrt());
-                        if w > 0.0 && h > 0.0 && sx > 1e-6 && sy > 1e-6 {
-                            let ppi = (w / (sx / 72.0)).min(h / (sy / 72.0));
-                            let e = out.entry(r).or_insert(f64::INFINITY);
-                            *e = e.min(ppi);
+                        let (width, height) = (s.dict.int(b"Width").unwrap_or(0) as f64, s.dict.int(b"Height").unwrap_or(0) as f64);
+                        let [m00, m01, m10, m11, ..] = top.0;
+                        let (sx, sy) = ((m00 * m00 + m01 * m01).sqrt(), (m10 * m10 + m11 * m11).sqrt());
+                        if width > 0.0 && height > 0.0 && sx > 1e-6 && sy > 1e-6 {
+                            let ppi = (width / (sx / 72.0)).min(height / (sy / 72.0));
+                            let best = out.entry(xref).or_insert(f64::INFINITY);
+                            *best = best.min(ppi);
                         }
                     }
                     Some(b"Form") => {
-                        if !seen.insert(r) && depth > 4 {
+                        if !seen.insert(xref) && depth > 4 {
                             continue;
                         }
                         let m = s.dict.get(b"Matrix").map(|m| doc.resolve(m)).and_then(|m| m.as_array().map(|a| Matrix::from_operands(a))).flatten();
@@ -183,15 +183,15 @@ fn is_dct(s: &Stream) -> Option<bool> {
 
 /// 8-bit samples of an image (`n` components), decoded.
 fn pixels(s: &Stream, n: usize) -> Option<Vec<u8>> {
-    let (w, h) = (s.dict.int(b"Width")? as usize, s.dict.int(b"Height")? as usize);
+    let (width, height) = (s.dict.int(b"Width")? as usize, s.dict.int(b"Height")? as usize);
     if is_dct(s)? {
         let img = image::load_from_memory_with_format(&s.raw, image::ImageFormat::Jpeg).ok()?;
         // Adobe CMYK/YCCK JPEGs aren't handled (the colour space check excludes them).
-        let v = if n == 1 { img.into_luma8().into_raw() } else { img.into_rgb8().into_raw() };
-        (v.len() == w * h * n).then_some(v)
+        let samples = if n == 1 { img.into_luma8().into_raw() } else { img.into_rgb8().into_raw() };
+        (samples.len() == width * height * n).then_some(samples)
     } else {
-        let v = s.decoded().ok()?;
-        (v.len() >= w * h * n).then(|| v[..w * h * n].to_vec())
+        let decoded = s.decoded().ok()?;
+        (decoded.len() >= width * height * n).then(|| decoded[..width * height * n].to_vec())
     }
 }
 
@@ -213,44 +213,44 @@ fn jpeg(px: &[u8], n: usize, w: u32, h: u32, quality: u8) -> Option<Vec<u8>> {
 
 /// A new image stream from 8-bit samples: the original dictionary with the new size and filter.
 fn image_stream(old: &Dict, px: &[u8], n: usize, w: u32, h: u32, compression: Compression, was_dct: bool) -> Option<Stream> {
-    let mut d = old.clone();
+    let mut dict = old.clone();
     for k in [&b"Filter"[..], b"DecodeParms", b"Length", b"DL"] {
-        d.remove(k);
+        dict.remove(k);
     }
-    d.set(b"Width".to_vec(), Object::Int(i64::from(w)));
-    d.set(b"Height".to_vec(), Object::Int(i64::from(h)));
-    d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    dict.set(b"Width".to_vec(), Object::Int(i64::from(w)));
+    dict.set(b"Height".to_vec(), Object::Int(i64::from(h)));
+    dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
     let use_jpeg = match compression {
         Compression::Jpeg(_) => true,
         Compression::Flate => false,
         Compression::Retain => was_dct,
     };
     if use_jpeg {
-        let q = match compression {
-            Compression::Jpeg(q) => q,
+        let quality = match compression {
+            Compression::Jpeg(value) => value,
             _ => 80,
         };
-        let data = jpeg(px, n, w, h, q)?;
-        d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
-        Some(Stream::from_raw(d, data))
+        let data = jpeg(px, n, w, h, quality)?;
+        dict.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        Some(Stream::from_raw(dict, data))
     } else {
-        Some(Stream::flate(d, px))
+        Some(Stream::flate(dict, px))
     }
 }
 
 /// One image: resample and/or recompress per `settings`; `ppi` is its effective resolution.
 /// Returns the new image and its new soft mask, if the result is smaller.
-fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: usize) -> Option<(Stream, Option<(ObjRef, Stream)>)> {
-    let d = &s.dict;
+fn process(doc: &Document, stream: &Stream, ppi: f64, settings: &ImageSettings, components: usize) -> Option<(Stream, Option<(ObjRef, Stream)>)> {
+    let d = &stream.dict;
     if d.contains(b"Decode") || d.contains(b"Mask") || d.name(b"ImageMask").is_some() || matches!(d.get(b"ImageMask"), Some(Object::Bool(true))) {
         return None;
     }
     if d.int(b"BitsPerComponent") != Some(8) {
         return None;
     }
-    let was_dct = is_dct(s)?;
-    let (w, h) = (d.int(b"Width")? as u32, d.int(b"Height")? as u32);
-    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
+    let was_dct = is_dct(stream)?;
+    let (width, height) = (d.int(b"Width")? as u32, d.int(b"Height")? as u32);
+    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > MAX_PIXELS {
         return None;
     }
     let resize = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0;
@@ -259,36 +259,36 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
         return None;
     }
     // Tiny images (icons, rules) don't benefit and JPEG would blur them.
-    if !resize && u64::from(w) * u64::from(h) < 64 * 64 {
+    if !resize && u64::from(width) * u64::from(height) < 64 * 64 {
         return None;
     }
     let (nw, nh) = if resize {
-        let k = settings.target_ppi / ppi;
-        (((f64::from(w) * k).round() as u32).max(1), ((f64::from(h) * k).round() as u32).max(1))
+        let scale = settings.target_ppi / ppi;
+        (((f64::from(width) * scale).round() as u32).max(1), ((f64::from(height) * scale).round() as u32).max(1))
     } else {
-        (w, h)
+        (width, height)
     };
-    let px = pixels(s, n)?;
-    let px = if (nw, nh) == (w, h) { px } else { resample(&px, n, w, h, nw, nh)? };
-    let new = image_stream(d, &px, n, nw, nh, settings.compression, was_dct)?;
+    let px = pixels(stream, components)?;
+    let px = if (nw, nh) == (width, height) { px } else { resample(&px, components, width, height, nw, nh)? };
+    let new = image_stream(d, &px, components, nw, nh, settings.compression, was_dct)?;
     // A soft mask must keep the image's dimensions: resample it with the image (lossless).
     let mut smask = None;
     if let Some(mr) = d.reference(b"SMask") {
         let mobj = doc.get(mr);
-        let Object::Stream(m) = &*mobj else { return None };
-        if (nw, nh) != (w, h) {
-            if m.dict.int(b"BitsPerComponent") != Some(8) || m.dict.contains(b"Matte") || m.dict.contains(b"Decode") {
+        let Object::Stream(mask_stream) = &*mobj else { return None };
+        if (nw, nh) != (width, height) {
+            if mask_stream.dict.int(b"BitsPerComponent") != Some(8) || mask_stream.dict.contains(b"Matte") || mask_stream.dict.contains(b"Decode") {
                 return None;
             }
-            let (mw, mh) = (m.dict.int(b"Width")? as u32, m.dict.int(b"Height")? as u32);
-            let mpx = pixels(m, 1)?;
+            let (mw, mh) = (mask_stream.dict.int(b"Width")? as u32, mask_stream.dict.int(b"Height")? as u32);
+            let mpx = pixels(mask_stream, 1)?;
             let mpx = resample(&mpx, 1, mw, mh, nw, nh)?;
-            smask = Some((mr, image_stream(&m.dict, &mpx, 1, nw, nh, Compression::Flate, false)?));
+            smask = Some((mr, image_stream(&mask_stream.dict, &mpx, 1, nw, nh, Compression::Flate, false)?));
         }
     }
-    let before = s.raw.len()
+    let before = stream.raw.len()
         + smask.as_ref().map_or(0, |(r, _)| match &*doc.get(*r) {
-            Object::Stream(m) => m.raw.len(),
+            Object::Stream(mask_stream) => mask_stream.raw.len(),
             _ => 0,
         });
     let after = new.raw.len() + smask.as_ref().map_or(0, |(_, m)| m.raw.len());

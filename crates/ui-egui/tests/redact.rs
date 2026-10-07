@@ -24,9 +24,9 @@ fn harness() -> Harness<'static, PrintCraftApp> {
 }
 
 fn at(h: &Harness<'static, PrintCraftApp>, x: f32, y: f32) -> Pos2 {
-    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-    let k = r.width() / 300.0;
-    r.min + egui::vec2(x * k, y * k)
+    let rect = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let scale = rect.width() / 300.0;
+    rect.min + egui::vec2(x * scale, y * scale)
 }
 
 fn marks(h: &Harness<'static, PrintCraftApp>) -> usize {

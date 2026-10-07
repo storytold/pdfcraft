@@ -24,9 +24,9 @@ fn harness() -> Harness<'static, PrintCraftApp> {
 }
 
 fn at(h: &Harness<'static, PrintCraftApp>, x: f32, y: f32) -> Pos2 {
-    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-    let k = r.width() / 300.0;
-    r.min + egui::vec2(x * k, y * k)
+    let rect = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let scale = rect.width() / 300.0;
+    rect.min + egui::vec2(x * scale, y * scale)
 }
 
 fn click(h: &mut Harness<'static, PrintCraftApp>, p: Pos2) {
@@ -49,17 +49,17 @@ fn typing_moving_styling_and_deleting_added_content() {
     assert!(h.state_mut().execute("edit.text"));
     h.run_steps(2);
     h.get_by_label("Edit a PDF");
-    let p = at(&h, 40.0, 300.0);
-    click(&mut h, p);
+    let point = at(&h, 40.0, 300.0);
+    click(&mut h, point);
     assert!(h.state().views[0].content.draft.is_some(), "the editor opened");
     h.event(egui::Event::Text("Reviewed".into()));
     h.run_steps(2);
     // Click elsewhere on the page commits and goes back to Select.
-    let p = at(&h, 250.0, 380.0);
-    click(&mut h, p);
-    let a = added(&h);
-    assert_eq!(a.len(), 1);
-    let printcraft_engine::AddedContent::Text(t) = &a[0].content else { panic!() };
+    let point = at(&h, 250.0, 380.0);
+    click(&mut h, point);
+    let items = added(&h);
+    assert_eq!(items.len(), 1);
+    let printcraft_engine::AddedContent::Text(t) = &items[0].content else { panic!() };
     assert_eq!(t.text, "Reviewed");
     assert_eq!(h.state().quick_tool, QuickTool::Select);
     h.run_steps(2);
@@ -88,15 +88,15 @@ fn typing_moving_styling_and_deleting_added_content() {
     }
     h.state_mut().add_image("logo.png".into(), png);
     h.run_steps(3);
-    let a = added(&h);
-    assert_eq!(a.len(), 1);
-    assert_eq!(a[0].content.rect(), [135.0, 190.0, 165.0, 210.0]);
+    let items = added(&h);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].content.rect(), [135.0, 190.0, 165.0, 210.0]);
     assert_eq!(h.state().views[0].content.selected, Some((0, 0)));
     // Edit image: rotate clockwise turns the box around its centre.
     h.get_by_label("Rotate clockwise").click();
     h.run_steps(3);
-    let a = added(&h);
-    let printcraft_engine::AddedContent::Image(img) = &a[0].content else { panic!() };
+    let items = added(&h);
+    let printcraft_engine::AddedContent::Image(img) = &items[0].content else { panic!() };
     assert_eq!((img.rotation, img.rect), (3, [140.0, 185.0, 160.0, 215.0]));
     h.get_by_label("Flip horizontal").click();
     h.run_steps(3);

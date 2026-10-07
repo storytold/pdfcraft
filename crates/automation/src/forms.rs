@@ -212,8 +212,8 @@ impl Automation {
                     Calculate::Simple { op, fields } => {
                         o.insert("calculate".into(), json!({ "op": op.code().to_lowercase(), "fields": fields }));
                     }
-                    Calculate::Notation(n) => {
-                        o.insert("calculate".into(), json!({ "notation": n }));
+                    Calculate::Notation(notation) => {
+                        o.insert("calculate".into(), json!({ "notation": notation }));
                     }
                     Calculate::None => {}
                 }
@@ -325,8 +325,8 @@ impl Automation {
                 let r: Vec<f64> = v.as_array().map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
                 let r = <[f64; 4]>::try_from(r).map_err(|_| ToolError::InvalidArgs("rect must be 4 numbers".into()))?;
                 let page = f.widgets.first().and_then(|w| w.page).ok_or_else(|| failed(format!("{name} is not on a page")))?;
-                let p = &doc.info.pages[page];
-                let (u0, u1) = (p.view_to_user(r[0] as f32, r[1] as f32), p.view_to_user(r[2] as f32, r[3] as f32));
+                let info = &doc.info.pages[page];
+                let (u0, u1) = (info.view_to_user(r[0] as f32, r[1] as f32), info.view_to_user(r[2] as f32, r[3] as f32));
                 Some((0, [f64::from(u0[0].min(u1[0])), f64::from(u0[1].min(u1[1])), f64::from(u0[0].max(u1[0])), f64::from(u0[1].max(u1[1]))]))
             }
         };

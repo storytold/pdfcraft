@@ -14,22 +14,22 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
     let searched = view.texts.len() + view.text_failed.len();
     let Some(find) = view.find.as_mut() else { return };
     find.in_panel = true;
-    let l = ui.label(egui::RichText::new("What word or phrase would you like to search for?").color(t.text_muted));
-    let r = ui
+    let prompt = ui.label(egui::RichText::new("What word or phrase would you like to search for?").color(t.text_muted));
+    let query_edit = ui
         .add(egui::TextEdit::singleline(&mut find.query).id(egui::Id::new("search-panel-input")).hint_text("Search").desired_width(f32::INFINITY))
-        .labelled_by(l.id);
+        .labelled_by(prompt.id);
     if find.focus {
-        r.request_focus();
+        query_edit.request_focus();
         find.focus = false;
     }
     ui.horizontal(|ui| {
         // Outlined boxes (the panel and the check-box fill are alike), as in dialogs.
-        let w = &mut ui.visuals_mut().widgets;
-        w.inactive.bg_stroke = egui::Stroke::new(1.0, t.border);
-        w.inactive.bg_fill = t.hover;
-        let a = ui.checkbox(&mut find.whole_words, "Whole words only").changed();
-        let b = ui.checkbox(&mut find.case_sensitive, "Case-sensitive").changed();
-        if a || b {
+        let widgets = &mut ui.visuals_mut().widgets;
+        widgets.inactive.bg_stroke = egui::Stroke::new(1.0, t.border);
+        widgets.inactive.bg_fill = t.hover;
+        let whole_words = ui.checkbox(&mut find.whole_words, "Whole words only").changed();
+        let case_sensitive = ui.checkbox(&mut find.case_sensitive, "Case-sensitive").changed();
+        if whole_words || case_sensitive {
             find.case_query.clear();
         }
     });

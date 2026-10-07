@@ -19,9 +19,9 @@ fn harness() -> Harness<'static, PrintCraftApp> {
 }
 
 fn at(h: &Harness<'static, PrintCraftApp>, x: f32, y: f32) -> Pos2 {
-    let r = h.state().views[0].page_screen_rect(0).unwrap();
-    let k = r.width() / 300.0;
-    r.min + egui::vec2(x * k, y * k)
+    let rect = h.state().views[0].page_screen_rect(0).unwrap();
+    let scale = rect.width() / 300.0;
+    rect.min + egui::vec2(x * scale, y * scale)
 }
 
 fn drag(h: &mut Harness<'static, PrintCraftApp>, a: Pos2, b: Pos2) {
@@ -46,8 +46,8 @@ fn links(h: &Harness<'static, PrintCraftApp>) -> Vec<printcraft_engine::LinkItem
 fn drawing_editing_and_deleting_links() {
     let mut h = harness();
     assert!(h.state_mut().execute("edit.link"));
-    let (a, b) = (at(&h, 40.0, 300.0), at(&h, 160.0, 320.0));
-    drag(&mut h, a, b);
+    let (from, to) = (at(&h, 40.0, 300.0), at(&h, 160.0, 320.0));
+    drag(&mut h, from, to);
     assert_eq!(h.state().dialog, Some(Dialog::LinkProps));
     h.get_by_label("Create Link");
     h.state_mut().link_draft.as_mut().unwrap().url = "https://example.org".into();
@@ -70,9 +70,9 @@ fn drawing_editing_and_deleting_links() {
     assert_eq!(h.state().dialog, Some(Dialog::LinkProps));
     h.get_by_label("Link Properties");
     {
-        let d = h.state_mut().link_draft.as_mut().unwrap();
-        d.web = false;
-        d.target = 1;
+        let draft = h.state_mut().link_draft.as_mut().unwrap();
+        draft.web = false;
+        draft.target = 1;
     }
     h.get_by_label("OK").click();
     h.run_steps(3);

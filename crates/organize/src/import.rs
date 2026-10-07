@@ -709,16 +709,16 @@ pub fn page_as_form(dst: &mut Document, src: &Document, page: usize) -> Result<(
     let all = walk(src)?;
     // `walk` gives the inheritable attributes (resources, boxes, rotation); the content is
     // the page's own.
-    let (pr, d) = all.get(page).cloned().ok_or(OrganizeError::NoSuchPage(page))?;
+    let (pr, dict) = all.get(page).cloned().ok_or(OrganizeError::NoSuchPage(page))?;
     let own = src.get(pr).as_dict().cloned().unwrap_or_default();
     let rect = |k: &[u8]| -> Option<[f64; 4]> {
-        let a = src.resolve(d.get(k)?);
+        let a = src.resolve(dict.get(k)?);
         let v: Vec<f64> = a.as_array()?.iter().filter_map(|x| src.resolve(x).as_f64()).collect();
         (v.len() == 4).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
     };
     let bbox = rect(b"CropBox").or_else(|| rect(b"MediaBox")).unwrap_or([0.0, 0.0, 612.0, 792.0]);
-    let (w, h) = (bbox[2] - bbox[0], bbox[3] - bbox[1]);
-    let rotate = d.get(b"Rotate").and_then(|r| src.resolve(r).as_int()).unwrap_or(0).rem_euclid(360);
+    let (width, height) = (bbox[2] - bbox[0], bbox[3] - bbox[1]);
+    let rotate = dict.get(b"Rotate").and_then(|r| src.resolve(r).as_int()).unwrap_or(0).rem_euclid(360);
     // Content: the page's streams, decoded and joined.
     let mut content = Vec::new();
     if let Some(c) = own.get(b"Contents") {
@@ -734,22 +734,22 @@ pub fn page_as_form(dst: &mut Document, src: &Document, page: usize) -> Result<(
         }
     }
     let mut copier = Copier { src, map: HashMap::new(), pages: HashMap::new(), annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() };
-    let resources = d.get(b"Resources").map_or(Object::Dict(Dict::new()), |r| copier.copy_value(dst, r, None));
+    let resources = dict.get(b"Resources").map_or(Object::Dict(Dict::new()), |r| copier.copy_value(dst, r, None));
     register_layers(dst, src, &copier.ocgs)?;
     let mut fd = Dict::new();
     fd.set(b"Type".to_vec(), Object::name("XObject"));
     fd.set(b"Subtype".to_vec(), Object::name("Form"));
     fd.set(b"BBox".to_vec(), Object::Array(bbox.iter().map(|v| Object::Real(*v)).collect()));
-    // Map the crop box to (0, 0)–(w, h) as displayed (turning a rotated page upright).
-    let m: [f64; 6] = match rotate {
+    // Map the crop box to (0, 0)–(width, height) as displayed (turning a rotated page upright).
+    let matrix: [f64; 6] = match rotate {
         90 => [0.0, -1.0, 1.0, 0.0, -bbox[1], bbox[2]],
         180 => [-1.0, 0.0, 0.0, -1.0, bbox[2], bbox[3]],
         270 => [0.0, 1.0, -1.0, 0.0, bbox[3], -bbox[0]],
         _ => [1.0, 0.0, 0.0, 1.0, -bbox[0], -bbox[1]],
     };
-    fd.set(b"Matrix".to_vec(), Object::Array(m.iter().map(|v| Object::Real(*v)).collect()));
+    fd.set(b"Matrix".to_vec(), Object::Array(matrix.iter().map(|v| Object::Real(*v)).collect()));
     fd.set(b"Resources".to_vec(), resources);
-    let r = dst.add(Object::Stream(Stream::flate(fd, &content)));
-    let size = if rotate == 90 || rotate == 270 { (h, w) } else { (w, h) };
-    Ok((r, size))
+    let form = dst.add(Object::Stream(Stream::flate(fd, &content)));
+    let size = if rotate == 90 || rotate == 270 { (height, width) } else { (width, height) };
+    Ok((form, size))
 }

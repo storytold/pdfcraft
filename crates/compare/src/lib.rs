@@ -160,31 +160,31 @@ fn anchors(a: &[u64], b: &[u64]) -> Vec<(usize, usize)> {
     out
 }
 
-/// Myers' diff of `a` and `b`: the edit script.
-fn myers(a: &[u64], b: &[u64]) -> Vec<Op> {
-    let (n, m) = (a.len(), b.len());
-    if n == 0 || m == 0 {
-        return std::iter::repeat_n(Op::Delete, n).chain(std::iter::repeat_n(Op::Insert, m)).collect();
+/// Myers' diff of `old` and `new`: the edit script.
+fn myers(old: &[u64], new: &[u64]) -> Vec<Op> {
+    let (old_len, new_len) = (old.len(), new.len());
+    if old_len == 0 || new_len == 0 {
+        return std::iter::repeat_n(Op::Delete, old_len).chain(std::iter::repeat_n(Op::Insert, new_len)).collect();
     }
-    let max = n + m;
+    let max = old_len + new_len;
     let off = max as isize + 1;
-    let mut v = vec![0usize; 2 * max + 3];
+    let mut frontier = vec![0usize; 2 * max + 3];
     // Frontier d only spans diagonals -d..=d: save just that slice.
     let mut trace: Vec<Vec<usize>> = Vec::new();
     let mut found = false;
     'outer: for d in 0..=max as isize {
-        trace.push(v[(off - d - 1).max(0) as usize..=(off + d + 1) as usize].to_vec());
+        trace.push(frontier[(off - d - 1).max(0) as usize..=(off + d + 1) as usize].to_vec());
         let mut k = -d;
         while k <= d {
-            let i = (k + off) as usize;
-            let mut x = if k == -d || (k != d && v[i - 1] < v[i + 1]) { v[i + 1] } else { v[i - 1] + 1 };
+            let idx = (k + off) as usize;
+            let mut x = if k == -d || (k != d && frontier[idx - 1] < frontier[idx + 1]) { frontier[idx + 1] } else { frontier[idx - 1] + 1 };
             let mut y = (x as isize - k) as usize;
-            while x < n && y < m && a[x] == b[y] {
+            while x < old_len && y < new_len && old[x] == new[y] {
                 x += 1;
                 y += 1;
             }
-            v[i] = x;
-            if x >= n && y >= m {
+            frontier[idx] = x;
+            if x >= old_len && y >= new_len {
                 found = true;
                 break 'outer;
             }
@@ -193,18 +193,18 @@ fn myers(a: &[u64], b: &[u64]) -> Vec<Op> {
     }
     if !found {
         // Too different: replace everything.
-        return std::iter::repeat_n(Op::Delete, n).chain(std::iter::repeat_n(Op::Insert, m)).collect();
+        return std::iter::repeat_n(Op::Delete, old_len).chain(std::iter::repeat_n(Op::Insert, new_len)).collect();
     }
     // Walk back through the saved frontiers.
     let mut ops = Vec::new();
-    let (mut x, mut y) = (n as isize, m as isize);
+    let (mut x, mut y) = (old_len as isize, new_len as isize);
     for d in (0..trace.len() as isize).rev() {
-        let v = &trace[d as usize];
+        let row = &trace[d as usize];
         let k = x - y;
         let base = (off - d - 1).max(0);
-        let i = |k: isize| (k + off - base) as usize;
-        let prev_k = if k == -d || (k != d && v[i(k - 1)] < v[i(k + 1)]) { k + 1 } else { k - 1 };
-        let prev_x = v[i(prev_k)] as isize;
+        let idx = |k: isize| (k + off - base) as usize;
+        let prev_k = if k == -d || (k != d && row[idx(k - 1)] < row[idx(k + 1)]) { k + 1 } else { k - 1 };
+        let prev_x = row[idx(prev_k)] as isize;
         let prev_y = prev_x - prev_k;
         while x > prev_x && y > prev_y {
             ops.push(Op::Equal);
@@ -258,31 +258,31 @@ fn side(words: &[&Word], neighbour: Option<&Word>) -> Side {
 /// Compare two documents' words.
 #[must_use]
 pub fn compare(old: &[Word], new: &[Word]) -> Comparison {
-    let a: Vec<u64> = old.iter().map(|w| hash(&w.text)).collect();
-    let b: Vec<u64> = new.iter().map(|w| hash(&w.text)).collect();
-    let mut ops = Vec::with_capacity(a.len().max(b.len()));
-    diff(&a, &b, &mut ops, 0);
+    let old_hashes: Vec<u64> = old.iter().map(|w| hash(&w.text)).collect();
+    let new_hashes: Vec<u64> = new.iter().map(|w| hash(&w.text)).collect();
+    let mut ops = Vec::with_capacity(old_hashes.len().max(new_hashes.len()));
+    diff(&old_hashes, &new_hashes, &mut ops, 0);
 
     let mut changes = Vec::new();
-    let (mut i, mut j) = (0usize, 0usize);
-    let mut k = 0;
-    while k < ops.len() {
-        if ops[k] == Op::Equal {
-            i += 1;
-            j += 1;
-            k += 1;
+    let (mut old_idx, mut new_idx) = (0usize, 0usize);
+    let mut op_idx = 0;
+    while op_idx < ops.len() {
+        if ops[op_idx] == Op::Equal {
+            old_idx += 1;
+            new_idx += 1;
+            op_idx += 1;
             continue;
         }
         let (mut del, mut ins): (Vec<&Word>, Vec<&Word>) = (Vec::new(), Vec::new());
-        while k < ops.len() && ops[k] != Op::Equal {
-            if ops[k] == Op::Delete {
-                del.push(&old[i]);
-                i += 1;
+        while op_idx < ops.len() && ops[op_idx] != Op::Equal {
+            if ops[op_idx] == Op::Delete {
+                del.push(&old[old_idx]);
+                old_idx += 1;
             } else {
-                ins.push(&new[j]);
-                j += 1;
+                ins.push(&new[new_idx]);
+                new_idx += 1;
             }
-            k += 1;
+            op_idx += 1;
         }
         let kind = match (del.is_empty(), ins.is_empty()) {
             (false, false) => Kind::Replaced,
@@ -290,8 +290,8 @@ pub fn compare(old: &[Word], new: &[Word]) -> Comparison {
             _ => Kind::Inserted,
         };
         // Where a one-sided change sits in the other document: next to the neighbouring word.
-        let old_near = old.get(i).or_else(|| old.last());
-        let new_near = new.get(j).or_else(|| new.last());
+        let old_near = old.get(old_idx).or_else(|| old.last());
+        let new_near = new.get(new_idx).or_else(|| new.last());
         changes.push(Change { kind, old: side(&del, old_near), new: side(&ins, new_near) });
     }
     Comparison { changes, old_words: old.len(), new_words: new.len() }

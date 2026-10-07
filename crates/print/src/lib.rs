@@ -537,19 +537,19 @@ pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError
             let name = format!("P{i}");
             xo.set(name.clone().into_bytes(), Object::Ref(form));
             // Display space → sheet, then clip to the visible part, then user → display.
-            let [a, b, cc, d, e, f] = pl.matrix.0;
+            let [m00, m01, m02, m03, m04, m05] = pl.matrix.0;
             let to_display = Matrix(views[pl.page]).invert().unwrap_or_default();
             let [ua, ub, uc, ud, ue, uf] = to_display.0;
             let [x0, y0, x1, y1] = pl.clip;
             let _ = writeln!(
                 c,
                 "q {} {} {} {} {} {} cm {} {} {} {} re W n {} {} {} {} {} {} cm /{name} Do Q",
-                n(a),
-                n(b),
-                n(cc),
-                n(d),
-                n(e),
-                n(f),
+                n(m00),
+                n(m01),
+                n(m02),
+                n(m03),
+                n(m04),
+                n(m05),
                 n(x0),
                 n(y0),
                 n(x1 - x0),

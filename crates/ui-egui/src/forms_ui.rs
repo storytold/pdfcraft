@@ -263,16 +263,16 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
                 if multiline {
                     te = te.desired_rows(((rect.height() / (font * 1.3)).floor() as usize).max(1));
                 }
-                let r = ui.add_sized(rect.size(), te);
+                let resp = ui.add_sized(rect.size(), te);
                 if fx.request_focus {
-                    r.request_focus();
+                    resp.request_focus();
                     fx.request_focus = false;
                     if std::mem::take(&mut fx.select_all)
-                        && let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), r.id)
+                        && let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), resp.id)
                     {
-                        let n = fx.text.chars().count();
-                        st.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(n))));
-                        st.store(ui.ctx(), r.id);
+                        let chars = fx.text.chars().count();
+                        st.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(chars))));
+                        st.store(ui.ctx(), resp.id);
                     }
                 }
                 let (enter, esc, tab, shift) = ui
@@ -281,7 +281,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
                     close = true;
                 } else if tab {
                     next = Some(!shift);
-                } else if r.lost_focus()
+                } else if resp.lost_focus()
                     && (!multiline || !enter)
                     && !fx.calendar_rect.is_some_and(|c| ui.input(|i| i.pointer.interact_pos().is_some_and(|p| c.contains(p))))
                 {

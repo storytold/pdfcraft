@@ -25,9 +25,9 @@ fn harness() -> Harness<'static, PrintCraftApp> {
 
 /// A point on page 1 at (x, y) points from its top-left.
 fn at(h: &Harness<'static, PrintCraftApp>, x: f32, y: f32) -> Pos2 {
-    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-    let k = r.width() / 300.0;
-    r.min + egui::vec2(x * k, y * k)
+    let rect = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let scale = rect.width() / 300.0;
+    rect.min + egui::vec2(x * scale, y * scale)
 }
 
 fn drag(h: &mut Harness<'static, PrintCraftApp>, a: Pos2, b: Pos2) {
@@ -61,8 +61,8 @@ fn placing_moving_editing_and_deleting_a_field() {
     h.run_steps(2);
     h.get_by_label("Prepare a form");
     // Drag out a text field in the empty lower part of the page.
-    let (a, b) = (at(&h, 40.0, 300.0), at(&h, 200.0, 322.0));
-    drag(&mut h, a, b);
+    let (from, to) = (at(&h, 40.0, 300.0), at(&h, 200.0, 322.0));
+    drag(&mut h, from, to);
     let all = names(&h);
     assert_eq!(all.len(), before + 1, "{all:?}");
     assert_eq!(all.last().map(String::as_str), Some("Text1"));
@@ -72,11 +72,11 @@ fn placing_moving_editing_and_deleting_a_field() {
     let r = rect_of(&h, "Text1");
     assert!((r[2] - r[0] - 160.0).abs() < 2.0 && (r[3] - r[1] - 22.0).abs() < 2.0, "{r:?}");
     // Move it 20 pt right.
-    let c = at(&h, 120.0, 311.0);
-    let d = c + egui::vec2(at(&h, 20.0, 0.0).x - at(&h, 0.0, 0.0).x, 0.0);
-    drag(&mut h, c, d);
-    let m = rect_of(&h, "Text1");
-    assert!((m[0] - r[0] - 20.0).abs() < 1.5, "moved: {r:?} → {m:?}");
+    let from = at(&h, 120.0, 311.0);
+    let to = from + egui::vec2(at(&h, 20.0, 0.0).x - at(&h, 0.0, 0.0).x, 0.0);
+    drag(&mut h, from, to);
+    let moved = rect_of(&h, "Text1");
+    assert!((moved[0] - r[0] - 20.0).abs() < 1.5, "moved: {r:?} → {moved:?}");
     // Field Properties: rename and make it required (one undo step).
     h.state_mut().execute("form.field.properties");
     h.run_steps(2);
@@ -224,17 +224,22 @@ fn duplicating_a_field_onto_every_page() {
     h.state_mut().apply_edit(printcraft_engine::Edit::InsertBlankPage { at: 1, width: 300.0, height: 400.0 });
     h.state_mut().execute("form.prepare");
     h.run_steps(3);
-    let (n, p) = {
+    let (n, center) = {
         let s = h.state();
         let doc = s.session.get(s.views[0].id).unwrap();
         let f = doc.form.iter().find(|f| f.name == "city").unwrap();
         (doc.info.pages.len(), printcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center())
     };
     assert!(n >= 2, "the fixture has {n} pages");
-    h.hover_at(p);
+    h.hover_at(center);
     h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::default() });
-    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::default() });
+    h.event(egui::Event::PointerButton { pos: center, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::default() });
+    h.event(egui::Event::PointerButton {
+        pos: center,
+        button: egui::PointerButton::Secondary,
+        pressed: false,
+        modifiers: egui::Modifiers::default(),
+    });
     h.run_steps(3);
     h.get_by_label("Duplicate…").click();
     h.run_steps(2);
@@ -243,8 +248,8 @@ fn duplicating_a_field_onto_every_page() {
     h.run_steps(3);
     let s = h.state();
     let doc = s.session.get(s.views[0].id).unwrap();
-    let f = doc.form.iter().find(|f| f.name == "city").unwrap();
-    let mut pages: Vec<usize> = f.widgets.iter().filter_map(|w| w.page).collect();
+    let field = doc.form.iter().find(|f| f.name == "city").unwrap();
+    let mut pages: Vec<usize> = field.widgets.iter().filter_map(|w| w.page).collect();
     pages.sort_unstable();
     assert_eq!(pages, (0..n).collect::<Vec<_>>());
     assert_eq!(doc.can_undo(), Some("Duplicate field"));
@@ -324,8 +329,8 @@ fn image_fields_take_a_picture_when_clicked() {
     let mut h = harness();
     assert!(h.state_mut().execute("form.add.image"));
     h.run_steps(2);
-    let (a, b) = (at(&h, 40.0, 220.0), at(&h, 140.0, 290.0));
-    drag(&mut h, a, b);
+    let (from, to) = (at(&h, 40.0, 220.0), at(&h, 140.0, 290.0));
+    drag(&mut h, from, to);
     assert_eq!(names(&h).last().map(String::as_str), Some("Image1"));
     // A picture to choose (the picker is bypassed in tests).
     let path = std::env::temp_dir().join(format!("printcraft-image-field-{}.png", std::process::id()));

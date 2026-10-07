@@ -1151,17 +1151,24 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                     let (vx1, vy1) = (((u1.min(1.0) * dw as f32).ceil() as u32).min(dw), ((v1.min(1.0) * dh as f32).ceil() as u32).min(dh));
                     for ty in vy0 / TILE..=(vy1.saturating_sub(1)) / TILE {
                         for tx in vx0 / TILE..=(vx1.saturating_sub(1)) / TILE {
-                            let (x, y) = (tx * TILE, ty * TILE);
-                            let (w, h) = (TILE.min(dw.saturating_sub(x)), TILE.min(dh.saturating_sub(y)));
-                            if w == 0 || h == 0 {
+                            let (tile_x, tile_y) = (tx * TILE, ty * TILE);
+                            let (tile_w, tile_h) = (TILE.min(dw.saturating_sub(tile_x)), TILE.min(dh.saturating_sub(tile_y)));
+                            if tile_w == 0 || tile_h == 0 {
                                 continue;
                             }
                             match view.tiles.get(&(i, tx, ty)) {
                                 Some((ttag, tex)) if *ttag == tag => {
                                     let (fw, fh) = (dw as f32, dh as f32);
-                                    xf.paint_image(painter, tex.id(), x as f32 / fw, y as f32 / fh, (x + w) as f32 / fw, (y + h) as f32 / fh);
+                                    xf.paint_image(
+                                        painter,
+                                        tex.id(),
+                                        tile_x as f32 / fw,
+                                        tile_y as f32 / fh,
+                                        (tile_x + tile_w) as f32 / fw,
+                                        (tile_y + tile_h) as f32 / fh,
+                                    );
                                 }
-                                _ => wanted.push((i, scale, tag, Some(Tile { x, y, w, h }))),
+                                _ => wanted.push((i, scale, tag, Some(Tile { x: tile_x, y: tile_y, w: tile_w, h: tile_h }))),
                             }
                         }
                     }
@@ -1181,14 +1188,14 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                 if resp.clicked() {
                     // Centred on the click, upright as the page is shown.
                     let (vx, vy) = xf.screen_to_view(p);
-                    let (w, h) = kind.size();
-                    let corners = [(f64::from(vx) - w / 2.0, f64::from(vy) - h / 2.0), (f64::from(vx) + w / 2.0, f64::from(vy) + h / 2.0)];
-                    let u: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
+                    let (sw, sh) = kind.size();
+                    let corners = [(f64::from(vx) - sw / 2.0, f64::from(vy) - sh / 2.0), (f64::from(vx) + sw / 2.0, f64::from(vy) + sh / 2.0)];
+                    let at: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
                     let rect = [
-                        f64::from(u[0][0].min(u[1][0])),
-                        f64::from(u[0][1].min(u[1][1])),
-                        f64::from(u[0][0].max(u[1][0])),
-                        f64::from(u[0][1].max(u[1][1])),
+                        f64::from(at[0][0].min(at[1][0])),
+                        f64::from(at[0][1].min(at[1][1])),
+                        f64::from(at[0][0].max(at[1][0])),
+                        f64::from(at[0][1].max(at[1][1])),
                     ];
                     let by = (kind.group() == printcraft_engine::StampGroup::Dynamic).then(|| by_line.clone());
                     let shape = printcraft_engine::Shape::Stamp { rect, stamp: kind, by };
@@ -1210,11 +1217,11 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                 if resp.clicked() {
                     // Centred on the click at its natural size (the engine sizes it).
                     let (vx, vy) = xf.screen_to_view(p);
-                    let u = info.pages[i].view_to_user(vx, vy);
-                    let (x, y) = (f64::from(u[0]), f64::from(u[1]));
+                    let at = info.pages[i].view_to_user(vx, vy);
+                    let (ax, ay) = (f64::from(at[0]), f64::from(at[1]));
                     view.pending_edit = Some(printcraft_engine::Edit::AddCustomStamp {
                         page: i,
-                        rect: [x, y, x, y],
+                        rect: [ax, ay, ax, ay],
                         name: cs.name.clone(),
                         file: printcraft_engine::MarkFile { name: cs.file.clone(), bytes: cs.data.clone(), page: cs.page },
                         author: author.clone(),
@@ -2093,9 +2100,9 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, ui: &mut
                     view.pending_edit = Some(Edit::DeletePages { pages: targets.clone() });
                 }
                 if icons::button(ui, "file-plus", 30.0, false, "Insert a blank page after the selection").clicked() {
-                    let c = info.pages[last].crop;
-                    let (w, h) = (f64::from((c[2] - c[0]).abs().max(1.0)), f64::from((c[3] - c[1]).abs().max(1.0)));
-                    view.pending_edit = Some(Edit::InsertBlankPage { at: last + 1, width: w, height: h });
+                    let crop = info.pages[last].crop;
+                    let (width, height) = (f64::from((crop[2] - crop[0]).abs().max(1.0)), f64::from((crop[3] - crop[1]).abs().max(1.0)));
+                    view.pending_edit = Some(Edit::InsertBlankPage { at: last + 1, width, height });
                 }
                 if icons::button(ui, "file-input", 30.0, false, "Insert pages from a file…").clicked() {
                     view.pending_action = Some(ViewAction::InsertFromFile);
@@ -2200,16 +2207,16 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, pool: &RenderPool, editable
         for row in 0..rows {
             let (row_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), cell.y), Sense::hover());
             for col in 0..cols {
-                let i = row * cols + col;
-                let Some(p) = info.pages.get(i) else { break };
-                let c = Rect::from_min_size(pos2(row_rect.left() + left + col as f32 * cell.x, row_rect.top()), cell);
-                let resp = ui.interact(c, ui.id().with(("org", i)), if editable { Sense::click_and_drag() } else { Sense::click() });
-                cells.push((i, c));
+                let idx = row * cols + col;
+                let Some(page_info) = info.pages.get(idx) else { break };
+                let cell_rect = Rect::from_min_size(pos2(row_rect.left() + left + col as f32 * cell.x, row_rect.top()), cell);
+                let resp = ui.interact(cell_rect, ui.id().with(("org", idx)), if editable { Sense::click_and_drag() } else { Sense::click() });
+                cells.push((idx, cell_rect));
                 // Drag pages to move them (the selection, or the page grabbed).
                 if resp.drag_started() {
-                    if !view.selected.contains(&i) {
-                        view.selected = [i].into();
-                        view.select_anchor = Some(i);
+                    if !view.selected.contains(&idx) {
+                        view.selected = [idx].into();
+                        view.select_anchor = Some(idx);
                     }
                     let mut pages: Vec<usize> = view.selected.iter().copied().collect();
                     pages.sort_unstable();
@@ -2219,49 +2226,55 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, pool: &RenderPool, editable
                     drop = true;
                 }
                 resp.widget_info(|| {
-                    egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, view.selected.contains(&i), format!("Page {}", p.label))
+                    egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, view.selected.contains(&idx), format!("Page {}", page_info.label))
                 });
-                let s = (cell.x - 44.0) / p.width.max(1.0);
-                let size = vec2(p.width * s, p.height * s).min(vec2(cell.x - 44.0, cell.y - 56.0));
-                let pr = Rect::from_center_size(pos2(c.center().x, c.top() + 16.0 + size.y / 2.0), size);
-                let selected = view.selected.contains(&i) || (view.selected.is_empty() && i == view.current);
+                let thumb_scale = (cell.x - 44.0) / page_info.width.max(1.0);
+                let size = vec2(page_info.width * thumb_scale, page_info.height * thumb_scale).min(vec2(cell.x - 44.0, cell.y - 56.0));
+                let pr = Rect::from_center_size(pos2(cell_rect.center().x, cell_rect.top() + 16.0 + size.y / 2.0), size);
+                let selected = view.selected.contains(&idx) || (view.selected.is_empty() && idx == view.current);
                 if selected || resp.hovered() {
-                    ui.painter().rect_filled(c.shrink(6.0), CornerRadius::same(8), if selected { t.accent_soft } else { t.hover });
+                    ui.painter().rect_filled(cell_rect.shrink(6.0), CornerRadius::same(8), if selected { t.accent_soft } else { t.hover });
                 }
-                if view.selected.contains(&i) {
-                    ui.painter().rect_stroke(c.shrink(6.0), CornerRadius::same(8), Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+                if view.selected.contains(&idx) {
+                    ui.painter().rect_stroke(cell_rect.shrink(6.0), CornerRadius::same(8), Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
                 }
                 ui.painter().rect_filled(pr.translate(vec2(0.0, 1.5)), CornerRadius::same(1), t.page_shadow);
                 ui.painter().rect_filled(pr, CornerRadius::ZERO, Color32::WHITE);
-                if let Some(tex) = view.thumbs.get(&i) {
+                if let Some(tex) = view.thumbs.get(&idx) {
                     ui.painter().image(tex.id(), pr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                 }
                 ui.painter().rect_stroke(pr, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
-                ui.painter().text(pos2(c.center().x, pr.bottom() + 16.0), Align2::CENTER_CENTER, &p.label, theme::medium(12.0), t.text_muted);
+                ui.painter().text(
+                    pos2(cell_rect.center().x, pr.bottom() + 16.0),
+                    Align2::CENTER_CENTER,
+                    &page_info.label,
+                    theme::medium(12.0),
+                    t.text_muted,
+                );
                 if resp.clicked() {
-                    let m = ui.input(|i| i.modifiers);
-                    if m.shift {
-                        let a = view.select_anchor.unwrap_or(view.current);
-                        view.selected = (a.min(i)..=a.max(i)).collect();
-                    } else if m.command {
-                        if !view.selected.remove(&i) {
-                            view.selected.insert(i);
+                    let mods = ui.input(|i| i.modifiers);
+                    if mods.shift {
+                        let anchor = view.select_anchor.unwrap_or(view.current);
+                        view.selected = (anchor.min(idx)..=anchor.max(idx)).collect();
+                    } else if mods.command {
+                        if !view.selected.remove(&idx) {
+                            view.selected.insert(idx);
                         }
-                        view.select_anchor = Some(i);
+                        view.select_anchor = Some(idx);
                     } else {
-                        view.selected = [i].into();
-                        view.select_anchor = Some(i);
+                        view.selected = [idx].into();
+                        view.select_anchor = Some(idx);
                     }
-                    view.current = i;
+                    view.current = idx;
                 }
                 if resp.double_clicked() {
-                    open_page = Some(i);
+                    open_page = Some(idx);
                 }
                 // Right-click: Cut, Copy, Paste (on the selection, or this page).
                 resp.context_menu(|ui| {
-                    if !view.selected.contains(&i) {
-                        view.selected = [i].into();
-                        view.current = i;
+                    if !view.selected.contains(&idx) {
+                        view.selected = [idx].into();
+                        view.current = idx;
                     }
                     if ui.add_enabled(editable, egui::Button::new("Cut")).clicked() {
                         view.pending_action = Some(ViewAction::CopyPages { cut: true });

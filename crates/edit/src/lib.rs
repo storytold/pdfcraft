@@ -144,7 +144,7 @@ fn picture(src: &MarkSource, page: (f64, f64), scale: f64, rotation: f64, offset
     let (sw, sh) = (src.size.0.max(0.01), src.size.1.max(0.01));
     let k = (w / sw).min(h / sh) * if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
     let (dw, dh) = (sw * k, sh * k);
-    let (s, c) = rotation.to_radians().sin_cos();
+    let (sin, cos) = rotation.to_radians().sin_cos();
     let (cx, cy) = (w / 2.0 + offset[0], h / 2.0 + offset[1]);
     // Centre, rotate, then place the picture's box (unit square for images).
     let place = if src.image {
@@ -152,7 +152,7 @@ fn picture(src: &MarkSource, page: (f64, f64), scale: f64, rotation: f64, offset
     } else {
         format!("{} 0 0 {} {} {} cm", n(k), n(k), n(-dw / 2.0), n(-dh / 2.0))
     };
-    format!("{} {} {} {} {} {} cm\n{place}\n/PCPic{} Do\n", n(c), n(s), n(-s), n(c), n(cx), n(cy), src.xobject.num)
+    format!("{} {} {} {} {} {} cm\n{place}\n/PCPic{} Do\n", n(cos), n(sin), n(-sin), n(cos), n(cx), n(cy), src.xobject.num)
 }
 
 /// Register a mark picture in the page's own resources (`/PCPic<num>`).
@@ -189,7 +189,7 @@ const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "Jun
 /// Expand `<<…>>` tokens for page `index` (0-based within the range) of `count`.
 #[must_use]
 pub fn expand(template: &str, page_number: u32, count: usize, bates: u64, cx: &Context) -> String {
-    let (y, m, d) = cx.date;
+    let (year, month, day) = cx.date;
     let mut out = String::new();
     let mut rest = template;
     while let Some(start) = rest.find("<<") {
@@ -208,20 +208,20 @@ pub fn expand(template: &str, page_number: u32, count: usize, bates: u64, cx: &C
             "1/n" => format!("{p}/{count}"),
             "Page 1" => format!("Page {p}"),
             "Page 1 of n" => format!("Page {p} of {count}"),
-            "m/d" => format!("{m}/{d}"),
-            "m/d/yy" => format!("{m}/{d}/{:02}", y.rem_euclid(100)),
-            "m/d/yyyy" => format!("{m}/{d}/{y}"),
-            "mm/dd/yy" => format!("{m:02}/{d:02}/{:02}", y.rem_euclid(100)),
-            "mm/dd/yyyy" => format!("{m:02}/{d:02}/{y}"),
-            "d/m/yy" => format!("{d}/{m}/{:02}", y.rem_euclid(100)),
-            "d/m/yyyy" => format!("{d}/{m}/{y}"),
-            "dd/mm/yyyy" => format!("{d:02}/{m:02}/{y}"),
-            "yyyy-mm-dd" => format!("{y}-{m:02}-{d:02}"),
-            "mmmm d, yyyy" => format!("{} {d}, {y}", MONTHS[(m.clamp(1, 12) - 1) as usize]),
+            "m/d" => format!("{month}/{day}"),
+            "m/d/yy" => format!("{month}/{day}/{:02}", year.rem_euclid(100)),
+            "m/d/yyyy" => format!("{month}/{day}/{year}"),
+            "mm/dd/yy" => format!("{month:02}/{day:02}/{:02}", year.rem_euclid(100)),
+            "mm/dd/yyyy" => format!("{month:02}/{day:02}/{year}"),
+            "d/m/yy" => format!("{day}/{month}/{:02}", year.rem_euclid(100)),
+            "d/m/yyyy" => format!("{day}/{month}/{year}"),
+            "dd/mm/yyyy" => format!("{day:02}/{month:02}/{year}"),
+            "yyyy-mm-dd" => format!("{year}-{month:02}-{day:02}"),
+            "mmmm d, yyyy" => format!("{} {day}, {year}", MONTHS[(month.clamp(1, 12) - 1) as usize]),
             t if t.starts_with("Bates Number") => {
                 // Bates Number#digits#start#prefix#suffix (start is applied by the caller).
                 let parts: Vec<&str> = t.split('#').collect();
-                let digits = parts.get(1).and_then(|d| d.parse::<usize>().ok()).unwrap_or(6).clamp(1, 15);
+                let digits = parts.get(1).and_then(|part| part.parse::<usize>().ok()).unwrap_or(6).clamp(1, 15);
                 format!("{}{:0digits$}{}", parts.get(3).unwrap_or(&""), bates, parts.get(4).unwrap_or(&""))
             }
             _ => format!("<<{token}>>"),
@@ -415,7 +415,7 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
     let bates0 = hf.text.iter().find_map(|t| bates_start(t)).unwrap_or(1);
     for (k, &i) in pages.iter().enumerate() {
         let page = &all[i];
-        let (w, h) = page.display_size(doc);
+        let (width, height) = page.display_size(doc);
         let number = hf.start_number + k as u32;
         let bates = bates0 + k as u64;
         let size = hf.font_size;
@@ -433,11 +433,11 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
                 let tw = helvetica_width(line, size);
                 let x = match slot % 3 {
                     0 => left,
-                    1 => (w - tw) / 2.0,
-                    _ => w - right - tw,
+                    1 => (width - tw) / 2.0,
+                    _ => width - right - tw,
                 };
                 // Headers hang below the top margin; footers sit on the bottom margin.
-                let y = if header { h - top - size * 0.8 - li as f64 * line_h } else { bottom + (lines.len() - 1 - li) as f64 * line_h };
+                let y = if header { height - top - size * 0.8 - li as f64 * line_h } else { bottom + (lines.len() - 1 - li) as f64 * line_h };
                 body.extend(text_op(x, y, line));
                 if hf.underline {
                     let _ = writeln!(underlines, "{} {} {} {} re f", n(x), n(y - size * 0.15), n(tw), n((size * 0.06).max(0.4)));
@@ -497,17 +497,17 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
         }
         let widest = lines.iter().map(|l| helvetica_width(l, 1.0)).fold(0.0, f64::max).max(0.01);
         let size = if wm.font_size > 0.0 { wm.font_size } else { ((w * w + h * h).sqrt() * 0.5 / widest).clamp(6.0, 300.0) };
-        let (s, c) = wm.rotation.to_radians().sin_cos();
+        let (sin, cos) = wm.rotation.to_radians().sin_cos();
         let (cx, cy) = (w / 2.0 + wm.offset[0], h / 2.0 + wm.offset[1]);
         let mut content = begin(MarkKind::Watermark, "Watermark", page.view_matrix(doc)).into_bytes();
         content.extend(
             format!(
                 "/PCGS{} gs\n{} {} {} {} {} {} cm\nBT\n/PCHelv {} Tf\n{}\n",
                 (opacity * 100.0).round() as i64,
-                n(c),
-                n(s),
-                n(-s),
-                n(c),
+                n(cos),
+                n(sin),
+                n(-sin),
+                n(cos),
                 n(cx),
                 n(cy),
                 n(size),

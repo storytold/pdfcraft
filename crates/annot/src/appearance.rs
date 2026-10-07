@@ -31,7 +31,7 @@ pub fn cloud_radius(w: f64) -> f64 {
 }
 
 /// Draw a line ending (`/LE`) at `tip`, for a line arriving from `from`. Open and closed arrows only.
-fn line_end(c: &mut String, kind: &[u8], tip: (f64, f64), from: (f64, f64), w: f64) {
+fn line_end(out: &mut String, kind: &[u8], tip: (f64, f64), from: (f64, f64), width: f64) {
     if kind == b"None" {
         return;
     }
@@ -41,12 +41,12 @@ fn line_end(c: &mut String, kind: &[u8], tip: (f64, f64), from: (f64, f64), w: f
         return;
     }
     let (ux, uy) = (dx / len, dy / len);
-    let s = arrow_size(w);
+    let s = arrow_size(width);
     let (cos, sin) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
     let a = (tip.0 + s * (ux * cos - uy * sin), tip.1 + s * (ux * sin + uy * cos));
     let b = (tip.0 + s * (ux * cos + uy * sin), tip.1 + s * (-ux * sin + uy * cos));
     let op = if kind == b"ClosedArrow" { "h B" } else { "S" };
-    let _ = writeln!(c, "{} {} m {} {} l {} {} l {op}", n(a.0), n(a.1), n(tip.0), n(tip.1), n(b.0), n(b.1));
+    let _ = writeln!(out, "{} {} m {} {} l {} {} l {op}", n(a.0), n(a.1), n(tip.0), n(tip.1), n(b.0), n(b.1));
 }
 
 /// A closed cloudy outline through `pts` (§12.5.4 `/BE /S /C`): each edge becomes a row of
@@ -88,8 +88,8 @@ fn nums(d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
 /// `/C`-style colour arrays: none (transparent), gray, RGB or CMYK. `Err` = the value is
 /// malformed and no appearance can be drawn; `Ok(None)` = there is no colour.
 #[allow(clippy::result_unit_err)]
-fn color(d: &Dict, key: &[u8]) -> Result<Option<Rgb>, ()> {
-    let c = match d.get(key) {
+fn color(dict: &Dict, key: &[u8]) -> Result<Option<Rgb>, ()> {
+    let c = match dict.get(key) {
         None => return Ok(None),
         Some(o) => o.as_array().ok_or(())?.iter().map(printcraft_cos::Object::as_f64).collect::<Option<Vec<f64>>>().ok_or(())?,
     };
@@ -188,52 +188,52 @@ fn form(bbox: [f64; 4], content: &[u8], resources: Dict) -> Stream {
 }
 
 /// Draw the normal appearance of an annotation, or `None` if this subtype/variant isn't supported.
-pub fn build(d: &Dict) -> Option<Stream> {
-    let subtype = d.name(b"Subtype")?.to_vec();
-    let rect = nums(d, b"Rect").filter(|r| r.len() == 4)?;
+pub fn build(anno: &Dict) -> Option<Stream> {
+    let subtype = anno.name(b"Subtype")?.to_vec();
+    let rect = nums(anno, b"Rect").filter(|r| r.len() == 4)?;
     let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
     // Cloudy borders (§12.5.4) are drawn for polygons only.
-    let cloudy = d.get(b"BE").and_then(|b| b.as_dict()).is_some_and(|b| b.name(b"S") == Some(b"C"));
+    let cloudy = anno.get(b"BE").and_then(|b| b.as_dict()).is_some_and(|b| b.name(b"S") == Some(b"C"));
     if cloudy && subtype != b"Polygon" {
         return None;
     }
-    let opacity = d.get(b"CA").and_then(printcraft_cos::Object::as_f64).unwrap_or(1.0).clamp(0.0, 1.0);
-    let stroke = color(d, b"C").ok()?;
-    let w = border_width(d);
+    let opacity = anno.get(b"CA").and_then(printcraft_cos::Object::as_f64).unwrap_or(1.0).clamp(0.0, 1.0);
+    let stroke = color(anno, b"C").ok()?;
+    let line_width = border_width(anno);
     let mut res = Dict::new();
-    let mut c = String::new();
+    let mut content = String::new();
     let markup = matches!(subtype.as_slice(), b"Highlight" | b"Underline" | b"StrikeOut" | b"Squiggly");
     if let Some(gs) = ext_gstate(opacity, subtype == b"Highlight") {
         res.set(b"ExtGState".to_vec(), Object::Dict(gs));
-        c.push_str("/GS0 gs\n");
+        content.push_str("/GS0 gs\n");
     }
     match subtype.as_slice() {
         b"Text" => {
             let col = stroke.unwrap_or([1.0, 0.82, 0.0]);
-            let icon = d.name(b"Name").map_or_else(|| "Note".into(), |n| String::from_utf8_lossy(n).into_owned());
-            c.push_str(&note_icon(&icon, col));
-            return Some(form([0.0, 0.0, NOTE_SIZE, NOTE_SIZE], c.as_bytes(), res));
+            let icon = anno.name(b"Name").map_or_else(|| "Note".into(), |n| String::from_utf8_lossy(n).into_owned());
+            content.push_str(&note_icon(&icon, col));
+            return Some(form([0.0, 0.0, NOTE_SIZE, NOTE_SIZE], content.as_bytes(), res));
         }
         b"FileAttachment" => {
             let col = stroke.unwrap_or([0.0, 0.47, 0.84]);
-            let icon = d.name(b"Name").map_or_else(|| "PushPin".into(), |n| String::from_utf8_lossy(n).into_owned());
-            c.push_str(&attach_icon(&icon, col));
-            return Some(form([0.0, 0.0, NOTE_SIZE, NOTE_SIZE], c.as_bytes(), res));
+            let icon = anno.name(b"Name").map_or_else(|| "PushPin".into(), |n| String::from_utf8_lossy(n).into_owned());
+            content.push_str(&attach_icon(&icon, col));
+            return Some(form([0.0, 0.0, NOTE_SIZE, NOTE_SIZE], content.as_bytes(), res));
         }
         _ if markup => {
-            let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
+            let qps = nums(anno, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
             let col = stroke?;
-            for quad in q.as_chunks::<8>().0 {
-                let p = |i: usize| (quad[2 * i], quad[2 * i + 1]);
-                let (p1, p2, p3, p4) = (p(0), p(1), p(2), p(3));
-                let h = (p1.0 - p3.0).hypot(p1.1 - p3.1);
+            for quad in qps.as_chunks::<8>().0 {
+                let nth = |i: usize| (quad[2 * i], quad[2 * i + 1]);
+                let (p1, p2, p3, p4) = (nth(0), nth(1), nth(2), nth(3));
+                let height = (p1.0 - p3.0).hypot(p1.1 - p3.1);
                 // A point a fraction `t` of the way from the bottom edge to the top edge.
                 let at = |bottom: (f64, f64), top: (f64, f64), t: f64| (bottom.0 + (top.0 - bottom.0) * t, bottom.1 + (top.1 - bottom.1) * t);
                 match subtype.as_slice() {
                     b"Highlight" => {
-                        c.push_str(&rg(col));
+                        content.push_str(&rg(col));
                         let _ = writeln!(
-                            c,
+                            content,
                             "{} {} m {} {} l {} {} l {} {} l h f",
                             n(p1.0),
                             n(p1.1),
@@ -246,40 +246,40 @@ pub fn build(d: &Dict) -> Option<Stream> {
                         );
                     }
                     b"Underline" | b"StrikeOut" => {
-                        let lw = (h * 0.07).clamp(0.5, 3.0);
+                        let lw = (height * 0.07).clamp(0.5, 3.0);
                         let t = if subtype == b"Underline" { 0.08 } else { 0.42 };
                         let (a, b) = (at(p3, p1, t), at(p4, p2, t));
-                        let _ = writeln!(c, "{}{} w\n{} {} m {} {} l S", rg_stroke(col), n(lw), n(a.0), n(a.1), n(b.0), n(b.1));
+                        let _ = writeln!(content, "{}{} w\n{} {} m {} {} l S", rg_stroke(col), n(lw), n(a.0), n(a.1), n(b.0), n(b.1));
                     }
                     _ => {
                         // Squiggly: a zigzag along the bottom of the quad.
-                        let lw = (h * 0.05).clamp(0.5, 2.0);
-                        let amp = (h * 0.06).max(0.75);
+                        let lw = (height * 0.05).clamp(0.5, 2.0);
+                        let amp = (height * 0.06).max(0.75);
                         let len = (p4.0 - p3.0).hypot(p4.1 - p3.1);
-                        let step = (h / 4.0).max(1.5);
+                        let step = (height / 4.0).max(1.5);
                         let steps = ((len / step).ceil() as usize).clamp(1, 10_000);
-                        let _ = writeln!(c, "{}{} w 1 j", rg_stroke(col), n(lw));
+                        let _ = writeln!(content, "{}{} w 1 j", rg_stroke(col), n(lw));
                         for i in 0..=steps {
                             let t = i as f64 / steps as f64;
                             let base = (p3.0 + (p4.0 - p3.0) * t, p3.1 + (p4.1 - p3.1) * t);
                             let up = if i % 2 == 0 { amp * 2.0 } else { 0.0 };
-                            let (ux, uy) = if h > 0.0 { ((p1.0 - p3.0) / h, (p1.1 - p3.1) / h) } else { (0.0, 1.0) };
+                            let (ux, uy) = if height > 0.0 { ((p1.0 - p3.0) / height, (p1.1 - p3.1) / height) } else { (0.0, 1.0) };
                             let (x, y) = (base.0 + ux * up, base.1 + uy * up);
-                            let _ = writeln!(c, "{} {} {}", n(x), n(y), if i == 0 { "m" } else { "l" });
+                            let _ = writeln!(content, "{} {} {}", n(x), n(y), if i == 0 { "m" } else { "l" });
                         }
-                        c.push_str("S\n");
+                        content.push_str("S\n");
                     }
                 }
             }
         }
         b"Redact" => {
             // While marked: the outline of each area (the fill comes when applied).
-            let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
+            let q = nums(anno, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
             let col = stroke.unwrap_or([0.89, 0.13, 0.13]);
-            let _ = writeln!(c, "{}1 w", rg_stroke(col));
+            let _ = writeln!(content, "{}1 w", rg_stroke(col));
             for quad in q.as_chunks::<8>().0 {
                 let _ = writeln!(
-                    c,
+                    content,
                     "{} {} m {} {} l {} {} l {} {} l h S",
                     n(quad[0]),
                     n(quad[1]),
@@ -293,24 +293,24 @@ pub fn build(d: &Dict) -> Option<Stream> {
             }
         }
         b"Square" | b"Circle" => {
-            let fill = color(d, b"IC").ok()?;
+            let fill = color(anno, b"IC").ok()?;
             if stroke.is_none() && fill.is_none() {
-                return Some(form(rect, c.as_bytes(), res));
+                return Some(form(rect, content.as_bytes(), res));
             }
-            let inset = w / 2.0;
+            let inset = line_width / 2.0;
             let [x0, y0, x1, y1] = [rect[0] + inset, rect[1] + inset, rect[2] - inset, rect[3] - inset];
             if let Some(f) = fill {
-                c.push_str(&rg(f));
+                content.push_str(&rg(f));
             }
             if let Some(s) = stroke {
-                let _ = write!(c, "{}{} w\n{}", rg_stroke(s), n(w), dash(d));
+                let _ = write!(content, "{}{} w\n{}", rg_stroke(s), n(line_width), dash(anno));
             }
             if subtype == b"Square" {
-                let _ = writeln!(c, "{} {} {} {} re", n(x0), n(y0), n(x1 - x0), n(y1 - y0));
+                let _ = writeln!(content, "{} {} {} {} re", n(x0), n(y0), n(x1 - x0), n(y1 - y0));
             } else {
-                c.push_str(&ellipse(x0, y0, x1, y1));
+                content.push_str(&ellipse(x0, y0, x1, y1));
             }
-            c.push_str(match (fill.is_some(), stroke.is_some() && w > 0.0) {
+            content.push_str(match (fill.is_some(), stroke.is_some() && line_width > 0.0) {
                 (true, true) => "B\n",
                 (true, false) => "f\n",
                 (false, true) => "S\n",
@@ -318,51 +318,52 @@ pub fn build(d: &Dict) -> Option<Stream> {
             });
         }
         b"Line" => {
-            let l = nums(d, b"L").filter(|l| l.len() == 4)?;
+            let l = nums(anno, b"L").filter(|l| l.len() == 4)?;
             let col = stroke?;
-            let ends: Vec<Vec<u8>> = match d.get(b"LE") {
+            let ends: Vec<Vec<u8>> = match anno.get(b"LE") {
                 None => vec![b"None".to_vec(), b"None".to_vec()],
                 Some(o) => o.as_array()?.iter().map(|e| e.as_name().map(<[u8]>::to_vec)).collect::<Option<_>>()?,
             };
             if ends.len() != 2 || ends.iter().any(|e| !matches!(e.as_slice(), b"None" | b"OpenArrow" | b"ClosedArrow")) {
                 return None;
             }
-            let fill = color(d, b"IC").ok()?.unwrap_or(col);
-            let _ = write!(c, "{}{}{} w 1 J 1 j\n{}", rg_stroke(col), rg(fill), n(w), dash(d));
-            let _ = writeln!(c, "{} {} m {} {} l S\n[] 0 d", n(l[0]), n(l[1]), n(l[2]), n(l[3]));
+            let fill = color(anno, b"IC").ok()?.unwrap_or(col);
+            let _ = write!(content, "{}{}{} w 1 J 1 j\n{}", rg_stroke(col), rg(fill), n(line_width), dash(anno));
+            let _ = writeln!(content, "{} {} m {} {} l S\n[] 0 d", n(l[0]), n(l[1]), n(l[2]), n(l[3]));
             for (end, (tip, from)) in ends.iter().zip([((l[0], l[1]), (l[2], l[3])), ((l[2], l[3]), (l[0], l[1]))]) {
-                line_end(&mut c, end, tip, from, w);
+                line_end(&mut content, end, tip, from, line_width);
             }
         }
         b"Polygon" | b"PolyLine" => {
-            let v = nums(d, b"Vertices").filter(|v| v.len() >= 4 && v.len() % 2 == 0)?;
+            let v = nums(anno, b"Vertices").filter(|v| v.len() >= 4 && v.len() % 2 == 0)?;
             let pts: Vec<(f64, f64)> = v.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
             let col = stroke;
             let closed = subtype == b"Polygon";
-            let fill = if closed { color(d, b"IC").ok()? } else { None };
-            if subtype == b"PolyLine" && d.get(b"LE").is_some_and(|e| e.as_array().is_none_or(|a| a.iter().any(|x| x.as_name() != Some(b"None")))) {
+            let fill = if closed { color(anno, b"IC").ok()? } else { None };
+            if subtype == b"PolyLine" && anno.get(b"LE").is_some_and(|e| e.as_array().is_none_or(|a| a.iter().any(|x| x.as_name() != Some(b"None"))))
+            {
                 // Line endings on connected lines aren't drawn yet.
                 return None;
             }
             if let Some(f) = fill {
-                c.push_str(&rg(f));
+                content.push_str(&rg(f));
             }
             if let Some(s) = col {
-                let _ = write!(c, "{}{} w 1 J 1 j\n{}", rg_stroke(s), n(w), dash(d));
+                let _ = write!(content, "{}{} w 1 J 1 j\n{}", rg_stroke(s), n(line_width), dash(anno));
             }
             if cloudy {
                 let intensity =
-                    d.get(b"BE").and_then(|b| b.as_dict()).and_then(|b| b.get(b"I")).and_then(printcraft_cos::Object::as_f64).unwrap_or(1.0);
-                c.push_str(&cloud_path(&pts, cloud_radius(w) * intensity.clamp(0.5, 2.0)));
+                    anno.get(b"BE").and_then(|b| b.as_dict()).and_then(|b| b.get(b"I")).and_then(printcraft_cos::Object::as_f64).unwrap_or(1.0);
+                content.push_str(&cloud_path(&pts, cloud_radius(line_width) * intensity.clamp(0.5, 2.0)));
             } else {
                 for (i, p) in pts.iter().enumerate() {
-                    let _ = writeln!(c, "{} {} {}", n(p.0), n(p.1), if i == 0 { "m" } else { "l" });
+                    let _ = writeln!(content, "{} {} {}", n(p.0), n(p.1), if i == 0 { "m" } else { "l" });
                 }
                 if closed {
-                    c.push_str("h\n");
+                    content.push_str("h\n");
                 }
             }
-            c.push_str(match (fill.is_some(), col.is_some() && w > 0.0) {
+            content.push_str(match (fill.is_some(), col.is_some() && line_width > 0.0) {
                 (true, true) => "B\n",
                 (true, false) => "f\n",
                 (false, true) => "S\n",
@@ -375,7 +376,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
             let [x0, y0, x1, y1] = rect;
             let (cx, h) = (f64::midpoint(x0, x1), y1 - y0);
             let _ = writeln!(
-                c,
+                content,
                 "{}{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c h f",
                 rg(col),
                 n(x0),
@@ -396,139 +397,139 @@ pub fn build(d: &Dict) -> Option<Stream> {
         }
         b"Ink" => {
             let col = stroke?;
-            let list = d.get(b"InkList")?.as_array()?;
-            let _ = writeln!(c, "{}{} w 1 J 1 j", rg_stroke(col), n(w));
+            let list = anno.get(b"InkList")?.as_array()?;
+            let _ = writeln!(content, "{}{} w 1 J 1 j", rg_stroke(col), n(line_width));
             for s in list {
                 let pts: Vec<f64> = s.as_array()?.iter().map(printcraft_cos::Object::as_f64).collect::<Option<_>>()?;
                 let pts: Vec<(f64, f64)> = pts.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
                 let Some(first) = pts.first() else { continue };
-                let _ = writeln!(c, "{} {} m", n(first.0), n(first.1));
+                let _ = writeln!(content, "{} {} m", n(first.0), n(first.1));
                 if pts.len() == 1 {
-                    let _ = writeln!(c, "{} {} l", n(first.0 + 0.01), n(first.1));
+                    let _ = writeln!(content, "{} {} l", n(first.0 + 0.01), n(first.1));
                 }
                 for p in &pts[1..] {
-                    let _ = writeln!(c, "{} {} l", n(p.0), n(p.1));
+                    let _ = writeln!(content, "{} {} l", n(p.0), n(p.1));
                 }
-                c.push_str("S\n");
+                content.push_str("S\n");
             }
         }
         b"Stamp" => {
             // A typed signature: filled outlines normalised to the rectangle.
-            if let Some(outline) = d.get(b"PCOutline").and_then(|o| o.as_array()) {
+            if let Some(outline) = anno.get(b"PCOutline").and_then(|o| o.as_array()) {
                 let [x0, y0, x1, y1] = rect;
-                let (w, h) = (x1 - x0, y1 - y0);
-                c.push_str(&rg(stroke.unwrap_or([0.0; 3])));
+                let (width, height) = (x1 - x0, y1 - y0);
+                content.push_str(&rg(stroke.unwrap_or([0.0; 3])));
                 for contour in outline {
                     let v: Vec<f64> = contour.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect()).unwrap_or_default();
                     for (i, p) in v.as_chunks::<2>().0.iter().enumerate() {
-                        let _ = writeln!(c, "{} {} {}", n(x0 + p[0] * w), n(y0 + p[1] * h), if i == 0 { "m" } else { "l" });
+                        let _ = writeln!(content, "{} {} {}", n(x0 + p[0] * width), n(y0 + p[1] * height), if i == 0 { "m" } else { "l" });
                     }
                     if v.len() >= 6 {
-                        c.push_str("h\n");
+                        content.push_str("h\n");
                     }
                 }
-                c.push_str("f*\n");
-                return Some(form(rect, c.as_bytes(), res));
+                content.push_str("f*\n");
+                return Some(form(rect, content.as_bytes(), res));
             }
             // A custom stamp: its picture (an image, or a form mapped to /PCPictureSize) fills
             // the rectangle.
-            if let Some(pic) = d.get(b"PCPicture").and_then(Object::as_ref) {
+            if let Some(pic) = anno.get(b"PCPicture").and_then(Object::as_ref) {
                 let [x0, y0, x1, y1] = rect;
-                let (w, h) = (x1 - x0, y1 - y0);
-                let place = if matches!(d.get(b"PCPictureImage"), Some(Object::Bool(true))) {
-                    format!("{} 0 0 {} {} {} cm", n(w), n(h), n(x0), n(y0))
+                let (width, height) = (x1 - x0, y1 - y0);
+                let place = if matches!(anno.get(b"PCPictureImage"), Some(Object::Bool(true))) {
+                    format!("{} 0 0 {} {} {} cm", n(width), n(height), n(x0), n(y0))
                 } else {
-                    let size = nums(d, b"PCPictureSize").filter(|s| s.len() == 2 && s[0] > 0.0 && s[1] > 0.0)?;
-                    format!("{} 0 0 {} {} {} cm", n(w / size[0]), n(h / size[1]), n(x0), n(y0))
+                    let size = nums(anno, b"PCPictureSize").filter(|s| s.len() == 2 && s[0] > 0.0 && s[1] > 0.0)?;
+                    format!("{} 0 0 {} {} {} cm", n(width / size[0]), n(height / size[1]), n(x0), n(y0))
                 };
-                let _ = writeln!(c, "q {place} /Pic Do Q");
+                let _ = writeln!(content, "q {place} /Pic Do Q");
                 let mut xo = Dict::new();
                 xo.set(b"Pic".to_vec(), Object::Ref(pic));
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
-                return Some(form(rect, c.as_bytes(), res));
+                return Some(form(rect, content.as_bytes(), res));
             }
             // Only PrintCraft's own Fill & Sign marks are drawn here.
-            let name = d.name(b"Name")?;
+            let name = anno.name(b"Name")?;
             let col = stroke.unwrap_or([0.0; 3]);
             let [x0, y0, x1, y1] = rect;
-            let (w, h) = (x1 - x0, y1 - y0);
-            let lw = w.min(h) * 0.12;
+            let (width, height) = (x1 - x0, y1 - y0);
+            let lw = width.min(height) * 0.12;
             match name {
                 b"PCCheck" => {
                     let _ = writeln!(
-                        c,
+                        content,
                         "{}{} w 1 J 1 j\n{} {} m {} {} l {} {} l S",
                         rg_stroke(col),
                         n(lw),
-                        n(x0 + w * 0.15),
-                        n(y0 + h * 0.5),
-                        n(x0 + w * 0.4),
-                        n(y0 + h * 0.2),
-                        n(x0 + w * 0.88),
-                        n(y0 + h * 0.85)
+                        n(x0 + width * 0.15),
+                        n(y0 + height * 0.5),
+                        n(x0 + width * 0.4),
+                        n(y0 + height * 0.2),
+                        n(x0 + width * 0.88),
+                        n(y0 + height * 0.85)
                     );
                 }
                 b"PCCross" => {
                     let _ = writeln!(
-                        c,
+                        content,
                         "{}{} w 1 J\n{} {} m {} {} l {} {} m {} {} l S",
                         rg_stroke(col),
                         n(lw),
-                        n(x0 + w * 0.18),
-                        n(y0 + h * 0.18),
-                        n(x1 - w * 0.18),
-                        n(y1 - h * 0.18),
-                        n(x0 + w * 0.18),
-                        n(y1 - h * 0.18),
-                        n(x1 - w * 0.18),
-                        n(y0 + h * 0.18)
+                        n(x0 + width * 0.18),
+                        n(y0 + height * 0.18),
+                        n(x1 - width * 0.18),
+                        n(y1 - height * 0.18),
+                        n(x0 + width * 0.18),
+                        n(y1 - height * 0.18),
+                        n(x1 - width * 0.18),
+                        n(y0 + height * 0.18)
                     );
                 }
                 b"PCDot" => {
-                    let r = w.min(h) * 0.3;
-                    c.push_str(&rg(col));
-                    c.push_str(&ellipse(x0 + w / 2.0 - r, y0 + h / 2.0 - r, x0 + w / 2.0 + r, y0 + h / 2.0 + r));
-                    c.push_str("f\n");
+                    let r = width.min(height) * 0.3;
+                    content.push_str(&rg(col));
+                    content.push_str(&ellipse(x0 + width / 2.0 - r, y0 + height / 2.0 - r, x0 + width / 2.0 + r, y0 + height / 2.0 + r));
+                    content.push_str("f\n");
                 }
                 b"PCLine" => {
                     let _ = writeln!(
-                        c,
+                        content,
                         "{}{} w 1 J\n{} {} m {} {} l S",
                         rg_stroke(col),
-                        n(h.clamp(0.5, 2.0)),
+                        n(height.clamp(0.5, 2.0)),
                         n(x0),
-                        n(y0 + h / 2.0),
+                        n(y0 + height / 2.0),
                         n(x1),
-                        n(y0 + h / 2.0)
+                        n(y0 + height / 2.0)
                     );
                 }
                 other => {
                     // Only stamps PrintCraft made: others keep their own artwork.
-                    if !matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) {
+                    if !matches!(anno.get(b"PCStamp"), Some(Object::Bool(true))) {
                         return None;
                     }
                     let kind = crate::StampKind::from_name(other)?;
-                    let by = d.get(b"PCByLine").and_then(|o| o.as_string()).map(PdfString::to_text);
+                    let by = anno.get(b"PCByLine").and_then(|o| o.as_string()).map(PdfString::to_text);
                     return Some(stamp(kind, rect, stroke.unwrap_or(kind.color()), by.as_deref(), opacity, res));
                 }
             }
         }
         b"FreeText" => {
-            let (text_color, size) = parse_da(d);
+            let (text_color, size) = parse_da(anno);
             let bg = stroke;
-            let bw = if d.contains(b"BS") || d.contains(b"Border") { border_width(d) } else { 0.0 };
+            let bw = if anno.contains(b"BS") || anno.contains(b"Border") { border_width(anno) } else { 0.0 };
             // A callout: the leader line (arrowhead at its first point), and the text box inside
             // `/Rect` by `/RD`.
             let full = rect;
             let mut rect = rect;
-            if d.contains(b"CL") {
-                let cl = nums(d, b"CL").filter(|l| l.len() == 4 || l.len() == 6)?;
-                let rd = nums(d, b"RD").filter(|r| r.len() == 4 && r.iter().all(|x| *x >= 0.0))?;
+            if anno.contains(b"CL") {
+                let cl = nums(anno, b"CL").filter(|l| l.len() == 4 || l.len() == 6)?;
+                let rd = nums(anno, b"RD").filter(|r| r.len() == 4 && r.iter().all(|x| *x >= 0.0))?;
                 rect = [full[0] + rd[0], full[1] + rd[1], full[2] - rd[2], full[3] - rd[3]];
                 if rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
                     return None;
                 }
-                let end = match d.get(b"LE") {
+                let end = match anno.get(b"LE") {
                     None => b"None".to_vec(),
                     Some(o) => o.as_name()?.to_vec(),
                 };
@@ -537,36 +538,36 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 }
                 let lw = bw.max(0.5);
                 let pts: Vec<(f64, f64)> = cl.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
-                let _ = writeln!(c, "{}{}{} w 1 J 1 j", rg_stroke(text_color), rg(bg.unwrap_or([1.0; 3])), n(lw));
+                let _ = writeln!(content, "{}{}{} w 1 J 1 j", rg_stroke(text_color), rg(bg.unwrap_or([1.0; 3])), n(lw));
                 for (i, p) in pts.iter().enumerate() {
-                    let _ = writeln!(c, "{} {} {}", n(p.0), n(p.1), if i == 0 { "m" } else { "l" });
+                    let _ = writeln!(content, "{} {} {}", n(p.0), n(p.1), if i == 0 { "m" } else { "l" });
                 }
-                c.push_str("S\n");
-                line_end(&mut c, &end, pts[0], pts[1], lw);
+                content.push_str("S\n");
+                line_end(&mut content, &end, pts[0], pts[1], lw);
             }
             if let Some(bg) = bg {
-                let _ = writeln!(c, "{}{} {} {} {} re f", rg(bg), n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1]));
+                let _ = writeln!(content, "{}{} {} {} {} re f", rg(bg), n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1]));
             }
             if bw > 0.0 {
                 let h = bw / 2.0;
                 let _ = writeln!(
-                    c,
+                    content,
                     "{}{} w\n{}{} {} {} {} re S\n[] 0 d",
                     rg_stroke(text_color),
                     n(bw),
-                    dash(d),
+                    dash(anno),
                     n(rect[0] + h),
                     n(rect[1] + h),
                     n(rect[2] - rect[0] - bw),
                     n(rect[3] - rect[1] - bw)
                 );
             }
-            let text = d.get(b"Contents").and_then(|o| o.as_string()).map(PdfString::to_text).unwrap_or_default();
+            let text = anno.get(b"Contents").and_then(|o| o.as_string()).map(PdfString::to_text).unwrap_or_default();
             let pad = 2.0 + bw;
             let width = (rect[2] - rect[0] - 2.0 * pad).max(1.0);
-            let q = d.int(b"Q").unwrap_or(0);
+            let q = anno.int(b"Q").unwrap_or(0);
             let _ = write!(
-                c,
+                content,
                 "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
                 n(rect[0]),
                 n(rect[1]),
@@ -575,7 +576,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 n(size),
                 rg(text_color)
             );
-            let mut out = c.into_bytes();
+            let mut out = content.into_bytes();
             let mut y = rect[3] - pad - size * 0.9;
             for line in wrap(&text, size, width) {
                 if y < rect[1] - size {
@@ -605,7 +606,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
         }
         _ => return None,
     }
-    Some(form(rect, c.as_bytes(), res))
+    Some(form(rect, content.as_bytes(), res))
 }
 
 /// A rubber stamp: a rounded frame (a pointed tag for sign-here stamps) with the label in bold

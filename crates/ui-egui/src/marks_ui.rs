@@ -123,14 +123,14 @@ fn color_button(ui: &mut egui::Ui, c: &mut [f64; 3]) {
 
 /// A schematic of the current page with the marks laid out (no rendering needed).
 fn preview(ui: &mut egui::Ui, t: &Tokens, size: (f64, f64), draw: impl FnOnce(&egui::Painter, Rect, f32)) {
-    let (w, h) = (size.0.max(1.0), size.1.max(1.0));
-    let s = (190.0 / w.max(h)) as f32;
-    let (r, _) = ui.allocate_exact_size(vec2(210.0, 210.0), egui::Sense::hover());
-    let page = Rect::from_center_size(r.center(), vec2(w as f32 * s, h as f32 * s));
-    let painter = ui.painter_at(r);
+    let (width, height) = (size.0.max(1.0), size.1.max(1.0));
+    let scale = (190.0 / width.max(height)) as f32;
+    let (area, _) = ui.allocate_exact_size(vec2(210.0, 210.0), egui::Sense::hover());
+    let page = Rect::from_center_size(area.center(), vec2(width as f32 * scale, height as f32 * scale));
+    let painter = ui.painter_at(area);
     painter.rect_filled(page, CornerRadius::ZERO, Color32::WHITE);
     painter.rect_stroke(page, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
-    draw(&painter, page, s);
+    draw(&painter, page, scale);
 }
 
 fn rgb32(c: [f64; 3]) -> Color32 {
@@ -180,10 +180,11 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
                     }
                     ui.end_row();
                     for col in 0..3 {
-                        let k = row * 3 + col;
-                        let r = ui.add_sized([220.0, 40.0], egui::TextEdit::multiline(&mut d.hf.text[k]).desired_rows(2).id_salt(("hf-box", k)));
-                        if r.gained_focus() || r.has_focus() {
-                            d.focused_box = k;
+                        let idx = row * 3 + col;
+                        let box_edit = egui::TextEdit::multiline(&mut d.hf.text[idx]).desired_rows(2).id_salt(("hf-box", idx));
+                        let resp = ui.add_sized([220.0, 40.0], box_edit);
+                        if resp.gained_focus() || resp.has_focus() {
+                            d.focused_box = idx;
                         }
                     }
                     ui.end_row();
@@ -307,13 +308,13 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
                         continue;
                     }
                     let shown = text.replace("<<", "").replace(">>", "");
-                    let y = if k < 3 { r.top() + hf.margins[0] as f32 * s } else { r.bottom() - hf.margins[1] as f32 * s };
-                    let (x, align) = match k % 3 {
+                    let pos_y = if k < 3 { r.top() + hf.margins[0] as f32 * s } else { r.bottom() - hf.margins[1] as f32 * s };
+                    let (pos_x, align) = match k % 3 {
                         0 => (r.left() + hf.margins[2] as f32 * s, egui::Align2::LEFT_CENTER),
                         1 => (r.center().x, egui::Align2::CENTER_CENTER),
                         _ => (r.right() - hf.margins[3] as f32 * s, egui::Align2::RIGHT_CENTER),
                     };
-                    p.text(pos2(x, y), align, shown, egui::FontId::proportional((hf.font_size as f32 * s).max(5.0)), rgb32(hf.color));
+                    p.text(pos2(pos_x, pos_y), align, shown, egui::FontId::proportional((hf.font_size as f32 * s).max(5.0)), rgb32(hf.color));
                 }
             }
             MarkKind::Watermark if file_name.is_some() => {

@@ -860,16 +860,16 @@ pub struct BlockStyle {
 pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option<&str>, style: &BlockStyle) -> Result<LineEdit, EditError> {
     let lines = text_lines(doc, page)?;
     let blocks = group_blocks(&lines);
-    let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
-    let members: Vec<&TextLine> = b.lines.iter().map(|i| &lines[*i]).collect();
+    let para = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
+    let members: Vec<&TextLine> = para.lines.iter().map(|idx| &lines[*idx]).collect();
     let first = members[0];
-    let p = page_dict(doc, page)?;
-    let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
-    let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
-    let streams = content_streams(doc, &p.dict);
+    let pg = page_dict(doc, page)?;
+    let mut res = pg.dict.get(b"Resources").map(|ent| doc.resolve(ent)).and_then(|ent| ent.as_dict().cloned()).unwrap_or_default();
+    let mut fonts_res = res.get(b"Font").map(|ent| doc.resolve(ent)).and_then(|ent| ent.as_dict().cloned()).unwrap_or_default();
+    let streams = content_streams(doc, &pg.dict);
     let (stream_obj, data) = streams.get(first.stream).cloned().ok_or_else(|| EditError::Invalid("the page's content changed".into()))?;
     let ops = parse(&data).ops;
-    let text = text.unwrap_or(&b.text).split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = text.unwrap_or(&para.text).split_whitespace().collect::<Vec<_>>().join(" ");
     let o = &first.origin;
     let (font_name, old_size) = o.state.font.clone().ok_or_else(|| EditError::Invalid("the paragraph has no font".into()))?;
     let k = o.k.max(1e-6);
@@ -877,23 +877,23 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     let size = style.size.map_or(old_size, |pt| (pt / k).max(0.1));
     // Spacing and scaling (text state), with the chosen values.
     let mut ts_state = o.state.clone();
-    if let Some(c) = style.char_spacing {
-        ts_state.char_spacing = c / k;
+    if let Some(spacing) = style.char_spacing {
+        ts_state.char_spacing = spacing / k;
     }
     if let Some(sc) = style.scale {
         ts_state.scale = (sc / 100.0).clamp(0.1, 10.0);
     }
     let o_state = ts_state.clone();
-    let metrics = fonts_res.get(font_name.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()).map(|d| Metrics::from_dict(doc, &d));
-    let reuse = style.family.is_none() && metrics.as_ref().is_some_and(|m| m.encode(&text).is_some());
+    let metrics = fonts_res.get(font_name.as_bytes()).and_then(|ent| doc.resolve(ent).as_dict().cloned()).map(|fd| Metrics::from_dict(doc, &fd));
+    let reuse = style.family.is_none() && metrics.as_ref().is_some_and(|mt| mt.encode(&text).is_some());
     let type3 = if !reuse && needs_type3(&text) { Some(type3_font(doc, &mut fonts_res, &text)?) } else { None };
     // The standard font used when the paragraph's own can't be (chosen, or substituted).
-    let (family, bold, italic) = style.family.unwrap_or((source_family(&b.base_font), b.bold, b.italic));
-    let std_width = move |s: &str, size: f64| -> f64 {
+    let (family, bold, italic) = style.family.unwrap_or((source_family(&para.base_font), para.bold, para.italic));
+    let std_width = move |txt: &str, size: f64| -> f64 {
         match family {
-            crate::added::Family::Courier => s.chars().count() as f64 * 0.6 * size,
-            crate::added::Family::Times => printcraft_fonts::helvetica_width(s, size) * 0.92,
-            crate::added::Family::Helvetica => printcraft_fonts::helvetica_width(s, size) * if bold { 1.05 } else { 1.0 },
+            crate::added::Family::Courier => txt.chars().count() as f64 * 0.6 * size,
+            crate::added::Family::Times => printcraft_fonts::helvetica_width(txt, size) * 0.92,
+            crate::added::Family::Helvetica => printcraft_fonts::helvetica_width(txt, size) * if bold { 1.05 } else { 1.0 },
         }
     };
     let [dx, dy] = style.offset.unwrap_or([0.0, 0.0]);
@@ -904,85 +904,85 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     // up to the page's margin.
     let width = match style.width {
         // Capped at the largest page PDF allows (14 400 pt).
-        Some(w) if w.is_finite() => w.clamp(size * k, 14_400.0),
+        Some(requested) if requested.is_finite() => requested.clamp(size * k, 14_400.0),
         Some(_) => return Err(EditError::Invalid("the paragraph's width must be a number".into())),
-        None if members.len() == 1 => (b.rect[2] - b.rect[0]).max(size * k).max(p.crop(doc)[2] - 36.0 - (b.rect[0] + dx)),
-        None => (b.rect[2] - b.rect[0]).max(size * k),
+        None if members.len() == 1 => (para.rect[2] - para.rect[0]).max(size * k).max(pg.crop(doc)[2] - 36.0 - (para.rect[0] + dx)),
+        None => (para.rect[2] - para.rect[0]).max(size * k),
     };
-    let advance = |s: &str| -> f64 {
-        let t = match (&metrics, reuse) {
-            (Some(m), true) => m.encode(s).map_or(0.0, |bytes| {
-                m.codes(&bytes)
+    let advance = |txt: &str| -> f64 {
+        let total = match (&metrics, reuse) {
+            (Some(mt), true) => mt.encode(txt).map_or(0.0, |bytes| {
+                mt.codes(&bytes)
                     .iter()
-                    .map(|(c, l)| m.width(*c) * size + o_state.char_spacing + if m.is_space(*c, *l) { o_state.word_spacing } else { 0.0 })
+                    .map(|(ch, lvl)| mt.width(*ch) * size + o_state.char_spacing + if mt.is_space(*ch, *lvl) { o_state.word_spacing } else { 0.0 })
                     .sum::<f64>()
             }),
             _ if let Some(fallback) = &type3 => {
-                fallback.codes.iter().map(|(ch, _, width)| s.chars().filter(|c| c == ch).count() as f64 * width * size).sum::<f64>()
-                    + s.chars().count() as f64 * o_state.char_spacing
+                fallback.codes.iter().map(|(ch, _, width)| txt.chars().filter(|cur| cur == ch).count() as f64 * width * size).sum::<f64>()
+                    + txt.chars().count() as f64 * o_state.char_spacing
             }
-            _ => std_width(s, size) + s.chars().count() as f64 * o_state.char_spacing,
+            _ => std_width(txt, size) + txt.chars().count() as f64 * o_state.char_spacing,
         };
-        t * o_state.scale * k
+        total * o_state.scale * k
     };
     let wrapped = wrap(&text, width + 0.5, advance);
     let mut substituted = None;
     let new_font = !reuse;
-    let (show_font, encode): (String, Encoder) = if let Some(m) = metrics.clone().filter(|_| reuse) {
-        (font_name.clone(), Box::new(move |s: &str| m.encode(s)))
+    let (show_font, encode): (String, Encoder) = if let Some(mt) = metrics.clone().filter(|_| reuse) {
+        (font_name.clone(), Box::new(move |line: &str| mt.encode(line)))
     } else if let Some(fallback) = type3.clone() {
         let name = fallback.name.clone();
         let encoder = fallback.clone();
         substituted = Some(format!("{} Type3", fallback.family));
-        (name, Box::new(move |s: &str| type3_encode(&encoder, s)))
+        (name, Box::new(move |line: &str| type3_encode(&encoder, line)))
     } else {
         let win = printcraft_fonts::win_ansi(&text);
-        let back: String = win.iter().map(|c| char::from_u32(u32::from(*c)).unwrap_or('?')).collect();
+        let back: String = win.iter().map(|byte| char::from_u32(u32::from(*byte)).unwrap_or('?')).collect();
         let base = family.base_font(bold, italic);
-        if text.chars().zip(back.chars()).any(|(a, c)| c == '?' && a != '?') {
-            return Err(EditError::Invalid(format!("\"{text}\" has characters neither {} nor {base} can show", b.base_font)));
+        if text.chars().zip(back.chars()).any(|(orig, conv)| conv == '?' && orig != '?') {
+            return Err(EditError::Invalid(format!("\"{text}\" has characters neither {} nor {base} can show", para.base_font)));
         }
-        let mut f = Dict::new();
-        f.set(b"Type".to_vec(), Object::name("Font"));
-        f.set(b"Subtype".to_vec(), Object::name("Type1"));
-        f.set(b"BaseFont".to_vec(), Object::name(base));
-        f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+        let mut font_dict = Dict::new();
+        font_dict.set(b"Type".to_vec(), Object::name("Font"));
+        font_dict.set(b"Subtype".to_vec(), Object::name("Type1"));
+        font_dict.set(b"BaseFont".to_vec(), Object::name(base));
+        font_dict.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
         let name = if style.family.is_none() { String::from_utf8_lossy(SUBSTITUTE).into_owned() } else { format!("PCEd{}", base.replace('-', "")) };
-        fonts_res.set(name.clone().into_bytes(), Object::Dict(f));
+        fonts_res.set(name.clone().into_bytes(), Object::Dict(font_dict));
         if style.family.is_none() {
             substituted = Some(base.to_string());
         }
-        (name, Box::new(|s: &str| Some(printcraft_fonts::win_ansi(s))))
+        (name, Box::new(|line: &str| Some(printcraft_fonts::win_ansi(line))))
     };
     // Line spacing in text space: the paragraph's own (scaled with the size), or 1.2 × the size.
     let lead = match style.line_spacing {
-        Some(m) => size * m.clamp(0.5, 5.0),
+        Some(factor) => size * factor.clamp(0.5, 5.0),
         None if members.len() > 1 => (members[0].origin.baseline - members[1].origin.baseline) / k * size / old_size,
         None if o_state.leading > 0.0 => o_state.leading,
         None => size * 1.2,
     };
-    let n = printcraft_content::num;
+    let num = printcraft_content::num;
     // In its own graphics state, so a new colour (or anything else) stops at the paragraph.
     let mut block_ops = vec![Op::new("q", vec![])];
     // Moved: a translation inside that state. The move is in page space, so it is taken back
     // through the CTM's linear part into the space the paragraph is drawn in.
     if dx != 0.0 || dy != 0.0 {
-        let c = o.ctm;
-        let back = Matrix([c[0], c[1], c[2], c[3], 0.0, 0.0])
+        let ctm = o.ctm;
+        let back = Matrix([ctm[0], ctm[1], ctm[2], ctm[3], 0.0, 0.0])
             .invert()
             .ok_or_else(|| EditError::Invalid("the paragraph is drawn in a space it can't be moved in".into()))?;
         let (ax, ay) = back.apply(dx, dy);
-        block_ops.push(Op::new("cm", vec![n(1.0), n(0.0), n(0.0), n(1.0), n(ax), n(ay)]));
+        block_ops.push(Op::new("cm", vec![num(1.0), num(0.0), num(0.0), num(1.0), num(ax), num(ay)]));
     }
     block_ops.push(Op::new("BT", vec![]));
     let mut state = o_state.clone();
     state.word_spacing = 0.0;
     state.font = Some((show_font, size));
     if let Some([r, g, bl]) = style.color {
-        state.fill = vec![Op::new("rg", vec![n(r), n(g), n(bl)])];
+        state.fill = vec![Op::new("rg", vec![num(r), num(g), num(bl)])];
     }
     block_ops.extend(state.ops());
-    block_ops.push(Op::new("Tm", o.tm.iter().map(|v| n(*v)).collect()));
+    block_ops.push(Op::new("Tm", o.tm.iter().map(|val| num(*val)).collect()));
     // Alignment: each line's offset from the left edge, in text space.
     let offset = |line: &str| -> f64 {
         let free = (width - advance(line)).max(0.0) / k;
@@ -993,7 +993,7 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
         }
     };
     // Justify: word spacing (single-byte code 32 only) so each line but the last fills the width.
-    let single_byte = !reuse || metrics.as_ref().is_some_and(|m| !m.composite);
+    let single_byte = !reuse || metrics.as_ref().is_some_and(|mt| !mt.composite);
     let justify = style.align == Some(crate::added::Align::Justify) && single_byte;
     let mut x = 0.0;
     let mut tw_set = 0.0;
@@ -1001,20 +1001,20 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     for (i, line) in wrapped.iter().enumerate() {
         let dx = offset(line);
         if i > 0 || dx != 0.0 {
-            block_ops.push(Op::new("Td", vec![n(dx - x), n(if i > 0 { -lead } else { 0.0 })]));
+            block_ops.push(Op::new("Td", vec![num(dx - x), num(if i > 0 { -lead } else { 0.0 })]));
         }
         x = dx;
         let spaces = line.matches(' ').count();
         let tw =
             if justify && i + 1 < wrapped.len() && spaces > 0 { (width - advance(line)).max(0.0) / k / o_state.scale / spaces as f64 } else { 0.0 };
         if tw != tw_set {
-            block_ops.push(Op::new("Tw", vec![n(tw)]));
+            block_ops.push(Op::new("Tw", vec![num(tw)]));
             tw_set = tw;
         }
         let bytes = encode(line).ok_or_else(|| EditError::Invalid(format!("\"{line}\" can't be shown")))?;
         block_ops.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
-        let w = (advance(line) + tw * spaces as f64 * o_state.scale * k) / k;
-        underlines.push((dx, dx + w, -(i as f64) * lead - size * 0.12));
+        let line_w = (advance(line) + tw * spaces as f64 * o_state.scale * k) / k;
+        underlines.push((dx, dx + line_w, -(i as f64) * lead - size * 0.12));
     }
     block_ops.push(Op::new("ET", vec![]));
     if style.underline == Some(true) {
@@ -1022,22 +1022,22 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
         let colour: Vec<Op> = state
             .fill
             .iter()
-            .map(|f| match f.op.as_slice() {
-                b"g" => Op::new("G", f.operands.clone()),
-                b"rg" => Op::new("RG", f.operands.clone()),
-                b"k" => Op::new("K", f.operands.clone()),
-                b"cs" => Op::new("CS", f.operands.clone()),
-                b"sc" => Op::new("SC", f.operands.clone()),
-                _ => Op::new("SCN", f.operands.clone()),
+            .map(|fill_op| match fill_op.op.as_slice() {
+                b"g" => Op::new("G", fill_op.operands.clone()),
+                b"rg" => Op::new("RG", fill_op.operands.clone()),
+                b"k" => Op::new("K", fill_op.operands.clone()),
+                b"cs" => Op::new("CS", fill_op.operands.clone()),
+                b"sc" => Op::new("SC", fill_op.operands.clone()),
+                _ => Op::new("SCN", fill_op.operands.clone()),
             })
             .collect();
         block_ops.push(Op::new("q", vec![]));
-        block_ops.push(Op::new("cm", o.tm.iter().map(|v| n(*v)).collect()));
+        block_ops.push(Op::new("cm", o.tm.iter().map(|val| num(*val)).collect()));
         block_ops.extend(colour);
-        block_ops.push(Op::new("w", vec![n(size * 0.06)]));
-        for (x0, x1, y) in underlines {
-            block_ops.push(Op::new("m", vec![n(x0), n(y)]));
-            block_ops.push(Op::new("l", vec![n(x1), n(y)]));
+        block_ops.push(Op::new("w", vec![num(size * 0.06)]));
+        for (x0, x1, ypos) in underlines {
+            block_ops.push(Op::new("m", vec![num(x0), num(ypos)]));
+            block_ops.push(Op::new("l", vec![num(x1), num(ypos)]));
         }
         block_ops.push(Op::new("S", vec![]));
         block_ops.push(Op::new("Q", vec![]));
@@ -1046,16 +1046,16 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     // The paragraph's operators go, and so does anything drawn in the same area (a fake-bold
     // second copy, an invisible text layer): the new text is all that may show.
     let mut drop: std::collections::HashMap<usize, std::collections::HashSet<usize>> =
-        members.iter().flat_map(|l| [(l.stream, l.ops.iter().copied().collect::<std::collections::HashSet<_>>())]).collect();
-    let member_rects: Vec<[f64; 4]> = members.iter().map(|l| l.rect).collect();
+        members.iter().flat_map(|ln| [(ln.stream, ln.ops.iter().copied().collect::<std::collections::HashSet<_>>())]).collect();
+    let member_rects: Vec<[f64; 4]> = members.iter().map(|ln| ln.rect).collect();
     for (stream, ops) in coincident_ops(&lines, &member_rects) {
         drop.entry(stream).or_default().extend(ops);
     }
     // Text shown earlier in the same text object stays first: the paragraph then goes where it
     // was, between two halves of the text object, so it keeps its place in reading order.
     let start = first.ops.first().copied().unwrap_or(o.bt_op);
-    let split = ops.get(o.bt_op..start).unwrap_or_default().iter().enumerate().any(|(i, op)| {
-        matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.get(&first.stream).is_some_and(|d| d.contains(&(o.bt_op + i)))
+    let split = ops.get(o.bt_op..start).unwrap_or_default().iter().enumerate().any(|(idx, op)| {
+        matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.get(&first.stream).is_some_and(|gone| gone.contains(&(o.bt_op + idx)))
     });
     // What the text after the paragraph expects: the state at its BT (or where it was split).
     let after = if split { &o.state } else { &o.bt_state };
@@ -1063,34 +1063,35 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     if split {
         block_ops.insert(0, Op::new("ET", vec![]));
         block_ops.push(Op::new("BT", vec![]));
-        block_ops.push(Op::new("Tm", o.tlm.iter().map(|v| n(*v)).collect()));
+        block_ops.push(Op::new("Tm", o.tlm.iter().map(|val| num(*val)).collect()));
     }
     let at = if split { start } else { o.bt_op };
     let mut new_ops = Vec::with_capacity(ops.len() + block_ops.len());
-    for (i, op) in ops.into_iter().enumerate() {
-        if i == at {
+    for (idx, op) in ops.into_iter().enumerate() {
+        if idx == at {
             new_ops.append(&mut block_ops);
         }
-        let keep = drop.get(&first.stream).is_none_or(|d| !d.contains(&i));
+        let keep = drop.get(&first.stream).is_none_or(|gone| !gone.contains(&idx));
         if keep {
             new_ops.push(op);
         }
     }
     let mut dict = match &*doc.resolve(&stream_obj) {
-        Object::Stream(s) => s.dict.clone(),
+        Object::Stream(old) => old.dict.clone(),
         _ => Dict::new(),
     };
     dict.remove(b"Length");
     let new = doc.add(Object::Stream(Stream::flate(dict, &serialize_ops(&new_ops))));
-    let contents: Vec<Object> = streams.iter().enumerate().map(|(i, (o, _))| if i == first.stream { Object::Ref(new) } else { o.clone() }).collect();
+    let contents: Vec<Object> =
+        streams.iter().enumerate().map(|(idx, (obj, _))| if idx == first.stream { Object::Ref(new) } else { obj.clone() }).collect();
     if new_font {
         res.set(b"Font".to_vec(), Object::Dict(fonts_res));
     }
-    let page_ref = p.obj;
-    doc.update_dict(page_ref, |d| {
-        d.set(b"Contents".to_vec(), if contents.len() == 1 { contents[0].clone() } else { Object::Array(contents) });
+    let page_ref = pg.obj;
+    doc.update_dict(page_ref, |pg_dict| {
+        pg_dict.set(b"Contents".to_vec(), if contents.len() == 1 { contents[0].clone() } else { Object::Array(contents) });
         if new_font {
-            d.set(b"Resources".to_vec(), Object::Dict(res));
+            pg_dict.set(b"Resources".to_vec(), Object::Dict(res));
         }
     })?;
     Ok(LineEdit { substituted })

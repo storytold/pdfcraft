@@ -707,35 +707,35 @@ const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday",
 /// `util.printd(cFormat, oDate)`: yyyy yy mmmm mmm mm m dddd ddd dd d HH H hh h MM M ss s tt,
 /// and the numeric formats 0 (D:yyyymmddHHMMss), 1 (yyyy.mm.dd HH:MM:ss) and 2 (m/d/yy h:MM:ss tt).
 fn printd(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let f = arg(args, 0);
-    let fmt = if f.is_number() {
-        match f.to_number(ctx)? as i32 {
+    let fmt_arg = arg(args, 0);
+    let fmt = if fmt_arg.is_number() {
+        match fmt_arg.to_number(ctx)? as i32 {
             0 => "D:yyyymmddHHMMss".to_string(),
             1 => "yyyy.mm.dd HH:MM:ss".to_string(),
             _ => "m/d/yy h:MM:ss tt".to_string(),
         }
     } else {
-        text(&f, ctx)?
+        text(&fmt_arg, ctx)?
     };
-    let d = arg(args, 1);
-    let Some(date) = d.as_object() else { return Err(error("util.printd needs a Date")) };
+    let date_arg = arg(args, 1);
+    let Some(date) = date_arg.as_object() else { return Err(error("util.printd needs a Date")) };
     let mut part = |m: &str| -> JsResult<i64> {
         let func = date.get(JsString::from(m), ctx)?;
         let func = func.as_callable().ok_or_else(|| error("util.printd needs a Date"))?;
-        let v = func.call(&d, &[], ctx)?.to_number(ctx)?;
-        if v.is_nan() {
+        let value = func.call(&date_arg, &[], ctx)?.to_number(ctx)?;
+        if value.is_nan() {
             return Err(error("invalid date"));
         }
-        Ok(v as i64)
+        Ok(value as i64)
     };
-    let (y, mo, day, wd, h, mi, sec) =
+    let (year, mo, day, wd, hour, mi, sec) =
         (part("getFullYear")?, part("getMonth")?, part("getDate")?, part("getDay")?, part("getHours")?, part("getMinutes")?, part("getSeconds")?);
     let mut out = String::new();
-    let b = fmt.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        let c = b[i];
-        let run = b[i..].iter().take_while(|x| **x == c).count();
+    let bytes = fmt.as_bytes();
+    let mut idx = 0;
+    while idx < bytes.len() {
+        let marker = bytes[idx];
+        let run = bytes[idx..].iter().take_while(|x| **x == marker).count();
         let push_num = |out: &mut String, v: i64, n: usize| {
             if n >= 2 {
                 let _ = write!(out, "{v:02}");
@@ -743,46 +743,46 @@ fn printd(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
                 out.push_str(&v.to_string());
             }
         };
-        match c {
+        match marker {
             b'y' => {
                 if run >= 4 {
-                    let _ = write!(out, "{y:04}");
+                    let _ = write!(out, "{year:04}");
                 } else {
-                    let _ = write!(out, "{:02}", y % 100);
+                    let _ = write!(out, "{:02}", year % 100);
                 }
             }
             b'm' => match run {
-                r if r >= 4 => out.push_str(MONTHS[mo as usize % 12]),
+                run_len if run_len >= 4 => out.push_str(MONTHS[mo as usize % 12]),
                 3 => out.push_str(&MONTHS[mo as usize % 12][..3]),
-                n => push_num(&mut out, mo + 1, n),
+                digits => push_num(&mut out, mo + 1, digits),
             },
             b'd' => match run {
-                r if r >= 4 => out.push_str(DAYS[wd as usize % 7]),
+                run_len if run_len >= 4 => out.push_str(DAYS[wd as usize % 7]),
                 3 => out.push_str(&DAYS[wd as usize % 7][..3]),
-                n => push_num(&mut out, day, n),
+                digits => push_num(&mut out, day, digits),
             },
-            b'H' => push_num(&mut out, h, run),
-            b'h' => push_num(&mut out, if h % 12 == 0 { 12 } else { h % 12 }, run),
+            b'H' => push_num(&mut out, hour, run),
+            b'h' => push_num(&mut out, if hour % 12 == 0 { 12 } else { hour % 12 }, run),
             b'M' => push_num(&mut out, mi, run),
             b's' => push_num(&mut out, sec, run),
             b't' => {
-                let ampm = if h < 12 { "am" } else { "pm" };
+                let ampm = if hour < 12 { "am" } else { "pm" };
                 out.push_str(if run >= 2 { ampm } else { &ampm[..1] });
             }
-            b'\\' if i + 1 < b.len() => {
-                out.push(b[i + 1] as char);
-                i += 2;
+            b'\\' if idx + 1 < bytes.len() => {
+                out.push(bytes[idx + 1] as char);
+                idx += 2;
                 continue;
             }
             _ => {
                 // Copy the rest of a multi-byte character too.
-                let ch = fmt[i..].chars().next().unwrap_or(' ');
+                let ch = fmt[idx..].chars().next().unwrap_or(' ');
                 out.push(ch);
-                i += ch.len_utf8();
+                idx += ch.len_utf8();
                 continue;
             }
         }
-        i += run;
+        idx += run;
     }
     Ok(s(&out))
 }
@@ -792,56 +792,56 @@ fn printd(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
 fn printx(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let fmt: Vec<char> = text(&arg(args, 0), ctx)?.chars().collect();
     let src: Vec<char> = text(&arg(args, 1), ctx)?.chars().collect();
-    let (mut out, mut j, mut case) = (String::new(), 0, 0);
-    let mut i = 0;
+    let (mut out, mut pos, mut case) = (String::new(), 0, 0);
+    let mut idx = 0;
     let push = |out: &mut String, c: char, case: i32| match case {
         1 => out.extend(c.to_uppercase()),
         -1 => out.extend(c.to_lowercase()),
         _ => out.push(c),
     };
-    while i < fmt.len() {
-        let f = fmt[i];
-        i += 1;
-        let take = |j: &mut usize, ok: &dyn Fn(char) -> bool| -> Option<char> {
-            while *j < src.len() {
-                let c = src[*j];
-                *j += 1;
+    while idx < fmt.len() {
+        let spec = fmt[idx];
+        idx += 1;
+        let take = |pos: &mut usize, ok: &dyn Fn(char) -> bool| -> Option<char> {
+            while *pos < src.len() {
+                let c = src[*pos];
+                *pos += 1;
                 if ok(c) {
                     return Some(c);
                 }
             }
             None
         };
-        match f {
+        match spec {
             '?' => {
-                if let Some(c) = take(&mut j, &|_| true) {
+                if let Some(c) = take(&mut pos, &|_| true) {
                     push(&mut out, c, case);
                 }
             }
             'X' => {
-                if let Some(c) = take(&mut j, &|c| c.is_alphanumeric()) {
+                if let Some(c) = take(&mut pos, &|c| c.is_alphanumeric()) {
                     push(&mut out, c, case);
                 }
             }
             'A' => {
-                if let Some(c) = take(&mut j, &|c| c.is_alphabetic()) {
+                if let Some(c) = take(&mut pos, &|c| c.is_alphabetic()) {
                     push(&mut out, c, case);
                 }
             }
             '9' => {
-                if let Some(c) = take(&mut j, &|c| c.is_ascii_digit()) {
+                if let Some(c) = take(&mut pos, &|c| c.is_ascii_digit()) {
                     push(&mut out, c, case);
                 }
             }
             '*' => {
-                for c in src[j.min(src.len())..].iter().copied() {
+                for c in src[pos.min(src.len())..].iter().copied() {
                     push(&mut out, c, case);
                 }
-                j = src.len();
+                pos = src.len();
             }
-            '\\' if i < fmt.len() => {
-                out.push(fmt[i]);
-                i += 1;
+            '\\' if idx < fmt.len() => {
+                out.push(fmt[idx]);
+                idx += 1;
             }
             '>' => case = 1,
             '<' => case = -1,

@@ -86,12 +86,12 @@ fn helvetica() -> Object {
 }
 
 fn color_array(doc: &Document, mk: Option<&Dict>, key: &[u8]) -> Option<String> {
-    let a = doc.resolve(mk?.get(key)?);
-    let v: Vec<f64> = a.as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
-    match v.as_slice() {
+    let arr = doc.resolve(mk?.get(key)?);
+    let nums: Vec<f64> = arr.as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
+    match nums.as_slice() {
         [g] => Some(format!("{} g", n(*g))),
         [r, g, b] => Some(format!("{} {} {} rg", n(*r), n(*g), n(*b))),
-        [c, m, y, k] => Some(format!("{} {} {} {} k", n(*c), n(*m), n(*y), n(*k))),
+        [cy, mg, ye, bk] => Some(format!("{} {} {} {} k", n(*cy), n(*mg), n(*ye), n(*bk))),
         _ => None,
     }
 }
@@ -140,7 +140,7 @@ fn frame(doc: &Document, wd: &Dict, w: f64, h: f64) -> (String, f64) {
             // grey top-left and light grey bottom-right.
             let (tl, br) = if style == b"B" { ("1 g", "0.5 g") } else { ("0.5 g", "0.75 g") };
             let (x0, y0, x1, y1) = (bw, bw, w - bw, h - bw);
-            let k = bw;
+            let inset = bw;
             let _ = write!(
                 c,
                 "{tl}\n{} {} m {} {} l {} {} l {} {} l {} {} l {} {} l f\n{br}\n{} {} m {} {} l {} {} l {} {} l {} {} l {} {} l f\n",
@@ -150,24 +150,24 @@ fn frame(doc: &Document, wd: &Dict, w: f64, h: f64) -> (String, f64) {
                 n(y1),
                 n(x1),
                 n(y1),
-                n(x1 - k),
-                n(y1 - k),
-                n(x0 + k),
-                n(y1 - k),
-                n(x0 + k),
-                n(y0 + k),
+                n(x1 - inset),
+                n(y1 - inset),
+                n(x0 + inset),
+                n(y1 - inset),
+                n(x0 + inset),
+                n(y0 + inset),
                 n(x1),
                 n(y1),
                 n(x1),
                 n(y0),
                 n(x0),
                 n(y0),
-                n(x0 + k),
-                n(y0 + k),
-                n(x1 - k),
-                n(y0 + k),
-                n(x1 - k),
-                n(y1 - k)
+                n(x0 + inset),
+                n(y0 + inset),
+                n(x1 - inset),
+                n(y0 + inset),
+                n(x1 - inset),
+                n(y1 - inset)
             );
             return (c, 2.0 * bw);
         }
@@ -185,31 +185,32 @@ pub fn field_appearance(doc: &Document, f: &Field, w: &Widget, values: &[String]
 /// [`field_appearance`], where `format` false means `values` are already what to show (a
 /// custom Format script ran).
 #[must_use]
-pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> Stream {
+pub fn field_appearance_as(doc: &Document, field: &Field, widget: &Widget, values: &[String], format: bool) -> Stream {
     // The Format event: what is shown, not what is stored.
     let formatted: Vec<String>;
     let values = if format
-        && matches!(f.kind, crate::FieldKind::Text | crate::FieldKind::Combo)
+        && matches!(field.kind, crate::FieldKind::Text | crate::FieldKind::Combo)
         && values.len() == 1
-        && f.actions.format != crate::af::Format::None
+        && field.actions.format != crate::af::Format::None
     {
-        formatted = vec![crate::af::format_value(&f.actions.format, &values[0])];
+        formatted = vec![crate::af::format_value(&field.actions.format, &values[0])];
         &formatted[..]
     } else {
         values
     };
-    let wobj = doc.get(w.obj);
+    let wobj = doc.get(widget.obj);
     let wd = wobj.as_dict().cloned().unwrap_or_default();
-    let (width, height) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
-    let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(printcraft_cos::PdfString::to_text)).as_deref().unwrap_or(&f.da));
+    let (width, height) = ((widget.rect[2] - widget.rect[0]).max(1.0), (widget.rect[3] - widget.rect[1]).max(1.0));
+    let da_obj = wd.get(b"DA").and_then(|ent| doc.resolve(ent).as_string().map(printcraft_cos::PdfString::to_text));
+    let da = parse_da(da_obj.as_deref().unwrap_or(&field.da));
     let (font_name, font_obj) = match dr_font(doc, &da.font) {
-        Some(o) => (da.font.clone(), o),
+        Some(fontobj) => (da.font.clone(), fontobj),
         None => ("Helv".to_string(), helvetica()),
     };
-    let (mut c, bw) = frame(doc, &wd, width, height);
+    let (mut ops, bw) = frame(doc, &wd, width, height);
     let pad = 2.0 + bw;
     let inner_w = (width - 2.0 * pad).max(1.0);
-    let q = wd.get(b"Q").and_then(|o| doc.resolve(o).as_int()).unwrap_or(f.quadding);
+    let quadding = wd.get(b"Q").and_then(|ent| doc.resolve(ent).as_int()).unwrap_or(field.quadding);
     let mut body: Vec<u8> = Vec::new();
     let show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str| {
         body.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
@@ -218,40 +219,44 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     };
     let x_for = |text: &str, size: f64| -> f64 {
         let tw = helvetica_width(text, size);
-        match q {
+        match quadding {
             1 => pad + (inner_w - tw) / 2.0,
             2 => width - pad - tw,
             _ => pad,
         }
     };
     let mut size = da.size;
-    if f.kind == FieldKind::List {
+    if field.kind == FieldKind::List {
         // Every option, one per line from the top; selected ones highlighted.
         if size == 0.0 {
             size = 12.0;
         }
         let line = size * 1.15;
-        let top = wd.get(b"TI").and_then(|o| doc.resolve(o).as_int()).unwrap_or(0).max(0) as usize;
+        let top = wd.get(b"TI").and_then(|ent| doc.resolve(ent).as_int()).unwrap_or(0).max(0) as usize;
         let mut y = height - pad;
-        for (export, display) in f.options.iter().skip(top) {
+        for (export, display) in field.options.iter().skip(top) {
             if y - line < 0.0 {
                 break;
             }
             if values.contains(export) {
-                let _ = write!(c, "0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line));
+                let _ = write!(ops, "0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line));
             }
             show(&mut body, pad, y - line + size * 0.25, display);
             y -= line;
         }
     } else {
-        let text: String = if f.kind == FieldKind::Combo {
-            values.iter().map(|v| f.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone())).collect::<Vec<_>>().join(", ")
+        let text: String = if field.kind == FieldKind::Combo {
+            values
+                .iter()
+                .map(|want| field.options.iter().find(|(opt, _)| opt == want).map_or(want.clone(), |(_, label)| label.clone()))
+                .collect::<Vec<_>>()
+                .join(", ")
         } else {
             values.first().cloned().unwrap_or_default()
         };
-        let text = if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text };
-        let comb = f.has(flags::COMB) && !f.has(flags::MULTILINE) && !f.has(flags::PASSWORD) && f.max_len.is_some_and(|m| m > 0);
-        if f.kind == FieldKind::Text && f.has(flags::MULTILINE) {
+        let text = if field.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text };
+        let comb = field.has(flags::COMB) && !field.has(flags::MULTILINE) && !field.has(flags::PASSWORD) && field.max_len.is_some_and(|len| len > 0);
+        if field.kind == FieldKind::Text && field.has(flags::MULTILINE) {
             if size == 0.0 {
                 // Auto size: the largest size (≤ 12) whose wrapped lines fit the height.
                 size = 12.0;
@@ -278,18 +283,18 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
             // Centre Helvetica's ascent (0.718) and descent (0.207) vertically.
             let y = (height - 0.925 * size) / 2.0 + 0.207 * size;
             if comb {
-                let cells = f.max_len.unwrap_or(1).max(1);
+                let cells = field.max_len.unwrap_or(1).max(1);
                 let cell = width / cells as f64;
                 for (i, ch) in text.chars().take(cells).enumerate() {
-                    let s = ch.to_string();
-                    show(&mut body, cell * i as f64 + (cell - helvetica_width(&s, size)) / 2.0, y, &s);
+                    let glyph = ch.to_string();
+                    show(&mut body, cell * i as f64 + (cell - helvetica_width(&glyph, size)) / 2.0, y, &glyph);
                 }
             } else {
                 show(&mut body, x_for(&text, size), y, &text);
             }
         }
     }
-    let mut content = c.into_bytes();
+    let mut content = ops.into_bytes();
     content.extend(
         format!(
             "/Tx BMC\nq\n{} {} {} {} re W n\nBT\n/{} {} Tf\n{}\n",
@@ -309,12 +314,12 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     fonts.set(font_name.into_bytes(), font_obj);
     let mut res = Dict::new();
     res.set(b"Font".to_vec(), Object::Dict(fonts));
-    let mut d = Dict::new();
-    d.set(b"Type".to_vec(), Object::name("XObject"));
-    d.set(b"Subtype".to_vec(), Object::name("Form"));
-    d.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, width, height].iter().map(|v| Object::Real(*v)).collect()));
-    d.set(b"Resources".to_vec(), Object::Dict(res));
-    Stream::flate(d, &content)
+    let mut form_xobj = Dict::new();
+    form_xobj.set(b"Type".to_vec(), Object::name("XObject"));
+    form_xobj.set(b"Subtype".to_vec(), Object::name("Form"));
+    form_xobj.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, width, height].iter().map(|coord| Object::Real(*coord)).collect()));
+    form_xobj.set(b"Resources".to_vec(), Object::Dict(res));
+    Stream::flate(form_xobj, &content)
 }
 
 /// On/Off appearances for a check box or radio button that has none (a check mark or a dot,
@@ -332,50 +337,50 @@ pub fn check_box_states(doc: &mut Document, w: &Widget, kind: FieldKind, on_name
         d.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, width, height].iter().map(|v| Object::Real(*v)).collect()));
         Object::Ref(doc.add(Object::Stream(Stream::flate(d, content.as_bytes()))))
     };
-    let s = width.min(height);
+    let side = width.min(height);
     let (cx, cy) = (width / 2.0, height / 2.0);
     let mark = if kind == FieldKind::Radio {
-        let r = s * 0.25;
-        let k = 0.5523 * r;
+        let radius = side * 0.25;
+        let bulge = 0.5523 * radius;
         format!(
             "0 g\n{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c f\n",
-            n(cx + r),
+            n(cx + radius),
             n(cy),
-            n(cx + r),
-            n(cy + k),
-            n(cx + k),
-            n(cy + r),
+            n(cx + radius),
+            n(cy + bulge),
+            n(cx + bulge),
+            n(cy + radius),
             n(cx),
-            n(cy + r),
-            n(cx - k),
-            n(cy + r),
-            n(cx - r),
-            n(cy + k),
-            n(cx - r),
+            n(cy + radius),
+            n(cx - bulge),
+            n(cy + radius),
+            n(cx - radius),
+            n(cy + bulge),
+            n(cx - radius),
             n(cy),
-            n(cx - r),
-            n(cy - k),
-            n(cx - k),
-            n(cy - r),
+            n(cx - radius),
+            n(cy - bulge),
+            n(cx - bulge),
+            n(cy - radius),
             n(cx),
-            n(cy - r),
-            n(cx + k),
-            n(cy - r),
-            n(cx + r),
-            n(cy - k),
-            n(cx + r),
+            n(cy - radius),
+            n(cx + bulge),
+            n(cy - radius),
+            n(cx + radius),
+            n(cy - bulge),
+            n(cx + radius),
             n(cy)
         )
     } else {
         format!(
             "0 G\n{} w 1 J 1 j\n{} {} m {} {} l {} {} l S\n",
-            n((s * 0.1).max(1.0)),
-            n(cx - s * 0.28),
+            n((side * 0.1).max(1.0)),
+            n(cx - side * 0.28),
             n(cy),
-            n(cx - s * 0.08),
-            n(cy - s * 0.22),
-            n(cx + s * 0.3),
-            n(cy + s * 0.25)
+            n(cx - side * 0.08),
+            n(cy - side * 0.22),
+            n(cx + side * 0.3),
+            n(cy + side * 0.25)
         )
     };
     let mut nd = Dict::new();

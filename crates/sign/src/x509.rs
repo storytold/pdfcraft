@@ -140,46 +140,45 @@ impl Certificate {
         let cert = Tlv::parse_all(raw)?.expect(tag::SEQUENCE, "Certificate")?;
         let parts = cert.children()?;
         let [tbs, sig_alg, sig] = parts.as_slice() else { return Err(SignError::Malformed("Certificate".into())) };
-        let mut f = tbs.children()?.into_iter().peekable();
-        if f.peek().is_some_and(|t| t.tag == tag::ctx(0)) {
-            f.next();
+        let mut fields = tbs.children()?.into_iter().peekable();
+        if fields.peek().is_some_and(|t| t.tag == tag::ctx(0)) {
+            fields.next();
         }
-        let serial = f.next().ok_or_else(|| SignError::Malformed("serial".into()))?.expect(tag::INTEGER, "serial")?.value.to_vec();
-        let _inner_alg = f.next();
-        let issuer = Name::parse(&f.next().ok_or_else(|| SignError::Malformed("issuer".into()))?)?;
-        let validity = f.next().ok_or_else(|| SignError::Malformed("validity".into()))?.children()?;
+        let serial = fields.next().ok_or_else(|| SignError::Malformed("serial".into()))?.expect(tag::INTEGER, "serial")?.value.to_vec();
+        let _inner_alg = fields.next();
+        let issuer = Name::parse(&fields.next().ok_or_else(|| SignError::Malformed("issuer".into()))?)?;
+        let validity = fields.next().ok_or_else(|| SignError::Malformed("validity".into()))?.children()?;
         let [nb, na] = validity.as_slice() else { return Err(SignError::Malformed("validity".into())) };
-        let subject = Name::parse(&f.next().ok_or_else(|| SignError::Malformed("subject".into()))?)?;
-        let public_key = PublicKey::from_spki(&f.next().ok_or_else(|| SignError::Malformed("public key".into()))?)?;
+        let subject = Name::parse(&fields.next().ok_or_else(|| SignError::Malformed("subject".into()))?)?;
+        let public_key = PublicKey::from_spki(&fields.next().ok_or_else(|| SignError::Malformed("public key".into()))?)?;
         let mut is_ca = false;
         let mut key_usage = None;
         let mut subject_key_id = None;
-        for t in f {
+        for t in fields {
             if t.tag != tag::ctx(3) {
                 continue;
             }
             for ext in t.inner()?.children()? {
-                let e = ext.children()?;
-                let Some(o) = e.first().and_then(|o| o.oid().ok()) else { continue };
-                let Some(value) = e.last().filter(|v| v.tag == tag::OCTET_STRING) else { continue };
-                match o.as_str() {
+                let items = ext.children()?;
+                let Some(oid) = items.first().and_then(|o| o.oid().ok()) else { continue };
+                let Some(value) = items.last().filter(|v| v.tag == tag::OCTET_STRING) else { continue };
+                match oid.as_str() {
                     "2.5.29.19" => {
                         is_ca = Tlv::parse_all(value.value)?.children()?.first().is_some_and(|b| b.tag == tag::BOOLEAN && b.value != [0]);
                     }
                     "2.5.29.15" => {
                         let bits = Tlv::parse_all(value.value)?;
-                        let v = bits.value;
-                        if let Some((_, b)) = v.split_first() {
+                        if let Some((_, b)) = bits.value.split_first() {
                             // Bit 0 is the most significant bit of the first byte.
-                            let mut u = 0u16;
+                            let mut usage = 0u16;
                             for (i, byte) in b.iter().take(2).enumerate() {
                                 for j in 0..8 {
                                     if byte & (0x80 >> j) != 0 {
-                                        u |= 1 << (i * 8 + j);
+                                        usage |= 1 << (i * 8 + j);
                                     }
                                 }
                             }
-                            key_usage = Some(u);
+                            key_usage = Some(usage);
                         }
                     }
                     "2.5.29.14" => subject_key_id = Some(Tlv::parse_all(value.value)?.value.to_vec()),

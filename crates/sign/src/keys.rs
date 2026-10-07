@@ -296,16 +296,16 @@ impl PrivateKey {
     /// When the `PrivateKeyInfo` is malformed, the key material does not parse (an invalid RSA
     /// key or curve point), or the algorithm or curve is unsupported.
     pub fn from_pkcs8(info: &[u8]) -> Result<PrivateKey, SignError> {
-        let t = Tlv::parse_all(info)?.children()?;
-        let [_version, alg, key, ..] = t.as_slice() else { return Err(SignError::Malformed("PrivateKeyInfo".into())) };
+        let tlv = Tlv::parse_all(info)?.children()?;
+        let [_version, alg, key, ..] = tlv.as_slice() else { return Err(SignError::Malformed("PrivateKeyInfo".into())) };
         let alg = alg.children()?;
-        let o = alg.first().ok_or_else(|| SignError::Malformed("key algorithm".into()))?.oid()?;
+        let alg_oid = alg.first().ok_or_else(|| SignError::Malformed("key algorithm".into()))?.oid()?;
         let key = key.expect(tag::OCTET_STRING, "private key")?;
-        match o.as_str() {
+        match alg_oid.as_str() {
             oid::RSA => {
                 let k = Tlv::parse_all(key.value)?.children()?;
-                let (n, e) = match k.as_slice() {
-                    [_, n, e, ..] => (n.uint_bytes().to_vec(), e.uint_bytes().to_vec()),
+                let (modulus, exponent) = match k.as_slice() {
+                    [_, modulus, exponent, ..] => (modulus.uint_bytes().to_vec(), exponent.uint_bytes().to_vec()),
                     _ => return Err(SignError::Malformed("RSAPrivateKey".into())),
                 };
                 #[cfg(not(target_arch = "wasm32"))]
@@ -316,12 +316,12 @@ impl PrivateKey {
                 );
                 #[cfg(target_arch = "wasm32")]
                 let inner = Inner::Rsa;
-                Ok(PrivateKey { inner, public: PublicKey::Rsa { n, e }, pkcs8: info.to_vec() })
+                Ok(PrivateKey { inner, public: PublicKey::Rsa { n: modulus, e: exponent }, pkcs8: info.to_vec() })
             }
             oid::EC => {
                 // ECPrivateKey: version, privateKey OCTET STRING, [0] parameters, [1] publicKey.
                 let ec = Tlv::parse_all(key.value)?.children()?;
-                let d = ec.get(1).ok_or_else(|| SignError::Malformed("ECPrivateKey".into()))?.expect(tag::OCTET_STRING, "EC private key")?.value;
+                let scalar = ec.get(1).ok_or_else(|| SignError::Malformed("ECPrivateKey".into()))?.expect(tag::OCTET_STRING, "EC private key")?.value;
                 let curve = match alg.get(1).map(super::der::Tlv::oid).transpose()? {
                     Some(c) => c,
                     None => ec
@@ -333,12 +333,12 @@ impl PrivateKey {
                 };
                 match curve.as_str() {
                     oid::P256 => {
-                        let k = p256::ecdsa::SigningKey::from_slice(d).map_err(|_| SignError::Malformed("P-256 key".into()))?;
+                        let k = p256::ecdsa::SigningKey::from_slice(scalar).map_err(|_| SignError::Malformed("P-256 key".into()))?;
                         let public = PublicKey::P256(k.verifying_key().to_sec1_point(false).as_bytes().to_vec());
                         Ok(PrivateKey { inner: Inner::P256(k), public, pkcs8: info.to_vec() })
                     }
                     oid::P384 => {
-                        let k = p384::ecdsa::SigningKey::from_slice(d).map_err(|_| SignError::Malformed("P-384 key".into()))?;
+                        let k = p384::ecdsa::SigningKey::from_slice(scalar).map_err(|_| SignError::Malformed("P-384 key".into()))?;
                         let public = PublicKey::P384(k.verifying_key().to_sec1_point(false).as_bytes().to_vec());
                         Ok(PrivateKey { inner: Inner::P384(k), public, pkcs8: info.to_vec() })
                     }

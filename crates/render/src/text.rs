@@ -186,13 +186,13 @@ impl<'a> Device<'a> for TextDevice {
     fn push_clip_path(&mut self, _: &ClipPath) {}
     fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
     fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {
-        let Some(u) = glyph.as_unicode() else {
+        let Some(unicode) = glyph.as_unicode() else {
             if std::env::var_os("PRINTCRAFT_TEXT_DEBUG").is_some() {
                 eprintln!("NOUNICODE {} {:?}", if matches!(glyph, Glyph::Type3(_)) { "t3" } else { "ol" }, (transform * glyph_transform).as_coeffs());
             }
             return;
         };
-        let text = match u {
+        let text = match unicode {
             hayro::hayro_interpret::hayro_cmap::BfString::Char(c) => c.to_string(),
             hayro::hayro_interpret::hayro_cmap::BfString::String(s) => s,
         };
@@ -201,7 +201,7 @@ impl<'a> Device<'a> for TextDevice {
         }
         // Glyph space → view space. Glyph space uses 1000 units per em for outline glyphs; the em
         // box spans descender (−200) to ascender (800), the advance gives the width.
-        let t = transform * glyph_transform;
+        let full = transform * glyph_transform;
         if std::env::var_os("PRINTCRAFT_TEXT_DEBUG").is_some() {
             let kind = if matches!(glyph, Glyph::Type3(_)) { "t3" } else { "ol" };
             eprintln!("{kind} {text:?} transform={:?} glyph_transform={:?}", transform.as_coeffs(), glyph_transform.as_coeffs());
@@ -211,7 +211,7 @@ impl<'a> Device<'a> for TextDevice {
             Glyph::Type3(g) => g.advance_width().filter(|a| a.is_finite() && *a > 0.0).map_or(600.0, f64::from),
         };
         // The baseline direction in view space (y down), to the nearest quarter turn.
-        let (dx, dy) = (t.as_coeffs()[0], t.as_coeffs()[1]);
+        let (dx, dy) = (full.as_coeffs()[0], full.as_coeffs()[1]);
         let dir = if dx.abs() >= dy.abs() {
             if dx >= 0.0 { 0 } else { 2 }
         } else if dy > 0.0 {
@@ -221,16 +221,19 @@ impl<'a> Device<'a> for TextDevice {
         };
         self.directions[dir] += text.chars().count();
         let em = Rect::new(0.0, -200.0, advance, 800.0);
-        let b = (t * em.to_path(0.1)).bounding_box();
-        if !(b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite()) || b.width() > 10_000.0 || b.height() > 10_000.0 {
+        let bbox = (full * em.to_path(0.1)).bounding_box();
+        if !(bbox.x0.is_finite() && bbox.y0.is_finite() && bbox.x1.is_finite() && bbox.y1.is_finite())
+            || bbox.width() > 10_000.0
+            || bbox.height() > 10_000.0
+        {
             return;
         }
         for (i, ch) in text.chars().enumerate() {
             // Ligatures (e.g. "ffi") share the glyph box, split evenly.
             let n = text.chars().count().max(1) as f64;
-            let w = b.width() / n;
-            let x0 = b.x0 + w * i as f64;
-            self.glyphs.push(TextGlyph { text: ch.to_string(), rect: [x0 as f32, b.y0 as f32, (x0 + w) as f32, b.y1 as f32] });
+            let w = bbox.width() / n;
+            let x0 = bbox.x0 + w * i as f64;
+            self.glyphs.push(TextGlyph { text: ch.to_string(), rect: [x0 as f32, bbox.y0 as f32, (x0 + w) as f32, bbox.y1 as f32] });
         }
     }
     fn draw_image(&mut self, _: Image<'a, '_>, _: Affine) {}
@@ -339,11 +342,15 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
     let mut glyphs = glyphs;
     let mut keep = vec![true; glyphs.len()];
     for i in 1..glyphs.len() {
-        let g = &glyphs[i];
-        let h = (g.rect[3] - g.rect[1]).max(0.1);
+        let cur = &glyphs[i];
+        let glyph_h = (cur.rect[3] - cur.rect[1]).max(0.1);
         for j in (i.saturating_sub(4)..i).rev() {
-            let p = &glyphs[j];
-            if keep[j] && p.text == g.text && (p.rect[0] - g.rect[0]).abs() < h * 0.2 && (p.rect[1] - g.rect[1]).abs() < h * 0.2 {
+            let prev = &glyphs[j];
+            if keep[j]
+                && prev.text == cur.text
+                && (prev.rect[0] - cur.rect[0]).abs() < glyph_h * 0.2
+                && (prev.rect[1] - cur.rect[1]).abs() < glyph_h * 0.2
+            {
                 keep[i] = false;
                 break;
             }
@@ -353,8 +360,8 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
         let mut it = keep.iter();
         glyphs.retain(|_| *it.next().unwrap_or(&true));
     }
-    let n = glyphs.len();
-    if n == 0 {
+    let count = glyphs.len();
+    if count == 0 {
         return PageText::default();
     }
     let height = |i: usize| (glyphs[i].rect[3] - glyphs[i].rect[1]).max(0.1);
@@ -362,20 +369,20 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
 
     // 1. Segments in content order.
     let mut segs: Vec<Seg> = Vec::new();
-    for i in 0..n {
-        let g = glyphs[i].rect;
-        let cont = segs.last().is_some_and(|s| {
-            let Some(&p) = s.idx.last() else { return false };
-            let ph = height(p).min(height(i));
-            let gap = g[0] - glyphs[p].rect[2];
-            (cy(i) - cy(p)).abs() < ph * 0.5 && gap < ph * 3.0 && g[0] > glyphs[p].rect[0] - ph * 2.0
+    for i in 0..count {
+        let grect = glyphs[i].rect;
+        let continues = segs.last().is_some_and(|seg| {
+            let Some(&prev) = seg.idx.last() else { return false };
+            let ph = height(prev).min(height(i));
+            let gap = grect[0] - glyphs[prev].rect[2];
+            (cy(i) - cy(prev)).abs() < ph * 0.5 && gap < ph * 3.0 && grect[0] > glyphs[prev].rect[0] - ph * 2.0
         });
-        if cont && let Some(s) = segs.last_mut() {
-            s.idx.push(i);
-            union(&mut s.bbox, &g);
-            s.h = s.h.max(height(i));
+        if continues && let Some(seg) = segs.last_mut() {
+            seg.idx.push(i);
+            union(&mut seg.bbox, &grect);
+            seg.h = seg.h.max(height(i));
         } else {
-            segs.push(Seg { idx: vec![i], bbox: g, h: height(i) });
+            segs.push(Seg { idx: vec![i], bbox: grect, h: height(i) });
         }
     }
     // Merge same-baseline segments that nearly touch.
@@ -388,12 +395,12 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
                     continue;
                 }
                 let (sa, sb) = (&segs[a], &segs[b]);
-                let h = sa.h.min(sb.h);
+                let shared_h = sa.h.min(sb.h);
                 let gap = (sb.bbox[0] - sa.bbox[2]).max(sa.bbox[0] - sb.bbox[2]);
-                if (sa.cy() - sb.cy()).abs() < h * 0.3 && (sa.h / sb.h - 1.0).abs() < 0.35 && gap < h * 1.2 {
+                if (sa.cy() - sb.cy()).abs() < shared_h * 0.3 && (sa.h / sb.h - 1.0).abs() < 0.35 && gap < shared_h * 1.2 {
                     let sb = segs.remove(b);
-                    let a = if b < a { a - 1 } else { a };
-                    let sa = &mut segs[a];
+                    let at = if b < a { a - 1 } else { a };
+                    let sa = &mut segs[at];
                     sa.idx.extend(sb.idx);
                     union(&mut sa.bbox, &sb.bbox);
                     sa.h = sa.h.max(sb.h);
@@ -412,22 +419,22 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
     by_top.sort_by(|a, b| segs[*a].bbox[1].total_cmp(&segs[*b].bbox[1]));
     let mut blocks: Vec<(Vec<usize>, [f32; 4])> = Vec::new();
     for si in by_top {
-        let s = &segs[si];
+        let seg = &segs[si];
         let target = blocks.iter().position(|(members, bb)| {
-            let Some(&m) = members.last() else { return false };
-            let last = &segs[m];
-            let vgap = s.bbox[1] - last.bbox[3];
-            let overlap = s.bbox[2].min(bb[2]) - s.bbox[0].max(bb[0]);
-            let minw = (s.bbox[2] - s.bbox[0]).min(bb[2] - bb[0]).max(1.0);
-            vgap > -last.h * 0.5 && vgap < last.h.max(s.h) * 1.1 && overlap > minw * 0.3 && (last.h / s.h - 1.0).abs() < 0.6
+            let Some(&prev) = members.last() else { return false };
+            let last = &segs[prev];
+            let vgap = seg.bbox[1] - last.bbox[3];
+            let overlap = seg.bbox[2].min(bb[2]) - seg.bbox[0].max(bb[0]);
+            let minw = (seg.bbox[2] - seg.bbox[0]).min(bb[2] - bb[0]).max(1.0);
+            vgap > -last.h * 0.5 && vgap < last.h.max(seg.h) * 1.1 && overlap > minw * 0.3 && (last.h / seg.h - 1.0).abs() < 0.6
         });
         match target {
             Some(b) => {
                 blocks[b].0.push(si);
-                let bb = s.bbox;
+                let bb = seg.bbox;
                 union(&mut blocks[b].1, &bb);
             }
-            None => blocks.push((vec![si], s.bbox)),
+            None => blocks.push((vec![si], seg.bbox)),
         }
     }
 
@@ -441,8 +448,8 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
             .copied()
             .filter(|c| {
                 let cb = blocks[*c].1;
-                let v = cb[3].min(tb[3]) - cb[1].max(tb[1]);
-                cb[2] <= tb[0] + 1.0 && v > 0.5 * (cb[3] - cb[1]).min(tb[3] - tb[1])
+                let tall = cb[3].min(tb[3]) - cb[1].max(tb[1]);
+                cb[2] <= tb[0] + 1.0 && tall > 0.5 * (cb[3] - cb[1]).min(tb[3] - tb[1])
             })
             .min_by(|a, b| blocks[*a].1[0].total_cmp(&blocks[*b].1[0]))
             .unwrap_or(top);
@@ -451,46 +458,47 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
     }
 
     // 4. Emit glyphs in reading order with line numbers and word gaps.
-    let mut order: Vec<usize> = Vec::with_capacity(n);
-    let mut line_of = Vec::with_capacity(n);
-    let mut space_before = Vec::with_capacity(n);
+    let mut order: Vec<usize> = Vec::with_capacity(count);
+    let mut line_of = Vec::with_capacity(count);
+    let mut space_before = Vec::with_capacity(count);
     let mut line = 0u32;
-    for b in block_order {
-        for si in &blocks[b].0 {
-            let s = &segs[*si];
-            let mut idx = s.idx.clone();
+    for block in block_order {
+        for si in &blocks[block].0 {
+            let seg = &segs[*si];
+            let mut idx = seg.idx.clone();
             // Reverse right-to-left runs (visual → logical).
             let rtl = |i: usize| glyphs[i].text.chars().any(is_rtl);
-            let mut k = 0;
-            while k < idx.len() {
-                if rtl(idx[k]) {
-                    let mut e = k;
-                    while e + 1 < idx.len()
-                        && (rtl(idx[e + 1]) || (glyphs[idx[e + 1]].text.trim().is_empty() && e + 2 < idx.len() && rtl(idx[e + 2])))
+            let mut run_start = 0;
+            while run_start < idx.len() {
+                if rtl(idx[run_start]) {
+                    let mut run_end = run_start;
+                    while run_end + 1 < idx.len()
+                        && (rtl(idx[run_end + 1])
+                            || (glyphs[idx[run_end + 1]].text.trim().is_empty() && run_end + 2 < idx.len() && rtl(idx[run_end + 2])))
                     {
-                        e += 1;
+                        run_end += 1;
                     }
-                    idx[k..=e].reverse();
-                    k = e + 1;
+                    idx[run_start..=run_end].reverse();
+                    run_start = run_end + 1;
                 } else {
-                    k += 1;
+                    run_start += 1;
                 }
             }
             // Word gaps relative to this line's typical letter gap (handles tracking).
-            let mut gaps: Vec<f32> = s.idx.windows(2).map(|w| glyphs[w[1]].rect[0] - glyphs[w[0]].rect[2]).collect();
+            let mut gaps: Vec<f32> = seg.idx.windows(2).map(|w| glyphs[w[1]].rect[0] - glyphs[w[0]].rect[2]).collect();
             gaps.sort_by(f32::total_cmp);
             let typical = gaps.get(gaps.len() / 3).copied().unwrap_or(0.0).max(0.0);
-            let threshold = (typical + s.h * 0.15).max(s.h * 0.15);
+            let threshold = (typical + seg.h * 0.15).max(seg.h * 0.15);
             let mut spaces = vec![false; idx.len()];
-            for w in 1..s.idx.len() {
-                let (p, c) = (s.idx[w - 1], s.idx[w]);
-                let gap = glyphs[c].rect[0] - glyphs[p].rect[2];
-                let (pt, ct) = (&glyphs[p].text, &glyphs[c].text);
-                let cjk = pt.chars().any(is_cjk) && ct.chars().any(is_cjk) && gap < s.h * 0.5;
-                let tight_cluster = (pt.chars().any(is_complex) || ct.chars().any(is_complex)) && gap < s.h * 0.6;
+            for w in 1..seg.idx.len() {
+                let (prev, cur) = (seg.idx[w - 1], seg.idx[w]);
+                let gap = glyphs[cur].rect[0] - glyphs[prev].rect[2];
+                let (pt, ct) = (&glyphs[prev].text, &glyphs[cur].text);
+                let cjk = pt.chars().any(is_cjk) && ct.chars().any(is_cjk) && gap < seg.h * 0.5;
+                let tight_cluster = (pt.chars().any(is_complex) || ct.chars().any(is_complex)) && gap < seg.h * 0.6;
                 if gap > threshold && !cjk && !tight_cluster && !pt.trim().is_empty() && !ct.trim().is_empty() {
-                    // Mark the space before glyph `c` wherever it ended up after RTL reversal.
-                    if let Some(pos) = idx.iter().position(|x| *x == c.max(p)) {
+                    // Mark the space before the current glyph wherever it ended up after RTL reversal.
+                    if let Some(pos) = idx.iter().position(|x| *x == cur.max(prev)) {
                         spaces[pos] = true;
                     }
                 }

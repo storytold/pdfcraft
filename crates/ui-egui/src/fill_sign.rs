@@ -182,23 +182,27 @@ pub fn place(page: usize, at: [f64; 2], sig: &SavedSig, initials: bool, author: 
     }
 }
 
-/// The text in the script font as a picture (`w`×`h` px, black on transparent), for previews.
-pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage {
-    let o = printcraft_engine::script_outline(text);
-    let mut img = egui::ColorImage::filled([w, h], Color32::TRANSPARENT);
-    let span = (o.ascent - o.descent).max(0.1);
-    if o.contours.is_empty() {
+/// The text in the script font as a picture (`width`×`height` px, black on transparent), for previews.
+pub(crate) fn script_preview(text: &str, width: usize, height: usize) -> egui::ColorImage {
+    let outline = printcraft_engine::script_outline(text);
+    let mut img = egui::ColorImage::filled([width, height], Color32::TRANSPARENT);
+    let span = (outline.ascent - outline.descent).max(0.1);
+    if outline.contours.is_empty() {
         return img;
     }
-    let k = ((h as f64 * 0.9) / span).min((w as f64 * 0.95) / o.width.max(0.01));
-    let x0 = (w as f64 - o.width * k) / 2.0;
+    let scale = ((height as f64 * 0.9) / span).min((width as f64 * 0.95) / outline.width.max(0.01));
+    let x0 = (width as f64 - outline.width * scale) / 2.0;
     // Device points (y down), then an even-odd scanline fill.
-    let polys: Vec<Vec<(f64, f64)>> = o
+    let polys: Vec<Vec<(f64, f64)>> = outline
         .contours
         .iter()
-        .map(|c| c.iter().map(|p| (x0 + p[0] * k, h as f64 * 0.5 + f64::midpoint(o.ascent, o.descent) * k - p[1] * k)).collect())
+        .map(|c| {
+            c.iter()
+                .map(|p| (x0 + p[0] * scale, height as f64 * 0.5 + f64::midpoint(outline.ascent, outline.descent) * scale - p[1] * scale))
+                .collect()
+        })
         .collect();
-    for y in 0..h {
+    for y in 0..height {
         let sy = y as f64 + 0.5;
         let mut xs: Vec<f64> = Vec::new();
         for poly in &polys {
@@ -211,7 +215,7 @@ pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage
         }
         xs.sort_by(f64::total_cmp);
         for pair in xs.as_chunks::<2>().0 {
-            let (from, to) = (pair[0].round().max(0.0) as usize, (pair[1].round() as usize).min(w));
+            let (from, to) = (pair[0].round().max(0.0) as usize, (pair[1].round() as usize).min(width));
             for x in from..to {
                 img[(x, y)] = Color32::BLACK;
             }

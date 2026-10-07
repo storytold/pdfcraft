@@ -169,19 +169,19 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
         return Err(bad("not a JPEG file"));
     }
-    let (mut i, mut size, mut comps, mut dpi, mut adobe) = (2usize, None, 0u8, (72.0, 72.0), false);
-    while i + 4 <= bytes.len() {
-        if bytes[i] != 0xFF {
-            i += 1;
+    let (mut pos, mut size, mut comps, mut dpi, mut adobe) = (2usize, None, 0u8, (72.0, 72.0), false);
+    while pos + 4 <= bytes.len() {
+        if bytes[pos] != 0xFF {
+            pos += 1;
             continue;
         }
-        let marker = bytes[i + 1];
+        let marker = bytes[pos + 1];
         if marker == 0xD8 || marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
-            i += 2;
+            pos += 2;
             continue;
         }
-        let len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
-        let seg = bytes.get(i + 4..i + 2 + len).ok_or_else(|| bad("truncated"))?;
+        let len = u16::from_be_bytes([bytes[pos + 2], bytes[pos + 3]]) as usize;
+        let seg = bytes.get(pos + 4..pos + 2 + len).ok_or_else(|| bad("truncated"))?;
         match marker {
             // APP0 JFIF density.
             0xE0 if seg.starts_with(b"JFIF\0") && seg.len() >= 12 => {
@@ -206,7 +206,7 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
             0xDA => break,
             _ => {}
         }
-        i += 2 + len;
+        pos += 2 + len;
     }
     let (w, h) = size.filter(|(w, h)| *w > 0 && *h > 0).ok_or_else(|| bad("no image size"))?;
     let mut d = Dict::new();
@@ -220,7 +220,7 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
             }
             "DeviceCMYK"
         }
-        n => return Err(bad(&format!("{n} colour components are not supported"))),
+        count => return Err(bad(&format!("{count} colour components are not supported"))),
     };
     d.set(b"ColorSpace".to_vec(), Object::name(cs));
     d.set(b"BitsPerComponent".to_vec(), Object::Int(8));

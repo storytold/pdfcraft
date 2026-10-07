@@ -183,41 +183,41 @@ fn date(s: &[char], i: usize) -> Option<usize> {
     }
     let spaces = |k: usize| s[k.min(s.len())..].iter().take_while(|c| **c == ' ').count();
     // Numeric: m/d/yy(yy), m-d-yyyy, d.m.yyyy, yyyy-mm-dd.
-    if let Some(a) = number(s, i, 1, 4) {
-        let sep = s.get(i + a).copied();
+    if let Some(month_len) = number(s, i, 1, 4) {
+        let sep = s.get(i + month_len).copied();
         if matches!(sep, Some('/' | '-' | '.'))
-            && let Some(b) = number(s, i + a + 1, 1, 2)
-            && s.get(i + a + 1 + b).copied() == sep
-            && let Some(c) = number(s, i + a + b + 2, if a == 4 { 1 } else { 2 }, if a == 4 { 2 } else { 4 })
-            && (a <= 2 || a == 4)
-            && !digit(s.get(i + a + b + 2 + c))
+            && let Some(sep_len) = number(s, i + month_len + 1, 1, 2)
+            && s.get(i + month_len + 1 + sep_len).copied() == sep
+            && let Some(year_len) = number(s, i + month_len + sep_len + 2, if month_len == 4 { 1 } else { 2 }, if month_len == 4 { 2 } else { 4 })
+            && (month_len <= 2 || month_len == 4)
+            && !digit(s.get(i + month_len + sep_len + 2 + year_len))
         {
-            return Some(a + b + c + 2);
+            return Some(month_len + sep_len + year_len + 2);
         }
         // "5 January 2024".
-        if a <= 2
-            && let k = i + a + spaces(i + a)
-            && k > i + a
-            && let Some(m) = month(s, k)
+        if month_len <= 2
+            && let after = i + month_len + spaces(i + month_len)
+            && after > i + month_len
+            && let Some(name_len) = month(s, after)
         {
-            let k2 = k + m + spaces(k + m);
-            if let Some(y) = number(s, k2, 4, 4) {
-                return Some(k2 + y - i);
+            let after_name = after + name_len + spaces(after + name_len);
+            if let Some(year) = number(s, after_name, 4, 4) {
+                return Some(after_name + year - i);
             }
         }
         return None;
     }
     // "January 5, 2024" / "Jan. 5 2024".
-    let m = month(s, i)?;
-    let k = i + m + spaces(i + m);
-    let d = number(s, k, 1, 2)?;
-    let mut k2 = k + d;
-    if s.get(k2) == Some(&',') {
-        k2 += 1;
+    let name_len = month(s, i)?;
+    let day_at = i + name_len + spaces(i + name_len);
+    let day = number(s, day_at, 1, 2)?;
+    let mut year_at = day_at + day;
+    if s.get(year_at) == Some(&',') {
+        year_at += 1;
     }
-    k2 += spaces(k2);
-    let y = number(s, k2, 4, 4)?;
-    Some(k2 + y - i)
+    year_at += spaces(year_at);
+    let year = number(s, year_at, 4, 4)?;
+    Some(year_at + year - i)
 }
 
 /// Character ranges of `text` matching `pattern`.

@@ -42,23 +42,23 @@ fn esc(s: &str) -> String {
 
 /// A PDF date (`D:YYYYMMDDHHmmSSOHH'mm'`) as an XMP (ISO 8601) date.
 pub fn iso_date(pdf: &str) -> Option<String> {
-    let d = pdf.trim().trim_start_matches("D:");
-    let digits: String = d.chars().take_while(char::is_ascii_digit).collect();
+    let date = pdf.trim().trim_start_matches("D:");
+    let digits: String = date.chars().take_while(char::is_ascii_digit).collect();
     if digits.len() < 4 {
         return None;
     }
     let part = |a: usize, b: usize, def: &str| digits.get(a..b).unwrap_or(def).to_string();
-    let (y, mo, da, h, mi, s) = (part(0, 4, "0000"), part(4, 6, "01"), part(6, 8, "01"), part(8, 10, "00"), part(10, 12, "00"), part(12, 14, "00"));
-    let rest = &d[digits.len()..];
+    let (y, mo, da, h, mi, sec) = (part(0, 4, "0000"), part(4, 6, "01"), part(6, 8, "01"), part(8, 10, "00"), part(10, 12, "00"), part(12, 14, "00"));
+    let rest = &date[digits.len()..];
     let tz = match rest.chars().next() {
         Some('Z') | None => "Z".to_string(),
         Some(sign @ ('+' | '-')) => {
-            let t: String = rest[1..].chars().filter(char::is_ascii_digit).collect();
-            format!("{sign}{}:{}", t.get(0..2).unwrap_or("00"), t.get(2..4).unwrap_or("00"))
+            let tz_digits: String = rest[1..].chars().filter(char::is_ascii_digit).collect();
+            format!("{sign}{}:{}", tz_digits.get(0..2).unwrap_or("00"), tz_digits.get(2..4).unwrap_or("00"))
         }
         _ => "Z".to_string(),
     };
-    Some(format!("{y}-{mo}-{da}T{h}:{mi}:{s}{tz}"))
+    Some(format!("{y}-{mo}-{da}T{h}:{mi}:{sec}{tz}"))
 }
 
 fn info(doc: &Document, key: &str) -> Option<String> {

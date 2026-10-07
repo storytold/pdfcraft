@@ -83,12 +83,12 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup) -> egui::Response {
     icons::paint(ui, Rect::from_min_size(rect.min + vec2(6.0, 7.0), vec2(20.0, 20.0)), g.icon, 19.0, hue(g));
     ui.painter().text(rect.left_center() + vec2(36.0, 0.0), Align2::LEFT_CENTER, g.label, theme::regular(13.5), t.text);
     match (g.badge, g.availability) {
-        (Some(b), _) => {
+        (Some(badge), _) => {
             let font = theme::semibold(9.5);
-            let w = ui.fonts_mut(|f| f.layout_no_wrap(b.to_string(), font.clone(), Color32::WHITE).size().x);
-            let r = Rect::from_center_size(rect.right_center() - vec2(w / 2.0 + 10.0, 0.0), vec2(w + 10.0, 16.0));
-            ui.painter().rect_filled(r, CornerRadius::same(4), t.badge_new);
-            ui.painter().text(r.center(), Align2::CENTER_CENTER, b, font, Color32::WHITE);
+            let badge_width = ui.fonts_mut(|f| f.layout_no_wrap(badge.to_string(), font.clone(), Color32::WHITE).size().x);
+            let badge_rect = Rect::from_center_size(rect.right_center() - vec2(badge_width / 2.0 + 10.0, 0.0), vec2(badge_width + 10.0, 16.0));
+            ui.painter().rect_filled(badge_rect, CornerRadius::same(4), t.badge_new);
+            ui.painter().text(badge_rect.center(), Align2::CENTER_CENTER, badge, font, Color32::WHITE);
         }
         // Planned tools: a quiet milestone hint instead of a chip, so the list stays calm.
         (None, Availability::Planned(m)) if resp.hovered() => {
@@ -230,8 +230,8 @@ fn stamp_palette(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 } else if resp.hovered() {
                     ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
                 }
-                let [r, g, b] = kind.color().map(|v| (v * 255.0) as u8);
-                let col = Color32::from_rgb(r, g, b);
+                let [red, green, blue] = kind.color().map(|v| (v * 255.0) as u8);
+                let col = Color32::from_rgb(red, green, blue);
                 let chip = Rect::from_min_size(rect.min + vec2(8.0, 5.0), vec2((rect.width() - 16.0).min(200.0), 28.0));
                 if group == StampGroup::SignHere {
                     let tip = chip.height() * 0.45;
@@ -252,8 +252,8 @@ fn stamp_palette(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                     );
                 } else {
                     ui.painter().rect(chip, CornerRadius::same(5), col.gamma_multiply(0.1), Stroke::new(1.5, col), egui::StrokeKind::Inside);
-                    let y = if group == StampGroup::Dynamic { chip.center().y - 4.0 } else { chip.center().y };
-                    ui.painter().text(egui::pos2(chip.center().x, y), Align2::CENTER_CENTER, kind.label(), theme::semibold(11.0), col);
+                    let text_y = if group == StampGroup::Dynamic { chip.center().y - 4.0 } else { chip.center().y };
+                    ui.painter().text(egui::pos2(chip.center().x, text_y), Align2::CENTER_CENTER, kind.label(), theme::semibold(11.0), col);
                     if group == StampGroup::Dynamic {
                         ui.painter().text(
                             egui::pos2(chip.center().x, chip.bottom() - 6.0),

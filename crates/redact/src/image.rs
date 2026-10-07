@@ -36,14 +36,14 @@ fn components(doc: &Document, s: &Stream) -> Option<usize> {
 /// `Ok(Some(copy))` with the covered pixels cleared, `Ok(None)` when no pixel centre is covered,
 /// `Err(())` when the image can't be cleared (the caller removes it).
 #[allow(clippy::result_unit_err)]
-pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]) -> Result<Option<Stream>, ()> {
+pub(crate) fn clear(doc: &Document, stream: &Stream, ctm: &Matrix, rects: &[[f64; 4]]) -> Result<Option<Stream>, ()> {
     let supported = |n: &[u8]| {
         matches!(
             n,
             b"FlateDecode" | b"Fl" | b"LZWDecode" | b"LZW" | b"ASCII85Decode" | b"A85" | b"ASCIIHexDecode" | b"AHx" | b"RunLengthDecode" | b"RL"
         )
     };
-    let ok = match s.dict.get(b"Filter") {
+    let ok = match stream.dict.get(b"Filter") {
         None => true,
         Some(Object::Name(n)) => supported(n),
         Some(Object::Array(a)) => a.iter().all(|f| f.as_name().is_some_and(supported)),
@@ -52,43 +52,43 @@ pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     if !ok {
         return Err(());
     }
-    let (w, h) = (s.dict.int(b"Width").ok_or(())?, s.dict.int(b"Height").ok_or(())?);
-    if w <= 0 || h <= 0 || (w as u64) * (h as u64) > MAX_PIXELS {
+    let (width, height) = (stream.dict.int(b"Width").ok_or(())?, stream.dict.int(b"Height").ok_or(())?);
+    if width <= 0 || height <= 0 || (width as u64) * (height as u64) > MAX_PIXELS {
         return Err(());
     }
-    let (w, h) = (w as usize, h as usize);
-    let mask = matches!(s.dict.get(b"ImageMask"), Some(Object::Bool(true)));
-    let (ncomp, bpc) = if mask { (1, 1) } else { (components(doc, s).ok_or(())?, s.dict.int(b"BitsPerComponent").ok_or(())? as usize) };
+    let (width, height) = (width as usize, height as usize);
+    let mask = matches!(stream.dict.get(b"ImageMask"), Some(Object::Bool(true)));
+    let (ncomp, bpc) = if mask { (1, 1) } else { (components(doc, stream).ok_or(())?, stream.dict.int(b"BitsPerComponent").ok_or(())? as usize) };
     if !matches!(bpc, 1 | 2 | 4 | 8 | 16) {
         return Err(());
     }
-    let mut data = s.decoded().map_err(|_| ())?;
-    let row = (w * ncomp * bpc).div_ceil(8);
-    if data.len() < row * h {
+    let mut data = stream.decoded().map_err(|_| ())?;
+    let row = (width * ncomp * bpc).div_ceil(8);
+    if data.len() < row * height {
         return Err(());
     }
-    data.truncate(row * h);
+    data.truncate(row * height);
     // Image masks: a sample of 0 paints unless /Decode is [1 0]; cleared samples must not paint.
     let clear_bit = if mask {
-        let inverted = s.dict.get(b"Decode").and_then(Object::as_array).and_then(|d| d.first()).and_then(Object::as_f64) == Some(1.0);
+        let inverted = stream.dict.get(b"Decode").and_then(Object::as_array).and_then(|d| d.first()).and_then(Object::as_f64) == Some(1.0);
         !inverted
     } else {
         false
     };
     let bits_per_pixel = ncomp * bpc;
     let mut cleared = 0usize;
-    for j in 0..h {
+    for j in 0..height {
         // Image space: (0,0) is the bottom-left of the unit square; row 0 is the top.
-        let v = 1.0 - (j as f64 + 0.5) / h as f64;
-        let (ax, ay) = ctm.apply(0.0, v);
-        let (bx, by) = ctm.apply(1.0, v);
+        let vy = 1.0 - (j as f64 + 0.5) / height as f64;
+        let (ax, ay) = ctm.apply(0.0, vy);
+        let (bx, by) = ctm.apply(1.0, vy);
         let row_box = [ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)];
         if !rects.iter().any(|r| overlaps(*r, [row_box[0], row_box[1] - 0.01, row_box[2], row_box[3] + 0.01], 0.0)) {
             continue;
         }
-        for i in 0..w {
-            let u = (i as f64 + 0.5) / w as f64;
-            let (x, y) = ctm.apply(u, v);
+        for i in 0..width {
+            let ux = (i as f64 + 0.5) / width as f64;
+            let (x, y) = ctm.apply(ux, vy);
             if !rects.iter().any(|r| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3]) {
                 continue;
             }
@@ -107,7 +107,7 @@ pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     if cleared == 0 {
         return Ok(None);
     }
-    let mut dict = s.dict.clone();
+    let mut dict = stream.dict.clone();
     dict.remove(b"Length");
     dict.remove(b"DecodeParms");
     Ok(Some(Stream::flate(dict, &data)))

@@ -5,39 +5,39 @@ use std::sync::Arc;
 use printcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
 use printcraft_optimize::{Compression, ImageSettings, Settings, SpaceCategory, audit_space, effective_resolutions, optimize};
 
-fn image(doc: &mut Document, w: u32, h: u32, n: usize, jpeg: bool, smask: Option<ObjRef>) -> ObjRef {
+fn image(doc: &mut Document, w: u32, h: u32, components: usize, jpeg: bool, smask: Option<ObjRef>) -> ObjRef {
     // A smooth gradient with a little texture (photo-like).
-    let mut px = Vec::with_capacity((w * h) as usize * n);
+    let mut px = Vec::with_capacity((w * h) as usize * components);
     for y in 0..h {
         for x in 0..w {
-            let v = ((x * 255 / w.max(1)) as u8).wrapping_add(((x ^ y) & 7) as u8);
-            px.push(v);
-            if n == 3 {
+            let sample = ((x * 255 / w.max(1)) as u8).wrapping_add(((x ^ y) & 7) as u8);
+            px.push(sample);
+            if components == 3 {
                 px.push((y * 255 / h.max(1)) as u8);
                 px.push(128);
             }
         }
     }
-    let mut d = Dict::new();
-    d.set(b"Type".to_vec(), Object::name("XObject"));
-    d.set(b"Subtype".to_vec(), Object::name("Image"));
-    d.set(b"Width".to_vec(), Object::Int(i64::from(w)));
-    d.set(b"Height".to_vec(), Object::Int(i64::from(h)));
-    d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
-    d.set(b"ColorSpace".to_vec(), Object::name(if n == 1 { "DeviceGray" } else { "DeviceRGB" }));
+    let mut dict = Dict::new();
+    dict.set(b"Type".to_vec(), Object::name("XObject"));
+    dict.set(b"Subtype".to_vec(), Object::name("Image"));
+    dict.set(b"Width".to_vec(), Object::Int(i64::from(w)));
+    dict.set(b"Height".to_vec(), Object::Int(i64::from(h)));
+    dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    dict.set(b"ColorSpace".to_vec(), Object::name(if components == 1 { "DeviceGray" } else { "DeviceRGB" }));
     if let Some(m) = smask {
-        d.set(b"SMask".to_vec(), Object::Ref(m));
+        dict.set(b"SMask".to_vec(), Object::Ref(m));
     }
-    let s = if jpeg {
+    let img = if jpeg {
         let mut out = Vec::new();
-        let ty = if n == 1 { image::ExtendedColorType::L8 } else { image::ExtendedColorType::Rgb8 };
+        let ty = if components == 1 { image::ExtendedColorType::L8 } else { image::ExtendedColorType::Rgb8 };
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 98).encode(&px, w, h, ty).unwrap();
-        d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
-        Stream::from_raw(d, out)
+        dict.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        Stream::from_raw(dict, out)
     } else {
-        Stream::flate(d, &px)
+        Stream::flate(dict, &px)
     };
-    doc.add(Object::Stream(s))
+    doc.add(Object::Stream(img))
 }
 
 fn page(doc: &mut Document, xobjects: &[(&str, ObjRef)], content: &str) -> ObjRef {
@@ -107,28 +107,28 @@ fn images_are_measured_where_drawn_and_downsampled() {
     assert_eq!(report.images, 5, "{report:?}");
     assert_eq!(report.images_resampled, 2, "{report:?}");
     assert_eq!(report.thumbnails, 2);
-    let b = stream(&doc, big);
-    assert_eq!((b.dict.int(b"Width"), b.dict.int(b"Height"), b.dict.name(b"Filter")), (Some(300), Some(300), Some(&b"DCTDecode"[..])));
-    let m = stream(&doc, masked);
+    let bs = stream(&doc, big);
+    assert_eq!((bs.dict.int(b"Width"), bs.dict.int(b"Height"), bs.dict.name(b"Filter")), (Some(300), Some(300), Some(&b"DCTDecode"[..])));
+    let ms = stream(&doc, masked);
     let sm = stream(&doc, mask);
-    assert_eq!((m.dict.int(b"Width"), sm.dict.int(b"Width")), (Some(150), Some(150)), "the soft mask follows its image");
+    assert_eq!((ms.dict.int(b"Width"), sm.dict.int(b"Width")), (Some(150), Some(150)), "the soft mask follows its image");
     assert_eq!(sm.dict.name(b"Filter"), Some(&b"FlateDecode"[..]));
     assert_eq!(stream(&doc, small).dict.int(b"Width"), Some(100));
     assert_eq!(stream(&doc, twice).dict.int(b"Width"), Some(300), "75 ppi is below the threshold");
-    let p = stream(&doc, photo);
-    assert_eq!(p.dict.int(b"Width"), Some(600));
+    let ps = stream(&doc, photo);
+    assert_eq!(ps.dict.int(b"Width"), Some(600));
     let after_bytes = write_full(&doc, &SaveOptions::default()).unwrap();
     assert!(after_bytes.len() * 3 < before, "{} → {}", before, after_bytes.len());
 
     // The optimized file opens, and the page still shows the picture where it was.
     let reopened = Document::open(Arc::new(after_bytes.clone())).unwrap();
     assert_eq!(printcraft_annot::page_refs(&reopened).unwrap().len(), 2);
-    let mut r = printcraft_render::PageRenderer::new(Arc::new(after_bytes), printcraft_render::RenderConfig::default());
-    let out = r.render(printcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    let mut renderer = printcraft_render::PageRenderer::new(Arc::new(after_bytes), printcraft_render::RenderConfig::default());
+    let out = renderer.render(printcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
     assert!(out.error.is_none(), "{:?}", out.error);
     // Top-left image area (36..180 x 600..744 user → y from the top 48..192): drawn, not white.
-    let i = ((100 * out.width + 100) * 4) as usize;
-    assert_ne!(&out.rgba[i..i + 3], &[255, 255, 255]);
+    let at = ((100 * out.width + 100) * 4) as usize;
+    assert_ne!(&out.rgba[at..at + 3], &[255, 255, 255]);
 }
 
 #[test]

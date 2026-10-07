@@ -191,11 +191,11 @@ pub(crate) enum ImageAction {
     Save(usize, usize),
 }
 
-fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
-    let p = &info.pages[page];
-    let (a, b) = (xf.screen_to_view(r.min), xf.screen_to_view(r.max));
-    let (u, v) = (p.view_to_user(a.0, a.1), p.view_to_user(b.0, b.1));
-    [f64::from(u[0].min(v[0])), f64::from(u[1].min(v[1])), f64::from(u[0].max(v[0])), f64::from(u[1].max(v[1]))]
+fn user_box(xf: &PageXform, info: &DocInfo, page: usize, rect: Rect) -> [f64; 4] {
+    let page_info = &info.pages[page];
+    let (first, last) = (xf.screen_to_view(rect.min), xf.screen_to_view(rect.max));
+    let (start, end) = (page_info.view_to_user(first.0, first.1), page_info.view_to_user(last.0, last.1));
+    [f64::from(start[0].min(end[0])), f64::from(start[1].min(end[1])), f64::from(start[0].max(end[0])), f64::from(start[1].max(end[1]))]
 }
 
 /// Images on a page: select, move, resize, right-click. Returns `true` when the pointer was used.
@@ -234,9 +234,9 @@ pub(crate) fn image_input(
     }
     // The selected image: frame, corner handles, dragging.
     if let Some(i) = selected {
-        let b = boxes[i];
-        painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
-        let corners = [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()];
+        let frame = boxes[i];
+        painter.rect_stroke(frame, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+        let corners = [frame.left_top(), frame.right_top(), frame.left_bottom(), frame.right_bottom()];
         for c in corners {
             painter.rect(
                 Rect::from_center_size(c, egui::vec2(8.0, 8.0)),
@@ -251,7 +251,7 @@ pub(crate) fn image_input(
             && let Some(o) = origin
         {
             let corner = corners.iter().position(|c| c.distance(o) < 8.0);
-            if corner.is_some() || b.contains(o) {
+            if corner.is_some() || frame.contains(o) {
                 let opposite = corner.map(|k| corners[3 - k]);
                 if let Some(s) = view.image_selection.as_mut() {
                     s.drag = Some((o, opposite));
@@ -264,21 +264,21 @@ pub(crate) fn image_input(
             let preview = match opposite {
                 // Resize from the opposite corner, keeping the aspect ratio.
                 Some(fixed) => {
-                    let (w0, h0) = (b.width().max(1.0), b.height().max(1.0));
-                    let k = ((p.x - fixed.x).abs() / w0).max((p.y - fixed.y).abs() / h0).max(0.05);
-                    let (w, h) = (w0 * k, h0 * k);
-                    let x = if p.x < fixed.x { fixed.x - w } else { fixed.x };
-                    let y = if p.y < fixed.y { fixed.y - h } else { fixed.y };
-                    Rect::from_min_size(Pos2::new(x, y), egui::vec2(w, h))
+                    let (w0, h0) = (frame.width().max(1.0), frame.height().max(1.0));
+                    let scale = ((p.x - fixed.x).abs() / w0).max((p.y - fixed.y).abs() / h0).max(0.05);
+                    let (sw, sh) = (w0 * scale, h0 * scale);
+                    let left = if p.x < fixed.x { fixed.x - sw } else { fixed.x };
+                    let top = if p.y < fixed.y { fixed.y - sh } else { fixed.y };
+                    Rect::from_min_size(Pos2::new(left, top), egui::vec2(sw, sh))
                 }
-                None => b.translate(p - start),
+                None => frame.translate(p - start),
             };
             painter.rect_stroke(preview, CornerRadius::ZERO, Stroke::new(1.0, ACCENT), egui::StrokeKind::Middle);
             if resp.drag_stopped() {
                 if let Some(s) = view.image_selection.as_mut() {
                     s.drag = None;
                 }
-                if preview != b {
+                if preview != frame {
                     view.pending_edit =
                         Some(Edit::EditPageImage { page, index: i, change: printcraft_engine::ImageEdit::Move(user_box(xf, info, page, preview)) });
                 }

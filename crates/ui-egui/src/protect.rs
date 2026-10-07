@@ -118,11 +118,11 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
             })
             .inner
     };
-    let r = field(ui, "Type Password", &mut d.password, "protect-pw");
-    if r.changed() || !d.password.is_empty() {
-        let (s, c) = strength(&d.password);
+    let pw_resp = field(ui, "Type Password", &mut d.password, "protect-pw");
+    if pw_resp.changed() || !d.password.is_empty() {
+        let (score, tint) = strength(&d.password);
         if !d.password.is_empty() {
-            ui.label(egui::RichText::new(format!("Strength: {s}")).font(theme::medium(11.5)).color(c));
+            ui.label(egui::RichText::new(format!("Strength: {score}")).font(theme::medium(11.5)).color(tint));
         }
     }
     ui.add_space(6.0);

@@ -83,8 +83,8 @@ impl Automation {
         let doc = self.doc(a)?;
         let r = doc.accessibility_check(&o).ok_or_else(|| failed("the document can't be read for checking"))?;
         let path = self.resolve(a.str("path")?, true)?;
-        let (y, m, d) = self.session.today();
-        let html = printcraft_engine::a11y::report_html(&r, &doc.name, &format!("{y}-{m:02}-{d:02}"));
+        let (year, month, day) = self.session.today();
+        let html = printcraft_engine::a11y::report_html(&r, &doc.name, &format!("{year}-{month:02}-{day:02}"));
         write_atomic(&path, html.as_bytes())?;
         let mut out = report_json(&r);
         out["path"] = json!(path.to_string_lossy());

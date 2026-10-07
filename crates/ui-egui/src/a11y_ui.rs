@@ -408,22 +408,23 @@ impl std::fmt::Debug for AltDraft {
 }
 
 /// Render a figure's area for the dialog (at most 360 × 220 px).
-fn figure_picture(ctx: &egui::Context, doc: &printcraft_engine::Document, f: &printcraft_engine::a11y::Figure) -> Option<egui::TextureHandle> {
-    let (page, b) = (f.page?, f.bbox?);
+fn figure_picture(ctx: &egui::Context, doc: &printcraft_engine::Document, figure: &printcraft_engine::a11y::Figure) -> Option<egui::TextureHandle> {
+    let (page, bbox) = (figure.page?, figure.bbox?);
     let info = doc.info.pages.get(page)?;
-    let (u, v) = (info.user_to_view(b[0] as f32, b[1] as f32), info.user_to_view(b[2] as f32, b[3] as f32));
-    let (x0, y0, x1, y1) = (u[0].min(v[0]), u[1].min(v[1]), u[0].max(v[0]), u[1].max(v[1]));
-    let (w, h) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
-    let scale = (360.0 / w).min(220.0 / h).clamp(0.05, 8.0);
+    let (start, end) = (info.user_to_view(bbox[0] as f32, bbox[1] as f32), info.user_to_view(bbox[2] as f32, bbox[3] as f32));
+    let (x0, y0, x1, y1) = (start[0].min(end[0]), start[1].min(end[1]), start[0].max(end[0]), start[1].max(end[1]));
+    let (width, height) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
+    let scale = (360.0 / width).min(220.0 / height).clamp(0.05, 8.0);
     let tile = printcraft_render::Tile {
         x: (x0 * scale).floor().max(0.0) as u32,
         y: (y0 * scale).floor().max(0.0) as u32,
-        w: (w * scale).ceil().max(1.0) as u32,
-        h: (h * scale).ceil().max(1.0) as u32,
+        w: (width * scale).ceil().max(1.0) as u32,
+        h: (height * scale).ceil().max(1.0) as u32,
     };
     let config = printcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
-    let mut r = printcraft_render::PageRenderer::new(doc.bytes.clone(), config);
-    let out = r.render(printcraft_render::RenderRequest { page, kind: printcraft_render::RequestKind::Pixels, tile: Some(tile), scale, tag: 0 });
+    let mut renderer = printcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+    let request = printcraft_render::RenderRequest { page, kind: printcraft_render::RequestKind::Pixels, tile: Some(tile), scale, tag: 0 };
+    let out = renderer.render(request);
     if out.error.is_some() || out.width == 0 {
         return None;
     }
@@ -434,33 +435,33 @@ fn figure_picture(ctx: &egui::Context, doc: &printcraft_engine::Document, f: &pr
 pub(crate) fn alt_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (bool, bool) {
     let ctx = ui.ctx().clone();
     let doc = app.alt_draft.doc.and_then(|id| app.session.get(id));
-    let d = &mut app.alt_draft;
+    let draft = &mut app.alt_draft;
     ui.label(egui::RichText::new("Set Alternate Text").font(theme::semibold(18.0)));
     ui.add_space(8.0);
-    let n = d.figures.len();
-    if n == 0 {
+    let count = draft.figures.len();
+    if count == 0 {
         ui.label(egui::RichText::new("This document has no tagged figures.").color(t.text_muted));
         let mut cancel = false;
         ui.horizontal(|ui| ui.with_layout(Layout::right_to_left(Align::Center), |ui| cancel = widgets::pill_button(ui, "Close", true).clicked()));
         return (false, cancel);
     }
-    d.index = d.index.min(n - 1);
-    let i = d.index;
-    if d.preview.as_ref().is_none_or(|(k, _)| *k != i)
+    draft.index = draft.index.min(count - 1);
+    let index = draft.index;
+    if draft.preview.as_ref().is_none_or(|(k, _)| *k != index)
         && let Some(doc) = doc
     {
-        d.preview = figure_picture(&ctx, doc, &d.figures[i]).map(|tex| (i, tex));
+        draft.preview = figure_picture(&ctx, doc, &draft.figures[index]).map(|tex| (index, tex));
     }
-    let page = d.figures[i].page.map(|p| format!(" on page {}", p + 1)).unwrap_or_default();
-    ui.label(egui::RichText::new(format!("Figure {} of {n}{page}", i + 1)).color(t.text_muted));
+    let page = draft.figures[index].page.map(|p| format!(" on page {}", p + 1)).unwrap_or_default();
+    ui.label(egui::RichText::new(format!("Figure {} of {count}{page}", index + 1)).color(t.text_muted));
     ui.add_space(6.0);
     egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
         let (area, _) = ui.allocate_exact_size(egui::vec2(380.0, 220.0), egui::Sense::hover());
-        match &d.preview {
+        match &draft.preview {
             Some((_, tex)) => {
-                let s = tex.size_vec2();
-                let k = (area.width() / s.x).min(area.height() / s.y).min(2.0);
-                let fit = egui::Rect::from_center_size(area.center(), s * k);
+                let size = tex.size_vec2();
+                let fit_scale = (area.width() / size.x).min(area.height() / size.y).min(2.0);
+                let fit = egui::Rect::from_center_size(area.center(), size * fit_scale);
                 ui.painter().image(tex.id(), fit, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
             }
             None => {
@@ -469,19 +470,20 @@ pub(crate) fn alt_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -
         }
     });
     ui.add_space(8.0);
-    ui.add_enabled_ui(!d.decorative[i], |ui| {
-        let l = ui.label("Alternate text");
-        ui.add(egui::TextEdit::multiline(&mut d.texts[i]).desired_rows(3).desired_width(380.0).hint_text("Describe the figure")).labelled_by(l.id);
+    ui.add_enabled_ui(!draft.decorative[index], |ui| {
+        let alt_label = ui.label("Alternate text");
+        let editor = egui::TextEdit::multiline(&mut draft.texts[index]).desired_rows(3).desired_width(380.0).hint_text("Describe the figure");
+        ui.add(editor).labelled_by(alt_label.id);
     });
-    ui.checkbox(&mut d.decorative[i], "Decorative figure");
+    ui.checkbox(&mut draft.decorative[index], "Decorative figure");
     ui.add_space(10.0);
     let (mut save, mut cancel) = (false, false);
     ui.horizontal(|ui| {
-        if ui.add_enabled_ui(i > 0, |ui| icons::button(ui, "chevron-left", 28.0, false, "Previous figure")).inner.clicked() {
-            d.index -= 1;
+        if ui.add_enabled_ui(index > 0, |ui| icons::button(ui, "chevron-left", 28.0, false, "Previous figure")).inner.clicked() {
+            draft.index -= 1;
         }
-        if ui.add_enabled_ui(i + 1 < n, |ui| icons::button(ui, "chevron-right", 28.0, false, "Next figure")).inner.clicked() {
-            d.index += 1;
+        if ui.add_enabled_ui(index + 1 < count, |ui| icons::button(ui, "chevron-right", 28.0, false, "Next figure")).inner.clicked() {
+            draft.index += 1;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if widgets::pill_button(ui, "Save & Close", true).clicked() {

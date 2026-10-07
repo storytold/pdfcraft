@@ -79,30 +79,30 @@ impl PageInfo {
     /// A point in view space (points, y down, after `/Rotate`; what the text layer uses) →
     /// PDF user space.
     #[must_use]
-    pub fn view_to_user(&self, x: f32, y: f32) -> [f32; 2] {
+    pub fn view_to_user(&self, view_x: f32, view_y: f32) -> [f32; 2] {
         let [cx0, cy0, cx1, cy1] = self.crop;
-        let (a, b) = (x / self.width.max(1e-3), y / self.height.max(1e-3));
-        let (u, v) = match self.rotation {
-            90 => (b, 1.0 - a),
-            180 => (1.0 - a, 1.0 - b),
-            270 => (1.0 - b, a),
-            _ => (a, b),
+        let (fx, fy) = (view_x / self.width.max(1e-3), view_y / self.height.max(1e-3));
+        let (ux, uy) = match self.rotation {
+            90 => (fy, 1.0 - fx),
+            180 => (1.0 - fx, 1.0 - fy),
+            270 => (1.0 - fy, fx),
+            _ => (fx, fy),
         };
-        [cx0 + u * (cx1 - cx0), cy1 - v * (cy1 - cy0)]
+        [cx0 + ux * (cx1 - cx0), cy1 - uy * (cy1 - cy0)]
     }
 
     /// PDF user space → view space (the inverse of [`Self::view_to_user`]).
     #[must_use]
-    pub fn user_to_view(&self, x: f32, y: f32) -> [f32; 2] {
+    pub fn user_to_view(&self, user_x: f32, user_y: f32) -> [f32; 2] {
         let [cx0, cy0, cx1, cy1] = self.crop;
-        let (u, v) = ((x - cx0) / (cx1 - cx0).max(1e-3), (cy1 - y) / (cy1 - cy0).max(1e-3));
-        let (a, b) = match self.rotation {
-            90 => (1.0 - v, u),
-            180 => (1.0 - u, 1.0 - v),
-            270 => (v, 1.0 - u),
-            _ => (u, v),
+        let (ux, uy) = ((user_x - cx0) / (cx1 - cx0).max(1e-3), (cy1 - user_y) / (cy1 - cy0).max(1e-3));
+        let (vx, vy) = match self.rotation {
+            90 => (1.0 - uy, ux),
+            180 => (1.0 - ux, 1.0 - uy),
+            270 => (uy, 1.0 - ux),
+            _ => (ux, uy),
         };
-        [a * self.width, b * self.height]
+        [vx * self.width, vy * self.height]
     }
 
     /// A view-space rectangle as a text-markup quad in user space: top-left, top-right,

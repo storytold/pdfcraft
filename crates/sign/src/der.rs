@@ -234,9 +234,15 @@ impl Time {
     #[must_use]
     pub fn from_pdf(s: &str) -> Option<Time> {
         let s = s.strip_prefix("D:").unwrap_or(s);
-        let d = |r: std::ops::Range<usize>, default: u32| s.get(r).map_or(Some(default), |x| x.parse::<u32>().ok());
-        let mut t =
-            Time { year: d(0..4, 0)?, month: d(4..6, 1)?, day: d(6..8, 1)?, hour: d(8..10, 0)?, minute: d(10..12, 0)?, second: d(12..14, 0)? };
+        let field = |r: std::ops::Range<usize>, default: u32| s.get(r).map_or(Some(default), |x| x.parse::<u32>().ok());
+        let mut t = Time {
+            year: field(0..4, 0)?,
+            month: field(4..6, 1)?,
+            day: field(6..8, 1)?,
+            hour: field(8..10, 0)?,
+            minute: field(10..12, 0)?,
+            second: field(12..14, 0)?,
+        };
         if t.year == 0 {
             return None;
         }
@@ -247,9 +253,9 @@ impl Time {
             _ => 0,
         };
         if sign != 0 {
-            let h = tz.get(1..3).and_then(|x| x.parse::<i64>().ok()).unwrap_or(0);
-            let m = tz.get(4..6).and_then(|x| x.parse::<i64>().ok()).unwrap_or(0);
-            t = t.add_seconds(sign * (h * 3600 + m * 60));
+            let tz_hours = tz.get(1..3).and_then(|x| x.parse::<i64>().ok()).unwrap_or(0);
+            let tz_mins = tz.get(4..6).and_then(|x| x.parse::<i64>().ok()).unwrap_or(0);
+            t = t.add_seconds(sign * (tz_hours * 3600 + tz_mins * 60));
         }
         Some(t)
     }

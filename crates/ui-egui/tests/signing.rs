@@ -68,8 +68,8 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     let mut h = harness(dir.clone());
     assert!(h.state_mut().execute("sign.digital"));
     assert_eq!(h.state().quick_tool, QuickTool::SignArea { certify: false });
-    let (a, b) = (at(&h, 40.0, 90.0), at(&h, 220.0, 40.0));
-    drag(&mut h, a, b);
+    let (from, to) = (at(&h, 40.0, 90.0), at(&h, 220.0, 40.0));
+    drag(&mut h, from, to);
     assert_eq!(h.state().dialog, Some(Dialog::Sign));
     assert_eq!(h.state().sign_draft.as_ref().map(|d| d.step), Some(SignStep::Configure), "no IDs yet: configure one");
 

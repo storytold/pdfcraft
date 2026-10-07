@@ -60,42 +60,41 @@ fn bmp(password: &str) -> Vec<u8> {
 }
 
 /// The PKCS #12 key derivation function (RFC 7292 Appendix B.2).
-fn pkcs12_kdf(alg: DigestAlg, password: &[u8], salt: &[u8], id: u8, iterations: u32, n: usize) -> Vec<u8> {
-    let (u, v) = match alg {
+fn pkcs12_kdf(alg: DigestAlg, password: &[u8], salt: &[u8], id: u8, iterations: u32, out_len: usize) -> Vec<u8> {
+    let (_hash_len, block_len) = match alg {
         DigestAlg::Sha1 => (20, 64),
         DigestAlg::Sha256 => (32, 64),
         DigestAlg::Sha384 => (48, 128),
         DigestAlg::Sha512 => (64, 128),
     };
-    let _ = u;
     let fill = |s: &[u8]| -> Vec<u8> {
         if s.is_empty() {
             return Vec::new();
         }
-        let len = v * s.len().div_ceil(v);
+        let len = block_len * s.len().div_ceil(block_len);
         s.iter().cycle().take(len).copied().collect()
     };
-    let d = vec![id; v];
-    let mut i: Vec<u8> = [fill(salt), fill(password)].concat();
-    let mut out = Vec::with_capacity(n);
-    while out.len() < n {
-        let mut a = alg.digest(&[&d, &i]);
+    let diversifier = vec![id; block_len];
+    let mut buf: Vec<u8> = [fill(salt), fill(password)].concat();
+    let mut out = Vec::with_capacity(out_len);
+    while out.len() < out_len {
+        let mut digest = alg.digest(&[&diversifier, &buf]);
         for _ in 1..iterations.max(1) {
-            a = alg.digest(&[&a]);
+            digest = alg.digest(&[&digest]);
         }
-        let b: Vec<u8> = a.iter().cycle().take(v).copied().collect();
-        for chunk in i.chunks_mut(v) {
-            // chunk = (chunk + b + 1) mod 2^(8v)
+        let addend: Vec<u8> = digest.iter().cycle().take(block_len).copied().collect();
+        for chunk in buf.chunks_mut(block_len) {
+            // chunk = (chunk + addend + 1) mod 2^(8 * block_len)
             let mut carry = 1u16;
-            for k in (0..v).rev() {
-                let s = u16::from(chunk[k]) + u16::from(b[k]) + carry;
-                chunk[k] = s as u8;
-                carry = s >> 8;
+            for k in (0..block_len).rev() {
+                let sum = u16::from(chunk[k]) + u16::from(addend[k]) + carry;
+                chunk[k] = sum as u8;
+                carry = sum >> 8;
             }
         }
-        out.extend_from_slice(&a);
+        out.extend_from_slice(&digest);
     }
-    out.truncate(n);
+    out.truncate(out_len);
     out
 }
 

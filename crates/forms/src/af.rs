@@ -500,22 +500,22 @@ fn group(int: &str, sep: char) -> String {
 /// 2 "1.234,56", 3 "1234,56", 4 "1'234.56").
 fn number_text(v: f64, decimals: u8, sep: u8) -> String {
     // Round half away from zero, as JavaScript's toFixed does for these values.
-    let p = 10f64.powi(i32::from(decimals));
-    let s = format!("{:.*}", decimals as usize, (v.abs() * p).round() / p);
-    let (int, frac) = s.split_once('.').map_or((s.as_str(), ""), |(a, b)| (a, b));
-    let (g, d) = match sep {
+    let scale = 10f64.powi(i32::from(decimals));
+    let text = format!("{:.*}", decimals as usize, (v.abs() * scale).round() / scale);
+    let (int, frac) = text.split_once('.').map_or((text.as_str(), ""), |(head, tail)| (head, tail));
+    let (group_sep, dec_sep) = match sep {
         1 => (None, '.'),
         2 => (Some('.'), ','),
         3 => (None, ','),
         4 => (Some('\''), '.'),
         _ => (Some(','), '.'),
     };
-    let mut out = match g {
-        Some(c) => group(int, c),
+    let mut out = match group_sep {
+        Some(mark) => group(int, mark),
         None => int.to_string(),
     };
     if !frac.is_empty() {
-        out.push(d);
+        out.push(dec_sep);
         out.push_str(frac);
     }
     out
@@ -877,43 +877,43 @@ fn eval_notation(src: &str, value_of: &dyn Fn(&str) -> f64) -> Option<f64> {
         N(f64),
         Op(char),
     }
-    // Recursive descent, `d` levels deep (at most MAX_NESTING).
-    fn expr(t: &[T], i: &mut usize, d: usize) -> Option<f64> {
-        let mut v = term(t, i, d)?;
-        while let Some(T::Op(o @ ('+' | '-'))) = t.get(*i) {
-            *i += 1;
-            let r = term(t, i, d)?;
-            v = if *o == '+' { v + r } else { v - r };
+    // Recursive descent, `depth` levels deep (at most MAX_NESTING).
+    fn expr(toks: &[T], pos: &mut usize, depth: usize) -> Option<f64> {
+        let mut acc = term(toks, pos, depth)?;
+        while let Some(T::Op(o @ ('+' | '-'))) = toks.get(*pos) {
+            *pos += 1;
+            let rhs = term(toks, pos, depth)?;
+            acc = if *o == '+' { acc + rhs } else { acc - rhs };
         }
-        Some(v)
+        Some(acc)
     }
-    fn term(t: &[T], i: &mut usize, d: usize) -> Option<f64> {
-        let mut v = factor(t, i, d)?;
-        while let Some(T::Op(o @ ('*' | '/'))) = t.get(*i) {
-            *i += 1;
-            let r = factor(t, i, d)?;
-            v = if *o == '*' { v * r } else { v / r };
+    fn term(toks: &[T], pos: &mut usize, depth: usize) -> Option<f64> {
+        let mut acc = factor(toks, pos, depth)?;
+        while let Some(T::Op(o @ ('*' | '/'))) = toks.get(*pos) {
+            *pos += 1;
+            let rhs = factor(toks, pos, depth)?;
+            acc = if *o == '*' { acc * rhs } else { acc / rhs };
         }
-        Some(v)
+        Some(acc)
     }
-    fn factor(t: &[T], i: &mut usize, d: usize) -> Option<f64> {
-        if d > MAX_NESTING {
+    fn factor(toks: &[T], pos: &mut usize, depth: usize) -> Option<f64> {
+        if depth > MAX_NESTING {
             return None;
         }
-        match t.get(*i)? {
-            T::N(n) => {
-                *i += 1;
-                Some(*n)
+        match toks.get(*pos)? {
+            T::N(num) => {
+                *pos += 1;
+                Some(*num)
             }
             T::Op('-') => {
-                *i += 1;
-                factor(t, i, d + 1).map(|v| -v)
+                *pos += 1;
+                factor(toks, pos, depth + 1).map(|val| -val)
             }
             T::Op('(') => {
-                *i += 1;
-                let v = expr(t, i, d + 1)?;
-                (t.get(*i) == Some(&T::Op(')'))).then(|| *i += 1)?;
-                Some(v)
+                *pos += 1;
+                let inner = expr(toks, pos, depth + 1)?;
+                (toks.get(*pos) == Some(&T::Op(')'))).then(|| *pos += 1)?;
+                Some(inner)
             }
             _ => None,
         }
@@ -922,18 +922,18 @@ fn eval_notation(src: &str, value_of: &dyn Fn(&str) -> f64) -> Option<f64> {
     let cs: Vec<char> = src.chars().collect();
     let mut i = 0;
     while i < cs.len() {
-        let c = cs[i];
-        if c.is_whitespace() {
+        let ch = cs[i];
+        if ch.is_whitespace() {
             i += 1;
-        } else if "+-*/()".contains(c) {
-            toks.push(T::Op(c));
+        } else if "+-*/()".contains(ch) {
+            toks.push(T::Op(ch));
             i += 1;
-        } else if c.is_ascii_digit() || c == '.' {
-            let s = i;
+        } else if ch.is_ascii_digit() || ch == '.' {
+            let start = i;
             while i < cs.len() && (cs[i].is_ascii_digit() || cs[i] == '.') {
                 i += 1;
             }
-            toks.push(T::N(cs[s..i].iter().collect::<String>().parse().ok()?));
+            toks.push(T::N(cs[start..i].iter().collect::<String>().parse().ok()?));
         } else {
             let mut name = String::new();
             while i < cs.len() && !(cs[i].is_whitespace() || "+-*/()".contains(cs[i])) {
@@ -947,8 +947,8 @@ fn eval_notation(src: &str, value_of: &dyn Fn(&str) -> f64) -> Option<f64> {
         }
     }
     let mut i = 0;
-    let v = expr(&toks, &mut i, 0)?;
-    (i == toks.len() && v.is_finite()).then_some(v)
+    let value = expr(&toks, &mut i, 0)?;
+    (i == toks.len() && value.is_finite()).then_some(value)
 }
 
 /// The Calculate event: the new value, given the current values of the other fields

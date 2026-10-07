@@ -196,18 +196,18 @@ pub(crate) fn page_streams(doc: &Document, page: &Dict, index: usize) -> Result<
 
 /// The boxes and overlay text drawn for the applied marks.
 fn overlay_content(marks: &[&Mark]) -> Vec<u8> {
-    let n = |v: f64| {
+    let num = |v: f64| {
         let s = format!("{v:.3}");
         s.trim_end_matches('0').trim_end_matches('.').to_string()
     };
-    let mut c: Vec<u8> = Vec::new();
+    let mut out: Vec<u8> = Vec::new();
     for m in marks {
         let Some(fill) = m.fill else { continue };
-        c.extend(format!("q {} {} {} rg\n", n(fill[0]), n(fill[1]), n(fill[2])).bytes());
+        out.extend(format!("q {} {} {} rg\n", num(fill[0]), num(fill[1]), num(fill[2])).bytes());
         for r in &m.rects {
-            c.extend(format!("{} {} {} {} re f\n", n(r[0]), n(r[1]), n(r[2] - r[0]), n(r[3] - r[1])).bytes());
+            out.extend(format!("{} {} {} {} re f\n", num(r[0]), num(r[1]), num(r[2] - r[0]), num(r[3] - r[1])).bytes());
         }
-        c.extend_from_slice(b"Q\n");
+        out.extend_from_slice(b"Q\n");
         if m.overlay.is_empty() {
             continue;
         }
@@ -222,11 +222,11 @@ fn overlay_content(marks: &[&Mark]) -> Vec<u8> {
         };
         let [cr, cg, cb] = look.color.map(|v| v.clamp(0.0, 1.0));
         for r in &m.rects {
-            let (w, h) = (r[2] - r[0], r[3] - r[1]);
-            let mut size = if look.size > 0.0 { look.size } else { (h * 0.7).min(12.0) };
+            let (rw, rh) = (r[2] - r[0], r[3] - r[1]);
+            let mut size = if look.size > 0.0 { look.size } else { (rh * 0.7).min(12.0) };
             let tw = width(&m.overlay, size);
-            if look.size <= 0.0 && tw > w - 2.0 && tw > 0.0 {
-                size *= (w - 2.0).max(0.0) / tw;
+            if look.size <= 0.0 && tw > rw - 2.0 && tw > 0.0 {
+                size *= (rw - 2.0).max(0.0) / tw;
             }
             if size < 2.0 {
                 continue;
@@ -234,33 +234,42 @@ fn overlay_content(marks: &[&Mark]) -> Vec<u8> {
             // One line, or as many repeated lines as fit (each line the text repeated across).
             let lines: Vec<String> = if look.repeat {
                 let unit = width(&format!("{} ", m.overlay), size).max(0.01);
-                let per_line = ((w - 2.0) / unit).floor().max(1.0) as usize;
-                let count = ((h / (size * 1.2)).floor() as usize).max(1);
+                let per_line = ((rw - 2.0) / unit).floor().max(1.0) as usize;
+                let count = ((rh / (size * 1.2)).floor() as usize).max(1);
                 vec![vec![m.overlay.as_str(); per_line].join(" "); count]
             } else {
                 vec![m.overlay.clone()]
             };
             let block = lines.len() as f64 * size * 1.2;
-            let mut y = r[1] + f64::midpoint(h, block) - size * 0.95;
-            c.extend(
-                format!("q {} {} {} {} re W n BT {} {} {} rg /{res} {} Tf ", n(r[0]), n(r[1]), n(w), n(h), n(cr), n(cg), n(cb), n(size)).bytes(),
+            let mut y = r[1] + f64::midpoint(rh, block) - size * 0.95;
+            let op = format!(
+                "q {} {} {} {} re W n BT {} {} {} rg /{res} {} Tf ",
+                num(r[0]),
+                num(r[1]),
+                num(rw),
+                num(rh),
+                num(cr),
+                num(cg),
+                num(cb),
+                num(size)
             );
+            out.extend(op.bytes());
             for line in &lines {
                 let lw = width(line, size);
                 let x = match look.align {
                     0 => r[0] + 1.0,
                     2 => r[2] - 1.0 - lw,
-                    _ => r[0] + (w - lw) / 2.0,
+                    _ => r[0] + (rw - lw) / 2.0,
                 };
-                c.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
-                c.extend_from_slice(&printcraft_fonts::literal(&printcraft_fonts::win_ansi(line)));
-                c.extend_from_slice(b" Tj ");
+                out.extend(format!("1 0 0 1 {} {} Tm ", num(x), num(y)).bytes());
+                out.extend_from_slice(&printcraft_fonts::literal(&printcraft_fonts::win_ansi(line)));
+                out.extend_from_slice(b" Tj ");
                 y -= size * 1.2;
             }
-            c.extend_from_slice(b"ET Q\n");
+            out.extend_from_slice(b"ET Q\n");
         }
     }
-    c
+    out
 }
 
 /// Apply every redaction mark (or only those on `pages`, 0-based). Irreversible for the saved

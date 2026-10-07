@@ -71,12 +71,12 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
         });
         // Dialog controls are outlined (radio buttons, check boxes, combo boxes and number fields
         // would otherwise blend into the dialog, whose fill matches the theme's field colour).
-        let w = &mut ui.visuals_mut().widgets;
-        w.inactive.bg_stroke = egui::Stroke::new(1.0, t.border);
-        w.inactive.weak_bg_fill = t.field;
+        let widgets = &mut ui.visuals_mut().widgets;
+        widgets.inactive.bg_stroke = egui::Stroke::new(1.0, t.border);
+        widgets.inactive.weak_bg_fill = t.field;
         // Slider rails and check-box interiors use the plain fill.
-        w.inactive.bg_fill = t.hover;
-        w.hovered.bg_stroke = egui::Stroke::new(1.0, t.text_muted);
+        widgets.inactive.bg_fill = t.hover;
+        widgets.hovered.bg_stroke = egui::Stroke::new(1.0, t.text_muted);
         match dialog {
             Dialog::Properties(tab) => {
                 ui.label(egui::RichText::new("Document Properties").font(theme::semibold(18.0)));
@@ -136,14 +136,14 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                             use printcraft_engine::{InitialLayout as L, Magnification as M, Navigation as N};
                             let editable = doc.allows_modification();
                             let pages = i.pages.len();
-                            let Some((_, v)) = app.view_draft.as_mut() else { return };
+                            let Some((_, view)) = app.view_draft.as_mut() else { return };
                             ui.label(egui::RichText::new("Layout and Magnification").font(theme::semibold(12.5)));
                             ui.end_row();
                             ui.label("Navigation tab");
                             ui.add_enabled_ui(editable, |ui| {
                                 egui::ComboBox::from_id_salt("iv-nav")
                                     .selected_text(
-                                        format!("{:?}", v.navigation).replace("PageOnly", "Page Only").replace("Pages", "Pages Panel and Page"),
+                                        format!("{:?}", view.navigation).replace("PageOnly", "Page Only").replace("Pages", "Pages Panel and Page"),
                                     )
                                     .show_ui(ui, |ui| {
                                         for (n, l) in [
@@ -153,7 +153,7 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                                             (N::Attachments, "Attachments Panel and Page"),
                                             (N::Layers, "Layers Panel and Page"),
                                         ] {
-                                            ui.selectable_value(&mut v.navigation, n, l);
+                                            ui.selectable_value(&mut view.navigation, n, l);
                                         }
                                     });
                             });
@@ -169,10 +169,10 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                                     (L::TwoUpCoverPage, "Two-Up (Cover Page)"),
                                     (L::TwoUpContinuousCoverPage, "Two-Up Continuous (Cover Page)"),
                                 ];
-                                let shown = names.iter().find(|(l, _)| *l == v.layout).map_or("Default", |(_, n)| n);
+                                let shown = names.iter().find(|(l, _)| *l == view.layout).map_or("Default", |(_, n)| n);
                                 egui::ComboBox::from_id_salt("iv-layout").selected_text(shown).show_ui(ui, |ui| {
                                     for (l, n) in names {
-                                        ui.selectable_value(&mut v.layout, l, n);
+                                        ui.selectable_value(&mut view.layout, l, n);
                                     }
                                 });
                             });
@@ -188,16 +188,16 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                                         (M::FitHeight, "Fit Height"),
                                         (M::FitVisible, "Fit Visible"),
                                     ];
-                                    let shown = match v.magnification {
-                                        M::Percent(p) => format!("{p:.0}%"),
-                                        m => names.iter().find(|(x, _)| *x == m).map_or("Default", |(_, n)| n).to_string(),
+                                    let shown = match view.magnification {
+                                        M::Percent(pct) => format!("{pct:.0}%"),
+                                        other => names.iter().find(|(x, _)| *x == other).map_or("Default", |(_, n)| n).to_string(),
                                     };
                                     egui::ComboBox::from_id_salt("iv-mag").selected_text(shown).show_ui(ui, |ui| {
-                                        for (m, n) in names {
-                                            ui.selectable_value(&mut v.magnification, m, n);
+                                        for (mode, label) in names {
+                                            ui.selectable_value(&mut view.magnification, mode, label);
                                         }
-                                        for p in [50.0, 75.0, 125.0, 150.0, 200.0] {
-                                            ui.selectable_value(&mut v.magnification, M::Percent(p), format!("{p:.0}%"));
+                                        for pct in [50.0, 75.0, 125.0, 150.0, 200.0] {
+                                            ui.selectable_value(&mut view.magnification, M::Percent(pct), format!("{pct:.0}%"));
                                         }
                                     });
                                 });
@@ -205,9 +205,9 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                             ui.end_row();
                             ui.label("Open to page");
                             ui.add_enabled_ui(editable, |ui| {
-                                let mut p = v.page + 1;
-                                if ui.add(egui::DragValue::new(&mut p).range(1..=pages.max(1))).changed() {
-                                    v.page = p - 1;
+                                let mut page = view.page + 1;
+                                if ui.add(egui::DragValue::new(&mut page).range(1..=pages.max(1))).changed() {
+                                    view.page = page - 1;
                                 }
                                 ui.label(format!("of {pages}"));
                             });
@@ -217,13 +217,13 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                             ui.label("");
                             ui.add_enabled_ui(editable, |ui| {
                                 ui.vertical(|ui| {
-                                    ui.checkbox(&mut v.fit_window, "Resize window to initial page");
-                                    ui.checkbox(&mut v.center_window, "Center window on screen");
-                                    ui.checkbox(&mut v.full_screen, "Open in Full Screen mode");
+                                    ui.checkbox(&mut view.fit_window, "Resize window to initial page");
+                                    ui.checkbox(&mut view.center_window, "Center window on screen");
+                                    ui.checkbox(&mut view.full_screen, "Open in Full Screen mode");
                                     ui.horizontal(|ui| {
                                         ui.label("Show:");
-                                        ui.radio_value(&mut v.display_title, false, "File Name");
-                                        ui.radio_value(&mut v.display_title, true, "Document Title");
+                                        ui.radio_value(&mut view.display_title, false, "File Name");
+                                        ui.radio_value(&mut view.display_title, true, "Document Title");
                                     });
                                 });
                             });
@@ -233,9 +233,9 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                             ui.label("");
                             ui.add_enabled_ui(editable, |ui| {
                                 ui.vertical(|ui| {
-                                    ui.checkbox(&mut v.hide_menubar, "Hide menu bar");
-                                    ui.checkbox(&mut v.hide_toolbar, "Hide toolbars");
-                                    ui.checkbox(&mut v.hide_window_ui, "Hide window controls");
+                                    ui.checkbox(&mut view.hide_menubar, "Hide menu bar");
+                                    ui.checkbox(&mut view.hide_toolbar, "Hide toolbars");
+                                    ui.checkbox(&mut view.hide_window_ui, "Hide window controls");
                                 });
                             });
                             ui.end_row();
@@ -316,8 +316,8 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                             row(ui, "PDF version", i.pdf_version.clone());
                             row(ui, "Location", doc.path.clone().unwrap_or_default());
                             row(ui, "File size", format!("{} ({} bytes)", human_size(i.file_size), i.file_size));
-                            let p = &i.pages[0];
-                            row(ui, "Page size", format!("{:.2} × {:.2} in", p.width / 72.0, p.height / 72.0));
+                            let page_info = &i.pages[0];
+                            row(ui, "Page size", format!("{:.2} × {:.2} in", page_info.width / 72.0, page_info.height / 72.0));
                             row(ui, "Number of pages", i.pages.len().to_string());
                             row(ui, "Tagged PDF", yes(i.tagged));
                             row(ui, "Form fields", i.fields.len().to_string());
@@ -341,24 +341,24 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                                 ui.end_row();
                             }
                             // Reading Options: binding and language.
-                            if let Some((_, v)) = app.view_draft.as_mut() {
+                            if let Some((_, view)) = app.view_draft.as_mut() {
                                 let editable = doc.allows_modification();
                                 ui.label(egui::RichText::new("Binding").color(t.text_muted));
                                 ui.add_enabled_ui(editable, |ui| {
                                     ui.horizontal(|ui| {
-                                        ui.radio_value(&mut v.right_to_left, false, "Left Edge");
-                                        ui.radio_value(&mut v.right_to_left, true, "Right Edge");
+                                        ui.radio_value(&mut view.right_to_left, false, "Left Edge");
+                                        ui.radio_value(&mut view.right_to_left, true, "Right Edge");
                                     });
                                 });
                                 ui.end_row();
-                                let l = ui.label(egui::RichText::new("Language").color(t.text_muted));
-                                let mut lang = v.language.clone().unwrap_or_default();
+                                let lang_label = ui.label(egui::RichText::new("Language").color(t.text_muted));
+                                let mut lang = view.language.clone().unwrap_or_default();
                                 if ui
                                     .add_enabled(editable, egui::TextEdit::singleline(&mut lang).hint_text("e.g. en-US").desired_width(160.0))
-                                    .labelled_by(l.id)
+                                    .labelled_by(lang_label.id)
                                     .changed()
                                 {
-                                    v.language = (!lang.trim().is_empty()).then(|| lang.trim().to_string());
+                                    view.language = (!lang.trim().is_empty()).then(|| lang.trim().to_string());
                                 }
                                 ui.end_row();
                             }
@@ -895,9 +895,9 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 ui.label(egui::RichText::new("Number pages").font(theme::semibold(18.0)));
                 ui.add_space(8.0);
                 let Some((_, id)) = app.active_ids() else { return };
-                let n = app.session.get(id).map_or(1, |d| d.info.pages.len()).max(1);
+                let total = app.session.get(id).map_or(1, |d| d.info.pages.len()).max(1);
                 let d = &mut app.number_draft;
-                d.to = d.to.clamp(1, n);
+                d.to = d.to.clamp(1, total);
                 d.from = d.from.clamp(1, d.to);
                 // Editable values get a visible border (the dialog and field fills are alike).
                 let boxed = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui) -> egui::Response| {
@@ -911,10 +911,10 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 egui::Grid::new("number_pages").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
                     ui.label("Pages");
                     ui.horizontal(|ui| {
-                        ui.add(egui::DragValue::new(&mut d.from).range(1..=n));
+                        ui.add(egui::DragValue::new(&mut d.from).range(1..=total));
                         ui.label("to");
-                        ui.add(egui::DragValue::new(&mut d.to).range(1..=n));
-                        ui.label(egui::RichText::new(format!("of {n}")).color(t.text_muted));
+                        ui.add(egui::DragValue::new(&mut d.to).range(1..=total));
+                        ui.label(egui::RichText::new(format!("of {total}")).color(t.text_muted));
                     });
                     ui.end_row();
                     ui.label("Style");
@@ -933,9 +933,9 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                         }
                     });
                     ui.end_row();
-                    let l = ui.label("Prefix");
+                    let prefix_label = ui.label("Prefix");
                     boxed(ui, &mut |ui| ui.add(egui::TextEdit::singleline(&mut d.prefix).desired_width(160.0).frame(egui::Frame::NONE)))
-                        .labelled_by(l.id);
+                        .labelled_by(prefix_label.id);
                     ui.end_row();
                     ui.label("Start");
                     ui.add(egui::DragValue::new(&mut d.start).range(1..=99_999));

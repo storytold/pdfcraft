@@ -360,16 +360,16 @@ impl Document {
                 id
             }
         };
-        let h = printcraft_crypt::create(params, &id0).map_err(|e| CosError::Security(e.to_string()))?;
-        let d = h.dict();
-        let s = |b: &[u8]| Object::String(crate::PdfString { bytes: b.to_vec(), hex: true });
+        let handler = printcraft_crypt::create(params, &id0).map_err(|e| CosError::Security(e.to_string()))?;
+        let d = handler.dict();
+        let hex_string = |b: &[u8]| Object::String(crate::PdfString { bytes: b.to_vec(), hex: true });
         let mut e = Dict::new();
         e.set(b"Filter".to_vec(), Object::name("Standard"));
         e.set(b"V".to_vec(), Object::Int(d.v));
         e.set(b"R".to_vec(), Object::Int(d.r));
         e.set(b"Length".to_vec(), Object::Int(d.length_bits));
-        e.set(b"O".to_vec(), s(&d.o));
-        e.set(b"U".to_vec(), s(&d.u));
+        e.set(b"O".to_vec(), hex_string(&d.o));
+        e.set(b"U".to_vec(), hex_string(&d.u));
         e.set(b"P".to_vec(), Object::Int(i64::from(d.p)));
         if d.v >= 4 {
             let mut cf = Dict::new();
@@ -388,9 +388,9 @@ impl Document {
             }
         }
         if d.v >= 5 {
-            e.set(b"OE".to_vec(), s(&d.oe));
-            e.set(b"UE".to_vec(), s(&d.ue));
-            e.set(b"Perms".to_vec(), s(&d.perms));
+            e.set(b"OE".to_vec(), hex_string(&d.oe));
+            e.set(b"UE".to_vec(), hex_string(&d.ue));
+            e.set(b"Perms".to_vec(), hex_string(&d.perms));
         }
         if let Some(Object::Ref(old)) = self.trailer.get(b"Encrypt").cloned() {
             self.free(old);
@@ -398,7 +398,7 @@ impl Document {
         let r = self.add(e);
         self.trailer.set(b"Encrypt".to_vec(), Object::Ref(r));
         // Objects are still read with the original handler; saves use the new one.
-        self.out_security = Some(Arc::new(h));
+        self.out_security = Some(Arc::new(handler));
         self.out_encrypt_num = Some(r.num);
         self.encryption_changed = true;
         Ok(())
@@ -878,15 +878,15 @@ impl Document {
         for pair in index.chunks(2) {
             let [start, count] = pair else { break };
             for i in 0..(*count).max(0) {
-                let Some(r) = rows.next() else { break };
-                let t = field(r, 0, w[0], 1);
-                let a = field(r, w[0], w[1], 0);
-                let b = field(r, w[0] + w[1], w[2], 0);
+                let Some(line) = rows.next() else { break };
+                let kind = field(line, 0, w[0], 1);
+                let value1 = field(line, w[0], w[1], 0);
+                let value2 = field(line, w[0] + w[1], w[2], 0);
                 let num = (*start + i).max(0) as u32;
-                let entry = match t {
-                    0 => XrefEntry::Free { next_generation: b.min(u64::from(u16::MAX)) as u16 },
-                    1 => XrefEntry::InFile { offset: a, generation: b.min(u64::from(u16::MAX)) as u16 },
-                    2 => XrefEntry::InStream { stream: a.min(u64::from(u32::MAX)) as u32, index: b.min(u64::from(u32::MAX)) as u32 },
+                let entry = match kind {
+                    0 => XrefEntry::Free { next_generation: value2.min(u64::from(u16::MAX)) as u16 },
+                    1 => XrefEntry::InFile { offset: value1, generation: value2.min(u64::from(u16::MAX)) as u16 },
+                    2 => XrefEntry::InStream { stream: value1.min(u64::from(u32::MAX)) as u32, index: value2.min(u64::from(u32::MAX)) as u32 },
                     _ => continue, // reserved types are treated as null references (§7.5.8.3)
                 };
                 if matches!(entry, XrefEntry::InFile { offset: 0, .. }) {

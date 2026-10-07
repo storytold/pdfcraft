@@ -1608,13 +1608,13 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
     for (page, p) in pages.iter().enumerate() {
         for (index, entry) in annots(doc, *p).iter().enumerate() {
             let obj = doc.resolve(entry);
-            let Some(d) = obj.as_dict() else { continue };
-            let Some(subtype) = d.name(b"Subtype").map(|s| String::from_utf8_lossy(s).into_owned()) else { continue };
+            let Some(dict) = obj.as_dict() else { continue };
+            let Some(subtype) = dict.name(b"Subtype").map(|s| String::from_utf8_lossy(s).into_owned()) else { continue };
             if matches!(subtype.as_str(), "Link" | "Widget" | "Popup") {
                 continue;
             }
             let nums = |k: &[u8]| -> Vec<f32> {
-                d.get(k)
+                dict.get(k)
                     .map(|o| doc.resolve(o))
                     .and_then(|o| o.as_array().map(|a| a.iter().map(|x| doc.resolve(x).as_f64().unwrap_or(0.0) as f32).collect()))
                     .unwrap_or_default()
@@ -1624,7 +1624,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
             let c = nums(b"C");
             let mut color = (c.len() == 3).then(|| [c[0], c[1], c[2]]);
             if subtype == "FreeText"
-                && let Some(da) = text_value(doc, d, b"DA")
+                && let Some(da) = text_value(doc, dict, b"DA")
             {
                 let t: Vec<&str> = da.split_whitespace().collect();
                 if let Some(i) = t.iter().position(|x| *x == "rg")
@@ -1635,22 +1635,22 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 }
             }
             let quads = nums(b"QuadPoints").as_chunks::<8>().0.to_vec();
-            let in_reply_to = d.get(b"IRT").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
+            let in_reply_to = dict.get(b"IRT").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
             out.push(Summary {
                 page,
                 index,
                 subtype,
-                author: text_value(doc, d, b"T"),
-                contents: text_value(doc, d, b"Contents"),
-                modified: text_value(doc, d, b"M"),
-                name: text_value(doc, d, b"NM"),
+                author: text_value(doc, dict, b"T"),
+                contents: text_value(doc, dict, b"Contents"),
+                modified: text_value(doc, dict, b"M"),
+                name: text_value(doc, dict, b"NM"),
                 in_reply_to,
                 rect,
                 color,
-                state: text_value(doc, d, b"State"),
+                state: text_value(doc, dict, b"State"),
                 quads,
-                locked: d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0) & FLAG_LOCKED != 0,
-                intent: d.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
+                locked: dict.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0) & FLAG_LOCKED != 0,
+                intent: dict.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
             });
         }
     }
@@ -1815,14 +1815,14 @@ pub fn add_text_replacement(
 pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]], radius: f64, meta: &Meta) -> Result<bool, AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
-    let d = annot_dict(doc, r);
-    if d.name(b"Subtype") != Some(b"Ink") {
+    let dict = annot_dict(doc, r);
+    if dict.name(b"Subtype") != Some(b"Ink") {
         return Err(AnnotError::Invalid("only drawings can be erased".into()));
     }
     if path.is_empty() || !path.iter().all(|p| finite(p)) || !radius.is_finite() || radius <= 0.0 {
         return Err(AnnotError::Invalid("invalid eraser path".into()));
     }
-    let strokes: Vec<Vec<[f64; 2]>> = d
+    let strokes: Vec<Vec<[f64; 2]>> = dict
         .get(b"InkList")
         .map(|l| doc.resolve(l))
         .and_then(|l| l.as_array().cloned())
@@ -1884,7 +1884,7 @@ pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]
         delete_annotation(doc, page, index)?;
         return Ok(true);
     }
-    let width = d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(printcraft_cos::Object::as_f64).unwrap_or(1.0);
+    let width = dict.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(printcraft_cos::Object::as_f64).unwrap_or(1.0);
     let rect = grow(bounds(kept.iter().flatten().copied()).unwrap_or_default(), width / 2.0 + 1.0);
     doc.update_dict(r, |d| {
         d.set(b"InkList".to_vec(), Object::Array(kept.iter().map(|s| num_array(&s.concat())).collect()));

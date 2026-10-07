@@ -50,15 +50,15 @@ fn damage_is_skipped_not_fatal() {
 
 #[test]
 fn matrices_compose_and_invert() {
-    let a = Matrix([2.0, 0.0, 0.0, 3.0, 10.0, 20.0]);
-    let b = Matrix([0.0, 1.0, -1.0, 0.0, 5.0, 0.0]);
-    let ab = a.then(&b);
-    let (x, y) = ab.apply(1.0, 1.0);
-    let (x1, y1) = a.apply(1.0, 1.0);
-    assert_eq!((x, y), b.apply(x1, y1));
-    let inv = ab.invert().unwrap();
-    let (u, v) = inv.apply(x, y);
-    assert!((u - 1.0).abs() < 1e-9 && (v - 1.0).abs() < 1e-9);
+    let first = Matrix([2.0, 0.0, 0.0, 3.0, 10.0, 20.0]);
+    let second = Matrix([0.0, 1.0, -1.0, 0.0, 5.0, 0.0]);
+    let combined = first.then(&second);
+    let (x, y) = combined.apply(1.0, 1.0);
+    let (x1, y1) = first.apply(1.0, 1.0);
+    assert_eq!((x, y), second.apply(x1, y1));
+    let inv = combined.invert().unwrap();
+    let (inv_x, inv_y) = inv.apply(x, y);
+    assert!((inv_x - 1.0).abs() < 1e-9 && (inv_y - 1.0).abs() < 1e-9);
     assert_eq!(Matrix([2.0, 0.0, 0.0, 2.0, 1.0, 1.0]).bbox([0.0, 0.0, 1.0, 1.0]), [1.0, 1.0, 3.0, 3.0]);
     assert!(overlaps([0.0, 0.0, 10.0, 10.0], [5.0, 5.0, 20.0, 20.0], 0.0));
     assert!(!overlaps([0.0, 0.0, 10.0, 10.0], [10.0, 0.0, 20.0, 10.0], 0.0));

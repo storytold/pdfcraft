@@ -107,47 +107,47 @@ fn filters(s: &Stream) -> Vec<Vec<u8>> {
 }
 
 /// The file for one image: its JPEG data as is, or a PNG.
-fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> {
-    let f = filters(s);
-    match f.last().map(Vec::as_slice) {
-        Some(b"DCTDecode" | b"DCT") if f.len() == 1 => return Ok(("jpg", s.raw.to_vec())),
+fn image(doc: &Document, stream: &Stream) -> Result<(&'static str, Vec<u8>), String> {
+    let filter_list = filters(stream);
+    match filter_list.last().map(Vec::as_slice) {
+        Some(b"DCTDecode" | b"DCT") if filter_list.len() == 1 => return Ok(("jpg", stream.raw.to_vec())),
         Some(b"JPXDecode") => return Err("JPEG 2000 images can't be exported yet".into()),
         Some(b"JBIG2Decode") => return Err("JBIG2 images can't be exported yet".into()),
         Some(b"CCITTFaxDecode" | b"CCF") => return Err("CCITT fax images can't be exported yet".into()),
         Some(b"DCTDecode" | b"DCT") => return Err("JPEG images inside other filters can't be exported yet".into()),
         _ => {}
     }
-    let (w, h) = (s.dict.int(b"Width").unwrap_or(0) as usize, s.dict.int(b"Height").unwrap_or(0) as usize);
-    if (w as u64) * (h as u64) > MAX_PIXELS {
-        return Err(format!("{w} × {h} is too large to export"));
+    let (width, height) = (stream.dict.int(b"Width").unwrap_or(0) as usize, stream.dict.int(b"Height").unwrap_or(0) as usize);
+    if (width as u64) * (height as u64) > MAX_PIXELS {
+        return Err(format!("{width} × {height} is too large to export"));
     }
-    let data = s.decoded().map_err(|e| e.to_string())?;
-    let mask = s.dict.get(b"ImageMask").is_some_and(|m| matches!(&*doc.resolve(m), Object::Bool(true)));
-    let bpc = if mask { 1 } else { s.dict.int(b"BitsPerComponent").unwrap_or(8) as usize };
+    let data = stream.decoded().map_err(|e| e.to_string())?;
+    let mask = stream.dict.get(b"ImageMask").is_some_and(|m| matches!(&*doc.resolve(m), Object::Bool(true)));
+    let bpc = if mask { 1 } else { stream.dict.int(b"BitsPerComponent").unwrap_or(8) as usize };
     if !matches!(bpc, 1 | 2 | 4 | 8 | 16) {
         return Err(format!("{bpc} bits per component isn't supported"));
     }
-    let space = if mask { Space::Gray } else { space(doc, s.dict.get(b"ColorSpace"))? };
-    let n = space.components();
-    let samples = unpack(&data, w, h, n, bpc).ok_or("the image data is shorter than its size says")?;
+    let space = if mask { Space::Gray } else { space(doc, stream.dict.get(b"ColorSpace"))? };
+    let comps = space.components();
+    let samples = unpack(&data, width, height, comps, bpc).ok_or("the image data is shorter than its size says")?;
     // Decode arrays: only inversion ([1 0] per component) is honoured, the common case.
-    let invert = s
+    let invert = stream
         .dict
         .get(b"Decode")
         .map(|d| doc.resolve(d))
         .and_then(|d| d.as_array().map(|a| a.first().and_then(Object::as_f64) > a.get(1).and_then(Object::as_f64)));
     let invert = invert.unwrap_or(false) ^ mask; // a stencil mask paints its 0 samples
     let max = (1u32 << bpc.min(8)) - 1;
-    let mut rgb = Vec::with_capacity(w * h * 3);
-    for px in samples.chunks_exact(n) {
-        let v = |i: usize| {
+    let mut rgb = Vec::with_capacity(width * height * 3);
+    for px in samples.chunks_exact(comps) {
+        let sample = |i: usize| {
             let x = (u32::from(px[i]) * 255 / max) as u8;
             if invert { 255 - x } else { x }
         };
         match &space {
-            Space::Gray => rgb.extend_from_slice(&[v(0); 3]),
-            Space::Rgb => rgb.extend_from_slice(&[v(0), v(1), v(2)]),
-            Space::Cmyk => rgb.extend_from_slice(&cmyk(v(0), v(1), v(2), v(3))),
+            Space::Gray => rgb.extend_from_slice(&[sample(0); 3]),
+            Space::Rgb => rgb.extend_from_slice(&[sample(0), sample(1), sample(2)]),
+            Space::Cmyk => rgb.extend_from_slice(&cmyk(sample(0), sample(1), sample(2), sample(3))),
             Space::Indexed(base, table) => {
                 let i = px[0] as usize;
                 let k = base.components();
@@ -160,8 +160,8 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
             }
         }
     }
-    let alpha = soft_mask(doc, s, w, h);
-    png(w as u32, h as u32, &rgb, alpha.as_deref()).map(|p| ("png", p))
+    let alpha = soft_mask(doc, stream, width, height);
+    png(width as u32, height as u32, &rgb, alpha.as_deref()).map(|p| ("png", p))
 }
 
 #[derive(Clone, Debug)]
@@ -234,16 +234,16 @@ fn unpack(data: &[u8], w: usize, h: usize, n: usize, bpc: usize) -> Option<Vec<u
     }
     let mut out = Vec::with_capacity(w * h * n);
     for y in 0..h {
-        let r = &data[y * row..(y + 1) * row];
+        let line = &data[y * row..(y + 1) * row];
         match bpc {
-            8 => out.extend_from_slice(&r[..w * n]),
-            16 => out.extend(r.as_chunks::<2>().0.iter().take(w * n).map(|c| c[0])),
+            8 => out.extend_from_slice(&line[..w * n]),
+            16 => out.extend(line.as_chunks::<2>().0.iter().take(w * n).map(|c| c[0])),
             _ => {
                 let per = 8 / bpc;
-                let m = (1u8 << bpc) - 1;
+                let mask = (1u8 << bpc) - 1;
                 for i in 0..w * n {
                     let shift = 8 - bpc * (i % per + 1);
-                    out.push((r[i / per] >> shift) & m);
+                    out.push((line[i / per] >> shift) & mask);
                 }
             }
         }
@@ -251,24 +251,24 @@ fn unpack(data: &[u8], w: usize, h: usize, n: usize, bpc: usize) -> Option<Vec<u
     Some(out)
 }
 
-fn cmyk(c: u8, m: u8, y: u8, k: u8) -> [u8; 3] {
-    let f = |x: u8| ((255 - u32::from(x)) * (255 - u32::from(k)) / 255) as u8;
-    [f(c), f(m), f(y)]
+fn cmyk(c: u8, m: u8, y: u8, key: u8) -> [u8; 3] {
+    let blend = |x: u8| ((255 - u32::from(x)) * (255 - u32::from(key)) / 255) as u8;
+    [blend(c), blend(m), blend(y)]
 }
 
 /// The soft mask as 8-bit alpha, when it is an 8-bit gray image of the same size.
-fn soft_mask(doc: &Document, s: &Stream, w: usize, h: usize) -> Option<Vec<u8>> {
-    let r = s.dict.get(b"SMask")?.as_ref()?;
-    let obj = doc.get(r);
-    let Object::Stream(m) = &*obj else { return None };
-    if m.dict.int(b"Width")? as usize != w || m.dict.int(b"Height")? as usize != h {
+fn soft_mask(doc: &Document, stream: &Stream, w: usize, h: usize) -> Option<Vec<u8>> {
+    let smask = stream.dict.get(b"SMask")?.as_ref()?;
+    let obj = doc.get(smask);
+    let Object::Stream(mask) = &*obj else { return None };
+    if mask.dict.int(b"Width")? as usize != w || mask.dict.int(b"Height")? as usize != h {
         return None;
     }
-    let bpc = m.dict.int(b"BitsPerComponent").unwrap_or(8) as usize;
-    if !filters(m).iter().all(|f| !matches!(f.as_slice(), b"DCTDecode" | b"JPXDecode" | b"JBIG2Decode" | b"CCITTFaxDecode")) {
+    let bpc = mask.dict.int(b"BitsPerComponent").unwrap_or(8) as usize;
+    if !filters(mask).iter().all(|f| !matches!(f.as_slice(), b"DCTDecode" | b"JPXDecode" | b"JBIG2Decode" | b"CCITTFaxDecode")) {
         return None;
     }
-    let px = unpack(&m.decoded().ok()?, w, h, 1, bpc)?;
+    let px = unpack(&mask.decoded().ok()?, w, h, 1, bpc)?;
     let max = (1u32 << bpc.min(8)) - 1;
     Some(px.into_iter().map(|v| (u32::from(v) * 255 / max) as u8).collect())
 }

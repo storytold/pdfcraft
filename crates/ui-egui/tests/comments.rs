@@ -460,11 +460,11 @@ fn highlighting_an_area_off_the_text() {
     let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
     // Blank space below the text line (text is at y 150).
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
-    let c = comments(&h);
-    assert_eq!(c.len(), 1, "{c:?}");
-    assert_eq!((c[0].subtype.as_str(), c[0].quads.len()), ("Highlight", 1));
-    let q = c[0].quads[0];
-    assert!((q[0] - 40.0).abs() < 3.0 && (q[1] - 100.0).abs() < 3.0, "{q:?}");
+    let annotations = comments(&h);
+    assert_eq!(annotations.len(), 1, "{annotations:?}");
+    assert_eq!((annotations[0].subtype.as_str(), annotations[0].quads.len()), ("Highlight", 1));
+    let quad = annotations[0].quads[0];
+    assert!((quad[0] - 40.0).abs() < 3.0 && (quad[1] - 100.0).abs() < 3.0, "{quad:?}");
     // Dragging over text still highlights the text (once the text layer is in).
     let mut glyphs = None;
     for _ in 0..200 {

@@ -98,11 +98,12 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
     if d.seeded != Some((current, d.which))
         && let Some(b) = boxes.get(current)
     {
-        let (m, x) = (b[0], b[box_index(d.which)]);
+        let (media, page_box) = (b[0], b[box_index(d.which)]);
         d.margins = if d.which == PageBox::Media {
             [0.0; 4]
         } else {
-            [x[0] - m[0], x[1] - m[1], m[2] - x[2], m[3] - x[3]].map(|v| (v.max(0.0) * 100.0).round() / 100.0)
+            [page_box[0] - media[0], page_box[1] - media[1], media[2] - page_box[2], media[3] - page_box[3]]
+                .map(|v| (v.max(0.0) * 100.0).round() / 100.0)
         };
         d.seeded = Some((current, d.which));
     }
@@ -133,16 +134,22 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
                     }
                 });
                 ui.end_row();
-                let k = d.unit.per_point();
+                let per_point = d.unit.per_point();
                 for (label, idx) in [("Top", 3), ("Bottom", 1), ("Left", 0), ("Right", 2)] {
-                    let l = ui.label(label);
-                    let mut v = d.margins[idx] * k;
+                    let margin_label = ui.label(label);
+                    let mut points = d.margins[idx] * per_point;
                     let speed = if d.unit == Unit::Inches { 0.01 } else { 0.5 };
-                    let r = ui
-                        .add(egui::DragValue::new(&mut v).speed(speed).range(0.0..=10_000.0).max_decimals(3).suffix(format!(" {}", d.unit.label())))
-                        .labelled_by(l.id);
-                    if r.changed() {
-                        d.margins[idx] = (v / k).max(0.0);
+                    let resp = ui
+                        .add(
+                            egui::DragValue::new(&mut points)
+                                .speed(speed)
+                                .range(0.0..=10_000.0)
+                                .max_decimals(3)
+                                .suffix(format!(" {}", d.unit.label())),
+                        )
+                        .labelled_by(margin_label.id);
+                    if resp.changed() {
+                        d.margins[idx] = (points / per_point).max(0.0);
                     }
                     ui.end_row();
                 }
@@ -155,20 +162,20 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
                 ui.vertical(|ui| {
                     ui.radio_value(&mut d.range, Range::All, "All");
                     ui.radio_value(&mut d.range, Range::Current, format!("Current page ({})", current + 1));
-                    let (mut a, mut b) = match d.range {
-                        Range::Pages(a, b) => (a, b),
+                    let (mut from, mut to) = match d.range {
+                        Range::Pages(first, last) => (first, last),
                         _ => (1, count),
                     };
                     ui.horizontal(|ui| {
                         let on = matches!(d.range, Range::Pages(..));
                         if ui.radio(on, "From").clicked() {
-                            d.range = Range::Pages(a, b);
+                            d.range = Range::Pages(from, to);
                         }
-                        let ra = ui.add(egui::DragValue::new(&mut a).range(1..=count));
+                        let from_drag = ui.add(egui::DragValue::new(&mut from).range(1..=count));
                         ui.label("to");
-                        let rb = ui.add(egui::DragValue::new(&mut b).range(1..=count));
-                        if ra.changed() || rb.changed() {
-                            d.range = Range::Pages(a.min(b), b.max(a));
+                        let to_drag = ui.add(egui::DragValue::new(&mut to).range(1..=count));
+                        if from_drag.changed() || to_drag.changed() {
+                            d.range = Range::Pages(from.min(to), to.max(from));
                         }
                     });
                 });
@@ -178,15 +185,18 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
         ui.add_space(16.0);
         // Preview: the media box and the new box, to scale.
         if let Some(b) = boxes.get(current) {
-            let m = b[0];
-            let (w, h) = ((m[2] - m[0]).max(1.0), (m[3] - m[1]).max(1.0));
-            let s = (180.0 / w.max(h)) as f32;
-            let (r, _) = ui.allocate_exact_size(vec2(200.0, 200.0), egui::Sense::hover());
-            let page = Rect::from_center_size(r.center(), vec2(w as f32 * s, h as f32 * s));
+            let media = b[0];
+            let (width, height) = ((media[2] - media[0]).max(1.0), (media[3] - media[1]).max(1.0));
+            let scale = (180.0 / width.max(height)) as f32;
+            let (area, _) = ui.allocate_exact_size(vec2(200.0, 200.0), egui::Sense::hover());
+            let page = Rect::from_center_size(area.center(), vec2(width as f32 * scale, height as f32 * scale));
             ui.painter().rect_filled(page, CornerRadius::ZERO, Color32::WHITE);
             ui.painter().rect_stroke(page, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
-            let [l, bo, ri, to] = d.margins.map(|v| v as f32 * s);
-            let inner = Rect::from_min_max(pos2(page.left() + l, page.top() + to), pos2(page.right() - ri, page.bottom() - bo));
+            let [left_margin, bottom_margin, right_margin, top_margin] = d.margins.map(|v| v as f32 * scale);
+            let inner = Rect::from_min_max(
+                pos2(page.left() + left_margin, page.top() + top_margin),
+                pos2(page.right() - right_margin, page.bottom() - bottom_margin),
+            );
             if inner.is_positive() {
                 ui.painter().rect_stroke(inner, CornerRadius::ZERO, Stroke::new(1.5, t.accent), egui::StrokeKind::Middle);
             }

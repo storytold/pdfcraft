@@ -99,11 +99,11 @@ impl Automation {
         let ph = f64::from(self.doc(a)?.info.pages[page].height);
         let rect = match (rect_arg(a, "rect")?, a.get("at")) {
             (Some(r), _) => to_display(r, ph),
-            (None, Some(v)) => {
-                let p: Vec<f64> = v.as_array().map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+            (None, Some(at_json)) => {
+                let p: Vec<f64> = at_json.as_array().map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
                 let [x, y]: [f64; 2] = p.try_into().map_err(|_| bad("at must be [x, y]"))?;
-                let w = a.opt_num("width")?.unwrap_or(200.0);
-                [x, ph - y - 20.0, x + w, ph - y]
+                let width = a.opt_num("width")?.unwrap_or(200.0);
+                [x, ph - y - 20.0, x + width, ph - y]
             }
             (None, None) => return Err(bad("pass at [x, y] (the text's top-left) or rect")),
         };

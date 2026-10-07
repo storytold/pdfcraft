@@ -139,17 +139,17 @@ fn layouts_fit_height_labels_and_system_theme() {
     h.state_mut().views[0].fit = Fit::Width;
     h.state_mut().views[0].layout = PageLayout::TwoUp;
     h.run_steps(4);
-    let (a, b) = (h.state().views[0].page_screen_rect(0).unwrap(), h.state().views[0].page_screen_rect(1).unwrap());
-    assert!((a.top() - b.top()).abs() < 1.0 && b.left() > a.right(), "side by side");
+    let (first, second) = (h.state().views[0].page_screen_rect(0).unwrap(), h.state().views[0].page_screen_rect(1).unwrap());
+    assert!((first.top() - second.top()).abs() < 1.0 && second.left() > first.right(), "side by side");
     h.state_mut().views[0].cover = true;
     h.run_steps(4);
-    let (a, b, c) = (
+    let (first, second, third) = (
         h.state().views[0].page_screen_rect(0).unwrap(),
         h.state().views[0].page_screen_rect(1).unwrap(),
         h.state().views[0].page_screen_rect(2).unwrap(),
     );
-    assert!(a.left() > vp.center().x - 1.0, "the cover sits on the right");
-    assert!(b.top() > a.bottom() && (b.top() - c.top()).abs() < 1.0, "then pairs 2–3");
+    assert!(first.left() > vp.center().x - 1.0, "the cover sits on the right");
+    assert!(second.top() > first.bottom() && (second.top() - third.top()).abs() < 1.0, "then pairs 2–3");
     // Page labels in the page box.
     h.state_mut().apply_edit(printcraft_engine::Edit::NumberPages {
         from: 0,

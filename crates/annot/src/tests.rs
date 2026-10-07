@@ -491,9 +491,9 @@ fn urls_are_found_in_text() {
 fn polygons_clouds_connected_lines_callouts_and_carets_are_drawn() {
     let mut doc = fixture();
     let tri = vec![[100.0, 100.0], [200.0, 100.0], [150.0, 180.0]];
-    let i = add_annotation(&mut doc, &new(0, Shape::Polygon { vertices: tri.clone(), cloud: false }), &meta("p")).unwrap();
-    let c = add_annotation(&mut doc, &new(0, Shape::Polygon { vertices: tri.clone(), cloud: true }), &meta("c")).unwrap();
-    let l =
+    let poly_idx = add_annotation(&mut doc, &new(0, Shape::Polygon { vertices: tri.clone(), cloud: false }), &meta("p")).unwrap();
+    let cloud_idx = add_annotation(&mut doc, &new(0, Shape::Polygon { vertices: tri.clone(), cloud: true }), &meta("c")).unwrap();
+    let line_idx =
         add_annotation(&mut doc, &new(0, Shape::PolyLine { vertices: vec![[300.0, 300.0], [350.0, 320.0], [400.0, 300.0]] }), &meta("l")).unwrap();
     let co = add_annotation(
         &mut doc,
@@ -501,11 +501,11 @@ fn polygons_clouds_connected_lines_callouts_and_carets_are_drawn() {
         &meta("co"),
     )
     .unwrap();
-    let k = add_annotation(&mut doc, &new(0, Shape::Caret { rect: [50.0, 600.0, 60.0, 612.0] }), &meta("k")).unwrap();
+    let caret_idx = add_annotation(&mut doc, &new(0, Shape::Caret { rect: [50.0, 600.0, 60.0, 612.0] }), &meta("k")).unwrap();
     let doc = reopen(&doc);
     let a = list(&doc, 0);
 
-    let p = &a[i];
+    let p = &a[poly_idx];
     assert_eq!(p.name(b"Subtype"), Some(&b"Polygon"[..]));
     assert_eq!(text(p, b"Subj"), "Polygon");
     let ap = ap_content(&doc, p);
@@ -513,7 +513,7 @@ fn polygons_clouds_connected_lines_callouts_and_carets_are_drawn() {
     let r = rect(p);
     assert!(r[0] <= 99.0 && r[3] >= 181.0, "{r:?}");
 
-    let cl = &a[c];
+    let cl = &a[cloud_idx];
     assert_eq!((text(cl, b"Subj").as_str(), cl.name(b"IT")), ("Cloud", Some(&b"PolygonCloud"[..])));
     let ap = ap_content(&doc, cl);
     assert!(ap.matches(" c\n").count() >= 6, "bumps along every edge: {ap}");
@@ -521,7 +521,7 @@ fn polygons_clouds_connected_lines_callouts_and_carets_are_drawn() {
     let r = rect(cl);
     assert!(r[1] < 100.0 - appearance::cloud_radius(2.0), "{r:?}");
 
-    let pl = &a[l];
+    let pl = &a[line_idx];
     assert_eq!((pl.name(b"Subtype"), text(pl, b"Subj").as_str()), (Some(&b"PolyLine"[..]), "Polygonal Line"));
     let ap = ap_content(&doc, pl);
     assert!(ap.contains("400 300 l") && !ap.contains("h\n"), "open path: {ap}");
@@ -535,7 +535,7 @@ fn polygons_clouds_connected_lines_callouts_and_carets_are_drawn() {
     let ap = ap_content(&doc, callout);
     assert!(ap.contains("220 460 m") && ap.contains("(hello) Tj"), "{ap}");
 
-    let caret = &a[k];
+    let caret = &a[caret_idx];
     assert_eq!((caret.name(b"Subtype"), text(caret, b"Subj").as_str()), (Some(&b"Caret"[..]), "Inserted Text"));
     assert!(ap_content(&doc, caret).contains(" c h f"));
 
@@ -548,8 +548,8 @@ fn polygons_clouds_connected_lines_callouts_and_carets_are_drawn() {
     assert!(ap_content(&doc, callout).contains("(hello) Tj"));
 
     // Moving shifts vertices.
-    move_annotation(&mut doc, 0, i, 10.0, 0.0, &meta("m")).unwrap();
-    let v: Vec<f64> = list(&doc, 0)[i].get(b"Vertices").unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect();
+    move_annotation(&mut doc, 0, poly_idx, 10.0, 0.0, &meta("m")).unwrap();
+    let v: Vec<f64> = list(&doc, 0)[poly_idx].get(b"Vertices").unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect();
     assert_eq!(v[0], 110.0);
 
     for bad in [

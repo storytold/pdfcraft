@@ -84,22 +84,22 @@ impl OutlinePen for Flatten {
         self.push(self.pt(x, y));
     }
 
-    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        let (p0, c, p) = (self.last(), self.pt(cx, cy), self.pt(x, y));
-        for i in 1..=STEPS {
-            let t = i as f64 / STEPS as f64;
+    fn quad_to(&mut self, ctrl_x: f32, ctrl_y: f32, ex: f32, ey: f32) {
+        let (p0, ctrl, p1) = (self.last(), self.pt(ctrl_x, ctrl_y), self.pt(ex, ey));
+        for step in 1..=STEPS {
+            let t = step as f64 / STEPS as f64;
             let u = 1.0 - t;
-            self.push([u * u * p0[0] + 2.0 * u * t * c[0] + t * t * p[0], u * u * p0[1] + 2.0 * u * t * c[1] + t * t * p[1]]);
+            self.push([u * u * p0[0] + 2.0 * u * t * ctrl[0] + t * t * p1[0], u * u * p0[1] + 2.0 * u * t * ctrl[1] + t * t * p1[1]]);
         }
     }
 
-    fn curve_to(&mut self, c0x: f32, c0y: f32, c1x: f32, c1y: f32, x: f32, y: f32) {
-        let (p0, c0, c1, p) = (self.last(), self.pt(c0x, c0y), self.pt(c1x, c1y), self.pt(x, y));
-        for i in 1..=STEPS {
-            let t = i as f64 / STEPS as f64;
+    fn curve_to(&mut self, c0x: f32, c0y: f32, c1x: f32, c1y: f32, ex: f32, ey: f32) {
+        let (p0, c0, c1, p1) = (self.last(), self.pt(c0x, c0y), self.pt(c1x, c1y), self.pt(ex, ey));
+        for step in 1..=STEPS {
+            let t = step as f64 / STEPS as f64;
             let u = 1.0 - t;
-            let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
-            self.push([a * p0[0] + b * c0[0] + c * c1[0] + d * p[0], a * p0[1] + b * c0[1] + c * c1[1] + d * p[1]]);
+            let (w0, w1, w2, w3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+            self.push([w0 * p0[0] + w1 * c0[0] + w2 * c1[0] + w3 * p1[0], w0 * p0[1] + w1 * c0[1] + w2 * c1[1] + w3 * p1[1]]);
         }
     }
 

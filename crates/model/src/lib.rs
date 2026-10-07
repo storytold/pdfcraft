@@ -141,19 +141,19 @@ mod tests {
     #[test]
     fn inherited_attributes_and_display_geometry() {
         for rotate in [0, 90, 180, 270, 450] {
-            let d = doc(rotate);
-            let p = &pages(&d)[0];
-            assert!(p.dict.contains(b"Resources") && p.dict.contains(b"MediaBox"));
-            assert_eq!(p.crop(&d), [10.0, 20.0, 210.0, 320.0]);
-            let (w, h) = p.display_size(&d);
-            let m = p.view_matrix(&d);
+            let test_doc = doc(rotate);
+            let page = &pages(&test_doc)[0];
+            assert!(page.dict.contains(b"Resources") && page.dict.contains(b"MediaBox"));
+            assert_eq!(page.crop(&test_doc), [10.0, 20.0, 210.0, 320.0]);
+            let (w, h) = page.display_size(&test_doc);
+            let mat = page.view_matrix(&test_doc);
             // The displayed page's corners map onto the crop box's corners.
-            let corners: Vec<[f64; 2]> = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].iter().map(|(x, y)| apply(m, *x, *y)).collect();
+            let corners: Vec<[f64; 2]> = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].iter().map(|(x, y)| apply(mat, *x, *y)).collect();
             for c in &corners {
                 assert!([10.0, 210.0].contains(&c[0]) && [20.0, 320.0].contains(&c[1]), "{rotate}: {c:?}");
             }
             // The displayed top-left corner is where a reader sees it.
-            let tl = apply(m, 0.0, h);
+            let tl = apply(mat, 0.0, h);
             let expect = match rotate % 360 {
                 0 => [10.0, 320.0],
                 90 => [10.0, 20.0],

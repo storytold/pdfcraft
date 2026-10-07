@@ -161,9 +161,9 @@ impl Automation {
                     }
                     hits.into_iter().flat_map(|r| text.line_rects(r)).map(|r| info.view_rect_to_quad(r)).collect()
                 }
-                (None, Some(q)) => {
+                (None, Some(raw_quads)) => {
                     let wrong = || ToolError::InvalidArgs("quads must be arrays of 8 numbers".into());
-                    let quads = q.as_array().ok_or_else(wrong)?;
+                    let quads = raw_quads.as_array().ok_or_else(wrong)?;
                     quads
                         .iter()
                         .map(|q| {
@@ -199,9 +199,9 @@ impl Automation {
                         .into_iter()
                         .find(|k| k.label().to_ascii_lowercase().replace(' ', "") == want && ((k.group() == StampGroup::Dynamic) == dynamic))
                         .ok_or_else(|| ToolError::InvalidArgs(format!("unknown stamp {want:?} (see the tool description)")))?;
-                    let (w, h) = stamp.size();
+                    let (width, height) = stamp.size();
                     let [x, y] = a.need::<2>("at", "a stamp (its centre)")?;
-                    let rect = rect_to_user(&info, [x - w / 2.0, y - h / 2.0, x + w / 2.0, y + h / 2.0]);
+                    let rect = rect_to_user(&info, [x - width / 2.0, y - height / 2.0, x + width / 2.0, y + height / 2.0]);
                     let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
                     let by = dynamic.then(|| self.session.stamp_by_line(&author));
                     Shape::Stamp { rect, stamp, by }
@@ -340,9 +340,9 @@ impl Automation {
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
         let size = 10.0;
         let text_at = |t: &str| {
-            let w = (printcraft_engine::annot_text::text_width(t, size) + 8.0).clamp(20.0, 600.0);
-            let h = size * 1.2 + 6.0;
-            Shape::Typewriter { rect: [at[0], at[1] - h, at[0] + w, at[1]], font_size: size }
+            let width = (printcraft_engine::annot_text::text_width(t, size) + 8.0).clamp(20.0, 600.0);
+            let height = size * 1.2 + 6.0;
+            Shape::Typewriter { rect: [at[0], at[1] - height, at[0] + width, at[1]], font_size: size }
         };
         let (shape, contents) = match a.str("type")? {
             "text" => {
@@ -350,16 +350,16 @@ impl Automation {
                 (text_at(&t), t)
             }
             "date" => {
-                let (yy, m, d) = self.session.today();
-                let t = format!("{m}/{d}/{yy}");
-                (text_at(&t), t)
+                let (year, month, day) = self.session.today();
+                let text = format!("{month}/{day}/{year}");
+                (text_at(&text), text)
             }
             // A typed signature or initials in the script font, left edge at `at`.
             kind @ ("signature" | "initials") => {
                 let t = a.str("text")?;
-                let h = if kind == "initials" { 24.0 } else { 32.0 };
-                let shape =
-                    printcraft_engine::typed_signature_shape(at, t, h).ok_or_else(|| ToolError::InvalidArgs("text has nothing to draw".into()))?;
+                let height = if kind == "initials" { 24.0 } else { 32.0 };
+                let shape = printcraft_engine::typed_signature_shape(at, t, height)
+                    .ok_or_else(|| ToolError::InvalidArgs("text has nothing to draw".into()))?;
                 (shape, String::new())
             }
             kind => {
@@ -370,8 +370,8 @@ impl Automation {
                     "line" => FillMark::Line,
                     other => return Err(ToolError::InvalidArgs(format!("unknown type {other:?}"))),
                 };
-                let (w, h) = if mark == FillMark::Line { (36.0, 4.0) } else { (12.0, 12.0) };
-                (Shape::Mark { rect: [at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0], mark }, String::new())
+                let (width, height) = if mark == FillMark::Line { (36.0, 4.0) } else { (12.0, 12.0) };
+                (Shape::Mark { rect: [at[0] - width / 2.0, at[1] - height / 2.0, at[0] + width / 2.0, at[1] + height / 2.0], mark }, String::new())
             }
         };
         let style = Style::default_for(&shape);

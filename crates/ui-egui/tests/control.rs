@@ -141,14 +141,14 @@ fn drawing_a_comment_by_drag_and_its_context_menu() {
     assert_eq!(st["quick_tool"], "square");
     let r = &st["active"]["pages_on_screen"][0]["rect"];
     let (x0, y0, x1, y1) = (r[0].as_f64().unwrap(), r[1].as_f64().unwrap(), r[2].as_f64().unwrap(), r[3].as_f64().unwrap());
-    let (a, b) = ([x0 + (x1 - x0) * 0.2, y0 + (y1 - y0) * 0.2], [x0 + (x1 - x0) * 0.5, y0 + (y1 - y0) * 0.4]);
-    ok(&mut h, &c, "ui.drag", json!({ "from": a, "to": b }));
+    let (from, to) = ([x0 + (x1 - x0) * 0.2, y0 + (y1 - y0) * 0.2], [x0 + (x1 - x0) * 0.5, y0 + (y1 - y0) * 0.4]);
+    ok(&mut h, &c, "ui.drag", json!({ "from": from, "to": to }));
     h.run_steps(2);
     let st = ok(&mut h, &c, "ui.state", json!({}));
     assert_eq!(st["active"]["selected_comment"], json!({ "page": 1, "index": 1 }), "{st}");
     assert_eq!(st["documents"][0]["dirty"], true);
     // A right-click on it offers the comment menu.
-    ok(&mut h, &c, "ui.click", json!({ "x": f64::midpoint(a[0], b[0]), "y": f64::midpoint(a[1], b[1]), "button": "secondary" }));
+    ok(&mut h, &c, "ui.click", json!({ "x": f64::midpoint(from[0], to[0]), "y": f64::midpoint(from[1], to[1]), "button": "secondary" }));
     let menu = ok(&mut h, &c, "ui.inspect", json!({ "query": "Set status" }));
     assert!(menu["count"].as_u64().unwrap() >= 1, "{menu}");
     assert!(call(&mut h, &c, "ui.drag", json!({ "from": [1, 2] })).unwrap_err().contains("to must be"));
@@ -175,16 +175,16 @@ fn loopback_transport_requires_the_token() {
     let talk = |lines: Vec<Value>| {
         let port = ep.port;
         std::thread::spawn(move || {
-            let s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-            let mut w = s.try_clone().unwrap();
-            let mut r = BufReader::new(s).lines();
+            let stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let mut writer = stream.try_clone().unwrap();
+            let mut reader = BufReader::new(stream).lines();
             let mut out = Vec::new();
             for l in lines {
                 // The server closes the connection after a failed auth; later writes may fail.
-                if writeln!(w, "{l}").is_err() {
+                if writeln!(writer, "{l}").is_err() {
                     break;
                 }
-                match r.next() {
+                match reader.next() {
                     Some(Ok(reply)) => out.push(serde_json::from_str::<Value>(&reply).unwrap()),
                     _ => break,
                 }

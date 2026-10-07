@@ -742,30 +742,31 @@ impl FieldDraft {
     /// The properties that changed (`None` when nothing did).
     #[must_use]
     pub fn props(&self) -> Option<FieldProps> {
-        let o = self.original.as_ref().as_ref()?;
+        let original = self.original.as_ref().as_ref()?;
         let ch = |a: bool, b: bool| (a != b).then_some(a);
         let p = FieldProps {
-            name: (self.name.trim() != o.name).then(|| self.name.trim().to_string()),
-            tooltip: (self.tooltip != o.tooltip).then(|| self.tooltip.clone()),
-            read_only: ch(self.read_only, o.read_only),
-            required: ch(self.required, o.required),
-            multiline: ch(self.multiline, o.multiline),
-            max_len: ((self.limit, self.max_len) != (o.limit, o.max_len)).then_some((self.limit && self.max_len > 0).then_some(self.max_len)),
-            options: (self.options != o.options).then(|| self.options.clone()),
-            font_size: ((self.font_size - o.font_size).abs() > 1e-6).then_some(self.font_size),
-            rect: (self.position != o.position).then(|| {
-                let [x, y, w, h] = self.position;
-                (self.widget, [x, y, x + w.max(4.0), y + h.max(4.0)])
+            name: (self.name.trim() != original.name).then(|| self.name.trim().to_string()),
+            tooltip: (self.tooltip != original.tooltip).then(|| self.tooltip.clone()),
+            read_only: ch(self.read_only, original.read_only),
+            required: ch(self.required, original.required),
+            multiline: ch(self.multiline, original.multiline),
+            max_len: ((self.limit, self.max_len) != (original.limit, original.max_len))
+                .then_some((self.limit && self.max_len > 0).then_some(self.max_len)),
+            options: (self.options != original.options).then(|| self.options.clone()),
+            font_size: ((self.font_size - original.font_size).abs() > 1e-6).then_some(self.font_size),
+            rect: (self.position != original.position).then(|| {
+                let [left, top, width, height] = self.position;
+                (self.widget, [left, top, left + width.max(4.0), top + height.max(4.0)])
             }),
-            look: (self.look != o.look).then_some(self.look).flatten(),
-            format: (self.format != o.format).then(|| self.format.clone()),
-            validate: (self.validate != o.validate).then(|| self.validate.clone()),
-            calculate: (self.calculate != o.calculate).then(|| self.calculate.clone()),
-            flags: OPTION_FLAGS.iter().filter(|b| (self.flags ^ o.flags) & **b != 0).map(|b| (*b, self.flags & b != 0)).collect(),
-            quadding: (self.quadding != o.quadding).then_some(self.quadding),
-            locked: ch(self.locked, o.locked),
-            actions: (self.actions != o.actions).then(|| self.actions.clone()),
-            default_value: (self.default != o.default).then(|| (!self.default.is_empty()).then(|| self.default.clone())),
+            look: (self.look != original.look).then_some(self.look).flatten(),
+            format: (self.format != original.format).then(|| self.format.clone()),
+            validate: (self.validate != original.validate).then(|| self.validate.clone()),
+            calculate: (self.calculate != original.calculate).then(|| self.calculate.clone()),
+            flags: OPTION_FLAGS.iter().filter(|bit| (self.flags ^ original.flags) & **bit != 0).map(|bit| (*bit, self.flags & bit != 0)).collect(),
+            quadding: (self.quadding != original.quadding).then_some(self.quadding),
+            locked: ch(self.locked, original.locked),
+            actions: (self.actions != original.actions).then(|| self.actions.clone()),
+            default_value: (self.default != original.default).then(|| (!self.default.is_empty()).then(|| self.default.clone())),
         };
         (p != FieldProps::default()).then_some(p)
     }

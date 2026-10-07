@@ -139,21 +139,21 @@ impl AddedImage {
     /// then fill the box.
     fn matrix(&self) -> printcraft_content::Matrix {
         use printcraft_content::Matrix as M;
-        let [l, b, r, t] = self.crop.map(|v| v.clamp(0.0, 0.45));
-        let (cw, ch) = ((1.0 - l - r).max(0.05), (1.0 - b - t).max(0.05));
-        let mut m = M([1.0 / cw, 0.0, 0.0, 1.0 / ch, -l / cw, -b / ch]);
+        let [left, bottom, right, top] = self.crop.map(|frac| frac.clamp(0.0, 0.45));
+        let (cw, ch) = ((1.0 - left - right).max(0.05), (1.0 - bottom - top).max(0.05));
+        let mut mat = M([1.0 / cw, 0.0, 0.0, 1.0 / ch, -left / cw, -bottom / ch]);
         if self.flip_h {
-            m = m.then(&M([-1.0, 0.0, 0.0, 1.0, 1.0, 0.0]));
+            mat = mat.then(&M([-1.0, 0.0, 0.0, 1.0, 1.0, 0.0]));
         }
         if self.flip_v {
-            m = m.then(&M([1.0, 0.0, 0.0, -1.0, 0.0, 1.0]));
+            mat = mat.then(&M([1.0, 0.0, 0.0, -1.0, 0.0, 1.0]));
         }
         for _ in 0..self.rotation % 4 {
             // A quarter turn counter-clockwise within the unit square.
-            m = m.then(&M([0.0, 1.0, -1.0, 0.0, 1.0, 0.0]));
+            mat = mat.then(&M([0.0, 1.0, -1.0, 0.0, 1.0, 0.0]));
         }
         let [x0, y0, x1, y1] = norm(self.rect);
-        m.then(&M([x1 - x0, 0.0, 0.0, y1 - y0, x0, y0]))
+        mat.then(&M([x1 - x0, 0.0, 0.0, y1 - y0, x0, y0]))
     }
 }
 
@@ -233,10 +233,10 @@ fn font_name(base: &str) -> String {
 }
 
 /// Content and resources for an item; `view` maps display space to user space.
-fn draw(doc: &Document, c: &Content, view: [f64; 6]) -> Result<(Vec<u8>, Dict), EditError> {
+fn draw(doc: &Document, content: &Content, view: [f64; 6]) -> Result<(Vec<u8>, Dict), EditError> {
     let mut res = Dict::new();
     let mut out = format!("q {} {} {} {} {} {} cm\n", n(view[0]), n(view[1]), n(view[2]), n(view[3]), n(view[4]), n(view[5])).into_bytes();
-    match c {
+    match content {
         Content::Text(t) => {
             let base = t.family.base_font(t.bold, t.italic);
             let name = font_name(base);
@@ -250,53 +250,56 @@ fn draw(doc: &Document, c: &Content, view: [f64; 6]) -> Result<(Vec<u8>, Dict), 
             let mut fonts = Dict::new();
             fonts.set(name.clone().into_bytes(), Object::Dict(font));
             res.set(b"Font".to_vec(), Object::Dict(fonts));
-            let r = text_rect(t);
-            let [cr, cg, cb] = t.color.map(|v| v.clamp(0.0, 1.0));
+            let bounds = text_rect(t);
+            let [cr, cg, cb] = t.color.map(|chan| chan.clamp(0.0, 1.0));
             out.extend(format!("BT /{name} {} Tf {} {} {} rg\n", n(t.size), n(cr), n(cg), n(cb)).bytes());
-            for (i, line) in lines(t).iter().enumerate() {
-                let w = t.family.width(line, t.size, t.bold);
+            for (idx, line) in lines(t).iter().enumerate() {
+                let width = t.family.width(line, t.size, t.bold);
                 let x = match t.align {
-                    Align::Left | Align::Justify => r[0],
-                    Align::Center => r[0] + ((r[2] - r[0]) - w) / 2.0,
-                    Align::Right => r[2] - w,
+                    Align::Left | Align::Justify => bounds[0],
+                    Align::Center => bounds[0] + ((bounds[2] - bounds[0]) - width) / 2.0,
+                    Align::Right => bounds[2] - width,
                 };
                 // Baseline: 0.8 em below the line top.
-                let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;
+                let y = bounds[3] - (idx as f64 * 1.2 + 0.95) * t.size;
                 // Justified: word spacing makes every line but the last fill the box.
                 let all = lines(t);
                 let spaces = line.matches(' ').count();
-                let tw =
-                    if t.align == Align::Justify && i + 1 < all.len() && spaces > 0 { ((r[2] - r[0]) - w).max(0.0) / spaces as f64 } else { 0.0 };
+                let tw = if t.align == Align::Justify && idx + 1 < all.len() && spaces > 0 {
+                    ((bounds[2] - bounds[0]) - width).max(0.0) / spaces as f64
+                } else {
+                    0.0
+                };
                 out.extend(format!("1 0 0 1 {} {} Tm {} Tw ", n(x), n(y), n(tw)).bytes());
                 out.extend(literal(&win_ansi(line)));
                 out.extend_from_slice(b" Tj\n");
             }
             out.extend_from_slice(b"ET\n");
         }
-        Content::Image(i) => {
-            if !matches!(&*doc.get(i.image), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image")) {
+        Content::Image(img) => {
+            if !matches!(&*doc.get(img.image), Object::Stream(stream) if stream.dict.name(b"Subtype") == Some(b"Image")) {
                 return Err(EditError::Invalid("not an image".into()));
             }
-            let r = norm(i.rect);
-            let name = format!("PCImg{}", i.image.num);
+            let bounds = norm(img.rect);
+            let name = format!("PCImg{}", img.image.num);
             let mut xo = Dict::new();
-            xo.set(name.clone().into_bytes(), Object::Ref(i.image));
+            xo.set(name.clone().into_bytes(), Object::Ref(img.image));
             res.set(b"XObject".to_vec(), Object::Dict(xo));
-            let [a, b, c, d, e, f] = i.matrix().0;
+            let mat = img.matrix().0;
             // Clip to the box: the cropped-away parts stay hidden.
             out.extend(
                 format!(
                     "{} {} {} {} re W n {} {} {} {} {} {} cm /{name} Do\n",
-                    n(r[0]),
-                    n(r[1]),
-                    n(r[2] - r[0]),
-                    n(r[3] - r[1]),
-                    n(a),
-                    n(b),
-                    n(c),
-                    n(d),
-                    n(e),
-                    n(f)
+                    n(bounds[0]),
+                    n(bounds[1]),
+                    n(bounds[2] - bounds[0]),
+                    n(bounds[3] - bounds[1]),
+                    n(mat[0]),
+                    n(mat[1]),
+                    n(mat[2]),
+                    n(mat[3]),
+                    n(mat[4]),
+                    n(mat[5])
                 )
                 .bytes(),
             );

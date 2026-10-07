@@ -38,16 +38,16 @@ fn the_crop_tool_crops_to_the_dragged_rectangle_then_returns_to_select() {
     h.run_steps(2);
     let r = h.state().views[0].page_screen_rect(0).unwrap();
     // The middle half of the page in both directions.
-    let (a, b) = (r.min + r.size() * 0.25, r.min + r.size() * 0.75);
-    h.hover_at(a);
+    let (from, to) = (r.min + r.size() * 0.25, r.min + r.size() * 0.75);
+    h.hover_at(from);
     h.run_steps(1);
-    h.drag_at(a);
+    h.drag_at(from);
     h.run_steps(1);
     for k in 1..=4 {
-        h.hover_at(a + (b - a) * (k as f32 / 4.0));
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
         h.run_steps(1);
     }
-    h.drop_at(b);
+    h.drop_at(to);
     h.run_steps(4);
     let (w, hh) = size(&h, 0);
     assert!((w - 150.0).abs() < 2.0 && (hh - 200.0).abs() < 2.0, "{w}×{hh}");

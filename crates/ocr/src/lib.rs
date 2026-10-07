@@ -178,10 +178,10 @@ impl PlacedWord {
     /// Place a pixel-space word with `to_user`, which maps an image pixel (x right, y down) to
     /// user space.
     pub fn place(word: &Word, to_user: impl Fn(f32, f32) -> [f64; 2]) -> PlacedWord {
-        let [l, t, r, b] = word.rect;
-        let o = to_user(l, b);
-        let br = to_user(r, b);
-        let tl = to_user(l, t);
+        let [left, top, right, bottom] = word.rect;
+        let o = to_user(left, bottom);
+        let br = to_user(right, bottom);
+        let tl = to_user(left, top);
         PlacedWord { text: word.text.clone(), origin: o, across: [br[0] - o[0], br[1] - o[1]], up: [tl[0] - o[0], tl[1] - o[1]] }
     }
 }
@@ -286,8 +286,8 @@ mod tests {
             ];
             let text = "HELLO WORLD";
             let (dot, x0, y0) = (4u32, 40u32, 40u32);
-            let (w, h) = (x0 * 2 + text.len() as u32 * 6 * dot, y0 * 2 + 7 * dot);
-            let mut px = vec![255u8; (w * h * 4) as usize];
+            let (width, height) = (x0 * 2 + text.len() as u32 * 6 * dot, y0 * 2 + 7 * dot);
+            let mut px = vec![255u8; (width * height * 4) as usize];
             for (i, c) in text.chars().enumerate() {
                 let Some((_, rows)) = GLYPHS.iter().find(|g| g.0 == c) else { continue };
                 for (ry, row) in rows.iter().enumerate() {
@@ -299,14 +299,14 @@ mod tests {
                             for dx in 0..dot {
                                 let x = x0 + (i as u32 * 6 + rx as u32) * dot + dx;
                                 let y = y0 + ry as u32 * dot + dy;
-                                let o = ((y * w + x) * 4) as usize;
-                                px[o..o + 3].copy_from_slice(&[0, 0, 0]);
+                                let offset = ((y * width + x) * 4) as usize;
+                                px[offset..offset + 3].copy_from_slice(&[0, 0, 0]);
                             }
                         }
                     }
                 }
             }
-            (w, h, px)
+            (width, height, px)
         }
     }
 }

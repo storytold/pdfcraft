@@ -64,28 +64,33 @@ impl Session {
     /// When `old` or `new` is not an open document (`EditError::NoDocument`). Pages that fail to
     /// render are skipped, not reported.
     pub fn compare_visual(&self, old: DocId, new: DocId, dpi: f32) -> Result<Vec<(usize, [f64; 4])>, EditError> {
-        let a = self.get(old).ok_or(EditError::NoDocument)?;
-        let b = self.get(new).ok_or(EditError::NoDocument)?;
-        let renderer = |d: &crate::Document| {
+        let first = self.get(old).ok_or(EditError::NoDocument)?;
+        let second = self.get(new).ok_or(EditError::NoDocument)?;
+        let renderer = |doc: &crate::Document| {
             printcraft_render::PageRenderer::new(
-                d.bytes.clone(),
-                printcraft_render::RenderConfig { password: d.password.as_deref().map(Arc::from), ..Default::default() },
+                doc.bytes.clone(),
+                printcraft_render::RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() },
             )
         };
-        let (mut ra, mut rb) = (renderer(a), renderer(b));
+        let (mut ra, mut rb) = (renderer(first), renderer(second));
         let scale = dpi.clamp(18.0, 150.0) / 72.0;
         let mut out = Vec::new();
-        for page in 0..a.info.pages.len().min(b.info.pages.len()) {
+        for page in 0..first.info.pages.len().min(second.info.pages.len()) {
             let req = printcraft_render::RenderRequest { page, scale, ..Default::default() };
-            let (x, y) = (ra.render(req), rb.render(req));
-            if x.error.is_some() || y.error.is_some() {
+            let (old_page, new_page) = (ra.render(req), rb.render(req));
+            if old_page.error.is_some() || new_page.error.is_some() {
                 continue;
             }
-            let info = &b.info.pages[page];
-            let s = y.width as f32 / info.width.max(1e-3);
-            for r in printcraft_compare::visual_regions((&y.rgba, y.width, y.height), (&x.rgba, x.width, x.height), 24) {
-                let p = info.view_to_user(r[0] as f32 / s, r[1] as f32 / s);
-                let q = info.view_to_user(r[2] as f32 / s, r[3] as f32 / s);
+            let info = &second.info.pages[page];
+            let view_scale = new_page.width as f32 / info.width.max(1e-3);
+            let regions = printcraft_compare::visual_regions(
+                (&new_page.rgba, new_page.width, new_page.height),
+                (&old_page.rgba, old_page.width, old_page.height),
+                24,
+            );
+            for region in regions {
+                let p = info.view_to_user(region[0] as f32 / view_scale, region[1] as f32 / view_scale);
+                let q = info.view_to_user(region[2] as f32 / view_scale, region[3] as f32 / view_scale);
                 out.push((page, [f64::from(p[0].min(q[0])), f64::from(p[1].min(q[1])), f64::from(p[0].max(q[0])), f64::from(p[1].max(q[1]))]));
             }
         }

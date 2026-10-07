@@ -257,26 +257,26 @@ impl Matrix {
     /// `self` then `then` (`self × then` in PDF's row-vector convention).
     #[must_use]
     pub fn then(&self, then: &Matrix) -> Matrix {
-        let [a, b, c, d, e, f] = self.0;
+        let [a1, b1, c1, d1, e1, f1] = self.0;
         let [a2, b2, c2, d2, e2, f2] = then.0;
-        Matrix([a * a2 + b * c2, a * b2 + b * d2, c * a2 + d * c2, c * b2 + d * d2, e * a2 + f * c2 + e2, e * b2 + f * d2 + f2])
+        Matrix([a1 * a2 + b1 * c2, a1 * b2 + b1 * d2, c1 * a2 + d1 * c2, c1 * b2 + d1 * d2, e1 * a2 + f1 * c2 + e2, e1 * b2 + f1 * d2 + f2])
     }
 
     #[must_use]
     pub fn apply(&self, x: f64, y: f64) -> (f64, f64) {
-        let [a, b, c, d, e, f] = self.0;
-        (a * x + c * y + e, b * x + d * y + f)
+        let [a1, b1, c1, d1, e1, f1] = self.0;
+        (a1 * x + c1 * y + e1, b1 * x + d1 * y + f1)
     }
 
     #[must_use]
     pub fn invert(&self) -> Option<Matrix> {
-        let [a, b, c, d, e, f] = self.0;
-        let det = a * d - b * c;
+        let [a1, b1, c1, d1, e1, f1] = self.0;
+        let det = a1 * d1 - b1 * c1;
         if det.abs() < 1e-12 || !det.is_finite() {
             return None;
         }
-        let (ia, ib, ic, id) = (d / det, -b / det, -c / det, a / det);
-        Some(Matrix([ia, ib, ic, id, -(e * ia + f * ic), -(e * ib + f * id)]))
+        let (ia, ib, ic, id) = (d1 / det, -b1 / det, -c1 / det, a1 / det);
+        Some(Matrix([ia, ib, ic, id, -(e1 * ia + f1 * ic), -(e1 * ib + f1 * id)]))
     }
 
     /// The bounding box of a rectangle `[x0 y0 x1 y1]` after this transform.
