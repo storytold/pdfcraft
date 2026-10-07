@@ -75,6 +75,16 @@ todo = "warn"
 # every lint below has to stay clean; when one is genuinely wrong for this
 # codebase, allow it in clippy.toml with a reason rather than in the source.
 pedantic = { level = "warn", priority = -1 }
+# TEMPORARY: the `cast_*` family (about 675 sites) is waved through while the
+# rest of the pedantic backlog is cleared. Every one of them needs a real
+# decision — a lossless `From`, a bounded `try_from` with a documented
+# fallback, or an `#[expect]` naming the bound that makes the cast safe — so
+# they are not silently "fixed" in one pass. Delete these four lines and fix
+# the casts properly before calling pedantic done.
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_possible_wrap = "allow"
 
 [profile.dev.package."*"]
 opt-level = 2
