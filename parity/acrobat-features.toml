@@ -5786,8 +5786,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.digital"]
 tools = ["sign_document"]
-evidence = ["crates/sign/tests/crypto.rs::opens_every_openssl_flavour_of_pkcs12", "crates/sign/tests/pdf.rs::signing_then_validating_with_and_without_trust", "crates/ui-egui/tests/signing.rs::certifying_without_a_visible_signature", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools"]
-notes = "PBES2 (AES, 3DES) and legacy SHA-1 3DES/RC2 files; RSA, P-256, P-384"
+evidence = ["crates/sign/tests/crypto.rs::opens_every_openssl_flavour_of_pkcs12", "crates/sign/tests/crypto.rs::opens_pkcs12_as_windows_writes_it", "crates/sign/tests/pdf.rs::signing_then_validating_with_and_without_trust", "crates/ui-egui/tests/signing.rs::certifying_without_a_visible_signature", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools"]
+notes = "PBES2 (AES, 3DES) and legacy SHA-1 3DES/RC2 files; RSA, P-256, P-384; both the DER OpenSSL writes and the BER Windows writes (indefinite lengths, segmented AuthenticatedSafe)"
 
 [[feature]]
 id = "sign.macos-keychain"
