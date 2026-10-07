@@ -219,21 +219,36 @@ struct Shown {
     decodable: bool,
 }
 
-fn interpret(doc: &Document, ops: &[Op], fonts_res: &Dict, cache: &mut HashMap<Vec<u8>, Rc<Metrics>>) -> Vec<Shown> {
+/// The graphics state carried from one of a page's content streams to the next: the streams
+/// are one stream in pieces (§7.8.2), so a `cm` (AutoCAD scales the whole page in the first
+/// stream), an unbalanced `q`, the font and the colour still apply in the streams after it.
+struct Carry {
+    ts: Ts,
+    stack: Vec<Ts>,
+}
+
+impl Carry {
+    fn new() -> Self {
+        let ts = Ts {
+            ctm: Matrix::IDENTITY,
+            fill: Vec::new(),
+            font: None,
+            size: 0.0,
+            char_spacing: 0.0,
+            word_spacing: 0.0,
+            scale: 1.0,
+            leading: 0.0,
+            rise: 0.0,
+        };
+        Carry { ts, stack: Vec::new() }
+    }
+}
+
+fn interpret(doc: &Document, ops: &[Op], fonts_res: &Dict, cache: &mut HashMap<Vec<u8>, Rc<Metrics>>, carry: &mut Carry) -> Vec<Shown> {
     let mut out = Vec::new();
-    let mut ts = Ts {
-        ctm: Matrix::IDENTITY,
-        fill: Vec::new(),
-        font: None,
-        size: 0.0,
-        char_spacing: 0.0,
-        word_spacing: 0.0,
-        scale: 1.0,
-        leading: 0.0,
-        rise: 0.0,
-    };
+    let mut ts = carry.ts.clone();
     let mut at_bt = (0usize, ts.clone());
-    let mut stack: Vec<Ts> = Vec::new();
+    let mut stack: Vec<Ts> = std::mem::take(&mut carry.stack);
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let mut bt = 0usize;
     for (i, op) in ops.iter().enumerate() {
@@ -380,6 +395,8 @@ fn interpret(doc: &Document, ops: &[Op], fonts_res: &Dict, cache: &mut HashMap<V
             _ => {}
         }
     }
+    carry.ts = ts;
+    carry.stack = stack;
     out
 }
 
@@ -390,9 +407,10 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
     let fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let mut cache = HashMap::new();
     let mut lines: Vec<TextLine> = Vec::new();
+    let mut carry = Carry::new();
     for (si, (_, data)) in content_streams(doc, &p.dict).into_iter().enumerate() {
         let ops = parse(&data).ops;
-        let shown = interpret(doc, &ops, &fonts_res, &mut cache);
+        let shown = interpret(doc, &ops, &fonts_res, &mut cache, &mut carry);
         let mut last: Option<(usize, f64, f64, f64)> = None; // (bt, baseline, end_x, size)
         for s in shown {
             let joins = last.is_some_and(|(bt, base, end, size)| {
