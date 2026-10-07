@@ -620,6 +620,11 @@ impl ReviewState {
 // ── pages and /Annots ───────────────────────────────────────────────────────────────────────
 
 /// The page object of each leaf page, in order.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoPageTree` when the document has no catalog (`/Root`) or the catalog has
+/// no `/Pages` entry.
 pub fn page_refs(doc: &Document) -> Result<Vec<ObjRef>, AnnotError> {
     let root = doc.root().ok_or(AnnotError::NoPageTree)?;
     let pages = doc.get(root).as_dict().and_then(|d| d.reference(b"Pages")).ok_or(AnnotError::NoPageTree)?;
@@ -880,6 +885,13 @@ pub fn callout_attach(rect: [f64; 4], knee: [f64; 2]) -> [f64; 2] {
 }
 
 /// Add a comment; returns its index in the page's `/Annots`.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoSuchPage` when `new.page` does not exist, `AnnotError::Invalid` when the
+/// style or the shape's geometry is bad (an attachment with an empty file name counts),
+/// `AnnotError::Unsupported` when the appearance can't be generated, and `AnnotError::Cos` when
+/// writing the document fails.
 pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> Result<usize, AnnotError> {
     let page = page_ref(doc, new.page)?;
     let style = &new.style;
@@ -1084,6 +1096,11 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
 
 /// (Re)generate `/AP /N` for the annotation `r` from its dictionary.
 /// Regenerate an annotation's normal appearance from its dictionary.
+///
+/// # Errors
+///
+/// Returns `AnnotError::Unsupported` with the annotation's subtype when its appearance can't be
+/// built, and `AnnotError::Cos` when writing the annotation fails.
 pub fn set_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
@@ -1143,6 +1160,12 @@ fn touch(d: &mut Dict, meta: &Meta) {
 }
 
 /// Delete a comment together with its pop-up and its replies (and theirs), as Acrobat does.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoSuchPage`/`AnnotError::NoSuchAnnotation` when `page` or `index` is out of
+/// range, `AnnotError::Invalid` when the comment is locked, and `AnnotError::Cos` when rewriting
+/// `/Annots` fails.
 pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
     let p = page_ref(doc, page)?;
     let list = annots(doc, p);
@@ -1184,6 +1207,12 @@ pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Resul
 
 /// Change a comment's text. Text boxes are redrawn to show it, and their rectangle follows the
 /// new text: the wrap width and top edge stay, the height fits the wrapped lines.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoSuchPage`/`AnnotError::NoSuchAnnotation` when `page` or `index` is out of
+/// range, `AnnotError::Invalid` when the refitted box rectangle is unusable, `AnnotError::Unsupported`
+/// when the appearance can't be regenerated, and `AnnotError::Cos` when writing the document fails.
 pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     let free_text = annot_dict(doc, r).name(b"Subtype") == Some(b"FreeText");
@@ -1243,12 +1272,24 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
 /// A reply is a text annotation with `/IRT` pointing at its parent (§12.5.6.2). It gets the
 /// parent's rectangle and an empty appearance, so it shows in comment lists but never paints a
 /// second icon on the page.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoSuchPage`/`AnnotError::NoSuchAnnotation` when `page` or `index` is out of
+/// range, `AnnotError::Invalid` when the comment is a pop-up, and `AnnotError::Cos` when rewriting
+/// `/Annots` fails.
 pub fn add_reply(doc: &mut Document, page: usize, index: usize, text: &str, author: &str, meta: &Meta) -> Result<usize, AnnotError> {
     reply(doc, page, index, text, author, meta, None)
 }
 
 /// Set a comment's review status (Acrobat: "Set status ▸ Accepted"…). Like Acrobat this adds a
 /// state reply (`/State`, `/StateModel /Review`) by `author`; the latest one wins.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoSuchPage`/`AnnotError::NoSuchAnnotation` when `page` or `index` is out of
+/// range, `AnnotError::Invalid` when the comment is a pop-up, and `AnnotError::Cos` when rewriting
+/// `/Annots` fails.
 pub fn set_review_state(doc: &mut Document, page: usize, index: usize, state: ReviewState, author: &str, meta: &Meta) -> Result<usize, AnnotError> {
     let text = format!("{} set by {}", state.name(), if author.is_empty() { "unknown" } else { author });
     reply(doc, page, index, &text, author, meta, Some(state))
@@ -1310,6 +1351,11 @@ fn unlocked(doc: &Document, r: ObjRef) -> Result<(), AnnotError> {
 
 /// Lock or unlock a comment (the Locked flag). A locked comment can't be moved, resized,
 /// restyled or deleted; its text and replies stay editable, as in Acrobat.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoSuchPage`/`AnnotError::NoSuchAnnotation` when `page` or `index` is out of
+/// range, and `AnnotError::Cos` when writing the document fails.
 pub fn set_locked(doc: &mut Document, page: usize, index: usize, locked: bool) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     let f = if locked { flags(doc, r) | FLAG_LOCKED } else { flags(doc, r) & !FLAG_LOCKED };
@@ -1319,6 +1365,12 @@ pub fn set_locked(doc: &mut Document, page: usize, index: usize, locked: bool) -
 
 /// Mark or unmark a comment with a checkmark. Like Acrobat this adds a hidden state reply with
 /// `/StateModel /Marked` by `author`; the latest one wins. It's private bookkeeping, not a status.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoSuchPage`/`AnnotError::NoSuchAnnotation` when `page` or `index` is out of
+/// range, `AnnotError::Invalid` when the comment is a pop-up, and `AnnotError::Cos` when rewriting
+/// `/Annots` fails.
 pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, author: &str, meta: &Meta) -> Result<usize, AnnotError> {
     let (p, parent) = annot_ref(doc, page, index)?;
     let pd = annot_dict(doc, parent);
@@ -1342,6 +1394,12 @@ pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, a
 }
 
 /// Move a comment (and its pop-up) by `(dx, dy)` points. The appearance moves with `/Rect`.
+///
+/// # Errors
+///
+/// Returns `AnnotError::Invalid` when `dx` or `dy` isn't finite or when the comment is locked,
+/// `AnnotError::NoSuchPage`/`AnnotError::NoSuchAnnotation` when `page` or `index` is out of range,
+/// and `AnnotError::Cos` when writing the document fails.
 pub fn move_annotation(doc: &mut Document, page: usize, index: usize, dx: f64, dy: f64, meta: &Meta) -> Result<(), AnnotError> {
     if !finite(&[dx, dy]) {
         return Err(AnnotError::Invalid("invalid offset".into()));
@@ -1386,6 +1444,13 @@ pub fn move_annotation(doc: &mut Document, page: usize, index: usize, dx: f64, d
 }
 
 /// Resize a rectangle, oval or text box to `rect`; its appearance is redrawn.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoSuchPage`/`AnnotError::NoSuchAnnotation` when `page` or `index` is out of
+/// range, `AnnotError::Invalid` when the comment is locked, when its subtype isn't `Square`,
+/// `Circle` or `FreeText`, or when `rect` is too small, `AnnotError::Unsupported` when the
+/// appearance can't be regenerated, and `AnnotError::Cos` when writing the document fails.
 pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
@@ -1442,6 +1507,13 @@ fn border_width_of(d: &Dict) -> f64 {
 }
 
 /// Change a comment's colour, opacity and/or line width, and redraw it.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoSuchPage`/`AnnotError::NoSuchAnnotation` when `page` or `index` is out of
+/// range, `AnnotError::Invalid` when the comment is locked or a style value isn't finite,
+/// `AnnotError::Unsupported` when the subtype's appearance can't be regenerated, and
+/// `AnnotError::Cos` when writing the document fails.
 pub fn set_style(
     doc: &mut Document,
     page: usize,
@@ -1588,6 +1660,12 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
 
 /// Change a comment's author (`/T`), subject (`/Subj`) and, for notes, icon (`/Name`, redrawn).
 /// `None` leaves a value as it is.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoSuchPage`/`AnnotError::NoSuchAnnotation` when `page` or `index` is out of
+/// range, `AnnotError::Invalid` when the comment is locked or `icon` is set on anything but a
+/// sticky note, and `AnnotError::Cos` when writing the document fails.
 pub fn set_info(
     doc: &mut Document,
     page: usize,
@@ -1671,6 +1749,13 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
 /// Replace Text (Acrobat's proposal): strike out `quads` and add a caret at the end of the
 /// struck text holding `replacement`, grouped with the strikeout (`/IRT` + `/RT /Group`) so they
 /// move, list and delete as one. Returns the strikeout's index.
+///
+/// # Errors
+///
+/// Returns `AnnotError::Invalid` when `quads` is empty or a style or the geometry is bad,
+/// `AnnotError::NoSuchPage`/`AnnotError::NoSuchAnnotation` when `page` is out of range,
+/// `AnnotError::Unsupported` when an appearance can't be generated, and `AnnotError::Cos` when
+/// writing the document fails.
 #[allow(clippy::too_many_arguments)]
 pub fn add_text_replacement(
     doc: &mut Document,
@@ -1720,6 +1805,13 @@ pub fn add_text_replacement(
 /// The Eraser (Draw tools): remove the parts of drawing `(page, index)` within `radius` points
 /// of `path`, splitting strokes where they are cut. A drawing with nothing left is deleted.
 /// Returns whether anything was erased.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoSuchPage`/`AnnotError::NoSuchAnnotation` when `page` or `index` is out of
+/// range, `AnnotError::Invalid` when the comment is locked, isn't an `Ink` drawing, or `path` or
+/// `radius` is unusable, `AnnotError::Unsupported` when the drawing's appearance can't be
+/// regenerated, and `AnnotError::Cos` when writing the document fails.
 pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]], radius: f64, meta: &Meta) -> Result<bool, AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;

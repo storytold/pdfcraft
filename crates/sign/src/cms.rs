@@ -57,6 +57,12 @@ fn bad(what: &str) -> SignError {
 impl SignedData {
     /// Parse a `ContentInfo` holding `SignedData`. Bytes after it (a PDF placeholder's zero
     /// padding) are ignored.
+    ///
+    /// # Errors
+    ///
+    /// When `bytes` is not a `ContentInfo` holding `SignedData`, or any part of it — the
+    /// `encapContentInfo`, certificates, `signerInfos`, digest or signature algorithm — is
+    /// malformed or names an unsupported algorithm.
     pub fn parse(bytes: &[u8]) -> Result<SignedData, SignError> {
         let (ci, _) = Tlv::parse(bytes)?;
         let ci = ci.expect(tag::SEQUENCE, "ContentInfo")?.children()?;
@@ -201,6 +207,11 @@ fn attribute(o: &str, value: &[u8]) -> Vec<u8> {
 /// A detached `CAdES` signature (`PAdES` B-B): signed attributes content-type, message-digest and
 /// signing-certificate-v2 (no signing-time: `PAdES` takes the time from the signature
 /// dictionary's `/M`). `chain` holds further certificates to embed (issuers).
+///
+/// # Errors
+///
+/// When `key` refuses or fails to sign: SHA-1 for a new signature, RSA signing in the browser,
+/// or an error from the platform crypto or an external key.
 pub fn sign_detached(
     key: &PrivateKey,
     cert: &Certificate,

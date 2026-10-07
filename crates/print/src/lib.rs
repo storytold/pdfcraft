@@ -223,6 +223,12 @@ fn fit_scale((dw, dh): (f64, f64), (cw, ch): (f64, f64)) -> f64 {
 }
 
 /// Lay out the sheets for `settings` given each source page's display size.
+///
+/// # Errors
+///
+/// Returns `PrintError::NoPages` when none of `settings.pages` falls inside `sizes`, and
+/// `PrintError::Invalid` when the paper size, custom scale, pages-per-sheet grid or poster tile
+/// scale or overlap is invalid.
 pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, PrintError> {
     let pages: Vec<usize> = settings.pages.iter().copied().filter(|p| *p < sizes.len()).collect();
     if pages.is_empty() {
@@ -502,6 +508,11 @@ fn page_form(doc: &mut Document, index: usize, content: Content) -> Result<ObjRe
 
 /// Build the print-ready PDF for `settings`. Encryption is not carried over (the file goes to a
 /// printer or is the user's own copy); callers must check the print permission first.
+///
+/// # Errors
+///
+/// Returns `PrintError::NoPages` or `PrintError::Invalid` when `layout` rejects the settings,
+/// and `PrintError::Cos` when writing the finished PDF fails.
 pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError> {
     let pages = printcraft_model::pages(src);
     let sizes: Vec<(f64, f64)> = pages.iter().map(|p| p.display_size(src)).collect();

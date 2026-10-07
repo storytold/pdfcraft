@@ -56,6 +56,11 @@ fn set_title(doc: &mut Document, title: &str) {
 }
 
 /// A document of `pages` empty pages of `width × height` points.
+///
+/// # Errors
+///
+/// When `width` or `height` is not a finite number of points within 3 to 14 400, when `pages`
+/// is 0 or more than 10 000, or when the new document has no page tree (`CreateError::Invalid`).
 pub fn blank(width: f64, height: f64, pages: usize) -> Result<Document, CreateError> {
     if !(width.is_finite() && height.is_finite() && (3.0..=MAX_SIDE).contains(&width) && (3.0..=MAX_SIDE).contains(&height))
         || pages == 0
@@ -397,6 +402,11 @@ fn embed(name: &str, bytes: &[u8]) -> Result<Vec<Embedded>, CreateError> {
 
 /// Embed an image file (its first page, for TIFFs) as an image `XObject` in `doc`. Returns the
 /// object and the image's natural size in points (from its resolution).
+///
+/// # Errors
+///
+/// When `bytes` is not a PNG, JPEG, JPEG 2000, TIFF, GIF or BMP, when the decoder rejects it,
+/// or when the file holds no image (`CreateError::Image`, naming `name` and the reason).
 pub fn image_xobject(doc: &mut Document, name: &str, bytes: &[u8]) -> Result<(ObjRef, (f64, f64)), CreateError> {
     let img = embed(name, bytes)?.into_iter().next().ok_or_else(|| CreateError::Image(name.into(), "the file has no image".into()))?;
     let size = (f64::from(img.px.0) * 72.0 / img.dpi.0, f64::from(img.px.1) * 72.0 / img.dpi.1);
@@ -414,6 +424,11 @@ pub fn image_xobject(doc: &mut Document, name: &str, bytes: &[u8]) -> Result<(Ob
 }
 
 /// One page per image, each the size of its image at the image's resolution.
+///
+/// # Errors
+///
+/// When `images` is empty (`CreateError::Invalid`), or when any of them is unsupported or
+/// undecodable (`CreateError::Image`, naming the file and the reason).
 pub fn from_images(images: &[(String, Vec<u8>)]) -> Result<Document, CreateError> {
     if images.is_empty() {
         return Err(CreateError::Invalid("no images".into()));
@@ -452,6 +467,10 @@ pub fn from_images(images: &[(String, Vec<u8>)]) -> Result<Document, CreateError
 // ── text ────────────────────────────────────────────────────────────────────────────────────
 
 /// Plain text set in Helvetica on pages of `page` size with 1-inch margins.
+///
+/// # Errors
+///
+/// When the new document has no page tree (`CreateError::Invalid`).
 pub fn from_text(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result<Document, CreateError> {
     let size = if font_size.is_finite() && font_size > 0.0 { font_size.clamp(4.0, 72.0) } else { 11.0 };
     let (w, h) = page;

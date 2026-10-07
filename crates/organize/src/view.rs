@@ -156,6 +156,12 @@ pub fn displays_doc_title(doc: &Document) -> bool {
 
 /// Write the initial view. An opening action that isn't a plain destination (a script, say) is
 /// kept unless the page or magnification asks for a destination.
+///
+/// # Errors
+///
+/// When the document has no page tree (`OrganizeError::NoPageTree`), when `v.page` is past the
+/// last page (`OrganizeError::NoSuchPage`), or when writing the catalog fails
+/// (`OrganizeError::Cos`).
 pub fn set_initial_view(doc: &mut Document, v: &InitialView) -> Result<(), OrganizeError> {
     let (root, c) = catalog(doc)?;
     let pages = crate::walk(doc)?;

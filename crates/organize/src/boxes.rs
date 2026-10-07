@@ -64,6 +64,10 @@ fn intersect(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
 }
 
 /// The effective boxes of every page: media, crop, bleed, trim, art.
+///
+/// # Errors
+///
+/// When the document has no page tree (`OrganizeError::NoPageTree`).
 pub fn page_boxes(doc: &Document) -> Result<Vec<[[f64; 4]; 5]>, OrganizeError> {
     Ok(walk(doc)?
         .iter()
@@ -80,6 +84,14 @@ pub fn page_boxes(doc: &Document) -> Result<Vec<[[f64; 4]; 5]>, OrganizeError> {
 }
 
 /// Set a box on `pages` (0-based). Margins apply to each page's own media box.
+///
+/// # Errors
+///
+/// When `pages` names a page that does not exist (`OrganizeError::NoSuchPage`), when the
+/// document has no page tree (`OrganizeError::NoPageTree`), when `spec` is invalid for `which`
+/// (`OrganizeError::InvalidBox`: removing the media box, a rectangle that is not a number,
+/// negative margins, or a box smaller than a point), or when writing fails
+/// (`OrganizeError::Cos`).
 pub fn set_page_box(doc: &mut Document, pages: &[usize], which: PageBox, spec: BoxSpec) -> Result<(), OrganizeError> {
     let all = walk(doc)?;
     check(pages, all.len())?;

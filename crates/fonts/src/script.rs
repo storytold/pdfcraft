@@ -111,6 +111,12 @@ impl OutlinePen for Flatten {
 /// Return one glyph of the Japanese document face ([`crate::document_japanese_font`], Shippori
 /// Mincho from craft-fonts), bounded so hostile replacement text cannot allocate unbounded
 /// outline data. [`GlyphError::NoFont`] when the build has no Japanese face.
+///
+/// # Errors
+///
+/// [`GlyphError::NoFont`] when the build has no Japanese face, [`GlyphError::Missing`] when the
+/// face cannot be parsed, `ch` has no glyph, its advance width is unusable, or a point is not
+/// finite; [`GlyphError::TooComplex`] when the outline has more than 4096 points or 256 contours.
 pub fn japanese_glyph(ch: char) -> Result<GlyphOutline, GlyphError> {
     let Some(face) = crate::document_japanese_font() else { return Err(GlyphError::NoFont) };
     let Ok(font) = FontRef::new(face.bytes) else { return Err(GlyphError::Missing) };

@@ -206,6 +206,13 @@ fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) ->
 }
 
 /// Run `action` on one file. `progress(step, steps)` is called before each step.
+///
+/// # Errors
+///
+/// When `bytes` cannot be opened as a PDF (an `OpenError` message), the document turns out to be
+/// read-only (its reason is the message), a text-recognition, file-size, field-detection or
+/// JavaScript step fails (the message is prefixed with the step's label), the document goes missing
+/// between steps, or writing the result fails (an `EditError` message).
 pub fn run_on(action: &Action, name: &str, bytes: Arc<Vec<u8>>, mut progress: impl FnMut(usize, usize)) -> Result<FileResult, String> {
     let mut s = Session::new();
     let mut id = s.open(name, None, bytes, None).map_err(|e| e.to_string())?;

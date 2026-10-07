@@ -89,6 +89,11 @@ pub fn printers() -> Vec<Printer> {
 }
 
 /// Send a print-ready PDF to the spooler. Returns the spooler's message (the job id).
+///
+/// # Errors
+///
+/// Returns `PrintError::Spool` when the job file cannot be written, `lp` is not available, the
+/// spooler refuses the job, or this platform has no spooler yet.
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, PrintError> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {

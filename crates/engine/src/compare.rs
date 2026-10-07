@@ -46,6 +46,10 @@ impl crate::Document {
 
 impl Session {
     /// Compare files: the text differences from document `old` to document `new`.
+    ///
+    /// # Errors
+    ///
+    /// When `old` or `new` is not an open document (`EditError::NoDocument`).
     pub fn compare(&self, old: DocId, new: DocId) -> Result<Comparison, EditError> {
         let a = self.get(old).ok_or(EditError::NoDocument)?;
         let b = self.get(new).ok_or(EditError::NoDocument)?;
@@ -54,6 +58,11 @@ impl Session {
 
     /// Visual compare: regions where page n of `new` looks different from page n of `old`
     /// (rendered at `dpi`), as (page, user-space box in `new`).
+    ///
+    /// # Errors
+    ///
+    /// When `old` or `new` is not an open document (`EditError::NoDocument`). Pages that fail to
+    /// render are skipped, not reported.
     pub fn compare_visual(&self, old: DocId, new: DocId, dpi: f32) -> Result<Vec<(usize, [f64; 4])>, EditError> {
         let a = self.get(old).ok_or(EditError::NoDocument)?;
         let b = self.get(new).ok_or(EditError::NoDocument)?;
@@ -84,6 +93,12 @@ impl Session {
     }
 
     /// The compare report as a new PDF (not opened).
+    ///
+    /// # Errors
+    ///
+    /// When `old` or `new` is not an open document (`EditError::NoDocument`), the report text
+    /// cannot be laid out (`EditError::Create`), or writing the new PDF fails
+    /// (`EditError::Write`).
     pub fn compare_report(&self, old: DocId, new: DocId) -> Result<Arc<Vec<u8>>, EditError> {
         let c = self.compare(old, new)?;
         let name = |id| self.get(id).map(|d| d.name.clone()).unwrap_or_default();
@@ -93,6 +108,13 @@ impl Session {
     /// Mark the differences in `new` as comments: highlights over replaced and inserted text
     /// (blue, green) and a note where text was deleted (red), authored "Compare". One undoable
     /// step; returns how many comments were added.
+    ///
+    /// # Errors
+    ///
+    /// When `old` or `new` is not an open document (`EditError::NoDocument`), or adding the
+    /// comments fails: the document is read-only, its security settings refuse annotations
+    /// (`EditError::NotPermitted`), or the result cannot be written and re-opened (see
+    /// [`Session::apply`]).
     pub fn mark_differences(&mut self, old: DocId, new: DocId) -> Result<usize, EditError> {
         let c = self.compare(old, new)?;
         let mut edits = Vec::new();

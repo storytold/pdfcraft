@@ -475,6 +475,13 @@ pub fn list_added(doc: &Document) -> Vec<Added> {
 }
 
 /// Add an item to a page (0-based). Returns its index among the page's added items.
+///
+/// # Errors
+///
+/// Returns `Err` when `page` is out of range (`EditError::NoSuchPage`), when the item fails
+/// validation (empty text, an out-of-range font size, a box too small to show it, or an object
+/// that is not an image; `EditError::Invalid`), or when the page cannot be written
+/// (`EditError::Cos`).
 pub fn add_content(doc: &mut Document, page: usize, c: &Content) -> Result<usize, EditError> {
     write(doc, page, c, None)?;
     Ok(list_added(doc).iter().filter(|a| a.page == page).count() - 1)
@@ -489,6 +496,12 @@ fn find(doc: &Document, page: usize, index: usize) -> Result<Added, EditError> {
 }
 
 /// Replace item `index` of `page` (moved, resized, retyped or reformatted).
+///
+/// # Errors
+///
+/// Returns `Err` when `page` has no added item `index`, when the new item would change between
+/// text and image, or when the item fails validation (`EditError::Invalid`); also when `page` is
+/// out of range (`EditError::NoSuchPage`) or the page cannot be written (`EditError::Cos`).
 pub fn update_content(doc: &mut Document, page: usize, index: usize, c: &Content) -> Result<(), EditError> {
     let a = find(doc, page, index)?;
     if std::mem::discriminant(&a.content) != std::mem::discriminant(c) {
@@ -499,6 +512,11 @@ pub fn update_content(doc: &mut Document, page: usize, index: usize, c: &Content
 }
 
 /// Remove item `index` of `page`.
+///
+/// # Errors
+///
+/// Returns `Err` when `page` has no added item `index` (`EditError::Invalid`) or when the page's
+/// content list cannot be written (`EditError::Cos`).
 pub fn delete_content(doc: &mut Document, page: usize, index: usize) -> Result<(), EditError> {
     let a = find(doc, page, index)?;
     let p = page_list(doc).swap_remove(page);

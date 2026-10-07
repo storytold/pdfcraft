@@ -142,6 +142,12 @@ pub(crate) type Step = Result<Vec<u8>, Failure>;
 /// Image codecs, `Crypt` and unknown filters anywhere in the chain give
 /// [`FilterError::Unsupported`] (callers keep such data encoded). `max_output` bounds
 /// every intermediate buffer.
+///
+/// # Errors
+///
+/// Returns `FilterError::Unsupported` for an image codec, `Crypt` or an unknown filter anywhere in
+/// the chain, `FilterError::Corrupt` when the data is malformed, and `FilterError::LimitExceeded`
+/// when a decoded buffer would exceed `max_output`.
 pub fn decode(chain: &[(Filter, Params)], data: &[u8], max_output: usize) -> Result<Vec<u8>, FilterError> {
     run(chain, data, max_output, true).map(|(v, _)| v)
 }
@@ -149,6 +155,12 @@ pub fn decode(chain: &[(Filter, Params)], data: &[u8], max_output: usize) -> Res
 /// Like [`decode`], but on corrupt data returns what was decoded before the error and
 /// reports `partial = true` (the behaviour viewers expect). The remaining filters of the
 /// chain still run on the partial data. Limit and unsupported errors are still errors.
+///
+/// # Errors
+///
+/// Returns `FilterError::Unsupported` for an image codec, `Crypt` or an unknown filter anywhere in
+/// the chain, and `FilterError::LimitExceeded` when a decoded buffer would exceed `max_output`;
+/// corrupt data is not an error here.
 pub fn decode_tolerant(chain: &[(Filter, Params)], data: &[u8], max_output: usize) -> Result<(Vec<u8>, bool), FilterError> {
     run(chain, data, max_output, false)
 }
@@ -200,6 +212,11 @@ fn with_predictor(step: Step, params: &Params, name: &'static str) -> Step {
 /// Encodes `data` with `filter`. Supported: Flate (zlib, level 6), LZW, `ASCIIHex`,
 /// ASCII85, `RunLength`. For Flate and LZW, `params.predictor >= 2` applies the
 /// predictor first (TIFF 2, PNG 10–15; 15 chooses the per-row optimum).
+///
+/// # Errors
+///
+/// Returns `FilterError::Unsupported` when `filter` has no encoder (an image codec, `Crypt` or an
+/// unknown name) or when `params` describe an invalid predictor.
 pub fn encode(filter: &Filter, params: &Params, data: &[u8]) -> Result<Vec<u8>, FilterError> {
     match filter {
         Filter::Flate => Ok(flate::encode(&predictor::encode(params, data)?)),

@@ -685,6 +685,13 @@ pub struct SignOptions {
 const BR_MARK: [i64; 3] = [1_111_111_111, 2_222_222_222, 3_333_333_333];
 
 /// Sign `doc` with `id`; returns the signed file (an incremental update when possible).
+///
+/// # Errors
+///
+/// When `doc` is encrypted or has no catalog; the named field is missing, already signed or has
+/// no widget; `opts.page` does not exist; writing the update fails; locating the `ByteRange`
+/// placeholder fails or the ranges do not fit; or the CMS signature does not fit the reserved
+/// `Contents` bytes.
 pub fn sign(doc: &Document, id: &DigitalId, opts: &SignOptions) -> Result<Vec<u8>, SignError> {
     if doc.security().is_some() || doc.output_handler().is_some() {
         return Err(SignError::Unsupported("signing encrypted documents".into()));

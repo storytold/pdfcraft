@@ -100,6 +100,10 @@ impl Automation {
     }
 
     /// Confine every path the tools read or write to `root` (relative paths resolve inside it).
+    ///
+    /// # Errors
+    ///
+    /// Returns `std::io::Error` when `root` does not exist or cannot be canonicalized.
     pub fn with_root(mut self, root: impl Into<PathBuf>) -> std::io::Result<Self> {
         self.root = Some(root.into().canonicalize()?);
         Ok(self)
@@ -118,6 +122,12 @@ impl Automation {
     }
 
     /// Run the tool `name` with JSON `args` (an object; `null` means no arguments).
+    ///
+    /// # Errors
+    ///
+    /// Returns `ToolError::UnknownTool` when no tool answers to `name`, `ToolError::InvalidArgs`
+    /// when `args` does not match the tool's schema, and `ToolError::Failed` when the tool runs
+    /// and fails.
     pub fn call(&mut self, name: &str, args: &Value) -> Result<Vec<Content>> {
         let empty = json!({});
         let args = if args.is_null() { &empty } else { args };

@@ -200,6 +200,13 @@ fn destination(doc: &Document, page: usize) -> Result<Object> {
 
 /// Add a bookmark titled `title` that goes to `page` (0-based), as child `index` of
 /// `parent_path` (`[]` = top level; an index past the end appends). Returns its path.
+///
+/// # Errors
+///
+/// When `title` is blank (`OutlineError::EmptyTitle`), when `parent_path` names no bookmark
+/// (`OutlineError::NoSuchBookmark`), when `page` does not exist
+/// (`OutlineError::Organize(OrganizeError::NoSuchPage)`), or when writing the outline fails
+/// (`OutlineError::Cos`).
 pub fn add_bookmark(doc: &mut Document, parent_path: &[usize], index: usize, title: &str, page: usize) -> Result<Vec<usize>> {
     if title.trim().is_empty() {
         return Err(OutlineError::EmptyTitle);
@@ -225,6 +232,11 @@ pub fn add_bookmark(doc: &mut Document, parent_path: &[usize], index: usize, tit
 }
 
 /// Change a bookmark's title.
+///
+/// # Errors
+///
+/// When `title` is blank (`OutlineError::EmptyTitle`), when `path` names no bookmark
+/// (`OutlineError::NoSuchBookmark`), or when writing fails (`OutlineError::Cos`).
 pub fn rename_bookmark(doc: &mut Document, path: &[usize], title: &str) -> Result<()> {
     if title.trim().is_empty() {
         return Err(OutlineError::EmptyTitle);
@@ -234,6 +246,12 @@ pub fn rename_bookmark(doc: &mut Document, path: &[usize], title: &str) -> Resul
 }
 
 /// Point a bookmark at `page` (0-based), replacing its destination or `GoTo` action.
+///
+/// # Errors
+///
+/// When `path` names no bookmark (`OutlineError::NoSuchBookmark`), when `page` does not exist
+/// (`OutlineError::Organize(OrganizeError::NoSuchPage)`), or when writing fails
+/// (`OutlineError::Cos`).
 pub fn set_bookmark_page(doc: &mut Document, path: &[usize], page: usize) -> Result<()> {
     let dest = destination(doc, page)?;
     let (r, _) = resolve_path(doc, path)?;
@@ -243,6 +261,11 @@ pub fn set_bookmark_page(doc: &mut Document, path: &[usize], page: usize) -> Res
 
 /// Remove a bookmark and everything under it. The removed items are unlinked (a full save drops
 /// them; an incremental save leaves the old objects unreferenced).
+///
+/// # Errors
+///
+/// When `path` names no bookmark (`OutlineError::NoSuchBookmark`) or writing the outline fails
+/// (`OutlineError::Cos`).
 pub fn delete_bookmark(doc: &mut Document, path: &[usize]) -> Result<()> {
     let (r, parent) = resolve_path(doc, path)?;
     let mut kids = children_of(doc, parent, &mut HashSet::from([parent]));
@@ -253,6 +276,12 @@ pub fn delete_bookmark(doc: &mut Document, path: &[usize]) -> Result<()> {
 
 /// Move the bookmark at `from` to child `index` of `to_parent` (counted after removing it from
 /// its old place; past the end appends). Returns its new path.
+///
+/// # Errors
+///
+/// When `to_parent` is the bookmark itself or inside it (`OutlineError::IntoItself`), when
+/// `from` or `to_parent` names no bookmark (`OutlineError::NoSuchBookmark`), or when writing the
+/// outline fails (`OutlineError::Cos`).
 pub fn move_bookmark(doc: &mut Document, from: &[usize], to_parent: &[usize], index: usize) -> Result<Vec<usize>> {
     if to_parent.starts_with(from) {
         return Err(OutlineError::IntoItself);
@@ -278,6 +307,11 @@ pub fn move_bookmark(doc: &mut Document, from: &[usize], to_parent: &[usize], in
 }
 
 /// Expand or collapse a bookmark that has children.
+///
+/// # Errors
+///
+/// When `path` names no bookmark (`OutlineError::NoSuchBookmark`) or writing the outline fails
+/// (`OutlineError::Cos`).
 pub fn set_bookmark_open(doc: &mut Document, path: &[usize], open: bool) -> Result<()> {
     let (r, _) = resolve_path(doc, path)?;
     let count = doc.get(r).as_dict().and_then(|d| d.int(b"Count")).unwrap_or(0);

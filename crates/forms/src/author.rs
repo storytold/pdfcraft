@@ -320,6 +320,13 @@ fn widget_dict(page: ObjRef, rect: [f64; 4]) -> Dict {
 }
 
 /// Add a field on `page` (0-based) in `rect` (user space). Returns its full name.
+///
+/// # Errors
+///
+/// `FormError::Invalid` when `page` does not exist, the rectangle is degenerate, the name
+/// contains a period or is already taken, or a radio export value is `Off`;
+/// `FormError::NoForm` when the document has no catalog; `FormError::Cos` when the form,
+/// field or page cannot be written.
 pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewField, name: Option<&str>) -> Result<String, FormError> {
     let pages = page_refs(doc);
     let page_ref = *pages.get(page).ok_or_else(|| FormError::Invalid(format!("page {} does not exist", page + 1)))?;
@@ -470,6 +477,11 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
 }
 
 /// Regenerate every widget appearance of a field from its current value and settings.
+///
+/// # Errors
+///
+/// `FormError::NoSuchField` when `name` matches no field, `FormError::Cos` when a
+/// widget's appearance cannot be written.
 pub fn redraw_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
     let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
     for w in &f.widgets {
@@ -582,6 +594,12 @@ fn button_appearance(doc: &Document, w: &Widget) -> Stream {
 
 /// Give a push button (an image field) the picture `image` (an image `XObject` of `px` pixels):
 /// it becomes the button's icon (`/MK /I`) and its appearance.
+///
+/// # Errors
+///
+/// `FormError::NoSuchField` when `name` matches no field, `FormError::Invalid` when the
+/// field is not a push button or image field, `FormError::Cos` when a widget or the
+/// appearance cannot be written.
 pub fn set_button_icon(doc: &mut Document, name: &str, image: ObjRef, px: (u32, u32)) -> Result<(), FormError> {
     let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
     if f.kind != FieldKind::PushButton {
@@ -612,6 +630,15 @@ fn empty_box(doc: &Document, w: &Widget) -> Stream {
 }
 
 /// Change a field's properties (General and Options tabs) and redraw it.
+///
+/// # Errors
+///
+/// `FormError::NoSuchField` when `name` matches no field; `FormError::Invalid` when the
+/// field is locked, the new name is empty, has a period or is taken, a comb has no
+/// character limit, the alignment is not 0, 1 or 2, the option list is empty, the
+/// rectangle is degenerate, or format, validate and calculate scripts are set on a field
+/// that cannot have them; `FormError::Cos` when a dictionary cannot be written; also the
+/// errors of `set_field_actions` and `recalculate`.
 pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<String, FormError> {
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
@@ -871,6 +898,11 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
 }
 
 /// Delete a field: its widgets leave their pages and the field leaves the form.
+///
+/// # Errors
+///
+/// `FormError::NoSuchField` when `name` matches no field, `FormError::NoForm` when the
+/// document has no catalog, `FormError::Cos` when a page or the form cannot be updated.
 pub fn delete_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
@@ -922,6 +954,12 @@ const WIDGET_KEYS: [&[u8]; 12] = [b"Type", b"Subtype", b"Rect", b"P", b"AP", b"A
 /// gets a widget at the same place, belonging to the same field, so they share one value.
 /// A field that is its own widget is first split into a field and a widget kid. Returns how
 /// many widgets were added (pages that already have one are skipped).
+///
+/// # Errors
+///
+/// `FormError::NoSuchField` when `name` matches no field, `FormError::Invalid` when the
+/// field has no widget or a page in `pages` does not exist, `FormError::Cos` when a
+/// widget or page cannot be written.
 pub fn duplicate_field(doc: &mut Document, name: &str, pages: &[usize]) -> Result<usize, FormError> {
     let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
     let model = f.widgets.first().cloned().ok_or_else(|| FormError::Invalid(format!("{name} has no widget")))?;

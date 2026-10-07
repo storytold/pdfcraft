@@ -815,6 +815,12 @@ pub fn format_value(f: &Format, value: &str) -> String {
 
 /// The Keystroke event on commit: does the value fit the format? Returns the value to store
 /// (numbers are normalised), or Acrobat's message.
+///
+/// # Errors
+///
+/// `Err` with the message to show when the value does not fit the format: a number that
+/// does not parse, a date or time that does not match, or a masked value that does not
+/// fit its mask.
 pub fn keystroke(f: &Format, field: &str, value: &str) -> Result<String, String> {
     let bad = || format!("The value entered does not match the format of the field [ {field} ]");
     if value.trim().is_empty() {
@@ -840,6 +846,10 @@ pub fn keystroke(f: &Format, field: &str, value: &str) -> Result<String, String>
 }
 
 /// The Validate event: `Err` with Acrobat's message when the value is out of range.
+///
+/// # Errors
+///
+/// `Err` with the message to show when `value` parses as a number outside the range.
 pub fn validate(v: &Validate, value: &str) -> Result<(), String> {
     let Validate::Range { min, max } = v else { return Ok(()) };
     if value.trim().is_empty() {

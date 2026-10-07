@@ -405,6 +405,12 @@ fn strip_actions(doc: &Document, d: &mut Dict) -> bool {
 }
 
 /// Make `doc` conform to `level` as far as possible, then re-check it.
+///
+/// # Errors
+///
+/// When the document has no catalog (`CosError::Syntax`, "no catalog"), or an object it rewrites
+/// is missing or is not a dictionary (`CosError::NotADictionary`: the catalog, `/AcroForm`, a
+/// page or its `/Annots`).
 pub fn convert(doc: &mut Document, level: Level) -> Result<Report, printcraft_cos::CosError> {
     let mut fixed = Vec::new();
     if doc.trailer().get(b"Encrypt").is_some() {

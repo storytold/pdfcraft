@@ -56,6 +56,10 @@ fn xobjects(doc: &Document, page: &Dict) -> Dict {
 }
 
 /// The images page `page` (0-based) draws, in drawing order.
+///
+/// # Errors
+///
+/// Returns `Err` when `page` is out of range (`EditError::NoSuchPage`).
 pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditError> {
     let p = page_of(doc, page)?;
     let xo = xobjects(doc, &p.dict);
@@ -134,6 +138,12 @@ pub fn turn_about_centre(rect: [f64; 4], quarters: i32, flip_h: bool, flip_v: bo
 }
 
 /// Change image `index` (from [`page_images`]) on `page`.
+///
+/// # Errors
+///
+/// Returns `Err` when `page` does not exist or has no image `index`
+/// (`EditError::NoSuchPage`, `EditError::Invalid`), when the image has no area to transform
+/// (`EditError::Invalid`), or when the page's content cannot be rewritten (`EditError::Cos`).
 pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &ImageChange) -> Result<(), EditError> {
     let images = page_images(doc, page)?;
     let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;

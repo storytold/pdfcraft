@@ -623,6 +623,11 @@ pub struct Endpoint {
 ///
 /// Protocol: newline-delimited JSON-RPC 2.0. The first request on a connection must be
 /// `{"method": "auth", "params": {"token": …}}`; anything else closes the connection.
+///
+/// # Errors
+///
+/// Returns `std::io::Error` when binding the loopback port, reading its address, generating the
+/// token or spawning the listener thread fails; per-connection failures stay on those threads.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
     use std::io::{BufRead, BufReader, Write};

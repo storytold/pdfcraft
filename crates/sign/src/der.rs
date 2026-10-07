@@ -50,6 +50,11 @@ pub struct Tlv<'a> {
 
 impl<'a> Tlv<'a> {
     /// Parse one element at the start of `input`; returns it and the rest.
+    ///
+    /// # Errors
+    ///
+    /// When `input` is truncated, the tag or length form is unsupported (multi-byte tags,
+    /// indefinite or over-four-byte lengths), or the declared length runs past the end.
     pub fn parse(input: &'a [u8]) -> Result<(Tlv<'a>, &'a [u8]), SignError> {
         let (&tag, rest) = input.split_first().ok_or_else(|| bad("truncated DER"))?;
         if tag & 0x1F == 0x1F {
@@ -74,6 +79,10 @@ impl<'a> Tlv<'a> {
     }
 
     /// Parse `input` as exactly one element.
+    ///
+    /// # Errors
+    ///
+    /// When parsing fails, or `input` holds trailing bytes after the element.
     pub fn parse_all(input: &'a [u8]) -> Result<Tlv<'a>, SignError> {
         let (t, rest) = Tlv::parse(input)?;
         if !rest.is_empty() {
@@ -83,6 +92,11 @@ impl<'a> Tlv<'a> {
     }
 
     /// The children of a constructed element.
+    ///
+    /// # Errors
+    ///
+    /// When a child is malformed: truncated, using an unsupported tag or length form, or
+    /// running past the end of the value.
     pub fn children(&self) -> Result<Vec<Tlv<'a>>, SignError> {
         let mut out = Vec::new();
         let mut rest = self.value;
@@ -95,16 +109,30 @@ impl<'a> Tlv<'a> {
     }
 
     /// Check the tag, for a clear error.
+    ///
+    /// # Errors
+    ///
+    /// When the element's tag differs from the expected `tag`; the message names `what`, the
+    /// expected tag and the one found.
     pub fn expect(self, tag: u8, what: &str) -> Result<Tlv<'a>, SignError> {
         if self.tag == tag { Ok(self) } else { Err(bad(&format!("{what}: expected tag {tag:#04x}, found {:#04x}", self.tag))) }
     }
 
     /// The element inside an EXPLICIT tag.
+    ///
+    /// # Errors
+    ///
+    /// When the value is not exactly one well-formed element.
     pub fn inner(&self) -> Result<Tlv<'a>, SignError> {
         Tlv::parse_all(self.value)
     }
 
     /// An OID in dotted form.
+    ///
+    /// # Errors
+    ///
+    /// When the element is not an OID, or its contents end in a truncated arc or hold an arc
+    /// too large for `u64`.
     pub fn oid(&self) -> Result<String, SignError> {
         if self.tag != tag::OID {
             return Err(bad("expected an OID"));
@@ -113,6 +141,10 @@ impl<'a> Tlv<'a> {
     }
 
     /// A non-negative INTEGER that fits in a u64.
+    ///
+    /// # Errors
+    ///
+    /// When the element is not an `INTEGER`, or is empty, negative, or wider than 9 bytes.
     pub fn u64(&self) -> Result<u64, SignError> {
         if self.tag != tag::INTEGER || self.value.is_empty() || self.value.len() > 9 || self.value[0] & 0x80 != 0 {
             return Err(bad("expected a small non-negative INTEGER"));
@@ -130,6 +162,11 @@ impl<'a> Tlv<'a> {
     }
 
     /// A BIT STRING's bytes (no unused bits allowed).
+    ///
+    /// # Errors
+    ///
+    /// When the element is not a whole-byte `BIT STRING`: a different tag, or a non-zero
+    /// unused-bits count.
     pub fn bits(&self) -> Result<&'a [u8], SignError> {
         match self.value {
             [0, rest @ ..] if self.tag == tag::BIT_STRING => Ok(rest),
@@ -152,6 +189,11 @@ impl<'a> Tlv<'a> {
     }
 
     /// `UTCTime` / `GeneralizedTime` as (year, month, day, hour, minute, second) in UTC.
+    ///
+    /// # Errors
+    ///
+    /// When the value is not UTF-8, lacks the trailing `Z`, is not a `UTCTime` or
+    /// `GeneralizedTime` tag, or holds a field that does not parse as a number.
     pub fn time(&self) -> Result<Time, SignError> {
         let s = std::str::from_utf8(self.value).map_err(|_| bad("time"))?;
         let s = s.strip_suffix('Z').ok_or_else(|| bad("times must be in UTC (Z)"))?;

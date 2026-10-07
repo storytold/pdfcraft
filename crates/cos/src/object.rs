@@ -224,12 +224,22 @@ impl Stream {
     /// Decoded data, tolerating truncated or corrupt encodings the way viewers do (the data
     /// decoded before the damage is returned). Streams with image codecs fail with
     /// `CosError::Filter` (keep them encoded). Use `decoded_strict` to detect damage.
+    ///
+    /// # Errors
+    ///
+    /// `CosError::Filter` when a filter cannot be undone or the decoded data would exceed
+    /// [`MAX_DECODED`].
     pub fn decoded(&self) -> Result<Vec<u8>, CosError> {
         self.decoded_within(MAX_DECODED)
     }
 
     /// Like [`Stream::decoded`], for a stream whose decoded size has a tighter bound than
     /// [`MAX_DECODED`]: decoding past `max` bytes is an error.
+    ///
+    /// # Errors
+    ///
+    /// `CosError::Filter` when a filter cannot be undone or the decoded data would exceed
+    /// `max`.
     pub fn decoded_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
         let chain = self.filters();
         if chain.is_empty() {
@@ -239,6 +249,11 @@ impl Stream {
     }
 
     /// Decoded data; any corruption is an error.
+    ///
+    /// # Errors
+    ///
+    /// `CosError::Filter` when a filter cannot be undone, the data is truncated or
+    /// corrupt, or the decoded data would exceed [`MAX_DECODED`].
     pub fn decoded_strict(&self) -> Result<Vec<u8>, CosError> {
         let chain = self.filters();
         if chain.is_empty() {

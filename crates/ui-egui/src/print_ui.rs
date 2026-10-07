@@ -93,6 +93,11 @@ impl Default for PrintDraft {
 
 impl PrintDraft {
     /// The engine settings for this draft (page count and labels from the document).
+    ///
+    /// # Errors
+    ///
+    /// Returns the `PrintError` message when the range names a page outside `1..=count` or a
+    /// token that is no number or label, or when the subset leaves no pages (`PrintError::NoPages`).
     pub fn settings(&self, count: usize, labels: &[String]) -> Result<print::Settings, String> {
         let range = match self.which {
             Which::All => None,

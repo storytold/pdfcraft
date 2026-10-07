@@ -159,6 +159,10 @@ pub fn page_label_ranges(doc: &Document) -> Vec<LabelRange> {
 }
 
 /// Every page's label, as a viewer shows it.
+///
+/// # Errors
+///
+/// When the document has no page tree (`OrganizeError::NoPageTree`).
 pub fn page_labels(doc: &Document) -> Result<Vec<String>, OrganizeError> {
     let n = page_count(doc)?;
     let ranges = page_label_ranges(doc);
@@ -172,6 +176,11 @@ pub fn page_labels(doc: &Document) -> Result<Vec<String>, OrganizeError> {
 }
 
 /// Replace all label ranges (an empty list removes `/PageLabels`).
+///
+/// # Errors
+///
+/// When the document has no page tree (`OrganizeError::NoPageTree`) or writing the ranges fails
+/// (`OrganizeError::Cos`).
 pub fn set_page_label_ranges(doc: &mut Document, ranges: &[LabelRange]) -> Result<(), OrganizeError> {
     pages_root(doc)?;
     let root = doc.root().ok_or(OrganizeError::NoPageTree)?;
@@ -205,6 +214,12 @@ pub fn set_page_label_ranges(doc: &mut Document, ranges: &[LabelRange]) -> Resul
 
 /// Acrobat's "Number pages": label pages `from..=to` (0-based) with `style`, `prefix` and
 /// starting number `first`; pages after `to` keep the labels they had.
+///
+/// # Errors
+///
+/// When `to` is past the last page or `from` is past `to` (`OrganizeError::NoSuchPage`), when
+/// the document has no page tree (`OrganizeError::NoPageTree`), or when writing the ranges fails
+/// (`OrganizeError::Cos`).
 pub fn number_pages(doc: &mut Document, from: usize, to: usize, style: LabelStyle, prefix: &str, first: u32) -> Result<(), OrganizeError> {
     let n = page_count(doc)?;
     if to >= n {

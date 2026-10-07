@@ -98,6 +98,11 @@ pub struct Ocr {
 }
 
 impl Ocr {
+    /// Load a recogniser from `models`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `OcrError::Load` when a model file can't be read or the engine rejects it.
     pub fn load(models: &Models) -> Result<Ocr, OcrError> {
         let load = |p: &Path| rten::Model::load_file(p).map_err(|e| OcrError::Load(p.display().to_string(), e.to_string()));
         let params = ocrs::OcrEngineParams {
@@ -110,11 +115,21 @@ impl Ocr {
     }
 
     /// Load the models found by [`Models::find`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `OcrError::NoModels` when no models are installed, or `OcrError::Load` when loading
+    /// them fails.
     pub fn find() -> Result<Ocr, OcrError> {
         Self::load(&Models::find().ok_or(OcrError::NoModels)?)
     }
 
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
+    ///
+    /// # Errors
+    ///
+    /// Returns `OcrError::EmptyImage` when `width` or `height` is 0 or `pixels` is empty, and
+    /// `OcrError::Recognize` when `pixels` doesn't hold `width` × `height` pixels or the engine fails.
     pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
         if width == 0 || height == 0 || pixels.is_empty() {
             return Err(OcrError::EmptyImage);

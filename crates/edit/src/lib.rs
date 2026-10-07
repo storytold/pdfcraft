@@ -355,6 +355,11 @@ fn place_tagged(doc: &mut Document, page: &printcraft_model::Page, tag: &str, co
 /// Draw `content` on top of a page (0-based) as permanent page content, with standard Helvetica
 /// available as `/PCHelv`. The stream is tagged `tag` (not a mark kind, so Remove never takes
 /// it away); the original content is wrapped in q/Q first. Used for applied redaction boxes.
+///
+/// # Errors
+///
+/// Returns `Err` when `page` is out of range (`EditError::NoSuchPage`) or when the page's
+/// resources or content list cannot be written (`EditError::Cos`).
 pub fn stamp(doc: &mut Document, page: usize, tag: &str, content: Vec<u8>) -> Result<(), EditError> {
     let all = page_list(doc);
     check(&[page], all.len())?;
@@ -387,6 +392,12 @@ fn text_op(x: f64, y: f64, text: &str) -> Vec<u8> {
 
 /// Add a header and footer to `pages` (0-based). With `replace`, existing headers and footers on
 /// those pages are removed first (Acrobat's Replace Existing).
+///
+/// # Errors
+///
+/// Returns `Err` when a page index in `pages` is out of range (`EditError::NoSuchPage`), when
+/// every text slot is blank or the font size or margins are invalid (`EditError::Invalid`), or
+/// when a page's marks or resources cannot be written (`EditError::Cos`).
 pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replace: bool, cx: &Context) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
@@ -448,6 +459,13 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
 }
 
 /// Add a text watermark to `pages`.
+///
+/// # Errors
+///
+/// Returns `Err` when a page index in `pages` is out of range (`EditError::NoSuchPage`), when
+/// there is neither text nor a picture source or the opacity, rotation or font size is invalid
+/// (`EditError::Invalid`), or when a page's marks or resources cannot be written
+/// (`EditError::Cos`).
 pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replace: bool) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
@@ -513,6 +531,11 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
 }
 
 /// Add a solid-colour background behind the content of `pages`.
+///
+/// # Errors
+///
+/// Returns `Err` when a page index in `pages` is out of range (`EditError::NoSuchPage`) or when
+/// the existing marks or the page's resources and content cannot be written (`EditError::Cos`).
 pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, replace: bool) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
@@ -546,6 +569,11 @@ pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, repl
 
 /// Remove marks of `kind` from `pages`; returns how many were removed. When no mark is left on
 /// top of a page, the q/Q wrapper goes too, restoring the original content list.
+///
+/// # Errors
+///
+/// Returns `Err` when a page index in `pages` is out of range (`EditError::NoSuchPage`) or when
+/// the page's content list cannot be written (`EditError::Cos`).
 pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Result<usize, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;

@@ -75,6 +75,11 @@ impl PrintCraftApp {
     /// View ▸ Zoom ▸ Fit Visible on the current page: find where the page has ink (a quick
     /// low-resolution render) and zoom so that spans the window's width. A blank page fits the
     /// width.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when `index` has no open document or the low-resolution probe render
+    /// fails with the renderer's message.
     pub fn fit_visible(&mut self, index: usize) -> Result<(), String> {
         let view = &self.views[index];
         let page = view.current;
@@ -110,6 +115,12 @@ impl PrintCraftApp {
 
     /// Render `view_rect` (page view points) of `page` at the current zoom and copy it to the
     /// clipboard (and keep it in `last_snapshot`).
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when `index` has no open document, the area covers more than
+    /// `64_000_000` pixels at this zoom, the render fails, or the system clipboard refuses the
+    /// image.
     pub fn snapshot(&mut self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32), String> {
         let view = &self.views[index];
         let doc = self.session.get(view.id).ok_or("no document")?;

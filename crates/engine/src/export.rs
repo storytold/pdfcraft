@@ -31,6 +31,11 @@ impl Document {
 
 /// Export all images: the images `pages` (0-based) use, each once, skipping those under
 /// `min_side` pixels on their shorter side. JPEGs come out unchanged, other images as PNG.
+///
+/// # Errors
+///
+/// When `src`'s bytes cannot be opened as a PDF (a `CosError` message): they are not a PDF, they
+/// need a password `src` does not carry, or the structure cannot be read.
 pub fn extract_images(src: &ExportSource, pages: &[usize], min_side: u32) -> Result<printcraft_create::ImageExport, String> {
     let doc = printcraft_cos::Document::open_with_password(src.bytes.clone(), src.config.password.as_deref()).map_err(|e| e.to_string())?;
     Ok(printcraft_create::extract_images(&doc, pages, min_side))
@@ -57,6 +62,11 @@ impl Exporter {
     }
 
     /// Page `page` (0-based) as a PNG at `dpi` (capped by the renderer's size limits).
+    ///
+    /// # Errors
+    ///
+    /// When `page` is out of range, the renderer reports an error for the page, or `encode_png`
+    /// fails (zero dimensions, or `rgba` not `width * height * 4` bytes long).
     pub fn png(&mut self, page: usize, dpi: f64) -> Result<Vec<u8>, String> {
         self.check(page)?;
         let r = self.renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
@@ -67,6 +77,13 @@ impl Exporter {
     }
 
     /// Page `page` as an image file of `format`.
+    ///
+    /// # Errors
+    ///
+    /// When `page` is out of range, the renderer reports an error for the page, or the chosen
+    /// encoder rejects the image: zero dimensions (PNG, JPEG and TIFF), a `premultiplied` buffer
+    /// that is not `width * height * 4` bytes long (PNG), or a `width` or `height` above 65535
+    /// (JPEG).
     pub fn image(&mut self, page: usize, dpi: f64, format: ImageFormat) -> Result<Vec<u8>, String> {
         self.check(page)?;
         let r = self.renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
@@ -81,6 +98,11 @@ impl Exporter {
     }
 
     /// The reading-order text of a page.
+    ///
+    /// # Errors
+    ///
+    /// When `page` is out of range, the renderer reports an error for the page, or the page has no
+    /// text layer.
     pub fn text(&mut self, page: usize) -> Result<String, String> {
         self.check(page)?;
         let r = self.renderer.render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
@@ -91,6 +113,11 @@ impl Exporter {
     }
 
     /// The text of several pages, separated by form feeds (as `pdftotext` does).
+    ///
+    /// # Errors
+    ///
+    /// When any page in `pages` fails as [`Exporter::text`] would: it is out of range, fails to
+    /// render, or has no text layer. The first failing page stops the extraction.
     pub fn text_of(&mut self, pages: &[usize]) -> Result<String, String> {
         let mut out = String::new();
         for (k, p) in pages.iter().enumerate() {
@@ -105,6 +132,11 @@ impl Exporter {
 }
 
 /// Premultiplied RGBA → PNG (straight alpha).
+///
+/// # Errors
+///
+/// When `width` or `height` is zero, `premultiplied` is not `width * height * 4` bytes long, or
+/// writing the header or pixel data fails.
 pub fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>, String> {
     let mut rgba = premultiplied.to_vec();
     for px in rgba.as_chunks_mut::<4>().0 {
@@ -170,6 +202,11 @@ fn over_white(premultiplied: &[u8]) -> Vec<u8> {
 }
 
 /// Premultiplied RGBA → baseline JPEG (pages are opaque: transparency becomes white paper).
+///
+/// # Errors
+///
+/// When `width` or `height` is zero or above 65535 (the JPEG limit), or writing the compressed
+/// data fails.
 pub fn encode_jpeg(width: u32, height: u32, premultiplied: &[u8], quality: u8) -> Result<Vec<u8>, String> {
     use image::ImageEncoder;
     let rgb = over_white(premultiplied);
@@ -181,6 +218,10 @@ pub fn encode_jpeg(width: u32, height: u32, premultiplied: &[u8], quality: u8) -
 }
 
 /// Premultiplied RGBA → TIFF (RGB, LZW-compressed by the encoder's default).
+///
+/// # Errors
+///
+/// When `width` or `height` is zero, or the TIFF encoder cannot write the image data.
 pub fn encode_tiff(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>, String> {
     use image::ImageEncoder;
     let rgb = over_white(premultiplied);

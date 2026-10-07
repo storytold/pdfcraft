@@ -117,6 +117,12 @@ pub struct Report {
 }
 
 /// Optimize `doc` in place.
+///
+/// # Errors
+///
+/// When the document has no page tree (`OptimizeError::NoPages`), or an object it rewrites is
+/// missing or is not a dictionary (`OptimizeError::Cos`: a page, the catalog, `ViewerPreferences`
+/// or a `/Names` node).
 pub fn optimize(doc: &mut Document, settings: &Settings) -> Result<Report, OptimizeError> {
     let mut report = Report::default();
     let pages = printcraft_annot::page_refs(doc).map_err(|_| OptimizeError::NoPages)?;

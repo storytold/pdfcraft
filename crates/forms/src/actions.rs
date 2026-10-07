@@ -143,6 +143,11 @@ fn read(doc: &Document, o: &Object, pages: &[printcraft_cos::ObjRef]) -> Option<
 }
 
 /// The actions of field `name` (its first widget), by trigger, in the tab's order.
+///
+/// # Errors
+///
+/// `FormError::NoSuchField` when `name` matches no field; an action that cannot be read
+/// is skipped rather than reported.
 pub fn field_actions(doc: &Document, name: &str) -> Result<Vec<(Trigger, FieldAction)>, FormError> {
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
@@ -213,6 +218,12 @@ fn write(doc: &mut Document, a: &FieldAction, pages: &[printcraft_cos::ObjRef]) 
 
 /// Replace field `name`'s actions (on every widget) with `actions`; triggers not listed lose
 /// theirs. `Other` actions are left as they are.
+///
+/// # Errors
+///
+/// `FormError::NoSuchField` when `name` matches no field, `FormError::Invalid` when a
+/// `GoTo` action names a page the document does not have, `FormError::Cos` when a widget
+/// dictionary cannot be written.
 pub fn set_field_actions(doc: &mut Document, name: &str, actions: &[(Trigger, FieldAction)]) -> Result<(), FormError> {
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();

@@ -94,10 +94,19 @@ fn walk(doc: &Document) -> Result<Vec<(ObjRef, Dict)>, OrganizeError> {
 }
 
 /// Leaf pages in document order.
+///
+/// # Errors
+///
+/// When the document has no page tree (`OrganizeError::NoPageTree`).
 pub fn pages(doc: &Document) -> Result<Vec<PageRef>, OrganizeError> {
     Ok(walk(doc)?.into_iter().map(|(obj, _)| PageRef { obj }).collect())
 }
 
+/// The number of leaf pages in document order.
+///
+/// # Errors
+///
+/// When the document has no page tree (`OrganizeError::NoPageTree`).
 pub fn page_count(doc: &Document) -> Result<usize, OrganizeError> {
     Ok(walk(doc)?.len())
 }
@@ -138,6 +147,12 @@ fn check(indices: &[usize], n: usize) -> Result<(), OrganizeError> {
 }
 
 /// Rotate pages by a multiple of 90° (positive = clockwise), adjusting `/Rotate` (§7.7.3.3).
+///
+/// # Errors
+///
+/// When `indices` names a page that does not exist (`OrganizeError::NoSuchPage`), when the
+/// document has no page tree (`OrganizeError::NoPageTree`), or when writing `/Rotate` fails
+/// (`OrganizeError::Cos`).
 pub fn rotate_pages(doc: &mut Document, indices: &[usize], degrees: i64) -> Result<(), OrganizeError> {
     let all = walk(doc)?;
     check(indices, all.len())?;
@@ -152,6 +167,12 @@ pub fn rotate_pages(doc: &mut Document, indices: &[usize], degrees: i64) -> Resu
 }
 
 /// Delete pages. Refuses to delete every page.
+///
+/// # Errors
+///
+/// When `indices` names a page that does not exist (`OrganizeError::NoSuchPage`), when it would
+/// delete every page (`OrganizeError::WouldRemoveAllPages`), when the document has no page tree
+/// (`OrganizeError::NoPageTree`), or when writing the document fails (`OrganizeError::Cos`).
 pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), OrganizeError> {
     let all = walk(doc)?;
     check(indices, all.len())?;
@@ -256,6 +277,12 @@ fn drop_widgets(doc: &mut Document, mut widgets: Vec<ObjRef>) -> Result<(), Orga
 
 /// Move the pages at `indices` (kept in their relative order) so they start at position `to`
 /// in the resulting document.
+///
+/// # Errors
+///
+/// When `indices` names a page that does not exist (`OrganizeError::NoSuchPage`), when the
+/// document has no page tree (`OrganizeError::NoPageTree`), or when rebuilding the page tree
+/// fails (`OrganizeError::Cos`).
 pub fn move_pages(doc: &mut Document, indices: &[usize], to: usize) -> Result<(), OrganizeError> {
     let all = walk(doc)?;
     check(indices, all.len())?;
@@ -271,6 +298,12 @@ pub fn move_pages(doc: &mut Document, indices: &[usize], to: usize) -> Result<()
 
 /// Duplicate pages: copies of `indices` (in order) are inserted after the last of them, sharing
 /// fonts and images with the originals.
+///
+/// # Errors
+///
+/// When `indices` names a page that does not exist (`OrganizeError::NoSuchPage`), when the
+/// document has no page tree (`OrganizeError::NoPageTree`), or when copying the pages fails
+/// (`OrganizeError::Cos`).
 pub fn duplicate_pages(doc: &mut Document, indices: &[usize]) -> Result<(), OrganizeError> {
     let n = page_count(doc)?;
     check(indices, n)?;
@@ -285,6 +318,13 @@ pub fn duplicate_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Orga
 /// Replace Pages: the content of `targets` (in order) is replaced by that of `src_pages` of
 /// `src`. As in Acrobat, only what the page shows changes (contents, resources and page boxes);
 /// the original pages' links, comments, form widgets and the bookmarks pointing at them stay.
+///
+/// # Errors
+///
+/// When `targets` or `src_pages` names a page that does not exist
+/// (`OrganizeError::NoSuchPage`), when the lists differ in length or `targets` is empty
+/// (`OrganizeError::Invalid`), when either document has no page tree
+/// (`OrganizeError::NoPageTree`), or when copying the pages fails (`OrganizeError::Cos`).
 pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_pages: &[usize]) -> Result<(), OrganizeError> {
     const SHOWN: [&[u8]; 8] = [b"Contents", b"Resources", b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox", b"Rotate"];
 
@@ -317,6 +357,11 @@ pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_
 }
 
 /// Insert a blank page of `width × height` points at position `at` (0 = before the first page).
+///
+/// # Errors
+///
+/// When the document has no page tree (`OrganizeError::NoPageTree`) or rebuilding the page tree
+/// fails (`OrganizeError::Cos`).
 pub fn insert_blank_page(doc: &mut Document, at: usize, width: f64, height: f64) -> Result<ObjRef, OrganizeError> {
     let mut all = walk(doc)?;
     let root = pages_root(doc)?;
@@ -346,6 +391,10 @@ pub fn info(doc: &Document, key: &str) -> Option<String> {
 ///
 /// Note: documents with XMP metadata also carry these values in the XMP packet; synchronising
 /// XMP arrives with the `model` crate (M2) — viewers that prefer XMP may still show old values.
+///
+/// # Errors
+///
+/// When writing the `/Info` dictionary fails (`OrganizeError::Cos`).
 pub fn set_info(doc: &mut Document, key: &str, value: &str) -> Result<(), OrganizeError> {
     let value = value.trim();
     let entry = (!value.is_empty()).then(|| Object::String(PdfString::text(value)));

@@ -103,6 +103,11 @@ pub enum Scheme {
 }
 
 /// A signature `AlgorithmIdentifier`: the scheme and, when the identifier names one, the digest.
+///
+/// # Errors
+///
+/// When the identifier is malformed (no OID, or children that do not parse), or names an
+/// unsupported signature algorithm.
 pub fn signature_algorithm(alg: &Tlv<'_>) -> Result<(Scheme, Option<DigestAlg>), SignError> {
     let parts = alg.children()?;
     let o = parts.first().ok_or_else(|| SignError::Malformed("empty algorithm".into()))?.oid()?;
@@ -143,6 +148,12 @@ pub enum PublicKey {
 }
 
 impl PublicKey {
+    /// Parse a `SubjectPublicKeyInfo` element into a public key.
+    ///
+    /// # Errors
+    ///
+    /// When the structure is malformed (not an algorithm plus a `BIT STRING`, or key bytes that
+    /// do not parse), the algorithm is unsupported, or the curve is not `P-256` or `P-384`.
     pub fn from_spki(spki: &Tlv<'_>) -> Result<PublicKey, SignError> {
         let parts = spki.children()?;
         let [alg, key] = parts.as_slice() else { return Err(SignError::Malformed("SubjectPublicKeyInfo".into())) };
@@ -188,6 +199,12 @@ impl PublicKey {
     }
 
     /// Check `sig` over a message whose digest (with `alg`) is `digest`.
+    ///
+    /// # Errors
+    ///
+    /// When the key itself is malformed: an RSA modulus or exponent the `rsa` crate rejects,
+    /// or a point that is not on the curve. A key/scheme mismatch or a bad signature is
+    /// `Ok(false)`.
     pub fn verify(&self, scheme: Scheme, alg: DigestAlg, digest: &[u8], sig: &[u8]) -> Result<bool, SignError> {
         match (self, scheme) {
             (PublicKey::Rsa { n, e }, Scheme::RsaPkcs1 | Scheme::RsaPss) => {
@@ -237,6 +254,11 @@ enum Inner {
 /// A private key `PrintCraft` can't read, only ask to sign (OS key stores, tokens).
 pub trait ExternalKey: Send + Sync {
     /// Sign `msg`, hashing it with `alg` (PKCS #1 v1.5 for RSA, DER-encoded ECDSA).
+    ///
+    /// # Errors
+    ///
+    /// When the external signer fails — for example the macOS Keychain refuses or cannot use
+    /// the key; the message names the cause.
     fn sign(&self, alg: DigestAlg, msg: &[u8]) -> Result<Vec<u8>, SignError>;
 }
 
@@ -268,6 +290,11 @@ impl PrivateKey {
     }
 
     /// From a PKCS#8 `PrivateKeyInfo`.
+    ///
+    /// # Errors
+    ///
+    /// When the `PrivateKeyInfo` is malformed, the key material does not parse (an invalid RSA
+    /// key or curve point), or the algorithm or curve is unsupported.
     pub fn from_pkcs8(info: &[u8]) -> Result<PrivateKey, SignError> {
         let t = Tlv::parse_all(info)?.children()?;
         let [_version, alg, key, ..] = t.as_slice() else { return Err(SignError::Malformed("PrivateKeyInfo".into())) };
@@ -323,6 +350,11 @@ impl PrivateKey {
     }
 
     /// A new RSA key (Acrobat's default for a self-signed digital ID is 2048-bit RSA).
+    ///
+    /// # Errors
+    ///
+    /// When `bits` is not 2048, 3072 or 4096, or key generation, encoding, or re-parsing the
+    /// result fails.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn generate_rsa(bits: usize) -> Result<PrivateKey, SignError> {
         use aws_lc_rs::encoding::AsDer;
@@ -345,6 +377,10 @@ impl PrivateKey {
     }
 
     /// A new P-256 key.
+    ///
+    /// # Errors
+    ///
+    /// When no randomness is available, or the generated key does not parse back as PKCS#8.
     pub fn generate_p256() -> Result<PrivateKey, SignError> {
         loop {
             let mut d = [0u8; 32];
@@ -394,6 +430,11 @@ impl PrivateKey {
     }
 
     /// Sign `msg` (hashed with `alg`). New signatures never use SHA-1.
+    ///
+    /// # Errors
+    ///
+    /// When `alg` is SHA-1, when signing with RSA in the browser, or when the signer fails:
+    /// the platform crypto, or an external key returning its own error.
     pub fn sign(&self, alg: DigestAlg, msg: &[u8]) -> Result<Vec<u8>, SignError> {
         if alg == DigestAlg::Sha1 {
             return Err(SignError::Unsupported("SHA-1 for new signatures".into()));

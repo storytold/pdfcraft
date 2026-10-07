@@ -243,6 +243,11 @@ fn check_figure(doc: &Document, obj: ObjRef) -> Result<Dict, AltError> {
 }
 
 /// Set (or, with `None` or blank text, remove) a figure's alternate text.
+///
+/// # Errors
+///
+/// When the document has no tag structure (`AltError::Untagged`), `obj` is not a figure
+/// (`AltError::NotAFigure`), or `obj`'s dictionary cannot be updated (`AltError::Cos`).
 pub fn set_alt(doc: &mut Document, obj: ObjRef, alt: Option<&str>) -> Result<(), AltError> {
     check_figure(doc, obj)?;
     let alt = alt.map(str::trim).filter(|a| !a.is_empty());
@@ -257,6 +262,12 @@ pub fn set_alt(doc: &mut Document, obj: ObjRef, alt: Option<&str>) -> Result<(),
 
 /// Decorative figure: its marked content on the page becomes an artifact, and the element
 /// leaves the structure tree (and the parent tree).
+///
+/// # Errors
+///
+/// When the document has no tag structure (`AltError::Untagged`), `obj` is not a figure
+/// (`AltError::NotAFigure`), or the page, the parent element or the parent tree cannot be
+/// updated (`AltError::Cos`).
 pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> {
     let d = check_figure(doc, obj)?;
     let ids: HashSet<i64> = mcids(&d).into_iter().collect();

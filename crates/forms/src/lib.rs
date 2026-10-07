@@ -474,6 +474,11 @@ fn rank_tabs(doc: &Document, pages: &[ObjRef], annot_index: &std::collections::H
 }
 
 /// Set the tab order of pages (0-based).
+///
+/// # Errors
+///
+/// `FormError::Invalid` when a page index does not exist; `FormError::Cos` when a page
+/// dictionary is missing, is not a dictionary, or cannot be written.
 pub fn set_tab_order(doc: &mut Document, pages: &[usize], order: TabOrder) -> Result<(), FormError> {
     let refs = page_refs(doc);
     for &p in pages {
@@ -614,11 +619,23 @@ fn walk(
 // ── writing ─────────────────────────────────────────────────────────────────────────────────
 
 /// Fill the field `name`.
+///
+/// # Errors
+///
+/// `FormError::NoForm` when the document has no form fields, `FormError::NoSuchField`
+/// when `name` matches none, `FormError::ReadOnly` for a read-only field,
+/// `FormError::Invalid` when the value does not fit the field (length, format, options or
+/// scripts), `FormError::Cos` when the document cannot be updated.
 pub fn set_value(doc: &mut Document, name: &str, value: &FieldValue) -> Result<(), FormError> {
     set_value_with(doc, name, value, &mut NoScripts)
 }
 
 /// [`set_value`], running the fields' JavaScript through `scripts`.
+///
+/// # Errors
+///
+/// As [`set_value`], plus `FormError::Invalid` when a Keystroke or Validate script
+/// rejects the value, or a change it makes to another field is rejected there.
 pub fn set_value_with(doc: &mut Document, name: &str, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
     let all = fields(doc);
     if all.is_empty() {
@@ -635,11 +652,22 @@ pub fn set_value_with(doc: &mut Document, name: &str, value: &FieldValue, script
 
 /// Run every field's Calculate script in the form's calculation order (`/CO`, then the other
 /// calculated fields), as Acrobat does after any value changes. Returns how many changed.
+///
+/// # Errors
+///
+/// `FormError::Invalid` when a computed value, or a change made to another field, is
+/// rejected there, `FormError::Cos` when a value or appearance cannot be written.
 pub fn recalculate(doc: &mut Document) -> Result<usize, FormError> {
     recalculate_with(doc, &mut NoScripts)
 }
 
 /// [`recalculate`], running custom Calculate (and Format) scripts through `scripts`.
+///
+/// # Errors
+///
+/// `FormError::Invalid` when a calculated value, or a change a script made to another
+/// field, is rejected there, `FormError::Cos` when a value or appearance cannot be
+/// written.
 pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result<usize, FormError> {
     let all = fields(doc);
     let calculated = |f: &Field| f.actions.calculate != af::Calculate::None || f.actions.scripts.calculate.is_some();
@@ -847,6 +875,12 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
 }
 
 /// Acrobat's Clear form: every field (or the named ones) back to its default value.
+///
+/// # Errors
+///
+/// `FormError::NoForm` when the document has no form fields, `FormError::NoSuchField`
+/// when a name in `names` matches no field, `FormError::Invalid` / `FormError::Cos` while
+/// writing the defaults and recalculating.
 pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, FormError> {
     let all = fields(doc);
     if all.is_empty() {
@@ -883,6 +917,12 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
 /// move field `name` one place earlier or later in its page's tab order. The page switches to
 /// annotation order (`/Tabs` removed) and its widgets are reordered in `/Annots`; other
 /// annotations keep their places.
+///
+/// # Errors
+///
+/// `FormError::NoSuchField` when `name` matches no field, `FormError::Invalid` when the
+/// field is not on a page or the page has no `/Annots`, `FormError::Cos` when the page
+/// cannot be updated.
 pub fn move_in_tab_order(doc: &mut Document, name: &str, earlier: bool) -> Result<(), FormError> {
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;

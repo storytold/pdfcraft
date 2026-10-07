@@ -47,6 +47,11 @@ impl McpServer {
     }
 
     /// Serve until `input` reaches end of file.
+    ///
+    /// # Errors
+    ///
+    /// Returns `std::io::Error` when reading a line from `input` fails or a reply cannot be
+    /// written and flushed to `output`.
     pub fn serve(&mut self, input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
         for line in input.lines() {
             let line = line?;

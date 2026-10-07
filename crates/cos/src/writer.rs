@@ -172,6 +172,12 @@ enum Row {
 /// A document that had to be reconstructed (no usable cross-reference chain) cannot be updated
 /// incrementally — other readers would follow the broken chain — so it is rewritten in full,
 /// which also repairs the file (what users expect after "the file was damaged and repaired").
+///
+/// # Errors
+///
+/// Not today: the update is assembled in an in-memory buffer, so there is no I/O that can fail
+/// and every object is already parsed. The `Result` keeps both save paths uniform for callers
+/// that handle them next to the fallible readers.
 pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
     // Reconstructed files have no chain to append to; added or removed encryption must
     // rewrite every object; redaction must not leave the old revision behind. All need a full save.
@@ -223,6 +229,11 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
 }
 
 /// Write only reachable objects, renumbered from 1, with a classic cross-reference table.
+///
+/// # Errors
+///
+/// Not today: serialization targets an in-memory buffer and dangles references resolve to
+/// `null`, so the walk always completes. The `Result` matches [`write_incremental`].
 pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
     let mut doc = doc.clone();
     stamp_mod_date(&mut doc, opts);

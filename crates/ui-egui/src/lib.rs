@@ -595,6 +595,12 @@ impl PrintCraftApp {
     }
 
     /// Open a document and make it the active tab. Encrypted files raise the password prompt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the image or text cannot be converted into a PDF, the PDF fails
+    /// to open (a wrong password raises the prompt instead), or the opened document cannot be
+    /// found for its tab.
     pub fn open_bytes(&mut self, name: &str, path: Option<String>, bytes: Vec<u8>) -> Result<(), String> {
         // Images and text files become new, unsaved PDFs (Create a PDF).
         if let Some(r) = self.open_converted(name, &bytes) {
@@ -901,6 +907,12 @@ impl PrintCraftApp {
     /// Apply a named view option (`--page 3`, `--panel bookmarks`, `--theme dark`, …).
     ///
     /// This is the seed of the UI control channel (M3.9): the same verbs become `ui.set` calls.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when `key` is unknown, a value does not parse or name a known thing
+    /// (`language`, `panel`, `tool`, `layer`, `quick`, `stamp-*`, `page`, `zoom`, `rotate`,
+    /// `select`, `comment`), or a view-scoped option is used with no open document.
     pub fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
         let view = self.active.and_then(|i| self.views.get_mut(i));
         match (key, view) {

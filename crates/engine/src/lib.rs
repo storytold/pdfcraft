@@ -91,6 +91,9 @@ pub use printcraft_xfdf::Format as DataFormat;
 
 /// Forms ▸ Merge data files into spreadsheet: the field values of each file (FDF, XFDF or a
 /// filled-in PDF form), as CSV with one row per file.
+///
+/// # Errors
+/// When any input file cannot be read as form data; the message names the file and the reason.
 pub fn merge_data_files(files: &[(String, Vec<u8>)]) -> Result<String, String> {
     let rows =
         files.iter().map(|(name, bytes)| printcraft_xfdf::data_values(bytes).map_err(|e| format!("{name}: {e}"))).collect::<Result<Vec<_>, _>>()?;
@@ -235,6 +238,10 @@ impl Document {
     }
 
     /// Save image as: image `index` on `page` as a file (extension, bytes).
+    ///
+    /// # Errors
+    /// When the document can't be read for editing, `page` has no image `index`, the image has
+    /// no object, or its bytes cannot be written (it is not an image or cannot be encoded).
     pub fn page_image_file(&self, page: usize, index: usize) -> Result<(&'static str, Vec<u8>), String> {
         let editor = self.editor.as_ref().ok_or("the document can't be read")?;
         let img = self.page_images(page).into_iter().nth(index).ok_or_else(|| format!("page {} has no image {}", page + 1, index + 1))?;
@@ -264,6 +271,10 @@ impl Document {
     /// The edit that fixes `rule`, for the rules with an automatic fix: the document language
     /// (`value` is the language), the title (`value` replaces it; else the current title or the
     /// file name) and the tab order.
+    ///
+    /// # Errors
+    /// When `rule` has no automatic fix, or `a11y::Rule::PrimaryLanguage` is given no language
+    /// `value`.
     pub fn accessibility_fix(&self, rule: a11y::Rule, value: Option<&str>) -> Result<Edit, String> {
         let value = value.map(str::trim).filter(|v| !v.is_empty());
         match rule {
@@ -1600,6 +1611,9 @@ fn keys_after(edit: &Edit) -> Option<Keys> {
 /// The last-resort guard (AGENTS.md §4): run `f`, turning a panic that escapes it into an error
 /// message, so one bad file or edit can't take the app and its other documents down. It is a
 /// safety net for bugs, not a substitute for returning errors.
+///
+/// # Errors
+/// When `f` panics: the panic's own message (`&str` or `String`), else `unknown error`.
 pub fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|p| {
         p.downcast_ref::<&str>().map(|s| (*s).to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown error".into())
@@ -1753,6 +1767,10 @@ impl Session {
     /// `password` is tried as either the user or owner password when the file is encrypted.
     /// Open saved revision `n` (1 = the oldest) of a document as a new, unsaved document named
     /// "<name> (revision n)".
+    ///
+    /// # Errors
+    /// When there is no document with that id, `n` names no saved revision, or the revision's
+    /// bytes cannot be opened (an `OpenError` message).
     pub fn open_revision(&mut self, id: DocId, n: usize) -> Result<DocId, String> {
         let doc = self.get(id).ok_or("no such document")?;
         let ends = doc.revision_ends();
@@ -1762,6 +1780,12 @@ impl Session {
         self.open(name, None, bytes, password.as_deref()).map_err(|e| e.to_string())
     }
 
+    /// Open `bytes` as a new document in the session, returning its `DocId`.
+    ///
+    /// # Errors
+    /// When the bytes are not a readable PDF, need or reject `password`, or are unsupported
+    /// (`OpenError::Invalid`, `OpenError::NeedsPassword`, `OpenError::WrongPassword`,
+    /// `OpenError::Unsupported`), or reading them fails unexpectedly.
     pub fn open(&mut self, name: impl Into<String>, path: Option<String>, bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocId, OpenError> {
         let name = name.into();
         guard(|| self.open_unguarded(name, path, bytes, password))
@@ -1833,6 +1857,12 @@ impl Session {
     }
 
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
+    ///
+    /// # Errors
+    /// When there is no document with that id, the document is read-only or its security
+    /// settings refuse the edit (`EditError::ReadOnly`, `EditError::NotPermitted`), the edit
+    /// fails, a full rewrite would invalidate a signed document (`EditError::SignedRewrite`), or
+    /// the result cannot be written and re-opened (the document is left unchanged).
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
         let now = self.now();
         let today = self.today();
@@ -1891,6 +1921,12 @@ impl Session {
         Ok(())
     }
 
+    /// Undo the document's last edit and return its label.
+    ///
+    /// # Errors
+    /// When there is no document with that id, there is nothing to undo
+    /// (`EditError::NothingToUndo`), or the restored state cannot be written or re-inspected
+    /// (`EditError::Write`, `EditError::Reopen`).
     pub fn undo(&mut self, id: DocId) -> Result<String, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
@@ -1905,6 +1941,12 @@ impl Session {
         Ok(label)
     }
 
+    /// Redo the document's undone edit and return its label.
+    ///
+    /// # Errors
+    /// When there is no document with that id, there is nothing to redo
+    /// (`EditError::NothingToRedo`), or the restored state cannot be written or re-inspected
+    /// (`EditError::Write`, `EditError::Reopen`).
     pub fn redo(&mut self, id: DocId) -> Result<String, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
@@ -1998,6 +2040,10 @@ impl Session {
 
     /// The bytes to write for Save: an incremental update of the file as opened/last saved,
     /// with `/ModDate` stamped. Call `mark_saved` after writing them successfully.
+    ///
+    /// # Errors
+    /// When there is no document with that id, or writing the incremental update fails or
+    /// panics (`EditError::Write`).
     pub fn save_bytes(&self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let Some(editor) = doc.editor.as_ref() else { return Ok(doc.bytes.clone()) };
@@ -2009,6 +2055,11 @@ impl Session {
     }
 
     /// A compact, garbage-collected rewrite (Save As ▸ "Optimized" / Reduce File Size groundwork).
+    ///
+    /// # Errors
+    /// When there is no document with that id, the document is signed (`EditError::Signed`), it
+    /// cannot be edited (`EditError::ReadOnly`), or writing the rewrite fails or panics
+    /// (`EditError::Write`).
     pub fn save_full_bytes(&self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         if doc.is_signed() {
@@ -2021,6 +2072,11 @@ impl Session {
 
     /// Record a successful save of `bytes` (to `path`, if any): rebase editing on the saved file
     /// so the next save appends only newer edits. Undo history is kept.
+    ///
+    /// # Errors
+    /// When there is no document with that id, `bytes` cannot be re-opened with the passwords
+    /// known for the document, or the view cannot be refreshed (`EditError::Reopen`,
+    /// `EditError::Write`).
     pub fn mark_saved(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<(), EditError> {
         let doc = self.doc_mut(id)?;
         if let Some(editor) = doc.editor.as_mut() {
@@ -2040,6 +2096,11 @@ impl Session {
 
     /// File ▸ Revert: back to the last saved version (or the file as opened). Undo history is
     /// cleared, as in Acrobat.
+    ///
+    /// # Errors
+    /// When there is no document with that id, the document cannot be edited
+    /// (`EditError::ReadOnly`), the saved file cannot be opened with any known password
+    /// (`EditError::Reopen`), or the refresh fails (`EditError::Write`, `EditError::Reopen`).
     pub fn revert(&mut self, id: DocId) -> Result<(), EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
@@ -2064,21 +2125,37 @@ impl Session {
     }
 
     /// The page count of another PDF (Replace Pages, Insert Pages dialogs).
+    ///
+    /// # Errors
+    /// When `bytes` are password-protected, unreadable or refuse page copying
+    /// (`EditError::Source`), or the document has no page tree (`EditError::Organize`).
     pub fn page_count_of(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<usize, EditError> {
         Ok(printcraft_organize::page_count(&open_source(name, bytes)?)?)
     }
 
     /// A new blank document (Create ▸ Blank page).
+    ///
+    /// # Errors
+    /// When the page size or count is invalid (`EditError::Create`), or the new file could not
+    /// be written (`EditError::Write`).
     pub fn create_blank(&self, width: f64, height: f64, pages: usize) -> Result<Arc<Vec<u8>>, EditError> {
         self.write_new(&printcraft_create::blank(width, height, pages)?)
     }
 
     /// A new document with one page per image (PNG, JPEG).
+    ///
+    /// # Errors
+    /// When no images are given or one cannot be embedded (`EditError::Create`), or the new file
+    /// could not be written (`EditError::Write`).
     pub fn create_from_images(&self, images: &[(String, Vec<u8>)]) -> Result<Arc<Vec<u8>>, EditError> {
         self.write_new(&printcraft_create::from_images(images)?)
     }
 
     /// A new document from plain text (US Letter, 11 pt Helvetica).
+    ///
+    /// # Errors
+    /// When the document cannot be built (`EditError::Create`), or the new file could not be
+    /// written (`EditError::Write`).
     pub fn create_from_text(&self, title: &str, text: &str) -> Result<Arc<Vec<u8>>, EditError> {
         self.write_new(&printcraft_create::from_text(title, text, printcraft_create::LETTER, 11.0)?)
     }
@@ -2087,6 +2164,11 @@ impl Session {
     /// quality; thumbnails dropped), identical resources merged, unused objects dropped, objects
     /// packed into compressed object streams. Returns the bytes and how many objects were
     /// merged. The open document is not changed (Acrobat saves the reduced copy as a new file).
+    ///
+    /// # Errors
+    /// When there is no document with that id, it cannot be edited, it is signed
+    /// (`EditError::Signed`), the optimization fails (`EditError::Optimize`) or the rewrite
+    /// could not be written (`EditError::Write`).
     pub fn reduced_bytes(&self, id: DocId) -> Result<(Arc<Vec<u8>>, usize), EditError> {
         let (bytes, report) = self.optimized_bytes(id, &optimize::Settings::default(), &[])?;
         Ok((bytes, report.merged))
@@ -2095,6 +2177,11 @@ impl Session {
     /// Optimize PDF ▸ Advanced optimization: `settings` for images and objects, plus Remove
     /// Hidden Information's `discard` categories (user data). A full rewrite: signed documents
     /// are refused. The open document is not changed.
+    ///
+    /// # Errors
+    /// When there is no document with that id, it cannot be edited, it is signed
+    /// (`EditError::Signed`), a `discard` category fails (`EditError::Redact`), the optimization
+    /// fails (`EditError::Optimize`) or the rewrite could not be written (`EditError::Write`).
     pub fn optimized_bytes(&self, id: DocId, settings: &optimize::Settings, discard: &[Hidden]) -> Result<(Arc<Vec<u8>>, OptimizeReport), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         if doc.is_signed() {
@@ -2113,6 +2200,10 @@ impl Session {
 
     /// Export comments and/or form data: XFDF and FDF carry either or both; XML, CSV and text
     /// are form data only.
+    ///
+    /// # Errors
+    /// When there is no document with that id, or the data cannot be produced: a read-only
+    /// document's file fails to re-open, or the exporter fails or panics (`EditError::Write`).
     pub fn export_data(&self, id: DocId, format: DataFormat, comments: bool, fields: bool) -> Result<Vec<u8>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = match doc.editor.as_ref() {
@@ -2129,6 +2220,11 @@ impl Session {
     }
 
     /// The print-ready PDF for `settings` (sheets laid out for the paper; see `printcraft-print`).
+    ///
+    /// # Errors
+    /// When there is no document with that id, its security settings disallow printing
+    /// (`EditError::NotPermitted`), its file fails to re-open (`EditError::Write`), or the
+    /// imposition fails (`EditError::Print`).
     pub fn print_pdf(&self, id: DocId, settings: &print::Settings) -> Result<Vec<u8>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         if !doc.allows_printing() {
@@ -2143,6 +2239,11 @@ impl Session {
     }
 
     /// Combine whole files, in order, into new PDF bytes (one bookmark per file).
+    ///
+    /// # Errors
+    /// When a source file is password-protected, unreadable or refuses page copying
+    /// (`EditError::Source`), combining fails (`EditError::Organize`), or the result could not
+    /// be written (`EditError::Write`).
     pub fn combine(&self, sources: &[(String, Arc<Vec<u8>>)]) -> Result<Arc<Vec<u8>>, EditError> {
         let docs = sources.iter().map(|(n, b)| open_source(n, b)).collect::<Result<Vec<_>, _>>()?;
         let named: Vec<(&str, &printcraft_cos::Document)> = sources.iter().map(|(n, _)| n.as_str()).zip(docs.iter()).collect();
@@ -2151,6 +2252,12 @@ impl Session {
     }
 
     /// Combine Files with a page range per file ("1-3, 6"; `None` or empty for all pages).
+    ///
+    /// # Errors
+    /// When a source file is password-protected, unreadable or refuses page copying
+    /// (`EditError::Source`), a page range or page count is invalid (`EditError::Print`,
+    /// `EditError::Organize`), combining fails, or the result could not be written
+    /// (`EditError::Write`).
     pub fn combine_ranges(&self, sources: &[CombineSource]) -> Result<Arc<Vec<u8>>, EditError> {
         let docs = sources.iter().map(|(n, b, _)| open_source(n, b)).collect::<Result<Vec<_>, _>>()?;
         let mut pages = Vec::with_capacity(docs.len());
@@ -2173,6 +2280,12 @@ impl Session {
     }
 
     /// New PDF bytes containing copies of `pages` of the document (Extract Pages).
+    ///
+    /// # Errors
+    /// When there is no editable document with that id (`EditError::NoDocument`,
+    /// `EditError::ReadOnly`), its security settings disallow assembling
+    /// (`EditError::NotPermitted`), `pages` cannot be extracted (`EditError::Organize`), or the
+    /// result could not be written (`EditError::Write`).
     pub fn extract(&self, id: DocId, pages: &[usize]) -> Result<Arc<Vec<u8>>, EditError> {
         let src = self.cos(id)?;
         if src.permissions().is_some_and(|p| !p.assemble()) {
@@ -2183,6 +2296,12 @@ impl Session {
     }
 
     /// Split the document into several new PDFs.
+    ///
+    /// # Errors
+    /// When there is no editable document with that id, its security settings disallow
+    /// assembling (`EditError::NotPermitted`), a part cannot be extracted or the page count
+    /// cannot be read (`EditError::Organize`), or a part could not be written
+    /// (`EditError::Write`).
     pub fn split(&self, id: DocId, by: &printcraft_organize::SplitBy) -> Result<Vec<SplitPart>, EditError> {
         let src = self.cos(id)?;
         if src.permissions().is_some_and(|p| !p.assemble()) {
@@ -2201,6 +2320,11 @@ impl Session {
     /// Split into parts of at most `max_bytes` each (Acrobat's "File size"): pages are taken in
     /// order while their size (as single-page files, an over-estimate because shared fonts and
     /// images count once per part) fits; a page larger than the limit is a part of its own.
+    ///
+    /// # Errors
+    /// When there is no editable document with that id, its security settings disallow
+    /// assembling (`EditError::NotPermitted`), a page cannot be measured or extracted
+    /// (`EditError::Organize`), or a part could not be written (`EditError::Write`).
     pub fn split_by_size(&self, id: DocId, max_bytes: usize) -> Result<Vec<SplitPart>, EditError> {
         let src = self.cos(id)?;
         if src.permissions().is_some_and(|p| !p.assemble()) {
@@ -2276,6 +2400,10 @@ impl Session {
     }
 
     /// Open freshly created bytes (combine / extract) as a new, unsaved document.
+    ///
+    /// # Errors
+    /// When `bytes` are not a readable PDF, need or reject a password, or fail to open for any
+    /// other reason (`OpenError`).
     pub fn open_new(&mut self, name: impl Into<String>, bytes: Arc<Vec<u8>>) -> Result<DocId, OpenError> {
         let id = self.open(name, None, bytes, None)?;
         if let Some(d) = self.docs.iter_mut().find(|d| d.id == id) {
@@ -2354,6 +2482,10 @@ impl Session {
 
     /// Acrobat's Summarize Comments ("Comments only" layout): a new PDF listing every comment
     /// with its number, author, type, date, text and replies, grouped by page.
+    ///
+    /// # Errors
+    /// When there is no document with that id, or the summary document cannot be built or
+    /// written (`EditError::Create`, `EditError::Write`).
     pub fn summarize_comments(&self, id: DocId, sort: SummarySort) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let text = comment_summary(&doc.name, &doc.info.annotations, sort);
@@ -2393,6 +2525,10 @@ impl Session {
     /// Sign the document's current state with `id` (Use a certificate ▸ Digitally sign). Returns
     /// the signed file; the caller saves it and then calls [`Session::mark_signed`]. An empty
     /// `opts.date` takes the session clock.
+    ///
+    /// # Errors
+    /// When there is no document with that id, the document cannot be edited (for example it is
+    /// encrypted: `EditError::ReadOnly`), or signing is refused or fails (`EditError::Sign`).
     pub fn sign(&self, doc: DocId, id: &printcraft_sign::DigitalId, mut opts: SignOptions) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
         // (Encrypted documents are refused by the signer for now.)
@@ -2405,6 +2541,11 @@ impl Session {
 
     /// Record that the signed file `bytes` was saved (to `path`): like [`Session::mark_saved`],
     /// and the edit history before signing is dropped (signing can't be undone).
+    ///
+    /// # Errors
+    /// When there is no document with that id, `bytes` cannot be re-opened
+    /// (`EditError::Reopen`), or the view cannot be refreshed (`EditError::Write`,
+    /// `EditError::Reopen`).
     pub fn mark_signed(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<(), EditError> {
         self.mark_saved(id, bytes, path)?;
         let doc = self.doc_mut(id)?;

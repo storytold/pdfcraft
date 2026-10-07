@@ -205,6 +205,12 @@ fn write_action(doc: &Document, d: &mut Dict, a: &LinkAction) -> Result<(), Anno
 }
 
 /// Add a link over `rect` (user space). Returns its index in the page's `/Annots`.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoSuchPage` when `page` or a `LinkAction::Page` target does not exist,
+/// `AnnotError::Invalid` when `rect` is too small, `action` is `LinkAction::Other`, or a
+/// `LinkAction::Uri` is empty, and `AnnotError::Cos` when writing the document fails.
 pub fn add(doc: &mut Document, page: usize, rect: [f64; 4], action: &LinkAction, style: &LinkStyle) -> Result<usize, AnnotError> {
     let p = page_ref(doc, page)?;
     let r = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
@@ -241,6 +247,12 @@ fn link_at(doc: &Document, page: usize, index: usize) -> Result<(ObjRef, ObjRef)
 }
 
 /// Link Properties: change a link's area, action and/or appearance.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoSuchPage`/`AnnotError::NoSuchAnnotation` when `page` or `index` is out of
+/// range or a `LinkAction::Page` target does not exist, and `AnnotError::Invalid` when the entry is
+/// an inline or non-link annotation, when `rect` is too small, or when a `LinkAction::Uri` is empty.
 pub fn set(
     doc: &mut Document,
     page: usize,
@@ -269,6 +281,12 @@ pub fn set(
 }
 
 /// Delete one link.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoSuchPage`/`AnnotError::NoSuchAnnotation` when `page` or `index` is out of
+/// range, `AnnotError::Invalid` when the entry is an inline or non-link annotation, and
+/// `AnnotError::Cos` when rewriting `/Annots` fails.
 pub fn delete(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
     let (p, _) = link_at(doc, page, index)?;
     let mut list = annots(doc, p);
@@ -277,6 +295,11 @@ pub fn delete(doc: &mut Document, page: usize, index: usize) -> Result<(), Annot
 }
 
 /// Remove every link on `pages` (all when `None`). Returns how many went.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoPageTree` when the document has no page tree, and `AnnotError::Cos` when
+/// rewriting a page's `/Annots` fails.
 pub fn remove_all(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize, AnnotError> {
     let refs = page_refs(doc)?;
     let mut n = 0;
@@ -335,6 +358,11 @@ pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
 
 /// Create links for found URLs: `(page, quads, uri)` with quads in user space (one link per
 /// line rectangle). Returns how many links were added.
+///
+/// # Errors
+///
+/// Returns `AnnotError::NoSuchPage` when a `page` doesn't exist, `AnnotError::Invalid` for a bad
+/// rectangle or action, and `AnnotError::Cos` when writing the document fails.
 pub fn add_many(doc: &mut Document, links: &[(usize, Vec<[f64; 4]>, String)], style: &LinkStyle) -> Result<usize, AnnotError> {
     let mut n = 0;
     for (page, rects, uri) in links {

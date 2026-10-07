@@ -81,6 +81,12 @@ impl<'a> Lexer<'a> {
     }
 
     /// Parse one direct object. References `N G R` are recognised.
+    ///
+    /// # Errors
+    ///
+    /// `CosError::Syntax` at the offending offset: the data ends early, a byte or keyword
+    /// is unexpected, a string, hex string, array or dictionary is unterminated, a number
+    /// is malformed, or nesting passes the depth limit.
     pub fn object(&mut self) -> Result<Object, CosError> {
         self.object_depth(0)
     }
@@ -356,6 +362,11 @@ fn hexval(b: u8) -> Option<u8> {
 
 /// Parse an indirect object at `offset`: `N G obj <object> [stream…endstream] endobj`.
 /// `resolve_length` resolves an indirect `/Length`. Returns the object and its (num, gen).
+///
+/// # Errors
+///
+/// `CosError::Syntax` when `offset` does not hold an `N G obj` header, the object body
+/// does not parse, or a stream has no `endstream`.
 pub fn parse_indirect(data: &[u8], offset: usize, resolve_length: &dyn Fn(ObjRef) -> Option<i64>) -> Result<(ObjRef, Object), CosError> {
     let mut lx = Lexer::new(data, offset);
     lx.skip_ws();

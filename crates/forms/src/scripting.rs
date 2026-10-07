@@ -153,6 +153,12 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
 
 /// Apply what a button or console script changed (values, read-only, required, visibility),
 /// then recalculate.
+///
+/// # Errors
+///
+/// `FormError::Invalid` when a value a script changed is rejected by the field it
+/// targets, `FormError::Cos` when a field or widget dictionary cannot be written; then the
+/// errors of [`crate::recalculate_with`].
 pub fn apply_script_changes(doc: &mut Document, changes: &[FieldChange], scripts: &mut dyn Scripts) -> Result<(), FormError> {
     apply_changes(doc, changes, "")?;
     crate::recalculate_with(doc, scripts)?;
@@ -203,6 +209,12 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
 }
 
 /// Add (or replace) a document-level JavaScript named `name`.
+///
+/// # Errors
+///
+/// `FormError::NoForm` when the document has no catalog, `FormError::Invalid` when the
+/// `JavaScript` name tree has `/Kids` (edit it with a full editor), `FormError::Cos` when
+/// the catalog cannot be updated.
 pub fn set_document_script(doc: &mut Document, name: &str, js: Option<&str>) -> Result<(), FormError> {
     let root = doc.root().ok_or(FormError::NoForm)?;
     let cat = doc.get(root).as_dict().cloned().unwrap_or_default();
@@ -243,6 +255,13 @@ pub fn set_document_script(doc: &mut Document, name: &str, js: Option<&str>) -> 
 /// Run a JavaScript: set (or remove, with `None`) field `name`'s script for `event` — one of
 /// `keystroke`, `format`, `validate`, `calculate` (the field's `/AA` K, F, V, C) or `mouse_up`
 /// (its widgets' `/A`). Calculated fields join the calculation order (`/CO`).
+///
+/// # Errors
+///
+/// `FormError::NoSuchField` when `name` matches no field, `FormError::Invalid` when
+/// `event` is not one of the known events, `FormError::Cos` when a widget or the field
+/// cannot be updated, `FormError::NoForm` when a `calculate` script needs a form on a
+/// document with no catalog.
 pub fn set_field_script(doc: &mut Document, name: &str, event: &str, js: Option<&str>) -> Result<(), FormError> {
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();

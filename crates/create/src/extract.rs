@@ -63,6 +63,12 @@ pub fn extract_images(doc: &Document, pages: &[usize], min_side: u32) -> ImageEx
 }
 
 /// One image `XObject` as a file: JPEG as is, else PNG ("Save image as").
+///
+/// # Errors
+///
+/// When `image` is not an image `XObject`, or when the image cannot be exported: an unsupported
+/// filter, colour space or bit depth, an image over 100 000 000 pixels, undecodable data, or a
+/// failed PNG encode. The message says which.
 pub fn image_file(doc: &Document, image: ObjRef) -> Result<(&'static str, Vec<u8>), String> {
     match &*doc.get(image) {
         Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => self::image(doc, s),

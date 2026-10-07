@@ -130,6 +130,12 @@ pub struct Certificate {
 }
 
 impl Certificate {
+    /// Parse one certificate from its DER encoding.
+    ///
+    /// # Errors
+    ///
+    /// When `raw` is not a well-formed `Certificate`: a missing or mistyped field, a name,
+    /// validity time or public key that does not parse, or an extension that is malformed.
     pub fn parse(raw: &[u8]) -> Result<Certificate, SignError> {
         let cert = Tlv::parse_all(raw)?.expect(tag::SEQUENCE, "Certificate")?;
         let parts = cert.children()?;
@@ -237,6 +243,11 @@ impl Certificate {
     /// A self-signed certificate for `key`: what Acrobat's "Create a new digital ID ▸ save to
     /// file" makes. Valid from `from` for `years`; usable for signing (digital signature and
     /// non-repudiation).
+    ///
+    /// # Errors
+    ///
+    /// When signing the certificate with `key` fails (an external key, or platform crypto), or
+    /// the built encoding does not parse back as a `Certificate`.
     pub fn self_signed(name: &Name, key: &PrivateKey, from: Time, years: u32, serial: &[u8]) -> Result<Certificate, SignError> {
         let alg = key.preferred_digest();
         let sig_alg = key.signature_algorithm(alg);
@@ -294,6 +305,11 @@ pub fn build_chain<'a>(leaf: &'a Certificate, pool: &'a [Certificate]) -> Vec<&'
 
 /// Certificates from a file: DER, or PEM with one or more `CERTIFICATE` blocks (`.cer`, `.crt`,
 /// `.pem`, Acrobat's `.fdf`-free exports).
+///
+/// # Errors
+///
+/// When the bytes hold no certificate at all, a PEM block's base64 is invalid, or a certificate
+/// does not parse.
 pub fn load_certificates(bytes: &[u8]) -> Result<Vec<Certificate>, SignError> {
     if bytes.first() == Some(&0x30) {
         return Ok(vec![Certificate::parse(bytes)?]);

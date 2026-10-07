@@ -39,6 +39,10 @@ pub fn reference(c: &Certificate) -> String {
 }
 
 /// The identity a reference (or a certificate common name) names.
+///
+/// # Errors
+///
+/// When the keychains cannot be searched, or no identity matches `reference_or_name`.
 pub fn find(reference_or_name: &str) -> Result<DigitalId, SignError> {
     identities(None)?
         .into_iter()
@@ -51,6 +55,11 @@ pub fn find(reference_or_name: &str) -> Result<DigitalId, SignError> {
 
 /// The signing identities in the user's keychains (or only in the keychain file `keychain`).
 /// Identities with keys `PrintCraft` can't use (other curves, Ed25519) are left out.
+///
+/// # Errors
+///
+/// When `keychain` cannot be opened, or the search fails for a reason other than "item not
+/// found" (no matches is an empty list, not an error).
 pub fn identities(keychain: Option<&Path>) -> Result<Vec<DigitalId>, SignError> {
     let mut search = ItemSearchOptions::new();
     search.class(ItemClass::identity()).load_refs(true).limit(Limit::All);

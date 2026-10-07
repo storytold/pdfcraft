@@ -62,6 +62,11 @@ impl RecoveryStore {
 
     /// Write (or replace) an entry. The PDF is written before its metadata, both atomically, so
     /// a listed entry always has complete bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `std::io::Error` when the recovery folder cannot be created, the PDF or its
+    /// metadata cannot be written, or the metadata fails to serialize.
     pub fn write(&self, meta: &RecoveryMeta, bytes: &[u8]) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.dir)?;
         crate::editing::write_atomically(&self.dir.join(format!("{}.pdf", meta.key)).to_string_lossy(), bytes)?;
@@ -101,6 +106,11 @@ impl RecoveryStore {
         out
     }
 
+    /// Read the PDF bytes stored for `key`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `std::io::Error` when the entry's file is missing or cannot be read.
     pub fn read(&self, key: &str) -> std::io::Result<Vec<u8>> {
         std::fs::read(self.dir.join(format!("{key}.pdf")))
     }

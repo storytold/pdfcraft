@@ -385,6 +385,10 @@ fn interpret(doc: &Document, ops: &[Op], fonts_res: &Dict, cache: &mut HashMap<V
 }
 
 /// The lines of text on a page (0-based), in content order.
+///
+/// # Errors
+///
+/// Returns `Err` when `page` is out of range (`EditError::NoSuchPage`).
 pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError> {
     let p = page_dict(doc, page)?;
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
@@ -595,6 +599,12 @@ fn type3_encode(fallback: &Type3Fallback, text: &str) -> Option<Vec<u8>> {
 }
 
 /// Replace the text of line `line` (an index into [`text_lines`]) on `page` with `text`.
+///
+/// # Errors
+///
+/// Returns `Err` when `page` or `line` does not exist (`EditError::NoSuchPage`,
+/// `EditError::Invalid`), when the text has characters no available font can show
+/// (`EditError::Invalid`), or when the page's content cannot be rewritten (`EditError::Cos`).
 pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) -> Result<LineEdit, EditError> {
     let text = text.replace(['\n', '\r'], " ");
     let lines = text_lines(doc, page)?;
@@ -716,6 +726,10 @@ fn coincident_ops(lines: &[TextLine], rects: &[[f64; 4]]) -> std::collections::H
 }
 
 /// The paragraphs on a page (0-based).
+///
+/// # Errors
+///
+/// Returns `Err` when `page` is out of range (`EditError::NoSuchPage`).
 pub fn text_blocks(doc: &Document, page: usize) -> Result<Vec<TextBlock>, EditError> {
     let lines = text_lines(doc, page)?;
     Ok(group_blocks(&lines))
@@ -802,6 +816,12 @@ fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec<String> {
 /// Replace paragraph `block` (an index into [`text_blocks`]) with `text`, rewrapped to the
 /// paragraph's width with its line spacing. The paragraph keeps its first line's position, font
 /// (or Helvetica when the font can't show the text), size and colour.
+///
+/// # Errors
+///
+/// Returns `Err` when `page` or the paragraph index does not exist (`EditError::NoSuchPage`,
+/// `EditError::Invalid`), when the text has characters no available font can show
+/// (`EditError::Invalid`), or when the page cannot be written (`EditError::Cos`).
 pub fn replace_block(doc: &mut Document, page: usize, block: usize, text: &str) -> Result<LineEdit, EditError> {
     rewrite_block(doc, page, block, Some(text), &BlockStyle::default())
 }
@@ -830,6 +850,13 @@ pub struct BlockStyle {
 }
 
 /// Rewrite paragraph `block` with new text (or its own) and formatting, rewrapped to its width.
+///
+/// # Errors
+///
+/// Returns `Err` when `page` or the paragraph index does not exist (`EditError::NoSuchPage`,
+/// `EditError::Invalid`), when the paragraph has no font, its offset or width is not a number or
+/// the text has characters no available font can show (`EditError::Invalid`), or when the page
+/// cannot be written (`EditError::Cos`).
 pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option<&str>, style: &BlockStyle) -> Result<LineEdit, EditError> {
     let lines = text_lines(doc, page)?;
     let blocks = group_blocks(&lines);

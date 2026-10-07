@@ -604,6 +604,12 @@ impl Default for ActionDraft {
 }
 
 impl ActionDraft {
+    /// Turn the draft into the `FieldAction` it stands for.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the chosen action needs a page number, URL or field names and the
+    /// draft's text is empty or, for the page number, not a number of at least 1.
     pub fn action(&self) -> Result<printcraft_engine::FieldAction, String> {
         use printcraft_engine::FieldAction as A;
         let t = self.text.trim();

@@ -48,6 +48,11 @@ impl OcrPage {
 }
 
 /// The recogniser, loaded once (it takes a moment) and shared.
+///
+/// # Errors
+///
+/// When the models are not installed (`OcrError::NoModels`) or fail to load
+/// (`OcrError::Load`); the message says which file and why.
 pub fn engine() -> Result<Arc<Ocr>, String> {
     static OCR: Mutex<Option<Arc<Ocr>>> = Mutex::new(None);
     let mut slot = OCR.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -154,6 +159,13 @@ impl Session {
     }
 
     /// Add the words found by [`OcrJob::run`] as one undoable step. Returns the number of words.
+    ///
+    /// # Errors
+    ///
+    /// When there is no document with that `id` (`EditError::NoDocument`), or adding the text
+    /// fails: the document is read-only, its security settings refuse the change
+    /// (`EditError::NotPermitted`), or the result cannot be written and re-opened (see
+    /// [`Session::apply`]).
     pub fn apply_ocr(&mut self, id: DocId, found: &[OcrPage]) -> Result<usize, EditError> {
         let edits: Vec<Edit> =
             found.iter().filter(|p| !p.words.is_empty()).map(|p| Edit::AddOcrText { page: p.page, words: p.words.clone() }).collect();
@@ -165,6 +177,12 @@ impl Session {
     }
 
     /// Recognise text on `pages` and add it, in one call (the CLI and agents use this).
+    ///
+    /// # Errors
+    ///
+    /// When there is no document with that `id` ("no such document"), the document is read-only
+    /// (its reason is the message), the models are missing or fail to load (see [`engine`]), or
+    /// adding the words fails (see [`Session::apply`]).
     pub fn recognize_text(&mut self, id: DocId, pages: &[usize], settings: OcrSettings) -> Result<Vec<OcrPage>, String> {
         let job = self.ocr_job(id, pages, settings).ok_or("no such document")?;
         if let Some(why) = self.get(id).and_then(|d| d.read_only_reason.clone()) {
@@ -194,6 +212,13 @@ impl FileResult {
 
 /// Recognize text in multiple files: one PDF's bytes in, the searchable PDF out. `progress`
 /// works as for [`OcrJob::run`].
+///
+/// # Errors
+///
+/// When `bytes` cannot be opened as a PDF (an `OpenError` message), the document turns out to be
+/// read-only (its reason is the message), its pages cannot be gathered into a job
+/// (`the document could not be read`), or applying the words or saving the result fails (an
+/// `EditError` message).
 pub fn recognize_file(
     name: &str,
     bytes: Arc<Vec<u8>>,

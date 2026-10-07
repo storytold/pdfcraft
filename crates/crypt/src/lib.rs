@@ -151,6 +151,12 @@ pub struct SecurityHandler {
 impl SecurityHandler {
     /// Authenticate with `password` (tried as owner password, then user password). `None`
     /// tries the empty password, which opens documents that only have an owner password.
+    ///
+    /// # Errors
+    ///
+    /// When `/Filter` is not `Standard` or the revision is unsupported, the password does not
+    /// check out ([`CryptError::WrongPassword`]), or the encryption dictionary's key data is
+    /// malformed.
     pub fn open(dict: EncryptDict, id0: &[u8], password: Option<&str>) -> Result<Self, CryptError> {
         if !dict.filter.is_empty() && dict.filter != b"Standard" {
             return Err(CryptError::Unsupported(format!("/Filter /{}", String::from_utf8_lossy(&dict.filter))));
@@ -533,6 +539,13 @@ fn expand(seed: &[u8; 32], label: &[u8], n: usize) -> Vec<u8> {
 }
 
 /// Build the `/Encrypt` values and an authenticated (owner) handler for a new encryption.
+///
+/// # Errors
+///
+/// Not today: every step is pure computation over `params` and `id0` (hashing, RC4, AES key
+/// derivation), so there is nothing that can fail. The `Result` matches
+/// [`SecurityHandler::open`] and keeps the door open for a future algorithm whose setup
+/// validates and rejects input.
 pub fn create(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, CryptError> {
     // Bits 7–8 and 13–32 must be 1; bits 1–2 must be 0 (§7.6.4.2).
     let p = (params.permissions | !0xFFF | 0xC0) & !0x3;

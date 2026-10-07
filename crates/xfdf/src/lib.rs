@@ -754,6 +754,11 @@ fn fdf_body(fdf: &Document) -> Result<Dict, DataError> {
 }
 
 /// The field values in a form data file (FDF or XFDF) or a filled-in PDF form, in file order.
+///
+/// # Errors
+///
+/// Returns `Err` when the bytes are not a readable FDF or PDF (`DataError::Malformed`) or when
+/// they are neither XFDF nor a recognised form-data file (`DataError::UnknownFormat`).
 pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError> {
     if bytes.starts_with(b"%FDF") {
         let fdf = Document::open(std::sync::Arc::new(bytes.to_vec())).map_err(|e| DataError::Malformed(e.to_string()))?;
@@ -895,6 +900,12 @@ fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
 
 /// Import comments and/or field values from XFDF, FDF, XML, CSV or tab-delimited text
 /// (detected from the content).
+///
+/// # Errors
+///
+/// Returns `Err` when the file cannot be parsed (`DataError::Malformed`), when no format fits its
+/// content (`DataError::UnknownFormat`), or when nothing in it matches this document
+/// (`DataError::NothingImported`).
 pub fn import(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
     let report = if bytes.starts_with(b"%FDF") {
         import_fdf(doc, bytes)?

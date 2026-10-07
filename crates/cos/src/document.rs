@@ -174,12 +174,24 @@ impl Document {
 
     /// Parse a document. Damaged cross-reference data is reconstructed; see `repair_log`.
     /// Encrypted documents open only if their user password is empty; see `open_with_password`.
+    ///
+    /// # Errors
+    ///
+    /// `CosError::NotPdf` when the data holds no PDF, `CosError::Syntax` when recovery
+    /// finds no objects at all, `CosError::NeedsPassword` for a document whose user
+    /// password is not empty, `CosError::Security` for unsupported security.
     pub fn open(data: Arc<Vec<u8>>) -> Result<Self, CosError> {
         Self::open_with_password(data, None)
     }
 
     /// Parse a document, authenticating encrypted ones with `password` (owner or user; `None`
     /// tries the empty password). Fails with `NeedsPassword` / `WrongPassword` as appropriate.
+    ///
+    /// # Errors
+    ///
+    /// As [`Document::open`], except the password: `CosError::WrongPassword` when
+    /// `password` does not match, `CosError::NeedsPassword` when it is `None` and the
+    /// document needs one.
     pub fn open_with_password(data: Arc<Vec<u8>>, password: Option<&str>) -> Result<Self, CosError> {
         // Viewers accept files whose header is missing or damaged as long as the body looks
         // like PDF; so do we (a note goes to the repair log).
@@ -332,6 +344,10 @@ impl Document {
 
     /// Protect the document with a password (§7.6.4). Takes effect on the next save, which is
     /// always a full rewrite. Returns the handler (authenticated as owner).
+    ///
+    /// # Errors
+    ///
+    /// `CosError::Security` when the crypt library cannot build a handler for `params`.
     pub fn set_encryption(&mut self, params: &printcraft_crypt::NewEncryption) -> Result<(), CosError> {
         // The file identifier is part of the key; make sure it exists and keep it.
         let id0 = match self.trailer.get(b"ID") {
@@ -512,6 +528,14 @@ impl Document {
         self.resolve(o).as_dict().cloned()
     }
 
+    /// Fetch object `num`, loading it from the file or the edit overlay and caching it.
+    ///
+    /// # Errors
+    ///
+    /// `CosError::MissingObject` when the number has no readable definition,
+    /// `CosError::Syntax` when the object does not parse or references cycle,
+    /// `CosError::Filter` when an object stream does not decode, `CosError::Poisoned`
+    /// when the cache lock is poisoned.
     pub fn try_get(&self, num: u32) -> Result<Arc<Object>, CosError> {
         match self.overlay.get(&num) {
             Some(Slot::Set(_, o)) => return Ok(o.clone()),
@@ -635,6 +659,11 @@ impl Document {
     }
 
     /// Edit a dictionary (or stream dictionary) object in place.
+    ///
+    /// # Errors
+    ///
+    /// `CosError::NotADictionary` when `r` does not resolve to a dictionary or stream
+    /// (including a missing or unparsable object).
     pub fn update_dict(&mut self, r: ObjRef, f: impl FnOnce(&mut Dict)) -> Result<(), CosError> {
         let mut obj = (*self.get(r)).clone();
         let d = obj.as_dict_mut().ok_or(CosError::NotADictionary(r))?;
@@ -685,6 +714,11 @@ impl Document {
 
     /// Rebase this document on bytes written by the writer (after a save): edits become part of
     /// the file and the overlay is cleared, so the next incremental save appends only new edits.
+    ///
+    /// # Errors
+    ///
+    /// As [`Document::open`] on `bytes`: the saved output does not parse, recovery finds
+    /// no objects, or an encrypted document does not open with the empty password.
     pub fn reopen_after_save(&self, bytes: Arc<Vec<u8>>) -> Result<Self, CosError> {
         Document::open(bytes)
     }

@@ -189,6 +189,13 @@ impl Session {
     /// Run `script` in document `id`, for a button (`target`: the field, event "Mouse Up") or
     /// the console (no target). Field changes and `resetForm` are applied as one undoable step;
     /// everything else the script asked for is returned.
+    ///
+    /// # Errors
+    ///
+    /// When JavaScript is switched off in the preferences (`EditError::Invalid`), there is no
+    /// document with that `id` (`EditError::NoDocument`), the document is read-only
+    /// (`EditError::ReadOnly`), or applying the field changes fails (see [`Session::apply`]). A
+    /// script that itself fails is reported in the returned outcome, not as an error.
     pub fn run_javascript(&mut self, id: DocId, script: &str, target: Option<&str>) -> Result<Outcome, EditError> {
         if self.js_off {
             return Err(EditError::Invalid("JavaScript is turned off (Preferences ▸ JavaScript)".into()));
@@ -306,6 +313,13 @@ impl Session {
     }
 
     /// Detect fields and add them, as one undoable step. Returns the new fields' names.
+    ///
+    /// # Errors
+    ///
+    /// When adding a detected field fails: the document is read-only, its security settings
+    /// refuse the change (`EditError::NotPermitted`), the name or rectangle is rejected
+    /// (`EditError::Form`), or the result cannot be written and re-opened (see
+    /// [`Session::apply`]).
     pub fn auto_detect_fields(&mut self, id: DocId, pages: &[usize]) -> Result<Vec<String>, EditError> {
         let found = self.detect_fields(id, pages);
         if found.is_empty() {

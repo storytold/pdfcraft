@@ -283,6 +283,11 @@ fn bags(safe_contents: &[u8], password: &str, out: &mut Vec<Bag>) -> Result<(), 
 }
 
 /// Open a `.p12` / `.pfx` file. A wrong password is [`SignError::WrongPassword`].
+///
+/// # Errors
+///
+/// When `bytes` is not a parseable PKCS#12 file, a protection scheme or digest is unsupported,
+/// the password does not verify, or the file holds no private key with a matching certificate.
 pub fn open(bytes: &[u8], password: &str) -> Result<DigitalId, SignError> {
     let pfx = Tlv::parse_all(bytes).map_err(|_| bad("not a PKCS #12 file"))?.children()?;
     let auth_safe = pfx.get(1).ok_or_else(|| bad("authSafe"))?.children()?;
@@ -366,6 +371,11 @@ fn random(n: usize) -> Result<Vec<u8>, SignError> {
 }
 
 /// Write a digital ID as a `.p12` protected by `password`.
+///
+/// # Errors
+///
+/// When a random salt or IV cannot be generated, AES key setup fails, or a structure built here
+/// does not re-parse.
 pub fn write(id: &DigitalId, password: &str) -> Result<Vec<u8>, SignError> {
     const ITER: u32 = 2048;
     let encrypt = |plain: &[u8]| -> Result<Vec<u8>, SignError> {

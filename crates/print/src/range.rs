@@ -27,6 +27,11 @@ fn page_of(tok: &str, count: usize, labels: &[String]) -> Result<usize, PrintErr
 /// The pages to print (0-based, in print order). `range` is `None` for all pages; it may list
 /// numbers and labels with `-` ranges (open-ended allowed: `5-`, `-3`). The subset counts the
 /// selected pages (the first selected is "odd"), as Acrobat does.
+///
+/// # Errors
+///
+/// Returns `PrintError::Invalid` when a token is not a page number or label or lies outside
+/// `1..=count`, and `PrintError::NoPages` when the subset leaves no pages.
 pub fn select_pages(count: usize, range: Option<&str>, labels: &[String], subset: Subset, reverse: bool) -> Result<Vec<usize>, PrintError> {
     let mut pages = Vec::new();
     match range.map(str::trim).filter(|r| !r.is_empty()) {

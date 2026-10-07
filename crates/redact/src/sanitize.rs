@@ -242,6 +242,13 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
 }
 
 /// Remove the chosen categories. Returns what was removed per category.
+///
+/// # Errors
+///
+/// Returns `Err` when the document has no catalog or none of the chosen categories has anything
+/// to remove (`RedactError::NothingToApply`), when a page's content or annotation list cannot be
+/// decoded or written (`RedactError::Unreadable`, `RedactError::Cos`), or when flattening the
+/// form fields fails (`RedactError::Edit`, `RedactError::Form`).
 pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden, usize)>, RedactError> {
     let counts = scan(doc);
     let count = |h: Hidden| counts.iter().find(|c| c.0 == h).map_or(0, |c| c.1);
@@ -391,6 +398,12 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
 }
 
 /// Sanitize Document: remove every category of hidden information.
+///
+/// # Errors
+///
+/// Returns `Err` when a page's content or annotation list cannot be decoded or written
+/// (`RedactError::Unreadable`, `RedactError::Cos`) or when removing the form fields fails
+/// (`RedactError::Edit`, `RedactError::Form`). Nothing hidden to remove is not an error.
 pub fn sanitize(doc: &mut Document) -> Result<Vec<(Hidden, usize)>, RedactError> {
     match remove_hidden(doc, &HIDDEN) {
         // Nothing hidden is fine for Sanitize: the full rewrite still drops old revisions.

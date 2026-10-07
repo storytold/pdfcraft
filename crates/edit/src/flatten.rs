@@ -54,6 +54,11 @@ fn placement(doc: &Document, form: &Dict, rect: [f64; 4]) -> Option<[f64; 6]> {
 
 /// Flatten comments and/or form fields on `pages`. Returns how many annotations were merged
 /// into page content.
+///
+/// # Errors
+///
+/// Returns `Err` when a page index in `pages` is out of range (`EditError::NoSuchPage`) or when
+/// a page's annotations, resources or content cannot be written (`EditError::Cos`).
 pub fn flatten(doc: &mut Document, pages: &[usize], comments: bool, fields: bool) -> Result<usize, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;

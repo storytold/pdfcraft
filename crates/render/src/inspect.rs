@@ -238,6 +238,13 @@ pub struct FontInfo {
 
 /// Inspect a document. Fails only if the renderer itself cannot open the file (or needs a
 /// password). Never panics: parser crashes are caught and reported.
+///
+/// # Errors
+///
+/// Returns `Err` when the parser crashes or the file has no readable page tree or no pages
+/// (`OpenError::Invalid`), when it is encrypted and needs a password or the given one is wrong
+/// (`OpenError::NeedsPassword`, `OpenError::WrongPassword`), or when its encryption is not
+/// supported (`OpenError::Unsupported`).
 pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, OpenError> {
     let pdf = catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes.clone(), password.unwrap_or(""))))
         .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))?
@@ -882,6 +889,12 @@ pub fn pretty_date(s: &str) -> String {
 }
 
 /// Fetch an attachment's bytes (decoded). Capped at 1 GiB to defuse decompression bombs.
+///
+/// # Errors
+///
+/// Returns `Err` when the document cannot be opened, when the attachment cannot be located (no
+/// `/Names`, `/EmbeddedFiles`, page, annotation or embedded stream), or when the stream cannot be
+/// decompressed within the 1 GiB limit; a panic inside the reader is caught and reported as one.
 pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -> Result<Vec<u8>, String> {
     let run = || -> Result<Vec<u8>, String> {
         let options = load_options(password);

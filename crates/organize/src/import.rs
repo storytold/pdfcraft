@@ -186,6 +186,12 @@ impl Copier<'_> {
 ///
 /// Resources identical to ones already in `dst` (the same fonts, images, colour profiles) are
 /// shared rather than stored twice (see `dedupe`).
+///
+/// # Errors
+///
+/// When `src_pages` names a page that `src` does not have (`OrganizeError::NoSuchPage`), when
+/// either document has no page tree (`OrganizeError::NoPageTree`), or when writing the copied
+/// pages fails (`OrganizeError::Cos`).
 pub fn import_pages(dst: &mut Document, src: &Document, src_pages: &[usize], at: usize) -> Result<Vec<ObjRef>, OrganizeError> {
     let first_new = dst.object_numbers().last().map_or(1, |n| n + 1);
     let pages = import_pages_mapped(dst, src, src_pages, at)?.0;
@@ -410,6 +416,12 @@ fn register_fields(dst: &mut Document, fields: &[ObjRef]) -> Result<(), Organize
 
 /// A new document containing copies of `pages` from `src` (Extract Pages / Split).
 /// Document information (title, author…) is carried over.
+///
+/// # Errors
+///
+/// When `pages` names a page that `src` does not have (`OrganizeError::NoSuchPage`), when `src`
+/// has no page tree (`OrganizeError::NoPageTree`), or when writing the copy fails
+/// (`OrganizeError::Cos`).
 pub fn extract_pages(src: &Document, pages: &[usize]) -> Result<Document, OrganizeError> {
     let mut out = Document::new_empty();
     // One source: nothing to deduplicate.
@@ -455,6 +467,11 @@ pub fn split_ranges(page_count: usize, by: &SplitBy) -> Vec<std::ops::Range<usiz
 }
 
 /// Split a document into several new documents.
+///
+/// # Errors
+///
+/// When `src` has no page tree (`OrganizeError::NoPageTree`) or writing one of the parts fails
+/// (`OrganizeError::Cos`).
 pub fn split(src: &Document, by: &SplitBy) -> Result<Vec<Document>, OrganizeError> {
     let n = crate::page_count(src)?;
     split_ranges(n, by).into_iter().map(|r| extract_pages(src, &r.collect::<Vec<_>>())).collect()
@@ -464,6 +481,11 @@ pub fn split(src: &Document, by: &SplitBy) -> Result<Vec<Document>, OrganizeErro
 /// bookmark (its `title`) pointing to its first page, like Acrobat's Combine Files.
 /// The source's own bookmarks are nested (collapsed) under its entry, and its document-level
 /// attachments are carried over.
+///
+/// # Errors
+///
+/// When any source has no page tree (`OrganizeError::NoPageTree`) or writing the combined
+/// document fails (`OrganizeError::Cos`).
 pub fn combine(sources: &[(&str, &Document)]) -> Result<Document, OrganizeError> {
     let all: Vec<(&str, &Document, Option<&[usize]>)> = sources.iter().map(|(t, d)| (*t, *d, None)).collect();
     combine_selected(&all)
@@ -471,6 +493,12 @@ pub fn combine(sources: &[(&str, &Document)]) -> Result<Document, OrganizeError>
 
 /// Combine Files with chosen pages: each source contributes `pages` (0-based, in that order;
 /// `None` for all of them). Bookmarks that point at pages left out lose their destination.
+///
+/// # Errors
+///
+/// When a chosen page index is past the end of its source (`OrganizeError::NoSuchPage`), when a
+/// source has no page tree (`OrganizeError::NoPageTree`), or when writing the combined document
+/// fails (`OrganizeError::Cos`).
 pub fn combine_selected(sources: &[(&str, &Document, Option<&[usize]>)]) -> Result<Document, OrganizeError> {
     let mut out = Document::new_empty();
     let mut marks = Vec::new();
@@ -670,6 +698,12 @@ fn copy_outline_level(
 /// for backgrounds and watermarks taken from a PDF. The form's `/BBox` is the page's crop box
 /// and its `/Matrix` undoes the page rotation, so it draws upright as displayed. Returns the
 /// form and its displayed size in points.
+///
+/// # Errors
+///
+/// When `page` is past the end of `src` (`OrganizeError::NoSuchPage`), when `src` has no page
+/// tree (`OrganizeError::NoPageTree`), when a content stream fails to decode
+/// (`OrganizeError::Invalid`), or when registering layers fails (`OrganizeError::Cos`).
 pub fn page_as_form(dst: &mut Document, src: &Document, page: usize) -> Result<(ObjRef, (f64, f64)), OrganizeError> {
     use printcraft_cos::Stream;
     let all = walk(src)?;

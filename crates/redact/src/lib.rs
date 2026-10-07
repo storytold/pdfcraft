@@ -265,6 +265,14 @@ fn overlay_content(marks: &[&Mark]) -> Vec<u8> {
 
 /// Apply every redaction mark (or only those on `pages`, 0-based). Irreversible for the saved
 /// file; callers keep the previous document for undo.
+///
+/// # Errors
+///
+/// Returns `Err` when no marks fall in `pages` (`RedactError::NothingToApply`), when a page's
+/// content cannot be decoded (`RedactError::Unreadable`) or written (`RedactError::Cos`), when
+/// drawing the boxes or deleting the doomed fields fails (`RedactError::Edit`,
+/// `RedactError::Form`), and when the verification pass still finds content under a mark
+/// (`RedactError::Residue`) — nothing is changed then.
 pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, RedactError> {
     let all_marks = marks(doc);
     let chosen: Vec<&Mark> = all_marks.iter().filter(|m| pages.is_none_or(|p| p.contains(&m.page))).collect();
@@ -424,6 +432,11 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
 }
 
 /// Remove redaction marks without applying them (`None` = all).
+///
+/// # Errors
+///
+/// Returns `Err` when no mark falls in `pages` (`RedactError::NothingToApply`) or when a page's
+/// annotation list cannot be written (`RedactError::Cos`).
 pub fn clear_marks(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize, RedactError> {
     let all = marks(doc);
     let doomed: Vec<ObjRef> = all.iter().filter(|m| pages.is_none_or(|p| p.contains(&m.page))).map(|m| m.obj).collect();

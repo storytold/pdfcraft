@@ -108,6 +108,11 @@ impl PrintCraftApp {
     }
 
     /// Create a new document from clipboard contents.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when encoding the image as PNG fails, the session cannot create the
+    /// document from the image or text, or the new document cannot be opened as a tab.
     pub fn create_from_clip(&mut self, clip: Clip) -> Result<(), String> {
         let created = match clip {
             Clip::Image { width, height, rgba } => {
