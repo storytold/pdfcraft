@@ -426,6 +426,51 @@ fn writing_to_a_folder_touches_nothing_beside_it() {
 }
 
 #[test]
+fn file_names_from_documents_stay_in_the_output_folder() {
+    // Folder outputs name their files after the document. A document name with separators,
+    // `..` or (on Windows) a drive letter used to take those files out of the folder, and out
+    // of the root.
+    let (base, root) = sandbox("doc-names");
+    let mut a = auto(&root);
+    let names = ["../../escape", "../../escape.pdf", "x/../../../escape.pdf", "/tmp/escape.pdf", r"x\C:escape.pdf", "C:escape.pdf", "..", "."];
+    for (i, name) in names.iter().enumerate() {
+        let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "pages": 2, "name": name }))["doc"].as_u64().unwrap();
+        let out = format!("out{i}");
+        let mut files: Vec<String> = Vec::new();
+        let r = ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": out, "dpi": 10 }));
+        files.extend(r["files"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_owned()));
+        let r = ok(&mut a, "page_extract", json!({ "doc": doc, "pages": [1], "separate": true, "out_dir": out }));
+        files.extend(r["files"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_owned()));
+        let r = ok(&mut a, "doc_split", json!({ "doc": doc, "every": 1, "out_dir": out }));
+        files.extend(r["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap().to_owned()));
+        assert_eq!(files.len(), 5, "{name:?}: {files:?}");
+        for f in &files {
+            let f = Path::new(f);
+            assert_eq!(f.parent(), Some(root.join(&out).as_path()), "{name:?} wrote {}", f.display());
+            assert!(f.is_file(), "{name:?}: {} exists", f.display());
+        }
+    }
+    // The same for the images a page uses, with a document that has one.
+    let doc = ok(&mut a, "doc_open", json!({ "path": "inside.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 18 }));
+    let pic =
+        ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["src/inside_page_1.png"], "name": "../../escape" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_export_all_images", json!({ "doc": pic, "folder": "all" }));
+    let files = r["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1, "{r}");
+    for f in files {
+        assert_eq!(Path::new(f["path"].as_str().unwrap()).parent(), Some(root.join("all").as_path()), "{r}");
+    }
+    let mut left: Vec<String> = std::fs::read_dir(&base).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    left.sort();
+    assert_eq!(left, ["outside", "root"]);
+
+    // The root itself must be a folder.
+    assert!(Automation::new().with_root(root.join("inside.pdf")).is_err());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
 fn command_list_reports_enablement_and_tools() {
     let dir = workdir("commands");
     let mut a = auto(&dir);

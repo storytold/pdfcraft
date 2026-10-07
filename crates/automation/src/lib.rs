@@ -100,7 +100,11 @@ impl Automation {
 
     /// Confine every path the tools read or write to `root` (relative paths resolve inside it).
     pub fn with_root(mut self, root: impl Into<PathBuf>) -> std::io::Result<Self> {
-        self.root = Some(root.into().canonicalize()?);
+        let root = root.into().canonicalize()?;
+        if !root.is_dir() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "the root must be a folder"));
+        }
+        self.root = Some(root);
         Ok(self)
     }
 
@@ -924,7 +928,7 @@ impl Automation {
             let out = pdfcraft_engine::export::extract_images(&doc.export_source(), &pages, min).map_err(failed)?;
             let mut files = Vec::new();
             for (k, img) in out.images.iter().enumerate() {
-                let path = folder.join(pdfcraft_engine::export::image_file_name(&stem, img, k + 1));
+                let path = child(&folder, &pdfcraft_engine::export::image_file_name(&stem, img, k + 1));
                 write_atomic(&path, &img.data)?;
                 files.push(json!({ "path": path.to_string_lossy(), "page": img.page + 1, "width": img.width, "height": img.height }));
             }
@@ -942,7 +946,7 @@ impl Automation {
         let mut files = Vec::new();
         for p in pages {
             let img = ex.image(p, dpi, format).map_err(failed)?;
-            let path = folder.join(format!("{stem}_page_{}.{}", p + 1, format.extension()));
+            let path = child(&folder, &format!("{stem}_page_{}.{}", p + 1, format.extension()));
             write_atomic(&path, &img)?;
             files.push(path.to_string_lossy().into_owned());
         }
@@ -1117,7 +1121,7 @@ impl Automation {
             let mut files = Vec::new();
             for &p in &pages {
                 let bytes = self.session.extract(id, &[p]).map_err(failed)?;
-                let path = dir.join(format!("{stem}-page{}.pdf", p + 1));
+                let path = child(&dir, &format!("{stem}-page{}.pdf", p + 1));
                 write_atomic(&path, &bytes)?;
                 files.push(path.to_string_lossy().into_owned());
             }
@@ -1196,7 +1200,7 @@ impl Automation {
                 Some((_, t)) => format!("{stem}-{}.pdf", safe(t)),
                 None => format!("{stem}-part{}.pdf", i + 1),
             };
-            let path = dir.join(file);
+            let path = child(&dir, &file);
             write_atomic(&path, bytes)?;
             files.push(json!({ "path": path.to_string_lossy(), "first_page": first, "last_page": last }));
         }
@@ -1648,6 +1652,17 @@ fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[u
     out
 }
 
+/// The file `name` inside `dir`, where `name` comes from a document or an argument: separators,
+/// colons (a Windows drive or stream) and control characters become `_`, and a name of only dots
+/// gets a leading `_`, so it is one plain file name and can't lead out of `dir`.
+fn child(dir: &Path, name: &str) -> PathBuf {
+    let mut safe: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':') || c.is_control() { '_' } else { c }).collect();
+    if safe.chars().all(|c| c == '.') {
+        safe.insert(0, '_');
+    }
+    dir.join(safe)
+}
+
 /// Write via a temporary file in the same directory, then rename over the target.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     // A folder can't be replaced, and staging beside it could land outside the root: "." names
@@ -1680,6 +1695,19 @@ mod tests {
         let deep = "../".repeat(base.components().count() + 1);
         assert_eq!(lexical(&base.join(&deep)), None);
         assert_eq!(lexical(Path::new("..")), None);
+    }
+
+    #[test]
+    fn names_from_documents_become_one_plain_file_name() {
+        let dir = std::env::temp_dir().join("out");
+        for name in ["../../x.png", "/abs/x.png", r"..\..\x.png", "C:x.png", r"\\host\share\x.png", "a:stream", "..", ".", "", "tab\there", "ok.png"]
+        {
+            let p = child(&dir, name);
+            assert_eq!(p.parent(), Some(dir.as_path()), "{name:?} -> {}", p.display());
+            assert_eq!(p.components().count(), dir.components().count() + 1, "{name:?} -> {}", p.display());
+        }
+        assert_eq!(child(&dir, "ok.png"), dir.join("ok.png"));
+        assert_eq!(child(&dir, "../x.png"), dir.join(".._x.png"));
     }
 
     #[cfg(windows)]
