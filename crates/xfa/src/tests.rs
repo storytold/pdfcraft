@@ -3,7 +3,8 @@ use std::sync::Arc;
 use printcraft_cos::{Document, Object, SaveOptions, write_incremental};
 
 use super::*;
-use crate::fixtures::{shell, template};
+use crate::data::{FieldData, FieldDatum, build_data, iso_to_pattern, parse_datasets, pattern_to_iso, read_values, som_to_path, write_datasets};
+use crate::fixtures::{shell, static_shell, template, template_with_data};
 use crate::layout::Item;
 use crate::model::*;
 
@@ -258,4 +259,139 @@ fn jpeg_headers_give_the_size() {
     assert_eq!(pdf::jpeg_size(&j), Some((300, 200)));
     assert_eq!(pdf::jpeg_size(b"\x89PNG"), None);
     assert_eq!(pdf::jpeg_size(&[0xFF, 0xD8, 0xFF]), None);
+}
+
+const DATA: &str = "<form><head><familyName>Singh</familyName><agree>1</agree><born>2001-02-03</born><answer>N</answer></head><table><row><from0>2019</from0><what0>Studied</what0><where0>Delhi</where0></row><row><from0>2021</from0><what0>Worked</what0><where0>Toronto</where0></row><row><from0>2023</from0><what0>Moved</what0><where0>Ottawa</where0></row></table></form>";
+
+#[test]
+fn datasets_parse_into_a_tree_and_som_paths_find_their_nodes() {
+    let d = parse_datasets(&template_with_data(1, DATA)).expect("datasets");
+    assert_eq!(d.name, "data");
+    assert_eq!(d.text_at(&som_to_path("form[0].head[0].familyName[0]")), Some("Singh"));
+    assert_eq!(d.text_at(&som_to_path("form[0].#subform[0].head[0].answer[0]")), Some("N"), "unnamed containers have no data node");
+    assert_eq!(d.text_at(&som_to_path("form[0].table[0].row[2].where0[0]")), Some("Ottawa"));
+    assert_eq!(d.text_at(&som_to_path("form[0].table[0].row[3].where0[0]")), None);
+    assert_eq!(d.count(&som_to_path("form[0].table[0]"), "row"), 3);
+    assert_eq!(som_to_path("a[1].b"), vec![("a".to_string(), 1), ("b".to_string(), 0)]);
+    assert!(parse_datasets("<xdp:xdp xmlns:xdp=\"x\"/>").is_none());
+}
+
+#[test]
+fn dates_convert_between_iso_and_acrobat_patterns() {
+    assert_eq!(iso_to_pattern("2001-02-03", "yyyy-mm-dd"), "2001-02-03");
+    assert_eq!(iso_to_pattern("2001-02-03", "mm/dd/yyyy"), "02/03/2001");
+    assert_eq!(iso_to_pattern("2001-02-03", "d.m.yy"), "3.2.01");
+    assert_eq!(iso_to_pattern("not a date", "mm/dd/yyyy"), "not a date");
+    assert_eq!(pattern_to_iso("02/03/2001", "mm/dd/yyyy").as_deref(), Some("2001-02-03"));
+    assert_eq!(pattern_to_iso("3.2.01", "d.m.yy").as_deref(), Some("2001-02-03"));
+    assert_eq!(pattern_to_iso("2001-02-03", "yyyy-mm-dd").as_deref(), Some("2001-02-03"));
+    assert_eq!(pattern_to_iso("13/40/2001", "mm/dd/yyyy"), None);
+    assert_eq!(pattern_to_iso("hello", "mm/dd/yyyy"), None);
+}
+
+#[test]
+fn data_fills_the_fields_and_adds_rows() {
+    let form = layout_xml(&template_with_data(1, DATA)).unwrap();
+    let all: Vec<&Widget> = form.pages.iter().flat_map(widgets).collect();
+    let by = |n: &str| all.iter().find(|w| w.name == n).unwrap_or_else(|| panic!("no widget {n}"));
+    assert_eq!(by("familyName").value.as_deref(), Some("Singh"));
+    assert_eq!(by("agree").value.as_deref(), Some("1"), "checked by its on value");
+    assert_eq!(by("born").value.as_deref(), Some("2001-02-03"));
+    let no = all.iter().find(|w| matches!(&w.kind, WidgetKind::Radio { on, .. } if on == "N")).unwrap();
+    let yes = all.iter().find(|w| matches!(&w.kind, WidgetKind::Radio { on, .. } if on == "Y")).unwrap();
+    assert!(no.value.is_some() && yes.value.is_none(), "the group's data picks the N button");
+    // One row in the template, three in the data: three rows laid out, each with its values.
+    let wheres: Vec<&str> = all.iter().filter(|w| w.name.starts_with("where0")).filter_map(|w| w.value.as_deref()).collect();
+    assert_eq!(wheres, ["Delhi", "Toronto", "Ottawa"]);
+    assert_eq!(by("where0_3").som, "form[0].table[0].row[2].where0[0]");
+    assert_eq!(by("agree").items, vec!["1".to_string(), "0".to_string()]);
+}
+
+/// The AcroForm's terminal fields as the engine would hand them over.
+fn field_data(doc: &Document) -> Vec<FieldDatum> {
+    let root = doc.get(doc.root().unwrap());
+    let acro = doc.resolve(root.as_dict().unwrap().get(b"AcroForm").unwrap());
+    let fields = doc.resolve(acro.as_dict().unwrap().get(b"Fields").unwrap()).as_array().unwrap().clone();
+    let mut out = Vec::new();
+    for f in fields {
+        let r = f.as_ref().unwrap();
+        let d = doc.get(r);
+        let d = d.as_dict().unwrap();
+        let name = d.get(b"T").and_then(|t| t.as_string()).map(|s| s.to_text()).unwrap_or_default();
+        let v = d.get(b"V").map(|v| doc.resolve(v));
+        let data = match d.name(b"FT") {
+            Some(b"Tx") => FieldData::Text(v.and_then(|v| v.as_string().map(|s| s.to_text())).unwrap_or_default()),
+            Some(b"Btn") if d.int(b"Ff").unwrap_or(0) & (1 << 15) != 0 => {
+                FieldData::Radio(v.and_then(|v| v.as_name().map(|n| String::from_utf8_lossy(n).into_owned())).filter(|n| n != "Off"))
+            }
+            Some(b"Btn") if d.int(b"Ff").unwrap_or(0) & (1 << 16) != 0 => FieldData::None,
+            Some(b"Btn") => FieldData::Check(v.and_then(|v| v.as_name().map(|n| n != b"Off")).unwrap_or(false)),
+            _ => FieldData::None,
+        };
+        out.push(FieldDatum { obj: r, name, data });
+    }
+    out
+}
+
+#[test]
+fn the_datasets_packet_is_written_from_the_fields_and_read_back() {
+    let mut doc = Document::open(Arc::new(shell(&template_with_data(1, DATA)))).unwrap();
+    render_into(&mut doc).unwrap();
+    // The laid-out fields hold the data's values; writing them back reproduces it.
+    let fields = field_data(&doc);
+    assert!(fields.iter().any(|f| f.name == "familyName" && f.data == FieldData::Text("Singh".into())), "{fields:?}");
+    assert!(fields.iter().any(|f| f.name == "answer" && f.data == FieldData::Radio(Some("N".into()))), "{fields:?}");
+    assert!(write_datasets(&mut doc, &fields).unwrap());
+    let doc = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let p = read_packets(&doc).unwrap().unwrap();
+    let d = parse_datasets(&p.xdp).unwrap();
+    assert_eq!(d.text_at(&som_to_path("form[0].head[0].familyName[0]")), Some("Singh"));
+    assert_eq!(d.text_at(&som_to_path("form[0].head[0].agree[0]")), Some("1"));
+    assert_eq!(d.text_at(&som_to_path("form[0].head[0].answer[0]")), Some("N"));
+    assert_eq!(d.text_at(&som_to_path("form[0].table[0].row[2].where0[0]")), Some("Ottawa"));
+    assert_eq!(p.xdp.matches("<xfa:datasets").count(), 1, "the packet is replaced, not duplicated");
+    // Change a value, write again: the data follows, and reading gives the field its value.
+    let mut doc = doc;
+    let mut fields = field_data(&doc);
+    for f in &mut fields {
+        if f.name == "familyName" {
+            f.data = FieldData::Text("Kaur".into());
+        }
+        if f.name == "agree" {
+            f.data = FieldData::Check(false);
+        }
+    }
+    write_datasets(&mut doc, &fields).unwrap();
+    let values = read_values(&doc, &fields);
+    assert!(values.contains(&("familyName".to_string(), FieldData::Text("Kaur".into()))), "{values:?}");
+    assert!(values.contains(&("agree".to_string(), FieldData::Check(false))), "{values:?}");
+    // A form without a datasets packet gets one, before the postamble.
+    let mut doc = Document::open(Arc::new(shell(&template(1)))).unwrap();
+    render_into(&mut doc).unwrap();
+    let fields = field_data(&doc);
+    assert!(write_datasets(&mut doc, &fields).unwrap());
+    let p = read_packets(&doc).unwrap().unwrap();
+    assert!(parse_datasets(&p.xdp).is_some());
+    // No XFA at all: nothing to write.
+    let mut plain = Document::new_empty();
+    assert!(!write_datasets(&mut plain, &[]).unwrap());
+}
+
+#[test]
+fn static_forms_read_their_values_from_the_datasets() {
+    let doc = Document::open(Arc::new(static_shell("<form1><page1><name>Ada</name><agree>1</agree></page1></form1>"))).unwrap();
+    assert!(!is_dynamic(&doc));
+    let fields = vec![
+        FieldDatum { obj: printcraft_cos::ObjRef::new(8, 0), name: "form1[0].page1[0].name[0]".into(), data: FieldData::Text(String::new()) },
+        FieldDatum { obj: printcraft_cos::ObjRef::new(9, 0), name: "form1[0].page1[0].agree[0]".into(), data: FieldData::Check(false) },
+    ];
+    let values = read_values(&doc, &fields);
+    assert_eq!(
+        values,
+        vec![
+            ("form1[0].page1[0].name[0]".to_string(), FieldData::Text("Ada".into())),
+            ("form1[0].page1[0].agree[0]".to_string(), FieldData::Check(true))
+        ]
+    );
+    assert_eq!(build_data(&doc, &fields), "<xfa:data><form1><page1><name></name><agree></agree></page1></form1></xfa:data>");
 }

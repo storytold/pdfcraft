@@ -1866,7 +1866,7 @@ fn notices(
         Some((
             "text-cursor-input",
             format!(
-                "Dynamic XFA form laid out from its template: {} page{}, {} field{}. Adobe's viewers won't show values filled in here yet.{}",
+                "Dynamic XFA form laid out from its template: {} page{}, {} field{}.{}",
                 x.pages,
                 s(x.pages),
                 x.fields,
@@ -1883,8 +1883,8 @@ fn notices(
         ))
     } else if info.xfa == Some(printcraft_render::Xfa::Static) {
         Some((
-            "triangle-alert",
-            "This form also contains XFA data, which PrintCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.".to_string(),
+            "text-cursor-input",
+            "XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.".to_string(),
             true,
         ))
     } else if !info.fields.is_empty() {

@@ -1704,6 +1704,52 @@ fn xfa_layout(doc: &mut printcraft_cos::Document) -> Result<XfaLayout, String> {
     Ok(report)
 }
 
+/// The form's fields as the XFA data layer wants them.
+fn xfa_field_data(doc: &printcraft_cos::Document) -> Vec<printcraft_xfa::FieldDatum> {
+    use printcraft_forms::FieldKind as K;
+    printcraft_forms::fields(doc)
+        .into_iter()
+        .map(|f| {
+            let data = match f.kind {
+                K::Text | K::Combo | K::List => printcraft_xfa::FieldData::Text(f.value.join("\n")),
+                K::CheckBox => printcraft_xfa::FieldData::Check(!f.value.is_empty()),
+                K::Radio => printcraft_xfa::FieldData::Radio(f.value.first().cloned()),
+                K::PushButton | K::Signature => printcraft_xfa::FieldData::None,
+            };
+            printcraft_xfa::FieldDatum { obj: f.obj, name: f.name, data }
+        })
+        .collect()
+}
+
+/// Keep the XFA datasets packet in step with the fields after an edit.
+fn xfa_sync_datasets(doc: &mut printcraft_cos::Document) -> Result<(), String> {
+    let data = xfa_field_data(doc);
+    printcraft_xfa::write_datasets(doc, &data).map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Give the fields the values the XFA datasets hold (a form filled in another viewer). Returns
+/// how many fields changed.
+fn xfa_values_from_datasets(doc: &mut printcraft_cos::Document) -> Result<usize, String> {
+    let data = xfa_field_data(doc);
+    let fields = printcraft_forms::fields(doc);
+    let mut changed = 0;
+    for (name, value) in printcraft_xfa::read_values(doc, &data) {
+        let Some(f) = fields.iter().find(|f| f.name == name) else { continue };
+        let new = match value {
+            printcraft_xfa::FieldData::Text(t) => (f.value.join("\n") != t).then_some(FieldValue::Text(t)),
+            printcraft_xfa::FieldData::Check(on) => (f.value.is_empty() == on).then_some(FieldValue::Check(on)),
+            printcraft_xfa::FieldData::Radio(sel) => (f.value.first() != sel.as_ref()).then_some(FieldValue::Radio(sel)),
+            printcraft_xfa::FieldData::None => None,
+        };
+        if let Some(v) = new
+            && printcraft_forms::set_value(doc, &name, &v).is_ok()
+        {
+            changed += 1;
+        }
+    }
+    Ok(changed)
+}
+
 /// Validate the signature fields of `cos` (written as `bytes`).
 fn signatures_of(cos: &printcraft_cos::Document, bytes: &[u8], trust: &TrustStore, cache: &printcraft_sign::DigestCache) -> Arc<Vec<SignatureInfo>> {
     Arc::new(printcraft_sign::pdf::list_cached(cos, bytes, trust, cache))
@@ -1793,27 +1839,50 @@ impl Session {
         // A dynamic XFA form is a shell around an XML template; lay the template out into real
         // pages and fields so the rest of the engine works on it. The original bytes stay: the
         // laid-out form is one appended revision.
+        let opts = SaveOptions { mod_date: self.now().map(printcraft_cos::pdf_date), ..SaveOptions::default() };
+        // Write `work` as one more revision and reopen it: what the document then is.
+        let rebase = |work: &printcraft_cos::Document| -> Result<(Arc<Vec<u8>>, DocInfo, printcraft_cos::Document), String> {
+            let new_bytes = write_incremental(work, &opts).map(Arc::new).map_err(|e| e.to_string())?;
+            let new_info = inspect(new_bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
+            let new_cos = printcraft_cos::Document::open_with_password(new_bytes.clone(), password).map_err(|e| e.to_string())?;
+            Ok((new_bytes, new_info, new_cos))
+        };
         let (bytes, info, cos, xfa) = match (info.xfa, cos) {
-            (Some(printcraft_render::Xfa::Dynamic), Ok(Ok(cos))) => {
-                // Laid out by an earlier session and saved: nothing to do.
-                if let Some(report) = printcraft_xfa::existing_layout(&cos) {
-                    return self.push_document(name, path, bytes, info, Ok(Ok(cos)), render_password, password, Some(report));
-                }
+            (Some(printcraft_render::Xfa::Dynamic), Ok(Ok(cos))) if printcraft_xfa::existing_layout(&cos).is_none() => {
                 let mut work = cos.clone();
-                let opts = SaveOptions { mod_date: self.now().map(printcraft_cos::pdf_date), ..SaveOptions::default() };
-                let laid_out =
-                    guard(|| xfa_layout(&mut work)).unwrap_or_else(|m| Err(format!("laying it out failed unexpectedly ({m})"))).and_then(|report| {
-                        let new_bytes = write_incremental(&work, &opts).map(Arc::new).map_err(|e| e.to_string())?;
-                        let new_info = inspect(new_bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
-                        let new_cos = printcraft_cos::Document::open_with_password(new_bytes.clone(), password).map_err(|e| e.to_string())?;
-                        Ok((new_bytes, new_info, new_cos, report))
-                    });
+                let laid_out = guard(|| xfa_layout(&mut work))
+                    .unwrap_or_else(|m| Err(format!("laying it out failed unexpectedly ({m})")))
+                    .and_then(|report| rebase(&work).map(|(b, i, c)| (b, i, c, report)));
                 match laid_out {
                     Ok((b, i, c, report)) => (b, i, Ok(Ok(c)), Some(report)),
                     Err(e) => {
                         let mut info = info;
                         info.warnings.push(format!("This dynamic XFA form could not be laid out: {e}"));
                         (bytes, info, Ok(Ok(cos)), None)
+                    }
+                }
+            }
+            // A static XFA form, or a dynamic one laid out earlier: its datasets may hold values
+            // filled in by another viewer since; give the fields those values.
+            (Some(_), Ok(Ok(cos))) => {
+                let report = printcraft_xfa::existing_layout(&cos);
+                let mut work = cos.clone();
+                let synced =
+                    guard(|| xfa_values_from_datasets(&mut work)).unwrap_or_else(|m| Err(format!("reading its data failed unexpectedly ({m})")));
+                match synced {
+                    Ok(0) => (bytes, info, Ok(Ok(cos)), report),
+                    Ok(_) => match rebase(&work) {
+                        Ok((b, i, c)) => (b, i, Ok(Ok(c)), report),
+                        Err(e) => {
+                            let mut info = info;
+                            info.warnings.push(format!("The values in this form's XFA data could not be applied: {e}"));
+                            (bytes, info, Ok(Ok(cos)), report)
+                        }
+                    },
+                    Err(e) => {
+                        let mut info = info;
+                        info.warnings.push(format!("The values in this form's XFA data could not be applied: {e}"));
+                        (bytes, info, Ok(Ok(cos)), report)
                     }
                 }
             }
@@ -1891,6 +1960,7 @@ impl Session {
         let js_off = self.js_off;
         let doc = self.doc_mut(id)?;
         let name = doc.name.clone();
+        let is_xfa = doc.info.xfa.is_some();
         let mut cx = EditCtx::new(now, doc.generation ^ (id.0 << 48));
         cx.today = today;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
@@ -1906,6 +1976,12 @@ impl Session {
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
         guard(|| run_edit(&mut next, &edit, &mut cx))
             .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
+        // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
+        if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full) {
+            guard(|| xfa_sync_datasets(&mut next))
+                .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
+                .map_err(EditError::Write)?;
+        }
         // Signed documents are only ever saved incrementally: an edit that needs a full rewrite
         // (applying redactions, changing security, sanitizing) would invalidate the signatures.
         let rewrites = |c: &printcraft_cos::Document| c.full_save_required() || c.encryption_changed();

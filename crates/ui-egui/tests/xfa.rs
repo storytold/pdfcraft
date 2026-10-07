@@ -1,6 +1,6 @@
-//! XFA forms (#60): a dynamic form is laid out from its template and says so; one whose template
-//! can't be read, and a static one, say that instead of silently showing a placeholder page or
-//! fields whose values Acrobat would override.
+//! XFA forms (#60): a dynamic form is laid out from its template and says so; a static one takes
+//! its values from the XFA data; one whose template can't be read says that instead of silently
+//! showing a placeholder page.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -74,11 +74,18 @@ fn a_dynamic_xfa_form_says_its_page_is_a_placeholder() {
 }
 
 #[test]
-fn a_static_xfa_form_can_be_filled_but_warns_about_its_xfa_data() {
+fn a_static_xfa_form_is_filled_from_its_data_and_says_so() {
     let field = "<< /FT /Tx /T (name) /Rect [20 20 200 40] /Type /Annot /Subtype /Widget /P 3 0 R >>";
     let h = open(pdf("/AcroForm << /Fields [6 0 R] /XFA 5 0 R >>", "", &[XFA_PACKET, field]));
     assert_eq!(xfa(&h), Some(printcraft_render::Xfa::Static));
-    h.get_by_label_contains("also contains XFA data");
+    h.get_by_label_contains("XFA data are kept in step");
+    // Values saved in the datasets by another viewer show up in the fields.
+    let h = open(printcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name><agree>1</agree></page1></form1>"));
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.form.iter().find(|f| f.name == "form1[0].page1[0].name[0]").unwrap().value, vec!["Ada".to_string()]);
+    assert_eq!(doc.form.iter().find(|f| f.name == "form1[0].page1[0].agree[0]").unwrap().value, vec!["1".to_string()]);
+    assert!(!doc.dirty);
     // The fields can still be highlighted from the notice.
     h.get_by_label("Highlight fields");
 }

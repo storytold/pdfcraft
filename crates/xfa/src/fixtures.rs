@@ -49,7 +49,7 @@ pub fn template(rows: usize) -> String {
     );
     for i in 0..rows {
         t.push_str(&format!(
-            r##"  <subform name="row" layout="row"><field name="from{i}" h="0.4in"><ui><textEdit/></ui></field><field name="what{i}" h="0.4in"><ui><textEdit/></ui></field><field name="where{i}" h="0.4in"><ui><textEdit/></ui></field></subform>
+            r##"  <subform name="row" layout="row"><occur max="-1"/><field name="from{i}" h="0.4in"><ui><textEdit/></ui></field><field name="what{i}" h="0.4in"><ui><textEdit/></ui></field><field name="where{i}" h="0.4in"><ui><textEdit/></ui></field></subform>
 "##
         ));
     }
@@ -66,15 +66,37 @@ pub fn template(rows: usize) -> String {
     t
 }
 
-/// A PDF shell around `xdp`: one placeholder page, `/NeedsRendering true`, no fields.
-pub fn shell(xdp: &str) -> Vec<u8> {
+/// [`template`] with a datasets packet holding `data` (the children of `xfa:data`).
+pub fn template_with_data(rows: usize, data: &str) -> String {
+    let t = template(rows);
+    let packet =
+        format!("<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets>\n</xdp:xdp>");
+    t.replace("</xdp:xdp>", &packet)
+}
+
+/// A static XFA form: an AcroForm with Designer-style field names (`form1[0].page1[0].name[0]`,
+/// a text field, and `…agree[0]`, a check box with on state `1`), plus XFA packets whose
+/// datasets hold `data` (the children of `xfa:data`). No `/NeedsRendering`.
+pub fn static_shell(data: &str) -> Vec<u8> {
+    let xdp = format!(
+        "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"/></template><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets></xdp:xdp>"
+    );
     let objs: Vec<Vec<u8>> = vec![
-        b"<< /Type /Catalog /Pages 2 0 R /NeedsRendering true /AcroForm << /XFA 5 0 R /Fields [] >> >>".to_vec(),
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 5 0 R /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >> >> >> >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
-        b"<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 700 Td (Please wait...) Tj ET\nendstream".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Annots [8 0 R 9 0 R] >>".to_vec(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
         format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        b"<< /T (form1[0]) /Kids [7 0 R] >>".to_vec(),
+        b"<< /T (page1[0]) /Parent 6 0 R /Kids [8 0 R 9 0 R] >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (name[0]) /Parent 7 0 R /Rect [72 700 300 720] /P 3 0 R /DA (/Helv 10 Tf 0 g) /MK << /BC [0 0 0] >> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree[0]) /Parent 7 0 R /Rect [72 660 84 672] /P 3 0 R /V /Off /AS /Off /MK << /BC [0 0 0] >> /AP << /N << /1 10 0 R /Off 10 0 R >> >> >>".to_vec(),
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 0 >>\nstream\n\nendstream".to_vec(),
     ];
+    assemble(objs)
+}
+
+fn assemble(objs: Vec<Vec<u8>>) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -90,4 +112,16 @@ pub fn shell(xdp: &str) -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     out
+}
+
+/// A PDF shell around `xdp`: one placeholder page, `/NeedsRendering true`, no fields.
+pub fn shell(xdp: &str) -> Vec<u8> {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /NeedsRendering true /AcroForm << /XFA 5 0 R /Fields [] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+        b"<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 700 Td (Please wait...) Tj ET\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+    ];
+    assemble(objs)
 }

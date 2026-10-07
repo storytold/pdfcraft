@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::XfaError;
+use crate::data::{DataNode, is_on, iso_to_pattern, som_to_path};
 use crate::model::*;
 use crate::text::{self, Block, Face, Span};
 
@@ -92,6 +93,8 @@ pub struct Widget {
     pub border: WidgetBorder,
     pub value: Option<String>,
     pub action: Option<Action>,
+    /// Check boxes: the on and off values of the data; radio buttons: the on value.
+    pub items: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -144,6 +147,7 @@ struct Cursor {
 
 struct Layouter<'t> {
     tpl: &'t Template,
+    data: Option<&'t DataNode>,
     areas: Vec<PageArea>,
     uses: Vec<usize>,
     pages: Vec<Page>,
@@ -157,8 +161,14 @@ struct Layouter<'t> {
     items: usize,
 }
 
-/// Lay a template out.
-pub fn layout(tpl: &Template) -> Result<Form, XfaError> {
+/// Index of child `i` among the earlier siblings with the same name (the SOM index).
+fn sib_index(children: &[Node], i: usize) -> usize {
+    let name = children.get(i).and_then(|c| c.common().name.as_deref());
+    children.iter().take(i).filter(|c| c.common().name.as_deref() == name && name.is_some()).count()
+}
+
+/// Lay a template out, with the values and repeat counts of `data` (the `xfa:data` element).
+pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError> {
     let areas = match &tpl.root.page_set {
         Some(ps) if !ps.areas.is_empty() => ps.areas.clone(),
         _ => vec![PageArea {
@@ -174,6 +184,7 @@ pub fn layout(tpl: &Template) -> Result<Form, XfaError> {
     collect_values(&[Node::Subform(Box::new(tpl.root.clone()))], &mut values, 0);
     let mut l = Layouter {
         tpl,
+        data,
         uses: vec![0; areas.len()],
         areas,
         pages: Vec::new(),
@@ -189,7 +200,7 @@ pub fn layout(tpl: &Template) -> Result<Form, XfaError> {
     l.new_page()?;
     let root = &tpl.root;
     if root.common.presence.occupies() {
-        l.flow_subform(root, None, &ctx, 0)?;
+        l.flow_subform(root, None, &ctx, 0, 0)?;
     }
     let total = l.pages.len();
     let count = total.to_string();
@@ -356,8 +367,8 @@ impl Layouter<'_> {
         // Master page content: positioned draws and fields.
         let ctx = Ctx { font: Font::default(), para: Para::default(), som: area.name.clone().map(|n| format!("{n}[0]")).unwrap_or_default() };
         let page_rect = Rect::new(0.0, 0.0, area.width, area.height);
-        for item in &area.items {
-            self.draw_positioned_child(item, page_rect, &ctx, 1)?;
+        for (i, item) in area.items.iter().enumerate() {
+            self.draw_positioned_child(item, page_rect, &ctx, 1, sib_index(&area.items, i))?;
         }
         Ok(())
     }
@@ -414,26 +425,32 @@ impl Layouter<'_> {
 
     // ───────────────────────────────────────────────────────────────────────── flow
 
-    fn flow_subform(&mut self, sf: &Subform, avail: Option<(f64, f64)>, ctx: &Ctx, depth: usize) -> Result<(), XfaError> {
+    fn flow_subform(&mut self, sf: &Subform, avail: Option<(f64, f64)>, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if depth > MAX_DEPTH {
             return Ok(());
         }
         if sf.break_before_page && self.page_has_flow() {
             self.new_page()?;
         }
-        let instances = sf.occur.initial.clamp(1, MAX_INSTANCES);
+        // Data adds instances of a repeating subform (rows added in another viewer).
+        let from_data = match (&sf.common.name, self.data) {
+            (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&som_to_path(&ctx.som), name),
+            _ => 0,
+        };
+        let instances = sf.occur.initial.max(from_data).min(sf.occur.max.unwrap_or(usize::MAX)).clamp(1, MAX_INSTANCES);
+        let ctx_parent = ctx;
         for i in 0..instances {
-            let ctx = ctx.with_som(&sf.common, i);
+            let ctx = ctx_parent.with_som(&sf.common, sib + i);
             let (rect, _, _) = self.cursor();
             let (x, w) = avail.unwrap_or((rect.x, rect.w));
             let w = clamp_opt(sf.common.w.unwrap_or(w), sf.common.min_w, sf.common.max_w).min(w.max(1.0));
             if !matches!(sf.layout, Layout::Tb | Layout::Table) || sf.common.h.is_some() {
                 // Not splittable: one block.
                 let node = Node::Subform(Box::new(sf.clone()));
-                let (_, h) = self.size_of(&node, w, &ctx, depth);
+                let (_, h) = self.size_of(&node, w, ctx_parent, depth);
                 self.make_room(h)?;
                 let (_, y, _) = self.cursor();
-                self.draw_node(&node, Rect::new(x, y, w, h), &ctx, depth)?;
+                self.draw_node(&node, Rect::new(x, y, w, h), ctx_parent, depth, sib + i)?;
                 self.place(h);
                 continue;
             }
@@ -444,20 +461,21 @@ impl Layouter<'_> {
             match sf.layout {
                 Layout::Table => self.flow_table(sf, inner_x, inner_w, &ctx, depth)?,
                 _ => {
-                    for child in &sf.children {
+                    for (ci, child) in sf.children.iter().enumerate() {
                         if !child.common().presence.occupies() {
                             continue;
                         }
+                        let csib = sib_index(&sf.children, ci);
                         if let Node::Subform(c) = child
                             && splittable(child)
                         {
-                            self.flow_subform(c, Some((inner_x, inner_w)), &ctx, depth + 1)?;
+                            self.flow_subform(c, Some((inner_x, inner_w)), &ctx, depth + 1, csib)?;
                             continue;
                         }
                         let (cw, ch) = self.size_of(child, inner_w, &ctx, depth + 1);
                         self.make_room(ch)?;
                         let (_, y, _) = self.cursor();
-                        self.draw_node(child, Rect::new(inner_x, y, cw, ch), &ctx, depth + 1)?;
+                        self.draw_node(child, Rect::new(inner_x, y, cw, ch), &ctx, depth + 1, csib)?;
                         self.place(ch);
                     }
                 }
@@ -480,39 +498,50 @@ impl Layouter<'_> {
 
     fn flow_table(&mut self, sf: &Subform, x: f64, inner_w: f64, ctx: &Ctx, depth: usize) -> Result<(), XfaError> {
         let cols = self.columns(sf, inner_w);
-        let leader = sf.overflow_leader.as_ref().and_then(|name| sf.children.iter().find(|c| c.common().name.as_deref() == Some(name) && is_row(c)));
-        for child in &sf.children {
+        let leader =
+            sf.overflow_leader.as_ref().and_then(|name| sf.children.iter().position(|c| c.common().name.as_deref() == Some(name) && is_row(c)));
+        for (ci, child) in sf.children.iter().enumerate() {
             if !child.common().presence.occupies() {
                 continue;
             }
+            let csib = sib_index(&sf.children, ci);
             if let Node::Subform(row) = child
                 && row.layout == Layout::Row
             {
-                let h = self.row_height(row, &cols, inner_w, ctx, depth + 1);
-                if self.make_room(h)?
-                    && let Some(Node::Subform(l)) = leader
-                    && !std::ptr::eq(l.as_ref(), row.as_ref())
-                {
-                    let lh = self.row_height(l, &cols, inner_w, ctx, depth + 1);
+                // Rows added as data (in another viewer) repeat the row.
+                let from_data = match (&row.common.name, self.data) {
+                    (Some(name), Some(d)) if row.occur.max != Some(1) => d.count(&som_to_path(&ctx.som), name),
+                    _ => 0,
+                };
+                let instances = row.occur.initial.max(from_data).min(row.occur.max.unwrap_or(usize::MAX)).clamp(1, MAX_INSTANCES);
+                for inst in 0..instances {
+                    let h = self.row_height(row, &cols, inner_w, ctx, depth + 1);
+                    if self.make_room(h)?
+                        && let Some(li) = leader
+                        && li != ci
+                        && let Some(Node::Subform(l)) = sf.children.get(li)
+                    {
+                        let lh = self.row_height(l, &cols, inner_w, ctx, depth + 1);
+                        let (_, y, _) = self.cursor();
+                        self.draw_row(l, &cols, Rect::new(x, y, inner_w, lh), ctx, depth + 1, sib_index(&sf.children, li))?;
+                        self.place(lh);
+                    }
                     let (_, y, _) = self.cursor();
-                    self.draw_row(l, &cols, Rect::new(x, y, inner_w, lh), ctx, depth + 1)?;
-                    self.place(lh);
+                    self.draw_row(row, &cols, Rect::new(x, y, inner_w, h), ctx, depth + 1, csib + inst)?;
+                    self.place(h);
                 }
-                let (_, y, _) = self.cursor();
-                self.draw_row(row, &cols, Rect::new(x, y, inner_w, h), ctx, depth + 1)?;
-                self.place(h);
                 continue;
             }
             if splittable(child)
                 && let Node::Subform(c) = child
             {
-                self.flow_subform(c, Some((x, inner_w)), ctx, depth + 1)?;
+                self.flow_subform(c, Some((x, inner_w)), ctx, depth + 1, csib)?;
                 continue;
             }
             let (cw, ch) = self.size_of(child, inner_w, ctx, depth + 1);
             self.make_room(ch)?;
             let (_, y, _) = self.cursor();
-            self.draw_node(child, Rect::new(x, y, cw, ch), ctx, depth + 1)?;
+            self.draw_node(child, Rect::new(x, y, cw, ch), ctx, depth + 1, csib)?;
             self.place(ch);
         }
         Ok(())
@@ -737,36 +766,36 @@ impl Layouter<'_> {
 
     // ───────────────────────────────────────────────────────────────────────── drawing
 
-    fn draw_row(&mut self, row: &Subform, cols: &[f64], rect: Rect, ctx: &Ctx, depth: usize) -> Result<(), XfaError> {
+    fn draw_row(&mut self, row: &Subform, cols: &[f64], rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if depth > MAX_DEPTH {
             return Ok(());
         }
         if let Some(b) = &row.common.border {
             self.draw_border(b, rect)?;
         }
-        let ctx = ctx.with_som(&row.common, 0);
+        let ctx = ctx.with_som(&row.common, sib);
         let inner = rect.inset(&row.common.margin);
         let (cells, _) = self.cells(row, cols, inner.w, &ctx, depth);
         for (i, r) in cells {
             if let Some(k) = row.children.get(i) {
                 // Cells stretch to the row height.
-                self.draw_node(k, Rect::new(inner.x + r.x, inner.y, r.w, inner.h), &ctx, depth + 1)?;
+                self.draw_node(k, Rect::new(inner.x + r.x, inner.y, r.w, inner.h), &ctx, depth + 1, sib_index(&row.children, i))?;
             }
         }
         Ok(())
     }
 
-    fn draw_positioned_child(&mut self, k: &Node, inner: Rect, ctx: &Ctx, depth: usize) -> Result<(), XfaError> {
+    fn draw_positioned_child(&mut self, k: &Node, inner: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         let c = k.common();
         if !c.presence.occupies() {
             return Ok(());
         }
         let (x, y) = (c.x.unwrap_or(0.0), c.y.unwrap_or(0.0));
         let (w, h) = self.size_of(k, (inner.w - x).max(1.0), ctx, depth + 1);
-        self.draw_node(k, Rect::new(inner.x + x, inner.y + y, w, h), ctx, depth + 1)
+        self.draw_node(k, Rect::new(inner.x + x, inner.y + y, w, h), ctx, depth + 1, sib)
     }
 
-    fn draw_node(&mut self, node: &Node, rect: Rect, ctx: &Ctx, depth: usize) -> Result<(), XfaError> {
+    fn draw_node(&mut self, node: &Node, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if depth > MAX_DEPTH {
             return Ok(());
         }
@@ -776,12 +805,12 @@ impl Layouter<'_> {
         }
         match node {
             Node::Draw(d) => self.draw_draw(d, rect, ctx),
-            Node::Field(f) => self.draw_field(f, rect, ctx, None),
-            Node::ExclGroup(g) => self.draw_group(g, rect, ctx, depth),
+            Node::Field(f) => self.draw_field(f, rect, ctx, None, sib),
+            Node::ExclGroup(g) => self.draw_group(g, rect, ctx, depth, sib),
             Node::Area(a) => {
-                let ctx = ctx.with_som(&a.common, 0);
-                for k in &a.children {
-                    self.draw_positioned_child(k, rect, &ctx, depth + 1)?;
+                let ctx = ctx.with_som(&a.common, sib);
+                for (i, k) in a.children.iter().enumerate() {
+                    self.draw_positioned_child(k, rect, &ctx, depth + 1, sib_index(&a.children, i))?;
                 }
                 Ok(())
             }
@@ -789,22 +818,23 @@ impl Layouter<'_> {
                 if let Some(b) = &s.common.border {
                     self.draw_border(b, rect)?;
                 }
-                let ctx = ctx.with_som(&s.common, 0);
+                let parent_ctx = ctx;
+                let ctx = ctx.with_som(&s.common, sib);
                 let inner = rect.inset(&s.common.margin);
                 match s.layout {
                     Layout::Positioned => {
-                        for k in &s.children {
-                            self.draw_positioned_child(k, inner, &ctx, depth + 1)?;
+                        for (i, k) in s.children.iter().enumerate() {
+                            self.draw_positioned_child(k, inner, &ctx, depth + 1, sib_index(&s.children, i))?;
                         }
                     }
                     Layout::Tb => {
                         let mut y = inner.y;
-                        for k in &s.children {
+                        for (i, k) in s.children.iter().enumerate() {
                             if !k.common().presence.occupies() {
                                 continue;
                             }
                             let (w, h) = self.size_of(k, inner.w, &ctx, depth + 1);
-                            self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1)?;
+                            self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1, sib_index(&s.children, i))?;
                             y += h;
                         }
                     }
@@ -813,33 +843,34 @@ impl Layouter<'_> {
                         for (i, r) in placed {
                             if let Some(k) = s.children.get(i) {
                                 let x = if s.layout == Layout::RlTb { inner.right() - r.x - r.w } else { inner.x + r.x };
-                                self.draw_node(k, Rect::new(x, inner.y + r.y, r.w, r.h), &ctx, depth + 1)?;
+                                self.draw_node(k, Rect::new(x, inner.y + r.y, r.w, r.h), &ctx, depth + 1, sib_index(&s.children, i))?;
                             }
                         }
                     }
                     Layout::Table => {
                         let cols = self.columns(s, inner.w);
                         let mut y = inner.y;
-                        for k in &s.children {
+                        for (i, k) in s.children.iter().enumerate() {
                             if !k.common().presence.occupies() {
                                 continue;
                             }
+                            let csib = sib_index(&s.children, i);
                             if let Node::Subform(r) = k
                                 && r.layout == Layout::Row
                             {
                                 let h = self.row_height(r, &cols, inner.w, &ctx, depth + 1);
-                                self.draw_row(r, &cols, Rect::new(inner.x, y, inner.w, h), &ctx, depth + 1)?;
+                                self.draw_row(r, &cols, Rect::new(inner.x, y, inner.w, h), &ctx, depth + 1, csib)?;
                                 y += h;
                             } else {
                                 let (w, h) = self.size_of(k, inner.w, &ctx, depth + 1);
-                                self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1)?;
+                                self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1, csib)?;
                                 y += h;
                             }
                         }
                     }
                     Layout::Row => {
                         let cols = self.columns(s, inner.w);
-                        self.draw_row(s, &cols, rect, &ctx, depth)?;
+                        self.draw_row(s, &cols, rect, parent_ctx, depth, sib)?;
                     }
                 }
                 Ok(())
@@ -923,11 +954,14 @@ impl Layouter<'_> {
         }
     }
 
-    fn draw_group(&mut self, g: &ExclGroup, rect: Rect, ctx: &Ctx, depth: usize) -> Result<(), XfaError> {
+    fn draw_group(&mut self, g: &ExclGroup, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &g.common.border {
             self.draw_border(b, rect)?;
         }
-        let ctx = ctx.with_som(&g.common, 0);
+        let ctx = ctx.with_som(&g.common, sib);
+        // The group's data node holds the selected button's on value.
+        let selected: Option<String> =
+            self.data.and_then(|d| d.text_at(&som_to_path(&ctx.som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         let inner = rect.inset(&g.common.margin);
         let group = self.unique_name(g.common.name.as_deref().unwrap_or("group"));
         let nodes: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
@@ -961,7 +995,8 @@ impl Layouter<'_> {
             if let Some(f) = g.fields.get(i) {
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| (i + 1).to_string());
                 let tip = f.tooltip.clone().or_else(|| g.tooltip.clone());
-                self.draw_field(f, Rect::new(inner.x + r.x, inner.y + r.y, r.w, r.h), &ctx, Some((&group, &on, tip)))?;
+                let chosen = selected.as_deref() == Some(on.as_str());
+                self.draw_field(f, Rect::new(inner.x + r.x, inner.y + r.y, r.w, r.h), &ctx, Some((&group, &on, tip, chosen)), sib_index(&nodes, i))?;
             }
         }
         Ok(())
@@ -974,7 +1009,14 @@ impl Layouter<'_> {
         if *n == 1 { base } else { format!("{base}_{n}") }
     }
 
-    fn draw_field(&mut self, f: &Field, rect: Rect, ctx: &Ctx, radio: Option<(&str, &str, Option<String>)>) -> Result<(), XfaError> {
+    fn draw_field(
+        &mut self,
+        f: &Field,
+        rect: Rect,
+        ctx: &Ctx,
+        radio: Option<(&str, &str, Option<String>, bool)>,
+        sib: usize,
+    ) -> Result<(), XfaError> {
         if let Some(b) = &f.common.border
             && f.ui != Ui::Button
         {
@@ -1032,9 +1074,16 @@ impl Layouter<'_> {
             _ => fctx.para.h_align,
         };
         let name = self.unique_name(f.common.name.as_deref().unwrap_or("field"));
-        let som = if fctx.som.is_empty() { name.clone() } else { format!("{}.{}[0]", fctx.som, f.common.name.as_deref().unwrap_or("field")) };
+        let som = if fctx.som.is_empty() {
+            format!("{}[{sib}]", f.common.name.as_deref().unwrap_or("field"))
+        } else {
+            format!("{}.{}[{sib}]", fctx.som, f.common.name.as_deref().unwrap_or("field"))
+        };
         let read_only = matches!(f.access, Access::ReadOnly | Access::Protected);
-        let plain_value = f.value.plain().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        // The data's value wins over the template's default.
+        let data_value: Option<String> =
+            self.data.and_then(|d| d.text_at(&som_to_path(&som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        let plain_value = data_value.clone().or_else(|| f.value.plain().map(|v| v.trim().to_string()).filter(|v| !v.is_empty()));
         let (kind, rect, border, value, tooltip) = match f.ui {
             Ui::CheckButton => {
                 let s = f.check_size.unwrap_or(10.0).min(ui.w.max(1.0)).min(ui.h.max(1.0));
@@ -1045,14 +1094,18 @@ impl Layouter<'_> {
                 };
                 let r = Rect::new(ui.x + f.ui_margin.left, y, s, s);
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "1".into());
-                let (kind, tip) = match radio {
-                    Some((group, on_value, tip)) => (
+                let (kind, tip, checked) = match radio {
+                    Some((group, on_value, tip, chosen)) => (
                         WidgetKind::Radio { group: group.to_string(), on: on_value.to_string(), round: f.check_round },
                         tip.or_else(|| f.tooltip.clone()),
+                        chosen,
                     ),
-                    None => (WidgetKind::CheckBox { on: on.clone(), round: f.check_round }, f.tooltip.clone()),
+                    None => (
+                        WidgetKind::CheckBox { on: on.clone(), round: f.check_round },
+                        f.tooltip.clone(),
+                        plain_value.as_deref().is_some_and(|v| is_on(v, &on)),
+                    ),
                 };
-                let checked = plain_value.as_deref().is_some_and(|v| v == on);
                 let border = widget_border(f.ui_border.as_ref(), true);
                 (kind, r, border, checked.then(|| on.clone()), tip)
             }
@@ -1067,7 +1120,10 @@ impl Layouter<'_> {
                 (WidgetKind::Button { caption }, ui, border, None, f.tooltip.clone())
             }
             Ui::DateTimeEdit => {
-                (WidgetKind::Date(date_pattern(f.picture.as_deref())), ui, widget_border(f.ui_border.as_ref(), false), plain_value, f.tooltip.clone())
+                let pattern = date_pattern(f.picture.as_deref());
+                // Data holds ISO dates; the field shows them in its pattern.
+                let shown = plain_value.as_ref().map(|v| if data_value.is_some() { iso_to_pattern(v, &pattern) } else { v.clone() });
+                (WidgetKind::Date(pattern), ui, widget_border(f.ui_border.as_ref(), false), shown, f.tooltip.clone())
             }
             _ => {
                 if f.ui == Ui::ChoiceList {
@@ -1080,6 +1136,11 @@ impl Layouter<'_> {
             return Ok(());
         }
         let action = if f.ui == Ui::Button { button_action(&f.scripts) } else { None };
+        let items: Vec<String> = match &kind {
+            WidgetKind::CheckBox { on, .. } => vec![on.clone(), f.items.get(1).cloned().unwrap_or_default()],
+            WidgetKind::Radio { on, .. } => vec![on.clone()],
+            _ => Vec::new(),
+        };
         self.fields += 1;
         self.push(Item::Widget(Box::new(Widget {
             rect,
@@ -1095,6 +1156,7 @@ impl Layouter<'_> {
             border,
             value,
             action,
+            items,
         })))
     }
 }

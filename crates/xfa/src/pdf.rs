@@ -125,6 +125,8 @@ struct Emitter<'a> {
     doc: &'a mut Document,
     fields: Vec<ObjRef>,
     radio_groups: HashMap<String, (ObjRef, Vec<ObjRef>)>,
+    /// The on state selected in each radio group, from the data.
+    radio_selected: HashMap<String, String>,
     field_count: usize,
     warnings: Vec<String>,
 }
@@ -209,6 +211,7 @@ impl Emitter<'_> {
                 let mut ap = Dict::new();
                 ap.set(b"N".to_vec(), Object::Dict(nd));
                 d.set(b"AP".to_vec(), Object::Dict(ap));
+                d.set(b"PCItems".to_vec(), Object::Array(w.items.iter().map(|i| Object::String(PdfString::text(i))).collect()));
             }
             WidgetKind::Radio { group, on, .. } => {
                 top_level = false;
@@ -222,6 +225,9 @@ impl Emitter<'_> {
                         g.set(b"V".to_vec(), Object::name("Off"));
                         g.set(b"DA".to_vec(), Object::String(PdfString::literal(Self::da(&w.face))));
                         g.set(b"Kids".to_vec(), Object::Array(Vec::new()));
+                        // The group's SOM path: the button's without its last step.
+                        let group_som = w.som.rsplit_once('.').map(|(g, _)| g.to_string()).unwrap_or_else(|| w.som.clone());
+                        g.set(SOM_KEY.to_vec(), Object::String(PdfString::text(&group_som)));
                         let p = self.doc.add(Object::Dict(g));
                         self.radio_groups.insert(group.clone(), (p, Vec::new()));
                         self.fields.push(p);
@@ -230,9 +236,14 @@ impl Emitter<'_> {
                     }
                 };
                 d.set(b"Parent".to_vec(), Object::Ref(parent));
-                d.set(b"AS".to_vec(), Object::name("Off"));
+                let state = state_name(on);
+                let chosen = w.value.is_some();
+                d.set(b"AS".to_vec(), Object::name(if chosen { &state } else { "Off" }));
+                if chosen {
+                    self.radio_selected.insert(group.clone(), state.clone());
+                }
                 let mut nd = Dict::new();
-                nd.set(state_name(on).into_bytes(), empty_form(self.doc, r.w, r.h));
+                nd.set(state.into_bytes(), empty_form(self.doc, r.w, r.h));
                 nd.set(b"Off".to_vec(), empty_form(self.doc, r.w, r.h));
                 let mut ap = Dict::new();
                 ap.set(b"N".to_vec(), Object::Dict(nd));
@@ -406,14 +417,21 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
             r
         }
     };
-    let mut em = Emitter { doc, fields: Vec::new(), radio_groups: HashMap::new(), field_count: 0, warnings: Vec::new() };
+    let mut em =
+        Emitter { doc, fields: Vec::new(), radio_groups: HashMap::new(), radio_selected: HashMap::new(), field_count: 0, warnings: Vec::new() };
     let mut kids = Vec::new();
     for page in &form.pages {
         kids.push(Object::Ref(em.page(page, pages_ref)?));
     }
-    let groups: Vec<(ObjRef, Vec<ObjRef>)> = em.radio_groups.values().cloned().collect();
-    for (parent, widgets) in groups {
-        em.doc.update_dict(parent, |d| d.set(b"Kids".to_vec(), Object::Array(widgets.iter().map(|r| Object::Ref(*r)).collect())))?;
+    let groups: Vec<(String, (ObjRef, Vec<ObjRef>))> = em.radio_groups.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    for (name, (parent, widgets)) in groups {
+        let selected = em.radio_selected.get(&name).cloned();
+        em.doc.update_dict(parent, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(widgets.iter().map(|r| Object::Ref(*r)).collect()));
+            if let Some(s) = &selected {
+                d.set(b"V".to_vec(), Object::name(s));
+            }
+        })?;
     }
     let Emitter { doc, fields, field_count, warnings, .. } = em;
     let count = kids.len();

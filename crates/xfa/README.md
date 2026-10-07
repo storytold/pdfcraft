@@ -33,6 +33,14 @@ the automation tools) works on it unchanged. The engine does this when it opens 
   its SOM path in `/PCSom`; the AcroForm gets `/PCXfaLayout` so a saved form is not laid out
   twice. The XFA packets stay, so Adobe's viewers keep rendering the form from them.
 
+- **Data** (`data`): the `datasets` packet. On layout, a field takes its value from the data
+  node at its SOM path (dates in ISO form, check and radio states by their on values), and a
+  repeating subform or row gets as many instances as the data has. `write_datasets` rebuilds
+  `xfa:data` from the AcroForm fields (by `/PCSom`, or by the Designer field names of a static
+  form) and `read_values` goes the other way, so a form filled here shows its values in Adobe's
+  viewers and a form filled there shows them here. The engine does both: values on open, the
+  packet after every form edit.
+
 ## API sketch
 
 ```rust
@@ -45,15 +53,14 @@ let form = printcraft_xfa::layout_xml(template_xml)?;       // pages of items, f
 
 ## Deliberately not done (yet)
 
-- **Data.** The `datasets` packet is neither read nor written: a form opens blank, and what is
-  filled in lives in the AcroForm fields only. Adobe's viewers, which lay the form out from the
-  XFA packets, don't show those values. Writing `datasets` from the `/PCSom` paths is the next
-  step (`form.xfa-data`).
+- **Data binding** is the default one only: explicit `bind ref` expressions, global binding and
+  data descriptions are not followed, and no standalone XML or XDP data file is imported or
+  exported.
 - **Scripting.** No FormCalc or XFA JavaScript (`xfa.host`, `xfa.layout`, `instanceManager`);
   rows are not added by button, validations and calculations don't run. Buttons map only the
   common idioms (reset, print, save as, launchURL).
-- **Static XFA forms** (`/NeedsRendering` absent, AcroForm fields present) are left to their
-  AcroForm.
+- **Static XFA forms** (`/NeedsRendering` absent, AcroForm fields present) keep their AcroForm;
+  only their data is read and written.
 - Choice lists are text fields; signature, image, barcode and password fields are left blank;
   PNG and GIF images, `keep` constraints, `subformSet` relations, `rl-tb` is mirrored `lr-tb`,
   font metrics are the approximate Helvetica ones, and line heights are 1.15 × size.

@@ -7,6 +7,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod data;
 pub mod fixtures;
 pub mod layout;
 pub mod model;
@@ -17,6 +18,9 @@ pub mod text;
 
 use printcraft_cos::Document;
 
+pub use data::{
+    DataNode, FieldData, FieldDatum, build_data, iso_to_pattern, parse_datasets, pattern_to_iso, read_values, som_to_path, write_datasets,
+};
 pub use layout::{Action, BorderShape, Form, Item, MAX_PAGES, Page, Widget, WidgetKind, layout};
 pub use packets::{Packets, read_packets};
 pub use parse::{measure, parse};
@@ -51,17 +55,19 @@ pub fn is_dynamic(doc: &Document) -> bool {
     existing_layout(doc).is_none() && matches!(read_packets(doc), Ok(Some(p)) if p.needs_rendering || !p.has_fields)
 }
 
-/// Lay a template packet (or whole XDP) out.
+/// Lay a template packet (or whole XDP, whose datasets then fill the fields) out.
 pub fn layout_xml(xml: &str) -> Result<Form, XfaError> {
     let (tpl, warnings) = parse(xml)?;
-    let mut form = layout(&tpl)?;
+    let data = parse_datasets(xml);
+    let mut form = layout(&tpl, data.as_ref())?;
     form.warnings.splice(0..0, warnings);
     Ok(form)
 }
 
 /// Lay a dynamic XFA form out into its own document: its placeholder pages are replaced by the
-/// laid-out pages and its fields join the AcroForm. The XFA packets stay, so Adobe's viewers
-/// keep rendering it their way. Widget appearances are left for the forms layer to generate.
+/// laid-out pages and its fields join the AcroForm, holding the values of the datasets packet.
+/// The XFA packets stay, so Adobe's viewers keep rendering it their way. Widget appearances are
+/// left for the forms layer to generate.
 pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     if !is_dynamic(doc) {
         return Err(XfaError::NotXfa);
