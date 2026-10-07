@@ -52,6 +52,8 @@ pub mod icons;
 mod pageboxes;
 mod palette;
 mod panels;
+#[cfg(not(target_arch = "wasm32"))]
+mod pickers;
 pub mod prepare;
 mod print_ui;
 pub use print_ui::{Handling as PrintHandling, PrintDraft, Which as PrintWhich};
@@ -325,6 +327,12 @@ pub struct PrintCraftApp {
     pub view_draft: Option<(DocId, printcraft_engine::InitialView)>,
     /// Files picked asynchronously for combine / insert (web).
     pub requests: files::Requests,
+    /// Native file pickers in flight (they never block the frame; see `pickers`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pickers: pickers::Pickers,
+    /// Pick these files instead of showing a picker (tests and automation).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub pick_override: Option<Vec<String>>,
     /// Write exported files (split) here instead of asking (tests and automation).
     pub export_dir_override: Option<String>,
     /// Split dialog settings.
@@ -491,6 +499,10 @@ impl PrintCraftApp {
             props_draft: None,
             view_draft: None,
             requests: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            pickers: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            pick_override: None,
             export_dir_override: None,
             split_draft: SplitDraft::default(),
             extract_draft: ExtractDraft::default(),
@@ -751,11 +763,11 @@ impl PrintCraftApp {
 
     pub fn open_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(p) =
-            rfd::FileDialog::new().add_filter("PDF", &["pdf"]).add_filter("Images and text (converted to PDF)", &create_ui::CONVERTIBLE).pick_file()
-        {
-            self.open_path(&p.to_string_lossy());
-        }
+        self.pick(
+            pickers::PickFor::Open,
+            rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).add_filter("Images and text (converted to PDF)", &create_ui::CONVERTIBLE),
+            false,
+        );
         // Browsers pick files asynchronously; the bytes arrive through `inbox`.
         #[cfg(target_arch = "wasm32")]
         {
@@ -1182,6 +1194,8 @@ impl eframe::App for PrintCraftApp {
         self.poll_ocr();
         self.poll_action();
         self.process_file_requests();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.process_picked();
         // Pull finished renders into textures for every open document.
         for view in &mut self.views {
             if let Some(doc) = self.session.get(view.id) {

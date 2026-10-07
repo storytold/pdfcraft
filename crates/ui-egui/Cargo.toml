@@ -28,6 +28,8 @@ base64 = "0.22"
 getrandom = "0.4"
 # Create ▸ Clipboard (images; already in the tree through egui-winit).
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
+# Waits for native file pickers off the UI thread (already in the tree through wgpu).
+pollster = "1.0"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"

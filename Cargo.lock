@@ -4098,6 +4098,7 @@ dependencies = [
  "js-sys",
  "log",
  "png 0.18.1",
+ "pollster 1.0.1",
  "printcraft-cos",
  "printcraft-engine",
  "printcraft-fonts",
