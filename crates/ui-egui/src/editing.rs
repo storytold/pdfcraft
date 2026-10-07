@@ -167,7 +167,7 @@ impl PrintCraftApp {
         let destination = match (target, path, &self.save_override) {
             (_, _, Some(p)) => Some(p.clone()),
             (SaveTarget::InPlace, Some(p), _) => Some(p),
-            _ => self.ask_save_path(&name),
+            _ => Self::ask_save_path(&name),
         };
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -212,13 +212,13 @@ impl PrintCraftApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn ask_save_path(&self, name: &str) -> Option<String> {
+    fn ask_save_path(name: &str) -> Option<String> {
         let name = if name.to_ascii_lowercase().ends_with(".pdf") { name.to_string() } else { format!("{name}.pdf") };
         rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name).save_file().map(|p| p.to_string_lossy().into_owned())
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn ask_save_path(&self, _name: &str) -> Option<String> {
+    fn ask_save_path(_name: &str) -> Option<String> {
         None // browsers download instead
     }
 

@@ -36,7 +36,7 @@ impl Automation {
         }
     }
 
-    fn link_style(&self, a: &Args, base: LinkStyle) -> Result<LinkStyle> {
+    fn link_style(a: &Args, base: LinkStyle) -> Result<LinkStyle> {
         let mut s = base;
         if let Some(v) = a.opt_bool("visible")? {
             s.visible = v;
@@ -84,7 +84,7 @@ impl Automation {
         let page = self.page(a)?;
         let rect = self.view_rect(a, page)?.ok_or_else(|| bad("link_add needs rect"))?;
         let action = self.link_action(a)?.ok_or_else(|| bad("pass url or to_page"))?;
-        let style = self.link_style(a, LinkStyle::default())?;
+        let style = Self::link_style(a, LinkStyle::default())?;
         self.apply(a, Edit::AddLink { page, rect, action, style })
     }
 
@@ -104,7 +104,7 @@ impl Automation {
         let (page, index, style) = self.link_index(a)?;
         let rect = self.view_rect(a, page)?;
         let action = self.link_action(a)?;
-        let new_style = self.link_style(a, style)?;
+        let new_style = Self::link_style(a, style)?;
         self.apply(a, Edit::SetLink { page, index, rect, action, style: (new_style != style).then_some(new_style) })
     }
 

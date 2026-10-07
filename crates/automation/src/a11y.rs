@@ -136,7 +136,7 @@ impl Automation {
 }
 
 impl Automation {
-    fn ocr_settings(&self, a: &Args) -> Result<printcraft_engine::ocr::OcrSettings> {
+    fn ocr_settings(a: &Args) -> Result<printcraft_engine::ocr::OcrSettings> {
         let mut settings = printcraft_engine::ocr::OcrSettings::default();
         if let Some(d) = a.opt_num("dpi")? {
             settings.dpi = d.clamp(72.0, 600.0) as f32;
@@ -154,7 +154,7 @@ impl Automation {
     }
 
     pub(crate) fn ocr_recognize_files(&mut self, a: &Args) -> Result<Value> {
-        let settings = self.ocr_settings(a)?;
+        let settings = Self::ocr_settings(a)?;
         let folder = self.resolve(a.str("folder")?, true)?;
         std::fs::create_dir_all(&folder).map_err(|e| failed(e.to_string()))?;
         let ocr = printcraft_engine::ocr::engine().map_err(failed)?;
@@ -179,7 +179,7 @@ impl Automation {
     }
 
     pub(crate) fn ocr_recognize(&mut self, a: &Args) -> Result<Value> {
-        let settings = self.ocr_settings(a)?;
+        let settings = Self::ocr_settings(a)?;
         let pages = if a.opt_ints("pages")?.is_some() { self.pages(a, "pages")? } else { Vec::new() };
         let id = self.doc(a)?.id;
         let found = self.session.recognize_text(id, &pages, settings).map_err(failed)?;
@@ -193,7 +193,7 @@ impl Automation {
         Ok(json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "pages": list }))
     }
 
-    pub(crate) fn ocr_status(&self) -> Result<Value> {
+    pub(crate) fn ocr_status() -> Result<Value> {
         use printcraft_engine::ocr;
         let dirs: Vec<String> = ocr::Models::search_dirs().iter().map(|d| d.to_string_lossy().into_owned()).collect();
         let langs: Vec<Value> = ocr::LANGUAGES.iter().map(|(c, n)| json!({ "code": c, "name": n })).collect();
@@ -269,13 +269,13 @@ impl Automation {
         Ok(json!({ "path": path.to_string_lossy(), "bytes": bytes.len(), "format": format.extension() }))
     }
 
-    fn pdfa_level(&self, a: &Args) -> Result<printcraft_engine::pdfa::Level> {
+    fn pdfa_level(a: &Args) -> Result<printcraft_engine::pdfa::Level> {
         let l = a.opt_str("level")?.unwrap_or("2b");
         printcraft_engine::pdfa::Level::from_id(l).ok_or_else(|| ToolError::InvalidArgs(format!("unknown PDF/A level {l:?} (2b or 3b)")))
     }
 
     pub(crate) fn pdfa_verify(&self, a: &Args) -> Result<Value> {
-        let level = self.pdfa_level(a)?;
+        let level = Self::pdfa_level(a)?;
         let doc = self.doc(a)?;
         let issues: Vec<Value> = doc
             .pdfa_verify(level)
@@ -292,13 +292,13 @@ impl Automation {
     }
 
     pub(crate) fn pdfa_convert(&mut self, a: &Args) -> Result<Value> {
-        let level = self.pdfa_level(a)?;
+        let level = Self::pdfa_level(a)?;
         let id = self.doc(a)?.id;
         self.session.apply(id, printcraft_engine::Edit::ConvertPdfA { level }).map_err(failed)?;
         self.pdfa_verify(a)
     }
 
-    pub(crate) fn action_list(&self) -> Result<Value> {
+    pub(crate) fn action_list() -> Result<Value> {
         use printcraft_engine::actions::{Step, builtin};
         let step_json = |s: &Step| json!({ "step": s.id(), "arg": s.arg() });
         let actions: Vec<Value> = builtin()
