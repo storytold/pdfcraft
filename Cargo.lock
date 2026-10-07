@@ -3452,6 +3452,7 @@ dependencies = [
  "eframe",
  "egui",
  "fmv-macos-events",
+ "pdfcraft-engine",
  "pdfcraft-ui-egui",
  "rustls-native-certs",
  "serde_json",
@@ -3593,6 +3594,8 @@ dependencies = [
  "pdfcraft-sign",
  "pdfcraft-xfdf",
  "png 0.18.1",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

@@ -223,7 +223,7 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     close
 }
 
-/// Preferences: interface language, identity and JavaScript. Returns `true` to close.
+/// Preferences: interface language, identity, JavaScript and the AI assistant. Returns `true` to close.
 pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new(app.language.tr("Preferences")).font(theme::semibold(18.0)));
     ui.horizontal(|ui| {
@@ -256,6 +256,8 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
                 .color(t.text_muted),
         );
     });
+    ui.add_space(8.0);
+    crate::ai_ui::preferences(ui, app, t);
     ui.add_space(10.0);
     buttons(ui, "OK", &[]).is_some()
 }

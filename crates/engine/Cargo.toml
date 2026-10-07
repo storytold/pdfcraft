@@ -31,6 +31,9 @@ pdfcraft-fonts = { workspace = true }
 pdfcraft-create = { workspace = true }
 pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
+# AI assistant requests and answers (OpenAI-compatible JSON); no network code here.
+serde = { workspace = true }
+serde_json = { workspace = true }
 png = "0.18"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

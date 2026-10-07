@@ -245,6 +245,7 @@ fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     (RightPanel::Accessibility, "Accessibility Checker"),
                     (RightPanel::Search, "Search"),
                     (RightPanel::Compare, "Compare"),
+                    (RightPanel::Assistant, "AI assistant"),
                 ] {
                     if ui.radio(app.right == Some(p), label).clicked() {
                         app.right = Some(p);

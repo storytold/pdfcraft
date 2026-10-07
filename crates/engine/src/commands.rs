@@ -268,6 +268,10 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("a11y.report", "Open accessibility report", None, None, Document, "file-text"),
     c("a11y.reading_options", "Change reading options…", None, None, Document, "book-open"),
     c("a11y.alt_text", "Add alternate text…", None, None, Modification, "image"),
+    // AI assistant (M13): answered by the model set in Preferences ▸ AI assistant (off by default).
+    c("ai.summary", "Summarize with AI", None, None, Document, "sparkles"),
+    c("ai.ask", "Ask AI about this document", None, None, Document, "message-circle-reply"),
+    c("ai.translate", "Translate with AI", None, None, Document, "languages"),
     c("export.all_images", "Export all images…", FILE, None, Document, "image"),
     c("edit.header_footer", "Add header & footer…", None, None, Modification, "heading"),
     c("edit.header_footer.update", "Update header & footer…", None, None, Marks(crate::MarkKind::HeaderFooter), "heading"),
