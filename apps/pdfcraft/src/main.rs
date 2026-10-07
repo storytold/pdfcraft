@@ -19,6 +19,7 @@
 
 use pdfcraft_ui_egui::PdfCraftApp;
 
+mod ai;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod updates;
@@ -125,6 +126,7 @@ fn main() -> eframe::Result {
             }
             app.integrated_titlebar = integrated;
             app.update_source = Some(std::sync::Arc::new(updates::latest_release));
+            app.ai_provider = Some(std::sync::Arc::new(ai::send));
             app.keychain_ids = cfg!(target_os = "macos");
             #[cfg(target_os = "macos")]
             {

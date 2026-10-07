@@ -7075,11 +7075,11 @@ title = "Translate documents"
 area = "J"
 tier = "P3"
 milestone = "M13"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["ai.translate"]
 tools = []
-evidence = []
-notes = "through an optional AiProvider; never Adobe's cloud"
+evidence = ["crates/ui-egui/tests/ai.rs::translate_sends_the_current_page_and_the_language"]
+notes = "through an optional AiProvider; never Adobe's cloud. The current page is translated into the panel. Missing: whole documents, writing the translation out as a PDF"
 
 [[feature]]
 id = "create.cloud-office-conversion"
@@ -9395,11 +9395,11 @@ title = "AI provider interface (local model or own endpoint), off by default"
 area = "N"
 tier = "P2"
 milestone = "M13"
-status = "planned"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/engine/src/ai.rs::endpoints_are_checked", "apps/pdfcraft/src/ai.rs::a_request_reaches_the_endpoint_with_the_key_and_the_answer_comes_back", "apps/pdfcraft/src/ai.rs::errors_say_what_went_wrong", "crates/ui-egui/tests/ai.rs::without_a_provider_set_up_the_commands_lead_to_preferences", "crates/ui-egui/tests/ai.rs::settings_are_saved_and_hostile_ones_are_tamed"]
+notes = "Preferences ▸ AI assistant: any OpenAI-compatible chat-completions endpoint (URL, model, optional API key), off by default; the desktop app sends the request, nothing below L8 has network code. Missing: a Test connection button, listing the server's models, streaming answers, keeping the API key in the OS keychain (it is in the settings file), the web build"
 
 [[feature]]
 id = "misc.ai-summary"
@@ -9407,11 +9407,11 @@ title = "Summarize a document"
 area = "N"
 tier = "P2"
 milestone = "M13"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["ai.summary"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/ai.rs::summarize_sends_the_document_and_shows_the_answer_with_its_pages", "crates/engine/src/ai.rs::document_text_is_marked_by_page_and_capped"]
+notes = "AI assistant panel. The text layer is sent with [Page n] markers, cut at 120,000 characters (the answer says so). Missing: summaries of very long documents in parts, scanned pages without OCR"
 
 [[feature]]
 id = "misc.ai-ask"
@@ -9419,11 +9419,11 @@ title = "Ask questions with citations to pages"
 area = "N"
 tier = "P2"
 milestone = "M13"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["ai.ask"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/ai.rs::ask_sends_the_typed_question", "crates/engine/src/ai.rs::cited_pages_are_found_in_order_and_bounded"]
+notes = "AI assistant panel; cited pages (p. 3, page 3, [Page 3]) become buttons that go to the page. Missing: follow-up questions with conversation history, highlighting the cited passage, retrieval for documents over the text cap"
 
 [[feature]]
 id = "misc.ai-conversational-edit"

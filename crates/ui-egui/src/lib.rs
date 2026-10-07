@@ -9,6 +9,7 @@
 
 mod a11y_ui;
 mod actions_ui;
+pub mod ai_ui;
 pub mod canvas;
 mod chrome;
 mod combine_ui;
@@ -108,6 +109,8 @@ pub enum RightPanel {
     Search,
     /// Compare files: the differences.
     Compare,
+    /// The AI assistant (M13; needs a provider).
+    Assistant,
 }
 
 /// Quick-action bar tools (the vertical floating strip).
@@ -302,6 +305,11 @@ pub struct PdfCraftApp {
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
     pub update_source: Option<updates::UpdateSource>,
     pub(crate) updates: updates::Updates,
+    /// How to send an AI request (the desktop app sets it; see `ai_ui`).
+    pub ai_provider: Option<ai_ui::AiProvider>,
+    /// Preferences ▸ AI assistant (off by default).
+    pub ai_settings: pdfcraft_engine::ai::AiSettings,
+    pub(crate) ai: ai_ui::AiState,
     pub palette_open: bool,
     pub palette_query: String,
     pub all_tools_expanded: bool,
@@ -476,6 +484,9 @@ impl PdfCraftApp {
             dialog: None,
             update_source: None,
             updates: updates::Updates::default(),
+            ai_provider: None,
+            ai_settings: Default::default(),
+            ai: Default::default(),
             palette_open: false,
             palette_query: String::new(),
             all_tools_expanded: false,
@@ -854,6 +865,7 @@ impl PdfCraftApp {
             "custom_stamps": stamps_ui::encode(&self.custom_stamps),
             "javascript": self.session.javascript(),
             "actions": actions_ui::encode(&self.custom_actions),
+            "ai": self.ai_settings,
         })
         .to_string()
     }
@@ -894,6 +906,9 @@ impl PdfCraftApp {
         }
         self.custom_stamps = stamps_ui::decode(&v["custom_stamps"]);
         self.custom_actions = actions_ui::decode(&v["actions"]);
+        if let Ok(ai) = serde_json::from_value::<pdfcraft_engine::ai::AiSettings>(v["ai"].clone()) {
+            self.ai_settings = ai.sanitized();
+        }
         if let Some(on) = v["javascript"].as_bool() {
             self.session.set_javascript(on);
         }
@@ -933,6 +948,7 @@ impl PdfCraftApp {
                     "accessibility" => Some(RightPanel::Accessibility),
                     "search" => Some(RightPanel::Search),
                     "compare" => Some(RightPanel::Compare),
+                    "assistant" => Some(RightPanel::Assistant),
                     "none" => None,
                     other => return Err(format!("unknown panel {other}")),
                 }
@@ -1176,6 +1192,7 @@ impl eframe::App for PdfCraftApp {
         let now = ctx.input(|i| i.time);
         self.autosave_tick(now);
         self.poll_updates();
+        self.poll_ai();
         self.shortcuts(ctx);
         self.process_pending_edits();
         self.poll_export();

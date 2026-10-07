@@ -25,7 +25,7 @@ pub fn latest_release() -> Result<Release, String> {
 }
 
 /// The certificate authorities the operating system trusts.
-fn os_roots() -> Result<ureq::tls::RootCerts, String> {
+pub(crate) fn os_roots() -> Result<ureq::tls::RootCerts, String> {
     let found = rustls_native_certs::load_native_certs();
     let certs: Vec<ureq::tls::Certificate<'static>> = found.certs.iter().map(|c| ureq::tls::Certificate::from_der(c.as_ref()).to_owned()).collect();
     if certs.is_empty() {

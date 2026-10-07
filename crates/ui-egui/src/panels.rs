@@ -148,6 +148,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
         format_section(app, ui, t);
     }
     let mut run = None;
+    let ai_ready = app.ai_provider.is_some() && app.ai_settings.is_ready();
     // Redact a PDF has Acrobat's footer: Clear all / Redact all.
     let footer = g.id == "redact";
     let marks = if footer { app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks()) } else { 0 };
@@ -158,7 +159,8 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
             for item in s.items {
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, item.label));
-                let ready = item.availability == Availability::Ready;
+                // AI items work once a provider is set up (Preferences ▸ AI assistant).
+                let ready = item.availability == Availability::Ready || (item.availability == Availability::Provider && ai_ready);
                 if resp.hovered() {
                     ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
                 }
@@ -174,7 +176,8 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                 let (chip, fill, cfg) = match item.availability {
                     Availability::Ready => ("Ready", Color32::from_rgb(0xDD, 0xF3, 0xE4), Color32::from_rgb(0x1E, 0x7B, 0x43)),
                     Availability::Planned(m) => (m, t.pressed, t.text_muted),
-                    Availability::Provider => ("AI", t.pressed, t.text_muted),
+                    Availability::Provider if ready => ("AI", Color32::from_rgb(0xDD, 0xF3, 0xE4), Color32::from_rgb(0x1E, 0x7B, 0x43)),
+                    Availability::Provider => ("Set up", t.pressed, t.text_muted),
                 };
                 let font = theme::semibold(9.5);
                 let w = ui.fonts_mut(|f| f.layout_no_wrap(chip.to_string(), font.clone(), cfg).size().x);
@@ -370,6 +373,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut sig_action: Option<crate::sign_ui::PanelAction> = None;
     let mut a11y_action: Option<crate::a11y_ui::PanelAction> = None;
     let mut compare_action: Option<crate::compare_ui::PanelAction> = None;
+    let mut ai_action: Option<crate::ai_ui::PanelAction> = None;
     let mut bm_rename = app.bookmark_rename.clone();
     let bm_editable = app.session.get(id).is_some_and(|d| d.allows_assembly() && d.read_only_reason.is_none());
     // Prepare a form is open: the Fields panel orders tabs.
@@ -382,6 +386,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         let sig_expanded = &mut app.sig_expanded;
         let a11y = &mut app.a11y;
         let compare = &app.compare;
+        let ai_panel = crate::ai_ui::PanelState { state: &mut app.ai, settings: &app.ai_settings, available: app.ai_provider.is_some() };
         let comment_allowed = doc.allows_annotation();
         egui::Panel::right("right_panel")
             .resizable(true)
@@ -405,6 +410,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Accessibility => ("Accessibility Checker", None),
                     RightPanel::Search => ("Search", None),
                     RightPanel::Compare => ("Compare", compare.as_ref().filter(|c| c.new == id).map(|c| c.result.changes.len())),
+                    RightPanel::Assistant => ("AI assistant", None),
                 };
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(title).font(theme::semibold(15.5)));
@@ -507,6 +513,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                     RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
                     RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
+                    RightPanel::Assistant => ai_action = crate::ai_ui::panel(ui, &t, ai_panel, id),
                     RightPanel::Attachments => {
                         if info.attachments.is_empty() {
                             empty(ui, &t, "paperclip", "This document has no attachments.");
@@ -555,6 +562,9 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     if let Some(a) = a11y_action {
         app.a11y_action(index, a);
+    }
+    if let Some(a) = ai_action {
+        app.ai_action(index, a);
     }
     if let Some(a) = compare_action {
         app.compare_action(index, a);
