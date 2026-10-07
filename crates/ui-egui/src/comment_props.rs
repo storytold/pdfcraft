@@ -3,11 +3,11 @@
 //! subject, modified) and Review History (status changes), with Acrobat's Locked box.
 
 use egui::{Align, Layout};
-use printcraft_engine::{CommentProps, Edit, NoteIcon};
+use pdfcraft_engine::{CommentProps, Edit, NoteIcon};
 
 use crate::comments::swatch_grid;
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, widgets};
+use crate::{PdfCraftApp, widgets};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PropsTab {
@@ -28,7 +28,7 @@ pub struct PropsDraft {
 const ICONS: [NoteIcon; 7] =
     [NoteIcon::Comment, NoteIcon::Note, NoteIcon::Help, NoteIcon::Insert, NoteIcon::Key, NoteIcon::NewParagraph, NoteIcon::Paragraph];
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Attach file: ask for a file (or take `attach_override`) and attach it at `at`.
     pub fn attach_file_comment(&mut self, page: usize, at: [f64; 2]) {
         let picked = match self.attach_override.take() {
@@ -43,8 +43,8 @@ impl PrintCraftApp {
         };
         let Some((file, data)) = picked else { return };
         let tool = crate::comments::CommentTool::Attach;
-        let shape = printcraft_engine::Shape::Attachment { at, icon: printcraft_engine::AttachIcon::PushPin, file, data };
-        let edit = Edit::AddAnnotation(printcraft_engine::NewAnnotation {
+        let shape = pdfcraft_engine::Shape::Attachment { at, icon: pdfcraft_engine::AttachIcon::PushPin, file, data };
+        let edit = Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
             page,
             shape,
             style: self.comment_prefs.style(tool),
@@ -114,7 +114,7 @@ pub fn edits(d: &PropsDraft) -> Vec<Edit> {
 }
 
 /// Draw the dialog; returns (apply, cancel).
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (bool, bool) {
+pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let history: Vec<(String, String, String)> = app
         .active_ids()
         .and_then(|(_, id)| app.session.get(id))
@@ -188,7 +188,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
                 ui.add(egui::TextEdit::singleline(&mut e.subject).desired_width(280.0)).labelled_by(l.id);
                 ui.end_row();
                 ui.label("Modified");
-                ui.label(e.modified.as_deref().map(printcraft_render::pretty_date).unwrap_or_else(|| "—".into()));
+                ui.label(e.modified.as_deref().map(pdfcraft_render::pretty_date).unwrap_or_else(|| "—".into()));
                 ui.end_row();
             });
         }

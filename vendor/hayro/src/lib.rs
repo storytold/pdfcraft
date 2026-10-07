@@ -60,7 +60,7 @@ use vello_cpu::color::palette::css::WHITE;
 use vello_cpu::{Level, Pixmap, RenderMode};
 
 mod renderer;
-/// PrintCraft patch: exported for its regression test.
+/// PdfCraft patch: exported for its regression test.
 pub use renderer::tiling_cell_scale;
 
 /// A cache used by the renderer.
@@ -99,7 +99,7 @@ pub struct RenderSettings {
     /// The background color. Determines the color of the base
     /// rectangle during rendering to a pixmap.
     pub bg_color: AlphaColor<Srgb>,
-    /// PrintCraft patch: top-left corner of the rendered region, in device pixels of the scaled
+    /// PdfCraft patch: top-left corner of the rendered region, in device pixels of the scaled
     /// page. Together with `width`/`height` this renders one tile of a large page.
     pub x_offset: f32,
     /// See `x_offset`.

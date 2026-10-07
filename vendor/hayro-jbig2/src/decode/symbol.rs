@@ -24,7 +24,7 @@ use crate::reader::Reader;
 
 const MAX_SYMBOLS: u32 = u16::MAX as u32;
 
-/// PrintCraft patch: the most symbol pixels one dictionary may decode (2^26). Symbols are
+/// PdfCraft patch: the most symbol pixels one dictionary may decode (2^26). Symbols are
 /// decoded pixel by pixel, and up to 65535 of them of up to 65535 × 65535 each kept a fuzzed
 /// file decoding for minutes; real dictionaries hold about a million pixels.
 const MAX_DICTIONARY_PIXELS: u64 = 1 << 26;
@@ -107,7 +107,7 @@ pub(crate) fn decode(
                 .total_width
                 .checked_add(symbol_width)
                 .ok_or(OverflowError::BitmapDimension)?;
-            // PrintCraft patch: see `MAX_DICTIONARY_PIXELS`.
+            // PdfCraft patch: see `MAX_DICTIONARY_PIXELS`.
             ctx.pixels = ctx
                 .pixels
                 .saturating_add(u64::from(symbol_width) * u64::from(ctx.height_class_height));
@@ -447,7 +447,7 @@ struct SymbolDecodeContext<'a> {
     symbols_decoded_count: u32,
     total_width: u32,
     height_class_height: u32,
-    /// PrintCraft patch: symbol pixels decoded so far (see `MAX_DICTIONARY_PIXELS`).
+    /// PdfCraft patch: symbol pixels decoded so far (see `MAX_DICTIONARY_PIXELS`).
     pixels: u64,
 }
 

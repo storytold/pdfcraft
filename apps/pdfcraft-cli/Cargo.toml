@@ -1,0 +1,26 @@
+[package]
+name = "pdfcraft-cli"
+description = "PdfCraft command-line tool: inspect, render and robustness-check PDFs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pdfcraft-cli"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-render = { workspace = true }
+serde_json = { workspace = true }
+pdfcraft-engine = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-automation = { workspace = true }
+base64 = "0.22"
+
+[features]
+default = ["mcp"]
+# The opt-in MCP server (`pdfcraft-cli mcp`). Build with --no-default-features to leave it out.
+mcp = ["pdfcraft-automation/mcp"]

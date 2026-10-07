@@ -7,13 +7,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use printcraft_cos::{Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 /// Each MCID's operators (serialized), and whether anything is still drawn inside it.
 fn by_mcid(data: &[u8]) -> HashMap<i64, (Vec<u8>, bool)> {
     let mut out: HashMap<i64, (Vec<u8>, bool)> = HashMap::new();
     let mut stack: Vec<Option<i64>> = Vec::new();
-    for op in printcraft_content::parse(data).ops {
+    for op in pdfcraft_content::parse(data).ops {
         match op.op.as_slice() {
             b"BDC" => {
                 let id = match op.operands.get(1) {
@@ -45,7 +45,7 @@ fn by_mcid(data: &[u8]) -> HashMap<i64, (Vec<u8>, bool)> {
             _ => false,
         };
         let mut bytes = Vec::new();
-        printcraft_content::write_op(&op, &mut bytes);
+        pdfcraft_content::write_op(&op, &mut bytes);
         for id in stack.iter().flatten() {
             let e = out.entry(*id).or_default();
             e.0.extend_from_slice(&bytes);
@@ -91,7 +91,7 @@ fn mcid_of(o: &Object, page: Option<ObjRef>, target: ObjRef) -> Option<i64> {
 }
 
 /// Clean the elements owning `changed` marked content on `page`; returns how many changed.
-pub(crate) fn clean(doc: &mut Document, page: ObjRef, changed: &HashSet<i64>, empty: &HashSet<i64>) -> Result<usize, printcraft_cos::CosError> {
+pub(crate) fn clean(doc: &mut Document, page: ObjRef, changed: &HashSet<i64>, empty: &HashSet<i64>) -> Result<usize, pdfcraft_cos::CosError> {
     if changed.is_empty() {
         return Ok(0);
     }

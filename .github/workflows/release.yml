@@ -1,5 +1,5 @@
 # Release pipeline: every push to `release` builds signed installers for every platform and
-# creates or updates the draft GitHub Release "PrintCraft v<version>". See docs/releasing.md.
+# creates or updates the draft GitHub Release "PdfCraft v<version>". See docs/releasing.md.
 #
 # All jobs run in the `release` environment (restricted to the `release` branch), which holds
 # the signing secrets. Every secret is optional: missing ones produce unsigned artifacts and a
@@ -28,7 +28,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: 1
-  PRINTCRAFT_BUILD_SHA: ${{ github.sha }}
+  PDFCRAFT_BUILD_SHA: ${{ github.sha }}
   INPUT_VERSION: ${{ inputs.version }}
 
 jobs:
@@ -58,7 +58,7 @@ jobs:
             echo "date=$(date -u +%Y-%m-%d)"
             echo "prerelease=$pre"
           } >>"$GITHUB_OUTPUT"
-          echo "### PrintCraft v$v (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
+          echo "### PdfCraft v$v (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
 
   macos:
     name: macOS universal
@@ -66,8 +66,8 @@ jobs:
     runs-on: macos-15
     environment: release
     env:
-      PRINTCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      PRINTCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      PDFCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      PDFCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
       # The craft-fonts build input (Japanese fonts): every release embeds it. Bump deliberately.
@@ -85,7 +85,7 @@ jobs:
           key: release-macos-universal
       - name: Apply version override
         if: inputs.version != ''
-        run: cargo xtask version set "$PRINTCRAFT_VERSION"
+        run: cargo xtask version set "$PDFCRAFT_VERSION"
       - name: Import signing certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -125,8 +125,8 @@ jobs:
           # .github/workflows/windows-arm64.yml installs and runs it on ARM64 hardware.
           - { arch: arm64, target: aarch64-pc-windows-msvc }
     env:
-      PRINTCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      PRINTCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      PDFCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      PDFCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
       # The craft-fonts build input (Japanese fonts): every release embeds it. Bump deliberately.
@@ -145,7 +145,7 @@ jobs:
       - name: Apply version override
         if: inputs.version != ''
         shell: bash
-        run: cargo xtask version set "$PRINTCRAFT_VERSION"
+        run: cargo xtask version set "$PDFCRAFT_VERSION"
       - name: Install WiX
         shell: pwsh
         run: dotnet tool install --global wix --version 5.0.2
@@ -183,8 +183,8 @@ jobs:
           - { arch: x86_64, runner: ubuntu-22.04, deb: amd64 }
           - { arch: aarch64, runner: ubuntu-22.04-arm, deb: arm64 }
     env:
-      PRINTCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      PRINTCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      PDFCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      PDFCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
       NFPM_VERSION: 2.47.0
     steps:
       - uses: actions/checkout@v4
@@ -210,7 +210,7 @@ jobs:
           key: release-linux-${{ matrix.arch }}
       - name: Apply version override
         if: inputs.version != ''
-        run: cargo xtask version set "$PRINTCRAFT_VERSION"
+        run: cargo xtask version set "$PDFCRAFT_VERSION"
       - name: Build and package (AppImage, deb, rpm, tar.gz)
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
@@ -219,9 +219,9 @@ jobs:
       - name: Check the packages
         run: |
           dpkg-deb --info dist/release/*.deb
-          dpkg-deb --contents dist/release/*.deb | grep -E 'usr/bin/printcraft$|metainfo|applications'
-          ldd target/release/printcraft
-          python3 -c "import yaml; m = yaml.safe_load(open('packaging/linux/flatpak/ai.storyteller.printcraft.yml')); assert m['id'] == 'ai.storyteller.printcraft'"
+          dpkg-deb --contents dist/release/*.deb | grep -E 'usr/bin/pdfcraft$|metainfo|applications'
+          ldd target/release/pdfcraft
+          python3 -c "import yaml; m = yaml.safe_load(open('packaging/linux/flatpak/ai.storyteller.pdfcraft.yml')); assert m['id'] == 'ai.storyteller.pdfcraft'"
           for appimage in dist/release/*.AppImage; do
             chmod +x "$appimage"
             APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --version
@@ -240,8 +240,8 @@ jobs:
     environment: release
     timeout-minutes: 180
     env:
-      PRINTCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      PRINTCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      PDFCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      PDFCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
       VERSION_OVERRIDE: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v4
@@ -260,7 +260,7 @@ jobs:
           usesh: true
           cpu: 4
           mem: 12288
-          envs: "PRINTCRAFT_VERSION PRINTCRAFT_BUILD_DATE VERSION_OVERRIDE"
+          envs: "PDFCRAFT_VERSION PDFCRAFT_BUILD_DATE VERSION_OVERRIDE"
           # The same packages as the FreeBSD CI workflow, plus bash for the packaging script.
           prepare: |
             pkg install -y bash git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib
@@ -270,7 +270,7 @@ jobs:
             . "$HOME/.cargo/env"
             git config --global --add safe.directory "$PWD"
             export CRAFT_FONTS_DIR="$PWD/craft-fonts" CRAFT_FONTS_REQUIRED=1
-            if [ -n "$VERSION_OVERRIDE" ]; then cargo xtask version set "$PRINTCRAFT_VERSION"; fi
+            if [ -n "$VERSION_OVERRIDE" ]; then cargo xtask version set "$PDFCRAFT_VERSION"; fi
             packaging/freebsd/package.sh
             # Only dist/ comes back out of the VM: copying the target dir back fails on large builds.
             rm -rf target
@@ -286,8 +286,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     env:
-      PRINTCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      PRINTCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      PDFCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      PDFCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
       TRUNK_VERSION: 0.21.14
     steps:
       - uses: actions/checkout@v4
@@ -311,7 +311,7 @@ jobs:
           trunk --version
       - name: Apply version override
         if: inputs.version != ''
-        run: cargo xtask version set "$PRINTCRAFT_VERSION"
+        run: cargo xtask version set "$PDFCRAFT_VERSION"
       - name: Build and zip
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
@@ -349,7 +349,7 @@ jobs:
         working-directory: artifacts
         run: |
           tag="v$VERSION"
-          title="PrintCraft v$VERSION"
+          title="PdfCraft v$VERSION"
           pre=()
           if [ "$PRERELEASE" = true ]; then pre=(--prerelease); fi
           if draft="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)"; then

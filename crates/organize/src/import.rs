@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use printcraft_cos::{Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 use crate::{INHERITABLE, OrganizeError, pages_root, rebuild, walk};
 
@@ -534,7 +534,7 @@ fn set_attachments(dst: &mut Document, mut entries: Vec<(Vec<u8>, Object)>) -> R
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     let mut names = Vec::new();
     for (k, v) in entries {
-        names.push(Object::String(printcraft_cos::PdfString::literal(k)));
+        names.push(Object::String(pdfcraft_cos::PdfString::literal(k)));
         names.push(v);
     }
     let mut tree = Dict::new();
@@ -565,7 +565,7 @@ fn add_outline(doc: &mut Document, marks: &[Mark<'_>]) -> Result<(), OrganizeErr
     let (Some(&first_item), Some(&last_item)) = (items.first(), items.last()) else { return Ok(()) };
     for (i, ((title, page, src, page_map), r)) in marks.iter().zip(&items).enumerate() {
         let mut d = Dict::new();
-        d.set(b"Title".to_vec(), Object::String(printcraft_cos::PdfString::text(title)));
+        d.set(b"Title".to_vec(), Object::String(pdfcraft_cos::PdfString::text(title)));
         d.set(b"Parent".to_vec(), Object::Ref(outlines));
         d.set(b"Dest".to_vec(), Object::Array(vec![Object::Ref(*page), Object::name("Fit")]));
         if i > 0 {
@@ -668,7 +668,7 @@ fn copy_outline_level(
 /// and its `/Matrix` undoes the page rotation, so it draws upright as displayed. Returns the
 /// form and its displayed size in points.
 pub fn page_as_form(dst: &mut Document, src: &Document, page: usize) -> Result<(ObjRef, (f64, f64)), OrganizeError> {
-    use printcraft_cos::Stream;
+    use pdfcraft_cos::Stream;
     let all = walk(src)?;
     // `walk` gives the inheritable attributes (resources, boxes, rotation); the content is
     // the page's own.

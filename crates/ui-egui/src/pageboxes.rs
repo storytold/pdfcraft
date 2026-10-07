@@ -4,10 +4,10 @@
 //! millimetres, and the pages. A preview shows the current page's media box and the new box.
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
-use printcraft_engine::{BoxSpec, Edit, PageBox};
+use pdfcraft_engine::{BoxSpec, Edit, PageBox};
 
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, widgets};
+use crate::{PdfCraftApp, widgets};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unit {
@@ -87,7 +87,7 @@ fn box_index(b: PageBox) -> usize {
 }
 
 /// Draw the dialog body; returns (apply, cancel).
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (bool, bool) {
+pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let Some((i, id)) = app.active_ids() else { return (false, true) };
     let current = app.views[i].current;
     let Some(doc) = app.session.get(id) else { return (false, true) };

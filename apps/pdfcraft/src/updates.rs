@@ -1,10 +1,10 @@
-//! Asks GitHub for the latest PrintCraft release (Help ▸ Check for updates, issue #28).
+//! Asks GitHub for the latest PdfCraft release (Help ▸ Check for updates, issue #28).
 
 use std::time::Duration;
 
-use printcraft_ui_egui::updates::{RELEASES_PAGE, Release};
+use pdfcraft_ui_egui::updates::{RELEASES_PAGE, Release};
 
-const LATEST: &str = "https://api.github.com/repos/storytold/printcraft/releases/latest";
+const LATEST: &str = "https://api.github.com/repos/storytold/pdfcraft/releases/latest";
 
 /// The latest release. The answer is untrusted: its size is capped, and only a page under
 /// [`RELEASES_PAGE`] is ever offered for download (anything else falls back to that list).
@@ -17,7 +17,7 @@ pub fn latest_release() -> Result<Release, String> {
     let mut response = agent
         .get(LATEST)
         .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", concat!("PrintCraft/", env!("CARGO_PKG_VERSION")))
+        .header("User-Agent", concat!("PdfCraft/", env!("CARGO_PKG_VERSION")))
         .call()
         .map_err(|e| format!("couldn't reach GitHub ({e})"))?;
     let body = response.body_mut().with_config().limit(1 << 20).read_to_string().map_err(|e| format!("unreadable answer ({e})"))?;
@@ -51,9 +51,9 @@ mod tests {
 
     #[test]
     fn answers_are_read_and_only_our_release_pages_are_offered() {
-        let r = parse(r#"{"tag_name":"v0.2.0","html_url":"https://github.com/storytold/printcraft/releases/tag/v0.2.0"}"#).unwrap();
-        assert_eq!(r, Release { version: "v0.2.0".into(), url: "https://github.com/storytold/printcraft/releases/tag/v0.2.0".into() });
-        for elsewhere in ["https://example.com/printcraft.exe", "https://github.com/storytold/printcraft/releases.evil/x", "javascript:alert(1)"] {
+        let r = parse(r#"{"tag_name":"v0.2.0","html_url":"https://github.com/storytold/pdfcraft/releases/tag/v0.2.0"}"#).unwrap();
+        assert_eq!(r, Release { version: "v0.2.0".into(), url: "https://github.com/storytold/pdfcraft/releases/tag/v0.2.0".into() });
+        for elsewhere in ["https://example.com/pdfcraft.exe", "https://github.com/storytold/pdfcraft/releases.evil/x", "javascript:alert(1)"] {
             let r = parse(&format!(r#"{{"tag_name":"v9.9.9","html_url":"{elsewhere}"}}"#)).unwrap();
             assert_eq!(r.url, RELEASES_PAGE, "{elsewhere}");
         }
@@ -61,12 +61,12 @@ mod tests {
         assert!(parse("<html>").is_err());
     }
 
-    /// Live: asks GitHub over TLS with the OS's roots (`cargo test -p printcraft -- --ignored`).
+    /// Live: asks GitHub over TLS with the OS's roots (`cargo test -p pdfcraft -- --ignored`).
     #[test]
     #[ignore = "needs network access"]
     fn github_answers_with_the_latest_release() {
         let r = latest_release().unwrap();
-        assert!(printcraft_ui_egui::updates::is_newer(&r.version, "0.0.0"), "{r:?}");
+        assert!(pdfcraft_ui_egui::updates::is_newer(&r.version, "0.0.0"), "{r:?}");
         assert!(r.url.starts_with(RELEASES_PAGE), "{r:?}");
     }
 }

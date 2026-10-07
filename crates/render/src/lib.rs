@@ -1,4 +1,4 @@
-//! printcraft-render — page rasterization and document inspection.
+//! pdfcraft-render — page rasterization and document inspection.
 //!
 //! **Bootstrap status (see ADR-0004):** rasterization goes straight through the `hayro` crate
 //! (hayro-interpret + vello_cpu), and inspection (outline, annotations, fields, layers,

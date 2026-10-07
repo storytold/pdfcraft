@@ -91,7 +91,7 @@ impl<'a> Readable<'a> for Operator<'a> {
     }
 }
 
-/// PrintCraft patch: how many `EI` candidates an inline image examines, and how far past each
+/// PdfCraft patch: how many `EI` candidates an inline image examines, and how far past each
 /// one the end-of-data heuristic looks, before taking the current candidate. Unbounded, the
 /// heuristic re-parsed the rest of the stream for every candidate, and each re-parse ran the
 /// heuristic again on the inline images it met: a fuzzed file hung for minutes.
@@ -104,7 +104,7 @@ pub struct UntypedIter<'a> {
     reader: Reader<'a>,
     stack: Stack<'a>,
     operator: Option<Operator<'a>>,
-    /// PrintCraft patch: this iterator only checks whether data reads as content (the
+    /// PdfCraft patch: this iterator only checks whether data reads as content (the
     /// end-of-data heuristic below); inline images it meets end at their first `EI`.
     lookahead: bool,
 }
@@ -210,7 +210,7 @@ impl<'a> UntypedIter<'a> {
                             // new we don't bother trying to read it.
                             let tail = &self.reader.tail()?[2..];
                             let mut find_reader = Reader::new(tail);
-                            // PrintCraft patch: bounded (see `MAX_EI_CANDIDATES`).
+                            // PdfCraft patch: bounded (see `MAX_EI_CANDIDATES`).
                             candidates += 1;
                             let mut steps = 0;
                             let heuristic = !self.lookahead && candidates <= MAX_EI_CANDIDATES;

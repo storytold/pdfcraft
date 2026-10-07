@@ -86,7 +86,7 @@ pub fn decode_row(filter: FilterType, bpp: usize, previous: &[u8], current: &mut
 }
 
 pub fn decode_frame(content: &[u8], bpp: usize, bytes_per_row: usize) -> Result<Vec<u8>> {
-    // PrintCraft patch: each row is a filter byte plus `bytes_per_row` bytes, so a row longer
+    // PdfCraft patch: each row is a filter byte plus `bytes_per_row` bytes, so a row longer
     // than the data can never be read (`read_exact` below fails). Refuse it before allocating:
     // a fuzzed `/Columns 4294967295` allocated two 4 GiB rows here.
     if !content.is_empty() && bytes_per_row >= content.len() {

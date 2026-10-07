@@ -1,13 +1,13 @@
 //! A Model Context Protocol server over the automation tools.
 //!
-//! **Opt-in only.** Nothing in PrintCraft starts this server on its own: it runs when a user
-//! launches `printcraft-cli mcp` (usually by adding that command to their agent's MCP
+//! **Opt-in only.** Nothing in PdfCraft starts this server on its own: it runs when a user
+//! launches `pdfcraft-cli mcp` (usually by adding that command to their agent's MCP
 //! configuration), and stops when its input closes. It opens no network port; the transport is
 //! newline-delimited JSON-RPC 2.0 over stdin/stdout.
 //!
 //! Implemented: `initialize`, `ping`, `tools/list`, `tools/call`, `resources/list`,
 //! `resources/templates/list`, `resources/read`, and the `notifications/*` the client sends.
-//! Resources expose the open documents read-only: `printcraft://doc/{doc}/info` (JSON),
+//! Resources expose the open documents read-only: `pdfcraft://doc/{doc}/info` (JSON),
 //! `…/text` (plain text), `…/page/{page}/text` and `…/page/{page}/image` (PNG; `?dpi=` 1–600). Tool failures are reported in the result (`isError: true`) so the agent can read
 //! them; protocol errors use JSON-RPC error codes.
 
@@ -26,10 +26,10 @@ const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
-const INSTRUCTIONS: &str = "PrintCraft edits PDFs. Open a file with doc_open to get a document id, then inspect \
+const INSTRUCTIONS: &str = "PdfCraft edits PDFs. Open a file with doc_open to get a document id, then inspect \
 (doc_info, text_extract, text_find, page_render) or edit it (page_*, doc_set_info). Edits are undoable \
 (edit_undo) and stay in memory until doc_save. Page numbers are 1-based. Open documents are also \
-resources: printcraft://doc/{doc}/info, /text, /page/{page}/text and /page/{page}/image.";
+resources: pdfcraft://doc/{doc}/info, /text, /page/{page}/text and /page/{page}/image.";
 
 pub struct McpServer {
     automation: Automation,
@@ -92,7 +92,7 @@ impl McpServer {
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false }, "resources": { "listChanged": false, "subscribe": false } },
-                    "serverInfo": { "name": "printcraft", "title": "PrintCraft", "version": env!("CARGO_PKG_VERSION"), "websiteUrl": printcraft_engine::links::APP_PAGE },
+                    "serverInfo": { "name": "pdfcraft", "title": "PdfCraft", "version": env!("CARGO_PKG_VERSION"), "websiteUrl": pdfcraft_engine::links::APP_PAGE },
                     "instructions": INSTRUCTIONS,
                 }))
             }
@@ -118,7 +118,7 @@ impl McpServer {
     }
 }
 
-/// The resource behind a `printcraft://` URI.
+/// The resource behind a `pdfcraft://` URI.
 #[derive(Debug, PartialEq)]
 enum Resource {
     Info(u64),
@@ -128,7 +128,7 @@ enum Resource {
 }
 
 fn parse_uri(uri: &str) -> Option<Resource> {
-    let rest = uri.strip_prefix("printcraft://doc/")?;
+    let rest = uri.strip_prefix("pdfcraft://doc/")?;
     let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
     let dpi = query.split('&').find_map(|kv| kv.strip_prefix("dpi=")).and_then(|v| v.parse::<f64>().ok());
     let parts: Vec<&str> = path.split('/').collect();
@@ -144,13 +144,13 @@ fn parse_uri(uri: &str) -> Option<Resource> {
 
 fn resource_templates() -> Value {
     json!([
-        { "uriTemplate": "printcraft://doc/{doc}/info", "name": "Document information", "mimeType": "application/json",
+        { "uriTemplate": "pdfcraft://doc/{doc}/info", "name": "Document information", "mimeType": "application/json",
           "description": "Metadata, pages, bookmarks, annotations, fields, links, layers, attachments, fonts and security of an open document (as doc_info)." },
-        { "uriTemplate": "printcraft://doc/{doc}/text", "name": "Document text", "mimeType": "text/plain",
+        { "uriTemplate": "pdfcraft://doc/{doc}/text", "name": "Document text", "mimeType": "text/plain",
           "description": "The text of every page in reading order, each page under a \"Page n\" heading." },
-        { "uriTemplate": "printcraft://doc/{doc}/page/{page}/text", "name": "Page text", "mimeType": "text/plain",
+        { "uriTemplate": "pdfcraft://doc/{doc}/page/{page}/text", "name": "Page text", "mimeType": "text/plain",
           "description": "The text of one page (1-based) in reading order." },
-        { "uriTemplate": "printcraft://doc/{doc}/page/{page}/image{?dpi}", "name": "Page image", "mimeType": "image/png",
+        { "uriTemplate": "pdfcraft://doc/{doc}/page/{page}/image{?dpi}", "name": "Page image", "mimeType": "image/png",
           "description": "One page (1-based) rendered to PNG; dpi 1–600, default 96." },
     ])
 }
@@ -164,15 +164,15 @@ impl McpServer {
         let mut out = Vec::new();
         for d in docs.unwrap_or_default() {
             let (id, name) = (d["doc"].as_u64().unwrap_or(0), d["name"].as_str().unwrap_or("document"));
-            out.push(
-                json!({ "uri": format!("printcraft://doc/{id}/info"), "name": format!("{name} (information)"), "mimeType": "application/json" }),
-            );
-            out.push(json!({ "uri": format!("printcraft://doc/{id}/text"), "name": format!("{name} (text)"), "mimeType": "text/plain" }));
+            out.push(json!({ "uri": format!("pdfcraft://doc/{id}/info"), "name": format!("{name} (information)"), "mimeType": "application/json" }));
+            out.push(json!({ "uri": format!("pdfcraft://doc/{id}/text"), "name": format!("{name} (text)"), "mimeType": "text/plain" }));
             // Pages are listed for short documents; longer ones use the templates.
             let pages = d["pages"].as_u64().unwrap_or(0);
             if pages <= 50 {
                 for p in 1..=pages {
-                    out.push(json!({ "uri": format!("printcraft://doc/{id}/page/{p}/image"), "name": format!("{name}, page {p}"), "mimeType": "image/png" }));
+                    out.push(
+                        json!({ "uri": format!("pdfcraft://doc/{id}/page/{p}/image"), "name": format!("{name}, page {p}"), "mimeType": "image/png" }),
+                    );
                 }
             }
         }
@@ -266,10 +266,10 @@ mod tests {
 
     #[test]
     fn resource_uris_parse() {
-        assert_eq!(parse_uri("printcraft://doc/3/info"), Some(Resource::Info(3)));
-        assert_eq!(parse_uri("printcraft://doc/3/page/2/image?dpi=36"), Some(Resource::PageImage(3, 2, Some(36.0))));
-        assert_eq!(parse_uri("printcraft://doc/3/page/2/text"), Some(Resource::PageText(3, 2)));
-        assert_eq!(parse_uri("printcraft://doc/x/info"), None);
+        assert_eq!(parse_uri("pdfcraft://doc/3/info"), Some(Resource::Info(3)));
+        assert_eq!(parse_uri("pdfcraft://doc/3/page/2/image?dpi=36"), Some(Resource::PageImage(3, 2, Some(36.0))));
+        assert_eq!(parse_uri("pdfcraft://doc/3/page/2/text"), Some(Resource::PageText(3, 2)));
+        assert_eq!(parse_uri("pdfcraft://doc/x/info"), None);
         assert_eq!(parse_uri("file:///etc/passwd"), None);
     }
 }

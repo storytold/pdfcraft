@@ -20,11 +20,11 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use printcraft_content::{Matrix, Op, contains, num, overlaps, parse, serialize_ops, string};
-use printcraft_cos::{Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_content::{Matrix, Op, contains, num, overlaps, parse, serialize_ops, string};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 use crate::{Report, image};
-use printcraft_fonts::pdf::Metrics;
+use pdfcraft_fonts::pdf::Metrics;
 
 const MAX_DEPTH: usize = 12;
 

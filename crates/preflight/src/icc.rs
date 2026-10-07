@@ -48,7 +48,7 @@ fn curve() -> Vec<u8> {
 pub fn srgb() -> Vec<u8> {
     // sRGB primaries, Bradford-adapted to the D50 profile connection space.
     let tags: Vec<(&[u8; 4], Vec<u8>)> = vec![
-        (b"desc", desc("sRGB (PrintCraft)")),
+        (b"desc", desc("sRGB (PdfCraft)")),
         (b"cprt", text("No copyright, use freely")),
         (b"wtpt", xyz(0.9642, 1.0, 0.8249)),
         (b"rXYZ", xyz(0.4361, 0.2225, 0.0139)),

@@ -4,8 +4,8 @@
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_engine::commands::COMMANDS;
-use printcraft_ui_egui::{Dialog, PrintCraftApp};
+use pdfcraft_engine::commands::COMMANDS;
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
@@ -32,9 +32,9 @@ fn fixture(n: usize) -> Vec<u8> {
     out
 }
 
-fn harness() -> Harness<'static, PrintCraftApp> {
+fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
         app
     });
@@ -67,19 +67,19 @@ fn every_registered_command_is_implemented() {
         if PICKERS.contains(&spec.id) {
             continue;
         }
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         if spec.id.starts_with("form.") || spec.id == "comment.flatten" {
             app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         } else {
             app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
         }
         // Give undo/redo something to do.
-        app.apply_edit(printcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+        app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
         if spec.id == "edit.redo" {
             app.undo();
         }
         if spec.id.starts_with("edit.") && (spec.id.ends_with(".update") || spec.id.ends_with(".remove")) {
-            use printcraft_engine::{Background, Edit, HeaderFooter, Watermark};
+            use pdfcraft_engine::{Background, Edit, HeaderFooter, Watermark};
             let mut hf = HeaderFooter::default();
             hf.text[1] = "x".into();
             app.apply_edit(Edit::AddHeaderFooter { pages: vec![0], settings: hf, replace: false });
@@ -97,7 +97,7 @@ fn every_registered_command_is_implemented() {
             });
         }
         if matches!(spec.id, "comment.flatten" | "comment.export" | "comment.summarize") {
-            use printcraft_engine::{Edit, NewAnnotation, Shape, Style};
+            use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
             let shape = Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] };
             app.apply_edit(Edit::AddAnnotation(NewAnnotation {
                 page: 0,
@@ -108,12 +108,9 @@ fn every_registered_command_is_implemented() {
             }));
         }
         if spec.id.starts_with("redact.") {
-            use printcraft_engine::{Edit, NewAnnotation, Shape, Style};
-            let shape = Shape::Redact {
-                quads: vec![printcraft_engine::rect_quad([10.0, 10.0, 50.0, 50.0])],
-                overlay: String::new(),
-                look: Default::default(),
-            };
+            use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+            let shape =
+                Shape::Redact { quads: vec![pdfcraft_engine::rect_quad([10.0, 10.0, 50.0, 50.0])], overlay: String::new(), look: Default::default() };
             app.apply_edit(Edit::AddAnnotation(NewAnnotation {
                 page: 0,
                 style: Style::default_for(&shape),
@@ -123,10 +120,10 @@ fn every_registered_command_is_implemented() {
             }));
         }
         if spec.id == "protect.remove" {
-            let p = printcraft_engine::Protection { open_password: Some("pw".into()), ..Default::default() };
-            app.apply_edit(printcraft_engine::Edit::Protect(p));
+            let p = pdfcraft_engine::Protection { open_password: Some("pw".into()), ..Default::default() };
+            app.apply_edit(pdfcraft_engine::Edit::Protect(p));
         }
-        let dir = std::env::temp_dir().join(format!("printcraft-cmd-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pdfcraft-cmd-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         app.save_override = Some(dir.join("out.pdf").to_string_lossy().into_owned());
         assert!(app.execute(spec.id), "{} is registered but not implemented (or wrongly disabled)", spec.id);
@@ -135,7 +132,7 @@ fn every_registered_command_is_implemented() {
 
 #[test]
 fn disabled_commands_explain_themselves() {
-    let mut app = PrintCraftApp::new();
+    let mut app = PdfCraftApp::new();
     assert!(!app.execute("file.save"));
     assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Open a document first"));
     app.open_bytes("doc.pdf", None, fixture(2)).unwrap();
@@ -158,7 +155,7 @@ fn shortcuts_run_registered_commands() {
     h.run_steps(2);
     h.key_press_modifiers(Modifiers::COMMAND | Modifiers::CTRL, Key::H);
     h.run_steps(2);
-    assert_eq!(h.state().mode, printcraft_ui_egui::Mode::Read);
+    assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Read);
 }
 
 #[test]

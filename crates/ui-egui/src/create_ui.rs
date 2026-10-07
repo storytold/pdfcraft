@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crate::PrintCraftApp;
+use crate::PdfCraftApp;
 
 /// File types Open accepts besides PDF (converted on open).
 pub const CONVERTIBLE: [&str; 12] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "txt", "text"];
@@ -62,7 +62,7 @@ fn stem(name: &str) -> &str {
     name.rsplit_once('.').map_or(name, |(s, _)| s)
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Convert a non-PDF file (image, text) into a new tab. Returns `None` when `bytes` is not
     /// something Create understands (the caller then tries to open it as a PDF).
     pub(crate) fn open_converted(&mut self, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
@@ -178,9 +178,9 @@ impl PrintCraftApp {
     /// the saving.
     pub(crate) fn save_optimized(
         &mut self,
-        id: printcraft_engine::DocId,
+        id: pdfcraft_engine::DocId,
         suffix: &str,
-        result: Result<(Arc<Vec<u8>>, String), printcraft_engine::EditError>,
+        result: Result<(Arc<Vec<u8>>, String), pdfcraft_engine::EditError>,
     ) {
         let Some(doc) = self.session.get(id) else { return };
         let (before, name) = (doc.bytes.len(), format!("{} ({suffix}).pdf", stem(&doc.name)));
@@ -191,7 +191,7 @@ impl PrintCraftApp {
                 return;
             }
         };
-        let saved = |app: &mut PrintCraftApp, place: String| {
+        let saved = |app: &mut PdfCraftApp, place: String| {
             let pct = 100.0 * (1.0 - bytes.len() as f64 / before.max(1) as f64);
             app.notify(format!(
                 "Saved {place}: {} → {} ({pct:.0}% smaller){detail}",

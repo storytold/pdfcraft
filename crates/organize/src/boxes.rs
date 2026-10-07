@@ -4,7 +4,7 @@
 //! → crop) and are clipped to the media box. Margins are measured inward from the media box in
 //! default user space (unrotated), as Acrobat's dialog does.
 
-use printcraft_cos::{Document, Object};
+use pdfcraft_cos::{Document, Object};
 
 use crate::{OrganizeError, check, walk};
 

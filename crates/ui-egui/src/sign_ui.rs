@@ -5,12 +5,12 @@
 use std::path::PathBuf;
 
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
-use printcraft_engine::sign::{self, Appearance, Certificate, DigitalId, Modification, Name, PrivateKey};
-use printcraft_engine::{SignOptions, SignatureInfo, SignatureStatus};
+use pdfcraft_engine::sign::{self, Appearance, Certificate, DigitalId, Modification, Name, PrivateKey};
+use pdfcraft_engine::{SignOptions, SignatureInfo, SignatureStatus};
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, icons, widgets};
+use crate::{PdfCraftApp, icons, widgets};
 
 /// A digital ID the app knows about (Acrobat: Digital ID files). The file stays where it is;
 /// its password is asked for at each signing.
@@ -123,7 +123,7 @@ pub struct SignView {
 }
 
 /// Drag a signature rectangle on one page (Digitally sign, Certify (visible signature)).
-pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, page: usize, info: &printcraft_render::DocInfo, view: &mut DocView) {
+pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, page: usize, info: &pdfcraft_render::DocInfo, view: &mut DocView) {
     let pointer = ui.input(|i| i.pointer.hover_pos());
     let origin = ui.input(|i| i.pointer.press_origin());
     if pointer.is_some_and(|p| xf.rect.contains(p)) {
@@ -157,7 +157,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
     }
 }
 
-/// Where new digital IDs are saved: next to the recovery folder (`…/PrintCraft/Digital IDs`).
+/// Where new digital IDs are saved: next to the recovery folder (`…/PdfCraft/Digital IDs`).
 fn id_dir() -> Option<PathBuf> {
     crate::recovery::RecoveryStore::default_dir().and_then(|d| d.parent().map(|p| p.join("Digital IDs")))
 }
@@ -180,7 +180,7 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
     }
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Start signing: the rectangle (or field) is known; show Sign with a Digital ID.
     pub fn start_signing(&mut self, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>) {
         self.refresh_keychain_ids();
@@ -353,7 +353,7 @@ impl PrintCraftApp {
 }
 
 /// Draw the signing dialogs; returns `true` when the dialog should close.
-pub(crate) fn dialog(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+pub(crate) fn dialog(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let Some(step) = app.sign_draft.as_ref().map(|d| d.step) else { return true };
     match step {
         SignStep::Choose => choose(ui, app, t),
@@ -376,7 +376,7 @@ fn error(ui: &mut egui::Ui, err: &Option<String>) {
     }
 }
 
-fn choose(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     title(ui, "Sign with a Digital ID");
     ui.label("Choose the digital ID that you want to use for signing:");
     ui.add_space(6.0);
@@ -436,7 +436,7 @@ fn choose(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
     close
 }
 
-fn configure(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     title(ui, "Configure a Digital ID for Signing");
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let mut close = false;
@@ -560,7 +560,7 @@ fn preview(ui: &mut egui::Ui, t: &Tokens, name: &str, d: &SignDraft) {
     ui.painter().galley(egui::pos2(x, inner.center().y - galley.size().y / 2.0), galley, Color32::BLACK);
 }
 
-fn sign_as(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let ids = app.digital_ids.clone();
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let Some(entry) = d.selected.and_then(|i| ids.get(i)).cloned() else {
@@ -612,9 +612,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
         ui.end_row();
         if in_keychain {
             ui.label("");
-            ui.label(
-                egui::RichText::new("The key is in the macOS Keychain, which may ask to allow PrintCraft to use it.").small().color(t.text_muted),
-            );
+            ui.label(egui::RichText::new("The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.").small().color(t.text_muted));
         } else {
             let l = ui.label("Digital ID password");
             let r = ui.add(egui::TextEdit::singleline(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);

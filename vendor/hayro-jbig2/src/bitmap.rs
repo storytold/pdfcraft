@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 // to `u16::MAX`, which should be more than enough.
 pub(crate) const MAX_DIMENSION: u32 = u16::MAX as u32;
 
-/// PrintCraft patch: the most pixels one bitmap may have (2^28, the renderer's
+/// PdfCraft patch: the most pixels one bitmap may have (2^28, the renderer's
 /// `MAX_IMAGE_PIXELS`). Each side alone may be 65535, so a single region could be 4.3 billion
 /// pixels, decoded one by one.
 pub(crate) const MAX_PIXELS: u64 = 1 << 28;
@@ -69,7 +69,7 @@ impl Bitmap {
         if width > MAX_DIMENSION || height > MAX_DIMENSION {
             bail!(OverflowError::BitmapDimension);
         }
-        // PrintCraft patch: see `MAX_PIXELS`.
+        // PdfCraft patch: see `MAX_PIXELS`.
         if u64::from(width) * u64::from(height) > MAX_PIXELS {
             bail!(OverflowError::BitmapDimension);
         }
@@ -96,7 +96,7 @@ impl Bitmap {
         if width > MAX_DIMENSION || height > MAX_DIMENSION {
             return Err(OverflowError::BitmapDimension.into());
         }
-        // PrintCraft patch: see `MAX_PIXELS` (the page bitmap is sized here).
+        // PdfCraft patch: see `MAX_PIXELS` (the page bitmap is sized here).
         if u64::from(width) * u64::from(height) > MAX_PIXELS {
             return Err(OverflowError::BitmapDimension.into());
         }

@@ -1,7 +1,7 @@
 //! `cargo xtask assets`: enforce the asset policy (AGENTS.md §1).
 //!
 //! `ATTRIBUTION.toml` lists every asset: committed or vendored files (`[[asset]]`), files that
-//! Cargo dependencies compile into PrintCraft (`[[bundled]]`), and files xtask downloads at build
+//! Cargo dependencies compile into PdfCraft (`[[bundled]]`), and files xtask downloads at build
 //! time (`[[fetched]]`). This gate fails when:
 //! - an asset-like file in the repository has no entry, or its SHA-256 differs;
 //! - a licence is not on the allowlist, or a declared licence file is missing;
@@ -350,7 +350,7 @@ pub fn render_markdown(m: &Manifest) -> String {
     let mut s = String::new();
     s.push_str("# Attribution\n\n");
     s.push_str("<!-- Generated from ATTRIBUTION.toml by `cargo xtask assets --write`. Do not edit by hand. -->\n\n");
-    s.push_str("Every asset PrintCraft includes, bundles or uses to build its published material, with its author, source and licence. ");
+    s.push_str("Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. ");
     s.push_str(
         "The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with SHA-256 hashes, is [ATTRIBUTION.toml](ATTRIBUTION.toml). ",
     );

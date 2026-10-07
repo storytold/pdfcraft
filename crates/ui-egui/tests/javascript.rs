@@ -3,7 +3,7 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_ui_egui::{Dialog, PrintCraftApp};
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 /// A form with a text field and a push button whose Mouse Up script fills it in.
 fn form() -> Vec<u8> {
@@ -30,9 +30,9 @@ fn form() -> Vec<u8> {
     out
 }
 
-fn harness() -> Harness<'static, PrintCraftApp> {
+fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("form.pdf", None, form()).unwrap();
         app
     });
@@ -40,7 +40,7 @@ fn harness() -> Harness<'static, PrintCraftApp> {
     h
 }
 
-fn value(h: &Harness<'static, PrintCraftApp>, name: &str) -> Vec<String> {
+fn value(h: &Harness<'static, PdfCraftApp>, name: &str) -> Vec<String> {
     let app = h.state();
     let id = app.active_ids().unwrap().1;
     app.session.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone()
@@ -97,17 +97,17 @@ fn document_scripts_and_preferences() {
     h.run_steps(2);
     assert!(!h.state().session.javascript());
     let saved = h.state().persist();
-    let mut fresh = PrintCraftApp::new();
+    let mut fresh = PdfCraftApp::new();
     fresh.restore(&saved);
     assert!(!fresh.session.javascript(), "the preference is remembered");
 }
 
 #[test]
 fn merge_data_files_into_a_spreadsheet() {
-    let dir = std::env::temp_dir().join(format!("printcraft-merge-ui-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pdfcraft-merge-ui-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("report.csv");
-    let mut app = PrintCraftApp::new();
+    let mut app = PdfCraftApp::new();
     app.save_override = Some(out.to_string_lossy().into_owned());
     app.merge_data_files(vec![("form.pdf".into(), form())]);
     assert_eq!(std::fs::read_to_string(&out).unwrap(), "greeting\n\n");
@@ -118,10 +118,9 @@ fn merge_data_files_into_a_spreadsheet() {
 
 #[test]
 fn prepare_a_form_detects_fields_on_a_paper_form() {
-    let paper =
-        printcraft_engine::Session::new().create_from_text("t", "Name: ____________________\n\nPhone: ____________________").unwrap().to_vec();
+    let paper = pdfcraft_engine::Session::new().create_from_text("t", "Name: ____________________\n\nPhone: ____________________").unwrap().to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("paper.pdf", None, paper.clone()).unwrap();
         app
     });

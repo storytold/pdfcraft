@@ -2,7 +2,7 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_ui_egui::{Dialog, PrintCraftApp, QuickTool};
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -12,9 +12,9 @@ const FIXTURE: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
-fn harness() -> Harness<'static, PrintCraftApp> {
+fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
         app.set_option("left", "closed").unwrap();
         app.set_option("zoom", "150").unwrap();
@@ -24,7 +24,7 @@ fn harness() -> Harness<'static, PrintCraftApp> {
     h
 }
 
-fn size(h: &Harness<'static, PrintCraftApp>, page: usize) -> (f32, f32) {
+fn size(h: &Harness<'static, PdfCraftApp>, page: usize) -> (f32, f32) {
     let s = h.state();
     let p = &s.session.get(s.views[0].id).unwrap().info.pages[page];
     (p.width, p.height)

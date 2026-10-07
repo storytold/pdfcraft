@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-sign"
+name = "pdfcraft-sign"
 description = "Digital signatures (ISO 32000-2 §12.8, PAdES): X.509, CMS, PKCS #12, signing and validation"
 version.workspace = true
 edition.workspace = true
@@ -11,9 +11,9 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-cos = { workspace = true }
-printcraft-annot = { workspace = true }
-printcraft-fonts = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-annot = { workspace = true }
+pdfcraft-fonts = { workspace = true }
 thiserror.workspace = true
 sha1 = "0.11"
 sha2 = "0.11"

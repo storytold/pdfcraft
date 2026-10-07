@@ -4,7 +4,7 @@ use egui::accesskit::Role;
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_ui_egui::PrintCraftApp;
+use pdfcraft_ui_egui::PdfCraftApp;
 
 const PDF: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -20,7 +20,7 @@ trailer << /Root 1 0 R >>
 #[test]
 fn the_identity_name_signs_new_comments_and_is_remembered() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("doc.pdf", None, PDF.to_vec()).expect("opens");
         app.set_option("author", "Tester").unwrap();
         app.set_option("dialog", "preferences").unwrap();
@@ -48,7 +48,7 @@ fn the_identity_name_signs_new_comments_and_is_remembered() {
     h.state_mut().views[0].select_text(0, 4, 8);
     assert!(h.state_mut().execute("comment.highlight"));
     // Wait for the edit to land in the document (it applies on a later frame).
-    let author = |h: &Harness<'static, PrintCraftApp>| {
+    let author = |h: &Harness<'static, PdfCraftApp>| {
         let doc = h.state().session.get(h.state().views[0].id).unwrap();
         doc.info.annotations.first().and_then(|a| a.author.clone())
     };
@@ -61,7 +61,7 @@ fn the_identity_name_signs_new_comments_and_is_remembered() {
     }
     assert_eq!(author(&h).as_deref(), Some("Grace Hopper"));
     // It survives a restart; an empty or missing name keeps the default, and a huge one is cut.
-    let mut restored = PrintCraftApp::new();
+    let mut restored = PdfCraftApp::new();
     restored.restore(&h.state().persist());
     assert_eq!(restored.comment_prefs.author, "Grace Hopper");
     restored.restore(r#"{"author": "  "}"#);

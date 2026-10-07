@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use printcraft_cos::{Document, Object, SaveOptions, write_full, write_incremental};
+use pdfcraft_cos::{Document, Object, SaveOptions, write_full, write_incremental};
 
 /// Leaf pages reachable from the catalog (cycle-safe), like viewers count them.
 fn page_count(doc: &Document) -> Option<usize> {
@@ -56,7 +56,7 @@ fn corpus_parity() {
         let result = std::panic::catch_unwind(|| -> Result<(), String> {
             let mut doc = match Document::open(bytes.clone()) {
                 Ok(d) => d,
-                Err(printcraft_cos::CosError::NeedsPassword) => return Err("encrypted".into()),
+                Err(pdfcraft_cos::CosError::NeedsPassword) => return Err("encrypted".into()),
                 Err(e) => return Err(format!("open: {e}")),
             };
             // hayro may repair a broken /Count; compare against the leaf walk count loosely.
@@ -64,14 +64,14 @@ fn corpus_parity() {
                 return Err(format!("page count {:?} vs hayro {expected}", page_count(&doc)));
             }
             let root = doc.root().ok_or("no root")?;
-            doc.update_dict(root, |d| d.set(b"PrintCraftTest".to_vec(), Object::Bool(true))).map_err(|e| e.to_string())?;
+            doc.update_dict(root, |d| d.set(b"PdfCraftTest".to_vec(), Object::Bool(true))).map_err(|e| e.to_string())?;
             let saved = write_incremental(&doc, &SaveOptions::default()).map_err(|e| format!("save: {e}"))?;
             // Reconstructed files are rewritten in full; everything else must keep its bytes.
             if !doc.revisions().is_empty() && saved.get(..bytes.len()) != Some(&bytes[..]) {
                 return Err("prefix modified".into());
             }
             let again = Document::open(Arc::new(saved.clone())).map_err(|e| format!("reopen: {e}"))?;
-            let flag = again.get(again.root().ok_or("no root after save")?).as_dict().and_then(|d| d.get(b"PrintCraftTest").cloned());
+            let flag = again.get(again.root().ok_or("no root after save")?).as_dict().and_then(|d| d.get(b"PdfCraftTest").cloned());
             if flag != Some(Object::Bool(true)) {
                 return Err("edit lost after reopen".into());
             }
@@ -118,10 +118,10 @@ fn corpus_passwords() {
     for (file, pw) in &cases {
         let Ok(bytes) = std::fs::read(dir.join(file)) else { continue };
         let bytes = Arc::new(bytes);
-        if !matches!(Document::open(bytes.clone()), Err(printcraft_cos::CosError::NeedsPassword)) {
+        if !matches!(Document::open(bytes.clone()), Err(pdfcraft_cos::CosError::NeedsPassword)) {
             failures.push(format!("{file}: opened without a password"));
         }
-        if !matches!(Document::open_with_password(bytes.clone(), Some("definitely wrong")), Err(printcraft_cos::CosError::WrongPassword)) {
+        if !matches!(Document::open_with_password(bytes.clone(), Some("definitely wrong")), Err(pdfcraft_cos::CosError::WrongPassword)) {
             failures.push(format!("{file}: wrong password not rejected"));
         }
         match Document::open_with_password(bytes.clone(), Some(pw)) {
@@ -132,7 +132,7 @@ fn corpus_passwords() {
                     continue;
                 }
                 let root = doc.root().unwrap();
-                doc.update_dict(root, |d| d.set(b"PrintCraftTest".to_vec(), Object::Bool(true))).unwrap();
+                doc.update_dict(root, |d| d.set(b"PdfCraftTest".to_vec(), Object::Bool(true))).unwrap();
                 let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
                 match Document::open_with_password(Arc::new(saved.clone()), Some(pw)) {
                     Ok(again) if page_count(&again) == pages => {}

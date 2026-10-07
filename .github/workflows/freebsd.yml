@@ -49,4 +49,4 @@ jobs:
             CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace --locked
             # The release packaging, end to end (a quicker release profile than the real release).
             CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 packaging/freebsd/package.sh
-            tar -tzf dist/release/printcraft-*-freebsd-*.tar.gz | grep -E '/bin/printcraft$|/bin/printcraft-cli$|applications/'
+            tar -tzf dist/release/pdfcraft-*-freebsd-*.tar.gz | grep -E '/bin/pdfcraft$|/bin/pdfcraft-cli$|applications/'

@@ -1,4 +1,4 @@
-# printcraft-a11y
+# pdfcraft-a11y
 
 Layer L4: accessibility (execution plan M12.3). Today: the Accessibility Checker's full check.
 

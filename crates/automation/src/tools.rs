@@ -690,7 +690,7 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "pages": pages("to fill (default: all)"), "color": { "type": "string" }, "file": { "type": "string" }, "file_page": { "type": "integer", "minimum": 1 }, "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }, "opacity": { "type": "number", "minimum": 0, "maximum": 1 }, "replace": { "type": "boolean" } }),
                 &["doc"],
             )),
-        t("doc_remove_marks", "Remove header & footer, watermark or background", "Remove every header and footer, watermark or background PrintCraft (or a compatible tool) added. Undoable.")
+        t("doc_remove_marks", "Remove header & footer, watermark or background", "Remove every header and footer, watermark or background PdfCraft (or a compatible tool) added. Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "kind": { "type": "string", "enum": ["header_footer", "watermark", "background"] } }), &["doc", "kind"])),
         t("doc_export_images", "Export pages as images", "Write pages as PNG, JPEG or TIFF files (`<name>_page_<n>.png|jpg|tif`) into a folder, at a resolution (default 150 dpi). JPEG and TIFF are flattened onto white paper. Includes unsaved edits.")
@@ -841,7 +841,7 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["paths", "folder"],
             )),
-        t("ocr_status", "OCR status", "Whether text recognition is available (its models are installed: run `cargo xtask models` or set PRINTCRAFT_MODELS), where it looks for them, and the languages it reads.")
+        t("ocr_status", "OCR status", "Whether text recognition is available (its models are installed: run `cargo xtask models` or set PDFCRAFT_MODELS), where it looks for them, and the languages it reads.")
             .ro()
             .cmd("ocr.recognize")
             .with(schema(json!({}), &[])),
@@ -999,7 +999,7 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc(), "comments": { "type": "boolean", "description": "Default true." }, "fields": { "type": "boolean", "description": "Default true." } }), &["doc"])),
         t("edit_undo", "Undo", "Undo the last edit of a document.").cmd("edit.undo").with(schema(json!({ "doc": doc() }), &["doc"])),
         t("edit_redo", "Redo", "Redo the last undone edit of a document.").cmd("edit.redo").with(schema(json!({ "doc": doc() }), &["doc"])),
-        t("command_list", "List commands", "Every registered PrintCraft command with its menu, shortcut, whether it is enabled now, and the tool that automates it.")
+        t("command_list", "List commands", "Every registered PdfCraft command with its menu, shortcut, whether it is enabled now, and the tool that automates it.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &[])),
     ]

@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use printcraft_cos::{Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 /// The categories, in Acrobat's order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -153,7 +153,7 @@ impl Audit<'_> {
 fn size(doc: &Document, num: u32) -> u64 {
     let obj = doc.get(ObjRef::new(num, doc.generation(num)));
     let mut out = Vec::new();
-    printcraft_cos::serialize(&obj, &mut out);
+    pdfcraft_cos::serialize(&obj, &mut out);
     // "n g obj\n … \nendobj\n" and its cross-reference entry.
     out.len() as u64 + 20 + 20
 }
@@ -163,7 +163,7 @@ fn size(doc: &Document, num: u32) -> u64 {
 pub fn audit_space(doc: &Document, file_len: u64) -> Vec<SpaceUse> {
     let mut a = Audit { doc, owner: HashMap::new() };
     let cat = doc.root().and_then(|r| doc.get(r).as_dict().cloned()).unwrap_or_default();
-    let pages = printcraft_model::pages(doc);
+    let pages = pdfcraft_model::pages(doc);
     // Order matters: the most specific owners first.
     if let Some(s) = cat.get(b"StructTreeRoot") {
         // Structure elements point at pages and annotations; those stay out (claim skips pages,
@@ -189,7 +189,7 @@ pub fn audit_space(doc: &Document, file_len: u64) -> Vec<SpaceUse> {
             }
         }
         // Resources before the content: a content stream's dictionary may point at what it
-        // draws (PrintCraft's /PCAdded records an added image), which stays an image or font.
+        // draws (PdfCraft's /PCAdded records an added image), which stays an image or font.
         let res = a.resolve_dict(p.dict.get(b"Resources"));
         a.resources(&res);
         if let Some(c) = p.dict.get(b"Contents") {

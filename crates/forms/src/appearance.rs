@@ -7,10 +7,10 @@
 //!
 //! The `/DA` font is used when the form's `/DR` defines it as a simple font; text is encoded in
 //! WinAnsi. Otherwise (composite fonts, missing resources) Helvetica is used, so text is always
-//! visible. Widths use the approximate Helvetica metrics of `printcraft-fonts`.
+//! visible. Widths use the approximate Helvetica metrics of `pdfcraft-fonts`.
 
-use printcraft_cos::{Dict, Document, Object, Stream};
-use printcraft_fonts::{helvetica_width, literal, win_ansi, wrap};
+use pdfcraft_cos::{Dict, Document, Object, Stream};
+use pdfcraft_fonts::{helvetica_width, literal, win_ansi, wrap};
 
 use crate::{Field, FieldKind, Widget, acroform, flags};
 

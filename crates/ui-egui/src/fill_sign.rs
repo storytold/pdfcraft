@@ -1,11 +1,11 @@
 //! Fill & Sign (Acrobat's Fill & Sign tool, execution plan M5.7): type text onto the page, place
 //! ✓ ✕ ● ─ marks and today's date, and sign with a drawn signature. Everything is an annotation
-//! (typewriter text, PrintCraft-drawn stamps, ink), so it can be moved, deleted and undone like
+//! (typewriter text, PdfCraft-drawn stamps, ink), so it can be moved, deleted and undone like
 //! any comment.
 
 use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
-use printcraft_engine::{Edit, FillMark, NewAnnotation, Shape, Style};
-use printcraft_render::DocInfo;
+use pdfcraft_engine::{Edit, FillMark, NewAnnotation, Shape, Style};
+use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
@@ -161,7 +161,7 @@ pub fn signature_at(page: usize, at: [f64; 2], strokes: &[Vec<[f32; 2]>], author
 
 /// Place typed text in the script font with its left edge at `at`, `height` points tall.
 pub fn typed_signature_at(page: usize, at: [f64; 2], text: &str, height: f64, author: &str) -> Option<Edit> {
-    printcraft_engine::typed_signature_shape(at, text, height).map(|shape| new(page, shape, String::new(), author))
+    pdfcraft_engine::typed_signature_shape(at, text, height).map(|shape| new(page, shape, String::new(), author))
 }
 
 /// Place a saved signature or initials.
@@ -174,7 +174,7 @@ pub fn place(page: usize, at: [f64; 2], sig: &SavedSig, initials: bool, author: 
 
 /// The text in the script font as a picture (`w`×`h` px, black on transparent), for previews.
 pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage {
-    let o = printcraft_engine::script_outline(text);
+    let o = pdfcraft_engine::script_outline(text);
     let mut img = egui::ColorImage::filled([w, h], Color32::TRANSPARENT);
     let span = (o.ascent - o.descent).max(0.1);
     if o.contours.is_empty() {

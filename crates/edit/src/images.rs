@@ -3,8 +3,8 @@
 //! `q … cm … Q` with the extra transform), replace (it draws another XObject in the same place),
 //! or delete. Only the stream that draws it is rewritten, as a new object.
 
-use printcraft_content::{Matrix, Op, parse, serialize_ops};
-use printcraft_cos::{Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_content::{Matrix, Op, parse, serialize_ops};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 use crate::EditError;
 
@@ -44,8 +44,8 @@ fn streams(doc: &Document, page: &Dict) -> Vec<(Object, Vec<u8>)> {
         .collect()
 }
 
-fn page_of(doc: &Document, page: usize) -> Result<printcraft_model::Page, EditError> {
-    printcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
+fn page_of(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
+    pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
 }
 
 fn xobjects(doc: &Document, page: &Dict) -> Dict {
@@ -149,7 +149,7 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
             let m = pm.then(&Matrix(*t)).then(&inv);
             vec![
                 Op::new("q", vec![]),
-                Op::new("cm", m.0.iter().map(|v| printcraft_content::num(*v)).collect()),
+                Op::new("cm", m.0.iter().map(|v| pdfcraft_content::num(*v)).collect()),
                 ops[img.op].clone(),
                 Op::new("Q", vec![]),
             ]

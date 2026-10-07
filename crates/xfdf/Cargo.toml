@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-xfdf"
+name = "pdfcraft-xfdf"
 description = "Comment and form data exchange: XFDF (ISO 19444-1) and FDF import/export, form data as XML, CSV and tab-delimited text"
 version.workspace = true
 edition.workspace = true
@@ -9,9 +9,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-cos = { workspace = true }
-printcraft-annot = { workspace = true }
-printcraft-forms = { workspace = true }
-printcraft-model = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-annot = { workspace = true }
+pdfcraft-forms = { workspace = true }
+pdfcraft-model = { workspace = true }
 roxmltree = "0.20"
 thiserror = { workspace = true }

@@ -97,7 +97,7 @@ pub(crate) fn parse<'a>(reader: &mut Reader<'a>) -> Result<HalftoneRegionHeader<
     if grid_width > MAX_DIMENSION || grid_height > MAX_DIMENSION {
         bail!(OverflowError::GridDimension);
     }
-    // PrintCraft patch: the product is bounded too (see `bitmap::MAX_PIXELS`).
+    // PdfCraft patch: the product is bounded too (see `bitmap::MAX_PIXELS`).
     if u64::from(grid_width) * u64::from(grid_height) > crate::bitmap::MAX_PIXELS {
         bail!(OverflowError::GridDimension);
     }

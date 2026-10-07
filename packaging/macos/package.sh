@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build, sign and (optionally) notarize the macOS release artifacts:
 #
-#   $DIST/printcraft-<version>-macos-<arch>.dmg          PrintCraft.app on a drag-to-Applications DMG
-#   $DIST/printcraft-cli-<version>-macos-<arch>.zip      the headless CLI
+#   $DIST/pdfcraft-<version>-macos-<arch>.dmg          PdfCraft.app on a drag-to-Applications DMG
+#   $DIST/pdfcraft-cli-<version>-macos-<arch>.zip      the headless CLI
 #
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
 #
@@ -39,9 +39,9 @@ export MACOSX_DEPLOYMENT_TARGET=11.0
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 SHORT_VERSION="${VERSION%%-*}"
 WORK="$CARGO_TARGET_DIR/macos-package"
-APP="$WORK/PrintCraft.app"
-DMG="$DIST/printcraft-$VERSION-macos-$ARCH.dmg"
-CLI_ZIP="$DIST/printcraft-cli-$VERSION-macos-$ARCH.zip"
+APP="$WORK/PdfCraft.app"
+DMG="$DIST/pdfcraft-$VERSION-macos-$ARCH.dmg"
+CLI_ZIP="$DIST/pdfcraft-cli-$VERSION-macos-$ARCH.zip"
 
 NOTARIZE=0
 if [ "$IDENTITY" = "-" ]; then
@@ -52,18 +52,18 @@ else
   warn "macOS: APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID incomplete; signed but not notarized"
 fi
 
-echo "==> PrintCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTARIZE"
+echo "==> PdfCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTARIZE"
 
 # ---- build -------------------------------------------------------------------------------------
 if [ "$SKIP_BUILD" = 0 ]; then
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p printcraft -p printcraft-cli "${args[@]}")
+  (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli "${args[@]}")
 fi
 
 rm -rf "$WORK"
 mkdir -p "$WORK/bin"
-for bin in printcraft printcraft-cli; do
+for bin in pdfcraft pdfcraft-cli; do
   inputs=()
   for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
   lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
@@ -97,28 +97,28 @@ notarize() {
   fi
 }
 
-# ---- PrintCraft.app ----------------------------------------------------------------------------
+# ---- PdfCraft.app ----------------------------------------------------------------------------
 echo "==> assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
-cp "$WORK/bin/printcraft" "$APP/Contents/MacOS/PrintCraft"
-cp "$ROOT/assets/app-icon/printcraft.icns" "$APP/Contents/Resources/PrintCraft.icns"
+cp "$WORK/bin/pdfcraft" "$APP/Contents/MacOS/PdfCraft"
+cp "$ROOT/assets/app-icon/pdfcraft.icns" "$APP/Contents/Resources/PdfCraft.icns"
 copy_font_licences "$APP/Contents/Resources"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
-  -e "s/@BUILD_SHA@/${PRINTCRAFT_BUILD_SHA:-unknown}/g" \
+  -e "s/@BUILD_SHA@/${PDFCRAFT_BUILD_SHA:-unknown}/g" \
   "$HERE/Info.plist.in" >"$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 printf 'APPL????' >"$APP/Contents/PkgInfo"
 
 # Sign inside-out: nested code first, then the bundle itself (no --deep on the final signature).
 # Today the only nested code is the main executable; frameworks/helpers would be signed here too.
-sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/PrintCraft"
+sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/PdfCraft"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
 
 if [ "$NOTARIZE" = 1 ]; then
-  ditto -c -k --keepParent "$APP" "$WORK/PrintCraft-notarize.zip"
-  notarize "$WORK/PrintCraft-notarize.zip"
+  ditto -c -k --keepParent "$APP" "$WORK/PdfCraft-notarize.zip"
+  notarize "$WORK/PdfCraft-notarize.zip"
   xcrun stapler staple "$APP"
   xcrun stapler validate "$APP"
   spctl --assess --type execute -vvv "$APP"
@@ -128,12 +128,12 @@ fi
 echo "==> building $DMG"
 STAGE="$WORK/dmg"
 mkdir -p "$STAGE"
-ditto "$APP" "$STAGE/PrintCraft.app"
+ditto "$APP" "$STAGE/PdfCraft.app"
 ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG" "$WORK/raw.dmg"
 # makehybrid + convert builds the image without attaching a device, unlike `create -srcfolder`,
 # which is flaky on CI runners ("Resource busy") and hangs in sandboxed sessions.
-hdiutil makehybrid -hfs -hfs-volume-name "PrintCraft $VERSION" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
+hdiutil makehybrid -hfs -hfs-volume-name "PdfCraft $VERSION" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
 hdiutil convert "$WORK/raw.dmg" -format UDZO -imagekey zlib-level=9 -o "$DMG"
 rm -f "$WORK/raw.dmg"
 sign "$DMG"
@@ -147,17 +147,17 @@ fi
 
 # ---- CLI ---------------------------------------------------------------------------------------
 echo "==> building $CLI_ZIP"
-CLI_DIR="$WORK/printcraft-cli-$VERSION-macos-$ARCH"
+CLI_DIR="$WORK/pdfcraft-cli-$VERSION-macos-$ARCH"
 mkdir -p "$CLI_DIR"
-cp "$WORK/bin/printcraft-cli" "$CLI_DIR/"
+cp "$WORK/bin/pdfcraft-cli" "$CLI_DIR/"
 copy_docs "$CLI_DIR"
-sign --options runtime "$CLI_DIR/printcraft-cli"
-codesign --verify --strict --verbose=2 "$CLI_DIR/printcraft-cli"
+sign --options runtime "$CLI_DIR/pdfcraft-cli"
+codesign --verify --strict --verbose=2 "$CLI_DIR/pdfcraft-cli"
 rm -f "$CLI_ZIP"
 ditto -c -k --keepParent "$CLI_DIR" "$CLI_ZIP"
 # A bare Mach-O can't carry a stapled ticket; Gatekeeper looks the notarization up online.
 if [ "$NOTARIZE" = 1 ]; then notarize "$CLI_ZIP"; fi
 
-"$WORK/bin/printcraft-cli" --version
+"$WORK/bin/pdfcraft-cli" --version
 echo "==> done"
 ls -lh "$DMG" "$CLI_ZIP"

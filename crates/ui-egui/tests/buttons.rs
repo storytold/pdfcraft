@@ -1,7 +1,7 @@
 //! Push buttons run their actions (Reset form, Named, …) without a JavaScript engine.
 
 use egui_kittest::Harness;
-use printcraft_ui_egui::{Dialog, PrintCraftApp};
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 /// Two pages; page 1 has a text field "name" (filled), a Reset button, a Next page button and a
 /// Print button (a JavaScript one-liner).
@@ -31,12 +31,12 @@ fn fixture() -> Vec<u8> {
     out
 }
 
-fn click_field(h: &mut Harness<'static, PrintCraftApp>, name: &str) {
+fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
     let p = {
         let s = h.state();
         let doc = s.session.get(s.views[0].id).unwrap();
         let f = doc.form.iter().find(|f| f.name == name).unwrap();
-        printcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
     };
     h.hover_at(p);
     h.run_steps(1);
@@ -49,7 +49,7 @@ fn click_field(h: &mut Harness<'static, PrintCraftApp>, name: &str) {
 #[test]
 fn buttons_reset_navigate_and_print() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("buttons.pdf", None, fixture()).unwrap();
         app.set_option("zoom", "150").unwrap();
         app

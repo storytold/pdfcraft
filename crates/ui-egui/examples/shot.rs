@@ -1,16 +1,16 @@
-//! Headless screenshot of the real PrintCraft shell (egui_kittest + wgpu, no window needed).
+//! Headless screenshot of the real PdfCraft shell (egui_kittest + wgpu, no window needed).
 //!
 //! ```text
-//! cargo run -p printcraft-ui-egui --example shot -- out.png [file.pdf] [--size 1440x900] [--scale 2] [--page 3 --panel pages …]
+//! cargo run -p pdfcraft-ui-egui --example shot -- out.png [file.pdf] [--size 1440x900] [--scale 2] [--page 3 --panel pages …]
 //! ```
 //! `--width N` downscales the image to N pixels wide (README screenshots). Any other
-//! `--key value` pair is passed to `PrintCraftApp::set_option`
+//! `--key value` pair is passed to `PdfCraftApp::set_option`
 //! (the same verbs as the desktop app's command-line flags and the future control channel).
 
 use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
-use printcraft_ui_egui::PrintCraftApp;
+use pdfcraft_ui_egui::PdfCraftApp;
 
 fn main() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
@@ -32,7 +32,7 @@ fn main() -> Result<(), String> {
         }
     }
     let mut harness = Harness::builder().with_size(size).with_pixels_per_point(scale).build_eframe(move |_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         if let Some(f) = &file {
             let bytes = std::fs::read(f).unwrap_or_default();
             let name = std::path::Path::new(f).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();

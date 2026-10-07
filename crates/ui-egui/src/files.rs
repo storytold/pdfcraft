@@ -5,9 +5,9 @@
 
 use std::sync::Arc;
 
-use printcraft_engine::{Edit, SplitBy};
+use pdfcraft_engine::{Edit, SplitBy};
 
-use crate::PrintCraftApp;
+use crate::PdfCraftApp;
 
 /// Why files were picked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +49,7 @@ impl Default for SplitDraft {
     }
 }
 
-/// Acrobat's Split by: number of pages, file size, top-level bookmarks (and PrintCraft's
+/// Acrobat's Split by: number of pages, file size, top-level bookmarks (and PdfCraft's
 /// before-selected-pages).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SplitMode {
@@ -85,8 +85,8 @@ pub struct RotateDraft {
     pub which: u8,
     pub from: usize,
     pub to: usize,
-    pub parity: printcraft_engine::PageParity,
-    pub orientation: printcraft_engine::PageOrientation,
+    pub parity: pdfcraft_engine::PageParity,
+    pub orientation: pdfcraft_engine::PageOrientation,
 }
 
 impl Default for RotateDraft {
@@ -95,7 +95,7 @@ impl Default for RotateDraft {
     }
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Ask for files to combine (File ▸ Combine files…).
     pub fn combine_dialog(&mut self) {
         self.pick_files(FilePurpose::Combine, true);
@@ -245,7 +245,7 @@ impl PrintCraftApp {
         if opts.delete {
             // Back on the original document.
             self.active = Some(i);
-            self.apply_edit(printcraft_engine::Edit::DeletePages { pages });
+            self.apply_edit(pdfcraft_engine::Edit::DeletePages { pages });
         }
     }
 
@@ -290,12 +290,12 @@ impl PrintCraftApp {
             2 => (d.from.max(1) - 1..d.to.min(n)).collect(),
             _ => (0..n).collect(),
         };
-        let pages = printcraft_engine::filter_pages(&doc.info, &base, d.parity, d.orientation);
+        let pages = pdfcraft_engine::filter_pages(&doc.info, &base, d.parity, d.orientation);
         if pages.is_empty() {
             self.notify("No pages match those choices");
             return;
         }
-        self.apply_edit(printcraft_engine::Edit::RotatePages { pages, degrees: d.degrees });
+        self.apply_edit(pdfcraft_engine::Edit::RotatePages { pages, degrees: d.degrees });
     }
 
     /// Split the active document and write the parts: into a chosen folder (desktop) or as
@@ -364,7 +364,7 @@ pub(crate) fn strip_pdf(name: &str) -> &str {
     name.strip_suffix(".pdf").or_else(|| name.strip_suffix(".PDF")).unwrap_or(name)
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Comments ▸ Import comments / Prepare a form ▸ Import data: XFDF, FDF, XML, CSV or text.
     pub fn import_data_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -381,7 +381,7 @@ impl PrintCraftApp {
             match std::fs::read(&path) {
                 Ok(bytes) => {
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    self.apply_edit(printcraft_engine::Edit::ImportData { name, bytes: std::sync::Arc::new(bytes) });
+                    self.apply_edit(pdfcraft_engine::Edit::ImportData { name, bytes: std::sync::Arc::new(bytes) });
                 }
                 Err(e) => self.notify(format!("Couldn't read {}: {e}", path.display())),
             }
@@ -392,7 +392,7 @@ impl PrintCraftApp {
 
     /// Export all comments / form data: the format follows the file name's extension.
     /// Export a PDF ▸ Word, HTML or RTF: ask where (`save_override` in tests), then write.
-    pub fn export_office_dialog(&mut self, format: printcraft_engine::compare::OfficeFormat) {
+    pub fn export_office_dialog(&mut self, format: pdfcraft_engine::compare::OfficeFormat) {
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
@@ -448,7 +448,7 @@ impl PrintCraftApp {
 
     /// Merge the given data files and save the spreadsheet (asks where; `save_override` in tests).
     pub fn merge_data_files(&mut self, files: Vec<(String, Vec<u8>)>) {
-        let csv = match printcraft_engine::merge_data_files(&files) {
+        let csv = match pdfcraft_engine::merge_data_files(&files) {
             Ok(c) => c,
             Err(e) => return self.notify(e),
         };
@@ -494,7 +494,7 @@ impl PrintCraftApp {
             };
             let Some(path) = path else { return };
             let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
-            let format = printcraft_engine::DataFormat::from_extension(&ext).unwrap_or(printcraft_engine::DataFormat::Xfdf);
+            let format = pdfcraft_engine::DataFormat::from_extension(&ext).unwrap_or(pdfcraft_engine::DataFormat::Xfdf);
             match self.session.export_data(id, format, comments, fields) {
                 Ok(bytes) => match crate::editing::write_atomically(&path.to_string_lossy(), &bytes) {
                     Ok(()) => self.notify(format!("Exported to {}", path.display())),
@@ -504,7 +504,7 @@ impl PrintCraftApp {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        match self.session.export_data(id, printcraft_engine::DataFormat::Xfdf, comments, fields) {
+        match self.session.export_data(id, pdfcraft_engine::DataFormat::Xfdf, comments, fields) {
             Ok(bytes) => {
                 let _ = crate::editing::download(&format!("{stem}.xfdf"), &bytes);
             }

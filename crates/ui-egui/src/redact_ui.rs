@@ -4,12 +4,12 @@
 //! confirmation, as Acrobat asks) or clear them.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use printcraft_engine::{Edit, NewAnnotation, REDACT_PATTERNS, RedactPattern, Rgb, Shape, Style, rect_quad};
-use printcraft_render::DocInfo;
+use pdfcraft_engine::{Edit, NewAnnotation, REDACT_PATTERNS, RedactPattern, Rgb, Shape, Style, rect_quad};
+use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
-use crate::{PrintCraftApp, widgets};
+use crate::{PdfCraftApp, widgets};
 
 const MARK_RED: Color32 = Color32::from_rgb(0xE3, 0x22, 0x22);
 
@@ -21,7 +21,7 @@ pub struct RedactPrefs {
     pub use_overlay: bool,
     pub overlay: String,
     /// Overlay text font, size (0 = auto), colour, alignment and repetition.
-    pub look: printcraft_engine::OverlayLook,
+    pub look: pdfcraft_engine::OverlayLook,
 }
 
 impl Default for RedactPrefs {
@@ -141,7 +141,7 @@ pub(crate) fn paint(ui: &egui::Ui, painter: &egui::Painter, page: usize, view: &
     }
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Mark every match of the search draft on every page; returns how many were marked.
     pub fn redact_search(&mut self) -> usize {
         let Some((_, id)) = self.active_ids() else { return 0 };
@@ -150,15 +150,14 @@ impl PrintCraftApp {
         if !d.patterns && d.text.trim().is_empty() {
             return 0;
         }
-        let config = printcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
-        let mut r = printcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+        let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         let mut edits = Vec::new();
         let author = self.comment_prefs.author.clone();
         for page in 0..doc.info.pages.len() {
-            let out =
-                r.render(printcraft_render::RenderRequest { page, kind: printcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
+            let out = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
             let Some(text) = out.text else { continue };
-            let hits = if d.patterns { text.find_with(|c| printcraft_engine::find_pattern(d.pattern, c)) } else { text.find(&d.text) };
+            let hits = if d.patterns { text.find_with(|c| pdfcraft_engine::find_pattern(d.pattern, c)) } else { text.find(&d.text) };
             for h in hits {
                 let quads: Vec<[f64; 8]> = text.line_rects(h).into_iter().map(|r| doc.info.pages[page].view_rect_to_quad(r)).collect();
                 if !quads.is_empty() {
@@ -279,7 +278,7 @@ pub(crate) fn props_body(ui: &mut egui::Ui, d: &mut RedactPrefs, _t: &Tokens) ->
         ui.label("Font:");
         ui.add_enabled_ui(on, |ui| {
             egui::ComboBox::from_id_salt("overlay-font").selected_text(look.font.name()).show_ui(ui, |ui| {
-                for f in printcraft_engine::OverlayFont::ALL {
+                for f in pdfcraft_engine::OverlayFont::ALL {
                     ui.selectable_value(&mut look.font, f, f.name());
                 }
             });
@@ -358,10 +357,10 @@ fn buttons(ui: &mut egui::Ui, ok: &str, primary: bool) -> (bool, bool) {
 /// something was.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HiddenDraft {
-    pub found: Vec<(printcraft_engine::Hidden, usize, bool)>,
+    pub found: Vec<(pdfcraft_engine::Hidden, usize, bool)>,
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     pub fn open_remove_hidden(&mut self) {
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };

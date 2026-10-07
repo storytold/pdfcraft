@@ -217,7 +217,7 @@ impl<'a> Type3Glyph<'a> {
         self.font.char_code_to_unicode(self.char_code)
     }
 
-    /// PrintCraft patch: the advance width in glyph space (1000 units per em), from `/Widths`.
+    /// PdfCraft patch: the advance width in glyph space (1000 units per em), from `/Widths`.
     pub fn advance_width(&self) -> Option<f32> {
         u8::try_from(self.char_code).ok().map(|c| self.font.glyph_width(c))
     }

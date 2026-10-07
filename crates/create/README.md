@@ -1,4 +1,4 @@
-# printcraft-create
+# pdfcraft-create
 
 Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
 
@@ -9,4 +9,4 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
   with transparency as a soft mask;
 - `from_text(text, …)`: plain text set in Helvetica, wrapped and paginated.
 
-Every function returns a `printcraft_cos::Document`; the caller writes it.
+Every function returns a `pdfcraft_cos::Document`; the caller writes it.

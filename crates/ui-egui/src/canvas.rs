@@ -9,11 +9,11 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2};
-use printcraft_engine::{DocId, Edit};
-use printcraft_render::{DocInfo, LinkTarget, PageText, RenderPool, RenderRequest, RequestKind, Tile};
+use pdfcraft_engine::{DocId, Edit};
+use pdfcraft_render::{DocInfo, LinkTarget, PageText, RenderPool, RenderRequest, RequestKind, Tile};
 
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, QuickTool, RightPanel, comments, icons, widgets};
+use crate::{PdfCraftApp, QuickTool, RightPanel, comments, icons, widgets};
 
 /// Logical pixels per PDF point at 100% (96 dpi, like browsers).
 pub const PT: f32 = 96.0 / 72.0;
@@ -141,10 +141,10 @@ pub struct DocView {
     pub pending_edit: Option<Edit>,
     /// Edit text: the lines per page (with the document generation they were read at), and the
     /// line being edited.
-    pub(crate) edit_lines: HashMap<usize, (u64, Vec<printcraft_engine::TextBlock>)>,
+    pub(crate) edit_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::TextBlock>)>,
     pub line_editor: Option<crate::edit_text_ui::LineEditor>,
     /// Edit text & images: the images per page (by document generation), and the selected one.
-    pub(crate) edit_images: HashMap<usize, (u64, Vec<printcraft_engine::PageImage>)>,
+    pub(crate) edit_images: HashMap<usize, (u64, Vec<pdfcraft_engine::PageImage>)>,
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
     /// A paragraph box being dragged (moved, or resized from its right edge) in Edit text.
     pub block_drag: Option<crate::edit_text_ui::BlockDrag>,
@@ -566,7 +566,7 @@ impl DocView {
     }
 
     /// Displayed page size in points for this view rotation.
-    fn display_size(&self, p: &printcraft_render::PageInfo) -> (f32, f32) {
+    fn display_size(&self, p: &pdfcraft_render::PageInfo) -> (f32, f32) {
         if self.rotation % 180 == 90 { (p.height, p.width) } else { (p.width, p.height) }
     }
 
@@ -713,7 +713,7 @@ impl DocView {
             }
             PageLayout::TwoUp => {
                 // With a cover page, the first page sits alone on the right.
-                let rows: Vec<&[printcraft_render::PageInfo]> = if self.cover && !info.pages.is_empty() {
+                let rows: Vec<&[pdfcraft_render::PageInfo]> = if self.cover && !info.pages.is_empty() {
                     std::iter::once(&info.pages[..1]).chain(info.pages[1..].chunks(2)).collect()
                 } else {
                     info.pages.chunks(2).collect()
@@ -898,7 +898,7 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     }
 }
 
-pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
+pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     // The Search panel closed: its search moves to the find bar.
     let search_open = app.right == Some(crate::RightPanel::Search);
@@ -1176,11 +1176,11 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                     let corners = [(vx as f64 - w / 2.0, vy as f64 - h / 2.0), (vx as f64 + w / 2.0, vy as f64 + h / 2.0)];
                     let u: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
                     let rect = [u[0][0].min(u[1][0]) as f64, u[0][1].min(u[1][1]) as f64, u[0][0].max(u[1][0]) as f64, u[0][1].max(u[1][1]) as f64];
-                    let by = (kind.group() == printcraft_engine::StampGroup::Dynamic).then(|| by_line.clone());
-                    let shape = printcraft_engine::Shape::Stamp { rect, stamp: kind, by };
-                    view.pending_edit = Some(printcraft_engine::Edit::AddAnnotation(printcraft_engine::NewAnnotation {
+                    let by = (kind.group() == pdfcraft_engine::StampGroup::Dynamic).then(|| by_line.clone());
+                    let shape = pdfcraft_engine::Shape::Stamp { rect, stamp: kind, by };
+                    view.pending_edit = Some(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
                         page: i,
-                        style: printcraft_engine::Style::default_for(&shape),
+                        style: pdfcraft_engine::Style::default_for(&shape),
                         shape,
                         contents: String::new(),
                         author: author.clone(),
@@ -1198,11 +1198,11 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                     let (vx, vy) = xf.screen_to_view(p);
                     let u = info.pages[i].view_to_user(vx, vy);
                     let (x, y) = (u[0] as f64, u[1] as f64);
-                    view.pending_edit = Some(printcraft_engine::Edit::AddCustomStamp {
+                    view.pending_edit = Some(pdfcraft_engine::Edit::AddCustomStamp {
                         page: i,
                         rect: [x, y, x, y],
                         name: cs.name.clone(),
-                        file: printcraft_engine::MarkFile { name: cs.file.clone(), bytes: cs.data.clone(), page: cs.page },
+                        file: pdfcraft_engine::MarkFile { name: cs.file.clone(), bytes: cs.data.clone(), page: cs.page },
                         author: author.clone(),
                     });
                     stamp_placed = true;
@@ -1370,7 +1370,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
             // red border.
             if view.highlight_fields {
                 for f in form.iter() {
-                    let required = f.has(printcraft_engine::field_flags::REQUIRED);
+                    let required = f.has(pdfcraft_engine::field_flags::REQUIRED);
                     for w in f.widgets.iter().filter(|w| w.page == Some(i)) {
                         let r = w.rect;
                         let sr = xf.user_rect(info, i, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]);
@@ -1563,7 +1563,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     let form_notice = view.forms.notice.take();
     // One crop, then back to selecting (as Acrobat does).
-    let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, printcraft_engine::Edit::SetPageBox { .. }));
+    let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, pdfcraft_engine::Edit::SetPageBox { .. }));
     let mut tool = app.quick_tool;
     comments::keys(ui.ctx(), view, &mut tool, allowed);
     if preparing {
@@ -1658,9 +1658,9 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
         app.views[index].pending_edit = Some(if app.quick_tool == QuickTool::Comment(comments::CommentTool::Highlight) {
             // An area highlight: a highlight over the box.
             let style = app.comment_prefs.style(comments::CommentTool::Highlight);
-            printcraft_engine::Edit::AddAnnotation(printcraft_engine::NewAnnotation {
+            pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
                 page,
-                shape: printcraft_engine::Shape::TextMarkup { kind: printcraft_engine::Markup::Highlight, quads },
+                shape: pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, quads },
                 style,
                 contents: String::new(),
                 author,
@@ -1693,8 +1693,8 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
 }
 
 /// Run a push button's action (the ones that need no JavaScript engine).
-fn run_button(app: &mut PrintCraftApp, index: usize, ctx: &egui::Context, name: &str, action: printcraft_engine::form_scripts::ButtonAction) {
-    use printcraft_engine::form_scripts::ButtonAction as B;
+fn run_button(app: &mut PdfCraftApp, index: usize, ctx: &egui::Context, name: &str, action: pdfcraft_engine::form_scripts::ButtonAction) {
+    use pdfcraft_engine::form_scripts::ButtonAction as B;
     let pages = app.session.get(app.views[index].id).map_or(0, |d| d.info.pages.len());
     match action {
         B::Reset { fields, exclude } => {
@@ -1706,7 +1706,7 @@ fn run_button(app: &mut PrintCraftApp, index: usize, ctx: &egui::Context, name: 
                 (false, true) => Some(all.iter().filter(|n| !listed(n)).cloned().collect()),
             };
             app.views[index].forms.focus = None;
-            app.views[index].pending_edit = Some(printcraft_engine::Edit::ResetForm { names });
+            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::ResetForm { names });
         }
         B::Named(n) => match n.as_str() {
             "Print" => app.open_print(),
@@ -1720,7 +1720,7 @@ fn run_button(app: &mut PrintCraftApp, index: usize, ctx: &egui::Context, name: 
         B::GoTo(p) => app.views[index].go_to_page(p.min(pages.saturating_sub(1))),
         B::Alert(m) => app.notify(m),
         B::Submit(url) => {
-            app.notify(format!("{name} submits the form to {url}; PrintCraft doesn't send form data. Save the document to keep your entries."))
+            app.notify(format!("{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries."))
         }
         B::ImportIcon => app.choose_field_image(name),
         B::Script(js) => {
@@ -1859,16 +1859,16 @@ fn notices(
     let mut open_repairs = false;
     let msg = if secured {
         Some(("lock", "This document is secured. Some changes are restricted by its security settings.".to_string(), false))
-    } else if info.xfa == Some(printcraft_render::Xfa::Dynamic) {
+    } else if info.xfa == Some(pdfcraft_render::Xfa::Dynamic) {
         Some((
             "triangle-alert",
-            "This is a dynamic XFA form, which PrintCraft can't display yet. What you see is the file's placeholder page.".to_string(),
+            "This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.".to_string(),
             false,
         ))
-    } else if info.xfa == Some(printcraft_render::Xfa::Static) {
+    } else if info.xfa == Some(pdfcraft_render::Xfa::Static) {
         Some((
             "triangle-alert",
-            "This form also contains XFA data, which PrintCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.".to_string(),
+            "This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.".to_string(),
             true,
         ))
     } else if !info.fields.is_empty() {
@@ -1911,7 +1911,7 @@ fn notices(
 }
 
 /// The floating quick-action bar at the left edge of the document area.
-fn quick_bar(app: &mut PrintCraftApp, area: Rect, ui: &mut egui::Ui) {
+fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let pos = area.left_top() + vec2(14.0, 14.0);
     egui::Area::new(egui::Id::new("quick-bar")).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
@@ -2094,7 +2094,7 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, ui: &mut
                 // selection in Organize Pages).
                 let sel = icons::button(ui, "list", 30.0, false, "Select pages");
                 egui::Popup::menu(&sel).show(|ui| {
-                    use printcraft_engine::{PageOrientation as O, PageParity as P, filter_pages};
+                    use pdfcraft_engine::{PageOrientation as O, PageParity as P, filter_pages};
                     let all: Vec<usize> = (0..n).collect();
                     for (label, parity, orient) in [
                         ("All pages", P::Both, O::Both),
