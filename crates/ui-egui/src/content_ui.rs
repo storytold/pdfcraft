@@ -64,6 +64,12 @@ fn on_page(added: &[Added], page: usize) -> Vec<(usize, &Added)> {
     added.iter().filter(|a| a.page == page).enumerate().collect()
 }
 
+/// Whether a path is a picture the image dialogs can place (`png` or `jpg`, in any case).
+fn is_placeable_image(path: &str) -> bool {
+    let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase);
+    matches!(ext.as_deref(), Some("png" | "jpg"))
+}
+
 fn handles(r: Rect) -> [(Pos2, bool, bool); 4] {
     [(r.left_top(), true, true), (r.right_top(), false, true), (r.left_bottom(), true, false), (r.right_bottom(), false, false)]
 }
@@ -380,7 +386,7 @@ impl crate::PrintCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let picked = match self.save_override.clone() {
-                Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => Some(std::path::PathBuf::from(p)),
+                Some(p) if is_placeable_image(&p) => Some(std::path::PathBuf::from(p)),
                 // Tests and automation set `save_override` and never see a native dialog.
                 Some(_) => None,
                 None => rfd::FileDialog::new()
@@ -406,7 +412,7 @@ impl crate::PrintCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let picked = match self.save_override.clone() {
-                Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => Some(std::path::PathBuf::from(p)),
+                Some(p) if is_placeable_image(&p) => Some(std::path::PathBuf::from(p)),
                 Some(_) => None,
                 None => rfd::FileDialog::new()
                     .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
@@ -448,7 +454,7 @@ impl crate::PrintCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let picked = match self.save_override.clone() {
-                Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => Some(std::path::PathBuf::from(p)),
+                Some(p) if is_placeable_image(&p) => Some(std::path::PathBuf::from(p)),
                 Some(_) => None,
                 None => rfd::FileDialog::new()
                     .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
@@ -472,7 +478,7 @@ impl crate::PrintCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let picked = match self.save_override.clone() {
-                Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => Some(std::path::PathBuf::from(p)),
+                Some(p) if is_placeable_image(&p) => Some(std::path::PathBuf::from(p)),
                 Some(_) => None,
                 None => rfd::FileDialog::new()
                     .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])

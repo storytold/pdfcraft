@@ -199,8 +199,8 @@ impl Automation {
         for p in paths {
             let path = self.resolve(&p, false)?;
             let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
-            let lower = p.to_ascii_lowercase();
-            let found = if lower.ends_with(".p12") || lower.ends_with(".pfx") {
+            let ext = std::path::Path::new(&p).extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase);
+            let found = if matches!(ext.as_deref(), Some("p12" | "pfx")) {
                 let id = sign::pkcs12::open(&bytes, a.opt_str("password")?.unwrap_or("")).map_err(failed)?;
                 std::iter::once(id.certificate).chain(id.chain).collect()
             } else {
