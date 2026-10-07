@@ -179,7 +179,7 @@ fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) ->
         }
         Step::AddHeader(t) | Step::AddFooter(t) => {
             let mut settings = crate::HeaderFooter::default();
-            settings.text[if matches!(step, Step::AddHeader(_)) { 1 } else { 4 }] = t.clone();
+            settings.text[if matches!(step, Step::AddHeader(_)) { 1 } else { 4 }].clone_from(t);
             Edit::AddHeaderFooter { pages: all, settings, replace: false }
         }
         Step::SetTitle(t) => Edit::SetInfo { key: "Title".into(), value: t.clone() },

@@ -73,7 +73,7 @@ fn display(doc: &printcraft_cos::Document, f: &Field) -> i32 {
 #[must_use]
 pub fn field_state(doc: &printcraft_cos::Document, f: &Field) -> printcraft_js::FieldState {
     let mut s = printcraft_js::FieldState::new(f.name.clone(), kind(f.kind), f.value.clone());
-    s.default = f.default.clone();
+    s.default.clone_from(&f.default);
     s.readonly = f.read_only();
     s.required = f.has(printcraft_forms::flags::REQUIRED);
     s.display = display(doc, f);

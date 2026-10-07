@@ -553,12 +553,12 @@ impl crate::PrintCraftApp {
         }
         let others: Vec<String> =
             self.session.get(id).map(|doc| doc.form.iter().filter(|x| x.name != name).map(|x| x.name.clone()).collect()).unwrap_or_default();
-        d.others = others.clone();
         d.actions = self.session.get(id).map(|doc| doc.field_actions(name)).unwrap_or_default();
         if let Some(o) = d.original.as_mut() {
-            o.others = others;
-            o.actions = d.actions.clone();
+            o.others.clone_from(&others);
+            o.actions.clone_from(&d.actions);
         }
+        d.others = others;
         self.field_props = Some(d);
         self.dialog = Some(crate::Dialog::FieldProps);
     }

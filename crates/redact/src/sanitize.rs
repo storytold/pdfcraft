@@ -162,7 +162,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
             let c = page.crop(doc);
             scope.hidden_text = Some([c[0].min(c[2]), c[1].min(c[3]), c[0].max(c[2]), c[1].max(c[3])]);
         }
-        scope.hidden_layers = off.clone();
+        scope.hidden_layers.clone_from(&off);
         let out = process(doc, &mut scope, &data, &resources, Matrix::IDENTITY);
         let blocks = scope.layer_blocks;
         total += out.residue + blocks + report.glyphs;

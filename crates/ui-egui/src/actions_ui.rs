@@ -321,7 +321,7 @@ fn edit_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
         app.wizard.editing = None;
     }
     if done && let Some((original, mut a)) = app.wizard.editing.take() {
-        a.name = name.clone();
+        a.name.clone_from(&name);
         match original.and_then(|o| app.custom_actions.iter().position(|c| c.name == o)) {
             Some(i) => app.custom_actions[i] = a,
             None => app.custom_actions.push(a),

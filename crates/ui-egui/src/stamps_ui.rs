@@ -70,7 +70,7 @@ pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens
                 egui::ComboBox::from_id_salt("stamp-categories").selected_text("").width(24.0).show_ui(ui, |ui| {
                     for c in &categories {
                         if ui.selectable_label(d.category == *c, c).clicked() {
-                            d.category = c.clone();
+                            d.category.clone_from(c);
                         }
                     }
                 });

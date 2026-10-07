@@ -1064,7 +1064,7 @@ pub fn show(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 }
             } else if dialog == Dialog::Split {
                 if ui.add_enabled_ui(split_ready.is_some(), |ui| widgets::pill_button(ui, "Split", true)).inner.clicked() {
-                    split_now = split_ready.clone();
+                    split_now.clone_from(&split_ready);
                     close = true;
                 }
                 if widgets::pill_button(ui, "Cancel", false).clicked() {
