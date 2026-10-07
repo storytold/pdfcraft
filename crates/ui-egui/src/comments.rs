@@ -1319,6 +1319,8 @@ pub fn status_badge(state: &str) -> Option<(&'static str, &'static str, Color32)
 }
 
 #[cfg(test)]
+// Tests assert the exact numbers this code computes; a tolerance would hide a rounding bug.
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 

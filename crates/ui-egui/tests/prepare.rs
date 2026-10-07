@@ -1,5 +1,7 @@
 //! Prepare a form in the real shell (`egui_kittest)`: field tools, placing, selecting, moving,
 //! Field Properties and deleting.
+// Tests assert the exact numbers this code computes; a tolerance would hide a rounding bug.
+#![allow(clippy::float_cmp)]
 
 use egui::Pos2;
 use egui_kittest::Harness;

@@ -343,7 +343,7 @@ fn params(c: &Content) -> Dict {
             if i.flip_v {
                 d.set(b"FlipV".to_vec(), Object::Bool(true));
             }
-            if i.crop != [0.0; 4] {
+            if i.crop.iter().any(|v| *v != 0.0) {
                 d.set(b"Crop".to_vec(), arr(&i.crop));
             }
         }

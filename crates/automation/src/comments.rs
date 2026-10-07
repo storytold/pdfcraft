@@ -482,6 +482,8 @@ impl Automation {
 }
 
 #[cfg(test)]
+// Tests assert the exact numbers this code computes; a tolerance would hide a rounding bug.
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 

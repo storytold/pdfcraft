@@ -1,5 +1,7 @@
 //! Edit a PDF ▸ Add content in the real shell (`egui_kittest)`: type text onto a page, move it,
 //! restyle it from the panel, add an image, delete with the keyboard.
+// Tests assert the exact numbers this code computes; a tolerance would hide a rounding bug.
+#![allow(clippy::float_cmp)]
 
 use egui::Pos2;
 use egui_kittest::Harness;

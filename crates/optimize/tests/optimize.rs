@@ -1,4 +1,6 @@
 //! The optimizer on documents with images drawn at known sizes.
+// Tests assert the exact numbers this code computes; a tolerance would hide a rounding bug.
+#![allow(clippy::float_cmp)]
 
 use std::sync::Arc;
 

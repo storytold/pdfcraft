@@ -361,9 +361,8 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                         let mut sheet = Sheet { size, placed: vec![Placement { page: p, matrix, clip }], ..Sheet::default() };
                         if cut_marks {
                             let (x0, y0, x1, y1) = (MARGIN, MARGIN, size.0 - MARGIN, size.1 - MARGIN);
-                            for (x, y) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
-                                let dx = if x == x0 { -1.0 } else { 1.0 };
-                                let dy = if y == y0 { -1.0 } else { 1.0 };
+                            // Each corner draws its marks inwards, away from the page.
+                            for (x, y, dx, dy) in [(x0, y0, -1.0, -1.0), (x1, y0, 1.0, -1.0), (x0, y1, -1.0, 1.0), (x1, y1, 1.0, 1.0)] {
                                 sheet.lines.push([x + dx * 2.0, y, x + dx * (MARGIN - 2.0), y]);
                                 sheet.lines.push([x, y + dy * 2.0, x, y + dy * (MARGIN - 2.0)]);
                             }

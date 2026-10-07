@@ -91,14 +91,14 @@ impl LineEditor {
         let (l, o) = (&self.look, &self.look0);
         printcraft_engine::BlockStyle {
             family: (l.family != o.family || l.bold != o.bold || l.italic != o.italic).then_some((l.family, l.bold, l.italic)),
-            size: (l.size != o.size).then_some(l.size),
-            color: (l.color != o.color).then_some(l.color),
+            size: ((l.size - o.size).abs() > 1e-6).then_some(l.size),
+            color: (l.color.iter().zip(&o.color).any(|(a, b)| (a - b).abs() > 1e-6)).then_some(l.color),
             align: (l.align != o.align).then_some(l.align),
             underline: (self.extras.underline != self.extras0.underline).then_some(self.extras.underline),
-            line_spacing: (self.extras.line_spacing != self.extras0.line_spacing && self.extras.line_spacing > 0.0)
+            line_spacing: ((self.extras.line_spacing - self.extras0.line_spacing).abs() > 1e-6 && self.extras.line_spacing > 0.0)
                 .then_some(self.extras.line_spacing),
-            char_spacing: (self.extras.char_spacing != self.extras0.char_spacing).then_some(self.extras.char_spacing),
-            scale: (self.extras.scale != self.extras0.scale).then_some(self.extras.scale),
+            char_spacing: ((self.extras.char_spacing - self.extras0.char_spacing).abs() > 1e-6).then_some(self.extras.char_spacing),
+            scale: ((self.extras.scale - self.extras0.scale).abs() > 1e-6).then_some(self.extras.scale),
             ..Default::default()
         }
     }

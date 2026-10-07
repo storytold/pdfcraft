@@ -928,6 +928,8 @@ pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -
 }
 
 #[cfg(test)]
+// Tests assert the exact numbers this code computes; a tolerance would hide a rounding bug.
+#[allow(clippy::float_cmp)]
 mod tests {
     #[test]
     fn png_predictor_rows_longer_than_the_data_are_refused_before_allocating() {

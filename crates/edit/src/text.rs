@@ -173,6 +173,12 @@ fn page_dict(doc: &Document, page: usize) -> Result<printcraft_model::Page, Edit
     printcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
 }
 
+/// Two colours the same for joining purposes: equal to within a rounding step of the
+/// content stream's own numbers.
+fn same_color(a: [f64; 3], b: [f64; 3]) -> bool {
+    a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.01)
+}
+
 fn fill_color(fill: &[Op]) -> [f64; 3] {
     let Some(op) = fill.iter().rev().find(|op| matches!(op.op.as_slice(), b"g" | b"rg" | b"k")) else {
         return [0.0, 0.0, 0.0];
@@ -404,7 +410,7 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
                 bt == s.bt
                     && lines.last().is_some_and(|l| l.font.as_bytes() == s.font.as_slice())
                     && lines.last().is_some_and(|l| {
-                        (s.size - l.size).abs() < 0.01 && s.bold == l.bold && s.italic == l.italic && fill_color(&s.state.fill) == l.color
+                        (s.size - l.size).abs() < 0.01 && s.bold == l.bold && s.italic == l.italic && same_color(fill_color(&s.state.fill), l.color)
                     })
                     && (s.baseline - base).abs() < size * 0.3
                     && s.start_x > end - size
@@ -760,7 +766,7 @@ fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
                     && prev.base_font == l.base_font
                     && prev.bold == l.bold
                     && prev.italic == l.italic
-                    && prev.color == l.color
+                    && same_color(prev.color, l.color)
                     && (prev.size - l.size).abs() < 0.01
                     && aligned(prev, l)
                     && g > l.size * 0.8
@@ -1011,7 +1017,7 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
         let spaces = line.matches(' ').count();
         let tw =
             if justify && i + 1 < wrapped.len() && spaces > 0 { (width - advance(line)).max(0.0) / k / o_state.scale / spaces as f64 } else { 0.0 };
-        if tw != tw_set {
+        if (tw - tw_set).abs() > 1e-6 {
             block_ops.push(Op::new("Tw", vec![num(tw)]));
             tw_set = tw;
         }

@@ -1,5 +1,7 @@
 //! The UI control channel (M3.9): an agent can see the widget tree, click, type, press keys,
 //! run commands, change view options and take screenshots of the running app.
+// Tests assert the exact numbers this code computes; a tolerance would hide a rounding bug.
+#![allow(clippy::float_cmp)]
 
 use base64::Engine as _;
 use std::sync::{Arc, Mutex};

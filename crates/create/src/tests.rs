@@ -1,3 +1,5 @@
+// Tests assert the exact numbers this code computes; a tolerance would hide a rounding bug.
+#![allow(clippy::float_cmp)]
 use std::fmt::Write as _;
 use std::sync::Arc;
 

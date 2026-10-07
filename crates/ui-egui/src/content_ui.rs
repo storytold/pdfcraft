@@ -568,7 +568,7 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &printcraft_engine
     if changed {
         let mut i = img.clone();
         i.crop = crop.map(|v| v / 100.0);
-        if i.crop != img.crop {
+        if i.crop.iter().zip(img.crop).any(|(a, b)| (a - b).abs() > 1e-6) {
             out = Some(ImageAction::Update(AddedContent::Image(i)));
         }
     }

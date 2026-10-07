@@ -754,7 +754,7 @@ impl FieldDraft {
                 .then_some((self.limit && self.max_len > 0).then_some(self.max_len)),
             options: (self.options != original.options).then(|| self.options.clone()),
             font_size: ((self.font_size - original.font_size).abs() > 1e-6).then_some(self.font_size),
-            rect: (self.position != original.position).then(|| {
+            rect: (self.position.iter().zip(original.position).any(|(a, b)| (a - b).abs() > 1e-6)).then(|| {
                 let [left, top, width, height] = self.position;
                 (self.widget, [left, top, left + width.max(4.0), top + height.max(4.0)])
             }),
