@@ -5115,11 +5115,11 @@ title = "View and fill dynamic XFA forms"
 area = "F"
 tier = "P1"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = "not rendered yet; detected on open and a notice says the page shown is the file's placeholder (#60)"
+status = "partial"
+commands = ["file.open"]
+tools = ["doc_open", "doc_info", "form_fields", "form_fill"]
+evidence = ["crates/xfa/src/tests.rs::layout_places_captions_fields_and_sizes_containers_to_their_content", "crates/xfa/src/tests.rs::tables_break_across_pages_and_repeat_their_header_row", "crates/xfa/src/tests.rs::rendering_into_the_pdf_replaces_the_placeholder_page_and_adds_fields", "crates/engine/src/tests.rs::dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally", "crates/automation/tests/automation.rs::dynamic_xfa_forms_open_render_fill_and_save_through_tools", "crates/ui-egui/tests/xfa.rs::a_dynamic_xfa_form_is_laid_out_and_filled"]
+notes = "laid out from the template on open by the xfa crate (positioned, tb, lr-tb, table/row, page masters, breaks, repeated header rows, captions, rich text, JPEG images) into real pages and AcroForm fields (text, date with AFDate formats, check boxes, radio groups, buttons with reset/print/save/URL), saved as an incremental revision; doc_info reports xfa_layout. Missing: the datasets packet is not read or written, so Adobe's viewers don't show values filled in here (form.xfa-data); no FormCalc or XFA JavaScript, so rows don't grow and calculations don't run; choice lists are text fields; signature, image and barcode fields are blank; PNG images; keep rules; metrics are approximate and Acrobat fidelity is eyeballed on real forms, not measured (#60)"
 
 [[feature]]
 id = "form.xfa-formcalc"
@@ -5143,7 +5143,7 @@ status = "planned"
 commands = []
 tools = []
 evidence = []
-notes = ""
+notes = "each field a dynamic form lays out keeps its template SOM path (/PCSom), ready for writing and reading the datasets packet"
 
 [[feature]]
 id = "form.xfa-flatten"

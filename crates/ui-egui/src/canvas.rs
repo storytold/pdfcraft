@@ -924,7 +924,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
     // Opened without the owner password and something is restricted.
     let secured = doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
     let repaired = !doc.repair_log().is_empty();
-    match notices(view, info, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t) {
+    match notices(view, doc, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t) {
         Some(Notice::Repairs) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
         Some(Notice::Security) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
         Some(Notice::Signatures) => app.right = Some(RightPanel::Signatures),
@@ -1830,13 +1830,15 @@ enum Notice {
 /// security, forms and warnings.
 fn notices(
     view: &mut DocView,
-    info: &DocInfo,
+    doc: &printcraft_engine::Document,
     secured: bool,
     repaired: bool,
     signed: Option<(&str, Color32, String)>,
     ui: &mut egui::Ui,
     t: &Tokens,
 ) -> Option<Notice> {
+    let info = &doc.info;
+    let xfa = doc.xfa.as_ref();
     if let Some((icon, color, text)) = signed {
         let mut open = false;
         egui::Frame::NONE.fill(t.accent_soft).inner_margin(egui::Margin::symmetric(14, 7)).show(ui, |ui| {
@@ -1859,6 +1861,20 @@ fn notices(
     let mut open_repairs = false;
     let msg = if secured {
         Some(("lock", "This document is secured. Some changes are restricted by its security settings.".to_string(), false))
+    } else if let Some(x) = xfa {
+        let s = |n: usize| if n == 1 { "" } else { "s" };
+        Some((
+            "text-cursor-input",
+            format!(
+                "Dynamic XFA form laid out from its template: {} page{}, {} field{}. Adobe's viewers won't show values filled in here yet.{}",
+                x.pages,
+                s(x.pages),
+                x.fields,
+                s(x.fields),
+                if x.warnings.is_empty() { String::new() } else { format!(" {}.", x.warnings.join("; ")) }
+            ),
+            true,
+        ))
     } else if info.xfa == Some(printcraft_render::Xfa::Dynamic) {
         Some((
             "triangle-alert",

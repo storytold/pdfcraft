@@ -1410,3 +1410,48 @@ fn guard_turns_a_panic_into_an_error() {
     let n = 3;
     assert_eq!(guard(|| -> u8 { panic!("page {n} is bad") }), Err("page 3 is bad".to_string()));
 }
+
+#[test]
+fn dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally() {
+    let original = Arc::new(printcraft_xfa::fixtures::shell(&printcraft_xfa::fixtures::template(3)));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, original.clone(), None).expect("opens");
+    let doc = s.get(id).unwrap();
+    let x = doc.xfa.as_ref().expect("laid out from the template");
+    assert_eq!((x.pages, x.fields), (2, 14), "{x:?}");
+    assert!(x.warnings.is_empty(), "{:?}", x.warnings);
+    assert_eq!(doc.info.pages.len(), 2, "the placeholder page is gone");
+    assert_eq!(doc.info.xfa, Some(printcraft_render::Xfa::Dynamic), "still an XFA form for Adobe's viewers");
+    assert!(!doc.dirty, "laying out is not an edit");
+    assert!(doc.bytes.starts_with(&original[..]), "the layout is an appended revision; the original bytes stay");
+    let names: Vec<&str> = doc.form.iter().map(|f| f.name.as_str()).collect();
+    assert!(names.contains(&"familyName") && names.contains(&"answer") && names.contains(&"what2"), "{names:?}");
+    let family = doc.form.iter().find(|f| f.name == "familyName").unwrap();
+    assert_eq!((family.tooltip.as_deref(), family.max_len), (Some("Your family name"), Some(30)));
+    let answer = doc.form.iter().find(|f| f.name == "answer").unwrap();
+    assert_eq!(answer.widgets.iter().filter_map(|w| w.on_state.clone()).collect::<Vec<_>>(), ["Y", "N"]);
+    assert!(page_texts(&s, id)[0].contains("Sample Form"), "{:?}", page_texts(&s, id));
+    // Fill it in and save: one more incremental revision on top.
+    s.apply(id, Edit::SetFieldValue { name: "familyName".into(), value: FieldValue::Text("Singh".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "answer".into(), value: FieldValue::Radio(Some("N".into())) }).unwrap();
+    assert!(s.get(id).unwrap().dirty);
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved.starts_with(&original[..]));
+    let id2 = s.open("saved.pdf", None, saved, None).unwrap();
+    let d2 = s.get(id2).unwrap();
+    assert_eq!(d2.info.pages.len(), 2, "a saved form is not laid out a second time");
+    assert_eq!(d2.xfa.as_ref().map(|x| (x.pages, x.fields)), Some((2, 14)), "the layout is remembered");
+    assert_eq!(d2.form.iter().find(|f| f.name == "familyName").unwrap().value, vec!["Singh".to_string()]);
+    assert_eq!(d2.form.iter().find(|f| f.name == "answer").unwrap().value, vec!["N".to_string()]);
+}
+
+#[test]
+fn an_xfa_form_without_a_template_opens_with_its_placeholder_and_a_warning() {
+    let bytes = Arc::new(printcraft_xfa::fixtures::shell("<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"></xdp:xdp>"));
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, bytes, None).expect("opens");
+    let doc = s.get(id).unwrap();
+    assert!(doc.xfa.is_none());
+    assert_eq!(doc.info.pages.len(), 1);
+    assert!(doc.info.warnings.iter().any(|w| w.contains("could not be laid out") && w.contains("no template")), "{:?}", doc.info.warnings);
+}

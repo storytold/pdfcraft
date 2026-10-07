@@ -3820,6 +3820,7 @@ dependencies = [
  "printcraft-engine",
  "printcraft-organize",
  "printcraft-render",
+ "printcraft-xfa",
  "serde_json",
 ]
 
@@ -3923,6 +3924,7 @@ dependencies = [
  "printcraft-redact",
  "printcraft-render",
  "printcraft-sign",
+ "printcraft-xfa",
  "printcraft-xfdf",
  "thiserror 2.0.21",
 ]
@@ -4103,6 +4105,7 @@ dependencies = [
  "printcraft-fonts",
  "printcraft-model",
  "printcraft-render",
+ "printcraft-xfa",
  "rfd",
  "serde",
  "serde_json",
@@ -4121,6 +4124,17 @@ dependencies = [
  "printcraft-ui-egui",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "printcraft-xfa"
+version = "0.2.1"
+dependencies = [
+ "base64 0.22.1",
+ "printcraft-cos",
+ "printcraft-fonts",
+ "roxmltree",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

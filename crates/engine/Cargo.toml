@@ -15,6 +15,7 @@ printcraft-cos = { workspace = true }
 printcraft-organize = { workspace = true }
 printcraft-annot = { workspace = true }
 printcraft-forms = { workspace = true }
+printcraft-xfa = { workspace = true }
 printcraft-edit = { workspace = true }
 printcraft-redact = { workspace = true }
 printcraft-print = { workspace = true }

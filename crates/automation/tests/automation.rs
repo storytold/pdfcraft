@@ -1527,3 +1527,40 @@ fn exporting_to_word_html_and_rtf() {
     assert!(std::fs::read_to_string(dir.join("a.rtf")).unwrap().contains("Page 2"));
     assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "a.xyz" })).is_err());
 }
+
+#[test]
+fn dynamic_xfa_forms_open_render_fill_and_save_through_tools() {
+    let dir = workdir("xfa");
+    std::fs::write(dir.join("xfa.pdf"), printcraft_xfa::fixtures::shell(&printcraft_xfa::fixtures::template(2))).unwrap();
+    let mut a = auto(&dir);
+    let opened = ok(&mut a, "doc_open", json!({ "path": "xfa.pdf" }));
+    assert_eq!(opened["pages"], 2, "laid out from the template, not the placeholder page");
+    let doc = opened["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(info["xfa"], "dynamic");
+    assert_eq!(info["xfa_layout"]["pages"], 2);
+    assert_eq!(info["xfa_layout"]["fields"], 11);
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let family = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "familyName").expect("familyName");
+    assert_eq!((family["type"].as_str(), family["tooltip"].as_str(), family["page"].as_u64()), (Some("text"), Some("Your family name"), Some(1)));
+    let answer = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "answer").expect("radio group");
+    assert_eq!(answer["options"], json!(["Y", "N"]));
+    // The page renders with the widgets' own appearances: the check box's border is drawn.
+    let png = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 36 })).unwrap();
+    let Content::Png { data, .. } = &png[0] else { panic!("expected an image") };
+    let decoder = png::Decoder::new(std::io::Cursor::new(data.as_slice()));
+    let mut reader = decoder.read_info().unwrap();
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+    reader.next_frame(&mut buf).unwrap();
+    assert!(buf.iter().filter(|b| **b < 128).count() > 200, "the page is not blank");
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "familyName": "Singh", "agree": true, "answer": "N", "born": "2001-02-03" } }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
+    ok(&mut a, "doc_close", json!({ "doc": doc }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "out.pdf" }));
+    assert_eq!(reopened["pages"], 2, "not laid out twice");
+    let doc2 = reopened["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc2 }));
+    let by = |n: &str| fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == n).unwrap()["value"].clone();
+    assert_eq!((by("familyName"), by("agree"), by("answer"), by("born")), (json!("Singh"), json!(true), json!("N"), json!("2001-02-03")));
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc2 }))["xfa_layout"]["pages"], 2);
+}

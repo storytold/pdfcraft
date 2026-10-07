@@ -38,6 +38,7 @@ pub use printcraft_forms::{
 
 pub use printcraft_a11y as a11y;
 pub use printcraft_edit::{BlockStyle, PageImage, TextBlock, TextLine};
+pub use printcraft_xfa::Report as XfaLayout;
 
 /// A change to an existing page image.
 #[derive(Clone, Debug, PartialEq)]
@@ -213,6 +214,9 @@ pub struct Document {
     config: RenderConfig,
     /// What field scripts printed or asked for (see [`Session::take_js_output`]).
     js_output: js::JsOutput,
+    /// Dynamic XFA forms: what laying the template out produced (pages and fields are
+    /// PrintCraft's; Adobe's viewers draw the form from the XFA packets themselves).
+    pub xfa: Option<XfaLayout>,
 }
 
 impl Document {
@@ -1691,6 +1695,15 @@ pub struct Session {
     js_off: bool,
 }
 
+/// Lay a dynamic XFA form out (pages and fields) and give its widgets appearances.
+fn xfa_layout(doc: &mut printcraft_cos::Document) -> Result<XfaLayout, String> {
+    let report = printcraft_xfa::render_into(doc).map_err(|e| e.to_string())?;
+    for f in printcraft_forms::fields(doc) {
+        printcraft_forms::redraw_field(doc, &f.name).map_err(|e| format!("{}: {e}", f.name))?;
+    }
+    Ok(report)
+}
+
 /// Validate the signature fields of `cos` (written as `bytes`).
 fn signatures_of(cos: &printcraft_cos::Document, bytes: &[u8], trust: &TrustStore, cache: &printcraft_sign::DigestCache) -> Arc<Vec<SignatureInfo>> {
     Arc::new(printcraft_sign::pdf::list_cached(cos, bytes, trust, cache))
@@ -1777,6 +1790,51 @@ impl Session {
             }
             Err(e) => return Err(e),
         };
+        // A dynamic XFA form is a shell around an XML template; lay the template out into real
+        // pages and fields so the rest of the engine works on it. The original bytes stay: the
+        // laid-out form is one appended revision.
+        let (bytes, info, cos, xfa) = match (info.xfa, cos) {
+            (Some(printcraft_render::Xfa::Dynamic), Ok(Ok(cos))) => {
+                // Laid out by an earlier session and saved: nothing to do.
+                if let Some(report) = printcraft_xfa::existing_layout(&cos) {
+                    return self.push_document(name, path, bytes, info, Ok(Ok(cos)), render_password, password, Some(report));
+                }
+                let mut work = cos.clone();
+                let opts = SaveOptions { mod_date: self.now().map(printcraft_cos::pdf_date), ..SaveOptions::default() };
+                let laid_out =
+                    guard(|| xfa_layout(&mut work)).unwrap_or_else(|m| Err(format!("laying it out failed unexpectedly ({m})"))).and_then(|report| {
+                        let new_bytes = write_incremental(&work, &opts).map(Arc::new).map_err(|e| e.to_string())?;
+                        let new_info = inspect(new_bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
+                        let new_cos = printcraft_cos::Document::open_with_password(new_bytes.clone(), password).map_err(|e| e.to_string())?;
+                        Ok((new_bytes, new_info, new_cos, report))
+                    });
+                match laid_out {
+                    Ok((b, i, c, report)) => (b, i, Ok(Ok(c)), Some(report)),
+                    Err(e) => {
+                        let mut info = info;
+                        info.warnings.push(format!("This dynamic XFA form could not be laid out: {e}"));
+                        (bytes, info, Ok(Ok(cos)), None)
+                    }
+                }
+            }
+            (_, cos) => (bytes, info, cos, None),
+        };
+        self.push_document(name, path, bytes, info, cos, render_password, password, xfa)
+    }
+
+    /// The last step of opening: build the document record and register it.
+    #[allow(clippy::too_many_arguments)]
+    fn push_document(
+        &mut self,
+        name: String,
+        path: Option<String>,
+        bytes: Arc<Vec<u8>>,
+        info: DocInfo,
+        cos: Result<Result<printcraft_cos::Document, printcraft_cos::CosError>, Box<dyn std::any::Any + Send>>,
+        render_password: Option<String>,
+        password: Option<&str>,
+        xfa: Option<XfaLayout>,
+    ) -> Result<DocId, OpenError> {
         let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let renderer = RenderPool::new(bytes.clone(), render_threads(), config.clone());
         let (editor, read_only_reason) = match cos {
@@ -1817,6 +1875,7 @@ impl Session {
             editor,
             config,
             js_output: Default::default(),
+            xfa,
         });
         Ok(id)
     }

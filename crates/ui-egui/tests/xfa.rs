@@ -1,5 +1,6 @@
-//! XFA forms (#60): not read yet, so the document says so instead of silently showing a
-//! placeholder page or fields whose values Acrobat would override.
+//! XFA forms (#60): a dynamic form is laid out from its template and says so; one whose template
+//! can't be read, and a static one, say that instead of silently showing a placeholder page or
+//! fields whose values Acrobat would override.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -48,8 +49,22 @@ fn xfa(h: &Harness<'static, PrintCraftApp>) -> Option<printcraft_render::Xfa> {
 }
 
 #[test]
+fn a_dynamic_xfa_form_is_laid_out_and_filled() {
+    let h = open(printcraft_xfa::fixtures::shell(&printcraft_xfa::fixtures::template(2)));
+    assert_eq!(xfa(&h), Some(printcraft_render::Xfa::Dynamic));
+    h.get_by_label_contains("laid out from its template: 2 pages, 11 fields");
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.info.pages.len(), 2);
+    assert!(doc.form.iter().any(|f| f.name == "familyName"));
+    // The notice offers to highlight the fields, like any form.
+    h.get_by_label("Highlight fields");
+}
+
+#[test]
 fn a_dynamic_xfa_form_says_its_page_is_a_placeholder() {
-    // No fields, the form lives in the XFA packets (an array of name/stream pairs here).
+    // No fields, the form lives in the XFA packets (an array of name/stream pairs here), but
+    // the packets hold no template: the placeholder page stays, with a notice.
     let h = open(pdf("/AcroForm << /Fields [] /XFA [(template) 5 0 R] >>", "/NeedsRendering true", &[XFA_PACKET]));
     assert_eq!(xfa(&h), Some(printcraft_render::Xfa::Dynamic));
     h.get_by_label_contains("dynamic XFA form");
