@@ -114,6 +114,16 @@ fn hide_actions_hide_and_show_fields() {
     });
     h.run_steps(6);
     assert!(!name_hidden(&h));
+    // A push button with an action shows the pointing hand, not the "not allowed" cursor.
+    let hide_at = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "hide").unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
+    };
+    h.hover_at(hide_at);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand);
     click_field(&mut h, "hide");
     assert!(name_hidden(&h), "the Hide action hid the field");
     // A hidden field takes no clicks: clicking where it was doesn't start editing it.

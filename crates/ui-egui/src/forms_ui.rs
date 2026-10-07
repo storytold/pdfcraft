@@ -83,8 +83,10 @@ pub(crate) fn page_input(
             .map(|(i, w)| (f, i, w))
     });
     let Some((f, wi, w)) = hit else { return false };
-    // Empty signature fields are signed by clicking them (Use a certificate).
-    let usable = allowed && (fillable(f) || f.kind == FormFieldKind::Signature);
+    // Empty signature fields are signed by clicking them (Use a certificate); push buttons run
+    // their action.
+    let pressable = f.kind == FormFieldKind::PushButton && !f.read_only() && f.button.is_some();
+    let usable = allowed && (fillable(f) || pressable || f.kind == FormFieldKind::Signature);
     ui.ctx().set_cursor_icon(match (usable, f.kind) {
         (false, _) => egui::CursorIcon::NotAllowed,
         (true, FormFieldKind::Text) => egui::CursorIcon::Text,
