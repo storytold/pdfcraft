@@ -8,4 +8,15 @@ allow-indexing-slicing-in-tests = true
 # Tests deliberately compare rendering output against recorded values and use
 # short destructuring names (x0, y1, w) for rectangles; the noise isn't worth
 # renaming just to satisfy a lint.
-too-many-lines-threshold = 100
+#
+# Most of this codebase's long functions are one long linear recipe — an egui
+# panel, a tool dispatch arm, a run through a content stream — where the length
+# is the structure, not a hidden abstraction. 250 lines is where a function
+# should have been split: anything longer is on the refactor list
+# (dialogs::dialogs, automation::tools, canvas::document_area, commands, and
+# annot::appearance::build are all still longer and being split).
+too-many-lines-threshold = 250
+# Option structs for the PDF features are genuinely a bag of on/off switches
+# (font subsetting, image downsampling, metadata, redaction…), and they are
+# serialized by name; a bitflag per option would only hide the JSON.
+max-struct-bools = 8
