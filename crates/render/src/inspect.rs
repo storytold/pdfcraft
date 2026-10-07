@@ -245,6 +245,8 @@ pub struct FontInfo {
 /// (`OpenError::Invalid`), when it is encrypted and needs a password or the given one is wrong
 /// (`OpenError::NeedsPassword`, `OpenError::WrongPassword`), or when its encryption is not
 /// supported (`OpenError::Unsupported`).
+// Shared ownership: the caller may still need the bytes it opened.
+#[expect(clippy::needless_pass_by_value, reason = "an Arc is handed in, not borrowed, so the caller keeps its own handle")]
 pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, OpenError> {
     let pdf = catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes.clone(), password.unwrap_or(""))))
         .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))?

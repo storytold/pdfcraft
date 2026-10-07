@@ -446,7 +446,7 @@ impl PrintCraftApp {
                 }
             }
             if !files.is_empty() {
-                self.merge_data_files(files);
+                self.merge_data_files(&files);
             }
         }
         #[cfg(target_arch = "wasm32")]
@@ -454,8 +454,8 @@ impl PrintCraftApp {
     }
 
     /// Merge the given data files and save the spreadsheet (asks where; `save_override` in tests).
-    pub fn merge_data_files(&mut self, files: Vec<(String, Vec<u8>)>) {
-        let csv = match printcraft_engine::merge_data_files(&files) {
+    pub fn merge_data_files(&mut self, files: &[(String, Vec<u8>)]) {
+        let csv = match printcraft_engine::merge_data_files(files) {
             Ok(c) => c,
             Err(e) => return self.notify(e),
         };

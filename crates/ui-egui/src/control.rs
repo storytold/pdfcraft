@@ -650,7 +650,7 @@ pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
                         continue;
                     }
                     let (reply, close) = match serde_json::from_str::<Value>(&line) {
-                        Err(e) => (rpc_error(Value::Null, -32700, &format!("parse error: {e}")), false),
+                        Err(e) => (rpc_error(&Value::Null, -32700, &format!("parse error: {e}")), false),
                         Ok(msg) => {
                             let id = msg.get("id").cloned().unwrap_or(Value::Null);
                             let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
@@ -659,8 +659,8 @@ pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
                                 let rx = client.send(method, params);
                                 match rx.recv_timeout(std::time::Duration::from_secs(30)) {
                                     Ok(Ok(v)) => (json!({ "jsonrpc": "2.0", "id": id, "result": v }), false),
-                                    Ok(Err(e)) => (rpc_error(id, -32000, &e), false),
-                                    Err(_) => (rpc_error(id, -32002, "the app did not answer within 30 s"), false),
+                                    Ok(Err(e)) => (rpc_error(&id, -32000, &e), false),
+                                    Err(_) => (rpc_error(&id, -32002, "the app did not answer within 30 s"), false),
                                 }
                             } else {
                                 let ok =
@@ -669,7 +669,7 @@ pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
                                 if ok {
                                     (json!({ "jsonrpc": "2.0", "id": id, "result": { "ok": true } }), false)
                                 } else {
-                                    (rpc_error(id, -32001, "authenticate first: auth {token}"), true)
+                                    (rpc_error(&id, -32001, "authenticate first: auth {token}"), true)
                                 }
                             }
                         }
@@ -685,7 +685,7 @@ pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn rpc_error(id: Value, code: i64, message: &str) -> Value {
+fn rpc_error(id: &Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 

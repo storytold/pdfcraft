@@ -153,19 +153,19 @@ impl PrintCraftApp {
                     }
                 }
             }
-            self.create_from_images(images);
+            self.create_from_images(&images);
         }
         #[cfg(target_arch = "wasm32")]
         self.notify("On the web, open or drop an image to convert it");
     }
 
     /// One new document from images (tests and automation call this directly).
-    pub fn create_from_images(&mut self, images: Vec<(String, Vec<u8>)>) {
+    pub fn create_from_images(&mut self, images: &[(String, Vec<u8>)]) {
         if images.is_empty() {
             return;
         }
         let name = if images.len() == 1 { format!("{}.pdf", stem(&images[0].0)) } else { "Images.pdf".to_string() };
-        let created = self.session.create_from_images(&images).map_err(|e| e.to_string());
+        let created = self.session.create_from_images(images).map_err(|e| e.to_string());
         if let Err(e) = self.open_created_bytes(&name, created) {
             self.notify(format!("Couldn't create a PDF: {e}"));
         }

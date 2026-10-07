@@ -61,7 +61,12 @@ fn comment_ref(mut extra: Value) -> Value {
 }
 
 fn schema(props: Value, required: &[&str]) -> Value {
-    json!({ "type": "object", "properties": props, "required": required, "additionalProperties": false })
+    let mut out = serde_json::Map::with_capacity(4);
+    out.insert("type".to_string(), json!("object"));
+    out.insert("properties".to_string(), props);
+    out.insert("required".to_string(), json!(required));
+    out.insert("additionalProperties".to_string(), json!(false));
+    Value::Object(out)
 }
 
 struct T {

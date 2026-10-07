@@ -536,13 +536,13 @@ fn frame_only(doc: &Document, w: &Widget) -> (String, f64, f64) {
     (c, width, height)
 }
 
-fn form_stream(width: f64, height: f64, content: Vec<u8>, resources: Dict) -> Stream {
+fn form_stream(width: f64, height: f64, content: &[u8], resources: &Dict) -> Stream {
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("XObject"));
     d.set(b"Subtype".to_vec(), Object::name("Form"));
     d.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, width, height].iter().map(|v| Object::Real(*v)).collect()));
-    d.set(b"Resources".to_vec(), Object::Dict(resources));
-    Stream::flate(d, &content)
+    d.set(b"Resources".to_vec(), Object::Dict(resources.clone()));
+    Stream::flate(d, content)
 }
 
 /// A push button: background, border, its icon (`/MK /I`, scaled to fit and centred) and its
@@ -589,7 +589,7 @@ fn button_appearance(doc: &Document, w: &Widget) -> Stream {
     if !xobjects.is_empty() {
         res.set(b"XObject".to_vec(), Object::Dict(xobjects));
     }
-    form_stream(width, height, content, res)
+    form_stream(width, height, &content, &res)
 }
 
 /// Give a push button (an image field) the picture `image` (an image `XObject` of `px` pixels):
@@ -611,7 +611,7 @@ pub fn set_button_icon(doc: &mut Document, name: &str, image: ObjRef, px: (u32, 
     xo.set(b"Im0".to_vec(), Object::Ref(image));
     let mut res = Dict::new();
     res.set(b"XObject".to_vec(), Object::Dict(xo));
-    let icon = doc.add(Object::Stream(form_stream(w, h, format!("q {w} 0 0 {h} 0 0 cm /Im0 Do Q").into_bytes(), res)));
+    let icon = doc.add(Object::Stream(form_stream(w, h, &format!("q {w} 0 0 {h} 0 0 cm /Im0 Do Q").into_bytes(), &res)));
     for wd in &f.widgets {
         let mut mk =
             doc.get(wd.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m))).and_then(|m| m.as_dict().cloned()).unwrap_or_default();
@@ -626,7 +626,7 @@ pub fn set_button_icon(doc: &mut Document, name: &str, image: ObjRef, px: (u32, 
 
 fn empty_box(doc: &Document, w: &Widget) -> Stream {
     let (c, width, height) = frame_only(doc, w);
-    form_stream(width, height, c.into_bytes(), Dict::new())
+    form_stream(width, height, &c.into_bytes(), &Dict::new())
 }
 
 /// Change a field's properties (General and Options tabs) and redraw it.

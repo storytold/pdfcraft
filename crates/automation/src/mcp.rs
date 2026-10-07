@@ -70,24 +70,24 @@ impl McpServer {
     pub fn handle_line(&mut self, line: &str) -> Option<String> {
         let reply = match serde_json::from_str::<Value>(line) {
             Ok(msg) => self.handle(&msg),
-            Err(e) => Some(error(Value::Null, PARSE_ERROR, &format!("parse error: {e}"))),
+            Err(e) => Some(error(&Value::Null, PARSE_ERROR, &format!("parse error: {e}"))),
         };
         reply.map(|r| r.to_string())
     }
 
     /// Handle one parsed message. Notifications (no `id`) get no reply.
     pub fn handle(&mut self, msg: &Value) -> Option<Value> {
-        let Some(obj) = msg.as_object() else { return Some(error(Value::Null, INVALID_REQUEST, "expected a JSON-RPC request object")) };
+        let Some(obj) = msg.as_object() else { return Some(error(&Value::Null, INVALID_REQUEST, "expected a JSON-RPC request object")) };
         let id = obj.get("id").cloned();
         let Some(method) = obj.get("method").and_then(Value::as_str) else {
             // A response to something we sent (we send no requests) or garbage.
-            return id.map(|id| error(id, INVALID_REQUEST, "missing method"));
+            return id.map(|id| error(&id, INVALID_REQUEST, "missing method"));
         };
         let params = obj.get("params").cloned().unwrap_or(Value::Null);
         let id = id?; // notifications/initialized, notifications/cancelled, …: nothing to answer
         Some(match self.dispatch(method, &params) {
             Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-            Err((code, message)) => error(id, code, &message),
+            Err((code, message)) => error(&id, code, &message),
         })
     }
 
@@ -229,7 +229,7 @@ impl McpServer {
     }
 }
 
-fn error(id: Value, code: i64, message: &str) -> Value {
+fn error(id: &Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 

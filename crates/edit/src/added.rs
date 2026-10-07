@@ -442,7 +442,7 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
     } else {
         // place_tagged appends a new stream; recover its reference.
         let p = page_list(doc).swap_remove(page);
-        place_tagged(doc, &p, TAG, content.clone(), false)?;
+        place_tagged(doc, &p, TAG, &content, false)?;
         let p = page_list(doc).swap_remove(page);
         let r = contents(doc, &p)?.last().and_then(Object::as_ref).ok_or_else(|| EditError::Invalid("could not add the content".into()))?;
         doc.set(r, Object::Stream(stream));

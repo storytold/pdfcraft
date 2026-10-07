@@ -12,7 +12,7 @@ fn stream(dict: &str, data: &[u8]) -> Vec<u8> {
     v
 }
 
-fn pdf(objs: Vec<Vec<u8>>) -> Document {
+fn pdf(objs: &[Vec<u8>]) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offs = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -49,7 +49,7 @@ fn one_page(content: &[u8], extra_res: &str, extra: Vec<Vec<u8>>) -> Document {
         widths(),
     ];
     objs.extend(extra);
-    pdf(objs)
+    pdf(&objs)
 }
 
 fn mark(doc: &mut Document, page: usize, rects: &[[f64; 4]], overlay: &str) {
@@ -106,7 +106,7 @@ fn glyphs_under_a_mark_go_and_the_rest_stays_put() {
 #[test]
 fn added_text_parameters_do_not_keep_redacted_text() {
     // An Edit ▸ Add content item: its stream dictionary keeps the source text under /PCAdded.
-    let mut doc = pdf(vec![
+    let mut doc = pdf(&[
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents [4 0 R] /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
@@ -220,7 +220,7 @@ fn shared_form_xobjects_are_copied_not_changed() {
         form,
     ];
     objs.push(b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".to_vec());
-    let mut doc = pdf(objs);
+    let mut doc = pdf(&objs);
     mark(&mut doc, 0, &[[0.0, 90.0, 300.0, 120.0]], "");
     let r = apply(&mut doc, None).unwrap();
     assert_eq!((r.glyphs, r.forms_rewritten), (6, 1), "{r:?}");
@@ -315,7 +315,7 @@ fn hidden_fixture() -> Document {
         b"<< /Type /Annot /Subtype /FileAttachment /Rect [200 10 210 20] /FS 8 0 R >>".to_vec(),
         stream("", b"attached"),
     ];
-    let mut doc = pdf(objs);
+    let mut doc = pdf(&objs);
     let info = doc.add(Object::Dict({
         let mut d = Dict::new();
         d.set(b"Title".to_vec(), printcraft_cos::PdfString::text("Secret plan"));
@@ -402,7 +402,7 @@ fn overlay_text_takes_its_font_size_colour_alignment_and_repeats() {
 #[test]
 fn tags_lose_what_redaction_removed() {
     let content = b"/P <</MCID 0>> BDC BT /F1 10 Tf 10 200 Td (SECRET) Tj ET EMC /P <</MCID 1>> BDC BT /F1 10 Tf 10 100 Td (Public) Tj ET EMC";
-    let mut doc = pdf(vec![
+    let mut doc = pdf(&[
         b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R /MarkInfo << /Marked true >> >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /StructParents 0 /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),

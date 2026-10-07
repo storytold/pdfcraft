@@ -109,10 +109,10 @@ fn merge_data_files_into_a_spreadsheet() {
     let out = dir.join("report.csv");
     let mut app = PrintCraftApp::new();
     app.save_override = Some(out.to_string_lossy().into_owned());
-    app.merge_data_files(vec![("form.pdf".into(), form())]);
+    app.merge_data_files(&[("form.pdf".into(), form())]);
     assert_eq!(std::fs::read_to_string(&out).unwrap(), "greeting\n\n");
     assert!(app.toast.clone().unwrap().0.starts_with("Merged 1 file"));
-    app.merge_data_files(vec![("x.fdf".into(), b"junk".to_vec())]);
+    app.merge_data_files(&[("x.fdf".into(), b"junk".to_vec())]);
     assert!(app.toast.clone().unwrap().0.starts_with("x.fdf:"));
 }
 

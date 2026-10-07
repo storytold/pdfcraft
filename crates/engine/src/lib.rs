@@ -1866,6 +1866,9 @@ impl Session {
     /// settings refuse the edit (`EditError::ReadOnly`, `EditError::NotPermitted`), the edit
     /// fails, a full rewrite would invalidate a signed document (`EditError::SignedRewrite`), or
     /// the result cannot be written and re-opened (the document is left unchanged).
+    // An edit is built for this call and handed over: the copy of the document is what
+    // gets edited, so `edit` itself is only read.
+    #[expect(clippy::needless_pass_by_value, reason = "the caller builds the edit for this call and gives it up")]
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
         let now = self.now();
         let today = self.today();
@@ -2080,6 +2083,8 @@ impl Session {
     /// When there is no document with that id, `bytes` cannot be re-opened with the passwords
     /// known for the document, or the view cannot be refreshed (`EditError::Reopen`,
     /// `EditError::Write`).
+    // The session keeps the saved bytes and the path; the caller is done with them.
+    #[expect(clippy::needless_pass_by_value, reason = "the session takes over the bytes and the path")]
     pub fn mark_saved(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<(), EditError> {
         let doc = self.doc_mut(id)?;
         if let Some(editor) = doc.editor.as_mut() {

@@ -171,10 +171,10 @@ impl PrintCraftApp {
         }
     }
 
-    pub(crate) fn compare_action(&mut self, index: usize, a: PanelAction) {
+    pub(crate) fn compare_action(&mut self, index: usize, a: &PanelAction) {
         let Some(s) = self.compare.as_mut() else { return };
         let (old, new) = (s.old, s.new);
-        match a {
+        match *a {
             PanelAction::Select(i) => {
                 s.selected = Some(i);
                 let Some(ch) = s.result.changes.get(i) else { return };

@@ -51,6 +51,8 @@ fn auto(dir: &Path) -> Automation {
     Automation::new().with_root(dir).unwrap().with_clock(|| 1_700_000_000)
 }
 
+// Callers pass the arguments inline as `json!({...})`; borrowing would only add noise.
+#[expect(clippy::needless_pass_by_value, reason = "callers pass the tool arguments inline")]
 fn ok(a: &mut Automation, tool: &str, args: Value) -> Value {
     match a.call(tool, &args) {
         Ok(mut c) => match c.remove(0) {
@@ -240,6 +242,7 @@ fn command_list_reports_enablement_and_tools() {
 // ---- MCP ---------------------------------------------------------------------------------------
 
 #[cfg(feature = "mcp")]
+#[expect(clippy::needless_pass_by_value, reason = "callers pass the request parameters inline")]
 fn rpc(server: &mut McpServer, id: u64, method: &str, params: Value) -> Value {
     let line = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string();
     serde_json::from_str(&server.handle_line(&line).expect("a reply")).unwrap()

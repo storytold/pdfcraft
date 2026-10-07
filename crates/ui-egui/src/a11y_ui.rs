@@ -341,8 +341,8 @@ impl PrintCraftApp {
         self.write_files(&[(format!("{stem} Accessibility Report.html"), std::sync::Arc::new(html.into_bytes()))], "Save the accessibility report");
     }
 
-    pub(crate) fn a11y_action(&mut self, index: usize, action: PanelAction) {
-        match action {
+    pub(crate) fn a11y_action(&mut self, index: usize, action: &PanelAction) {
+        match *action {
             PanelAction::CheckAgain => self.run_accessibility_check(),
             PanelAction::Options => self.dialog = Some(Dialog::AccessibilityOptions),
             PanelAction::ShowReport => self.show_accessibility_report(),

@@ -325,14 +325,14 @@ fn tagged(tag: &str) -> Dict {
 
 /// Put a mark's content on a page: behind (prepended) or on top (appended, after wrapping the
 /// original content in q/Q).
-fn place(doc: &mut Document, page: &printcraft_model::Page, kind: MarkKind, content: Vec<u8>, behind: bool) -> Result<(), EditError> {
+fn place(doc: &mut Document, page: &printcraft_model::Page, kind: MarkKind, content: &[u8], behind: bool) -> Result<(), EditError> {
     place_tagged(doc, page, kind.tag(), content, behind)
 }
 
 /// Put content on a page, tagged `tag` (see [`place`]).
-fn place_tagged(doc: &mut Document, page: &printcraft_model::Page, tag: &str, content: Vec<u8>, behind: bool) -> Result<(), EditError> {
+fn place_tagged(doc: &mut Document, page: &printcraft_model::Page, tag: &str, content: &[u8], behind: bool) -> Result<(), EditError> {
     let mut list = contents(doc, page)?;
-    let mark = Object::Ref(doc.add(Object::Stream(Stream::flate(tagged(tag), &content))));
+    let mark = Object::Ref(doc.add(Object::Stream(Stream::flate(tagged(tag), content))));
     if behind {
         list.insert(0, mark);
     } else {
@@ -360,12 +360,14 @@ fn place_tagged(doc: &mut Document, page: &printcraft_model::Page, tag: &str, co
 ///
 /// Returns `Err` when `page` is out of range (`EditError::NoSuchPage`) or when the page's
 /// resources or content list cannot be written (`EditError::Cos`).
+// The stamp bytes are built for this call and handed over.
+#[expect(clippy::needless_pass_by_value, reason = "the caller builds the stamp content for this call")]
 pub fn stamp(doc: &mut Document, page: usize, tag: &str, content: Vec<u8>) -> Result<(), EditError> {
     let all = page_list(doc);
     check(&[page], all.len())?;
     add_resources(doc, &all[page], None, Some(&content))?;
     let p = page_list(doc).swap_remove(page);
-    place_tagged(doc, &p, tag, content, false)
+    place_tagged(doc, &p, tag, &content, false)
 }
 
 fn begin(kind: MarkKind, subtype: &str, matrix: [f64; 6]) -> String {
@@ -453,7 +455,7 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
         content.extend_from_slice(END.as_bytes());
         add_resources(doc, page, None, None)?;
         let page = &page_list(doc)[i];
-        place(doc, page, MarkKind::HeaderFooter, content, false)?;
+        place(doc, page, MarkKind::HeaderFooter, &content, false)?;
     }
     Ok(())
 }
@@ -492,7 +494,7 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
             add_resources(doc, &page, Some(opacity), None)?;
             add_picture_resource(doc, &page_list(doc)[i].clone(), src)?;
             let page = &page_list(doc)[i];
-            place(doc, page, MarkKind::Watermark, content.into_bytes(), wm.behind)?;
+            place(doc, page, MarkKind::Watermark, &content.into_bytes(), wm.behind)?;
             continue;
         }
         let widest = lines.iter().map(|l| helvetica_width(l, 1.0)).fold(0.0, f64::max).max(0.01);
@@ -525,7 +527,7 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
         content.extend_from_slice(END.as_bytes());
         add_resources(doc, &page, Some(opacity), None)?;
         let page = &page_list(doc)[i];
-        place(doc, page, MarkKind::Watermark, content, wm.behind)?;
+        place(doc, page, MarkKind::Watermark, &content, wm.behind)?;
     }
     Ok(())
 }
@@ -562,7 +564,7 @@ pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, repl
             add_picture_resource(doc, &page_list(doc)[i].clone(), src)?;
         }
         let page = &page_list(doc)[i];
-        place(doc, page, MarkKind::Background, content.into_bytes(), true)?;
+        place(doc, page, MarkKind::Background, &content.into_bytes(), true)?;
     }
     Ok(())
 }

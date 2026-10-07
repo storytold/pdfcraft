@@ -647,6 +647,8 @@ impl PrintCraftApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    // egui calls this with the dropped file by value.
+    #[expect(clippy::needless_pass_by_value, reason = "the signature is egui's callback")]
     fn open_dropped(&mut self, f: egui::DroppedFileHandle, _ctx: &egui::Context) {
         let p = f.path().to_string_lossy().into_owned();
         if !p.is_empty() && f.path().is_absolute() {

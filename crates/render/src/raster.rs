@@ -402,6 +402,8 @@ impl RenderPool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+// The pool hands the worker its request by move; nothing else owns these.
+#[expect(clippy::needless_pass_by_value, reason = "the worker thread takes ownership of the request it is spawned with")]
 fn worker(id: usize, bytes: Arc<Vec<u8>>, config: RenderConfig, shared: Arc<Shared>, wake: Receiver<()>, out: Sender<RenderedPage>) {
     let settings = config.settings();
     // Outer loop: (re)build parser + cache; rebuilt after a renderer panic.

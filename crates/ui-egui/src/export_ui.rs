@@ -125,8 +125,8 @@ fn run(
     dpi: f64,
     format: ImageFormat,
     min_side: u32,
-    pages: Vec<usize>,
-    stem: String,
+    pages: &[usize],
+    stem: &str,
     mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), String>,
     status: &ExportStatus,
 ) -> String {
@@ -138,12 +138,12 @@ fn run(
     };
     if kind == ExportKind::AllImages {
         set(0, None);
-        let out = match printcraft_engine::export::extract_images(&src, &pages, min_side) {
+        let out = match printcraft_engine::export::extract_images(&src, pages, min_side) {
             Ok(o) => o,
             Err(e) => return format!("Export stopped: {e}"),
         };
         for (k, img) in out.images.iter().enumerate() {
-            if let Err(e) = sink(&printcraft_engine::export::image_file_name(&stem, img, k + 1), img.data.clone()) {
+            if let Err(e) = sink(&printcraft_engine::export::image_file_name(stem, img, k + 1), img.data.clone()) {
                 return format!("Export stopped: {e}");
             }
         }
@@ -170,7 +170,7 @@ fn run(
         }
         ExportKind::Text => {
             set(0, None);
-            match ex.text_of(&pages).and_then(|text| sink(&format!("{stem}.txt"), text.into_bytes())) {
+            match ex.text_of(pages).and_then(|text| sink(&format!("{stem}.txt"), text.into_bytes())) {
                 Ok(()) => format!("Exported the text of {total} page{}", if total == 1 { "" } else { "s" }),
                 Err(e) => format!("Export stopped: {e}"),
             }
@@ -203,7 +203,7 @@ impl PrintCraftApp {
                 let sink = |name: &str, bytes: Vec<u8>| {
                     crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &bytes).map_err(|e| format!("{name}: {e}"))
                 };
-                let msg = run(src, kind, dpi, format, min_side, pages, stem, sink, &st);
+                let msg = run(src, kind, dpi, format, min_side, &pages, &stem, sink, &st);
                 if let Ok(mut s) = st.lock() {
                     let (done, total) = s.as_ref().map_or((0, 0), |(d, t, _)| (*d, *t));
                     *s = Some((done.max(total), total, Some(format!("{msg} to {shown}"))));
@@ -217,7 +217,7 @@ impl PrintCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let msg = run(src, kind, dpi, format, min_side, pages, stem, |name, bytes| crate::editing::download(name, &bytes), &status);
+            let msg = run(src, kind, dpi, format, min_side, &pages, &stem, |name, bytes| crate::editing::download(name, &bytes), &status);
             if let Ok(mut s) = status.lock() {
                 *s = Some((0, 0, Some(msg)));
             }

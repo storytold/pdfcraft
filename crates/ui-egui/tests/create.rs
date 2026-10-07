@@ -19,7 +19,7 @@ fn opening_images_and_text_converts_them_to_new_pdfs() {
     let mut app = PrintCraftApp::new();
     app.open_bytes("photo.png", Some("/tmp/photo.png".into()), png()).unwrap();
     app.open_bytes("notes.txt", None, b"first line\nsecond line".to_vec()).unwrap();
-    app.create_from_images(vec![("a.png".into(), png()), ("b.png".into(), png())]);
+    app.create_from_images(&[("a.png".into(), png()), ("b.png".into(), png())]);
     assert!(app.execute("create.blank"));
     let docs = app.session.docs();
     let summary: Vec<(String, usize, bool)> = docs.iter().map(|d| (d.name.clone(), d.info.pages.len(), d.dirty)).collect();

@@ -557,10 +557,10 @@ pub fn right_panel(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
         app.run_command(c);
     }
     if let Some(a) = a11y_action {
-        app.a11y_action(index, a);
+        app.a11y_action(index, &a);
     }
     if let Some(a) = compare_action {
-        app.compare_action(index, a);
+        app.compare_action(index, &a);
     }
     match sig_action {
         Some(crate::sign_ui::PanelAction::Validate) => app.run_command("sign.validate"),
