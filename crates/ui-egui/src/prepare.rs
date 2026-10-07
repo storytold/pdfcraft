@@ -1130,7 +1130,6 @@ fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
         Format::Date(_) => "10/1/2026",
         Format::Time(_) => "14:05",
         Format::Special(2) => "5551234567",
-        Format::Special(3) => "123456789",
         Format::Special(_) => "123456789",
         _ => "",
     };

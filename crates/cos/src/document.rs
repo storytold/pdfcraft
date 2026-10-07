@@ -676,8 +676,7 @@ impl Document {
     #[must_use]
     pub fn generation(&self, num: u32) -> u16 {
         match self.overlay.get(&num) {
-            Some(Slot::Set(g, _)) => *g,
-            Some(Slot::Freed(g)) => *g,
+            Some(Slot::Set(g, _) | Slot::Freed(g)) => *g,
             None => match self.entries.get(&num) {
                 Some(XrefEntry::InFile { generation, .. }) => *generation,
                 Some(XrefEntry::Free { next_generation }) => *next_generation,

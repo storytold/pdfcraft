@@ -45,7 +45,6 @@ pub fn kind_label(a: &Annotation) -> &str {
 
 pub fn subtype_icon(s: &str) -> &'static str {
     match s {
-        "Text" => "message-square-text",
         "Highlight" => "highlighter",
         "Underline" => "underline",
         "StrikeOut" => "strikethrough",

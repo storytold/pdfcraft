@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
-use printcraft_engine::sign::{self, Appearance, Certificate, DigitalId, Modification, Name, PrivateKey};
+use printcraft_engine::sign::{self, Appearance, Certificate, DigitalId, Name, PrivateKey};
 use printcraft_engine::{SignOptions, SignatureInfo, SignatureStatus};
 
 use crate::canvas::{DocView, PageXform};
@@ -685,7 +685,6 @@ fn status_icon(s: &SignatureInfo) -> (&'static str, Color32) {
         return ("pen-line", Color32::from_gray(0x80));
     }
     match (s.status, &s.modification) {
-        (SignatureStatus::Valid, Modification::None) => ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78)),
         (SignatureStatus::Valid, _) => ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78)),
         (SignatureStatus::Unknown, _) => ("triangle-alert", Color32::from_rgb(0xE6, 0x86, 0x19)),
         (SignatureStatus::Invalid, _) => ("circle-x", Color32::from_rgb(0xD7, 0x37, 0x3F)),

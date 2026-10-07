@@ -50,8 +50,8 @@ pub fn iso_date(pdf: &str) -> Option<String> {
     let part = |a: usize, b: usize, def: &str| digits.get(a..b).unwrap_or(def).to_string();
     let (y, mo, da, h, mi, sec) = (part(0, 4, "0000"), part(4, 6, "01"), part(6, 8, "01"), part(8, 10, "00"), part(10, 12, "00"), part(12, 14, "00"));
     let rest = &date[digits.len()..];
+    // No zone marker, or one we don't know: UTC.
     let tz = match rest.chars().next() {
-        Some('Z') | None => "Z".to_string(),
         Some(sign @ ('+' | '-')) => {
             let tz_digits: String = rest[1..].chars().filter(char::is_ascii_digit).collect();
             format!("{sign}{}:{}", tz_digits.get(0..2).unwrap_or("00"), tz_digits.get(2..4).unwrap_or("00"))

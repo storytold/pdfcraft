@@ -263,12 +263,11 @@ fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef]) -> af::Actions {
         // A mask has only a keystroke script.
         match af::parse_format(&k) {
             Some(fm @ af::Format::Mask(_)) => out.format = fm,
-            Some(_) => {}
             None if !k.trim().is_empty() => {
                 out.unsupported.push("keystroke");
                 out.scripts.keystroke = Some(k);
             }
-            None => {}
+            Some(_) | None => {}
         }
     }
     if let Some(v) = js(b"V") {

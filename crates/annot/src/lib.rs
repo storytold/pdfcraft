@@ -548,21 +548,17 @@ impl Style {
         let (color, width) = match shape {
             Shape::Note { .. } => ([1.0, 0.82, 0.0], 1.0),
             Shape::TextMarkup { kind: Markup::Highlight, .. } => ([1.0, 0.94, 0.0], 1.0),
-            Shape::TextMarkup { kind: Markup::Underline, .. } => ([0.0, 0.47, 0.84], 1.0),
+            Shape::TextMarkup { kind: Markup::Underline, .. } | Shape::Caret { .. } | Shape::Attachment { .. } => ([0.0, 0.47, 0.84], 1.0),
             Shape::TextMarkup { kind: Markup::StrikeOut, .. } => ([0.89, 0.13, 0.13], 1.0),
             Shape::TextMarkup { kind: Markup::Squiggly, .. } => ([0.18, 0.62, 0.36], 1.0),
             Shape::Rectangle { .. } | Shape::Oval { .. } | Shape::Line { .. } | Shape::Polygon { .. } | Shape::PolyLine { .. } => {
                 ([0.89, 0.13, 0.13], 2.0)
             }
             Shape::Callout { .. } => ([0.0, 0.0, 0.0], 1.0),
-            Shape::Caret { .. } | Shape::Attachment { .. } => ([0.0, 0.47, 0.84], 1.0),
             Shape::Ink { .. } => ([0.0, 0.4, 0.87], 2.0),
-            Shape::TextBox { .. } | Shape::Typewriter { .. } => ([0.0, 0.0, 0.0], 0.0),
-            Shape::Mark { .. } => ([0.0, 0.0, 0.0], 1.5),
-            Shape::Signature { .. } => ([0.0, 0.0, 0.0], 1.5),
+            Shape::TextBox { .. } | Shape::Typewriter { .. } | Shape::CustomStamp { .. } | Shape::TypedSignature { .. } => ([0.0, 0.0, 0.0], 0.0),
+            Shape::Mark { .. } | Shape::Signature { .. } => ([0.0, 0.0, 0.0], 1.5),
             Shape::Stamp { stamp, .. } => (stamp.color(), 2.0),
-            Shape::CustomStamp { .. } => ([0.0, 0.0, 0.0], 0.0),
-            Shape::TypedSignature { .. } => ([0.0, 0.0, 0.0], 0.0),
             // Red outline while marked; a black box once applied.
             Shape::Redact { .. } => return Self { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: Some([0.0, 0.0, 0.0]) },
         };
@@ -852,7 +848,7 @@ fn subject(shape: &Shape) -> &'static str {
         Shape::TextBox { .. } => "Text Box",
         Shape::Typewriter { .. } => "Typewriter",
         Shape::Mark { mark, .. } => mark.label(),
-        Shape::Signature { .. } => "Signature",
+        Shape::Signature { .. } | Shape::TypedSignature { .. } => "Signature",
         Shape::Redact { .. } => "Redact",
         Shape::Stamp { stamp, .. } => match stamp.group() {
             StampGroup::Dynamic => "Dynamic stamp",
@@ -860,7 +856,6 @@ fn subject(shape: &Shape) -> &'static str {
             StampGroup::StandardBusiness => "Stamp",
         },
         Shape::CustomStamp { .. } => "Stamp",
-        Shape::TypedSignature { .. } => "Signature",
         Shape::Polygon { cloud: true, .. } => "Cloud",
         Shape::Polygon { .. } => "Polygon",
         Shape::PolyLine { .. } => "Polygonal Line",

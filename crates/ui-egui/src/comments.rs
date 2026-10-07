@@ -149,14 +149,13 @@ impl CommentTool {
             Self::Highlight => "highlighter",
             Self::Underline => "underline",
             Self::StrikeOut => "strikethrough",
-            Self::Squiggly => "spline",
+            Self::Squiggly | Self::PolyLine => "spline",
             Self::Ink => "pencil",
             Self::Line => "minus",
             Self::Arrow => "move-right",
             Self::Rectangle => "square",
             Self::Oval => "circle",
             Self::Polygon => "pentagon",
-            Self::PolyLine => "spline",
             Self::Cloud => "cloud",
             Self::Callout => "message-square-quote",
             Self::Caret => "text-cursor-input",
@@ -208,7 +207,7 @@ impl CommentTool {
             Self::Highlight | Self::Underline | Self::StrikeOut | Self::Squiggly => {
                 Shape::TextMarkup { kind: self.markup().unwrap_or(Markup::Highlight), quads: Vec::new() }
             }
-            Self::Ink => Shape::Ink { strokes: Vec::new() },
+            Self::Ink | Self::Eraser => Shape::Ink { strokes: Vec::new() },
             Self::Line => Shape::Line { from: [0.0; 2], to: [0.0; 2], arrow: false },
             Self::Arrow => Shape::Line { from: [0.0; 2], to: [0.0; 2], arrow: true },
             Self::Rectangle => Shape::Rectangle { rect: [0.0; 4] },
@@ -219,7 +218,6 @@ impl CommentTool {
             Self::Callout => Shape::Callout { rect: [0.0; 4], knee: [0.0; 2], point: [0.0; 2], font_size: 10.0 },
             Self::Caret => Shape::Caret { rect: [0.0; 4] },
             Self::ReplaceText => Shape::TextMarkup { kind: Markup::StrikeOut, quads: Vec::new() },
-            Self::Eraser => Shape::Ink { strokes: Vec::new() },
             Self::Attach => Shape::Attachment { at: [0.0; 2], icon: printcraft_engine::AttachIcon::PushPin, file: String::new(), data: Vec::new() },
         }
     }

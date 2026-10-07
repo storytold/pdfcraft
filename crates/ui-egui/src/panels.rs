@@ -813,11 +813,10 @@ fn fields(
                 FieldKind::Text => "text-cursor-input",
                 FieldKind::CheckBox => "check-circle-2",
                 FieldKind::Radio => "circle",
-                FieldKind::PushButton => "square",
+                FieldKind::PushButton | FieldKind::Unknown => "square",
                 FieldKind::Combo => "chevron-down",
                 FieldKind::List => "list",
                 FieldKind::Signature => "signature",
-                FieldKind::Unknown => "square",
             };
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &f.name));

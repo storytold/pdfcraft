@@ -111,9 +111,8 @@ impl Cipher {
     fn key_len(self) -> usize {
         match self {
             Cipher::Aes128 => 16,
-            Cipher::Aes192 => 24,
+            Cipher::Aes192 | Cipher::TripleDes => 24,
             Cipher::Aes256 => 32,
-            Cipher::TripleDes => 24,
             Cipher::Rc2(bits) => bits / 8,
         }
     }

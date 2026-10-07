@@ -509,14 +509,10 @@ fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Mod
             _ if before.is_none() => continue,
             _ => "other changes",
         };
-        let ok = match (kind, p) {
-            ("signature" | "document security store", _) => true,
-            ("form fill", Some(2 | 3) | None) => true,
-            ("comments", Some(3) | None) => true,
-            // Every save updates /Info (ModDate), signing included.
-            ("metadata", _) => true,
-            _ => false,
-        };
+        // Every save updates /Info (ModDate), signing included.
+        let ok = matches!(kind, "signature" | "document security store" | "metadata")
+            || matches!(kind, "form fill") && matches!(p, Some(2 | 3) | None)
+            || matches!(kind, "comments") && matches!(p, Some(3) | None);
         let list = if ok { &mut allowed } else { &mut disallowed };
         if !list.contains(&kind) {
             list.push(kind);
