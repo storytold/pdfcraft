@@ -114,6 +114,20 @@ impl Automation {
         &self.session
     }
 
+    /// Save `bytes` that a caller writes on the session's behalf, such as `pdfcraft-cli run`
+    /// saving a rendered page. With a root, it is confined like a tool's own output (a relative
+    /// path resolves inside it) and written atomically. Without one, the path is written as
+    /// given, so `/dev/stdout` and the like still work. Returns where the file went.
+    pub fn write_output(&self, path: &str, bytes: &[u8]) -> Result<PathBuf> {
+        let target = self.resolve(path, true)?;
+        if self.root.is_some() {
+            write_atomic(&target, bytes)?;
+        } else {
+            std::fs::write(&target, bytes).map_err(|e| failed(format!("{path}: {e}")))?;
+        }
+        Ok(target)
+    }
+
     /// Run the tool `name` with JSON `args` (an object; `null` means no arguments).
     pub fn call(&mut self, name: &str, args: &Value) -> Result<Vec<Content>> {
         let empty = json!({});
@@ -326,6 +340,11 @@ impl Automation {
                 if name == "image_save" {
                     let (ext, bytes) = self.doc(&a)?.page_image_file(page, index).map_err(failed)?;
                     let mut path = self.resolve(a.str("path")?, true)?;
+                    if path.is_dir() {
+                        // Adding the extension to a folder's name would write beside it: "." is the
+                        // root, so that would land outside it.
+                        return Err(failed(format!("{}: is a folder, not a file", path.display())));
+                    }
                     if path.extension().is_none() {
                         path.set_extension(ext);
                     }
@@ -1631,6 +1650,11 @@ fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[u
 
 /// Write via a temporary file in the same directory, then rename over the target.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    // A folder can't be replaced, and staging beside it could land outside the root: "." names
+    // the root itself, whose parent isn't ours to write in.
+    if path.is_dir() {
+        return Err(failed(format!("{}: is a folder, not a file", path.display())));
+    }
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let name = path.file_name().ok_or_else(|| failed(format!("{}: not a file path", path.display())))?;
     std::fs::create_dir_all(dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;

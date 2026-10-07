@@ -392,6 +392,40 @@ fn root_refusals_do_not_reveal_what_exists_outside() {
 }
 
 #[test]
+fn writing_to_a_folder_touches_nothing_beside_it() {
+    // "." names the root itself. Saving there used to stage its temporary file next to the
+    // root, outside it, overwriting and then deleting any file of that name.
+    let (base, root) = sandbox("root-itself");
+    let mut a = auto(&root);
+    let beside = base.join(".root.pdfcraft-tmp");
+    std::fs::write(&beside, "SENTINEL").unwrap();
+    std::fs::create_dir_all(root.join("folder")).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "inside.pdf" }))["doc"].as_u64().unwrap();
+    for p in [".", "", "folder", "folder/"] {
+        let e = a.call("doc_save", &json!({ "doc": doc, "path": p })).unwrap_err();
+        assert!(matches!(&e, ToolError::Failed(m) if m.contains("is a folder")), "{p:?}: {e:?}");
+    }
+    let png = vec![1, 2, 3];
+    assert!(a.write_output(".", &png).is_err());
+    assert_eq!(std::fs::read_to_string(&beside).unwrap(), "SENTINEL");
+    assert!(!root.join(".folder.pdfcraft-tmp").exists());
+    // `image_save` adds an extension when the path has none, which turned "." into `root.png`
+    // beside the root.
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 18 }));
+    let pic = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["src/inside_page_1.png"] }))["doc"].as_u64().unwrap();
+    for p in [".", "", "folder", "src/.."] {
+        let e = a.call("image_save", &json!({ "doc": pic, "page": 1, "image": 1, "path": p })).unwrap_err();
+        assert!(matches!(&e, ToolError::Failed(m) if m.contains("is a folder")), "{p:?}: {e:?}");
+    }
+    assert!(!base.join("root.png").exists() && !root.join("folder.png").exists());
+    ok(&mut a, "image_save", json!({ "doc": pic, "page": 1, "image": 1, "path": "folder/picture" }));
+    assert!(root.join("folder/picture.png").is_file());
+    // Folder outputs may still name the root.
+    ok(&mut a, "doc_split", json!({ "doc": doc, "every": 1, "out_dir": "." }));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
 fn command_list_reports_enablement_and_tools() {
     let dir = workdir("commands");
     let mut a = auto(&dir);

@@ -10,6 +10,7 @@ Agent control for PdfCraft: a headless tool table over the engine, and an opt-in
 ```rust
 let mut a = Automation::new().with_root("/work")?;      // optional: confine all paths
 let doc = a.call("doc_open", &json!({ "path": "in.pdf" }))?;   // Vec<Content>
+a.write_output("page1.png", &png)?;                      // save a result yourself, under the same root rules
 tools() -> Vec<ToolDef>                                  // name, title, description, input_schema, read_only, destructive, command
 mcp::McpServer::new(a).serve(stdin, stdout)?             // newline-delimited JSON-RPC 2.0
 ```
