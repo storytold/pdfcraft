@@ -440,3 +440,7 @@ Forks and modified versions must remove them.
   <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
   <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
 </p>
+
+## Star history
+
+[![Star History Chart](https://api.star-history.com/svg?repos=storytold/printcraft&type=Date&legend=top-left)](https://www.star-history.com/?repos=storytold%2Fprintcraft&type=date&legend=top-left)
