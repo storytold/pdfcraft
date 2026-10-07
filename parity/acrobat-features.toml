@@ -2247,11 +2247,11 @@ title = "Show/hide-a-field action"
 area = "C"
 tier = "P1"
 milestone = "M6"
-status = "planned"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/buttons.rs::hide_actions_hide_and_show_fields", "crates/forms/src/tests.rs::push_buttons_read_hide_actions"]
+notes = "A push button's Hide action (/T names, field or widget references, arrays; /H) hides or shows the fields and their kids; hidden widgets take no clicks, tab stops or highlights. A widget reference acts on its whole field, and only form fields are hidden, not other annotations."
 
 [[feature]]
 id = "edit.action-javascript"

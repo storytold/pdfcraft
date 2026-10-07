@@ -99,6 +99,8 @@ pub struct Widget {
     pub tab: usize,
     /// The widget's Locked flag (`/F` bit 8): its properties can't be changed.
     pub locked: bool,
+    /// The widget's Hidden or NoView flag (`/F` bit 2 or 6): it isn't shown and takes no input.
+    pub hidden: bool,
 }
 
 /// A terminal form field.
@@ -216,9 +218,46 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef]) -> Option<af::But
             let target = dest.as_array()?.first()?.as_ref()?;
             af::ButtonAction::GoTo(page_refs(doc).iter().position(|p| *p == target)?)
         }
+        b"Hide" => {
+            // /T: a field name, an annotation (or field) reference, or an array of them.
+            let target = |o: &Object| match o {
+                Object::Ref(r) => qualified_name(doc, *r).or_else(|| text_of(&doc.resolve(o))),
+                other => text_of(other),
+            };
+            let fields = match a.get(b"T") {
+                Some(t) => match &*doc.resolve(t) {
+                    Object::Array(items) => items.iter().filter_map(target).collect(),
+                    _ => target(t).into_iter().collect(),
+                },
+                None => Vec::new(),
+            };
+            let hide = !a.get(b"H").is_some_and(|h| matches!(&*doc.resolve(h), Object::Bool(false)));
+            af::ButtonAction::ShowHide { fields, hide }
+        }
         b"JavaScript" => af::button_script(&script(doc, &action)?),
         _ => return None,
     })
+}
+
+/// The fully qualified name of the field that `r` (a field or one of its widgets) belongs to,
+/// from the partial names (`/T`) up its `/Parent` chain.
+fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
+    let mut parts = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut cur = Some(r);
+    while let Some(c) = cur {
+        if seen.len() > 64 || !seen.insert(c) {
+            break;
+        }
+        let obj = doc.get(c);
+        let d = obj.as_dict()?;
+        if let Some(t) = d.get(b"T").and_then(|o| text_of(&doc.resolve(o))) {
+            parts.push(t);
+        }
+        cur = d.get(b"Parent").and_then(|p| p.as_ref());
+    }
+    parts.reverse();
+    (!parts.is_empty()).then(|| parts.join("."))
 }
 
 /// The JavaScript of an action dictionary (`/JS` string or stream).
@@ -554,6 +593,7 @@ fn walk(
             let wo = doc.get(w);
             let wd = wo.as_dict()?;
             let rect = nums(doc, wd.get(b"Rect")).filter(|r| r.len() == 4).unwrap_or_else(|| vec![0.0; 4]);
+            let annot_flags = wd.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
             let on_state = wd
                 .get(b"AP")
                 .map(|ap| doc.resolve(ap))
@@ -567,7 +607,8 @@ fn walk(
                 on_state: on_state.filter(|_| matches!(kind, FieldKind::CheckBox | FieldKind::Radio)),
                 state: wd.name(b"AS").map(|s| String::from_utf8_lossy(s).into_owned()),
                 tab: usize::MAX,
-                locked: wd.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0) & 128 != 0,
+                locked: annot_flags & 128 != 0,
+                hidden: annot_flags & (2 | 32) != 0,
             })
         })
         .collect();

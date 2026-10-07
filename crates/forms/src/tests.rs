@@ -713,6 +713,40 @@ fn field_actions_round_trip_on_every_trigger() {
 }
 
 #[test]
+fn push_buttons_read_hide_actions() {
+    let mut doc = fixture();
+    let go = field(&fields(&doc), "go").obj;
+    let s = |t: &str| Object::String(PdfString::text(t));
+    let city = ObjRef::new(16, 0);
+    let null = ObjRef::new(9, 0);
+    let button = |doc: &mut Document, t: Object, h: Option<bool>| {
+        let mut a = Dict::new();
+        a.set(b"S".to_vec(), Object::name("Hide"));
+        a.set(b"T".to_vec(), t);
+        if let Some(h) = h {
+            a.set(b"H".to_vec(), Object::Bool(h));
+        }
+        doc.update_dict(go, |d| d.set(b"A".to_vec(), Object::Dict(a))).unwrap();
+        field(&fields(&doc), "go").button.clone()
+    };
+    let hide = |names: &[&str], hide: bool| Some(af::ButtonAction::ShowHide { fields: names.iter().map(|n| n.to_string()).collect(), hide });
+    // A name; /H defaults to true (hide).
+    assert_eq!(button(&mut doc, s("name"), None), hide(&["name"], true));
+    // A widget reference names its field by its fully qualified name; /H false shows.
+    assert_eq!(button(&mut doc, Object::Ref(city), Some(false)), hide(&["address.city"], false));
+    // An array of both; a reference to something that isn't a field is skipped.
+    assert_eq!(button(&mut doc, Object::Array(vec![s("name"), Object::Ref(city), Object::Ref(null)]), None), hide(&["name", "address.city"], true));
+    // A /Parent cycle ends instead of looping.
+    let looped = doc.add(Object::Dict(Dict::new()));
+    doc.update_dict(looped, |d| {
+        d.set(b"T".to_vec(), s("loop"));
+        d.set(b"Parent".to_vec(), Object::Ref(looped));
+    })
+    .unwrap();
+    assert_eq!(button(&mut doc, Object::Ref(looped), None), hide(&["loop"], true));
+}
+
+#[test]
 fn detection_finds_blanks_rules_boxes_and_names_them() {
     use crate::detect::*;
     let w = |t: &str, x0: f64, y0: f64, x1: f64| Word { text: t.into(), rect: [x0, y0, x1, y0 + 10.0] };

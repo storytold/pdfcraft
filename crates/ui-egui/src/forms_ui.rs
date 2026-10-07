@@ -76,7 +76,11 @@ pub(crate) fn page_input(
     let pointer = ui.input(|i| i.pointer.hover_pos());
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
     let hit = form.iter().find_map(|f| {
-        f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && widget_rect(xf, info, page, w.rect).contains(p)).map(|(i, w)| (f, i, w))
+        f.widgets
+            .iter()
+            .enumerate()
+            .find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
+            .map(|(i, w)| (f, i, w))
     });
     let Some((f, wi, w)) = hit else { return false };
     // Empty signature fields are signed by clicking them (Use a certificate).
@@ -210,7 +214,7 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, form: &[FormField], view: &DocView) {
     let pointer = ui.input(|i| i.pointer.hover_pos());
     for f in form {
-        for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page)) {
+        for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page) && !w.hidden) {
             let r = widget_rect(xf, info, page, w.rect);
             let focused = view.forms.focus.as_ref().is_some_and(|x| x.name == f.name && x.widget == wi);
             if focused {
@@ -358,7 +362,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
         let mut order: Vec<(usize, &FormField, usize)> = form
             .iter()
             .filter(|x| fillable(x) && matches!(x.kind, FormFieldKind::Text | FormFieldKind::Combo | FormFieldKind::List))
-            .flat_map(|x| x.widgets.iter().enumerate().filter(|(_, w)| w.page.is_some()).map(move |(wi, w)| (w.tab, x, wi)))
+            .flat_map(|x| x.widgets.iter().enumerate().filter(|(_, w)| w.page.is_some() && !w.hidden).map(move |(wi, w)| (w.tab, x, wi)))
             .collect();
         order.sort_by_key(|o| o.0);
         if let Some(pos) = order

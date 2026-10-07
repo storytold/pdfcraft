@@ -1088,6 +1088,12 @@ pub enum ButtonAction {
     Uri(String),
     /// Go to a page (0-based) in this document.
     GoTo(usize),
+    /// A hide action (§12.6.4.11): hide the listed fields (and their kids), or show them when
+    /// `hide` is false.
+    ShowHide {
+        fields: Vec<String>,
+        hide: bool,
+    },
     /// `app.alert("…")`.
     Alert(String),
     /// Submit the form to a URL (not sent: PdfCraft never posts form data on its own).
