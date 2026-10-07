@@ -218,6 +218,179 @@ fn errors_are_specific_and_safe() {
     let _ = std::fs::remove_file(outside);
 }
 
+/// `root/` (with `inside.pdf`) next to `outside/` (with the file `secret.pdf` and the folder
+/// `sub`), all in a fresh temporary directory. Returns (base, canonical root).
+fn sandbox(test: &str) -> (PathBuf, PathBuf) {
+    let base = std::env::temp_dir().join(format!("pdfcraft-automation-{test}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("root")).unwrap();
+    std::fs::create_dir_all(base.join("outside/sub")).unwrap();
+    std::fs::write(base.join("root/inside.pdf"), fixture(1)).unwrap();
+    std::fs::write(base.join("outside/secret.pdf"), fixture(1)).unwrap();
+    let root = base.join("root").canonicalize().unwrap();
+    (base, root)
+}
+
+/// A link `root/<name>` to the directory `target`: a symlink on Unix, a junction on Windows
+/// (which needs no privilege).
+fn link_dir(root: &Path, name: &str, target: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, root.join(name)).unwrap();
+    #[cfg(windows)]
+    {
+        // Rebuilt from components so every separator is `\` (cmd reads `/x` as a switch).
+        let (link, target): (PathBuf, PathBuf) = (root.join(name).components().collect(), target.components().collect());
+        let status = std::process::Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(link).arg(target).output().unwrap();
+        assert!(status.status.success(), "mklink /J failed: {}", String::from_utf8_lossy(&status.stderr));
+    }
+}
+
+#[test]
+fn root_refusals_do_not_reveal_what_exists_outside() {
+    // Regression test for #136: every path outside the root gets the same refusal, whether it
+    // exists, is a file or a folder, or passes through a missing folder.
+    let (base, root) = sandbox("root-oracle");
+    let mut a = auto(&root);
+    let refusal = |p: &str| ToolError::Failed(format!("{p} is outside the allowed directory {}", root.display()));
+    let abs = |rel: &str| base.join(rel).to_str().unwrap().to_owned();
+
+    #[cfg_attr(not(windows), allow(unused_mut))]
+    let mut reads = vec![
+        "../outside/secret.pdf".to_owned(),
+        "../outside/nope.pdf".into(),
+        "../outside/secret.pdf/x".into(),
+        "../outside/sub".into(),
+        "../outside/sub/x".into(),
+        "../nowhere/at/all.pdf".into(),
+        "missing/../../outside/secret.pdf".into(),
+        "missing/../../outside/nope.pdf".into(),
+        "../../../../../../../../../../../../../../../../../../../../../../../../x.pdf".into(),
+        abs("outside/secret.pdf"),
+        abs("outside/nope.pdf"),
+        abs("outside/sub/x"),
+        abs("nowhere/x.pdf"),
+        abs("nowhere/../outside/nope.pdf"),
+        abs("outside/../outside/secret.pdf"),
+        abs("root/../outside/secret.pdf"),
+    ];
+    #[cfg(windows)]
+    {
+        reads.extend([
+            r"..\outside\secret.pdf".to_owned(),
+            r"..\outside/nope.pdf".into(),
+            "../outside/secret.pdf.".into(),
+            "../outside/secret.pdf ".into(),
+            // Another network share or device namespace is refused by name, without contacting
+            // it (`.invalid` never resolves, so a regression fails instead of reaching a host).
+            r"\\pdfcraft-test.invalid\share\secret.pdf".into(),
+            "//pdfcraft-test.invalid/share/secret.pdf".into(),
+            r"\\?\UNC\pdfcraft-test.invalid\share\secret.pdf".into(),
+            r"\\.\pipe\pdfcraft-test".into(),
+            r"\\?\GLOBALROOT\Device\Null".into(),
+        ]);
+        let other = base.join("outside/secret.pdf").canonicalize().unwrap();
+        reads.push(other.to_str().unwrap().to_owned()); // the verbatim \\?\C:\… form
+        if let Some(drive) = (b'D'..=b'Z').rev().map(|d| format!("{}:\\", d as char)).find(|d| !Path::new(d).exists()) {
+            reads.push(format!("{drive}secret.pdf")); // a drive that doesn't exist
+        }
+    }
+    for p in &reads {
+        assert_eq!(a.call("doc_open", &json!({ "path": p })).unwrap_err(), refusal(p), "reading {p}");
+    }
+
+    let writes = [
+        "../outside/sub/../y.pdf".to_owned(),
+        "../outside/nosub/../y.pdf".into(),
+        "../outside/y.pdf".into(),
+        "../outside/nosub/y.pdf".into(),
+        "../outside/secret.pdf".into(),
+        "../outside/secret.pdf/y.pdf".into(),
+        "new/../../escape.pdf".into(),
+        abs("outside/nosub/deeper/y.pdf"),
+    ];
+    let doc = ok(&mut a, "doc_open", json!({ "path": "inside.pdf" }))["doc"].as_u64().unwrap();
+    for p in &writes {
+        assert_eq!(a.call("doc_save", &json!({ "doc": doc, "path": p })).unwrap_err(), refusal(p), "writing {p}");
+    }
+    #[cfg(windows)]
+    {
+        // In a verbatim path `/` is not a separator, so `x/../..` can't climb out of it either.
+        for tail in [r"\x/../../outside/v.pdf", r"\x/../../outside/secret.pdf"] {
+            let p = format!("{}{tail}", root.display());
+            if let Ok(c) = a.call("doc_save", &json!({ "doc": doc, "path": p })) {
+                let Content::Json(v) = &c[0] else { panic!("{p}: expected JSON") };
+                assert!(Path::new(v["path"].as_str().unwrap()).starts_with(&root), "{p} wrote {v}");
+            }
+            // (What lands outside the root, if anything, is checked below.)
+        }
+    }
+
+    // A link inside the root that leads out of it is refused the same way, below it too.
+    link_dir(&base.join("root"), "link", &base.join("outside"));
+    for p in ["link/secret.pdf", "link/nope.pdf", "link/sub/x", "link"] {
+        assert_eq!(a.call("doc_open", &json!({ "path": p })).unwrap_err(), refusal(p), "reading {p}");
+    }
+    for p in ["link/new.pdf", "link/nosub/new.pdf", "link/secret.pdf"] {
+        assert_eq!(a.call("doc_save", &json!({ "doc": doc, "path": p })).unwrap_err(), refusal(p), "writing {p}");
+    }
+    // So is a link whose target is gone: whether a link's target exists stays hidden too.
+    std::fs::create_dir_all(base.join("outside/gone")).unwrap();
+    link_dir(&base.join("root"), "broken", &base.join("outside/gone"));
+    std::fs::remove_dir(base.join("outside/gone")).unwrap();
+    for p in ["broken", "broken/x.pdf", "broken/x/y.pdf"] {
+        assert_eq!(a.call("doc_open", &json!({ "path": p })).unwrap_err(), refusal(p), "reading {p}");
+        assert_eq!(a.call("doc_save", &json!({ "doc": doc, "path": p })).unwrap_err(), refusal(p), "writing {p}");
+    }
+
+    // Nothing was written outside the root, and the outside files are untouched.
+    let mut left: Vec<String> =
+        std::fs::read_dir(base.join("outside")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    left.sort();
+    assert_eq!(left, ["secret.pdf", "sub"]);
+    assert_eq!(std::fs::read(base.join("outside/secret.pdf")).unwrap(), fixture(1));
+    assert!(!base.join("escape.pdf").exists() && !base.join("y.pdf").exists());
+
+    // Inside the root nothing changes: missing files say so, and existing ones open and save,
+    // however the path is spelled.
+    let missing = a.call("doc_open", &json!({ "path": "missing-inside.pdf" })).unwrap_err();
+    assert!(matches!(&missing, ToolError::Failed(m) if m.starts_with("missing-inside.pdf: ") && !m.contains("outside")), "{missing:?}");
+    let not_dir = a.call("doc_open", &json!({ "path": "inside.pdf/x" })).unwrap_err();
+    assert!(matches!(&not_dir, ToolError::Failed(m) if !m.contains("outside")), "{not_dir:?}");
+    #[cfg_attr(not(windows), allow(unused_mut))]
+    let mut opens = vec![
+        "inside.pdf".to_owned(),
+        "./inside.pdf".into(),
+        "sub/../inside.pdf".into(),
+        "../root/inside.pdf".into(),
+        "../outside/../root/inside.pdf".into(),
+        "../nowhere/../root/inside.pdf".into(),
+        abs("root/inside.pdf"),
+        abs("outside/../root/inside.pdf"),
+        abs("nowhere/../root/inside.pdf"),
+        root.join("inside.pdf").to_str().unwrap().to_owned(),
+    ];
+    #[cfg(windows)]
+    {
+        let plain = abs("root/inside.pdf");
+        opens.extend([plain.to_lowercase(), plain.to_uppercase(), r"..\root\inside.pdf".into()]);
+    }
+    for p in &opens {
+        ok(&mut a, "doc_open", json!({ "path": p }));
+    }
+    for p in ["new.pdf", "fresh/dir/new.pdf", "fresh/../also-new.pdf"] {
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": p }));
+    }
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": abs("root/abs-new.pdf") }));
+    for f in ["new.pdf", "fresh/dir/new.pdf", "also-new.pdf", "abs-new.pdf"] {
+        assert!(root.join(f).is_file(), "{f} was written inside the root");
+    }
+
+    // Without a root, paths are used as given.
+    let mut free = Automation::new();
+    ok(&mut free, "doc_open", json!({ "path": abs("outside/secret.pdf") }));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn command_list_reports_enablement_and_tools() {
     let dir = workdir("commands");

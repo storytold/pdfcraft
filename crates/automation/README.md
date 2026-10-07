@@ -23,7 +23,7 @@ mcp::McpServer::new(a).serve(stdin, stdout)?             // newline-delimited JS
 - Unknown arguments are rejected, so typos fail loudly.
 - Tools that change a document return its summary (`doc`, `pages`, `dirty`, `undo`, `redo`, …).
 - `doc_close` refuses to drop unsaved changes unless `discard_changes: true`. `doc_save` writes atomically, incrementally in place, and in full for a new path.
-- With a root set, every read and write path must resolve inside it (symlinks and `..` included).
+- With a root set, every read and write path must resolve inside it (symlinks and `..` included). Relative paths resolve inside the root, and `..` is resolved by name before the check. Every path outside the root gets the same refusal (`<path> is outside the allowed directory <root>`), whether or not it exists, so a confined agent can't probe the rest of the disk; on Windows another network share or device path (`\\host\share`, `\\?\UNC\…`, `\\.\…`) is refused without being contacted. "Not found" and other filesystem errors are reported only for paths inside the root.
 
 ## MCP server
 

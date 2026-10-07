@@ -9350,8 +9350,8 @@ milestone = "M13"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/automation/tests/automation.rs::errors_are_specific_and_safe"]
-notes = ""
+evidence = ["crates/automation/tests/automation.rs::errors_are_specific_and_safe", "crates/automation/tests/automation.rs::root_refusals_do_not_reveal_what_exists_outside"]
+notes = "One refusal for every path outside the root, existing or not (#136). Check-then-write, not openat-style: a process racing the tool on the same disk could swap a folder for a link between the check and the write."
 
 [[feature]]
 id = "misc.mcp-resources"

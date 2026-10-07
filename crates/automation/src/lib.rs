@@ -1322,35 +1322,87 @@ impl Automation {
 
     /// Resolve a user-supplied path, enforcing the root (if any). `for_write` allows a file that
     /// does not exist yet (its nearest existing ancestor must be inside the root).
+    ///
+    /// Every path outside the root gets the same refusal, so a confined client can't learn what
+    /// exists out there (#136): `..` is resolved by name first, another network share or device
+    /// namespace is refused without touching it, and the deepest existing ancestor (links
+    /// followed) must be inside the root before anything about the rest is reported.
     fn resolve(&self, path: &str, for_write: bool) -> Result<PathBuf> {
         let p = Path::new(path);
-        let joined = match &self.root {
-            Some(root) if p.is_relative() => root.join(p),
-            _ => p.to_path_buf(),
-        };
-        let Some(root) = &self.root else { return Ok(joined) };
-        let real = if for_write {
-            // Canonicalize the deepest existing ancestor, then re-append the rest.
-            let mut existing = joined.as_path();
-            let mut rest = Vec::new();
-            while !existing.exists() {
-                rest.push(existing.file_name().ok_or_else(|| failed(format!("{path}: invalid path")))?);
-                existing = existing.parent().ok_or_else(|| failed(format!("{path}: invalid path")))?;
-            }
-            if rest.iter().any(|c| *c == "..") {
-                return Err(failed(format!("{path}: '..' is not allowed here")));
-            }
-            let mut real = existing.canonicalize().map_err(|e| failed(format!("{path}: {e}")))?;
-            real.extend(rest.iter().rev());
-            real
-        } else {
-            joined.canonicalize().map_err(|e| failed(format!("{path}: {e}")))?
-        };
-        if !real.starts_with(root) {
-            return Err(failed(format!("{path} is outside the allowed directory {}", root.display())));
+        let Some(root) = &self.root else { return Ok(p.to_path_buf()) };
+        let outside = || failed(format!("{path} is outside the allowed directory {}", root.display()));
+        let joined = lexical(&root.join(p)).ok_or_else(outside)?;
+        if foreign_share(&joined, root) {
+            return Err(outside());
         }
+        let mut existing = joined.as_path();
+        let mut rest = Vec::new();
+        while !existing.exists() {
+            if existing.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err(outside()); // a broken link: going on would tell whether its target exists
+            }
+            match (existing.file_name(), existing.parent()) {
+                (Some(name), Some(parent)) => {
+                    rest.push(name);
+                    existing = parent;
+                }
+                _ => return Err(outside()), // not even a drive or share that exists
+            }
+        }
+        let mut real = existing.canonicalize().map_err(|_| outside())?;
+        if !real.starts_with(root) {
+            return Err(outside());
+        }
+        if !rest.is_empty() && !for_write {
+            // Missing, below a folder inside the root: say why, as the system reports it.
+            real = joined.canonicalize().map_err(|e| failed(format!("{path}: {e}")))?;
+            if !real.starts_with(root) {
+                return Err(outside()); // it appeared, as a link out, since the check above
+            }
+            return Ok(real);
+        }
+        real.extend(rest.iter().rev());
         Ok(real)
     }
+}
+
+/// `path` with `.` and `..` resolved by name, before the filesystem is consulted (Windows does
+/// the same, and so does joining onto a canonical root there). `None` if a `..` would climb
+/// above the start of the path.
+fn lexical(path: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut parts: Vec<Component> = Vec::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => match parts.last() {
+                Some(Component::Normal(_)) => {
+                    parts.pop();
+                }
+                _ => return None,
+            },
+            other => parts.push(other),
+        }
+    }
+    Some(parts.iter().collect())
+}
+
+/// Whether `path` names another network share or device namespace than `root` (Windows
+/// `\\host\share`, `\\?\UNC\…`, `\\.\…`, `\\?\…`). Those are refused by name: even checking
+/// that one exists would contact the host. Drive letters are left to the normal check.
+fn foreign_share(path: &Path, root: &Path) -> bool {
+    use std::path::{Component, Prefix};
+    fn share(p: &Path) -> Option<String> {
+        let Some(Component::Prefix(prefix)) = p.components().next() else { return None };
+        let (kind, a, b) = match prefix.kind() {
+            Prefix::Disk(_) | Prefix::VerbatimDisk(_) => return None,
+            Prefix::UNC(host, share) | Prefix::VerbatimUNC(host, share) => ("unc", host, share),
+            Prefix::DeviceNS(name) => ("device", name, std::ffi::OsStr::new("")),
+            Prefix::Verbatim(name) => ("verbatim", name, std::ffi::OsStr::new("")),
+        };
+        Some(format!("{kind}\\{}\\{}", a.to_string_lossy(), b.to_string_lossy()).to_lowercase())
+    }
+    share(path).is_some_and(|s| share(root).as_ref() != Some(&s))
 }
 
 // ---- JSON helpers ----------------------------------------------------------------------------
@@ -1588,4 +1640,47 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         let _ = std::fs::remove_file(&tmp);
         failed(format!("{}: {e}", path.display()))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dot_dot_resolves_by_name_and_never_climbs_above_the_start() {
+        let base = std::env::temp_dir();
+        let l = |rel: &str| lexical(&base.join(rel));
+        assert_eq!(l("a/./b/../c"), Some(base.join("a").join("c")));
+        assert_eq!(l("missing/../../x"), lexical(&base.join("..").join("x")));
+        assert_eq!(l("a/.."), Some(lexical(&base).unwrap()));
+        let deep = "../".repeat(base.components().count() + 1);
+        assert_eq!(lexical(&base.join(&deep)), None);
+        assert_eq!(lexical(Path::new("..")), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn other_shares_and_device_paths_are_refused_by_name() {
+        let local = Path::new(r"\\?\C:\work\root");
+        for p in [
+            r"\\host\share\x.pdf",
+            "//host/share/x.pdf",
+            r"\/host/share/x.pdf",
+            r"\\?\UNC\host\share\x.pdf",
+            r"\\.\pipe\x",
+            r"\\.\C:\work\root\x.pdf",
+            r"\\?\GLOBALROOT\Device\x",
+        ] {
+            assert!(foreign_share(Path::new(p), local), "{p}");
+        }
+        for p in [r"C:\work\root\x.pdf", r"c:\elsewhere\x.pdf", r"\\?\C:\work\root\x.pdf", r"D:\x.pdf", r"C:x.pdf"] {
+            assert!(!foreign_share(Path::new(p), local), "{p}");
+        }
+        // A root on a share accepts that share, however it is spelled, and nothing else.
+        let shared = Path::new(r"\\?\UNC\Server\Docs\root");
+        assert!(!foreign_share(Path::new(r"\\server\docs\root\x.pdf"), shared));
+        assert!(!foreign_share(Path::new(r"\\?\UNC\SERVER\DOCS\x.pdf"), shared));
+        assert!(foreign_share(Path::new(r"\\server\other\x.pdf"), shared));
+        assert!(foreign_share(Path::new(r"\\attacker\docs\x.pdf"), shared));
+    }
 }
