@@ -74,7 +74,7 @@ fn big(n: usize) -> Vec<u8> {
         ));
         let mut body = String::new();
         for l in 0..40 {
-            let _ = write!(body, "BT /F1 10 Tf 72 {} Td (Page {} line {l} with some words to lay out) Tj ET\n", 720 - l * 15, i + 1);
+            let _ = writeln!(body, "BT /F1 10 Tf 72 {} Td (Page {} line {l} with some words to lay out) Tj ET", 720 - l * 15, i + 1);
         }
         objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
         objs.push("<< /Type /Annot /Subtype /Square /Rect [72 72 144 144] /C [1 0 0] /T (Ada) /Contents (Check) >>".into());
