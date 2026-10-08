@@ -578,6 +578,17 @@ impl Automation {
                 let ids: Vec<Value> = Vec::new();
                 json!({ "count": ids.len(), "ids": ids })
             }
+            "sign_windows_ids" => {
+                #[cfg(target_os = "windows")]
+                let ids: Vec<Value> = pdfcraft_engine::sign::windows::identities()
+                    .map_err(failed)?
+                    .iter()
+                    .map(|id| json!({ "id": pdfcraft_engine::sign::windows::reference(&id.certificate), "certificate": signing::cert_json(&id.certificate) }))
+                    .collect();
+                #[cfg(not(target_os = "windows"))]
+                let ids: Vec<Value> = Vec::new();
+                json!({ "count": ids.len(), "ids": ids })
+            }
             "sign_trust" => self.sign_trust(&a)?,
             "comment_mark" => self.comment_mark(&a)?,
             "comment_lock" => self.comment_lock(&a)?,
@@ -610,7 +621,8 @@ impl Automation {
     fn doc_close(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let id = doc.id;
-        if doc.dirty && !a.opt_bool("discard_changes")?.unwrap_or(false) {
+        let discard_changes = a.opt_bool("discard_changes")?.unwrap_or(false);
+        if doc.dirty && !discard_changes {
             return Err(failed("the document has unsaved changes: save it with doc_save, or pass discard_changes: true"));
         }
         self.session.close(id);

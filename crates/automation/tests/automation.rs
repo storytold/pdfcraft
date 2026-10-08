@@ -1631,6 +1631,13 @@ fn digital_ids_signing_and_validation_through_tools() {
     assert_eq!(ok(&mut a, "sign_list", json!({ "doc": doc }))["count"], 0);
     // A Keychain identity that doesn't exist (macOS) or Keychains at all (elsewhere).
     assert!(matches!(a.call("sign_document", &json!({ "doc": doc, "id": "keychain:No Such Signer", "out": "k.pdf" })), Err(ToolError::Failed(_))));
+    assert!(matches!(a.call("sign_document", &json!({ "doc": doc, "id": "windows:No Such Signer", "out": "w.pdf" })), Err(ToolError::Failed(_))));
+    let store = ok(&mut a, "sign_windows_ids", json!({}));
+    let ids = store["ids"].as_array().unwrap();
+    assert_eq!(store["count"].as_u64().unwrap(), ids.len() as u64);
+    assert!(ids.iter().all(|id| id["id"].as_str().unwrap().starts_with("windows:")));
+    #[cfg(not(windows))]
+    assert!(ids.is_empty());
     assert!(matches!(
         a.call("sign_document", &json!({ "doc": doc, "id": "ada.p12", "password": "wrong!", "out": "signed.pdf" })),
         Err(ToolError::InvalidArgs(_))
@@ -2201,4 +2208,108 @@ fn doc_info_describes_set_layer_links() {
             "preserve_rb": false,
         })
     );
+}
+
+mod close_argument_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // Create exclusively and remove only this test's directory, never a pre-existing one.
+    struct CloseDir(PathBuf);
+
+    impl CloseDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let parent = std::env::temp_dir();
+            for _ in 0..128 {
+                let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+                let path = parent.join(format!("pdfcraft-close-{}-{serial}", std::process::id()));
+                match std::fs::create_dir(&path) {
+                    Ok(()) => {
+                        let dir = Self(path);
+                        std::fs::write(dir.0.join("a.pdf"), fixture(3)).unwrap();
+                        std::fs::write(dir.0.join("b.pdf"), fixture(2)).unwrap();
+                        return dir;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("creating close test directory: {error}"),
+                }
+            }
+            panic!("no unused close test directory after 128 attempts");
+        }
+    }
+
+    impl Drop for CloseDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn close_rejects_invalid_discard_types_without_changing_clean_or_dirty_documents() {
+        let dir = CloseDir::new();
+        let source = std::fs::read(dir.0.join("a.pdf")).unwrap();
+        let other_source = std::fs::read(dir.0.join("b.pdf")).unwrap();
+        let mut a = auto(&dir.0);
+        let other = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
+        for dirty in [false, true] {
+            let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+            if dirty {
+                ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "Title", "value": "Unsaved title" }));
+            }
+            let list = ok(&mut a, "doc_list", json!({}));
+            let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+            let text = ok(&mut a, "text_extract", json!({ "doc": doc }));
+            let bytes = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes.clone();
+            for invalid in [json!("false"), json!(0), json!([]), json!({})] {
+                let error = a.call("doc_close", &json!({ "doc": doc, "discard_changes": invalid })).unwrap_err();
+                assert!(matches!(error, ToolError::InvalidArgs(ref message) if message == "discard_changes must be true or false"));
+                assert_eq!(ok(&mut a, "doc_list", json!({})), list, "all document identities, order, paths and history stay unchanged");
+                assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc })), info);
+                assert_eq!(ok(&mut a, "text_extract", json!({ "doc": doc })), text);
+                let current = a.session().get(pdfcraft_engine::DocId(doc)).unwrap();
+                assert_eq!(current.bytes, bytes);
+                assert_eq!(current.dirty, dirty);
+                assert_eq!(std::fs::read(dir.0.join("a.pdf")).unwrap(), source);
+                assert_eq!(std::fs::read(dir.0.join("b.pdf")).unwrap(), other_source);
+            }
+            assert_eq!(ok(&mut a, "doc_close", json!({ "doc": doc, "discard_changes": true }))["closed"], doc);
+            assert!(a.session().get(pdfcraft_engine::DocId(doc)).is_none());
+            assert!(a.session().get(pdfcraft_engine::DocId(other)).is_some());
+        }
+    }
+
+    #[test]
+    fn close_keeps_default_and_boolean_discard_controls() {
+        let dir = CloseDir::new();
+        let source = std::fs::read(dir.0.join("a.pdf")).unwrap();
+        let mut a = auto(&dir.0);
+        let other = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
+        for discard in [None, Some(Value::Null), Some(json!(false)), Some(json!(true))] {
+            let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+            let mut args = json!({ "doc": doc });
+            if let Some(discard) = discard {
+                args["discard_changes"] = discard;
+            }
+            assert_eq!(ok(&mut a, "doc_close", args)["closed"], doc);
+            assert!(a.session().get(pdfcraft_engine::DocId(doc)).is_none());
+            assert!(a.session().get(pdfcraft_engine::DocId(other)).is_some());
+        }
+        let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+        ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "Title", "value": "Unsaved title" }));
+        let before = ok(&mut a, "doc_list", json!({}));
+        let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+        let bytes = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes.clone();
+        for args in [json!({ "doc": doc }), json!({ "doc": doc, "discard_changes": null }), json!({ "doc": doc, "discard_changes": false })] {
+            let error = a.call("doc_close", &args).unwrap_err();
+            assert!(matches!(error, ToolError::Failed(ref message) if message.contains("unsaved changes")));
+            assert_eq!(ok(&mut a, "doc_list", json!({})), before);
+            assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc })), info);
+            assert_eq!(a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes, bytes);
+        }
+        assert_eq!(ok(&mut a, "doc_close", json!({ "doc": doc, "discard_changes": true }))["closed"], doc);
+        assert!(a.session().get(pdfcraft_engine::DocId(doc)).is_none());
+        assert!(a.session().get(pdfcraft_engine::DocId(other)).is_some());
+        assert_eq!(std::fs::read(dir.0.join("a.pdf")).unwrap(), source);
+    }
 }

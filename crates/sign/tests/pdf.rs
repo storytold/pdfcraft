@@ -637,3 +637,75 @@ fn a_timestamp_token_may_sign_with_a_different_digest_than_its_imprint() {
     let token = pdfcraft_sign::timestamp::parse_response(&resp, &q).unwrap();
     assert_eq!((token.digest, token.imprint, token.gen_time), (pdfcraft_sign::DigestAlg::Sha1, imprint, time));
 }
+
+#[cfg(windows)]
+#[test]
+fn windows_store_enumeration_and_missing_identity() {
+    assert!(pdfcraft_sign::windows::identities().is_ok());
+    assert!(pdfcraft_sign::windows::find("windows:no such signer").is_err());
+}
+
+/// Uses only newly created software-backed CNG keys, removed even when signing fails.
+#[cfg(windows)]
+#[test]
+#[ignore = "creates temporary certificates in the Windows Current User Personal store"]
+fn signing_with_windows_store_identities() {
+    use std::process::Command;
+    fn powershell(script: &str) -> std::process::Output {
+        // Load the certificate provider explicitly in a profile-free Windows PowerShell child.
+        let script = format!(
+            r#"$ErrorActionPreference='Stop'; Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1"; {script}"#
+        );
+        Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &script]).output().unwrap()
+    }
+    struct Certificates(Vec<String>);
+    impl Drop for Certificates {
+        fn drop(&mut self) {
+            for thumbprint in &self.0 {
+                let out =
+                    powershell(&format!("$ErrorActionPreference='Stop'; Remove-Item -LiteralPath 'Cert:\\CurrentUser\\My\\{thumbprint}' -DeleteKey"));
+                if !out.status.success() {
+                    eprintln!("test certificate cleanup failed: {}", String::from_utf8_lossy(&out.stderr));
+                }
+            }
+        }
+    }
+    let mut created = Certificates(Vec::new());
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).unwrap();
+    let unique: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    for algorithm in ["RSA", "ECDSA_nistP256", "ECDSA_nistP384"] {
+        let name = format!("PdfCraft Test {unique} {algorithm}");
+        let rsa = if algorithm == "RSA" { "-KeyLength 2048" } else { "" };
+        let out = powershell(&format!(
+            "$ErrorActionPreference='Stop'; $c=New-SelfSignedCertificate -Subject 'CN={name}' -CertStoreLocation 'Cert:\\CurrentUser\\My' -Provider 'Microsoft Software Key Storage Provider' -KeyAlgorithm {algorithm} {rsa} -KeyUsage DigitalSignature -KeyExportPolicy NonExportable; $c.Thumbprint"
+        ));
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let thumbprint = String::from_utf8(out.stdout).unwrap().trim().to_string();
+        assert_eq!(thumbprint.len(), 40);
+        assert!(thumbprint.bytes().all(|b| b.is_ascii_hexdigit()));
+        created.0.push(thumbprint);
+        let listed = pdfcraft_sign::windows::identities().unwrap();
+        let listed_id = listed.iter().find(|id| id.certificate.subject.common_name() == Some(name.as_str())).expect("new identity listed");
+        let reference = pdfcraft_sign::windows::reference(&listed_id.certificate);
+        let id = pdfcraft_sign::windows::find(&reference).unwrap();
+        assert_eq!(pdfcraft_sign::windows::find(&format!("windows:{name}")).unwrap().certificate.raw, id.certificate.raw);
+        assert!(id.key.is_external());
+        let mut options = opts();
+        let now = powershell("(Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')");
+        assert!(now.status.success());
+        options.date = format!("D:{}Z", String::from_utf8(now.stdout).unwrap().trim());
+        let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &options).unwrap();
+        let validated = signatures(&open(&signed), &signed, &TrustStore { certs: vec![id.certificate.clone()] });
+        let signature = validated.iter().find(|s| s.signed).unwrap();
+        assert_eq!(signature.status, Status::Valid, "{:?}", signature.details);
+        assert_eq!(signature.modification, Modification::None);
+        assert_eq!(signature.signer.as_deref(), Some(name.as_str()));
+    }
+    let thumbprints = created.0.clone();
+    drop(created);
+    for thumbprint in thumbprints {
+        let out = powershell(&format!("if (Test-Path -LiteralPath 'Cert:\\CurrentUser\\My\\{thumbprint}') {{ exit 1 }}"));
+        assert!(out.status.success(), "test certificate remains: {thumbprint}");
+    }
+}

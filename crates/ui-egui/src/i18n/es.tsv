@@ -788,6 +788,7 @@
 	Sign with a Digital ID	Firmar con un ID digital
 	Choose the digital ID that you want to use for signing:	Elige el ID digital que quieres usar para firmar:
 	Keychain  ·  	Llavero  ·  
+	Windows store  ·  	Almacén de Windows  ·  
 	Issued by: 	Emitido por: 
 	, Expires: 	, caduca: 
 	No digital IDs yet.	Aún no hay ningún ID digital.
@@ -817,6 +818,7 @@
 	Annotations, form fill-in, and digital signatures	Anotaciones, rellenado de formularios y firmas digitales
 	Form fill-in and digital signatures	Rellenado de formularios y firmas digitales
 	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	La clave está en el Llavero de macOS, que puede pedirte permiso para que PdfCraft la use.
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	La clave está en el almacén de certificados de Windows, que puede pedirte permiso para que PdfCraft la use.
 	Digital ID password	Contraseña del ID digital
 	Back	Atrás
 	Validate all	Validar todas

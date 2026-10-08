@@ -17,6 +17,8 @@ pub mod pdf;
 pub mod pkcs12;
 pub mod revocation;
 pub mod timestamp;
+#[cfg(target_os = "windows")]
+pub mod windows;
 pub mod x509;
 
 pub use der::Time;

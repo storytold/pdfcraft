@@ -44,7 +44,10 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   signer's chain and a verified revocation invalidates the signature.
 
 Not yet: revocation fetching (AIA/CRLDP extraction and a fetcher), timestamp-server
-configuration, FieldMDP locks, certificate security, OS key stores and PKCS #11 tokens.
+configuration, FieldMDP locks, certificate security, smart cards and PKCS #11 tokens.
+macOS Keychain and Windows Current User Personal (My) store identities sign through
+`ExternalKey` without exporting private keys. Windows CNG supports RSA PKCS #1 v1.5 and
+ECDSA P-256/P-384; the store integration is tested with software-backed keys.
 - **Validation:** `/ByteRange` and the CMS are read from the file's own bytes; the digest,
   the signature value and the signer's chain (against a `TrustStore`) are checked. Later
   revisions are diffed against the signed one, and the changes are classified (signing, form

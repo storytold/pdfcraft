@@ -794,6 +794,7 @@
 	Sign with a Digital ID	デジタル ID で署名
 	Choose the digital ID that you want to use for signing:	署名に使用するデジタル ID を選択してください:
 	Keychain  ·  	キーチェーン · 
+	Windows store  ·  	Windows 証明書ストア · 
 	Issued by: 	発行者: 
 	, Expires: 	、有効期限: 
 	No digital IDs yet.	デジタル ID はまだありません。
@@ -823,6 +824,7 @@
 	Annotations, form fill-in, and digital signatures	注釈、フォーム入力、デジタル署名
 	Form fill-in and digital signatures	フォーム入力とデジタル署名
 	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	鍵は macOS のキーチェーンに保存されています。PdfCraft に使用を許可するか確認される場合があります。
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	鍵は Windows の証明書ストアに保存されています。PdfCraft に使用を許可するか確認される場合があります。
 	Digital ID password	デジタル ID のパスワード
 	Back	戻る
 	Validate all	すべて検証

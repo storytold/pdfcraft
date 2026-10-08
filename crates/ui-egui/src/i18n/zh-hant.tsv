@@ -443,6 +443,7 @@
 	Sign with a Digital ID	使用數位 ID 簽署
 	Choose the digital ID that you want to use for signing:	選擇要用於簽名的數位 ID：
 	Keychain  ·  	鑰匙串 · 
+	Windows store  ·  	Windows 憑證存放區 · 
 	Issued by: 	頒發者：
 	, Expires: 	，有效期至：
 	No digital IDs yet.	尚無數位 ID。
@@ -472,6 +473,7 @@
 	Annotations, form fill-in, and digital signatures	註解、填寫表單和數位簽章
 	Form fill-in and digital signatures	填寫表單和數位簽章
 	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	金鑰位於 macOS 鑰匙串中，系統可能會詢問是否允許 PdfCraft 使用它。
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	金鑰位於 Windows 憑證存放區中，系統可能會詢問是否允許 PdfCraft 使用它。
 	Digital ID password	數位 ID 密碼
 	Back	返回
 	Validate all	全部驗證
