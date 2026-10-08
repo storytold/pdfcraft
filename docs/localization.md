@@ -1,6 +1,6 @@
 # Interface language
 
-Choose **Menu > Edit > Preferences…** (Command-comma on macOS, Ctrl-comma elsewhere) **> Interface language** and select **Auto**, **English**, **日本語**, **简体中文**, **繁體中文**, **Čeština** or **Português (Brasil)**. The change applies immediately and persists between launches. Command ids, document contents and file names are unchanged.
+Choose **Menu > Edit > Preferences…** (Command-comma on macOS, Ctrl-comma elsewhere) **> Interface language** and select **Auto**, **English**, **日本語**, **简体中文**, **繁體中文**, **Čeština**, **Português (Brasil)** or **Español**. The change applies immediately and persists between launches. Command ids, document contents and file names are unchanged.
 
 **Auto** (the default) follows the system language: `LC_ALL`, `LC_MESSAGES` or `LANG`, then the preferred-languages list on macOS. Any Portuguese locale (`pt_BR`, `pt_PT`) uses the Brazilian catalog, and Chinese locales for Taiwan, Hong Kong and Macau (`zh_TW`, `zh_HK`, `zh_MO`, `zh-Hant`) the Traditional Chinese one; other Chinese locales (`zh`, `zh_CN`, `zh_SG`, `zh-Hans`) the Simplified Chinese one. A system language without a catalog, such as French, shows English. On Windows, **Auto** uses the Windows display languages, in preference order, when no supported locale is selected by those environment variables. The query asks Windows directly (`GetUserPreferredUILanguages`, through the `sys-locale` crate) without starting a process, and is cached for the process. If detection fails or the display language has no catalog, PdfCraft shows English.
 
@@ -10,7 +10,7 @@ The control channel exposes the setting through `ui.set`:
 {"method":"ui.set","params":{"key":"language","value":"ja"}}
 ```
 
-The value is `auto` or a language code (`en`, `ja`, `zh-hans`, `zh-hant`, `cs`, `pt-br`), in any case. `ui.state` reports `language` as written in the preferences (`auto`, `en`, `ja`, `zh-hans`, `zh-hant`, `cs` or `pt-br`). Unknown values return an error without changing the current setting. Preferences saved before this setting existed follow the system language.
+The value is `auto` or a language code (`en`, `ja`, `zh-hans`, `zh-hant`, `cs`, `pt-br`, `es`), in any case. `ui.state` reports `language` as written in the preferences (`auto`, `en`, `ja`, `zh-hans`, `zh-hant`, `cs`, `pt-br` or `es`). Unknown values return an error without changing the current setting. Preferences saved before this setting existed follow the system language.
 
 Dialogs, panels, menus, notices and history labels go through the catalog (`tl!`). Japanese, Traditional Chinese and Simplified Chinese translate them (about 1,800 entries each); Czech and Brazilian Portuguese cover the menus so far. Untranslated labels use English. Error details that come from the engine or the operating system are shown as they are, inside a translated frame ("操作「…」に失敗しました: …"). The command palette matches the translated label, the English label and the command id. Vertical Japanese PDF rendering is an existing viewer feature; this change does not add vertical text editing.
 
