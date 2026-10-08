@@ -53,6 +53,13 @@ pub enum BlockedLink {
     Malformed,
     /// A scheme other than [`DOCUMENT_SCHEMES`] (lowercased).
     Scheme(String),
+    /// An email address asking the email app to attach a local file (`attach=`, `attachment=`)
+    /// or read one into the message (`insert=`).
+    MailFile,
+    /// An email address containing text that some email tools decode before reading the address,
+    /// so it could spell `attach`: an RFC 2047 encoded word (`=?utf-8?q?…?=`) or a backslash
+    /// escape (`\0141`, `\x61`).
+    MailEncodedWord,
 }
 
 impl std::fmt::Display for BlockedLink {
@@ -63,6 +70,8 @@ impl std::fmt::Display for BlockedLink {
             Self::Hidden => write!(f, "the address contains hidden or invisible characters"),
             Self::Malformed => write!(f, "the address isn't a complete web or email address"),
             Self::Scheme(s) => write!(f, "it is a “{s}:” address"),
+            Self::MailFile => write!(f, "it asks your email app to attach or insert a file from your computer"),
+            Self::MailEncodedWord => write!(f, "it contains encoded text that some email apps turn into other instructions"),
         }
     }
 }
@@ -108,7 +117,96 @@ pub fn document_url(raw: &str) -> Result<String, BlockedLink> {
     if !complete {
         return Err(BlockedLink::Malformed);
     }
+    if scheme == "mailto" {
+        check_mail_parameters(rest)?;
+    }
     Ok(url.to_string())
+}
+
+/// Email-address parameters that make an email app read a file from the user's computer: Evolution,
+/// KMail and Claws Mail attach the file named by `attach` (Evolution and KMail also by
+/// `attachment`), and Claws Mail reads an `insert` file into the message body. Names are matched as
+/// prefixes, so `attachments` is refused too.
+const MAIL_FILE_PARAMETERS: &[&str] = &["attach", "insert"];
+
+/// How many layers of percent-encoding are looked through. Email apps decode once at most.
+const MAIL_DECODE_LAYERS: usize = 8;
+
+/// Refuse an email address (what follows `mailto:`) that asks for a local file. A document can't
+/// need this, and a drafted message carrying the user's files is one click from being sent.
+///
+/// Email apps disagree on how they read the address, so this doesn't try to parse it the way any
+/// one of them does. Every email app reads a parameter as `name=value`, so it refuses any word
+/// that starts with one of [`MAIL_FILE_PARAMETERS`] (in any case) and is followed by `=`, wherever
+/// it stands: after `?`, `&`, `#` or `;` (KMail looks for the first `?` anywhere and reads `&#38;`
+/// as `&`), with no `?` at all (xdg-email reads `mailto:a@example.org&attach=…` as a parameter) or
+/// after a comma (xdg-email copies the subject into Thunderbird's comma-separated `-compose`
+/// argument). The check is repeated after each layer of percent-decoding (KMail decodes names, so
+/// `%61ttach` is `attach`). A word without `=` (`Please attach the invoice`) is fine.
+///
+/// The address is refused, not stripped of the parameter: PdfCraft never rewrites what a document
+/// asks to open, and a stripped address could still be read differently by some email app.
+fn check_mail_parameters(rest: &str) -> Result<(), BlockedLink> {
+    let mut text = rest.to_string();
+    for _ in 0..MAIL_DECODE_LAYERS {
+        check_mail_layer(&text)?;
+        let decoded = String::from_utf8_lossy(&percent_decode(text.as_bytes())).into_owned();
+        if decoded == text {
+            return Ok(());
+        }
+        text = decoded;
+    }
+    check_mail_layer(&text)
+}
+
+/// One layer of [`check_mail_parameters`].
+fn check_mail_layer(text: &str) -> Result<(), BlockedLink> {
+    // KMail decodes RFC 2047 encoded words (`=?utf-8?q?attach?=`) across the whole address before
+    // reading it, and its decoder is lenient, so any `=?` followed later by `?=` is refused.
+    if text.find("=?").is_some_and(|i| text.get(i + 2..).is_some_and(|after| after.contains("?="))) {
+        return Err(BlockedLink::MailEncodedWord);
+    }
+    // xdg-email passes the address through `echo`, which turns `\0141` (octal) or `\x61` into `a`.
+    if text.split('\\').skip(1).any(|after| after.starts_with(|c: char| c.is_ascii_digit() || matches!(c, 'x' | 'X'))) {
+        return Err(BlockedLink::MailEncodedWord);
+    }
+    let lower = text.to_ascii_lowercase();
+    let is_word = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-');
+    let mut previous = None;
+    for (i, c) in lower.char_indices() {
+        let starts_word = is_word(c) && !previous.is_some_and(is_word);
+        previous = Some(c);
+        if !starts_word {
+            continue;
+        }
+        let Some(word) = lower.get(i..) else { continue };
+        let name_end = word.find(|c: char| !is_word(c)).unwrap_or(word.len());
+        let (name, after) = word.split_at(name_end);
+        let asks = MAIL_FILE_PARAMETERS.iter().any(|p| name.starts_with(p));
+        if asks && after.trim_start_matches([' ', '\t', '+', '\'', '"']).starts_with('=') {
+            return Err(BlockedLink::MailFile);
+        }
+    }
+    Ok(())
+}
+
+/// Decode `%XX` escapes. A `%` not followed by two hex digits is kept as it is.
+fn percent_decode(s: &[u8]) -> Vec<u8> {
+    let hex = |b: Option<&u8>| b.and_then(|b| char::from(*b).to_digit(16)).and_then(|d| u8::try_from(d).ok());
+    let mut out = Vec::with_capacity(s.len());
+    let mut i = 0;
+    while let Some(&b) = s.get(i) {
+        if b == b'%'
+            && let (Some(high), Some(low)) = (hex(s.get(i + 1)), hex(s.get(i + 2)))
+        {
+            out.push((high << 4) | low);
+            i += 3;
+        } else {
+            out.push(b);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// The authority of a web address: what follows `//`, up to the first `/`, `\`, `?` or `#`.
@@ -222,5 +320,76 @@ mod tests {
         assert_eq!(host("https://other.example\\x@trusted.example/"), Some("other.example"));
         assert_eq!(host("mailto:a@example.org"), None);
         assert_eq!(host("https:///nohost"), None);
+    }
+
+    #[test]
+    fn email_links_may_not_ask_for_a_local_file() {
+        use super::{BlockedLink as B, document_url};
+        for bad in [
+            // Evolution, KMail and Claws Mail attach the named file.
+            "mailto:a@example.org?attach=/home/me/.ssh/id_ed25519",
+            "mailto:a@example.org?subject=Hi&attachment=file:///etc/passwd",
+            // Claws Mail reads an `insert` file into the message body.
+            "mailto:a@example.org?insert=/home/me/notes.txt",
+            // Names are matched case-insensitively (Evolution, KMail) and after percent-decoding (KMail).
+            "mailto:a@example.org?ATTACH=x",
+            "mailto:a@example.org?Attachment=x",
+            "mailto:a@example.org?%61ttach=x",
+            "mailto:a@example.org?%2561ttach=x",
+            "mailto:a@example.org?%49NSERT=x",
+            "mailto:a@example.org?attach%3D/etc/passwd",
+            // An empty value, a repeated name, spaces or quotes before `=`.
+            "mailto:a@example.org?attach=",
+            "mailto:a@example.org?subject=a&attach=x&attach=y",
+            "mailto:a@example.org?subject=a& attach =x",
+            "mailto:a@example.org?subject=a&'attachment'='x'",
+            // No recipient, no `?` at all (xdg-email), a second `?`, and a `?` that only exists once decoded.
+            "mailto:?attach=x",
+            "mailto:a@example.org&attach=/etc/passwd",
+            "mailto:a@example.org?subject=a?attach=x",
+            "mailto:a@example.org%3Fattach=x",
+            // KMail reads the query from the first `?` even inside a fragment, and reads `&#38;` as `&`.
+            "mailto:a@example.org#?attach=x",
+            "mailto:a@example.org?subject=a#&attach=x",
+            "mailto:a@example.org?subject=a&#38;attach=x",
+            "mailto:a@example.org?subject=a;attach=x",
+            // An encoded `&`, and a comma (xdg-email copies the subject into a comma-separated list).
+            "mailto:a@example.org?subject=a%26attach=x",
+            "mailto:a@example.org?subject=a,attachment='/etc/passwd'",
+            // A `+`, an encoded tab or an encoded space between the name and `=`.
+            "mailto:a@example.org?attach+=x",
+            "mailto:a@example.org?attach%09=x",
+            "mailto:a@example.org?attach%20=x",
+        ] {
+            assert_eq!(document_url(bad), Err(B::MailFile), "{bad}");
+        }
+        // KMail decodes RFC 2047 encoded words across the whole address before reading it, so
+        // `=?utf-8?q?attach?=` could become `attach`. Such words never belong in a link.
+        for bad in [
+            "mailto:a@example.org?=?utf-8?q?attach?==/etc/passwd",
+            "mailto:a@example.org?subject==?UTF-8?B?YXR0YWNo?=",
+            "mailto:a@example.org?subject=%3D%3Futf-8%3Fq%3Fattach%3F%3D",
+            "mailto:a@example.org?subject==??q?attach?=",
+            "mailto:a@example.org?subject==?utf-8?base64?YXR0YWNo?=",
+            // Backslash escapes that `echo` in xdg-email decodes, raw and percent-encoded.
+            "mailto:a@example.org?\\0141ttach=x",
+            "mailto:x\\x61ttachment=y",
+            "mailto:a@example.org?%5C0141ttach=x",
+        ] {
+            assert_eq!(document_url(bad), Err(B::MailEncodedWord), "{bad}");
+        }
+        for ok in [
+            "mailto:orders@example.org?subject=Order form&body=Please attach the invoice",
+            "mailto:a@example.org?subject=Attachments%20to%20follow",
+            "mailto:a@example.org?body=Questions%3F%20Attach%20your%20CV",
+            "mailto:a@example.org?body=Hi%3B%20insert%20your%20name",
+            "mailto:a@example.org?cc=b@example.org&bcc=c@example.org&in-reply-to=%3Cid@example.org%3E",
+            "mailto:attach@example.org",
+            "mailto:a@example.org?attach",
+            "mailto:a@example.org?x-attach=1&reattach=2",
+            "mailto:a@example.org?body=Saved in C:\\Users\\me\\Documents",
+        ] {
+            assert_eq!(document_url(ok).as_deref(), Ok(ok), "{ok}");
+        }
     }
 }

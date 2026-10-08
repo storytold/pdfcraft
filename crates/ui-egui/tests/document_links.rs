@@ -167,3 +167,19 @@ fn a_script_cannot_open_other_kinds_of_address() {
         assert!(h.state().toast.clone().is_some_and(|t| t.0.contains("won't open")), "{url}: {:?}", h.state().toast);
     }
 }
+
+#[test]
+fn an_email_link_cannot_attach_a_local_file() {
+    let _gpu = gpu();
+    for url in ["mailto:a@example.org?attach=/home/me/.ssh/id_ed25519", "mailto:a@example.org?subject=Hi&%61ttachment=C:/Users/me/x.txt"] {
+        let mut h = harness();
+        let id = h.state().views[0].id;
+        let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
+        h.state_mut().run_button_script(id, "web", &script);
+        h.run_steps(3);
+        assert_eq!(h.state().pending_link, None, "{url}");
+        assert_eq!(h.state().last_opened_url, None, "{url}");
+        let toast = h.state().toast.clone().expect("the user is told").0;
+        assert!(toast.contains("attach or insert a file"), "{url}: {toast}");
+    }
+}

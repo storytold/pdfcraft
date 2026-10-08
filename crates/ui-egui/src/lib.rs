@@ -966,10 +966,15 @@ impl PdfCraftApp {
                     self.pending_link = Some(PendingLink { url, origin });
                 }
             }
-            Err(e) => self.notify_fmt(
-                "{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.",
-                &[("who", tl!(origin.noun())), ("e", &e.to_string())],
-            ),
+            Err(e) => {
+                use pdfcraft_engine::links::BlockedLink;
+                let template = if matches!(e, BlockedLink::MailFile | BlockedLink::MailEncodedWord) {
+                    "{who} in this document tried to open an address PdfCraft won't open: {e}."
+                } else {
+                    "{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents."
+                };
+                self.notify_fmt(template, &[("who", tl!(origin.noun())), ("e", &e.to_string())]);
+            }
         }
     }
 
