@@ -116,7 +116,10 @@ pub fn document_url(raw: &str) -> Result<String, BlockedLink> {
         "mailto" => !rest.is_empty(),
         _ => authority(url).is_some_and(|a| !a.contains(' ')) && display_host(url).is_some(),
     };
-    if !complete {
+    // The desktop app opens addresses through the webbrowser crate, which treats one the WHATWG URL
+    // parser rejects as a local file path and opens that instead (`mailto://a^b/` would become
+    // `file:///…/mailto:/a^b/`). So only an address the parser accepts, as the same scheme, goes on.
+    if !complete || !url::Url::parse(url).is_ok_and(|u| u.scheme() == scheme) {
         return Err(BlockedLink::Malformed);
     }
     if scheme == "mailto" {
@@ -418,6 +421,18 @@ mod tests {
         assert_eq!(host("https://other.example\\x@trusted.example/"), Some("other.example"));
         assert_eq!(host("mailto:a@example.org"), None);
         assert_eq!(host("https:///nohost"), None);
+    }
+
+    #[test]
+    fn addresses_the_url_parser_rejects_are_refused() {
+        use super::{BlockedLink as B, document_url};
+        // The webbrowser crate would open each of these as a local file path.
+        for bad in ["mailto://a^b/x", "mailto://a:99999/", "mailto://[x]/", "mailto://a\\b/", "mailto://a b/", "https://a^b/", "http://a<b/"] {
+            assert_eq!(document_url(bad), Err(B::Malformed), "{bad}");
+        }
+        for ok in ["mailto://example.org/x", "mailto:a@example.org?subject=a b"] {
+            assert_eq!(document_url(ok).as_deref(), Ok(ok), "{ok}");
+        }
     }
 
     #[test]

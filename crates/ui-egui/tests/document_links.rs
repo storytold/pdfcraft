@@ -156,7 +156,17 @@ fn a_script_asks_first_and_only_once() {
 #[test]
 fn a_script_cannot_open_other_kinds_of_address() {
     let _gpu = gpu();
-    for url in ["file:///etc/passwd", "javascript:alert(1)", "ms-settings:privacy", "smb://server/share", "https://exa\u{202E}gro.elpmaxe"] {
+    // `mailto://a^b/x` and `https://a^b/` don't parse as URLs, so the browser would be handed them
+    // as local file paths.
+    for url in [
+        "file:///etc/passwd",
+        "javascript:alert(1)",
+        "ms-settings:privacy",
+        "smb://server/share",
+        "https://exa\u{202E}gro.elpmaxe",
+        "mailto://a^b/x",
+        "https://a^b/",
+    ] {
         let mut h = harness();
         let id = h.state().views[0].id;
         let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
