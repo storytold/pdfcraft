@@ -197,6 +197,9 @@ pub struct DocView {
     pub forward: Vec<usize>,
     /// Pending navigation: page and fraction down the page to align with the viewport top.
     pub goto: Option<(usize, f32)>,
+    /// Pending keyboard scrolling, in points down (negative: up): ↓ / ↑, and Page Down /
+    /// Page Up where the pages scroll.
+    pub key_scroll: f32,
     /// Briefly outline an annotation after navigating to it from a panel.
     pub flash: Option<(usize, [f32; 4], f64)>,
     /// Compare files: differences shaded on this document's pages (page, user-space box, colour).
@@ -331,6 +334,7 @@ impl DocView {
             back: Vec::new(),
             forward: Vec::new(),
             goto: None,
+            key_scroll: 0.0,
             flash: None,
             compare_marks: Vec::new(),
             pages: HashMap::new(),
@@ -1048,18 +1052,36 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     if key(Key::End) {
         view.go_to_page(usize::MAX);
     }
-    if view.layout == PageLayout::Single || ctx.input(|i| i.modifiers.command) {
-        if key(Key::ArrowRight) || key(Key::PageDown) {
-            view.step_page(true);
-        }
-        if key(Key::ArrowLeft) || key(Key::PageUp) {
-            view.step_page(false);
+    // As in Acrobat: → / ← go to the next / previous page in every layout (#185), and so do
+    // ⌘Page Down / ⌘Page Up, or plain Page Down / Page Up in single-page view.
+    let command = ctx.input(|i| i.modifiers.command);
+    let scrolls = view.layout != PageLayout::Single;
+    if key(Key::ArrowRight) || (key(Key::PageDown) && (command || !scrolls)) {
+        view.step_page(true);
+    }
+    if key(Key::ArrowLeft) || (key(Key::PageUp) && (command || !scrolls)) {
+        view.step_page(false);
+    }
+    // ↓ / ↑ scroll a line, and Page Down / Page Up a screen where the pages scroll.
+    if !command {
+        let screen = (view.viewport_h - KEY_SCROLL_LINE).max(KEY_SCROLL_LINE);
+        let steps = [(Key::ArrowDown, KEY_SCROLL_LINE), (Key::ArrowUp, -KEY_SCROLL_LINE), (Key::PageDown, screen), (Key::PageUp, -screen)];
+        for (k, by) in steps {
+            if key(k) && (scrolls || matches!(k, Key::ArrowDown | Key::ArrowUp)) {
+                view.key_scroll += by;
+            }
         }
     }
 }
 
+/// How far ↓ / ↑ scroll: a mouse-wheel line on the desktop. Page Down / Page Up keep this much
+/// of the previous screen in view.
+const KEY_SCROLL_LINE: f32 = 40.0;
+
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    // Keyboard scrolling applies to this frame's page view only, never later.
+    let key_scroll = std::mem::take(&mut app.views[index].key_scroll);
     // The Search panel closed: its search moves to the find bar.
     let search_open = app.right == Some(crate::RightPanel::Search);
     if let Some(f) = app.views[index].find.as_mut()
@@ -1259,8 +1281,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             // Only interactions pause; the document must keep its original colours.
             ui.set_opacity(opacity);
         }
-        if auto_delta != Vec2::ZERO {
-            ui.scroll_with_delta_animation(auto_delta, egui::style::ScrollAnimation::none());
+        // Middle-button auto-scroll and the keyboard (positive y moves the content down).
+        let delta = auto_delta - vec2(0.0, key_scroll);
+        if delta != Vec2::ZERO {
+            ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
         }
         let (resp_rect, resp) = ui.allocate_exact_size(vec2(content_w, content_h), Sense::click_and_drag());
         // The Hand tool pans: the content widget takes every drag, so scroll by its delta.

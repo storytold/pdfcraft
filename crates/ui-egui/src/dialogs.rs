@@ -1030,7 +1030,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     ("⌘+ / ⌘−", tl!("Zoom in / out (also pinch or ⌘-scroll)")),
                     ("⇧⌘+ / ⇧⌘−", tl!("Rotate view")),
                     ("Home / End", tl!("First / last page")),
-                    ("⌘← / ⌘→", tl!("Previous / next page")),
+                    ("← / →, ⌘← / ⌘→", tl!("Previous / next page")),
                     ("Delete", tl!("Delete selected pages (Organize)")),
                     ("⌘A", tl!("Select all pages (Organize)")),
                 ] {
