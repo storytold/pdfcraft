@@ -20,14 +20,79 @@ pub struct Packets {
     pub has_fields: bool,
 }
 
-fn to_text(bytes: &[u8]) -> String {
+/// How a packet's bytes encode its text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Encoding {
+    /// UTF-8, with or without a byte order mark.
+    Utf8 { bom: bool },
+    /// UTF-16, little-endian, with or without a byte order mark.
+    Utf16Le { bom: bool },
+    /// UTF-16, big-endian, with or without a byte order mark.
+    Utf16Be { bom: bool },
+}
+
+fn utf16(bytes: &[u8], from: fn([u8; 2]) -> u16) -> Option<String> {
+    let (chunks, rest) = bytes.as_chunks::<2>();
+    if !rest.is_empty() {
+        return None;
+    }
+    char::decode_utf16(chunks.iter().map(|c| from(*c))).collect::<Result<String, _>>().ok()
+}
+
+/// A packet's text and how it was encoded, when it decodes without loss: UTF-8 or UTF-16,
+/// told apart by a byte order mark or (without one) by how `<` is written. `None` for
+/// anything else (invalid UTF-8, a legacy encoding, a broken surrogate), which can be read
+/// only approximately and so must not be written back.
+pub fn decode(bytes: &[u8]) -> Option<(String, Encoding)> {
     match bytes {
-        [0xFF, 0xFE, rest @ ..] => {
-            char::decode_utf16(rest.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c))).map(|c| c.unwrap_or('\u{FFFD}')).collect()
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes).map(|t| (t, Encoding::Utf16Le { bom: true })),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes).map(|t| (t, Encoding::Utf16Be { bom: true })),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8(rest.to_vec()).ok().map(|t| (t, Encoding::Utf8 { bom: true })),
+        [b'<', 0, ..] => utf16(bytes, u16::from_le_bytes).map(|t| (t, Encoding::Utf16Le { bom: false })),
+        [0, b'<', ..] => utf16(bytes, u16::from_be_bytes).map(|t| (t, Encoding::Utf16Be { bom: false })),
+        _ => String::from_utf8(bytes.to_vec()).ok().map(|t| (t, Encoding::Utf8 { bom: false })),
+    }
+}
+
+/// `text` in `encoding` (the inverse of [`decode`]).
+pub fn encode(text: &str, encoding: Encoding) -> Vec<u8> {
+    let units = |bom: bool, to: fn(u16) -> [u8; 2]| {
+        let mut out = Vec::with_capacity(text.len().saturating_mul(2).saturating_add(2));
+        if bom {
+            out.extend_from_slice(&to(0xFEFF));
         }
-        [0xFE, 0xFF, rest @ ..] => {
-            char::decode_utf16(rest.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c))).map(|c| c.unwrap_or('\u{FFFD}')).collect()
+        for u in text.encode_utf16() {
+            out.extend_from_slice(&to(u));
         }
+        out
+    };
+    match encoding {
+        Encoding::Utf8 { bom } => {
+            let mut out = Vec::with_capacity(text.len() + 3);
+            if bom {
+                out.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+            }
+            out.extend_from_slice(text.as_bytes());
+            out
+        }
+        Encoding::Utf16Le { bom } => units(bom, u16::to_le_bytes),
+        Encoding::Utf16Be { bom } => units(bom, u16::to_be_bytes),
+    }
+}
+
+/// A packet's text for reading: exact when it decodes, else UTF-8 with replacement characters.
+fn to_text(bytes: &[u8]) -> String {
+    if let Some((text, _)) = decode(bytes) {
+        return text;
+    }
+    let lossy16 = |rest: &[u8], from: fn([u8; 2]) -> u16| -> String {
+        char::decode_utf16(rest.as_chunks::<2>().0.iter().map(|c| from(*c))).map(|c| c.unwrap_or('\u{FFFD}')).collect()
+    };
+    match bytes {
+        [0xFF, 0xFE, rest @ ..] => lossy16(rest, u16::from_le_bytes),
+        [0xFE, 0xFF, rest @ ..] => lossy16(rest, u16::from_be_bytes),
+        [b'<', 0, ..] => lossy16(bytes, u16::from_le_bytes),
+        [0, b'<', ..] => lossy16(bytes, u16::from_be_bytes),
         _ => String::from_utf8_lossy(bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)).into_owned(),
     }
 }

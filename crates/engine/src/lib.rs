@@ -219,6 +219,9 @@ pub struct Document {
     /// Dynamic XFA forms: what laying the template out produced (pages and fields are
     /// PdfCraft's; Adobe's viewers draw the form from the XFA packets themselves).
     pub xfa: Option<XfaLayout>,
+    /// XFA forms: what was approximated, rewritten or could not be written to the XFA data
+    /// (also in `info.warnings`, kept there when the document is re-read).
+    pub xfa_warnings: Vec<String>,
 }
 
 impl Document {
@@ -1728,18 +1731,31 @@ fn xfa_field_data(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_xfa::FieldDatum>
         .collect()
 }
 
-/// Keep the XFA datasets packet in step with the fields after an edit.
-fn xfa_sync_datasets(doc: &mut pdfcraft_cos::Document) -> Result<(), String> {
+/// Keep the XFA datasets packet in step with the fields after an edit. Returns what could not
+/// be written.
+fn xfa_sync_datasets(doc: &mut pdfcraft_cos::Document) -> Result<Vec<String>, String> {
     let data = xfa_field_data(doc);
-    pdfcraft_xfa::write_datasets(doc, &data).map(|_| ()).map_err(|e| e.to_string())
+    pdfcraft_xfa::write_datasets(doc, &data).map(|r| r.warnings).map_err(|e| e.to_string())
+}
+
+/// Most XFA warnings kept per document.
+const MAX_XFA_WARNINGS: usize = 50;
+
+/// Add `new` to `list` (no repeats, at most [`MAX_XFA_WARNINGS`]).
+fn note_warnings(list: &mut Vec<String>, new: &[String]) {
+    for w in new {
+        if !list.contains(w) && list.len() < MAX_XFA_WARNINGS {
+            list.push(w.clone());
+        }
+    }
 }
 
 /// Give the fields the values the XFA datasets hold (a form filled in another viewer). Returns
-/// how many fields changed.
-fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Result<usize, String> {
+/// the names of the fields that changed.
+fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Result<Vec<String>, String> {
     let data = xfa_field_data(doc);
     let fields = pdfcraft_forms::fields(doc);
-    let mut changed = 0;
+    let mut changed = Vec::new();
     for (name, value) in pdfcraft_xfa::read_values(doc, &data) {
         let Some(f) = fields.iter().find(|f| f.name == name) else { continue };
         let new = match value {
@@ -1751,7 +1767,7 @@ fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Result<usize, S
         if let Some(v) = new
             && pdfcraft_forms::set_value(doc, &name, &v).is_ok()
         {
-            changed += 1;
+            changed.push(name);
         }
     }
     Ok(changed)
@@ -1877,9 +1893,20 @@ impl Session {
                 let synced =
                     guard(|| xfa_values_from_datasets(&mut work)).unwrap_or_else(|m| Err(format!("reading its data failed unexpectedly ({m})")));
                 match synced {
-                    Ok(0) => (bytes, info, Ok(Ok(cos)), report),
-                    Ok(_) => match rebase(&work) {
-                        Ok((b, i, c)) => (b, i, Ok(Ok(c)), report),
+                    Ok(names) if names.is_empty() => (bytes, info, Ok(Ok(cos)), report),
+                    Ok(names) => match rebase(&work) {
+                        Ok((b, mut i, c)) => {
+                            // The fields were rewritten from the XFA data: say so, and which.
+                            let shown: Vec<&str> = names.iter().take(5).map(String::as_str).collect();
+                            let more = if names.len() > shown.len() { format!(" and {} more", names.len() - shown.len()) } else { String::new() };
+                            i.warnings.push(format!(
+                                "{} form field value{} were taken from this form's XFA data (filled in by another viewer): {}{more}",
+                                names.len(),
+                                if names.len() == 1 { "" } else { "s" },
+                                shown.join(", ")
+                            ));
+                            (b, i, Ok(Ok(c)), report)
+                        }
                         Err(e) => {
                             let mut info = info;
                             info.warnings.push(format!("The values in this form's XFA data could not be applied: {e}"));
@@ -1895,7 +1922,13 @@ impl Session {
             }
             (_, cos) => (bytes, info, cos, None),
         };
-        self.push_document(name, path, bytes, info, cos, render_password, password, xfa)
+        // XFA notes survive the document being re-read after edits.
+        let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
+        let id = self.push_document(name, path, bytes, info, cos, render_password, password, xfa)?;
+        if let Some(d) = self.docs.iter_mut().find(|d| d.id == id) {
+            note_warnings(&mut d.xfa_warnings, &xfa_warnings);
+        }
+        Ok(id)
     }
 
     /// The last step of opening: build the document record and register it.
@@ -1952,6 +1985,7 @@ impl Session {
             config,
             js_output: Default::default(),
             xfa,
+            xfa_warnings: Vec::new(),
         });
         Ok(id)
     }
@@ -1984,8 +2018,9 @@ impl Session {
         guard(|| run_edit(&mut next, &edit, &mut cx))
             .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
         // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
+        let mut xfa_notes = Vec::new();
         if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full) {
-            guard(|| xfa_sync_datasets(&mut next))
+            xfa_notes = guard(|| xfa_sync_datasets(&mut next))
                 .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
                 .map_err(EditError::Write)?;
         }
@@ -2020,6 +2055,9 @@ impl Session {
         }
         doc.dirty = true;
         doc.generation += 1;
+        note_warnings(&mut doc.xfa_warnings, &xfa_notes);
+        let notes = doc.xfa_warnings.clone();
+        note_warnings(&mut doc.info.warnings, &notes);
         if let Some(js) = cx.js {
             doc.js_output.append(js.output);
         }
@@ -2120,6 +2158,7 @@ impl Session {
                 l.visible = old.visible;
             }
         }
+        note_warnings(&mut info.warnings, &doc.xfa_warnings);
         doc.info = info;
         doc.form = Arc::new(pdfcraft_forms::fields(&editor.cos));
         doc.marks = pdfcraft_edit::marks_present(&editor.cos);

@@ -11,7 +11,7 @@ pub mod data;
 pub mod fixtures;
 pub mod layout;
 pub mod model;
-mod packets;
+pub mod packets;
 pub mod parse;
 pub mod pdf;
 pub mod text;
@@ -19,10 +19,11 @@ pub mod text;
 use pdfcraft_cos::Document;
 
 pub use data::{
-    DataNode, FieldData, FieldDatum, build_data, iso_to_pattern, parse_datasets, pattern_to_iso, read_values, som_to_path, write_datasets,
+    DataNode, DatasetsWrite, FieldData, FieldDatum, build_data, iso_to_pattern, parse_datasets, pattern_to_iso, read_values, som_to_path,
+    write_datasets,
 };
 pub use layout::{Action, BorderShape, Form, Item, MAX_PAGES, Page, Widget, WidgetKind, layout};
-pub use packets::{Packets, read_packets};
+pub use packets::{Encoding, Packets, decode as decode_packet, encode as encode_packet, read_packets};
 pub use parse::{measure, parse};
 pub use pdf::{LAYOUT_KEY, SOM_KEY, existing_layout};
 

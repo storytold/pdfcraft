@@ -35,11 +35,18 @@ the automation tools) works on it unchanged. The engine does this when it opens 
 
 - **Data** (`data`): the `datasets` packet. On layout, a field takes its value from the data
   node at its SOM path (dates in ISO form, check and radio states by their on values), and a
-  repeating subform or row gets as many instances as the data has. `write_datasets` rebuilds
-  `xfa:data` from the AcroForm fields (by `/PCSom`, or by the Designer field names of a static
-  form) and `read_values` goes the other way, so a form filled here shows its values in Adobe's
-  viewers and a form filled there shows them here. The engine does both: values on open, the
-  packet after every form edit.
+  repeating subform or row gets as many instances as the data has. `write_datasets` merges the
+  AcroForm fields' values (by `/PCSom`, or by the Designer field names of a static form) into
+  the existing `xfa:data`: only the bound nodes' text changes and missing nodes are added, so
+  unbound data, other namespaces, attributes and comments stay byte for byte. Values it can't
+  write (a node holding structured content, absurd SOM indices, a packet that is neither UTF-8
+  nor UTF-16) come back as warnings; UTF-16 packets are written back as UTF-16. `read_values`
+  goes the other way, so a form filled here shows its values in Adobe's viewers and a form
+  filled there shows them here. The engine does both: values on open (recorded in the
+  document's warnings), the packet after every form edit.
+
+Layout measures each container once per (node, width): width-less containers would otherwise
+be measured exponentially often in their nesting. A measurement budget backs this up.
 
 ## API sketch
 

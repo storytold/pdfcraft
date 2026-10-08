@@ -3,7 +3,9 @@ use std::sync::Arc;
 use pdfcraft_cos::{Document, Object, SaveOptions, write_incremental};
 
 use super::*;
-use crate::data::{FieldData, FieldDatum, build_data, iso_to_pattern, parse_datasets, pattern_to_iso, read_values, som_to_path, write_datasets};
+use crate::data::{
+    DatasetsWrite, FieldData, FieldDatum, build_data, iso_to_pattern, parse_datasets, pattern_to_iso, read_values, som_to_path, write_datasets,
+};
 use crate::fixtures::{shell, static_shell, template, template_with_data};
 use crate::layout::Item;
 use crate::model::*;
@@ -341,7 +343,8 @@ fn the_datasets_packet_is_written_from_the_fields_and_read_back() {
     let fields = field_data(&doc);
     assert!(fields.iter().any(|f| f.name == "familyName" && f.data == FieldData::Text("Singh".into())), "{fields:?}");
     assert!(fields.iter().any(|f| f.name == "answer" && f.data == FieldData::Radio(Some("N".into()))), "{fields:?}");
-    assert!(write_datasets(&mut doc, &fields).unwrap());
+    // The data already holds what the fields hold: nothing to write.
+    assert_eq!(write_datasets(&mut doc, &fields).unwrap(), DatasetsWrite::default());
     let doc = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
     let p = read_packets(&doc).unwrap().unwrap();
     let d = parse_datasets(&p.xdp).unwrap();
@@ -361,7 +364,8 @@ fn the_datasets_packet_is_written_from_the_fields_and_read_back() {
             f.data = FieldData::Check(false);
         }
     }
-    write_datasets(&mut doc, &fields).unwrap();
+    let w = write_datasets(&mut doc, &fields).unwrap();
+    assert!(w.written && w.warnings.is_empty(), "{w:?}");
     let values = read_values(&doc, &fields);
     assert!(values.contains(&("familyName".to_string(), FieldData::Text("Kaur".into()))), "{values:?}");
     assert!(values.contains(&("agree".to_string(), FieldData::Check(false))), "{values:?}");
@@ -369,12 +373,12 @@ fn the_datasets_packet_is_written_from_the_fields_and_read_back() {
     let mut doc = Document::open(Arc::new(shell(&template(1)))).unwrap();
     render_into(&mut doc).unwrap();
     let fields = field_data(&doc);
-    assert!(write_datasets(&mut doc, &fields).unwrap());
+    assert!(write_datasets(&mut doc, &fields).unwrap().written);
     let p = read_packets(&doc).unwrap().unwrap();
     assert!(parse_datasets(&p.xdp).is_some());
     // No XFA at all: nothing to write.
     let mut plain = Document::new_empty();
-    assert!(!write_datasets(&mut plain, &[]).unwrap());
+    assert!(!write_datasets(&mut plain, &[]).unwrap().written);
 }
 
 #[test]
@@ -414,4 +418,129 @@ fn nested_width_less_subforms_lay_out_in_polynomial_time() {
         assert!(names.iter().any(|n| n == "inner") || depth > 60, "{depth}: {names:?}");
         assert!(names.len() > 1);
     }
+}
+
+/// The static fixture's two fields, holding `name` and `agree`.
+fn static_fields(name: &str, agree: bool) -> Vec<FieldDatum> {
+    vec![
+        FieldDatum { obj: pdfcraft_cos::ObjRef::new(8, 0), name: "form1[0].page1[0].name[0]".into(), data: FieldData::Text(name.into()) },
+        FieldDatum { obj: pdfcraft_cos::ObjRef::new(9, 0), name: "form1[0].page1[0].agree[0]".into(), data: FieldData::Check(agree) },
+    ]
+}
+
+/// The decoded XFA stream (object 5 in the static fixture, or whatever `/XFA` now points to).
+fn xfa_bytes(doc: &Document) -> Vec<u8> {
+    let root = doc.get(doc.root().unwrap());
+    let acro = doc.resolve(root.as_dict().unwrap().get(b"AcroForm").unwrap());
+    let xfa = doc.resolve(acro.as_dict().unwrap().get(b"XFA").unwrap());
+    let Object::Stream(s) = &*xfa else { panic!("a stream") };
+    s.decoded_within(1 << 20).unwrap()
+}
+
+#[test]
+fn writing_values_keeps_the_data_no_field_binds_to() {
+    // Regression: the data element was rebuilt from the fields alone, dropping everything else.
+    let data = concat!(
+        "<form1 a=\"1\"><page1><name>Ada</name><notes xmlns:my=\"urn:my\"><my:extra kind='x>y'>keep me</my:extra></notes>",
+        "<rich><p>bold <b>text</b></p></rich></page1><deep><a><b><c>deep value</c></b></a></deep></form1>",
+        "<other xmlns=\"urn:other\"><x>unbound</x></other><!-- a comment --><empty/>"
+    );
+    let mut doc = Document::open(Arc::new(static_shell(data))).unwrap();
+    let w = write_datasets(&mut doc, &static_fields("Grace & <Co>\r\n", true)).unwrap();
+    assert!(w.written && w.warnings.is_empty(), "{w:?}");
+    let saved = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let xdp = String::from_utf8(xfa_bytes(&saved)).unwrap();
+    // Everything no field binds to is still there, as written.
+    for kept in [
+        "<form1 a=\"1\">",
+        "<notes xmlns:my=\"urn:my\"><my:extra kind='x>y'>keep me</my:extra></notes>",
+        "<rich><p>bold <b>text</b></p></rich>",
+        "<deep><a><b><c>deep value</c></b></a></deep>",
+        "<other xmlns=\"urn:other\"><x>unbound</x></other><!-- a comment --><empty/>",
+        "<template xmlns=",
+    ] {
+        assert!(xdp.contains(kept), "lost {kept:?}: {xdp}");
+    }
+    // The bound value changed in place; the missing check box node was added beside it.
+    assert!(xdp.contains("<name>Grace &amp; &lt;Co&gt;&#xD;\n</name>"), "{xdp}");
+    let d = parse_datasets(&xdp).unwrap();
+    assert_eq!(d.text_at(&som_to_path("form1[0].page1[0].name[0]")), Some("Grace & <Co>\r\n"));
+    assert_eq!(d.text_at(&som_to_path("form1[0].page1[0].agree[0]")), Some("1"));
+    assert_eq!(xdp.matches("<page1>").count(), 1, "added into the existing node, not a second one");
+    // Writing the same values again changes nothing.
+    let mut again = saved;
+    assert_eq!(write_datasets(&mut again, &static_fields("Grace & <Co>\r\n", true)).unwrap(), DatasetsWrite::default());
+    // A field bound to a node holding structured content is reported, not flattened.
+    let mut doc = Document::open(Arc::new(static_shell("<form1><page1><name><p>rich</p></name></page1></form1>"))).unwrap();
+    let w = write_datasets(&mut doc, &static_fields("plain", false)).unwrap();
+    assert!(w.warnings.iter().any(|m| m.contains("structured content") && m.contains("name[0]")), "{w:?}");
+    assert!(String::from_utf8(xfa_bytes(&doc)).unwrap().contains("<name><p>rich</p></name>"));
+}
+
+#[test]
+fn utf16_packets_are_read_and_written_back_as_utf16() {
+    let mut doc = Document::open(Arc::new(static_shell("<form1><page1><name>Zoë 日本</name><other>ünbound</other></page1></form1>"))).unwrap();
+    let text = String::from_utf8(xfa_bytes(&doc)).unwrap();
+    for (encoding, bom) in [(Encoding::Utf16Le { bom: true }, &[0xFF, 0xFE][..]), (Encoding::Utf16Be { bom: true }, &[0xFE, 0xFF][..])] {
+        let mut doc16 = doc.clone();
+        doc16.set(
+            pdfcraft_cos::ObjRef::new(5, 0),
+            Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), &encode_packet(&text, encoding))),
+        );
+        // Read exactly, not as mojibake.
+        let values = read_values(&doc16, &static_fields("", false));
+        assert_eq!(values.first(), Some(&("form1[0].page1[0].name[0]".to_string(), FieldData::Text("Zoë 日本".into()))));
+        let w = write_datasets(&mut doc16, &static_fields("Łódź", false)).unwrap();
+        assert!(w.written && w.warnings.is_empty(), "{w:?}");
+        let bytes = xfa_bytes(&doc16);
+        assert!(bytes.starts_with(bom), "still UTF-16 with its byte order mark");
+        let (back, enc) = decode_packet(&bytes).unwrap();
+        assert_eq!(enc, encoding);
+        assert!(back.contains("<name>Łódź</name>") && back.contains("<other>ünbound</other>"), "{back}");
+    }
+    // A packet in neither UTF-8 nor UTF-16 (Latin-1 here) is left alone, and that is reported.
+    let latin1: Vec<u8> = text.replace("Zoë 日本", "Zo\u{eb}").chars().map(|c| c as u32 as u8).collect();
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), &latin1)));
+    let w = write_datasets(&mut doc, &static_fields("x", true)).unwrap();
+    assert!(!w.written && !w.warnings.is_empty(), "{w:?}");
+    assert_eq!(xfa_bytes(&doc), latin1);
+}
+
+#[test]
+fn huge_som_indices_are_capped_not_built() {
+    // Regression: each index created its missing siblings one count at a time (quadratic), with
+    // no limit on the total. Many fields with absurd indices must finish at once, reporting
+    // what they could not write.
+    let mut doc = Document::open(Arc::new(static_shell("<form1/>"))).unwrap();
+    let start = std::time::Instant::now();
+    let fields: Vec<FieldDatum> = (0..300)
+        .map(|i| FieldDatum {
+            obj: pdfcraft_cos::ObjRef::new(1000 + i, 0),
+            name: format!("form1[0].a[{}].b[99999].c[99999].d[{i}]", 9_000 + i),
+            data: FieldData::Text("v".into()),
+        })
+        .collect();
+    let w = write_datasets(&mut doc, &fields).unwrap();
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "took {:?}", start.elapsed());
+    assert!(w.warnings.iter().any(|m| m.contains("repeats too often")), "{w:?}");
+    let xdp = String::from_utf8(xfa_bytes(&doc)).unwrap();
+    assert!(xdp.matches("<a>").count() <= 20_000, "at most the node budget is created");
+    // Building fresh data is capped the same way.
+    let start = std::time::Instant::now();
+    let data = build_data(&doc, &fields);
+    assert!(start.elapsed() < std::time::Duration::from_secs(10));
+    assert!(data.len() < 2_000_000);
+    // And a moderate index still works.
+    let mut doc = Document::open(Arc::new(static_shell("<form1><row><v>1</v></row></form1>"))).unwrap();
+    let row = |i: usize| FieldDatum {
+        obj: pdfcraft_cos::ObjRef::new(500, 0),
+        name: format!("form1[0].row[{i}].v[0]"),
+        data: FieldData::Text(i.to_string()),
+    };
+    let w = write_datasets(&mut doc, &[row(0), row(3)]).unwrap();
+    assert!(w.written && w.warnings.is_empty(), "{w:?}");
+    let d = parse_datasets(&String::from_utf8(xfa_bytes(&doc)).unwrap()).unwrap();
+    assert_eq!(d.count(&som_to_path("form1[0]"), "row"), 4);
+    assert_eq!(d.text_at(&som_to_path("form1[0].row[3].v[0]")), Some("3"));
+    assert!(d.get(&som_to_path("form1[0].row[2]")).is_some(), "the instances in between exist, empty");
 }

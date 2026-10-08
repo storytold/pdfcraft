@@ -6,9 +6,12 @@
 //! under nodes named after its named ancestor subforms, repeated instances as repeated sibling
 //! elements. Explicit `bind ref` expressions are not followed.
 
+use std::collections::HashMap;
+
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 use crate::XfaError;
+use crate::packets::{Encoding, encode};
 
 const XFA_DATA_NS: &str = "http://www.xfa.org/schema/xfa-data/1.0/";
 /// Most data nodes read.
@@ -233,20 +236,31 @@ fn xml_name(s: &str) -> String {
     out
 }
 
-fn escape(s: &str) -> String {
+/// `s` as XML character data. Characters XML 1.0 cannot hold are left out; the flag says
+/// whether any were.
+fn escape(s: &str) -> (String, bool) {
     let mut out = String::with_capacity(s.len());
+    let mut dropped = false;
     for c in s.chars() {
         match c {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
-            c if c.is_control() && c != '\n' && c != '\t' && c != '\r' => {}
+            // Parsers turn a raw carriage return into a line feed; a reference keeps it.
+            '\r' => out.push_str("&#xD;"),
+            '\u{FFFE}' | '\u{FFFF}' => dropped = true,
+            c if c.is_control() && c != '\n' && c != '\t' => dropped = true,
             c => out.push(c),
         }
     }
-    out
+    (out, dropped)
 }
+
+/// Most data nodes one write may create (instances skipped by a SOM index count too).
+const MAX_NEW_NODES: usize = 20_000;
+/// Highest same-name sibling index a write follows.
+const MAX_INDEX: usize = 10_000;
 
 /// A data tree being built for writing.
 #[derive(Default)]
@@ -254,43 +268,73 @@ struct Build {
     name: String,
     text: String,
     children: Vec<Build>,
+    /// Positions in `children` by name, in order.
+    by_name: HashMap<String, Vec<usize>>,
 }
 
 impl Build {
-    fn at(&mut self, path: &[(String, usize)]) -> &mut Build {
+    /// The node at `path` below this one, created as needed. `None` when the path is deeper
+    /// than [`MAX_DEPTH`], an index is above [`MAX_INDEX`], or creating it would spend more
+    /// than `budget` new nodes.
+    fn at(&mut self, path: &[(String, usize)], budget: &mut usize) -> Option<&mut Build> {
+        if path.len() > MAX_DEPTH {
+            return None;
+        }
         let mut node = self;
         for (name, idx) in path {
-            let name = xml_name(name);
-            while node.children.iter().filter(|c| c.name == name).count() <= *idx {
-                node.children.push(Build { name: name.clone(), ..Default::default() });
+            if *idx > MAX_INDEX {
+                return None;
             }
-            let pos = node.children.iter().enumerate().filter(|(_, c)| c.name == name).nth(*idx).map(|(i, _)| i).unwrap_or(0);
-            node = &mut node.children[pos];
+            let name = xml_name(name);
+            let have = node.by_name.get(&name).map_or(0, Vec::len);
+            if *idx >= have {
+                let need = idx - have + 1;
+                if need > *budget {
+                    return None;
+                }
+                *budget -= need;
+                for _ in 0..need {
+                    let pos = node.children.len();
+                    node.by_name.entry(name.clone()).or_default().push(pos);
+                    node.children.push(Build { name: name.clone(), ..Default::default() });
+                }
+            }
+            let pos = *node.by_name.get(&name)?.get(*idx)?;
+            node = node.children.get_mut(pos)?;
         }
-        node
+        Some(node)
     }
 
-    fn write(&self, out: &mut String, depth: usize) {
-        if depth > MAX_DEPTH {
-            return;
-        }
+    /// The tree as XML. Depth is bounded by [`Build::at`].
+    fn write(&self, out: &mut String) {
         if self.children.is_empty() {
-            out.push_str(&format!("<{}>{}</{}>", self.name, escape(&self.text), self.name));
+            out.push_str(&format!("<{}>{}</{}>", self.name, escape(&self.text).0, self.name));
             return;
         }
         out.push_str(&format!("<{}>", self.name));
-        for c in &self.children {
-            c.write(out, depth + 1);
-        }
+        self.write_children(out);
         out.push_str(&format!("</{}>", self.name));
+    }
+
+    fn write_children(&self, out: &mut String) {
+        for c in &self.children {
+            c.write(out);
+        }
     }
 }
 
-/// The `xfa:data` element for `fields`.
-pub fn build_data(doc: &Document, fields: &[FieldDatum]) -> String {
-    let mut root = Build::default();
+/// A value to write: where (the field's SOM path, and the data path it binds to) and what.
+struct Want {
+    som: String,
+    path: DataPath,
+    text: String,
+}
+
+fn wanted(doc: &Document, fields: &[FieldDatum]) -> Vec<Want> {
+    let mut out = Vec::new();
     for f in fields {
-        let path = som_to_path(&som_of(doc, f));
+        let som = som_of(doc, f);
+        let path = som_to_path(&som);
         if path.is_empty() {
             continue;
         }
@@ -306,115 +350,411 @@ pub fn build_data(doc: &Document, fields: &[FieldDatum]) -> String {
             FieldData::Radio(sel) => sel.clone().unwrap_or_default(),
             FieldData::None => continue,
         };
-        root.at(&path).text = text;
+        out.push(Want { som, path, text });
     }
-    let mut out = String::from("<xfa:data>");
-    for c in &root.children {
-        c.write(&mut out, 0);
-    }
-    out.push_str("</xfa:data>");
     out
 }
 
-/// The datasets packet text with its `xfa:data` replaced by `data` (other children, such as
-/// a data description, stay). `None` gets a fresh packet.
-fn replace_data(existing: Option<&str>, data: &str) -> String {
-    let fresh = || format!("<xfa:datasets xmlns:xfa=\"{XFA_DATA_NS}\">{data}</xfa:datasets>");
-    let Some(text) = existing else { return fresh() };
-    let Some(start) = text.find("<xfa:data>").or_else(|| text.find("<xfa:data ")).or_else(|| text.find("<xfa:data/>")) else {
-        // A datasets element without data: put ours in front of its end tag.
-        return match text.rfind("</xfa:datasets>") {
-            Some(end) => format!("{}{data}{}", &text[..end], &text[end..]),
-            None => fresh(),
-        };
-    };
-    let after = &text[start..];
-    let end = if after.starts_with("<xfa:data/>") {
-        start + "<xfa:data/>".len()
-    } else {
-        match after.find("</xfa:data>") {
-            Some(e) => start + e + "</xfa:data>".len(),
-            None => return fresh(),
+/// Note that a value could not be written (once per kind of reason, naming a few fields).
+fn skipped(warnings: &mut Vec<String>, reason: &str, som: &str) {
+    const MAX_WARNINGS: usize = 20;
+    if let Some(w) = warnings.iter_mut().find(|w| w.starts_with(reason)) {
+        if w.matches(", ").count() < 4 {
+            w.push_str(&format!(", {som}"));
+        } else if !w.ends_with('…') {
+            w.push_str(", …");
+        }
+    } else if warnings.len() < MAX_WARNINGS {
+        warnings.push(format!("{reason}: {som}"));
+    }
+}
+
+const TOO_MANY: &str = "XFA data not written for fields whose data path is too deep or repeats too often";
+const STRUCTURED: &str = "XFA data not written for fields whose data node holds structured content";
+const CONFLICT: &str = "XFA data not written for fields bound to the same data node as another field";
+const CONTROL: &str = "Characters XML can't hold were left out of the XFA data of";
+
+/// Fresh data for `wants`: the children of an `xfa:data` element.
+fn build_children(wants: &[Want], warnings: &mut Vec<String>) -> String {
+    let mut root = Build::default();
+    let mut budget = MAX_NEW_NODES;
+    for w in wants {
+        match root.at(&w.path, &mut budget) {
+            Some(node) => node.text = w.text.clone(),
+            None => skipped(warnings, TOO_MANY, &w.som),
+        }
+        if escape(&w.text).1 {
+            skipped(warnings, CONTROL, &w.som);
+        }
+    }
+    let mut out = String::new();
+    root.write_children(&mut out);
+    out
+}
+
+/// The `xfa:data` element for `fields`, built afresh.
+pub fn build_data(doc: &Document, fields: &[FieldDatum]) -> String {
+    format!("<xfa:data>{}</xfa:data>", build_children(&wanted(doc, fields), &mut Vec::new()))
+}
+
+fn fresh_datasets(data_children: &str) -> String {
+    format!("<xfa:datasets xmlns:xfa=\"{XFA_DATA_NS}\"><xfa:data>{data_children}</xfa:data></xfa:datasets>")
+}
+
+/// Where an element's start tag ends (the index of its `>`), skipping quoted attribute values.
+fn start_tag_end(src: &str, range: &std::ops::Range<usize>) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let mut quote = None;
+    for i in range.clone() {
+        let b = *bytes.get(i)?;
+        match (quote, b) {
+            (Some(q), _) if b == q => quote = None,
+            (Some(_), _) => {}
+            (None, b'"' | b'\'') => quote = Some(b),
+            (None, b'>') => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// An element's qualified name as written.
+fn qname<'s>(src: &'s str, range: &std::ops::Range<usize>) -> Option<&'s str> {
+    let rest = src.get(range.start.checked_add(1)?..range.end)?;
+    let end = rest.find(|c: char| c.is_whitespace() || c == '/' || c == '>')?;
+    rest.get(..end).filter(|n| !n.is_empty())
+}
+
+/// One change to the packet text: replace `start..end` with `text`.
+struct Edit {
+    start: usize,
+    end: usize,
+    text: String,
+}
+
+/// The edit that puts `inner` (markup) at the end of `node`'s content.
+fn append_edit(src: &str, node: roxmltree::Node, inner: &str) -> Option<Edit> {
+    let range = node.range();
+    let tag_end = start_tag_end(src, &range)?;
+    if tag_end.checked_add(1)? == range.end && src.get(..tag_end)?.ends_with('/') {
+        // `<a/>` becomes `<a>inner</a>`.
+        let name = qname(src, &range)?;
+        return Some(Edit { start: tag_end.checked_sub(1)?, end: range.end, text: format!(">{inner}</{name}>") });
+    }
+    let close = range.start + src.get(range.clone())?.rfind("</")?;
+    Some(Edit { start: close, end: close, text: inner.to_string() })
+}
+
+/// The edit that makes `text` (escaped) the whole content of the leaf `node`.
+fn replace_edit(src: &str, node: roxmltree::Node, text: &str) -> Option<Edit> {
+    let range = node.range();
+    let tag_end = start_tag_end(src, &range)?;
+    if tag_end.checked_add(1)? == range.end && src.get(..tag_end)?.ends_with('/') {
+        let name = qname(src, &range)?;
+        return Some(Edit { start: tag_end.checked_sub(1)?, end: range.end, text: format!(">{text}</{name}>") });
+    }
+    let close = range.start + src.get(range.clone())?.rfind("</")?;
+    (close > tag_end).then(|| Edit { start: tag_end + 1, end: close, text: text.to_string() })
+}
+
+/// What merging the values into a packet's text came to.
+enum Merged {
+    /// The data already holds every value.
+    Unchanged,
+    Changed(String),
+    /// The text could not be merged into (the reason is in the warnings).
+    Failed,
+}
+
+/// Where a datasets packet sits: one packet of an array (`Packet`), or inside the whole XDP.
+#[derive(Clone, Copy, PartialEq)]
+enum Within {
+    Packet,
+    Xdp,
+}
+
+const WRAP_OPEN: &str = "<pdfcraft-wrap xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\" xmlns:xdp=\"http://ns.adobe.com/xdp/\">";
+const WRAP_CLOSE: &str = "</pdfcraft-wrap>";
+
+/// Write `wants` into the data of the datasets packet in `text`, changing only what has to
+/// change: values go into the data nodes they bind to, missing nodes are added, and everything
+/// else (data no field binds to, other namespaces, attributes, comments, layout) stays as
+/// written.
+fn merge(text: &str, within: Within, wants: &[Want], warnings: &mut Vec<String>) -> Merged {
+    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
+    // A packet of an array may use the prefixes the XDP envelope declares: read it inside
+    // an element declaring the usual ones.
+    let wrapped;
+    let (src, shift, parsed) = match roxmltree::Document::parse_with_options(text, opts()) {
+        Ok(d) => (text, 0, d),
+        Err(first) => {
+            wrapped = format!("{WRAP_OPEN}{text}{WRAP_CLOSE}");
+            match (within, roxmltree::Document::parse_with_options(&wrapped, opts())) {
+                (Within::Packet, Ok(d)) => (wrapped.as_str(), WRAP_OPEN.len(), d),
+                _ => {
+                    warnings.push(format!("The XFA data could not be read ({first}); the field values were not written to it"));
+                    return Merged::Failed;
+                }
+            }
         }
     };
-    format!("{}{data}{}", &text[..start], &text[end..])
+    let is = |n: &roxmltree::Node, name: &str| n.is_element() && n.tag_name().name() == name;
+    let datasets = parsed
+        .descendants()
+        .find(|n| is(n, "datasets") && n.tag_name().namespace() == Some(XFA_DATA_NS))
+        .or_else(|| parsed.descendants().find(|n| is(n, "datasets")));
+    let mut edits = Vec::new();
+    let mut data = None;
+    match datasets {
+        None if within == Within::Xdp => {
+            let root = parsed.root_element();
+            match append_edit(src, root, &fresh_datasets(&build_children(wants, warnings))) {
+                Some(e) => edits.push(e),
+                None => {
+                    warnings.push("The XFA packets could not be extended with data; the field values were not written".into());
+                    return Merged::Failed;
+                }
+            }
+        }
+        None => {
+            warnings.push("The XFA datasets packet holds no datasets element; the field values were not written to it".into());
+            return Merged::Failed;
+        }
+        Some(ds) => match ds.children().find(|n| is(n, "data")) {
+            Some(d) => data = Some(d),
+            None => {
+                let prefix = qname(src, &ds.range()).and_then(|q| q.split_once(':')).map(|(p, _)| format!("{p}:")).unwrap_or_default();
+                let element = format!("<{prefix}data>{}</{prefix}data>", build_children(wants, warnings));
+                match append_edit(src, ds, &element) {
+                    Some(e) => edits.push(e),
+                    None => {
+                        warnings.push("The XFA datasets could not be extended with data; the field values were not written".into());
+                        return Merged::Failed;
+                    }
+                }
+            }
+        },
+    }
+    if let Some(data) = data {
+        merge_values(src, data, wants, &mut edits, warnings);
+    }
+    if edits.is_empty() {
+        return Merged::Unchanged;
+    }
+    // Apply from the end, so earlier positions stay valid; overlapping edits (two fields bound
+    // to one node) keep the first.
+    edits.sort_by_key(|e| (e.start, e.end));
+    let mut kept: Vec<Edit> = Vec::with_capacity(edits.len());
+    for e in edits {
+        if kept.last().is_some_and(|k| e.start < k.end) {
+            if kept.last().is_some_and(|k| k.text != e.text) && !warnings.iter().any(|w| w == CONFLICT) {
+                warnings.push(CONFLICT.into());
+            }
+            continue;
+        }
+        kept.push(e);
+    }
+    let mut out = src.to_string();
+    for e in kept.iter().rev() {
+        if out.get(e.start..e.end).is_none() {
+            warnings.push("The XFA data could not be updated; the field values were not written to it".into());
+            return Merged::Failed;
+        }
+        out.replace_range(e.start..e.end, &e.text);
+    }
+    if shift > 0 {
+        match out.get(shift..out.len().saturating_sub(WRAP_CLOSE.len())) {
+            Some(inner) => out = inner.to_string(),
+            None => return Merged::Failed,
+        }
+    }
+    Merged::Changed(out)
 }
 
-fn stream_text(doc: &Document, o: &Object) -> Option<String> {
+/// The edits that put `wants` into the `data` element.
+fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Vec<Edit>, warnings: &mut Vec<String>) {
+    // Element children by local name, per element visited (built once each).
+    let mut index: HashMap<roxmltree::NodeId, HashMap<String, Vec<roxmltree::NodeId>>> = HashMap::new();
+    let tree = data.document();
+    // Nodes to add, per existing element they go into.
+    let mut added: Vec<(roxmltree::NodeId, Build)> = Vec::new();
+    let mut budget = MAX_NEW_NODES;
+    for w in wants {
+        let (escaped, dropped) = escape(&w.text);
+        let mut node = data;
+        let mut depth = 0;
+        let mut have = 0;
+        for (name, idx) in &w.path {
+            let kids = index.entry(node.id()).or_insert_with(|| {
+                let mut by: HashMap<String, Vec<roxmltree::NodeId>> = HashMap::new();
+                for c in node.children().filter(|c| c.is_element()) {
+                    by.entry(c.tag_name().name().to_string()).or_default().push(c.id());
+                }
+                by
+            });
+            let same = kids.get(name.as_str());
+            match same.and_then(|v| v.get(*idx)).and_then(|id| tree.get_node(*id)) {
+                Some(next) => {
+                    node = next;
+                    depth += 1;
+                }
+                None => {
+                    have = same.map_or(0, Vec::len);
+                    break;
+                }
+            }
+        }
+        if depth == w.path.len() {
+            // The data node exists: give it the value, unless it already holds it.
+            let current: String = node.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
+            if node.children().any(|c| c.is_element()) {
+                let all: String = node.descendants().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
+                if all.trim() != w.text.trim() {
+                    skipped(warnings, STRUCTURED, &w.som);
+                }
+                continue;
+            }
+            if current == w.text {
+                continue;
+            }
+            match replace_edit(src, node, &escaped) {
+                Some(e) => edits.push(e),
+                None => skipped(warnings, STRUCTURED, &w.som),
+            }
+        } else {
+            // Missing: add the rest of the path below the deepest node that exists. An empty
+            // value needs no node.
+            if w.text.is_empty() {
+                continue;
+            }
+            let mut rest: DataPath = w.path.get(depth..).unwrap_or_default().to_vec();
+            if let Some(first) = rest.first_mut() {
+                first.1 = first.1.saturating_sub(have);
+            }
+            let pos = match added.iter().position(|(id, _)| *id == node.id()) {
+                Some(p) => p,
+                None => {
+                    added.push((node.id(), Build::default()));
+                    added.len() - 1
+                }
+            };
+            let built = added.get_mut(pos).and_then(|(_, b)| b.at(&rest, &mut budget));
+            match built {
+                Some(b) => b.text = w.text.clone(),
+                None => {
+                    skipped(warnings, TOO_MANY, &w.som);
+                    continue;
+                }
+            }
+        }
+        if dropped {
+            skipped(warnings, CONTROL, &w.som);
+        }
+    }
+    for (id, build) in added {
+        let Some(node) = tree.get_node(id) else { continue };
+        let mut inner = String::new();
+        build.write_children(&mut inner);
+        match append_edit(src, node, &inner) {
+            Some(e) => edits.push(e),
+            None => warnings.push("Some XFA data nodes could not be added; their field values were not written".into()),
+        }
+    }
+}
+
+/// What [`write_datasets`] did.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DatasetsWrite {
+    /// The datasets packet changed (a new revision of it was added to the document).
+    pub written: bool,
+    /// Values that could not be written, and why.
+    pub warnings: Vec<String>,
+}
+
+/// A packet stream's text and encoding; `None` (with a warning) when it can't be read exactly.
+fn packet_text(doc: &Document, o: &Object, warnings: &mut Vec<String>) -> Option<(String, Encoding)> {
     let s = doc.resolve(o);
-    let Object::Stream(s) = &*s else { return None };
-    s.decoded_within(64 << 20).ok().map(|b| String::from_utf8_lossy(&b).into_owned())
+    let Object::Stream(s) = &*s else {
+        warnings.push("The XFA data packet is not a stream; the field values were not written to it".into());
+        return None;
+    };
+    let bytes = match s.decoded_within(64 << 20) {
+        Ok(b) => b,
+        Err(e) => {
+            warnings.push(format!("The XFA data could not be decoded ({e}); the field values were not written to it"));
+            return None;
+        }
+    };
+    let decoded = crate::packets::decode(&bytes);
+    if decoded.is_none() {
+        warnings.push("The XFA data is neither UTF-8 nor UTF-16; the field values were not written to it, so it stays as it was".into());
+    }
+    decoded
 }
 
-fn text_stream(text: &str) -> Stream {
-    Stream::flate(Dict::new(), text.as_bytes())
-}
-
-/// Write the fields' values into the datasets packet. Returns `false` when the document has no
-/// XFA entry to write into.
-pub fn write_datasets(doc: &mut Document, fields: &[FieldDatum]) -> Result<bool, XfaError> {
-    let Some(root) = doc.root() else { return Ok(false) };
+/// Write the fields' values into the datasets packet, keeping all the data no field binds to.
+/// Nothing is written when the document has no XFA entry or the data already holds the values;
+/// values that can't be written are reported, never silently dropped.
+pub fn write_datasets(doc: &mut Document, fields: &[FieldDatum]) -> Result<DatasetsWrite, XfaError> {
+    let mut report = DatasetsWrite::default();
+    let Some(root) = doc.root() else { return Ok(report) };
     let catalog = doc.get(root);
-    let Some(acro_obj) = catalog.as_dict().and_then(|c| c.get(b"AcroForm")).cloned() else { return Ok(false) };
+    let Some(acro_obj) = catalog.as_dict().and_then(|c| c.get(b"AcroForm")).cloned() else { return Ok(report) };
     let acro_ref = acro_obj.as_ref();
-    let Some(mut acro) = doc.resolve(&acro_obj).as_dict().cloned() else { return Ok(false) };
-    let Some(xfa) = acro.get(b"XFA").cloned() else { return Ok(false) };
-    let data = build_data(doc, fields);
+    let Some(mut acro) = doc.resolve(&acro_obj).as_dict().cloned() else { return Ok(report) };
+    let Some(xfa) = acro.get(b"XFA").cloned() else { return Ok(report) };
+    let wants = wanted(doc, fields);
+    let warnings = &mut report.warnings;
     match &*doc.resolve(&xfa) {
         Object::Array(items) => {
             let mut items = items.clone();
-            let mut i = 0;
-            while i + 1 < items.len() {
-                if items.get(i).and_then(|n| n.as_string()).is_some_and(|s| s.to_text() == "datasets") {
-                    let existing = items.get(i + 1).and_then(|o| stream_text(doc, o));
-                    let packet = replace_data(existing.as_deref(), &data);
-                    let r = doc.add(Object::Stream(text_stream(&packet)));
-                    items[i + 1] = Object::Ref(r);
-                    return finish(doc, acro_ref, &mut acro, root, items);
+            let at = (0..items.len())
+                .step_by(2)
+                .find(|&i| items.get(i).and_then(|n| n.as_string()).is_some_and(|s| s.to_text() == "datasets") && i + 1 < items.len());
+            let packet = match at {
+                Some(i) => {
+                    let Some(existing) = items.get(i + 1).cloned() else { return Ok(report) };
+                    let Some((text, encoding)) = packet_text(doc, &existing, warnings) else { return Ok(report) };
+                    match merge(&text, Within::Packet, &wants, warnings) {
+                        Merged::Changed(t) => Some((i, encode(&t, encoding))),
+                        Merged::Unchanged | Merged::Failed => None,
+                    }
                 }
-                i += 2;
+                None => None,
+            };
+            match (at, packet) {
+                (Some(i), Some((_, bytes))) => {
+                    let r = doc.add(Object::Stream(Stream::flate(Dict::new(), &bytes)));
+                    if let Some(slot) = items.get_mut(i + 1) {
+                        *slot = Object::Ref(r);
+                    }
+                }
+                (Some(_), None) => return Ok(report),
+                (None, _) => {
+                    // No datasets packet yet: before the postamble, or last.
+                    let text = fresh_datasets(&build_children(&wants, warnings));
+                    let r = doc.add(Object::Stream(Stream::flate(Dict::new(), text.as_bytes())));
+                    let pos = items.iter().position(|n| n.as_string().is_some_and(|s| s.to_text() == "postamble")).unwrap_or(items.len());
+                    items.insert(pos, Object::Ref(r));
+                    items.insert(pos, Object::String(PdfString::text("datasets")));
+                }
             }
-            // No datasets packet yet: before the postamble, or last.
-            let r = doc.add(Object::Stream(text_stream(&replace_data(None, &data))));
-            let pos = items.iter().position(|n| n.as_string().is_some_and(|s| s.to_text() == "postamble")).unwrap_or(items.len());
-            items.insert(pos, Object::Ref(r));
-            items.insert(pos, Object::String(PdfString::text("datasets")));
-            finish(doc, acro_ref, &mut acro, root, items)
+            acro.set(b"XFA".to_vec(), Object::Array(items));
         }
         Object::Stream(_) => {
-            let Some(text) = stream_text(doc, &xfa) else { return Ok(false) };
-            let new = match (text.find("<xfa:datasets"), text.find("</xfa:datasets>")) {
-                (Some(a), Some(b)) if b > a => {
-                    let end = b + "</xfa:datasets>".len();
-                    format!("{}{}{}", &text[..a], replace_data(Some(&text[a..end]), &data), &text[end..])
-                }
-                _ => match text.rfind("</xdp:xdp>") {
-                    Some(e) => format!("{}{}{}", &text[..e], replace_data(None, &data), &text[e..]),
-                    None => return Ok(false),
-                },
-            };
-            let r = doc.add(Object::Stream(text_stream(&new)));
+            let Some((text, encoding)) = packet_text(doc, &xfa, warnings) else { return Ok(report) };
+            let Merged::Changed(new) = merge(&text, Within::Xdp, &wants, warnings) else { return Ok(report) };
+            let r = doc.add(Object::Stream(Stream::flate(Dict::new(), &encode(&new, encoding))));
             acro.set(b"XFA".to_vec(), Object::Ref(r));
-            match acro_ref {
-                Some(ar) => doc.set(ar, Object::Dict(acro)),
-                None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(acro)))?,
-            }
-            Ok(true)
         }
-        _ => Ok(false),
+        _ => return Ok(report),
     }
-}
-
-fn finish(doc: &mut Document, acro_ref: Option<ObjRef>, acro: &mut Dict, root: ObjRef, items: Vec<Object>) -> Result<bool, XfaError> {
-    acro.set(b"XFA".to_vec(), Object::Array(items));
     match acro_ref {
-        Some(ar) => doc.set(ar, Object::Dict(acro.clone())),
-        None => {
-            let a = acro.clone();
-            doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(a)))?;
-        }
+        Some(ar) => doc.set(ar, Object::Dict(acro)),
+        None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(acro)))?,
     }
-    Ok(true)
+    report.written = true;
+    Ok(report)
 }
 
 /// The values the datasets hold for `fields`: `(field name, what it should hold)`, only for
