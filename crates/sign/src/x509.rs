@@ -117,6 +117,11 @@ pub struct Certificate {
     pub public_key: PublicKey,
     /// Basic constraints: a CA certificate.
     pub is_ca: bool,
+    /// Whether the certificate has a basicConstraints extension at all (old v1 roots don't).
+    pub has_basic_constraints: bool,
+    /// Basic constraints `pathLenConstraint`: how many CA certificates may follow this one
+    /// before the end-entity certificate.
+    pub path_len: Option<u32>,
     /// Key usage bits (bit 0 = digitalSignature, 1 = nonRepudiation, 5 = keyCertSign), if present.
     pub key_usage: Option<u16>,
     pub subject_key_id: Option<Vec<u8>>,
@@ -137,6 +142,8 @@ pub struct Certificate {
 #[derive(Default)]
 struct Extensions {
     is_ca: bool,
+    has_basic_constraints: bool,
+    path_len: Option<u32>,
     key_usage: Option<u16>,
     subject_key_id: Option<Vec<u8>>,
     authority_key_id: Option<Vec<u8>>,
@@ -150,7 +157,12 @@ impl Extensions {
         match oid {
             "2.5.29.19" => {
                 let Ok(bc) = Tlv::parse_all(value.value) else { return };
-                self.is_ca = bc.children().is_ok_and(|c| c.first().is_some_and(|b| b.tag == tag::BOOLEAN && b.value != [0]));
+                self.has_basic_constraints = true;
+                let fields = bc.children().unwrap_or_default();
+                self.is_ca = fields.first().is_some_and(|b| b.tag == tag::BOOLEAN && b.value != [0]);
+                // pathLenConstraint is the INTEGER after the optional cA BOOLEAN.
+                self.path_len =
+                    fields.iter().find(|t| t.tag == tag::INTEGER).and_then(|t| t.u64().ok()).map(|n| u32::try_from(n).unwrap_or(u32::MAX));
             }
             "2.5.29.15" => {
                 let Ok(bits) = Tlv::parse_all(value.value) else { return };
@@ -255,7 +267,17 @@ impl Certificate {
                 ext.read(o.as_str(), value);
             }
         }
-        let Extensions { is_ca, key_usage, subject_key_id, authority_key_id, extended_key_usage, ocsp_urls, crl_urls } = ext;
+        let Extensions {
+            is_ca,
+            has_basic_constraints,
+            path_len,
+            key_usage,
+            subject_key_id,
+            authority_key_id,
+            extended_key_usage,
+            ocsp_urls,
+            crl_urls,
+        } = ext;
         Ok(Certificate {
             raw: raw.to_vec(),
             tbs: tbs.raw.to_vec(),
@@ -268,6 +290,8 @@ impl Certificate {
             not_after: na.time()?,
             public_key,
             is_ca,
+            has_basic_constraints,
+            path_len,
             key_usage,
             subject_key_id,
             authority_key_id,
@@ -287,6 +311,15 @@ impl Certificate {
         let Ok(alg) = Tlv::parse_all(&self.sig_alg) else { return false };
         let Ok((scheme, Some(digest))) = keys::signature_algorithm(&alg) else { return false };
         key.verify(scheme, digest, &digest.digest(&[&self.tbs]), &self.signature).unwrap_or(false)
+    }
+
+    /// Whether this certificate may issue certificates (RFC 5280 §4.2.1.9, §4.2.1.3): it is a
+    /// CA by its basic constraints, and if it has a key usage, that includes `keyCertSign`. A
+    /// self-signed certificate with no basic constraints at all (an old v1 root) counts as a CA.
+    pub fn may_issue(&self) -> bool {
+        /// keyUsage bit 5.
+        const KEY_CERT_SIGN: u16 = 1 << 5;
+        (self.is_ca || (!self.has_basic_constraints && self.is_self_signed())) && self.key_usage.is_none_or(|u| u & KEY_CERT_SIGN != 0)
     }
 
     /// Valid at `t`.
@@ -348,25 +381,55 @@ impl Certificate {
     }
 }
 
-/// The chain from `leaf` up through `pool`, as far as issuers can be found and their keys
-/// verify the certificate below. Stops at a self-signed certificate.
-pub fn build_chain<'a>(leaf: &'a Certificate, pool: &'a [Certificate]) -> Vec<&'a Certificate> {
+/// The chain from `leaf` up through `pool`, as far as issuers can be found and may issue: each
+/// issuer's key verifies the certificate below it, it is a CA allowed to sign certificates, its
+/// `pathLenConstraint` allows the CA certificates below it, and (when `at` is given) it was valid
+/// then. Stops at a self-signed certificate. Certificates embedded in a document are in `pool`
+/// too, so an ordinary end-entity certificate must never be accepted as an issuer.
+pub fn build_chain<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at: Option<Time>) -> Vec<&'a Certificate> {
+    build_chain_noted(leaf, pool, at).0
+}
+
+/// [`build_chain`], and why it stopped where it did if a certificate that matched the issuer by
+/// name and signature was refused.
+pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at: Option<Time>) -> (Vec<&'a Certificate>, Option<String>) {
     let mut chain = vec![leaf];
+    let mut refused = None;
     while chain.len() < 10 {
         let Some(&last) = chain.last() else { break };
         if last.issuer.raw == last.subject.raw {
             break;
         }
-        let Some(issuer) = pool.iter().find(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by(&c.public_key)) else {
-            break;
-        };
+        // CA certificates between `last` and the leaf: what a candidate's pathLenConstraint limits.
+        let below = chain.len() - 1;
+        let mut found = None;
+        for c in pool.iter().filter(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by(&c.public_key)) {
+            let why = if !c.may_issue() {
+                Some("is not a CA certificate that may issue certificates")
+            } else if c.path_len.is_some_and(|n| below > n as usize) {
+                Some("does not allow this many CA certificates below it (path length)")
+            } else if at.is_some_and(|t| !c.valid_at(t)) {
+                Some("was not valid at the time of signing")
+            } else {
+                None
+            };
+            match why {
+                None => {
+                    found = Some(c);
+                    break;
+                }
+                Some(why) => {
+                    refused = Some(format!("The certificate of {} {why}, so it is not used to vouch for {}.", c.display_name(), last.display_name()))
+                }
+            }
+        }
+        let Some(issuer) = found else { break };
+        refused = None;
         chain.push(issuer);
     }
-    chain
+    (chain, refused)
 }
 
-/// Certificates from a file: DER, or PEM with one or more `CERTIFICATE` blocks (`.cer`, `.crt`,
-/// `.pem`, Acrobat's `.fdf`-free exports).
 pub fn load_certificates(bytes: &[u8]) -> Result<Vec<Certificate>, SignError> {
     if bytes.first() == Some(&0x30) {
         return Ok(vec![Certificate::parse(bytes)?]);

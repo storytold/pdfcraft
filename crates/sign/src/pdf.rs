@@ -21,7 +21,7 @@ use crate::cms::SignedData;
 use crate::der::Time;
 use crate::keys::DigestAlg;
 use crate::pkcs12::DigitalId;
-use crate::x509::{Certificate, build_chain};
+use crate::x509::{Certificate, build_chain, build_chain_noted};
 
 #[cfg(test)]
 #[path = "pdf_discovery_tests.rs"]
@@ -536,8 +536,9 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
                     // own claimed time, as without a timestamp.
                     let mut pool = crate::timestamp::token_certs(raw);
                     pool.extend(trust.certs.iter().cloned());
-                    let trusted_tsa =
-                        t.signer_certificate().is_some_and(|c| c.valid_at(t.gen_time) && build_chain(&c, &pool).iter().any(|x| trust.trusts(x)));
+                    let trusted_tsa = t
+                        .signer_certificate()
+                        .is_some_and(|c| c.valid_at(t.gen_time) && build_chain(&c, &pool, Some(t.gen_time)).iter().any(|x| trust.trusts(x)));
                     if trusted_tsa {
                         info.timestamp_time = Some(t.gen_time);
                     } else {
@@ -576,13 +577,20 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
     info.signing_time = s.signing_time.or_else(|| info.date.as_deref().and_then(Time::from_pdf));
     let mut pool = sd.certificates.clone();
     pool.extend(trust.certs.iter().cloned());
-    let chain: Vec<Certificate> = build_chain(&cert, &pool).into_iter().cloned().collect();
+    // The time the chain is judged at: trusted timestamp, else the signer's claimed time.
+    let at = info.timestamp_time.or(info.signing_time);
+    let (chain, refused) = build_chain_noted(&cert, &pool, at);
+    let chain: Vec<Certificate> = chain.into_iter().cloned().collect();
     let trusted = chain.iter().any(|c| trust.trusts(c));
     info.chain = chain;
     info.certificate = Some(cert.clone());
+    if let Some(why) = refused
+        && !trusted
+    {
+        info.details.push(why);
+    }
     // Revocation evidence embedded in the document security store, if any. A verified
     // revocation is final: later blocks must not soften the verdict.
-    let at = info.timestamp_time.or(info.signing_time);
     let signer = info.chain.first().cloned();
     let revoked = check_dss_revocation(doc, signer.as_ref(), &at, info);
     // Changes after signing.
@@ -773,7 +781,8 @@ fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut Sig
         // ordinary signature from an unknown signer.
         let mut pool = crate::timestamp::token_certs(&contents);
         pool.extend(trust.certs.iter().cloned());
-        let trusted_tsa = token.signer_certificate().map(|c| build_chain(&c, &pool).iter().any(|x| trust.trusts(x))).unwrap_or(false);
+        let trusted_tsa =
+            token.signer_certificate().map(|c| build_chain(&c, &pool, Some(token.gen_time)).iter().any(|x| trust.trusts(x))).unwrap_or(false);
         if trusted_tsa {
             info.status = Status::Valid;
             info.details.push("The timestamp token is valid and its authority is trusted.".into());
