@@ -36,3 +36,8 @@ sync_github_name = false
 real_name = "Hal Goff"
 display_name = "Hal Goff, HG Studio"
 sync_github_name = false
+
+[people.mlkonrad]
+real_name = "Marlon Konrad"
+display_name = "Marlon Konrad"
+sync_github_name = false
