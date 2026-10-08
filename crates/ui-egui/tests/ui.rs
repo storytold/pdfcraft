@@ -158,7 +158,7 @@ fn drag_selects_text_and_copy_returns_it() {
 #[test]
 fn persistence_round_trips_and_tolerates_garbage() {
     let mut a = PdfCraftApp::new();
-    a.theme = pdfcraft_ui_egui::theme::ThemeKind::Dark;
+    a.set_option("theme", "dark").unwrap();
     let json = a.persist();
     let mut b = PdfCraftApp::new();
     b.restore(&json);

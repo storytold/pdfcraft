@@ -3,7 +3,7 @@
 use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, vec2};
 
 use crate::canvas::{Fit, PageLayout};
-use crate::theme::{self, ThemeKind, Tokens};
+use crate::theme::{self, ThemePreference, Tokens};
 use crate::{Dialog, Mode, PdfCraftApp, PropsTab, RightPanel, icons, widgets};
 
 pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
@@ -43,14 +43,14 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     app.open_dialog();
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let (icon, next, tip) = match app.theme {
-                        ThemeKind::Light => ("moon", ThemeKind::Dark, tl!("Dark gray theme")),
-                        ThemeKind::Dark => ("sun", ThemeKind::Light, tl!("Light theme")),
+                    let (icon, label) = match app.theme_preference {
+                        ThemePreference::System => ("settings", tl!("Use system setting")),
+                        ThemePreference::Light => ("sun", tl!("Light gray")),
+                        ThemePreference::Dark => ("moon", tl!("Dark gray")),
                     };
-                    if icons::button(ui, icon, 28.0, false, tl!(tip)).clicked() {
-                        let ctx = ui.ctx().clone();
-                        app.set_theme(&ctx, next);
-                    }
+                    let tip = format!("{}: {label}", tl!("Display theme"));
+                    let response = icons::button(ui, icon, 28.0, false, &tip);
+                    egui::Popup::menu(&response).show(|ui| theme_menu(app, ui));
                     if icons::button(ui, "circle-help", 28.0, false, tl!("Keyboard shortcuts")).clicked() {
                         app.dialog = Some(Dialog::Shortcuts);
                     }
@@ -61,6 +61,20 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 });
             });
         });
+}
+
+/// Both theme entry points use the same choices and command path.
+fn theme_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    for (preference, command, label) in [
+        (ThemePreference::System, "view.theme.system", "Use system setting"),
+        (ThemePreference::Light, "view.theme.light", "Light gray"),
+        (ThemePreference::Dark, "view.theme.dark", "Dark gray"),
+    ] {
+        if ui.radio(app.theme_preference == preference, tl!(label)).clicked() {
+            app.execute(command);
+            ui.close();
+        }
+    }
 }
 
 fn tab(ui: &mut egui::Ui, t: &Tokens, name: &str, dirty: bool, active: bool, close: &mut Option<usize>, index: usize) -> egui::Response {
@@ -212,20 +226,7 @@ fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 ui.separator();
             }
             crate::commands::registry_menu(app, ui, "View");
-            ui.menu_button(tl!("Display theme"), |ui| {
-                let ctx = ui.ctx().clone();
-                if ui.radio(app.follow_system_theme, tl!("Use system setting")).clicked() {
-                    app.follow_system_theme = true;
-                }
-                if ui.radio(!app.follow_system_theme && app.theme == ThemeKind::Light, tl!("Light gray")).clicked() {
-                    app.follow_system_theme = false;
-                    app.set_theme(&ctx, ThemeKind::Light);
-                }
-                if ui.radio(!app.follow_system_theme && app.theme == ThemeKind::Dark, tl!("Dark gray")).clicked() {
-                    app.follow_system_theme = false;
-                    app.set_theme(&ctx, ThemeKind::Dark);
-                }
-            });
+            ui.menu_button(tl!("Display theme"), |ui| theme_menu(app, ui));
             ui.menu_button(tl!("Side panels"), |ui| {
                 for (p, label) in [
                     (RightPanel::Comments, tl!("Comments")),

@@ -5,7 +5,7 @@
 //!
 //! View options (applied after the files open; also the seed of the UI control channel):
 //! `--page N  --zoom 150  --layout continuous|two-up|single  --panel comments|bookmarks|pages|fields|layers|attachments|none
-//!  --theme light|dark  --language auto|<code>  --mode all|read|edit|convert|sign  --tool <catalogue id>  --left open|closed
+//!  --theme light|dark|system  --language auto|<code>  --mode all|read|edit|convert|sign  --tool <catalogue id>  --left open|closed
 //!  --organize on  --fields on  --dialog properties|shortcuts|about  --palette <query>  --home on`
 //!
 //! `--control <file>` enables the UI control channel (off by default): the app listens on a random

@@ -1584,10 +1584,10 @@ area = "B"
 tier = "P1"
 milestone = "M3"
 status = "shipped"
-commands = ["view.theme"]
+commands = ["view.theme", "view.theme.light", "view.theme.dark"]
 tools = []
-evidence = ["crates/ui-egui/tests/ui.rs::theme_and_view_options_apply", "crates/ui-egui/src/theme.rs::text_is_readable_on_every_surface"]
-notes = "every text colour meets WCAG AA (4.5:1) on every surface in both themes; glyphs are pixel-aligned for sharper text at 100–150 % scaling"
+evidence = ["crates/ui-egui/tests/theme.rs::toolbar_and_view_menu_share_three_state_preferences", "crates/ui-egui/src/theme.rs::text_is_readable_on_every_surface"]
+notes = "Toolbar and Display theme share three choices and a preference setter; manual choices exit system mode. Every text colour meets WCAG AA (4.5:1) on every surface in both themes; glyphs are pixel-aligned for sharper text at 100–150 % scaling."
 
 [[feature]]
 id = "view.theme-system"
@@ -1596,10 +1596,10 @@ area = "B"
 tier = "P1"
 milestone = "M3"
 status = "shipped"
-commands = ["view.theme"]
+commands = ["view.theme.system"]
 tools = []
-evidence = ["crates/ui-egui/tests/viewer.rs::layouts_fit_height_labels_and_system_theme"]
-notes = "Display theme ▸ Use system setting (and --theme system)"
+evidence = ["crates/ui-egui/tests/theme.rs::toolbar_and_view_menu_share_three_state_preferences", "crates/ui-egui/tests/theme.rs::saved_preferences_restore_with_legacy_light_dark_settings", "crates/ui-egui/tests/control.rs::theme_commands_and_options_report_preference_and_effective_colours"]
+notes = "Toolbar, Display theme and --theme system share a persisted System preference that follows OS changes without losing the selected mode; ui.state reports preference and resolved colours separately."
 
 [[feature]]
 id = "view.home-view"

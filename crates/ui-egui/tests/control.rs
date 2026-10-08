@@ -68,6 +68,29 @@ fn ok(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, pa
     call(h, c, method, params).unwrap_or_else(|e| panic!("{method}: {e}"))
 }
 
+#[test]
+fn theme_commands_and_options_report_preference_and_effective_colours() {
+    let (mut h, c) = harness();
+    h.input_mut().system_theme = Some(egui::Theme::Dark);
+    h.run_steps(2);
+    for (id, preference, effective) in
+        [("view.theme.system", "System", "Dark"), ("view.theme.light", "Light", "Light"), ("view.theme.dark", "Dark", "Dark")]
+    {
+        ok(&mut h, &c, "ui.command", json!({ "id": id }));
+        let state = ok(&mut h, &c, "ui.state", json!({}));
+        assert_eq!(state["theme_preference"], preference);
+        assert_eq!(state["theme"], effective);
+    }
+    ok(&mut h, &c, "ui.set", json!({ "key": "theme", "value": "system" }));
+    h.input_mut().system_theme = Some(egui::Theme::Light);
+    h.run_steps(2);
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(state["theme_preference"], "System");
+    assert_eq!(state["theme"], "Light");
+    assert!(call(&mut h, &c, "ui.set", json!({ "key": "theme", "value": "purple" })).is_err());
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["theme_preference"], "System");
+}
+
 /// Switching the interface language changes labels only: documents, their dirty state and the
 /// command ids agents drive stay exactly the same.
 #[test]

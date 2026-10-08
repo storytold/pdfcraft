@@ -83,7 +83,7 @@ pub use canvas::DocView;
 pub use editing::{CloseRequest, SaveTarget};
 pub use files::{ExtractDraft, FilePurpose, RotateDraft, SplitDraft, SplitMode, SplitPlan};
 pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore};
-use theme::ThemeKind;
+use theme::{ThemeKind, ThemePreference};
 
 /// Top-level workspace modes (Acrobat's mode bar).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -324,11 +324,11 @@ pub struct PdfCraftApp {
     pub quick_tool: QuickTool,
     /// Comment author, per-tool colours and widths, pin.
     pub comment_prefs: comments::CommentPrefs,
+    /// Resolved colours, including the current OS theme when following the system.
     pub theme: ThemeKind,
+    pub theme_preference: ThemePreference,
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
-    /// Follow the operating system's light/dark setting.
-    pub follow_system_theme: bool,
     pub dialog: Option<Dialog>,
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
     pub update_source: Option<updates::UpdateSource>,
@@ -437,7 +437,6 @@ pub struct PdfCraftApp {
     allow_quit: bool,
     /// The egui context, for commands that change window or theme state.
     ctx: Option<egui::Context>,
-    pending_theme: Option<ThemeKind>,
     styled: bool,
     fonts_ready: bool,
     /// The installed fonts put the Simplified Chinese faces first (see `theme::font_definitions_for`).
@@ -545,8 +544,8 @@ impl PdfCraftApp {
             quick_tool: QuickTool::Select,
             comment_prefs: Default::default(),
             theme: ThemeKind::Light,
+            theme_preference: ThemePreference::Light,
             language: i18n::AUTO.to_string(),
-            follow_system_theme: false,
             dialog: None,
             update_source: None,
             updates: updates::Updates::default(),
@@ -616,7 +615,6 @@ impl PdfCraftApp {
             pending_recovered: None,
             allow_quit: false,
             ctx: None,
-            pending_theme: None,
             styled: false,
             fonts_ready: false,
             fonts_hans: false,
@@ -950,9 +948,20 @@ impl PdfCraftApp {
         self.notify(i18n::fmt(tl!(template), args));
     }
 
-    pub fn set_theme(&mut self, ctx: &egui::Context, kind: ThemeKind) {
-        self.theme = kind;
-        theme::apply(ctx, kind);
+    pub fn set_theme_preference(&mut self, preference: ThemePreference) {
+        self.theme_preference = preference;
+        self.theme = preference.resolve(self.ctx.as_ref().and_then(egui::Context::system_theme), self.theme);
+        if let Some(ctx) = &self.ctx {
+            theme::apply(ctx, self.theme);
+        }
+    }
+
+    fn sync_theme(&mut self, ctx: &egui::Context) {
+        let kind = self.theme_preference.resolve(ctx.system_theme(), self.theme);
+        if kind != self.theme {
+            self.theme = kind;
+            theme::apply(ctx, kind);
+        }
     }
 
     /// Run a catalogue command. Commands that aren't implemented yet say which milestone ships them.
@@ -992,7 +1001,7 @@ impl PdfCraftApp {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
         serde_json::json!({
             "recent": self.recent,
-            "theme": self.theme,
+            "theme": self.theme_preference,
             "default_mode": self.default_mode,
             "language": self.language,
             "author": self.comment_prefs.author,
@@ -1019,8 +1028,8 @@ impl PdfCraftApp {
             let r: Vec<RecentFile> = r.into_iter().filter(|f| std::path::Path::new(&f.path).exists()).collect();
             self.recent = r;
         }
-        if let Ok(t) = serde_json::from_value::<ThemeKind>(v["theme"].clone()) {
-            self.theme = t;
+        if let Ok(preference) = serde_json::from_value::<ThemePreference>(v["theme"].clone()) {
+            self.set_theme_preference(preference);
         }
         if let Ok(mode) = serde_json::from_value::<Mode>(v["default_mode"].clone()) {
             self.default_mode = mode;
@@ -1077,8 +1086,13 @@ impl PdfCraftApp {
                 self.language = language.to_string();
             }
             ("theme", _) => {
-                self.follow_system_theme = value == "system";
-                self.pending_theme = Some(if value == "dark" { ThemeKind::Dark } else { ThemeKind::Light });
+                let preference = match value {
+                    "system" => ThemePreference::System,
+                    "light" => ThemePreference::Light,
+                    "dark" => ThemePreference::Dark,
+                    _ => return Err("theme must be light, dark, or system".into()),
+                };
+                self.set_theme_preference(preference);
             }
             ("panel", _) => {
                 self.right = match value {
@@ -1319,17 +1333,7 @@ impl eframe::App for PdfCraftApp {
                 self.fonts_hans = hans;
             }
         }
-        if let Some(k) = self.pending_theme.take() {
-            self.set_theme(ctx, k);
-        }
-        if self.follow_system_theme
-            && let Some(sys) = ctx.system_theme()
-        {
-            let want = if sys == egui::Theme::Dark { ThemeKind::Dark } else { ThemeKind::Light };
-            if want != self.theme {
-                self.set_theme(ctx, want);
-            }
-        }
+        self.sync_theme(ctx);
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         for f in dropped {
             self.open_dropped(f, ctx);

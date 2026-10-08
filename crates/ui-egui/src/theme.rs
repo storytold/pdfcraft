@@ -12,6 +12,29 @@ pub enum ThemeKind {
     Dark,
 }
 
+/// The saved user choice, independent of the light/dark colours currently displayed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum ThemePreference {
+    System,
+    #[default]
+    Light,
+    Dark,
+}
+
+impl ThemePreference {
+    pub fn resolve(self, system: Option<egui::Theme>, fallback: ThemeKind) -> ThemeKind {
+        match self {
+            Self::Light => ThemeKind::Light,
+            Self::Dark => ThemeKind::Dark,
+            Self::System => match system {
+                Some(egui::Theme::Light) => ThemeKind::Light,
+                Some(egui::Theme::Dark) => ThemeKind::Dark,
+                None => fallback,
+            },
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Tokens {
     pub kind: ThemeKind,
@@ -168,6 +191,8 @@ pub fn semibold(size: f32) -> FontId {
 }
 
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
+    // egui must use the same theme for popup/menu styles as our custom chrome.
+    ctx.set_theme(if kind == ThemeKind::Dark { egui::Theme::Dark } else { egui::Theme::Light });
     let t = Tokens::for_kind(kind);
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("pdfcraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
