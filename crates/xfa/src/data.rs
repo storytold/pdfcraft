@@ -704,6 +704,8 @@ pub struct DatasetsWrite {
     pub written: bool,
     /// Values that could not be written, and why.
     pub warnings: Vec<String>,
+    /// The datasets stream written, when one was.
+    pub stream: Option<ObjRef>,
 }
 
 /// A packet stream's text and encoding; `None` (with a warning) when it can't be read exactly.
@@ -731,54 +733,189 @@ fn packet_text(doc: &Document, o: &Object, warnings: &mut Vec<String>) -> Option
 /// Nothing is written when the document has no XFA entry or the data already holds the values;
 /// values that can't be written are reported, never silently dropped.
 pub fn write_datasets(doc: &mut Document, fields: &[FieldDatum]) -> Result<DatasetsWrite, XfaError> {
+    write_datasets_reusing(doc, fields, None)
+}
+
+/// [`write_datasets`], replacing the stream `reuse` in place when the packet is that stream
+/// (written earlier in the same edit) rather than adding another.
+pub fn write_datasets_reusing(doc: &mut Document, fields: &[FieldDatum], reuse: Option<ObjRef>) -> Result<DatasetsWrite, XfaError> {
     let wants = wanted(doc, fields);
-    rewrite(doc, Op::Values(&wants))
+    rewrite(doc, &[Op::Values(&wants)], reuse)
+}
+
+/// One change to the data, for [`write_data_ops`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum DataOp {
+    /// Put `text` at the node `path`, adding the node (and the ones above it) as needed.
+    Value { path: DataPath, text: String },
+    /// Make sure the node at `parent` has at least `count` children named `name` (a script
+    /// added rows: the layout repeats the subform once per data instance).
+    Instances { parent: DataPath, name: String, count: usize },
+    /// Take the node at `path` out (a script removed a row).
+    Remove(DataPath),
+}
+
+impl DataNode {
+    /// The node at `path`, made (with empty siblings before it) where missing; `None` past
+    /// the index cap.
+    fn ensure(&mut self, path: &[(String, usize)]) -> Option<&mut DataNode> {
+        let mut node = self;
+        for (name, idx) in path {
+            if *idx >= MAX_INDEX {
+                return None;
+            }
+            let have = node.children.iter().filter(|c| &c.name == name).count();
+            for _ in have..=*idx {
+                node.children.push(DataNode { name: name.clone(), ..Default::default() });
+            }
+            node = node.children.iter_mut().filter(|c| &c.name == name).nth(*idx)?;
+        }
+        Some(node)
+    }
+
+    /// Apply `op` to this tree (the root is the `xfa:data` element), as [`write_data_ops`]
+    /// will to the packet, so scripts that run before it is written see the change.
+    pub fn apply(&mut self, op: &DataOp) {
+        match op {
+            DataOp::Value { path, text } => {
+                if let Some(n) = self.ensure(path)
+                    && n.children.is_empty()
+                {
+                    n.text = text.clone();
+                }
+            }
+            DataOp::Instances { parent, name, count } => {
+                if let Some(&last) = count.checked_sub(1).as_ref() {
+                    let mut path = parent.clone();
+                    path.push((name.clone(), last.min(MAX_INDEX.saturating_sub(1))));
+                    let _ = self.ensure(&path);
+                }
+            }
+            DataOp::Remove(path) => {
+                let Some(((name, idx), parent)) = path.split_last() else { return };
+                let mut node = self;
+                for (n, i) in parent {
+                    let Some(next) = node.children.iter_mut().filter(|c| &c.name == n).nth(*i) else { return };
+                    node = next;
+                }
+                if let Some(at) = node.children.iter().enumerate().filter(|(_, c)| &c.name == name).nth(*idx).map(|(at, _)| at) {
+                    node.children.remove(at);
+                }
+            }
+        }
+    }
+}
+
+fn path_som(path: &DataPath) -> String {
+    path.iter().map(|(n, i)| format!("{n}[{i}]")).collect::<Vec<_>>().join(".")
 }
 
 /// Make sure the data has at least `count` instances of `name` under `parent` (a script added
 /// rows: the layout repeats the subform once per data instance).
 pub fn add_data_instances(doc: &mut Document, parent: &DataPath, name: &str, count: usize) -> Result<DatasetsWrite, XfaError> {
-    let wants: Vec<Want> = (0..count.min(MAX_INDEX))
-        .map(|k| {
-            let mut path = parent.clone();
-            path.push((name.to_string(), k));
-            Want { som: format!("{name}[{k}]"), path, text: String::new(), ensure: true }
-        })
-        .collect();
-    rewrite(doc, Op::Values(&wants))
+    write_data_ops(doc, &[DataOp::Instances { parent: parent.clone(), name: name.to_string(), count }], None)
 }
 
 /// Put `text` at the data node `path` (a field with no widget, a hidden one or a draw, that a
 /// script gave a value), adding the node as needed.
 pub fn write_data_value(doc: &mut Document, path: &DataPath, text: &str) -> Result<DatasetsWrite, XfaError> {
-    if path.is_empty() {
-        return Ok(DatasetsWrite::default());
-    }
-    let som = path.iter().map(|(n, i)| format!("{n}[{i}]")).collect::<Vec<_>>().join(".");
-    let wants = [Want { som, path: path.clone(), text: text.to_string(), ensure: true }];
-    rewrite(doc, Op::Values(&wants))
+    write_data_ops(doc, &[DataOp::Value { path: path.clone(), text: text.to_string() }], None)
 }
 
 /// Remove the data node at `path` (a script removed a row).
 pub fn remove_data_instance(doc: &mut Document, path: &DataPath) -> Result<DatasetsWrite, XfaError> {
-    if path.is_empty() {
-        return Ok(DatasetsWrite::default());
-    }
-    rewrite(doc, Op::Remove(path))
+    write_data_ops(doc, &[DataOp::Remove(path.clone())], None)
 }
 
-fn rewrite(doc: &mut Document, op: Op) -> Result<DatasetsWrite, XfaError> {
+/// Apply `ops` to the datasets packet, in order, as one rewrite of it: everything one script
+/// event changed becomes a single new datasets stream. When the packet is already the stream
+/// `reuse` (written earlier for the same event), that stream is replaced in place instead of
+/// a new one being added. The stream written is in the report.
+pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>) -> Result<DatasetsWrite, XfaError> {
+    // Runs of values (and instances) merge in one pass; a value set twice keeps the last.
+    let mut steps: Vec<Vec<Want>> = Vec::new();
+    let mut removes: Vec<Option<DataPath>> = Vec::new();
+    let mut run: Vec<Want> = Vec::new();
+    let flush = |run: &mut Vec<Want>, steps: &mut Vec<Vec<Want>>, removes: &mut Vec<Option<DataPath>>| {
+        if !run.is_empty() {
+            let mut seen = std::collections::HashSet::new();
+            let mut kept: Vec<Want> = std::mem::take(run).into_iter().rev().filter(|w| seen.insert((w.ensure, w.path.clone()))).collect();
+            kept.reverse();
+            steps.push(kept);
+            removes.push(None);
+        }
+    };
+    for op in ops {
+        match op {
+            DataOp::Value { path, text } if !path.is_empty() => {
+                // An empty value clears an existing node and needs no new one.
+                run.push(Want { som: path_som(path), path: path.clone(), text: text.clone(), ensure: false });
+            }
+            DataOp::Instances { parent, name, count } => {
+                for k in 0..(*count).min(MAX_INDEX) {
+                    let mut path = parent.clone();
+                    path.push((name.clone(), k));
+                    run.push(Want { som: format!("{name}[{k}]"), path, text: String::new(), ensure: true });
+                }
+            }
+            DataOp::Remove(path) if !path.is_empty() => {
+                flush(&mut run, &mut steps, &mut removes);
+                steps.push(Vec::new());
+                removes.push(Some(path.clone()));
+            }
+            _ => {}
+        }
+    }
+    flush(&mut run, &mut steps, &mut removes);
+    let plan: Vec<Op> = steps
+        .iter()
+        .zip(&removes)
+        .map(|(w, r)| match r {
+            Some(p) => Op::Remove(p),
+            None => Op::Values(w),
+        })
+        .collect();
+    rewrite(doc, &plan, reuse)
+}
+
+/// Put `bytes` in the document as a datasets stream: in place of `old` when that is the stream
+/// `reuse`, else as a new object.
+fn put_stream(doc: &mut Document, old: Option<&Object>, reuse: Option<ObjRef>, bytes: &[u8]) -> ObjRef {
+    let stream = Object::Stream(Stream::flate(Dict::new(), bytes));
+    match (old.and_then(Object::as_ref), reuse) {
+        (Some(r), Some(keep)) if r == keep => {
+            doc.set(r, stream);
+            r
+        }
+        _ => doc.add(stream),
+    }
+}
+
+/// Merge `ops` into `text` in order. `None`: nothing changed (or nothing could be merged).
+fn merge_all(text: &str, within: Within, ops: &[Op], warnings: &mut Vec<String>) -> Option<String> {
+    let mut current: Option<String> = None;
+    for op in ops {
+        match merge(current.as_deref().unwrap_or(text), within, *op, warnings) {
+            Merged::Changed(t) => current = Some(t),
+            Merged::Unchanged => {}
+            // Later steps still apply to what merged so far; the reason is in the warnings.
+            Merged::Failed => {}
+        }
+    }
+    current
+}
+
+fn rewrite(doc: &mut Document, ops: &[Op], reuse: Option<ObjRef>) -> Result<DatasetsWrite, XfaError> {
     let mut report = DatasetsWrite::default();
+    if ops.is_empty() {
+        return Ok(report);
+    }
     let Some(root) = doc.root() else { return Ok(report) };
     let catalog = doc.get(root);
     let Some(acro_obj) = catalog.as_dict().and_then(|c| c.get(b"AcroForm")).cloned() else { return Ok(report) };
     let acro_ref = acro_obj.as_ref();
     let Some(mut acro) = doc.resolve(&acro_obj).as_dict().cloned() else { return Ok(report) };
     let Some(xfa) = acro.get(b"XFA").cloned() else { return Ok(report) };
-    let wants: &[Want] = match op {
-        Op::Values(w) => w,
-        Op::Remove(_) => &[],
-    };
     let warnings = &mut report.warnings;
     match &*doc.resolve(&xfa) {
         Object::Array(items) => {
@@ -786,30 +923,26 @@ fn rewrite(doc: &mut Document, op: Op) -> Result<DatasetsWrite, XfaError> {
             let at = (0..items.len())
                 .step_by(2)
                 .find(|&i| items.get(i).and_then(|n| n.as_string()).is_some_and(|s| s.to_text() == "datasets") && i + 1 < items.len());
-            let packet = match at {
+            match at {
                 Some(i) => {
                     let Some(existing) = items.get(i + 1).cloned() else { return Ok(report) };
                     let Some((text, encoding)) = packet_text(doc, &existing, warnings) else { return Ok(report) };
-                    match merge(&text, Within::Packet, op, warnings) {
-                        Merged::Changed(t) => Some((i, encode(&t, encoding))),
-                        Merged::Unchanged | Merged::Failed => None,
-                    }
-                }
-                None => None,
-            };
-            match (at, packet) {
-                (Some(i), Some((_, bytes))) => {
-                    let r = doc.add(Object::Stream(Stream::flate(Dict::new(), &bytes)));
+                    let Some(t) = merge_all(&text, Within::Packet, ops, warnings) else { return Ok(report) };
+                    let r = put_stream(doc, Some(&existing), reuse, &encode(&t, encoding));
+                    report.stream = Some(r);
                     if let Some(slot) = items.get_mut(i + 1) {
                         *slot = Object::Ref(r);
                     }
                 }
-                (Some(_), None) => return Ok(report),
-                (None, _) if matches!(op, Op::Remove(_)) => return Ok(report),
-                (None, _) => {
-                    // No datasets packet yet: before the postamble, or last.
-                    let text = fresh_datasets(&build_children(wants, warnings));
+                None => {
+                    // No datasets packet yet: made from the first values, then the rest merged
+                    // in; before the postamble, or last.
+                    let Some(first) = ops.iter().position(|op| matches!(op, Op::Values(_))) else { return Ok(report) };
+                    let Some(Op::Values(wants)) = ops.get(first) else { return Ok(report) };
+                    let fresh = fresh_datasets(&build_children(wants, warnings));
+                    let text = merge_all(&fresh, Within::Packet, ops.get(first + 1..).unwrap_or_default(), warnings).unwrap_or(fresh);
                     let r = doc.add(Object::Stream(Stream::flate(Dict::new(), text.as_bytes())));
+                    report.stream = Some(r);
                     let pos = items.iter().position(|n| n.as_string().is_some_and(|s| s.to_text() == "postamble")).unwrap_or(items.len());
                     items.insert(pos, Object::Ref(r));
                     items.insert(pos, Object::String(PdfString::text("datasets")));
@@ -819,8 +952,9 @@ fn rewrite(doc: &mut Document, op: Op) -> Result<DatasetsWrite, XfaError> {
         }
         Object::Stream(_) => {
             let Some((text, encoding)) = packet_text(doc, &xfa, warnings) else { return Ok(report) };
-            let Merged::Changed(new) = merge(&text, Within::Xdp, op, warnings) else { return Ok(report) };
-            let r = doc.add(Object::Stream(Stream::flate(Dict::new(), &encode(&new, encoding))));
+            let Some(new) = merge_all(&text, Within::Xdp, ops, warnings) else { return Ok(report) };
+            let r = put_stream(doc, Some(&xfa), reuse, &encode(&new, encoding));
+            report.stream = Some(r);
             acro.set(b"XFA".to_vec(), Object::Ref(r));
         }
         _ => return Ok(report),

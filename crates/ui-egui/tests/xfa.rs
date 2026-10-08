@@ -139,3 +139,15 @@ fn xfa_buttons_run_their_scripts_in_the_app() {
     click_field(&mut h, "hello");
     h.get_by_label_contains("Hello 2");
 }
+
+#[test]
+fn messages_from_scripts_run_on_open_show_right_away() {
+    let tpl = pdfcraft_xfa::fixtures::scripted_template()
+        .replace("if (qty.rawValue === null) qty.rawValue = 2;", r#"xfa.host.messageBox("Welcome to the form"); xfa.host.print();"#);
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&tpl));
+    h.run_steps(2);
+    h.get_by_label_contains("Welcome to the form");
+    assert_eq!(h.state().dialog, None, "an initialize script can't open the Print dialog");
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().session.take_js_output(id).is_empty(), "nothing waits for the next edit");
+}

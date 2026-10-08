@@ -744,6 +744,10 @@ impl PdfCraftApp {
             self.recent.insert(0, RecentFile { name: name.to_string(), path: p, pages, size });
             self.recent.truncate(12);
         }
+        // What the form's scripts said while it opened (messages, errors) shows now, not with
+        // the next edit.
+        let out = self.session.take_js_output(id);
+        self.handle_js(id, out);
         Ok(())
     }
 

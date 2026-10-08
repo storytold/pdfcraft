@@ -72,14 +72,15 @@ fn buttons_reset_navigate_and_print() {
     assert_eq!(h.state().dialog, Some(Dialog::Print), "this.print() opens the Print dialog");
     h.state_mut().dialog = None;
     h.run_steps(2);
-    // The Save named action (XFA forms' Save buttons use Save and SaveAs) runs the file command:
-    // the reset above made the document dirty, and the click writes it.
-    let before = std::fs::metadata(&path).unwrap().len();
+    // A document's Save named action never writes the file unasked (PdfCraft's XFA buttons
+    // use SaveAs, which opens the Save As dialog, as a script's `execMenuItem` does): the
+    // reset above made the document dirty, and the click leaves it so.
+    let before = std::fs::read(&path).unwrap();
     click_field(&mut h, "save");
     h.run_steps(4);
-    assert!(h.query_by_label_contains("isn't supported").is_none(), "Save runs the Save command");
-    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "saved");
-    assert!(std::fs::metadata(&path).unwrap().len() > before, "the file grew by the saved revision");
+    h.get_by_label_contains("isn't supported");
+    assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty, "not saved");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "the file is untouched");
     click_field(&mut h, "next");
     h.run_steps(4);
     assert_eq!(h.state().views[0].current, 1, "the NextPage action");

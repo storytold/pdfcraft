@@ -1698,3 +1698,77 @@ fn xfa_scripts_can_remove_rows_twice_and_reset_fields_by_name() {
     assert!(value(&s, "amount").is_empty());
     assert_eq!(value(&s, "price"), vec!["9".to_string()]);
 }
+
+/// Streams in `bytes` (every revision) that hold an XFA datasets packet.
+fn datasets_streams(bytes: &Arc<Vec<u8>>) -> usize {
+    let cos = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+    cos.object_numbers()
+        .into_iter()
+        .filter(|&n| {
+            cos.try_get(n).ok().is_some_and(|o| match &*o {
+                pdfcraft_cos::Object::Stream(s) => s.decoded_within(1 << 24).is_ok_and(|b| b.windows(9).any(|w| w == b"datasets>")),
+                _ => false,
+            })
+        })
+        .count()
+}
+
+#[test]
+fn hostile_xfa_open_scripts_are_merged_capped_kept_from_printing_and_noted() {
+    // On open: a calculate setting its own value 50 000 times, an initialize script showing a
+    // thousand messages and asking to print, open a link and save.
+    let tpl = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(
+            r#"<calculate><script contentType="application/x-javascript">qty.rawValue * price.rawValue</script></calculate>"#,
+            r#"<calculate><script contentType="application/x-javascript">for (var i = 0; i &lt; 50000; i++) this.rawValue = i;</script></calculate>"#,
+        )
+        .replace(
+            r#"if (qty.rawValue === null) qty.rawValue = 2;"#,
+            r#"for (var i = 0; i &lt; 1000; i++) xfa.host.messageBox("m" + i); xfa.host.print(); xfa.host.gotoURL("https://example.com/"); app.execMenuItem("SaveAs"); if (qty.rawValue === null) qty.rawValue = 2;"#,
+        );
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&tpl));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let started = std::time::Instant::now();
+    let id = s.open("hostile.pdf", None, bytes, None).expect("opens");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.form.iter().find(|f| f.name == "total").unwrap().value, vec!["49999".to_string()]);
+    // One datasets stream for the scripts' revision, not one per value set.
+    assert!(datasets_streams(&doc.bytes) <= 3, "{} datasets streams", datasets_streams(&doc.bytes));
+    // What opening changed is noted with the form's other XFA notes.
+    assert!(doc.xfa_warnings.iter().any(|w| w.contains("scripts changed it on opening")), "{:?}", doc.xfa_warnings);
+    let out = s.take_js_output(id);
+    assert_eq!(out.alerts.len(), 100, "message boxes are capped");
+    assert!(out.errors.iter().any(|e| e.contains("more than 100 messages")), "{:?}", out.errors);
+    assert!(out.requests.is_empty(), "only a click may print, save or open links: {:?}", out.requests);
+    assert!(out.console.iter().any(|c| c.contains("only print when a button is clicked")), "{:?}", out.console);
+}
+
+#[test]
+fn runaway_xfa_calculations_at_open_end_quickly_with_a_report() {
+    // Nested loops in one frame stop at the loop limit; loops in nested calls (that limit is per
+    // call) are abandoned at the time limit and turn the form's scripts off.
+    let tpl = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(
+            r#"<calculate><script contentType="application/x-javascript">qty.rawValue * price.rawValue</script></calculate>"#,
+            r#"<calculate><script contentType="application/x-javascript">for (var i = 0; i &lt; 1e9; i++) { for (var j = 0; j &lt; 1e9; j++) {} }</script></calculate>"#,
+        )
+        .replace(
+            r#"var t = 0; var rows"#,
+            r#"function f() { for (var j = 0; j &lt; 99999; j++) {} } for (var k = 0; k &lt; 5000; k++) f(); var t = 0; var rows"#,
+        );
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&tpl));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let started = std::time::Instant::now();
+    let id = s.open("runaway.pdf", None, bytes, None).expect("opens");
+    assert!(started.elapsed() < std::time::Duration::from_secs(4), "{:?}", started.elapsed());
+    let out = s.take_js_output(id);
+    assert!(out.errors.iter().any(|e| e.contains("total") && e.contains("maximum number of iteration")), "{:?}", out.errors);
+    assert!(out.errors.iter().any(|e| e.contains("abandoned")), "{:?}", out.errors);
+    assert!(out.errors.iter().any(|e| e.contains("scripts are off")), "{:?}", out.errors);
+    // The scripts stay off: a change runs nothing more.
+    let started = std::time::Instant::now();
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("3".into()) }).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    assert!(s.take_js_output(id).errors.is_empty());
+}

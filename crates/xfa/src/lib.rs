@@ -20,16 +20,16 @@ pub mod text;
 use pdfcraft_cos::Document;
 
 pub use data::{
-    DataNode, DataPath, DatasetsWrite, FieldData, FieldDatum, add_data_instances, build_data, iso_to_pattern, parse_datasets, pattern_to_iso,
-    read_values, remove_data_instance, som_to_path, write_data_value, write_datasets,
+    DataNode, DataOp, DataPath, DatasetsWrite, FieldData, FieldDatum, add_data_instances, build_data, iso_to_pattern, parse_datasets, pattern_to_iso,
+    read_values, remove_data_instance, som_to_path, write_data_ops, write_data_value, write_datasets, write_datasets_reusing,
 };
 pub use layout::{Action, BorderShape, Form, Item, MAX_PAGES, Page, Widget, WidgetKind, layout};
 pub use packets::{Encoding, Packets, decode as decode_packet, encode as encode_packet, read_packets};
 pub use parse::{measure, parse};
-pub use pdf::{LAYOUT_KEY, SOM_KEY, existing_layout};
+pub use pdf::{CLICK_KEY, LAYOUT_KEY, SOM_KEY, existing_layout};
 pub use script::{
-    FormNode, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, fields_by_som, form_tree, overrides, rerender,
-    set_overrides, template_of,
+    FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, fields_by_som, form_tree,
+    has_scripts, overrides, rerender, set_overrides, template_of,
 };
 
 #[derive(Debug, thiserror::Error)]

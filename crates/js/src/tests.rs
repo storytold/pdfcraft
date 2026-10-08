@@ -389,4 +389,28 @@ mod xfa_model {
         let o = go("for (var i = 0; i < 5000; i++) table._row.addInstance(1); table._row.count", "form1[0].page1[0].go[0]", "click");
         assert_eq!(o.result.as_deref(), Some("1002"));
     }
+
+    #[test]
+    fn values_set_again_merge_and_hostile_loops_are_capped() {
+        // A calculate that sets its own value in a loop leaves one effect: the last value.
+        let o = go("for (var i = 0; i < 50000; i++) this.rawValue = i;", "form1[0].page1[0].total[0]", "calculate");
+        assert_eq!(o.effects, vec![XfaEffect::SetValue { som: "form1[0].page1[0].total[0]".into(), value: "49999".into() }], "{:?}", o.error);
+        // Order-dependent effects in between keep the values on either side.
+        let o = go("qty.rawValue = 1; xfa.host.resetData(); qty.rawValue = 2; qty.rawValue = 3;", "form1[0].page1[0]", "click");
+        assert_eq!(o.effects.len(), 3, "{:?}", o.effects);
+        assert_eq!(o.effects.last(), Some(&XfaEffect::SetValue { som: "form1[0].page1[0].qty[0]".into(), value: "3".into() }));
+        // Message boxes and console lines in a loop stop at their caps, and say so.
+        let o = go("for (var i = 0; i < 100000; i++) { xfa.host.messageBox('m' + i); console.println('c' + i); }", "form1[0].page1[0]", "initialize");
+        let alerts = o.effects.iter().filter(|e| matches!(e, XfaEffect::MessageBox(_))).count();
+        assert_eq!(alerts, MAX_ALERTS);
+        assert_eq!(o.console.len(), MAX_CONSOLE);
+        assert!(o.notes.iter().any(|n| n.contains("messages")) && o.notes.iter().any(|n| n.contains("console")), "{:?}", o.notes);
+        // Distinct effects stop at the effect cap.
+        let o = go("for (var i = 0; i < 30000; i++) xfa.host.beep();", "form1[0].page1[0]", "click");
+        assert_eq!(o.effects.len(), MAX_EFFECTS);
+        assert!(o.notes.iter().any(|n| n.contains("changes")), "{:?}", o.notes);
+        // Long messages are cut.
+        let o = go("xfa.host.messageBox(new Array(100000).join('x'));", "form1[0].page1[0]", "click");
+        assert!(matches!(&o.effects[0], XfaEffect::MessageBox(m) if m.chars().count() <= 4_097));
+    }
 }

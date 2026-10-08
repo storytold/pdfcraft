@@ -15,6 +15,9 @@ pub const OVERRIDES_KEY: &[u8] = b"PCXfaOverrides";
 
 const MAX_DEPTH: usize = 64;
 const MAX_EVENTS: usize = 20_000;
+/// Most objects of the live form built (the scripting engine's snapshot holds as many):
+/// nested repeating subforms multiply, so the walk stops here and says so.
+pub const MAX_FORM_NODES: usize = 200_000;
 const MAX_OVERRIDES: usize = 10_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +56,18 @@ pub struct ScriptEvent {
     pub formcalc: bool,
     /// Validate scripts: the message shown when they fail.
     pub message: Option<String>,
+}
+
+/// The live form as [`form_tree`] builds it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LiveForm {
+    /// The root subform's instance tree.
+    pub root: FormNode,
+    /// Every scripted event, in document order.
+    pub events: Vec<ScriptEvent>,
+    /// The form was larger than [`MAX_FORM_NODES`] objects (or [`MAX_EVENTS`] events): what
+    /// is past that was left out.
+    pub truncated: bool,
 }
 
 /// What scripts changed about the template's objects, by SOM path.
@@ -159,11 +174,25 @@ struct Walker<'a> {
     data: Option<&'a DataNode>,
     ov: &'a Overrides,
     events: Vec<ScriptEvent>,
+    /// Objects built so far.
+    nodes: usize,
+    truncated: bool,
 }
 
 impl Walker<'_> {
+    /// Count one more object; false once the budget is spent.
+    fn take(&mut self) -> bool {
+        if self.nodes >= MAX_FORM_NODES {
+            self.truncated = true;
+            return false;
+        }
+        self.nodes += 1;
+        true
+    }
+
     fn push_events(&mut self, som: &str, scripts: &[Script], calculate: Option<&Script>, validate: Option<&Script>, message: Option<&str>) {
         if self.events.len() >= MAX_EVENTS {
+            self.truncated = true;
             return;
         }
         for s in scripts {
@@ -245,6 +274,9 @@ impl Walker<'_> {
             return out;
         }
         for (i, n) in nodes.iter().enumerate() {
+            if !self.take() {
+                break;
+            }
             let sib = sib_index(nodes, i);
             match n {
                 Node::Subform(sf) => {
@@ -254,6 +286,10 @@ impl Walker<'_> {
                     };
                     let instances = crate::layout::instance_count(&sf.occur, from_data);
                     for k in 0..instances {
+                        // The first instance was counted above.
+                        if k > 0 && !self.take() {
+                            break;
+                        }
                         let index = sib + k;
                         let som = child_som(parent_som, sf.common.name.as_deref(), index);
                         self.push_events(&som, &sf.scripts, None, None, None);
@@ -313,6 +349,9 @@ impl Walker<'_> {
                     let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
                     let mut children = Vec::new();
                     for (fi, f) in g.fields.iter().enumerate() {
+                        if !self.take() {
+                            break;
+                        }
                         children.push(self.field(f, &som, sib_index(&fields, fi), Some(selected.as_deref().unwrap_or(""))));
                     }
                     out.push(FormNode {
@@ -336,9 +375,10 @@ impl Walker<'_> {
 }
 
 /// The live form: the root subform's instance tree (values from `data`, presence and access
-/// from the template and `ov`) and every scripted event, in document order.
-pub fn form_tree(tpl: &Template, data: Option<&DataNode>, ov: &Overrides) -> (FormNode, Vec<ScriptEvent>) {
-    let mut w = Walker { data, ov, events: Vec::new() };
+/// from the template and `ov`) and every scripted event, in document order, within
+/// [`MAX_FORM_NODES`] objects.
+pub fn form_tree(tpl: &Template, data: Option<&DataNode>, ov: &Overrides) -> LiveForm {
+    let mut w = Walker { data, ov, events: Vec::new(), nodes: 0, truncated: false };
     let root = Node::Subform(Box::new(tpl.root.clone()));
     let mut nodes = w.children(std::slice::from_ref(&root), "", 0);
     let mut root_node = nodes.pop().unwrap_or_default();
@@ -366,7 +406,29 @@ pub fn form_tree(tpl: &Template, data: Option<&DataNode>, ov: &Overrides) -> (Fo
             });
         }
     }
-    (root_node, w.events)
+    LiveForm { root: root_node, events: w.events, truncated: w.truncated }
+}
+
+/// Does the template declare any script (an event, calculation or validation)? Forms without
+/// one need no live form and run nothing.
+pub fn has_scripts(tpl: &Template) -> bool {
+    fn any(s: &[Script]) -> bool {
+        s.iter().any(|s| !s.text.trim().is_empty())
+    }
+    fn field(f: &Field) -> bool {
+        any(&f.scripts) || [&f.calculate, &f.validate].into_iter().flatten().any(|s| !s.text.trim().is_empty())
+    }
+    fn walk(nodes: &[Node], depth: usize) -> bool {
+        depth <= MAX_DEPTH
+            && nodes.iter().any(|n| match n {
+                Node::Subform(sf) => any(&sf.scripts) || walk(&sf.children, depth + 1),
+                Node::Area(a) => walk(&a.children, depth + 1),
+                Node::Field(f) => field(f),
+                Node::ExclGroup(g) => any(&g.scripts) || g.fields.iter().any(field),
+                Node::Draw(_) => false,
+            })
+    }
+    any(&tpl.root.scripts) || walk(&tpl.root.children, 1) || tpl.root.page_set.as_ref().is_some_and(|ps| ps.areas.iter().any(|a| walk(&a.items, 1)))
 }
 
 /// The template with `ov` applied to its objects (instance 0 of each; scripts that hide one

@@ -1283,6 +1283,10 @@ struct EditCtx {
     /// its scripts produced.
     xfa: Option<Arc<pdfcraft_xfa::model::Template>>,
     xfa_out: js::JsOutput,
+    /// The datasets stream this edit wrote (later writes in the edit replace it in place).
+    xfa_datasets: Option<pdfcraft_cos::ObjRef>,
+    /// A form script ran too long and was abandoned: the document's scripts go off.
+    xfa_ran_away: bool,
     /// Pages in the document, for `xfa.layout.pageCount()`.
     pages: usize,
     date: Option<String>,
@@ -1307,6 +1311,8 @@ impl EditCtx {
             js: None,
             xfa: None,
             xfa_out: Default::default(),
+            xfa_datasets: None,
+            xfa_ran_away: false,
             pages: 0,
             date: now.map(pdfcraft_cos::pdf_date),
             today: (1970, 1, 1),
@@ -1444,7 +1450,11 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         },
         Edit::XfaEvent { som, activity } => {
             let tpl = cx.xfa.clone().ok_or_else(|| EditError::Invalid("this is not a laid-out XFA form, or JavaScript is off".into()))?;
-            xfa::on_event(doc, &tpl, som, activity, cx.pages, &mut cx.xfa_out).map_err(EditError::Invalid)?;
+            let mut run = xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false };
+            let ran = xfa::on_event(doc, &tpl, som, activity, &mut run);
+            cx.xfa_datasets = run.datasets;
+            cx.xfa_ran_away |= run.ran_away;
+            ran.map_err(EditError::Invalid)?;
         }
         Edit::SetFieldImage { name, image } => {
             let (img, _) = pdfcraft_create::image_xobject(doc, name, image)?;
@@ -1807,10 +1817,20 @@ fn xfa_field_data(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_xfa::FieldDatum>
 
 /// Keep the XFA datasets packet in step with the fields after an edit. Returns what could not
 /// be written.
-fn xfa_sync_datasets(doc: &mut pdfcraft_cos::Document) -> Result<Vec<String>, String> {
+/// `datasets`: the stream this edit already wrote, replaced in place rather than added again
+/// (and set to the one written).
+fn xfa_sync_datasets(doc: &mut pdfcraft_cos::Document, datasets: &mut Option<pdfcraft_cos::ObjRef>) -> Result<Vec<String>, String> {
     let data = xfa_field_data(doc);
-    pdfcraft_xfa::write_datasets(doc, &data).map(|r| r.warnings).map_err(|e| e.to_string())
+    let r = pdfcraft_xfa::write_datasets_reusing(doc, &data, *datasets).map_err(|e| e.to_string())?;
+    if r.stream.is_some() {
+        *datasets = r.stream;
+    }
+    Ok(r.warnings)
 }
+
+/// What a document whose form script ran away is told.
+const XFA_SCRIPTS_OFF: &str =
+    "A script of this form ran too long and was abandoned; the form's scripts are off for this document (reopen it to run them again)";
 
 /// Most XFA warnings kept per document.
 const MAX_XFA_WARNINGS: usize = 50;
@@ -1999,6 +2019,7 @@ impl Session {
         // A laid-out XFA form: its initialize and calculate scripts run now, as on opening in
         // Acrobat; what they change is one more revision, still nothing to save.
         let mut script_output = js::JsOutput::default();
+        let mut ran_away = false;
         let xfa_template = match (&xfa, &cos) {
             (Some(_), Ok(Ok(c))) => xfa::template(c),
             _ => None,
@@ -2008,17 +2029,33 @@ impl Session {
                 Some(tpl) => {
                     let mut work = cos.clone();
                     let pages = info.pages.len();
-                    let ran = guard(|| xfa::on_open(&mut work, &tpl, pages, &mut script_output))
-                        .unwrap_or_else(|m| Err(format!("its scripts failed unexpectedly ({m})")));
+                    let ran = guard(|| {
+                        let mut run = xfa::XfaRun { page_count: pages, out: &mut script_output, datasets: None, ran_away: false };
+                        let changes = xfa::on_open(&mut work, &tpl, &mut run);
+                        if run.ran_away {
+                            ran_away = true;
+                        }
+                        changes
+                    })
+                    .unwrap_or_else(|m| Err(format!("its scripts failed unexpectedly ({m})")));
                     match ran {
-                        Ok(true) => match rebase(&work) {
-                            Ok((b, i, c)) => (b, i, Ok(Ok(c))),
+                        Ok(changes) if work.is_modified() => match rebase(&work) {
+                            Ok((b, mut i, c)) => {
+                                // The file as saved differs from what opening shows: say so.
+                                if !changes.is_empty() {
+                                    i.warnings.push(format!(
+                                        "This form's scripts changed it on opening ({}); saving keeps those changes",
+                                        changes.describe()
+                                    ));
+                                }
+                                (b, i, Ok(Ok(c)))
+                            }
                             Err(e) => {
                                 script_output.errors.push(format!("The form's scripts could not be applied: {e}"));
                                 (bytes, info, Ok(Ok(cos)))
                             }
                         },
-                        Ok(false) => (bytes, info, Ok(Ok(cos))),
+                        Ok(_) => (bytes, info, Ok(Ok(cos))),
                         Err(e) => {
                             script_output.errors.push(format!("The form's scripts could not run: {e}"));
                             (bytes, info, Ok(Ok(cos)))
@@ -2033,8 +2070,12 @@ impl Session {
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
         let id = self.push_document(name, path, bytes, info, cos, render_password, password, xfa)?;
         if let Some(d) = self.docs.iter_mut().find(|d| d.id == id) {
-            d.xfa_template = xfa_template;
+            // A script that ran away on open turns the form's scripts off for this document.
+            d.xfa_template = if ran_away { None } else { xfa_template };
             d.js_output.append(script_output);
+            if ran_away {
+                d.js_output.errors.push(XFA_SCRIPTS_OFF.into());
+            }
             note_warnings(&mut d.xfa_warnings, &xfa_warnings);
         }
         Ok(id)
@@ -2063,7 +2104,10 @@ impl Session {
             Ok(Err(e)) => (None, Some(e.to_string())),
             Err(_) => (None, Some("the document structure could not be read for editing".into())),
         };
-        let form = editor.as_ref().map(|e| pdfcraft_forms::fields(&e.cos)).unwrap_or_default();
+        let mut form = editor.as_ref().map(|e| pdfcraft_forms::fields(&e.cos)).unwrap_or_default();
+        if let Some(e) = editor.as_ref() {
+            xfa::mark_script_buttons(&e.cos, &mut form);
+        }
         let marks = editor.as_ref().map(|e| pdfcraft_edit::marks_present(&e.cos)).unwrap_or_default();
         let added = editor.as_ref().map(|e| pdfcraft_edit::list_added(&e.cos)).unwrap_or_default();
         let links = editor.as_ref().map(|e| pdfcraft_annot::links::list(&e.cos)).unwrap_or_default();
@@ -2136,7 +2180,8 @@ impl Session {
         // to date first.
         if let Some(tpl) = cx.xfa.clone() {
             if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full) {
-                let notes = guard(|| xfa_sync_datasets(&mut next))
+                let datasets = &mut cx.xfa_datasets;
+                let notes = guard(|| xfa_sync_datasets(&mut next, datasets))
                     .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
                     .map_err(EditError::Write)?;
                 cx.xfa_out.errors.extend(notes);
@@ -2153,18 +2198,13 @@ impl Session {
             let mut reset = false;
             collect(&edit, &mut changed, &mut reset);
             if !changed.is_empty() || reset {
-                let pages = cx.pages;
-                let out = &mut cx.xfa_out;
-                let ran = guard(|| {
-                    for name in &changed {
-                        xfa::on_change(&mut next, &tpl, name, pages, out)?;
-                    }
-                    if reset && changed.is_empty() {
-                        xfa::recalculate(&mut next, &tpl, pages, out)?;
-                    }
-                    Ok::<(), String>(())
-                })
-                .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
+                let mut run = xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false };
+                // Every changed field's scripts, then the calculations once (after a reset,
+                // only those).
+                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run))
+                    .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
+                cx.xfa_datasets = run.datasets;
+                cx.xfa_ran_away |= run.ran_away;
                 if let Err(e) = ran {
                     cx.xfa_out.errors.push(e);
                 }
@@ -2173,7 +2213,8 @@ impl Session {
         // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
         let mut xfa_notes = Vec::new();
         if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full) {
-            xfa_notes = guard(|| xfa_sync_datasets(&mut next))
+            let datasets = &mut cx.xfa_datasets;
+            xfa_notes = guard(|| xfa_sync_datasets(&mut next, datasets))
                 .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
                 .map_err(EditError::Write)?;
         }
@@ -2215,6 +2256,10 @@ impl Session {
             doc.js_output.append(js.output);
         }
         doc.js_output.append(cx.xfa_out);
+        if cx.xfa_ran_away {
+            doc.xfa_template = None;
+            doc.js_output.errors.push(XFA_SCRIPTS_OFF.into());
+        }
         Ok(())
     }
 
@@ -2267,7 +2312,9 @@ impl Session {
         } else {
             editor.cos.bytes().clone()
         };
-        let form = Arc::new(pdfcraft_forms::fields(&editor.cos));
+        let mut form = pdfcraft_forms::fields(&editor.cos);
+        xfa::mark_script_buttons(&editor.cos, &mut form);
+        let form = Arc::new(form);
         match scope {
             Scope::Comments => doc.info.annotations = comment_list(&editor.cos),
             Scope::Form => {
@@ -2320,7 +2367,9 @@ impl Session {
         }
         note_warnings(&mut info.warnings, &doc.xfa_warnings);
         doc.info = info;
-        doc.form = Arc::new(pdfcraft_forms::fields(&editor.cos));
+        let mut form = pdfcraft_forms::fields(&editor.cos);
+        xfa::mark_script_buttons(&editor.cos, &mut form);
+        doc.form = Arc::new(form);
         doc.marks = pdfcraft_edit::marks_present(&editor.cos);
         doc.added = pdfcraft_edit::list_added(&editor.cos);
         doc.links = pdfcraft_annot::links::list(&editor.cos);

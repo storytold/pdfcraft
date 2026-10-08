@@ -8,6 +8,7 @@
 //! children, then its siblings, then each ancestor's children.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use boa_engine::object::ObjectInitializer;
 use boa_engine::object::builtins::{JsArray, JsProxy};
@@ -133,6 +134,12 @@ pub struct XfaOutcome {
     pub result: Option<String>,
     /// The completion value as a boolean, when it was one.
     pub result_bool: Option<bool>,
+    /// Limits the script ran into (too many effects, message boxes or console lines): what
+    /// was left out, for the caller to report.
+    pub notes: Vec<String>,
+    /// The script ran past its time limit and was left running on its own thread (the engine
+    /// can't interrupt it): the caller should run no more of this form's scripts.
+    pub abandoned: bool,
 }
 
 /// Most nodes a snapshot may hold.
@@ -141,6 +148,22 @@ const MAX_NODES: usize = 200_000;
 const MAX_ADDED: usize = 1_000;
 /// Deepest tree followed.
 const MAX_DEPTH: usize = 64;
+/// Most effects one run may produce (after values set again on the same object are merged).
+pub const MAX_EFFECTS: usize = 10_000;
+/// Most message boxes one run may show.
+pub const MAX_ALERTS: usize = 100;
+/// Most console lines one run may print.
+pub const MAX_CONSOLE: usize = 1_000;
+/// Longest message or console line kept, in characters.
+const MAX_LINE: usize = 4_096;
+
+/// `m` cut to [`MAX_LINE`] characters.
+fn clip(m: String) -> String {
+    match m.char_indices().nth(MAX_LINE) {
+        Some((at, _)) => format!("{}…", m.get(..at).unwrap_or_default()),
+        None => m,
+    }
+}
 
 struct HNode {
     name: String,
@@ -168,6 +191,84 @@ struct XHost {
     added: usize,
     /// Index of `this`.
     current: usize,
+    /// Where the effect setting a property of an object is in `effects`, by (property, SOM):
+    /// setting it again replaces that effect (the last value wins) unless something that
+    /// depends on order (rows added or removed, a reset) came after it.
+    set_at: HashMap<(u8, String), usize>,
+    /// Effects before this index are behind an order-dependent effect.
+    barrier: usize,
+    alerts: usize,
+    dropped_effects: usize,
+    dropped_alerts: usize,
+    dropped_console: usize,
+}
+
+impl XHost {
+    /// Record an effect: values, presence and access set again on the same object replace the
+    /// earlier one; past [`MAX_EFFECTS`] (or [`MAX_ALERTS`] message boxes) effects are counted
+    /// and dropped.
+    fn push(&mut self, e: XfaEffect) {
+        let key = match &e {
+            XfaEffect::SetValue { som, .. } => Some((0u8, som.clone())),
+            XfaEffect::SetPresence { som, .. } => Some((1, som.clone())),
+            XfaEffect::SetAccess { som, .. } => Some((2, som.clone())),
+            _ => None,
+        };
+        if let Some(key) = key {
+            if let Some(&at) = self.set_at.get(&key)
+                && at >= self.barrier
+                && let Some(slot) = self.effects.get_mut(at)
+            {
+                *slot = e;
+                return;
+            }
+            if self.effects.len() >= MAX_EFFECTS {
+                self.dropped_effects += 1;
+                return;
+            }
+            self.set_at.insert(key, self.effects.len());
+            self.effects.push(e);
+            return;
+        }
+        if matches!(e, XfaEffect::MessageBox(_)) {
+            if self.alerts >= MAX_ALERTS {
+                self.dropped_alerts += 1;
+                return;
+            }
+            self.alerts += 1;
+        }
+        if self.effects.len() >= MAX_EFFECTS {
+            self.dropped_effects += 1;
+            return;
+        }
+        if matches!(e, XfaEffect::AddInstance { .. } | XfaEffect::RemoveInstance { .. } | XfaEffect::ResetData(_)) {
+            self.barrier = self.effects.len() + 1;
+        }
+        self.effects.push(e);
+    }
+
+    fn print(&mut self, line: String) {
+        if self.console.len() >= MAX_CONSOLE {
+            self.dropped_console += 1;
+        } else {
+            self.console.push(line);
+        }
+    }
+
+    /// What the limits left out.
+    fn notes(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.dropped_effects > 0 {
+            out.push(format!("the script made more than {MAX_EFFECTS} changes; {} more were left out", self.dropped_effects));
+        }
+        if self.dropped_alerts > 0 {
+            out.push(format!("the script showed more than {MAX_ALERTS} messages; {} more were left out", self.dropped_alerts));
+        }
+        if self.dropped_console > 0 {
+            out.push(format!("the script printed more than {MAX_CONSOLE} console lines; {} more were left out", self.dropped_console));
+        }
+        out
+    }
 }
 
 type Shared = RefCell<XHost>;
@@ -494,7 +595,7 @@ fn add_instance_of(ctx: &mut Context, parent: usize, name: &str) -> JsResult<Opt
     renumber(&mut h, new, 0);
     h.added += 1;
     let som = h.nodes.get(new).map(|n| n.som.clone()).unwrap_or_default();
-    h.effects.push(XfaEffect::AddInstance { som });
+    h.push(XfaEffect::AddInstance { som });
     Ok(Some(new))
 }
 
@@ -517,7 +618,7 @@ fn remove_instance_of(ctx: &mut Context, parent: usize, name: &str, i: usize) ->
         }
         renumber(&mut h, inst, 0);
     }
-    h.effects.push(XfaEffect::RemoveInstance { som });
+    h.push(XfaEffect::RemoveInstance { som });
     Ok(())
 }
 
@@ -727,7 +828,7 @@ fn node_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
             if let Some(n) = h.nodes.get_mut(idx) {
                 n.value = value.clone();
             }
-            h.effects.push(XfaEffect::SetValue { som, value });
+            h.push(XfaEffect::SetValue { som, value });
         }
         "presence" => {
             let p = match value.as_str() {
@@ -737,7 +838,7 @@ fn node_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
             if let Some(n) = h.nodes.get_mut(idx) {
                 n.presence = p.clone();
             }
-            h.effects.push(XfaEffect::SetPresence { som, presence: p });
+            h.push(XfaEffect::SetPresence { som, presence: p });
         }
         "access" => {
             let a = match value.as_str() {
@@ -747,7 +848,7 @@ fn node_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
             if let Some(n) = h.nodes.get_mut(idx) {
                 n.access = a.clone();
             }
-            h.effects.push(XfaEffect::SetAccess { som, access: a });
+            h.push(XfaEffect::SetAccess { som, access: a });
         }
         _ => {}
     }
@@ -788,12 +889,12 @@ fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<JsValue> {
 // ── xfa.host, xfa.layout, xfa.event, app, console ───────────────────────────────────────────
 
 fn effect(ctx: &mut Context, e: XfaEffect) -> JsResult<()> {
-    host(ctx)?.borrow_mut().effects.push(e);
+    host(ctx)?.borrow_mut().push(e);
     Ok(())
 }
 
 fn message_box(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let m = text(&arg(args, 0), ctx)?;
+    let m = clip(text(&arg(args, 0), ctx)?);
     effect(ctx, XfaEffect::MessageBox(m))?;
     Ok(JsValue::from(1.0))
 }
@@ -860,8 +961,8 @@ fn relayout(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> 
 }
 
 fn console_println(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let m = text(&arg(args, 0), ctx)?;
-    host(ctx)?.borrow_mut().console.push(m);
+    let m = clip(text(&arg(args, 0), ctx)?);
+    host(ctx)?.borrow_mut().print(m);
     Ok(JsValue::undefined())
 }
 
@@ -1148,6 +1249,44 @@ pub fn run_xfa(script: &str, event: &XfaEvent, doc: &XfaDoc, root: &XfaNode, lim
     run_here(script, event, doc, root, limits)
 }
 
+/// [`run_xfa`] with a time limit: a script still running after `timeout` (loops inside
+/// nested function calls can run for hours within the engine's per-frame loop limit) is left
+/// on its thread, which ends when the engine's own limits stop it, and an outcome with
+/// `abandoned` set comes back at once. In the browser build there are no threads: the script
+/// runs to its limits.
+pub fn run_xfa_within(script: &str, event: &XfaEvent, doc: &XfaDoc, root: XfaNode, limits: Limits, timeout: std::time::Duration) -> XfaOutcome {
+    let failed = |why: String| XfaOutcome { error: Some(why), ..Default::default() };
+    if let Some(why) = refuse(script) {
+        return failed(why);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (script, event, doc) = (script.to_string(), event.clone(), doc.clone());
+        let spawned = std::thread::Builder::new().name("pdfcraft-xfa-js".into()).stack_size(crate::SCRIPT_STACK).spawn(move || {
+            // The receiver is gone when the caller stopped waiting: nothing to report then.
+            let _ = tx.send(run_here(&script, &event, &doc, &root, limits));
+        });
+        if let Err(e) = spawned {
+            return failed(format!("the script engine could not start: {e}"));
+        }
+        match rx.recv_timeout(timeout) {
+            Ok(o) => o,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => XfaOutcome {
+                error: Some(format!("the script ran longer than {:.1} s and was abandoned", timeout.as_secs_f64())),
+                abandoned: true,
+                ..Default::default()
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => failed("the script stopped with an internal error".into()),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = timeout;
+        run_here(script, event, doc, &root, limits)
+    }
+}
+
 fn run_here(script: &str, event: &XfaEvent, doc: &XfaDoc, root: &XfaNode, limits: Limits) -> XfaOutcome {
     let mut ctx = Context::default();
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
@@ -1157,7 +1296,20 @@ fn run_here(script: &str, event: &XfaEvent, doc: &XfaDoc, root: &XfaNode, limits
     let mut nodes = Vec::new();
     flatten(&form, None, &mut nodes, 0);
     let current = nodes.iter().position(|n| n.som == event.target && n.kind != XfaKind::Form).unwrap_or(1.min(nodes.len().saturating_sub(1)));
-    ctx.insert_data(RefCell::new(XHost { nodes, effects: Vec::new(), console: Vec::new(), doc: doc.clone(), added: 0, current }));
+    ctx.insert_data(RefCell::new(XHost {
+        nodes,
+        effects: Vec::new(),
+        console: Vec::new(),
+        doc: doc.clone(),
+        added: 0,
+        current,
+        set_at: HashMap::new(),
+        barrier: 0,
+        alerts: 0,
+        dropped_effects: 0,
+        dropped_alerts: 0,
+        dropped_console: 0,
+    }));
     let mut out = XfaOutcome::default();
     let result = (|| -> JsResult<()> {
         install(&mut ctx, event, doc, current)?;
@@ -1181,6 +1333,7 @@ fn run_here(script: &str, event: &XfaEvent, doc: &XfaDoc, root: &XfaNode, limits
     }
     if let Some(h) = ctx.remove_data::<Shared>() {
         let h = h.into_inner();
+        out.notes = h.notes();
         out.effects = h.effects;
         out.console = h.console;
     }
