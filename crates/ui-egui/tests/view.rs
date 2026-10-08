@@ -51,6 +51,30 @@ fn rect(h: &Harness<'static, PdfCraftApp>, page: usize) -> Option<egui::Rect> {
     h.state().views[0].page_screen_rect(page)
 }
 
+/// Two pages of different sizes: 300×400 then 600×300.
+const MIXED: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 600 300] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+fn mixed_harness(options: &'static [(&'static str, &'static str)]) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("mixed.pdf", None, MIXED.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "none").unwrap();
+        for (k, v) in options {
+            app.set_option(k, v).unwrap();
+        }
+        app
+    });
+    h.run_steps(8);
+    h
+}
+
 /// A vertical wheel event; negative `dy` scrolls down.
 fn wheel(unit: MouseWheelUnit, dy: f32, phase: TouchPhase) -> egui::Event {
     egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, dy), phase, modifiers: Modifiers::NONE }
@@ -370,6 +394,37 @@ fn actual_size_fit_width_and_fit_page() {
     let (r, vp) = (rect(&h, 0).expect("page 1"), h.state().views[0].viewport_rect());
     assert!(r.height() <= vp.height() && r.height() > vp.height() * 0.85, "fit page: page {} in viewport {}", r.height(), vp.height());
     assert!(r.width() < vp.width(), "a portrait page fits by height");
+}
+
+#[test]
+fn fit_page_holds_zoom_across_mixed_page_sizes() {
+    // Scrolling views fit their largest page, so scrolling past other sizes must not jump
+    // the zoom (#214).
+    let mut h = mixed_harness(&[("layout", "continuous")]);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num0); // fit page
+    h.run_steps(4);
+    let z1 = h.state().views[0].zoom;
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 1);
+    assert_eq!(h.state().views[0].zoom, z1, "another size scrolls past at the same zoom");
+}
+
+#[test]
+fn single_page_fit_page_fits_the_shown_page() {
+    // Single-page view fits the page it shows: each page fills the viewport on its own.
+    let mut h = mixed_harness(&[("layout", "single")]);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num0); // fit page
+    h.run_steps(4);
+    let vp = h.state().views[0].viewport_rect();
+    let r1 = rect(&h, 0).expect("page 1");
+    assert!(r1.width() <= vp.width() && r1.height() <= vp.height(), "page 1 fits: {r1:?} in {vp:?}");
+    let z1 = h.state().views[0].zoom;
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(4);
+    let r2 = rect(&h, 1).expect("page 2");
+    assert!(r2.width() <= vp.width() && r2.height() <= vp.height(), "page 2 fits: {r2:?} in {vp:?}");
+    assert_ne!(h.state().views[0].zoom, z1, "the wider page refits instead of keeping page 1's zoom");
 }
 
 #[test]

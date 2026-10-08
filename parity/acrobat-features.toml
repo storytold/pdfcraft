@@ -938,8 +938,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.fit_one_page"]
 tools = []
-evidence = ["crates/ui-egui/tests/view.rs::actual_size_fit_width_and_fit_page", "crates/ui-egui/tests/view.rs::rail_page_display_menu_offers_acrobats_view_choices"]
-notes = "View ▸ Zoom to page level (⌘0) and the rail's Page display menu, which also offers Fit one full page (single-page view at Fit page)"
+evidence = ["crates/ui-egui/tests/view.rs::actual_size_fit_width_and_fit_page", "crates/ui-egui/tests/view.rs::rail_page_display_menu_offers_acrobats_view_choices", "crates/ui-egui/tests/view.rs::fit_page_holds_zoom_across_mixed_page_sizes", "crates/ui-egui/tests/view.rs::single_page_fit_page_fits_the_shown_page"]
+notes = "View ▸ Zoom to page level (⌘0) and the rail's Page display menu, which also offers Fit one full page (single-page view at Fit page). Scrolling views fit their largest page so mixed sizes never jump the zoom; single-page view fits the shown page"
 
 [[feature]]
 id = "view.zoom-fit-width"

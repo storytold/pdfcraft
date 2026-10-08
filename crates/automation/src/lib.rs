@@ -1045,6 +1045,15 @@ impl Automation {
     fn doc_protect(&mut self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::{Algorithm, Changes, Printing, Protection};
         let d = Protection::default();
+        // Restrictions only exist behind a permissions password (ISO 32000-2 §7.6.4.4: /P is
+        // enforced against the owner password; without one everything stays allowed). Refuse a
+        // restriction that could not take effect instead of writing an unrestricted file (#134).
+        let restriction = ["printing", "changes", "copy", "accessibility"].into_iter().find(|k| a.get(k).is_some());
+        if let (None, Some(key)) = (a.opt_str("permissions_password")?, restriction) {
+            return Err(ToolError::InvalidArgs(format!(
+                "`{key}` needs `permissions_password`: with open_password alone the document is encrypted but nothing is restricted"
+            )));
+        }
         let p = Protection {
             open_password: a.opt_str("open_password")?.map(str::to_owned),
             permissions_password: a.opt_str("permissions_password")?.map(str::to_owned),
@@ -1578,16 +1587,19 @@ fn info(d: &Document) -> Value {
             "page": n + 1, "label": p.label, "width": p.width, "height": p.height, "rotation": p.rotation,
         })).collect::<Vec<_>>(),
         "outline": outline(&i.outline),
+        // Rectangles use the tools' convention (top-left of the displayed page, like
+        // comment_list and link_list), not raw PDF user space, so they can be fed back to
+        // geometry-taking tools (#129).
         "annotations": i.annotations.iter().map(|a| json!({
             "page": page1(a.page), "type": a.subtype, "author": a.author, "contents": a.contents,
-            "modified": a.modified, "name": a.name, "in_reply_to": a.in_reply_to, "rect": a.rect,
+            "modified": a.modified, "name": a.name, "in_reply_to": a.in_reply_to, "rect": view_rect(i, a.page, a.rect),
         })).collect::<Vec<_>>(),
         "fields": i.fields.iter().map(|f| json!({
             "name": f.name, "kind": format!("{:?}", f.kind), "value": f.value, "page": f.page.map(page1),
             "tooltip": f.tooltip, "has_actions": f.has_actions,
         })).collect::<Vec<_>>(),
         "links": i.links.iter().map(|l| json!({
-            "page": page1(l.page), "rect": l.rect,
+            "page": page1(l.page), "rect": view_rect(i, l.page, l.rect),
             "target": match &l.target {
                 pdfcraft_render::LinkTarget::Page(p) => json!({ "page": page1(*p) }),
                 pdfcraft_render::LinkTarget::Uri(u) => json!({ "uri": u }),
@@ -1602,6 +1614,12 @@ fn info(d: &Document) -> Value {
         "warnings": i.warnings,
         "repairs": d.repair_log(),
     })
+}
+
+/// A user-space rectangle on 0-based `page` in displayed-page coordinates; unchanged when the
+/// page is unknown (a malformed annotation that points at no page).
+fn view_rect(i: &pdfcraft_render::DocInfo, page: usize, rect: [f32; 4]) -> [f32; 4] {
+    i.pages.get(page).map_or(rect, |p| comments::rect_to_view(p, rect))
 }
 
 fn outline(items: &[pdfcraft_render::OutlineItem]) -> Value {

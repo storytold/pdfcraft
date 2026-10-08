@@ -86,7 +86,8 @@ fn main() -> eframe::Result {
         if log::log_enabled!(log::Level::Error) {
             log::error!("{report}");
         } else {
-            eprintln!("pdfcraft: {report}");
+            // `eprintln!` panics on a broken stderr pipe, and a panic inside the panic hook aborts.
+            let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("pdfcraft: {report}\n"));
         }
     }));
     let mut files = Vec::new();
@@ -132,7 +133,8 @@ fn main() -> eframe::Result {
     if let (Some(logger), Some(dir)) = (logger, settings_dir()) {
         match logger.attach_dir(&dir.join("logs")) {
             Ok(path) => log::info!("PdfCraft {}, log file {}", env!("CARGO_PKG_VERSION"), path.display()),
-            Err(e) => eprintln!("pdfcraft: no log file: {e}"),
+            // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
+            Err(e) => log::warn!("no log file: {e}"),
         }
     }
     let persistence_path = settings_dir().map(|d| d.join("app.ron"));
