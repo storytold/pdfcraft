@@ -168,18 +168,44 @@ fn page_list(s: &str) -> Result<Vec<usize>, String> {
     s.split(',').map(|p| p.trim().parse::<usize>().ok().filter(|n| *n > 0).map(|n| n - 1).ok_or(format!("bad page number {p:?}"))).collect()
 }
 
+/// The options `edit` understands, for its "unknown option" message.
+const EDIT_OPTIONS: &str = "--out, --password, --full, --rotate, --delete, --move, --insert-blank, --title, --author";
+
 /// Apply page and metadata edits through the engine and save (incrementally unless `--full`).
+///
+/// Every argument is parsed before the file is opened: an option this command does not know
+/// (a typo like `--rotat`) is an error, not something to skip — skipping it would write an
+/// unchanged copy and exit 0, which looks like a successful edit (#133).
 fn edit(args: &[String]) -> Result<(), String> {
     use pdfcraft_engine::{Edit, Session};
-    let path = *positional(args).first().ok_or("edit: missing file")?;
-    let out = flag(args, "--out").ok_or("edit: missing --out")?;
-    let mut session = Session::new();
-    let id = session.open(path, Some(path.to_string()), read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
+    let mut path: Option<&str> = None;
+    let mut out: Option<&str> = None;
+    let mut password: Option<&str> = None;
+    let mut full = false;
     let mut edits = Vec::new();
     let mut i = 0;
-    while i < args.len() {
-        let value = args.get(i + 1).map(String::as_str).unwrap_or("");
-        match args[i].as_str() {
+    while let Some(arg) = args.get(i).map(String::as_str) {
+        // Options that take no value, and the input file.
+        match arg {
+            "--full" => {
+                full = true;
+                i += 1;
+                continue;
+            }
+            a if a.starts_with("--") => {}
+            a => {
+                if path.is_some() {
+                    return Err(format!("edit: unexpected argument {a:?} (one input file, then options)"));
+                }
+                path = Some(a);
+                i += 1;
+                continue;
+            }
+        }
+        let value = args.get(i + 1).map(String::as_str).ok_or_else(|| format!("edit: {arg} needs a value"))?;
+        match arg {
+            "--out" => out = Some(value),
+            "--password" => password = Some(value),
             "--rotate" => {
                 let (pages, deg) = value.split_once(':').ok_or("--rotate PAGES:DEGREES")?;
                 edits.push(Edit::RotatePages { pages: page_list(pages)?, degrees: deg.parse().map_err(|_| "bad degrees")? });
@@ -196,14 +222,18 @@ fn edit(args: &[String]) -> Result<(), String> {
             }
             "--title" => edits.push(Edit::SetInfo { key: "Title".into(), value: value.into() }),
             "--author" => edits.push(Edit::SetInfo { key: "Author".into(), value: value.into() }),
-            _ => {}
+            other => return Err(format!("edit: unknown option {other:?} (expected one of: {EDIT_OPTIONS})")),
         }
-        i += 1;
+        i += 2;
     }
+    let path = path.ok_or("edit: missing file")?;
+    let out = out.ok_or("edit: missing --out")?;
+    let mut session = Session::new();
+    let id = session.open(path, Some(path.to_string()), read(path)?, password).map_err(|e| e.to_string())?;
     for e in edits {
         session.apply(id, e).map_err(|e| e.to_string())?;
     }
-    let bytes = if args.iter().any(|a| a == "--full") { session.save_full_bytes(id) } else { session.save_bytes(id) }.map_err(|e| e.to_string())?;
+    let bytes = if full { session.save_full_bytes(id) } else { session.save_bytes(id) }.map_err(|e| e.to_string())?;
     std::fs::write(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}"))
 }
 
