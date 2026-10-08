@@ -1720,6 +1720,12 @@ fn child(dir: &Path, name: &str) -> PathBuf {
 
 /// Write via a temporary file in the same directory, then rename over the target.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic_with(path, bytes, staging_suffixes())
+}
+
+/// [`write_atomic`], trying the staging names that `suffixes` give.
+fn write_atomic_with(path: &Path, bytes: &[u8], suffixes: impl IntoIterator<Item = u64>) -> Result<()> {
+    use std::io::Write;
     // A folder can't be replaced, and staging beside it could land outside the root: "." names
     // the root itself, whose parent isn't ours to write in.
     if path.is_dir() {
@@ -1728,12 +1734,60 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let name = path.file_name().ok_or_else(|| failed(format!("{}: not a file path", path.display())))?;
     std::fs::create_dir_all(dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
-    let tmp = dir.join(format!(".{}.pdfcraft-tmp", name.to_string_lossy()));
-    std::fs::write(&tmp, bytes).map_err(|e| failed(format!("{}: {e}", tmp.display())))?;
+    let (tmp, file) = create_staging(dir, &name.to_string_lossy(), suffixes).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
+    // Closed at the end of the block, before the rename.
+    let written = {
+        let mut file = file;
+        file.write_all(bytes)
+    };
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(failed(format!("{}: {e}", tmp.display())));
+    }
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         failed(format!("{}: {e}", path.display()))
     })
+}
+
+/// How many staging names [`create_staging`] tries. A random 64-bit name is only taken if someone
+/// put a file there on purpose, so running out means refusing, not trying harder.
+const STAGING_ATTEMPTS: usize = 16;
+
+/// Create a new, empty staging file in `dir` for the file `name`, one name per suffix. It is
+/// opened with `create_new`, which fails if anything already has the name (a file, a hard link,
+/// a symbolic link even when dangling, a folder), on Windows as everywhere else; such a name is
+/// skipped, never opened, so a file planted at the staging path can't receive or redirect the
+/// write.
+fn create_staging(dir: &Path, name: &str, suffixes: impl IntoIterator<Item = u64>) -> std::io::Result<(PathBuf, std::fs::File)> {
+    // At most 128 bytes of the target's name, cut between characters, so the staging name fits
+    // the 255-byte (Linux, macOS) and 255-unit (Windows) limits however long that name is.
+    let mut stem = String::new();
+    for c in name.chars() {
+        if stem.len() + c.len_utf8() > 128 {
+            break;
+        }
+        stem.push(c);
+    }
+    for suffix in suffixes.into_iter().take(STAGING_ATTEMPTS) {
+        let tmp = dir.join(format!(".{stem}.{suffix:016x}.pdfcraft-tmp"));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => return Ok((tmp, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            // Windows reports a folder at the name as "access denied"; it is taken all the same.
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && tmp.symlink_metadata().is_ok() => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "every temporary file name tried is taken"))
+}
+
+/// Unpredictable staging-name suffixes, so a name can't be planted in advance. `RandomState` is
+/// keyed from the operating system's random source.
+fn staging_suffixes() -> impl Iterator<Item = u64> {
+    use std::hash::BuildHasher;
+    let state = std::hash::RandomState::new();
+    (0u64..).map(move |i| state.hash_one(i))
 }
 
 #[cfg(test)]
@@ -1789,5 +1843,159 @@ mod tests {
         assert!(!foreign_share(Path::new(r"\\?\UNC\SERVER\DOCS\x.pdf"), shared));
         assert!(foreign_share(Path::new(r"\\server\other\x.pdf"), shared));
         assert!(foreign_share(Path::new(r"\\attacker\docs\x.pdf"), shared));
+    }
+
+    /// A fresh, empty folder for one staging test.
+    fn staging_dir(test: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-staging-{}-{test}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn staged(dir: &Path, suffix: u64) -> PathBuf {
+        dir.join(format!(".out.pdf.{suffix:016x}.pdfcraft-tmp"))
+    }
+
+    fn read(p: &Path) -> String {
+        std::fs::read_to_string(p).unwrap()
+    }
+
+    /// A symbolic link to a file, where the system allows one (Windows needs Developer Mode or an
+    /// administrator for it).
+    fn file_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link)
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(target, link)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            Err(std::io::Error::other(format!("no symbolic links here: {} {}", target.display(), link.display())))
+        }
+    }
+
+    #[test]
+    fn staging_never_writes_through_a_file_planted_at_its_name() {
+        let dir = staging_dir("planted");
+        // A file elsewhere that a planted link points at.
+        let outside = dir.join("outside.txt");
+        std::fs::write(&outside, "PRECIOUS").unwrap();
+        let target = dir.join("out.pdf");
+        // A hard link needs no privileges on any system, and writing to it writes to `outside`.
+        std::fs::hard_link(&outside, staged(&dir, 1)).unwrap();
+        std::fs::write(staged(&dir, 2), "PLANTED").unwrap();
+        write_atomic_with(&target, b"NEW", [1, 2, 3]).unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert_eq!(read(&outside), "PRECIOUS");
+        assert_eq!(read(&staged(&dir, 1)), "PRECIOUS");
+        assert_eq!(read(&staged(&dir, 2)), "PLANTED");
+        assert!(!staged(&dir, 3).exists(), "the staging file was renamed into place");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn staging_never_writes_through_a_symbolic_link_planted_at_its_name() {
+        let dir = staging_dir("symlink");
+        let outside = dir.join("outside.txt");
+        std::fs::write(&outside, "PRECIOUS").unwrap();
+        let target = dir.join("out.pdf");
+        if let Err(e) = file_symlink(&outside, &staged(&dir, 1)) {
+            eprintln!("symbolic links not checked: {e}");
+            return;
+        }
+        write_atomic_with(&target, b"NEW", [1, 2]).unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert_eq!(read(&outside), "PRECIOUS");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn staging_never_creates_a_file_through_a_dangling_link_at_its_name() {
+        let dir = staging_dir("dangling");
+        let unborn = dir.join("created-through-a-link.txt");
+        let target = dir.join("out.pdf");
+        if let Err(e) = file_symlink(&unborn, &staged(&dir, 1)) {
+            eprintln!("symbolic links not checked: {e}");
+            return;
+        }
+        write_atomic_with(&target, b"NEW", [1, 2]).unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert!(!unborn.exists(), "nothing was created through the dangling link");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn staging_gives_up_rather_than_reuse_a_taken_name() {
+        let dir = staging_dir("taken");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, "OLD").unwrap();
+        for s in 1..=STAGING_ATTEMPTS as u64 {
+            std::fs::write(staged(&dir, s), "PLANTED").unwrap();
+        }
+        assert!(write_atomic_with(&target, b"NEW", 1..).is_err());
+        assert_eq!(read(&target), "OLD");
+        for s in 1..=STAGING_ATTEMPTS as u64 {
+            assert_eq!(read(&staged(&dir, s)), "PLANTED");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The names in a folder: what a test can see was left behind.
+    fn listing(dir: &Path) -> Vec<String> {
+        let mut names: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn staging_names_differ_between_saves_and_fit_long_names() {
+        let suffixes: std::collections::HashSet<u64> = staging_suffixes().take(64).collect();
+        assert_eq!(suffixes.len(), 64);
+        assert_ne!(staging_suffixes().next(), staging_suffixes().next(), "each save draws new names");
+        // 60 four-byte characters: a 244-byte name, within every system's limit. Its staging name
+        // must be too (on Linux the whole name in it would be 275 bytes).
+        let dir = staging_dir("long");
+        let name = format!("{}.pdf", "\u{1F600}".repeat(60));
+        write_atomic(&dir.join(&name), b"NEW").unwrap();
+        assert_eq!(read(&dir.join(&name)), "NEW");
+        assert_eq!(listing(&dir), [name], "no staging file is left behind");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_folder_at_the_staging_name_is_left_alone() {
+        let dir = staging_dir("folder");
+        std::fs::create_dir(staged(&dir, 1)).unwrap();
+        std::fs::write(staged(&dir, 1).join("inside.txt"), "PLANTED").unwrap();
+        let target = dir.join("out.pdf");
+        write_atomic_with(&target, b"NEW", [1, 2]).unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert_eq!(read(&staged(&dir, 1).join("inside.txt")), "PLANTED");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Windows refuses to replace a read-only file, so the rename fails: the staging file must not
+    /// be left behind.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_rename_removes_the_staging_file() {
+        let dir = staging_dir("readonly");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, "OLD").unwrap();
+        let mut perms = std::fs::metadata(&target).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&target, perms.clone()).unwrap();
+        let e = write_atomic_with(&target, b"NEW", [7]).unwrap_err();
+        assert!(e.to_string().contains(&target.display().to_string()), "the rename failed, not the staging: {e}");
+        assert_eq!(read(&target), "OLD");
+        assert_eq!(listing(&dir), ["out.pdf"], "the staging file was removed");
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&target, perms).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
