@@ -76,11 +76,11 @@ jobs:
           $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/l*v', 'install.log' -Wait -PassThru
           if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 60; throw "msiexec /i exited $($p.ExitCode)" }
           $shortcuts = @(
-            (Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'PdfCraft.lnk'),
-            (Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'PdfCraft.lnk')
+            (Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'Linkco PDF Editor.lnk'),
+            (Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'Linkco PDF Editor.lnk')
           )
           # Plain shortcuts to the program (#143), not advertised ones, so TargetPath is the exe.
-          $exePath = Join-Path $env:ProgramFiles 'PdfCraft\pdfcraft.exe'
+          $exePath = Join-Path $env:ProgramFiles 'Linkco\Linkco PDF Editor\pdfcraft.exe'
           $wsh = New-Object -ComObject WScript.Shell
           foreach ($shortcut in $shortcuts) {
             if (-not (Test-Path -LiteralPath $shortcut)) { throw "installer did not create $shortcut" }
@@ -88,7 +88,7 @@ jobs:
             if ($target -ne $exePath) { throw "$shortcut points to '$target', not $exePath" }
             Write-Output "ok $shortcut -> $target"
           }
-          $dir = Join-Path $env:ProgramFiles 'PdfCraft'
+          $dir = Join-Path $env:ProgramFiles 'Linkco\Linkco PDF Editor'
           foreach ($exe in 'pdfcraft.exe', 'pdfcraft-cli.exe') {
             $path = Join-Path $dir $exe
             if (-not (Test-Path $path)) { Get-ChildItem -Recurse $env:ProgramFiles -Filter $exe | Select-Object -First 3; throw "$exe not installed in $dir" }

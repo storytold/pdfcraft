@@ -40,20 +40,32 @@ const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256
 const LEGACY_STORAGE_KEY: &str = "printcraft";
 
 /// The settings folder: `app.ron` and the `logs` folder (docs/development.md). eframe would
-/// otherwise derive it from the app id; keep it under "PdfCraft".
+/// otherwise derive it from the app id; keep it under "Linkco PDF Editor".
 fn settings_dir() -> Option<std::path::PathBuf> {
-    eframe::storage_dir("PdfCraft")
+    eframe::storage_dir("Linkco PDF Editor")
 }
 
-/// Move the settings and crash-recovery folders of the app's former name, PrintCraft, to the new
-/// name once, so an upgrade keeps recent files, preferences and unsaved work. Best effort: a
-/// folder is left alone when the new one already exists or the move fails.
+/// Move the settings and crash-recovery folders of the app's former names (PrintCraft, PdfCraft)
+/// to the new name once, so an upgrade keeps recent files, preferences and unsaved work. Best
+/// effort: a folder is left alone when the new one already exists or the move fails.
 fn migrate_legacy_folders() {
-    let mut moves = vec![(eframe::storage_dir("PrintCraft"), settings_dir())];
-    // Recovery lives in the settings folder except on Windows, where it is under %LOCALAPPDATA%.
+    let mut moves = vec![
+        (eframe::storage_dir("PdfCraft"), settings_dir()),
+        (eframe::storage_dir("PrintCraft"), settings_dir()),
+    ];
+    // Recovery lives in the settings folder except on Windows (%LOCALAPPDATA%) and Linux ($XDG_DATA_HOME / ~/.local/share).
     if cfg!(windows) {
         let local = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
-        moves.push((local.as_ref().map(|d| d.join("PrintCraft")), local.map(|d| d.join("PdfCraft"))));
+        moves.push((local.as_ref().map(|d| d.join("PdfCraft")), local.as_ref().map(|d| d.join("Linkco PDF Editor"))));
+        moves.push((local.as_ref().map(|d| d.join("PrintCraft")), local.map(|d| d.join("Linkco PDF Editor"))));
+    }
+    if cfg!(target_os = "linux") {
+        let data = std::env::var_os("XDG_DATA_HOME")
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").filter(|v| !v.is_empty()).map(|h| std::path::PathBuf::from(h).join(".local/share")));
+        moves.push((data.as_ref().map(|d| d.join("pdfcraft")), data.as_ref().map(|d| d.join("linkco-pdf-editor"))));
+        moves.push((data.as_ref().map(|d| d.join("printcraft")), data.map(|d| d.join("linkco-pdf-editor"))));
     }
     for (old, new) in moves {
         let (Some(old), Some(new)) = (old, new) else { continue };
@@ -112,7 +124,7 @@ fn main() -> eframe::Result {
     }
     let integrated = cfg!(target_os = "macos");
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("PdfCraft")
+        .with_title("Linkco PDF Editor")
         .with_inner_size([1440.0, 920.0])
         .with_min_inner_size([820.0, 520.0])
         .with_drag_and_drop(true)
@@ -132,7 +144,7 @@ fn main() -> eframe::Result {
     // Records logged until now are written to it first.
     if let (Some(logger), Some(dir)) = (logger, settings_dir()) {
         match logger.attach_dir(&dir.join("logs")) {
-            Ok(path) => log::info!("PdfCraft {}, log file {}", env!("CARGO_PKG_VERSION"), path.display()),
+            Ok(path) => log::info!("Linkco PDF Editor {}, log file {}", env!("CARGO_PKG_VERSION"), path.display()),
             // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
             Err(e) => log::warn!("no log file: {e}"),
         }
@@ -147,7 +159,7 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     let apple_events = &apple_events;
     eframe::run_native(
-        "PdfCraft",
+        "Linkco PDF Editor",
         native,
         Box::new(move |cc| {
             let mut app = PdfCraftApp::new();

@@ -314,7 +314,7 @@ fn tab_and_window_show_the_document_title_when_asked() {
     use pdfcraft_engine::Edit;
     let mut h = harness();
     h.run_steps(2);
-    assert_eq!(h.state().window_title, "b.pdf — PdfCraft");
+    assert_eq!(h.state().window_title, "b.pdf — Linkco PDF Editor");
     {
         let s = h.state_mut();
         let id = s.views[s.active.unwrap()].id;
@@ -324,7 +324,7 @@ fn tab_and_window_show_the_document_title_when_asked() {
         s.session.apply(id, Edit::SetInitialView(Box::new(v))).unwrap();
     }
     h.run_steps(2);
-    assert_eq!(h.state().window_title, "Quarterly report — PdfCraft");
+    assert_eq!(h.state().window_title, "Quarterly report — Linkco PDF Editor");
     h.get_by_label_contains("Quarterly report");
 }
 

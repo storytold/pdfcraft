@@ -7,9 +7,9 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>PdfCraft</string>
+  <string>Linkco PDF Editor</string>
   <key>CFBundleName</key>
-  <string>PdfCraft</string>
+  <string>Linkco PDF Editor</string>
   <key>CFBundleExecutable</key>
   <string>PdfCraft</string>
   <key>CFBundleIdentifier</key>
@@ -43,7 +43,7 @@
   <key>NSRequiresAquaSystemAppearance</key>
   <false/>
   <key>NSHumanReadableCopyright</key>
-  <string>Copyright © the PdfCraft authors. MIT OR Apache-2.0.</string>
+  <string>© Al Rawabet Commercial Services &amp; Contracting Company W.L.L.</string>
 
   <!-- Documents PdfCraft opens (#73): it is offered under Open With and can be made the default
        for PDFs, without taking over from the system's viewer on install ("Alternate"). Declared by

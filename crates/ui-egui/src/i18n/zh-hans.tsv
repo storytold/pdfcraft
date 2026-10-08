@@ -5,7 +5,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Simplified Chinese computing vocabulary. No proprietary localisation resource, string table or
 # product UI (Acrobat's included) was consulted or copied; add entries the same way.
-# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
+# Product and technology names (Linkco PDF Editor, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept.
 
 	Menu	菜单
@@ -364,9 +364,7 @@
 	Check for updates	检查更新
 	No check has run yet.	尚未运行检查。
 	Checking for a newer version…	正在检查新版本…
-	PdfCraft {v} is available.	PdfCraft {v} 可用。
 	You have version {c}. Download the new version from its release page.	当前版本为 {c}。请从其发布页面下载新版本。
-	PdfCraft {c} is up to date.	PdfCraft {c} 已是最新。
 	Couldn't check for updates: {e}	无法检查更新：{e}
 	You have version {c}. All releases are listed at {page}.	当前版本为 {c}。所有版本列在 {page}。
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	向 GitHub 查询最新版本。不会自动下载或安装任何内容。
@@ -472,7 +470,6 @@
 	No changes allowed	不允许任何更改
 	Annotations, form fill-in, and digital signatures	注释、填写表单和数字签名
 	Form fill-in and digital signatures	填写表单和数字签名
-	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	密钥位于 macOS 钥匙串中，系统可能会询问是否允许 PdfCraft 使用它。
 	Digital ID password	数字 ID 密码
 	Back	返回
 	Validate all	全部验证
@@ -1214,7 +1211,6 @@
 	Anyone opening the document will need this password. It's applied when you save.	打开文档的任何人都需要此密码。保存时应用。
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	打开文档无需密码；更改限制需要此密码。保存时应用。
 	Recover unsaved documents?	要恢复未保存的文档吗？
-	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft 未正常关闭。以下文档的更改已自动保存：
 	just now	刚刚
 	{n} min ago	{n} 分钟前
 	{n} h ago	{n} 小时前
@@ -1233,7 +1229,6 @@
 	Select all pages (Organize)	选择所有页面（组织页面）
 	Version {v}	版本{v}
 	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	用 Rust 从零编写的开源 PDF 应用。MIT OR Apache-2.0 许可。
-	Part of	隶属于
 	Summarize Options	汇总选项
 	Choose a layout:	选择布局：
 	Comments only	仅注释
@@ -1380,10 +1375,8 @@
 	On the web, open or drop an image to convert it	在 Web 端，打开或拖入图像进行转换
 	Couldn't optimize the file: {e}	无法优化文件：{e}
 	Couldn't write {path}: {e}	无法写入{path}：{e}
-	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	该表单请求提交到{u}；PdfCraft 不发送表单数据。请保存文档以保留填写内容。
 	{s} actions run in the JavaScript engine (M6)	{s} 动作在 JavaScript 引擎中运行 (M6)
 	{name}: the {other} action isn't supported yet	{name}：{other} 动作暂不受支持
-	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} 将表单提交到{url}；PdfCraft 不发送表单数据。请保存文档以保留填写内容。
 	Export stopped: {e}	导出中止：{e}
 	Exported 1 image	已导出 1 张图像
 	Exported {n} images	已导出{n}张图像
@@ -1540,7 +1533,6 @@
 	Signed and all signatures are valid.	已签名，所有签名均有效。
 	At least one signature has problems.	至少一个签名存在问题。
 	This document is secured. Some changes are restricted by its security settings.	本文档已加密。其安全设置限制了部分更改。
-	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	这是动态 XFA 表单，PdfCraft 暂无法显示。您看到的是文件的占位页面。
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	此表单还包含 XFA 数据，PdfCraft 暂不读取。您可以填写字段，但 Acrobat 可能显示 XFA 值。
 	This document contains {n} interactive form fields.	本文档包含 {n} 个交互式表单域。
 	This file was damaged and has been repaired. Saving keeps the repaired version.	此文件已损坏并已修复。保存将保留修复后的版本。
@@ -1580,7 +1572,6 @@
 	Read	阅读
 	Convert	转换
 	E-Sign	电子签名
-	Welcome to PdfCraft	欢迎使用 PdfCraft
 	An open-source PDF workbench — local, private, and scriptable.	开源 PDF 工作台——本地、私密、可编写脚本。
 	Recommended tools	推荐工具
 	Use now	立即使用
@@ -1613,15 +1604,7 @@
 	Split document…	拆分文档…
 	Number pages…	页面编号…
 	Keyboard shortcuts	键盘快捷键
-	Join the ArtCraft Discord	加入 ArtCraft Discord
-	Join the ArtCraft community	加入 ArtCraft 社区
-	Get help, share feedback and follow development on Discord.	在 Discord 上获取帮助、分享反馈并关注开发动态。
-	Join our Discord	加入我们的 Discord
-	PdfCraft web page	PdfCraft 网页
-	PdfCraft on GitHub	GitHub 上的 PdfCraft
-	ArtCraft website	ArtCraft 官网
 	Check for updates…	检查更新…
-	About PdfCraft	关于 PdfCraft
 	JavaScript console…	JavaScript 控制台…
 	Document JavaScripts…	文档 JavaScript…
 	Recognize text…	识别文本…
@@ -1631,8 +1614,6 @@
 	Add background…	添加背景…
 	Prepare a form	准备表单
 	Digitally sign	数字签名
-	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	在 PdfCraft 中打开的文件会显示在这里。将 PDF 拖放到任意位置即可打开。
-	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft 可离线工作。无遥测、无账号，除非您自行添加服务商，否则无云端处理。
 
 	Measure distance	测量距离
 	Measure perimeter	测量周长
@@ -1897,3 +1878,18 @@
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA 表单：字段与 XFA 数据保持同步，以便其他阅读器显示您填写的内容。
 @plural	{n} page|{n} pages	{n} 页
 @plural	{n} field|{n} fields	{n} 个字段
+	About Linkco PDF Editor	关于 Linkco PDF Editor
+	Linkco PDF Editor	Linkco PDF 编辑器
+	Professional PDF tools for everyday document work.	面向日常文档工作的专业 PDF 工具。
+	Professional PDF document tools by Linkco.	Linkco 出品的专业 PDF 文档工具。
+	View all tools →	查看全部工具 →
+	Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.	在 Linkco PDF Editor 中打开的文件会显示在这里。将 PDF 拖放到任意位置即可打开。
+	Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider.	Linkco PDF Editor 可离线工作。无遥测、无账号，除非您自行添加服务商，否则无云端处理。
+	Linkco PDF Editor {v} is available.	Linkco PDF Editor {v} 可用。
+	Linkco PDF Editor {c} is up to date.	Linkco PDF Editor {c} 已是最新。
+	The key is in the macOS Keychain, which may ask to allow Linkco PDF Editor to use it.	密钥位于 macOS 钥匙串中，系统可能会询问是否允许 Linkco PDF Editor 使用它。
+	Linkco PDF Editor didn't shut down normally. These documents had changes that were autosaved:	Linkco PDF Editor 未正常关闭。以下文档的更改已自动保存：
+	The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	该表单请求提交到{u}；Linkco PDF Editor 不发送表单数据。请保存文档以保留填写内容。
+	{name} submits the form to {url}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	{name} 将表单提交到{url}；Linkco PDF Editor 不发送表单数据。请保存文档以保留填写内容。
+	This is a dynamic XFA form, which Linkco PDF Editor can't display yet. What you see is the file's placeholder page.	这是动态 XFA 表单，Linkco PDF Editor 暂无法显示。您看到的是文件的占位页面。
+	{who} in this document tried to open an address Linkco PDF Editor won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	此文档中的{who}尝试打开 Linkco PDF Editor 不会打开的地址：{e}。仅允许从文档打开网页（http、https）和电子邮件（mailto）链接。

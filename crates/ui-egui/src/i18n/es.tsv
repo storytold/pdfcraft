@@ -6,7 +6,7 @@
 # Spanish computing vocabulary (European Spanish, informal "tú"). No proprietary localisation
 # resource, string table or product UI (Acrobat's included) was consulted or copied; add entries
 # the same way.
-# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
+# Product and technology names (Linkco PDF Editor, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
 
 	Menu	Menú
@@ -58,7 +58,6 @@
 	Side panels	Paneles laterales
 	Enable Acrobat JavaScript	Activar Acrobat JavaScript
 	OK	Aceptar
-	Join our Discord	Únete a nuestro Discord
 	Close	Cerrar
 	Next / previous match	Coincidencia siguiente / anterior
 	Copy selected text	Copiar el texto seleccionado
@@ -118,17 +117,12 @@
 	Next page	Página siguiente
 	Previous page	Página anterior
 	Current page — type a page number or label (such as iv) and press Enter	Página actual: escribe un número o una etiqueta de página (por ejemplo, iv) y pulsa Intro
-	Welcome to PdfCraft	Te damos la bienvenida a PdfCraft
 	An open-source PDF workbench — local, private, and scriptable.	Un banco de trabajo PDF de código abierto: local, privado y automatizable.
-	Join the ArtCraft community	Únete a la comunidad de ArtCraft
-	Get help, share feedback and follow development on Discord.	Recibe ayuda, comparte tu opinión y sigue el desarrollo en Discord.
 	Recommended tools	Herramientas recomendadas
 	Use now	Usar ahora
 	Open file	Abrir archivo
 	Recent	Recientes
-	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Los archivos que abras en PdfCraft aparecerán aquí. Suelta un PDF en cualquier parte para abrirlo.
 	Privacy	Privacidad
-	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft funciona sin conexión. Sin telemetría, sin cuenta y sin procesamiento en la nube, salvo que añadas un proveedor.
 	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Los scripts se ejecutan en un entorno aislado, sin acceso a archivos ni a la red. Con JavaScript desactivado, las funciones estándar de formato, validación y cálculo de Acrobat siguen funcionando.
 	Back to all tools	Volver a todas las herramientas
 	Close panel	Cerrar panel
@@ -261,12 +255,7 @@
 	Split document…	Dividir documento…
 	Number pages…	Numerar páginas…
 	Keyboard shortcuts	Atajos de teclado
-	Join the ArtCraft Discord	Únete al Discord de ArtCraft
-	PdfCraft web page	Página web de PdfCraft
-	PdfCraft on GitHub	PdfCraft en GitHub
-	ArtCraft website	Sitio web de ArtCraft
 	Check for updates…	Buscar actualizaciones…
-	About PdfCraft	Acerca de PdfCraft
 	Export a PDF	Exportar un PDF
 	Export to	Exportar a
 	Microsoft Word (.docx)	Microsoft Word (.docx)
@@ -708,9 +697,7 @@
 	Check for updates	Buscar actualizaciones
 	No check has run yet.	Aún no se ha hecho ninguna comprobación.
 	Checking for a newer version…	Buscando una versión más reciente…
-	PdfCraft {v} is available.	PdfCraft {v} está disponible.
 	You have version {c}. Download the new version from its release page.	Tienes la versión {c}. Descarga la nueva versión desde su página de publicación.
-	PdfCraft {c} is up to date.	PdfCraft {c} está actualizado.
 	Couldn't check for updates: {e}	No se pudieron buscar actualizaciones: {e}
 	You have version {c}. All releases are listed at {page}.	Tienes la versión {c}. Todas las versiones aparecen en {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Consulta a GitHub cuál es la última versión. No se descarga ni se instala nada automáticamente.
@@ -816,7 +803,6 @@
 	No changes allowed	No se permite ningún cambio
 	Annotations, form fill-in, and digital signatures	Anotaciones, rellenado de formularios y firmas digitales
 	Form fill-in and digital signatures	Rellenado de formularios y firmas digitales
-	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	La clave está en el Llavero de macOS, que puede pedirte permiso para que PdfCraft la use.
 	Digital ID password	Contraseña del ID digital
 	Back	Atrás
 	Validate all	Validar todas
@@ -1308,7 +1294,6 @@
 	Anyone opening the document will need this password. It's applied when you save.	Cualquiera que abra el documento necesitará esta contraseña. Se aplica al guardar.
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	El documento se abre sin contraseña; esta contraseña hace falta para cambiar las restricciones. Se aplica al guardar.
 	Recover unsaved documents?	¿Recuperar documentos sin guardar?
-	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft no se cerró correctamente. Estos documentos tenían cambios que se guardaron automáticamente:
 	just now	ahora mismo
 	{n} min ago	hace {n} min
 	{n} h ago	hace {n} h
@@ -1317,7 +1302,6 @@
 	Discard	Descartar
 	Version {v}	Versión {v}
 	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	Una aplicación PDF de código abierto, de sala limpia, escrita en Rust. MIT OR Apache-2.0.
-	Part of	Parte de
 	Summarize Options	Opciones de resumen
 	Choose a layout:	Elige una disposición:
 	Comments only	Solo comentarios
@@ -1464,10 +1448,8 @@
 	On the web, open or drop an image to convert it	En la versión web, abre o suelta una imagen para convertirla
 	Couldn't optimize the file: {e}	No se pudo optimizar el archivo: {e}
 	Couldn't write {path}: {e}	No se pudo escribir {path}: {e}
-	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	El formulario pide enviarse a {u}; PdfCraft no envía datos de formulario. Guarda el documento para conservar lo que has introducido.
 	{s} actions run in the JavaScript engine (M6)	Las acciones {s} se ejecutan en el motor de JavaScript (M6)
 	{name}: the {other} action isn't supported yet	{name}: la acción {other} aún no es compatible
-	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} envía el formulario a {url}; PdfCraft no envía datos de formulario. Guarda el documento para conservar lo que has introducido.
 	Export stopped: {e}	Exportación detenida: {e}
 	Exported 1 image	Se ha exportado 1 imagen
 	Exported {n} images	Se han exportado {n} imágenes
@@ -1624,7 +1606,6 @@
 	Signed and all signatures are valid.	Firmado y todas las firmas son válidas.
 	At least one signature has problems.	Al menos una firma tiene problemas.
 	This document is secured. Some changes are restricted by its security settings.	Este documento está protegido. Su configuración de seguridad restringe algunos cambios.
-	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Este es un formulario XFA dinámico, que PdfCraft aún no puede mostrar. Lo que ves es la página de marcador de posición del archivo.
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Este formulario también contiene datos XFA, que PdfCraft aún no lee. Puedes rellenar sus campos, pero Acrobat puede mostrar los valores XFA en su lugar.
 	This document contains {n} interactive form fields.	Este documento contiene {n} campos de formulario interactivos.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Este archivo estaba dañado y se ha reparado. Al guardar se conserva la versión reparada.
@@ -1893,3 +1874,18 @@
 	Default page display	Presentación de página predeterminada
 	Default zoom	Zoom predeterminado
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Se usa cuando un PDF no pide una presentación ni un zoom. El desplazamiento continuo nunca salta de página en página.
+	About Linkco PDF Editor	Acerca de Linkco PDF Editor
+	Linkco PDF Editor	Linkco PDF Editor
+	Professional PDF tools for everyday document work.	Herramientas profesionales de PDF para el trabajo diario con documentos.
+	Professional PDF document tools by Linkco.	Herramientas profesionales para documentos PDF de Linkco.
+	View all tools →	Ver todas las herramientas →
+	Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.	Los archivos que abras en Linkco PDF Editor aparecerán aquí. Suelta un PDF en cualquier parte para abrirlo.
+	Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider.	Linkco PDF Editor funciona sin conexión. Sin telemetría, sin cuenta y sin procesamiento en la nube, salvo que añadas un proveedor.
+	Linkco PDF Editor {v} is available.	Linkco PDF Editor {v} está disponible.
+	Linkco PDF Editor {c} is up to date.	Linkco PDF Editor {c} está actualizado.
+	The key is in the macOS Keychain, which may ask to allow Linkco PDF Editor to use it.	La clave está en el Llavero de macOS, que puede pedirte permiso para que Linkco PDF Editor la use.
+	Linkco PDF Editor didn't shut down normally. These documents had changes that were autosaved:	Linkco PDF Editor no se cerró correctamente. Estos documentos tenían cambios que se guardaron automáticamente:
+	The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	El formulario pide enviarse a {u}; Linkco PDF Editor no envía datos de formulario. Guarda el documento para conservar lo que has introducido.
+	{name} submits the form to {url}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	{name} envía el formulario a {url}; Linkco PDF Editor no envía datos de formulario. Guarda el documento para conservar lo que has introducido.
+	This is a dynamic XFA form, which Linkco PDF Editor can't display yet. What you see is the file's placeholder page.	Este es un formulario XFA dinámico, que Linkco PDF Editor aún no puede mostrar. Lo que ves es la página de marcador de posición del archivo.
+	{who} in this document tried to open an address Linkco PDF Editor won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} en este documento intentó abrir una dirección que Linkco PDF Editor no abrirá: {e}. Solo se abren enlaces web (http, https) y de correo (mailto) desde los documentos.

@@ -1,43 +1,29 @@
-//! Home tab: recommended tools, open card, recent files (local only, never another app's list).
+//! Home tab: Linkco PDF Editor dashboard with recommended tools, open card, and recent files.
 
-use egui::{Align2, CornerRadius, Rect, Sense, Stroke, vec2};
+use egui::{Align, Align2, CornerRadius, Layout, Rect, Sense, Stroke, vec2};
 use pdfcraft_engine::catalog;
 
 use crate::theme::{self, Tokens};
 use crate::{LeftPanel, PdfCraftApp, icons, panels::human_size, widgets};
 
-const RECOMMENDED: [&str; 5] = ["organize", "comment", "form", "edit", "protect"];
+const RECOMMENDED: [&str; 8] = ["organize", "edit", "combine", "compress", "export", "scan", "fill_sign", "protect"];
 
 pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 36, right: 36, top: 28, bottom: 28 }).show(ui, |ui| {
-            ui.label(egui::RichText::new(tl!("Welcome to PdfCraft")).font(theme::semibold(24.0)));
-            ui.label(
-                egui::RichText::new(tl!("An open-source PDF workbench — local, private, and scriptable."))
-                    .color(t.text_muted)
-                    .font(theme::regular(14.0)),
-            );
-            ui.add_space(14.0);
-            egui::Frame::NONE
-                .fill(t.card)
-                .stroke(Stroke::new(1.0, t.border))
-                .corner_radius(CornerRadius::same(12))
-                .inner_margin(egui::Margin::same(14))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        widgets::artcraft_mark(ui, 28.0);
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new(tl!("Join the ArtCraft community")).font(theme::semibold(15.0)));
-                            ui.label(egui::RichText::new(tl!("Get help, share feedback and follow development on Discord.")).color(t.text_muted));
-                        });
-                    });
-                    ui.add_space(8.0);
-                    if let Some(cmd) = widgets::community_links(ui) {
-                        app.execute(cmd);
-                    }
+            ui.horizontal(|ui| {
+                widgets::app_mark(ui, 42.0);
+                ui.add_space(6.0);
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(tl!("Linkco PDF Editor")).font(theme::semibold(24.0)));
+                    ui.label(
+                        egui::RichText::new(tl!("Professional PDF tools for everyday document work."))
+                            .color(t.text_muted)
+                            .font(theme::regular(14.0)),
+                    );
                 });
+            });
             ui.add_space(22.0);
 
             egui::Frame::NONE
@@ -47,8 +33,23 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 .inner_margin(egui::Margin::same(18))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(egui::RichText::new(tl!("Recommended tools")).font(theme::semibold(15.0)));
-                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(tl!("Recommended tools")).font(theme::semibold(15.0)));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui
+                                .add(
+                                    egui::Label::new(egui::RichText::new(tl!("View all tools →")).color(t.accent_text).font(theme::medium(13.0)))
+                                        .sense(Sense::click()),
+                                )
+                                .clicked()
+                            {
+                                app.left = LeftPanel::AllTools;
+                                app.left_open = true;
+                                app.all_tools_expanded = true;
+                            }
+                        });
+                    });
+                    ui.add_space(12.0);
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = vec2(14.0, 14.0);
                         for id in RECOMMENDED {
@@ -100,7 +101,9 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             ui.label(egui::RichText::new(tl!("Recent")).font(theme::semibold(17.0)));
             ui.add_space(8.0);
             if app.recent.is_empty() {
-                ui.label(egui::RichText::new(tl!("Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.")).color(t.text_muted));
+                ui.label(
+                    egui::RichText::new(tl!("Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.")).color(t.text_muted),
+                );
             }
             let mut open = None;
             for r in &app.recent {
@@ -140,8 +143,10 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             ui.add_space(20.0);
             widgets::section_title(ui, tl!("Privacy"));
             ui.label(
-                egui::RichText::new(tl!("PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider."))
-                    .color(t.text_muted),
+                egui::RichText::new(tl!(
+                    "Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider."
+                ))
+                .color(t.text_muted),
             );
         });
     });

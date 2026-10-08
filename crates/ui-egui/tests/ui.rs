@@ -31,7 +31,8 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, P
 #[test]
 fn home_shows_welcome_and_tools() {
     let h = harness(|_| {});
-    h.get_by_label_contains("Welcome to PdfCraft");
+    h.get_by_label_contains("Linkco PDF Editor");
+    h.get_by_label_contains("Professional PDF tools for everyday document work.");
     assert!(h.query_all_by_label("Organize pages").count() >= 2, "tool list + home card");
     h.get_by_label("Open file");
 }

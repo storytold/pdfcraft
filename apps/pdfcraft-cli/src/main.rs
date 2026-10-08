@@ -61,7 +61,7 @@ fn main() -> ExitCode {
             #[cfg(feature = "mcp")]
             Some("mcp") => mcp(&args[1..]),
             Some("--version") => version(),
-            _ => Err("usage: pdfcraft-cli <info|render|text|edit|combine|extract|split|check|tools|run|mcp|ui> …  (see source header for options)\nhelp and feedback: https://discord.gg/artcraft"
+            _ => Err("usage: pdfcraft-cli <info|render|text|edit|combine|extract|split|check|tools|run|mcp|ui> …  (see source header for options)"
                 .into()),
         };
     match result {
@@ -108,9 +108,7 @@ fn stdout_line(line: std::fmt::Arguments<'_>) -> Result<(), CliError> {
 }
 
 fn version() -> Result<(), CliError> {
-    stdout_line(format_args!("pdfcraft-cli {}", env!("CARGO_PKG_VERSION")))?;
-    stdout_line(format_args!("Discord: {}  (help and feedback)", pdfcraft_engine::links::DISCORD))?;
-    stdout_line(format_args!("Web:     {}", pdfcraft_engine::links::APP_PAGE))?;
+    stdout_line(format_args!("pdfcraft-cli {} (Linkco PDF Editor)", env!("CARGO_PKG_VERSION")))?;
     stdout_line(format_args!("Source:  {}", pdfcraft_engine::links::GITHUB))?;
     Ok(())
 }

@@ -5,7 +5,7 @@
 # Clean-room: written from the meaning of the English labels, following common Czech desktop
 # conventions (menus are nouns, commands are infinitives); not taken from Adobe Acrobat's Czech
 # localisation or any other product's translation. Terminology: annotations are "komentáře",
-# pages are "stránky", form fields are "formulářová pole". Product and format names (PdfCraft,
+# pages are "stránky", form fields are "formulářová pole". Product and format names (Linkco PDF Editor,
 # PDF, Word, HTML…) stay in Latin letters; the trailing "…" of dialog commands is kept.
 
 	Menu	Nabídka
@@ -85,12 +85,7 @@
 	Split document…	Rozdělit dokument…
 	Number pages…	Očíslovat stránky…
 	Keyboard shortcuts	Klávesové zkratky
-	Join the ArtCraft Discord	Připojit se ke komunitě ArtCraft na Discordu
-	PdfCraft web page	Webová stránka PdfCraft
-	PdfCraft on GitHub	PdfCraft na GitHubu
-	ArtCraft website	Web ArtCraft
 	Check for updates…	Zkontrolovat aktualizace…
-	About PdfCraft	O aplikaci PdfCraft
 	Auto	Automaticky
 	Continuous scrolling	Plynulé posouvání
 	Single page	Jednostránkové zobrazení
@@ -104,3 +99,7 @@
 	Fit to width scrolling	Plynulé posouvání s přizpůsobením šířce
 	Fit one full page	Celá jedna stránka
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Používá se, když PDF nepožaduje rozložení ani zvětšení. Plynulé posouvání mezi stránkami neskáče.
+	About Linkco PDF Editor	O aplikaci Linkco PDF Editor
+	Professional PDF tools for everyday document work.	Profesionální nástroje PDF pro každodenní práci s dokumenty.
+	Professional PDF document tools by Linkco.	Profesionální nástroje pro dokumenty PDF od společnosti Linkco.
+	View all tools →	Zobrazit všechny nástroje →

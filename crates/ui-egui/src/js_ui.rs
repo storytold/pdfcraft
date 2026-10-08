@@ -45,7 +45,7 @@ impl PdfCraftApp {
                 }
                 Request::LaunchUrl(u) => self.request_document_url(&u, crate::LinkOrigin::Script),
                 Request::Submit(u) => self.notify_fmt(
-                    "The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.",
+                    "The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.",
                     &[("u", &u)],
                 ),
                 Request::SaveAs => self.run_command("file.save_as"),

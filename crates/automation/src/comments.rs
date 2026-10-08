@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use crate::{Args, Automation, Result, ToolError, failed};
 
 /// Author used when a tool call names none.
-pub(crate) const DEFAULT_AUTHOR: &str = "PdfCraft";
+pub(crate) const DEFAULT_AUTHOR: &str = "Linkco PDF Editor";
 
 pub(crate) fn parse_color(s: &str) -> Result<Rgb> {
     let named = match s.to_ascii_lowercase().as_str() {

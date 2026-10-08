@@ -5,7 +5,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Brazilian Portuguese computing vocabulary. No proprietary localisation resource, string table or
 # product UI (Acrobat's included) was consulted or copied; add entries the same way.
-# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
+# Product and technology names (Linkco PDF Editor, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
 
 	Menu	Menu
@@ -58,3 +58,7 @@
 	Enable Acrobat JavaScript	Ativar o Acrobat JavaScript
 	OK	OK
 	Auto	Automático
+	About Linkco PDF Editor	Sobre o Linkco PDF Editor
+	Professional PDF tools for everyday document work.	Ferramentas profissionais de PDF para o trabalho diário com documentos.
+	Professional PDF document tools by Linkco.	Ferramentas profissionais para documentos PDF da Linkco.
+	View all tools →	Ver todas as ferramentas →

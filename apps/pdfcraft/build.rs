@@ -14,11 +14,12 @@ fn main() {
     }
     let mut res = winresource::WindowsResource::new();
     res.set_icon("../../assets/app-icon/pdfcraft.ico")
-        .set("ProductName", "PdfCraft")
-        .set("FileDescription", "PdfCraft PDF workbench")
-        .set("LegalCopyright", "Copyright (c) the PdfCraft contributors. MIT OR Apache-2.0.")
+        .set("ProductName", "Linkco PDF Editor")
+        .set("FileDescription", "Linkco PDF Editor")
+        .set("CompanyName", "Al Rawabet Commercial Services & Contracting Company W.L.L.")
+        .set("LegalCopyright", "© Al Rawabet Commercial Services & Contracting Company W.L.L.")
         .set("OriginalFilename", "pdfcraft.exe")
-        .set("InternalName", "pdfcraft");
+        .set("InternalName", "Linkco PDF Editor");
     if let Err(e) = res.compile() {
         if std::env::var_os("PDFCRAFT_REQUIRE_WINRES").is_some() {
             println!("cargo::error=embedding Windows resources failed: {e}");
