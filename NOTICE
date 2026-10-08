@@ -16,11 +16,12 @@ list (author, source, license) is in ATTRIBUTION.md.
 - Inter typeface (assets/fonts/Inter-*.ttf) — SIL Open Font License 1.1. See assets/fonts/OFL-Inter.txt.
 - JetBrains Mono typeface (assets/fonts/JetBrainsMono-*.ttf) — SIL Open Font License 1.1. See assets/fonts/OFL-JetBrainsMono.txt.
 - Dancing Script typeface (assets/fonts/DancingScript.ttf), Copyright 2016 The Dancing Script Project Authors — SIL Open Font License 1.1 (Reserved Font Name "Dancing Script"). See assets/fonts/OFL-DancingScript.txt.
-- Japanese fonts from craft-fonts (https://github.com/storytold/craft-fonts), an optional build input
+- Japanese, Simplified Chinese and Arabic fonts from craft-fonts (https://github.com/storytold/craft-fonts), an optional build input
   (CRAFT_FONTS_DIR) that is not part of this repository. Builds made with it, which includes every
   official release, embed the fonts listed in
   https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md (BIZ UDPGothic, Shippori Mincho,
-  BIZ UDMincho; the web build only BIZ UDPGothic Regular) under the SIL Open Font License 1.1. Those
+  BIZ UDMincho, Noto Sans CJK SC, Noto Sans Arabic; the web build embeds BIZ UDPGothic Regular and
+  the Arabic face) under the SIL Open Font License 1.1. Those
   packages carry each font's licence as OFL-<family>.txt.
 - hayro (rendering, via crates.io) — Apache-2.0 OR MIT. Its `embed-fonts` feature bundles the Foxit
   standard-14 Type 1 fonts under BSD-3-Clause ("Copyright 2014 PDFium Authors"), and hayro-cmap bundles

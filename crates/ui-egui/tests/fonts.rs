@@ -7,6 +7,13 @@ use pdfcraft_ui_egui::theme;
 const JAPANESE: &str = "日本語の文字";
 const CHINESE: &str = "简体中文欢迎";
 const ARABIC: &str = "واحد اثنين";
+/// Persian/Farsi UI text (Problem A): shared Arabic letters plus Persian-specific extras and
+/// Persian (Extended Arabic-Indic) digits. An Arabic-only face is not enough.
+const PERSIAN: &str = "سلام پچژگ کیفیت ۱۲۳۴۵۶۷۸۹۰";
+/// Letters present in Persian but absent from Arabic: the fix must cover each of these.
+const PERSIAN_EXTRAS: [char; 6] = ['پ', 'چ', 'ژ', 'گ', 'ی', 'ک'];
+/// Persian digits U+06F0–U+06F9.
+const PERSIAN_DIGITS: [char; 10] = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
 
 fn families() -> Vec<FontId> {
     vec![FontId::proportional(13.0), FontId::monospace(13.0), theme::medium(13.0), theme::semibold(17.0)]
@@ -73,26 +80,54 @@ fn chinese_ui_text_prefers_the_chinese_face() {
     }
 }
 
-/// Built with a craft-fonts Arabic face, Arabic text has real glyphs in every family, from a
-/// face placed after the app's own fonts.
+/// Built with a craft-fonts Arabic face, Arabic and Persian text has real glyphs in every
+/// family, from a face placed after the app's own fonts (Problem A: Persian in the Search input
+/// showed tofu because no embedded face had these glyphs).
 #[test]
 fn arabic_ui_text_uses_craft_fonts() {
+    use skrifa::MetadataProvider as _;
     let arabic: Vec<String> = pdfcraft_fonts::ui_arabic_fonts().iter().map(|f| f.name()).collect();
     if arabic.is_empty() {
         eprintln!("skipping arabic_ui_text_uses_craft_fonts: no Arab face bundled (set CRAFT_FONTS_DIR with an Arabic face to run it)");
         return;
     }
     let defs = theme::font_definitions();
+    // Latin keeps the app's own faces first: Inter, then JetBrains Mono for code.
+    assert_eq!(defs.families[&FontFamily::Proportional][0], "Inter");
+    assert_eq!(defs.families[&FontFamily::Monospace][0], "JetBrainsMono");
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
         let stack = &defs.families[&family];
         let first_ar = stack.iter().position(|n| arabic.contains(n)).expect("an Arab face is a fallback");
         let own = stack.iter().position(|n| n == "Inter" || n == "JetBrainsMono").expect("the app's own font");
         assert!(own < first_ar, "{family:?}: {stack:?}");
     }
-    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    let mut fonts = Fonts::new(TextOptions::default(), defs.clone());
     for id in families() {
         assert!(fonts.has_glyphs(&id, ARABIC), "{id:?} lacks {ARABIC}");
+        assert!(fonts.has_glyphs(&id, PERSIAN), "{id:?} lacks {PERSIAN}");
     }
+    assert!(layout_widths(&mut fonts, PERSIAN).iter().all(|w| w.is_finite() && *w > 0.0));
+    // Each embedded Arab face covers the Persian-specific letters and digits individually
+    // (skrifa, the same parser egui uses): an Arabic-only face would pass the ARABIC check
+    // above yet still show tofu for Persian.
+    for face in pdfcraft_fonts::ui_arabic_fonts() {
+        let name = face.name();
+        let data = defs.font_data.get(&name).unwrap_or_else(|| panic!("Arab face {name:?} is registered"));
+        let font = skrifa::FontRef::from_index(&data.font, data.index).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let charmap = font.charmap();
+        let mut wanted: Vec<char> = ARABIC.chars().chain(PERSIAN.chars()).filter(|c| !c.is_whitespace()).collect();
+        wanted.extend(PERSIAN_EXTRAS.iter().chain(PERSIAN_DIGITS.iter()));
+        let mut missing: Vec<char> = wanted.into_iter().filter(|c| charmap.map(*c).is_none()).collect();
+        missing.sort_unstable();
+        missing.dedup();
+        assert!(missing.is_empty(), "{name} lacks Persian glyphs {missing:?}");
+    }
+    // Inter itself has none of the Persian extras: the glyphs above come from the fallback,
+    // and Latin text is unaffected by adding it.
+    let inter = &defs.font_data["Inter"];
+    let inter_font = skrifa::FontRef::from_index(&inter.font, inter.index).unwrap();
+    let inter_charmap = inter_font.charmap();
+    assert!(PERSIAN_EXTRAS.iter().all(|c| inter_charmap.map(*c).is_none()), "Inter covers Persian extras: the fallback order matters");
 }
 
 /// On a machine with a suitable installed font, the installed definitions end every family

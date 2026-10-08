@@ -72,12 +72,12 @@ jobs:
       PDFCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
-      # The craft-fonts build input (Japanese fonts): every release embeds it. Bump deliberately.
+      # The craft-fonts build input (Japanese, Chinese and Arabic fonts): every release embeds it. Bump deliberately.
       - name: Check out craft-fonts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: storytold/craft-fonts
-          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -131,12 +131,12 @@ jobs:
       PDFCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
-      # The craft-fonts build input (Japanese fonts): every release embeds it. Bump deliberately.
+      # The craft-fonts build input (Japanese, Chinese and Arabic fonts): every release embeds it. Bump deliberately.
       - name: Check out craft-fonts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: storytold/craft-fonts
-          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -190,12 +190,12 @@ jobs:
       NFPM_VERSION: 2.47.0
     steps:
       - uses: actions/checkout@v4
-      # The craft-fonts build input (Japanese fonts): every release embeds it. Bump deliberately.
+      # The craft-fonts build input (Japanese, Chinese and Arabic fonts): every release embeds it. Bump deliberately.
       - name: Check out craft-fonts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: storytold/craft-fonts
-          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
       - name: Install build and packaging tools
         run: |
@@ -288,12 +288,12 @@ jobs:
       VERSION_OVERRIDE: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v4
-      # The craft-fonts build input (Japanese fonts): every release embeds it. Bump deliberately.
+      # The craft-fonts build input (Japanese, Chinese and Arabic fonts): every release embeds it. Bump deliberately.
       - name: Check out craft-fonts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: storytold/craft-fonts
-          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
       - name: Build and package in a FreeBSD VM (tar.gz)
         # vmactions/freebsd-vm v1.5.9, pinned by commit (it runs our build).
@@ -334,12 +334,12 @@ jobs:
       TRUNK_VERSION: 0.21.14
     steps:
       - uses: actions/checkout@v4
-      # The craft-fonts build input (Japanese fonts): every release embeds it. Bump deliberately.
+      # The craft-fonts build input (Japanese, Chinese and Arabic fonts): every release embeds it. Bump deliberately.
       - name: Check out craft-fonts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: storytold/craft-fonts
-          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
       - uses: dtolnay/rust-toolchain@stable
         with:
