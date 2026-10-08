@@ -193,23 +193,51 @@ fn main() -> eframe::Result {
 }
 
 /// Write the control endpoint so that only the current user can read the token.
+///
+/// The JSON goes to a new file next to `path`, created fresh (owner-only on Unix), which then
+/// replaces `path`. Opening `path` itself would follow a link planted there and truncate whatever
+/// it points at; a rename replaces the link and leaves its target alone. A reader polling for the
+/// file also never sees it half-written.
 fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()> {
+    use std::io::{ErrorKind, Write};
     let json = serde_json::json!({ "port": port, "token": token, "pid": std::process::id() }).to_string();
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
+    let path = std::path::Path::new(path);
+    let name = path.file_name().ok_or_else(|| std::io::Error::new(ErrorKind::InvalidInput, "not a file name"))?;
+    // Unpredictable suffixes, so the name can't be planted in advance. `RandomState` is keyed from
+    // the operating system's random source.
+    let random = std::hash::RandomState::new();
+    for i in 0..16u32 {
+        let mut staged = std::ffi::OsString::from(".");
+        staged.push(name);
+        staged.push(format!(".{:016x}.tmp", std::hash::BuildHasher::hash_one(&random, i)));
+        let staged = path.with_file_name(staged);
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let file = match opts.open(&staged) {
+            Ok(f) => f,
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            // Windows refuses `create_new` on a folder with "access denied"; the name is taken all
+            // the same. A folder we can't write to, with nothing at the name, still fails here.
+            Err(e) if e.kind() == ErrorKind::PermissionDenied && staged.symlink_metadata().is_ok() => continue,
+            Err(e) => return Err(e),
+        };
+        // The block closes the file before it is renamed.
+        let written = {
+            let mut file = file;
+            file.write_all(json.as_bytes())
+        };
+        let done = written.and_then(|()| std::fs::rename(&staged, path));
+        if done.is_err() {
+            let _ = std::fs::remove_file(&staged);
+        }
+        return done;
     }
-    use std::io::Write;
-    let mut f = opts.open(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    }
-    f.write_all(json.as_bytes())
+    Err(std::io::Error::new(ErrorKind::AlreadyExists, "no free name for the control file's temporary copy"))
 }
 
 /// How wgpu finds a GPU. Each choice yields to its wgpu environment variable.
@@ -376,5 +404,77 @@ mod tests {
         assert_eq!(gpus, vec![NVIDIA]);
         assert!(super::linux_display_gpus(std::path::Path::new("/nonexistent/drm")).is_empty());
         Ok(())
+    }
+
+    /// A fresh folder per call: tests run in parallel.
+    fn scratch() -> std::path::PathBuf {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("pdfcraft-control-file-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// The control file's port and token, and every name in its folder.
+    fn written(dir: &std::path::Path) -> (serde_json::Value, Vec<String>) {
+        let json = serde_json::from_str(&std::fs::read_to_string(dir.join("ctl.json")).unwrap()).unwrap();
+        let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        (json, names)
+    }
+
+    #[test]
+    fn the_control_file_replaces_a_hard_link_instead_of_writing_through_it() {
+        // The file used to be opened with create + truncate, so a link planted at the path had its
+        // target truncated and overwritten with the token.
+        let dir = scratch();
+        std::fs::write(dir.join("victim.txt"), "keep me").unwrap();
+        std::fs::hard_link(dir.join("victim.txt"), dir.join("ctl.json")).unwrap();
+        super::write_control_file(&dir.join("ctl.json").to_string_lossy(), 4242, "t0ken").unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("victim.txt")).unwrap(), "keep me");
+        let (json, names) = written(&dir);
+        assert_eq!((json["port"].as_u64(), json["token"].as_str()), (Some(4242), Some("t0ken")));
+        assert_eq!(names, ["ctl.json", "victim.txt"], "no temporary file left behind");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_control_file_replaces_a_symlink_instead_of_writing_through_it() {
+        let dir = scratch();
+        let (link, target) = (dir.join("ctl.json"), dir.join("victim.txt"));
+        std::fs::write(&target, "keep me").unwrap();
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&target, &link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&target, &link);
+        if let Err(e) = made {
+            // Windows needs Developer Mode (or admin) for symlinks.
+            eprintln!("skipped: can't create a symlink here: {e}");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        super::write_control_file(&link.to_string_lossy(), 4242, "t0ken").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep me");
+        assert!(!std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(written(&dir).0["token"].as_str(), Some("t0ken"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_control_file_replaces_the_one_a_previous_run_left() {
+        let dir = scratch();
+        std::fs::write(dir.join("ctl.json"), r#"{"port":1,"token":"old"}"#).unwrap();
+        super::write_control_file(&dir.join("ctl.json").to_string_lossy(), 4242, "t0ken").unwrap();
+        let (json, names) = written(&dir);
+        assert_eq!(json["token"].as_str(), Some("t0ken"));
+        assert_eq!(names, ["ctl.json"]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.join("ctl.json")).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0, "only the owner can read the token: {mode:o}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
