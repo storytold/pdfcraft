@@ -37,6 +37,8 @@ deterministic; the engine supplies them.
   cloudy borders or callouts, instead of leaving a stale appearance.
 - Replies get the parent's `/Rect` and an empty appearance: they appear in comment lists but
   never paint a second icon.
+- Resizing a stamp changes its `/Rect` and preserves its original appearance and resources;
+  viewers scale that appearance into the new rectangle. Locked stamps refuse the edit.
 
 ## Not yet
 

@@ -46,3 +46,8 @@ sync_github_name = false
 real_name = "Marlon Konrad"
 display_name = "Marlon Konrad"
 sync_github_name = false
+
+[people.chiranjeevi-max]
+real_name = "Chiranjeevi Uddanti"
+display_name = "Chiranjeevi U"
+sync_github_name = false

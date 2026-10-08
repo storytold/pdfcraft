@@ -195,6 +195,50 @@ fn the_pages_menu_comes_from_the_registry() {
 }
 
 #[test]
+fn the_open_recent_menu_lists_files_and_opens_one() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-recent-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("recent.pdf");
+    std::fs::write(&path, fixture(2)).unwrap();
+    let path = path.to_string_lossy().into_owned();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
+        let path = path.clone();
+        move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
+            app.recent.push(pdfcraft_ui_egui::RecentFile { name: "recent.pdf".into(), path, pages: 2, size: 0 });
+            app
+        }
+    });
+    h.run_steps(4);
+    h.get_by_label("Menu").click();
+    h.run_steps(2);
+    h.get_by_label("File ⏵").hover();
+    h.run_steps(3);
+    h.get_by_label("Open Recent ⏵").hover();
+    h.run_steps(3);
+    h.get_by_label_contains("recent.pdf").click();
+    h.run_steps(4);
+    let app = h.state();
+    assert_eq!(app.views.len(), 2, "the recent file opened in a new tab");
+    let active = app.active.unwrap();
+    assert_eq!(app.session.get(app.views[active].id).and_then(|d| d.path.as_deref()), Some(path.as_str()), "the active tab is the recent file");
+}
+
+#[test]
+fn the_open_recent_menu_is_disabled_while_the_list_is_empty() {
+    let mut h = harness();
+    h.get_by_label("Menu").click();
+    h.run_steps(2);
+    h.get_by_label("File ⏵").hover();
+    h.run_steps(3);
+    assert!(
+        h.query_by(|n| n.label().as_deref() == Some("Open Recent") && n.is_disabled()).is_some(),
+        "Open Recent is disabled while no file has been opened"
+    );
+}
+
+#[test]
 fn the_shortcuts_dialog_lists_the_real_bindings() {
     let mut h = harness();
     h.state_mut().execute("help.shortcuts");

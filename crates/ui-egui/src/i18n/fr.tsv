@@ -1989,3 +1989,7 @@
 	{n} files	{n} fichiers
 	{n} files need attention	{n} fichiers demandent votre attention
 	{n} selected	{n} sélectionnés
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Choisissez une image PNG ou JPEG (jusqu’à 4 Mio). La transparence est conservée.
+	Couldn't import the signature image: {e}	Impossible d’importer l’image de la signature : {e}
+	Open Recent	Ouvrir un fichier récent
+	No recent files	Aucun fichier récent

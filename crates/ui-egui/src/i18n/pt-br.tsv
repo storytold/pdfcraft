@@ -20,6 +20,8 @@
 	Identity	Identidade
 	Name on new comments	Nome nos novos comentários
 	Open…	Abrir…
+	Open Recent	Abrir recentes
+	No recent files	Nenhum arquivo recente
 	New blank PDF	Novo PDF em branco
 	Create PDF from file…	Criar PDF a partir de arquivo…
 	Create PDF from images…	Criar PDF a partir de imagens…
@@ -58,3 +60,5 @@
 	Enable Acrobat JavaScript	Ativar o Acrobat JavaScript
 	OK	OK
 	Auto	Automático
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Escolha uma imagem PNG ou JPEG (até 4 MiB). A transparência é preservada.
+	Couldn't import the signature image: {e}	Não foi possível importar a imagem da assinatura: {e}

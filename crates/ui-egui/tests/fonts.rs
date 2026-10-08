@@ -7,6 +7,7 @@ use pdfcraft_ui_egui::theme;
 const JAPANESE: &str = "日本語の文字";
 const CHINESE: &str = "简体中文欢迎";
 const ARABIC: &str = "واحد اثنين";
+const TELUGU: &str = "తెలుగు ఫైల్";
 
 fn families() -> Vec<FontId> {
     vec![FontId::proportional(13.0), FontId::monospace(13.0), theme::medium(13.0), theme::semibold(17.0)]
@@ -92,6 +93,34 @@ fn arabic_ui_text_uses_craft_fonts() {
     let mut fonts = Fonts::new(TextOptions::default(), defs);
     for id in families() {
         assert!(fonts.has_glyphs(&id, ARABIC), "{id:?} lacks {ARABIC}");
+    }
+}
+
+/// Built with a craft-fonts Telugu face, Telugu text has real glyphs in every family, from a
+/// face placed after the app's own fonts, and is shaped: the conjunct క్ష is narrower than క్
+/// and ష held apart by a zero-width non-joiner.
+#[test]
+fn telugu_ui_text_uses_craft_fonts() {
+    let telugu: Vec<String> = pdfcraft_fonts::CRAFT_FONTS.iter().filter(|f| f.covers("Telu")).map(|f| f.name()).collect();
+    if telugu.is_empty() {
+        eprintln!("skipping telugu_ui_text_uses_craft_fonts: no Telu face bundled (set CRAFT_FONTS_DIR with a Telugu face to run it)");
+        return;
+    }
+    let defs = theme::font_definitions();
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        let stack = &defs.families[&family];
+        let first_te = stack.iter().position(|n| telugu.contains(n)).expect("a Telu face is a fallback");
+        let own = stack.iter().position(|n| n == "Inter" || n == "JetBrainsMono").expect("the app's own font");
+        assert!(own < first_te, "{family:?}: {stack:?}");
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, TELUGU), "{id:?} lacks {TELUGU}");
+    }
+    let joined = layout_widths(&mut fonts, "క్ష");
+    let apart = layout_widths(&mut fonts, "క్\u{200c}ష");
+    for (j, a) in joined.iter().zip(&apart) {
+        assert!(j < a, "క్ష is one conjunct, narrower than క్‌ష: {j} vs {a}");
     }
 }
 

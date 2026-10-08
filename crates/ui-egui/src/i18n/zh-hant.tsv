@@ -20,6 +20,8 @@
 	Identity	個人資訊
 	Name on new comments	新註解的作者名稱
 	Open…	開啟…
+	Open Recent	開啟最近的檔案
+	No recent files	沒有最近的檔案
 	Open	開啟
 	Open file	開啟檔案
 	Home	首頁
@@ -1924,3 +1926,5 @@
 	Page display: {layout}	頁面顯示：{layout}
 	Fit to width scrolling	符合寬度連續捲動
 	Fit one full page	單頁完整顯示
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	選擇 PNG 或 JPEG 圖像（最大 4 MiB）。透明度會保留。
+	Couldn't import the signature image: {e}	無法匯入簽名圖像：{e}

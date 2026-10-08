@@ -130,12 +130,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
             }
             if let Some(p) = open {
-                if let Some(i) = app.views.iter().position(|v| app.session.get(v.id).and_then(|d| d.path.as_deref()) == Some(p.as_str())) {
-                    app.active = Some(i);
-                } else {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    app.open_path(&p);
-                }
+                app.open_recent(&p);
             }
             ui.add_space(20.0);
             widgets::section_title(ui, tl!("Privacy"));

@@ -683,6 +683,31 @@ struct OutlineCtx<'a> {
     expand: Option<usize>,
 }
 
+/// The destination page label gets its own right-aligned column in a bookmark row; drawing
+/// tools put whole section titles in /PageLabels, so the column is bounded (#124).
+const LABEL_COLUMN_MAX: f32 = 72.0;
+/// More characters than ever fit [`LABEL_COLUMN_MAX`] at the label size.
+const LABEL_MEASURE_CHARS: usize = 64;
+
+/// The longest head of `text` that `fits`, plus an ellipsis when the whole string doesn't.
+/// Whole characters are dropped from the end, so the string is only ever cut at a char
+/// boundary, and the loop always ends (at the ellipsis alone). A label is document text: only
+/// its first [`LABEL_MEASURE_CHARS`] characters are measured, so a huge one can't make each
+/// frame lay out thousands of candidates.
+fn ellipsized_prefix(text: &str, mut fits: impl FnMut(&str) -> bool) -> String {
+    let mut s: String = text.chars().take(LABEL_MEASURE_CHARS).collect();
+    if s.len() == text.len() && fits(text) {
+        return text.to_owned();
+    }
+    loop {
+        s.pop();
+        let candidate = format!("{s}\u{2026}");
+        if s.is_empty() || fits(&candidate) {
+            return candidate;
+        }
+    }
+}
+
 fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineItem, path: &[usize], siblings: usize, cx: &mut OutlineCtx<'_>) {
     let depth = path.len() - 1;
     let indent = depth as f32 * 16.0;
@@ -720,8 +745,20 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
             }
         }
     } else {
+        // The page label sits right-aligned in its own bounded column, and the title wraps to
+        // what is really left of it — a long label painted over a long title was the overlap
+        // of #124.
+        let label_font = theme::regular(11.0);
+        let label_galley = item.page.and_then(|p| info.pages.get(p)).map(|page| {
+            ui.fonts_mut(|f| {
+                let text =
+                    ellipsized_prefix(&page.label, |s| f.layout_no_wrap(s.to_owned(), label_font.clone(), t.text_faint).size().x <= LABEL_COLUMN_MAX);
+                f.layout_no_wrap(text, label_font, t.text_faint)
+            })
+        });
+        let label_w = label_galley.as_ref().map_or(0.0, |g| g.size().x);
         let font = if depth == 0 { theme::medium(13.0) } else { theme::regular(13.0) };
-        let wrap_w = (ui.available_width() - indent - 20.0 - 36.0).max(60.0);
+        let wrap_w = (ui.available_width() - indent - 20.0 - label_w - 12.0).max(60.0);
         let galley = ui.fonts_mut(|f| f.layout(item.title.clone(), font, t.text, wrap_w));
         let h = (galley.size().y + 12.0).max(28.0);
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
@@ -739,10 +776,11 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
             }
         }
         ui.painter().galley(pos2(x0 + 20.0, rect.top() + 6.0), galley, t.text);
-        if let Some(p) = item.page
-            && let Some(page) = info.pages.get(p)
-        {
-            ui.painter().text(rect.right_top() + vec2(-6.0, 14.0), Align2::RIGHT_CENTER, &page.label, theme::regular(11.0), t.text_faint);
+        if let Some(g) = label_galley {
+            // Right-aligned, vertically centred at the first line, inside the column the title
+            // wrapped around.
+            let pos = pos2(rect.right() - 6.0 - g.size().x, rect.top() + 14.0 - g.size().y / 2.0);
+            ui.painter().galley(pos, g, t.text_faint);
         }
         if resp.clicked()
             && let Some(p) = item.page
@@ -929,7 +967,60 @@ fn fields(
 pub fn human_size(n: usize) -> String {
     match n {
         n if n >= 1 << 20 => format!("{:.1} MB", n as f64 / (1u64 << 20) as f64),
-        n if n >= 1 << 10 => format!("{:.1} KB", n as f64 / 1024.0),
+        n if n >= 1 << 10 => format!("{:.1} KB", n as f64 / (1u64 << 10) as f64),
         n => format!("{n} bytes"),
+    }
+}
+
+#[cfg(test)]
+mod label_column {
+    use super::ellipsized_prefix;
+
+    /// A short page label (the usual "3", "iv", "1-1") is shown unchanged.
+    #[test]
+    fn short_labels_are_not_touched() {
+        for label in ["3", "iv", "1-1", "A-201"] {
+            assert_eq!(ellipsized_prefix(label, |s| s.len() <= 10), label);
+        }
+    }
+
+    /// A label wider than its column (#124: whole section titles in /PageLabels) keeps only
+    /// the head that fits, with an ellipsis, and that head is a prefix of the real label.
+    #[test]
+    fn long_labels_are_cut_to_their_column_with_an_ellipsis() {
+        let label = "Floor Plans (001 Floor Plans): GROUND FLOOR PLAN";
+        let shown = ellipsized_prefix(label, |s| s.len() <= 20);
+        assert!(shown.ends_with('\u{2026}'), "{shown:?}");
+        assert!(shown.len() <= 20, "{shown:?}");
+        assert!(label.starts_with(shown.trim_end_matches('\u{2026}')), "{shown:?}");
+    }
+
+    /// CJK labels (three bytes per character) are cut on character boundaries too.
+    #[test]
+    fn multibyte_labels_are_cut_on_char_boundaries() {
+        let label = "図面（一階平面図）：配置図";
+        let shown = ellipsized_prefix(label, |s| s.len() <= 12);
+        assert!(shown.ends_with('\u{2026}'), "{shown:?}");
+        assert!(shown.len() <= 12, "{shown:?}");
+        assert!(label.starts_with(shown.trim_end_matches('\u{2026}')), "{shown:?}");
+    }
+
+    /// The pathological floor: nothing fits, the loop still ends with the lone ellipsis.
+    #[test]
+    fn the_loop_ends_when_nothing_fits() {
+        assert_eq!(ellipsized_prefix("Floor Plans", |_| false), "\u{2026}");
+    }
+
+    /// A huge label from a hostile file is measured a bounded number of times per frame.
+    #[test]
+    fn a_huge_label_is_measured_a_bounded_number_of_times() {
+        let label = "x".repeat(1_000_000);
+        let mut calls = 0;
+        let shown = ellipsized_prefix(&label, |s| {
+            calls += 1;
+            s.len() <= 12
+        });
+        assert!(calls <= super::LABEL_MEASURE_CHARS + 1, "{calls} measurements");
+        assert!(shown.ends_with('\u{2026}') && label.starts_with(shown.trim_end_matches('\u{2026}')), "{shown:?}");
     }
 }

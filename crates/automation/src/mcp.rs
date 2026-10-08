@@ -31,13 +31,34 @@ const INSTRUCTIONS: &str = "PdfCraft edits PDFs. Open a file with doc_open to ge
 (edit_undo) and stay in memory until doc_save. Page numbers are 1-based. Open documents are also \
 resources: pdfcraft://doc/{doc}/info, /text, /page/{page}/text and /page/{page}/image.";
 
+/// Appended to the instructions in compact mode.
+const COMPACT_INSTRUCTIONS: &str = " Only a core set of tools is listed. Every other tool is still available: find it with \
+tool_search (optional query and category, or name for its full input schema) and run it with tool_call.";
+
+/// The tools `tools/list` returns in compact mode, besides the two meta tools.
+pub const COMPACT_CORE_TOOLS: &[&str] =
+    &["doc_open", "doc_info", "doc_save", "doc_close", "page_render", "text_extract", "text_find", "doc_combine", "doc_split", "edit_undo"];
+
+/// Meta tools that exist only in compact mode.
+const TOOL_SEARCH: &str = "tool_search";
+const TOOL_CALL: &str = "tool_call";
+
 pub struct McpServer {
     automation: Automation,
+    compact: bool,
 }
 
 impl McpServer {
     pub fn new(automation: Automation) -> Self {
-        Self { automation }
+        Self { automation, compact: false }
+    }
+
+    /// In compact mode `tools/list` returns only [`COMPACT_CORE_TOOLS`] plus `tool_search` and
+    /// `tool_call`, which find and run any other tool. `tools/call` accepts every tool by name
+    /// either way. Off by default.
+    pub fn with_compact(mut self, on: bool) -> Self {
+        self.compact = on;
+        self
     }
 
     pub fn automation(&self) -> &Automation {
@@ -93,18 +114,35 @@ impl McpServer {
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false }, "resources": { "listChanged": false, "subscribe": false } },
                     "serverInfo": { "name": "pdfcraft", "title": "PdfCraft", "version": env!("CARGO_PKG_VERSION"), "websiteUrl": pdfcraft_engine::links::APP_PAGE },
-                    "instructions": INSTRUCTIONS,
+                    "instructions": if self.compact { format!("{INSTRUCTIONS}{COMPACT_INSTRUCTIONS}") } else { INSTRUCTIONS.to_string() },
                 }))
             }
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": crate::tools().iter().map(tool_json).collect::<Vec<_>>() })),
+            "tools/list" => Ok(json!({ "tools": self.tool_list() })),
             "tools/call" => {
                 let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "tools/call needs a tool name".to_string()))?;
                 let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+                if self.compact && name == TOOL_SEARCH {
+                    return Ok(match search_tools(&args) {
+                        Ok(found) => call_result(vec![Content::Json(found)]),
+                        Err(message) => tool_error(&message),
+                    });
+                }
+                if self.compact && name == TOOL_CALL {
+                    let (inner, inner_args) = match unwrap_tool_call(&args) {
+                        Ok(pair) => pair,
+                        Err(message) => return Ok(tool_error(&message)),
+                    };
+                    return Ok(match self.automation.call(&inner, &inner_args) {
+                        Ok(content) => call_result(content),
+                        Err(ToolError::UnknownTool(t)) => tool_error(&format!("unknown tool {t:?}; use tool_search to find the right name")),
+                        Err(e) => tool_error(&e.to_string()),
+                    });
+                }
                 match self.automation.call(name, &args) {
                     Ok(content) => Ok(call_result(content)),
                     Err(ToolError::UnknownTool(t)) => Err((INVALID_PARAMS, format!("unknown tool {t:?}"))),
-                    Err(e) => Ok(json!({ "content": [{ "type": "text", "text": e.to_string() }], "isError": true })),
+                    Err(e) => Ok(tool_error(&e.to_string())),
                 }
             }
             "resources/list" => Ok(json!({ "resources": self.resource_list() })),
@@ -116,6 +154,149 @@ impl McpServer {
             other => Err((METHOD_NOT_FOUND, format!("method not found: {other}"))),
         }
     }
+}
+
+impl McpServer {
+    /// What `tools/list` returns: every tool, or in compact mode the core set and the meta tools.
+    fn tool_list(&self) -> Vec<Value> {
+        let all = crate::tools();
+        if !self.compact {
+            return all.iter().map(tool_json).collect();
+        }
+        let mut out: Vec<Value> = COMPACT_CORE_TOOLS.iter().filter_map(|n| all.iter().find(|t| t.name == *n)).map(tool_json).collect();
+        out.extend(meta_tools());
+        out
+    }
+}
+
+/// The two tools only compact mode lists.
+fn meta_tools() -> [Value; 2] {
+    [
+        json!({
+            "name": TOOL_SEARCH,
+            "title": "Find PdfCraft tools",
+            "description": "Search and list all PdfCraft automation tools, including the core tools, with a one-sentence description each. Filter by query \
+        (words matched against name, title and description) and/or category (the name prefix: doc, page, text, form, …). \
+        With name, return that one tool in full, including its input_schema. Run a tool with tool_call.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Words to look for, all of which must match (case-insensitive)." },
+                    "category": { "type": "string", "description": "Tool name prefix, e.g. page, text, form, redact." },
+                    "name": { "type": "string", "description": "Exact tool name: return its description and input_schema." },
+                },
+                "required": [],
+                "additionalProperties": false,
+            },
+            "annotations": { "title": "Find PdfCraft tools", "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false },
+        }),
+        json!({
+            "name": TOOL_CALL,
+            "title": "Run any PdfCraft tool",
+            "description": "Run any PdfCraft tool by name with its arguments, exactly as if it were called directly. \
+        Find names and argument schemas with tool_search. The result is the tool's own result.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "The tool to run, e.g. page_rotate." },
+                    "arguments": { "type": "object", "description": "The tool's arguments (see its input_schema from tool_search)." },
+                },
+                "required": ["name"],
+                "additionalProperties": false,
+            },
+            "annotations": { "title": "Run any PdfCraft tool", "readOnlyHint": false, "destructiveHint": true, "openWorldHint": false },
+        }),
+    ]
+}
+
+/// The category of a tool: its name up to the first underscore (`page_rotate` → `page`).
+fn category_of(name: &str) -> &str {
+    name.split('_').next().unwrap_or(name)
+}
+
+/// A description up to and including its first sentence.
+fn first_sentence(text: &str) -> &str {
+    // ASCII lowercasing keeps byte offsets, so positions found in `lower` are valid in `text`.
+    let lower = text.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(i) = lower.get(from..).and_then(|rest| rest.find(". ")).map(|i| i + from) {
+        // "e.g. " and "i.e. " are abbreviations, not the end of the sentence.
+        if !lower.get(..i).is_some_and(|before| before.ends_with("e.g") || before.ends_with("i.e")) {
+            return text.get(..=i).unwrap_or(text);
+        }
+        from = i + 2;
+    }
+    text
+}
+
+/// Reject keys other than `allowed`, as the tool table does for a tool's own arguments.
+fn check_keys(tool: &str, args: &Value, allowed: &[&str]) -> Result<(), String> {
+    match args.as_object().and_then(|o| o.keys().find(|k| !allowed.contains(&k.as_str()))) {
+        Some(k) => Err(format!("{tool}: unknown argument {k:?} (expected: {})", allowed.join(", "))),
+        None => Ok(()),
+    }
+}
+
+/// `tool_search`: filter the tool table by query and category, or describe one tool in full.
+fn search_tools(args: &Value) -> Result<Value, String> {
+    if !(args.is_object() || args.is_null()) {
+        return Err(format!("{TOOL_SEARCH} takes an object with optional query, category and name"));
+    }
+    check_keys(TOOL_SEARCH, args, &["query", "category", "name"])?;
+    let text = |key: &str| match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.trim())),
+        Some(_) => Err(format!("{TOOL_SEARCH}: {key} must be a string")),
+    };
+    let (query, category, name) = (text("query")?, text("category")?, text("name")?);
+    let all = crate::tools();
+    if let Some(name) = name {
+        let t =
+            all.iter().find(|t| t.name == name).ok_or_else(|| format!("unknown tool {name:?}; call {TOOL_SEARCH} without name to list the tools"))?;
+        return Ok(json!({ "tool": {
+            "name": t.name, "title": t.title, "category": category_of(t.name), "description": t.description,
+            "read_only": t.read_only, "destructive": t.destructive, "input_schema": t.input_schema,
+        } }));
+    }
+    let category = category.map(|c| c.trim_end_matches('_').to_lowercase()).filter(|c| !c.is_empty());
+    let words: Vec<String> = query.map(|q| q.to_lowercase().split_whitespace().map(str::to_owned).collect()).unwrap_or_default();
+    let mut categories: Vec<&str> = all.iter().map(|t| category_of(t.name)).collect();
+    categories.sort_unstable();
+    categories.dedup();
+    let found: Vec<Value> = all
+        .iter()
+        .filter(|t| category.as_deref().is_none_or(|c| category_of(t.name) == c))
+        .filter(|t| {
+            let haystack = format!("{} {} {}", t.name, t.title, t.description).to_lowercase();
+            words.iter().all(|w| haystack.contains(w.as_str()))
+        })
+        .map(|t| json!({ "name": t.name, "category": category_of(t.name), "description": first_sentence(t.description), "read_only": t.read_only }))
+        .collect();
+    Ok(json!({ "count": found.len(), "tools": found, "categories": categories }))
+}
+
+/// `tool_call`: the tool name and its arguments from the meta tool's own arguments.
+fn unwrap_tool_call(args: &Value) -> Result<(String, Value), String> {
+    let Some(obj) = args.as_object() else { return Err(format!("{TOOL_CALL} needs an object with name and arguments")) };
+    check_keys(TOOL_CALL, args, &["name", "arguments"])?;
+    let name = obj
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{TOOL_CALL} needs the name of the tool to run; find it with {TOOL_SEARCH}"))?;
+    if name == TOOL_CALL || name == TOOL_SEARCH {
+        return Err(format!("{TOOL_SEARCH} and {TOOL_CALL} are called directly, not through {TOOL_CALL}"));
+    }
+    let inner = match obj.get("arguments") {
+        None | Some(Value::Null) => Value::Null,
+        Some(v @ Value::Object(_)) => v.clone(),
+        Some(_) => return Err(format!("{TOOL_CALL}: arguments must be an object")),
+    };
+    Ok((name.to_owned(), inner))
+}
+
+/// A failed tool call, as the agent should read it.
+fn tool_error(message: &str) -> Value {
+    json!({ "content": [{ "type": "text", "text": message }], "isError": true })
 }
 
 /// The resource behind a `pdfcraft://` URI.
@@ -262,7 +443,19 @@ fn call_result(content: Vec<Content>) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{Resource, parse_uri};
+    use super::{Resource, first_sentence, parse_uri};
+
+    #[test]
+    fn first_sentence_skips_abbreviations() {
+        assert_eq!(first_sentence("Rotate pages. Undoable."), "Rotate pages.");
+        assert_eq!(first_sentence("Label pages (i.e. roman numerals). Undoable."), "Label pages (i.e. roman numerals).");
+        assert_eq!(first_sentence("Label pages (I.E. roman numerals, E.G. i, ii). Undoable."), "Label pages (I.E. roman numerals, E.G. i, ii).");
+        assert_eq!(first_sentence("Use a value, e.g. en-US, or none. Then more."), "Use a value, e.g. en-US, or none.");
+        assert_eq!(first_sentence("No full stop here"), "No full stop here");
+        assert_eq!(first_sentence("Only an abbreviation, e.g. this"), "Only an abbreviation, e.g. this");
+        assert_eq!(first_sentence(""), "");
+        assert_eq!(first_sentence("Zażółć gęślą, i.e. jaźń. Dalej."), "Zażółć gęślą, i.e. jaźń.");
+    }
 
     #[test]
     fn resource_uris_parse() {

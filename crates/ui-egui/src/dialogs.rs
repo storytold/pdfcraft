@@ -814,14 +814,17 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 return;
             }
             Dialog::Signature => {
-                let (apply, cancel) = crate::fill_sign::signature_pad(ui, &t, &mut app.signature_draft, &mut app.signature_preview);
+                let (apply, cancel, browse) = crate::fill_sign::signature_pad(ui, &t, &mut app.signature_draft, &mut app.signature_preview);
+                if browse {
+                    app.pick_signature_image();
+                }
                 if apply {
                     let d = std::mem::take(&mut app.signature_draft);
                     let tool = if d.initials {
-                        app.initials = Some(d.saved());
+                        app.initials = d.saved();
                         crate::fill_sign::FillTool::Initials
                     } else {
-                        app.signature = Some(d.saved());
+                        app.signature = d.saved();
                         crate::fill_sign::FillTool::Signature
                     };
                     app.quick_tool = crate::QuickTool::Fill(tool);
@@ -1190,10 +1193,8 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 }
             }
         }
-        Some(Dialog::Sanitize) => {
-            if app.apply_edit(Edit::Sanitize) {
-                app.notify_tr("Document sanitized. Save to finish: saving rewrites the whole file.");
-            }
+        Some(Dialog::Sanitize) if app.apply_edit(Edit::Sanitize) => {
+            app.notify_tr("Document sanitized. Save to finish: saving rewrites the whole file.");
         }
         Some(Dialog::RedactApply) => {
             let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());

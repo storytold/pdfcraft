@@ -209,12 +209,29 @@ impl PdfCraftApp {
     /// user has been told why, so the typing isn't lost and the caller can stop.
     fn apply_queued_edit(&mut self, i: usize) -> bool {
         let Some(edit) = self.views.get_mut(i).and_then(|v| v.pending_edit.take()) else { return true };
+        let signature_page = self.views.get_mut(i).and_then(|v| v.fill_signature_page.take());
         let committed = self.views.get_mut(i).and_then(|v| v.forms.committed.take());
         let typed = match (&edit, &committed) {
             (Edit::SetFieldValue { name, .. }, Some(draft)) => *name == draft.name,
             _ => false,
         };
-        if self.apply_edit(edit) || !typed {
+        if self.apply_edit(edit) {
+            if let Some(page) = signature_page
+                && let Some(view) = self.views.get_mut(i)
+            {
+                // Signature imports are a labeled batch; select their appended stamp just
+                // as AddAnnotation selects a typed or drawn signature.
+                let newest = self
+                    .session
+                    .get(view.id)
+                    .and_then(|d| d.info.annotations.iter().filter(|a| a.page == page && a.in_reply_to.is_none()).map(|a| a.index).max());
+                view.comments.selected = newest.map(|index| (page, index));
+                view.comments.reveal = true;
+                self.quick_tool = crate::QuickTool::Select;
+            }
+            return true;
+        }
+        if !typed {
             return true;
         }
         if let (Some(mut draft), Some(view)) = (committed, self.views.get_mut(i)) {

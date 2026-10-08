@@ -13,7 +13,8 @@
 //! pdfcraft-cli tools                                       automation tools and their JSON Schemas
 //! pdfcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
 //! pdfcraft-cli run    --script steps.json [--root DIR]      [{"tool": "doc_open", "args": {…}}, …]
-//! pdfcraft-cli mcp    [--root DIR]                          MCP server on stdin/stdout (opt-in)
+//! pdfcraft-cli mcp    [--root DIR] [--compact]              MCP server on stdin/stdout (opt-in)
+//!                                                            --compact lists a core set of tools plus tool_search and tool_call
 //! pdfcraft-cli ui     --control FILE <method> [key=value …] [--out shot.png]
 //!                                                            drive a running app started with --control FILE
 //! ```
@@ -579,8 +580,13 @@ fn run(args: &[String]) -> Result<(), CliError> {
 
 #[cfg(feature = "mcp")]
 fn mcp(args: &[String]) -> Result<(), CliError> {
-    let mut server = pdfcraft_automation::mcp::McpServer::new(automation(args)?);
-    eprintln!("pdfcraft-cli: MCP server on stdio (protocol {}); close stdin to stop", pdfcraft_automation::mcp::PROTOCOL_VERSIONS[0]);
+    let compact = args.iter().any(|a| a == "--compact");
+    let mut server = pdfcraft_automation::mcp::McpServer::new(automation(args)?).with_compact(compact);
+    eprintln!(
+        "pdfcraft-cli: MCP server on stdio (protocol {}{}); close stdin to stop",
+        pdfcraft_automation::mcp::PROTOCOL_VERSIONS[0],
+        if compact { ", compact tool list" } else { "" }
+    );
     server.serve(std::io::stdin().lock(), std::io::stdout().lock()).map_err(|e| CliError::Message(e.to_string()))
 }
 

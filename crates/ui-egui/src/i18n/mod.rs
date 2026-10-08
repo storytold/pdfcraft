@@ -17,7 +17,7 @@
 //!
 //! # Looking strings up
 //! - [`tl!`](crate::tl) / [`t`]: a plain string in the current language. [`tr`]: in a given one.
-//! - [`tr_ctx`]: when one English word needs different translations.
+//! - [`tr_ctx`] (`tl_ctx!` in UI code): when one English word needs different translations.
 //! - [`tr_id`]: a command-id keyed string with the English label as fallback (menu items), so a
 //!   translation survives rewording of the English text and can differ per command.
 //! - [`trn`]: plural-aware (`{n}` is filled in). [`fmt`]: fill `{name}` placeholders after [`tr`];
@@ -75,7 +75,7 @@ fn plural_fr(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 8] = [
+pub static LANGUAGES: [LangInfo; 9] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -90,6 +90,8 @@ pub static LANGUAGES: [LangInfo; 8] = [
     LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
     // French; every `fr-*` locale (`fr-FR`, `fr-CA`, `fr-BE` ...) resolves here.
     LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv"), plural: plural_fr, catalog: OnceLock::new() },
+    // Telugu; every `te-*` locale (`te-IN`) resolves here.
+    LangInfo { code: "te", name: "తెలుగు", source: include_str!("te.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -343,11 +345,17 @@ pub fn action_label(text: &str) -> String {
     t(text).to_owned()
 }
 
-/// A command label such as "Undo Insert pages from a.pdf" in the current language.
+/// A command label such as "Undo Insert pages from a.pdf" in the current language. A catalog
+/// whose word order doesn't put the verb first translates "Undo {action}" and "Redo {action}"
+/// as whole phrases; otherwise the translated verb goes before the action.
 pub fn command_label(text: &str) -> String {
-    for prefix in ["Undo", "Redo"] {
+    for (prefix, template) in [("Undo", "Undo {action}"), ("Redo", "Redo {action}")] {
         if let Some(action) = text.strip_prefix(prefix).and_then(|tail| tail.strip_prefix(' ')) {
-            return format!("{} {}", t(prefix), action_label(action));
+            let action = action_label(action);
+            if has(current(), template) {
+                return fmt(t(template), &[("action", &action)]);
+            }
+            return format!("{} {action}", t(prefix));
         }
     }
     t(text).to_owned()
@@ -708,6 +716,97 @@ mod tests {
                 for item in section.items {
                     assert!(has(es, item.label), "missing item: {}", item.label);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn telugu_is_registered() {
+        let te = Lang::from_code("te").expect("te registered");
+        assert_eq!(te.name(), "తెలుగు");
+        assert_eq!(normalize_pref("TE"), Some("te"));
+        assert_eq!(lang_from_tag("te_IN.UTF-8"), Some(te));
+        assert_eq!(first_supported("te-IN\r\nen-US"), Some(te));
+        assert_eq!(tr(te, "File"), "ఫైల్");
+        assert_eq!(tr(te, "Save as…"), "వేరే పేరుతో సేవ్ చేయి…");
+        assert_eq!(tr(te, "నివేదిక.pdf"), "నివేదిక.pdf");
+        assert_eq!(trn(te, 1, "{n} page", "{n} pages"), "1 పేజీ");
+        assert_eq!(trn(te, 3, "{n} page", "{n} pages"), "3 పేజీలు");
+        let mut app = crate::PdfCraftApp::default();
+        app.set_option("language", "te").unwrap();
+        assert_eq!(app.language, "te");
+        let mut restored = crate::PdfCraftApp::default();
+        restored.restore(&app.persist());
+        assert_eq!(restored.language, "te");
+    }
+
+    /// Telugu puts the verb last, so it translates "Undo {action}" as a whole phrase; a catalog
+    /// without that entry (Spanish) keeps the verb in front of the action.
+    #[test]
+    fn undo_and_redo_labels_use_the_catalog_phrase_when_there_is_one() {
+        let te = Lang::from_code("te").expect("te registered");
+        set_current(te);
+        assert_eq!(command_label("Undo"), "రద్దు చేయి");
+        assert_eq!(command_label("Undo Untranslated custom action"), "రద్దు చేయి: Untranslated custom action");
+        assert_eq!(command_label("Redo Untranslated custom action"), "మళ్లీ చేయి: Untranslated custom action");
+        let es = Lang::from_code("es").expect("es registered");
+        set_current(es);
+        assert_eq!(command_label("Undo Untranslated custom action"), format!("{} Untranslated custom action", tr(es, "Undo")));
+        set_current(Lang::EN);
+        assert_eq!(command_label("Undo Untranslated custom action"), "Undo Untranslated custom action");
+    }
+
+    /// A label that reads differently by use has its own contextual entry where a language needs
+    /// one; a language without it falls back to the plain translation.
+    #[test]
+    fn contextual_labels_fall_back_to_the_plain_translation() {
+        let te = Lang::from_code("te").expect("te registered");
+        assert_eq!(tr_ctx(te, "signature pad", "Type"), "టైప్ చేయి");
+        assert_eq!(tr(te, "Type"), "రకం");
+        let es = Lang::from_code("es").expect("es registered");
+        assert_eq!(tr_ctx(es, "signature pad", "Type"), tr(es, "Type"));
+    }
+
+    /// Telugu translates every registered command and every All tools group, section and item.
+    #[test]
+    fn telugu_covers_commands_and_catalogue() {
+        let te = Lang::from_code("te").expect("te registered");
+        for command in pdfcraft_engine::commands::COMMANDS {
+            assert!(has(te, command.label), "missing command: {}", command.label);
+        }
+        for group in pdfcraft_engine::catalog::TOOL_GROUPS {
+            assert!(has(te, group.label), "missing group: {}", group.label);
+            for section in group.sections {
+                assert!(has(te, section.title), "missing section: {}", section.title);
+                for item in section.items {
+                    assert!(has(te, item.label), "missing item: {}", item.label);
+                }
+            }
+        }
+    }
+
+    /// With a craft-fonts Telugu face, every Telugu translation has glyphs: with all interface
+    /// faces (desktop) and with the Telugu face as the only craft-fonts face (the web build keeps
+    /// it; Telugu labels must not need a Japanese or Arabic face).
+    #[test]
+    fn telugu_labels_have_glyphs() {
+        let telugu: Vec<String> = pdfcraft_fonts::ui_telugu_fonts().iter().map(|f| f.name()).collect();
+        if telugu.is_empty() {
+            eprintln!("skipping Telugu glyph checks: build with CRAFT_FONTS_DIR and a Telugu face to run them");
+            return;
+        }
+        let te = Lang::from_code("te").expect("te registered");
+        let (entries, _) = parse_entries(te.0.source, te.0.plural_forms());
+        let labels: String = entries.iter().flat_map(|e| e.translation.chars()).chain(te.name().chars()).filter(|c| !c.is_control()).collect();
+        let mut telugu_only = crate::theme::font_definitions();
+        for family in telugu_only.families.values_mut() {
+            family.retain(|name| !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.name() == *name) || telugu.contains(name));
+        }
+        use egui::epaint::text::{Fonts, TextOptions};
+        for (build, defs) in [("all faces", crate::theme::font_definitions()), ("Telugu face only", telugu_only)] {
+            let mut fonts = Fonts::new(TextOptions::default(), defs);
+            for id in [egui::FontId::proportional(13.0), egui::FontId::monospace(13.0), crate::theme::medium(13.0), crate::theme::semibold(17.0)] {
+                assert!(fonts.has_glyphs(&id, &labels), "{build}: {id:?} lacks a Telugu label glyph");
             }
         }
     }

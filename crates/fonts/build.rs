@@ -1,8 +1,8 @@
 //! Embeds the fonts of the optional craft-fonts build input (`CRAFT_FONTS_DIR`) as `CRAFT_FONTS`.
 //! The recipe is craft-fonts' `docs/integration.md`; unset, `CRAFT_FONTS` is empty. It only reads
 //! the local checkout (no network). On wasm32 it embeds only the UI faces (BIZ UDPGothic Regular
-//! and any `Arab` face), to keep the web build within hosting limits (Cloudflare Pages: 25 MiB
-//! per file).
+//! and any `Arab` or `Telu` face), to keep the web build within hosting limits (Cloudflare Pages:
+//! 25 MiB per file).
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -41,7 +41,10 @@ fn craft_fonts(dir: &std::path::Path) -> Result<String, String> {
         };
         // Arabic interface faces are small, so the web build keeps them too.
         let arabic = scripts.split(',').any(|s| s.trim() == "Arab");
-        if wasm && !(*family == "BIZ UDPGothic" && *style == "Regular") && !arabic {
+        // Telugu faces too, for the Telugu interface.
+        let telugu = scripts.split(',').any(|s| s.trim() == "Telu");
+        let web_face = (*family == "BIZ UDPGothic" && *style == "Regular") || arabic || telugu;
+        if wasm && !web_face {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;

@@ -61,6 +61,8 @@
 	Identity	身份
 	Name on new comments	新注释的作者姓名
 	Open…	打开…
+	Open Recent	打开最近的文件
+	No recent files	没有最近的文件
 	Open	打开
 	Open file	打开文件
 	Home	主页
@@ -2000,3 +2002,5 @@
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA 表单：字段与 XFA 数据保持同步，以便其他阅读器显示您填写的内容。
 @plural	{n} page|{n} pages	{n} 页
 @plural	{n} field|{n} fields	{n} 个字段
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	选择 PNG 或 JPEG 图像（最大 4 MiB）。透明度会保留。
+	Couldn't import the signature image: {e}	无法导入签名图像：{e}

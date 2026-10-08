@@ -53,10 +53,8 @@ fn walk(doc: &Document, data: &[u8], resources: &Dict, ctm: Matrix, depth: usize
         let top = stack.last().copied().unwrap_or(ctm);
         match op.op.as_slice() {
             b"q" => stack.push(top),
-            b"Q" => {
-                if stack.len() > 1 {
-                    stack.pop();
-                }
+            b"Q" if stack.len() > 1 => {
+                stack.pop();
             }
             b"cm" => {
                 if let Some(m) = Matrix::from_operands(&op.operands)

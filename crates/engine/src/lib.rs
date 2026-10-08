@@ -20,7 +20,10 @@ pub mod export;
 pub mod js;
 pub mod links;
 pub mod ocr;
+pub mod signature_image;
 pub mod xfa;
+
+pub use signature_image::SignatureImage;
 
 pub use pdfcraft_organize::{BoxSpec, PageBox, SplitBy, split_ranges};
 
@@ -1434,7 +1437,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::AddCustomStamp { page, rect, name, file, author } => {
             let src = mark_source(doc, file)?;
             let (sw, sh) = (src.size.0.max(1.0), src.size.1.max(1.0));
-            let rect = if (rect[2] - rect[0]).abs() < 1.0 || (rect[3] - rect[1]).abs() < 1.0 {
+            let rect = if rect[2] == rect[0] && rect[3] == rect[1] {
                 let k = (200.0 / sw.max(sh)).min(1.0);
                 let (w, h) = (sw * k, sh * k);
                 [rect[0] - w / 2.0, rect[1] - h / 2.0, rect[0] + w / 2.0, rect[1] + h / 2.0]

@@ -275,6 +275,8 @@ pub struct DocView {
     pub marquee_done: Option<crate::zoom_snap::Marquee>,
     /// Fill & Sign text being typed.
     pub fill_text: Option<crate::fill_sign::TypeBox>,
+    /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
+    pub(crate) fill_signature_page: Option<usize>,
     /// A non-edit action requested by the organize toolbar, handled by the app.
     pub pending_action: Option<ViewAction>,
 }
@@ -381,6 +383,7 @@ impl DocView {
             marquee: None,
             marquee_done: None,
             fill_text: None,
+            fill_signature_page: None,
         }
     }
 
@@ -1490,8 +1493,25 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             if let QuickTool::Fill(ft) = tool
                 && allowed
             {
-                match crate::fill_sign::page_input(ui, &resp, &xf, i, info, ft, view, signature.as_ref(), initials.as_ref(), &author, today) {
+                match crate::fill_sign::page_input(
+                    ui,
+                    &resp,
+                    &xf,
+                    i,
+                    info,
+                    ft,
+                    view,
+                    signature.as_ref(),
+                    initials.as_ref(),
+                    &mut app.signature_preview,
+                    &author,
+                    today,
+                ) {
                     Some(crate::fill_sign::FillAction::Edit(e)) => view.pending_edit = Some(*e),
+                    Some(crate::fill_sign::FillAction::Signature(e)) => {
+                        view.pending_edit = Some(*e);
+                        view.fill_signature_page = Some(i);
+                    }
                     Some(crate::fill_sign::FillAction::CreateSignature) => open_signature = true,
                     Some(crate::fill_sign::FillAction::CreateInitials) => open_initials = true,
                     None => {}
@@ -1660,8 +1680,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     }
                 }
             }
-            // Link hover + click.
-            if let Some(p) = pointer {
+            // Fill & Sign keeps its placement cursor clear of link/comment hover feedback.
+            if !matches!(tool, QuickTool::Fill(_))
+                && let Some(p) = pointer
+            {
                 for l in info.links.iter().filter(|l| l.page == i) {
                     let sr = xf.user_rect(info, i, l.rect);
                     if sr.contains(p) {

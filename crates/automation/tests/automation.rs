@@ -590,6 +590,272 @@ fn mcp_resources_expose_open_documents() {
     assert_eq!(rpc(&mut s, 7, "resources/read", json!({ "uri": "pdfcraft://doc/1/page/9/image" }))["error"]["code"], -32602);
 }
 
+/// A server in compact mode with `dir` as its root.
+#[cfg(feature = "mcp")]
+fn compact_server(dir: &Path) -> McpServer {
+    McpServer::new(auto(dir)).with_compact(true)
+}
+
+/// Run a tool through the compact server's `tool_call`.
+#[cfg(feature = "mcp")]
+fn via_tool_call(s: &mut McpServer, id: u64, tool: &str, arguments: Value) -> Value {
+    rpc(s, id, "tools/call", json!({ "name": "tool_call", "arguments": { "name": tool, "arguments": arguments } }))
+}
+
+#[cfg(feature = "mcp")]
+fn tool_names(reply: &Value) -> Vec<String> {
+    reply["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect()
+}
+
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_default_lists_every_tool_and_has_no_meta_tools() {
+    let mut s = McpServer::new(Automation::new());
+    let names = tool_names(&rpc(&mut s, 1, "tools/list", json!({})));
+    assert_eq!(names.len(), tools().len());
+    assert!(!names.iter().any(|n| n == "tool_search" || n == "tool_call"));
+    assert!(!rpc(&mut s, 2, "initialize", json!({}))["result"]["instructions"].as_str().unwrap().contains("tool_search"));
+    // Without --compact the meta tools do not exist.
+    assert_eq!(rpc(&mut s, 3, "tools/call", json!({ "name": "tool_search" }))["error"]["code"], -32602);
+}
+
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_compact_lists_the_core_tools_and_two_meta_tools() {
+    let mut s = McpServer::new(Automation::new()).with_compact(true);
+    let list = rpc(&mut s, 1, "tools/list", json!({}));
+    let mut expected: Vec<String> = pdfcraft_automation::mcp::COMPACT_CORE_TOOLS.iter().map(|n| n.to_string()).collect();
+    expected.extend(["tool_search".to_string(), "tool_call".to_string()]);
+    assert_eq!(tool_names(&list), expected);
+    let all: Vec<&str> = tools().iter().map(|t| t.name).collect();
+    for core in pdfcraft_automation::mcp::COMPACT_CORE_TOOLS {
+        assert!(all.contains(core), "core tool {core} is not in the tool table");
+    }
+    // Core tools are the real definitions, and the list is far smaller than the full one.
+    let full = rpc(&mut McpServer::new(Automation::new()), 2, "tools/list", json!({}));
+    let core_open = list["result"]["tools"][0].clone();
+    assert_eq!(Some(&core_open), full["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "doc_open"));
+    assert!(list.to_string().len() * 5 < full.to_string().len(), "compact {} vs full {}", list.to_string().len(), full.to_string().len());
+    for meta in &list["result"]["tools"].as_array().unwrap()[10..] {
+        assert_eq!(meta["inputSchema"]["type"], "object");
+    }
+    let instructions = rpc(&mut s, 3, "initialize", json!({}))["result"]["instructions"].as_str().unwrap().to_string();
+    assert!(instructions.contains("tool_search") && instructions.contains("tool_call"), "{instructions}");
+}
+
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_compact_tool_search_filters_by_query_and_category() {
+    let mut s = McpServer::new(Automation::new()).with_compact(true);
+    let mut search = |args: Value| rpc(&mut s, 1, "tools/call", json!({ "name": "tool_search", "arguments": args }));
+
+    let everything = search(json!({}));
+    assert_eq!(everything["result"]["isError"], false);
+    assert_eq!(everything["result"]["structuredContent"]["count"], tools().len());
+    let first = &everything["result"]["structuredContent"]["tools"][0];
+    assert!(first["name"].is_string() && first["description"].is_string() && first["read_only"].is_boolean(), "{first}");
+
+    let rotate = search(json!({ "query": "ROTATE" }))["result"]["structuredContent"].clone();
+    let names: Vec<&str> = rotate["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"page_rotate"), "{names:?}");
+    assert!(names.len() < tools().len());
+
+    let docs = search(json!({ "category": "doc" }))["result"]["structuredContent"].clone();
+    let expected = tools().iter().filter(|t| t.name.starts_with("doc_")).count();
+    assert!(expected > 0);
+    assert_eq!(docs["count"], expected);
+    assert!(docs["tools"].as_array().unwrap().iter().all(|t| t["name"].as_str().unwrap().starts_with("doc_") && t["category"] == "doc"));
+
+    let both = search(json!({ "category": "page", "query": "rotate" }))["result"]["structuredContent"].clone();
+    assert!(both["tools"].as_array().unwrap().iter().all(|t| t["name"].as_str().unwrap().starts_with("page_")));
+    assert!(both["tools"].as_array().unwrap().iter().any(|t| t["name"] == "page_rotate"));
+
+    // No match is an empty result that lists the categories, not an error.
+    let none = search(json!({ "category": "nonsense" }));
+    assert_eq!(none["result"]["isError"], false);
+    assert_eq!(none["result"]["structuredContent"]["count"], 0);
+    assert!(none["result"]["structuredContent"]["categories"].as_array().unwrap().iter().any(|c| c == "page"));
+
+    // One tool in full.
+    let one = search(json!({ "name": "page_rotate" }))["result"]["structuredContent"]["tool"].clone();
+    assert_eq!(one["name"], "page_rotate");
+    assert_eq!(one["input_schema"]["type"], "object");
+    let def = tools().into_iter().find(|t| t.name == "page_rotate").unwrap();
+    assert_eq!(one["input_schema"], def.input_schema);
+    assert_eq!(one["description"], def.description);
+
+    // Bad arguments are tool errors.
+    for bad in [json!({ "name": "no_such_tool" }), json!({ "query": 3 }), json!({ "category": ["doc"] }), json!("doc")] {
+        let r = search(bad.clone());
+        assert_eq!(r["result"]["isError"], true, "{bad}");
+        assert!(r["result"]["content"][0]["text"].as_str().is_some_and(|t| !t.is_empty()));
+    }
+}
+
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_compact_tool_call_dispatches_to_any_tool() {
+    let dir = workdir("mcp-compact");
+    let mut s = compact_server(&dir);
+    let opened = via_tool_call(&mut s, 1, "doc_open", json!({ "path": "a.pdf" }));
+    assert_eq!(opened["result"]["isError"], false);
+    assert_eq!(opened["result"]["structuredContent"]["pages"], 3);
+
+    // A tool outside the core list, through the meta tool.
+    let deleted = via_tool_call(&mut s, 2, "page_delete", json!({ "doc": 1, "pages": [3] }));
+    assert_eq!(deleted["result"]["isError"], false, "{deleted}");
+    assert_eq!(deleted["result"]["structuredContent"]["pages"], 2);
+
+    // The same tool called by name directly still works, and sees the same session.
+    let listed = rpc(&mut s, 3, "tools/call", json!({ "name": "doc_list", "arguments": {} }));
+    assert_eq!(listed["result"]["isError"], false);
+    assert_eq!(listed["result"]["structuredContent"]["documents"][0]["pages"], 2);
+
+    // Images come back as images.
+    let png = via_tool_call(&mut s, 4, "page_render", json!({ "doc": 1, "page": 1, "dpi": 36 }));
+    assert_eq!(png["result"]["content"][0]["type"], "image");
+
+    // `arguments` may be left out for tools that need none.
+    assert_eq!(via_tool_call(&mut s, 5, "doc_list", Value::Null)["result"]["isError"], false);
+    let no_args = rpc(&mut s, 6, "tools/call", json!({ "name": "tool_call", "arguments": { "name": "doc_list" } }));
+    assert_eq!(no_args["result"]["isError"], false);
+
+    // The result equals what the direct call returns.
+    let direct = rpc(&mut s, 7, "tools/call", json!({ "name": "doc_info", "arguments": { "doc": 1 } }));
+    let wrapped = via_tool_call(&mut s, 8, "doc_info", json!({ "doc": 1 }));
+    assert_eq!(direct["result"], wrapped["result"]);
+}
+
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_compact_tool_call_reports_errors_without_panicking() {
+    let dir = workdir("mcp-compact-errors");
+    let mut s = compact_server(&dir);
+    let text = |r: &Value| r["result"]["content"][0]["text"].as_str().unwrap_or_default().to_string();
+
+    let unknown = via_tool_call(&mut s, 1, "no_such_tool", json!({}));
+    assert_eq!(unknown["result"]["isError"], true);
+    assert!(text(&unknown).contains("no_such_tool") && text(&unknown).contains("tool_search"), "{}", text(&unknown));
+
+    // The tool's own validation errors pass through.
+    let missing = via_tool_call(&mut s, 2, "doc_open", json!({}));
+    assert_eq!(missing["result"]["isError"], true);
+    let outside = via_tool_call(&mut s, 3, "doc_open", json!({ "path": "/definitely/not/here.pdf" }));
+    assert_eq!(outside["result"]["isError"], true);
+    let wrong_type = via_tool_call(&mut s, 4, "page_delete", json!({ "doc": "one", "pages": "all" }));
+    assert_eq!(wrong_type["result"]["isError"], true);
+
+    // Malformed meta-tool arguments.
+    for args in [
+        json!({}),
+        json!({ "name": 7 }),
+        json!({ "name": "doc_list", "arguments": [1] }),
+        json!("doc_list"),
+        Value::Null,
+        json!({ "name": "tool_call" }),
+        json!({ "name": "tool_search" }),
+    ] {
+        let r = rpc(&mut s, 5, "tools/call", json!({ "name": "tool_call", "arguments": args }));
+        assert_eq!(r["result"]["isError"], true, "{args}");
+        assert!(!text(&r).is_empty());
+    }
+
+    // Direct calls keep the usual protocol error for an unknown tool, and the session survives all of it.
+    assert_eq!(rpc(&mut s, 6, "tools/call", json!({ "name": "nope" }))["error"]["code"], -32602);
+    assert_eq!(via_tool_call(&mut s, 7, "doc_open", json!({ "path": "a.pdf" }))["result"]["isError"], false);
+}
+
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_compact_tool_search_summarizes_the_first_sentence() {
+    let mut s = McpServer::new(Automation::new()).with_compact(true);
+    let mut summary = |tool: &str| {
+        let found = rpc(
+            &mut s,
+            1,
+            "tools/call",
+            json!({ "name": "tool_search", "arguments": { "query": tool, "category": tool.split('_').next().unwrap() } }),
+        );
+        found["result"]["structuredContent"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == tool).unwrap()["description"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    // Abbreviations such as "e.g." do not end the summary.
+    assert_eq!(summary("page_number"), "Label a range of pages (e.g. i, ii, iii for front matter, or A-1, A-2 for an appendix).");
+    assert_eq!(
+        summary("accessibility_fix"),
+        "Apply the checker's automatic fix for a rule: primary-language (value: the language, e.g. en-US), title (value: the title; default the current title or file name; also shows it in the title bar) or tab-order (every page tabs in structure order)."
+    );
+}
+
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_compact_meta_tools_reject_unknown_arguments() {
+    let dir = workdir("mcp-compact-keys");
+    let mut s = compact_server(&dir);
+    let list = rpc(&mut s, 1, "tools/list", json!({}));
+    let metas = &list["result"]["tools"].as_array().unwrap()[10..];
+    assert_eq!(metas.len(), 2);
+    for meta in metas {
+        assert_eq!(meta["inputSchema"]["additionalProperties"], false, "{}", meta["name"]);
+    }
+    let text = |r: &Value| r["result"]["content"][0]["text"].as_str().unwrap_or_default().to_string();
+
+    // A misspelled filter is an error, not an unfiltered listing.
+    let typo = rpc(&mut s, 2, "tools/call", json!({ "name": "tool_search", "arguments": { "qurey": "rotate" } }));
+    assert_eq!(typo["result"]["isError"], true, "{typo}");
+    assert!(text(&typo).contains("\"qurey\"") && text(&typo).contains("query"), "{}", text(&typo));
+    let extra = rpc(&mut s, 3, "tools/call", json!({ "name": "tool_search", "arguments": { "query": "rotate", "extra": 1 } }));
+    assert_eq!(extra["result"]["isError"], true, "{extra}");
+    assert!(text(&extra).contains("\"extra\""), "{}", text(&extra));
+
+    // tool_call rejects extra outer keys before running anything.
+    let misspelled =
+        rpc(&mut s, 4, "tools/call", json!({ "name": "tool_call", "arguments": { "name": "doc_open", "argumentz": { "path": "a.pdf" } } }));
+    assert_eq!(misspelled["result"]["isError"], true, "{misspelled}");
+    assert!(text(&misspelled).contains("\"argumentz\""), "{}", text(&misspelled));
+    let extra = rpc(&mut s, 5, "tools/call", json!({ "name": "tool_call", "arguments": { "name": "doc_list", "unexpected": "value" } }));
+    assert_eq!(extra["result"]["isError"], true, "{extra}");
+    assert!(text(&extra).contains("\"unexpected\""), "{}", text(&extra));
+    assert_eq!(rpc(&mut s, 6, "tools/call", json!({ "name": "doc_list", "arguments": {} }))["result"]["structuredContent"]["documents"], json!([]));
+
+    // Keys inside "arguments" are left to the target tool, which rejects its unknown ones itself.
+    let inner = via_tool_call(&mut s, 7, "doc_list", json!({ "unexpected": "value" }));
+    assert_eq!(inner["result"]["isError"], true, "{inner}");
+    assert!(text(&inner).contains("doc_list: unknown argument \"unexpected\""), "{}", text(&inner));
+}
+
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_compact_tool_call_keeps_the_root_confinement() {
+    let root = workdir("mcp-compact-root");
+    let outside_dir = workdir("mcp-compact-outside");
+    let outside = outside_dir.join("a.pdf").to_string_lossy().into_owned();
+    let text = |r: &Value| r["result"]["content"][0]["text"].as_str().unwrap_or_default().to_string();
+
+    // Direct call and tool_call both refuse a real PDF outside the root, with the same words.
+    let mut confined = compact_server(&root);
+    let direct = rpc(&mut confined, 1, "tools/call", json!({ "name": "doc_open", "arguments": { "path": outside } }));
+    assert_eq!(direct["result"]["isError"], true, "{direct}");
+    assert!(text(&direct).contains("is outside the allowed directory"), "{}", text(&direct));
+    let wrapped = via_tool_call(&mut confined, 2, "doc_open", json!({ "path": outside }));
+    assert_eq!(wrapped["result"]["isError"], true, "{wrapped}");
+    assert_eq!(text(&wrapped), text(&direct));
+    // Nothing was opened.
+    let listed = rpc(&mut confined, 3, "tools/call", json!({ "name": "doc_list", "arguments": {} }));
+    assert_eq!(listed["result"]["structuredContent"]["documents"], json!([]));
+
+    // The same file opens through tool_call on a server without a root, so the refusal came from the root.
+    let mut open = McpServer::new(Automation::new()).with_compact(true);
+    let opened = via_tool_call(&mut open, 4, "doc_open", json!({ "path": outside }));
+    assert_eq!(opened["result"]["isError"], false, "{opened}");
+    assert_eq!(opened["result"]["structuredContent"]["pages"], 3);
+
+    // And a file inside the root still opens through the confined server.
+    assert_eq!(via_tool_call(&mut confined, 5, "doc_open", json!({ "path": "a.pdf" }))["result"]["isError"], false);
+}
+
 #[test]
 fn parallel_text_extraction_keeps_page_order_and_follows_edits() {
     let dir = workdir("parallel");
@@ -1098,6 +1364,72 @@ fn fill_and_sign_through_tools() {
     let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
     assert_eq!(list["count"], 4);
     assert!(matches!(a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": "text", "at": [1, 1] })), Err(ToolError::InvalidArgs(_))));
+}
+
+#[test]
+fn image_signatures_through_tools_preserve_transparency_and_survive_save() {
+    let dir = workdir("image-signatures");
+    let mut png = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png, 120, 40);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let rgba: Vec<u8> = (0..40)
+            .flat_map(|y| (0..120).flat_map(move |x| if (40..80).contains(&x) && (10..30).contains(&y) { [0, 0, 0, 255] } else { [0, 0, 0, 0] }))
+            .collect();
+        encoder.write_header().unwrap().write_image_data(&rgba).unwrap();
+    }
+    std::fs::write(dir.join("signature.png"), png).unwrap();
+    std::fs::write(dir.join("broken.png"), b"broken").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 200, "height": 300 }))["doc"].as_u64().unwrap();
+    for (kind, y) in [("signature", 60), ("initials", 120)] {
+        ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": kind, "at": [20, y], "path": "signature.png" }));
+    }
+    let render = |a: &mut Automation, doc| {
+        let output = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
+        let Content::Png { data, .. } = &output[0] else { panic!() };
+        image::load_from_memory(data).unwrap().to_rgba8()
+    };
+    let before = render(&mut a, doc);
+    assert_eq!(before.get_pixel(25, 60).0, [255, 255, 255, 255], "transparent margin exposes the page");
+    assert_eq!(before.get_pixel(65, 60).0, [0, 0, 0, 255], "signature ink is embedded");
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Add initials");
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 1);
+    ok(&mut a, "edit_redo", json!({ "doc": doc }));
+    // The same resize edit the selection handles use must keep the imported appearance.
+    for rect in [json!([20, 40, 20, 88]), json!([20, 40, 100000000, 88])] {
+        assert!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": 1, "rect": rect })).is_err());
+    }
+    ok(&mut a, "comment_lock", json!({ "doc": doc, "page": 1, "index": 1 }));
+    assert!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": 1, "rect": [20, 40, 164, 88] })).is_err());
+    ok(&mut a, "comment_lock", json!({ "doc": doc, "page": 1, "index": 1, "locked": false }));
+    assert_eq!(render(&mut a, doc), before, "invalid and locked resizes leave the image intact");
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": 1, "rect": [20, 40, 164, 88] }));
+    let resized = render(&mut a, doc);
+    assert_eq!(resized.get_pixel(110, 64).0, [0, 0, 0, 255], "resizing scales the original ink");
+    assert_eq!(resized.get_pixel(25, 64).0, [255, 255, 255, 255], "resizing retains alpha");
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Resize comment");
+    assert_eq!(render(&mut a, doc), before);
+    ok(&mut a, "edit_redo", json!({ "doc": doc }));
+    assert_eq!(render(&mut a, doc), resized);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "signed.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "signed.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": reopened }))["count"], 2);
+    assert_eq!(render(&mut a, reopened), resized, "resized appearances retain alpha and geometry after save");
+    for args in [
+        json!({ "type": "signature", "path": "broken.png" }),
+        json!({ "type": "signature", "path": "signature.png", "text": "Ada" }),
+        json!({ "type": "check", "path": "signature.png" }),
+        json!({ "type": "signature", "path": "../outside.png" }),
+    ] {
+        let mut args = args;
+        args["doc"] = json!(doc);
+        args["page"] = json!(1);
+        args["at"] = json!([20, 80]);
+        assert!(a.call("fill_sign_add", &args).is_err(), "{args}");
+    }
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 2, "errors leave the PDF intact");
 }
 
 #[test]
