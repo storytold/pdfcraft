@@ -224,22 +224,13 @@ fn detect_system_lang() -> Lang {
     Lang::EN
 }
 
-/// The Windows display language, queried once when Auto first resolves (no profile or console).
+/// The Windows display languages in preference order, one tag per line, queried once when Auto
+/// first resolves. `sys-locale` asks Windows directly (`GetUserPreferredUILanguages`), so no
+/// process is started.
 #[cfg(target_os = "windows")]
 fn windows_ui_language() -> Option<String> {
-    use std::os::windows::process::CommandExt;
-
-    // Use the system executable rather than searching PATH, as with macOS defaults above.
-    let powershell = std::path::PathBuf::from(std::env::var_os("SystemRoot")?).join("System32/WindowsPowerShell/v1.0/powershell.exe");
-    let out = std::process::Command::new(powershell)
-        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "(Get-UICulture).Name"])
-        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW: the desktop app has no console.
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8(out.stdout).ok()
+    let tags: Vec<String> = sys_locale::get_locales().collect();
+    (!tags.is_empty()).then(|| tags.join("\n"))
 }
 
 /// The first supported language in a macOS `defaults read` list or Windows UI-culture output.
@@ -426,7 +417,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_display_language_query_returns_a_locale_tag() {
-        let tag = windows_ui_language().expect("Windows PowerShell should provide the UI culture");
+        let tag = windows_ui_language().expect("Windows should report a display language");
         let tag = tag.trim();
         assert!(!tag.is_empty());
         assert!(tag.split('-').all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric())));
