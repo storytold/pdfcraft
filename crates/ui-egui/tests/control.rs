@@ -524,6 +524,34 @@ fn japanese_dialogs_errors_and_custom_action_names() {
 }
 
 #[test]
+fn simplified_chinese_signature_prompts_and_errors_keep_document_state() {
+    let (mut h, c) = harness();
+    let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
+    ok(&mut h, &c, "ui.set", json!({"key": "language", "value": "zh-hans"}));
+    ok(&mut h, &c, "ui.set", json!({"key": "dialog", "value": "signature"}));
+    let typed = ok(&mut h, &c, "ui.inspect", json!({"query": "请输入您的签名。"}));
+    assert!(typed["count"].as_u64().unwrap() > 0, "{typed}");
+    // The shell also has a Draw control; the modal's button is registered after the shell.
+    let draw = ok(&mut h, &c, "ui.inspect", json!({"query": "绘制"}));
+    let id = draw["widgets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|w| w["label"] == "绘制" && w["clickable"] == true)
+        .expect("signature Draw button")["id"]
+        .clone();
+    ok(&mut h, &c, "ui.click", json!({"id": id}));
+    let drawn = ok(&mut h, &c, "ui.inspect", json!({"query": "请在下方绘制您的签名。"}));
+    assert!(drawn["count"].as_u64().unwrap() > 0, "{drawn}");
+    ok(&mut h, &c, "ui.click", json!({"label": "取消"}));
+    assert!(!h.state_mut().apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(state["notice"], "删除页面失败：a document must keep at least one page");
+    assert_eq!(state["documents"], documents, "a language change and failed edit must preserve the document");
+}
+
+#[test]
 fn inspect_and_click_by_label_and_id() {
     let (mut h, c) = harness();
     let found = ok(&mut h, &c, "ui.inspect", json!({ "query": "read" }));

@@ -670,6 +670,87 @@ mod tests {
         }
     }
 
+    /// Like PhotoCraft's complete-catalog gates, derive coverage from the UI, not another language.
+    #[test]
+    fn simplified_chinese_covers_commands_and_catalogue() {
+        let zh = Lang::from_code("zh-hans").expect("zh-hans registered");
+        for command in pdfcraft_engine::commands::COMMANDS {
+            assert!(has(zh, command.label), "missing command: {}", command.label);
+            if let Some(menu) = command.menu {
+                assert!(has(zh, menu), "missing menu: {menu}");
+            }
+        }
+        for group in pdfcraft_engine::catalog::TOOL_GROUPS {
+            assert!(has(zh, group.label), "missing group: {}", group.label);
+            for section in group.sections {
+                assert!(has(zh, section.title), "missing section: {}", section.title);
+                for item in section.items {
+                    assert!(has(zh, item.label), "missing item: {}", item.label);
+                }
+            }
+        }
+    }
+
+    /// New tl!("literal") labels must not silently fall back to English in the complete catalog.
+    #[test]
+    fn simplified_chinese_covers_ui_literals() {
+        let zh = Lang::from_code("zh-hans").expect("zh-hans registered");
+        let mut stack = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut literals = std::collections::BTreeSet::new();
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).expect("UI source directory") {
+                let path = entry.expect("UI source entry").path();
+                if path.is_dir() {
+                    // Catalog implementation and its test-only lookup examples are not UI labels.
+                    if path.file_name().is_some_and(|name| name != "i18n") {
+                        stack.push(path);
+                    }
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let source = std::fs::read_to_string(path).expect("UI source file").replace("\r\n", "\n");
+                    let mut rest = source.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+                    while let Some((_, after)) = rest.split_once("tl!(\"") {
+                        let mut escaped = false;
+                        let end = after
+                            .char_indices()
+                            .find_map(|(i, c)| {
+                                if c == '"' && !escaped {
+                                    return Some(i);
+                                }
+                                escaped = c == '\\' && !escaped;
+                                None
+                            })
+                            .expect("closed tl! literal");
+                        let (raw, tail) = after.split_at(end);
+                        if tail.starts_with("\")") {
+                            // Current UI literals use the shared Rust/JSON string escapes.
+                            let label: String = serde_json::from_str(&format!("\"{raw}\"")).expect("UI literal escapes");
+                            literals.insert(label);
+                        }
+                        rest = tail.strip_prefix('"').expect("closing quote");
+                    }
+                }
+            }
+        }
+        assert!(literals.len() > 900, "source scan found only {} literals", literals.len());
+        let missing: Vec<_> = literals.iter().filter(|label| !has(zh, label)).collect();
+        assert!(missing.is_empty(), "untranslated Simplified Chinese UI literals: {missing:#?}");
+    }
+
+    #[test]
+    fn simplified_chinese_history_and_diagnostics_preserve_user_values() {
+        let zh = Lang::from_code("zh-hans").expect("zh-hans registered");
+        set_current(zh);
+        assert_eq!(command_label("Undo Insert pages from 报告 {n}.pdf"), "撤销 从 报告 {n}.pdf 插入页面");
+        assert_eq!(command_label("Redo Fill in 联系人 {key}"), "重做 填写 联系人 {key}");
+        assert_eq!(action_label("Change Title"), "更改标题");
+        assert_eq!(action_label("Custom action {n}"), "Custom action {n}");
+        assert_eq!(fmt(t("This page couldn't be displayed.\n{e}"), &[("e", "OS error {n}")]), "无法显示此页面。\nOS error {n}");
+        assert_eq!(fmt(t("{n} pages selected"), &[("n", "3")]), "已选择 3 页");
+        assert_eq!(tr(zh, "CheckBox"), "复选框");
+        assert_eq!(tr(zh, "pages"), "页");
+        set_current(Lang::EN);
+    }
+
     #[test]
     fn traditional_chinese_is_registered() {
         let zh = Lang::from_code("zh-hant").expect("zh-hant registered");

@@ -1633,3 +1633,203 @@
 	Digitally sign	数字签名
 	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	在 PdfCraft 中打开的文件会显示在这里。将 PDF 拖放到任意位置即可打开。
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft 可离线工作。无遥测、无账号，除非您自行添加服务商，否则无云端处理。
+
+# Remaining dialogs, generated history labels and diagnostics. Translated from the English meaning.
+	{0}: {1}	{0}：{1}
+	{dpi} pixels/inch	{dpi} 像素/英寸
+	{kind} field	{kind}字段
+	{month} {y}	{y} 年 {month}
+	{n} pages selected	已选择 {n} 页
+	{name} — unsaved changes	{name} — 有未保存的更改
+	{s} action	{s}动作
+	1 page selected	已选择 1 页
+	a bookmark cannot be moved inside itself	无法将书签移入其自身内部
+	a document must keep at least one page	文档必须保留至少一页
+	A form field has additional actions	表单字段包含附加动作
+	A stream refers to an external file	数据流引用了外部文件
+	A stream uses LZW compression	数据流使用 LZW 压缩
+	Add arrow	添加箭头
+	Add background	添加背景
+	Add bookmark	添加书签
+	Add callout	添加标注框
+	Add checkmark	添加勾选标记
+	Add cloud	添加云形
+	Add connected lines	添加折线
+	Add cross	添加叉号
+	Add dot	添加圆点
+	Add drawing	添加绘图
+	Add field	添加字段
+	Add file attachment	添加文件附件
+	Add header & footer	添加页眉和页脚
+	Add highlight	添加高亮
+	Add image	添加图像
+	Add inserted text	添加插入文本标记
+	Add line	添加直线
+	Add link	添加链接
+	Add oval	添加椭圆
+	Add polygon	添加多边形
+	Add rectangle	添加矩形
+	Add redaction mark	添加密文标记
+	Add signature	添加签名
+	Add squiggly underline	添加波浪下划线
+	Add stamp	添加图章
+	Add sticky note	添加便笺
+	Add strikethrough	添加删除线
+	Add text box	添加文本框
+	Add underline	添加下划线
+	An embedded file has no AFRelationship	嵌入文件缺少 AFRelationship
+	An image asks to be interpolated	图像要求进行插值
+	An image has alternates or OPI information	图像包含替代图像或 OPI 信息
+	Button Style:	按钮样式：
+	Change {key}	更改{key}
+	Change comment properties	更改注释属性
+	Change field properties	更改字段属性
+	Change initial view	更改初始视图
+	Change initials	更改姓名首字母
+	Change link properties	更改链接属性
+	Change signature	更改签名
+	Check	勾选
+	Check Box Style:	复选框样式：
+	Choose images	选择图像
+	Circle	圆形
+	Combo	下拉列表
+	Coming in milestone	计划推出的里程碑
+	Crop page	裁剪页面
+	Delete bookmark	删除书签
+	Delete comment	删除注释
+	Delete content	删除内容
+	Delete document JavaScript	删除文档 JavaScript
+	Delete field	删除字段
+	Delete image	删除图像
+	Delete link	删除链接
+	Delete page	删除页面
+	Device colour is used, but there is no PDF/A output intent	使用了设备颜色，但未设置 PDF/A 输出意图
+	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	使用了 DeviceCMYK：需要设置 CMYK 输出意图（不会自动添加）
+	Diagnostic details	诊断详情
+	Diamond	菱形
+	Double-click	双击
+	Draw your {what} below.	请在下方绘制您的{what}。
+	Duplicate page	复制页面
+	e.g. en-US	例如 en-US
+	Edit comment	编辑注释
+	Edit content	编辑内容
+	Edit document JavaScript	编辑文档 JavaScript
+	Edit script of {name}	编辑 {name} 的脚本
+	Edit text	编辑文本
+	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	嵌入文件本身必须符合 PDF/A 标准（其他类型的文件请使用 PDF/A-3）
+	Erase	擦除
+	Fill & Sign: change initials	填写与签名：更改姓名首字母
+	Fill & Sign: change signature	填写与签名：更改签名
+	Fill & Sign: remove saved initials	填写与签名：移除已保存的姓名首字母
+	Fill & Sign: remove saved signature	填写与签名：移除已保存的签名
+	Fill in {name}	填写 {name}
+	Flatten	拼合
+	Flip image	翻转图像
+	Font: Helvetica	字体：Helvetica
+	Go to page {p}	转到第 {p} 页
+	Images and text	图像和文本
+	Images and text (converted to PDF)	图像和文本（转换为 PDF）
+	Import {name}	导入 {name}
+	Insert pages from {name}	从 {name} 插入页面
+	Items marked Ready work today.	标记为就绪的项目现已可用。
+	JavaScript	JavaScript
+	JavaScript, e.g. getField("total").value	JavaScript，例如 getField("total").value
+	List	列表
+	Lock comment	锁定注释
+	Mark figure as decorative	将图形标记为装饰性内容
+	Microsoft Word (.docx)	Microsoft Word（.docx）
+	Move bookmark	移动书签
+	Move comment	移动注释
+	Move image	移动图像
+	Move page	移动页面
+	Move pages	移动页面
+	no such document	找不到该文档
+	nothing in the file matches this document	文件中没有与此文档匹配的数据
+	open to see what it will include	打开以查看计划包含的功能
+	Page {p} of {n}	第 {p} 页，共 {n} 页
+	PDF/A…	PDF/A…
+	Planned	计划中
+	Planned for milestone	计划推出的里程碑
+	PostScript / EPS	PostScript / EPS
+	PostScript XObjects aren't allowed	不允许使用 PostScript XObject
+	Presentation (.pptx)	演示文稿（.pptx）
+	PushButton	按钮
+	Radio	单选按钮
+	Remove redaction marks	移除密文标记
+	Rename bookmark	重命名书签
+	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	渲染：hayro（初期实现） · 界面：egui · 图标：Lucide（ISC） · 字体：Inter、JetBrains Mono、Dancing Script（OFL）
+	Replace page	替换页面
+	Resize comment	调整注释大小
+	Rotate image	旋转图像
+	Rotate page	旋转页面
+	Run JavaScript	运行 JavaScript
+	Save as PDF/A-1b	另存为 PDF/A-1b
+	Save as PDF/A-2b	另存为 PDF/A-2b
+	Save as PDF/A-3b	另存为 PDF/A-3b
+	Save as PDF/UA	另存为 PDF/UA
+	Save as PDF/X	另存为 PDF/X
+	Select a file for the stamp	选择图章文件
+	Select Icon	选择图标
+	Set bookmark destination	设置书签目标
+	Set status Accepted	将状态设为已接受
+	Set status Cancelled	将状态设为已取消
+	Set status Completed	将状态设为已完成
+	Set status None	将状态设为无
+	Set status Rejected	将状态设为已拒绝
+	Set status Unmarked	将状态设为未标记
+	Set tab order	设置 Tab 键顺序
+	Set the image of {name}	设置 {name} 的图像
+	Spreadsheet (.xlsx)	电子表格（.xlsx）
+	Square	正方形
+	Star	星形
+	The document has additional actions (/AA)	文档包含附加动作（/AA）
+	The document has document-level JavaScript	文档包含文档级 JavaScript
+	the document has no form fields	文档没有表单字段
+	the document has no page tree	文档没有页面树
+	the document has no tags	文档没有标签
+	The document has no XMP metadata	文档没有 XMP 元数据
+	The document is encrypted	文档已加密
+	the document is protected by a password	文档受密码保护
+	The form asks viewers to make appearances (NeedAppearances)	表单要求阅读器生成外观（NeedAppearances）
+	the image is empty	图像为空
+	The operation failed.	操作失败。
+	the password is incorrect	密码不正确
+	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	尚未安装文本识别模型（请运行 `cargo xtask models` 或设置 PRINTCRAFT_MODELS）
+	The title in the metadata and the document information differ	元数据与文档信息中的标题不一致
+	the title must not be empty	标题不能为空
+	there are no pages to print	没有可打印的页面
+	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	此文档已签名：重写文件会使签名失效（请改用增量保存）
+	this file isn't XFDF, FDF, XML or text form data	此文件不是 XFDF、FDF、XML 或文本格式的表单数据
+	This page couldn't be displayed.\n{e}	无法显示此页面。\n{e}
+	Type your {what}.	请输入您的{what}。
+	Unknown	未知
+	Unlock comment	解锁注释
+	Update background	更新背景
+	Update header & footer	更新页眉和页脚
+	Update watermark	更新水印
+	Your name	您的姓名
+
+# Additional UI labels, including newer workspace and security prompts.
+	Change {what}	更改{what}
+	Cut and stack	裁切后堆叠
+	Default workspace mode	默认工作区模式
+	Documents and view	文档与视图
+	Open email app	打开邮件应用
+	Open link	打开链接
+	Open this web page?	是否打开此网页？
+	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	脚本在沙盒中运行，无法访问文件或网络。脚本请求打开网页时，需要先获得您的许可。关闭 JavaScript 后，Acrobat 的标准格式、验证和计算函数仍可使用。
+	Sign yourself	自行签名
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	尚未安装文本识别功能：缺少模型（请运行 `cargo xtask models` 或设置 PDFCRAFT_MODELS）。
+	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	用于打开 PDF 时。如果启动参数或控制通道明确指定了模式，则本次会话优先使用该模式。
+	Write this email?	是否撰写此邮件？
+	{who} in this document wants to open this address in your browser:	此文档中的{who}请求在浏览器中打开以下地址：
+	{who} in this document wants to open your email app with this address:	此文档中的{who}请求打开邮件应用并使用以下地址：
+	CheckBox	复选框
+	Create link	创建链接
+	Duplicate field	复制字段
+	Replace pages	替换页面
+	Set alternate text	设置替代文本
+	nothing to redo	没有可重做的操作
+	nothing to undo	没有可撤销的操作
+	pages	页
+	there are no redaction marks to apply	没有可应用的密文标记
