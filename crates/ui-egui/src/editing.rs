@@ -73,12 +73,21 @@ impl PdfCraftApp {
         }
     }
 
+    /// Undo the last change: to the Combine files list while its tab shows, else the document.
     pub fn undo(&mut self) {
-        self.history_step(true);
+        if self.combine_showing() {
+            self.combine_history_step(true);
+        } else {
+            self.history_step(true);
+        }
     }
 
     pub fn redo(&mut self) {
-        self.history_step(false);
+        if self.combine_showing() {
+            self.combine_history_step(false);
+        } else {
+            self.history_step(false);
+        }
     }
 
     fn history_step(&mut self, undo: bool) {

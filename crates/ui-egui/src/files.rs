@@ -125,7 +125,7 @@ impl Default for RotateDraft {
 }
 
 impl PdfCraftApp {
-    /// Ask for files to combine (File ▸ Combine files…).
+    /// Ask for files to add to the Combine files list (its Add files… button).
     pub fn combine_dialog(&mut self) {
         self.pick_files(FilePurpose::Combine, true);
     }
@@ -178,6 +178,7 @@ impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn use_paths(&mut self, purpose: FilePurpose, paths: &[std::path::PathBuf]) {
         let mut files = Vec::new();
+        let mut modified = Vec::new();
         for p in paths {
             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file.pdf".into());
             match std::fs::read(p) {
@@ -187,10 +188,58 @@ impl PdfCraftApp {
                     return;
                 }
             }
+            modified.push(std::fs::metadata(p).and_then(|m| m.modified()).ok());
         }
-        if !files.is_empty() {
+        if files.is_empty() {
+            return;
+        }
+        // Combine files lists when each file was last modified.
+        if purpose == FilePurpose::Combine {
+            let incoming = files
+                .into_iter()
+                .zip(modified)
+                .map(|((name, bytes), modified)| crate::combine_ui::Incoming { name, bytes: Arc::new(bytes), modified, note: None })
+                .collect();
+            self.stage_combine_with(incoming);
+        } else {
             self.use_files(purpose, files);
         }
+    }
+
+    /// A file dropped on the Combine files tab: added to its list.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn drop_into_combine(&mut self, f: egui::DroppedFileHandle, _ctx: &egui::Context) {
+        // A folder: the PDFs in it and in the folders inside it.
+        if f.path().is_absolute() && f.path().is_dir() {
+            self.add_folder_to_combine(f.path(), true);
+            return;
+        }
+        if f.path().is_absolute() {
+            self.use_paths(FilePurpose::Combine, &[f.path().to_path_buf()]);
+            return;
+        }
+        let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+        match f.bytes() {
+            Ok(bytes) => self.use_files(FilePurpose::Combine, vec![(name, bytes)]),
+            Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+        }
+    }
+
+    /// Browsers read dropped files asynchronously; they join the Combine files list next frame.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn drop_into_combine(&mut self, f: egui::DroppedFileHandle, ctx: &egui::Context) {
+        let requests = self.requests.clone();
+        let request = self.file_request(FilePurpose::Combine, Vec::new());
+        let ctx = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+            if let Ok(bytes) = f.bytes_async().await
+                && let Ok(mut q) = requests.lock()
+            {
+                q.push(FileRequest { files: vec![(name, bytes)], ..request });
+                ctx.request_repaint();
+            }
+        });
     }
 
     /// A request to use `files` for `purpose`, bound to the document it will edit: the active

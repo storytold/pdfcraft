@@ -144,6 +144,34 @@ pub fn community_links(ui: &mut egui::Ui) -> Option<&'static str> {
     clicked
 }
 
+/// [`icon_pill`] with a ▾ part at its end that opens a menu of related choices. Returns the
+/// main button's response and the ▾'s (give it to `egui::Popup::menu`).
+pub fn split_pill(ui: &mut egui::Ui, icon: &str, label: &str, more: &str) -> (Response, Response) {
+    let t = Tokens::get(ui.ctx());
+    let font = theme::medium(12.5);
+    let w = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font.clone(), t.text).size().x);
+    let (rect, _) = ui.allocate_exact_size(vec2(w + 46.0 + 28.0, 30.0), Sense::hover());
+    let (main_rect, more_rect) = rect.split_left_right_at_x(rect.right() - 28.0);
+    let main = ui.interact(main_rect, ui.id().with(("split-pill", label)), Sense::click());
+    let arrow = ui.interact(more_rect, ui.id().with(("split-pill-more", label)), Sense::click());
+    main.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), more));
+    let radius = CornerRadius::same(15);
+    ui.painter().rect(rect, radius, t.card, Stroke::new(1.2, t.text_muted), egui::StrokeKind::Inside);
+    let left = CornerRadius { nw: 15, sw: 15, ne: 0, se: 0 };
+    let right = CornerRadius { nw: 0, sw: 0, ne: 15, se: 15 };
+    for (r, resp, corners) in [(main_rect, &main, left), (more_rect, &arrow, right)] {
+        if resp.hovered() {
+            ui.painter().rect_filled(r.shrink(1.2), corners, t.hover);
+        }
+    }
+    ui.painter().vline(more_rect.left(), rect.y_range().shrink(7.0), Stroke::new(1.0, t.text_muted));
+    crate::icons::paint(ui, Rect::from_min_size(rect.min + vec2(12.0, 7.0), vec2(16.0, 16.0)), icon, 15.0, t.text);
+    ui.painter().text(rect.left_center() + vec2(34.0, 0.0), Align2::LEFT_CENTER, label, font, t.text);
+    crate::icons::paint(ui, Rect::from_center_size(more_rect.center(), vec2(14.0, 14.0)), "chevron-down", 13.0, t.text);
+    (main.on_hover_text(label), arrow.on_hover_text(more))
+}
+
 /// A pill button with an icon (primary = filled accent).
 pub fn icon_pill(ui: &mut egui::Ui, icon: &str, label: &str, primary: bool) -> Response {
     let t = Tokens::get(ui.ctx());

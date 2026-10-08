@@ -747,6 +747,33 @@ fn protecting_through_tools() {
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
 }
 
+#[test]
+fn combine_opens_protected_files_with_their_passwords() {
+    let dir = workdir("combine-passwords");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // Opens with "open"; only "boss" may assemble pages.
+    ok(&mut a, "doc_protect", json!({ "doc": doc, "open_password": "open", "permissions_password": "boss", "changes": "none" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "locked.pdf" }));
+    let combine = |a: &mut Automation, passwords: Value| {
+        a.call("doc_combine", &json!({ "paths": ["locked.pdf", "b.pdf"], "passwords": passwords, "open": true }))
+    };
+    let err = |r: Result<_, ToolError>| match r {
+        Err(ToolError::Failed(m)) => m,
+        Err(other) => panic!("expected a failure, got {other:?}"),
+        Ok(_) => panic!("expected a failure"),
+    };
+    assert!(err(combine(&mut a, Value::Null)).contains("password-protected"));
+    assert!(err(combine(&mut a, json!(["wrong", null]))).contains("password is wrong"));
+    assert!(err(combine(&mut a, json!(["open", null]))).contains("don't allow copying pages"));
+    assert!(matches!(combine(&mut a, json!(["boss"])), Err(ToolError::InvalidArgs(_))), "one per path");
+    let done = ok(&mut a, "doc_combine", json!({ "paths": ["locked.pdf", "b.pdf"], "passwords": ["boss", null], "open": true }));
+    assert!(!done.to_string().contains("boss"), "passwords are never echoed");
+    let out = done["document"]["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, out), ["Page 1", "Page 2", "Page 3", "Page 1", "Page 2"]);
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": out }))["security"]["protected"], false, "the result is not encrypted");
+}
+
 /// Restrictions exist only behind a permissions password: open_password alone encrypts and
 /// restricts nothing, and asking for a restriction without one is refused rather than ignored (#134).
 #[test]

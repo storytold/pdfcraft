@@ -2890,8 +2890,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.combine"]
 tools = ["doc_combine"]
-evidence = ["crates/organize/src/tests.rs::combine_concatenates_with_a_bookmark_per_file", "crates/ui-egui/tests/editing.rs::combining_files_opens_a_new_unsaved_tab", "crates/automation/tests/automation.rs::combine_extract_and_split"]
-notes = ""
+evidence = ["crates/organize/src/tests.rs::combine_concatenates_with_a_bookmark_per_file", "crates/ui-egui/tests/editing.rs::combining_files_opens_a_new_unsaved_tab", "crates/ui-egui/tests/editing.rs::combine_files_opens_in_its_own_tab", "crates/ui-egui/tests/editing.rs::combine_lists_size_and_warns_before_combining", "crates/ui-egui/tests/editing.rs::a_password_protected_file_is_unlocked_with_its_password_and_combined", "crates/ui-egui/tests/editing.rs::a_folder_adds_its_pdfs_in_order_and_optionally_its_subfolders", "crates/ui-egui/tests/ui.rs::pdfs_dropped_on_the_combine_tab_join_its_list", "crates/automation/tests/automation.rs::combine_extract_and_split", "crates/automation/tests/automation.rs::combine_opens_protected_files_with_their_passwords"]
+notes = "Combine files is its own tab: a table of the files (name, pages, size, modified, warnings) with column sorting, resizing and moving; files, folders (with subfolders) and open documents can be added, or dropped on the tab. Problems show before Combine (password, security settings that withhold page assembly, bad page ranges, duplicates); protected files are unlocked with their open or permissions password (also doc_combine passwords). The result is never encrypted, and is not yet offered for protection in the same step."
 
 [[feature]]
 id = "organize.combine-bookmarks"
@@ -2915,7 +2915,7 @@ status = "shipped"
 commands = ["page.combine"]
 tools = ["doc_combine"]
 evidence = ["crates/ui-egui/tests/editing.rs::combine_files_takes_chosen_pages_in_the_order_listed", "crates/automation/tests/automation.rs::combine_extract_and_split"]
-notes = "Combine files list: order (move up/down), remove, add files, a page range per file (such as 1-3, 6; in the order given); bookmarks to left-out pages lose their destination"
+notes = "A page range per file (such as 1-3, 6; in the order given), checked as it is typed, with the page count it takes; bookmarks to left-out pages lose their destination"
 
 [[feature]]
 id = "organize.combine-sort"
@@ -2923,11 +2923,11 @@ title = "Sort and reorder files before combining"
 area = "D"
 tier = "P2"
 milestone = "M4"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["page.combine"]
+tools = ["doc_combine"]
+evidence = ["crates/ui-egui/tests/editing.rs::column_headings_sort_the_list_and_flip_on_the_second_click", "crates/ui-egui/tests/editing.rs::ctrl_and_shift_clicks_select_several_files_that_move_and_go_together", "crates/ui-egui/tests/editing.rs::undo_and_redo_restore_the_combine_list", "crates/automation/tests/automation.rs::combine_extract_and_split"]
+notes = "Sort by any column (name in natural order, pages, size, modified, warnings), ascending or descending; multi-select (Ctrl/Shift) and move up/down, Alt+arrows or drag; every change undoable. doc_combine combines in the order its paths are given."
 
 [[feature]]
 id = "organize.combine-options"
@@ -2935,11 +2935,11 @@ title = "Combine options (file size, convert to PDF/A, include open files)"
 area = "D"
 tier = "P2"
 milestone = "M11"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["page.combine"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::open_documents_can_be_added_to_combine"]
+notes = "Include open files: Add open documents (with their unsaved changes). Missing: file-size options and converting the result to PDF/A."
 
 [[feature]]
 id = "organize.resource-dedupe"

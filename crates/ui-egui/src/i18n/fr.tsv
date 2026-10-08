@@ -1931,3 +1931,59 @@
 	Lines +/−	Lignes +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login} : {prs} PR, {commits} commits, +{added} / −{deleted} lignes (Δ {delta}), +{bin_added} / −{bin_deleted} fichiers binaires, {first} – {last}
 	Set layer visibility	Définir la visibilité des calques
+
+# Combine files tab
+	1 file	1 fichier
+	1 file needs attention	1 fichier demande votre attention
+	? of {n}	? sur {n}
+	Add folder	Ajouter un dossier
+	Add folder and subfolders	Ajouter un dossier et ses sous-dossiers
+	Add folder and subfolders…	Ajouter un dossier et ses sous-dossiers…
+	Add folder…	Ajouter un dossier…
+	Add open documents	Ajouter des documents ouverts
+	Add the PDFs to combine	Ajoutez les PDF à combiner
+	Added more than once	Ajouté plusieurs fois
+	All open documents	Tous les documents ouverts
+	Can't be read: {e}	Illisible : {e}
+	Check the pages of {name}: {why}	Vérifiez les pages de {name} : {why}
+	Click to sort, drag to move the column. Drag its edge to resize it.	Cliquer pour trier, faire glisser pour déplacer la colonne. Faire glisser son bord pour la redimensionner.
+	Drag to reorder	Faire glisser pour réordonner
+	Drop PDFs or folders here, or choose them.	Déposez ici des PDF ou des dossiers, ou choisissez-les.
+	Enter the password that opens it	Saisissez le mot de passe qui l'ouvre
+	Enter the permissions password to allow combining	Saisissez le mot de passe des autorisations pour permettre de le combiner
+	Every PDF in the folder	Tous les PDF du dossier
+	Every PDF in the folder and the folders inside it	Tous les PDF du dossier et des dossiers qu'il contient
+	File name	Nom du fichier
+	Files are combined from top to bottom. Leave Pages empty to take every page.	Les fichiers sont combinés de haut en bas. Laissez Pages vide pour prendre toutes les pages.
+	Hide password	Masquer le mot de passe
+	Includes unsaved changes	Inclut des modifications non enregistrées
+	Its security settings don't allow copying pages	Ses paramètres de sécurité n'autorisent pas la copie des pages
+	More ways to add files	Autres façons d'ajouter des fichiers
+	No documents are open	Aucun document n'est ouvert
+	No pages selected	Aucune page sélectionnée
+	Opened, but its security settings don't allow combining. Enter the permissions password.	Ouvert, mais ses paramètres de sécurité n'autorisent pas la combinaison. Saisissez le mot de passe des autorisations.
+	Password-protected	Protégé par mot de passe
+	Protected: the combined file won't keep its security settings	Protégé : le fichier combiné ne conservera pas ses paramètres de sécurité
+	Remove {n} files	Retirer {n} fichiers
+	Reset columns	Réinitialiser les colonnes
+	Select a file first	Sélectionnez d'abord un fichier
+	Select a password-protected file first	Sélectionnez d'abord un fichier protégé par mot de passe
+	Show password	Afficher le mot de passe
+	The password is only used to read the file; it isn't saved.	Le mot de passe sert uniquement à lire le fichier ; il n'est pas enregistré.
+	The same password is tried on each file.	Le même mot de passe est essayé sur chaque fichier.
+	Unlock	Déverrouiller
+	Unlock {name}	Déverrouiller {name}
+	Unlock {n} files	Déverrouiller {n} fichiers
+	Unlocked: the combined file won't be password-protected	Déverrouillé : le fichier combiné ne sera pas protégé par mot de passe
+	Unlock…	Déverrouiller…
+	Warnings	Avertissements
+	Wrong password	Mot de passe incorrect
+	sorted ascending	tri croissant
+	sorted descending	tri décroissant
+	yesterday	hier
+	{k} of {n}	{k} sur {n}
+	{name} can't be combined: {why}	Impossible de combiner {name} : {why}
+	{n} days ago	il y a {n} jours
+	{n} files	{n} fichiers
+	{n} files need attention	{n} fichiers demandent votre attention
+	{n} selected	{n} sélectionnés
