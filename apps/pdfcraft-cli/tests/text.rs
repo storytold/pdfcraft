@@ -1,4 +1,5 @@
-//! `text` must fail loudly when a page it was asked for cannot be read (#131).
+//! `text` must fail loudly when a page it was asked for cannot be read (#131), and when the
+//! document itself cannot be opened, e.g. a password-protected file without `--password` (#132).
 
 use std::process::Command;
 
@@ -54,6 +55,42 @@ fn text_of_a_readable_document_succeeds() {
     std::fs::write(&path, fixture(3)).unwrap();
     let out = Command::new(BIN).args(["text", path.to_str().unwrap()]).output().unwrap();
     assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Page 1") && stdout.contains("Page 3"), "{stdout}");
+}
+
+/// `three.pdf` encrypted with the open password `openme`, via `run --script`.
+fn protected_fixture() -> std::path::PathBuf {
+    let src = tmp("to-protect.pdf");
+    std::fs::write(&src, fixture(3)).unwrap();
+    let out_path = tmp("protected.pdf");
+    let script = tmp("protect.json");
+    let steps = serde_json::json!([
+        { "tool": "doc_open", "args": { "path": src } },
+        { "tool": "doc_protect", "args": { "doc": 1, "open_password": "openme" } },
+        { "tool": "doc_save", "args": { "doc": 1, "path": out_path } },
+    ]);
+    std::fs::write(&script, steps.to_string()).unwrap();
+    let out = Command::new(BIN).args(["run", "--script", script.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success(), "protecting the fixture failed: {}", String::from_utf8_lossy(&out.stderr));
+    out_path
+}
+
+#[test]
+fn text_of_a_protected_document_without_the_password_fails() {
+    let path = protected_fixture();
+    let out = Command::new(BIN).args(["text", path.to_str().unwrap()]).output().unwrap();
+    assert!(!out.status.success(), "a document that cannot be opened must not exit 0");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("password"), "the reason must be named: {stderr}");
+    assert!(out.stdout.is_empty(), "{}", String::from_utf8_lossy(&out.stdout));
+}
+
+#[test]
+fn text_of_a_protected_document_with_the_password_succeeds() {
+    let path = protected_fixture();
+    let out = Command::new(BIN).args(["text", path.to_str().unwrap(), "--password", "openme"]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Page 1") && stdout.contains("Page 3"), "{stdout}");
 }

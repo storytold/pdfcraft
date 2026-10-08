@@ -174,7 +174,18 @@ fn info(args: &[String]) -> Result<(), CliError> {
 
 fn text(args: &[String]) -> Result<(), CliError> {
     let path = *positional(args).first().ok_or("text: missing file")?;
-    let mut r = PageRenderer::new(read(path)?, RenderConfig { password: flag(args, "--password").map(Arc::from), ..Default::default() });
+    let password = flag(args, "--password");
+    let bytes = read(path)?;
+    let mut r = PageRenderer::new(bytes.clone(), RenderConfig { password: password.map(Arc::from), ..Default::default() });
+    // A document the renderer could not open (wrong or missing password, unparseable file) has
+    // no pages, and "extract every page" of nothing would print nothing and exit 0 (#132). Ask
+    // `inspect` why instead, so a protected file fails the same way `info` does.
+    if r.page_count() == 0 {
+        let info = inspect(bytes, password).map_err(|e| format!("text: {e}"))?;
+        if !info.pages.is_empty() {
+            return Err("text: the document could not be parsed".into());
+        }
+    }
     let pages: Vec<usize> = match flag(args, "--page") {
         Some(p) => vec![p.parse::<usize>().map_err(|_| "bad --page")?.saturating_sub(1)],
         None => (0..r.page_count()).collect(),
