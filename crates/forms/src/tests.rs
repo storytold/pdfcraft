@@ -727,7 +727,7 @@ fn push_buttons_read_hide_actions() {
             a.set(b"H".to_vec(), Object::Bool(h));
         }
         doc.update_dict(go, |d| d.set(b"A".to_vec(), Object::Dict(a))).unwrap();
-        field(&fields(&doc), "go").button.clone()
+        field(&fields(doc), "go").button.clone()
     };
     let hide = |names: &[&str], hide: bool| Some(af::ButtonAction::ShowHide { fields: names.iter().map(|n| n.to_string()).collect(), hide });
     // A name; /H defaults to true (hide).
