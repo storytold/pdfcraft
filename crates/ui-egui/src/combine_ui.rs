@@ -1102,7 +1102,7 @@ fn grip(ui: &egui::Ui, rect: Rect, colour: Color32) {
 }
 
 /// How long ago `time` was ("5 min ago"); a date after a week. Relative times need no time zone.
-fn ago(time: SystemTime) -> String {
+pub(crate) fn ago(time: SystemTime) -> String {
     let secs = SystemTime::now().duration_since(time).map(|d| d.as_secs()).unwrap_or(0);
     let (mins, hours, days) = (secs / 60, secs / 3600, secs / 86_400);
     match () {

@@ -1608,10 +1608,10 @@ area = "B"
 tier = "P1"
 milestone = "M3"
 status = "shipped"
-commands = []
+commands = ["file.pin_folder"]
 tools = []
-evidence = ["crates/ui-egui/tests/ui.rs::home_shows_welcome_and_tools"]
-notes = ""
+evidence = ["crates/ui-egui/tests/ui.rs::home_shows_welcome_and_tools", "crates/ui-egui/tests/folders.rs::a_pinned_folder_lists_its_newest_pdfs_on_home", "crates/ui-egui/tests/folders.rs::clicking_a_pinned_pdf_opens_it_and_adds_it_to_recent", "crates/ui-egui/tests/folders.rs::pinned_folders_survive_a_restart"]
+notes = "Desktop: folders pinned to Home (File ▸ Pin folder to Home…, up to 8) list their newest PDFs, read on a worker thread and refreshed every few seconds while Home shows; a folder that can't be read (moved, offline synced drive) stays pinned and says so. Pinned folders are local paths, so a cloud drive works through its synced folder (iCloud Drive, OneDrive, Dropbox). Not yet: subfolders, search within a pinned folder, the web build."
 
 [[feature]]
 id = "view.all-tools"
@@ -9555,7 +9555,7 @@ status = "na"
 commands = []
 tools = []
 evidence = []
-notes = "Adobe cloud; use OS file dialogs and synced folders"
+notes = "Adobe cloud; use OS file dialogs and synced folders, which can be pinned to Home (view.home-view)"
 
 [[feature]]
 id = "misc.cross-device-sync"

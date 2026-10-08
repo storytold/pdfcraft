@@ -21,6 +21,24 @@
 	Name on new comments	新註解的作者名稱
 	Open…	開啟…
 	Open Recent	開啟最近的檔案
+	Pin folder to Home…	將資料夾釘選到首頁…
+	Folders	資料夾
+	Pin a folder…	釘選資料夾…
+	Pin a folder to Home	將資料夾釘選到首頁
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	釘選資料夾後，即可在此列出其中最新的 PDF，例如掃描器或同步雲端硬碟儲存檔案的位置。
+	Unpin	取消釘選
+	Unpin {folder}	取消釘選 {folder}
+	Looking for PDFs…	正在尋找 PDF…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	此資料夾目前無法使用。它可能已被移動，或其所在磁碟或雲端同步處於離線狀態。
+	No PDFs in this folder yet	此資料夾中還沒有 PDF
+	Show less	顯示較少
+	Show {n} more	再顯示 {n} 個
+	The newest {n} of {total} PDFs	共 {total} 個 PDF 中最新的 {n} 個
+	Pinned folders need the desktop app	釘選資料夾需要桌面版應用程式
+	Choose a folder on this computer to pin	請選擇這部電腦上要釘選的資料夾
+	{folder} is already pinned to Home	{folder} 已釘選到首頁
+	You can pin up to {n} folders. Unpin one first.	最多可釘選 {n} 個資料夾。請先取消釘選一個。
+	Pinned {folder} to Home	已將 {folder} 釘選到首頁
 	No recent files	沒有最近的檔案
 	Open	開啟
 	Open file	開啟檔案

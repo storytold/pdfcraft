@@ -1,4 +1,5 @@
-//! Home tab: recommended tools, open card, recent files (local only, never another app's list).
+//! Home tab: recommended tools, open card, pinned folders and recent files (local only, never
+//! another app's list).
 
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, vec2};
 use pdfcraft_engine::catalog;
@@ -95,6 +96,12 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         }
                     });
                 });
+
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                ui.add_space(26.0);
+                crate::folders_ui::section(app, ui);
+            }
 
             ui.add_space(26.0);
             ui.label(egui::RichText::new(tl!("Recent")).font(theme::semibold(17.0)));
