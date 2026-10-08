@@ -71,11 +71,7 @@ impl Exporter {
         if let Some(e) = r.error {
             return Err(format!("page {}: {e}", page + 1));
         }
-        match format {
-            ImageFormat::Png => encode_png(r.width, r.height, &r.rgba),
-            ImageFormat::Jpeg { quality } => encode_jpeg(r.width, r.height, &r.rgba, quality),
-            ImageFormat::Tiff => encode_tiff(r.width, r.height, &r.rgba),
-        }
+        encode_image(r.width, r.height, &r.rgba, format)
     }
 
     /// The reading-order text of a page.
@@ -99,6 +95,15 @@ impl Exporter {
             out.push('\n');
         }
         Ok(out)
+    }
+}
+
+/// Premultiplied RGBA → an image file of `format`.
+pub fn encode_image(width: u32, height: u32, premultiplied: &[u8], format: ImageFormat) -> Result<Vec<u8>, String> {
+    match format {
+        ImageFormat::Png => encode_png(width, height, premultiplied),
+        ImageFormat::Jpeg { quality } => encode_jpeg(width, height, premultiplied, quality),
+        ImageFormat::Tiff => encode_tiff(width, height, premultiplied),
     }
 }
 

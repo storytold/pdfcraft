@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
-//! pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.pam
+//! pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
 //! pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
 //! pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
 //!                       [--insert-blank 1] [--title T] [--author A] [--full]
@@ -39,6 +39,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use pdfcraft_engine::export::ImageFormat;
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, inspect};
 
 fn main() -> ExitCode {
@@ -333,16 +334,30 @@ fn render(args: &[String]) -> Result<(), CliError> {
     let path = *positional(args).first().ok_or("render: missing file")?;
     let page: usize = flag(args, "--page").unwrap_or("1").parse().map_err(|_| "bad --page")?;
     let dpi: f32 = flag(args, "--dpi").unwrap_or("96").parse().map_err(|_| "bad --dpi")?;
-    let out = flag(args, "--out").ok_or("render: missing --out (.pam)")?;
+    let out = flag(args, "--out").ok_or("render: missing --out (.png, .jpg, .tif or .pam)")?;
+    // The file is what its name says (#248): a `.png` used to get a netpbm PAM stream.
+    let format = match Path::new(out).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+        Some("png") => Some(ImageFormat::Png),
+        Some("jpg" | "jpeg") => Some(ImageFormat::Jpeg { quality: 90 }),
+        Some("tif" | "tiff") => Some(ImageFormat::Tiff),
+        Some("pam") => None,
+        _ => return Err(format!("render: --out {out}: use a .png, .jpg, .tif or .pam name").into()),
+    };
     let mut r = PageRenderer::new(read(path)?, RenderConfig { password: flag(args, "--password").map(Arc::from), ..Default::default() });
     let p = r.render(RenderRequest { page: page.saturating_sub(1), kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0 });
     if let Some(e) = p.error {
         return Err(e.into());
     }
-    // PAM (netpbm RGB_ALPHA) keeps this tool dependency-free; convert with any image tool.
-    let mut f = std::fs::File::create(out).map_err(|e| e.to_string())?;
-    write!(f, "P7\nWIDTH {}\nHEIGHT {}\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", p.width, p.height).map_err(|e| e.to_string())?;
-    f.write_all(&p.rgba).map_err(|e| e.to_string())?;
+    let bytes = match format {
+        Some(f) => pdfcraft_engine::export::encode_image(p.width, p.height, &p.rgba, f)?,
+        None => {
+            // PAM (netpbm RGB_ALPHA): the raw premultiplied pixels, for tools that read it.
+            let mut pam = format!("P7\nWIDTH {}\nHEIGHT {}\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", p.width, p.height).into_bytes();
+            pam.extend_from_slice(&p.rgba);
+            pam
+        }
+    };
+    std::fs::write(out, bytes).map_err(|e| format!("{out}: {e}"))?;
     eprintln!("rendered page {page} at {dpi} dpi: {}×{} px in {} ms", p.width, p.height, p.millis);
     Ok(())
 }
