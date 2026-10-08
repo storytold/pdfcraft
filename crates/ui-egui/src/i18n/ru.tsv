@@ -1154,7 +1154,7 @@
 	Applied 1 redaction mark. Save to remove the content from the file.	Применена 1 метка сокрытия. Сохраните, чтобы удалить содержимое из файла.
 	Applied {n} redaction marks. Save to remove the content from the file.	Применено {n} меток сокрытия. Сохраните, чтобы удалить содержимое из файла.
 	JavaScript Console	Консоль JavaScript
-	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript выключен (Настройки ▸ JavaScript).
+	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript выключен (Настройки > JavaScript).
 	Output appears here.	Вывод появляется здесь.
 	Script Name:	Название скрипта:
 	This document has no document-level scripts.	В этом документе нет скриптов уровня документа.
