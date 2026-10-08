@@ -70,4 +70,11 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn every_command_icon_exists() {
+        for c in pdfcraft_engine::commands::COMMANDS {
+            assert!(super::exists(c.icon), "missing icon {} ({})", c.icon, c.id);
+        }
+    }
 }

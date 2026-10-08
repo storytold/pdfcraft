@@ -127,6 +127,8 @@ M0 → M1 → M2 → M3 → M4 must happen in order. After M4, M5–M12 can run 
 
 Newest first. One line per session: the date, what moved, and the new overall percentage.
 
+- **2026-10-08 (community, M3, #214):** In single-page view, when the whole page fits, the wheel turns pages: one per wheel notch, one per trackpad swipe including its momentum. The rail gets a Page display button between rotate and zoom with Acrobat's view choices (Fit to width scrolling, Fit one full page, Actual size, Zoom to page level, Fit visible, Read mode, Full screen) and the page layouts. Preferences gets Default page display and Default zoom, which every new tab uses. In continuous view, Fit page and Fit height fit the largest page, so mixed page sizes no longer jump while scrolling. Overall estimate unchanged (about 30–35%).
+
 - **2026-10-08 (M14, Windows Chinese Auto):** Auto now reads the Windows display language after locale environment overrides, selecting Simplified or Traditional Chinese through the existing locale mapping. Added Chinese region/script and Windows query regressions. Chinese font delivery remains incomplete. Localization remains partial; overall ≈ 30–35% (unchanged).
 
 - **2026-10-08 (M3, themes):** Toolbar and Display theme now share System, Light and Dark preferences, one command path and persistent settings; the duplicate View toggle is removed. Effective colours track the OS only in System mode, with egui popup styles kept in sync. Overall estimate unchanged (about 30–35%).

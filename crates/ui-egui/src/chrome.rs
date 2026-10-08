@@ -2,7 +2,7 @@
 
 use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, vec2};
 
-use crate::canvas::{Fit, PageLayout};
+use crate::canvas::{DocView, Fit, PageLayout};
 use crate::theme::{self, ThemePreference, Tokens};
 use crate::{Dialog, Mode, PdfCraftApp, PropsTab, RightPanel, icons, widgets};
 
@@ -210,18 +210,8 @@ fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     v.view_history(true);
                 }
                 ui.separator();
-                ui.label(egui::RichText::new(tl!("Page display")).color(t.text_faint).small());
-                for (l, label) in
-                    [(PageLayout::Continuous, "Continuous scrolling"), (PageLayout::TwoUp, "Two-page view"), (PageLayout::Single, "Single page")]
-                {
-                    if ui.radio(v.layout == l, tl!(label)).clicked() {
-                        v.layout = l;
-                        v.goto = Some((v.current, 0.0));
-                    }
-                }
-                if ui.add_enabled(v.layout == PageLayout::TwoUp, egui::Checkbox::new(&mut v.cover, tl!("Show cover page in two-page view"))).changed()
-                {
-                    v.goto = Some((v.current, 0.0));
+                if let Some(id) = page_display_menu(ui, &app.views[i]) {
+                    app.execute(id);
                 }
                 ui.separator();
             }
@@ -295,6 +285,7 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
             // Page navigation cluster at the bottom (as in Acrobat's rail).
             let view = &mut app.views[index];
+            let mut page_display = None;
             ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 if icons::button(ui, "zoom-out", 32.0, false, tl!("Zoom out (⌘−)")).clicked() {
@@ -303,10 +294,20 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 if icons::button(ui, "zoom-in", 32.0, false, tl!("Zoom in (⌘+)")).clicked() {
                     view.zoom_step(true);
                 }
+                // Between rotate and zoom, as in Acrobat. Its command runs once `view` is free.
+                let tip = crate::i18n::fmt(tl!("Page display: {layout}"), &[("layout", tl!(view.layout.label()))]);
+                let resp = icons::button(ui, view.layout.icon(), 32.0, false, &tip);
+                page_display = egui::Popup::menu(&resp)
+                    .show(|ui| {
+                        ui.set_min_width(220.0);
+                        rail_view_menu(ui, view)
+                    })
+                    .and_then(|r| r.inner);
                 if icons::button(ui, "rotate-cw", 32.0, false, tl!("Rotate view clockwise (⇧⌘+)")).clicked() {
                     view.rotate_view(true);
                 }
-                let fit_icon = if view.fit == Fit::Width { "maximize" } else { "columns-2" };
+                // Not `columns-2` while fitting the page: that is the two-page view's icon.
+                let fit_icon = if view.fit == Fit::Width { "maximize" } else { "maximize-2" };
                 if icons::button(ui, fit_icon, 32.0, false, tl!("Toggle fit page / fit width")).clicked() {
                     view.fit = if view.fit == Fit::Width { Fit::Page } else { Fit::Width };
                     view.goto = Some((view.current, 0.0));
@@ -341,5 +342,64 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                 }
             });
+            if let Some(id) = page_display {
+                app.execute(id);
+            }
         });
+}
+
+/// View ▸ Page display and the rail's Page display menu: the layouts and the cover page.
+/// Returns the command a click asks for, for the caller to run.
+fn page_display_menu(ui: &mut egui::Ui, view: &DocView) -> Option<&'static str> {
+    let t = Tokens::get(ui.ctx());
+    ui.label(egui::RichText::new(tl!("Page display")).color(t.text_faint).small());
+    let mut picked = None;
+    for l in PageLayout::ORDER {
+        if ui.radio(view.layout == l, tl!(l.label())).clicked() {
+            picked = Some(l.command());
+        }
+    }
+    let mut cover = view.cover;
+    if ui.add_enabled(view.cover_applies(), egui::Checkbox::new(&mut cover, tl!("Show cover page in two-page view"))).changed() {
+        picked = Some("view.layout.cover");
+    }
+    if picked.is_some() {
+        ui.close();
+    }
+    picked
+}
+
+/// The rail's Page display menu: Acrobat's view choices around the page display. Zoom changes
+/// apply at once; the command a click asks for is returned for the caller to run.
+fn rail_view_menu(ui: &mut egui::Ui, view: &mut DocView) -> Option<&'static str> {
+    let mut picked = None;
+    for (id, label) in [("view.fit_width_scrolling", "Fit to width scrolling"), ("view.fit_one_page", "Fit one full page")] {
+        if ui.button(tl!(label)).clicked() {
+            picked = Some(id);
+        }
+    }
+    ui.separator();
+    if ui.button(tl!("Actual size")).clicked() {
+        view.set_zoom(1.0);
+        ui.close();
+    }
+    if ui.button(tl!("Zoom to page level")).clicked() {
+        view.set_fit(Fit::Page);
+        ui.close();
+    }
+    if ui.button(tl!("Fit visible")).clicked() {
+        picked = Some("view.fit_visible");
+    }
+    ui.separator();
+    picked = page_display_menu(ui, view).or(picked);
+    ui.separator();
+    for (id, label) in [("view.read_mode", "Read mode"), ("view.full_screen", "Full screen mode")] {
+        if ui.button(tl!(label)).clicked() {
+            picked = Some(id);
+        }
+    }
+    if picked.is_some() {
+        ui.close();
+    }
+    picked
 }

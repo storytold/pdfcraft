@@ -14,8 +14,11 @@ use crate::{
 };
 
 impl PdfCraftApp {
+    /// Whether a registered command can run now. The engine judges the document (security,
+    /// contents, undo history); view state it can't see is checked here.
     pub(crate) fn command_enabled(&self, spec: &CommandSpec) -> bool {
         commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
+            && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
     }
 
     /// Run a registered command by id. Returns `false` when the id is unknown or the command
@@ -63,6 +66,7 @@ impl PdfCraftApp {
                 commands::Needs::Assembly | commands::Needs::Modification | commands::Needs::Annotate if self.active.is_some() => {
                     tl!("The document's security settings don't allow this change").to_string()
                 }
+                commands::Needs::TwoPageView if self.active.is_some() => tl!("Switch to two-page view first to show the cover page").to_string(),
                 _ => tl!("Open a document first").to_string(),
             };
             self.notify(why);
@@ -120,6 +124,25 @@ impl PdfCraftApp {
                 }
             }
             "view.palette" => self.palette_open = !self.palette_open,
+            layout if crate::canvas::PageLayout::from_command(layout).is_some() => {
+                if let (Some(i), Some(layout)) = (active, crate::canvas::PageLayout::from_command(layout)) {
+                    self.views[i].set_layout(layout);
+                }
+            }
+            "view.layout.cover" => {
+                if let Some(i) = active {
+                    let v = &mut self.views[i];
+                    v.set_cover(!v.cover);
+                }
+            }
+            "view.fit_width_scrolling" | "view.fit_one_page" => {
+                use crate::canvas::{Fit, PageLayout};
+                let (layout, fit) = if id == "view.fit_one_page" { (PageLayout::Single, Fit::Page) } else { (PageLayout::Continuous, Fit::Width) };
+                if let Some(i) = active {
+                    self.views[i].set_layout(layout);
+                    self.views[i].set_fit(fit);
+                }
+            }
             "view.full_screen" => {
                 let on = !self.full_screen;
                 match self.ctx.clone() {
