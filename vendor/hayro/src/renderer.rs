@@ -21,7 +21,7 @@ use vello_cpu::{
 };
 
 
-/// PrintCraft patch: largest image drawn, in pixels (2^28 ≈ 268 MP, well above real page images).
+/// PdfCraft patch: largest image drawn, in pixels (2^28 ≈ 268 MP, well above real page images).
 const MAX_IMAGE_PIXELS: u64 = 1 << 28;
 pub(crate) struct Renderer {
     pub(crate) ctx: RenderContext,
@@ -77,7 +77,7 @@ impl Renderer {
             line_width *= threshold;
         }
 
-        // PrintCraft patch: a stroke far wider than the canvas looks the same as one a few canvases
+        // PdfCraft patch: a stroke far wider than the canvas looks the same as one a few canvases
         // wide, but its geometry grows with the width: a fuzzed `/LW 9223372036854775807`
         // allocated 10 GB in stroke expansion.
         let widest = 4.0 * (f32::from(self.ctx.width()) + f32::from(self.ctx.height()));
@@ -224,7 +224,7 @@ impl Renderer {
         };
         let mut img_width = image_data.width();
         let mut img_height = image_data.height();
-        // PrintCraft patch: skip images with absurd dimensions (a fuzzed inline image claimed
+        // PdfCraft patch: skip images with absurd dimensions (a fuzzed inline image claimed
         // /W 4294967295 over four bytes of data; resampling it never finished).
         if img_width == 0 || img_height == 0 || u64::from(img_width) * u64::from(img_height) > MAX_IMAGE_PIXELS {
             return;
@@ -518,7 +518,7 @@ impl Renderer {
                         };
                         xs = xs.max(min_x_scale).min(max_x_scale);
                         ys = ys.max(min_y_scale).min(max_y_scale);
-                        // PrintCraft patch: the cell pixmap is `step × scale` pixels, which only the
+                        // PdfCraft patch: the cell pixmap is `step × scale` pixels, which only the
                         // u16 cast below bounded (a fuzzed /XStep far beyond /BBox gave 65535² cells).
                         xs = tiling_cell_scale(xs, t.x_step, MAX_PIXMAP_SIZE);
                         ys = tiling_cell_scale(ys, t.y_step, MAX_PIXMAP_SIZE);
@@ -1160,7 +1160,7 @@ fn convert_blend_mode(blend_mode: BlendMode) -> peniko::BlendMode {
     peniko::BlendMode::new(mix, Compose::SrcOver)
 }
 
-/// PrintCraft patch: the scale for a tiling cell, lowered so that the cell pixmap (`|step| ×
+/// PdfCraft patch: the scale for a tiling cell, lowered so that the cell pixmap (`|step| ×
 /// scale` pixels a side) stays within `max_pixels`. Geometry is unchanged (the pattern transform
 /// is derived from the scale); an over-large step only renders at lower resolution.
 pub fn tiling_cell_scale(scale: f32, step: f32, max_pixels: f32) -> f32 {

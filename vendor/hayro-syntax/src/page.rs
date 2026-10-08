@@ -53,7 +53,7 @@ impl<'a> Pages<'a> {
     ) -> Option<Self> {
         let mut pages = vec![];
         let pages_ctx = PagesContext::new();
-        // PrintCraft patch: guard against page-tree cycles (a `/Kids` entry pointing back up
+        // PdfCraft patch: guard against page-tree cycles (a `/Kids` entry pointing back up
         // the tree), which otherwise recurse until the stack overflows.
         let mut visited = BTreeSet::new();
         resolve_pages(
@@ -109,7 +109,7 @@ impl<'a> Deref for Pages<'a> {
     }
 }
 
-/// PrintCraft patch: maximum page-tree depth (direct dictionaries have no id to track).
+/// PdfCraft patch: maximum page-tree depth (direct dictionaries have no id to track).
 const MAX_PAGE_TREE_DEPTH: usize = 256;
 
 fn resolve_pages<'a>(
@@ -120,7 +120,7 @@ fn resolve_pages<'a>(
     visited: &mut BTreeSet<ObjectIdentifier>,
     depth: usize,
 ) -> Option<()> {
-    // PrintCraft patch: skip nodes already visited and absurdly deep trees.
+    // PdfCraft patch: skip nodes already visited and absurdly deep trees.
     if depth > MAX_PAGE_TREE_DEPTH {
         return None;
     }

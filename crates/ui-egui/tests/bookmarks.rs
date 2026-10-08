@@ -3,7 +3,7 @@
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_ui_egui::PrintCraftApp;
+use pdfcraft_ui_egui::PdfCraftApp;
 
 const PAGES: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -14,9 +14,9 @@ const PAGES: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
-fn harness() -> Harness<'static, PrintCraftApp> {
+fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("pages.pdf", None, PAGES.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "bookmarks").unwrap();
@@ -26,9 +26,9 @@ fn harness() -> Harness<'static, PrintCraftApp> {
     h
 }
 
-fn outline(h: &Harness<'static, PrintCraftApp>) -> Vec<(String, Option<usize>, usize)> {
+fn outline(h: &Harness<'static, PdfCraftApp>) -> Vec<(String, Option<usize>, usize)> {
     let id = h.state().views[0].id;
-    fn flat(items: &[printcraft_render::OutlineItem], depth: usize, out: &mut Vec<(String, Option<usize>, usize)>) {
+    fn flat(items: &[pdfcraft_render::OutlineItem], depth: usize, out: &mut Vec<(String, Option<usize>, usize)>) {
         for i in items {
             out.push((i.title.clone(), i.page, depth));
             flat(&i.children, depth + 1, out);
@@ -40,12 +40,12 @@ fn outline(h: &Harness<'static, PrintCraftApp>) -> Vec<(String, Option<usize>, u
 }
 
 /// The inline rename editor (the text field, not its inner text run).
-fn field<'a>(h: &'a Harness<'static, PrintCraftApp>, value: &'a str) -> egui_kittest::Node<'a> {
+fn field<'a>(h: &'a Harness<'static, PdfCraftApp>, value: &'a str) -> egui_kittest::Node<'a> {
     h.query_all_by_value(value).next().unwrap_or_else(|| panic!("no editor showing {value:?}"))
 }
 
 /// Add a bookmark with ⌘B at the current page and name it by typing.
-fn add(h: &mut Harness<'static, PrintCraftApp>, title: &str) {
+fn add(h: &mut Harness<'static, PdfCraftApp>, title: &str) {
     h.key_press_modifiers(Modifiers::COMMAND, Key::B);
     h.run_steps(3);
     field(h, "Untitled"); // the inline editor is open and focused
@@ -57,7 +57,7 @@ fn add(h: &mut Harness<'static, PrintCraftApp>, title: &str) {
     h.run_steps(3);
 }
 
-fn menu(h: &mut Harness<'static, PrintCraftApp>, bookmark: &str, item: &str) {
+fn menu(h: &mut Harness<'static, PdfCraftApp>, bookmark: &str, item: &str) {
     h.get_by_label(bookmark).click_secondary();
     h.run_steps(2);
     h.get_by_label(item).click();
@@ -130,13 +130,13 @@ fn number_pages_dialog_labels_the_selected_pages() {
 
 #[test]
 fn expanding_and_collapsing_all_bookmarks() {
-    use printcraft_engine::Edit;
+    use pdfcraft_engine::Edit;
     let mut h = harness();
     for (parent, title) in [(vec![], "Part"), (vec![0], "Chapter"), (vec![0, 0], "Section")] {
         h.state_mut().apply_edit(Edit::AddBookmark { parent, index: 0, title: title.into(), page: 0 });
     }
     h.run_steps(3);
-    let shown = |h: &Harness<'static, PrintCraftApp>, t: &str| h.query_by_label(t).is_some();
+    let shown = |h: &Harness<'static, PdfCraftApp>, t: &str| h.query_by_label(t).is_some();
     h.get_by_label("Bookmark options").click();
     h.run_steps(2);
     h.get_by_label("Expand all bookmarks").click();

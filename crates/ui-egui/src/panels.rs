@@ -2,11 +2,11 @@
 //! right-hand panels (Comments, Bookmarks, Pages, Fields, Layers, Attachments).
 
 use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, pos2, vec2};
-use printcraft_engine::catalog::{self, Availability, TOOL_GROUPS, ToolGroup};
-use printcraft_render::{DocInfo, FieldKind, OutlineItem};
+use pdfcraft_engine::catalog::{self, Availability, TOOL_GROUPS, ToolGroup};
+use pdfcraft_render::{DocInfo, FieldKind, OutlineItem};
 
 use crate::theme::{self, Tokens};
-use crate::{LeftPanel, PrintCraftApp, RightPanel, icons, widgets};
+use crate::{LeftPanel, PdfCraftApp, RightPanel, icons, widgets};
 
 const COLLAPSED_TOOLS: usize = 14;
 
@@ -14,7 +14,7 @@ fn hue(g: &ToolGroup) -> Color32 {
     Color32::from_rgb(g.hue[0], g.hue[1], g.hue[2])
 }
 
-pub fn left_panel(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
+pub fn left_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::left("tool_panel")
         .resizable(false)
@@ -52,7 +52,7 @@ fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: bool) -> (bool
     (go_back, close)
 }
 
-fn all_tools(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let (_, close) = panel_header(ui, t, "All tools", false);
     if close {
         app.left_open = false;
@@ -108,7 +108,7 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup) -> egui::Response {
     resp.on_hover_text(tip)
 }
 
-fn tool_detail(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
+fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
     let (back, close) = panel_header(ui, t, g.label, true);
     if back {
         app.left = LeftPanel::AllTools;
@@ -210,8 +210,8 @@ fn tool_detail(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'stat
 
 /// Add a stamp: Dynamic, Sign Here and Standard Business stamps; click one, then click on the
 /// page to place it.
-fn stamp_palette(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    use printcraft_engine::{StampGroup, StampKind};
+fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    use pdfcraft_engine::{StampGroup, StampKind};
     ui.label(egui::RichText::new("Choose a stamp, then click on the page to place it.").small().color(t.text_faint));
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         for (group, title) in
@@ -272,7 +272,7 @@ fn stamp_palette(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
 
 /// Edit a PDF ▸ Format text: for the selected added text (one undoable change), or the style
 /// new text gets.
-fn format_section(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // Editing a paragraph of existing text: its formatting, applied as it changes.
     if let Some((i, _)) = app.active_ids()
         && let Some(ed) = app.views[i].line_editor.clone()
@@ -285,7 +285,7 @@ fn format_section(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
         changed |= crate::edit_text_ui::extras_panel(ui, &mut ed.extras);
         if changed {
-            let edit = printcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };
+            let edit = pdfcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };
             if app.apply_edit(edit) {
                 ed.applied();
                 if let Some(doc) = app.session.get(app.views[i].id)
@@ -304,14 +304,14 @@ fn format_section(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let (page, index) = app.views[i].content.selected?;
         let doc = app.session.get(id)?;
         match &doc.added.iter().filter(|a| a.page == page).nth(index)?.content {
-            printcraft_engine::AddedContent::Image(img) => Some((page, index, img.clone())),
+            pdfcraft_engine::AddedContent::Image(img) => Some((page, index, img.clone())),
             _ => None,
         }
     });
     if let Some((page, index, img)) = image {
         match crate::content_ui::image_panel(ui, t, &img) {
             Some(crate::content_ui::ImageAction::Update(content)) => {
-                app.apply_edit(printcraft_engine::Edit::UpdateContent { page, index, content });
+                app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content });
             }
             Some(crate::content_ui::ImageAction::Replace) => app.replace_image_dialog(page, index),
             None => {}
@@ -325,15 +325,15 @@ fn format_section(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let doc = app.session.get(id)?;
         let a = doc.added.iter().filter(|a| a.page == page).nth(index)?;
         match &a.content {
-            printcraft_engine::AddedContent::Text(text) => Some((page, index, text.clone())),
+            pdfcraft_engine::AddedContent::Text(text) => Some((page, index, text.clone())),
             _ => None,
         }
     });
     match selected {
         Some((page, index, text)) => {
             if let Some(style) = crate::content_ui::format_panel(ui, t, &text) {
-                app.text_style = printcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], ..style.clone() };
-                app.apply_edit(printcraft_engine::Edit::UpdateContent { page, index, content: printcraft_engine::AddedContent::Text(style) });
+                app.text_style = pdfcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], ..style.clone() };
+                app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content: pdfcraft_engine::AddedContent::Text(style) });
             }
         }
         None if app.quick_tool == crate::QuickTool::AddText => {
@@ -355,7 +355,7 @@ pub(crate) enum Nav {
     Flash(usize, [f32; 4]),
 }
 
-pub fn right_panel(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
+pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some((index, id)) = app.active_ids() else { return };
     let Some(panel) = app.right else { return };
@@ -365,7 +365,7 @@ pub fn right_panel(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
     let mut attachment_action: Option<(usize, bool)> = None; // (index, open instead of save)
     let mut bm_action: Option<BmAction> = None;
     let mut bm_expand: Option<usize> = None;
-    let mut panel_edit: Option<printcraft_engine::Edit> = None;
+    let mut panel_edit: Option<pdfcraft_engine::Edit> = None;
     let mut panel_command: Option<&'static str> = None;
     let mut sig_action: Option<crate::sign_ui::PanelAction> = None;
     let mut a11y_action: Option<crate::a11y_ui::PanelAction> = None;
@@ -519,7 +519,7 @@ pub fn right_panel(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                                         ui.set_width(ui.available_width() - 70.0);
                                         ui.add(egui::Label::new(egui::RichText::new(&a.name).font(theme::medium(13.0))).truncate());
                                         let mut meta = a.size.map(human_size).unwrap_or_default();
-                                        if let printcraft_render::AttachmentSource::Annotation { page, .. } = a.source {
+                                        if let pdfcraft_render::AttachmentSource::Annotation { page, .. } = a.source {
                                             meta = format!("{meta}  ·  on page {}", info.pages.get(page).map(|p| p.label.as_str()).unwrap_or("?"));
                                         }
                                         if let Some(d) = &a.description {
@@ -783,10 +783,10 @@ fn fields(
     ui: &mut egui::Ui,
     t: &Tokens,
     info: &DocInfo,
-    form: &[printcraft_engine::FormField],
+    form: &[pdfcraft_engine::FormField],
     preparing: bool,
     nav: &mut Option<Nav>,
-    edit: &mut Option<printcraft_engine::Edit>,
+    edit: &mut Option<pdfcraft_engine::Edit>,
 ) {
     if info.fields.is_empty() {
         empty(ui, t, "text-cursor-input", "This document has no form fields.");
@@ -846,7 +846,7 @@ fn fields(
                     }
                     icons::paint(ui, r.shrink(3.0), icon, 15.0, t.icon);
                     if b.on_hover_text(tip).clicked() {
-                        *edit = Some(printcraft_engine::Edit::MoveInTabOrder { name: f.name.clone(), earlier });
+                        *edit = Some(pdfcraft_engine::Edit::MoveInTabOrder { name: f.name.clone(), earlier });
                     }
                 }
             }

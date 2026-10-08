@@ -1,4 +1,4 @@
-//! printcraft-export — Export a PDF ▸ Word, HTML, RTF (L4).
+//! pdfcraft-export — Export a PDF ▸ Word, HTML, RTF (L4).
 //!
 //! The engine reduces each page to [`Page`]: paragraphs (text, box, size, bold/italic) and
 //! images (encoded bytes and box), in reading order. The writers turn that into a flowing

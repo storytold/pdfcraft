@@ -101,10 +101,10 @@ pub struct InterpreterSettings {
     /// Note that this feature is currently not fully implemented yet, so some
     /// annotations might be missing.
     pub render_annotations: bool,
-    /// PrintCraft patch: hide comments (markup annotations) but keep form fields (`/Widget`)
+    /// PdfCraft patch: hide comments (markup annotations) but keep form fields (`/Widget`)
     /// and links, for the viewer's "Hide all comments".
     pub hide_comments: bool,
-    /// PrintCraft patch: viewer overrides for optional content groups (object number, generation,
+    /// PdfCraft patch: viewer overrides for optional content groups (object number, generation,
     /// visible), applied on top of the document's default configuration (Layers panel toggles).
     pub ocg_overrides: Arc<Vec<(i32, i32, bool)>>,
 }
@@ -158,18 +158,18 @@ pub fn interpret_page<'a>(
             let flags = annot.get::<u32>(F).unwrap_or(0);
 
             // Annotation should be hidden (Hidden = bit 2, NoView = bit 6).
-            // PrintCraft patch: NoView was not honoured upstream.
+            // PdfCraft patch: NoView was not honoured upstream.
             if flags & (2 | 32) != 0 {
                 continue;
             }
-            // PrintCraft patch: "Hide all comments" keeps widgets and links.
+            // PdfCraft patch: "Hide all comments" keeps widgets and links.
             if context.settings.hide_comments
                 && !matches!(annot.get::<hayro_syntax::object::Name<'_>>(SUBTYPE).as_deref(), Some(b"Widget" | b"Link"))
             {
                 continue;
             }
 
-            // PrintCraft patch: `/N` may be a stream or a dictionary of appearance states selected
+            // PdfCraft patch: `/N` may be a stream or a dictionary of appearance states selected
             // by `/AS` (checkboxes, radio buttons, …). Upstream only handled the stream form.
             let normal = annot.get::<Dict<'_>>(AP).and_then(|ap| {
                 ap.get::<Stream<'_>>(N).or_else(|| {

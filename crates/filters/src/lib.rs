@@ -1,6 +1,6 @@
 //! PDF stream filters (ISO 32000-2 §7.4).
 //!
-//! Layer L0, standalone: this crate depends on no other PrintCraft crate.
+//! Layer L0, standalone: this crate depends on no other PdfCraft crate.
 //!
 //! Decoding covers the general-purpose filters (`FlateDecode`, `LZWDecode` with
 //! TIFF/PNG predictors, `ASCIIHexDecode`, `ASCII85Decode`, `RunLengthDecode`).

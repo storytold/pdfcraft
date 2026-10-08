@@ -1,6 +1,6 @@
 [package]
-name = "printcraft-web"
-description = "PrintCraft in the browser (wasm32; build with `trunk build --release` in this directory)"
+name = "pdfcraft-web"
+description = "PdfCraft in the browser (wasm32; build with `trunk build --release` in this directory)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-printcraft-ui-egui = { workspace = true }
+pdfcraft-ui-egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "glow", "persistence", "accesskit"] }
 egui = { workspace = true }
 

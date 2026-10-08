@@ -20,7 +20,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
-use printcraft_cos::{Document, ObjRef, Object};
+use pdfcraft_cos::{Document, ObjRef, Object};
 
 const RESOURCE_TYPES: &[&[u8]] = &[b"Font", b"FontDescriptor", b"ExtGState", b"Pattern", b"Encoding", b"CMap", b"Halftone"];
 const COLOR_SPACE_FAMILIES: &[&[u8]] = &[b"ICCBased", b"Indexed", b"Separation", b"DeviceN", b"CalRGB", b"CalGray", b"Lab", b"Pattern"];
@@ -240,7 +240,7 @@ pub fn dedupe_resources(doc: &mut Document, candidates: &[ObjRef], index_existin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use printcraft_cos::{Dict, Stream};
+    use pdfcraft_cos::{Dict, Stream};
     use std::sync::Arc;
 
     fn stream(data: &[u8]) -> Object {

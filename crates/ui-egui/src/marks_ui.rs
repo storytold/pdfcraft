@@ -3,10 +3,10 @@
 //! preview of the current page. "Update" opens the same dialog in replace mode.
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
-use printcraft_engine::{Background, Edit, HeaderFooter, MarkKind, Watermark};
+use pdfcraft_engine::{Background, Edit, HeaderFooter, MarkKind, Watermark};
 
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, widgets};
+use crate::{PdfCraftApp, widgets};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Subset {
@@ -138,7 +138,7 @@ fn rgb32(c: [f64; 3]) -> Color32 {
 }
 
 /// The dialog for `kind`; returns (apply, cancel).
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind: MarkKind) -> (bool, bool) {
+pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: MarkKind) -> (bool, bool) {
     let Some((i, id)) = app.active_ids() else { return (false, true) };
     let current = app.views[i].current;
     let Some(doc) = app.session.get(id) else { return (false, true) };
@@ -392,9 +392,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
     (apply, cancel)
 }
 
-fn mark_file(d: &MarksDraft) -> Option<printcraft_engine::MarkFile> {
+fn mark_file(d: &MarksDraft) -> Option<pdfcraft_engine::MarkFile> {
     let (name, bytes) = d.file.clone().filter(|_| d.use_file)?;
-    Some(printcraft_engine::MarkFile { name, bytes, page: d.file_page.max(1) - 1 })
+    Some(pdfcraft_engine::MarkFile { name, bytes, page: d.file_page.max(1) - 1 })
 }
 
 /// Source ▸ File: Browse…, the page of a PDF, and the size relative to the page.

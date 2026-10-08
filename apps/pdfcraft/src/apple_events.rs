@@ -1,9 +1,9 @@
 //! macOS open-documents and quit Apple events (#73).
 //!
-//! Finder double-clicks, Open With, drops on the Dock icon and `open -a PrintCraft file.pdf` don't
+//! Finder double-clicks, Open With, drops on the Dock icon and `open -a PdfCraft file.pdf` don't
 //! pass paths on the command line: LaunchServices sends the running (or just-launched) app a
 //! `kAEOpenDocuments` ('odoc') Apple event. winit 0.30 doesn't handle it and owns the
-//! `NSApplicationDelegate`, so AppKit answered "PrintCraft cannot open files in the PDF document
+//! `NSApplicationDelegate`, so AppKit answered "PdfCraft cannot open files in the PDF document
 //! format". Handling it ourselves needs Objective-C class declarations, i.e. `unsafe`, which this
 //! workspace forbids. The audited `fmv-macos-events` crate (also used by PhotoCraft) wraps exactly
 //! that, an `NSAppleEventManager` handler registered before Finder's launch event that leaves
@@ -11,7 +11,7 @@
 //! [`OsEvent`]s that the UI polls every frame.
 
 use fmv_macos_events::{Event, Inbox, Registration};
-use printcraft_ui_egui::{OsEvent, OsEventsFn};
+use pdfcraft_ui_egui::{OsEvent, OsEventsFn};
 
 /// Keeps the Apple-event handlers registered; hold it until the event loop returns.
 pub struct AppleEvents {
@@ -27,7 +27,7 @@ impl AppleEvents {
         Self { _registration: registration, inbox }
     }
 
-    /// The queue the UI drains (`PrintCraftApp::os_events`); events arriving later wake `ctx`.
+    /// The queue the UI drains (`PdfCraftApp::os_events`); events arriving later wake `ctx`.
     pub fn connect(&self, ctx: &egui::Context) -> OsEventsFn {
         let ctx = ctx.clone();
         self.inbox.set_wake(move || ctx.request_repaint());

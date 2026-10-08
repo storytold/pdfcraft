@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use printcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
-use printcraft_optimize::{Compression, ImageSettings, Settings, SpaceCategory, audit_space, effective_resolutions, optimize};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
+use pdfcraft_optimize::{Compression, ImageSettings, Settings, SpaceCategory, audit_space, effective_resolutions, optimize};
 
 fn image(doc: &mut Document, w: u32, h: u32, n: usize, jpeg: bool, smask: Option<ObjRef>) -> ObjRef {
     // A smooth gradient with a little texture (photo-like).
@@ -94,7 +94,7 @@ fn images_are_measured_where_drawn_and_downsampled() {
         &[("A", masked), ("B", photo), ("C", twice)],
         "q 72 0 0 72 36 36 cm /A Do Q q 1 0 0 1 100 100 cm 600 0 0 400 0 0 cm /B Do Q q 72 0 0 72 0 0 cm /C Do Q q 288 0 0 288 300 300 cm /C Do Q",
     );
-    let pages = printcraft_annot::page_refs(&doc).unwrap();
+    let pages = pdfcraft_annot::page_refs(&doc).unwrap();
     let ppi = effective_resolutions(&doc, &pages);
     assert_eq!(ppi[&big].round(), 600.0);
     assert_eq!(ppi[&small].round(), 50.0);
@@ -122,9 +122,9 @@ fn images_are_measured_where_drawn_and_downsampled() {
 
     // The optimized file opens, and the page still shows the picture where it was.
     let reopened = Document::open(Arc::new(after_bytes.clone())).unwrap();
-    assert_eq!(printcraft_annot::page_refs(&reopened).unwrap().len(), 2);
-    let mut r = printcraft_render::PageRenderer::new(Arc::new(after_bytes), printcraft_render::RenderConfig::default());
-    let out = r.render(printcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert_eq!(pdfcraft_annot::page_refs(&reopened).unwrap().len(), 2);
+    let mut r = pdfcraft_render::PageRenderer::new(Arc::new(after_bytes), pdfcraft_render::RenderConfig::default());
+    let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
     assert!(out.error.is_none(), "{:?}", out.error);
     // Top-left image area (36..180 x 600..744 user → y from the top 48..192): drawn, not white.
     let i = ((100 * out.width + 100) * 4) as usize;
@@ -224,7 +224,7 @@ fn invalid_links_and_unreferenced_destinations_go() {
         d.set(b"Dest".to_vec(), dest);
         Object::Ref(doc.add(Object::Dict(d)))
     };
-    let s = |t: &str| Object::String(printcraft_cos::PdfString::literal(t.as_bytes().to_vec()));
+    let s = |t: &str| Object::String(pdfcraft_cos::PdfString::literal(t.as_bytes().to_vec()));
     let annots = vec![
         link(&mut doc, Object::Array(vec![Object::Ref(p), Object::name("Fit")])),
         link(&mut doc, Object::Array(vec![Object::Ref(ObjRef::new(999, 0)), Object::name("Fit")])),

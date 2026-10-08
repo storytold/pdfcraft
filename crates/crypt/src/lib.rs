@@ -1,4 +1,4 @@
-//! printcraft-crypt — the PDF standard security handler (ISO 32000-2 §7.6), standalone (L0).
+//! pdfcraft-crypt — the PDF standard security handler (ISO 32000-2 §7.6), standalone (L0).
 //!
 //! Supports every revision of the standard handler:
 //! - R2 (40-bit RC4), R3 (RC4 up to 128-bit), R4 (crypt filters: RC4 or AES-128);

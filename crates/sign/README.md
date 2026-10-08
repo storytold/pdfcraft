@@ -1,4 +1,4 @@
-# printcraft-sign
+# pdfcraft-sign
 
 Layer L4: digital signatures (execution plan M9; ISO 32000-2 §12.8; PAdES, ETSI EN 319 142).
 

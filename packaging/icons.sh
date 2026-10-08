@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerate every app icon from assets/app-icon/printcraft.svg (the master vector).
+# Regenerate every app icon from assets/app-icon/pdfcraft.svg (the master vector).
 #
 # Needs: resvg (brew install resvg / cargo install resvg) and python3 (stdlib only, for the .ico).
 # On macOS, iconutil also writes the .icns. The outputs are committed, so building and packaging
@@ -10,8 +10,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIR="$ROOT/assets/app-icon"
-SVG="$DIR/printcraft.svg"
-ID="ai.storyteller.printcraft"
+SVG="$DIR/pdfcraft.svg"
+ID="ai.storyteller.pdfcraft"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -28,8 +28,8 @@ MAC="$TMP/macos.svg"
 
 render() { resvg -w "$2" -h "$2" "$1" "$3" </dev/null; }
 
-# 1024 px PNG on Apple's grid (also the runtime Dock icon on macOS, see apps/printcraft/src/main.rs).
-render "$MAC" 1024 "$DIR/printcraft-1024.png"
+# 1024 px PNG on Apple's grid (also the runtime Dock icon on macOS, see apps/pdfcraft/src/main.rs).
+render "$MAC" 1024 "$DIR/pdfcraft-1024.png"
 
 # Linux hicolor theme (full bleed; hicolor/256x256 is also the runtime icon on Windows and Linux).
 for s in 16 24 32 48 64 128 256 512; do
@@ -45,7 +45,7 @@ for s in 16 20 24 32 40 48 64 128 256; do
   render "$SVG" "$s" "$TMP/ico-$s.png"
   ICO_PNGS+=("$TMP/ico-$s.png")
 done
-python3 - "$DIR/printcraft.ico" "${ICO_PNGS[@]}" <<'PY'
+python3 - "$DIR/pdfcraft.ico" "${ICO_PNGS[@]}" <<'PY'
 import struct, sys
 out, pngs = sys.argv[1], sys.argv[2:]
 blobs = [open(p, "rb").read() for p in pngs]
@@ -61,14 +61,14 @@ PY
 
 # macOS .icns.
 if command -v iconutil >/dev/null; then
-  SET="$TMP/printcraft.iconset"
+  SET="$TMP/pdfcraft.iconset"
   mkdir -p "$SET"
   for s in 16 32 128 256 512; do
     render "$MAC" "$s" "$SET/icon_${s}x${s}.png"
     render "$MAC" $((s * 2)) "$SET/icon_${s}x${s}@2x.png"
   done
-  iconutil -c icns -o "$DIR/printcraft.icns" "$SET"
+  iconutil -c icns -o "$DIR/pdfcraft.icns" "$SET"
 else
-  echo "warning: iconutil not found (macOS only); printcraft.icns not regenerated" >&2
+  echo "warning: iconutil not found (macOS only); pdfcraft.icns not regenerated" >&2
 fi
 echo "icons written to $DIR"

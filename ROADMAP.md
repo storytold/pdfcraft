@@ -1,4 +1,4 @@
-# PrintCraft roadmap
+# PdfCraft roadmap
 
 The milestones, current progress and time estimates to Acrobat Pro feature parity. Keep this up to date:
 - **Every session:** update the progress column and add a line to the log.
@@ -6,7 +6,7 @@ The milestones, current progress and time estimates to Acrobat Pro feature parit
 
 Detailed task lists and acceptance tests are in `plan/execution-plan.md` (local-only). This file is the public summary.
 
-**What "parity" means here:** the offline feature set of Acrobat Pro, milestones M0–M14. It excludes Adobe's cloud services (Document Cloud storage, Adobe Sign, the Adobe AI Assistant). Those have no clean-room equivalent; PrintCraft's alternatives are local-first, plus opt-in providers (M13).
+**What "parity" means here:** the offline feature set of Acrobat Pro, milestones M0–M14. It excludes Adobe's cloud services (Document Cloud storage, Adobe Sign, the Adobe AI Assistant). Those have no clean-room equivalent; PdfCraft's alternatives are local-first, plus opt-in providers (M13).
 
 ## Estimate summary
 
@@ -127,6 +127,7 @@ M0 → M1 → M2 → M3 → M4 must happen in order. After M4, M5–M12 can run 
 
 Newest first. One line per session: the date, what moved, and the new overall percentage.
 
+- **2026-10-07 (session 16):** PrintCraft is renamed PdfCraft: repo `storytold/pdfcraft`, crates and binaries `pdfcraft*`, bundle id `ai.storyteller.pdfcraft`. On first launch the app moves the old PrintCraft settings and crash-recovery folders to the new name, so upgrades keep recent files, preferences and unsaved work. No feature change. ≈ 30–35%.
 - **2026-10-07 (session 15):** Five community issues, each with a regression test: in two-page view, Next page moves a whole spread (#77, #70); Export to Word opens in Word again, with control characters dropped and receipt-length pages kept within Word's 22 in, checked in Microsoft Word (#78, #72); macOS opens PDFs from Finder, Open With and the Dock (Apple events through the audited `fmv-macos-events`, PDF declared in the Info.plist), and the packaging no longer describes the image editor it was copied from (#82, #73); Add text keeps the box being typed when you click elsewhere, with Done and Discard beside it, reproduced and checked with real OS input (#86, #74); sharper, higher-contrast text, most visible on Windows, with every text colour at WCAG AA in both themes (#84, #76; the console window was already gone in 0.2.1). Still open: #79 (layered "not verified" signature appearances), #80 (native macOS menu bar), #81 (Homebrew and Scoop). P0 88%, P1 53%; 805 features 50.2% shipped (53.7% weighted). ≈ 30–35%.
 - **2026-10-06 (session 14):** Issues: move and resize existing text boxes in Edit text (#59, closes #40); Windows release builds open no console window and the Start Menu shortcut has its icon (#58, #57; rolled out to every Craft app); native Windows ARM64 installers, installed and run on an ARM64 runner in CI (#66, #71; the intermittent ARM64 test crash was a WARP shader-JIT race between parallel GPU-rendering tests, not our code); XFA forms are detected and explained instead of failing silently (#65, #60 stays open for real XFA). Also: squiggly underline tool, comment opacity, Preferences ▸ Identity, drag-and-drop/hover tests; community table export to Word/HTML/RTF (#62, with linear-time detection and a column cap). #63 (timestamps/LTV with outbound network) held for review fixes and an owner decision on network access. ≈ 30–35% (unchanged).
 - **2026-10-05 (session 13, later):** FreeBSD: CI builds and tests the workspace in a FreeBSD 14.3 VM (#45) and the release ships a FreeBSD x86_64 tarball, checked in CI (#42); README lists FreeBSD. Fuzzing: the nightly job's 11 hangs fixed (#41: our parser's exponential retries, inline images, Type 3 fan-out), plus a JBIG2 hang (#43, vendored hayro-jbig2) and a Type 1 font stack overflow (#46, skrifa 0.47); a full run now finds 0 crashes. Landed community PRs #36 (text editing, Japanese replacements), #47 (English/Japanese interface) and #48 (XFDF colour crash). Windows launch crash with Intel's Vulkan driver fixed by using Direct3D 12 (#49, issue #37); one copy of the Japanese font instead of two (#51, −8.3 MB); full screen and About get real tests (#50). P0 88%, P1 52%. ≈ 30–35%.
@@ -174,7 +175,7 @@ Newest first. One line per session: the date, what moved, and the new overall pe
   - Overall ≈ 9.5%.
 
 - **2026-09-30 (session 5, after a machine crash; no work lost):**
-  - Agent control: new `printcraft-automation` crate with 20 JSON-Schema tools, an opt-in MCP server (`printcraft-cli mcp`, stdio only, can be compiled out), and `printcraft-cli run`/`tools`.
+  - Agent control: new `pdfcraft-automation` crate with 20 JSON-Schema tools, an opt-in MCP server (`pdfcraft-cli mcp`, stdio only, can be compiled out), and `pdfcraft-cli run`/`tools`.
   - Text on rotated pages now reads along its lines; the pdf.js oracle is unchanged at median 0.980.
   - Finding text in 520 pages: 17.9 s → 3.7 s (parallel), about 20 ms when repeated (cached).
   - CI: dependency licence audit (`deny.toml`, `xtask deny`) and a GitHub workflow for macOS, Windows, Linux and wasm.

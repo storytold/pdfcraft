@@ -1,7 +1,7 @@
 //! Redaction tools: mark areas, text, patterns or whole pages for redaction, apply the marks
 //! (removing what they cover for good) or clear them.
 
-use printcraft_engine::{Edit, Hidden, NewAnnotation, RedactPattern, Shape, Style, find_pattern, rect_quad};
+use pdfcraft_engine::{Edit, Hidden, NewAnnotation, RedactPattern, Shape, Style, find_pattern, rect_quad};
 use serde_json::{Value, json};
 
 use crate::comments::{DEFAULT_AUTHOR, parse_color};

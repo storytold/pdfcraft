@@ -4,8 +4,8 @@
 use std::sync::{Arc, Mutex};
 
 use egui_kittest::Harness;
-use printcraft_ui_egui::PrintCraftApp;
-use printcraft_ui_egui::control::{ControlClient, Reply};
+use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::control::{ControlClient, Reply};
 use serde_json::{Value, json};
 
 fn fixture(n: usize) -> Vec<u8> {
@@ -33,11 +33,11 @@ fn fixture(n: usize) -> Vec<u8> {
     out
 }
 
-fn harness() -> (Harness<'static, PrintCraftApp>, ControlClient) {
+fn harness() -> (Harness<'static, PdfCraftApp>, ControlClient) {
     let slot: Arc<Mutex<Option<ControlClient>>> = Arc::default();
     let s = slot.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
         app.open_bytes("doc.pdf", None, fixture(5)).unwrap();
         app
@@ -48,7 +48,7 @@ fn harness() -> (Harness<'static, PrintCraftApp>, ControlClient) {
 }
 
 /// Send a request and run frames until it is answered.
-fn call(h: &mut Harness<'static, PrintCraftApp>, c: &ControlClient, method: &str, params: Value) -> Reply {
+fn call(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, params: Value) -> Reply {
     let rx = c.send(method, params);
     for _ in 0..30 {
         h.step();
@@ -59,7 +59,7 @@ fn call(h: &mut Harness<'static, PrintCraftApp>, c: &ControlClient, method: &str
     panic!("{method}: no reply after 30 frames");
 }
 
-fn ok(h: &mut Harness<'static, PrintCraftApp>, c: &ControlClient, method: &str, params: Value) -> Value {
+fn ok(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, params: Value) -> Value {
     call(h, c, method, params).unwrap_or_else(|e| panic!("{method}: {e}"))
 }
 
@@ -171,7 +171,7 @@ fn screenshots_of_window_and_region() {
 fn loopback_transport_requires_the_token() {
     use std::io::{BufRead, BufReader, Write};
     let (mut h, c) = harness();
-    let ep = printcraft_ui_egui::control::serve(c).unwrap();
+    let ep = pdfcraft_ui_egui::control::serve(c).unwrap();
     let talk = |lines: Vec<Value>| {
         let port = ep.port;
         std::thread::spawn(move || {
@@ -192,7 +192,7 @@ fn loopback_transport_requires_the_token() {
             out
         })
     };
-    let pump = |h: &mut Harness<'static, PrintCraftApp>, t: std::thread::JoinHandle<Vec<Value>>| {
+    let pump = |h: &mut Harness<'static, PdfCraftApp>, t: std::thread::JoinHandle<Vec<Value>>| {
         while !t.is_finished() {
             h.step();
         }

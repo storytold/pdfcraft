@@ -298,7 +298,7 @@ impl RenderPool {
             };
             let (wtx, wrx) = channel::<()>();
             let (shared, out, bytes, config) = (self.shared.clone(), self.results_tx.clone(), self.bytes.clone(), self.config.clone());
-            match std::thread::Builder::new().name(format!("printcraft-render-{id}")).spawn(move || worker(id, bytes, config, shared, wrx, out)) {
+            match std::thread::Builder::new().name(format!("pdfcraft-render-{id}")).spawn(move || worker(id, bytes, config, shared, wrx, out)) {
                 Ok(h) => {
                     lock(&self.wake).push(wtx);
                     lock(&self._workers).push(h);

@@ -1,4 +1,4 @@
-# Build with: trunk build --release   (from apps/printcraft-web)
+# Build with: trunk build --release   (from apps/pdfcraft-web)
 # The release zip (packaging/web/package.sh) expects the site in dist/web with relative URLs.
 [build]
 target = "index.html"

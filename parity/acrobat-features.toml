@@ -1,4 +1,4 @@
-# PrintCraft parity checklist vs Acrobat Pro (offline feature set). Generated from plan docs; maintained by hand.
+# PdfCraft parity checklist vs Acrobat Pro (offline feature set). Generated from plan docs; maintained by hand.
 # Validated and reported by `cargo xtask parity`. Schema: see the [schema] table.
 # Status rules: `shipped` = usable today with at least one cited test; `partial` = part exists (notes say what is
 # missing); `planned` = not started; `na` = Adobe-cloud-only (notes name the local or pluggable alternative).
@@ -1694,7 +1694,7 @@ milestone = "M3"
 status = "partial"
 commands = ["help.check_updates"]
 tools = []
-evidence = ["crates/ui-egui/tests/updates.rs::a_newer_release_is_offered_for_download", "crates/ui-egui/tests/updates.rs::nothing_is_asked_until_the_user_checks", "apps/printcraft/src/updates.rs::answers_are_read_and_only_our_release_pages_are_offered"]
+evidence = ["crates/ui-egui/tests/updates.rs::a_newer_release_is_offered_for_download", "crates/ui-egui/tests/updates.rs::nothing_is_asked_until_the_user_checks", "apps/pdfcraft/src/updates.rs::answers_are_read_and_only_our_release_pages_are_offered"]
 notes = "asks GitHub Releases on request and offers the release page. By the owner's decision there is no check at start and no in-place install (Acrobat has both)"
 
 [[feature]]
@@ -2323,7 +2323,7 @@ status = "shipped"
 commands = ["edit.header_footer.update", "edit.header_footer.remove"]
 tools = ["doc_header_footer", "doc_remove_marks"]
 evidence = ["crates/edit/src/tests.rs::replace_and_remove_restore_the_original_content", "crates/ui-egui/tests/marks.rs::header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset"]
-notes = "recognises PrintCraft marks; Acrobat-made headers are not detected yet"
+notes = "recognises PdfCraft marks; Acrobat-made headers are not detected yet"
 
 [[feature]]
 id = "edit.header-footer-tokens"
@@ -3471,7 +3471,7 @@ status = "partial"
 commands = []
 tools = ["comment_add"]
 evidence = ["crates/annot/src/tests.rs::every_tool_creates_a_drawable_comment", "crates/engine/src/tests.rs::highlight_multiplies_over_text", "crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn"]
-notes = "appearances for every type PrintCraft creates (highlight multiplies; clouds, callouts, stamps, polygons, carets); rich text not yet"
+notes = "appearances for every type PdfCraft creates (highlight multiplies; clouds, callouts, stamps, polygons, carets); rich text not yet"
 
 [[feature]]
 id = "comment.sticky-note"
@@ -3987,7 +3987,7 @@ status = "shipped"
 commands = ["comment.stamp"]
 tools = ["comment_add"]
 evidence = ["crates/annot/src/tests.rs::stamps_draw_their_label_and_by_line", "crates/ui-egui/tests/stamps.rs::choosing_and_placing_stamps", "crates/automation/tests/automation.rs::stamps_through_tools"]
-notes = "12 standard business stamps in PrintCraft's own design; ISO 32000 stamp names where defined"
+notes = "12 standard business stamps in PdfCraft's own design; ISO 32000 stamp names where defined"
 
 [[feature]]
 id = "comment.stamps-sign-here"
@@ -5191,7 +5191,7 @@ status = "shipped"
 commands = ["sign.fill.check", "sign.fill.cross", "sign.fill.dot", "sign.fill.line"]
 tools = ["fill_sign_add"]
 evidence = ["crates/ui-egui/tests/fill_sign.rs::text_marks_and_date", "crates/annot/src/tests.rs::fill_and_sign_items_are_drawn"]
-notes = "PrintCraft-drawn stamps"
+notes = "PdfCraft-drawn stamps"
 
 [[feature]]
 id = "form.fill-sign-date"
@@ -9363,7 +9363,7 @@ status = "shipped"
 commands = []
 tools = ["doc_info", "text_extract", "page_render"]
 evidence = ["crates/automation/tests/automation.rs::mcp_resources_expose_open_documents", "crates/automation/src/mcp.rs::resource_uris_parse"]
-notes = "resources/list, resources/templates/list and resources/read: printcraft://doc/{doc}/info (JSON), /text, /page/{page}/text, /page/{page}/image?dpi= (PNG)"
+notes = "resources/list, resources/templates/list and resources/read: pdfcraft://doc/{doc}/info (JSON), /text, /page/{page}/text, /page/{page}/image?dpi= (PNG)"
 
 [[feature]]
 id = "misc.ui-control-channel"

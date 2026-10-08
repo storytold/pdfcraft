@@ -4,11 +4,11 @@
 use egui::Pos2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_ui_egui::{Dialog, PrintCraftApp};
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
-fn harness() -> Harness<'static, PrintCraftApp> {
+fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app.set_option("zoom", "150").unwrap();
         app
@@ -23,13 +23,13 @@ fn harness() -> Harness<'static, PrintCraftApp> {
     h
 }
 
-fn at(h: &Harness<'static, PrintCraftApp>, x: f32, y: f32) -> Pos2 {
+fn at(h: &Harness<'static, PdfCraftApp>, x: f32, y: f32) -> Pos2 {
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
     let k = r.width() / 300.0;
     r.min + egui::vec2(x * k, y * k)
 }
 
-fn marks(h: &Harness<'static, PrintCraftApp>) -> usize {
+fn marks(h: &Harness<'static, PdfCraftApp>) -> usize {
     let s = h.state();
     s.session.get(s.views[0].id).unwrap().redaction_marks()
 }
@@ -87,7 +87,7 @@ fn removing_hidden_information_and_sanitizing() {
     h.get_by_label("Remove hidden information");
     {
         let d = &h.state().hidden_draft;
-        let fields = d.found.iter().find(|f| f.0 == printcraft_engine::Hidden::FormFields).unwrap();
+        let fields = d.found.iter().find(|f| f.0 == pdfcraft_engine::Hidden::FormFields).unwrap();
         assert_eq!((fields.1, fields.2), (5, true), "five fields, checked");
     }
     h.get_by_label("Remove").click();

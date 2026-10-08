@@ -1,12 +1,12 @@
-# Releasing PrintCraft
+# Releasing PdfCraft
 
 Every push to the `release` branch runs `.github/workflows/release.yml`. It builds installers for
 macOS, Windows, Linux, FreeBSD and the web, signs the ones it has certificates for, and creates or
-updates a **draft** GitHub Release named `PrintCraft v<version>`. Nobody sees a draft until a
+updates a **draft** GitHub Release named `PdfCraft v<version>`. Nobody sees a draft until a
 maintainer publishes it.
 
-The pipeline was ported from PhotoCraft's. User-facing names say **PrintCraft**; files, binaries and
-ids stay lowercase (`printcraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.printcraft`).
+The pipeline was ported from PhotoCraft's. User-facing names say **PdfCraft**; files, binaries and
+ids stay lowercase (`pdfcraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.pdfcraft`).
 
 ## Cutting a release
 
@@ -18,10 +18,10 @@ ids stay lowercase (`printcraft-<version>-<platform>-<arch>.<ext>`, `ai.storytel
    cargo xtask version set 0.3.0       # or 0.3.0-rc.1; updates Cargo.toml and Cargo.lock
    ```
 
-   Commit the change through the normal review flow (see the `Release: PrintCraft v0.2.1` PR).
+   Commit the change through the normal review flow (see the `Release: PdfCraft v0.2.1` PR).
 2. **Merge `main` into `release`** (or fast-forward it) and push. The workflow starts by itself.
 3. **Wait for the draft.** When every job has finished (notarization is the slow part), the
-   Releases page has a draft `PrintCraft v0.3.0` targeting the pushed commit, with every artifact
+   Releases page has a draft `PdfCraft v0.3.0` targeting the pushed commit, with every artifact
    and `SHA256SUMS.txt`. The notes are generated from the merged PRs.
 4. **Check it.** Download an installer or two and read the job summaries. A `::warning::` there
    means a signing secret was missing and that artifact is unsigned.
@@ -40,21 +40,21 @@ with `cargo xtask version set` before building, so the binaries report it too. T
 
 | Platform | Artifacts | Built on |
 |---|---|---|
-| macOS 11+ (universal: Apple silicon + Intel) | `printcraft-<v>-macos-universal.dmg`, `printcraft-cli-<v>-macos-universal.zip` | `macos-15` |
-| Windows 10+ x64 | `printcraft-<v>-windows-x64.msi`, `printcraft-<v>-windows-x64-portable.zip` | `windows-latest` |
-| Windows 10+ x86 (32-bit) | `printcraft-<v>-windows-x86.msi`, `printcraft-<v>-windows-x86-portable.zip` | `windows-latest` |
-| Windows 11 on ARM64 | `printcraft-<v>-windows-arm64.msi`, `printcraft-<v>-windows-arm64-portable.zip` | `windows-latest` (cross-compiled) |
-| Linux x86_64 | `printcraft-<v>-linux-x86_64.{AppImage,deb,rpm,tar.gz}` | `ubuntu-22.04` |
-| Linux aarch64 | `printcraft-<v>-linux-aarch64.{AppImage,deb,rpm,tar.gz}` | `ubuntu-22.04-arm` |
-| FreeBSD 14 x86_64 | `printcraft-<v>-freebsd-x86_64.tar.gz` | FreeBSD VM on `ubuntu-latest` |
-| Web | `printcraft-web-<v>.zip` (a static site; see [`packaging/web/README.md`](../packaging/web/README.md)) | `ubuntu-latest` |
+| macOS 11+ (universal: Apple silicon + Intel) | `pdfcraft-<v>-macos-universal.dmg`, `pdfcraft-cli-<v>-macos-universal.zip` | `macos-15` |
+| Windows 10+ x64 | `pdfcraft-<v>-windows-x64.msi`, `pdfcraft-<v>-windows-x64-portable.zip` | `windows-latest` |
+| Windows 10+ x86 (32-bit) | `pdfcraft-<v>-windows-x86.msi`, `pdfcraft-<v>-windows-x86-portable.zip` | `windows-latest` |
+| Windows 11 on ARM64 | `pdfcraft-<v>-windows-arm64.msi`, `pdfcraft-<v>-windows-arm64-portable.zip` | `windows-latest` (cross-compiled) |
+| Linux x86_64 | `pdfcraft-<v>-linux-x86_64.{AppImage,deb,rpm,tar.gz}` | `ubuntu-22.04` |
+| Linux aarch64 | `pdfcraft-<v>-linux-aarch64.{AppImage,deb,rpm,tar.gz}` | `ubuntu-22.04-arm` |
+| FreeBSD 14 x86_64 | `pdfcraft-<v>-freebsd-x86_64.tar.gz` | FreeBSD VM on `ubuntu-latest` |
+| Web | `pdfcraft-web-<v>.zip` (a static site; see [`packaging/web/README.md`](../packaging/web/README.md)) | `ubuntu-latest` |
 
 The ARM64 Windows build is cross-compiled on the x64 runner, so signing and WiX work as for the
 other Windows builds; `.github/workflows/windows-arm64.yml` installs and runs it on ARM64 hardware.
 
-Every binary reports its version (`printcraft --version`, `printcraft-cli --version`, *Help ▸ About*).
-The workflow sets `PRINTCRAFT_BUILD_SHA` and `PRINTCRAFT_BUILD_DATE` (`packaging/env.sh` fills them in
-for local builds): the commit is recorded in the macOS `Info.plist` (`PrintCraftBuildCommit`) and the
+Every binary reports its version (`pdfcraft --version`, `pdfcraft-cli --version`, *Help ▸ About*).
+The workflow sets `PDFCRAFT_BUILD_SHA` and `PDFCRAFT_BUILD_DATE` (`packaging/env.sh` fills them in
+for local builds): the commit is recorded in the macOS `Info.plist` (`PdfCraftBuildCommit`) and the
 date in the AppStream metadata. The binaries don't embed the commit yet.
 
 **Fonts:** every job checks out [craft-fonts](https://github.com/storytold/craft-fonts) at the commit
@@ -65,10 +65,10 @@ deliberately.
 ### macOS
 
 `packaging/macos/package.sh` builds both architectures, joins them with `lipo`, and assembles
-`PrintCraft.app` from `Info.plist.in` (bundle id `ai.storyteller.printcraft`, macOS 11+, PDF declared
-as a document type with rank Alternate, so PrintCraft is offered under Open With without taking over
+`PdfCraft.app` from `Info.plist.in` (bundle id `ai.storyteller.pdfcraft`, macOS 11+, PDF declared
+as a document type with rank Alternate, so PdfCraft is offered under Open With without taking over
 from Preview). Files opened from Finder arrive as Apple events, which
-`apps/printcraft/src/apple_events.rs` receives.
+`apps/pdfcraft/src/apple_events.rs` receives.
 
 - **Signing** uses the hardened runtime and a secure timestamp, executable first, then the bundle.
   `packaging/macos/import-cert.sh` puts the certificate in a temporary keychain, deleted at the end
@@ -76,7 +76,7 @@ from Preview). Files opened from Finder arrive as Apple events, which
 - **Notarization:** the app is zipped and sent with `xcrun notarytool submit --wait`, the ticket is
   stapled, and the result is checked with `codesign --verify`, `stapler validate` and `spctl`. The
   app ships on a drag-to-Applications DMG, which is signed and notarized too.
-- **CLI:** `printcraft-cli` is signed and notarized as a zip. A bare executable can't hold a stapled
+- **CLI:** `pdfcraft-cli` is signed and notarized as a zip. A bare executable can't hold a stapled
   ticket, so Gatekeeper looks it up online the first time a downloaded copy runs.
 
 Without certificates (locally) the script signs ad-hoc and skips notarization:
@@ -91,9 +91,9 @@ packaging/macos/package.sh --arch aarch64     # quicker, host-only; --arch unive
 neither the MSI nor the portable zip needs the Visual C++ redistributable.
 
 - Before packaging, it reads both executables' PE headers: the machine type must match `-Arch`, and
-  `printcraft.exe` must be a GUI-subsystem program (no console window, #57) while `printcraft-cli.exe`
+  `pdfcraft.exe` must be a GUI-subsystem program (no console window, #57) while `pdfcraft-cli.exe`
   stays a console program.
-- `printcraft.wxs` (WiX v5) installs per machine into Program Files with a Start Menu shortcut and an
+- `pdfcraft.wxs` (WiX v5) installs per machine into Program Files with a Start Menu shortcut and an
   App Paths entry. The MSI version is the numeric `X.Y.Z` (MSI has no pre-release field), and
   same-version upgrades are allowed so release candidates replace each other. Icon ids end in `.ico`
   or `.exe` (Windows Installer requires it); packaging-lint checks this.
@@ -128,7 +128,7 @@ binaries; check the tarball against `SHA256SUMS.txt`.
 
 ### Web
 
-`packaging/web/package.sh` runs `trunk build --release` in `apps/printcraft-web` and zips the site
+`packaging/web/package.sh` runs `trunk build --release` in `apps/pdfcraft-web` and zips the site
 with sample `_headers` and `.htaccess` files. Hosting (MIME types, compression, caching, iframes) is
 covered in [`packaging/web/README.md`](../packaging/web/README.md).
 

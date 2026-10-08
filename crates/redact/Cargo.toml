@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-redact"
+name = "pdfcraft-redact"
 description = "Redaction (architecture §11.2): marks, apply (glyphs, images, vectors, XObjects, annotations, fields), verification"
 version.workspace = true
 edition.workspace = true
@@ -9,13 +9,13 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-cos = { workspace = true }
-printcraft-content = { workspace = true }
-printcraft-fonts = { workspace = true }
-printcraft-model = { workspace = true }
-printcraft-forms = { workspace = true }
-printcraft-edit = { workspace = true }
-printcraft-annot = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-content = { workspace = true }
+pdfcraft-fonts = { workspace = true }
+pdfcraft-model = { workspace = true }
+pdfcraft-forms = { workspace = true }
+pdfcraft-edit = { workspace = true }
+pdfcraft-annot = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

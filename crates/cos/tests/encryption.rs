@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use printcraft_cos::{Algorithm, Auth, CosError, Document, NewEncryption, ObjRef, Object, PdfString, SaveOptions, write_full, write_incremental};
+use pdfcraft_cos::{Algorithm, Auth, CosError, Document, NewEncryption, ObjRef, Object, PdfString, SaveOptions, write_full, write_incremental};
 
 const SECRET: &str = "BT /F1 18 Tf 20 100 Td (Secret page) Tj ET";
 
@@ -180,7 +180,7 @@ fn qpdf_agrees() {
         eprintln!("qpdf not installed; skipping");
         return;
     }
-    let dir = std::env::temp_dir().join(format!("printcraft-enc-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pdfcraft-enc-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     for alg in ALL {
         let path = dir.join(format!("{alg:?}.pdf"));

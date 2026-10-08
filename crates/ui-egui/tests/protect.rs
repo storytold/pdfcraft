@@ -2,7 +2,7 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_ui_egui::{Dialog, PrintCraftApp};
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -11,9 +11,9 @@ const FIXTURE: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
-fn harness() -> Harness<'static, PrintCraftApp> {
+fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
         app
     });
@@ -21,7 +21,7 @@ fn harness() -> Harness<'static, PrintCraftApp> {
     h
 }
 
-fn type_into(h: &mut Harness<'static, PrintCraftApp>, label: &str, text: &str) {
+fn type_into(h: &mut Harness<'static, PdfCraftApp>, label: &str, text: &str) {
     h.get_by_label(label).click();
     h.run_steps(2);
     h.get_by_label(label).type_text(text);
@@ -50,7 +50,7 @@ fn protecting_for_viewing_requires_matching_passwords_and_saves_encrypted() {
     assert!(doc.security_summary().unwrap().pending);
     // What Save writes needs the password.
     let bytes = h.state().session.save_bytes(id).unwrap();
-    let mut s = printcraft_engine::Session::new();
+    let mut s = pdfcraft_engine::Session::new();
     assert!(s.open("p.pdf", None, bytes.clone(), None).is_err());
     assert!(s.open("p.pdf", None, bytes, Some("Open-Sesame-42")).is_ok());
     // Remove security is now offered, and undo also takes the protection back.

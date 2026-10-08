@@ -2,7 +2,7 @@
 //! move/resize/retype/restyle it, delete it. Geometry is in points from the top-left of the
 //! displayed page (y down), like every other tool.
 
-use printcraft_engine::{AddedContent, AddedText, Edit, FontFamily, TextAlign};
+use pdfcraft_engine::{AddedContent, AddedText, Edit, FontFamily, TextAlign};
 use serde_json::{Value, json};
 
 use crate::comments::parse_color;

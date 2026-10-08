@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use printcraft_cos::{Document, ObjRef, Object, SaveOptions, write_incremental};
+use pdfcraft_cos::{Document, ObjRef, Object, SaveOptions, write_incremental};
 
 use super::*;
 

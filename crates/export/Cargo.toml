@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-export"
+name = "pdfcraft-export"
 description = "Export a PDF to HTML, Word (.docx) and RTF from its paragraphs and images"
 version.workspace = true
 edition.workspace = true

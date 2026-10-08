@@ -53,7 +53,7 @@ jobs:
         run: ./packaging/windows/package.ps1 -Arch arm64
       - uses: actions/upload-artifact@v4
         with:
-          name: printcraft-windows-arm64
+          name: pdfcraft-windows-arm64
           path: dist/arm64/*
           if-no-files-found: error
           retention-days: 7
@@ -66,7 +66,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: printcraft-windows-arm64
+          name: pdfcraft-windows-arm64
           path: dist
       - name: Install the MSI, check it, run it, uninstall it
         shell: pwsh
@@ -75,8 +75,8 @@ jobs:
           $msi = (Get-ChildItem dist/*.msi | Select-Object -First 1).FullName
           $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/l*v', 'install.log' -Wait -PassThru
           if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 60; throw "msiexec /i exited $($p.ExitCode)" }
-          $dir = Join-Path $env:ProgramFiles 'PrintCraft'
-          foreach ($exe in 'printcraft.exe', 'printcraft-cli.exe') {
+          $dir = Join-Path $env:ProgramFiles 'PdfCraft'
+          foreach ($exe in 'pdfcraft.exe', 'pdfcraft-cli.exe') {
             $path = Join-Path $dir $exe
             if (-not (Test-Path $path)) { Get-ChildItem -Recurse $env:ProgramFiles -Filter $exe | Select-Object -First 3; throw "$exe not installed in $dir" }
             $bytes = [System.IO.File]::ReadAllBytes($path)
@@ -85,9 +85,9 @@ jobs:
             Write-Output "ok $path (ARM64)"
           }
           # The installed CLI runs natively: open, render and edit a small PDF through the engine.
-          $cli = Join-Path $dir 'printcraft-cli.exe'
+          $cli = Join-Path $dir 'pdfcraft-cli.exe'
           & $cli tools | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "printcraft-cli tools exited $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) { throw "pdfcraft-cli tools exited $LASTEXITCODE" }
           $body = 'BT /F1 24 Tf 20 150 Td (Hello ARM64) Tj ET'
           $objs = @('<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
             '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
@@ -103,13 +103,13 @@ jobs:
           $steps = '[{"tool":"doc_open","args":{"path":"hello.pdf"}},{"tool":"text_paragraphs","args":{"doc":1,"page":1}},{"tool":"text_edit","args":{"doc":1,"page":1,"paragraph":1,"text":"Edited on ARM64"}},{"tool":"page_render","args":{"doc":1,"page":1,"dpi":72},"out":"smoke/page.png"},{"tool":"doc_save","args":{"doc":1,"path":"out.pdf"}}]'
           [System.IO.File]::WriteAllText("$PWD\smoke\steps.json", $steps)
           $out = & $cli run --script smoke\steps.json --root smoke 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 0) { Write-Output $out; throw "printcraft-cli run exited $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) { Write-Output $out; throw "pdfcraft-cli run exited $LASTEXITCODE" }
           if ($out -notmatch 'Hello ARM64') { Write-Output $out; throw 'text_paragraphs did not read the page' }
           foreach ($f in 'smoke\page.png', 'smoke\out.pdf') { if (-not (Test-Path $f) -or (Get-Item $f).Length -eq 0) { Write-Output $out; throw "$f was not written" } }
-          Write-Output 'ok printcraft-cli: opened, read, edited, rendered and saved a PDF on ARM64'
+          Write-Output 'ok pdfcraft-cli: opened, read, edited, rendered and saved a PDF on ARM64'
           $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "msiexec /x exited $($p.ExitCode)" }
-          if (Test-Path (Join-Path $dir 'printcraft.exe')) { throw 'uninstall left printcraft.exe behind' }
+          if (Test-Path (Join-Path $dir 'pdfcraft.exe')) { throw 'uninstall left pdfcraft.exe behind' }
           Write-Output 'ok uninstalled'
 
   test:

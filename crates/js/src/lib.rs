@@ -1,4 +1,4 @@
-//! printcraft-js — Acrobat JavaScript for forms (L3).
+//! pdfcraft-js — Acrobat JavaScript for forms (L3).
 //!
 //! Field scripts (format, keystroke, validate, calculate), button actions and document-level
 //! scripts run in [boa](https://boajs.dev), a JavaScript engine written in Rust, with the subset
@@ -152,7 +152,7 @@ pub enum Request {
     /// `this.pageNum = n` (0-based).
     GoToPage(usize),
     LaunchUrl(String),
-    /// `this.submitForm(url)`: never sent on PrintCraft's own.
+    /// `this.submitForm(url)`: never sent on PdfCraft's own.
     Submit(String),
     /// `field.setFocus()`.
     Focus(String),
@@ -1080,7 +1080,7 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
     {
         std::thread::scope(|scope| {
             let spawned = std::thread::Builder::new()
-                .name("printcraft-js".into())
+                .name("pdfcraft-js".into())
                 .stack_size(SCRIPT_STACK)
                 .spawn_scoped(scope, || run_here(script, event, doc, fields, doc_scripts, limits));
             match spawned {

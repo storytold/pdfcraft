@@ -96,7 +96,7 @@ impl Tokens {
     }
 
     pub fn get(ctx: &egui::Context) -> Self {
-        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("printcraft-theme"))).unwrap_or_else(|| Self::for_kind(ThemeKind::Light))
+        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("pdfcraft-theme"))).unwrap_or_else(|| Self::for_kind(ThemeKind::Light))
     }
 
     pub fn dark(&self) -> bool {
@@ -122,8 +122,8 @@ pub fn font_definitions() -> FontDefinitions {
     add(&mut fonts, "JetBrainsMono", include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"));
     fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "Inter".to_owned());
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".to_owned());
-    // The same static bytes printcraft-fonts uses for Japanese text in PDFs: one copy, not two.
-    for face in printcraft_fonts::ui_japanese_fonts() {
+    // The same static bytes pdfcraft-fonts uses for Japanese text in PDFs: one copy, not two.
+    for face in pdfcraft_fonts::ui_japanese_fonts() {
         let name = face.name();
         add(&mut fonts, &name, face.bytes);
         for family in [FontFamily::Proportional, FontFamily::Monospace] {
@@ -151,7 +151,7 @@ pub fn semibold(size: f32) -> FontId {
 
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     let t = Tokens::for_kind(kind);
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("printcraft-theme"), t));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("pdfcraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.panel;
     v.window_fill = t.card;

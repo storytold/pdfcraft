@@ -1,18 +1,18 @@
 //! Help ▸ Check for updates (issue #28): ask for the latest release and offer its download page.
 //!
-//! The desktop app supplies how to ask ([`PrintCraftApp::update_source`]), so this crate has no
+//! The desktop app supplies how to ask ([`PdfCraftApp::update_source`]), so this crate has no
 //! network code; without a source (the web build, tests) the command opens the releases page.
-//! PrintCraft never downloads or installs anything itself: the user downloads the new version.
+//! PdfCraft never downloads or installs anything itself: the user downloads the new version.
 //! It asks only when the user does: there is no check at start (the owner's decision).
 
 use std::sync::Arc;
 
 use egui::{Align, Layout};
 
-use crate::{PrintCraftApp, theme, widgets};
+use crate::{PdfCraftApp, theme, widgets};
 
-/// Where every PrintCraft release is listed.
-pub const RELEASES_PAGE: &str = "https://github.com/storytold/printcraft/releases";
+/// Where every PdfCraft release is listed.
+pub const RELEASES_PAGE: &str = "https://github.com/storytold/pdfcraft/releases";
 
 /// The latest published release.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,7 +62,7 @@ pub(crate) struct Updates {
     pub(crate) open: bool,
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Help ▸ Check for updates: ask for the latest release and show the outcome.
     pub fn check_for_updates(&mut self) {
         let Some(source) = self.update_source.clone() else {
@@ -108,7 +108,7 @@ impl PrintCraftApp {
 }
 
 /// The Updates dialog.
-pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
+pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if !app.updates.open {
         return;
     }
@@ -136,14 +136,14 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
             }
             Check::Done(Ok(r)) if is_newer(&r.version, current) => {
                 let version = r.version.trim_start_matches(['v', 'V']);
-                ui.label(egui::RichText::new(format!("PrintCraft {version} is available.")).strong());
+                ui.label(egui::RichText::new(format!("PdfCraft {version} is available.")).strong());
                 ui.label(
                     egui::RichText::new(format!("You have version {current}. Download the new version from its release page.")).color(t.text_muted),
                 );
                 download = Some(r.url.clone());
             }
             Check::Done(Ok(_)) => {
-                ui.label(format!("PrintCraft {current} is up to date."));
+                ui.label(format!("PdfCraft {current} is up to date."));
             }
             Check::Done(Err(e)) => {
                 ui.label(format!("Couldn't check for updates: {e}"));

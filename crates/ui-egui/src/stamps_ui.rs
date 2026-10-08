@@ -7,7 +7,7 @@ use egui::{Align, Layout};
 use serde::{Deserialize, Serialize};
 
 use crate::theme::{self, Tokens};
-use crate::{Dialog, PrintCraftApp, QuickTool, widgets};
+use crate::{Dialog, PdfCraftApp, QuickTool, widgets};
 
 /// Stamp files larger than this aren't kept in the library (it lives in the app's settings).
 pub const MAX_STAMP_BYTES: usize = 4 << 20;
@@ -50,7 +50,7 @@ pub struct StampDraft {
     pub name: String,
 }
 
-pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (bool, bool) {
+pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let categories: Vec<String> = {
         let mut c: Vec<String> = app.custom_stamps.iter().map(|s| s.category.clone()).collect();
         c.sort();
@@ -96,7 +96,7 @@ pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens
 }
 
 /// The Custom stamps section of the stamps palette.
-pub(crate) fn palette_section(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+pub(crate) fn palette_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     widgets::section_title(ui, "Custom");
     let mut remove = None;
     let mut categories: Vec<String> = app.custom_stamps.iter().map(|s| s.category.clone()).collect();
@@ -128,7 +128,7 @@ pub(crate) fn palette_section(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &To
     }
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Create ▸ choose a PDF or an image for a new custom stamp.
     pub(crate) fn pick_stamp_file(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]

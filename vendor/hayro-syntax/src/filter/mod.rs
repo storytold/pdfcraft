@@ -132,7 +132,7 @@ impl Filter {
     }
 }
 
-/// PrintCraft patch: whether a CCITT image of `columns` × `rows` may be decoded. The decoder sizes
+/// PdfCraft patch: whether a CCITT image of `columns` × `rows` may be decoded. The decoder sizes
 /// its line buffers from `/Columns`, which a fuzzed file set to 4294967295 (a 4 GiB allocation);
 /// real fax lines are a few thousand pixels wide.
 pub fn ccitt_size_ok(columns: u32, rows: u32) -> bool {

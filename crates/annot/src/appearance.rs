@@ -1,4 +1,4 @@
-//! Appearance streams (§12.5.5) for the comment types PrintCraft creates, execution plan M5.2.
+//! Appearance streams (§12.5.5) for the comment types PdfCraft creates, execution plan M5.2.
 //!
 //! [`build`] draws a normal appearance (`/AP /N`) from the annotation dictionary alone, so the
 //! same code serves new comments and restyled ones. Drawings are in page space with
@@ -6,13 +6,13 @@
 //! It returns `None` for anything it cannot draw faithfully (cloudy borders, unknown line
 //! endings, indirect geometry), so callers never replace an appearance with a worse one.
 //!
-//! The note icons are PrintCraft's own drawings (AGENTS.md §1). Text boxes use the standard
+//! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use the standard
 //! Helvetica font with WinAnsi encoding; line breaking uses [`text_width`], an approximation of
 //! Helvetica's proportions by character class (no font program or metrics file is bundled).
 
-use printcraft_cos::{Dict, Object, PdfString, Stream};
-pub use printcraft_fonts::{helvetica_width as text_width, wrap};
-use printcraft_fonts::{literal, win_ansi};
+use pdfcraft_cos::{Dict, Object, PdfString, Stream};
+pub use pdfcraft_fonts::{helvetica_width as text_width, wrap};
+use pdfcraft_fonts::{literal, win_ansi};
 
 use crate::{NOTE_SIZE, Rgb, n};
 
@@ -435,7 +435,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
                 return Some(form(rect, c.as_bytes(), res));
             }
-            // Only PrintCraft's own Fill & Sign marks are drawn here.
+            // Only PdfCraft's own Fill & Sign marks are drawn here.
             let name = d.name(b"Name")?;
             let col = stroke.unwrap_or([0.0; 3]);
             let [x0, y0, x1, y1] = rect;
@@ -482,7 +482,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                     n(y0 + h / 2.0)
                 )),
                 other => {
-                    // Only stamps PrintCraft made: others keep their own artwork.
+                    // Only stamps PdfCraft made: others keep their own artwork.
                     if !matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) {
                         return None;
                     }
@@ -727,9 +727,9 @@ fn ellipse(x0: f64, y0: f64, x1: f64, y1: f64) -> String {
     s
 }
 
-/// PrintCraft's note icons, drawn in a 20 × 20 box: a speech bubble for `/Comment`, a page
+/// PdfCraft's note icons, drawn in a 20 × 20 box: a speech bubble for `/Comment`, a page
 /// with a folded corner for everything else, both filled with the note colour.
-/// File attachment icons in a 20 × 20 box: PrintCraft's own drawings.
+/// File attachment icons in a 20 × 20 box: PdfCraft's own drawings.
 fn attach_icon(name: &str, col: Rgb) -> String {
     let mut s = format!("{}{}1.2 w 1 j 1 J\n", rg(col), rg_stroke(col));
     match name {

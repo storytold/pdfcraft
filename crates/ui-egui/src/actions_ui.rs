@@ -1,13 +1,13 @@
-//! Action Wizard: the actions (PrintCraft's and your own), running one over files in the
+//! Action Wizard: the actions (PdfCraft's and your own), running one over files in the
 //! background, and creating or editing an action's steps. Your actions are remembered.
 
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
-use printcraft_engine::actions::{Action, Step, builtin};
+use pdfcraft_engine::actions::{Action, Step, builtin};
 
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, widgets};
+use crate::{PdfCraftApp, widgets};
 
 /// The Action Wizard's state.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -28,7 +28,7 @@ pub struct RunProgress {
     pub message: Option<String>,
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Built-in actions, then the user's.
     pub fn all_actions(&self) -> Vec<Action> {
         let mut v = builtin();
@@ -58,7 +58,7 @@ impl PrintCraftApp {
                 if let Ok(mut s) = p.lock() {
                     s.done = i;
                 }
-                let r = printcraft_engine::actions::run_on(&action, &name, Arc::new(bytes), |_, _| {}).and_then(|r| {
+                let r = pdfcraft_engine::actions::run_on(&action, &name, Arc::new(bytes), |_, _| {}).and_then(|r| {
                     #[cfg(not(target_arch = "wasm32"))]
                     crate::editing::write_atomically(&dir.join(&name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())?;
                     #[cfg(target_arch = "wasm32")]
@@ -83,7 +83,7 @@ impl PrintCraftApp {
         if self.run_inline {
             work();
         } else {
-            std::thread::Builder::new().name("printcraft-action".into()).spawn(work).ok();
+            std::thread::Builder::new().name("pdfcraft-action".into()).spawn(work).ok();
         }
         #[cfg(target_arch = "wasm32")]
         work();
@@ -177,7 +177,7 @@ pub fn decode(v: &serde_json::Value) -> Vec<Action> {
 }
 
 /// The Action Wizard dialog. Returns `true` to close.
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     if app.wizard.editing.is_some() {
         return edit_body(ui, app, t);
     }
@@ -245,7 +245,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bo
     close
 }
 
-fn edit_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+fn edit_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let Some((original, a)) = app.wizard.editing.as_mut() else { return false };
     ui.label(egui::RichText::new(if original.is_some() { "Edit Action" } else { "New Action" }).font(theme::semibold(18.0)));
     ui.add_space(8.0);

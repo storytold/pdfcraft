@@ -5,7 +5,7 @@
 //! `from..=to`, and keep every later page showing the label it had before. The tree is written
 //! back as one flat `/Nums` array, with ranges that merely continue the previous one merged.
 
-use printcraft_cos::{Dict, Document, Object, PdfString};
+use pdfcraft_cos::{Dict, Document, Object, PdfString};
 
 use crate::{OrganizeError, page_count, pages_root};
 

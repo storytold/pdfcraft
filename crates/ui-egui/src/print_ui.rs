@@ -4,10 +4,10 @@
 //! sheets. Printing sends the print-ready PDF to the system spooler; "Save as PDF" writes it.
 
 use egui::{Color32, Pos2, Rect, Stroke, pos2, vec2};
-use printcraft_engine::print::{self, Binding, BookletSubset, Content, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, spool};
+use pdfcraft_engine::print::{self, Binding, BookletSubset, Content, Layout, Orientation, PAPERS, PageOrder, SizeMode, Subset, spool};
 
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, widgets};
+use crate::{PdfCraftApp, widgets};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Which {
@@ -129,7 +129,7 @@ impl PrintDraft {
     }
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     pub fn open_print(&mut self) {
         let Some((i, _)) = self.active_ids() else { return };
         let printers = spool::printers();

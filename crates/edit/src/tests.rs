@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use printcraft_cos::{Document, SaveOptions, write_incremental};
+use pdfcraft_cos::{Document, SaveOptions, write_incremental};
 
 use super::*;
 
@@ -40,7 +40,7 @@ fn reopen(doc: &Document) -> Document {
 
 /// The decoded content streams of a page, in order.
 fn streams(doc: &Document, page: usize) -> Vec<String> {
-    let p = &printcraft_model::pages(doc)[page];
+    let p = &pdfcraft_model::pages(doc)[page];
     let c = p.dict.get(b"Contents").cloned();
     let list = match c.map(|c| doc.resolve(&c)).as_deref() {
         Some(Object::Array(a)) => a.clone(),
@@ -77,7 +77,7 @@ fn header_and_footer_are_drawn_in_display_space_and_wrap_the_original_content() 
     let s0 = streams(&doc, 0);
     // q-wrapper, original, Q-wrapper, header/footer.
     assert_eq!(s0.len(), 4, "{s0:?}");
-    assert_eq!((s0[0].as_str(), s0[2].as_str()), ("q %PrintCraft\n", "Q %PrintCraft\n"));
+    assert_eq!((s0[0].as_str(), s0[2].as_str()), ("q %PdfCraft\n", "Q %PdfCraft\n"));
     let mark = &s0[3];
     assert!(mark.contains("/PCMark /HeaderFooter") && mark.contains("(Page 1 of 3) Tj") && mark.contains("(Confidential \\(draft\\)) Tj"), "{mark}");
     assert!(mark.contains("1 0 0 1 0 0 cm"), "upright page: identity");
@@ -86,11 +86,11 @@ fn header_and_footer_are_drawn_in_display_space_and_wrap_the_original_content() 
     assert!(s1.last().unwrap().contains("0 1 -1 0 600 0 cm") && s1.last().unwrap().contains("(Page 2 of 3)"), "{s1:?}");
     // A page without content gets just the mark; its inherited resources are copied, not changed.
     assert_eq!(streams(&doc, 2).len(), 1);
-    let p2 = &printcraft_model::pages(&doc)[2];
+    let p2 = &pdfcraft_model::pages(&doc)[2];
     let res = doc.resolve(p2.dict.get(b"Resources").unwrap());
     let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
     assert!(fonts.as_dict().unwrap().contains(b"PCHelv") && fonts.as_dict().unwrap().contains(b"F1"));
-    let shared = doc.get(printcraft_cos::ObjRef::new(6, 0));
+    let shared = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
     let shared_fonts = doc.resolve(shared.as_dict().unwrap().get(b"Font").unwrap());
     assert!(!shared_fonts.as_dict().unwrap().contains(b"PCHelv"), "the shared dictionary is untouched");
     assert_eq!(marks_present(&doc), [MarkKind::HeaderFooter]);
@@ -145,7 +145,7 @@ fn invalid_requests_change_nothing() {
 
 #[test]
 fn flattening_draws_appearances_into_the_page_and_removes_the_comments() {
-    use printcraft_annot::{Meta, NewAnnotation, NoteIcon, Shape, Style, add_annotation, add_reply};
+    use pdfcraft_annot::{Meta, NewAnnotation, NoteIcon, Shape, Style, add_annotation, add_reply};
     let mut doc = fixture();
     let meta = Meta { date: None, id: "x".into() };
     let add = |doc: &mut Document, shape: Shape| {
@@ -159,7 +159,7 @@ fn flattening_draws_appearances_into_the_page_and_removes_the_comments() {
     let n = flatten(&mut doc, &[0], true, false).unwrap();
     assert_eq!(n, 2, "the rectangle and the note icon are drawn; the reply has nothing to draw");
     let doc = reopen(&doc);
-    let p = &printcraft_model::pages(&doc)[0];
+    let p = &pdfcraft_model::pages(&doc)[0];
     assert!(!p.dict.contains(b"Annots"), "comments, pop-up and reply are gone");
     let s = streams(&doc, 0);
     assert_eq!(s.len(), before.len() + 3, "wrapped original + flattened content: {s:?}");
@@ -281,7 +281,7 @@ fn descriptor_text_page() -> Document {
 
 /// The Japanese fallback face comes from craft-fonts, an optional build input.
 fn without_craft_fonts(test: &str) -> bool {
-    if printcraft_fonts::document_japanese_font().is_some() {
+    if pdfcraft_fonts::document_japanese_font().is_some() {
         return false;
     }
     eprintln!("skipping {test}: built without craft-fonts (set CRAFT_FONTS_DIR to run it)");
@@ -324,7 +324,7 @@ fn japanese_edit_without_craft_fonts_is_a_clear_error() {
     let before = page_content_bytes(&doc, 0);
     let line = text::replace_line(&mut doc, 0, 0, "日本語の文字");
     let block = text::replace_block(&mut doc, 0, 0, "日本語の文字");
-    if printcraft_fonts::document_japanese_font().is_some() {
+    if pdfcraft_fonts::document_japanese_font().is_some() {
         eprintln!("built with craft-fonts: the Japanese edits succeed (checked by the tests above)");
         assert!(line.is_ok() && block.is_ok());
         return;
@@ -411,7 +411,7 @@ fn paragraphs_are_found_and_rewrapped() {
     assert_eq!(blocks[0].lines, [0, 1, 2]);
     let width = blocks[0].rect[2] - blocks[0].rect[0];
     let next = blocks[1].rect;
-    let long = "PrintCraft rewraps a paragraph to its own width when its text changes, keeping the font, size, colour and line spacing.";
+    let long = "PdfCraft rewraps a paragraph to its own width when its text changes, keeping the font, size, colour and line spacing.";
     assert_eq!(text::replace_block(&mut doc, 0, 0, long).unwrap().substituted, None);
     let doc = reopen(&doc);
     let lines = text::text_lines(&doc, 0).unwrap();
@@ -438,14 +438,14 @@ fn paragraphs_are_found_and_rewrapped() {
 }
 
 fn page_content_bytes(doc: &Document, page: usize) -> Vec<u8> {
-    let p = printcraft_model::pages(doc).swap_remove(page);
+    let p = pdfcraft_model::pages(doc).swap_remove(page);
     let c = p.dict.get(b"Contents").unwrap();
     match &*doc.resolve(c) {
-        printcraft_cos::Object::Stream(s) => s.decoded().unwrap(),
-        printcraft_cos::Object::Array(a) => a
+        pdfcraft_cos::Object::Stream(s) => s.decoded().unwrap(),
+        pdfcraft_cos::Object::Array(a) => a
             .iter()
             .flat_map(|x| match &*doc.resolve(x) {
-                printcraft_cos::Object::Stream(s) => s.decoded().unwrap(),
+                pdfcraft_cos::Object::Stream(s) => s.decoded().unwrap(),
                 _ => Vec::new(),
             })
             .collect(),
@@ -505,16 +505,16 @@ fn page_images_move_turn_replace_and_delete() {
     // The text after it is untouched.
     assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Caption");
     // Replace with another image object, in the same place.
-    let mut d = printcraft_cos::Dict::new();
+    let mut d = pdfcraft_cos::Dict::new();
     for (k, v) in [
-        (&b"Type"[..], printcraft_cos::Object::name("XObject")),
-        (b"Subtype", printcraft_cos::Object::name("Image")),
-        (b"Width", printcraft_cos::Object::Int(1)),
-        (b"Height", printcraft_cos::Object::Int(1)),
+        (&b"Type"[..], pdfcraft_cos::Object::name("XObject")),
+        (b"Subtype", pdfcraft_cos::Object::name("Image")),
+        (b"Width", pdfcraft_cos::Object::Int(1)),
+        (b"Height", pdfcraft_cos::Object::Int(1)),
     ] {
         d.set(k.to_vec(), v);
     }
-    let other = doc.add(printcraft_cos::Object::Stream(printcraft_cos::Stream::from_raw(d, vec![0])));
+    let other = doc.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::from_raw(d, vec![0])));
     images::change_image(&mut doc, 0, 0, &images::ImageChange::Replace(other)).unwrap();
     let imgs = images::page_images(&doc, 0).unwrap();
     assert_eq!((imgs[0].object, imgs[0].width), (Some(other), 1));
@@ -566,13 +566,13 @@ fn a_new_paragraph_colour_does_not_spill_into_the_text_after_it() {
     text::rewrite_block(&mut doc, 0, 0, None, &style).unwrap();
     let doc = reopen(&doc);
     // The fill colour in force where the second paragraph is shown (q/Q nest it).
-    let ops = printcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+    let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
     let (mut fill, mut stack) = (String::from("0 g"), Vec::new());
     for op in &ops {
         match op.op.as_slice() {
             b"q" => stack.push(fill.clone()),
             b"Q" => fill = stack.pop().unwrap_or_default(),
-            b"g" | b"rg" | b"k" => fill = String::from_utf8_lossy(&printcraft_content::serialize_ops(std::slice::from_ref(op))).trim().to_string(),
+            b"g" | b"rg" | b"k" => fill = String::from_utf8_lossy(&pdfcraft_content::serialize_ops(std::slice::from_ref(op))).trim().to_string(),
             b"Tj" if op.operands.first().and_then(|o| o.as_string()).is_some_and(|s| s.to_text() == "Second paragraph") => break,
             _ => {}
         }
@@ -609,7 +609,7 @@ fn recolouring_a_paragraph_in_a_shared_text_object_keeps_order_and_nesting() {
     let doc = reopen(&doc);
     let texts: Vec<String> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
     assert_eq!(texts, ["First paragraph", "Second paragraph", "Third paragraph"]);
-    let ops = printcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+    let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
     let (mut in_text, mut depth, mut red) = (false, 0usize, Vec::new());
     for op in &ops {
         match op.op.as_slice() {

@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  PdfCraft MSI (WiX Toolset v5: `dotnet tool install -g wix`). Built by package.ps1:
+
+    wix build pdfcraft.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
+
+  Per-machine install into Program Files, a Start Menu shortcut, an App Paths entry, and PdfCraft
+  registered as a PDF handler (offered under "Open with" and in Default apps, never forced as the
+  default). Files opened with PdfCraft arrive on its command line.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="PdfCraft"
+      Manufacturer="Learning Machines LLC"
+      Version="$(var.Version)"
+      UpgradeCode="EA00C367-7270-4C50-9D8B-A7A5C88AD27F"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="PdfCraft PDF workbench" Manufacturer="Learning Machines LLC" />
+    <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
+         (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of PdfCraft is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- Windows Installer requires an Icon id ending in .ico or .exe, or advertised shortcuts and
+         Add/Remove Programs show a blank icon (#57). -->
+    <Icon Id="PdfcraftIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="PdfcraftIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://getartcraft.com/apps/pdfcraft" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://getartcraft.com/apps/pdfcraft" />
+    <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="PdfCraft" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="PdfCraft" Level="1">
+      <ComponentGroupRef Id="PdfcraftFiles" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="PdfcraftFiles" Directory="INSTALLFOLDER">
+      <Component Id="PdfcraftApp" Guid="E724C1C6-091F-4E21-A685-80D089FDBE21">
+        <File Id="PdfcraftExe" Source="$(var.BinDir)\pdfcraft.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="PdfCraft"
+              Description="PdfCraft PDF workbench" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
+              Icon="PdfcraftIcon.ico" IconIndex="0" />
+        </File>
+
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\pdfcraft.exe" Value="[#PdfcraftExe]" Type="string" />
+
+        <!-- PDF files (#107): PdfCraft is offered under "Open with" and in Settings ▸ Default
+             apps, through Windows' Default Programs registration (a ProgID, OpenWithProgids,
+             Capabilities and RegisteredApplications). It never takes over an existing default:
+             .pdf's own default value is left alone, and the user chooses. Without this, the only
+             PdfCraft entry to pick was the advertised Start Menu shortcut, which Windows can't
+             run as a file handler ("This app can't run on your PC"). -->
+        <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraft.Document" Value="PDF Document" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraft.Document\DefaultIcon" Value="[#PdfcraftExe],0" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraft.Document\shell\open\command" Value="&quot;[#PdfcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.pdf\OpenWithProgids" Name="PdfCraft.Document" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\pdfcraft.exe" Name="FriendlyAppName" Value="PdfCraft" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\pdfcraft.exe\SupportedTypes" Name=".pdf" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\pdfcraft.exe\shell\open\command" Value="&quot;[#PdfcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraft\Capabilities" Name="ApplicationName" Value="PdfCraft" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraft\Capabilities" Name="ApplicationDescription" Value="Open-source PDF workbench" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraft\Capabilities" Name="ApplicationIcon" Value="[#PdfcraftExe],0" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraft\Capabilities\FileAssociations" Name=".pdf" Value="PdfCraft.Document" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\RegisteredApplications" Name="PdfCraft" Value="Software\PdfCraft\Capabilities" Type="string" />
+      </Component>
+
+      <Component Id="PdfcraftCli">
+        <File Id="PdfcraftCliExe" Source="$(var.BinDir)\pdfcraft-cli.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

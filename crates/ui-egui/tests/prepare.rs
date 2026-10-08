@@ -4,11 +4,11 @@
 use egui::Pos2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_ui_egui::{PrintCraftApp, QuickTool};
+use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 
-fn harness() -> Harness<'static, PrintCraftApp> {
+fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app.set_option("zoom", "150").unwrap();
         app
@@ -24,13 +24,13 @@ fn harness() -> Harness<'static, PrintCraftApp> {
 }
 
 /// A point on page 1 at (x, y) points from its top-left.
-fn at(h: &Harness<'static, PrintCraftApp>, x: f32, y: f32) -> Pos2 {
+fn at(h: &Harness<'static, PdfCraftApp>, x: f32, y: f32) -> Pos2 {
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
     let k = r.width() / 300.0;
     r.min + egui::vec2(x * k, y * k)
 }
 
-fn drag(h: &mut Harness<'static, PrintCraftApp>, a: Pos2, b: Pos2) {
+fn drag(h: &mut Harness<'static, PdfCraftApp>, a: Pos2, b: Pos2) {
     h.hover_at(a);
     h.run_steps(1);
     h.drag_at(a);
@@ -43,12 +43,12 @@ fn drag(h: &mut Harness<'static, PrintCraftApp>, a: Pos2, b: Pos2) {
     h.run_steps(4);
 }
 
-fn names(h: &Harness<'static, PrintCraftApp>) -> Vec<String> {
+fn names(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
     let s = h.state();
     s.session.get(s.views[0].id).unwrap().form.iter().map(|f| f.name.clone()).collect()
 }
 
-fn rect_of(h: &Harness<'static, PrintCraftApp>, name: &str) -> [f64; 4] {
+fn rect_of(h: &Harness<'static, PdfCraftApp>, name: &str) -> [f64; 4] {
     let s = h.state();
     s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().widgets[0].rect
 }
@@ -93,7 +93,7 @@ fn placing_moving_editing_and_deleting_a_field() {
         let s = h.state();
         let doc = s.session.get(s.views[0].id).unwrap();
         assert_eq!(doc.can_undo(), Some("Change field properties"));
-        assert!(doc.form.iter().find(|f| f.name == "email").unwrap().has(printcraft_engine::field_flags::REQUIRED));
+        assert!(doc.form.iter().find(|f| f.name == "email").unwrap().has(pdfcraft_engine::field_flags::REQUIRED));
         assert_eq!(s.views[0].prepare.selected.as_ref().map(|s| s.0.as_str()), Some("email"));
     }
     // Delete removes the selected field.
@@ -116,7 +116,7 @@ fn placing_moving_editing_and_deleting_a_field() {
 
 #[test]
 fn format_validate_and_calculate_tabs() {
-    use printcraft_engine::form_scripts::{Calculate, Format, Validate};
+    use pdfcraft_engine::form_scripts::{Calculate, Format, Validate};
     let mut h = harness();
     h.state_mut().execute("form.prepare");
     h.run_steps(2);
@@ -147,7 +147,7 @@ fn format_validate_and_calculate_tabs() {
 
 #[test]
 fn appearance_tab_restyles_the_field() {
-    use printcraft_engine::{BorderStyle, FieldFont};
+    use pdfcraft_engine::{BorderStyle, FieldFont};
     let mut h = harness();
     h.state_mut().execute("form.prepare");
     h.run_steps(2);
@@ -173,12 +173,12 @@ fn appearance_tab_restyles_the_field() {
 #[test]
 fn options_tab_sets_the_check_box_style() {
     // #94: Check Box Style on the Options tab.
-    use printcraft_engine::CheckStyle;
+    use pdfcraft_engine::CheckStyle;
     let mut h = harness();
-    h.state_mut().apply_edit(printcraft_engine::Edit::AddField {
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
         page: 0,
         rect: [40.0, 300.0, 56.0, 316.0],
-        kind: printcraft_engine::NewField::CheckBox,
+        kind: pdfcraft_engine::NewField::CheckBox,
         name: Some("agree".into()),
     });
     h.state_mut().open_field_props("agree", 0);
@@ -196,7 +196,7 @@ fn options_tab_sets_the_check_box_style() {
 
 #[test]
 fn options_tab_sets_flags_alignment_and_defaults() {
-    use printcraft_engine::field_flags as ff;
+    use pdfcraft_engine::field_flags as ff;
     let mut h = harness();
     h.state_mut().open_field_props("city", 0);
     h.run_steps(2);
@@ -225,7 +225,7 @@ fn the_fields_panel_orders_tabs_manually() {
     h.state_mut().execute("form.prepare");
     h.state_mut().set_option("panel", "fields").unwrap();
     h.run_steps(3);
-    let order = |h: &Harness<'static, PrintCraftApp>| -> Vec<String> {
+    let order = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> {
         let s = h.state();
         let form = &s.session.get(s.views[0].id).unwrap().form;
         let mut v: Vec<(usize, String)> = form.iter().filter_map(|f| f.widgets.iter().map(|w| w.tab).min().map(|t| (t, f.name.clone()))).collect();
@@ -245,14 +245,14 @@ fn the_fields_panel_orders_tabs_manually() {
 #[test]
 fn duplicating_a_field_onto_every_page() {
     let mut h = harness();
-    h.state_mut().apply_edit(printcraft_engine::Edit::InsertBlankPage { at: 1, width: 300.0, height: 400.0 });
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 300.0, height: 400.0 });
     h.state_mut().execute("form.prepare");
     h.run_steps(3);
     let (n, p) = {
         let s = h.state();
         let doc = s.session.get(s.views[0].id).unwrap();
         let f = doc.form.iter().find(|f| f.name == "city").unwrap();
-        (doc.info.pages.len(), printcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center())
+        (doc.info.pages.len(), pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center())
     };
     assert!(n >= 2, "the fixture has {n} pages");
     h.hover_at(p);
@@ -276,19 +276,19 @@ fn duplicating_a_field_onto_every_page() {
 
 #[test]
 fn aligning_distributing_and_sizing_several_fields() {
-    use printcraft_ui_egui::prepare::{Arrange, arrange};
+    use pdfcraft_ui_egui::prepare::{Arrange, arrange};
     let mut h = harness();
     for (name, x, y, w) in [("a", 20.0, 300.0, 60.0), ("b", 120.0, 280.0, 80.0), ("c", 260.0, 260.0, 30.0)] {
-        h.state_mut().apply_edit(printcraft_engine::Edit::AddField {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
             page: 0,
             rect: [x, y, x + w, y + 20.0],
-            kind: printcraft_engine::NewField::Text { multiline: false },
+            kind: pdfcraft_engine::NewField::Text { multiline: false },
             name: Some(name.into()),
         });
     }
     h.run_steps(2);
-    let form = |h: &Harness<'static, PrintCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().form.as_ref().clone();
-    let rect = |h: &Harness<'static, PrintCraftApp>, n: &str| form(h).iter().find(|f| f.name == n).unwrap().widgets[0].rect;
+    let form = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().form.as_ref().clone();
+    let rect = |h: &Harness<'static, PdfCraftApp>, n: &str| form(h).iter().find(|f| f.name == n).unwrap().widgets[0].rect;
     let a = ("a".to_string(), 0);
     let others = vec![("b".to_string(), 0), ("c".to_string(), 0)];
     // Align tops with a.
@@ -313,10 +313,10 @@ fn aligning_distributing_and_sizing_several_fields() {
 fn deleting_several_selected_fields_and_detecting_fields_from_the_panel() {
     let mut h = harness();
     for (name, x) in [("a", 20.0), ("b", 120.0), ("c", 220.0)] {
-        h.state_mut().apply_edit(printcraft_engine::Edit::AddField {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
             page: 0,
             rect: [x, 300.0, x + 60.0, 320.0],
-            kind: printcraft_engine::NewField::Text { multiline: false },
+            kind: pdfcraft_engine::NewField::Text { multiline: false },
             name: Some(name.into()),
         });
     }
@@ -357,7 +357,7 @@ fn preview_fills_the_form_and_locked_fields_keep_their_properties() {
     h.run_steps(1);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    let locked = |h: &Harness<'static, PrintCraftApp>| {
+    let locked = |h: &Harness<'static, PdfCraftApp>| {
         let s = h.state();
         s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "city").unwrap().locked()
     };
@@ -381,7 +381,7 @@ fn image_fields_take_a_picture_when_clicked() {
     drag(&mut h, a, b);
     assert_eq!(names(&h).last().map(String::as_str), Some("Image1"));
     // A picture to choose (the picker is bypassed in tests).
-    let path = std::env::temp_dir().join(format!("printcraft-image-field-{}.png", std::process::id()));
+    let path = std::env::temp_dir().join(format!("pdfcraft-image-field-{}.png", std::process::id()));
     image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30])).save(&path).unwrap();
     h.state_mut().save_override = Some(path.to_string_lossy().into_owned());
     // Fill it in as a reader would.
@@ -400,7 +400,7 @@ fn image_fields_take_a_picture_when_clicked() {
 
 #[test]
 fn actions_tab_adds_and_removes_actions() {
-    use printcraft_engine::{FieldAction, FieldTrigger};
+    use pdfcraft_engine::{FieldAction, FieldTrigger};
     let mut h = harness();
     h.state_mut().execute("form.prepare");
     h.run_steps(2);

@@ -1,8 +1,8 @@
 # Vendored crates
 
 Permissively licensed crates we carry small patches for. Each directory keeps the upstream
-licence files unchanged. Every patch is marked `PrintCraft patch:` in the source, is covered by a
-PrintCraft test, and should be proposed upstream. Remove the vendored copy once upstream releases
+licence files unchanged. Every patch is marked `PdfCraft patch:` in the source, is covered by a
+PdfCraft test, and should be proposed upstream. Remove the vendored copy once upstream releases
 the fix. Vendoring copyleft code is never allowed (plan/adr/0001).
 
 | Crate | Version | Licence | Patches | Test |

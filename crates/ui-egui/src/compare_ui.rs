@@ -3,11 +3,11 @@
 //! offers a report or the differences as comments.
 
 use egui::{Align, Color32, Layout};
-use printcraft_engine::DocId;
-use printcraft_engine::compare::{Comparison, Kind};
+use pdfcraft_engine::DocId;
+use pdfcraft_engine::compare::{Comparison, Kind};
 
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, RightPanel, widgets};
+use crate::{PdfCraftApp, RightPanel, widgets};
 
 /// The last comparison.
 pub struct CompareState {
@@ -31,12 +31,12 @@ pub enum PanelAction {
 }
 
 pub fn colour(kind: Kind) -> Color32 {
-    let [r, g, b] = printcraft_engine::compare::colour(kind);
+    let [r, g, b] = pdfcraft_engine::compare::colour(kind);
     Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
 }
 
 /// The Compare Files dialog: pick the older document. Returns (compare, cancel).
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (bool, bool) {
+pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     ui.label(egui::RichText::new("Compare Files").font(theme::semibold(18.0)));
     ui.add_space(8.0);
     let Some((_, new)) = app.active_ids() else { return (false, true) };
@@ -136,7 +136,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &Option<CompareState>,
     action
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Compare the chosen older document with the active one and show the differences.
     pub fn run_compare(&mut self) {
         let Some((i, new)) = self.active_ids() else { return };

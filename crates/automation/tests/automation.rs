@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "mcp")]
-use printcraft_automation::mcp::McpServer;
-use printcraft_automation::{Automation, Content, ToolError, tools};
+use pdfcraft_automation::mcp::McpServer;
+use pdfcraft_automation::{Automation, Content, ToolError, tools};
 use serde_json::{Value, json};
 
 /// A PDF with `n` 200×300 pt pages reading "Page 1", "Page 2", …
@@ -37,7 +37,7 @@ fn fixture(n: usize) -> Vec<u8> {
 
 /// A fresh directory with `a.pdf` (3 pages) and `b.pdf` (2 pages).
 fn workdir(test: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("printcraft-automation-{test}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pdfcraft-automation-{test}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("a.pdf"), fixture(3)).unwrap();
@@ -77,7 +77,7 @@ fn tool_table_is_well_formed() {
         }
         assert!(!(t.read_only && t.destructive), "{} is both read-only and destructive", t.name);
         if let Some(c) = t.command {
-            assert!(printcraft_engine::commands::command(c).is_some(), "{} names unregistered command {c}", t.name);
+            assert!(pdfcraft_engine::commands::command(c).is_some(), "{} names unregistered command {c}", t.name);
         }
     }
 }
@@ -206,11 +206,11 @@ fn errors_are_specific_and_safe() {
     assert_eq!(ok(&mut a, "doc_list", json!({}))["documents"], json!([]));
 
     // The root confines reads and writes.
-    let outside = std::env::temp_dir().join("printcraft-automation-outside.pdf");
+    let outside = std::env::temp_dir().join("pdfcraft-automation-outside.pdf");
     std::fs::write(&outside, fixture(1)).unwrap();
     assert!(matches!(err(&mut a, "doc_open", json!({ "path": outside.to_str().unwrap() })), ToolError::Failed(m) if m.contains("outside")));
     assert!(
-        matches!(err(&mut a, "doc_open", json!({ "path": "../printcraft-automation-outside.pdf" })), ToolError::Failed(m) if m.contains("outside"))
+        matches!(err(&mut a, "doc_open", json!({ "path": "../pdfcraft-automation-outside.pdf" })), ToolError::Failed(m) if m.contains("outside"))
     );
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
     assert!(a.call("doc_save", &json!({ "doc": doc, "path": "new/../../escape.pdf" })).is_err());
@@ -265,7 +265,7 @@ fn mcp_session_over_stdio() {
     assert_eq!(replies.len(), 4, "the notification gets no reply");
 
     assert_eq!(replies[0]["result"]["protocolVersion"], "2025-03-26");
-    assert_eq!(replies[0]["result"]["serverInfo"]["name"], "printcraft");
+    assert_eq!(replies[0]["result"]["serverInfo"]["name"], "pdfcraft");
     assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), tools().len());
     assert_eq!(replies[2]["result"]["structuredContent"]["pages"], 3);
     assert_eq!(replies[2]["result"]["isError"], false);
@@ -283,7 +283,7 @@ fn mcp_errors() {
     assert_eq!(rpc(&mut s, 1, "initialize", json!({ "protocolVersion": "1999-01-01" }))["result"]["protocolVersion"], "2025-06-18");
     assert_eq!(rpc(&mut s, 2, "ping", json!({}))["result"], json!({}));
     assert_eq!(rpc(&mut s, 3, "prompts/list", json!({}))["error"]["code"], -32601);
-    assert_eq!(rpc(&mut s, 6, "resources/read", json!({ "uri": "printcraft://doc/9/info" }))["error"]["code"], -32602);
+    assert_eq!(rpc(&mut s, 6, "resources/read", json!({ "uri": "pdfcraft://doc/9/info" }))["error"]["code"], -32602);
     assert_eq!(rpc(&mut s, 4, "tools/call", json!({ "name": "nope" }))["error"]["code"], -32602);
     let failed = rpc(&mut s, 5, "tools/call", json!({ "name": "doc_open", "arguments": { "path": "/definitely/not/here.pdf" } }));
     assert_eq!(failed["result"]["isError"], true);
@@ -303,19 +303,19 @@ fn mcp_resources_expose_open_documents() {
     rpc(&mut s, 4, "tools/call", json!({ "name": "doc_open", "arguments": { "path": "a.pdf" } }));
     let list = rpc(&mut s, 5, "resources/list", json!({}))["result"]["resources"].as_array().cloned().unwrap();
     assert_eq!(list.len(), 2 + 3, "info, text and three page images");
-    assert_eq!(list[0]["uri"], "printcraft://doc/1/info");
+    assert_eq!(list[0]["uri"], "pdfcraft://doc/1/info");
     let read = |s: &mut McpServer, uri: &str| rpc(s, 6, "resources/read", json!({ "uri": uri }))["result"]["contents"][0].clone();
-    let text = read(&mut s, "printcraft://doc/1/text");
+    let text = read(&mut s, "pdfcraft://doc/1/text");
     assert_eq!(text["mimeType"], "text/plain");
     assert!(text["text"].as_str().unwrap().contains("Page 2\nPage 2"), "{text}");
-    assert_eq!(read(&mut s, "printcraft://doc/1/page/3/text")["text"], "Page 3");
-    let info: Value = serde_json::from_str(read(&mut s, "printcraft://doc/1/info")["text"].as_str().unwrap()).unwrap();
+    assert_eq!(read(&mut s, "pdfcraft://doc/1/page/3/text")["text"], "Page 3");
+    let info: Value = serde_json::from_str(read(&mut s, "pdfcraft://doc/1/info")["text"].as_str().unwrap()).unwrap();
     assert_eq!(info["pages"].as_array().unwrap().len(), 3);
-    let img = read(&mut s, "printcraft://doc/1/page/1/image?dpi=36");
+    let img = read(&mut s, "pdfcraft://doc/1/page/1/image?dpi=36");
     use base64::Engine as _;
     let png = base64::engine::general_purpose::STANDARD.decode(img["blob"].as_str().unwrap()).unwrap();
     assert_eq!(&png[1..4], b"PNG");
-    assert_eq!(rpc(&mut s, 7, "resources/read", json!({ "uri": "printcraft://doc/1/page/9/image" }))["error"]["code"], -32602);
+    assert_eq!(rpc(&mut s, 7, "resources/read", json!({ "uri": "pdfcraft://doc/1/page/9/image" }))["error"]["code"], -32602);
 }
 
 #[test]
@@ -487,7 +487,7 @@ fn protecting_through_tools() {
 #[test]
 fn forms_through_tools() {
     let dir = workdir("forms");
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/demo/printcraft-showcase.pdf");
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/demo/pdfcraft-showcase.pdf");
     if !src.exists() {
         eprintln!("skipped: run `cargo xtask demo-pdf` for the showcase form");
         return;
@@ -1121,9 +1121,9 @@ fn links_through_tools() {
     assert_eq!(list["count"], 3);
     let added = list["links"].as_array().unwrap().iter().find(|l| l["to_page"] == 1).unwrap().clone();
     assert_eq!(added["rect"], json!([72.0, 300.0, 200.0, 320.0]));
-    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": added["index"], "url": "https://printcraft.dev" }));
+    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": added["index"], "url": "https://pdfcraft.dev" }));
     let list = ok(&mut a, "link_list", json!({ "doc": doc }));
-    assert!(list["links"].as_array().unwrap().iter().any(|l| l["url"] == "https://printcraft.dev"));
+    assert!(list["links"].as_array().unwrap().iter().any(|l| l["url"] == "https://pdfcraft.dev"));
     ok(&mut a, "link_delete", json!({ "doc": doc, "page": 1, "index": added["index"] }));
     let r = ok(&mut a, "links_remove", json!({ "doc": doc }));
     assert_eq!(r["removed"], 2);

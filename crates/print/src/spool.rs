@@ -31,7 +31,7 @@ pub struct Job {
 
 impl Default for Job {
     fn default() -> Self {
-        Job { printer: None, copies: 1, collate: true, duplex: Duplex::Off, grayscale: false, title: "PrintCraft".into() }
+        Job { printer: None, copies: 1, collate: true, duplex: Duplex::Off, grayscale: false, title: "PdfCraft".into() }
     }
 }
 
@@ -89,7 +89,7 @@ pub fn printers() -> Vec<Printer> {
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, PrintError> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        let dir = std::env::temp_dir().join(format!("printcraft-print-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pdfcraft-print-{}", std::process::id()));
         std::fs::create_dir_all(&dir).map_err(|e| PrintError::Spool(e.to_string()))?;
         let file = dir.join(format!("job-{}.pdf", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos())));
         std::fs::write(&file, pdf).map_err(|e| PrintError::Spool(e.to_string()))?;

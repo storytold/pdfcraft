@@ -3,7 +3,7 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_ui_egui::PrintCraftApp;
+use pdfcraft_ui_egui::PdfCraftApp;
 
 /// A one-page PDF with a proper xref; `acroform` is the catalog's /AcroForm (or empty), `extra`
 /// more catalog entries, `objects` extra objects numbered from 5.
@@ -32,9 +32,9 @@ fn pdf(acroform: &str, extra: &str, objects: &[&str]) -> Vec<u8> {
 
 const XFA_PACKET: &str = "<< /Length 52 >>\nstream\n<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"></xdp:xdp>\nendstream";
 
-fn open(bytes: Vec<u8>) -> Harness<'static, PrintCraftApp> {
+fn open(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("form.pdf", None, bytes).expect("opens");
         app
     });
@@ -42,7 +42,7 @@ fn open(bytes: Vec<u8>) -> Harness<'static, PrintCraftApp> {
     h
 }
 
-fn xfa(h: &Harness<'static, PrintCraftApp>) -> Option<printcraft_render::Xfa> {
+fn xfa(h: &Harness<'static, PdfCraftApp>) -> Option<pdfcraft_render::Xfa> {
     let s = h.state();
     s.session.get(s.views[0].id).unwrap().info.xfa
 }
@@ -51,18 +51,18 @@ fn xfa(h: &Harness<'static, PrintCraftApp>) -> Option<printcraft_render::Xfa> {
 fn a_dynamic_xfa_form_says_its_page_is_a_placeholder() {
     // No fields, the form lives in the XFA packets (an array of name/stream pairs here).
     let h = open(pdf("/AcroForm << /Fields [] /XFA [(template) 5 0 R] >>", "/NeedsRendering true", &[XFA_PACKET]));
-    assert_eq!(xfa(&h), Some(printcraft_render::Xfa::Dynamic));
+    assert_eq!(xfa(&h), Some(pdfcraft_render::Xfa::Dynamic));
     h.get_by_label_contains("dynamic XFA form");
     // Without /NeedsRendering, no fields still means nothing to fill but the placeholder.
     let h = open(pdf("/AcroForm << /Fields [] /XFA 5 0 R >>", "", &[XFA_PACKET]));
-    assert_eq!(xfa(&h), Some(printcraft_render::Xfa::Dynamic));
+    assert_eq!(xfa(&h), Some(pdfcraft_render::Xfa::Dynamic));
 }
 
 #[test]
 fn a_static_xfa_form_can_be_filled_but_warns_about_its_xfa_data() {
     let field = "<< /FT /Tx /T (name) /Rect [20 20 200 40] /Type /Annot /Subtype /Widget /P 3 0 R >>";
     let h = open(pdf("/AcroForm << /Fields [6 0 R] /XFA 5 0 R >>", "", &[XFA_PACKET, field]));
-    assert_eq!(xfa(&h), Some(printcraft_render::Xfa::Static));
+    assert_eq!(xfa(&h), Some(pdfcraft_render::Xfa::Static));
     h.get_by_label_contains("also contains XFA data");
     // The fields can still be highlighted from the notice.
     h.get_by_label("Highlight fields");
@@ -77,5 +77,5 @@ fn ordinary_forms_and_documents_have_no_xfa_notice() {
     h.get_by_label_contains("interactive form fields");
     // A malformed /XFA (a number) still counts as XFA; it never crashes the open.
     let h = open(pdf("/AcroForm << /Fields [] /XFA 42 >>", "", &[]));
-    assert_eq!(xfa(&h), Some(printcraft_render::Xfa::Dynamic));
+    assert_eq!(xfa(&h), Some(pdfcraft_render::Xfa::Dynamic));
 }
