@@ -78,6 +78,8 @@ pub enum Action {
     Print,
     SaveAs,
     Url(String),
+    /// Any other click script: run by the XFA scripting engine.
+    Script(String),
 }
 
 /// An interactive field to create as an AcroForm widget.
@@ -97,6 +99,8 @@ pub struct Widget {
     pub read_only: bool,
     pub border: WidgetBorder,
     pub value: Option<String>,
+    /// The template's default value (what a reset restores); data values are not defaults.
+    pub default: Option<String>,
     pub action: Option<Action>,
     /// Check boxes: the on and off values of the data; radio buttons: the on value.
     pub items: Vec<String>,
@@ -180,6 +184,14 @@ struct Layouter<'t> {
     measured: RefCell<HashMap<MeasureKey, Measured>>,
     /// Measurements made so far (see [`MAX_MEASURES`]).
     measures: Cell<usize>,
+}
+
+/// How many instances of a repeating subform to lay out: what the data holds once it holds
+/// any (rows added or removed), else the template's initial count; never below one, never
+/// above the maximum.
+pub fn instance_count(occur: &Occur, from_data: usize) -> usize {
+    let n = if from_data > 0 { from_data } else { occur.initial };
+    n.min(occur.max.unwrap_or(usize::MAX)).clamp(1, MAX_INSTANCES)
 }
 
 /// Index of child `i` among the earlier siblings with the same name (the SOM index).
@@ -302,6 +314,13 @@ fn date_pattern(picture: Option<&str>) -> String {
 fn button_action(scripts: &[Script]) -> Option<Action> {
     let s = scripts.iter().find(|s| s.activity == "click")?;
     let t = &s.text;
+    // Only a single-statement idiom becomes a native PDF action; anything else is run by the
+    // XFA scripting engine.
+    let one = t.trim().trim_end_matches(';');
+    let single = !one.contains(';') && !one.contains('\n');
+    if !single {
+        return (!t.trim().is_empty()).then(|| Action::Script(t.clone()));
+    }
     if t.contains("resetData") {
         Some(Action::Reset)
     } else if t.contains("host.print") || t.contains("execMenuItem(\"Print\")") {
@@ -315,8 +334,10 @@ fn button_action(scripts: &[Script]) -> Option<Action> {
         let body = &rest[q + 1..];
         let end = body.find(quote)?;
         Some(Action::Url(body[..end].to_string()))
-    } else {
+    } else if t.trim().is_empty() {
         None
+    } else {
+        Some(Action::Script(t.clone()))
     }
 }
 
@@ -475,7 +496,7 @@ impl Layouter<'_> {
             (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&som_to_path(&ctx.som), name),
             _ => 0,
         };
-        let instances = sf.occur.initial.max(from_data).min(sf.occur.max.unwrap_or(usize::MAX)).clamp(1, MAX_INSTANCES);
+        let instances = instance_count(&sf.occur, from_data);
         let ctx_parent = ctx;
         for i in 0..instances {
             let ctx = ctx_parent.with_som(&sf.common, sib + i);
@@ -550,7 +571,7 @@ impl Layouter<'_> {
                     (Some(name), Some(d)) if row.occur.max != Some(1) => d.count(&som_to_path(&ctx.som), name),
                     _ => 0,
                 };
-                let instances = row.occur.initial.max(from_data).min(row.occur.max.unwrap_or(usize::MAX)).clamp(1, MAX_INSTANCES);
+                let instances = instance_count(&row.occur, from_data);
                 for inst in 0..instances {
                     let h = self.row_height(row, &cols, inner_w, ctx, depth + 1);
                     if self.make_room(h)?
@@ -1155,7 +1176,8 @@ impl Layouter<'_> {
         // The data's value wins over the template's default.
         let data_value: Option<String> =
             self.data.and_then(|d| d.text_at(&som_to_path(&som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
-        let plain_value = data_value.clone().or_else(|| f.value.plain().map(|v| v.trim().to_string()).filter(|v| !v.is_empty()));
+        let template_default = f.value.plain().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        let plain_value = data_value.clone().or_else(|| template_default.clone());
         let (kind, rect, border, value, tooltip) = match f.ui {
             Ui::CheckButton => {
                 let s = f.check_size.unwrap_or(10.0).min(ui.w.max(1.0)).min(ui.h.max(1.0));
@@ -1227,6 +1249,7 @@ impl Layouter<'_> {
             read_only,
             border,
             value,
+            default: template_default,
             action,
             items,
         })))

@@ -48,6 +48,14 @@ the automation tools) works on it unchanged. The engine does this when it opens 
 Layout measures each container once per (node, width): width-less containers would otherwise
 be measured exponentially often in their nesting. A measurement budget backs this up.
 
+- **Scripts** (`script`): the live form as scripts see it (`form_tree`: the instance tree with
+  values, presence and access; `ScriptEvent`s in document order), presence and access overrides
+  scripts make (kept on the AcroForm as `/PCXfaOverrides`, so undo and reopening keep them),
+  rows added and removed in the data (`add_data_instances`, `remove_data_instance`), and
+  `rerender`, which lays the form out again from template, data and overrides. The scripts
+  themselves run in the `js` crate's XFA object model; the engine runs initialize and calculate
+  on open, exit, validate and calculate after a field changes, and click for buttons.
+
 ## API sketch
 
 ```rust
@@ -63,9 +71,18 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
 - **Data binding** is the default one only: explicit `bind ref` expressions, global binding and
   data descriptions are not followed, and no standalone XML or XDP data file is imported or
   exported.
-- **Scripting.** No FormCalc or XFA JavaScript (`xfa.host`, `xfa.layout`, `instanceManager`);
-  rows are not added by button, validations and calculations don't run. Buttons map only the
-  common idioms (reset, print, save as, launchURL).
+- **Scripting.** JavaScript only: FormCalc scripts (the default language of older forms) are
+  detected and reported, not run. The object model covers what forms commonly use (`xfa.form`
+  navigation and SOM resolution, `rawValue`, `presence`, `access`, instance managers,
+  `xfa.host` messages, reset, print, focus and URLs, `xfa.layout` page numbers, `xfa.event`);
+  not `xfa.template`, data descriptions, `xfa.connectionSet`, `border`/`font`/`ui` properties
+  (reads give a sink that accepts writes), `execEvent`, or the change event per keystroke.
+  Validate failures show their message and keep the value, as Acrobat does for scripts.
+  A hidden instance of a repeating subform hides every instance (overrides apply to the template).
+  A repeating subform shows what its data holds once the data holds any instance, else its
+  `initial` count, and never fewer than one (`occur min="0"` still shows one row).
+  Each script runs in a fresh engine on its own thread; a form with hundreds of calculate
+  scripts pays that on every field change (a shared engine per event is the obvious next step).
 - **Static XFA forms** (`/NeedsRendering` absent, AcroForm fields present) keep their AcroForm;
   only their data is read and written.
 - Choice lists are text fields; signature, image, barcode and password fields are left blank;

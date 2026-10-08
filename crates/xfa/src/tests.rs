@@ -6,9 +6,11 @@ use super::*;
 use crate::data::{
     DatasetsWrite, FieldData, FieldDatum, build_data, iso_to_pattern, parse_datasets, pattern_to_iso, read_values, som_to_path, write_datasets,
 };
-use crate::fixtures::{shell, static_shell, template, template_with_data};
+use crate::data::{add_data_instances, remove_data_instance, write_data_value};
+use crate::fixtures::{scripted_template, shell, static_shell, template, template_with_data};
 use crate::layout::Item;
 use crate::model::*;
+use crate::script::{NodeKind, Overrides, apply_overrides, fields_by_som, form_tree, overrides, rerender, set_overrides};
 
 fn widgets(page: &Page) -> Vec<&Widget> {
     page.items.iter().filter_map(|i| if let Item::Widget(w) = i { Some(w.as_ref()) } else { None }).collect()
@@ -543,4 +545,123 @@ fn huge_som_indices_are_capped_not_built() {
     assert_eq!(d.count(&som_to_path("form1[0]"), "row"), 4);
     assert_eq!(d.text_at(&som_to_path("form1[0].row[3].v[0]")), Some("3"));
     assert!(d.get(&som_to_path("form1[0].row[2]")).is_some(), "the instances in between exist, empty");
+}
+
+#[test]
+fn the_form_tree_carries_values_presence_instances_and_the_events() {
+    let xml = scripted_template();
+    let (tpl, _) = parse(&xml).unwrap();
+    let (root, events) = form_tree(&tpl, None, &Overrides::default());
+    assert_eq!((root.name.as_str(), root.som.as_str()), ("form", "form[0]"));
+    let page = &root.children[0];
+    assert_eq!(page.som, "form[0].page1[0]");
+    let by = |n: &str| page.children.iter().find(|c| c.name == n).unwrap_or_else(|| panic!("no {n}"));
+    assert_eq!((by("price").value.as_str(), by("price").numeric, by("total").access.as_str()), ("5", true, "readOnly"));
+    assert_eq!(by("details").presence, "hidden");
+    let table = by("table");
+    assert_eq!(table.children.len(), 1, "one row without data");
+    assert!(table.children[0].repeatable && table.children[0].occur_max.is_none());
+    assert_eq!(table.children[0].children[1].som, "form[0].page1[0].table[0].row[0].amount[0]");
+    let ev = |som: &str, act: &str| events.iter().find(|e| e.som == som && e.activity == act).unwrap_or_else(|| panic!("no {act} on {som}"));
+    assert!(ev("form[0].page1[0]", "initialize").script.contains("qty.rawValue = 2"));
+    assert!(ev("form[0].page1[0].total[0]", "calculate").script.contains("qty.rawValue * price.rawValue"));
+    assert_eq!(ev("form[0].page1[0].qty[0]", "validate").message.as_deref(), Some("Quantity must be 100 or less"));
+    assert!(!ev("form[0].page1[0].addRow[0]", "click").formcalc);
+    assert!(ev("form[0].page1[0].legacy[0]", "click").formcalc, "no contentType means FormCalc");
+    // Data adds rows and values; overrides change presence.
+    let data = parse_datasets("<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form><page1><qty>7</qty><table><row><amount>1</amount></row><row><amount>2</amount></row><row><amount>3</amount></row></table></page1></form></xfa:data></xfa:datasets>").unwrap();
+    let mut ov = Overrides::default();
+    ov.presence.insert("form[0].page1[0].details[0]".into(), "visible".into());
+    let (root, _) = form_tree(&tpl, Some(&data), &ov);
+    let page = &root.children[0];
+    assert_eq!(page.children.iter().find(|c| c.name == "qty").unwrap().value, "7");
+    assert_eq!(page.children.iter().find(|c| c.name == "table").unwrap().children.len(), 3);
+    assert_eq!(page.children.iter().find(|c| c.name == "details").unwrap().presence, "visible");
+    assert_eq!(page.children.iter().find(|c| c.name == "details").unwrap().kind, Some(NodeKind::Subform));
+}
+
+#[test]
+fn overrides_live_in_the_acroform_and_hide_objects_in_the_layout() {
+    let mut doc = Document::open(Arc::new(shell(&scripted_template()))).unwrap();
+    render_into(&mut doc).unwrap();
+    assert!(overrides(&doc).is_empty());
+    let names = |doc: &Document| fields_by_som(doc).into_values().collect::<Vec<_>>();
+    assert!(!names(&doc).iter().any(|n| n == "note"), "details is hidden: {:?}", names(&doc));
+    let mut ov = Overrides::default();
+    ov.presence.insert("form[0].page1[0].details[0]".into(), "visible".into());
+    ov.access.insert("form[0].page1[0].qty[0]".into(), "readOnly".into());
+    set_overrides(&mut doc, &ov).unwrap();
+    assert_eq!(overrides(&doc), ov);
+    let (tpl, _) = parse(&scripted_template()).unwrap();
+    let laid = apply_overrides(&tpl, &ov);
+    let Node::Subform(page) = &laid.root.children[0] else { panic!() };
+    let Node::Subform(details) = page.children.iter().find(|c| c.common().name.as_deref() == Some("details")).unwrap() else { panic!() };
+    assert_eq!(details.common.presence, Presence::Visible);
+    let Node::Field(qty) = page.children.iter().find(|c| c.common().name.as_deref() == Some("qty")).unwrap() else { panic!() };
+    assert_eq!(qty.access, Access::ReadOnly);
+    // Laying out again shows the note field and keeps the others.
+    let report = rerender(&mut doc, &tpl).unwrap();
+    let after = names(&doc);
+    assert!(after.iter().any(|n| n == "note"), "{after:?}");
+    assert!(after.iter().any(|n| n == "qty"));
+    assert_eq!(report.fields, after.len());
+    // Reopening the written bytes finds one set of fields, not two.
+    let doc = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert_eq!(names(&doc).len(), after.len());
+    assert_eq!(overrides(&doc), ov);
+    // Clearing removes the key.
+    let mut doc = doc;
+    set_overrides(&mut doc, &Overrides::default()).unwrap();
+    assert!(overrides(&doc).is_empty());
+}
+
+#[test]
+fn data_instances_are_added_and_removed_in_the_packet() {
+    let mut doc = Document::open(Arc::new(shell(&scripted_template()))).unwrap();
+    render_into(&mut doc).unwrap();
+    let parent = som_to_path("form[0].page1[0].table[0]");
+    // No datasets packet yet: one is created with the rows.
+    assert!(add_data_instances(&mut doc, &parent, "row", 3).unwrap().written);
+    let data = crate::script::data_of(&doc).unwrap();
+    assert_eq!(data.count(&parent, "row"), 3);
+    // Asking for fewer changes nothing; more adds.
+    assert!(!add_data_instances(&mut doc, &parent, "row", 2).unwrap().written);
+    assert!(add_data_instances(&mut doc, &parent, "row", 4).unwrap().written);
+    let mut p = parent.clone();
+    p.push(("row".into(), 1));
+    p.push(("amount".into(), 0));
+    write_data_value(&mut doc, &p, "42").unwrap();
+    let data = crate::script::data_of(&doc).unwrap();
+    assert_eq!((data.count(&parent, "row"), data.text_at(&p)), (4, Some("42")));
+    // Remove the second row: the third's value moves up.
+    let mut second = parent.clone();
+    second.push(("row".into(), 1));
+    assert!(remove_data_instance(&mut doc, &second).unwrap().written);
+    let data = crate::script::data_of(&doc).unwrap();
+    assert_eq!(data.count(&parent, "row"), 3);
+    assert_eq!(data.text_at(&p), None, "the row holding 42 is gone");
+    // Removing what isn't there is nothing.
+    let mut tenth = parent.clone();
+    tenth.push(("row".into(), 9));
+    assert!(!remove_data_instance(&mut doc, &tenth).unwrap().written);
+    // The layout follows the data: three rows of fields.
+    let (tpl, _) = parse(&scripted_template()).unwrap();
+    rerender(&mut doc, &tpl).unwrap();
+    let names: Vec<String> = fields_by_som(&doc).into_values().collect();
+    assert_eq!(names.iter().filter(|n| n.starts_with("amount")).count(), 3, "{names:?}");
+    // Hostile: absurd indices are capped, not built.
+    assert!(add_data_instances(&mut doc, &parent, "row", 1_000_000).is_ok());
+}
+
+#[test]
+fn formcalc_button_idioms_keep_their_native_actions() {
+    let xml = scripted_template()
+        .replace("<script>$host.messageBox(\"FormCalc\")</script>", "<script>$host.resetData()</script>")
+        .replace("xfa.host.messageBox(\"Hello \" + qty.rawValue);", "if (qty.rawValue > 1) { xfa.host.resetData(); }");
+    let form = layout_xml(&xml).unwrap();
+    let w: Vec<&Widget> = form.pages.iter().flat_map(widgets).collect();
+    let by = |n: &str| w.iter().find(|w| w.name == n).unwrap_or_else(|| panic!("no {n}"));
+    assert_eq!(by("legacy").action, Some(Action::Reset), "a one-statement FormCalc idiom is a native action");
+    assert!(matches!(by("hello").action, Some(Action::Script(_))), "anything else runs as a script: {:?}", by("hello").action);
+    assert!(matches!(by("addRow").action, Some(Action::Script(_))));
 }

@@ -328,6 +328,8 @@ struct Want {
     som: String,
     path: DataPath,
     text: String,
+    /// Create the node even for an empty value (an instance of a repeating subform).
+    ensure: bool,
 }
 
 fn wanted(doc: &Document, fields: &[FieldDatum]) -> Vec<Want> {
@@ -350,9 +352,18 @@ fn wanted(doc: &Document, fields: &[FieldDatum]) -> Vec<Want> {
             FieldData::Radio(sel) => sel.clone().unwrap_or_default(),
             FieldData::None => continue,
         };
-        out.push(Want { som, path, text });
+        out.push(Want { som, path, text, ensure: false });
     }
     out
+}
+
+/// What a rewrite of the datasets packet does.
+#[derive(Clone, Copy)]
+enum Op<'a> {
+    /// Put these values in (adding nodes as needed).
+    Values(&'a [Want]),
+    /// Take the node at this path out.
+    Remove(&'a DataPath),
 }
 
 /// Note that a value could not be written (once per kind of reason, naming a few fields).
@@ -480,7 +491,11 @@ const WRAP_CLOSE: &str = "</pdfcraft-wrap>";
 /// change: values go into the data nodes they bind to, missing nodes are added, and everything
 /// else (data no field binds to, other namespaces, attributes, comments, layout) stays as
 /// written.
-fn merge(text: &str, within: Within, wants: &[Want], warnings: &mut Vec<String>) -> Merged {
+fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merged {
+    let wants: &[Want] = match op {
+        Op::Values(w) => w,
+        Op::Remove(_) => &[],
+    };
     let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
     // A packet of an array may use the prefixes the XDP envelope declares: read it inside
     // an element declaring the usual ones.
@@ -506,6 +521,7 @@ fn merge(text: &str, within: Within, wants: &[Want], warnings: &mut Vec<String>)
     let mut edits = Vec::new();
     let mut data = None;
     match datasets {
+        None if matches!(op, Op::Remove(_)) => return Merged::Unchanged,
         None if within == Within::Xdp => {
             let root = parsed.root_element();
             match append_edit(src, root, &fresh_datasets(&build_children(wants, warnings))) {
@@ -522,6 +538,7 @@ fn merge(text: &str, within: Within, wants: &[Want], warnings: &mut Vec<String>)
         }
         Some(ds) => match ds.children().find(|n| is(n, "data")) {
             Some(d) => data = Some(d),
+            None if matches!(op, Op::Remove(_)) => return Merged::Unchanged,
             None => {
                 let prefix = qname(src, &ds.range()).and_then(|q| q.split_once(':')).map(|(p, _)| format!("{p}:")).unwrap_or_default();
                 let element = format!("<{prefix}data>{}</{prefix}data>", build_children(wants, warnings));
@@ -536,7 +553,21 @@ fn merge(text: &str, within: Within, wants: &[Want], warnings: &mut Vec<String>)
         },
     }
     if let Some(data) = data {
-        merge_values(src, data, wants, &mut edits, warnings);
+        match op {
+            Op::Values(w) => merge_values(src, data, w, &mut edits, warnings),
+            Op::Remove(path) => {
+                // The element at `path`, with the whitespace before it.
+                let mut node = Some(data);
+                for (name, idx) in path {
+                    node = node.and_then(|n| n.children().filter(|c| c.is_element() && c.tag_name().name() == name).nth(*idx));
+                }
+                if let Some(n) = node {
+                    let r = n.range();
+                    let start = src.get(..r.start).map_or(r.start, |before| r.start - before.len() + before.trim_end().len());
+                    edits.push(Edit { start, end: r.end, text: String::new() });
+                }
+            }
+        }
     }
     if edits.is_empty() {
         return Merged::Unchanged;
@@ -605,7 +636,11 @@ fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Ve
             }
         }
         if depth == w.path.len() {
-            // The data node exists: give it the value, unless it already holds it.
+            // The data node exists: give it the value, unless it already holds it. A node
+            // only wanted to exist (a row instance) is left as it is.
+            if w.ensure && w.text.is_empty() {
+                continue;
+            }
             let current: String = node.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
             if node.children().any(|c| c.is_element()) {
                 let all: String = node.descendants().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
@@ -623,8 +658,8 @@ fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Ve
             }
         } else {
             // Missing: add the rest of the path below the deepest node that exists. An empty
-            // value needs no node.
-            if w.text.is_empty() {
+            // value needs no node, unless the node itself is wanted (a new instance).
+            if w.text.is_empty() && !w.ensure {
                 continue;
             }
             let mut rest: DataPath = w.path.get(depth..).unwrap_or_default().to_vec();
@@ -696,6 +731,43 @@ fn packet_text(doc: &Document, o: &Object, warnings: &mut Vec<String>) -> Option
 /// Nothing is written when the document has no XFA entry or the data already holds the values;
 /// values that can't be written are reported, never silently dropped.
 pub fn write_datasets(doc: &mut Document, fields: &[FieldDatum]) -> Result<DatasetsWrite, XfaError> {
+    let wants = wanted(doc, fields);
+    rewrite(doc, Op::Values(&wants))
+}
+
+/// Make sure the data has at least `count` instances of `name` under `parent` (a script added
+/// rows: the layout repeats the subform once per data instance).
+pub fn add_data_instances(doc: &mut Document, parent: &DataPath, name: &str, count: usize) -> Result<DatasetsWrite, XfaError> {
+    let wants: Vec<Want> = (0..count.min(MAX_INDEX))
+        .map(|k| {
+            let mut path = parent.clone();
+            path.push((name.to_string(), k));
+            Want { som: format!("{name}[{k}]"), path, text: String::new(), ensure: true }
+        })
+        .collect();
+    rewrite(doc, Op::Values(&wants))
+}
+
+/// Put `text` at the data node `path` (a field with no widget, a hidden one or a draw, that a
+/// script gave a value), adding the node as needed.
+pub fn write_data_value(doc: &mut Document, path: &DataPath, text: &str) -> Result<DatasetsWrite, XfaError> {
+    if path.is_empty() {
+        return Ok(DatasetsWrite::default());
+    }
+    let som = path.iter().map(|(n, i)| format!("{n}[{i}]")).collect::<Vec<_>>().join(".");
+    let wants = [Want { som, path: path.clone(), text: text.to_string(), ensure: true }];
+    rewrite(doc, Op::Values(&wants))
+}
+
+/// Remove the data node at `path` (a script removed a row).
+pub fn remove_data_instance(doc: &mut Document, path: &DataPath) -> Result<DatasetsWrite, XfaError> {
+    if path.is_empty() {
+        return Ok(DatasetsWrite::default());
+    }
+    rewrite(doc, Op::Remove(path))
+}
+
+fn rewrite(doc: &mut Document, op: Op) -> Result<DatasetsWrite, XfaError> {
     let mut report = DatasetsWrite::default();
     let Some(root) = doc.root() else { return Ok(report) };
     let catalog = doc.get(root);
@@ -703,7 +775,10 @@ pub fn write_datasets(doc: &mut Document, fields: &[FieldDatum]) -> Result<Datas
     let acro_ref = acro_obj.as_ref();
     let Some(mut acro) = doc.resolve(&acro_obj).as_dict().cloned() else { return Ok(report) };
     let Some(xfa) = acro.get(b"XFA").cloned() else { return Ok(report) };
-    let wants = wanted(doc, fields);
+    let wants: &[Want] = match op {
+        Op::Values(w) => w,
+        Op::Remove(_) => &[],
+    };
     let warnings = &mut report.warnings;
     match &*doc.resolve(&xfa) {
         Object::Array(items) => {
@@ -715,7 +790,7 @@ pub fn write_datasets(doc: &mut Document, fields: &[FieldDatum]) -> Result<Datas
                 Some(i) => {
                     let Some(existing) = items.get(i + 1).cloned() else { return Ok(report) };
                     let Some((text, encoding)) = packet_text(doc, &existing, warnings) else { return Ok(report) };
-                    match merge(&text, Within::Packet, &wants, warnings) {
+                    match merge(&text, Within::Packet, op, warnings) {
                         Merged::Changed(t) => Some((i, encode(&t, encoding))),
                         Merged::Unchanged | Merged::Failed => None,
                     }
@@ -730,9 +805,10 @@ pub fn write_datasets(doc: &mut Document, fields: &[FieldDatum]) -> Result<Datas
                     }
                 }
                 (Some(_), None) => return Ok(report),
+                (None, _) if matches!(op, Op::Remove(_)) => return Ok(report),
                 (None, _) => {
                     // No datasets packet yet: before the postamble, or last.
-                    let text = fresh_datasets(&build_children(&wants, warnings));
+                    let text = fresh_datasets(&build_children(wants, warnings));
                     let r = doc.add(Object::Stream(Stream::flate(Dict::new(), text.as_bytes())));
                     let pos = items.iter().position(|n| n.as_string().is_some_and(|s| s.to_text() == "postamble")).unwrap_or(items.len());
                     items.insert(pos, Object::Ref(r));
@@ -743,7 +819,7 @@ pub fn write_datasets(doc: &mut Document, fields: &[FieldDatum]) -> Result<Datas
         }
         Object::Stream(_) => {
             let Some((text, encoding)) = packet_text(doc, &xfa, warnings) else { return Ok(report) };
-            let Merged::Changed(new) = merge(&text, Within::Xdp, &wants, warnings) else { return Ok(report) };
+            let Merged::Changed(new) = merge(&text, Within::Xdp, op, warnings) else { return Ok(report) };
             let r = doc.add(Object::Stream(Stream::flate(Dict::new(), &encode(&new, encoding))));
             acro.set(b"XFA".to_vec(), Object::Ref(r));
         }

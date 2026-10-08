@@ -187,6 +187,8 @@ impl Emitter<'_> {
                 }
                 if let Some(v) = &w.value {
                     d.set(b"V".to_vec(), Object::String(PdfString::text(v)));
+                }
+                if let Some(v) = &w.default {
                     d.set(b"DV".to_vec(), Object::String(PdfString::text(v)));
                 }
                 if let WidgetKind::Date(pattern) = &w.kind {
@@ -202,7 +204,7 @@ impl Emitter<'_> {
                 let checked = w.value.is_some();
                 d.set(b"V".to_vec(), Object::name(if checked { &on } else { "Off" }));
                 d.set(b"AS".to_vec(), Object::name(if checked { &on } else { "Off" }));
-                if checked {
+                if w.default.as_deref().is_some_and(|dv| crate::data::is_on(dv, &on)) {
                     d.set(b"DV".to_vec(), Object::name(&on));
                 }
                 let mut nd = Dict::new();
@@ -271,6 +273,12 @@ impl Emitter<'_> {
                         Action::Url(u) => {
                             ad.set(b"S".to_vec(), Object::name("URI"));
                             ad.set(b"URI".to_vec(), Object::String(PdfString::literal(u.as_bytes().to_vec())));
+                        }
+                        Action::Script(js) => {
+                            // The XFA click script as the button's action: the engine routes it
+                            // to the XFA scripting engine by the field's SOM path.
+                            ad.set(b"S".to_vec(), Object::name("JavaScript"));
+                            ad.set(b"JS".to_vec(), Object::String(PdfString::text(js)));
                         }
                     }
                     d.set(b"A".to_vec(), Object::Dict(ad));
