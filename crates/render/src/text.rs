@@ -146,6 +146,41 @@ impl PageText {
             .map(|(i, _)| i)
     }
 
+    /// The word around glyph `i` as its first and last glyph (double-click): it stops at word
+    /// gaps, blank glyphs and line ends.
+    pub fn word_at(&self, i: usize) -> Option<(usize, usize)> {
+        self.glyphs.get(i)?;
+        let blank = |k: usize| self.glyphs.get(k).is_none_or(|g| g.text.trim().is_empty());
+        // Glyph `k` (≥ 1) follows glyph `k - 1` with no word gap or line break between them.
+        let joined = |k: usize| !self.space_before.get(k).copied().unwrap_or(true) && self.line_of.get(k - 1) == self.line_of.get(k);
+        let mut first = i;
+        while first > 0 && joined(first) && !blank(first - 1) {
+            first -= 1;
+        }
+        let mut last = i;
+        while joined(last + 1) && !blank(last + 1) {
+            last += 1;
+        }
+        Some((first, last))
+    }
+
+    /// The line around glyph `i` as its first and last glyph (triple-click). A line's glyphs are
+    /// consecutive.
+    pub fn line_at(&self, i: usize) -> Option<(usize, usize)> {
+        self.glyphs.get(i)?;
+        let line = self.line_of.get(i)?;
+        let same = |k: usize| self.line_of.get(k) == Some(line);
+        let mut first = i;
+        while first > 0 && same(first - 1) {
+            first -= 1;
+        }
+        let mut last = i;
+        while same(last + 1) {
+            last += 1;
+        }
+        Some((first, last))
+    }
+
     /// Merge the boxes of `range` into one rectangle per line (for highlighting).
     pub fn line_rects(&self, range: std::ops::Range<usize>) -> Vec<[f32; 4]> {
         let mut out: Vec<(u32, [f32; 4])> = Vec::new();
@@ -655,5 +690,25 @@ mod tests {
         let mut v = Vec::new();
         word(&mut v, "每个字", 10.0, 10.0, 9.0);
         assert_eq!(layout(v).plain_text(), "每个字");
+    }
+
+    /// Two lines, "ab cd" and "e fg": words stop at blank glyphs, word gaps and line ends.
+    #[test]
+    fn words_and_lines_around_a_glyph() {
+        let t = PageText {
+            glyphs: Vec::from(["a", "b", " ", "c", "d", "e", "f", "g"].map(|s| TextGlyph { text: s.into(), rect: [0.0; 4] })),
+            line_of: vec![0, 0, 0, 0, 0, 1, 1, 1],
+            space_before: vec![false, false, false, false, false, false, true, false],
+        };
+        assert_eq!(t.word_at(1), Some((0, 1)));
+        assert_eq!(t.word_at(3), Some((3, 4)));
+        assert_eq!(t.word_at(4), Some((3, 4)));
+        assert_eq!(t.word_at(5), Some((5, 5)));
+        assert_eq!(t.word_at(7), Some((6, 7)));
+        assert_eq!(t.line_at(2), Some((0, 4)));
+        assert_eq!(t.line_at(6), Some((5, 7)));
+        assert_eq!(t.word_at(8), None);
+        assert_eq!(t.line_at(8), None);
+        assert_eq!(PageText::default().line_at(0), None);
     }
 }

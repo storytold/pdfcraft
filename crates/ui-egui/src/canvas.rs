@@ -1664,19 +1664,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         sel.head = h;
                     }
                     if resp.double_clicked() && over_text {
-                        if let Some(a) = text.nearest(vx, vy) {
-                            // Expand to the word: stop at inferred spaces, explicit spaces and line ends.
-                            let is_break = |k: usize| text.glyphs[k].text.trim().is_empty();
-                            let mut s0 = a;
-                            while s0 > 0 && !text.space_before[s0] && text.line_of[s0 - 1] == text.line_of[s0] && !is_break(s0 - 1) {
-                                s0 -= 1;
-                            }
-                            let mut e = a;
-                            while e + 1 < text.glyphs.len() && !text.space_before[e + 1] && text.line_of[e + 1] == text.line_of[e] && !is_break(e + 1)
-                            {
-                                e += 1;
-                            }
-                            view.selection = Some(Selection { page: i, anchor: s0, head: e });
+                        if let Some((first, last)) = text.nearest(vx, vy).and_then(|a| text.word_at(a)) {
+                            view.selection = Some(Selection { page: i, anchor: first, head: last });
                         }
                     } else if resp.clicked() && !over_link {
                         view.selection = None;
