@@ -127,7 +127,7 @@ M0 → M1 → M2 → M3 → M4 must happen in order. After M4, M5–M12 can run 
 
 Newest first. One line per session: the date, what moved, and the new overall percentage.
 
-- **2026-10-08 (M14, Simplified Chinese):** Added 204 translations, bringing the catalog from 1,625 to 1,829 entries. PhotoCraft-style coverage checks protect registered commands, All tools labels and UI `tl!` literals; generated history and diagnostic regressions preserve user values. Chinese font delivery remains incomplete: the release-pinned craft-fonts input has no Hans face and the web build only embeds the Japanese UI face (see #112 and #140). Localization remains partial; overall ≈ 30–35% (unchanged).
+- **2026-10-08 (M14, Simplified Chinese):** Added 208 translations, bringing the catalog from 1,625 to 1,833 entries. PhotoCraft-style coverage checks protect registered commands, All tools labels and UI `tl!` literals; generated history and diagnostic regressions preserve user values. Chinese font delivery remains incomplete: the release-pinned craft-fonts input has no Hans face and the web build only embeds the Japanese UI face (see #112 and #140). Localization remains partial; overall ≈ 30–35% (unchanged).
 
 - **2026-10-07 (community, #190):** Create PDF from Images offers embedded resolution, 72 DPI, or custom DPI (1–1200) without resampling. The engine and doc_create share the choice; Windows image context menus open the chooser through --create-images. Overall estimate unchanged (about 30–35%).
 

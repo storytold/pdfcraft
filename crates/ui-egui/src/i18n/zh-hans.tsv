@@ -1841,3 +1841,7 @@
 	Use custom DPI	使用自定义 DPI
 	DPI sets the printed page size without resampling the image.	DPI 用于设置打印页面尺寸，不会对图像重新采样。
 	Create	创建
+	Dynamic XFA form laid out from its template: {pages}, {fields}.	动态 XFA 表单已按模板排版：{pages}，{fields}。
+	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA 表单：字段与 XFA 数据保持同步，以便其他阅读器显示您填写的内容。
+@plural	{n} page|{n} pages	{n} 页
+@plural	{n} field|{n} fields	{n} 个字段

@@ -748,6 +748,9 @@ mod tests {
         assert_eq!(fmt(t("{n} pages selected"), &[("n", "3")]), "已选择 3 页");
         assert_eq!(tr(zh, "CheckBox"), "复选框");
         assert_eq!(tr(zh, "pages"), "页");
+        assert_eq!(trn(zh, 1, "{n} page", "{n} pages"), "1 页");
+        assert_eq!(trn(zh, 0, "{n} field", "{n} fields"), "0 个字段");
+        assert_eq!(trn(zh, 2, "{n} field", "{n} fields"), "2 个字段");
         set_current(Lang::EN);
     }
 
