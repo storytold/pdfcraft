@@ -78,7 +78,7 @@ jobs:
 
       - name: CLI without the MCP server still builds
         if: runner.os == 'Linux'
-        run: cargo check -p printcraft-cli --no-default-features
+        run: cargo check -p pdfcraft-cli --no-default-features
 
   wasm:
     name: wasm32 check

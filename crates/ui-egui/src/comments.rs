@@ -9,12 +9,12 @@
 //!   Reply, Set status, Colour and Delete.
 //! - **Composer:** the floating "Add a comment" card used for new notes, text boxes and edits.
 //!
-//! Everything is turned into `printcraft_engine::Edit`s, queued on the view as `pending_edit` and
+//! Everything is turned into `pdfcraft_engine::Edit`s, queued on the view as `pending_edit` and
 //! applied by the app, so each change is one undo step.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
-use printcraft_engine::{Edit, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
-use printcraft_render::{Annotation, DocInfo};
+use pdfcraft_engine::{Edit, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
+use pdfcraft_render::{Annotation, DocInfo};
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::{self, Tokens};
@@ -211,7 +211,7 @@ impl CommentTool {
             Self::Caret => Shape::Caret { rect: [0.0; 4] },
             Self::ReplaceText => Shape::TextMarkup { kind: Markup::StrikeOut, quads: Vec::new() },
             Self::Eraser => Shape::Ink { strokes: Vec::new() },
-            Self::Attach => Shape::Attachment { at: [0.0; 2], icon: printcraft_engine::AttachIcon::PushPin, file: String::new(), data: Vec::new() },
+            Self::Attach => Shape::Attachment { at: [0.0; 2], icon: pdfcraft_engine::AttachIcon::PushPin, file: String::new(), data: Vec::new() },
         }
     }
 }
@@ -1028,10 +1028,10 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             });
             ui.add_space(6.0);
             let hint = match c.kind {
-                ComposerKind::TextBox | ComposerKind::Callout { .. } => "Type text",
-                ComposerKind::Caret => "Text to insert",
-                ComposerKind::Replace => "Replacement text",
-                _ => "Add a comment",
+                ComposerKind::TextBox | ComposerKind::Callout { .. } => tl!("Type text"),
+                ComposerKind::Caret => tl!("Text to insert"),
+                ComposerKind::Replace => tl!("Replacement text"),
+                _ => tl!("Add a comment"),
             };
             let edit =
                 ui.add(egui::TextEdit::multiline(&mut c.text).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY).id_salt("composer-text"));
@@ -1048,13 +1048,16 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let can_post = !c.text.trim().is_empty() || matches!(c.kind, ComposerKind::Edit(_));
                     if ui
-                        .add_enabled(can_post, egui::Button::new(egui::RichText::new("Post").color(Color32::WHITE)).fill(t.accent).corner_radius(14))
+                        .add_enabled(
+                            can_post,
+                            egui::Button::new(egui::RichText::new(tl!("Post")).color(Color32::WHITE)).fill(t.accent).corner_radius(14),
+                        )
                         .clicked()
                         || (enter && can_post)
                     {
                         post = true;
                     }
-                    if ui.add(egui::Button::new("Cancel").corner_radius(14)).clicked() {
+                    if ui.add(egui::Button::new(tl!("Cancel")).corner_radius(14)).clicked() {
                         cancel = true;
                     }
                 });
@@ -1115,7 +1118,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
 
 /// A text box sized to its text (at most 300 pt wide), hanging from its top-left corner.
 pub fn text_box_rect(at: [f64; 2], text: &str, size: f64) -> [f64; 4] {
-    use printcraft_engine::annot_text::{text_width, wrap};
+    use pdfcraft_engine::annot_text::{text_width, wrap};
     let pad = 2.0;
     let longest = text.lines().map(|l| text_width(l, size)).fold(0.0, f64::max);
     let w = (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0);
@@ -1153,7 +1156,7 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
     match selected {
         Some(a) => {
             let (page, index) = (a.page, a.index);
-            if ui.add_enabled(allowed, egui::Button::new("Edit text…")).clicked() {
+            if ui.add_enabled(allowed, egui::Button::new(tl!("Edit text…"))).clicked() {
                 view.comments.composer = Some(Composer {
                     page,
                     at: [a.rect[2] as f64, a.rect[3] as f64],
@@ -1163,22 +1166,22 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                 });
                 ui.close();
             }
-            if ui.add_enabled(allowed, egui::Button::new("Reply")).clicked() {
+            if ui.add_enabled(allowed, egui::Button::new(tl!("Reply"))).clicked() {
                 view.comments.reveal = true;
                 action = Some(CanvasAction::OpenComments);
                 ui.close();
             }
             ui.add_enabled_ui(allowed, |ui| {
-                ui.menu_button("Set status", |ui| {
+                ui.menu_button(tl!("Set status"), |ui| {
                     for s in [ReviewState::None, ReviewState::Accepted, ReviewState::Cancelled, ReviewState::Completed, ReviewState::Rejected] {
-                        if ui.button(s.name()).clicked() {
+                        if ui.button(tl!(s.name())).clicked() {
                             action =
                                 Some(CanvasAction::Edit(Box::new(Edit::SetAnnotationStatus { page, index, state: s, author: prefs.author.clone() })));
                             ui.close();
                         }
                     }
                 });
-                ui.menu_button("Colour", |ui| {
+                ui.menu_button(tl!("Colour"), |ui| {
                     if let Some(c) = swatch_grid(ui, a.color.map(|c| c.map(f64::from))) {
                         action =
                             Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation { page, index, color: Some(c), opacity: None, width: None })));
@@ -1186,40 +1189,39 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                     }
                 });
             });
-            let thread: Vec<&printcraft_render::Annotation> =
-                info.annotations.iter().filter(|r| a.name.is_some() && r.in_reply_to == a.name).collect();
+            let thread: Vec<&pdfcraft_render::Annotation> = info.annotations.iter().filter(|r| a.name.is_some() && r.in_reply_to == a.name).collect();
             let marked = crate::comments_panel::is_marked(&thread);
-            if ui.add_enabled(allowed, egui::Button::new(if marked { "Remove checkmark" } else { "Mark with checkmark" })).clicked() {
+            if ui.add_enabled(allowed, egui::Button::new(tl!(if marked { "Remove checkmark" } else { "Mark with checkmark" }))).clicked() {
                 action = Some(CanvasAction::Edit(Box::new(Edit::MarkAnnotation { page, index, marked: !marked, author: prefs.author.clone() })));
                 ui.close();
             }
-            if ui.button("Copy text").clicked() {
+            if ui.button(tl!("Copy text")).clicked() {
                 ui.ctx().copy_text(a.contents.clone().unwrap_or_default());
                 ui.close();
             }
             ui.separator();
-            if ui.add_enabled(allowed && !a.locked, egui::Button::new("Delete")).clicked() {
+            if ui.add_enabled(allowed && !a.locked, egui::Button::new(tl!("Delete"))).clicked() {
                 view.comments.selected = None;
                 action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotation { page, index })));
                 ui.close();
             }
-            if ui.add_enabled(allowed, egui::Button::new("Properties…")).clicked() {
+            if ui.add_enabled(allowed, egui::Button::new(tl!("Properties…"))).clicked() {
                 action = Some(CanvasAction::Properties(page, index));
                 ui.close();
             }
-            if ui.add_enabled(tool_for(a).is_some(), egui::Button::new("Make Current Properties Default")).clicked() {
+            if ui.add_enabled(tool_for(a).is_some(), egui::Button::new(tl!("Make Current Properties Default"))).clicked() {
                 view.comments.default_request = Some((page, index));
                 ui.close();
             }
         }
         None => {
             if let Some((page, at)) = view.comments.context_at
-                && ui.add_enabled(allowed, egui::Button::new("Add a sticky note here")).clicked()
+                && ui.add_enabled(allowed, egui::Button::new(tl!("Add a sticky note here"))).clicked()
             {
                 view.comments.composer = Some(Composer { page, at, kind: ComposerKind::Note, text: String::new(), focus: true });
                 ui.close();
             }
-            if ui.button("Comments panel").clicked() {
+            if ui.button(tl!("Comments panel")).clicked() {
                 action = Some(CanvasAction::OpenComments);
                 ui.close();
             }
@@ -1249,7 +1251,7 @@ pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
             if on || resp.hovered() {
                 ui.painter().circle_stroke(r.center(), 11.0, Stroke::new(1.5, SELECT_BLUE));
             }
-            if resp.on_hover_text(*name).clicked() {
+            if resp.on_hover_text(tl!(name)).clicked() {
                 picked = Some(*c);
             }
             if i % 5 == 4 {
@@ -1263,34 +1265,34 @@ pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
 /// The comment tools' extra quick-bar controls: pin, colour, opacity and thickness.
 pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) {
     let style = prefs.style(tool);
-    if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { "Keep tool selected: on" } else { "Keep tool selected" }).clicked() {
+    if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
         prefs.pinned = !prefs.pinned;
     }
     let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
     ui.painter().circle_filled(r.center(), 9.0, color32(style.color));
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(50)));
-    let resp = resp.on_hover_text("Colour");
+    let resp = resp.on_hover_text(tl!("Colour"));
     egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).show(|ui| {
         if let Some(c) = swatch_grid(ui, Some(style.color)) {
             prefs.set_color(tool, c);
             ui.close();
         }
     });
-    let resp = icons::button(ui, "blend", 32.0, false, "Opacity");
+    let resp = icons::button(ui, "blend", 32.0, false, tl!("Opacity"));
     egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_min_width(180.0);
         let mut percent = (style.opacity * 100.0).round();
-        ui.label(egui::RichText::new("Opacity").font(theme::semibold(12.0)));
+        ui.label(egui::RichText::new(tl!("Opacity")).font(theme::semibold(12.0)));
         if ui.add(egui::Slider::new(&mut percent, 10.0..=100.0).step_by(5.0).suffix(" %")).changed() {
             prefs.set_opacity(tool, percent / 100.0);
         }
     });
     if tool.has_width() {
-        let resp = icons::button(ui, "sliders-horizontal", 32.0, false, "Line thickness");
+        let resp = icons::button(ui, "sliders-horizontal", 32.0, false, tl!("Line thickness"));
         egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             ui.set_min_width(180.0);
             let mut w = style.width;
-            ui.label(egui::RichText::new("Line thickness").font(theme::semibold(12.0)));
+            ui.label(egui::RichText::new(tl!("Line thickness")).font(theme::semibold(12.0)));
             if ui.add(egui::Slider::new(&mut w, 0.5..=12.0).step_by(0.5).suffix(" pt")).changed() {
                 prefs.set_width(tool, w);
             }
@@ -1317,7 +1319,7 @@ mod tests {
     fn tools_round_trip_through_their_commands() {
         for t in ALL {
             assert_eq!(CommentTool::from_command(t.command()), Some(t));
-            assert!(printcraft_engine::commands::command(t.command()).is_some(), "{} is registered", t.command());
+            assert!(pdfcraft_engine::commands::command(t.command()).is_some(), "{} is registered", t.command());
             assert!(icons::exists(t.icon()), "icon {}", t.icon());
             assert!(GROUPS[t.group()].contains(&t));
         }

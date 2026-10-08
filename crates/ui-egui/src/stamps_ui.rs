@@ -7,7 +7,7 @@ use egui::{Align, Layout};
 use serde::{Deserialize, Serialize};
 
 use crate::theme::{self, Tokens};
-use crate::{Dialog, PrintCraftApp, QuickTool, widgets};
+use crate::{Dialog, PdfCraftApp, QuickTool, widgets};
 
 /// Stamp files larger than this aren't kept in the library (it lives in the app's settings).
 pub const MAX_STAMP_BYTES: usize = 4 << 20;
@@ -50,7 +50,7 @@ pub struct StampDraft {
     pub name: String,
 }
 
-pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (bool, bool) {
+pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let categories: Vec<String> = {
         let mut c: Vec<String> = app.custom_stamps.iter().map(|s| s.category.clone()).collect();
         c.sort();
@@ -58,14 +58,14 @@ pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens
         c
     };
     let d = &mut app.stamp_draft;
-    ui.label(egui::RichText::new("Create Custom Stamp").font(theme::semibold(18.0)));
+    ui.label(egui::RichText::new(tl!("Create Custom Stamp")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
-    ui.label(egui::RichText::new(format!("From {}", d.file)).color(t.text_muted));
+    ui.label(egui::RichText::new(crate::i18n::fmt(tl!("From {file}"), &[("file", &d.file)])).color(t.text_muted));
     ui.add_space(8.0);
     egui::Grid::new("stamp-create").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
-        let l = ui.label("Category:");
+        let l = ui.label(tl!("Category:"));
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut d.category).desired_width(200.0).hint_text("e.g. My stamps")).labelled_by(l.id);
+            ui.add(egui::TextEdit::singleline(&mut d.category).desired_width(200.0).hint_text(tl!("e.g. My stamps"))).labelled_by(l.id);
             if !categories.is_empty() {
                 egui::ComboBox::from_id_salt("stamp-categories").selected_text("").width(24.0).show_ui(ui, |ui| {
                     for c in &categories {
@@ -77,7 +77,7 @@ pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens
             }
         });
         ui.end_row();
-        let l = ui.label("Name:");
+        let l = ui.label(tl!("Name:"));
         ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(200.0)).labelled_by(l.id);
         ui.end_row();
     });
@@ -85,10 +85,10 @@ pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens
     let ok = !d.category.trim().is_empty() && !d.name.trim().is_empty();
     let (mut save, mut cancel) = (false, false);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, "OK", true)).inner.clicked() {
+        if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
             save = true;
         }
-        if widgets::pill_button(ui, "Cancel", false).clicked() {
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
             cancel = true;
         }
     });
@@ -96,8 +96,8 @@ pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens
 }
 
 /// The Custom stamps section of the stamps palette.
-pub(crate) fn palette_section(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    widgets::section_title(ui, "Custom");
+pub(crate) fn palette_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    widgets::section_title(ui, tl!("Custom"));
     let mut remove = None;
     let mut categories: Vec<String> = app.custom_stamps.iter().map(|s| s.category.clone()).collect();
     categories.sort();
@@ -111,7 +111,7 @@ pub(crate) fn palette_section(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &To
                 app.quick_tool = QuickTool::CustomStamp(i);
             }
             resp.context_menu(|ui| {
-                if ui.button("Delete stamp").clicked() {
+                if ui.button(tl!("Delete stamp")).clicked() {
                     remove = Some(i);
                     ui.close();
                 }
@@ -123,12 +123,12 @@ pub(crate) fn palette_section(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &To
         app.quick_tool = QuickTool::Select;
     }
     ui.add_space(4.0);
-    if widgets::pill_button(ui, "Create custom stamp…", false).on_hover_text("From a PDF page or an image").clicked() {
+    if widgets::pill_button(ui, tl!("Create custom stamp…"), false).on_hover_text(tl!("From a PDF page or an image")).clicked() {
         app.pick_stamp_file();
     }
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Create ▸ choose a PDF or an image for a new custom stamp.
     pub(crate) fn pick_stamp_file(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -137,8 +137,8 @@ impl PrintCraftApp {
                 Some(p) if [".png", ".jpg", ".pdf"].iter().any(|e| p.ends_with(e)) => Some(std::path::PathBuf::from(p)),
                 Some(_) => None,
                 None => rfd::FileDialog::new()
-                    .add_filter("PDF or image", &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                    .set_title("Select a file for the stamp")
+                    .add_filter(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
+                    .set_title(tl!("Select a file for the stamp"))
                     .pick_file(),
             };
             let Some(path) = picked else { return };
@@ -147,17 +147,17 @@ impl PrintCraftApp {
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     self.start_custom_stamp(name, bytes);
                 }
-                Err(e) => self.notify(format!("Couldn't read {}: {e}", path.display())),
+                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
             }
         }
         #[cfg(target_arch = "wasm32")]
-        self.notify("Custom stamps arrive on the web with file pickers for images");
+        self.notify_tr("Custom stamps arrive on the web with file pickers for images");
     }
 
     /// Open the Create Custom Stamp dialog for a file.
     pub fn start_custom_stamp(&mut self, file: String, bytes: Vec<u8>) {
         if bytes.len() > MAX_STAMP_BYTES {
-            self.notify(format!("{file} is too large for a stamp (at most {} MB)", MAX_STAMP_BYTES >> 20));
+            self.notify_fmt("{file} is too large for a stamp (at most {n} MB)", &[("file", &file), ("n", &(MAX_STAMP_BYTES >> 20).to_string())]);
             return;
         }
         let name = file.rsplit_once('.').map_or(file.as_str(), |(s, _)| s).to_string();

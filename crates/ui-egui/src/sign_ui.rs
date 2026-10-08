@@ -5,12 +5,12 @@
 use std::path::PathBuf;
 
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
-use printcraft_engine::sign::{self, Appearance, Certificate, DigitalId, Modification, Name, PrivateKey};
-use printcraft_engine::{SignOptions, SignatureInfo, SignatureStatus};
+use pdfcraft_engine::sign::{self, Appearance, Certificate, DigitalId, Modification, Name, PrivateKey};
+use pdfcraft_engine::{SignOptions, SignatureInfo, SignatureStatus};
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, icons, widgets};
+use crate::{PdfCraftApp, icons, widgets};
 
 /// A digital ID the app knows about (Acrobat: Digital ID files). The file stays where it is;
 /// its password is asked for at each signing.
@@ -123,7 +123,7 @@ pub struct SignView {
 }
 
 /// Drag a signature rectangle on one page (Digitally sign, Certify (visible signature)).
-pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, page: usize, info: &printcraft_render::DocInfo, view: &mut DocView) {
+pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, page: usize, info: &pdfcraft_render::DocInfo, view: &mut DocView) {
     let pointer = ui.input(|i| i.pointer.hover_pos());
     let origin = ui.input(|i| i.pointer.press_origin());
     if pointer.is_some_and(|p| xf.rect.contains(p)) {
@@ -157,7 +157,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
     }
 }
 
-/// Where new digital IDs are saved: next to the recovery folder (`…/PrintCraft/Digital IDs`).
+/// Where new digital IDs are saved: next to the recovery folder (`…/PdfCraft/Digital IDs`).
 fn id_dir() -> Option<PathBuf> {
     crate::recovery::RecoveryStore::default_dir().and_then(|d| d.parent().map(|p| p.join("Digital IDs")))
 }
@@ -180,7 +180,7 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
     }
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Start signing: the rectangle (or field) is known; show Sign with a Digital ID.
     pub fn start_signing(&mut self, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>) {
         self.refresh_keychain_ids();
@@ -199,7 +199,7 @@ impl PrintCraftApp {
                         self.digital_ids.push(entry_for(&sign::keychain::reference(&id.certificate), &id.certificate));
                     }
                 }
-                Err(e) => self.notify(format!("The Keychain's digital IDs couldn't be listed: {e}")),
+                Err(e) => self.notify_fmt("The Keychain's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
             }
         }
     }
@@ -309,7 +309,7 @@ impl PrintCraftApp {
             self.views[i].invalidate_content();
         }
         self.right = Some(crate::RightPanel::Signatures);
-        self.notify(format!("Signed and saved to {}", path.display()));
+        self.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]);
         Ok(())
     }
 
@@ -331,7 +331,7 @@ impl PrintCraftApp {
                 self.views.push(DocView::new(new, &doc.info));
                 self.active = Some(self.views.len() - 1);
             }
-            Err(e) => self.notify(format!("Couldn't open revision {n}: {e}")),
+            Err(e) => self.notify_fmt("Couldn't open revision {n}: {e}", &[("n", &n.to_string()), ("e", &e.to_string())]),
         }
     }
 
@@ -347,13 +347,13 @@ impl PrintCraftApp {
                 self.views.push(DocView::new(new, &doc.info));
                 self.active = Some(self.views.len() - 1);
             }
-            Err(e) => self.notify(format!("Couldn't open the signed version: {e}")),
+            Err(e) => self.notify_fmt("Couldn't open the signed version: {e}", &[("e", &e.to_string())]),
         }
     }
 }
 
 /// Draw the signing dialogs; returns `true` when the dialog should close.
-pub(crate) fn dialog(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+pub(crate) fn dialog(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let Some(step) = app.sign_draft.as_ref().map(|d| d.step) else { return true };
     match step {
         SignStep::Choose => choose(ui, app, t),
@@ -363,7 +363,7 @@ pub(crate) fn dialog(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> 
 }
 
 fn title(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text).font(theme::semibold(18.0)));
+    ui.label(egui::RichText::new(tl!(text)).font(theme::semibold(18.0)));
     ui.add_space(4.0);
     ui.separator();
     ui.add_space(8.0);
@@ -376,9 +376,9 @@ fn error(ui: &mut egui::Ui, err: &Option<String>) {
     }
 }
 
-fn choose(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     title(ui, "Sign with a Digital ID");
-    ui.label("Choose the digital ID that you want to use for signing:");
+    ui.label(tl!("Choose the digital ID that you want to use for signing:"));
     ui.add_space(6.0);
     let ids = app.digital_ids.clone();
     let Some(d) = app.sign_draft.as_mut() else { return true };
@@ -399,11 +399,13 @@ fn choose(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
             icons::paint(ui, Rect::from_min_size(rect.min + vec2(10.0, 15.0), vec2(20.0, 20.0)), "badge-check", 18.0, t.accent);
             ui.painter().text(rect.min + vec2(40.0, 9.0), egui::Align2::LEFT_TOP, &e.name, theme::semibold(13.0), t.text);
             let sub = format!(
-                "{}{}Issued by: {}, Expires: {}",
-                if e.path.starts_with("keychain:") { "Keychain  ·  " } else { "" },
-                if e.email.is_empty() { String::new() } else { format!("{}  ·  ", e.email) },
-                e.issuer,
-                e.expires
+                "{keychain}{email}{issued}{issuer}{expires}{date}",
+                keychain = if e.path.starts_with("keychain:") { tl!("Keychain  ·  ").to_string() } else { String::new() },
+                email = if e.email.is_empty() { String::new() } else { format!("{}  ·  ", e.email) },
+                issued = tl!("Issued by: "),
+                issuer = e.issuer,
+                expires = tl!(", Expires: "),
+                date = e.expires,
             );
             ui.painter().text(rect.min + vec2(40.0, 28.0), egui::Align2::LEFT_TOP, sub, theme::regular(11.5), t.text_muted);
             if resp.clicked() {
@@ -414,21 +416,21 @@ fn choose(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
             }
         }
         if ids.is_empty() {
-            ui.label(egui::RichText::new("No digital IDs yet.").color(t.text_muted));
+            ui.label(egui::RichText::new(tl!("No digital IDs yet.")).color(t.text_muted));
         }
     });
     ui.add_space(10.0);
     ui.horizontal(|ui| {
-        if widgets::pill_button(ui, "Configure New Digital ID", false).clicked() {
+        if widgets::pill_button(ui, tl!("Configure New Digital ID"), false).clicked() {
             d.step = SignStep::Configure;
             d.error = None;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.add_enabled_ui(d.selected.is_some(), |ui| widgets::pill_button(ui, "Continue", true)).inner.clicked() {
+            if ui.add_enabled_ui(d.selected.is_some(), |ui| widgets::pill_button(ui, tl!("Continue"), true)).inner.clicked() {
                 d.step = SignStep::SignAs;
                 d.error = None;
             }
-            if widgets::pill_button(ui, "Cancel", false).clicked() {
+            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
                 close = true;
             }
         });
@@ -436,63 +438,63 @@ fn choose(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
     close
 }
 
-fn configure(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     title(ui, "Configure a Digital ID for Signing");
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let mut close = false;
     let mut go = false;
-    ui.radio_value(&mut d.new_id.create, false, "Use a Digital ID from a file");
-    ui.radio_value(&mut d.new_id.create, true, "Create a new Digital ID (self-signed, saved to a password-protected file)");
+    ui.radio_value(&mut d.new_id.create, false, tl!("Use a Digital ID from a file"));
+    ui.radio_value(&mut d.new_id.create, true, tl!("Create a new Digital ID (self-signed, saved to a password-protected file)"));
     ui.add_space(8.0);
     let n = &mut d.new_id;
     if n.create {
         egui::Grid::new("new-id").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             for (label, value) in [
-                ("Name", &mut n.name),
-                ("Organizational Unit", &mut n.unit),
-                ("Organization Name", &mut n.organization),
-                ("Email Address", &mut n.email),
+                (tl!("Name"), &mut n.name),
+                (tl!("Organizational Unit"), &mut n.unit),
+                (tl!("Organization Name"), &mut n.organization),
+                (tl!("Email Address"), &mut n.email),
             ] {
                 let l = ui.label(label);
                 ui.add(egui::TextEdit::singleline(value).desired_width(260.0)).labelled_by(l.id);
                 ui.end_row();
             }
-            let l = ui.label("Country/Region");
+            let l = ui.label(tl!("Country/Region"));
             ui.add(egui::TextEdit::singleline(&mut n.country).hint_text("US").char_limit(2).desired_width(60.0)).labelled_by(l.id);
             ui.end_row();
-            ui.label("Key Algorithm");
+            ui.label(tl!("Key Algorithm"));
             egui::ComboBox::from_id_salt("key-alg").selected_text(KEY_ALGORITHMS[n.key].0).show_ui(ui, |ui| {
                 for (i, (label, _)) in KEY_ALGORITHMS.iter().enumerate() {
                     ui.selectable_value(&mut n.key, i, *label);
                 }
             });
             ui.end_row();
-            let l = ui.label("Password");
+            let l = ui.label(tl!("Password"));
             ui.add(egui::TextEdit::singleline(&mut n.password).password(true).desired_width(200.0)).labelled_by(l.id);
             ui.end_row();
-            let l = ui.label("Confirm Password");
+            let l = ui.label(tl!("Confirm Password"));
             ui.add(egui::TextEdit::singleline(&mut n.confirm).password(true).desired_width(200.0)).labelled_by(l.id);
             ui.end_row();
         });
         ui.label(
-            egui::RichText::new("Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.")
+            egui::RichText::new(tl!("Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others."))
                 .small()
                 .color(t.text_muted),
         );
     } else {
         egui::Grid::new("id-file").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-            let l = ui.label("File (.p12, .pfx)");
+            let l = ui.label(tl!("File (.p12, .pfx)"));
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut n.file).desired_width(220.0)).labelled_by(l.id);
                 #[cfg(not(target_arch = "wasm32"))]
-                if ui.button("Browse…").clicked()
-                    && let Some(p) = rfd::FileDialog::new().add_filter("Digital ID", &["p12", "pfx"]).pick_file()
+                if ui.button(tl!("Browse…")).clicked()
+                    && let Some(p) = rfd::FileDialog::new().add_filter(tl!("Digital ID"), &["p12", "pfx"]).pick_file()
                 {
                     n.file = p.to_string_lossy().into_owned();
                 }
             });
             ui.end_row();
-            let l = ui.label("Password");
+            let l = ui.label(tl!("Password"));
             ui.add(egui::TextEdit::singleline(&mut n.file_password).password(true).desired_width(200.0)).labelled_by(l.id);
             ui.end_row();
         });
@@ -500,15 +502,15 @@ fn configure(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
     ui.add_space(6.0);
     error(ui, &d.error);
     ui.horizontal(|ui| {
-        if !app.digital_ids.is_empty() && widgets::pill_button(ui, "Back", false).clicked() {
+        if !app.digital_ids.is_empty() && widgets::pill_button(ui, tl!("Back"), false).clicked() {
             d.step = SignStep::Choose;
             d.error = None;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, if d.new_id.create { "Save" } else { "Continue" }, true).clicked() {
+            if widgets::pill_button(ui, if d.new_id.create { tl!("Save") } else { tl!("Continue") }, true).clicked() {
                 go = true;
             }
-            if widgets::pill_button(ui, "Cancel", false).clicked() {
+            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
                 close = true;
             }
         });
@@ -560,41 +562,47 @@ fn preview(ui: &mut egui::Ui, t: &Tokens, name: &str, d: &SignDraft) {
     ui.painter().galley(egui::pos2(x, inner.center().y - galley.size().y / 2.0), galley, Color32::BLACK);
 }
 
-fn sign_as(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let ids = app.digital_ids.clone();
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let Some(entry) = d.selected.and_then(|i| ids.get(i)).cloned() else {
         d.step = SignStep::Choose;
         return false;
     };
-    title(ui, &format!("{} as \"{}\"", if d.certify.is_some() { "Certify" } else { "Sign" }, entry.name));
+    title(
+        ui,
+        &crate::i18n::fmt(
+            tl!("{verb} as \"{name}\""),
+            &[("verb", if d.certify.is_some() { tl!("Certify") } else { tl!("Sign") }), ("name", &entry.name)],
+        ),
+    );
     let in_keychain = entry.path.starts_with("keychain:");
     let mut close = false;
     let mut go = false;
     if d.rect.is_some() || d.field.is_some() {
-        ui.label(egui::RichText::new("Appearance").font(theme::semibold(12.5)));
+        ui.label(egui::RichText::new(tl!("Appearance")).font(theme::semibold(12.5)));
         preview(ui, t, &entry.name, d);
         ui.horizontal_wrapped(|ui| {
             let a = &mut d.appearance;
-            ui.checkbox(&mut a.name, "Name");
-            ui.checkbox(&mut a.date, "Date");
-            ui.checkbox(&mut a.reason, "Reason");
-            ui.checkbox(&mut a.location, "Location");
-            ui.checkbox(&mut a.distinguished_name, "Distinguished name");
-            ui.checkbox(&mut a.labels, "Labels");
+            ui.checkbox(&mut a.name, tl!("Name"));
+            ui.checkbox(&mut a.date, tl!("Date"));
+            ui.checkbox(&mut a.reason, tl!("Reason"));
+            ui.checkbox(&mut a.location, tl!("Location"));
+            ui.checkbox(&mut a.distinguished_name, tl!("Distinguished name"));
+            ui.checkbox(&mut a.labels, tl!("Labels"));
         });
         ui.add_space(6.0);
     } else {
-        ui.label(egui::RichText::new("The signature will be invisible.").color(t.text_muted));
+        ui.label(egui::RichText::new(tl!("The signature will be invisible.")).color(t.text_muted));
     }
     egui::Grid::new("sign-as").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
         if d.certify.is_some() {
-            ui.label("Permitted actions after certifying");
+            ui.label(tl!("Permitted actions after certifying"));
             let mut p = d.certify.unwrap_or(2);
             let label = |p: u8| match p {
-                1 => "No changes allowed",
-                3 => "Annotations, form fill-in, and digital signatures",
-                _ => "Form fill-in and digital signatures",
+                1 => tl!("No changes allowed"),
+                3 => tl!("Annotations, form fill-in, and digital signatures"),
+                _ => tl!("Form fill-in and digital signatures"),
             };
             egui::ComboBox::from_id_salt("certify-p").selected_text(label(p)).width(300.0).show_ui(ui, |ui| {
                 for v in [1u8, 2, 3] {
@@ -604,19 +612,19 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
             d.certify = Some(p);
             ui.end_row();
         }
-        let l = ui.label("Reason");
-        ui.add(egui::TextEdit::singleline(&mut d.reason).hint_text("Optional").desired_width(260.0)).labelled_by(l.id);
+        let l = ui.label(tl!("Reason"));
+        ui.add(egui::TextEdit::singleline(&mut d.reason).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
         ui.end_row();
-        let l = ui.label("Location");
-        ui.add(egui::TextEdit::singleline(&mut d.location).hint_text("Optional").desired_width(260.0)).labelled_by(l.id);
+        let l = ui.label(tl!("Location"));
+        ui.add(egui::TextEdit::singleline(&mut d.location).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
         ui.end_row();
         if in_keychain {
             ui.label("");
             ui.label(
-                egui::RichText::new("The key is in the macOS Keychain, which may ask to allow PrintCraft to use it.").small().color(t.text_muted),
+                egui::RichText::new(tl!("The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.")).small().color(t.text_muted),
             );
         } else {
-            let l = ui.label("Digital ID password");
+            let l = ui.label(tl!("Digital ID password"));
             let r = ui.add(egui::TextEdit::singleline(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 go = true;
@@ -627,15 +635,15 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
     ui.add_space(6.0);
     error(ui, &d.error);
     ui.horizontal(|ui| {
-        if widgets::pill_button(ui, "Back", false).clicked() {
+        if widgets::pill_button(ui, tl!("Back"), false).clicked() {
             d.step = SignStep::Choose;
             d.error = None;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, "Sign", true).clicked() {
+            if widgets::pill_button(ui, tl!("Sign"), true).clicked() {
                 go = true;
             }
-            if widgets::pill_button(ui, "Cancel", false).clicked() {
+            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
                 close = true;
             }
         });
@@ -656,8 +664,10 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
     close
 }
 
-/// The message bar for signed documents: (icon, colour, text, certified).
-pub(crate) fn banner(sigs: &[SignatureInfo]) -> Option<(&'static str, Color32, String)> {
+/// The message bar for signed documents: (icon, colour, template, argument).
+/// The template renders through [`crate::i18n::tr_fmt`] at the call site, so the bar follows
+/// the UI language; names inside `argument` stay as they are.
+pub(crate) fn banner(sigs: &[SignatureInfo]) -> Option<(&'static str, Color32, &'static str, String)> {
     let signed: Vec<&SignatureInfo> = sigs.iter().filter(|s| s.signed).collect();
     if signed.is_empty() {
         return None;
@@ -669,14 +679,14 @@ pub(crate) fn banner(sigs: &[SignatureInfo]) -> Option<(&'static str, Color32, S
             let org = x.subject.organization().map(|o| format!(", {o}")).unwrap_or_default();
             format!("{}{org}, certificate issued by {}.", x.display_name(), x.issuer.common_name().unwrap_or("an unknown issuer"))
         });
-        return Some(("badge-check", Color32::from_rgb(0x14, 0x73, 0xE6), format!("Certified by {}", by.unwrap_or_default())));
+        return Some(("badge-check", Color32::from_rgb(0x14, 0x73, 0xE6), "Certified by {by}", by.unwrap_or_default()));
     }
     Some(if signed.iter().any(|s| s.status == SignatureStatus::Invalid) {
-        ("circle-x", Color32::from_rgb(0xD7, 0x37, 0x3F), "At least one signature is invalid.".into())
+        ("circle-x", Color32::from_rgb(0xD7, 0x37, 0x3F), "At least one signature is invalid.", String::new())
     } else if signed.iter().all(|s| s.status == SignatureStatus::Valid) {
-        ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78), "Signed and all signatures are valid.".into())
+        ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78), "Signed and all signatures are valid.", String::new())
     } else {
-        ("triangle-alert", Color32::from_rgb(0xE6, 0x86, 0x19), "At least one signature has problems.".into())
+        ("triangle-alert", Color32::from_rgb(0xE6, 0x86, 0x19), "At least one signature has problems.", String::new())
     })
 }
 
@@ -709,7 +719,7 @@ pub enum PanelAction {
 pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expanded: &mut Vec<String>) -> Option<PanelAction> {
     let mut action = None;
     ui.horizontal(|ui| {
-        if widgets::pill_button(ui, "Validate all", false).clicked() {
+        if widgets::pill_button(ui, tl!("Validate all"), false).clicked() {
             action = Some(PanelAction::Validate);
         }
     });
@@ -719,7 +729,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
         ui.vertical_centered(|ui| {
             ui.add(icons::image("signature", 32.0, t.text_faint));
             ui.add_space(6.0);
-            ui.label(egui::RichText::new("This document has no signatures.").color(t.text_muted));
+            ui.label(egui::RichText::new(tl!("This document has no signatures.")).color(t.text_muted));
         });
         return action;
     }
@@ -760,16 +770,16 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
         egui::Frame::NONE.inner_margin(egui::Margin { left: 44, right: 4, top: 2, bottom: 8 }).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 3.0;
             if !s.signed {
-                if widgets::pill_button(ui, "Sign this field…", true).clicked() {
+                if widgets::pill_button(ui, tl!("Sign this field…"), true).clicked() {
                     action = Some(PanelAction::Sign(s.field.clone()));
                 }
                 return;
             }
             ui.label(
                 egui::RichText::new(match s.status {
-                    SignatureStatus::Valid => "Signature is valid:",
-                    SignatureStatus::Unknown => "Signature validity is UNKNOWN:",
-                    SignatureStatus::Invalid => "Signature is INVALID:",
+                    SignatureStatus::Valid => tl!("Signature is valid:"),
+                    SignatureStatus::Unknown => tl!("Signature validity is UNKNOWN:"),
+                    SignatureStatus::Invalid => tl!("Signature is INVALID:"),
                 })
                 .font(theme::semibold(12.0)),
             );
@@ -777,9 +787,9 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
                 ui.add(egui::Label::new(egui::RichText::new(format!("• {line}")).font(theme::regular(11.5)).color(t.text_muted)).wrap());
             }
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("Signature Details").font(theme::semibold(12.0)));
+            ui.label(egui::RichText::new(tl!("Signature Details")).font(theme::semibold(12.0)));
             let row = |ui: &mut egui::Ui, k: &str, v: &str| {
-                ui.add(egui::Label::new(egui::RichText::new(format!("{k}: {v}")).font(theme::regular(11.5))).wrap());
+                ui.add(egui::Label::new(egui::RichText::new(format!("{}: {v}", tl!(k))).font(theme::regular(11.5))).wrap());
             };
             if let Some(r) = &s.reason {
                 row(ui, "Reason", r);
@@ -802,10 +812,13 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
                 Some(p) => {
                     let link = ui.add(
                         egui::Label::new(
-                            egui::RichText::new(format!("Field: {} on page {}", s.field, p + 1))
-                                .font(theme::regular(11.5))
-                                .color(t.accent_text)
-                                .underline(),
+                            egui::RichText::new(crate::i18n::fmt(
+                                tl!("Field: {field} on page {p}"),
+                                &[("field", &s.field), ("p", &(p + 1).to_string())],
+                            ))
+                            .font(theme::regular(11.5))
+                            .color(t.accent_text)
+                            .underline(),
                         )
                         .sense(egui::Sense::click()),
                     );
@@ -819,22 +832,22 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
             ui.horizontal_wrapped(|ui| {
                 if let Some(c) = s.chain.last().or(s.certificate.as_ref())
                     && s.status == SignatureStatus::Unknown
-                    && ui.button("Add to trusted certificates").clicked()
+                    && ui.button(tl!("Add to trusted certificates")).clicked()
                 {
                     action = Some(PanelAction::Trust(Box::new(c.clone())));
                 }
-                if ui.button("View signed version").clicked() {
+                if ui.button(tl!("View signed version")).clicked() {
                     action = Some(PanelAction::ViewSigned(s.signed_len));
                 }
                 if let Some(c) = &s.certificate
-                    && ui.button("Show certificate…").clicked()
+                    && ui.button(tl!("Show certificate…")).clicked()
                 {
                     let mut chain = vec![c.clone()];
                     chain.extend(s.chain.iter().filter(|x| x.raw != c.raw).cloned());
                     action = Some(PanelAction::ViewCertificate(chain));
                 }
                 if let Some(c) = &s.certificate
-                    && ui.button("Export certificate…").clicked()
+                    && ui.button(tl!("Export certificate…")).clicked()
                 {
                     action = Some(PanelAction::ExportCertificate(Box::new(c.clone())));
                 }
@@ -888,7 +901,7 @@ pub(crate) enum CertAction {
 /// The Certificate Viewer dialog: the chain on the left, the selected certificate's tabs.
 pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Certificate], t: &Tokens) -> (bool, Option<CertAction>) {
     title(ui, "Certificate Viewer");
-    ui.label(egui::RichText::new("This dialog shows the details of a certificate and its chain.").color(t.text_muted));
+    ui.label(egui::RichText::new(tl!("This dialog shows the details of a certificate and its chain.")).color(t.text_muted));
     ui.add_space(8.0);
     let mut action = None;
     v.selected = v.selected.min(v.chain.len().saturating_sub(1));
@@ -911,7 +924,7 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
             ui.set_width(440.0);
             let Some(c) = v.chain.get(v.selected).cloned() else { return };
             ui.horizontal(|ui| {
-                for (tab, label) in [(CertTab::Summary, "Summary"), (CertTab::Details, "Details"), (CertTab::Trust, "Trust")] {
+                for (tab, label) in [(CertTab::Summary, tl!("Summary")), (CertTab::Details, tl!("Details")), (CertTab::Trust, tl!("Trust"))] {
                     if widgets::pill_button(ui, label, v.tab == tab).clicked() {
                         v.tab = tab;
                     }
@@ -921,7 +934,7 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
             let grid = |ui: &mut egui::Ui, rows: Vec<(&str, String)>| {
                 egui::Grid::new(("cert-rows", v.tab as u8)).num_columns(2).spacing([12.0, 5.0]).show(ui, |ui| {
                     for (k, val) in rows {
-                        ui.label(egui::RichText::new(k).color(t.text_muted));
+                        ui.label(egui::RichText::new(tl!(k)).color(t.text_muted));
                         ui.add(egui::Label::new(val).wrap());
                         ui.end_row();
                     }
@@ -935,7 +948,7 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
                         ("Issued by", c.issuer.display()),
                         ("Valid from", c.not_before.to_string()),
                         ("Valid to", c.not_after.to_string()),
-                        ("Intended usage", c.key_usage.map(key_usage).unwrap_or_else(|| "Any".into())),
+                        ("Intended usage", c.key_usage.map(key_usage).unwrap_or_else(|| tl!("Any").to_string())),
                     ],
                 ),
                 CertTab::Details => grid(
@@ -949,8 +962,8 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
                         ("Validity ends", c.not_after.to_string()),
                         ("Public key", c.public_key.describe()),
                         ("Basic constraints", if c.is_ca { "Certificate authority".into() } else { "End entity".into() }),
-                        ("Key usage", c.key_usage.map(key_usage).unwrap_or_else(|| "Not present".into())),
-                        ("Self-signed", if c.is_self_signed() { "Yes".into() } else { "No".into() }),
+                        ("Key usage", c.key_usage.map(key_usage).unwrap_or_else(|| tl!("Not present").to_string())),
+                        ("Self-signed", if c.is_self_signed() { tl!("Yes").to_string() } else { tl!("No").to_string() }),
                         ("SHA-1 digest", hex(&sign::keys::DigestAlg::Sha1.digest(&[&c.raw]))),
                         ("SHA-256 digest", hex(&sign::keys::DigestAlg::Sha256.digest(&[&c.raw]))),
                     ],
@@ -959,27 +972,27 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
                     let is_trusted = trusted.iter().any(|x| x.raw == c.raw);
                     let anchored = v.chain.iter().any(|x| trusted.iter().any(|y| y.raw == x.raw));
                     ui.label(if is_trusted {
-                        "This certificate is in your list of trusted certificates."
+                        tl!("This certificate is in your list of trusted certificates.")
                     } else if anchored {
-                        "This certificate is trusted through a certificate above it in the chain."
+                        tl!("This certificate is trusted through a certificate above it in the chain.")
                     } else {
-                        "This certificate is not trusted. Signatures made with it show an unknown identity."
+                        tl!("This certificate is not trusted. Signatures made with it show an unknown identity.")
                     });
                     ui.add_space(8.0);
-                    if !is_trusted && widgets::pill_button(ui, "Add to Trusted Certificates", false).clicked() {
+                    if !is_trusted && widgets::pill_button(ui, tl!("Add to Trusted Certificates"), false).clicked() {
                         action = Some(CertAction::Trust(Box::new(c.clone())));
                     }
                 }
             }
             ui.add_space(8.0);
-            if widgets::pill_button(ui, "Export…", false).clicked() {
+            if widgets::pill_button(ui, tl!("Export…"), false).clicked() {
                 action = Some(CertAction::Export(Box::new(c.clone())));
             }
         });
     });
     ui.add_space(10.0);
     let mut close = false;
-    ui.horizontal(|ui| ui.with_layout(Layout::right_to_left(Align::Center), |ui| close = widgets::pill_button(ui, "OK", true).clicked()));
+    ui.horizontal(|ui| ui.with_layout(Layout::right_to_left(Align::Center), |ui| close = widgets::pill_button(ui, tl!("OK"), true).clicked()));
     (close, action)
 }
 

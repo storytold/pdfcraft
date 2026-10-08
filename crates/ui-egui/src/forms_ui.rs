@@ -5,8 +5,8 @@
 //! and list boxes open a list of their options. Every change is one undoable engine edit.
 
 use egui::{Color32, CornerRadius, Rect, Stroke, vec2};
-use printcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, field_flags};
-use printcraft_render::DocInfo;
+use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, field_flags};
+use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
@@ -35,9 +35,21 @@ pub struct Focus {
 pub struct FormView {
     pub focus: Option<Focus>,
     /// A message for the app to show (e.g. "buttons run JavaScript").
-    pub notice: Option<String>,
+    pub notice: Option<FormNotice>,
     /// A push button was clicked: (its field name, what it does).
-    pub button: Option<(String, printcraft_engine::form_scripts::ButtonAction)>,
+    pub button: Option<(String, pdfcraft_engine::form_scripts::ButtonAction)>,
+}
+
+/// A form message for the app to show, with document data kept separate so the visible
+/// text follows the UI language.
+#[derive(Clone, Debug)]
+pub enum FormNotice {
+    /// Filling is blocked by the document's security settings.
+    Security,
+    /// A read-only field was clicked (its name).
+    ReadOnly(String),
+    /// A push button with no action was clicked (its name).
+    NoAction(String),
 }
 
 fn widget_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
@@ -76,11 +88,17 @@ pub(crate) fn page_input(
     let pointer = ui.input(|i| i.pointer.hover_pos());
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
     let hit = form.iter().find_map(|f| {
-        f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && widget_rect(xf, info, page, w.rect).contains(p)).map(|(i, w)| (f, i, w))
+        f.widgets
+            .iter()
+            .enumerate()
+            .find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
+            .map(|(i, w)| (f, i, w))
     });
     let Some((f, wi, w)) = hit else { return false };
-    // Empty signature fields are signed by clicking them (Use a certificate).
-    let usable = allowed && (fillable(f) || f.kind == FormFieldKind::Signature);
+    // Empty signature fields are signed by clicking them (Use a certificate); push buttons run
+    // their action.
+    let pressable = f.kind == FormFieldKind::PushButton && !f.read_only() && f.button.is_some();
+    let usable = allowed && (fillable(f) || pressable || f.kind == FormFieldKind::Signature);
     ui.ctx().set_cursor_icon(match (usable, f.kind) {
         (false, _) => egui::CursorIcon::NotAllowed,
         (true, FormFieldKind::Text) => egui::CursorIcon::Text,
@@ -90,14 +108,14 @@ pub(crate) fn page_input(
         return resp.is_pointer_button_down_on();
     }
     if !allowed {
-        view.forms.notice = Some("The document's security settings don't allow filling in form fields".into());
+        view.forms.notice = Some(FormNotice::Security);
         return true;
     }
     match f.kind {
-        _ if f.read_only() => view.forms.notice = Some(format!("{} is read-only", f.name)),
+        _ if f.read_only() => view.forms.notice = Some(FormNotice::ReadOnly(f.name.clone())),
         FormFieldKind::PushButton => match &f.button {
             Some(a) => view.forms.button = Some((f.name.clone(), a.clone())),
-            None => view.forms.notice = Some(format!("{} has no action", f.name)),
+            None => view.forms.notice = Some(FormNotice::NoAction(f.name.clone())),
         },
         FormFieldKind::Signature => view.sign.field = Some(f.name.clone()),
         FormFieldKind::CheckBox => {
@@ -140,7 +158,7 @@ const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "Jun
 /// The date picker under a focused date field. Returns the picked date, formatted with the
 /// field's own format.
 fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &str, today: (i64, u32, u32)) -> Option<String> {
-    use printcraft_engine::form_scripts::{DateTime, format_date, parse_date};
+    use pdfcraft_engine::form_scripts::{DateTime, format_date, parse_date};
     let fx = view.forms.focus.as_mut()?;
     let (mut y, mut m) = fx.calendar.unwrap_or_else(|| match parse_date(&fx.text, fmt) {
         Some(d) => (d.y, d.m),
@@ -154,11 +172,17 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.small_button("‹").on_hover_text("Previous month").clicked() {
+                    if ui.small_button("‹").on_hover_text(tl!("Previous month")).clicked() {
                         (y, m) = if m == 1 { (y - 1, 12) } else { (y, m - 1) };
                     }
-                    ui.label(egui::RichText::new(format!("{} {y}", MONTHS[(m.clamp(1, 12) - 1) as usize])).strong());
-                    if ui.small_button("›").on_hover_text("Next month").clicked() {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::fmt(
+                            tl!("{month} {y}"),
+                            &[("month", tl!(MONTHS[(m.clamp(1, 12) - 1) as usize])), ("y", &y.to_string())],
+                        ))
+                        .strong(),
+                    );
+                    if ui.small_button("›").on_hover_text(tl!("Next month")).clicked() {
                         (y, m) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
                     }
                 });
@@ -186,7 +210,14 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
                             if is_today {
                                 text = text.strong();
                             }
-                            if ui.selectable_label(selected, text).on_hover_text(format!("{} {day}, {y}", MONTHS[(m - 1) as usize])).clicked() {
+                            if ui
+                                .selectable_label(selected, text)
+                                .on_hover_text(crate::i18n::fmt(
+                                    tl!("{month} {day}, {y}"),
+                                    &[("month", tl!(MONTHS[(m - 1) as usize])), ("day", &day.to_string()), ("y", &y.to_string())],
+                                ))
+                                .clicked()
+                            {
                                 picked = Some(format_date(DateTime { y, m, d: day, hh: 0, mm: 0, ss: 0 }, fmt));
                             }
                         } else {
@@ -210,7 +241,7 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, form: &[FormField], view: &DocView) {
     let pointer = ui.input(|i| i.pointer.hover_pos());
     for f in form {
-        for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page)) {
+        for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page) && !w.hidden) {
             let r = widget_rect(xf, info, page, w.rect);
             let focused = view.forms.focus.as_ref().is_some_and(|x| x.name == f.name && x.widget == wi);
             if focused {
@@ -290,7 +321,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
                 }
             });
             // Date fields: a calendar under the field (Acrobat's date picker).
-            if let printcraft_engine::form_scripts::Format::Date(fmt) = &f.actions.format
+            if let pdfcraft_engine::form_scripts::Format::Date(fmt) = &f.actions.format
                 && let Some(picked) = calendar(ctx, view, rect, fmt, today)
             {
                 if let Some(fx) = view.forms.focus.as_mut() {
@@ -328,7 +359,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
                                 }
                             }
                         });
-                        if multi && ui.button("Done").clicked() {
+                        if multi && ui.button(tl!("Done")).clicked() {
                             commit(view, form);
                         }
                     });
@@ -358,7 +389,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
         let mut order: Vec<(usize, &FormField, usize)> = form
             .iter()
             .filter(|x| fillable(x) && matches!(x.kind, FormFieldKind::Text | FormFieldKind::Combo | FormFieldKind::List))
-            .flat_map(|x| x.widgets.iter().enumerate().filter(|(_, w)| w.page.is_some()).map(move |(wi, w)| (w.tab, x, wi)))
+            .flat_map(|x| x.widgets.iter().enumerate().filter(|(_, w)| w.page.is_some() && !w.hidden).map(move |(wi, w)| (w.tab, x, wi)))
             .collect();
         order.sort_by_key(|o| o.0);
         if let Some(pos) = order

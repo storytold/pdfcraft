@@ -1,11 +1,11 @@
 //! Fill & Sign (Acrobat's Fill & Sign tool, execution plan M5.7): type text onto the page, place
 //! ✓ ✕ ● ─ marks and today's date, and sign with a drawn signature. Everything is an annotation
-//! (typewriter text, PrintCraft-drawn stamps, ink), so it can be moved, deleted and undone like
+//! (typewriter text, PdfCraft-drawn stamps, ink), so it can be moved, deleted and undone like
 //! any comment.
 
 use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
-use printcraft_engine::{Edit, FillMark, NewAnnotation, Shape, Style};
-use printcraft_render::DocInfo;
+use pdfcraft_engine::{Edit, FillMark, NewAnnotation, Shape, Style};
+use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
@@ -42,16 +42,31 @@ pub struct SigDraft {
     pub drawing: bool,
     /// Creating initials (otherwise the signature).
     pub initials: bool,
+    /// Replacing an existing saved value.
+    pub editing: bool,
 }
 
 impl SigDraft {
     pub fn new(initials: bool, name: &str) -> Self {
         let text = if initials { name.split_whitespace().filter_map(|w| w.chars().next()).collect() } else { name.trim().to_string() };
-        Self { strokes: Vec::new(), text, drawing: false, initials }
+        Self { strokes: Vec::new(), text, drawing: false, initials, editing: false }
+    }
+
+    /// Edit a copy of the saved value; Cancel must leave the original untouched.
+    pub fn from_saved(initials: bool, saved: &SavedSig) -> Self {
+        match saved {
+            SavedSig::Drawn(strokes) => Self { strokes: strokes.clone(), drawing: true, initials, editing: true, ..Default::default() },
+            SavedSig::Typed(text) => Self { text: text.clone(), initials, editing: true, ..Default::default() },
+        }
     }
 
     fn ready(&self) -> bool {
-        if self.drawing { self.strokes.iter().any(|s| s.len() > 1) } else { !self.text.trim().is_empty() }
+        if self.drawing {
+            self.strokes.iter().any(|s| s.len() > 1)
+        } else {
+            !self.text.trim().is_empty()
+                && self.text.chars().take(pdfcraft_engine::MAX_SIGNATURE_CHARS + 1).count() <= pdfcraft_engine::MAX_SIGNATURE_CHARS
+        }
     }
 
     pub fn saved(&self) -> SavedSig {
@@ -161,32 +176,40 @@ pub fn signature_at(page: usize, at: [f64; 2], strokes: &[Vec<[f32; 2]>], author
 
 /// Place typed text in the script font with its left edge at `at`, `height` points tall.
 pub fn typed_signature_at(page: usize, at: [f64; 2], text: &str, height: f64, author: &str) -> Option<Edit> {
-    printcraft_engine::typed_signature_shape(at, text, height).map(|shape| new(page, shape, String::new(), author))
+    pdfcraft_engine::typed_signature_shape(at, text, height).map(|shape| new(page, shape, String::new(), author))
 }
 
 /// Place a saved signature or initials.
 pub fn place(page: usize, at: [f64; 2], sig: &SavedSig, initials: bool, author: &str) -> Option<Edit> {
     match sig {
         SavedSig::Drawn(strokes) => signature_at(page, at, strokes, author),
-        SavedSig::Typed(text) => typed_signature_at(page, at, text, if initials { 24.0 } else { 32.0 }, author),
+        SavedSig::Typed(text) => {
+            let [left, bottom, right, top] = pdfcraft_engine::script_outline(text).bounds();
+            let height = if initials { 24.0_f64 } else { 32.0_f64 };
+            // Keep long names within the same placement width as drawn signatures.
+            let height = height.min(150.0 * (top - bottom).max(0.1) / (right - left).max(0.01));
+            typed_signature_at(page, at, text, height, author)
+        }
     }
 }
 
 /// The text in the script font as a picture (`w`×`h` px, black on transparent), for previews.
 pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage {
-    let o = printcraft_engine::script_outline(text);
+    let o = pdfcraft_engine::script_outline(text);
     let mut img = egui::ColorImage::filled([w, h], Color32::TRANSPARENT);
-    let span = (o.ascent - o.descent).max(0.1);
+    let [left, bottom, right, top] = o.bounds();
+    let span = (top - bottom).max(0.1);
+    let width = (right - left).max(0.01);
     if o.contours.is_empty() {
         return img;
     }
-    let k = ((h as f64 * 0.9) / span).min((w as f64 * 0.95) / o.width.max(0.01));
-    let x0 = (w as f64 - o.width * k) / 2.0;
+    let k = ((h as f64 * 0.9) / span).min((w as f64 * 0.95) / width);
+    let x0 = (w as f64 - width * k) / 2.0;
     // Device points (y down), then an even-odd scanline fill.
     let polys: Vec<Vec<(f64, f64)>> = o
         .contours
         .iter()
-        .map(|c| c.iter().map(|p| (x0 + p[0] * k, h as f64 * 0.5 + (o.ascent + o.descent) / 2.0 * k - p[1] * k)).collect())
+        .map(|c| c.iter().map(|p| (x0 + (p[0] - left) * k, h as f64 * 0.5 + (top + bottom) / 2.0 * k - p[1] * k)).collect())
         .collect();
     for y in 0..h {
         let sy = y as f64 + 0.5;
@@ -201,13 +224,97 @@ pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage
         }
         xs.sort_by(|a, b| a.total_cmp(b));
         for pair in xs.as_chunks::<2>().0 {
-            let (from, to) = (pair[0].round().max(0.0) as usize, (pair[1].round() as usize).min(w));
+            let (from, to) = (pair[0].round().clamp(0.0, w as f64) as usize, pair[1].round().clamp(0.0, w as f64) as usize);
             for x in from..to {
                 img[(x, y)] = Color32::BLACK;
             }
         }
     }
     img
+}
+
+/// Saved previews and add/remove controls, shared by the left panel and quick-tool picker.
+pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp, t: &Tokens) -> Option<&'static str> {
+    ui.set_width(ui.available_width().clamp(240.0, 248.0));
+    let mut command = None;
+    for (i, (saved, what, use_id, change_id, remove_id)) in [
+        (app.signature.as_ref(), "signature", "sign.fill.signature", "sign.fill.signature.change", "sign.fill.signature.remove"),
+        (app.initials.as_ref(), "initials", "sign.fill.initials", "sign.fill.initials.change", "sign.fill.initials.remove"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let label = |template: &str| crate::i18n::fmt(tl!(template), &[("what", tl!(what))]);
+        let Some(saved) = saved else {
+            if crate::widgets::ghost_button(ui, "plus", &label("Add {what}")).clicked() {
+                command = Some(use_id);
+            }
+            continue;
+        };
+        ui.horizontal(|ui| {
+            let (rect, response) = ui.allocate_exact_size(vec2((ui.available_width() - 68.0).max(140.0), 52.0), Sense::click());
+            let use_label = label("Use {what}");
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, use_label.clone()));
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, CornerRadius::same(4), Color32::WHITE);
+            painter.rect_stroke(
+                rect,
+                CornerRadius::same(4),
+                Stroke::new(1.0, if response.hovered() { t.accent } else { t.border }),
+                egui::StrokeKind::Inside,
+            );
+            let preview_rect = rect.shrink(8.0);
+            match saved {
+                SavedSig::Typed(text) => {
+                    let cache = &mut app.saved_signature_previews[i];
+                    if cache.as_ref().is_none_or(|(s, _)| s != text) {
+                        *cache = Some((
+                            text.clone(),
+                            ui.ctx().load_texture(format!("saved-{what}"), script_preview(text, 480, 104), egui::TextureOptions::LINEAR),
+                        ));
+                    }
+                    if let Some((_, tex)) = cache {
+                        let size = vec2(480.0, 104.0) * (preview_rect.width() / 480.0).min(preview_rect.height() / 104.0);
+                        painter.image(
+                            tex.id(),
+                            egui::Rect::from_center_size(preview_rect.center(), size),
+                            egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                            Color32::WHITE,
+                        );
+                    }
+                }
+                SavedSig::Drawn(strokes) => {
+                    let bounds = strokes
+                        .iter()
+                        .flatten()
+                        .filter(|p| p.iter().all(|v| v.is_finite()))
+                        .fold(egui::Rect::NOTHING, |r, p| r.union(egui::Rect::from_min_max(pos2(p[0], p[1]), pos2(p[0], p[1]))));
+                    if bounds.is_finite() {
+                        let scale = (preview_rect.width() / bounds.width().max(0.01)).min(preview_rect.height() / bounds.height().max(0.01));
+                        for stroke in strokes {
+                            let pts = stroke
+                                .iter()
+                                .filter(|p| p.iter().all(|v| v.is_finite()))
+                                .map(|p| preview_rect.center() + vec2(p[0] - bounds.center().x, bounds.center().y - p[1]) * scale)
+                                .collect();
+                            painter.add(egui::Shape::line(pts, Stroke::new(1.5, Color32::BLACK)));
+                        }
+                    }
+                }
+            }
+            if response.on_hover_text(label("Place saved {what}")).clicked() {
+                command = Some(use_id);
+            }
+            if crate::icons::button(ui, "pencil", 26.0, false, &label("Change {what}")).clicked() {
+                command = Some(change_id);
+            }
+            if crate::icons::button(ui, "x", 26.0, false, &label("Remove saved {what}")).clicked() {
+                command = Some(remove_id);
+            }
+        });
+        ui.add_space(4.0);
+    }
+    command
 }
 
 /// Clicks with a Fill & Sign tool on one page. Returns `true` when the click was used.
@@ -288,7 +395,7 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 .desired_width(width)
                 .background_color(Color32::from_rgba_unmultiplied(255, 255, 255, 230))
                 .text_color(Color32::BLACK)
-                .hint_text("Type text")
+                .hint_text(tl!("Type text"))
                 .id_salt("fill-text-edit"),
         );
         if t.focus {
@@ -316,21 +423,27 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
 
 /// The signature pad: draw with the pointer; returns the strokes (normalised) on Apply.
 pub(crate) fn signature_pad(ui: &mut egui::Ui, t: &Tokens, d: &mut SigDraft, preview: &mut Option<(String, egui::TextureHandle)>) -> (bool, bool) {
-    let what = if d.initials { "initials" } else { "signature" };
-    ui.label(egui::RichText::new(format!("Create {what}")).font(crate::theme::semibold(18.0)));
+    let what = if d.initials { tl!("initials") } else { tl!("signature") };
+    let title = if d.editing { tl!("Change {what}") } else { tl!("Create {what}") };
+    ui.label(egui::RichText::new(crate::i18n::fmt(title, &[("what", what)])).font(crate::theme::semibold(18.0)));
     ui.horizontal(|ui| {
-        if crate::widgets::pill_button(ui, "Type", !d.drawing).clicked() {
+        if crate::widgets::pill_button(ui, tl!("Type"), !d.drawing).clicked() {
             d.drawing = false;
         }
-        if crate::widgets::pill_button(ui, "Draw", d.drawing).clicked() {
+        if crate::widgets::pill_button(ui, tl!("Draw"), d.drawing).clicked() {
             d.drawing = true;
         }
     });
     ui.add_space(6.0);
     if !d.drawing {
-        let l = ui.label(egui::RichText::new(format!("Type your {what}.")).color(t.text_muted));
-        ui.add(egui::TextEdit::singleline(&mut d.text).desired_width(460.0).hint_text(if d.initials { "Initials" } else { "Your name" }))
-            .labelled_by(l.id);
+        let l = ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Type your {what}."), &[("what", what)])).color(t.text_muted));
+        ui.add(
+            egui::TextEdit::singleline(&mut d.text)
+                .char_limit(pdfcraft_engine::MAX_SIGNATURE_CHARS)
+                .desired_width(460.0)
+                .hint_text(tl!(if d.initials { "Initials" } else { "Your name" })),
+        )
+        .labelled_by(l.id);
         let (rect, _) = ui.allocate_exact_size(vec2(460.0, 150.0), Sense::hover());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, CornerRadius::same(6), Color32::WHITE);
@@ -344,7 +457,7 @@ pub(crate) fn signature_pad(ui: &mut egui::Ui, t: &Tokens, d: &mut SigDraft, pre
         }
         return pad_buttons(ui, d);
     }
-    ui.label(egui::RichText::new(format!("Draw your {what} below.")).color(t.text_muted));
+    ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Draw your {what} below."), &[("what", what)])).color(t.text_muted));
     let strokes = &mut d.strokes;
     let (rect, resp) = ui.allocate_exact_size(vec2(460.0, 150.0), Sense::drag());
     let painter = ui.painter_at(rect);
@@ -375,19 +488,40 @@ fn pad_buttons(ui: &mut egui::Ui, d: &mut SigDraft) -> (bool, bool) {
     ui.add_space(10.0);
     let (mut apply, mut cancel) = (false, false);
     ui.horizontal(|ui| {
-        if ui.button("Clear").clicked() {
+        if ui.button(tl!("Clear")).clicked() {
             d.strokes.clear();
             d.text.clear();
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let ready = d.ready();
-            if ui.add_enabled_ui(ready, |ui| crate::widgets::pill_button(ui, "Apply", true)).inner.clicked() {
+            if ui.add_enabled_ui(ready, |ui| crate::widgets::pill_button(ui, tl!("Apply"), true)).inner.clicked() {
                 apply = true;
             }
-            if crate::widgets::pill_button(ui, "Cancel", false).clicked() {
+            if crate::widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
                 cancel = true;
             }
         });
     });
     (apply, cancel)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn long_signature_previews_have_clear_margins() {
+        for text in ["Alexandria Catherine Elizabeth Montgomery-Wellington", "Jg Jg Jg Jg Jg Jg Jg Jg Jg Jg Jg"] {
+            for [w, h] in [[920, 300], [480, 104]] {
+                let image = super::script_preview(text, w, h);
+                assert!(image.pixels.iter().any(|p| p.a() > 0));
+                for x in 0..w {
+                    assert_eq!(image[(x, 0)].a(), 0);
+                    assert_eq!(image[(x, h - 1)].a(), 0);
+                }
+                for y in 0..h {
+                    assert_eq!(image[(0, y)].a(), 0);
+                    assert_eq!(image[(w - 1, y)].a(), 0);
+                }
+            }
+        }
+    }
 }

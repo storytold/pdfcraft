@@ -51,7 +51,7 @@ pub struct Shortcut {
     pub shift: bool,
     /// ⌃ on macOS (in addition to ⌘); unused elsewhere.
     pub mac_ctrl: bool,
-    /// Key name: a letter, a digit, or `Delete`.
+    /// Key name: a letter, a digit, punctuation such as `,`, or `Delete`.
     pub key: &'static str,
 }
 
@@ -252,6 +252,10 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("sign.fill.date", "Fill & Sign: date", None, None, Annotate, "clock-3"),
     c("sign.fill.signature", "Fill & Sign: sign", None, None, Annotate, "signature"),
     c("sign.fill.initials", "Fill & Sign: initials", None, None, Annotate, "signature"),
+    c("sign.fill.signature.change", "Fill & Sign: change signature", None, None, Nothing, "signature"),
+    c("sign.fill.signature.remove", "Fill & Sign: remove saved signature", None, None, Nothing, "x"),
+    c("sign.fill.initials.remove", "Fill & Sign: remove saved initials", None, None, Nothing, "x"),
+    c("sign.fill.initials.change", "Fill & Sign: change initials", None, None, Nothing, "signature"),
     c("export.image", "Export to image…", FILE, None, Document, "image"),
     c("optimize.reduce", "Reduce file size…", FILE, None, Document, "file-down"),
     c("optimize.advanced", "Optimize PDF…", FILE, None, Document, "settings-2"),
@@ -259,7 +263,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("export.docx", "Export to Word…", FILE, None, Document, "file-text"),
     c("export.html", "Export to HTML…", FILE, None, Document, "file-symlink"),
     c("export.rtf", "Export to RTF…", FILE, None, Document, "file-text"),
-    c("app.preferences", "Preferences…", None, None, Nothing, "settings"),
+    c("app.preferences", "Preferences…", EDIT, Some(Shortcut::cmd(",")), Nothing, "settings"),
     c("tools.js_console", "JavaScript console…", None, Some(Shortcut::cmd("J")), Document, "square-terminal"),
     c("tools.document_js", "Document JavaScripts…", None, None, Modification, "file-code"),
     c("ocr.recognize", "Recognize text…", None, None, Modification, "scan-text"),
@@ -298,11 +302,11 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.number", "Number pages…", PAGES, None, Assembly, "hash"),
     c("help.shortcuts", "Keyboard shortcuts", HELP, None, Nothing, "circle-help"),
     c("help.discord", "Join the ArtCraft Discord", HELP, None, Nothing, "messages-square"),
-    c("help.app_page", "PrintCraft web page", HELP, None, Nothing, "globe"),
-    c("help.github", "PrintCraft on GitHub", HELP, None, Nothing, "code-xml"),
+    c("help.app_page", "PdfCraft web page", HELP, None, Nothing, "globe"),
+    c("help.github", "PdfCraft on GitHub", HELP, None, Nothing, "code-xml"),
     c("help.website", "ArtCraft website", HELP, None, Nothing, "external-link"),
     c("help.check_updates", "Check for updates…", HELP, None, Nothing, "cloud"),
-    c("help.about", "About PrintCraft", HELP, None, Nothing, "info"),
+    c("help.about", "About PdfCraft", HELP, None, Nothing, "info"),
 ];
 
 pub fn command(id: &str) -> Option<&'static CommandSpec> {

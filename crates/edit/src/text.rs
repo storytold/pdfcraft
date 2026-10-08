@@ -13,10 +13,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use printcraft_content::{Matrix, Op, parse, serialize_ops};
-use printcraft_cos::{Dict, Document, Object, PdfString, Stream};
-use printcraft_fonts::pdf::Metrics;
-use printcraft_fonts::{GlyphError, japanese_glyph};
+use pdfcraft_content::{Matrix, Op, parse, serialize_ops};
+use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
+use pdfcraft_fonts::pdf::Metrics;
+use pdfcraft_fonts::{GlyphError, japanese_glyph};
 
 use crate::EditError;
 
@@ -71,7 +71,7 @@ impl TextState {
 
     /// Operators that set this state (inside a text object).
     fn ops(&self) -> Vec<Op> {
-        let n = printcraft_content::num;
+        let n = pdfcraft_content::num;
         let mut v = Vec::new();
         if let Some((f, size)) = &self.font {
             v.push(Op::new("Tf", vec![Object::name(f), n(*size)]));
@@ -167,8 +167,36 @@ fn content_streams(doc: &Document, page: &Dict) -> Vec<(Object, Vec<u8>)> {
         .collect()
 }
 
-fn page_dict(doc: &Document, page: usize) -> Result<printcraft_model::Page, EditError> {
-    printcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
+/// Rewrite one of a page's content streams: `edit(i)` gives the operators to insert before
+/// operator `i` of `ops` (parsed from `data`) and whether to keep it. Everything else is copied
+/// byte for byte. A page's streams are one stream in pieces, split between any two tokens
+/// (ISO 32000-2 §7.8.2), so a piece can end with operands whose operator starts the next one,
+/// or start by closing a dictionary the previous one opened; those tokens belong to no operator
+/// parsed here and must stay where they are.
+fn splice(data: &[u8], ops: &[Op], mut edit: impl FnMut(usize) -> (Vec<Op>, bool)) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut at = 0;
+    for (i, op) in ops.iter().enumerate() {
+        let (insert, keep) = edit(i);
+        if insert.is_empty() && keep {
+            continue;
+        }
+        let start = op.span.start.clamp(at, data.len());
+        out.extend_from_slice(data.get(at..start).unwrap_or_default());
+        if !insert.is_empty() {
+            if out.last().is_some_and(|b| !b.is_ascii_whitespace()) {
+                out.push(b'\n');
+            }
+            out.extend_from_slice(&serialize_ops(&insert));
+        }
+        at = if keep { start } else { op.span.end.clamp(start, data.len()) };
+    }
+    out.extend_from_slice(data.get(at..).unwrap_or_default());
+    out
+}
+
+fn page_dict(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
+    pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
 }
 
 fn fill_color(fill: &[Op]) -> [f64; 3] {
@@ -219,21 +247,36 @@ struct Shown {
     decodable: bool,
 }
 
-fn interpret(doc: &Document, ops: &[Op], fonts_res: &Dict, cache: &mut HashMap<Vec<u8>, Rc<Metrics>>) -> Vec<Shown> {
+/// The graphics state carried from one of a page's content streams to the next: the streams
+/// are one stream in pieces (§7.8.2), so a `cm` (AutoCAD scales the whole page in the first
+/// stream), an unbalanced `q`, the font and the colour still apply in the streams after it.
+struct Carry {
+    ts: Ts,
+    stack: Vec<Ts>,
+}
+
+impl Carry {
+    fn new() -> Self {
+        let ts = Ts {
+            ctm: Matrix::IDENTITY,
+            fill: Vec::new(),
+            font: None,
+            size: 0.0,
+            char_spacing: 0.0,
+            word_spacing: 0.0,
+            scale: 1.0,
+            leading: 0.0,
+            rise: 0.0,
+        };
+        Carry { ts, stack: Vec::new() }
+    }
+}
+
+fn interpret(doc: &Document, ops: &[Op], fonts_res: &Dict, cache: &mut HashMap<Vec<u8>, Rc<Metrics>>, carry: &mut Carry) -> Vec<Shown> {
     let mut out = Vec::new();
-    let mut ts = Ts {
-        ctm: Matrix::IDENTITY,
-        fill: Vec::new(),
-        font: None,
-        size: 0.0,
-        char_spacing: 0.0,
-        word_spacing: 0.0,
-        scale: 1.0,
-        leading: 0.0,
-        rise: 0.0,
-    };
+    let mut ts = carry.ts.clone();
     let mut at_bt = (0usize, ts.clone());
-    let mut stack: Vec<Ts> = Vec::new();
+    let mut stack: Vec<Ts> = std::mem::take(&mut carry.stack);
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let mut bt = 0usize;
     for (i, op) in ops.iter().enumerate() {
@@ -380,6 +423,8 @@ fn interpret(doc: &Document, ops: &[Op], fonts_res: &Dict, cache: &mut HashMap<V
             _ => {}
         }
     }
+    carry.ts = ts;
+    carry.stack = stack;
     out
 }
 
@@ -390,9 +435,10 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
     let fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let mut cache = HashMap::new();
     let mut lines: Vec<TextLine> = Vec::new();
+    let mut carry = Carry::new();
     for (si, (_, data)) in content_streams(doc, &p.dict).into_iter().enumerate() {
         let ops = parse(&data).ops;
-        let shown = interpret(doc, &ops, &fonts_res, &mut cache);
+        let shown = interpret(doc, &ops, &fonts_res, &mut cache, &mut carry);
         let mut last: Option<(usize, f64, f64, f64)> = None; // (bt, baseline, end_x, size)
         for s in shown {
             let joins = last.is_some_and(|(bt, base, end, size)| {
@@ -516,14 +562,14 @@ fn unicode_hex(ch: char) -> String {
 /// This build has no Japanese face to draw replacement text with.
 fn no_japanese_font() -> EditError {
     EditError::Invalid(
-        "this text needs PrintCraft's Japanese fallback font, which this build doesn't include \
+        "this text needs PdfCraft's Japanese fallback font, which this build doesn't include \
          (official releases do; to build it in, set CRAFT_FONTS_DIR to a craft-fonts checkout)"
             .into(),
     )
 }
 
 fn type3_font(doc: &mut Document, fonts_res: &mut Dict, text: &str) -> Result<Type3Fallback, EditError> {
-    let family = printcraft_fonts::document_japanese_font().ok_or_else(no_japanese_font)?.family;
+    let family = pdfcraft_fonts::document_japanese_font().ok_or_else(no_japanese_font)?.family;
     let mut chars = Vec::new();
     for ch in text.chars() {
         if !chars.contains(&ch) {
@@ -603,7 +649,7 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let streams = content_streams(doc, &p.dict);
     let (stream_obj, data) = streams.get(target.stream).cloned().ok_or_else(|| EditError::Invalid("the page's content changed".into()))?;
-    let mut ops = parse(&data).ops;
+    let ops = parse(&data).ops;
     let first = target.ops[0];
     // The line's own font, when it can show every character.
     let font = fonts_res.get(target.font.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()).map(|d| Metrics::from_dict(doc, &d));
@@ -628,12 +674,12 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
                 let bytes = type3_encode(&fallback, &text)
                     .ok_or_else(|| EditError::Invalid(format!("\"{text}\" can't be shown by the Japanese fallback")))?;
                 let size = font_size_before(&ops, first).unwrap_or(target.size);
-                replacement.push(Op::new("Tf", vec![Object::name(&fallback.name), printcraft_content::num(size)]));
+                replacement.push(Op::new("Tf", vec![Object::name(&fallback.name), pdfcraft_content::num(size)]));
                 replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
-                replacement.push(Op::new("Tf", vec![Object::name(&target.font), printcraft_content::num(size)]));
+                replacement.push(Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
                 substituted = Some(format!("{} Type3", fallback.family));
             } else {
-                let win = printcraft_fonts::win_ansi(&text);
+                let win = pdfcraft_fonts::win_ansi(&text);
                 // WinAnsi turns what it can't show into '?'; refuse rather than print the wrong thing.
                 let back: String = win.iter().map(|b| char::from_u32(u32::from(*b)).unwrap_or('?')).collect();
                 if text.chars().zip(back.chars()).any(|(a, b)| b == '?' && a != '?') {
@@ -644,9 +690,9 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
                 let family = source_family(&target.base_font);
                 let base = family.base_font(target.bold, target.italic);
                 let substitute_name = format!("PCEd{}", base.replace('-', ""));
-                replacement.push(Op::new("Tf", vec![Object::name(&substitute_name), printcraft_content::num(size)]));
+                replacement.push(Op::new("Tf", vec![Object::name(&substitute_name), pdfcraft_content::num(size)]));
                 replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(win))]));
-                replacement.push(Op::new("Tf", vec![Object::name(&target.font), printcraft_content::num(size)]));
+                replacement.push(Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
                 substituted = Some(base.to_string());
                 let mut f = Dict::new();
                 f.set(b"Type".to_vec(), Object::name("Font"));
@@ -660,20 +706,15 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
     // Rebuild: the line's first operator becomes the replacement, its others go. Copies of the
     // line drawn in the same area go too, so the replacement is all that shows.
     let drops = coincident_ops(&lines, std::slice::from_ref(&target.rect));
-    let mut new_ops = Vec::with_capacity(ops.len() + replacement.len());
-    for (i, op) in ops.drain(..).enumerate() {
-        if i == first {
-            new_ops.append(&mut replacement);
-        } else if !drops.get(&target.stream).is_some_and(|d| d.contains(&i)) {
-            new_ops.push(op);
-        }
-    }
+    let new_data = splice(&data, &ops, |i| {
+        if i == first { (std::mem::take(&mut replacement), false) } else { (Vec::new(), !drops.get(&target.stream).is_some_and(|d| d.contains(&i))) }
+    });
     let mut dict = match &*doc.resolve(&stream_obj) {
         Object::Stream(s) => s.dict.clone(),
         _ => Dict::new(),
     };
     dict.remove(b"Length");
-    let new = doc.add(Object::Stream(Stream::flate(dict, &serialize_ops(&new_ops))));
+    let new = doc.add(Object::Stream(Stream::flate(dict, &new_data)));
     let contents: Vec<Object> = streams.iter().enumerate().map(|(i, (o, _))| if i == target.stream { Object::Ref(new) } else { o.clone() }).collect();
     let page_ref = p.obj;
     if substituted.is_some() {
@@ -864,8 +905,8 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     let std_width = move |s: &str, size: f64| -> f64 {
         match family {
             crate::added::Family::Courier => s.chars().count() as f64 * 0.6 * size,
-            crate::added::Family::Times => printcraft_fonts::helvetica_width(s, size) * 0.92,
-            crate::added::Family::Helvetica => printcraft_fonts::helvetica_width(s, size) * if bold { 1.05 } else { 1.0 },
+            crate::added::Family::Times => pdfcraft_fonts::helvetica_width(s, size) * 0.92,
+            crate::added::Family::Helvetica => pdfcraft_fonts::helvetica_width(s, size) * if bold { 1.05 } else { 1.0 },
         }
     };
     let [dx, dy] = style.offset.unwrap_or([0.0, 0.0]);
@@ -911,7 +952,7 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
         substituted = Some(format!("{} Type3", fallback.family));
         (name, Box::new(move |s: &str| type3_encode(&encoder, s)))
     } else {
-        let win = printcraft_fonts::win_ansi(&text);
+        let win = pdfcraft_fonts::win_ansi(&text);
         let back: String = win.iter().map(|c| char::from_u32(u32::from(*c)).unwrap_or('?')).collect();
         let base = family.base_font(bold, italic);
         if text.chars().zip(back.chars()).any(|(a, c)| c == '?' && a != '?') {
@@ -927,7 +968,7 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
         if style.family.is_none() {
             substituted = Some(base.to_string());
         }
-        (name, Box::new(|s: &str| Some(printcraft_fonts::win_ansi(s))))
+        (name, Box::new(|s: &str| Some(pdfcraft_fonts::win_ansi(s))))
     };
     // Line spacing in text space: the paragraph's own (scaled with the size), or 1.2 × the size.
     let lead = match style.line_spacing {
@@ -936,7 +977,7 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
         None if o_state.leading > 0.0 => o_state.leading,
         None => size * 1.2,
     };
-    let n = printcraft_content::num;
+    let n = pdfcraft_content::num;
     // In its own graphics state, so a new colour (or anything else) stops at the paragraph.
     let mut block_ops = vec![Op::new("q", vec![])];
     // Moved: a translation inside that state. The move is in page space, so it is taken back
@@ -1041,22 +1082,16 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
         block_ops.push(Op::new("Tm", o.tlm.iter().map(|v| n(*v)).collect()));
     }
     let at = if split { start } else { o.bt_op };
-    let mut new_ops = Vec::with_capacity(ops.len() + block_ops.len());
-    for (i, op) in ops.into_iter().enumerate() {
-        if i == at {
-            new_ops.append(&mut block_ops);
-        }
-        let keep = drop.get(&first.stream).is_none_or(|d| !d.contains(&i));
-        if keep {
-            new_ops.push(op);
-        }
-    }
+    let new_data = splice(&data, &ops, |i| {
+        let insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
+        (insert, drop.get(&first.stream).is_none_or(|d| !d.contains(&i)))
+    });
     let mut dict = match &*doc.resolve(&stream_obj) {
         Object::Stream(s) => s.dict.clone(),
         _ => Dict::new(),
     };
     dict.remove(b"Length");
-    let new = doc.add(Object::Stream(Stream::flate(dict, &serialize_ops(&new_ops))));
+    let new = doc.add(Object::Stream(Stream::flate(dict, &new_data)));
     let contents: Vec<Object> = streams.iter().enumerate().map(|(i, (o, _))| if i == first.stream { Object::Ref(new) } else { o.clone() }).collect();
     if new_font {
         res.set(b"Font".to_vec(), Object::Dict(fonts_res));

@@ -2,7 +2,7 @@
 
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
-use printcraft_ui_egui::PrintCraftApp;
+use pdfcraft_ui_egui::PdfCraftApp;
 
 /// Three 300×400 pt pages. Page 1 links to page 3.
 const PAGES: &[u8] = b"%PDF-1.7
@@ -27,9 +27,9 @@ fn gpu() -> std::sync::MutexGuard<'static, ()> {
     GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn harness(options: &'static [(&'static str, &'static str)]) -> Harness<'static, PrintCraftApp> {
+fn harness(options: &'static [(&'static str, &'static str)]) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("pages.pdf", None, PAGES.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "none").unwrap();
@@ -42,8 +42,43 @@ fn harness(options: &'static [(&'static str, &'static str)]) -> Harness<'static,
     h
 }
 
-fn rect(h: &Harness<'static, PrintCraftApp>, page: usize) -> Option<egui::Rect> {
+fn rect(h: &Harness<'static, PdfCraftApp>, page: usize) -> Option<egui::Rect> {
     h.state().views[0].page_screen_rect(page)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn middle_button_scrolling_keeps_page_colours_in_both_themes() {
+    use egui_kittest::kittest::Queryable;
+    let _gpu = gpu();
+    for theme in ["light", "dark"] {
+        for organize in [false, true] {
+            let mut h = harness(&[("zoom", "50")]);
+            h.state_mut().set_option("theme", theme).unwrap();
+            h.state_mut().set_option("organize", if organize { "on" } else { "off" }).unwrap();
+            for _ in 0..100 {
+                h.run_steps(2);
+                if !h.state().render_pending() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let page = if organize { h.get_by_label("Page 1").rect() } else { rect(&h, 0).unwrap() };
+            let at = page.center();
+            let ppp = h.ctx.pixels_per_point();
+            let before = *h.render().unwrap().get_pixel((at.x * ppp) as u32, (at.y * ppp) as u32);
+            assert_eq!(before, image::Rgba([255, 255, 255, 255]), "the synthetic page is white");
+            let anchor = h.state().views[0].viewport_rect().center();
+            h.event(egui::Event::PointerMoved(anchor));
+            h.event(egui::Event::PointerButton { pos: anchor, button: egui::PointerButton::Middle, pressed: true, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+            h.event(egui::Event::PointerButton { pos: anchor, button: egui::PointerButton::Middle, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+            assert!(h.state().views[0].auto_scrolling());
+            let during = *h.render().unwrap().get_pixel((at.x * ppp) as u32, (at.y * ppp) as u32);
+            assert_eq!(during, before, "scrolling preserves page colours: theme={theme}, organize={organize}");
+        }
+    }
 }
 
 #[test]
@@ -131,9 +166,9 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
 
-fn form_harness() -> Harness<'static, PrintCraftApp> {
+fn form_harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("form.pdf", None, FORM.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app
@@ -170,7 +205,7 @@ fn highlight_fields_tints_the_field_area() {
     let r = rect(&h, 0).expect("page 1");
     // The field spans x 50..250, y 300..330 (PDF space, y up) on a 300×400 page; sample inside it.
     let at = egui::pos2(r.min.x + r.width() * (60.0 / 300.0), r.min.y + r.height() * (1.0 - 305.0 / 400.0));
-    let pixel = |h: &mut Harness<'static, PrintCraftApp>| {
+    let pixel = |h: &mut Harness<'static, PdfCraftApp>| {
         let img = h.render().expect("renders");
         let ppp = h.ctx.pixels_per_point();
         *img.get_pixel((at.x * ppp) as u32, (at.y * ppp) as u32)
@@ -221,8 +256,8 @@ fn required_fields_get_a_red_border_when_highlighting() {
     let mut h = form_harness();
     h.state_mut().set_option("panel", "none").unwrap();
     h.state_mut().set_option("fields", "on").unwrap();
-    let props = printcraft_engine::FieldProps { required: Some(true), ..Default::default() };
-    h.state_mut().apply_edit(printcraft_engine::Edit::SetFieldProps { name: "fullname".into(), props: Box::new(props) });
+    let props = pdfcraft_engine::FieldProps { required: Some(true), ..Default::default() };
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps { name: "fullname".into(), props: Box::new(props) });
     for _ in 0..100 {
         h.run_steps(2);
         if !h.state().render_pending() {

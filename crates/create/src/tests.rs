@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use printcraft_cos::{SaveOptions, write_full};
+use pdfcraft_cos::{SaveOptions, write_full};
 
 use super::*;
 
@@ -168,7 +168,7 @@ fn images_export_as_jpeg_unchanged_and_others_as_png() {
 fn indexed_and_one_bit_images_decode() {
     let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
     // Replace the page's image with a 4×1 indexed image (two colours) and add a 1-bit mask.
-    let page = printcraft_model::pages(&doc)[0].clone();
+    let page = pdfcraft_model::pages(&doc)[0].clone();
     let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
     let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
     let (_, r) = xo.iter().next().map(|(k, v)| (k.clone(), v.as_ref().unwrap())).unwrap();

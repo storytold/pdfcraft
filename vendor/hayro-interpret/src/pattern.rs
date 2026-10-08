@@ -228,7 +228,7 @@ impl<'a> TilingPattern<'a> {
         initial_transform: Affine,
         is_stroke: bool,
     ) -> Option<()> {
-        // PrintCraft patch: a tiling pattern can paint itself (directly, or through resources it
+        // PdfCraft patch: a tiling pattern can paint itself (directly, or through resources it
         // inherits when its own are missing), which recursed until the stack overflowed. Bound
         // the nesting like XObjects do, tighter because every level rasterizes a tile.
         if self.nesting_depth > crate::context::MAX_PAINT_NESTING || !crate::context::take_nested_paint(self.nesting_depth) {

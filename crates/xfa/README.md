@@ -1,12 +1,12 @@
-# printcraft-xfa
+# pdfcraft-xfa
 
-XFA forms (XFA 3.3, the template and layout parts). Layer L3; depends on `printcraft-cos` and
-`printcraft-fonts` only.
+XFA forms (XFA 3.3, the template and layout parts). Layer L3; depends on `pdfcraft-cos` and
+`pdfcraft-fonts` only.
 
 A dynamic XFA form is a PDF shell around an XML template (`/AcroForm /XFA`): one placeholder page
 ("requires Adobe Reader") and `/NeedsRendering true`. Viewers without an XFA engine show the
 placeholder. This crate reads the template, lays it out, and writes ordinary pages and AcroForm
-fields into the document, so everything else in PrintCraft (rendering, filling, saving, printing,
+fields into the document, so everything else in PdfCraft (rendering, filling, saving, printing,
 the automation tools) works on it unchanged. The engine does this when it opens such a form.
 
 ## What it does
@@ -44,11 +44,11 @@ the automation tools) works on it unchanged. The engine does this when it opens 
 ## API sketch
 
 ```rust
-if printcraft_xfa::is_dynamic(&doc) {
-    let report = printcraft_xfa::render_into(&mut doc)?;   // pages, fields, warnings
-    for f in printcraft_forms::fields(&doc) { printcraft_forms::redraw_field(&mut doc, &f.name)?; }
+if pdfcraft_xfa::is_dynamic(&doc) {
+    let report = pdfcraft_xfa::render_into(&mut doc)?;   // pages, fields, warnings
+    for f in pdfcraft_forms::fields(&doc) { pdfcraft_forms::redraw_field(&mut doc, &f.name)?; }
 }
-let form = printcraft_xfa::layout_xml(template_xml)?;       // pages of items, for tests
+let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for tests
 ```
 
 ## Deliberately not done (yet)

@@ -4,8 +4,9 @@
 use std::sync::{Arc, Mutex};
 
 use egui_kittest::Harness;
-use printcraft_ui_egui::PrintCraftApp;
-use printcraft_ui_egui::control::{ControlClient, Reply};
+use egui_kittest::kittest::Queryable;
+use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::control::{ControlClient, Reply};
 use serde_json::{Value, json};
 
 fn fixture(n: usize) -> Vec<u8> {
@@ -33,13 +34,17 @@ fn fixture(n: usize) -> Vec<u8> {
     out
 }
 
-fn harness() -> (Harness<'static, PrintCraftApp>, ControlClient) {
+fn harness() -> (Harness<'static, PdfCraftApp>, ControlClient) {
+    harness_pages(5)
+}
+
+fn harness_pages(pages: usize) -> (Harness<'static, PdfCraftApp>, ControlClient) {
     let slot: Arc<Mutex<Option<ControlClient>>> = Arc::default();
     let s = slot.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
-        app.open_bytes("doc.pdf", None, fixture(5)).unwrap();
+        app.open_bytes("doc.pdf", None, fixture(pages)).unwrap();
         app
     });
     h.run_steps(4);
@@ -48,7 +53,7 @@ fn harness() -> (Harness<'static, PrintCraftApp>, ControlClient) {
 }
 
 /// Send a request and run frames until it is answered.
-fn call(h: &mut Harness<'static, PrintCraftApp>, c: &ControlClient, method: &str, params: Value) -> Reply {
+fn call(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, params: Value) -> Reply {
     let rx = c.send(method, params);
     for _ in 0..30 {
         h.step();
@@ -59,8 +64,346 @@ fn call(h: &mut Harness<'static, PrintCraftApp>, c: &ControlClient, method: &str
     panic!("{method}: no reply after 30 frames");
 }
 
-fn ok(h: &mut Harness<'static, PrintCraftApp>, c: &ControlClient, method: &str, params: Value) -> Value {
+fn ok(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, params: Value) -> Value {
     call(h, c, method, params).unwrap_or_else(|e| panic!("{method}: {e}"))
+}
+
+/// Switching the interface language changes labels only: documents, their dirty state and the
+/// command ids agents drive stay exactly the same.
+#[test]
+fn language_switch_preserves_document_and_command_ids() {
+    use pdfcraft_ui_egui::i18n;
+    let (mut h, c) = harness();
+    let doc = h.state().views[0].id;
+    h.state_mut().session.apply(doc, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
+    assert_eq!(documents[0]["dirty"], true);
+    let commands = ok(&mut h, &c, "ui.commands", json!({}));
+    for code in ["ja", "zh-hans", "en"] {
+        ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": code }));
+        h.run_steps(2);
+        let state = ok(&mut h, &c, "ui.state", json!({}));
+        assert_eq!(state["language"], code);
+        assert_eq!(state["documents"], documents);
+        assert_eq!(ok(&mut h, &c, "ui.commands", json!({})), commands);
+
+        let lang = i18n::Lang::from_code(code).unwrap();
+        h.get_by_label(i18n::tr(lang, "Menu")).click();
+        h.run_steps(2);
+        h.get_by_label(&format!("{} ⏵", i18n::tr(lang, "File"))).hover();
+        h.run_steps(3);
+        h.get_by_label_contains(i18n::tr(lang, "Open…"));
+        ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
+        ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
+        h.run_steps(2);
+    }
+    let error = call(&mut h, &c, "ui.set", json!({ "key": "language", "value": "xx" })).unwrap_err();
+    assert!(error.contains("auto, en, ja"), "{error}");
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "en");
+}
+
+#[cfg(target_os = "linux")]
+fn start_autoscroll(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient) -> egui::Pos2 {
+    let p = h.state().views[0].viewport_rect().center();
+    ok(h, c, "ui.click", json!({ "x": p.x, "y": p.y, "button": "middle" }));
+    assert!(h.state().views[0].auto_scrolling());
+    p
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn middle_click_autoscroll_latches_has_a_dead_zone_and_scrolls_both_directions() {
+    let (mut h, c) = harness();
+    // Keep the tracked page visible through the downward leg and reversal.
+    h.state_mut().set_option("zoom", "400").unwrap();
+    h.run_steps(3);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(2);
+    let p = start_autoscroll(&mut h, &c);
+    let top = h.state().views[0].page_screen_rect(0).unwrap().top();
+    ok(&mut h, &c, "ui.move", json!({ "x": p.x + 100.0, "y": p.y + 8.0 }));
+    h.run_steps(8);
+    assert_eq!(h.state().views[0].page_screen_rect(0).unwrap().top(), top, "horizontal motion and the dead zone do not scroll");
+    ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + 90.0 }));
+    h.run_steps(8);
+    let down = h.state().views[0].page_screen_rect(0).unwrap().top();
+    assert!(down < top - 30.0, "moving below the anchor scrolls down: {top} -> {down}");
+    ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y - 50.0 }));
+    // The control request itself takes frames while the previous downward motion continues.
+    // Measure reversal after it has arrived and the scroll area's layout has caught up.
+    h.run_steps(2);
+    let reversing = h.state().views[0].page_screen_rect(0).unwrap().top();
+    h.run_steps(8);
+    let up = h.state().views[0].page_screen_rect(0).unwrap().top();
+    assert!(up > reversing + 15.0, "moving above the anchor scrolls up: {reversing} -> {up}");
+    ok(&mut h, &c, "ui.click", json!({ "x": p.x, "y": p.y, "button": "middle" }));
+    assert!(!h.state().views[0].auto_scrolling(), "a second wheel click stops");
+    h.run_steps(2);
+    let stopped = h.state().views[0].page_screen_rect(0).unwrap().top();
+    h.run_steps(8);
+    assert_eq!(h.state().views[0].page_screen_rect(0).unwrap().top(), stopped, "no drift after cancellation");
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "scrolling never edits the PDF");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn moving_before_middle_button_release_keeps_scrolling_without_starting_page_tools() {
+    let (mut h, c) = harness();
+    // Keep the tracked page on screen while the faster gesture continues after release.
+    h.state_mut().set_option("zoom", "400").unwrap();
+    h.run_steps(3);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(2);
+    // A middle drag must not also draw with a selected tool (egui accepts any drag button).
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Crop;
+    let p = h.state().views[0].viewport_rect().center();
+    let top = h.state().views[0].page_screen_rect(0).unwrap().top();
+    ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y + 60.0], "steps": 12, "button": "middle" }));
+    h.run_steps(2);
+    assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < top - 20.0);
+    assert!(h.state().views[0].auto_scrolling(), "release keeps scrolling toggled on even after movement");
+    let released = h.state().views[0].page_screen_rect(0).unwrap().top();
+    h.run_steps(8);
+    assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < released - 30.0, "scrolling continues with no button held");
+    assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag");
+    assert!(h.state().dialog.is_none());
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+    ok(&mut h, &c, "ui.click", json!({ "x": p.x, "y": p.y + 60.0, "button": "middle" }));
+    assert!(!h.state().views[0].auto_scrolling(), "the next middle click toggles scrolling off");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn autoscroll_uses_the_initial_click_position_when_input_arrives_in_one_frame() {
+    let (mut h, c) = harness();
+    let p = h.state().views[0].viewport_rect().center();
+    let moved = p + egui::vec2(0.0, 60.0);
+    let top = h.state().views[0].page_screen_rect(0).unwrap().top();
+    h.event(egui::Event::PointerMoved(p));
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Middle, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.event(egui::Event::PointerMoved(moved));
+    h.event(egui::Event::PointerButton { pos: moved, button: egui::PointerButton::Middle, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(8);
+    assert!(h.state().views[0].auto_scrolling());
+    assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < top - 20.0, "distance is measured from the click, not the last mouse event");
+    ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn farther_from_the_click_scrolls_faster_in_the_viewer_and_page_grid() {
+    use egui_kittest::kittest::Queryable;
+    for organize in [false, true] {
+        let (mut h, c) = harness_pages(40);
+        h.state_mut().views[0].organize = organize;
+        h.run_steps(3);
+        let top = |h: &Harness<'static, PdfCraftApp>| {
+            if organize { h.get_by_label("Page 1").rect().top() } else { h.state().views[0].page_screen_rect(0).unwrap().top() }
+        };
+        let p = start_autoscroll(&mut h, &c);
+        ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + 30.0 }));
+        let before_near = top(&h);
+        h.run_steps(8);
+        let near = before_near - top(&h);
+        ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + 100.0 }));
+        let before_far = top(&h);
+        h.run_steps(8);
+        let far = before_far - top(&h);
+        assert!(near > 0.0 && far > near * 3.0, "farther movement must be faster: organize={organize}, near={near}, far={far}");
+        ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y }));
+        h.run_steps(2);
+        let at_anchor = top(&h);
+        h.run_steps(8);
+        assert_eq!(top(&h), at_anchor, "returning to the original click pauses scrolling");
+        assert!(h.state().views[0].auto_scrolling(), "the toggle stays on at the anchor");
+        ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn autoscroll_uses_elapsed_frame_time_and_preserves_fractional_motion_in_both_views() {
+    use egui_kittest::kittest::Queryable;
+    for (organize, scale, zoom) in [(false, 1.0, "100"), (false, 2.0, "100"), (false, 1.0, "400"), (true, 1.0, "100"), (true, 2.0, "100")] {
+        for frames in [30, 60, 120, 144] {
+            let (mut h, c) = harness_pages(40);
+            h.set_pixels_per_point(scale);
+            h.state_mut().set_option("zoom", zoom).unwrap();
+            h.state_mut().views[0].organize = organize;
+            h.run_steps(3);
+            assert_eq!(h.ctx.pixels_per_point(), scale);
+            let top = |h: &Harness<'static, PdfCraftApp>| {
+                if organize { h.get_by_label("Page 1").rect().top() } else { h.state().views[0].page_screen_rect(0).unwrap().top() }
+            };
+            let step = |h: &mut Harness<'static, PdfCraftApp>| {
+                // Deliberately differ from the harness's predicted frame interval: scrolling
+                // must follow the elapsed time rather than the display's predicted rate.
+                h.input_mut().time = Some(h.ctx.input(|i| i.time) + 1.0 / f64::from(frames));
+                h.step();
+            };
+            let p = start_autoscroll(&mut h, &c);
+            for (distance, expected) in [(16.0, 17.83), (50.0, 218.67)] {
+                ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + distance }));
+                step(&mut h);
+                step(&mut h);
+                let before = top(&h);
+                for _ in 0..frames {
+                    step(&mut h);
+                }
+                let travelled = before - top(&h);
+                assert!(
+                    (travelled - expected).abs() < 1.0,
+                    "organize={organize}, scale={scale}, zoom={zoom}, fps={frames}, distance={distance}, travelled={travelled}"
+                );
+                assert_eq!(
+                    h.output().viewport_output[&egui::ViewportId::ROOT].repaint_delay,
+                    std::time::Duration::ZERO,
+                    "motion schedules the next display frame"
+                );
+            }
+            ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + 15.0 }));
+            step(&mut h);
+            let paused = top(&h);
+            for _ in 0..frames {
+                step(&mut h);
+            }
+            assert_eq!(top(&h), paused, "the dead zone pauses immediately, without coasting");
+            assert!(h.state().views[0].auto_scrolling());
+            ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y - 50.0 }));
+            step(&mut h);
+            step(&mut h);
+            let before = top(&h);
+            for _ in 0..frames {
+                step(&mut h);
+            }
+            assert!((top(&h) - before - 218.67).abs() < 1.0, "resuming above the anchor reverses direction");
+            ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn escape_stops_autoscroll_without_closing_find() {
+    let (mut h, c) = harness();
+    h.state_mut().views[0].open_find();
+    h.run_steps(3);
+    // Focus the canvas so the text field no longer owns keyboard input.
+    let p = h.state().views[0].viewport_rect().center();
+    ok(&mut h, &c, "ui.click", json!({ "x": p.x, "y": p.y }));
+    h.run_steps(2);
+    start_autoscroll(&mut h, &c);
+    ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
+    assert!(!h.state().views[0].auto_scrolling());
+    assert!(h.state().views[0].find.is_some(), "Escape cancels the scrolling gesture first");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn autoscroll_cancels_on_click_wheel_focus_loss_and_pointer_exit() {
+    let (mut h, c) = harness();
+    let p = start_autoscroll(&mut h, &c);
+    ok(&mut h, &c, "ui.click", json!({ "x": p.x, "y": p.y }));
+    assert!(!h.state().views[0].auto_scrolling());
+    start_autoscroll(&mut h, &c);
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -20.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(2);
+    assert!(!h.state().views[0].auto_scrolling());
+    start_autoscroll(&mut h, &c);
+    h.input_mut().focused = false;
+    h.run_steps(2);
+    assert!(!h.state().views[0].auto_scrolling());
+    h.input_mut().focused = true;
+    h.run_steps(2);
+    start_autoscroll(&mut h, &c);
+    h.event(egui::Event::PointerGone);
+    h.run_steps(2);
+    assert!(!h.state().views[0].auto_scrolling());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn autoscroll_is_scoped_to_the_active_view_and_cannot_start_under_a_dialog() {
+    let (mut h, c) = harness();
+    let p = start_autoscroll(&mut h, &c);
+    h.state_mut().open_bytes("other.pdf", None, fixture(2)).unwrap();
+    h.run_steps(2);
+    assert!(!h.state().views[0].auto_scrolling());
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    assert!(!h.state().views[0].auto_scrolling(), "returning to the tab must not resume");
+    start_autoscroll(&mut h, &c);
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::About);
+    h.run_steps(2);
+    assert!(!h.state().views[0].auto_scrolling());
+    ok(&mut h, &c, "ui.click", json!({ "x": p.x, "y": p.y, "button": "middle" }));
+    assert!(!h.state().views[0].auto_scrolling(), "a modal owns its input");
+    assert!(call(&mut h, &c, "ui.move", json!({ "x": "bad", "y": 2 })).is_err());
+    assert!(call(&mut h, &c, "ui.drag", json!({ "from": [1, 2], "to": [3, 4], "button": "bad" })).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_click_that_stops_autoscroll_preserves_the_page_selection() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, c) = harness_pages(40);
+    h.state_mut().execute("page.organize");
+    h.state_mut().views[0].select_pages(&[0]);
+    h.run_steps(3);
+    let page_two = h.get_by_label("Page 2").rect().center();
+    start_autoscroll(&mut h, &c);
+    ok(&mut h, &c, "ui.click", json!({ "x": page_two.x, "y": page_two.y }));
+    assert!(!h.state().views[0].auto_scrolling());
+    assert_eq!(h.state().views[0].target_pages(), vec![0], "the cancelling press and release belong to autoscroll");
+    // The next ordinary click still selects normally.
+    ok(&mut h, &c, "ui.click", json!({ "x": page_two.x, "y": page_two.y }));
+    assert_eq!(h.state().views[0].target_pages(), vec![1]);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn organize_pages_supports_autoscroll_without_selecting_or_reordering_pages() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, c) = harness_pages(40);
+    h.state_mut().execute("page.organize");
+    h.run_steps(3);
+    let top = h.get_by_label("Page 1").rect().top();
+    let p = start_autoscroll(&mut h, &c);
+    ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + 80.0 }));
+    h.run_steps(8);
+    assert!(h.get_by_label("Page 1").rect().top() < top - 30.0, "the organize grid scrolls");
+    assert!(h.state().views[0].selected.is_empty());
+    assert!(h.state().views[0].org_drag.is_none());
+    ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
+    // Holding the wheel over a page also must not create an organize drag.
+    ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y + 80.0], "button": "middle" }));
+    assert!(h.state().views[0].selected.is_empty());
+    assert!(h.state().views[0].org_drag.is_none());
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+    assert!(h.state().views[0].auto_scrolling(), "releasing the wheel leaves the grid scrolling on");
+    h.state_mut().views[0].organize = false;
+    h.run_steps(2);
+    assert!(!h.state().views[0].auto_scrolling(), "changing canvas mode cancels the gesture");
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn middle_button_input_does_not_start_custom_scrolling_outside_linux() {
+    for organize in [false, true] {
+        let (mut h, c) = harness_pages(40);
+        h.state_mut().views[0].organize = organize;
+        h.run_steps(3);
+        let p = h.state().views[0].viewport_rect().center();
+        ok(&mut h, &c, "ui.click", json!({ "x": p.x, "y": p.y, "button": "middle" }));
+        ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + 50.0 }));
+        h.run_steps(8);
+        assert!(!h.state().views[0].auto_scrolling(), "custom scrolling must be Linux-only: organize={organize}");
+    }
 }
 
 #[test]
@@ -77,6 +420,107 @@ fn state_and_view_options() {
     ok(&mut h, &c, "ui.set", json!({ "key": "panel", "value": "bookmarks" }));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["right_panel"], "Bookmarks");
     assert!(call(&mut h, &c, "ui.set", json!({ "key": "panel", "value": "nonsense" })).is_err());
+}
+
+#[test]
+fn japanese_controls_and_search_keep_command_ids() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "ja" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "ja");
+    ok(&mut h, &c, "ui.click", json!({ "label": "閲覧" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read");
+
+    ok(&mut h, &c, "ui.command", json!({ "id": "app.preferences" }));
+    let prefs = ok(&mut h, &c, "ui.inspect", json!({ "query": "表示言語" }));
+    assert!(prefs["count"].as_u64().unwrap() > 0, "{prefs}");
+    ok(&mut h, &c, "ui.click", json!({ "label": "OK" }));
+
+    for (query, translated) in [("整理", "ページを整理"), ("Split document", "文書を分割…"), ("page.split", "文書を分割…")] {
+        ok(&mut h, &c, "ui.command", json!({ "id": "view.palette" }));
+        ok(&mut h, &c, "ui.type", json!({ "text": query }));
+        let hits = ok(&mut h, &c, "ui.inspect", json!({ "query": translated }));
+        assert!(hits["count"].as_u64().unwrap() > 0, "{query}: {hits}");
+        ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
+        h.state_mut().palette_query.clear();
+    }
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["name"], "doc.pdf");
+    ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "en" }));
+    ok(&mut h, &c, "ui.click", json!({ "label": "All tools" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "AllTools");
+}
+
+#[test]
+fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "ja" }));
+    ok(&mut h, &c, "ui.click", json!({ "label": "メニュー" }));
+    ok(&mut h, &c, "ui.click", json!({ "label": "編集 ⏵" }));
+    let menu = ok(&mut h, &c, "ui.inspect", json!({ "query": "環境設定…" }));
+    let prefs = menu["widgets"].as_array().unwrap().iter().find(|w| w["clickable"] == true).expect("Preferences menu item");
+    ok(&mut h, &c, "ui.click", json!({ "id": prefs["id"] }));
+    for (current, next, code) in [("日本語", "English", "en"), ("English", "日本語", "ja")] {
+        let selector = ok(&mut h, &c, "ui.inspect", json!({ "query": current }));
+        let combo = selector["widgets"].as_array().unwrap().iter().find(|w| w["role"] == "ComboBox").expect("language selector");
+        ok(&mut h, &c, "ui.click", json!({ "id": combo["id"] }));
+        ok(&mut h, &c, "ui.click", json!({ "label": next }));
+        assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], code);
+    }
+    ok(&mut h, &c, "ui.click", json!({ "label": "OK" }));
+    ok(&mut h, &c, "ui.key", json!({ "key": ",", "modifiers": ["command"] }));
+    let prefs = ok(&mut h, &c, "ui.inspect", json!({ "query": "表示言語" }));
+    assert!(prefs["count"].as_u64().unwrap() > 0, "{prefs}");
+    ok(&mut h, &c, "ui.click", json!({ "label": "OK" }));
+
+    ok(&mut h, &c, "ui.command", json!({ "id": "help.shortcuts" }));
+    for label in ["キーボードショートカット", "開く", "環境設定", "次／前の検索結果", "ダブルクリック", "閉じる"]
+    {
+        let found = ok(&mut h, &c, "ui.inspect", json!({ "query": label }));
+        assert!(found["count"].as_u64().unwrap() > 0, "{label}: {found}");
+    }
+    let english = ok(&mut h, &c, "ui.inspect", json!({ "query": "Next / previous match" }));
+    assert_eq!(english["count"], 0);
+    ok(&mut h, &c, "ui.click", json!({ "label": "閉じる" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["name"], "doc.pdf");
+}
+
+#[test]
+fn japanese_dialogs_errors_and_custom_action_names() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({"key": "language", "value": "ja"}));
+    for (dialog, label) in [
+        ("properties", "文書のプロパティ"),
+        ("protect", "パスワードで保護"),
+        ("export-image", "画像に書き出し"),
+        ("optimize", "PDF の最適化"),
+        ("recognize-text", "テキストを認識"),
+        ("accessibility-options", "アクセシビリティチェックのオプション"),
+        ("js-console", "JavaScript コンソール"),
+        ("compare-files", "ファイルを比較"),
+        ("sign", "署名用のデジタル ID を設定"),
+    ] {
+        ok(&mut h, &c, "ui.set", json!({"key": "dialog", "value": dialog}));
+        let found = ok(&mut h, &c, "ui.inspect", json!({"query": label}));
+        assert!(found["count"].as_u64().unwrap() > 0, "{dialog}: {found}");
+    }
+    ok(&mut h, &c, "ui.set", json!({"key": "dialog", "value": "none"}));
+    assert!(!h.state_mut().apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    // The frame is translated; the engine's own error text is shown as it is.
+    assert_eq!(state["notice"], "操作「ページを削除」に失敗しました: a document must keep at least one page");
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["name"], "doc.pdf");
+
+    h.state_mut().custom_actions.push(pdfcraft_engine::actions::Action {
+        name: "Save".to_string(),
+        description: "Print".to_string(),
+        steps: Vec::new(),
+        builtin: false,
+    });
+    h.state_mut().wizard.selected = Some("Save".to_string());
+    ok(&mut h, &c, "ui.set", json!({"key": "dialog", "value": "action-wizard"}));
+    for label in ["アクションウィザード", "Save", "Print"] {
+        let found = ok(&mut h, &c, "ui.inspect", json!({"query": label}));
+        assert!(found["widgets"].as_array().unwrap().iter().any(|w| w["label"] == label || w["value"] == label), "{found}");
+    }
 }
 
 #[test]
@@ -133,6 +577,41 @@ fn commands_keys_and_typing() {
 }
 
 #[test]
+fn select_all_key_selects_every_page_in_organize() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({ "key": "organize", "value": "on" }));
+    ok(&mut h, &c, "ui.set", json!({ "key": "select", "value": "3" }));
+    ok(&mut h, &c, "ui.key", json!({ "key": "A", "modifiers": ["command"] }));
+    assert_eq!(h.state().views[0].target_pages(), [0, 1, 2, 3, 4]);
+    assert_eq!(h.state().views[0].current, 2);
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["dirty"], false);
+}
+
+#[test]
+fn saved_signature_can_be_changed_through_the_control_channel() {
+    let (mut h, c) = harness();
+    h.state_mut().signature = Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Ada Lovelace".into()));
+    ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.signature.change" }));
+    h.run_steps(3);
+    assert_eq!(h.state().signature_draft.text, "Ada Lovelace");
+    let fields = ok(&mut h, &c, "ui.inspect", json!({ "role": "TextInput" }));
+    let field = fields["widgets"].as_array().unwrap().iter().find(|w| w["value"] == "Ada Lovelace").expect("the signature text field");
+    let r = field["rect"].as_array().unwrap();
+    let [x0, y0, x1, y1] = [0, 1, 2, 3].map(|i| r[i].as_f64().unwrap());
+    ok(&mut h, &c, "ui.click", json!({ "x": (x0 + x1) / 2.0, "y": (y0 + y1) / 2.0 }));
+    ok(&mut h, &c, "ui.key", json!({ "key": "A", "modifiers": ["command"] }));
+    ok(&mut h, &c, "ui.type", json!({ "text": "Grace Hopper" }));
+    ok(&mut h, &c, "ui.click", json!({ "label": "Apply" }));
+    assert_eq!(h.state().signature, Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Grace Hopper".into())));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], "fill-signature");
+    ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.signature.remove" }));
+    assert_eq!(h.state().signature, None);
+    h.state_mut().initials = Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("GH".into()));
+    ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.initials.remove" }));
+    assert_eq!(h.state().initials, None);
+}
+
+#[test]
 fn drawing_a_comment_by_drag_and_its_context_menu() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.command", json!({ "id": "comment.square" }));
@@ -171,7 +650,7 @@ fn screenshots_of_window_and_region() {
 fn loopback_transport_requires_the_token() {
     use std::io::{BufRead, BufReader, Write};
     let (mut h, c) = harness();
-    let ep = printcraft_ui_egui::control::serve(c).unwrap();
+    let ep = pdfcraft_ui_egui::control::serve(c).unwrap();
     let talk = |lines: Vec<Value>| {
         let port = ep.port;
         std::thread::spawn(move || {
@@ -192,7 +671,7 @@ fn loopback_transport_requires_the_token() {
             out
         })
     };
-    let pump = |h: &mut Harness<'static, PrintCraftApp>, t: std::thread::JoinHandle<Vec<Value>>| {
+    let pump = |h: &mut Harness<'static, PdfCraftApp>, t: std::thread::JoinHandle<Vec<Value>>| {
         while !t.is_finished() {
             h.step();
         }
@@ -224,4 +703,17 @@ fn loopback_transport_requires_the_token() {
     assert_eq!(good[0]["result"]["ok"], true);
     assert_eq!(good[1]["result"]["documents"][0]["name"], "doc.pdf");
     assert!(good[2]["error"]["message"].as_str().unwrap().contains("disabled"));
+}
+
+#[test]
+fn control_default_workspace_and_session_override() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({"key": "default-mode", "value": "edit"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["default_mode"], "edit");
+    assert!(call(&mut h, &c, "ui.set", json!({"key": "default-mode", "value": "unknown"})).is_err());
+    h.state_mut().open_bytes("next.pdf", None, fixture(1)).unwrap();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Edit");
+    ok(&mut h, &c, "ui.set", json!({"key": "mode", "value": "read"}));
+    h.state_mut().open_bytes("another.pdf", None, fixture(1)).unwrap();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read");
 }

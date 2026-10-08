@@ -46,12 +46,12 @@ jobs:
           }
       - name: XML, desktop entry, AppStream, Flatpak manifest
         run: |
-          xmllint --noout packaging/windows/printcraft.wxs packaging/macos/*.plist* packaging/linux/*.xml*
+          xmllint --noout packaging/windows/*.wxs packaging/macos/*.plist* packaging/linux/*.xml*
           # Windows Installer needs Icon ids ending in .ico or .exe, or shortcuts show a blank icon (#57).
-          if grep -oE '<Icon Id="[^"]*"' packaging/windows/printcraft.wxs | grep -vE '\.(ico|exe)"$'; then
-            echo "::error file=packaging/windows/printcraft.wxs::Icon Id must end in .ico or .exe"; exit 1
+          if grep -oE '<Icon Id="[^"]*"' packaging/windows/pdfcraft.wxs | grep -vE '\.(ico|exe)"$'; then
+            echo "::error file=packaging/windows/pdfcraft.wxs::Icon Id must end in .ico or .exe"; exit 1
           fi
-          desktop-file-validate packaging/linux/ai.storyteller.printcraft.desktop
-          sed -e 's/@VERSION@/0.0.0/' -e 's/@DATE@/2026-01-01/' packaging/linux/ai.storyteller.printcraft.metainfo.xml.in >"$RUNNER_TEMP/ai.storyteller.printcraft.metainfo.xml"
-          appstreamcli validate --no-net --explain "$RUNNER_TEMP/ai.storyteller.printcraft.metainfo.xml"
-          python3 -c "import yaml; m = yaml.safe_load(open('packaging/linux/flatpak/ai.storyteller.printcraft.yml')); assert m['id'] == 'ai.storyteller.printcraft' and m['command'] == 'printcraft'"
+          desktop-file-validate packaging/linux/ai.storyteller.pdfcraft.desktop
+          sed -e 's/@VERSION@/0.0.0/' -e 's/@DATE@/2026-01-01/' packaging/linux/ai.storyteller.pdfcraft.metainfo.xml.in >"$RUNNER_TEMP/ai.storyteller.pdfcraft.metainfo.xml"
+          appstreamcli validate --no-net --explain "$RUNNER_TEMP/ai.storyteller.pdfcraft.metainfo.xml"
+          python3 -c "import yaml; m = yaml.safe_load(open('packaging/linux/flatpak/ai.storyteller.pdfcraft.yml')); assert m['id'] == 'ai.storyteller.pdfcraft' and m['command'] == 'pdfcraft'"

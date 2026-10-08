@@ -117,7 +117,7 @@ pub struct Action {
     pub name: String,
     pub description: String,
     pub steps: Vec<Step>,
-    /// One of PrintCraft's own actions (can't be edited or deleted).
+    /// One of PdfCraft's own actions (can't be edited or deleted).
     pub builtin: bool,
 }
 

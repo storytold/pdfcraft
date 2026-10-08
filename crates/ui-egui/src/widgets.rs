@@ -3,7 +3,7 @@
 use egui::{Align2, Color32, CornerRadius, Rect, Response, Sense, Stroke, vec2};
 
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, icons};
+use crate::{PdfCraftApp, icons};
 
 /// A mode-bar tab: text with an underline when active.
 pub fn mode_tab(ui: &mut egui::Ui, label: &str, active: bool) -> Response {
@@ -75,12 +75,13 @@ pub fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> Response {
 pub fn section_title(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
     ui.add_space(10.0);
-    ui.label(egui::RichText::new(text.to_uppercase()).font(theme::semibold(10.5)).color(t.text_faint).extra_letter_spacing(0.6));
+    // Section titles across every panel go through here, so one translation point covers them.
+    ui.label(egui::RichText::new(tl!(text).to_uppercase()).font(theme::semibold(10.5)).color(t.text_faint).extra_letter_spacing(0.6));
     ui.add_space(2.0);
 }
 
 /// Transient message at the bottom centre.
-pub fn toast(app: &mut PrintCraftApp, ctx: &egui::Context) {
+pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some((msg, start)) = app.toast.clone() else { return };
     let now = ctx.input(|i| i.time);
     let start = if start == 0.0 { now } else { start };
@@ -127,14 +128,14 @@ pub fn artcraft_mark(ui: &mut egui::Ui, size: f32) -> Response {
     )
 }
 
-/// Buttons for every community link (`printcraft_engine::links`), Discord first and prominent.
+/// Buttons for every community link (`pdfcraft_engine::links`), Discord first and prominent.
 /// Returns the registry command of the one clicked.
 pub fn community_links(ui: &mut egui::Ui) -> Option<&'static str> {
     let mut clicked = None;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-        for (i, l) in printcraft_engine::links::LINKS.iter().enumerate() {
-            let resp = if i == 0 { icon_pill(ui, l.icon, "Join our Discord", true) } else { icon_pill(ui, l.icon, l.label, false) };
+        for (i, l) in pdfcraft_engine::links::LINKS.iter().enumerate() {
+            let resp = if i == 0 { icon_pill(ui, l.icon, tl!("Join our Discord"), true) } else { icon_pill(ui, l.icon, tl!(l.label), false) };
             if resp.on_hover_text(l.url).clicked() {
                 clicked = Some(l.command);
             }

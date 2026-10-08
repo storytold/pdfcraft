@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-filters-fuzz"
+name = "pdfcraft-filters-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -8,13 +8,13 @@ license = "MIT OR Apache-2.0"
 [package.metadata]
 cargo-fuzz = true
 
-# Detached from the PrintCraft workspace: run with `cargo +nightly fuzz run decode`
+# Detached from the PdfCraft workspace: run with `cargo +nightly fuzz run decode`
 # from crates/filters/.
 [workspace]
 
 [dependencies]
 libfuzzer-sys = "0.4"
-printcraft-filters = { path = ".." }
+pdfcraft-filters = { path = ".." }
 
 [[bin]]
 name = "decode"

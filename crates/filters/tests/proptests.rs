@@ -1,7 +1,7 @@
 //! Round-trip property tests (encode → decode) for every encodable filter and predictor,
 //! and fuzz-style tests feeding arbitrary bytes and parameters to every decoder.
 
-use printcraft_filters::{Filter, FilterError, Params, decode, decode_tolerant, encode};
+use pdfcraft_filters::{Filter, FilterError, Params, decode, decode_tolerant, encode};
 use proptest::prelude::*;
 
 const MAX: usize = 1 << 24;
@@ -142,7 +142,7 @@ proptest! {
 
 #[test]
 fn flate_bomb_in_chain() {
-    let bomb = printcraft_filters::encode_flate(&vec![0u8; 32 << 20]);
+    let bomb = pdfcraft_filters::encode_flate(&vec![0u8; 32 << 20]);
     let a85 = encode(&Filter::Ascii85, &Params::default(), &bomb).unwrap();
     let chain = [(Filter::Ascii85, Params::default()), (Filter::Flate, Params::default())];
     assert!(matches!(decode(&chain, &a85, 1 << 20), Err(FilterError::LimitExceeded(_))));

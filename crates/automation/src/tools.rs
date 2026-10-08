@@ -274,7 +274,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "form_set_props",
             "Field properties",
-            "Change a field's properties (General and Options tabs): name (renames it), tooltip, read_only, required, multiline, max_length (0 = no limit), options (combo/list items), font_size (0 = auto), rect (position), format, validate, calculate (Acrobat's Format/Validate/Calculate tabs, run natively: values are checked, formatted and recalculated as in Acrobat). Options tab: align (left, center, right), default (the value Reset form restores; for check boxes and radio buttons their on state, \"\" for off), flags { scroll, rich_text, password, file_select, spell_check, comb (needs max_length), sort, editable, multi_select, commit_immediately }. Only the given ones change. Undoable.",
+            "Change a field's properties (General and Options tabs): name (renames it), tooltip, read_only, required, multiline, max_length (0 = no limit), options (combo/list items), font_size (0 = auto), rect (position), format, validate, calculate (Acrobat's Format/Validate/Calculate tabs, run natively: values are checked, formatted and recalculated as in Acrobat). Options tab: align (left, center, right), default (the value Reset form restores; for check boxes and radio buttons their on state, \"\" for off), flags { scroll, rich_text, password, file_select, spell_check, comb (needs max_length), sort, editable, multi_select, commit_immediately }, check_style (check boxes and radio buttons: check, circle, cross, diamond, square, star). Only the given ones change. Undoable.",
         )
         .with(schema(
             json!({
@@ -290,6 +290,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "align": { "type": "string", "enum": ["left", "center", "right"] },
                 "locked": { "type": "boolean", "description": "Lock the field's properties (only unlocking is accepted while locked)." },
                 "default": { "type": "string" },
+                "check_style": { "type": "string", "enum": ["check", "circle", "cross", "diamond", "square", "star"], "description": "Check boxes and radio buttons: the mark shown when on." },
                 "flags": { "type": "object", "additionalProperties": { "type": "boolean" } },
                 "font_size": { "type": "number", "minimum": 0 },
                 "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "Move/resize: points from the top-left of the displayed page." },
@@ -306,7 +307,7 @@ pub fn tools() -> Vec<ToolDef> {
                 &["doc"],
             )),
         t("doc_export_data", "Export comments or form data", "Write comments and/or form data to path; the extension picks the format: .xfdf or .fdf (comments and/or fields), .xml, .csv or .txt (form data). what: all (default), comments, fields.")
-            .ro()
+            .destructive()
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "what": { "type": "string", "enum": ["all", "comments", "fields"] } }), &["doc", "path"])),
         t("doc_import_data", "Import comments or form data", "Import comments and/or field values from an XFDF, FDF, XML, CSV or tab-delimited text file (detected from its content). Comments with the same name are replaced; values go through the form's formats and validation. Undoable.")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
@@ -367,7 +368,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_print",
             "Print",
-            "Print with Acrobat's Print dialog options, or save the print-ready PDF. pages: a range such as \"1-3, 6, 9-\" (page labels allowed; default all); subset odd/even; reverse. layout: fit (default), actual, shrink, custom (scale %), multiple (per_sheet 2/4/6/9/16, order, border, auto_rotate), booklet (booklet_subset both/front/back, binding left/right), poster (scale %, overlap pt, cut_marks). orientation auto/portrait/landscape; comments_forms document / document-and-markups (default) / document-and-stamps / form-fields-only; paper Letter/Legal/Tabloid/A3/A4/A5. Then path (save) or printer (a name or \"default\") with copies, collate, duplex off/long-edge/short-edge, grayscale.",
+            "Print with Acrobat's Print dialog options, or save the print-ready PDF. pages: a range such as \"1-3, 6, 9-\" (page labels allowed; default all); subset odd/even; reverse. layout: fit (default), actual, shrink, custom (scale %), multiple (per_sheet 2/4/6/9/16, order, border, auto_rotate; cut-stack order arranges single-sided sheets for cutting into piles and stacking left to right, top to bottom, keeping sheet order within each pile; duplex must be off), booklet (booklet_subset both/front/back, binding left/right), poster (scale %, overlap pt, cut_marks). orientation auto/portrait/landscape; comments_forms document / document-and-markups (default) / document-and-stamps / form-fields-only; paper Letter/Legal/Tabloid/A3/A4/A5. Then path (save) or printer (a name or \"default\") with copies, collate, duplex off/long-edge/short-edge, grayscale.",
         )
         .with(schema(
             json!({
@@ -378,7 +379,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "layout": { "type": "string", "enum": ["fit", "actual", "shrink", "custom", "multiple", "booklet", "poster"] },
                 "scale": { "type": "number", "exclusiveMinimum": 0 },
                 "per_sheet": { "type": "integer", "minimum": 1, "maximum": 256 },
-                "order": { "type": "string", "enum": ["horizontal", "horizontal-reversed", "vertical", "vertical-reversed"] },
+                "order": { "type": "string", "enum": ["horizontal", "horizontal-reversed", "vertical", "vertical-reversed", "cut-stack"] },
                 "border": { "type": "boolean" },
                 "auto_rotate": { "type": "boolean" },
                 "booklet_subset": { "type": "string", "enum": ["both", "front", "back"] },
@@ -689,7 +690,7 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "pages": pages("to fill (default: all)"), "color": { "type": "string" }, "file": { "type": "string" }, "file_page": { "type": "integer", "minimum": 1 }, "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }, "opacity": { "type": "number", "minimum": 0, "maximum": 1 }, "replace": { "type": "boolean" } }),
                 &["doc"],
             )),
-        t("doc_remove_marks", "Remove header & footer, watermark or background", "Remove every header and footer, watermark or background PrintCraft (or a compatible tool) added. Undoable.")
+        t("doc_remove_marks", "Remove header & footer, watermark or background", "Remove every header and footer, watermark or background PdfCraft (or a compatible tool) added. Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "kind": { "type": "string", "enum": ["header_footer", "watermark", "background"] } }), &["doc", "kind"])),
         t("doc_export_images", "Export pages as images", "Write pages as PNG, JPEG or TIFF files (`<name>_page_<n>.png|jpg|tif`) into a folder, at a resolution (default 150 dpi). JPEG and TIFF are flattened onto white paper. Includes unsaved edits.")
@@ -719,7 +720,7 @@ pub fn tools() -> Vec<ToolDef> {
                 &["doc"],
             )),
         t("accessibility_report", "Accessibility report", "Run the full check and write the accessibility report (HTML) to path; returns the results too. Takes the same options as accessibility_check.")
-            .ro()
+            .destructive()
             .cmd("a11y.report")
             .with(schema(
                 json!({
@@ -840,7 +841,7 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["paths", "folder"],
             )),
-        t("ocr_status", "OCR status", "Whether text recognition is available (its models are installed: run `cargo xtask models` or set PRINTCRAFT_MODELS), where it looks for them, and the languages it reads.")
+        t("ocr_status", "OCR status", "Whether text recognition is available (its models are installed: run `cargo xtask models` or set PDFCRAFT_MODELS), where it looks for them, and the languages it reads.")
             .ro()
             .cmd("ocr.recognize")
             .with(schema(json!({}), &[])),
@@ -942,7 +943,7 @@ pub fn tools() -> Vec<ToolDef> {
                 &["doc", "page", "image", "action"],
             )),
         t("image_save", "Save image as", "Write one of a page's images to path: JPEG images unchanged, others as PNG (the extension is added when missing).")
-            .ro()
+            .destructive()
             .cmd("edit.edit_text")
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "image": { "type": "integer", "minimum": 1 }, "path": { "type": "string" } }), &["doc", "page", "image", "path"])),
         t("text_paragraphs", "List paragraphs", "The paragraphs on a page (lines grouped by font, size, alignment and spacing): number, text, its line numbers, box (top-left-origin points), font and size. Use the number with text_edit's paragraph.")
@@ -998,7 +999,7 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc(), "comments": { "type": "boolean", "description": "Default true." }, "fields": { "type": "boolean", "description": "Default true." } }), &["doc"])),
         t("edit_undo", "Undo", "Undo the last edit of a document.").cmd("edit.undo").with(schema(json!({ "doc": doc() }), &["doc"])),
         t("edit_redo", "Redo", "Redo the last undone edit of a document.").cmd("edit.redo").with(schema(json!({ "doc": doc() }), &["doc"])),
-        t("command_list", "List commands", "Every registered PrintCraft command with its menu, shortcut, whether it is enabled now, and the tool that automates it.")
+        t("command_list", "List commands", "Every registered PdfCraft command with its menu, shortcut, whether it is enabled now, and the tool that automates it.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &[])),
     ]

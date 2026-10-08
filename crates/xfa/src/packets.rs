@@ -1,7 +1,7 @@
 //! The XDP packets inside a PDF (`/AcroForm /XFA`, ISO 32000-1 §12.7.8): either one stream
 //! holding the whole XDP, or an array of (name, stream) pairs.
 
-use printcraft_cos::{Document, Object};
+use pdfcraft_cos::{Document, Object};
 
 use crate::XfaError;
 

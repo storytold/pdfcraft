@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-model"
+name = "pdfcraft-model"
 description = "Typed views over the PDF object graph (page tree with inherited attributes, page geometry)"
 version.workspace = true
 edition.workspace = true
@@ -9,4 +9,4 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-cos = { workspace = true }
+pdfcraft-cos = { workspace = true }

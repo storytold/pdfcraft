@@ -83,7 +83,7 @@ fn decode_arithmetic(
     if width > MAX_DIMENSION || height > MAX_DIMENSION {
         bail!(OverflowError::BitmapDimension);
     }
-    // PrintCraft patch: the product is bounded too (see `bitmap::MAX_PIXELS`).
+    // PdfCraft patch: the product is bounded too (see `bitmap::MAX_PIXELS`).
     if u64::from(width) * u64::from(height) > crate::bitmap::MAX_PIXELS {
         bail!(OverflowError::BitmapDimension);
     }

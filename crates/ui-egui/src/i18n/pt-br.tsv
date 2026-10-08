@@ -1,0 +1,60 @@
+# Brazilian Portuguese (pt-br) catalog. Format: see the header of ja.tsv
+# (context <TAB> source <TAB> translation; @id, @plural and other contexts; escapes \n \t \\).
+# Plural forms (see `plural_pt` in i18n/mod.rs): one (0 and 1) | other.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Brazilian Portuguese computing vocabulary. No proprietary localisation resource, string table or
+# product UI (Acrobat's included) was consulted or copied; add entries the same way.
+# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
+# the trailing "…" of dialog commands is kept.
+
+	Menu	Menu
+	File	Arquivo
+	Edit	Editar
+	Pages	Páginas
+	View	Exibir
+	Help	Ajuda
+	Preferences	Preferências
+	Preferences…	Preferências…
+	Interface language	Idioma da interface
+	Identity	Identidade
+	Name on new comments	Nome nos novos comentários
+	Open…	Abrir…
+	New blank PDF	Novo PDF em branco
+	Create PDF from file…	Criar PDF a partir de arquivo…
+	Create PDF from images…	Criar PDF a partir de imagens…
+	Create PDF from clipboard	Criar PDF a partir da área de transferência
+	Combine files…	Combinar arquivos…
+	Save	Salvar
+	Save as…	Salvar como…
+	Close file	Fechar arquivo
+	Close all	Fechar tudo
+	Revert	Reverter
+	Print…	Imprimir…
+	Document properties…	Propriedades do documento…
+	Undo	Desfazer
+	Redo	Refazer
+	Find…	Localizar…
+	Advanced search…	Pesquisa avançada…
+	Copy pages	Copiar páginas
+	Cut pages	Recortar páginas
+	Paste pages	Colar páginas
+	Fit visible	Ajustar ao visível
+	Marquee zoom	Zoom por seleção
+	Take a snapshot	Capturar instantâneo
+	Full screen mode	Modo de tela cheia
+	Read mode	Modo de leitura
+	Switch light / dark theme	Alternar tema claro / escuro
+	Comments panel	Painel de comentários
+	Form fields panel	Painel de campos de formulário
+	Clear form	Limpar formulário
+	Find tools and commands…	Localizar ferramentas e comandos…
+	Zoom	Zoom
+	Actual size	Tamanho real
+	Zoom to page level	Ajustar à página
+	Fit to width	Ajustar à largura
+	Display theme	Tema de exibição
+	Side panels	Painéis laterais
+	Enable Acrobat JavaScript	Ativar o Acrobat JavaScript
+	OK	OK
+	Auto	Automático

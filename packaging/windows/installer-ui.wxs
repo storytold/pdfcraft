@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Original, text-only native MSI dialogs. No third-party UI artwork or custom-action DLLs.
+     Full UI gets welcome (with the desktop-shortcut checkbox)/progress/outcome screens; /qn and /qb stay unattended. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <UI Id="PdfcraftInstallerUI">
+      <TextStyle Id="InstallerNormal" FaceName="Segoe UI" Size="9" />
+      <TextStyle Id="InstallerTitle" FaceName="Segoe UI" Size="12" Bold="yes" />
+      <Property Id="DefaultUIFont" Value="InstallerNormal" />
+
+      <Dialog Id="InstallWelcome" Width="370" Height="180" Title="[ProductName] Setup">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Install [ProductName]" />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="40"
+            Text="Setup will install [ProductName] for all users and add it to the Start menu. Click Install to continue." />
+        <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="105" Width="330" Height="17"
+            Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
+        <Control Id="Install" Type="PushButton" X="195" Y="145" Width="75" Height="23" Default="yes" ElevationShield="yes" Text="&amp;Install">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="280" Y="145" Width="70" Height="23" Cancel="yes" Text="Cancel">
+          <Publish Event="EndDialog" Value="Exit" />
+        </Control>
+      </Dialog>
+
+      <Dialog Id="InstallMaintenance" Width="370" Height="180" Title="[ProductName] Setup">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Maintain [ProductName]" />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70"
+            Text="[ProductName] is already installed. Choose Repair to restore missing files and shortcuts, or Remove to uninstall it." />
+        <Control Id="Repair" Type="PushButton" X="110" Y="145" Width="75" Height="23" Default="yes" ElevationShield="yes" Text="&amp;Repair">
+          <Publish Property="REINSTALL" Value="ALL" Order="1" />
+          <Publish Property="REINSTALLMODE" Value="amus" Order="2" />
+          <Publish Event="EndDialog" Value="Return" Order="3" />
+        </Control>
+        <Control Id="Remove" Type="PushButton" X="195" Y="145" Width="75" Height="23" ElevationShield="yes" Text="R&amp;emove">
+          <Publish Property="REMOVE" Value="ALL" Order="1" />
+          <Publish Event="EndDialog" Value="Return" Order="2" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="280" Y="145" Width="70" Height="23" Cancel="yes" Text="Cancel">
+          <Publish Event="EndDialog" Value="Exit" />
+        </Control>
+      </Dialog>
+
+      <Dialog Id="InstallProgress" Width="370" Height="180" Title="[ProductName] Setup" Modeless="yes">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Setting up [ProductName]" />
+        <Control Id="Status" Type="Text" X="20" Y="60" Width="330" Height="40" Text="Please wait while setup completes.">
+          <Subscribe Event="ActionText" Attribute="Text" />
+        </Control>
+        <Control Id="Progress" Type="ProgressBar" X="20" Y="110" Width="330" Height="15" ProgressBlocks="yes">
+          <Subscribe Event="SetProgress" Attribute="Progress" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="280" Y="145" Width="70" Height="23" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="ConfirmCancel" />
+        </Control>
+      </Dialog>
+
+      <Dialog Id="ConfirmCancel" Width="300" Height="110" Title="Cancel setup">
+        <Control Id="Description" Type="Text" X="20" Y="20" Width="260" Height="35" Text="Cancel [ProductName] setup?" />
+        <Control Id="Yes" Type="PushButton" X="130" Y="70" Width="70" Height="23" Text="&amp;Yes">
+          <Publish Event="EndDialog" Value="Exit" />
+        </Control>
+        <Control Id="No" Type="PushButton" X="210" Y="70" Width="70" Height="23" Default="yes" Cancel="yes" Text="&amp;No">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+      </Dialog>
+
+      <Dialog Id="InstallComplete" Width="370" Height="180" Title="[ProductName] Setup">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Setup completed successfully" />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70"
+            Text="[ProductName] setup has completed successfully. Click Finish to close this window." />
+        <Control Id="Finish" Type="PushButton" X="280" Y="145" Width="70" Height="23" Default="yes" Cancel="yes" Text="&amp;Finish">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+      </Dialog>
+
+      <Dialog Id="InstallFailed" Width="370" Height="180" Title="[ProductName] Setup">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Setup failed" />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70"
+            Text="[ProductName] setup could not be completed. Resolve the reported error and run setup again." />
+        <Control Id="Finish" Type="PushButton" X="280" Y="145" Width="70" Height="23" Default="yes" Cancel="yes" Text="&amp;Finish">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+      </Dialog>
+
+      <Dialog Id="InstallCancelled" Width="370" Height="180" Title="[ProductName] Setup">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Setup cancelled" />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70"
+            Text="[ProductName] setup was cancelled. Run setup again when you are ready." />
+        <Control Id="Finish" Type="PushButton" X="280" Y="145" Width="70" Height="23" Default="yes" Cancel="yes" Text="&amp;Finish">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+      </Dialog>
+
+      <!-- Shown by Windows Installer (Restart Manager) when an upgrade or repair must replace files
+           that a running PdfCraft holds open. OK closes those programs (MSIRMSHUTDOWN=2) and
+           continues; Cancel ends setup. -->
+      <Dialog Id="MsiRMFilesInUse" Width="370" Height="200" Title="[ProductName] Setup" KeepModeless="yes">
+        <Control Id="Title" Type="Text" X="20" Y="15" Width="330" Height="25" Text="{\InstallerTitle}Files in use" />
+        <Control Id="Description" Type="Text" X="20" Y="45" Width="330" Height="30"
+            Text="These programs are using files that setup needs to update. Click OK to close them and continue, or Cancel to stop setup." />
+        <Control Id="List" Type="ListBox" X="20" Y="80" Width="330" Height="55" Property="FileInUseProcess" Sunken="yes" TabSkip="yes" />
+        <Control Id="OK" Type="PushButton" X="195" Y="165" Width="75" Height="23" Default="yes" Text="OK">
+          <Publish Property="MSIRMSHUTDOWN" Value="2" Order="1" />
+          <Publish Event="EndDialog" Value="Return" Order="2" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="280" Y="165" Width="70" Height="23" Cancel="yes" Text="Cancel">
+          <Publish Event="EndDialog" Value="Exit" />
+        </Control>
+      </Dialog>
+
+      <InstallUISequence>
+        <Show Dialog="InstallWelcome" Before="InstallMaintenance" Condition="UILevel = 5 AND NOT Installed" />
+        <Show Dialog="InstallMaintenance" Before="InstallProgress" Condition="UILevel = 5 AND Installed AND NOT REMOVE AND NOT REINSTALL" />
+        <Show Dialog="InstallProgress" Before="ExecuteAction" Condition="UILevel = 5" />
+        <Show Dialog="InstallComplete" OnExit="success" Condition="UILevel = 5" />
+        <Show Dialog="InstallFailed" OnExit="error" Condition="UILevel = 5" />
+        <Show Dialog="InstallCancelled" OnExit="cancel" Condition="UILevel = 5" />
+      </InstallUISequence>
+    </UI>
+  </Fragment>
+</Wix>

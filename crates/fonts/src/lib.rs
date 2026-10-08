@@ -1,4 +1,4 @@
-//! printcraft-fonts — font metrics and encodings for generated appearances (L2).
+//! pdfcraft-fonts — font metrics and encodings for generated appearances (L2).
 //!
 //! See the README: the metrics are approximations by character class (no vendor metrics files
 //! are bundled). The full font subsystem lands in M2.2/M7.
@@ -9,8 +9,8 @@ mod craft;
 mod encodings;
 pub mod pdf;
 mod script;
-pub use craft::{CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_japanese_font, ui_japanese_fonts};
-pub use script::{GlyphError, GlyphOutline, ScriptOutline, japanese_glyph, script_outline};
+pub use craft::{CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_japanese_font, ui_chinese_fonts, ui_cjk_fonts, ui_japanese_fonts};
+pub use script::{GlyphError, GlyphOutline, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, script_outline};
 
 /// Approximate advance of `s` in Helvetica (or Arial) at `size` points.
 pub fn helvetica_width(s: &str, size: f64) -> f64 {

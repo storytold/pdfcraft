@@ -7,10 +7,10 @@
 //!
 //! The `/DA` font is used when the form's `/DR` defines it as a simple font; text is encoded in
 //! WinAnsi. Otherwise (composite fonts, missing resources) Helvetica is used, so text is always
-//! visible. Widths use the approximate Helvetica metrics of `printcraft-fonts`.
+//! visible. Widths use the approximate Helvetica metrics of `pdfcraft-fonts`.
 
-use printcraft_cos::{Dict, Document, Object, Stream};
-use printcraft_fonts::{helvetica_width, literal, win_ansi, wrap};
+use pdfcraft_cos::{Dict, Document, Object, Stream};
+use pdfcraft_fonts::{helvetica_width, literal, win_ansi, wrap};
 
 use crate::{Field, FieldKind, Widget, acroform, flags};
 
@@ -320,6 +320,7 @@ pub fn check_box_states(doc: &mut Document, w: &Widget, kind: FieldKind, on_name
     let wd = wobj.as_dict().cloned().unwrap_or_default();
     let (width, height) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
     let (frame_c, _) = frame(doc, &wd, width, height);
+    let style = crate::author::CheckStyle::of_widget(doc, &wd, kind);
     let mut form = |content: String| -> Object {
         let mut d = Dict::new();
         d.set(b"Type".to_vec(), Object::name("XObject"));
@@ -328,57 +329,107 @@ pub fn check_box_states(doc: &mut Document, w: &Widget, kind: FieldKind, on_name
         Object::Ref(doc.add(Object::Stream(Stream::flate(d, content.as_bytes()))))
     };
     let s = width.min(height);
-    let (cx, cy) = (width / 2.0, height / 2.0);
-    let mark = if kind == FieldKind::Radio {
-        let r = s * 0.25;
-        let k = 0.5523 * r;
-        format!(
-            "0 g\n{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c f\n",
-            n(cx + r),
-            n(cy),
-            n(cx + r),
-            n(cy + k),
-            n(cx + k),
-            n(cy + r),
-            n(cx),
-            n(cy + r),
-            n(cx - k),
-            n(cy + r),
-            n(cx - r),
-            n(cy + k),
-            n(cx - r),
-            n(cy),
-            n(cx - r),
-            n(cy - k),
-            n(cx - k),
-            n(cy - r),
-            n(cx),
-            n(cy - r),
-            n(cx + k),
-            n(cy - r),
-            n(cx + r),
-            n(cy - k),
-            n(cx + r),
-            n(cy)
-        )
-    } else {
-        format!(
-            "0 G\n{} w 1 J 1 j\n{} {} m {} {} l {} {} l S\n",
-            n((s * 0.1).max(1.0)),
-            n(cx - s * 0.28),
-            n(cy),
-            n(cx - s * 0.08),
-            n(cy - s * 0.22),
-            n(cx + s * 0.3),
-            n(cy + s * 0.25)
-        )
-    };
+    let mark = check_mark(style, width / 2.0, height / 2.0, s);
     let mut nd = Dict::new();
     nd.set(on_name.as_bytes().to_vec(), form(format!("{frame_c}{mark}")));
     nd.set(b"Off".to_vec(), form(frame_c));
     let mut ap = Dict::new();
     ap.set(b"N".to_vec(), Object::Dict(nd));
     ap
+}
+
+/// The on-state mark for `style` (#94), centred on (`cx`, `cy`) in a box whose smaller side is
+/// `s`, drawn in black.
+fn check_mark(style: crate::author::CheckStyle, cx: f64, cy: f64, s: f64) -> String {
+    use crate::author::CheckStyle;
+    // A filled polygon through `pts`.
+    let polygon = |pts: &[(f64, f64)]| {
+        let mut c = String::from("0 g\n");
+        for (i, (x, y)) in pts.iter().enumerate() {
+            c.push_str(&format!("{} {} {} ", n(*x), n(*y), if i == 0 { "m" } else { "l" }));
+        }
+        c.push_str("h f\n");
+        c
+    };
+    let line = n((s * 0.1).max(1.0));
+    match style {
+        CheckStyle::Check => format!(
+            "0 G\n{line} w 1 J 1 j\n{} {} m {} {} l {} {} l S\n",
+            n(cx - s * 0.28),
+            n(cy),
+            n(cx - s * 0.08),
+            n(cy - s * 0.22),
+            n(cx + s * 0.3),
+            n(cy + s * 0.25)
+        ),
+        CheckStyle::Cross => {
+            let d = s * 0.25;
+            format!(
+                "0 G\n{line} w 1 J\n{} {} m {} {} l S\n{} {} m {} {} l S\n",
+                n(cx - d),
+                n(cy - d),
+                n(cx + d),
+                n(cy + d),
+                n(cx - d),
+                n(cy + d),
+                n(cx + d),
+                n(cy - d)
+            )
+        }
+        CheckStyle::Square => {
+            let d = s * 0.22;
+            format!("0 g\n{} {} {} {} re f\n", n(cx - d), n(cy - d), n(2.0 * d), n(2.0 * d))
+        }
+        CheckStyle::Diamond => {
+            let d = s * 0.3;
+            polygon(&[(cx, cy + d), (cx + d, cy), (cx, cy - d), (cx - d, cy)])
+        }
+        CheckStyle::Star => {
+            // Five points: outer and inner radii alternate, the first point straight up.
+            let (outer, inner) = (s * 0.32, s * 0.32 * 0.382);
+            let pts: Vec<(f64, f64)> = (0..10)
+                .map(|i| {
+                    let a = std::f64::consts::FRAC_PI_2 + i as f64 * std::f64::consts::PI / 5.0;
+                    let r = if i % 2 == 0 { outer } else { inner };
+                    (cx + r * a.cos(), cy + r * a.sin())
+                })
+                .collect();
+            polygon(&pts)
+        }
+        CheckStyle::Circle => {
+            let r = s * 0.25;
+            let k = 0.5523 * r;
+            format!(
+                "0 g\n{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c f\n",
+                n(cx + r),
+                n(cy),
+                n(cx + r),
+                n(cy + k),
+                n(cx + k),
+                n(cy + r),
+                n(cx),
+                n(cy + r),
+                n(cx - k),
+                n(cy + r),
+                n(cx - r),
+                n(cy + k),
+                n(cx - r),
+                n(cy),
+                n(cx - r),
+                n(cy - k),
+                n(cx - k),
+                n(cy - r),
+                n(cx),
+                n(cy - r),
+                n(cx + k),
+                n(cy - r),
+                n(cx + r),
+                n(cy - k),
+                n(cx + r),
+                n(cy)
+            )
+        }
+    }
 }
 
 #[cfg(test)]

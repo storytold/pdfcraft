@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use printcraft_cos::{Document, Object, SaveOptions, write_incremental};
+use pdfcraft_cos::{Document, Object, SaveOptions, write_incremental};
 
 use super::*;
 
@@ -133,7 +133,7 @@ fn check_boxes_and_radios_switch_states() {
     let size = field(&all, "size");
     assert_eq!(size.value, ["L"]);
     assert_eq!(size.widgets.iter().map(|w| w.state.clone().unwrap()).collect::<Vec<_>>(), ["Off", "L"]);
-    // The bare check box got PrintCraft's own appearances and kept its other keys.
+    // The bare check box got PdfCraft's own appearances and kept its other keys.
     let bare = field(&all, "bare");
     assert_eq!(bare.value, ["Yes"]);
     assert_eq!(bare.widgets[0].on_state.as_deref(), Some("Yes"));
@@ -208,7 +208,7 @@ fn every_field_type_can_be_added_named_and_drawn() {
     {
         // One page.
         let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
-        let mut p = printcraft_cos::Dict::new();
+        let mut p = pdfcraft_cos::Dict::new();
         p.set(b"Type".to_vec(), Object::name("Page"));
         p.set(b"Parent".to_vec(), Object::Ref(pages));
         p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
@@ -312,7 +312,7 @@ fn properties_rename_and_delete() {
 fn deleting_works_with_a_form_dictionary_inside_the_catalog() {
     let mut doc = fixture();
     let root = doc.root().unwrap();
-    let af = doc.get(printcraft_cos::ObjRef::new(4, 0)).as_dict().cloned().unwrap();
+    let af = doc.get(pdfcraft_cos::ObjRef::new(4, 0)).as_dict().cloned().unwrap();
     doc.update_dict(root, |d| d.set(b"AcroForm".to_vec(), Object::Dict(af))).unwrap();
     let before = fields(&doc).len();
     delete_field(&mut doc, "name").unwrap();
@@ -324,7 +324,7 @@ fn deleting_works_with_a_form_dictionary_inside_the_catalog() {
 fn one_page() -> Document {
     let mut doc = Document::new_empty();
     let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
-    let mut p = printcraft_cos::Dict::new();
+    let mut p = pdfcraft_cos::Dict::new();
     p.set(b"Type".to_vec(), Object::name("Page"));
     p.set(b"Parent".to_vec(), Object::Ref(pages));
     p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
@@ -524,6 +524,58 @@ fn options_tab_flags_alignment_and_defaults() {
 }
 
 #[test]
+fn check_box_styles_change_the_mark() {
+    // #94: Field Properties ▸ Options ▸ Check Box Style (stored as /MK /CA).
+    let mut doc = one_page();
+    let check = add_field(&mut doc, 0, [50.0, 700.0, 70.0, 720.0], &NewField::CheckBox, None).unwrap();
+    let radio = add_field(&mut doc, 0, [50.0, 600.0, 70.0, 620.0], &NewField::Radio { group: None, export: "A".into() }, None).unwrap();
+    let text = add_field(&mut doc, 0, [50.0, 500.0, 250.0, 520.0], &NewField::Text { multiline: false }, None).unwrap();
+    let style = |doc: &Document, name: &str| check_style(doc, field(&fields(doc), name));
+    assert_eq!((style(&doc, &check), style(&doc, &radio)), (CheckStyle::Check, CheckStyle::Circle), "the defaults");
+    // The "on" appearance: the widget's /AP /N entry for its on state.
+    let on_ap = |doc: &Document, name: &str| {
+        let all = fields(doc);
+        let w = &field(&all, name).widgets[0];
+        let on = w.on_state.clone().unwrap();
+        let n = doc
+            .get(w.obj)
+            .as_dict()
+            .unwrap()
+            .get(b"AP")
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"N")
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .reference(on.as_bytes())
+            .unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+    };
+    let before = on_ap(&doc, &check);
+    for (s, code) in
+        [(CheckStyle::Cross, "8"), (CheckStyle::Square, "n"), (CheckStyle::Star, "H"), (CheckStyle::Diamond, "u"), (CheckStyle::Circle, "l")]
+    {
+        set_props(&mut doc, &check, &FieldProps { check_style: Some(s), ..FieldProps::default() }).unwrap();
+        let doc2 = reopen(&doc);
+        assert_eq!(style(&doc2, &check), s, "saved and read back");
+        let mk = doc2.get(field(&fields(&doc2), &check).widgets[0].obj).as_dict().unwrap().get(b"MK").unwrap().as_dict().cloned().unwrap();
+        assert_eq!(mk.get(b"CA").and_then(|c| c.as_string()).map(|c| c.to_text()).as_deref(), Some(code));
+        assert!(mk.get(b"BC").is_some(), "the border colour is kept");
+        assert_ne!(on_ap(&doc, &check), before, "{s:?} draws a different mark");
+    }
+    assert!(on_ap(&doc, &check).contains(" c f"), "a circle is a filled curve");
+    set_props(&mut doc, &radio, &FieldProps { check_style: Some(CheckStyle::Square), ..FieldProps::default() }).unwrap();
+    assert!(on_ap(&doc, &radio).contains(" re f"), "a square");
+    assert!(
+        set_props(&mut doc, &text, &FieldProps { check_style: Some(CheckStyle::Star), ..FieldProps::default() }).is_err(),
+        "text fields have no style"
+    );
+}
+
+#[test]
 fn ordering_tabs_manually() {
     let mut doc = one_page();
     let text = NewField::Text { multiline: false };
@@ -532,7 +584,7 @@ fn ordering_tabs_manually() {
     }
     // A comment between the widgets keeps its place.
     let page = page_refs(&doc)[0];
-    let mut note = printcraft_cos::Dict::new();
+    let mut note = pdfcraft_cos::Dict::new();
     note.set(b"Type".to_vec(), Object::name("Annot"));
     note.set(b"Subtype".to_vec(), Object::name("Text"));
     note.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
@@ -569,7 +621,7 @@ fn duplicating_a_field_across_pages_shares_its_value() {
     // A second and third page.
     let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
     for _ in 0..2 {
-        let mut p = printcraft_cos::Dict::new();
+        let mut p = pdfcraft_cos::Dict::new();
         p.set(b"Type".to_vec(), Object::name("Page"));
         p.set(b"Parent".to_vec(), Object::Ref(pages));
         p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
@@ -623,7 +675,7 @@ fn image_fields_ask_for_a_picture_and_show_it() {
     {
         d.set(k.to_vec(), v);
     }
-    let img = doc.add(Object::Stream(printcraft_cos::Stream::from_raw(d, vec![0; 24])));
+    let img = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(d, vec![0; 24])));
     set_button_icon(&mut doc, &name, img, (4, 2)).unwrap();
     let w = doc.get(f.widgets[0].obj).as_dict().cloned().unwrap();
     let mk = w.get(b"MK").unwrap().as_dict().unwrap().clone();
@@ -661,6 +713,40 @@ fn field_actions_round_trip_on_every_trigger() {
 }
 
 #[test]
+fn push_buttons_read_hide_actions() {
+    let mut doc = fixture();
+    let go = field(&fields(&doc), "go").obj;
+    let s = |t: &str| Object::String(PdfString::text(t));
+    let city = ObjRef::new(16, 0);
+    let null = ObjRef::new(9, 0);
+    let button = |doc: &mut Document, t: Object, h: Option<bool>| {
+        let mut a = Dict::new();
+        a.set(b"S".to_vec(), Object::name("Hide"));
+        a.set(b"T".to_vec(), t);
+        if let Some(h) = h {
+            a.set(b"H".to_vec(), Object::Bool(h));
+        }
+        doc.update_dict(go, |d| d.set(b"A".to_vec(), Object::Dict(a))).unwrap();
+        field(&fields(doc), "go").button.clone()
+    };
+    let hide = |names: &[&str], hide: bool| Some(af::ButtonAction::ShowHide { fields: names.iter().map(|n| n.to_string()).collect(), hide });
+    // A name; /H defaults to true (hide).
+    assert_eq!(button(&mut doc, s("name"), None), hide(&["name"], true));
+    // A widget reference names its field by its fully qualified name; /H false shows.
+    assert_eq!(button(&mut doc, Object::Ref(city), Some(false)), hide(&["address.city"], false));
+    // An array of both; a reference to something that isn't a field is skipped.
+    assert_eq!(button(&mut doc, Object::Array(vec![s("name"), Object::Ref(city), Object::Ref(null)]), None), hide(&["name", "address.city"], true));
+    // A /Parent cycle ends instead of looping.
+    let looped = doc.add(Object::Dict(Dict::new()));
+    doc.update_dict(looped, |d| {
+        d.set(b"T".to_vec(), s("loop"));
+        d.set(b"Parent".to_vec(), Object::Ref(looped));
+    })
+    .unwrap();
+    assert_eq!(button(&mut doc, Object::Ref(looped), None), hide(&["loop"], true));
+}
+
+#[test]
 fn detection_finds_blanks_rules_boxes_and_names_them() {
     use crate::detect::*;
     let w = |t: &str, x0: f64, y0: f64, x1: f64| Word { text: t.into(), rect: [x0, y0, x1, y0 + 10.0] };
@@ -690,12 +776,12 @@ fn detection_finds_blanks_rules_boxes_and_names_them() {
 #[test]
 fn page_shapes_reads_boxes_and_rules() {
     let mut doc = fixture();
-    let page = printcraft_model::pages(&doc)[0].obj;
-    let s = doc.add(printcraft_cos::Object::Stream(printcraft_cos::Stream::flate(
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let s = doc.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(
         Default::default(),
         b"q 2 0 0 2 0 0 cm 10 10 6 6 re S 20 50 m 120 50 l S 0 0 m 5 5 l S 30 300 100 0.5 re f Q",
     )));
-    doc.update_dict(page, |d| d.set(b"Contents".to_vec(), printcraft_cos::Object::Ref(s))).unwrap();
+    doc.update_dict(page, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(s))).unwrap();
     let sh = crate::detect::page_shapes(&doc, 0);
     assert_eq!(sh.boxes, [[20.0, 20.0, 32.0, 32.0]]);
     assert_eq!(sh.rules, [[40.0, 100.0, 240.0, 100.0], [60.0, 600.5, 260.0, 600.5]]);

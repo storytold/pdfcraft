@@ -2,12 +2,12 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_ui_egui::{PrintCraftApp, QuickTool};
+use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 
 #[test]
 fn choosing_and_placing_stamps() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app.set_option("zoom", "150").unwrap();
         app
@@ -18,7 +18,7 @@ fn choosing_and_placing_stamps() {
     h.get_by_label("Add a stamp");
     h.get_all_by_label("APPROVED").next().expect("dynamic approved").click();
     h.run_steps(2);
-    assert_eq!(h.state().quick_tool, QuickTool::Stamp(printcraft_engine::StampKind::DynApproved));
+    assert_eq!(h.state().quick_tool, QuickTool::Stamp(pdfcraft_engine::StampKind::DynApproved));
     let p = {
         let r = h.state().views[0].page_screen_rect(0).unwrap();
         r.min + egui::vec2(r.width() * 0.5, r.height() * 0.85)
@@ -38,7 +38,7 @@ fn choosing_and_placing_stamps() {
         h.run_steps(2);
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    if let Ok(dir) = std::env::var("PRINTCRAFT_SHOTS") {
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
         h.render().unwrap().save(format!("{dir}/stamps.png")).unwrap();
     }
 }
@@ -46,7 +46,7 @@ fn choosing_and_placing_stamps() {
 #[test]
 fn creating_placing_and_keeping_custom_stamps() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app.set_option("zoom", "150").unwrap();
         app
@@ -87,7 +87,7 @@ fn creating_placing_and_keeping_custom_stamps() {
     assert_eq!(doc.can_undo(), Some("Add stamp"));
     // The library is kept with the app's settings.
     let saved = s.persist();
-    let mut again = PrintCraftApp::new();
+    let mut again = PdfCraftApp::new();
     again.restore(&saved);
     assert_eq!(again.custom_stamps.len(), 1);
     assert_eq!((again.custom_stamps[0].category.as_str(), again.custom_stamps[0].name.as_str()), ("Company", "logo"));

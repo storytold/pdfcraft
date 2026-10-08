@@ -143,7 +143,7 @@ fn imposed_pdf_has_the_sheets_and_honours_comments_and_forms() {
     let doc = fixture(3);
     let out = impose(&doc, &settings(vec![0, 1, 2], Layout::multiple(2))).unwrap();
     let printed = Document::open(Arc::new(out.clone())).unwrap();
-    let pages = printcraft_model::pages(&printed);
+    let pages = pdfcraft_model::pages(&printed);
     assert_eq!(pages.len(), 2);
     assert_eq!(pages[0].crop(&printed), [0.0, 0.0, 792.0, 612.0]);
     // The source pages are form XObjects holding their content.
@@ -190,4 +190,81 @@ fn spooler_arguments_and_printer_list() {
         "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false -- /tmp/x.pdf"
     );
     assert_eq!(lp_args(&Job::default(), "f.pdf")[0], "-n", "no -d: the default printer");
+}
+
+#[test]
+fn lpstat_output_is_untranslated() {
+    // A localized lpstat (here Polish) is unreadable to parse_lpstat...
+    assert!(parse_lpstat("drukarka Office_Laser jest bezczynna.\ndomyślny cel systemowy: Office_Laser\n").is_empty());
+    // ...so the command must force the C locale, including the SOFTWARE switch macOS CUPS needs.
+    let cmd = spool::lpstat_command();
+    let envs: Vec<_> = cmd.get_envs().map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()))).collect();
+    for key in ["LC_ALL", "LANG"] {
+        assert!(envs.contains(&(key.into(), Some("C".into()))), "{key}=C missing: {envs:?}");
+    }
+    assert!(envs.iter().any(|(k, v)| k == "SOFTWARE" && v.as_deref().is_some_and(|v| !v.is_empty())), "SOFTWARE missing: {envs:?}");
+}
+
+fn cut_stack(cols: usize, rows: usize) -> Layout {
+    Layout::Multiple { cols, rows, order: PageOrder::CutStack, border: false, auto_rotate: false }
+}
+
+#[test]
+fn cut_stack_keeps_piles_in_order_and_blanks_in_place() {
+    let sizes = vec![(200.0, 300.0); 10];
+    let sheets = layout(&sizes, &settings((0..10).collect(), cut_stack(2, 2))).unwrap();
+    assert_eq!(sheet_pages(&sheets), [vec![0, 3, 6, 9], vec![1, 4, 7], vec![2, 5, 8]]);
+    for s in &sheets {
+        assert_eq!(s.lines, sheets[0].lines, "identical cuts even with blank cells");
+        assert_eq!(s.lines.len(), 4);
+        for (pl, first) in s.placed.iter().zip(&sheets[0].placed) {
+            assert_eq!(pl.matrix, first.matrix, "every pile stays in its cell");
+        }
+    }
+    assert!(sheets[0].placed[1].matrix.0[4] > sheets[0].placed[0].matrix.0[4]);
+    assert!(sheets[0].placed[2].matrix.0[5] < sheets[0].placed[0].matrix.0[5]);
+    // Selection and reverse order are preserved, including repeated source pages.
+    let selected = vec![9, 5, 5, 2, 0];
+    let sheets = layout(&sizes, &settings(selected, cut_stack(2, 2))).unwrap();
+    assert_eq!(sheet_pages(&sheets), [vec![9, 5, 0], vec![5, 2]]);
+    assert_eq!(sheets[1].placed[1].matrix, sheets[0].placed[1].matrix);
+}
+
+#[test]
+fn cutting_and_stacking_recovers_every_selected_page() {
+    // Simulate the actual operation using cell positions, not the imposition formula.
+    for (cols, rows) in [(1, 1), (1, 2), (2, 2), (2, 3), (3, 3), (4, 4)] {
+        for orientation in [Orientation::Auto, Orientation::Portrait, Orientation::Landscape] {
+            for n in 1..=37 {
+                let sizes = vec![(200.0, 300.0); n];
+                let selected: Vec<usize> = (0..n).rev().collect();
+                let s = Settings { orientation, ..settings(selected.clone(), cut_stack(cols, rows)) };
+                let sheets = layout(&sizes, &s).unwrap();
+                let mut piles: std::collections::BTreeMap<(i64, i64), Vec<usize>> = Default::default();
+                for sheet in &sheets {
+                    for pl in &sheet.placed {
+                        // Equal source sizes, so the page origins identify row/column.
+                        let [_, _, _, _, x, y] = pl.matrix.0;
+                        piles.entry((-(y * 100.0).round() as i64, (x * 100.0).round() as i64)).or_default().push(pl.page);
+                    }
+                }
+                let restacked: Vec<usize> = piles.into_values().flatten().collect();
+                assert_eq!(restacked, selected, "{cols}x{rows}, {n} pages, {orientation:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn multiple_rejects_hostile_grids_without_panicking() {
+    let sizes = [(200.0, 300.0)];
+    for (cols, rows) in [(usize::MAX, 2), (2, usize::MAX), (0, 2), (1, 0), (257, 1)] {
+        let mode = Layout::Multiple { cols, rows, order: PageOrder::Horizontal, border: false, auto_rotate: false };
+        assert!(matches!(layout(&sizes, &settings(vec![0], mode)), Err(PrintError::Invalid(_))));
+    }
+    let tiny = Settings { paper: (72.0, 72.0), ..settings(vec![0], cut_stack(16, 16)) };
+    assert!(matches!(layout(&sizes, &tiny), Err(PrintError::Invalid(_))));
+    for size in [(0.0, 300.0), (200.0, f64::NAN), (f64::INFINITY, 300.0), (f64::from_bits(1), f64::from_bits(1))] {
+        assert!(matches!(layout(&[size], &settings(vec![0], cut_stack(2, 2))), Err(PrintError::Invalid(_))));
+    }
 }

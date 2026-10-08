@@ -5,11 +5,11 @@
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
-use printcraft_engine::DocId;
-use printcraft_engine::ocr::{LANGUAGES, OcrPage, OcrSettings};
+use pdfcraft_engine::DocId;
+use pdfcraft_engine::ocr::{LANGUAGES, OcrPage, OcrSettings};
 
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, widgets};
+use crate::{PdfCraftApp, widgets};
 
 /// Which pages to read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,16 +58,16 @@ pub struct OcrRun {
     pub progress: Arc<Mutex<OcrProgress>>,
 }
 
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (bool, bool) {
+pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
-    let available = printcraft_engine::ocr::available();
+    let available = pdfcraft_engine::ocr::available();
     let d = &mut app.ocr_draft;
     d.to = d.to.clamp(1, pages);
     d.from = d.from.clamp(1, d.to);
-    ui.label(egui::RichText::new("Recognize Text").font(theme::semibold(18.0)));
+    ui.label(egui::RichText::new(tl!("Recognize Text")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     let group = |ui: &mut egui::Ui, title: &str, body: &mut dyn FnMut(&mut egui::Ui)| {
-        ui.label(egui::RichText::new(title).font(theme::semibold(13.0)));
+        ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(13.0)));
         egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             body(ui);
@@ -75,19 +75,19 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
         ui.add_space(8.0);
     };
     group(ui, "Pages", &mut |ui| {
-        ui.radio_value(&mut d.pages, OcrPages::All, "All pages");
-        ui.radio_value(&mut d.pages, OcrPages::Current, "Current page");
+        ui.radio_value(&mut d.pages, OcrPages::All, tl!("All pages"));
+        ui.radio_value(&mut d.pages, OcrPages::Current, tl!("Current page"));
         ui.horizontal(|ui| {
-            ui.radio_value(&mut d.pages, OcrPages::Range, "From");
+            ui.radio_value(&mut d.pages, OcrPages::Range, tl!("From"));
             let on = d.pages == OcrPages::Range;
             ui.add_enabled(on, egui::DragValue::new(&mut d.from).range(1..=pages));
-            ui.label("to");
+            ui.label(tl!("to"));
             ui.add_enabled(on, egui::DragValue::new(&mut d.to).range(1..=pages));
         });
     });
     group(ui, "Settings", &mut |ui| {
         egui::Grid::new("ocr-settings").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-            ui.label("Document language");
+            ui.label(tl!("Document language"));
             let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
             egui::ComboBox::from_id_salt("ocr-language").selected_text(name).width(220.0).show_ui(ui, |ui| {
                 for (code, name) in LANGUAGES {
@@ -95,14 +95,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
                 }
             });
             ui.end_row();
-            ui.label("Output");
-            egui::ComboBox::from_id_salt("ocr-output").selected_text("Searchable Image (Exact)").width(220.0).show_ui(ui, |ui| {
+            ui.label(tl!("Output"));
+            egui::ComboBox::from_id_salt("ocr-output").selected_text(tl!("Searchable Image (Exact)")).width(220.0).show_ui(ui, |ui| {
                 let _ = ui
-                    .selectable_label(true, "Searchable Image (Exact)")
-                    .on_hover_text("Adds invisible text over each word; the page image is not changed");
+                    .selectable_label(true, tl!("Searchable Image (Exact)"))
+                    .on_hover_text(tl!("Adds invisible text over each word; the page image is not changed"));
             });
             ui.end_row();
-            ui.label("Downsample to");
+            ui.label(tl!("Downsample to"));
             egui::ComboBox::from_id_salt("ocr-dpi").selected_text(format!("{} dpi", d.dpi)).width(220.0).show_ui(ui, |ui| {
                 for v in [600, 300, 150, 72] {
                     ui.selectable_value(&mut d.dpi, v, format!("{v} dpi"));
@@ -113,7 +113,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
     });
     if !available {
         ui.label(
-            egui::RichText::new("Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).")
+            egui::RichText::new(tl!("Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS)."))
                 .small()
                 .color(t.text_muted),
         );
@@ -123,10 +123,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
     let (mut go, mut cancel) = (false, false);
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.add_enabled_ui(available, |ui| widgets::pill_button(ui, "Recognize text", true)).inner.clicked() {
+            if ui.add_enabled_ui(available, |ui| widgets::pill_button(ui, tl!("Recognize text"), true)).inner.clicked() {
                 go = true;
             }
-            if widgets::pill_button(ui, "Cancel", false).clicked() {
+            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
                 cancel = true;
             }
         })
@@ -134,12 +134,12 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
     (go, cancel)
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Recognize text on the pages chosen in the dialog, in the background.
     pub fn start_ocr(&mut self) {
         let Some((vi, id)) = self.active_ids() else { return };
         if self.ocr_run.is_some() {
-            self.notify("Text recognition is already running");
+            self.notify_tr("Text recognition is already running");
             return;
         }
         if let Some(why) = self.session.get(id).and_then(|d| d.read_only_reason.clone()) {
@@ -157,7 +157,7 @@ impl PrintCraftApp {
         let progress = Arc::new(Mutex::new(OcrProgress { total: job.pages.len(), ..Default::default() }));
         let p = progress.clone();
         let work = move || {
-            let result = printcraft_engine::ocr::engine().map(|ocr| {
+            let result = pdfcraft_engine::ocr::engine().map(|ocr| {
                 job.run(&ocr, |done, total| {
                     let Ok(mut s) = p.lock() else { return false };
                     s.done = done;
@@ -173,7 +173,7 @@ impl PrintCraftApp {
         if self.run_inline {
             work();
         } else {
-            std::thread::Builder::new().name("printcraft-ocr".into()).spawn(work).ok();
+            std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
         }
         #[cfg(target_arch = "wasm32")]
         work();
@@ -185,7 +185,7 @@ impl PrintCraftApp {
     /// (the export folder override in tests), under the same names.
     pub fn ocr_files(&mut self, files: Vec<(String, Vec<u8>)>) {
         if self.ocr_batch.is_some() {
-            self.notify("Text recognition is already running");
+            self.notify_tr("Text recognition is already running");
             return;
         }
         let settings = OcrSettings { dpi: self.ocr_draft.dpi as f32, language: self.ocr_draft.language.clone(), ..Default::default() };
@@ -193,21 +193,24 @@ impl PrintCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         let dir = match &self.export_dir_override {
             Some(d) => Some(std::path::PathBuf::from(d)),
-            None => rfd::FileDialog::new().set_title("Choose a folder for the searchable files").pick_folder(),
+            None => rfd::FileDialog::new().set_title(tl!("Choose a folder for the searchable files").to_string()).pick_folder(),
         };
         #[cfg(not(target_arch = "wasm32"))]
         let Some(dir) = dir else { return };
         let p = progress.clone();
+        // The summary is written on the worker thread: draw it in the UI's language.
+        let lang = crate::i18n::current();
         let work = move || {
+            crate::i18n::set_current(lang);
             let (mut ok, mut words, mut failed) = (0, 0, Vec::new());
-            match printcraft_engine::ocr::engine() {
+            match pdfcraft_engine::ocr::engine() {
                 Err(e) => failed.push(e),
                 Ok(ocr) => {
                     for (i, (name, bytes)) in files.into_iter().enumerate() {
                         if let Ok(mut s) = p.lock() {
                             s.done = i;
                         }
-                        let r = printcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true);
+                        let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true);
                         let saved = r.and_then(|r| {
                             #[cfg(not(target_arch = "wasm32"))]
                             crate::editing::write_atomically(&dir.join(&name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())?;
@@ -220,14 +223,19 @@ impl PrintCraftApp {
                                 ok += 1;
                                 words += n;
                             }
-                            Err(e) => failed.push(format!("{name}: {e}")),
+                            Err(e) => failed.push(format!("{name}: {}", e)),
                         }
                     }
                 }
             }
-            let mut msg = format!("Recognized {words} words in {ok} file{}", if ok == 1 { "" } else { "s" });
+            let done = if ok == 1 {
+                crate::i18n::fmt(tl!("Recognized {w} words in 1 file"), &[("w", &words.to_string())])
+            } else {
+                crate::i18n::fmt(tl!("Recognized {w} words in {n} files"), &[("w", &words.to_string()), ("n", &ok.to_string())])
+            };
+            let mut msg = done;
             if !failed.is_empty() {
-                msg.push_str(&format!("; failed: {}", failed.join("; ")));
+                msg.push_str(&crate::i18n::fmt(tl!("; failed: {list}"), &[("list", &failed.join("; "))]));
             }
             if let Ok(mut s) = p.lock() {
                 s.done = s.total;
@@ -238,7 +246,7 @@ impl PrintCraftApp {
         if self.run_inline {
             work();
         } else {
-            std::thread::Builder::new().name("printcraft-ocr-files".into()).spawn(work).ok();
+            std::thread::Builder::new().name("pdfcraft-ocr-files".into()).spawn(work).ok();
         }
         #[cfg(target_arch = "wasm32")]
         work();
@@ -265,7 +273,10 @@ impl PrintCraftApp {
                     self.notify(m);
                 }
                 Some(Err((done, total))) => {
-                    let m = format!("Recognizing text… file {} of {}", (done + 1).min(total.max(1)), total.max(1));
+                    let m = crate::i18n::fmt(
+                        tl!("Recognizing text… file {d} of {t}"),
+                        &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
+                    );
                     if self.toast.as_ref().is_none_or(|t| t.0 != m) {
                         self.notify(m);
                     }
@@ -280,7 +291,10 @@ impl PrintCraftApp {
         let (doc, progress) = (run.doc, run.progress.clone());
         let Ok(mut s) = progress.lock() else { return };
         let Some(result) = s.result.take() else {
-            let msg = format!("Recognizing text… page {} of {}", (s.done + 1).min(s.total.max(1)), s.total.max(1));
+            let msg = crate::i18n::fmt(
+                tl!("Recognizing text… page {d} of {t}"),
+                &[("d", &(s.done + 1).min(s.total.max(1)).to_string()), ("t", &s.total.max(1).to_string())],
+            );
             drop(s);
             if self.toast.as_ref().is_none_or(|t| t.0 != msg) {
                 self.notify(msg);
@@ -295,7 +309,7 @@ impl PrintCraftApp {
         let found = match result {
             Ok(f) => f,
             Err(e) => {
-                self.notify(e);
+                self.notify_error(e);
                 return;
             }
         };
@@ -308,14 +322,23 @@ impl PrintCraftApp {
                 {
                     view.document_changed(&info);
                 }
-                let mut msg =
-                    format!("Recognized {words} word{} on {read} page{}", if words == 1 { "" } else { "s" }, if read == 1 { "" } else { "s" });
+                let words_part = if words == 1 {
+                    crate::i18n::fmt(tl!("Recognized 1 word"), &[])
+                } else {
+                    crate::i18n::fmt(tl!("Recognized {n} words"), &[("n", &words.to_string())])
+                };
+                let pages_part = if read == 1 { tl!("1 page").to_string() } else { crate::i18n::fmt(tl!("{n} pages"), &[("n", &read.to_string())]) };
+                let mut msg = crate::i18n::fmt(tl!("{words} on {pages}"), &[("words", &words_part), ("pages", &pages_part)]);
                 if skipped > 0 {
-                    msg.push_str(&format!("; {skipped} page{} already had text", if skipped == 1 { "" } else { "s" }));
+                    msg.push_str(&if skipped == 1 {
+                        crate::i18n::fmt(tl!("; 1 page already had text"), &[])
+                    } else {
+                        crate::i18n::fmt(tl!("; {n} pages already had text"), &[("n", &skipped.to_string())])
+                    });
                 }
                 self.notify(msg);
             }
-            Err(e) => self.notify(e.to_string()),
+            Err(e) => self.notify_error(e),
         }
     }
 }

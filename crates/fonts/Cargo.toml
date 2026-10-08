@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-fonts"
+name = "pdfcraft-fonts"
 description = "Font metrics and text encoding helpers for generated appearances (standard fonts, WinAnsi)"
 version.workspace = true
 edition.workspace = true
@@ -9,6 +9,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-cos = { workspace = true }
+pdfcraft-cos = { workspace = true }
 # Glyph outlines of the bundled script font (typed signatures); already in the tree via egui.
 skrifa = "0.44"

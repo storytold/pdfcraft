@@ -4,8 +4,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use printcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
-use printcraft_fonts::{literal, win_ansi};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
+use pdfcraft_fonts::{literal, win_ansi};
 
 use crate::XfaError;
 use crate::layout::{Action, BorderShape, Form, Item, Page, Widget, WidgetKind};

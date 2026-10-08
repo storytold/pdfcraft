@@ -5,8 +5,8 @@
 //! check boxes), a thin grey border and a white background, and appearance streams generated
 //! immediately so every viewer shows the empty field.
 
-use printcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
-use printcraft_fonts::{helvetica_width, literal, win_ansi};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
+use pdfcraft_fonts::{helvetica_width, literal, win_ansi};
 
 use crate::{Field, FieldKind, FormError, Widget, appearance, fields, flags, page_refs};
 
@@ -89,6 +89,8 @@ pub struct FieldProps {
     pub locked: Option<bool>,
     /// Actions tab: every trigger's action (replacing the field's).
     pub actions: Option<Vec<(crate::Trigger, crate::FieldAction)>>,
+    /// Options tab: the mark of a check box or radio button (every widget).
+    pub check_style: Option<CheckStyle>,
 }
 
 fn invalid<T>(m: impl Into<String>) -> Result<T, FormError> {
@@ -213,6 +215,63 @@ impl FieldFont {
             FieldFont::Courier => "Courier",
         }
     }
+}
+
+/// The mark a check box or radio button shows when on (Field Properties ▸ Options ▸ style).
+/// Stored as `/MK /CA`, the ZapfDingbats character Acrobat uses for it; PdfCraft draws the
+/// mark as paths, so no symbol font is needed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheckStyle {
+    Check,
+    Circle,
+    Cross,
+    Diamond,
+    Square,
+    Star,
+}
+
+impl CheckStyle {
+    pub const ALL: [CheckStyle; 6] =
+        [CheckStyle::Check, CheckStyle::Circle, CheckStyle::Cross, CheckStyle::Diamond, CheckStyle::Square, CheckStyle::Star];
+
+    fn code(self) -> &'static str {
+        match self {
+            CheckStyle::Check => "4",
+            CheckStyle::Circle => "l",
+            CheckStyle::Cross => "8",
+            CheckStyle::Diamond => "u",
+            CheckStyle::Square => "n",
+            CheckStyle::Star => "H",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CheckStyle::Check => "Check",
+            CheckStyle::Circle => "Circle",
+            CheckStyle::Cross => "Cross",
+            CheckStyle::Diamond => "Diamond",
+            CheckStyle::Square => "Square",
+            CheckStyle::Star => "Star",
+        }
+    }
+
+    /// A widget's style: its `/MK /CA`, else a check for check boxes and a circle for radios.
+    pub(crate) fn of_widget(doc: &Document, wd: &Dict, kind: FieldKind) -> Self {
+        let mk = wd.get(b"MK").and_then(|m| doc.resolve(m).as_dict().cloned()).unwrap_or_default();
+        let ca = mk.get(b"CA").and_then(|c| doc.resolve(c).as_string().map(|s| s.to_text()));
+        CheckStyle::ALL.into_iter().find(|s| ca.as_deref() == Some(s.code())).unwrap_or(if kind == FieldKind::Radio {
+            CheckStyle::Circle
+        } else {
+            CheckStyle::Check
+        })
+    }
+}
+
+/// A check box's or radio button's style (from its first widget).
+pub fn check_style(doc: &Document, f: &Field) -> CheckStyle {
+    let wd = f.widgets.first().and_then(|w| doc.get(w.obj).as_dict().cloned()).unwrap_or_default();
+    CheckStyle::of_widget(doc, &wd, f.kind)
 }
 
 fn rgb_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 3]> {
@@ -464,6 +523,7 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
                 state: Some("Off".into()),
                 tab: usize::MAX,
                 locked: false,
+                hidden: false,
             };
             let ap = appearance::check_box_states(doc, &w, FieldKind::Radio, export);
             doc.update_dict(widget, |d| d.set(b"AP".to_vec(), Object::Dict(ap)))?;
@@ -702,6 +762,9 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     if props.options.as_ref().is_some_and(|o| o.is_empty()) && matches!(f.kind, FieldKind::Combo | FieldKind::List) {
         return invalid("a list needs at least one option");
     }
+    if props.check_style.is_some() && !matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
+        return invalid("only check boxes and radio buttons have a check style");
+    }
     doc.update_dict(f.obj, |d| {
         d.set(b"Ff".to_vec(), Object::Int(ff as i64));
         if let Some(t) = &props.tooltip {
@@ -783,6 +846,14 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
                 }
                 d.set(b"BS".to_vec(), Object::Dict(bs));
             })?;
+        }
+    }
+    if let Some(style) = props.check_style {
+        for w in &f.widgets {
+            // Resolved first: an indirect /MK keeps its colours.
+            let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
+            mk.set(b"CA".to_vec(), PdfString::text(style.code()));
+            doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
         }
     }
     if let Some((wi, r)) = props.rect {

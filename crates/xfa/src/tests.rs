@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use printcraft_cos::{Document, Object, SaveOptions, write_incremental};
+use pdfcraft_cos::{Document, Object, SaveOptions, write_incremental};
 
 use super::*;
 use crate::data::{FieldData, FieldDatum, build_data, iso_to_pattern, parse_datasets, pattern_to_iso, read_values, som_to_path, write_datasets};
@@ -382,8 +382,8 @@ fn static_forms_read_their_values_from_the_datasets() {
     let doc = Document::open(Arc::new(static_shell("<form1><page1><name>Ada</name><agree>1</agree></page1></form1>"))).unwrap();
     assert!(!is_dynamic(&doc));
     let fields = vec![
-        FieldDatum { obj: printcraft_cos::ObjRef::new(8, 0), name: "form1[0].page1[0].name[0]".into(), data: FieldData::Text(String::new()) },
-        FieldDatum { obj: printcraft_cos::ObjRef::new(9, 0), name: "form1[0].page1[0].agree[0]".into(), data: FieldData::Check(false) },
+        FieldDatum { obj: pdfcraft_cos::ObjRef::new(8, 0), name: "form1[0].page1[0].name[0]".into(), data: FieldData::Text(String::new()) },
+        FieldDatum { obj: pdfcraft_cos::ObjRef::new(9, 0), name: "form1[0].page1[0].agree[0]".into(), data: FieldData::Check(false) },
     ];
     let values = read_values(&doc, &fields);
     assert_eq!(

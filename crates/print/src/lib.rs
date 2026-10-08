@@ -17,8 +17,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use printcraft_content::Matrix;
-use printcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
+use pdfcraft_content::Matrix;
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
 
 pub mod range;
 pub mod spool;
@@ -36,7 +36,7 @@ pub enum PrintError {
     #[error("{0}")]
     Spool(String),
     #[error(transparent)]
-    Cos(#[from] printcraft_cos::CosError),
+    Cos(#[from] pdfcraft_cos::CosError),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -64,6 +64,8 @@ pub enum PageOrder {
     HorizontalReversed,
     Vertical,
     VerticalReversed,
+    /// Single-sided sheets: cut into cell piles, then stack them in row-major order.
+    CutStack,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -247,11 +249,12 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
             }
         }
         Layout::Multiple { cols, rows, order, border, auto_rotate } => {
-            if cols == 0 || rows == 0 || cols * rows > 256 {
+            let cells = cols.checked_mul(rows).filter(|&n| n > 0 && n <= 256);
+            let Some(cells) = cells else {
                 return Err(PrintError::Invalid("invalid number of pages per sheet".into()));
-            }
+            };
             // A grid with more columns than rows wants a landscape sheet, and the reverse.
-            let first = sizes[pages[0]];
+            let first = pages.first().and_then(|&p| sizes.get(p)).copied().ok_or(PrintError::NoPages)?;
             let page_landscape = first.0 > first.1;
             let (gc, gr, sheet_landscape) = if cols == rows {
                 (cols, rows, page_landscape)
@@ -265,11 +268,36 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
             let gap = 6.0;
             let (aw, ah) = (size.0 - 2.0 * MARGIN, size.1 - 2.0 * MARGIN);
             let (cw, ch) = ((aw - gap * (gc - 1) as f64) / gc as f64, (ah - gap * (gr - 1) as f64) / gr as f64);
-            for chunk in pages.chunks(gc * gr) {
+            if cw <= 0.0 || ch <= 0.0 {
+                return Err(PrintError::Invalid("the page grid does not fit on the paper".into()));
+            }
+            let sheet_count = pages.len().div_ceil(cells);
+            for sheet_index in 0..sheet_count {
                 let mut sheet = Sheet { size, ..Sheet::default() };
-                for (k, &p) in chunk.iter().enumerate() {
+                if order == PageOrder::CutStack {
+                    // Marks align across every sheet, including unoccupied cells. Cut in the
+                    // middle of each gutter; marks stay in the printable area, clear of cells.
+                    for col in 1..gc {
+                        let x = MARGIN + col as f64 * (cw + gap) - gap / 2.0;
+                        sheet.lines.extend([[x, MARGIN, x, MARGIN + 8.0], [x, size.1 - MARGIN - 8.0, x, size.1 - MARGIN]]);
+                    }
+                    for row in 1..gr {
+                        let y = size.1 - MARGIN - row as f64 * (ch + gap) + gap / 2.0;
+                        sheet.lines.extend([[MARGIN, y, MARGIN + 8.0, y], [size.0 - MARGIN - 8.0, y, size.0 - MARGIN, y]]);
+                    }
+                }
+                for k in 0..cells {
+                    // A cell's pile gets consecutive pages. Missing pages leave blank cells,
+                    // rather than shifting later piles left on the final sheets.
+                    let index = if order == PageOrder::CutStack {
+                        k.checked_mul(sheet_count).and_then(|n| n.checked_add(sheet_index))
+                    } else {
+                        sheet_index.checked_mul(cells).and_then(|n| n.checked_add(k))
+                    };
+                    let Some(p) = index.and_then(|i| pages.get(i)).copied() else { continue };
+
                     let (col, row) = match order {
-                        PageOrder::Horizontal => (k % gc, k / gc),
+                        PageOrder::Horizontal | PageOrder::CutStack => (k % gc, k / gc),
                         PageOrder::HorizontalReversed => (gc - 1 - k % gc, k / gc),
                         PageOrder::Vertical => (k / gr, k % gr),
                         PageOrder::VerticalReversed => (gc - 1 - k / gr, k % gr),
@@ -277,9 +305,15 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                     let x0 = MARGIN + col as f64 * (cw + gap);
                     let y1 = size.1 - MARGIN - row as f64 * (ch + gap);
                     let cell = [x0, y1 - ch, x0 + cw, y1];
-                    let d = sizes[p];
+                    let d = sizes.get(p).copied().ok_or_else(|| PrintError::Invalid("page size is missing".into()))?;
+                    if !(d.0.is_finite() && d.1.is_finite() && d.0 > 0.0 && d.1 > 0.0) {
+                        return Err(PrintError::Invalid("invalid page size".into()));
+                    }
                     let rotate = auto_rotate && (d.0 > d.1) != (cw > ch) && (d.0 - d.1).abs() > 1.0;
                     let s = fit_scale(if rotate { (d.1, d.0) } else { d }, (cw, ch));
+                    if !s.is_finite() || s <= 0.0 {
+                        return Err(PrintError::Invalid("page size cannot be scaled to the grid".into()));
+                    }
                     let pl = place_in(p, d, cell, s, rotate);
                     if border {
                         let b = pl.matrix.bbox(pl.clip);
@@ -449,7 +483,7 @@ fn appearance_matrix(doc: &Document, form: &Dict, rect: [f64; 4]) -> Option<Matr
 
 /// A Form XObject holding page `index` as it prints (user space; BBox = crop box).
 fn page_form(doc: &mut Document, index: usize, content: Content) -> Result<ObjRef, PrintError> {
-    let page = printcraft_model::pages(doc).swap_remove(index);
+    let page = pdfcraft_model::pages(doc).swap_remove(index);
     let crop = page.crop(doc);
     let mut res = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut body = if content == Content::FormFieldsOnly { Vec::new() } else { decoded_contents(doc, &page.dict) };
@@ -500,7 +534,7 @@ fn page_form(doc: &mut Document, index: usize, content: Content) -> Result<ObjRe
 /// Build the print-ready PDF for `settings`. Encryption is not carried over (the file goes to a
 /// printer or is the user's own copy); callers must check the print permission first.
 pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError> {
-    let pages = printcraft_model::pages(src);
+    let pages = pdfcraft_model::pages(src);
     let sizes: Vec<(f64, f64)> = pages.iter().map(|p| p.display_size(src)).collect();
     let sheets = layout(&sizes, settings)?;
     let mut doc = src.clone();

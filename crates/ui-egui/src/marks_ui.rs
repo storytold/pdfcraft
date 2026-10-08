@@ -3,10 +3,10 @@
 //! preview of the current page. "Update" opens the same dialog in replace mode.
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
-use printcraft_engine::{Background, Edit, HeaderFooter, MarkKind, Watermark};
+use pdfcraft_engine::{Background, Edit, HeaderFooter, MarkKind, Watermark};
 
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, widgets};
+use crate::{PdfCraftApp, widgets};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Subset {
@@ -46,24 +46,24 @@ impl PageRange {
 
     pub(crate) fn ui(&mut self, ui: &mut egui::Ui, count: usize) {
         ui.horizontal(|ui| {
-            ui.radio_value(&mut self.all, true, "All pages");
-            ui.radio_value(&mut self.all, false, "Pages from");
+            ui.radio_value(&mut self.all, true, tl!("All pages"));
+            ui.radio_value(&mut self.all, false, tl!("Pages from"));
             ui.add_enabled(!self.all, egui::DragValue::new(&mut self.from).range(1..=count.max(1)));
-            ui.label("to");
+            ui.label(tl!("to"));
             if self.to == 1 && self.from == 1 {
                 self.to = count.max(1);
             }
             ui.add_enabled(!self.all, egui::DragValue::new(&mut self.to).range(1..=count.max(1)));
-            ui.label("Subset");
+            ui.label(tl!("Subset"));
             let label = match self.subset {
-                Subset::All => "All pages in range",
-                Subset::Even => "Even pages only",
-                Subset::Odd => "Odd pages only",
+                Subset::All => tl!("All pages in range"),
+                Subset::Even => tl!("Even pages only"),
+                Subset::Odd => tl!("Odd pages only"),
             };
             egui::ComboBox::from_id_salt("mark-subset").selected_text(label).show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.subset, Subset::All, "All pages in range");
-                ui.selectable_value(&mut self.subset, Subset::Even, "Even pages only");
-                ui.selectable_value(&mut self.subset, Subset::Odd, "Odd pages only");
+                ui.selectable_value(&mut self.subset, Subset::All, tl!("All pages in range"));
+                ui.selectable_value(&mut self.subset, Subset::Even, tl!("Even pages only"));
+                ui.selectable_value(&mut self.subset, Subset::Odd, tl!("Odd pages only"));
             });
         });
     }
@@ -138,32 +138,32 @@ fn rgb32(c: [f64; 3]) -> Color32 {
 }
 
 /// The dialog for `kind`; returns (apply, cancel).
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind: MarkKind) -> (bool, bool) {
+pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: MarkKind) -> (bool, bool) {
     let Some((i, id)) = app.active_ids() else { return (false, true) };
     let current = app.views[i].current;
     let Some(doc) = app.session.get(id) else { return (false, true) };
     let count = doc.info.pages.len();
     let page = doc.info.pages.get(current).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
     let d = &mut app.marks_draft;
-    let verb = if d.replace { "Update" } else { "Add" };
+    let verb = if d.replace { tl!("Update") } else { tl!("Add") };
     let title = match kind {
-        MarkKind::HeaderFooter => format!("{verb} Header and Footer"),
-        MarkKind::Watermark => format!("{verb} Watermark"),
-        MarkKind::Background => format!("{verb} Background"),
+        MarkKind::HeaderFooter => crate::i18n::fmt(tl!("{verb} Header and Footer"), &[("verb", verb)]),
+        MarkKind::Watermark => crate::i18n::fmt(tl!("{verb} Watermark"), &[("verb", verb)]),
+        MarkKind::Background => crate::i18n::fmt(tl!("{verb} Background"), &[("verb", verb)]),
     };
     ui.label(egui::RichText::new(title).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     match kind {
         MarkKind::HeaderFooter => {
             ui.horizontal(|ui| {
-                ui.label("Font: Helvetica");
-                ui.label("Size");
+                ui.label(tl!("Font: Helvetica"));
+                ui.label(tl!("Size"));
                 ui.add(egui::DragValue::new(&mut d.hf.font_size).range(4.0..=72.0).speed(0.5));
-                ui.checkbox(&mut d.hf.underline, "Underline");
+                ui.checkbox(&mut d.hf.underline, tl!("Underline"));
                 color_button(ui, &mut d.hf.color);
                 ui.add_space(16.0);
-                ui.label("Margins (in)");
-                for (label, k) in [("Top", 0), ("Bottom", 1), ("Left", 2), ("Right", 3)] {
+                ui.label(tl!("Margins (in)"));
+                for (label, k) in [(tl!("Top"), 0), (tl!("Bottom"), 1), (tl!("Left"), 2), (tl!("Right"), 3)] {
                     ui.label(label);
                     let mut v = d.hf.margins[k] / 72.0;
                     if ui.add(egui::DragValue::new(&mut v).range(0.0..=10.0).speed(0.05).max_decimals(2)).changed() {
@@ -175,7 +175,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
             egui::Grid::new("hf-boxes").num_columns(3).spacing([10.0, 4.0]).show(ui, |ui| {
                 for row in 0..2 {
                     for col in 0..3 {
-                        ui.label(egui::RichText::new(BOX_NAMES[row * 3 + col]).small());
+                        ui.label(egui::RichText::new(tl!(BOX_NAMES[row * 3 + col])).small());
                     }
                     ui.end_row();
                     for col in 0..3 {
@@ -197,7 +197,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
                         }
                     },
                 );
-                if ui.button("Insert Page Number").clicked() {
+                if ui.button(tl!("Insert Page Number")).clicked() {
                     d.hf.text[d.focused_box].push_str(PAGE_FORMATS[d.page_format]);
                 }
                 ui.add_space(12.0);
@@ -209,19 +209,19 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
                         }
                     },
                 );
-                if ui.button("Insert Date").clicked() {
+                if ui.button(tl!("Insert Date")).clicked() {
                     d.hf.text[d.focused_box].push_str(DATE_FORMATS[d.date_format]);
                 }
                 ui.add_space(12.0);
-                ui.label("Start page number");
+                ui.label(tl!("Start page number"));
                 ui.add(egui::DragValue::new(&mut d.hf.start_number).range(1..=999_999));
             });
         }
         MarkKind::Watermark => {
             ui.horizontal(|ui| {
-                ui.label("Source");
-                ui.radio_value(&mut d.use_file, false, "Text");
-                ui.radio_value(&mut d.use_file, true, "File");
+                ui.label(tl!("Source"));
+                ui.radio_value(&mut d.use_file, false, tl!("Text"));
+                ui.radio_value(&mut d.use_file, true, tl!("File"));
             });
             if d.use_file {
                 file_source(ui, d, MarkKind::Watermark);
@@ -229,7 +229,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     ui.add_enabled_ui(!d.use_file, |ui| {
-                        ui.label("Text");
+                        ui.label(tl!("Text"));
                         ui.add(
                             egui::TextEdit::multiline(&mut d.wm.text)
                                 .desired_rows(2)
@@ -239,9 +239,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
                         );
                     });
                     ui.horizontal(|ui| {
-                        ui.add_enabled_ui(!d.use_file, |ui| ui.checkbox(&mut d.fit, "Fit to page"));
+                        ui.add_enabled_ui(!d.use_file, |ui| ui.checkbox(&mut d.fit, tl!("Fit to page")));
                         ui.add_enabled_ui(!d.fit, |ui| {
-                            ui.label("Size");
+                            ui.label(tl!("Size"));
                             if d.wm.font_size == 0.0 {
                                 d.wm.font_size = 72.0;
                             }
@@ -250,39 +250,39 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
                         color_button(ui, &mut d.wm.color);
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Rotation");
+                        ui.label(tl!("Rotation"));
                         for r in [-45.0, 0.0, 45.0] {
-                            ui.radio_value(&mut d.wm.rotation, r, if r == 0.0 { "None".to_string() } else { format!("{r}°") });
+                            ui.radio_value(&mut d.wm.rotation, r, if r == 0.0 { tl!("None").to_string() } else { format!("{r}°") });
                         }
                         ui.add(egui::DragValue::new(&mut d.wm.rotation).range(-180.0..=180.0).suffix("°"));
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Opacity");
+                        ui.label(tl!("Opacity"));
                         let mut pct = d.wm.opacity * 100.0;
                         if ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%")).changed() {
                             d.wm.opacity = pct / 100.0;
                         }
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Location");
-                        ui.radio_value(&mut d.wm.behind, true, "Appear behind page");
-                        ui.radio_value(&mut d.wm.behind, false, "Appear on top of page");
+                        ui.label(tl!("Location"));
+                        ui.radio_value(&mut d.wm.behind, true, tl!("Appear behind page"));
+                        ui.radio_value(&mut d.wm.behind, false, tl!("Appear on top of page"));
                     });
                 });
             });
         }
         MarkKind::Background => {
             ui.horizontal(|ui| {
-                ui.radio_value(&mut d.use_file, false, "From colour");
+                ui.radio_value(&mut d.use_file, false, tl!("From colour"));
                 ui.add_enabled_ui(!d.use_file, |ui| color_button(ui, &mut d.bg.color));
                 ui.add_space(12.0);
-                ui.radio_value(&mut d.use_file, true, "File");
+                ui.radio_value(&mut d.use_file, true, tl!("File"));
             });
             if d.use_file {
                 file_source(ui, d, MarkKind::Background);
             }
             ui.horizontal(|ui| {
-                ui.label("Opacity");
+                ui.label(tl!("Opacity"));
                 let mut pct = d.bg.opacity * 100.0;
                 if ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%")).changed() {
                     d.bg.opacity = pct / 100.0;
@@ -291,7 +291,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
         }
     }
     ui.add_space(8.0);
-    ui.label(egui::RichText::new("Page Range Options").font(theme::semibold(12.5)));
+    ui.label(egui::RichText::new(tl!("Page Range Options")).font(theme::semibold(12.5)));
     d.range.ui(ui, count);
     ui.add_space(8.0);
     // Preview of the current page.
@@ -360,11 +360,20 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
             }
         });
         ui.vertical(|ui| {
-            ui.label(egui::RichText::new(format!("Preview: page {} of {count}", current + 1)).small().color(t.text_faint));
+            ui.label(
+                egui::RichText::new(crate::i18n::fmt(
+                    tl!("Preview: page {p} of {n}"),
+                    &[("p", &(current + 1).to_string()), ("n", &count.to_string())],
+                ))
+                .small()
+                .color(t.text_faint),
+            );
             let n = d.range.pages(count).len();
-            ui.label(egui::RichText::new(format!("Applies to {n} page{}", if n == 1 { "" } else { "s" })).small().color(t.text_faint));
+            let applies =
+                if n == 1 { tl!("Applies to 1 page").to_string() } else { crate::i18n::fmt(tl!("Applies to {n} pages"), &[("n", &n.to_string())]) };
+            ui.label(egui::RichText::new(applies).small().color(t.text_faint));
             if d.replace {
-                ui.label(egui::RichText::new("Replaces the existing one on those pages.").small().color(t.text_faint));
+                ui.label(egui::RichText::new(tl!("Replaces the existing one on those pages.")).small().color(t.text_faint));
             }
         });
     });
@@ -382,28 +391,28 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
             }
             MarkKind::Background => !d.use_file || d.file.is_some(),
         } && !d.range.pages(count).is_empty();
-        if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, "OK", true)).inner.clicked() {
+        if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
             apply = true;
         }
-        if widgets::pill_button(ui, "Cancel", false).clicked() {
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
             cancel = true;
         }
     });
     (apply, cancel)
 }
 
-fn mark_file(d: &MarksDraft) -> Option<printcraft_engine::MarkFile> {
+fn mark_file(d: &MarksDraft) -> Option<pdfcraft_engine::MarkFile> {
     let (name, bytes) = d.file.clone().filter(|_| d.use_file)?;
-    Some(printcraft_engine::MarkFile { name, bytes, page: d.file_page.max(1) - 1 })
+    Some(pdfcraft_engine::MarkFile { name, bytes, page: d.file_page.max(1) - 1 })
 }
 
 /// Source ▸ File: Browse…, the page of a PDF, and the size relative to the page.
 fn file_source(ui: &mut egui::Ui, d: &mut MarksDraft, kind: MarkKind) {
     ui.horizontal(|ui| {
         #[cfg(not(target_arch = "wasm32"))]
-        if ui.button("Browse…").clicked()
+        if ui.button(tl!("Browse…")).clicked()
             && let Some(p) = rfd::FileDialog::new()
-                .add_filter("PDF or image", &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
+                .add_filter(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
                 .pick_file()
         {
             match std::fs::read(&p) {
@@ -411,14 +420,14 @@ fn file_source(ui: &mut egui::Ui, d: &mut MarksDraft, kind: MarkKind) {
                 Err(_) => d.file = None,
             }
         }
-        ui.label(d.file.as_ref().map(|f| f.0.clone()).unwrap_or_else(|| "No file chosen".into()));
+        ui.label(d.file.as_ref().map(|f| f.0.clone()).unwrap_or_else(|| tl!("No file chosen").to_string()));
         if d.file.as_ref().is_some_and(|f| f.1.starts_with(b"%PDF")) {
-            ui.label("Page number");
+            ui.label(tl!("Page number"));
             ui.add(egui::DragValue::new(&mut d.file_page).range(1..=9999));
         }
     });
     ui.horizontal(|ui| {
-        ui.label("Scale relative to target page");
+        ui.label(tl!("Scale relative to target page"));
         let scale = if kind == MarkKind::Background { &mut d.bg.scale } else { &mut d.wm.scale };
         let mut pct = *scale * 100.0;
         if ui.add(egui::Slider::new(&mut pct, 5.0..=100.0).suffix("%")).changed() {

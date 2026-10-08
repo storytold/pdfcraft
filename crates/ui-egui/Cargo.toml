@@ -1,6 +1,6 @@
 [package]
-name = "printcraft-ui-egui"
-description = "The egui shell of PrintCraft"
+name = "pdfcraft-ui-egui"
+description = "The egui shell of PdfCraft"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,9 +9,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-fonts = { workspace = true }
-printcraft-engine = { workspace = true }
-printcraft-render = { workspace = true }
+pdfcraft-fonts = { workspace = true }
+pdfcraft-engine = { workspace = true }
+pdfcraft-render = { workspace = true }
 egui = { workspace = true }
 egui_extras = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "persistence", "links"] }
@@ -28,6 +28,8 @@ base64 = "0.22"
 getrandom = "0.4"
 # Create ▸ Clipboard (images; already in the tree through egui-winit).
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
+# Waits for native file pickers off the UI thread (already in the tree through wgpu).
+pollster = "1.0"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"
@@ -36,8 +38,10 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url"] }
 
 [dev-dependencies]
-printcraft-xfa = { workspace = true }
-printcraft-cos = { workspace = true }
-printcraft-model = { workspace = true }
+pdfcraft-xfa = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-model = { workspace = true }
 egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.
+skrifa = "0.44"

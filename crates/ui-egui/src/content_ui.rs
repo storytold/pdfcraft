@@ -4,8 +4,8 @@
 //! Delete to remove it. Each change is one undoable engine edit.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use printcraft_engine::{Added, AddedContent, AddedText, Edit, FontFamily, TextAlign};
-use printcraft_render::DocInfo;
+use pdfcraft_engine::{Added, AddedContent, AddedText, Edit, FontFamily, TextAlign};
+use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
@@ -289,7 +289,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                     .desired_rows(1)
                     .background_color(Color32::from_rgba_unmultiplied(255, 255, 255, 235))
                     .text_color(Color32::from_rgb(cr, cg, cb))
-                    .hint_text("Type text")
+                    .hint_text(tl!("Type text"))
                     .id_salt("added-text-edit"),
             );
             if t.focus {
@@ -350,7 +350,7 @@ fn finish(cv: &mut ContentView, d: TextDraft, added: &[Added]) -> Option<Edit> {
 /// Returns the changed style; for a selected item the caller turns it into an update.
 pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> Option<AddedText> {
     let mut s = style.clone();
-    widgets::section_title(ui, "Format text");
+    widgets::section_title(ui, tl!("Format text"));
     ui.horizontal(|ui| {
         egui::ComboBox::from_id_salt("font-family").selected_text(s.family.label()).width(110.0).show_ui(ui, |ui| {
             for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
@@ -365,18 +365,18 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
         });
     });
     ui.horizontal(|ui| {
-        if ui.selectable_label(s.bold, egui::RichText::new("B").strong()).on_hover_text("Bold").clicked() {
+        if ui.selectable_label(s.bold, egui::RichText::new("B").strong()).on_hover_text(tl!("Bold")).clicked() {
             s.bold = !s.bold;
         }
-        if ui.selectable_label(s.italic, egui::RichText::new("I").italics()).on_hover_text("Italic").clicked() {
+        if ui.selectable_label(s.italic, egui::RichText::new("I").italics()).on_hover_text(tl!("Italic")).clicked() {
             s.italic = !s.italic;
         }
         ui.separator();
         for (a, icon, tip) in [
-            (TextAlign::Left, "align-left", "Align left"),
-            (TextAlign::Center, "align-center", "Centre"),
-            (TextAlign::Right, "align-right", "Align right"),
-            (TextAlign::Justify, "align-justify", "Justify"),
+            (TextAlign::Left, "align-left", tl!("Align left")),
+            (TextAlign::Center, "align-center", tl!("Centre")),
+            (TextAlign::Right, "align-right", tl!("Align right")),
+            (TextAlign::Justify, "align-justify", tl!("Justify")),
         ] {
             if crate::icons::button(ui, icon, 26.0, s.align == a, tip).clicked() {
                 s.align = a;
@@ -387,7 +387,7 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
     if let Some(picked) = crate::comments::swatch_grid(ui, Some(c)) {
         s.color = picked;
     }
-    ui.label(egui::RichText::new("Standard fonts; text outside Windows-1252 isn't supported yet.").small().color(t.text_faint));
+    ui.label(egui::RichText::new(tl!("Standard fonts; text outside Windows-1252 isn't supported yet.")).small().color(t.text_faint));
     (s != *style).then_some(s)
 }
 
@@ -395,7 +395,7 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
 pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens) {
     ui.label(
         egui::RichText::new(
-            "Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.",
+            tl!("Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it."),
         )
             .small()
             .color(t.text_faint),
@@ -403,7 +403,7 @@ pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens) {
     ui.add_space(4.0);
 }
 
-impl crate::PrintCraftApp {
+impl crate::PdfCraftApp {
     /// Edit a PDF ▸ Add content ▸ Image: pick a file and place it in the middle of the current page.
     pub fn add_image_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -413,8 +413,8 @@ impl crate::PrintCraftApp {
                 // Tests and automation set `save_override` and never see a native dialog.
                 Some(_) => None,
                 None => rfd::FileDialog::new()
-                    .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                    .set_title("Choose an image")
+                    .add_filter(tl!("Images").to_string(), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
+                    .set_title(tl!("Choose an image"))
                     .pick_file(),
             };
             let Some(path) = picked else { return };
@@ -423,11 +423,11 @@ impl crate::PrintCraftApp {
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     self.add_image(name, bytes);
                 }
-                Err(e) => self.notify(format!("Couldn't read {}: {e}", path.display())),
+                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
             }
         }
         #[cfg(target_arch = "wasm32")]
-        self.notify("Adding images arrives on the web with file pickers for images");
+        self.notify_tr("Adding images arrives on the web with file pickers for images");
     }
 
     /// Edit text & images ▸ Replace Image: pick a file to draw in a page image's place.
@@ -438,8 +438,8 @@ impl crate::PrintCraftApp {
                 Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => Some(std::path::PathBuf::from(p)),
                 Some(_) => None,
                 None => rfd::FileDialog::new()
-                    .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                    .set_title("Replace image")
+                    .add_filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
+                    .set_title(tl!("Replace image"))
                     .pick_file(),
             };
             let Some(path) = picked else { return };
@@ -449,14 +449,17 @@ impl crate::PrintCraftApp {
                     self.apply_edit(Edit::EditPageImage {
                         page,
                         index,
-                        change: printcraft_engine::ImageEdit::Replace { name, bytes: std::sync::Arc::new(bytes) },
+                        change: pdfcraft_engine::ImageEdit::Replace { name, bytes: std::sync::Arc::new(bytes) },
                     });
                 }
-                Err(e) => self.notify(format!("Couldn't read {}: {e}", path.display())),
+                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
             }
         }
         #[cfg(target_arch = "wasm32")]
-        self.notify(format!("Replacing images on page {} arrives on the web with image pickers ({index})", page + 1));
+        self.notify_fmt(
+            "Replacing images on page {p} arrives on the web with image pickers ({i})",
+            &[("p", &(page + 1).to_string()), ("i", &index.to_string())],
+        );
     }
 
     /// Edit text & images ▸ Save Image As.
@@ -467,7 +470,7 @@ impl crate::PrintCraftApp {
             Some(Ok((ext, bytes))) => {
                 self.write_files(&[(format!("Image page {} #{}.{ext}", page + 1, index + 1), std::sync::Arc::new(bytes))], "Save image");
             }
-            Some(Err(e)) => self.notify(format!("Couldn't save the image: {e}")),
+            Some(Err(e)) => self.notify_fmt("Couldn't save the image: {e}", &[("e", &e.to_string())]),
             None => {}
         }
     }
@@ -480,8 +483,8 @@ impl crate::PrintCraftApp {
                 Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => Some(std::path::PathBuf::from(p)),
                 Some(_) => None,
                 None => rfd::FileDialog::new()
-                    .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                    .set_title("Select Icon")
+                    .add_filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
+                    .set_title(tl!("Select Icon"))
                     .pick_file(),
             };
             let Some(path) = picked else { return };
@@ -489,11 +492,11 @@ impl crate::PrintCraftApp {
                 Ok(bytes) => {
                     self.apply_edit(Edit::SetFieldImage { name: name.to_string(), image: std::sync::Arc::new(bytes) });
                 }
-                Err(e) => self.notify(format!("Couldn't read {}: {e}", path.display())),
+                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
             }
         }
         #[cfg(target_arch = "wasm32")]
-        self.notify(format!("{name}: choosing images arrives on the web with file pickers for images"));
+        self.notify_fmt("{name}: choosing images arrives on the web with file pickers for images", &[("name", &name)]);
     }
 
     /// Edit image ▸ Replace: pick a file for the selected image.
@@ -504,8 +507,8 @@ impl crate::PrintCraftApp {
                 Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => Some(std::path::PathBuf::from(p)),
                 Some(_) => None,
                 None => rfd::FileDialog::new()
-                    .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                    .set_title("Replace image")
+                    .add_filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
+                    .set_title(tl!("Replace image"))
                     .pick_file(),
             };
             let Some(path) = picked else { return };
@@ -514,13 +517,13 @@ impl crate::PrintCraftApp {
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     self.apply_edit(Edit::ReplaceImage { page, index, name, bytes: std::sync::Arc::new(bytes) });
                 }
-                Err(e) => self.notify(format!("Couldn't read {}: {e}", path.display())),
+                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
             }
         }
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (page, index);
-            self.notify("Replacing images arrives on the web with image file pickers");
+            self.notify_tr("Replacing images arrives on the web with image file pickers");
         }
     }
 
@@ -539,44 +542,44 @@ impl crate::PrintCraftApp {
 
 /// What the image tools ask for.
 pub(crate) enum ImageAction {
-    Update(printcraft_engine::AddedContent),
+    Update(pdfcraft_engine::AddedContent),
     Replace,
 }
 
 /// Edit image: rotate, flip, crop, replace (shown while an added image is selected).
-pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &printcraft_engine::AddedImage) -> Option<ImageAction> {
+pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
     let mut out = None;
-    widgets::section_title(ui, "Edit image");
+    widgets::section_title(ui, tl!("Edit image"));
     ui.horizontal(|ui| {
         let mut i = img.clone();
         let r = i.rect;
-        let turn = |i: &mut printcraft_engine::AddedImage, k: u8| {
+        let turn = |i: &mut pdfcraft_engine::AddedImage, k: u8| {
             i.rotation = (i.rotation + k) % 4;
             // The box turns with the picture, around its centre.
             let (cx, cy, w, h) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0, r[2] - r[0], r[3] - r[1]);
             i.rect = [cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0];
         };
-        if crate::icons::button(ui, "rotate-ccw", 28.0, false, "Rotate counterclockwise").clicked() {
+        if crate::icons::button(ui, "rotate-ccw", 28.0, false, tl!("Rotate counterclockwise")).clicked() {
             turn(&mut i, 1);
             out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
         }
-        if crate::icons::button(ui, "rotate-cw", 28.0, false, "Rotate clockwise").clicked() {
+        if crate::icons::button(ui, "rotate-cw", 28.0, false, tl!("Rotate clockwise")).clicked() {
             turn(&mut i, 3);
             out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
         }
-        if crate::icons::button(ui, "flip-horizontal-2", 28.0, false, "Flip horizontal").clicked() {
+        if crate::icons::button(ui, "flip-horizontal-2", 28.0, false, tl!("Flip horizontal")).clicked() {
             i.flip_h = !i.flip_h;
             out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
         }
-        if crate::icons::button(ui, "flip-vertical-2", 28.0, false, "Flip vertical").clicked() {
+        if crate::icons::button(ui, "flip-vertical-2", 28.0, false, tl!("Flip vertical")).clicked() {
             i.flip_v = !i.flip_v;
             out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
         }
-        if crate::icons::button(ui, "replace", 28.0, false, "Replace image").clicked() {
+        if crate::icons::button(ui, "replace", 28.0, false, tl!("Replace image")).clicked() {
             out = Some(ImageAction::Replace);
         }
     });
-    ui.label(egui::RichText::new("Crop (% trimmed from each side)").small().color(t.text_muted));
+    ui.label(egui::RichText::new(tl!("Crop (% trimmed from each side)")).small().color(t.text_muted));
     let mut crop = img.crop.map(|v| (v * 100.0).round());
     let mut changed = false;
     ui.horizontal(|ui| {

@@ -3,7 +3,7 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_ui_egui::{Dialog, PrintCraftApp};
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 /// `n` pages of 200×300; page i says "Page i+1" plus "page" and "Pages" for find tests.
 fn fixture(n: usize) -> Vec<u8> {
@@ -31,9 +31,9 @@ fn fixture(n: usize) -> Vec<u8> {
     out
 }
 
-fn harness() -> Harness<'static, PrintCraftApp> {
+fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("a.pdf", None, fixture(5)).unwrap();
         app.open_bytes("b.pdf", None, fixture(2)).unwrap();
         app
@@ -52,18 +52,18 @@ fn harness() -> Harness<'static, PrintCraftApp> {
 fn close_all_asks_only_for_changed_documents() {
     let mut h = harness();
     // Change the active document (b.pdf).
-    h.state_mut().apply_edit(printcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
     h.state_mut().execute("file.close_all");
     h.run_steps(2);
     assert_eq!(h.state().views.len(), 1, "the clean document closed at once");
-    assert_eq!(h.state().close_request, Some(printcraft_ui_egui::CloseRequest::All), "b.pdf asks to be saved");
+    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::All), "b.pdf asks to be saved");
     h.get_by_label_contains("Save changes");
 }
 
 #[test]
 fn revert_after_confirming() {
     let mut h = harness();
-    h.state_mut().apply_edit(printcraft_engine::Edit::DeletePages { pages: vec![0] });
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
     assert!(h.state_mut().execute("file.revert"));
     h.run_steps(2);
     assert_eq!(h.state().dialog, Some(Dialog::Revert));
@@ -98,6 +98,11 @@ fn view_history_select_all_and_find_options() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_eq!(h.state().views[0].selected_text().as_deref(), Some("Page 4 pages PAGE"));
+    h.state_mut().views[0].select_text(3, 0, 0);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("Page 4 pages PAGE"), "the viewer shortcut still selects text");
+    assert!(h.state().views[0].selected.is_empty(), "the viewer shortcut doesn't select pages");
     // Find: "page" matches three times a page; whole words, case-sensitive narrows it.
     h.state_mut().views[0].open_find();
     h.state_mut().views[0].find.as_mut().unwrap().query = "page".into();
@@ -126,7 +131,7 @@ fn view_history_select_all_and_find_options() {
 
 #[test]
 fn layouts_fit_height_labels_and_system_theme() {
-    use printcraft_ui_egui::canvas::{Fit, PageLayout};
+    use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
     let mut h = harness();
     h.state_mut().active = Some(0);
     // Fit height: the page's height fills the view (less the margins).
@@ -151,10 +156,10 @@ fn layouts_fit_height_labels_and_system_theme() {
     assert!(a.left() > vp.center().x - 1.0, "the cover sits on the right");
     assert!(b.top() > a.bottom() && (b.top() - c.top()).abs() < 1.0, "then pairs 2–3");
     // Page labels in the page box.
-    h.state_mut().apply_edit(printcraft_engine::Edit::NumberPages {
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::NumberPages {
         from: 0,
         to: 1,
-        style: printcraft_engine::LabelStyle::LowerRoman,
+        style: pdfcraft_engine::LabelStyle::LowerRoman,
         prefix: String::new(),
         first: 1,
     });
@@ -176,13 +181,13 @@ fn layouts_fit_height_labels_and_system_theme() {
 fn two_page_view_steps_a_spread_at_a_time() {
     // #70: ⌘→ went to the right-hand page of the same spread, so the view never moved.
     use egui::{Key, Modifiers};
-    use printcraft_ui_egui::canvas::{Fit, PageLayout};
+    use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
     let mut h = harness();
     h.state_mut().active = Some(0);
     h.state_mut().views[0].fit = Fit::Width;
     h.state_mut().views[0].layout = PageLayout::TwoUp;
     h.run_steps(4);
-    let step = |h: &mut Harness<'static, PrintCraftApp>, key| {
+    let step = |h: &mut Harness<'static, PdfCraftApp>, key| {
         h.key_press_modifiers(Modifiers::COMMAND, key);
         h.run_steps(4);
         h.state().views[0].current
@@ -207,7 +212,7 @@ trailer << /Root 1 0 R >>
 %%EOF"
         .to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("damaged.pdf", None, damaged.clone()).unwrap();
         app
     });
@@ -215,15 +220,15 @@ trailer << /Root 1 0 R >>
     h.get_by_label_contains("This file was damaged and has been repaired.");
     h.get_by_label("Details").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, Some(Dialog::Properties(printcraft_ui_egui::PropsTab::Advanced)));
+    assert_eq!(h.state().dialog, Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::Advanced)));
     h.get_by_label("Repair log");
 }
 
 #[test]
 fn initial_view_is_edited_and_honoured_on_open() {
-    use printcraft_engine::{InitialLayout, Magnification, Navigation};
+    use pdfcraft_engine::{InitialLayout, Magnification, Navigation};
     let mut h = harness();
-    h.state_mut().dialog = Some(Dialog::Properties(printcraft_ui_egui::PropsTab::InitialView));
+    h.state_mut().dialog = Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::InitialView));
     h.run_steps(2);
     h.get_by_label("Open to page");
     {
@@ -244,13 +249,13 @@ fn initial_view_is_edited_and_honoured_on_open() {
     assert_eq!(s.session.get(id).unwrap().can_undo(), Some("Change document properties"));
     // Opening the saved file follows it.
     let bytes = s.session.save_bytes(id).unwrap();
-    let mut app = PrintCraftApp::new();
+    let mut app = PdfCraftApp::new();
     app.open_bytes("again.pdf", None, bytes.to_vec()).unwrap();
     let view = &app.views[0];
-    assert_eq!((view.current, view.cover, app.right), (1, true, Some(printcraft_ui_egui::RightPanel::Bookmarks)));
+    assert_eq!((view.current, view.cover, app.right), (1, true, Some(pdfcraft_ui_egui::RightPanel::Bookmarks)));
 }
 
-fn drag(h: &mut Harness<'static, PrintCraftApp>, a: egui::Pos2, b: egui::Pos2) {
+fn drag(h: &mut Harness<'static, PdfCraftApp>, a: egui::Pos2, b: egui::Pos2) {
     h.hover_at(a);
     h.run_steps(1);
     h.drag_at(a);
@@ -306,10 +311,10 @@ fn fit_visible_zooms_to_the_content_width() {
 
 #[test]
 fn tab_and_window_show_the_document_title_when_asked() {
-    use printcraft_engine::Edit;
+    use pdfcraft_engine::Edit;
     let mut h = harness();
     h.run_steps(2);
-    assert_eq!(h.state().window_title, "b.pdf — PrintCraft");
+    assert_eq!(h.state().window_title, "b.pdf — PdfCraft");
     {
         let s = h.state_mut();
         let id = s.views[s.active.unwrap()].id;
@@ -319,13 +324,13 @@ fn tab_and_window_show_the_document_title_when_asked() {
         s.session.apply(id, Edit::SetInitialView(Box::new(v))).unwrap();
     }
     h.run_steps(2);
-    assert_eq!(h.state().window_title, "Quarterly report — PrintCraft");
+    assert_eq!(h.state().window_title, "Quarterly report — PdfCraft");
     h.get_by_label_contains("Quarterly report");
 }
 
 #[test]
 fn an_earlier_revision_opens_from_document_properties() {
-    use printcraft_engine::Edit;
+    use pdfcraft_engine::Edit;
     let mut h = harness();
     {
         let s = h.state_mut();
@@ -335,7 +340,7 @@ fn an_earlier_revision_opens_from_document_properties() {
         s.open_bytes("updated.pdf", None, bytes.to_vec()).unwrap();
     }
     h.run_steps(2);
-    h.state_mut().dialog = Some(Dialog::Properties(printcraft_ui_egui::PropsTab::Advanced));
+    h.state_mut().dialog = Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::Advanced));
     h.run_steps(2);
     h.run_steps(2);
     h.get_by_label("View revision 1").click();

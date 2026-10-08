@@ -1,6 +1,6 @@
 [package]
-name = "printcraft"
-description = "PrintCraft desktop app"
+name = "pdfcraft"
+description = "PdfCraft desktop app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,7 +13,7 @@ workspace = true
 # trusted roots. No bundled root list (webpki-roots and webpki-root-certs are CDLA-licensed).
 ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"] }
 rustls-native-certs = "0.8"
-printcraft-ui-egui = { workspace = true }
+pdfcraft-ui-egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "persistence", "links"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
@@ -25,5 +25,5 @@ serde_json = { workspace = true }
 fmv-macos-events = "=0.1.0"
 
 [build-dependencies]
-# Icon + VERSIONINFO for printcraft.exe; build.rs only uses it when targeting Windows.
+# Icon + VERSIONINFO for pdfcraft.exe; build.rs only uses it when targeting Windows.
 winresource = "0.1"

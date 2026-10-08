@@ -3,12 +3,12 @@
 //! their outlines, a click selects one, a double-click edits it and Delete removes it.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use printcraft_engine::{Edit, LinkAction, LinkHighlight, LinkItem, LinkStyle};
-use printcraft_render::DocInfo;
+use pdfcraft_engine::{Edit, LinkAction, LinkHighlight, LinkItem, LinkStyle};
+use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, widgets};
+use crate::{PdfCraftApp, widgets};
 
 const LINK_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
@@ -132,7 +132,7 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView) {
     }
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Open Link Properties for a new link area or an existing link.
     pub(crate) fn open_link_props(&mut self, page: usize, rect: Option<[f64; 4]>, index: Option<usize>) {
         let Some((_, id)) = self.active_ids() else { return };
@@ -172,12 +172,16 @@ impl PrintCraftApp {
         let Some((_, id)) = self.active_ids() else { return };
         let found = self.session.find_urls(id);
         if found.is_empty() {
-            self.notify("No unlinked web addresses were found in the text");
+            self.notify_tr("No unlinked web addresses were found in the text");
             return;
         }
         let n = found.len();
         if self.apply_edit(Edit::AddLinks { links: found, style: LinkStyle::default() }) {
-            self.notify(format!("Created {n} link{}", if n == 1 { "" } else { "s" }));
+            if n == 1 {
+                self.notify_tr("Created 1 link");
+            } else {
+                self.notify_fmt("Created {n} links", &[("n", &n.to_string())]);
+            }
         }
     }
 }
@@ -185,43 +189,42 @@ impl PrintCraftApp {
 /// Link Properties. Returns (apply, cancel).
 pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Tokens) -> (bool, bool) {
     ui.set_width(460.0);
-    ui.label(egui::RichText::new(if d.index.is_some() { "Link Properties" } else { "Create Link" }).font(theme::semibold(18.0)));
+    ui.label(egui::RichText::new(if d.index.is_some() { tl!("Link Properties") } else { tl!("Create Link") }).font(theme::semibold(18.0)));
     ui.add_space(8.0);
-    widgets::section_title(ui, "Link Appearance");
+    widgets::section_title(ui, tl!("Link Appearance"));
     egui::Grid::new("link-appearance").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-        ui.label("Link Type:");
-        egui::ComboBox::from_id_salt("link-type").selected_text(if d.style.visible { "Visible Rectangle" } else { "Invisible Rectangle" }).show_ui(
-            ui,
-            |ui| {
-                ui.selectable_value(&mut d.style.visible, true, "Visible Rectangle");
-                ui.selectable_value(&mut d.style.visible, false, "Invisible Rectangle");
-            },
-        );
+        ui.label(tl!("Link Type:"));
+        egui::ComboBox::from_id_salt("link-type")
+            .selected_text(if d.style.visible { tl!("Visible Rectangle") } else { tl!("Invisible Rectangle") })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut d.style.visible, true, tl!("Visible Rectangle"));
+                ui.selectable_value(&mut d.style.visible, false, tl!("Invisible Rectangle"));
+            });
         ui.end_row();
-        ui.label("Highlight Style:");
-        egui::ComboBox::from_id_salt("link-hl").selected_text(d.style.highlight.label()).show_ui(ui, |ui| {
+        ui.label(tl!("Highlight Style:"));
+        egui::ComboBox::from_id_salt("link-hl").selected_text(tl!(d.style.highlight.label())).show_ui(ui, |ui| {
             for h in LinkHighlight::ALL {
-                ui.selectable_value(&mut d.style.highlight, h, h.label());
+                ui.selectable_value(&mut d.style.highlight, h, tl!(h.label()));
             }
         });
         ui.end_row();
         if d.style.visible {
-            ui.label("Line Thickness:");
+            ui.label(tl!("Line Thickness:"));
             egui::ComboBox::from_id_salt("link-w")
                 .selected_text(if d.style.width <= 1.0 {
-                    "Thin"
+                    tl!("Thin")
                 } else if d.style.width <= 2.0 {
-                    "Medium"
+                    tl!("Medium")
                 } else {
-                    "Thick"
+                    tl!("Thick")
                 })
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut d.style.width, 1.0, "Thin");
-                    ui.selectable_value(&mut d.style.width, 2.0, "Medium");
-                    ui.selectable_value(&mut d.style.width, 3.0, "Thick");
+                    ui.selectable_value(&mut d.style.width, 1.0, tl!("Thin"));
+                    ui.selectable_value(&mut d.style.width, 2.0, tl!("Medium"));
+                    ui.selectable_value(&mut d.style.width, 3.0, tl!("Thick"));
                 });
             ui.end_row();
-            ui.label("Line Style:");
+            ui.label(tl!("Line Style:"));
             let mut style = if d.style.dashed {
                 1
             } else if d.style.underline {
@@ -229,15 +232,15 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Token
             } else {
                 0
             };
-            egui::ComboBox::from_id_salt("link-s").selected_text(["Solid", "Dashed", "Underline"][style]).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("link-s").selected_text(tl!(["Solid", "Dashed", "Underline"][style])).show_ui(ui, |ui| {
                 for (k, l) in ["Solid", "Dashed", "Underline"].iter().enumerate() {
-                    ui.selectable_value(&mut style, k, *l);
+                    ui.selectable_value(&mut style, k, tl!(l));
                 }
             });
             d.style.dashed = style == 1;
             d.style.underline = style == 2;
             ui.end_row();
-            ui.label("Color:");
+            ui.label(tl!("Color:"));
             if let Some(c) = crate::comments::swatch_grid(ui, Some(d.style.color)) {
                 d.style.color = c;
             }
@@ -245,34 +248,34 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Token
         }
     });
     ui.add_space(8.0);
-    widgets::section_title(ui, "Link Action");
-    ui.radio_value(&mut d.web, true, "Open a web page");
+    widgets::section_title(ui, tl!("Link Action"));
+    ui.radio_value(&mut d.web, true, tl!("Open a web page"));
     ui.add_enabled_ui(d.web, |ui| {
         ui.horizontal(|ui| {
             ui.add_space(24.0);
             ui.add(egui::TextEdit::singleline(&mut d.url).desired_width(360.0).hint_text("https://example.org"));
         });
     });
-    ui.radio_value(&mut d.web, false, "Go to a page view");
+    ui.radio_value(&mut d.web, false, tl!("Go to a page view"));
     ui.add_enabled_ui(!d.web, |ui| {
         ui.horizontal(|ui| {
             ui.add_space(24.0);
-            ui.label("Page");
+            ui.label(tl!("Page"));
             ui.add(egui::DragValue::new(&mut d.target).range(1..=pages.max(1)));
-            ui.label(format!("of {pages}"));
+            ui.label(crate::i18n::fmt(tl!("of {name}"), &[("name", &pages.to_string())]));
         });
     });
     let ok = !d.web || (d.url.trim().len() > 3 && d.url.trim() != "https://");
     if !ok {
-        ui.label(egui::RichText::new("Type the web address.").small().color(t.text_faint));
+        ui.label(egui::RichText::new(tl!("Type the web address.")).small().color(t.text_faint));
     }
     ui.add_space(12.0);
     let (mut a, mut c) = (false, false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, "OK", true)).inner.clicked() {
+        if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
             a = true;
         }
-        if widgets::pill_button(ui, "Cancel", false).clicked() {
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
             c = true;
         }
     });

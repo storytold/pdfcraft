@@ -34,4 +34,4 @@ openssl pkcs12 -export -inkey leaf.key -in leaf.crt -certfile ca.crt -out chain.
 `openssl-signed.pdf` is a hand-written one-page PDF with a `/Contents` placeholder, signed with
 `openssl cms -sign -binary -md sha256 -outform DER -signer rsa.crt -inkey rsa.key` over its
 byte ranges (`adbe.pkcs7.detached`, with OpenSSL's signing-time attribute). It checks the
-validator against a signature PrintCraft did not make; poppler's `pdfsig` reports it valid.
+validator against a signature PdfCraft did not make; poppler's `pdfsig` reports it valid.

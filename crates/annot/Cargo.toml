@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-annot"
+name = "pdfcraft-annot"
 description = "Annotations (comments): builders, appearance streams and edits, ISO 32000-2 §12.5"
 version.workspace = true
 edition.workspace = true
@@ -9,8 +9,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-cos = { workspace = true }
-printcraft-fonts = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-fonts = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use printcraft_cos::Document;
+use pdfcraft_cos::Document;
 
 use super::*;
 
@@ -265,7 +265,7 @@ fn setting_alt_text_and_marking_decorative() {
     assert_eq!(r.result(Rule::FiguresAltText).unwrap().status, Status::Passed);
     set_alt(&mut doc, f[0].obj, None).unwrap();
     assert_eq!(figures(&doc)[0].alt, None);
-    assert_eq!(set_alt(&mut doc, printcraft_cos::ObjRef::new(6, 0), Some("x")), Err(AltError::NotAFigure(6)));
+    assert_eq!(set_alt(&mut doc, pdfcraft_cos::ObjRef::new(6, 0), Some("x")), Err(AltError::NotAFigure(6)));
     // Decorative: the figure leaves the tags and its content becomes an artifact.
     mark_decorative(&mut doc, f[0].obj).unwrap();
     let left = figures(&doc);
@@ -273,9 +273,9 @@ fn setting_alt_text_and_marking_decorative() {
     assert_eq!(left[0].alt.as_deref(), Some("A bar"));
     let r = check(&doc, &Options { rules: [Rule::FiguresAltText, Rule::TaggedContent].into(), pages: None });
     assert_eq!(failed(&r), Vec::<Rule>::new(), "{:?}", r.results);
-    let pages = printcraft_model::pages(&doc);
+    let pages = pdfcraft_model::pages(&doc);
     let c = doc.resolve(pages[0].dict.get(b"Contents").unwrap());
-    let printcraft_cos::Object::Stream(c) = &*c else { panic!("one content stream") };
+    let pdfcraft_cos::Object::Stream(c) = &*c else { panic!("one content stream") };
     let text = String::from_utf8(c.decoded().unwrap()).unwrap();
     assert!(text.contains("/Artifact BMC") && !text.contains("/MCID 0"), "{text}");
 }

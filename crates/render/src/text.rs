@@ -1,4 +1,4 @@
-//! Text extraction (bootstrap for `printcraft-text`, architecture §8).
+//! Text extraction (bootstrap for `pdfcraft-text`, architecture §8).
 //!
 //! A hayro `Device` that ignores paint and records every glyph: its Unicode value (ToUnicode →
 //! encoding → glyph name fallbacks, handled by hayro) and its box in *page view space*, i.e.
@@ -180,7 +180,7 @@ impl<'a> Device<'a> for TextDevice {
     fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
     fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {
         let Some(u) = glyph.as_unicode() else {
-            if std::env::var_os("PRINTCRAFT_TEXT_DEBUG").is_some() {
+            if std::env::var_os("PDFCRAFT_TEXT_DEBUG").is_some() {
                 eprintln!("NOUNICODE {} {:?}", if matches!(glyph, Glyph::Type3(_)) { "t3" } else { "ol" }, (transform * glyph_transform).as_coeffs());
             }
             return;
@@ -195,7 +195,7 @@ impl<'a> Device<'a> for TextDevice {
         // Glyph space → view space. Glyph space uses 1000 units per em for outline glyphs; the em
         // box spans descender (−200) to ascender (800), the advance gives the width.
         let t = transform * glyph_transform;
-        if std::env::var_os("PRINTCRAFT_TEXT_DEBUG").is_some() {
+        if std::env::var_os("PDFCRAFT_TEXT_DEBUG").is_some() {
             let kind = if matches!(glyph, Glyph::Type3(_)) { "t3" } else { "ol" };
             eprintln!("{kind} {text:?} transform={:?} glyph_transform={:?}", transform.as_coeffs(), glyph_transform.as_coeffs());
         }

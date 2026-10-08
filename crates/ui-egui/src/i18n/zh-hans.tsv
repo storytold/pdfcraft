@@ -1,0 +1,1635 @@
+# Simplified Chinese (zh-hans) catalog. Format: see the header
+# of ja.tsv (context <TAB> source <TAB> translation; @id, @plural and other contexts; escapes
+# \n \t \\). Chinese has one plural form.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Simplified Chinese computing vocabulary. No proprietary localisation resource, string table or
+# product UI (Acrobat's included) was consulted or copied; add entries the same way.
+# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
+# the trailing "…" of dialog commands is kept.
+
+	Menu	菜单
+	File	文件
+	Edit	编辑
+	Pages	页面
+	View	视图
+	Help	帮助
+	Preferences	首选项
+	Preferences…	首选项…
+	Interface language	界面语言
+	Identity	身份
+	Name on new comments	新注释的作者姓名
+	Open…	打开…
+	Open	打开
+	Open file	打开文件
+	Home	主页
+	New blank PDF	新建空白 PDF
+	Create PDF from file…	从文件创建 PDF…
+	Create PDF from images…	从图像创建 PDF…
+	Create PDF from clipboard	从剪贴板创建 PDF
+	Combine files…	合并文件…
+	Save	保存
+	Save as…	另存为…
+	Close file	关闭文件
+	Close all	关闭全部
+	Revert	还原
+	Print…	打印…
+	Document properties…	文档属性…
+	Undo	撤销
+	Redo	重做
+	Find…	查找…
+	Advanced search…	高级搜索…
+	Copy pages	复制页面
+	Cut pages	剪切页面
+	Paste pages	粘贴页面
+	Fit visible	适合可见区域
+	Fit to height	适合高度
+	Marquee zoom	选框缩放
+	Zoom in	放大
+	Zoom out	缩小
+	Rotate view clockwise	顺时针旋转视图
+	Rotate view counterclockwise	逆时针旋转视图
+	Take a snapshot	拍摄快照
+	Full screen mode	全屏模式
+	Read mode	阅读模式
+	Switch light / dark theme	切换浅色/深色主题
+	Comments panel	注释面板
+	Form fields panel	表单域面板
+	Signatures panel	签名面板
+	Clear form	清除表单
+	Find tools and commands…	查找工具和命令…
+	Find tools and commands	查找工具和命令
+	Zoom	缩放
+	Actual size	实际大小
+	Zoom to page level	缩放到整页
+	Fit to width	适合宽度
+	Display theme	显示主题
+	Side panels	侧边面板
+	Enable Acrobat JavaScript	启用 Acrobat JavaScript
+	OK	确定
+	Cancel	取消
+	Close	关闭
+	Don't save	不保存
+	Delete	删除
+	Apply	应用
+	Run	运行
+	Clear	清除
+	Sanitize	清理
+	Mark all	全部标记
+	Save changes to “{name}” before closing?	在关闭前保存对“{name}”的更改？
+	Your changes will be lost if you don't save them.	如果不保存，更改将会丢失。
+	Password required	需要密码
+	“{name}” is protected. Enter a password to open it.	“{name}”受保护。请输入密码以打开。
+	Password	密码
+	Incorrect password. Try again.	密码不正确，请重试。
+	Export a PDF	导出 PDF
+	Fill & Sign	填写与签名
+	Edit a PDF	编辑 PDF
+	Create a PDF	创建 PDF
+	Combine files	合并文件
+	Add comments	添加注释
+	Scan & OCR	扫描和 OCR
+	Protect a PDF	保护 PDF
+	Redact a PDF	密文 PDF
+	Compress a PDF	压缩 PDF
+	Add a stamp	添加图章
+	Use a certificate	使用证书
+	Use print production	印刷制作
+	Measure objects	测量对象
+	Compare files	比较文件
+	Use guided actions	使用引导操作
+	Prepare for accessibility	无障碍准备
+	Apply PDF standards	应用 PDF 标准
+	Add search index	添加搜索索引
+	Use JavaScript	使用 JavaScript
+	AI assistant	AI 助手
+	Export to	导出为
+	Fill	填写
+	Modify page	修改页面
+	Add content	添加内容
+	Create from	创建来源
+	Combine	合并
+	Page options	页面选项
+	More	更多
+	Markup	标记
+	Drawing	绘图
+	Review	审阅
+	Recognize text	识别文本
+	Recognize Text	识别文本
+	Delete selected fields	删除所选字段
+	Password protection will be applied when you save	保存时将应用密码保护
+	Saved the print-ready PDF to {path}	打印就绪的 PDF 已保存到{path}
+	Could not save: {e}	无法保存：{e}
+	Earlier in tab order	在 Tab 顺序中前移
+	Later in tab order	在 Tab 顺序中后移
+	From:	从：
+	To:	至：
+	High Resolution	高分辨率
+	Print	打印
+	Save as PDF/A	另存为 PDF/A
+	Verify to see what the document needs.	验证以查看文档需要什么。
+	Set Page Boxes	设置页面框
+	Signature panel	签名面板
+	{month} {day}, {y}	{month}{day}日，{y}年
+	The document's security settings don't allow filling in form fields	文档安全设置不允许填写表单域
+	{name} is read-only	{name}为只读
+	{name} has no action	{name}没有动作
+	Previous month	上个月
+	Next month	下个月
+	January	一月
+	February	二月
+	March	三月
+	April	四月
+	May	五月
+	June	六月
+	July	七月
+	August	八月
+	September	九月
+	October	十月
+	November	十一月
+	December	十二月
+	Done	完成
+	This certificate is in your list of trusted certificates.	此证书位于受信任证书列表中。
+	This certificate is trusted through a certificate above it in the chain.	此证书通过链中上方的证书受到信任。
+	This certificate is not trusted. Signatures made with it show an unknown identity.	此证书不受信任。使用它制作的签名显示未知身份。
+	Add to Trusted Certificates	添加到受信任的证书
+	Export…	导出…
+	PDF Optimizer	PDF 优化器
+	Discard Objects	丢弃对象
+	Discard User Data	丢弃用户数据
+	Clean Up	清理
+	Color Images	彩色图像
+	Grayscale Images	灰度图像
+	Bicubic downsampling to	双三次降采样至
+	for images above	（高于此分辨率的图像）
+	Compression	压缩
+	ZIP	ZIP
+	Retain existing	保留现有
+	Minimum	最低
+	Low	低
+	High	高
+	Maximum	最高
+	Each image is measured where pages draw it; an image is replaced only if the result is smaller.	按页面绘制位置测量每个图像；仅在结果更小时替换图像。
+	Discard all links, actions and JavaScript	丢弃所有链接、动作和 JavaScript
+	Discard alternate images	丢弃备用图像
+	Discard embedded page thumbnails	丢弃嵌入的页面缩略图
+	Discard document tags	丢弃文档标记
+	Discard embedded print settings	丢弃嵌入的打印设置
+	Discard bookmarks	丢弃书签
+	Discard hidden layer content	丢弃隐藏图层内容
+	Discard all comments, forms and multimedia	丢弃所有注释、表单和多媒体
+	Discard document information and metadata	丢弃文档信息和元数据
+	Discard all object data (file attachments)	丢弃所有对象数据（文件附件）
+	Discard private data of other applications	丢弃其他应用程序的私有数据
+	Discard hidden text	丢弃隐藏文本
+	Use Flate to encode streams that are not encoded	使用 Flate 编码未编码的流
+	Remove invalid links and bookmarks	删除无效链接和书签
+	Remove unreferenced named destinations	删除未引用的命名目标
+	Compress document structure (object streams)	压缩文档结构（对象流）
+	Remove unused objects and merge identical ones	删除未使用的对象并合并相同的对象
+	Audit space usage…	审计空间使用情况…
+	Space Audit	空间审计
+	Bytes	字节
+	Content Streams	内容流
+	X Object Forms	XObject 表单
+	Structure Info	结构信息
+	Thumbnails	缩略图
+	Named Destinations	命名目标
+	Color Spaces	颜色空间
+	Shadings	着色
+	Patterns (graphics objects)	图案
+	Extended Graphics States	扩展图形状态
+	Embedded Files	嵌入文件
+	Document Overhead	文档开销
+	Total	总计
+	Text Field Properties	文本字段属性
+	Check Box Properties	复选框属性
+	Radio Button Properties	单选按钮属性
+	Dropdown Properties	下拉列表属性
+	List Box Properties	列表框属性
+	Button Properties	按钮属性
+	Digital Signature Properties	数字签名属性
+	Position	位置
+	Options	选项
+	Validate	验证
+	Calculate	计算
+	Actions	操作
+	This field is locked. Unlock it to change its properties.	此字段已锁定。解锁后可更改其属性。
+	Tooltip:	提示：
+	Common Properties	常规属性
+	Read Only	只读
+	Required	必填
+	Font Size:	字号：
+	Auto	自动
+	Text Color:	文本颜色：
+	Borders and Colors	边框和颜色
+	Border Color:	边框颜色：
+	Fill Color:	填充颜色：
+	No color	无颜色
+	Beveled	斜面
+	Left:	左：
+	Bottom:	下：
+	Width:	宽：
+	Height:	高：
+	Points from the page's bottom-left corner.	从页面左下角算起的点数。
+	Alignment:	对齐：
+	Default Value:	默认值：
+	Multi-line	多行
+	Scroll long text	滚动长文本
+	Allow Rich Text Formatting	允许富文本格式
+	Limit of	限制为
+	characters	个字符
+	Field is used for file selection	字段用于文件选择
+	Check spelling	检查拼写
+	Comb of	梳状（每格一字符），共
+	Export Value: {on}	导出值：{on}
+	Check box is checked by default	默认选中复选框
+	Button is checked by default	默认选中按钮
+	Buttons with the same name and value are selected in unison	同名同值的按钮一起选中
+	Item:	项目：
+	Item List	项目列表
+	Up	上移
+	Delete {o}	删除 {o}
+	Add the choices people pick from.	添加供人选择的选项。
+	Default:	默认值：
+	(none)	（无）
+	Sort items	排序项目
+	Allow user to enter custom text	允许用户输入自定义文本
+	Multiple selection	多选
+	Commit selected value immediately	立即提交所选值
+	Number	数字
+	Percentage	百分比
+	Time	时间
+	Special	特殊
+	Select format category:	选择格式类别：
+	The value is shown as typed.	按输入显示值。
+	Decimal places:	小数位数：
+	Separator style:	分隔符样式：
+	Currency symbol:	货币符号：
+	Before the number	在数字之前
+	Negative number style:	负数样式：
+	Format:	格式：
+	Custom:	自定义：
+	Zip Code	邮政编码
+	Zip Code + 4	邮政编码 + 4
+	Phone Number	电话号码
+	Social Security Number	社会安全号码
+	Arbitrary Mask	任意掩码
+	Mask:	掩码：
+	9 digit, A letter, O letter or digit, X any character	9 表示数字，A 表示字母，O 表示字母或数字，X 表示任意字符
+	Example: {sample}	示例：{sample}
+	Field value is not validated	不验证字段值
+	Field value is in range:	字段值在范围内：
+	Add an Action	添加操作
+	Select Trigger:	选择触发器：
+	Mouse Up	鼠标松开
+	Mouse Down	鼠标按下
+	Mouse Enter	鼠标进入
+	Mouse Exit	鼠标离开
+	On Focus	获得焦点
+	On Blur	失去焦点
+	Select Action:	选择操作：
+	Open a web link	打开网页链接
+	Reset a form	重置表单
+	Execute a menu item	执行菜单项
+	Show a field	显示字段
+	Hide a field	隐藏字段
+	Submit a form	提交表单
+	Fields to reset (comma-separated; empty: all)	要重置的字段（逗号分隔；为空表示全部）
+	Print, NextPage, PrevPage, FirstPage or LastPage	Print、NextPage、PrevPage、FirstPage 或 LastPage
+	Field names (comma-separated)	字段名（逗号分隔）
+	URL to submit to	要提交到的 URL
+	Script:	脚本：
+	Value:	值：
+	No actions	无操作
+	Value is not calculated	不计算值
+	Value is the	值为
+	sum (+)	求和 (+)
+	product (x)	求积 (x)
+	average	平均值
+	minimum	最小值
+	maximum	最大值
+	of the following fields:	以下字段的：
+	Simplified field notation:	简化字段表示法：
+	Field names with + - * / and parentheses; put \\ before spaces in names.	字段名支持 + - * / 和括号；名称中的空格前加 \\。
+	Format text	设置文本格式
+	Bold	粗体
+	Italic	斜体
+	Align left	左对齐
+	Centre	居中
+	Align right	右对齐
+	Justify	两端对齐
+	Standard fonts; text outside Windows-1252 isn't supported yet.	标准字体；尚不支持 Windows-1252 之外的文本。
+	Edit image	编辑图像
+	Rotate counterclockwise	逆时针旋转
+	Rotate clockwise	顺时针旋转
+	Flip horizontal	水平翻转
+	Flip vertical	垂直翻转
+	Replace image	替换图像
+	Crop (% trimmed from each side)	裁剪（从每条边修剪的百分比）
+	Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.	单击页面添加文本；每次单击开始一个新文本框，✓ 完成。拖动项目以移动，拖动角落以调整大小，双击文本进行编辑。
+	Choose an image	选择图像
+	Export to Image	导出为图像
+	Export to Text	导出为文本
+	Export All Images	导出所有图像
+	Resolution	分辨率
+	Format	格式
+	Quality	质量
+	One {f} file per page, named after the document.	每页一个 {f} 文件，以文档命名。
+	Exclude images smaller than	排除小于以下尺寸的图像
+	No limit	无限制
+	Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.	每个图像一次，以文档和页面命名。JPEG 图像原样保存，其他为 PNG。
+	Plain text in reading order; pages are separated by form feeds.	按阅读顺序的纯文本；页面之间用换页符分隔。
+	Create {what}	创建{what}
+	initials	姓名首字母
+	signature	签名
+	Create Custom Stamp	创建自定义图章
+	From {file}	来自 {file}
+	Category:	类别：
+	e.g. My stamps	例如：我的图章
+	Name:	名称：
+	Custom	自定义
+	Delete stamp	删除图章
+	Create custom stamp…	创建自定义图章…
+	From a PDF page or an image	来自 PDF 页面或图像
+	Line spacing	行距
+	Character spacing	字符间距
+	Horizontal scale	水平缩放
+	Rotate Clockwise	顺时针旋转
+	Rotate Counterclockwise	逆时针旋转
+	Flip Horizontal	水平翻转
+	Flip Vertical	垂直翻转
+	Replace Image…	替换图像…
+	Save Image As…	图像另存为…
+	Check for updates	检查更新
+	No check has run yet.	尚未运行检查。
+	Checking for a newer version…	正在检查新版本…
+	PdfCraft {v} is available.	PdfCraft {v} 可用。
+	You have version {c}. Download the new version from its release page.	当前版本为 {c}。请从其发布页面下载新版本。
+	PdfCraft {c} is up to date.	PdfCraft {c} 已是最新。
+	Couldn't check for updates: {e}	无法检查更新：{e}
+	You have version {c}. All releases are listed at {page}.	当前版本为 {c}。所有版本列在 {page}。
+	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	向 GitHub 查询最新版本。不会自动下载或安装任何内容。
+	Download	下载
+	Later	稍后
+	none	无
+	Declared conformance: {shown}	声明的一致性：{shown}
+	Output intent: {list}	输出意图：{list}
+	Conformance level:	一致性级别：
+	No problems found: the document conforms to {level}.	未发现问题：文档符合 {level}。
+	 (page {p})	（第 {p} 页）
+	  · not fixable here	 · 此处无法修复
+	Verify	验证
+	Box	框
+	Units	单位
+	Set to zero	置零
+	Current page ({n})	当前页（第 {n} 页）
+	Subset	子集
+	Update	更新
+	Add	添加
+	{verb} Header and Footer	{verb}页眉和页脚
+	{verb} Watermark	{verb}水印
+	{verb} Background	{verb}背景
+	Margins (in)	边距（英寸）
+	Left Header Text	左页眉文本
+	Center Header Text	居中页眉文本
+	Right Header Text	右页眉文本
+	Left Footer Text	左页脚文本
+	Center Footer Text	居中页脚文本
+	Right Footer Text	右页脚文本
+	Insert Page Number	插入页码
+	Insert Date	插入日期
+	Start page number	起始页码
+	Source	来源
+	Fit to page	适合页面
+	Rotation	旋转
+	Appear behind page	显示在页面后面
+	Appear on top of page	显示在页面上层
+	From colour	使用颜色
+	Page Range Options	页面范围选项
+	Preview: page {p} of {n}	预览：第 {p} 页，共 {n} 页
+	Applies to 1 page	应用于 1 页
+	Applies to {n} pages	应用于 {n} 页
+	Replaces the existing one on those pages.	替换这些页面上的现有内容。
+	PDF or image	PDF 或图像
+	No file chosen	未选择文件
+	Page number	页码
+	Scale relative to target page	相对于目标页面的缩放
+	Link Properties	链接属性
+	Create Link	创建链接
+	Link Appearance	链接外观
+	Link Type:	链接类型：
+	Visible Rectangle	可见矩形
+	Invisible Rectangle	不可见矩形
+	Highlight Style:	高亮样式：
+	Invert	反转
+	Outline	轮廓
+	Inset	嵌入
+	Line Thickness:	线条粗细：
+	Thin	细
+	Thick	粗
+	Line Style:	线条样式：
+	Solid	实线
+	Dashed	虚线
+	Color:	颜色：
+	Link Action	链接动作
+	Open a web page	打开网页
+	Go to a page view	转到页面视图
+	Type the web address.	输入网址。
+	This document has no signatures.	本文档没有签名。
+	The Keychain's digital IDs couldn't be listed: {e}	无法列出钥匙串中的数字 ID：{e}
+	Signed and saved to {path}	已签名并保存到{path}
+	Couldn't open revision {n}: {e}	无法打开修订版本{n}：{e}
+	Couldn't open the signed version: {e}	无法打开已签名版本：{e}
+	Sign with a Digital ID	使用数字 ID 签名
+	Choose the digital ID that you want to use for signing:	选择要用于签名的数字 ID：
+	Keychain  ·  	钥匙串 · 
+	Issued by: 	颁发者：
+	, Expires: 	，有效期至：
+	No digital IDs yet.	尚无数字 ID。
+	Configure New Digital ID	配置新数字 ID
+	Continue	继续
+	Configure a Digital ID for Signing	配置用于签名的数字 ID
+	Use a Digital ID from a file	使用文件中的数字 ID
+	Create a new Digital ID (self-signed, saved to a password-protected file)	创建新数字 ID（自签名，保存到受密码保护的文件）
+	Name	名称
+	Organizational Unit	组织单位
+	Organization Name	组织名称
+	Email Address	电子邮件地址
+	Country/Region	国家/地区
+	Key Algorithm	密钥算法
+	Confirm Password	确认密码
+	Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.	有效期 5 年，用于数字签名。自签名 ID 通常不受他人信任。
+	File (.p12, .pfx)	文件 (.p12, .pfx)
+	Digital ID	数字 ID
+	Browse…	浏览…
+	{verb} as "{name}"	{verb}为“{name}”
+	Certify	认证
+	The signature will be invisible.	签名将不可见。
+	Distinguished name	可分辨名称
+	Labels	标签
+	Permitted actions after certifying	认证后允许的操作
+	No changes allowed	不允许任何更改
+	Annotations, form fill-in, and digital signatures	注释、填写表单和数字签名
+	Form fill-in and digital signatures	填写表单和数字签名
+	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	密钥位于 macOS 钥匙串中，系统可能会询问是否允许 PdfCraft 使用它。
+	Digital ID password	数字 ID 密码
+	Back	返回
+	Validate all	全部验证
+	Sign this field…	签署此字段…
+	Signature is valid:	签名有效：
+	Signature validity is UNKNOWN:	签名有效性未知：
+	Signature is INVALID:	签名无效：
+	Signature Details	签名详细信息
+	Reason	原因
+	Signing time	签署时间
+	Algorithm	算法
+	Signer	签署者
+	Issued by	颁发者
+	Valid	有效期
+	Field	字段
+	Field: {field} on page {p}	字段：{field}，第 {p} 页
+	Add to trusted certificates	添加到受信任的证书
+	View signed version	查看已签名版本
+	Show certificate…	显示证书…
+	Export certificate…	导出证书…
+	Certificate Viewer	证书查看器
+	This dialog shows the details of a certificate and its chain.	此对话框显示证书及其链的详细信息。
+	Trust	信任
+	Issued to	颁发给
+	Valid from	有效期自
+	Valid to	有效期至
+	Intended usage	预期用途
+	Any	任何
+	Version	版本
+	Serial number	序列号
+	Issuer	颁发者
+	Validity starts	有效期开始
+	Validity ends	有效期结束
+	Public key	公钥
+	Key usage	密钥用途
+	Not present	不存在
+	Self-signed	自签名
+	Edit Action	编辑操作
+	New Action	新建操作
+	Action name:	操作名称：
+	Description:	描述：
+	Steps	步骤
+	Add the steps this action runs, in order.	按顺序添加此操作运行的步骤。
+	Add Step	添加步骤
+	An action with this name already exists.	已存在同名的操作。
+	New Action…	新建操作…
+	Edit…	编辑…
+	Add watermark	添加水印
+	Add header	添加页眉
+	Add footer	添加页脚
+	Set document title	设置文档标题
+	Run a JavaScript	运行 JavaScript
+	Prepare for Distribution	准备分发
+	Remove hidden information and flatten comments and form fields, so recipients see only the pages.	删除隐藏信息并拼合注释和表单域，使接收者仅看到页面。
+	Optimize Scanned Documents	优化扫描文档
+	Make scans searchable, then make them smaller.	使扫描件可搜索，然后将其变小。
+	Add Page Numbers	添加页码
+	Number every page in the footer.	在页脚为每页编号。
+	Mark as Confidential	标为机密
+	A diagonal CONFIDENTIAL watermark on every page.	每页上的对角线 CONFIDENTIAL 水印。
+	Sanitize Documents	清理文档
+	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	删除隐藏信息、元数据、脚本和嵌入内容，并重写文件。
+	Type text	输入文本
+	Text to insert	要插入的文本
+	Replacement text	替换文本
+	Edit text…	编辑文本…
+	Add a sticky note here	在此处添加附注
+	{kind} Properties	{kind} 属性
+	Appearance	外观
+	General	常规
+	Review History	审阅历史
+	This comment's appearance can't be changed yet.	此注释的外观尚无法更改。
+	Icon	图标
+	Thickness	粗细
+	Modified	修改时间
+	No status has been set.	尚未设置状态。
+	Compare Files	比较文件
+	Old file:	旧文件：
+	Open the older version first	请先打开旧版本
+	New file:	新文件：
+	Text is compared word by word; the differences are shown on the new file.	逐词比较文本；差异显示在新文件上。
+	Compare this file with an older version: Compare files… in All tools.	将此文件与旧版本比较：在所有工具中使用“比较文件…”。
+	No differences in the text.	文本没有差异。
+	{n} {kind}	{n} {kind}
+	Inserted	插入
+	Deleted	删除
+	Replaced	替换
+	Visual	视觉
+	Mark as comments	标记为注释
+	Report…	报告…
+	{kind} · page {p}	{kind} · 第 {p} 页
+	Set Alternate Text	设置替代文本
+	This document has no tagged figures.	本文档没有带标记的图形。
+	 on page {p}	（第 {p} 页）
+	Figure {i} of {n}{page}	图形 {i}/{n}{page}
+	No preview	无预览
+	Alternate text	替代文本
+	Describe the figure	描述该图形
+	Decorative figure	装饰性图形
+	Previous figure	上一个图形
+	Next figure	下一个图形
+	Save & Close	保存并关闭
+	Accessibility Checker Options	无障碍检查器选项
+	Report Options	报告选项
+	Create accessibility report	创建无障碍报告
+	Page Range	页面范围
+	All pages in document	文档中的所有页面
+	Checking Options ({on} of 32 in all categories)	检查选项（所有类别共 32 项，已选 {on} 项）
+	Show this dialog when the Checker starts	启动检查器时显示此对话框
+	Select All	全选
+	Clear All	全部清除
+	Start Checking	开始检查
+	This document hasn't been checked yet.	本文档尚未检查。
+	No issues found	未发现问题
+	1 issue	1 个问题
+	{n} issues	{n} 个问题
+	{label} (1 issue)	{label}（1 个问题）
+	{label} ({n} issues)	{label}（{n} 个问题）
+	Check again	重新检查
+	Report	报告
+	Show the accessibility report	显示无障碍报告
+	Collapse	折叠
+	Expand	展开
+	{rule} - {status}	{rule} - {status}
+	Passed	通过
+	Failed	未通过
+	Needs manual check	需人工检查
+	Skipped	已跳过
+	Fix	修复
+	Skip Rule	跳过规则
+	Explain	解释
+	Check Again	重新检查
+	Show Report	显示报告
+	Options…	选项…
+	Go to the page	转到该页面
+	Page Content	页面内容
+	Forms	表单
+	Alternate Text	替代文本
+	Tables	表格
+	Lists	列表
+	Headings	标题
+	Accessibility permission flag	无障碍许可标志
+	Accessibility permission flag is set	已设置无障碍许可标志
+	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	安全设置必须允许辅助技术读取内容（“允许屏幕阅读器设备访问文本”）。请更改文档安全设置以允许。
+	Image-only PDF	纯图像 PDF
+	Document is not image-only PDF	文档不是纯图像 PDF
+	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	仅为文本图片的页面无法朗读或搜索。请识别文本（OCR）以添加文本层。
+	Document is tagged PDF	文档是标记的 PDF
+	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	标记为文档提供辅助技术遵循的逻辑结构。请标记文档（自动标记 PDF）。
+	Logical Reading Order	逻辑阅读顺序
+	Document structure provides a logical reading order	文档结构提供逻辑阅读顺序
+	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	检查标记的阅读顺序是否与明眼读者一致。使用阅读顺序工具或标记面板进行更正。
+	Primary language	主要语言
+	Text language is specified	已指定文本语言
+	Screen readers choose their voice from the document's language. Set it in Document Properties > Advanced > Language.	屏幕阅读器根据文档语言选择语音。请在“文档属性”>“高级”>“语言”中设置。
+	Document title is showing in title bar	标题栏中显示文档标题
+	The window should show a meaningful title rather than the file name. Set a title and Initial View > Show: Document Title.	窗口应显示有意义的标题而非文件名。请设置标题，并在“初始视图”>“显示”中选择“文档标题”。
+	Bookmarks are present in large documents	大文档中有书签
+	Documents of more than 20 pages need bookmarks for navigation. Add bookmarks for the main sections.	超过 20 页的文档需要书签以便导航。请为主要章节添加书签。
+	Color contrast	颜色对比度
+	Document has appropriate color contrast	文档颜色对比度合适
+	Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.	文本与背景的对比度必须足够，以便低视力人士阅读。请目视或使用对比度工具检查颜色。
+	Tagged content	标记的内容
+	All page content is tagged	所有页面内容都已标记
+	Everything on a page must be tagged or marked as an artifact (decoration, headers, footers). Tag the untagged content.	页面上的所有内容都必须标记或标为 artifact（装饰、页眉、页脚）。请标记未标记的内容。
+	Tagged annotations	标记的注释
+	All annotations are tagged	所有注释都已标记
+	Comments, links and fields must be in the tag tree to be announced. Tag the annotations.	注释、链接和字段必须位于标记树中才能被播报。请标记注释。
+	Tab order	Tab 顺序
+	Tab order is consistent with structure order	Tab 顺序与结构顺序一致
+	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	包含链接、注释或字段的页面应按结构顺序 Tab。修复操作将每页的 Tab 顺序设为“使用文档结构”。
+	Character encoding	字符编码
+	Reliable character encoding is provided	提供了可靠的字符编码
+	Fonts must map their characters to Unicode so text can be read and copied. Fix the fonts or recreate the PDF.	字体必须将其字符映射到 Unicode，以便读取和复制文本。请修复字体或重新生成 PDF。
+	Tagged multimedia	标记的多媒体
+	All multimedia objects are tagged	所有多媒体对象都已标记
+	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	视频、声音和富媒体必须标记才能被播报。请标记多媒体注释。
+	Screen flicker	屏幕闪烁
+	Page will not cause screen flicker	页面不会导致屏幕闪烁
+	Animation that flashes can cause seizures. Check scripts and media for flicker.	闪烁的动画可能导致癫痫发作。请检查脚本和媒体是否存在闪烁。
+	Scripts	脚本
+	No inaccessible scripts	没有无障碍脚本
+	Timed responses	限时响应
+	Page does not require timed responses	页面不需要限时响应
+	People may need more time to respond. Check that nothing has a time limit.	人们可能需要更多时间来响应。请检查确认没有时间限制。
+	Navigation links	导航链接
+	Navigation links are not repetitive	导航链接不重复
+	Repeated navigation links should be skippable. Check links that appear on every page.	重复的导航链接应可跳过。请检查出现在每一页上的链接。
+	Tagged form fields	标记的表单域
+	All form fields are tagged	所有表单域都已标记
+	Form fields must be in the tag tree (Form tags) to be announced. Tag the form fields.	表单域必须位于标记树（表单标记）中才能被播报。请标记表单域。
+	Field descriptions	字段描述
+	All form fields have description	所有表单域都有描述
+	Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.	每个字段都需要说明输入内容的提示。在“字段属性”>“常规”>“提示”中添加。
+	Figures alternate text	图形替代文本
+	Figures require alternate text	图形需要替代文本
+	Pictures need alternate text that describes them, or must be marked decorative. Add alternate text to each figure.	图片需要描述性的替代文本，或标为装饰性。请为每个图形添加替代文本。
+	Nested alternate text	嵌套替代文本
+	Alternate text that will never be read	永远不会被朗读的替代文本
+	Alternate text inside an element that already has alternate text is never read. Remove the inner alternate text.	已有替代文本的元素内部的替代文本永远不会被朗读。请删除内部替代文本。
+	Associated with content	与内容关联
+	Alternate text must be associated with some content	替代文本必须与某些内容关联
+	Alternate text on an element without page content is never reached. Remove it or attach the element to content.	没有页面内容的元素上的替代文本永远无法到达。请删除它或将元素附加到内容。
+	Hides annotation	隐藏注释
+	Alternate text should not hide annotation	替代文本不应隐藏注释
+	Alternate text on an element that contains a link or field hides that annotation from assistive technology. Move the alternate text.	包含链接或字段的元素上的替代文本会向辅助技术隐藏该注释。请移动替代文本。
+	Other elements alternate text	其他元素替代文本
+	Other elements that require alternate text	需要替代文本的其他元素
+	Formulas and similar non-text elements need alternate text. Add alternate text to them.	公式及类似非文本元素需要替代文本。请为它们添加替代文本。
+	Rows	行
+	TR must be a child of Table, THead, TBody, or TFoot	TR 必须是 Table、THead、TBody 或 TFoot 的子级
+	Table cells belong in a row. Fix the table's tags.	表格单元格应位于行内。请修复表格标记。
+	Headers	表头
+	Tables should have headers	表格应有表头
+	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	表头单元格（TH）告诉听者每列或每行包含的内容。请标记表头单元格。
+	Regularity	规则性
+	Tables must contain the same number of columns in each row and rows in each column	表格每行必须包含相同数量的列，每列必须包含相同数量的行
+	Irregular tables confuse cell navigation. Give every row the same number of cells (counting spans).	不规则表格会干扰单元格导航。请让每行具有相同数量的单元格（计入跨度）。
+	Summary	摘要
+	Tables must have a summary	表格必须有摘要
+	A summary describes the table's purpose and layout. Add a Summary attribute to each table.	摘要描述表格的用途和布局。请为每个表格添加 Summary 属性。
+	List items	列表项
+	LI must be a child of L	LI 必须是 L 的子级
+	List items belong in a list. Fix the list's tags.	列表项应位于列表内。请修复列表标记。
+	Lbl and LBody	Lbl 和 LBody
+	Lbl and LBody must be children of LI	Lbl 和 LBody 必须是 LI 的子级
+	List labels and bodies belong in a list item. Fix the list's tags.	列表标签和正文应位于列表项内。请修复列表标记。
+	Appropriate nesting	适当的嵌套
+	Heading levels shouldn't skip (an H1 followed by an H3). Retag the headings.	标题级别不应跳跃（H1 后面不应直接跟 H3）。请重新标记标题。
+	TH and TD	TH 和 TD
+	TH and TD must be children of TR	TH 和 TD 必须是 TR 的子级
+	Mark Page Range	标记页面范围
+	Pages from	页面范围从
+	Single word or phrase	单个词或短语
+	Text to find	要查找的文本
+	Patterns	模式
+	Phone Numbers	电话号码
+	Email Addresses	电子邮件地址
+	Credit Cards	信用卡
+	Social Security Numbers	社会安全号码
+	Dates	日期
+	Text in images isn't found; recognise text (OCR) first.	图像中的文本无法找到；请先识别文本（OCR）。
+	No matches.	无匹配。
+	{n} match(es) marked for redaction.	已标记 {n} 个匹配以待密文。
+	Redaction Tool Properties	密文工具属性
+	Redacted area fill colour:	密文区域填充颜色：
+	Use overlay text	使用覆盖文本
+	Custom text:	自定义文本：
+	Font:	字体：
+	Font size:	字号：
+	Auto-size text to fit redaction region	自动调整文本大小以适应密文区域
+	Font colour:	字体颜色：
+	Repeat overlay text	重复覆盖文本
+	Text alignment:	文本对齐：
+	Center	居中
+	Apply redactions	应用密文
+	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	即将应用 1 个密文标记。标记下的文本、图像和绘图，以及与其重叠的注释和表单域，将被永久删除。
+	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	即将应用 {n} 个密文标记。标记下的文本、图像和绘图，以及与其重叠的注释和表单域，将被永久删除。
+	Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it.	之后请保存文档：保存将重写整个文件，使删除的内容不留痕迹。
+	Select the items to remove from this document.	选择要从本文档中删除的项目。
+	Metadata	元数据
+	File attachments	文件附件
+	Comments and markups	注释和标记
+	Hidden text	隐藏文本
+	Hidden layers	隐藏图层
+	Links, actions and JavaScripts	链接、动作和 JavaScript
+	Private data of other applications	其他应用程序的私有数据
+	None found	未发现
+	Form fields are flattened: their values stay visible. Saving rewrites the whole file.	表单域将被拼合：其值保持可见。保存将重写整个文件。
+	Remove	删除
+	Sanitizing removes hidden information from the document: metadata, file attachments, comments, form fields (flattened), hidden text and layers, bookmarks, links, actions and scripts, and private application data.	清理将删除文档中的隐藏信息：元数据、文件附件、注释、表单域（拼合）、隐藏文本和图层、书签、链接、动作和脚本，以及私有应用程序数据。
+	Save the document afterwards; saving rewrites the whole file so nothing removed stays in it.	之后请保存文档；保存将重写整个文件，使删除的内容不残留。
+	Printer:	打印机：
+	Save as PDF	另存为 PDF
+	{name} (default)	{name}（默认）
+	Copies:	份数：
+	Collate	逐份打印
+	Print in grayscale	灰度打印
+	Two-sided:	双面：
+	Off	关
+	Flip on long edge	沿长边翻转
+	Flip on short edge	沿短边翻转
+	Paper:	纸张：
+	Pages to Print	要打印的页面
+	More options:	更多选项：
+	All pages in range	范围内的所有页面
+	Odd pages only	仅奇数页
+	Even pages only	仅偶数页
+	Reverse pages	逆序页面
+	Page Sizing & Handling	页面大小和处理
+	Size	尺寸
+	Poster	海报
+	Multiple	多页
+	Booklet	小册子
+	Fit	适合
+	Shrink oversized pages	缩小过大的页面
+	Custom scale:	自定义比例：
+	Tile scale:	平铺比例：
+	Overlap:	重叠：
+	Cut marks	裁剪标记
+	Pages per sheet:	每张纸页数：
+	Page order:	页面顺序：
+	Horizontal	水平
+	Horizontal reversed	水平反转
+	Vertical	垂直
+	Vertical reversed	垂直反转
+	Print page border	打印页面边框
+	Auto-rotate pages	自动旋转页面
+	Booklet subset:	小册子子集：
+	Both sides	双面
+	Front side only	仅正面
+	Back side only	仅背面
+	Binding:	装订：
+	Left	左
+	Right	右
+	Orientation:	方向：
+	Auto portrait/landscape	自动纵向/横向
+	Portrait	纵向
+	Landscape	横向
+	Comments & Forms	注释和表单
+	Document	文档
+	Document and markups	文档和标记
+	Document and stamps	文档和图章
+	Form fields only	仅表单域
+	Previous sheet	上一张
+	Next sheet	下一张
+	No sheets	无纸张
+	Sheet {s} of {n}	第 {s} 张，共 {n} 张
+	Removed 1 hidden item. Save to remove them from the file.	已删除 1 个隐藏项。保存以从文件中删除它们。
+	Removed {n} hidden items. Save to remove them from the file.	已删除 {n} 个隐藏项。保存以从文件中删除它们。
+	Document sanitized. Save to finish: saving rewrites the whole file.	文档已清理。保存以完成：保存将重写整个文件。
+	Applied 1 redaction mark. Save to remove the content from the file.	已应用 1 个密文标记。保存以从文件中删除内容。
+	Applied {n} redaction marks. Save to remove the content from the file.	已应用 {n} 个密文标记。保存以从文件中删除内容。
+	JavaScript Console	JavaScript 控制台
+	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript 已关闭（首选项 ▸ JavaScript）。
+	Output appears here.	输出显示在此处。
+	Document JavaScripts	文档 JavaScript
+	Script Name:	脚本名称：
+	This document has no document-level scripts.	本文档没有文档级脚本。
+	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	脚本在无文件和网络访问权限的沙盒中运行。关闭 JavaScript 后，Acrobat 的标准格式化、验证和计算函数仍可使用。
+	No form fields were detected	未检测到表单域
+	Detected 1 form field	检测到 1 个表单域
+	Detected {n} form fields	检测到 {n} 个表单域
+	{field}: {e}	{field}：{e}
+	Page navigation	页面导航
+	Previous view	上一个视图
+	Next view	下一个视图
+	Page display	页面显示
+	Continuous scrolling	连续滚动
+	Two-page view	双页视图
+	Single page	单页
+	Show cover page in two-page view	在双页视图中显示封面页
+	Use system setting	跟随系统设置
+	Light gray	浅灰色
+	Dark gray	深灰色
+	Current page	当前页
+	Document language	文档语言
+	Output	输出
+	Searchable Image (Exact)	可搜索图像（精确）
+	Adds invisible text over each word; the page image is not changed	在每个词上添加不可见文本；页面图像保持不变
+	Downsample to	降采样至
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	未安装文本识别：缺少模型（运行 `cargo xtask models`，或设置 PRINTCRAFT_MODELS）。
+	Settings	设置
+	Protect	保护
+	Advanced options	高级选项
+	Redact	密文
+	Optimize	优化
+	Fields	字段
+	Add form components	添加表单组件
+	Stamps	图章
+	Certificates	证书
+	Print production	印刷制作
+	Measure	测量
+	Compare	比较
+	Actions list	操作列表
+	Accessibility	无障碍
+	Standards	标准
+	Index	索引
+	Bring your own model (off by default)	自备模型（默认关闭）
+	Single file	单个文件
+	Multiple files	多个文件
+	Images	图像
+	Clipboard	剪贴板
+	Blank page	空白页
+	Add files to combine	添加要合并的文件
+	Page grid	页面网格
+	Rotate	旋转
+	Insert	插入
+	Replace	替换
+	Split	拆分
+	Set page boxes	设置页面框
+	Page labels	页面标签
+	Page transitions	页面切换
+	Sticky note	附注
+	Highlight text	突出显示文本
+	Underline	下划线
+	Strikethrough	删除线
+	Squiggly underline	波浪下划线
+	Text box	文本框
+	Draw freehand	徒手画
+	Rectangle	矩形
+	Oval	椭圆
+	Line	直线
+	Arrow	箭头
+	Cloud	云形
+	Stamp	图章
+	Comment list	注释列表
+	Flatten comments	拼合注释
+	In this file	当前文件
+	In multiple files	多个文件
+	Enhance scanned file	增强扫描文件
+	Correct recognized text	更正识别文本
+	Protect with password	使用密码保护
+	Remove hidden information	删除隐藏信息
+	Encrypt with certificate	使用证书加密
+	Security properties	安全性属性
+	Redact text and images	密文文本和图像
+	Redact pages	密文页面
+	Find text and redact	查找文本并密文
+	Set properties	设置属性
+	Sanitize document	清理文档
+	Reduce file size	减小文件大小
+	Advanced optimization	高级优化
+	Audit space usage	审计空间使用情况
+	Field list	字段列表
+	Field properties	字段属性
+	Tab order by rows	按行 Tab 顺序
+	Tab order by columns	按列 Tab 顺序
+	Flatten form fields	拼合表单域
+	Import data	导入数据
+	Export data	导出数据
+	Text field	文本字段
+	Checkbox	复选框
+	Radio button	单选按钮
+	Drop-down list	下拉列表
+	List box	列表框
+	Button	按钮
+	Image field	图像字段
+	Date field	日期字段
+	Digital signature	数字签名
+	Stamp palette	图章面板
+	Timestamp	时间戳
+	Validate all signatures	验证所有签名
+	Certify (visible signature)	认证（可见签名）
+	Certify (invisible signature)	认证（不可见签名）
+	Output preview	输出预览
+	Preflight	印前检查
+	Convert colors	转换颜色
+	Add printer marks	添加打印机标记
+	Fix hairlines	修复细线
+	Measuring tool	测量工具
+	Geospatial location	地理空间位置
+	Select files to compare	选择要比较的文件
+	Action Wizard	操作向导
+	Make accessible	设为无障碍
+	Prepare for distribution	准备分发
+	Optimize scanned documents	优化扫描文档
+	Archive documents	存档文档
+	Automatically tag PDF	自动标记 PDF
+	Change reading options	更改阅读选项
+	Open accessibility report	打开无障碍报告
+	Add alternate text	添加替代文本
+	Fix reading order	修复阅读顺序
+	Manage embedded index	管理嵌入式索引
+	Console	控制台
+	Document actions	文档操作
+	Summarize	摘要
+	Ask about this document	询问本文档
+	Translate	翻译
+	Optional	可选
+	Ready	就绪
+	Available	可用
+	Planned · {m}	计划中 · {m}
+	Planned for milestone {m} — open to see what it will include	计划于 {m} 里程碑——打开查看将包含的内容
+	Optional: needs an AI provider you configure	可选：需要您自行配置 AI 服务商
+	Coming in milestone {m}. Items marked Ready work today.	{m} 里程碑推出。标记为就绪的项目现已可用。
+	1 mark	1 个标记
+	{n} marks	{n} 个标记
+	Back to all tools	返回所有工具
+	Close panel	关闭面板
+	View more	查看更多
+	View less	收起
+	Edit fields	编辑字段
+	Preview	预览
+	Try the form as people filling it in will see it	以填写者视角试用表单
+	Dynamic	动态
+	Sign Here	签名处
+	Standard Business	标准业务
+	Choose a stamp, then click on the page to place it.	选择图章，然后单击页面放置。
+	Redact all	全部密文
+	Clear all	全部清除
+	Add text	添加文本
+	Checkmark	对勾
+	Cross	叉号
+	Dot	圆点
+	Date	日期
+	Signature	签名
+	Initials	姓名首字母
+	Rotate pages	旋转页面
+	Insert pages	插入页面
+	Extract pages	提取页面
+	Extract	提取
+	Edit text & images	编辑文本和图像
+	Text	文本
+	Image	图像
+	Header and footer	页眉和页脚
+	Watermark	水印
+	Link	链接
+	Bates numbering	贝茨编号
+	Background	背景
+	Attach file	附加文件
+	Export all images	导出所有图像
+	Image (PNG)	图像 (PNG)
+	Text (plain)	纯文本
+	HTML web page	HTML 网页
+	Rich Text Format (.rtf)	富文本格式 (.rtf)
+	Comments	注释
+	Bookmarks	书签
+	Page thumbnails	页面缩略图
+	Form fields	表单域
+	Layers	图层
+	Attachments	附件
+	Signatures	签名
+	Accessibility Checker	无障碍检查器
+	Zoom out (⌘−)	缩小 (⌘−)
+	Zoom in (⌘+)	放大 (⌘+)
+	Rotate view clockwise (⇧⌘+)	顺时针旋转视图 (⇧⌘+)
+	Toggle fit page / fit width	切换适合页面/适合宽度
+	Next page	下一页
+	Previous page	上一页
+	Current page — type a page number or label (such as iv) and press Enter	当前页 — 输入页码或标签（如 iv）后按 Enter
+	Open a PDF (⌘O)	打开 PDF (⌘O)
+	Dark gray theme	深灰色主题
+	Light theme	浅色主题
+	Print (⌘P)	打印 (⌘P)
+	Save (M4)	保存 (M4)
+	Document properties (⌘D)	文档属性 (⌘D)
+	Action Wizard…	操作向导…
+	Add Bates numbering…	添加贝茨编号…
+	Add a button	添加按钮
+	Add a callout	添加标注
+	Add a checkbox	添加复选框
+	Add a date field	添加日期字段
+	Add a digital signature field	添加数字签名字段
+	Add a drop-down list	添加下拉列表
+	Add a list box	添加列表框
+	Add a radio button	添加单选按钮
+	Add a sticky note	添加附注
+	Add a text box	添加文本框
+	Add a text field	添加文本字段
+	Add alternate text…	添加替代文本…
+	Add an image field	添加图像字段
+	Add image…	添加图像…
+	Add or edit links	添加或编辑链接
+	Apply redactions…	应用密文…
+	Attach a file	附加文件
+	Change reading options…	更改阅读选项…
+	Check for accessibility	无障碍检查
+	Clear redaction marks	清除密文标记
+	Compare files…	比较文件…
+	Create links from URLs	从 URL 创建链接
+	Detect form fields	检测表单域
+	Draw a cloud	画云形
+	Draw a line	画直线
+	Draw a polygon	画多边形
+	Draw a rectangle	画矩形
+	Draw an arrow	画箭头
+	Draw an oval	画椭圆
+	Draw connected lines	画连接线
+	Erase drawings	擦除绘图
+	Export all comments to data file…	将所有注释导出到数据文件…
+	Export form data…	导出表单数据…
+	Field properties…	字段属性…
+	Fill & Sign: add text	填写与签名：添加文本
+	Fill & Sign: checkmark	填写与签名：对勾
+	Fill & Sign: cross	填写与签名：叉号
+	Fill & Sign: date	填写与签名：日期
+	Fill & Sign: dot	填写与签名：圆点
+	Fill & Sign: initials	填写与签名：姓名首字母
+	Fill & Sign: line	填写与签名：直线
+	Fill & Sign: sign	填写与签名：签名
+	Find text and redact…	查找文本并密文…
+	Hide all comments	隐藏所有注释
+	Import comments…	导入注释…
+	Import form data…	导入表单数据…
+	Insert text	插入文本
+	Merge data files into spreadsheet…	将数据文件合并到电子表格…
+	Optimize scanned documents…	优化扫描文档…
+	Prepare for distribution…	准备分发…
+	Recognize text in multiple files…	识别多个文件中的文本…
+	Redact pages…	密文页面…
+	Redaction properties…	密文属性…
+	Remove all links	删除所有链接
+	Remove background	删除背景
+	Remove header & footer	删除页眉和页脚
+	Remove hidden information…	删除隐藏信息…
+	Remove watermark	删除水印
+	Replace text	替换文本
+	Sanitize document…	清理文档…
+	Squiggly underline text	波浪下划线文本
+	Strikethrough text	删除线文本
+	Summarize comments	汇总注释
+	Tab order: by columns	按列 Tab 顺序
+	Tab order: by document structure	按文档结构 Tab 顺序
+	Tab order: by rows	按行 Tab 顺序
+	Underline text	下划线文本
+	Update background…	更新背景…
+	Update header & footer…	更新页眉和页脚…
+	Update watermark…	更新水印…
+	Note	附注
+	Polyline	多段线
+	Attachment	附件
+	Callout	标注
+	Typewriter	打字机
+	Checked	已勾选
+	Unchecked	未勾选
+	Marked	已标记
+	Locked	已锁定
+	Search comments	搜索注释
+	Add a comment	添加注释
+	No comments yet.	尚无注释。
+	Pick a tool in the quick bar, or type above.	在快捷栏中选择工具，或在上方输入。
+	No comments match.	没有匹配的注释。
+	Unknown author	未知作者
+	No colour	无颜色
+	Remove checkmark	删除勾选标记
+	Mark with checkmark	添加勾选标记
+	Reply	回复
+	Add a reply	添加回复
+	Post	发布
+	Page {label}	第 {label} 页
+	{kind} — click to show it on the page	{kind} —— 单击以在页面上显示
+	Set status	设置状态
+	Copy text	复制文本
+	Properties…	属性…
+	Make Current Properties Default	将当前属性设为默认
+	More options	更多选项
+	Sort by	排序方式
+	Author	作者
+	Type	类型
+	Colour	颜色
+	Show all comments	显示所有注释
+	Create PDF comment summary…	创建 PDF 注释摘要…
+	Export all to data file…	全部导出到数据文件…
+	Filter comments	筛选注释
+	Status	状态
+	Accepted	已接受
+	Rejected	已拒绝
+	Cancelled	已取消
+	Completed	已完成
+	Show all	全部显示
+	Yellow	黄色
+	Orange	橙色
+	Red	红色
+	Pink	粉色
+	Purple	紫色
+	Blue	蓝色
+	Light blue	浅蓝色
+	Green	绿色
+	Gray	灰色
+	Black	黑色
+	Search	搜索
+	Bookmark options	书签选项
+	Expand all bookmarks	展开所有书签
+	Expand top-level bookmarks	展开顶层书签
+	Collapse all bookmarks	折叠所有书签
+	New bookmark (⌘B)	新建书签 (⌘B)
+	This document has no bookmarks.	本文档没有书签。
+	This document has no layers.	本文档没有图层。
+	This document has no attachments.	本文档没有附件。
+	Hide layer	隐藏图层
+	Show layer	显示图层
+	on page {label}	第 {label} 页
+	Save attachment…	保存附件…
+	Open in a new tab	在新选项卡中打开
+	This document has no pages.	本文档没有页面。
+	Find text	查找文本
+	No matches	无匹配
+	Searching… {s}/{p}	正在搜索… {s}/{p}
+	{c} of {n}{more}	{c} / {n}{more}
+	Previous (⇧⌘G)	上一个 (⇧⌘G)
+	Next (⌘G)	下一个 (⌘G)
+	Find options	查找选项
+	Whole words only	仅全字匹配
+	Case-sensitive	区分大小写
+	Close (Esc)	关闭 (Esc)
+	Align	对齐
+	Top	上
+	Bottom	下
+	Center horizontally	水平居中
+	Center vertically	垂直居中
+	Distribute	分布
+	Horizontally	水平分布
+	Vertically	垂直分布
+	Set Fields to Same Size	将字段设为相同大小
+	Height	高度
+	Width	宽度
+	Both	两者
+	Duplicate…	重复…
+	All pages	所有页面
+	Odd pages	奇数页
+	Even pages	偶数页
+	Landscape pages	横向页面
+	Portrait pages	纵向页面
+	Move earlier	前移
+	Move later	后移
+	Back to the document	返回文档
+	Protect Using Password	使用密码保护
+	Requires user to enter a password for:	需要用户输入密码，用于：
+	Viewing	查看
+	Editing	编辑
+	Type Password	输入密码
+	Re-type Password	重新输入密码
+	Strength: {s}	强度：{s}
+	Strong	强
+	Medium	中等
+	Weak	弱
+	Advanced Options {chevron}	高级选项 {chevron}
+	Compatibility	兼容性
+	Acrobat X and later (256-bit AES)	Acrobat X 及更高版本（256 位 AES）
+	Acrobat 7.0 and later (128-bit AES)	Acrobat 7.0 及更高版本（128 位 AES）
+	Acrobat 5.0 and later (128-bit RC4)	Acrobat 5.0 及更高版本（128 位 RC4）
+	Acrobat 3.0 and later (40-bit RC4)	Acrobat 3.0 及更高版本（40 位 RC4）
+	Encrypt	加密
+	All document contents	所有文档内容
+	All document contents except metadata	除元数据外的所有文档内容
+	Printing allowed	允许打印
+	Low Resolution (150 dpi)	低分辨率（150 dpi）
+	Changes allowed	允许的更改
+	Inserting, deleting, and rotating pages	插入、删除和旋转页面
+	Filling in form fields and signing existing signature fields	填写表单域并签署现有签名字段
+	Commenting, filling in form fields, and signing existing signature fields	注释、填写表单域并签署现有签名字段
+	Any except extracting pages	除提取页面外的任何操作
+	Enable copying of text, images, and other content	允许复制文本、图像和其他内容
+	Enable text access for screen reader devices for the visually impaired	允许屏幕阅读器设备访问文本以帮助视障人士
+	Type a password.	请输入密码。
+	The passwords don't match.	两次输入的密码不一致。
+	This compatibility level supports only plain ASCII passwords.	此兼容性级别仅支持纯 ASCII 密码。
+	Anyone opening the document will need this password. It's applied when you save.	打开文档的任何人都需要此密码。保存时应用。
+	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	打开文档无需密码；更改限制需要此密码。保存时应用。
+	Recover unsaved documents?	要恢复未保存的文档吗？
+	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft 未正常关闭。以下文档的更改已自动保存：
+	just now	刚刚
+	{n} min ago	{n} 分钟前
+	{n} h ago	{n} 小时前
+	 · password-protected	 · 受密码保护
+	Recover	恢复
+	Discard	放弃
+	Next / previous match	下一个/上一个匹配
+	Copy selected text	复制所选文本
+	Select a word	选择一个词
+	Clear selection / close find	清除选择/关闭查找
+	Zoom in / out (also pinch or ⌘-scroll)	放大/缩小（也可用捏合或 ⌘+滚轮）
+	Rotate view	旋转视图
+	First / last page	首页/末页
+	Previous / next page	上一页/下一页
+	Delete selected pages (Organize)	删除选定页面（组织页面）
+	Select all pages (Organize)	选择所有页面（组织页面）
+	Version {v}	版本{v}
+	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	用 Rust 从零编写的开源 PDF 应用。MIT OR Apache-2.0 许可。
+	Part of	隶属于
+	Summarize Options	汇总选项
+	Choose a layout:	选择布局：
+	Comments only	仅注释
+	Sort comments by:	注释排序依据：
+	Create PDF Comment Summary	创建 PDF 注释摘要
+	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	还原到“{name}”的上次保存版本？此后的更改将无法撤销。
+	Number pages	页面编号
+	Style	样式
+	None (prefix only)	无（仅前缀）
+	Prefix	前缀
+	Start	开始
+	Labels: {preview}. Later pages keep their labels.	标签：{preview}。后续页面保留其标签。
+	Even and Odd Pages	奇偶页
+	Even Pages Only	仅偶数页
+	Odd Pages Only	仅奇数页
+	Landscape and Portrait Pages	横向和纵向页面
+	Landscape Pages	横向页面
+	Portrait Pages	纵向页面
+	Duplicate Field	复制字段
+	Duplicate "{name}" onto:	将“{name}”复制到：
+	1 page selected.	已选择 1 页。
+	{n} pages selected.	已选择 {n} 页。
+	Delete pages after extracting	提取后删除页面
+	Extract pages as separate files	将页面提取为单独文件
+	Rotate Pages	旋转页面
+	Direction:	方向：
+	Clockwise 90 degrees	顺时针 90 度
+	Counterclockwise 90 degrees	逆时针 90 度
+	180 degrees	180 度
+	Pages:	页面：
+	All	全部
+	Selection	所选内容
+	From	从
+	Rotate:	旋转：
+	Repairs	修复记录
+	Repair log	修复日志
+	Split document	拆分文档
+	Number of pages	页数
+	Pages per file	每文件页数
+	File size	文件大小
+	At most	至多
+	Top-level bookmarks ({n})	顶层书签（{n} 个）
+	Before each selected page (select pages in Organize)	在每个选定页面之前拆分（在组织页面中选择）
+	Creates 1 file from {n} pages.	从 {n} 页创建 1 个文件。
+	Creates {f} files from {n} pages.	从 {n} 页创建 {f} 个文件。
+	Each file holds as many of the {n} pages as fit.	每个文件容纳 {n} 页中尽量多的页面。
+	Replace Pages	替换页面
+	Original: replace pages	原文档：替换页面
+	to	到
+	to {n}	到 {n}
+	Replacement: pages of {name}	替换文件：{name} 的页面
+	of {name}	共 {name} 个
+	Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.	仅更改页面内容：原页面的链接、注释、表单域和书签保留。
+	The replacement file doesn't have that many pages.	替换文件没有那么多页面。
+	Tagged PDF	标记的 PDF
+	Document Properties	文档属性
+	Description	描述
+	Initial View	初始视图
+	Security	安全
+	Fonts	字体
+	Advanced	高级
+	Title	标题
+	Subject	主题
+	Keywords	关键字
+	Application	应用程序
+	PDF producer	PDF 生成器
+	Layout and Magnification	布局和缩放
+	Navigation tab	导航选项卡
+	Page Only	仅页面
+	Bookmarks Panel and Page	书签面板和页面
+	Pages Panel and Page	页面面板和页面
+	Attachments Panel and Page	附件面板和页面
+	Layers Panel and Page	图层和页面
+	Page layout	页面布局
+	Default	默认
+	Single Page	单页
+	Single Page Continuous	单页连续
+	Two-Up (Facing)	双页（对页）
+	Two-Up Continuous (Facing)	双页连续（对页）
+	Two-Up (Cover Page)	双页（封面页）
+	Two-Up Continuous (Cover Page)	双页连续（封面页）
+	Magnification	缩放
+	Actual Size	实际大小
+	Fit Page	适合页面
+	Fit Width	适合宽度
+	Fit Height	适合高度
+	Fit Visible	适合可见区域
+	Open to page	打开到页面
+	of {pages}	共 {pages} 页
+	Window Options	窗口选项
+	Resize window to initial page	调整窗口大小以适合初始页面
+	Center window on screen	在屏幕上居中窗口
+	Open in Full Screen mode	以全屏模式打开
+	Show:	显示：
+	File Name	文件名
+	Document Title	文档标题
+	User Interface Options	用户界面选项
+	Hide menu bar	隐藏菜单栏
+	Hide toolbars	隐藏工具栏
+	Hide window controls	隐藏窗口控件
+	Security method	安全方法
+	No security	无安全性
+	Restrictions	限制
+	None — everything is allowed	无 — 允许一切操作
+	Password security	密码安全性
+	Encryption	加密
+	Opened with	打开方式
+	— (protection is applied when you save)	—（保存时应用保护）
+	Owner password (no restrictions apply)	所有者密码（无限制）
+	User password	用户密码
+	Change settings…	更改设置…
+	Printing	打印
+	Not allowed	不允许
+	Allowed	允许
+	High resolution	高分辨率
+	Low resolution	低分辨率
+	Changing the document	更改文档
+	Document assembly	文档组装
+	Content copying	内容复制
+	Content copying for accessibility	为无障碍复制内容
+	Commenting	注释
+	Filling of form fields	填写表单域
+	No fonts are referenced by the pages.	页面未引用任何字体。
+	PDF version	PDF 版本
+	Location	位置
+	Page size	页面大小
+	Yes	是
+	No	否
+	Revisions	修订
+	View revision {n}	查看修订版本{n}
+	Open the file as it was saved then	打开当时保存的文件
+	Binding	装订
+	Left Edge	左边缘
+	Right Edge	右边缘
+	Language	语言
+	Saved {place}: {before} → {after} ({pct}% smaller){detail}	已保存{place}：{before} → {after}（缩小了{pct}%）{detail}
+	Couldn't save the image: {e}	无法保存图像：{e}
+	Adding images arrives on the web with file pickers for images	Web 端添加图像将使用图像文件选择器
+	Replacing images on page {p} arrives on the web with image pickers ({i})	在 Web 端替换第{p}页的图像将使用图像选择器（{i}）
+	{name}: choosing images arrives on the web with file pickers for images	{name}：在 Web 端选择图像将使用图像文件选择器
+	Replacing images arrives on the web with image file pickers	Web 端替换图像将使用图像文件选择器
+	Couldn't create a PDF: {e}	无法创建 PDF：{e}
+	The clipboard has no image or text	剪贴板没有图像或文本
+	On the web, open or drop an image to convert it	在 Web 端，打开或拖入图像进行转换
+	Couldn't optimize the file: {e}	无法优化文件：{e}
+	Couldn't write {path}: {e}	无法写入{path}：{e}
+	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	该表单请求提交到{u}；PdfCraft 不发送表单数据。请保存文档以保留填写内容。
+	{s} actions run in the JavaScript engine (M6)	{s} 动作在 JavaScript 引擎中运行 (M6)
+	{name}: the {other} action isn't supported yet	{name}：{other} 动作暂不受支持
+	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} 将表单提交到{url}；PdfCraft 不发送表单数据。请保存文档以保留填写内容。
+	Export stopped: {e}	导出中止：{e}
+	Exported 1 image	已导出 1 张图像
+	Exported {n} images	已导出{n}张图像
+	 ({s} not exported: {first})	（{s} 个未导出：{first}）
+	Exported the text of 1 page	已导出 1 页的文本
+	Exported the text of {n} pages	已导出{n}页的文本
+	{msg} to {dir}	{msg}到{dir}
+	Exporting… {d} of {t}	正在导出…第{d}个，共{t}个
+	Choose a folder for the exported files	选择导出文件的文件夹
+	New {tool} comments will look like this one	新的{tool}注释将采用此外观
+	This document can't be checked: it couldn't be read for editing	无法检查本文档：无法读取进行编辑
+	The checker found no problems in this document.	检查器在本文档中未发现问题。
+	The checker found 1 problem which may prevent the document from being fully accessible.	检查器发现 1 个问题，可能导致文档无法完全无障碍。
+	The checker found {n} problems which may prevent the document from being fully accessible.	检查器发现 {n} 个问题，可能导致文档无法完全无障碍。
+	The text is the same	文本相同
+	1 difference found	发现 1 处差异
+	{n} differences found	发现 {n} 处差异
+	Added 1 comment	已添加 1 条注释
+	Added {n} comments	已添加 {n} 条注释
+	Choose a folder for the results	选择结果文件夹
+	Files for {name}	{name} 的文件
+	An action is already running	已有操作正在运行
+	Running action… file {d} of {t}	正在运行操作…第{d}个文件，共{t}个
+	No unlinked web addresses were found in the text	文本中未发现未链接的网址
+	Created 1 link	已创建 1 个链接
+	Created {n} links	已创建{n}个链接
+	Text recognition is already running	文本识别已在运行
+	Recognizing text… file {d} of {t}	正在识别文本…第{d}个文件，共{t}个
+	Recognizing text… page {d} of {t}	正在识别文本…第{d}页，共{t}页
+	Recognized 1 word	识别了 1 个单词
+	Recognized {n} words	识别了{n}个单词
+	{words} on {pages}	在{pages}{words}
+	; 1 page already had text	；1 页已有文本
+	; {n} pages already had text	；{n} 页已有文本
+	Recognized {w} words in 1 file	在 1 个文件中识别了{w}个单词
+	Recognized {w} words in {n} files	在{n}个文件中识别了{w}个单词
+	; failed: {list}	；失败：{list}
+	1 file done	1 个文件已完成
+	{n} files done	{n} 个文件已完成
+	The selected area has been copied ({w} × {h} pixels)	所选区域已复制（{w} × {h} 像素）
+	Couldn't take the snapshot: {e}	无法拍摄快照：{e}
+	Couldn't recover {name}: {e}	无法恢复{name}：{e}
+	The document now conforms to {level}; save it to keep the changes	文档现已符合{level}；保存以保留更改
+	Fixed what could be fixed; 1 problem remains	已修复能修复的问题；还剩 1 个问题
+	Fixed what could be fixed; {n} problems remain	已修复能修复的问题；还剩{n}个问题
+	Custom stamps arrive on the web with file pickers for images	Web 端自定义图章将使用图像文件选择器
+	{file} is too large for a stamp (at most {n} MB)	{file} 对于图章来说太大了（最大 {n} MB）
+	Sent to {printer}	已发送到{printer}
+	Sent to {printer}: {msg}	已发送到{printer}：{msg}
+	Choose a folder for the searchable files	选择可搜索文件的文件夹
+	Files are combined in this order. Leave Pages empty to take every page.	文件将按此顺序合并。页码留空表示取全部页面。
+	Pages of {name} to combine, e.g. 1-3, 6	要合并的{name}的页面，例如 1-3、6
+	Remove {name}	删除{name}
+	Add files…	添加文件…
+	Add at least two files	至少添加两个文件
+	Couldn't add {name}: {e}	无法添加{name}：{e}
+	Couldn't combine files: {e}	无法合并文件：{e}
+	Export comments	导出注释
+	Export form data	导出表单数据
+	Comment and form data	注释和表单数据
+	Export	导出
+	Select data files to merge	选择要合并的数据文件
+	Form data and PDF forms	表单数据和 PDF 表单
+	Save the spreadsheet	保存电子表格
+	Save the accessibility report	保存无障碍报告
+	Save image	保存图像
+	Export certificate	导出证书
+	Choose a folder for the extracted pages	选择提取页面的文件夹
+	Choose a folder for the split files	选择拆分文件的文件夹
+	Couldn't use {name}: {e}	无法使用{name}：{e}
+	Couldn't extract pages: {e}	无法提取页面：{e}
+	Couldn't write {name}: {e}	无法写入{name}：{e}
+	Wrote 1 file to {dir}	已将 1 个文件写入{dir}
+	Wrote {n} files to {dir}	已将{n}个文件写入{dir}
+	No pages match those choices	所选条件没有匹配的页面
+	Couldn't split: {e}	无法拆分：{e}
+	Couldn't summarize comments: {e}	无法汇总注释：{e}
+	Couldn't open the result: {e}	无法打开结果：{e}
+	Importing data arrives on the web with file pickers for data files	Web 端导入数据将使用数据文件选择器
+	Exported to {path}	已导出到{path}
+	Merging data files needs the desktop app	合并数据文件需要桌面端应用
+	Merged 1 file into {path}	已将 1 个文件合并到{path}
+	Merged {n} files into {path}	已将{n}个文件合并到{path}
+	Combined {n} files	已合并{n}个文件
+	Extracted 1 page	已提取 1 页
+	Extracted {n} pages	已提取{n}页
+	Created a comment summary	已创建注释摘要
+	Couldn't open {name}: {e}	无法打开{name}：{e}
+	Couldn't read {name}: {e}	无法读取{name}：{e}
+	Couldn't save: {e}	无法保存：{e}
+	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Web 端附件下载将于 M3.10 到来（{n} 字节已就绪）
+	`{command}` {when}	`{command}` {when}
+	ships in milestone {m}	将于 {m} 里程碑推出
+	needs an AI provider (off by default)	需要 AI 服务商（默认关闭）
+	is available	可用
+	is not available yet	暂不可用
+	{label} failed: {e}	{label}失败：{e}
+	Undid {label}	已撤销{label}
+	Redid {label}	已重做{label}
+	A document needs at least one page: copy instead	文档至少需要保留一页，请改用复制
+	Cut {what}	已剪切{what}
+	Copied {what}	已复制{what}
+	1 page	1 页
+	{n} pages	{n} 页
+	Copy or cut pages first	请先复制或剪切页面
+	Couldn't save {name}: {e}	无法保存{name}：{e}
+	Saved {name}	已保存{name}
+	Saved, but reopening failed: {e}	已保存，但重新打开失败：{e}
+	Downloaded {name}	已下载{name}
+	Couldn't download {name}: {e}	无法下载{name}：{e}
+	Reverted to the last saved version	已还原到上次保存的版本
+	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	出错了：内部错误中断了操作（{m}）。文档未更改。
+	Nothing to undo	没有可撤销的操作
+	Nothing to redo	没有可重做的操作
+	This document has no form fields you can fill in	本文档没有可填写的表单域
+	This document has no comments to flatten	本文档没有可拼合的注释
+	This document has no form fields to flatten	本文档没有可拼合的表单域
+	There are no redaction marks (mark text, areas or pages first)	没有密文标记（请先标记文本、区域或页面）
+	This document has no {kind} to change	本文档没有可更改的{kind}
+	header or footer	页眉或页脚
+	watermark	水印
+	background	背景
+	This document isn't password-protected	本文档未受密码保护
+	Only the document's owner can change its security (open it with the permissions password)	只有文档所有者才能更改安全性（请使用权限密码打开）
+	The document's security settings don't allow this change	文档安全设置不允许此更改
+	Open a document first	请先打开文档
+	Security will be removed when you save	保存时将删除安全性设置
+	Click text or an image to edit it	单击文本或图像进行编辑
+	Drag a rectangle to create a link; double-click a link to edit it	拖动矩形创建链接；双击链接进行编辑
+	There are no redaction marks to apply	没有可应用的密文标记
+	Drag to draw the area where the signature should appear.	拖动绘制签名应显示的区域。
+	Couldn't fit the visible content: {e}	无法适应可见内容：{e}
+	Drag a rectangle around the area to copy	拖动框选要复制的区域
+	Click on the page to add a {tool}, or drag to set its size	单击页面添加{tool}，或拖动设置其大小
+	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	拖动页面上的矩形进行裁剪；双击页面可设置页面框
+	Keep tool selected: on	保持工具选中：开
+	Keep tool selected	保持工具选中
+	Opacity	不透明度
+	Line thickness	线条粗细
+	What word or phrase would you like to search for?	您想搜索哪个词或短语？
+	Searching… {s} of {p} pages	正在搜索… {s}/{p} 页
+	 (searching… {s} of {p} pages)	（正在搜索… {s}/{p} 页）
+	1 instance	1 个匹配
+	{n} instances	{n} 个匹配
+	Go to this result	转到此结果
+	Highlight	突出显示
+	Draw	绘制
+	Polygon	多边形
+	Connected lines	连接线
+	Eraser	橡皮擦
+	Sign	签名
+	Certified by {by}	认证方{by}
+	At least one signature is invalid.	至少一个签名无效。
+	Signed and all signatures are valid.	已签名，所有签名均有效。
+	At least one signature has problems.	至少一个签名存在问题。
+	This document is secured. Some changes are restricted by its security settings.	本文档已加密。其安全设置限制了部分更改。
+	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	这是动态 XFA 表单，PdfCraft 暂无法显示。您看到的是文件的占位页面。
+	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	此表单还包含 XFA 数据，PdfCraft 暂不读取。您可以填写字段，但 Acrobat 可能显示 XFA 值。
+	This document contains {n} interactive form fields.	本文档包含 {n} 个交互式表单域。
+	This file was damaged and has been repaired. Saving keeps the repaired version.	此文件已损坏并已修复。保存将保留修复后的版本。
+	Dismiss	关闭
+	Hide field highlights	隐藏字段高亮
+	Highlight fields	高亮显示字段
+	Security settings	安全设置
+	Details	详情
+	Select (V)	选择 (V)
+	Hand (H)	抓手 (H)
+	Delete pages (Delete)	删除页面 (Delete)
+	Insert a blank page after the selection	在所选内容后插入空白页
+	Insert pages from a file…	从文件插入页面…
+	Extract pages to a new document	将页面提取到新文档
+	Split into files…	拆分为多个文件…
+	Select pages	选择页面
+	Cut	剪切
+	Copy	复制
+	Paste after	在后面粘贴
+	Rename	重命名
+	Set to current page ({n})	设为当前页（第 {n} 页）
+	Move up	上移
+	Move down	下移
+	Indent	缩进
+	Outdent	减少缩进
+	This document has no form fields.	本文档没有表单域。
+	Tab order: move a field with its arrows.	Tab 顺序：用箭头移动字段。
+	Unplaced	未放置
+	Has JavaScript actions (run in M6)	含 JavaScript 动作（M6 运行）
+	Page	页面
+	None	无
+	Tool	工具
+	Command	命令
+	Search tools and commands…	搜索工具和命令…
+	No matching tools	没有匹配的工具
+	All tools	所有工具
+	Read	阅读
+	Convert	转换
+	E-Sign	电子签名
+	Welcome to PdfCraft	欢迎使用 PdfCraft
+	An open-source PDF workbench — local, private, and scriptable.	开源 PDF 工作台——本地、私密、可编写脚本。
+	Recommended tools	推荐工具
+	Use now	立即使用
+	Recent	最近
+	Privacy	隐私
+	Export to image…	导出为图像…
+	Reduce file size…	减小文件大小…
+	Optimize PDF…	优化 PDF…
+	Export to text…	导出为文本…
+	Export to Word…	导出为 Word…
+	Export to HTML…	导出为 HTML…
+	Export to RTF…	导出为 RTF…
+	Export all images…	导出所有图像…
+	Protect using password…	使用密码保护…
+	Remove security	删除安全性设置
+	Security properties…	安全性属性…
+	Organize pages	组织页面
+	New bookmark	新建书签
+	Rotate pages clockwise	顺时针旋转页面
+	Rotate pages counterclockwise	逆时针旋转页面
+	Delete pages	删除页面
+	Insert blank page	插入空白页
+	Rotate pages…	旋转页面…
+	Duplicate pages	重复页面
+	Crop pages	裁剪页面
+	Set page boxes…	设置页面框…
+	Insert pages from file…	从文件插入页面…
+	Replace pages…	替换页面…
+	Extract pages…	提取页面…
+	Split document…	拆分文档…
+	Number pages…	页面编号…
+	Keyboard shortcuts	键盘快捷键
+	Join the ArtCraft Discord	加入 ArtCraft Discord
+	Join the ArtCraft community	加入 ArtCraft 社区
+	Get help, share feedback and follow development on Discord.	在 Discord 上获取帮助、分享反馈并关注开发动态。
+	Join our Discord	加入我们的 Discord
+	PdfCraft web page	PdfCraft 网页
+	PdfCraft on GitHub	GitHub 上的 PdfCraft
+	ArtCraft website	ArtCraft 官网
+	Check for updates…	检查更新…
+	About PdfCraft	关于 PdfCraft
+	JavaScript console…	JavaScript 控制台…
+	Document JavaScripts…	文档 JavaScript…
+	Recognize text…	识别文本…
+	Check for accessibility…	无障碍检查…
+	Add header & footer…	添加页眉和页脚…
+	Add watermark…	添加水印…
+	Add background…	添加背景…
+	Prepare a form	准备表单
+	Digitally sign	数字签名
+	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	在 PdfCraft 中打开的文件会显示在这里。将 PDF 拖放到任意位置即可打开。
+	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft 可离线工作。无遥测、无账号，除非您自行添加服务商，否则无云端处理。

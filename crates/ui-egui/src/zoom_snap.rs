@@ -2,10 +2,10 @@
 //! and Edit ▸ Take a Snapshot (drag a rectangle to copy that area as an image).
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use printcraft_render::{RenderConfig, RenderRequest, RequestKind, Tile};
+use pdfcraft_render::{RenderConfig, RenderRequest, RequestKind, Tile};
 
 use crate::canvas::{DocView, PageXform};
-use crate::{PrintCraftApp, QuickTool};
+use crate::{PdfCraftApp, QuickTool};
 
 /// A finished gesture: (page, the rectangle on screen, the same in page view points
 /// [x0, y0, x1, y1]); a plain click has an empty rectangle.
@@ -44,7 +44,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
     }
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Finish a marquee gesture for the current tool.
     pub(crate) fn finish_marquee(&mut self, index: usize, done: Marquee) {
         let (page, rect, view_rect) = done;
@@ -64,8 +64,10 @@ impl PrintCraftApp {
                     return;
                 }
                 match self.snapshot(index, page, view_rect) {
-                    Ok((w, h)) => self.notify(format!("The selected area has been copied ({w} × {h} pixels)")),
-                    Err(e) => self.notify(format!("Couldn't take the snapshot: {e}")),
+                    Ok((w, h)) => {
+                        self.notify_fmt("The selected area has been copied ({w} × {h} pixels)", &[("w", &w.to_string()), ("h", &h.to_string())])
+                    }
+                    Err(e) => self.notify_fmt("Couldn't take the snapshot: {e}", &[("e", &e.to_string())]),
                 }
             }
             _ => {}
@@ -80,7 +82,7 @@ impl PrintCraftApp {
         let page = view.current;
         let doc = self.session.get(view.id).ok_or("no document")?;
         let config = RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..RenderConfig::default() };
-        let mut r = printcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         // About 800 px along the longer side is plenty to find the margins.
         let size = doc.info.pages.get(page).map_or(792.0, |p| p.width.max(p.height));
         let out = r.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: (800.0 / size).clamp(0.1, 4.0), tag: 0 });
@@ -125,7 +127,7 @@ impl PrintCraftApp {
             return Err("the area is too large at this zoom".into());
         }
         let config = RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..RenderConfig::default() };
-        let mut r = printcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         let out = r.render(RenderRequest { page, kind: RequestKind::Pixels, tile: Some(tile), scale, tag: 0 });
         if let Some(e) = out.error {
             return Err(e);

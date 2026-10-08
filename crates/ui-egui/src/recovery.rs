@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::PrintCraftApp;
+use crate::PdfCraftApp;
 
 /// How often unsaved changes are written to the recovery folder.
 pub const AUTOSAVE_SECS: f64 = 60.0;
@@ -40,17 +40,17 @@ impl RecoveryStore {
         Self { dir: dir.into() }
     }
 
-    /// The platform's per-user data folder: `~/Library/Application Support/PrintCraft/Recovery`
-    /// (macOS), `%LOCALAPPDATA%\PrintCraft\Recovery` (Windows), or
-    /// `$XDG_DATA_HOME/printcraft/recovery` / `~/.local/share/printcraft/recovery` (others).
+    /// The platform's per-user data folder: `~/Library/Application Support/PdfCraft/Recovery`
+    /// (macOS), `%LOCALAPPDATA%\PdfCraft\Recovery` (Windows), or
+    /// `$XDG_DATA_HOME/pdfcraft/recovery` / `~/.local/share/pdfcraft/recovery` (others).
     pub fn default_dir() -> Option<PathBuf> {
         let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
         if cfg!(target_os = "macos") {
-            env("HOME").map(|h| h.join("Library/Application Support/PrintCraft/Recovery"))
+            env("HOME").map(|h| h.join("Library/Application Support/PdfCraft/Recovery"))
         } else if cfg!(windows) {
-            env("LOCALAPPDATA").map(|d| d.join("PrintCraft").join("Recovery"))
+            env("LOCALAPPDATA").map(|d| d.join("PdfCraft").join("Recovery"))
         } else {
-            env("XDG_DATA_HOME").or_else(|| env("HOME").map(|h| h.join(".local/share"))).map(|d| d.join("printcraft/recovery"))
+            env("XDG_DATA_HOME").or_else(|| env("HOME").map(|h| h.join(".local/share"))).map(|d| d.join("pdfcraft/recovery"))
         }
     }
 
@@ -114,7 +114,7 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Turn on autosave into `store`, and look for documents a previous session left behind.
     pub fn enable_recovery(&mut self, store: RecoveryStore) {
         self.recoverable = store.list();
@@ -137,7 +137,7 @@ impl PrintCraftApp {
     }
 
     /// Drop a document's recovery entry (it was saved, discarded or closed).
-    pub(crate) fn forget_recovery(&mut self, doc: printcraft_engine::DocId) {
+    pub(crate) fn forget_recovery(&mut self, doc: pdfcraft_engine::DocId) {
         if let (Some(store), Some(key)) = (&self.recovery, self.recovery_keys.remove(&doc)) {
             store.remove(&key);
         }
@@ -162,7 +162,7 @@ impl PrintCraftApp {
             let bytes = match store.read(key) {
                 Ok(b) => b,
                 Err(e) => {
-                    self.notify(format!("Couldn't recover {}: {e}", meta.name));
+                    self.notify_fmt("Couldn't recover {name}: {e}", &[("name", &meta.name), ("e", &e.to_string())]);
                     continue;
                 }
             };
@@ -173,7 +173,7 @@ impl PrintCraftApp {
             match self.open_bytes(&meta.name, None, bytes) {
                 Ok(()) if self.password_prompt.is_none() => self.finish_recovery(&meta),
                 Ok(()) => {}
-                Err(e) => self.notify(format!("Couldn't recover {}: {e}", meta.name)),
+                Err(e) => self.notify_fmt("Couldn't recover {name}: {e}", &[("name", &meta.name), ("e", &e.to_string())]),
             }
         }
         self.recoverable.retain(|m| !keys.contains(&m.key));

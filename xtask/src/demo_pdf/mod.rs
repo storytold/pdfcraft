@@ -1,4 +1,4 @@
-//! `cargo xtask demo-pdf`: build the PrintCraft showcase PDF.
+//! `cargo xtask demo-pdf`: build the PdfCraft showcase PDF.
 //!
 //! 1. Render a procedural PNG and fill the placeholders in `assets/demo/showcase.html`.
 //! 2. Print the HTML with headless Chrome (tagged PDF, outline from headings).
@@ -36,7 +36,7 @@ pub fn run(args: &[String]) -> Result<()> {
     }
 
     let root = repo_root();
-    let out = out_override.unwrap_or_else(|| root.join("dist/demo/printcraft-showcase.pdf"));
+    let out = out_override.unwrap_or_else(|| root.join("dist/demo/pdfcraft-showcase.pdf"));
     let build = root.join("dist/demo/build");
     fs::create_dir_all(&build).with_context(|| format!("creating {}", build.display()))?;
     if let Some(parent) = out.parent() {

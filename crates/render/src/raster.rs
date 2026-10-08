@@ -115,6 +115,15 @@ pub fn effective_scale(width_pt: f32, height_pt: f32, scale: f32) -> f32 {
     if capped.is_finite() && capped > 0.0 { capped } else { by_side.min(by_area).max(f32::MIN_POSITIVE) }
 }
 
+/// Device pixels that cover `pt` points at `scale`: rounded up, as poppler's `pdftoppm` does, so
+/// the last partial row or column of a page is drawn (anti-aliased against the background) rather
+/// than cut off. Float noise up to 1/100 px is not rounded up, so 612 pt at 150 dpi stays 1275 px.
+/// At least 1; saturates instead of overflowing.
+pub fn device_pixels(pt: f32, scale: f32) -> u32 {
+    let px = pt * scale - 0.01;
+    if px.is_finite() { px.ceil().max(1.0) as u32 } else { 1 }
+}
+
 /// Render one page with a caller-owned parser and cache. Panics inside the renderer are caught
 /// and reported as `Err((message, panicked))`.
 type Output = (u32, u32, Vec<u8>, Option<Arc<crate::text::PageText>>);
@@ -151,7 +160,10 @@ fn render_page<'a>(pdf: &'a Pdf, cache: &RenderCache<'a>, settings: &Interpreter
             }
             None => {
                 let scale = effective_scale(w, h, req.scale);
-                RenderSettings { x_scale: scale, y_scale: scale, bg_color: WHITE, ..Default::default() }
+                // hayro floors the size when none is given, losing the partial edge pixels. The
+                // scale keeps each side within MAX_SIDE (give or take float noise), so it fits u16.
+                let side = |pt: f32| device_pixels(pt, scale).min(MAX_SIDE as u32) as u16;
+                RenderSettings { x_scale: scale, y_scale: scale, width: Some(side(w)), height: Some(side(h)), bg_color: WHITE, ..Default::default() }
             }
         };
         let pixmap = render(page, cache, settings, &rs);
@@ -298,7 +310,7 @@ impl RenderPool {
             };
             let (wtx, wrx) = channel::<()>();
             let (shared, out, bytes, config) = (self.shared.clone(), self.results_tx.clone(), self.bytes.clone(), self.config.clone());
-            match std::thread::Builder::new().name(format!("printcraft-render-{id}")).spawn(move || worker(id, bytes, config, shared, wrx, out)) {
+            match std::thread::Builder::new().name(format!("pdfcraft-render-{id}")).spawn(move || worker(id, bytes, config, shared, wrx, out)) {
                 Ok(h) => {
                     lock(&self.wake).push(wtx);
                     lock(&self._workers).push(h);
@@ -560,6 +572,40 @@ trailer << /Root 1 0 R >>
         assert!((14_400.0 * s).powi(2) <= MAX_PIXELS * 1.01);
     }
 
+    /// Issue #102: an A4 page (595.28×841.89 pt) rendered 595×841 at 72 dpi, dropping the last
+    /// partial row and column. Like pdftoppm it is now 596×842, the edge pixels partly covered.
+    #[test]
+    fn fractional_page_sizes_round_up() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Contents 4 0 R >> endobj
+4 0 obj << /Length 31 >> stream
+0 0 1 rg 0 0 595.28 841.89 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+        let mut r = PageRenderer::new(Arc::new(pdf.to_vec()), RenderConfig::default());
+        let req = RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 };
+        let p = r.render(req);
+        assert!(p.error.is_none(), "{:?}", p.error);
+        assert_eq!((p.width, p.height), (596, 842));
+        let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+        assert_eq!(px(594, 840), vec![0, 0, 255, 255]);
+        // The partial column and row blend the fill into the white page.
+        for (x, y) in [(595, 400), (300, 841), (595, 841)] {
+            let c = px(x, y);
+            assert!(c[0] < 255 && c[2] == 255, "({x}, {y}) is not partly covered: {c:?}");
+        }
+        assert_eq!(r.render(RenderRequest { scale: 300.0 / 72.0, ..req }).width, 2481);
+        // A tile over the corner draws the same edge pixels.
+        let t = r.render(RenderRequest { tile: Some(Tile { x: 594, y: 840, w: 2, h: 2 }), ..req });
+        assert_eq!((t.width, t.height), (2, 2));
+        assert_eq!(&t.rgba[12..16], &px(595, 841)[..]);
+        // Float noise doesn't add a row: Letter at 150 dpi is 1275 px wide.
+        assert_eq!((device_pixels(612.0, 150.0 / 72.0), device_pixels(0.2, 1.0), device_pixels(f32::NAN, 1.0)), (1275, 1, 1));
+    }
+
     /// A checkbox whose `/AP /N` is a state dictionary must draw the `/AS` state; a NoView
     /// annotation must not draw at all. (Regression test for the vendored hayro patch.)
     #[test]
@@ -588,6 +634,40 @@ trailer << /Root 1 0 R >>
         let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
         assert_eq!(px(20, 80), vec![255, 0, 0, 255], "checkbox must show its /Yes state");
         assert_eq!(px(75, 25), vec![255, 255, 255, 255], "NoView annotation must not be drawn");
+    }
+
+    /// Quartz writes `/AP /N` as an indirect dictionary of states, and the next object in
+    /// the file is often some other stream. That dictionary must not be read as that stream,
+    /// or the checkbox (whose real appearance is `/AS`) is skipped.
+    #[test]
+    fn indirect_appearance_state_dict_is_not_another_stream() {
+        let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /T (cb) /V /Yes /AS /Yes /Rect [10 10 30 30]
+   /AP 9 0 R >> endobj
+9 0 obj << /N 10 0 R >> endobj
+10 0 obj << /Yes 5 0 R /Off 6 0 R >> endobj
+11 0 obj << /Length 24 >> stream
+0 0 1 rg 0 0 20 20 re f
+endstream
+endobj
+5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length 24 >> stream
+1 0 0 rg 0 0 20 20 re f
+endstream
+endobj
+6 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length 24 >> stream
+0 1 0 rg 0 0 20 20 re f
+endstream
+endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+        let mut r = PageRenderer::new(Arc::new(pdf.to_vec()), RenderConfig::default());
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+        assert!(p.error.is_none(), "{:?}", p.error);
+        let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+        assert_eq!(px(20, 80), vec![255, 0, 0, 255], "checkbox must show the /Yes appearance, not the decoy stream");
     }
 
     #[test]

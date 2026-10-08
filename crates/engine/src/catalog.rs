@@ -14,7 +14,7 @@ pub enum Availability {
     Ready,
     /// Planned; ships in the named milestone.
     Planned(&'static str),
-    /// Cloud-only in Acrobat; PrintCraft offers an optional pluggable provider instead.
+    /// Cloud-only in Acrobat; PdfCraft offers an optional pluggable provider instead.
     Provider,
 }
 
@@ -99,6 +99,8 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 item("Date", "clock-3", "sign.fill.date", Ready),
                 item("Signature", "signature", "sign.fill.signature", Ready),
                 item("Initials", "signature", "sign.fill.initials", Ready),
+                item("Change signature", "signature", "sign.fill.signature.change", Ready),
+                item("Change initials", "signature", "sign.fill.initials.change", Ready),
             ],
         }],
     },
@@ -323,6 +325,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 title: "Fields",
                 items: &[
                     item("Field list", "list", "form.fields", Ready),
+                    item("Detect form fields", "scan", "form.detect", Ready),
                     item("Clear form", "eraser", "form.clear", Ready),
                     item("Field properties", "settings-2", "form.field.properties", Ready),
                     item("Tab order by rows", "rows-3", "form.tab_order.row", Ready),

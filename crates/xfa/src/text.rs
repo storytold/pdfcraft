@@ -108,8 +108,8 @@ impl Face {
     pub fn width(&self, s: &str) -> f64 {
         match self.family {
             Family::Courier => s.chars().count() as f64 * 0.6 * self.size,
-            Family::Helvetica => printcraft_fonts::helvetica_width(s, self.size) * if self.bold { 1.04 } else { 1.0 },
-            Family::Times => printcraft_fonts::helvetica_width(s, self.size) * if self.bold { 0.96 } else { 0.92 },
+            Family::Helvetica => pdfcraft_fonts::helvetica_width(s, self.size) * if self.bold { 1.04 } else { 1.0 },
+            Family::Times => pdfcraft_fonts::helvetica_width(s, self.size) * if self.bold { 0.96 } else { 0.92 },
         }
     }
 }

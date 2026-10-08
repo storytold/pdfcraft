@@ -6,7 +6,7 @@
 //! under nodes named after its named ancestor subforms, repeated instances as repeated sibling
 //! elements. Explicit `bind ref` expressions are not followed.
 
-use printcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 use crate::XfaError;
 
@@ -109,7 +109,7 @@ fn text_of(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
     d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text()))
 }
 
-/// The SOM path of a field: its `/PCSom` when PrintCraft generated it, else its name.
+/// The SOM path of a field: its `/PCSom` when PdfCraft generated it, else its name.
 fn som_of(doc: &Document, f: &FieldDatum) -> String {
     doc.get(f.obj).as_dict().and_then(|d| text_of(doc, d, crate::pdf::SOM_KEY)).unwrap_or_else(|| f.name.clone())
 }

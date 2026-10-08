@@ -1,4 +1,4 @@
-//! printcraft-ocr — Scan & OCR ▸ Recognize text (L4).
+//! pdfcraft-ocr — Scan & OCR ▸ Recognize text (L4).
 //!
 //! Recognition runs the ocrs engine (MIT/Apache-2.0) with its pre-trained models (CC-BY-SA-4.0,
 //! fetched by `cargo xtask models`; see ATTRIBUTION.toml). The caller renders a page to pixels;
@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-pub use printcraft_fonts::helvetica_width;
+pub use pdfcraft_fonts::helvetica_width;
 
 /// The model files, as named in ATTRIBUTION.toml.
 pub const DETECTION_MODEL: &str = "text-detection.rten";
@@ -23,7 +23,7 @@ pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
-    #[error("the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)")]
+    #[error("the text recognition models are not installed (run `cargo xtask models`, or set PDFCRAFT_MODELS)")]
     NoModels,
     #[error("loading {0}: {1}")]
     Load(String, String),
@@ -47,7 +47,7 @@ impl Models {
         (m.detection.is_file() && m.recognition.is_file()).then_some(m)
     }
 
-    /// Look for the models: `$PRINTCRAFT_MODELS`, then `models/` beside the executable (and
+    /// Look for the models: `$PDFCRAFT_MODELS`, then `models/` beside the executable (and
     /// `Resources/models` in a macOS bundle), then the source tree's `assets/models/`.
     pub fn find() -> Option<Models> {
         Self::search_dirs().iter().find_map(|d| Self::in_dir(d))
@@ -56,7 +56,7 @@ impl Models {
     /// The directories [`Models::find`] looks in, in order.
     pub fn search_dirs() -> Vec<PathBuf> {
         let mut dirs = Vec::new();
-        if let Some(d) = std::env::var_os("PRINTCRAFT_MODELS") {
+        if let Some(d) = std::env::var_os("PDFCRAFT_MODELS") {
             dirs.push(PathBuf::from(d));
         }
         if let Some(exe) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
@@ -196,7 +196,7 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
         let nums: Vec<String> = m.iter().map(|v| num(*v)).collect();
         out.extend_from_slice(nums.join(" ").as_bytes());
         out.extend_from_slice(b" Tm ");
-        out.extend(printcraft_fonts::literal(&printcraft_fonts::win_ansi(&w.text)));
+        out.extend(pdfcraft_fonts::literal(&pdfcraft_fonts::win_ansi(&w.text)));
         out.extend_from_slice(b" Tj\n");
     }
     out.extend_from_slice(b"ET\nEMC\n");

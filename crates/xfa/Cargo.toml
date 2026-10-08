@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-xfa"
+name = "pdfcraft-xfa"
 description = "XFA forms: reads a dynamic form's XDP packets and lays its template out as PDF pages and AcroForm fields"
 version.workspace = true
 edition.workspace = true
@@ -11,8 +11,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-cos = { workspace = true }
-printcraft-fonts = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-fonts = { workspace = true }
 roxmltree = "0.20"
 base64 = "0.22"
 thiserror = { workspace = true }

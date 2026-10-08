@@ -1,18 +1,18 @@
 //! Help ▸ Check for updates (issue #28): ask for the latest release and offer its download page.
 //!
-//! The desktop app supplies how to ask ([`PrintCraftApp::update_source`]), so this crate has no
+//! The desktop app supplies how to ask ([`PdfCraftApp::update_source`]), so this crate has no
 //! network code; without a source (the web build, tests) the command opens the releases page.
-//! PrintCraft never downloads or installs anything itself: the user downloads the new version.
+//! PdfCraft never downloads or installs anything itself: the user downloads the new version.
 //! It asks only when the user does: there is no check at start (the owner's decision).
 
 use std::sync::Arc;
 
 use egui::{Align, Layout};
 
-use crate::{PrintCraftApp, theme, widgets};
+use crate::{PdfCraftApp, theme, widgets};
 
-/// Where every PrintCraft release is listed.
-pub const RELEASES_PAGE: &str = "https://github.com/storytold/printcraft/releases";
+/// Where every PdfCraft release is listed.
+pub const RELEASES_PAGE: &str = "https://github.com/storytold/pdfcraft/releases";
 
 /// The latest published release.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,7 +62,7 @@ pub(crate) struct Updates {
     pub(crate) open: bool,
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Help ▸ Check for updates: ask for the latest release and show the outcome.
     pub fn check_for_updates(&mut self) {
         let Some(source) = self.update_source.clone() else {
@@ -108,7 +108,7 @@ impl PrintCraftApp {
 }
 
 /// The Updates dialog.
-pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
+pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if !app.updates.open {
         return;
     }
@@ -120,48 +120,60 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
         ui.set_width(420.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("cloud", 22.0, t.accent));
-            ui.label(egui::RichText::new("Check for updates").font(theme::semibold(16.0)));
+            ui.label(egui::RichText::new(tl!("Check for updates")).font(theme::semibold(16.0)));
         });
         ui.add_space(8.0);
         match &app.updates.check {
             Check::Idle => {
-                ui.label("No check has run yet.");
+                ui.label(tl!("No check has run yet."));
             }
             #[cfg(not(target_arch = "wasm32"))]
             Check::Running(_) => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Checking for a newer version…");
+                    ui.label(tl!("Checking for a newer version…"));
                 });
             }
             Check::Done(Ok(r)) if is_newer(&r.version, current) => {
                 let version = r.version.trim_start_matches(['v', 'V']);
-                ui.label(egui::RichText::new(format!("PrintCraft {version} is available.")).strong());
+                ui.label(egui::RichText::new(crate::i18n::fmt(tl!("PdfCraft {v} is available."), &[("v", version)])).strong());
                 ui.label(
-                    egui::RichText::new(format!("You have version {current}. Download the new version from its release page.")).color(t.text_muted),
+                    egui::RichText::new(crate::i18n::fmt(
+                        tl!("You have version {c}. Download the new version from its release page."),
+                        &[("c", current)],
+                    ))
+                    .color(t.text_muted),
                 );
                 download = Some(r.url.clone());
             }
             Check::Done(Ok(_)) => {
-                ui.label(format!("PrintCraft {current} is up to date."));
+                ui.label(crate::i18n::fmt(tl!("PdfCraft {c} is up to date."), &[("c", current)]));
             }
             Check::Done(Err(e)) => {
-                ui.label(format!("Couldn't check for updates: {e}"));
-                ui.label(egui::RichText::new(format!("You have version {current}. All releases are listed at {RELEASES_PAGE}.")).color(t.text_muted));
+                ui.label(crate::i18n::fmt(tl!("Couldn't check for updates: {e}"), &[("e", &e.to_string())]));
+                ui.label(
+                    egui::RichText::new(crate::i18n::fmt(
+                        tl!("You have version {c}. All releases are listed at {page}."),
+                        &[("c", current), ("page", RELEASES_PAGE)],
+                    ))
+                    .color(t.text_muted),
+                );
             }
         }
         ui.add_space(10.0);
         ui.label(
-            egui::RichText::new("Asks GitHub for the latest release. Nothing is downloaded or installed automatically.").color(t.text_muted).small(),
+            egui::RichText::new(tl!("Asks GitHub for the latest release. Nothing is downloaded or installed automatically."))
+                .color(t.text_muted)
+                .small(),
         );
         ui.add_space(12.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if let Some(url) = download.take() {
-                let get = widgets::pill_button(ui, "Download", true).clicked();
-                let later = widgets::pill_button(ui, "Later", false).clicked();
+                let get = widgets::pill_button(ui, tl!("Download"), true).clicked();
+                let later = widgets::pill_button(ui, tl!("Later"), false).clicked();
                 close = get || later;
                 download = get.then_some(url);
-            } else if widgets::pill_button(ui, "Close", true).clicked() {
+            } else if widgets::pill_button(ui, tl!("Close"), true).clicked() {
                 close = true;
             }
         });

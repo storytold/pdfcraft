@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crate::PrintCraftApp;
+use crate::PdfCraftApp;
 
 /// File types Open accepts besides PDF (converted on open).
 pub const CONVERTIBLE: [&str; 12] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "txt", "text"];
@@ -62,7 +62,7 @@ fn stem(name: &str) -> &str {
     name.rsplit_once('.').map_or(name, |(s, _)| s)
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Convert a non-PDF file (image, text) into a new tab. Returns `None` when `bytes` is not
     /// something Create understands (the caller then tries to open it as a PDF).
     pub(crate) fn open_converted(&mut self, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
@@ -100,10 +100,10 @@ impl PrintCraftApp {
         match clip {
             Some(c) => {
                 if let Err(e) = self.create_from_clip(c) {
-                    self.notify(format!("Couldn't create a PDF: {e}"));
+                    self.notify_fmt("Couldn't create a PDF: {e}", &[("e", &e.to_string())]);
                 }
             }
-            None => self.notify("The clipboard has no image or text"),
+            None => self.notify_tr("The clipboard has no image or text"),
         }
     }
 
@@ -123,7 +123,7 @@ impl PrintCraftApp {
     pub(crate) fn create_blank(&mut self) {
         let created = self.session.create_blank(612.0, 792.0, 1).map_err(|e| e.to_string());
         if let Err(e) = self.open_created_bytes("Untitled.pdf", created) {
-            self.notify(format!("Couldn't create a PDF: {e}"));
+            self.notify_fmt("Couldn't create a PDF: {e}", &[("e", &e.to_string())]);
         }
     }
 
@@ -132,8 +132,8 @@ impl PrintCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let Some(files) = rfd::FileDialog::new()
-                .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                .set_title("Choose images")
+                .add_filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
+                .set_title(tl!("Choose images"))
                 .pick_files()
             else {
                 return;
@@ -143,7 +143,7 @@ impl PrintCraftApp {
                 match std::fs::read(&f) {
                     Ok(b) => images.push((f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), b)),
                     Err(e) => {
-                        self.notify(format!("Couldn't read {}: {e}", f.display()));
+                        self.notify_fmt("Couldn't read {name}: {e}", &[("name", &f.display().to_string()), ("e", &e.to_string())]);
                         return;
                     }
                 }
@@ -151,7 +151,7 @@ impl PrintCraftApp {
             self.create_from_images(images);
         }
         #[cfg(target_arch = "wasm32")]
-        self.notify("On the web, open or drop an image to convert it");
+        self.notify_tr("On the web, open or drop an image to convert it");
     }
 
     /// One new document from images (tests and automation call this directly).
@@ -162,7 +162,7 @@ impl PrintCraftApp {
         let name = if images.len() == 1 { format!("{}.pdf", stem(&images[0].0)) } else { "Images.pdf".to_string() };
         let created = self.session.create_from_images(&images).map_err(|e| e.to_string());
         if let Err(e) = self.open_created_bytes(&name, created) {
-            self.notify(format!("Couldn't create a PDF: {e}"));
+            self.notify_fmt("Couldn't create a PDF: {e}", &[("e", &e.to_string())]);
         }
     }
 
@@ -178,26 +178,31 @@ impl PrintCraftApp {
     /// the saving.
     pub(crate) fn save_optimized(
         &mut self,
-        id: printcraft_engine::DocId,
+        id: pdfcraft_engine::DocId,
         suffix: &str,
-        result: Result<(Arc<Vec<u8>>, String), printcraft_engine::EditError>,
+        result: Result<(Arc<Vec<u8>>, String), pdfcraft_engine::EditError>,
     ) {
         let Some(doc) = self.session.get(id) else { return };
         let (before, name) = (doc.bytes.len(), format!("{} ({suffix}).pdf", stem(&doc.name)));
         let (bytes, detail) = match result {
             Ok(r) => r,
             Err(e) => {
-                self.notify(format!("Couldn't optimize the file: {e}"));
+                self.notify_fmt("Couldn't optimize the file: {e}", &[("e", &e.to_string())]);
                 return;
             }
         };
-        let saved = |app: &mut PrintCraftApp, place: String| {
+        let saved = |app: &mut PdfCraftApp, place: String| {
             let pct = 100.0 * (1.0 - bytes.len() as f64 / before.max(1) as f64);
-            app.notify(format!(
-                "Saved {place}: {} → {} ({pct:.0}% smaller){detail}",
-                crate::panels::human_size(before),
-                crate::panels::human_size(bytes.len())
-            ));
+            app.notify_fmt(
+                "Saved {place}: {before} → {after} ({pct}% smaller){detail}",
+                &[
+                    ("place", &place),
+                    ("before", &crate::panels::human_size(before)),
+                    ("after", &crate::panels::human_size(bytes.len())),
+                    ("pct", &format!("{pct:.0}")),
+                    ("detail", &detail),
+                ],
+            );
         };
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -208,13 +213,13 @@ impl PrintCraftApp {
             let Some(path) = path else { return };
             match crate::editing::write_atomically(&path, &bytes) {
                 Ok(()) => saved(self, path),
-                Err(e) => self.notify(format!("Couldn't write {path}: {e}")),
+                Err(e) => self.notify_fmt("Couldn't write {path}: {e}", &[("path", &path), ("e", &e.to_string())]),
             }
         }
         #[cfg(target_arch = "wasm32")]
         match crate::editing::download(&name, &bytes) {
             Ok(()) => saved(self, name),
-            Err(e) => self.notify(format!("Couldn't download {name}: {e}")),
+            Err(e) => self.notify_fmt("Couldn't download {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
         }
     }
 }

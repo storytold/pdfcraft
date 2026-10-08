@@ -3,13 +3,13 @@
 use egui::Pos2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_engine::LinkAction;
-use printcraft_ui_egui::{Dialog, PrintCraftApp};
+use pdfcraft_engine::LinkAction;
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
-fn harness() -> Harness<'static, PrintCraftApp> {
+fn harness() -> Harness<'static, PdfCraftApp> {
     // 60 fps steps, so two clicks fall inside egui's double-click window.
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app.set_option("zoom", "150").unwrap();
         app
@@ -18,13 +18,13 @@ fn harness() -> Harness<'static, PrintCraftApp> {
     h
 }
 
-fn at(h: &Harness<'static, PrintCraftApp>, x: f32, y: f32) -> Pos2 {
+fn at(h: &Harness<'static, PdfCraftApp>, x: f32, y: f32) -> Pos2 {
     let r = h.state().views[0].page_screen_rect(0).unwrap();
     let k = r.width() / 300.0;
     r.min + egui::vec2(x * k, y * k)
 }
 
-fn drag(h: &mut Harness<'static, PrintCraftApp>, a: Pos2, b: Pos2) {
+fn drag(h: &mut Harness<'static, PdfCraftApp>, a: Pos2, b: Pos2) {
     h.hover_at(a);
     h.run_steps(1);
     h.drag_at(a);
@@ -37,7 +37,7 @@ fn drag(h: &mut Harness<'static, PrintCraftApp>, a: Pos2, b: Pos2) {
     h.run_steps(3);
 }
 
-fn links(h: &Harness<'static, PrintCraftApp>) -> Vec<printcraft_engine::LinkItem> {
+fn links(h: &Harness<'static, PdfCraftApp>) -> Vec<pdfcraft_engine::LinkItem> {
     let s = h.state();
     s.session.get(s.views[0].id).unwrap().links.clone()
 }

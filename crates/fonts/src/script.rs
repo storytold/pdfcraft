@@ -6,6 +6,9 @@ use skrifa::{FontRef, MetadataProvider};
 
 static FONT: &[u8] = include_bytes!("../../../assets/fonts/DancingScript.ttf");
 
+/// Bound signature work while allowing long personal names.
+pub const MAX_SIGNATURE_CHARS: usize = 256;
+
 /// Outlines of a line of existing text at a font size of 1 (em units).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ScriptOutline {
@@ -13,6 +16,19 @@ pub struct ScriptOutline {
     pub width: f64,
     pub ascent: f64,
     pub descent: f64,
+}
+
+impl ScriptOutline {
+    /// Layout bounds including glyph overhangs, so previews and PDF appearances never clip ink.
+    pub fn bounds(&self) -> [f64; 4] {
+        self.contours.iter().flatten().fold([0.0, self.descent, self.width, self.ascent], |mut b, p| {
+            b[0] = b[0].min(p[0]);
+            b[1] = b[1].min(p[1]);
+            b[2] = b[2].max(p[0]);
+            b[3] = b[3].max(p[1]);
+            b
+        })
+    }
 }
 
 /// One glyph outline in em units, with the baseline at y = 0.
@@ -38,11 +54,12 @@ struct Flatten {
     dx: f64,
     points: usize,
     too_complex: bool,
+    max_points: usize,
 }
 
 impl Flatten {
     fn new(scale: f64) -> Self {
-        Self { contours: Vec::new(), cur: Vec::new(), scale, dx: 0.0, points: 0, too_complex: false }
+        Self { contours: Vec::new(), cur: Vec::new(), scale, dx: 0.0, points: 0, too_complex: false, max_points: 4096 }
     }
 
     fn pt(&self, x: f32, y: f32) -> [f64; 2] {
@@ -54,8 +71,7 @@ impl Flatten {
     }
 
     fn push(&mut self, p: [f64; 2]) {
-        const MAX_POINTS: usize = 4096;
-        if self.points >= MAX_POINTS {
+        if self.points >= self.max_points {
             self.too_complex = true;
             return;
         }
@@ -150,7 +166,11 @@ pub fn japanese_glyph(ch: char) -> Result<GlyphOutline, GlyphError> {
 }
 
 /// The outlines of `text` in the script font (characters it lacks are skipped).
+/// Over-limit input returns an empty outline instead of a silently truncated signature.
 pub fn script_outline(text: &str) -> ScriptOutline {
+    if text.chars().take(MAX_SIGNATURE_CHARS + 1).count() > MAX_SIGNATURE_CHARS {
+        return ScriptOutline::default();
+    }
     let Ok(font) = FontRef::new(FONT) else { return ScriptOutline::default() };
     let loc = LocationRef::default();
     let metrics = font.metrics(Size::unscaled(), loc);
@@ -159,6 +179,9 @@ pub fn script_outline(text: &str) -> ScriptOutline {
     let glyphs = font.outline_glyphs();
     let advances = font.glyph_metrics(Size::unscaled(), loc);
     let mut pen = Flatten::new(scale);
+    // The 4096-point budget is for one untrusted document glyph (japanese_glyph), not a
+    // whole signature in our bundled font. Keep a separate bounded budget for the line.
+    pen.max_points = 262_144;
     for ch in text.chars() {
         let Some(gid) = charmap.map(ch) else { continue };
         if let Some(g) = glyphs.get(gid) {
@@ -168,11 +191,26 @@ pub fn script_outline(text: &str) -> ScriptOutline {
         pen.dx += advances.advance_width(gid).unwrap_or(0.0) as f64 * scale;
     }
     pen.close();
+    if pen.too_complex {
+        return ScriptOutline::default();
+    }
     ScriptOutline { contours: pen.contours, width: pen.dx, ascent: metrics.ascent as f64 * scale, descent: metrics.descent as f64 * scale }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn long_names_keep_every_glyph_with_bounded_outline_work() {
+        let text = "Alexandria Catherine Elizabeth Montgomery-Wellington";
+        let o = super::script_outline(text);
+        let expected: usize = text.chars().map(|c| super::script_outline(&c.to_string()).contours.len()).sum();
+        assert_eq!(o.contours.len(), expected, "the entire name must be drawn");
+        let max_x = o.contours.iter().flatten().map(|p| p[0]).fold(0.0, f64::max);
+        assert!(max_x > o.width - 0.5, "ink reaches the last letter: {max_x} / {}", o.width);
+        assert!(!super::script_outline(&"W".repeat(super::MAX_SIGNATURE_CHARS)).contours.is_empty());
+        assert!(super::script_outline(&"W".repeat(super::MAX_SIGNATURE_CHARS + 1)).contours.is_empty());
+    }
+
     #[test]
     fn a_name_becomes_outlines() {
         let o = super::script_outline("Ada L.");

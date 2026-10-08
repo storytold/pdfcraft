@@ -1,4 +1,4 @@
-# printcraft-print
+# pdfcraft-print
 
 Layer L4: printing (execution plan M10.5).
 
@@ -14,6 +14,14 @@ spool::submit(&pdf, &spool::Job { printer: None, copies: 2, ..Default::default()
   centred; auto orientation turns the sheet for landscape pages.
 - **Multiple**: 2/4/6/9/16 (or any n) pages per sheet, horizontal/vertical (reversed) order,
   page borders, auto-rotation of pages that don't match the cell.
+- **Cut and stack** (Multiple's page order): consecutive pages in each cell's pile,
+  with aligned cut marks in the gutters. For example, 10 pages at 4 per sheet give
+  `[1, 4, 7, 10]`, `[2, 5, 8, blank]`, `[3, 6, 9, blank]`. Print single-sided,
+  keep sheets in output order, cut at the marks, then stack the cell piles from
+  left to right, top to bottom. Blank cells can be discarded. Page ranges and
+  Reverse pages are applied before imposition. Duplex imposition is not supported.
+  Headless: `doc_print` with `layout: "multiple"`, `order: "cut-stack"` and
+  `per_sheet: 4` (or any supported grid size), plus `path` or `printer`.
 - **Booklet**: saddle-stitch imposition padded to a multiple of 4; both sides, front or back
   only; left or right binding.
 - **Poster**: tile scale, overlap shared by neighbouring tiles, cut marks.

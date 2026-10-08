@@ -3,10 +3,10 @@
 #
 # Exports:
 #   ROOT                    workspace root
-#   VERSION                 [workspace.package] version from Cargo.toml (override: PRINTCRAFT_VERSION)
+#   VERSION                 [workspace.package] version from Cargo.toml (override: PDFCRAFT_VERSION)
 #   DIST                    output directory for release artifacts (default: $ROOT/dist/release)
-#   PRINTCRAFT_BUILD_SHA    git commit baked into the binaries (see crates/engine/src/build_info.rs)
-#   PRINTCRAFT_BUILD_DATE   UTC build date, YYYY-MM-DD
+#   PDFCRAFT_BUILD_SHA    git commit, recorded in the macOS Info.plist (PdfCraftBuildCommit)
+#   PDFCRAFT_BUILD_DATE   UTC build date, YYYY-MM-DD
 #   CARGO_TARGET_DIR        cargo's target dir (default: $ROOT/target)
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,7 +21,7 @@ workspace_version() {
   ' "$ROOT/Cargo.toml"
 }
 
-VERSION="${PRINTCRAFT_VERSION:-$(workspace_version)}"
+VERSION="${PDFCRAFT_VERSION:-$(workspace_version)}"
 if [ -z "$VERSION" ]; then
   echo "error: could not read [workspace.package] version from $ROOT/Cargo.toml" >&2
   exit 1
@@ -32,11 +32,11 @@ DIST="${DIST:-$ROOT/dist/release}"
 mkdir -p "$DIST"
 export DIST
 
-if [ -z "${PRINTCRAFT_BUILD_SHA:-}" ]; then
-  PRINTCRAFT_BUILD_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+if [ -z "${PDFCRAFT_BUILD_SHA:-}" ]; then
+  PDFCRAFT_BUILD_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
 fi
-export PRINTCRAFT_BUILD_SHA
-export PRINTCRAFT_BUILD_DATE="${PRINTCRAFT_BUILD_DATE:-$(date -u +%Y-%m-%d)}"
+export PDFCRAFT_BUILD_SHA
+export PDFCRAFT_BUILD_DATE="${PDFCRAFT_BUILD_DATE:-$(date -u +%Y-%m-%d)}"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 
 # Emit a GitHub Actions warning (plain stderr outside Actions).
