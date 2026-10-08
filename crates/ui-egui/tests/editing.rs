@@ -396,7 +396,7 @@ fn save_prompt_stays_inside_the_screen_for_a_long_filename() {
     let mut h = Harness::builder().with_size(egui::vec2(1365.0, 719.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.open_bytes(name, None, fixture(1)).expect("fixture opens");
-        app.close_request = Some(CloseRequest::Tab(0));
+        app.close_request = Some(CloseRequest::Tab(app.views[0].id));
         app
     });
     h.run_steps(4);

@@ -166,24 +166,22 @@ impl PdfCraftApp {
     pub(crate) fn create_from_images_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let Some(files) = rfd::FileDialog::new()
+            let dialog = rfd::AsyncFileDialog::new()
                 .add_filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                .set_title(tl!("Choose images"))
-                .pick_files()
-            else {
-                return;
-            };
-            let mut images = Vec::new();
-            for f in files {
-                match std::fs::read(&f) {
-                    Ok(b) => images.push((f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), b)),
-                    Err(e) => {
-                        self.notify_fmt("Couldn't read {name}: {e}", &[("name", &f.display().to_string()), ("e", &e.to_string())]);
-                        return;
+                .set_title(tl!("Choose images"));
+            self.ask(crate::pickers::Ask::Files(dialog), None, |app, files| {
+                let mut images = Vec::new();
+                for f in files {
+                    match std::fs::read(&f) {
+                        Ok(b) => images.push((f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), b)),
+                        Err(e) => {
+                            app.notify_fmt("Couldn't read {name}: {e}", &[("name", &f.display().to_string()), ("e", &e.to_string())]);
+                            return;
+                        }
                     }
                 }
-            }
-            self.begin_image_import(images);
+                app.begin_image_import(images);
+            });
         }
         #[cfg(target_arch = "wasm32")]
         self.notify_tr("On the web, open or drop an image to convert it");
@@ -267,14 +265,15 @@ impl PdfCraftApp {
                 return;
             }
         };
-        let saved = |app: &mut PdfCraftApp, place: String| {
-            let pct = 100.0 * (1.0 - bytes.len() as f64 / before.max(1) as f64);
+        let after = bytes.len();
+        let saved = move |app: &mut PdfCraftApp, place: String| {
+            let pct = 100.0 * (1.0 - after as f64 / before.max(1) as f64);
             app.notify_fmt(
                 "Saved {place}: {before} → {after} ({pct}% smaller){detail}",
                 &[
                     ("place", &place),
                     ("before", &crate::panels::human_size(before)),
-                    ("after", &crate::panels::human_size(bytes.len())),
+                    ("after", &crate::panels::human_size(after)),
                     ("pct", &format!("{pct:.0}")),
                     ("detail", &detail),
                 ],
@@ -282,14 +281,16 @@ impl PdfCraftApp {
         };
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let path = match &self.save_override {
-                Some(p) => Some(p.clone()),
-                None => rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(&name).save_file().map(|p| p.to_string_lossy().into_owned()),
+            let write = move |app: &mut Self, path: String| match crate::editing::write_atomically(&path, &bytes) {
+                Ok(()) => saved(app, path),
+                Err(e) => app.notify_fmt("Couldn't write {path}: {e}", &[("path", &path), ("e", &e.to_string())]),
             };
-            let Some(path) = path else { return };
-            match crate::editing::write_atomically(&path, &bytes) {
-                Ok(()) => saved(self, path),
-                Err(e) => self.notify_fmt("Couldn't write {path}: {e}", &[("path", &path), ("e", &e.to_string())]),
+            match self.save_override.clone() {
+                Some(p) => write(self, p),
+                None => {
+                    let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(&name);
+                    self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, p| write(app, p.to_string_lossy().into_owned()));
+                }
             }
         }
         #[cfg(target_arch = "wasm32")]

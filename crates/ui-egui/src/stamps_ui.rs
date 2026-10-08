@@ -133,21 +133,22 @@ impl PdfCraftApp {
     pub(crate) fn pick_stamp_file(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let picked = match self.save_override.clone() {
-                Some(p) if [".png", ".jpg", ".pdf"].iter().any(|e| p.ends_with(e)) => Some(std::path::PathBuf::from(p)),
-                Some(_) => None,
-                None => rfd::FileDialog::new()
-                    .add_filter(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                    .set_title(tl!("Select a file for the stamp"))
-                    .pick_file(),
-            };
-            let Some(path) = picked else { return };
-            match std::fs::read(&path) {
+            let read = |app: &mut Self, path: std::path::PathBuf| match std::fs::read(&path) {
                 Ok(bytes) => {
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    self.start_custom_stamp(name, bytes);
+                    app.start_custom_stamp(name, bytes);
                 }
-                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
+                Err(e) => app.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
+            };
+            match self.save_override.clone() {
+                Some(p) if [".png", ".jpg", ".pdf"].iter().any(|e| p.ends_with(e)) => read(self, p.into()),
+                Some(_) => {}
+                None => {
+                    let dialog = rfd::AsyncFileDialog::new()
+                        .add_filter(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
+                        .set_title(tl!("Select a file for the stamp"));
+                    self.ask_one(crate::pickers::Ask::File(dialog), None, read);
+                }
             }
         }
         #[cfg(target_arch = "wasm32")]

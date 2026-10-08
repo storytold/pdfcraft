@@ -291,26 +291,43 @@ impl PdfCraftApp {
             appearance: d.appearance.clone(),
             ..SignOptions::default()
         };
-        let signed = self.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?;
-        // Signing saves, as in Acrobat: choose where (a cancelled save cancels signing).
+        // Signing saves, as in Acrobat: choose where (a cancelled save cancels signing). The
+        // document is signed once the user has chosen.
         let name = self.session.get(doc_id).map(|d| d.name.clone()).unwrap_or_default();
         let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
-        let path = match self.save_override.clone() {
-            Some(p) => Some(PathBuf::from(p)),
-            #[cfg(not(target_arch = "wasm32"))]
-            None => rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem}_signed.pdf")).save_file(),
-            #[cfg(target_arch = "wasm32")]
-            None => None,
+        let sign_and_save = move |app: &mut Self, path: PathBuf| -> Result<(), String> {
+            let signed = app.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?;
+            crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()).map_err(|e| format!("Could not save: {e}"))?;
+            app.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
+            if let Some(view) = app.views.iter_mut().find(|v| v.id == doc_id) {
+                view.invalidate_content();
+            }
+            app.right = Some(crate::RightPanel::Signatures);
+            app.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]);
+            Ok(())
         };
-        let Some(path) = path else { return Err(String::new()) };
-        std::fs::write(&path, signed.as_slice()).map_err(|e| format!("Could not save: {e}"))?;
-        self.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
-        if let Some((i, _)) = self.active_ids() {
-            self.views[i].invalidate_content();
+        match self.save_override.clone() {
+            Some(p) => sign_and_save(self, PathBuf::from(p)),
+            #[cfg(not(target_arch = "wasm32"))]
+            None => {
+                let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem}_signed.pdf"));
+                // The signature's page, rectangle and field refer to the document as it is now:
+                // the pick is dropped (with a notice) if it is edited or switched away from
+                // meanwhile. Once the picker shows, the dialog closes; an error from here on
+                // arrives as a notice. If no picker could show, the dialog stays open.
+                let asked = self.ask_one(crate::pickers::Ask::Save(dialog), Some(doc_id), move |app, path| {
+                    if let Err(e) = sign_and_save(app, path) {
+                        app.notify(e);
+                    }
+                });
+                if asked { Ok(()) } else { Err(String::new()) }
+            }
+            #[cfg(target_arch = "wasm32")]
+            None => {
+                let _ = (stem, sign_and_save);
+                Err(String::new())
+            }
         }
-        self.right = Some(crate::RightPanel::Signatures);
-        self.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]);
-        Ok(())
     }
 
     /// Trust a certificate (Signatures panel ▸ Add to trusted certificates), revalidating.
@@ -443,6 +460,9 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let mut close = false;
     let mut go = false;
+    // Browse… is desktop-only.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut browse = false;
     ui.radio_value(&mut d.new_id.create, false, tl!("Use a Digital ID from a file"));
     ui.radio_value(&mut d.new_id.create, true, tl!("Create a new Digital ID (self-signed, saved to a password-protected file)"));
     ui.add_space(8.0);
@@ -487,10 +507,8 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut n.file).desired_width(220.0)).labelled_by(l.id);
                 #[cfg(not(target_arch = "wasm32"))]
-                if ui.button(tl!("Browse…")).clicked()
-                    && let Some(p) = rfd::FileDialog::new().add_filter(tl!("Digital ID"), &["p12", "pfx"]).pick_file()
-                {
-                    n.file = p.to_string_lossy().into_owned();
+                if ui.button(tl!("Browse…")).clicked() {
+                    browse = true;
                 }
             });
             ui.end_row();
@@ -529,6 +547,22 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             Err(e) => d.error = Some(e),
         }
     }
+    // The picker answers on a later frame, into the draft if the same dialog is still open.
+    #[cfg(not(target_arch = "wasm32"))]
+    if browse {
+        let dialog = rfd::AsyncFileDialog::new().add_filter(tl!("Digital ID"), &["p12", "pfx"]);
+        let epoch = app.dialog_epoch();
+        app.ask_one(crate::pickers::Ask::File(dialog), None, move |app, p| {
+            // Not one closed meanwhile, or opened again since.
+            if app.dialog_epoch() == epoch
+                && let Some(d) = app.sign_draft.as_mut()
+            {
+                d.new_id.file = p.to_string_lossy().into_owned();
+            }
+        });
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = browse;
     close
 }
 

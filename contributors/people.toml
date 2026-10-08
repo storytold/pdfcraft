@@ -26,3 +26,8 @@ sync_github_name = false
 real_name = "Gert Pellin"
 display_name = "Gert Pellin"
 sync_github_name = false
+
+[people.viator1969]
+real_name = "Jose Antonio Abad"
+display_name = "jaabadmi"
+sync_github_name = false

@@ -8,8 +8,9 @@ use crate::PdfCraftApp;
 /// What the user was doing when we asked whether to save.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CloseRequest {
-    /// Close this tab (index into `views`).
-    Tab(usize),
+    /// Close this document's tab. By id, not tab index: tabs can close and shift while a save
+    /// panel is open.
+    Tab(pdfcraft_engine::DocId),
     /// Quit the application once every dirty document is resolved.
     Quit,
     /// File ▸ Close all: like Quit, but the application stays open.
@@ -161,48 +162,52 @@ impl PdfCraftApp {
         }
     }
 
-    /// Save the document shown in tab `index`. Returns `true` if it was written.
+    /// Save the document shown in tab `index`. Returns `true` if it was written now. When it has
+    /// to ask where (a new document, or Save As) it returns `false` and saves on a later frame,
+    /// once the user has chosen.
     pub fn save_view(&mut self, index: usize, target: SaveTarget) -> bool {
+        self.save_then(index, target, |_| {})
+    }
+
+    /// [`Self::save_view`], then `after` once the document is written: now, or on a later frame
+    /// when the user had to choose where. `after` never runs when the save fails or is cancelled.
+    pub(crate) fn save_then(&mut self, index: usize, target: SaveTarget, after: impl FnOnce(&mut Self) + Send + 'static) -> bool {
         let Some(id) = self.views.get(index).map(|v| v.id) else { return false };
         let Some(doc) = self.session.get(id) else { return false };
         let (name, path) = (doc.name.clone(), doc.path.clone());
-        let bytes = match self.session.save_bytes(id) {
-            Ok(b) => b,
-            Err(e) => {
-                self.notify_fmt("Couldn't save {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
-                return false;
-            }
-        };
-        let destination = match (target, path, &self.save_override) {
-            (_, _, Some(p)) => Some(p.clone()),
-            (SaveTarget::InPlace, Some(p), _) => Some(p),
-            _ => self.ask_save_path(&name),
-        };
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let Some(dest) = destination else { return false };
-            if let Err(e) = write_atomically(&dest, &bytes) {
-                self.notify_fmt("Couldn't save {name}: {e}", &[("name", &dest), ("e", &e.to_string())]);
-                return false;
-            }
-            match self.session.mark_saved(id, bytes, Some(dest.clone())) {
-                Ok(()) => {
-                    self.forget_recovery(id);
-                    if let Some(doc) = self.session.get(id) {
-                        self.views[index].document_changed(&doc.info);
-                    }
-                    self.notify_fmt("Saved {name}", &[("name", &short_name(&dest))]);
-                    true
+            let destination = match (target, path, &self.save_override) {
+                (_, _, Some(p)) => p.clone(),
+                (SaveTarget::InPlace, Some(p), _) => p,
+                _ => {
+                    let name = if name.to_ascii_lowercase().ends_with(".pdf") { name } else { format!("{name}.pdf") };
+                    let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
+                    // The bytes are taken once the user has chosen, so edits made meanwhile are saved too.
+                    self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, dest| {
+                        if app.save_doc_to(id, &dest.to_string_lossy()) {
+                            after(app);
+                        }
+                    });
+                    return false;
                 }
-                Err(e) => {
-                    self.notify_fmt("Saved, but reopening failed: {e}", &[("e", &e.to_string())]);
-                    false
-                }
+            };
+            let saved = self.save_doc_to(id, &destination);
+            if saved {
+                after(self);
             }
+            saved
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = destination;
+            let _ = (target, path);
+            let bytes = match self.session.save_bytes(id) {
+                Ok(b) => b,
+                Err(e) => {
+                    self.notify_fmt("Couldn't save {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
+                    return false;
+                }
+            };
             match download(&name, &bytes) {
                 Ok(()) => {
                     let _ = self.session.mark_saved(id, bytes, None);
@@ -210,6 +215,7 @@ impl PdfCraftApp {
                         self.views[index].document_changed(&doc.info);
                     }
                     self.notify_fmt("Downloaded {name}", &[("name", &name)]);
+                    after(self);
                     true
                 }
                 Err(e) => {
@@ -220,22 +226,47 @@ impl PdfCraftApp {
         }
     }
 
+    /// Write document `id` to `dest` and make it the document's file. Returns `true` if written.
     #[cfg(not(target_arch = "wasm32"))]
-    fn ask_save_path(&self, name: &str) -> Option<String> {
-        let name = if name.to_ascii_lowercase().ends_with(".pdf") { name.to_string() } else { format!("{name}.pdf") };
-        rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name).save_file().map(|p| p.to_string_lossy().into_owned())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn ask_save_path(&self, _name: &str) -> Option<String> {
-        None // browsers download instead
+    fn save_doc_to(&mut self, id: pdfcraft_engine::DocId, dest: &str) -> bool {
+        let Some(name) = self.session.get(id).map(|d| d.name.clone()) else {
+            self.notify_tr("The document was closed before it could be saved.");
+            return false;
+        };
+        let bytes = match self.session.save_bytes(id) {
+            Ok(b) => b,
+            Err(e) => {
+                self.notify_fmt("Couldn't save {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
+                return false;
+            }
+        };
+        if let Err(e) = write_atomically(dest, &bytes) {
+            self.notify_fmt("Couldn't save {name}: {e}", &[("name", dest), ("e", &e.to_string())]);
+            return false;
+        }
+        match self.session.mark_saved(id, bytes, Some(dest.to_string())) {
+            Ok(()) => {
+                self.forget_recovery(id);
+                if let Some(doc) = self.session.get(id)
+                    && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+                {
+                    view.document_changed(&doc.info);
+                }
+                self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
+                true
+            }
+            Err(e) => {
+                self.notify_fmt("Saved, but reopening failed: {e}", &[("e", &e.to_string())]);
+                false
+            }
+        }
     }
 
     /// Close a tab, asking first if it has unsaved changes.
     pub fn request_close_tab(&mut self, index: usize) {
         let dirty = self.views.get(index).and_then(|v| self.session.get(v.id)).is_some_and(|d| d.dirty);
-        if dirty {
-            self.close_request = Some(CloseRequest::Tab(index));
+        if dirty && let Some(id) = self.views.get(index).map(|v| v.id) {
+            self.close_request = Some(CloseRequest::Tab(id));
         } else {
             self.close_tab(index);
         }
@@ -278,7 +309,10 @@ impl PdfCraftApp {
     pub fn resolve_close(&mut self, ctx: &egui::Context, choice: Option<bool>) {
         let Some(req) = self.close_request.take() else { return };
         let index = match req {
-            CloseRequest::Tab(i) => i,
+            CloseRequest::Tab(id) => match self.views.iter().position(|v| v.id == id) {
+                Some(i) => i,
+                None => return, // already closed
+            },
             CloseRequest::Quit | CloseRequest::All => match self.first_dirty() {
                 Some(i) => i,
                 None => {
@@ -291,19 +325,31 @@ impl PdfCraftApp {
         };
         match choice {
             None => {} // cancelled: nothing closes
-            Some(save) => {
-                if save && !self.save_view(index, SaveTarget::InPlace) {
-                    return; // save failed or was cancelled: keep the document open
-                }
-                self.close_tab(index);
-                if req == CloseRequest::Quit || req == CloseRequest::All {
-                    // Ask about the next dirty document, or quit.
-                    match self.first_dirty() {
-                        Some(_) => self.close_request = Some(req),
-                        None if req == CloseRequest::Quit => self.quit(ctx),
-                        None => {}
+            Some(false) => self.close_and_continue(ctx, index, req),
+            Some(true) => {
+                let Some(id) = self.views.get(index).map(|v| v.id) else { return };
+                // Close only once the save has actually been written, which may be on a later
+                // frame when the user has to choose where. A failed or cancelled save keeps the
+                // document open.
+                let ctx = ctx.clone();
+                self.save_then(index, SaveTarget::InPlace, move |app| {
+                    if let Some(i) = app.views.iter().position(|v| v.id == id) {
+                        app.close_and_continue(&ctx, i, req);
                     }
-                }
+                });
+            }
+        }
+    }
+
+    /// Close tab `index` for a close request, then ask about the next dirty document, or quit.
+    fn close_and_continue(&mut self, ctx: &egui::Context, index: usize, req: CloseRequest) {
+        self.close_tab(index);
+        // A newer prompt wins: the user may have started another close while a save was pending.
+        if (req == CloseRequest::Quit || req == CloseRequest::All) && self.close_request.is_none() {
+            match self.first_dirty() {
+                Some(_) => self.close_request = Some(req),
+                None if req == CloseRequest::Quit => self.quit(ctx),
+                None => {}
             }
         }
     }

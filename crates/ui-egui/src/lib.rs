@@ -443,6 +443,10 @@ pub struct PdfCraftApp {
     last_autosave: f64,
     pending_recovered: Option<RecoveryMeta>,
     allow_quit: bool,
+    /// The dialog seen at the last check, and a counter bumped whenever it changes (see
+    /// [`Self::dialog_epoch`]).
+    dialog_seen: Option<Dialog>,
+    dialog_epoch: u64,
     /// The egui context, for commands that change window or theme state.
     ctx: Option<egui::Context>,
     styled: bool,
@@ -623,6 +627,8 @@ impl PdfCraftApp {
             last_autosave: 0.0,
             pending_recovered: None,
             allow_quit: false,
+            dialog_seen: None,
+            dialog_epoch: 0,
             ctx: None,
             styled: false,
             fonts_ready: false,
@@ -793,6 +799,17 @@ impl PdfCraftApp {
         });
     }
 
+    /// A number that changes whenever the open dialog changes (opened, closed or replaced by
+    /// another), checked every frame. A picker started from a dialog's Browse… button answers
+    /// only into the same showing of that dialog.
+    pub(crate) fn dialog_epoch(&mut self) -> u64 {
+        if self.dialog != self.dialog_seen {
+            self.dialog_seen = self.dialog;
+            self.dialog_epoch = self.dialog_epoch.wrapping_add(1);
+        }
+        self.dialog_epoch
+    }
+
     /// Save an attachment to disk, or open a PDF attachment in a new tab.
     pub fn attachment_action(&mut self, doc: DocId, index: usize, open: bool) {
         let Some(d) = self.session.get(doc) else { return };
@@ -807,12 +824,12 @@ impl PdfCraftApp {
             }
             (Ok(bytes), false) => {
                 #[cfg(not(target_arch = "wasm32"))]
-                if let Some(path) = rfd::FileDialog::new().set_file_name(&att.name).save_file() {
-                    match std::fs::write(&path, &bytes) {
-                        Ok(()) => self.notify_fmt("Saved {name}", &[("name", &path.display().to_string())]),
-                        Err(e) => self.notify_fmt("Couldn't save: {e}", &[("e", &e.to_string())]),
+                self.ask_one(pickers::Ask::Save(rfd::AsyncFileDialog::new().set_file_name(&att.name)), None, move |app, path| {
+                    match crate::editing::write_atomically(&path.to_string_lossy(), &bytes) {
+                        Ok(()) => app.notify_fmt("Saved {name}", &[("name", &path.display().to_string())]),
+                        Err(e) => app.notify_fmt("Couldn't save: {e}", &[("e", &e.to_string())]),
                     }
-                }
+                });
                 #[cfg(target_arch = "wasm32")]
                 self.notify_fmt("Downloading attachments on the web arrives with M3.10 ({n} bytes ready)", &[("n", &bytes.len().to_string())]);
             }
@@ -1352,6 +1369,7 @@ impl eframe::App for PdfCraftApp {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ctx = Some(ctx.clone());
+        self.dialog_epoch();
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
         i18n::set_current(lang);

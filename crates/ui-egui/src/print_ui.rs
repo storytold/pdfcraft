@@ -143,7 +143,9 @@ impl PdfCraftApp {
         self.dialog = Some(crate::Dialog::Print);
     }
 
-    /// Print (or save) with the dialog's settings. Returns `true` on success.
+    /// Print (or save) with the dialog's settings. Returns `true` on success. Save as PDF without
+    /// a preset path returns `true` once the save picker is showing; the file is written on a
+    /// later frame, when the user has chosen where.
     pub fn print_now(&mut self) -> bool {
         let Some((_, id)) = self.active_ids() else { return false };
         let Some(doc) = self.session.get(id) else { return false };
@@ -179,26 +181,29 @@ impl PdfCraftApp {
                 }
             },
             None => {
-                let path = match self.save_override.clone() {
-                    Some(p) => Some(std::path::PathBuf::from(p)),
-                    #[cfg(not(target_arch = "wasm32"))]
-                    None => {
-                        let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF");
-                        rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem} (print).pdf")).save_file()
-                    }
-                    #[cfg(target_arch = "wasm32")]
-                    None => None,
-                };
-                let Some(path) = path else { return false };
-                match std::fs::write(&path, &bytes) {
+                let write = move |app: &mut Self, path: std::path::PathBuf| match crate::editing::write_atomically(&path.to_string_lossy(), &bytes) {
                     Ok(()) => {
-                        self.notify_fmt("Saved the print-ready PDF to {path}", &[("path", &path.display().to_string())]);
+                        app.notify_fmt("Saved the print-ready PDF to {path}", &[("path", &path.display().to_string())]);
                         true
                     }
                     Err(e) => {
-                        self.notify_fmt("Could not save: {e}", &[("e", &e.to_string())]);
+                        app.notify_fmt("Could not save: {e}", &[("e", &e.to_string())]);
                         false
                     }
+                };
+                match self.save_override.clone() {
+                    Some(p) => write(self, p.into()),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    None => {
+                        // Saved on a later frame, once the user has chosen where.
+                        let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF");
+                        let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem} (print).pdf"));
+                        self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, path| {
+                            write(app, path);
+                        })
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    None => false,
                 }
             }
         }

@@ -31,17 +31,27 @@ const ICONS: [NoteIcon; 7] =
 impl PdfCraftApp {
     /// Attach file: ask for a file (or take `attach_override`) and attach it at `at`.
     pub fn attach_file_comment(&mut self, page: usize, at: [f64; 2]) {
-        let picked = match self.attach_override.take() {
-            Some(f) => Some(f),
+        match self.attach_override.take() {
+            Some((file, data)) => self.add_attachment_comment(page, at, file, data),
             #[cfg(not(target_arch = "wasm32"))]
-            None => rfd::FileDialog::new().set_title(tl!("Attach a file")).pick_file().and_then(|p| {
-                let data = std::fs::read(&p).ok()?;
-                Some((p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), data))
-            }),
+            None => {
+                // Attached on a later frame, and only to the document it was started on.
+                let target = self.active_ids().map(|(_, id)| id);
+                let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Attach a file"));
+                self.ask_one(crate::pickers::Ask::File(dialog), target, move |app, p| match std::fs::read(&p) {
+                    Ok(data) => {
+                        app.add_attachment_comment(page, at, p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), data)
+                    }
+                    Err(e) => app.notify_fmt("Couldn't read {name}: {e}", &[("name", &p.display().to_string()), ("e", &e.to_string())]),
+                });
+            }
             #[cfg(target_arch = "wasm32")]
-            None => None,
-        };
-        let Some((file, data)) = picked else { return };
+            None => {}
+        }
+    }
+
+    /// Add a file attachment comment at `at` on `page` of the active document.
+    fn add_attachment_comment(&mut self, page: usize, at: [f64; 2], file: String, data: Vec<u8>) {
         let tool = crate::comments::CommentTool::Attach;
         let shape = pdfcraft_engine::Shape::Attachment { at, icon: pdfcraft_engine::AttachIcon::PushPin, file, data };
         let edit = Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
