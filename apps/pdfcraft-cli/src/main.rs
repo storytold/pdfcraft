@@ -321,7 +321,11 @@ fn split(args: &[String]) -> Result<(), CliError> {
     let mut session = pdfcraft_engine::Session::new();
     let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
     let stem = file_stem(path);
-    for (a, b, bytes) in session.split(id, &by).map_err(|e| e.to_string())? {
+    let parts = session.split(id, &by).map_err(|e| e.to_string())?;
+    // An output folder that does not exist yet is created (#249); one that can't be is reported
+    // as the folder's problem, not as the first part's.
+    std::fs::create_dir_all(&dir).map_err(|e| format!("split: --out-dir {}: {e}", dir.display()))?;
+    for (a, b, bytes) in parts {
         let name = dir.join(if a == b { format!("{stem}-p{a}.pdf") } else { format!("{stem}-p{a}-{b}.pdf") });
         std::fs::write(&name, bytes.as_slice()).map_err(|e| format!("{}: {e}", name.display()))?;
         stdout_line(format_args!("{}", name.display()))?;
