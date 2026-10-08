@@ -62,17 +62,27 @@ impl Pickers {
     where
         F: Future<Output = Vec<PathBuf>> + Send + 'static,
     {
+        self.spawn_worker(pick_for, target, ctx, pick).is_some()
+    }
+
+    /// [`Self::spawn`], returning the worker so tests can wait for it instead of polling.
+    fn spawn_worker<F>(&self, pick_for: PickFor, target: Option<DocId>, ctx: Option<egui::Context>, pick: F) -> Option<std::thread::JoinHandle<()>>
+    where
+        F: Future<Output = Vec<PathBuf>> + Send + 'static,
+    {
         let showing = Showing(self.showing.clone());
         let done = self.done.clone();
-        let started = std::thread::Builder::new().name("file-picker".into()).spawn(move || {
-            let _showing = showing;
-            let paths = pollster::block_on(pick);
-            done.lock().unwrap_or_else(PoisonError::into_inner).push(Picked { pick_for, target, paths });
-            if let Some(ctx) = ctx {
-                ctx.request_repaint();
-            }
-        });
-        started.is_ok()
+        std::thread::Builder::new()
+            .name("file-picker".into())
+            .spawn(move || {
+                let _showing = showing;
+                let paths = pollster::block_on(pick);
+                done.lock().unwrap_or_else(PoisonError::into_inner).push(Picked { pick_for, target, paths });
+                if let Some(ctx) = ctx {
+                    ctx.request_repaint();
+                }
+            })
+            .ok()
     }
 
     /// Queue a pick that is already known (tests and automation).
@@ -144,13 +154,9 @@ mod tests {
     fn worker_queues_the_pick_and_clears_showing() {
         let pickers = Pickers::default();
         pickers.showing.store(true, Ordering::SeqCst);
-        assert!(pickers.spawn(PickFor::Open, None, None, async { vec![PathBuf::from("a.pdf")] }));
-        for _ in 0..500 {
-            if !pickers.showing.load(Ordering::SeqCst) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
+        let worker = pickers.spawn_worker(PickFor::Open, None, None, async { vec![PathBuf::from("a.pdf")] }).expect("worker starts");
+        // Wait for the worker itself: polling with a deadline was flaky on loaded CI runners.
+        assert!(worker.join().is_ok());
         assert!(!pickers.showing.load(Ordering::SeqCst));
         let picked = pickers.take();
         assert_eq!(picked.len(), 1);
@@ -164,13 +170,9 @@ mod tests {
         fn fail() -> Vec<PathBuf> {
             panic!("picker failed")
         }
-        assert!(pickers.spawn(PickFor::Open, None, None, async { fail() }));
-        for _ in 0..500 {
-            if !pickers.showing.load(Ordering::SeqCst) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
+        let worker = pickers.spawn_worker(PickFor::Open, None, None, async { fail() }).expect("worker starts");
+        // join returns once the panic has unwound and the drop guard has run.
+        assert!(worker.join().is_err());
         assert!(!pickers.showing.load(Ordering::SeqCst));
         assert!(pickers.take().is_empty());
     }
