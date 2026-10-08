@@ -232,256 +232,292 @@ pub(crate) fn body(
         // Settings.
         ui.vertical(|ui| {
             ui.set_width(470.0);
-            egui::Grid::new("print-top").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
-                ui.label("Printer:");
-                let shown = d.printer.clone().unwrap_or_else(|| "Save as PDF".into());
-                egui::ComboBox::from_id_salt("printer").selected_text(shown).width(260.0).show_ui(ui, |ui| {
-                    for p in &d.printers {
-                        let label = if p.default { format!("{} (default)", p.name) } else { p.name.clone() };
-                        ui.selectable_value(&mut d.printer, Some(p.name.clone()), label);
-                    }
-                    ui.selectable_value(&mut d.printer, None, "Save as PDF");
-                });
-                ui.end_row();
-                ui.label("Copies:");
-                ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(&mut d.copies).range(1..=999));
-                    ui.checkbox(&mut d.collate, "Collate");
-                    ui.checkbox(&mut d.grayscale, "Print in grayscale");
-                });
-                ui.end_row();
-                ui.label("Two-sided:");
-                combo(
-                    ui,
-                    "duplex",
-                    &mut d.duplex,
-                    &[(spool::Duplex::Off, "Off"), (spool::Duplex::LongEdge, "Flip on long edge"), (spool::Duplex::ShortEdge, "Flip on short edge")],
-                    160.0,
-                );
-                ui.end_row();
-                ui.label("Paper:");
-                egui::ComboBox::from_id_salt("paper").selected_text(PAPERS[d.paper].0).width(160.0).show_ui(ui, |ui| {
-                    for (i, (name, _)) in PAPERS.iter().enumerate() {
-                        ui.selectable_value(&mut d.paper, i, *name);
-                    }
-                });
-                ui.end_row();
-            });
+            settings_grid(ui, d);
             ui.add_space(6.0);
             widgets::section_title(ui, "Pages to Print");
-            ui.horizontal(|ui| {
-                ui.radio_value(&mut d.which, Which::All, "All");
-                ui.radio_value(&mut d.which, Which::Current, "Current page");
-                ui.radio_value(&mut d.which, Which::Range, "Pages");
-                let r = ui.add_enabled(
-                    d.which == Which::Range,
-                    egui::TextEdit::singleline(&mut d.range).hint_text(format!("1-{}", sizes.len())).desired_width(110.0),
-                );
-                if r.gained_focus() {
-                    d.which = Which::Range;
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("More options:");
-                combo(
-                    ui,
-                    "subset",
-                    &mut d.subset,
-                    &[(Subset::All, "All pages in range"), (Subset::Odd, "Odd pages only"), (Subset::Even, "Even pages only")],
-                    150.0,
-                );
-                ui.checkbox(&mut d.reverse, "Reverse pages");
-            });
+            pages_section(ui, d, sizes);
             ui.add_space(6.0);
             widgets::section_title(ui, "Page Sizing & Handling");
-            ui.horizontal(|ui| {
-                for (h, label) in
-                    [(Handling::Size, "Size"), (Handling::Poster, "Poster"), (Handling::Multiple, "Multiple"), (Handling::Booklet, "Booklet")]
-                {
-                    if widgets::mode_tab(ui, label, d.handling == h).clicked() {
-                        d.handling = h;
-                        d.sheet = 0;
-                    }
-                }
-            });
-            ui.add_space(4.0);
-            match d.handling {
-                Handling::Size => {
-                    ui.horizontal(|ui| {
-                        ui.radio_value(&mut d.size, SizeMode::Fit, "Fit");
-                        ui.radio_value(&mut d.size, SizeMode::Actual, "Actual size");
-                        ui.radio_value(&mut d.size, SizeMode::Shrink, "Shrink oversized pages");
-                    });
-                    ui.horizontal(|ui| {
-                        let custom = matches!(d.size, SizeMode::Custom(_));
-                        if ui.radio(custom, "Custom scale:").clicked() {
-                            d.size = SizeMode::Custom(d.custom_scale);
-                        }
-                        ui.add_enabled(custom, egui::DragValue::new(&mut d.custom_scale).range(1.0..=1000.0).suffix(" %"));
-                    });
-                }
-                Handling::Poster => {
-                    ui.horizontal(|ui| {
-                        ui.label("Tile scale:");
-                        ui.add(egui::DragValue::new(&mut d.poster_scale).range(10.0..=1000.0).suffix(" %"));
-                        ui.label("Overlap:");
-                        ui.add(egui::DragValue::new(&mut d.overlap).range(0.0..=144.0).suffix(" pt"));
-                        ui.checkbox(&mut d.cut_marks, "Cut marks");
-                    });
-                }
-                Handling::Multiple => {
-                    ui.horizontal(|ui| {
-                        ui.label("Pages per sheet:");
-                        combo(ui, "per-sheet", &mut d.per_sheet, &[(2, "2"), (4, "4"), (6, "6"), (9, "9"), (16, "16")], 60.0);
-                        ui.label("Page order:");
-                        combo(
-                            ui,
-                            "order",
-                            &mut d.order,
-                            &[
-                                (PageOrder::Horizontal, "Horizontal"),
-                                (PageOrder::HorizontalReversed, "Horizontal reversed"),
-                                (PageOrder::Vertical, "Vertical"),
-                                (PageOrder::VerticalReversed, "Vertical reversed"),
-                            ],
-                            150.0,
-                        );
-                    });
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut d.border, "Print page border");
-                        ui.checkbox(&mut d.auto_rotate, "Auto-rotate pages");
-                    });
-                }
-                Handling::Booklet => {
-                    ui.horizontal(|ui| {
-                        ui.label("Booklet subset:");
-                        combo(
-                            ui,
-                            "booklet",
-                            &mut d.booklet_subset,
-                            &[
-                                (BookletSubset::BothSides, "Both sides"),
-                                (BookletSubset::FrontOnly, "Front side only"),
-                                (BookletSubset::BackOnly, "Back side only"),
-                            ],
-                            130.0,
-                        );
-                        ui.label("Binding:");
-                        combo(ui, "binding", &mut d.binding, &[(Binding::Left, "Left"), (Binding::Right, "Right")], 80.0);
-                    });
-                }
-            }
+            handling_section(ui, d);
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.label("Orientation:");
-                ui.radio_value(&mut d.orientation, Orientation::Auto, "Auto portrait/landscape");
-                ui.radio_value(&mut d.orientation, Orientation::Portrait, "Portrait");
-                ui.radio_value(&mut d.orientation, Orientation::Landscape, "Landscape");
-            });
+            orientation_row(ui, d);
             ui.add_space(6.0);
             widgets::section_title(ui, "Comments & Forms");
-            combo(
-                ui,
-                "content",
-                &mut d.content,
-                &[
-                    (Content::Document, "Document"),
-                    (Content::DocumentAndMarkups, "Document and markups"),
-                    (Content::DocumentAndStamps, "Document and stamps"),
-                    (Content::FormFieldsOnly, "Form fields only"),
-                ],
-                220.0,
-            );
+            content_section(ui, d);
         });
         ui.add_space(12.0);
         // Preview.
         ui.vertical(|ui| {
             ui.set_width(320.0);
-            let (area, _) = ui.allocate_exact_size(vec2(320.0, 380.0), egui::Sense::hover());
-            ui.painter().rect_filled(area, 6.0, t.hover);
-            match (&settings, sheets.get(d.sheet)) {
-                (Err(e), _) => {
-                    ui.put(area.shrink(16.0), egui::Label::new(egui::RichText::new(e).color(t.text_muted)).wrap());
-                }
-                (Ok(_), Some(sheet)) => {
-                    let k = ((area.width() - 24.0) / sheet.size.0 as f32).min((area.height() - 24.0) / sheet.size.1 as f32);
-                    let paper = Rect::from_center_size(area.center(), vec2(sheet.size.0 as f32 * k, sheet.size.1 as f32 * k));
-                    ui.painter().rect_filled(paper, 0.0, Color32::WHITE);
-                    ui.painter().rect_stroke(paper, 0.0, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
-                    let to_screen = |x: f64, y: f64| -> Pos2 { pos2(paper.left() + x as f32 * k, paper.bottom() - y as f32 * k) };
-                    let painter = ui.painter().with_clip_rect(paper);
-                    for pl in &sheet.placed {
-                        let (dw, dh) = sizes[pl.page];
-                        let [x0, y0, x1, y1] = pl.clip;
-                        let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| {
-                            let (sx, sy) = pl.matrix.apply(x, y);
-                            to_screen(sx, sy)
-                        });
-                        // UVs of the visible part (texture y runs down from the page top).
-                        let uv = |x: f64, y: f64| pos2((x / dw) as f32, (1.0 - y / dh) as f32);
-                        let uvs = [uv(x0, y0), uv(x1, y0), uv(x1, y1), uv(x0, y1)];
-                        if let Some(tex) = thumb(pl.page) {
-                            let mut mesh = egui::Mesh::with_texture(tex);
-                            for (p, u) in corners.iter().zip(uvs) {
-                                mesh.vertices.push(egui::epaint::Vertex {
-                                    pos: *p,
-                                    uv: u,
-                                    color: if d.grayscale { Color32::from_gray(235) } else { Color32::WHITE },
-                                });
-                            }
-                            mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
-                            painter.add(egui::Shape::mesh(mesh));
-                        } else {
-                            painter.add(egui::Shape::convex_polygon(
-                                corners.to_vec(),
-                                Color32::from_gray(245),
-                                Stroke::new(0.5, Color32::from_gray(180)),
-                            ));
-                            let c = corners.iter().fold(vec2(0.0, 0.0), |a, p| a + p.to_vec2()) / 4.0;
-                            painter.text(
-                                c.to_pos2(),
-                                egui::Align2::CENTER_CENTER,
-                                (pl.page + 1).to_string(),
-                                theme::regular(11.0),
-                                Color32::from_gray(120),
-                            );
-                        }
-                    }
-                    for b in &sheet.borders {
-                        painter.rect_stroke(
-                            Rect::from_two_pos(to_screen(b[0], b[1]), to_screen(b[2], b[3])),
-                            0.0,
-                            Stroke::new(0.6, Color32::BLACK),
-                            egui::StrokeKind::Middle,
-                        );
-                    }
-                    for l in &sheet.lines {
-                        painter.line_segment([to_screen(l[0], l[1]), to_screen(l[2], l[3])], Stroke::new(0.6, Color32::BLACK));
-                    }
-                }
-                _ => {}
-            }
-            ui.horizontal(|ui| {
-                let n = sheets.len();
-                if ui.add_enabled(d.sheet > 0, egui::Button::new("‹")).on_hover_text("Previous sheet").clicked() {
-                    d.sheet -= 1;
-                }
-                ui.label(if n == 0 { "No sheets".to_string() } else { format!("Sheet {} of {n}", d.sheet + 1) });
-                if ui.add_enabled(d.sheet + 1 < n, egui::Button::new("›")).on_hover_text("Next sheet").clicked() {
-                    d.sheet += 1;
-                }
-            });
-            if let Some(s) = sheets.first() {
-                let (w, h) = (s.size.0 / 72.0, s.size.1 / 72.0);
-                ui.label(egui::RichText::new(format!("{w:.2} × {h:.2} in")).small().color(t.text_muted));
-            }
+            preview(ui, t, d, sizes, &settings, &sheets, thumb);
         });
     });
+    footer(ui, d, settings.is_ok() && !sheets.is_empty())
+}
+
+/// The printer, copies, duplex and paper grid.
+fn settings_grid(ui: &mut egui::Ui, d: &mut PrintDraft) {
+    egui::Grid::new("print-top").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+        ui.label("Printer:");
+        let shown = d.printer.clone().unwrap_or_else(|| "Save as PDF".into());
+        egui::ComboBox::from_id_salt("printer").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+            for p in &d.printers {
+                let label = if p.default { format!("{} (default)", p.name) } else { p.name.clone() };
+                ui.selectable_value(&mut d.printer, Some(p.name.clone()), label);
+            }
+            ui.selectable_value(&mut d.printer, None, "Save as PDF");
+        });
+        ui.end_row();
+        ui.label("Copies:");
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(&mut d.copies).range(1..=999));
+            ui.checkbox(&mut d.collate, "Collate");
+            ui.checkbox(&mut d.grayscale, "Print in grayscale");
+        });
+        ui.end_row();
+        ui.label("Two-sided:");
+        combo(
+            ui,
+            "duplex",
+            &mut d.duplex,
+            &[(spool::Duplex::Off, "Off"), (spool::Duplex::LongEdge, "Flip on long edge"), (spool::Duplex::ShortEdge, "Flip on short edge")],
+            160.0,
+        );
+        ui.end_row();
+        ui.label("Paper:");
+        egui::ComboBox::from_id_salt("paper").selected_text(PAPERS[d.paper].0).width(160.0).show_ui(ui, |ui| {
+            for (i, (name, _)) in PAPERS.iter().enumerate() {
+                ui.selectable_value(&mut d.paper, i, *name);
+            }
+        });
+        ui.end_row();
+    });
+}
+
+/// The pages to print: all of them, the current one or a range, with odd/even and reverse.
+fn pages_section(ui: &mut egui::Ui, d: &mut PrintDraft, sizes: &[(f64, f64)]) {
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut d.which, Which::All, "All");
+        ui.radio_value(&mut d.which, Which::Current, "Current page");
+        ui.radio_value(&mut d.which, Which::Range, "Pages");
+        let r = ui.add_enabled(
+            d.which == Which::Range,
+            egui::TextEdit::singleline(&mut d.range).hint_text(format!("1-{}", sizes.len())).desired_width(110.0),
+        );
+        if r.gained_focus() {
+            d.which = Which::Range;
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("More options:");
+        combo(
+            ui,
+            "subset",
+            &mut d.subset,
+            &[(Subset::All, "All pages in range"), (Subset::Odd, "Odd pages only"), (Subset::Even, "Even pages only")],
+            150.0,
+        );
+        ui.checkbox(&mut d.reverse, "Reverse pages");
+    });
+}
+
+/// The handling modes as tabs, with the options of the chosen one under them.
+fn handling_section(ui: &mut egui::Ui, d: &mut PrintDraft) {
+    ui.horizontal(|ui| {
+        for (h, label) in [(Handling::Size, "Size"), (Handling::Poster, "Poster"), (Handling::Multiple, "Multiple"), (Handling::Booklet, "Booklet")] {
+            if widgets::mode_tab(ui, label, d.handling == h).clicked() {
+                d.handling = h;
+                d.sheet = 0;
+            }
+        }
+    });
+    ui.add_space(4.0);
+    handling_options(ui, d);
+}
+
+/// What the chosen handling mode does with the pages.
+fn handling_options(ui: &mut egui::Ui, d: &mut PrintDraft) {
+    match d.handling {
+        Handling::Size => {
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut d.size, SizeMode::Fit, "Fit");
+                ui.radio_value(&mut d.size, SizeMode::Actual, "Actual size");
+                ui.radio_value(&mut d.size, SizeMode::Shrink, "Shrink oversized pages");
+            });
+            ui.horizontal(|ui| {
+                let custom = matches!(d.size, SizeMode::Custom(_));
+                if ui.radio(custom, "Custom scale:").clicked() {
+                    d.size = SizeMode::Custom(d.custom_scale);
+                }
+                ui.add_enabled(custom, egui::DragValue::new(&mut d.custom_scale).range(1.0..=1000.0).suffix(" %"));
+            });
+        }
+        Handling::Poster => {
+            ui.horizontal(|ui| {
+                ui.label("Tile scale:");
+                ui.add(egui::DragValue::new(&mut d.poster_scale).range(10.0..=1000.0).suffix(" %"));
+                ui.label("Overlap:");
+                ui.add(egui::DragValue::new(&mut d.overlap).range(0.0..=144.0).suffix(" pt"));
+                ui.checkbox(&mut d.cut_marks, "Cut marks");
+            });
+        }
+        Handling::Multiple => {
+            ui.horizontal(|ui| {
+                ui.label("Pages per sheet:");
+                combo(ui, "per-sheet", &mut d.per_sheet, &[(2, "2"), (4, "4"), (6, "6"), (9, "9"), (16, "16")], 60.0);
+                ui.label("Page order:");
+                combo(
+                    ui,
+                    "order",
+                    &mut d.order,
+                    &[
+                        (PageOrder::Horizontal, "Horizontal"),
+                        (PageOrder::HorizontalReversed, "Horizontal reversed"),
+                        (PageOrder::Vertical, "Vertical"),
+                        (PageOrder::VerticalReversed, "Vertical reversed"),
+                    ],
+                    150.0,
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut d.border, "Print page border");
+                ui.checkbox(&mut d.auto_rotate, "Auto-rotate pages");
+            });
+        }
+        Handling::Booklet => {
+            ui.horizontal(|ui| {
+                ui.label("Booklet subset:");
+                combo(
+                    ui,
+                    "booklet",
+                    &mut d.booklet_subset,
+                    &[
+                        (BookletSubset::BothSides, "Both sides"),
+                        (BookletSubset::FrontOnly, "Front side only"),
+                        (BookletSubset::BackOnly, "Back side only"),
+                    ],
+                    130.0,
+                );
+                ui.label("Binding:");
+                combo(ui, "binding", &mut d.binding, &[(Binding::Left, "Left"), (Binding::Right, "Right")], 80.0);
+            });
+        }
+    }
+}
+
+/// Portrait, landscape or whatever each page already is.
+fn orientation_row(ui: &mut egui::Ui, d: &mut PrintDraft) {
+    ui.horizontal(|ui| {
+        ui.label("Orientation:");
+        ui.radio_value(&mut d.orientation, Orientation::Auto, "Auto portrait/landscape");
+        ui.radio_value(&mut d.orientation, Orientation::Portrait, "Portrait");
+        ui.radio_value(&mut d.orientation, Orientation::Landscape, "Landscape");
+    });
+}
+
+/// What goes on the sheets: the document, the markups with it, or the form fields.
+fn content_section(ui: &mut egui::Ui, d: &mut PrintDraft) {
+    combo(
+        ui,
+        "content",
+        &mut d.content,
+        &[
+            (Content::Document, "Document"),
+            (Content::DocumentAndMarkups, "Document and markups"),
+            (Content::DocumentAndStamps, "Document and stamps"),
+            (Content::FormFieldsOnly, "Form fields only"),
+        ],
+        220.0,
+    );
+}
+
+/// The sheets as they will print, with the navigation between them under the picture.
+fn preview(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    d: &mut PrintDraft,
+    sizes: &[(f64, f64)],
+    settings: &Result<print::Settings, String>,
+    sheets: &[print::Sheet],
+    thumb: &dyn Fn(usize) -> Option<egui::TextureId>,
+) {
+    let (area, _) = ui.allocate_exact_size(vec2(320.0, 380.0), egui::Sense::hover());
+    ui.painter().rect_filled(area, 6.0, t.hover);
+    match (settings, sheets.get(d.sheet)) {
+        (Err(e), _) => {
+            ui.put(area.shrink(16.0), egui::Label::new(egui::RichText::new(e).color(t.text_muted)).wrap());
+        }
+        (Ok(_), Some(sheet)) => {
+            let k = ((area.width() - 24.0) / sheet.size.0 as f32).min((area.height() - 24.0) / sheet.size.1 as f32);
+            let paper = Rect::from_center_size(area.center(), vec2(sheet.size.0 as f32 * k, sheet.size.1 as f32 * k));
+            ui.painter().rect_filled(paper, 0.0, Color32::WHITE);
+            ui.painter().rect_stroke(paper, 0.0, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
+            let to_screen = |x: f64, y: f64| -> Pos2 { pos2(paper.left() + x as f32 * k, paper.bottom() - y as f32 * k) };
+            let painter = ui.painter().with_clip_rect(paper);
+            for pl in &sheet.placed {
+                let (dw, dh) = sizes[pl.page];
+                let [x0, y0, x1, y1] = pl.clip;
+                let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| {
+                    let (sx, sy) = pl.matrix.apply(x, y);
+                    to_screen(sx, sy)
+                });
+                // UVs of the visible part (texture y runs down from the page top).
+                let uv = |x: f64, y: f64| pos2((x / dw) as f32, (1.0 - y / dh) as f32);
+                let uvs = [uv(x0, y0), uv(x1, y0), uv(x1, y1), uv(x0, y1)];
+                if let Some(tex) = thumb(pl.page) {
+                    let mut mesh = egui::Mesh::with_texture(tex);
+                    for (p, u) in corners.iter().zip(uvs) {
+                        mesh.vertices.push(egui::epaint::Vertex {
+                            pos: *p,
+                            uv: u,
+                            color: if d.grayscale { Color32::from_gray(235) } else { Color32::WHITE },
+                        });
+                    }
+                    mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+                    painter.add(egui::Shape::mesh(mesh));
+                } else {
+                    painter.add(egui::Shape::convex_polygon(corners.to_vec(), Color32::from_gray(245), Stroke::new(0.5, Color32::from_gray(180))));
+                    let c = corners.iter().fold(vec2(0.0, 0.0), |a, p| a + p.to_vec2()) / 4.0;
+                    painter.text(c.to_pos2(), egui::Align2::CENTER_CENTER, (pl.page + 1).to_string(), theme::regular(11.0), Color32::from_gray(120));
+                }
+            }
+            for b in &sheet.borders {
+                painter.rect_stroke(
+                    Rect::from_two_pos(to_screen(b[0], b[1]), to_screen(b[2], b[3])),
+                    0.0,
+                    Stroke::new(0.6, Color32::BLACK),
+                    egui::StrokeKind::Middle,
+                );
+            }
+            for l in &sheet.lines {
+                painter.line_segment([to_screen(l[0], l[1]), to_screen(l[2], l[3])], Stroke::new(0.6, Color32::BLACK));
+            }
+        }
+        _ => {}
+    }
+    ui.horizontal(|ui| {
+        let n = sheets.len();
+        if ui.add_enabled(d.sheet > 0, egui::Button::new("‹")).on_hover_text("Previous sheet").clicked() {
+            d.sheet -= 1;
+        }
+        ui.label(if n == 0 { "No sheets".to_string() } else { format!("Sheet {} of {n}", d.sheet + 1) });
+        if ui.add_enabled(d.sheet + 1 < n, egui::Button::new("›")).on_hover_text("Next sheet").clicked() {
+            d.sheet += 1;
+        }
+    });
+    if let Some(s) = sheets.first() {
+        let (w, h) = (s.size.0 / 72.0, s.size.1 / 72.0);
+        ui.label(egui::RichText::new(format!("{w:.2} × {h:.2} in")).small().color(t.text_muted));
+    }
+}
+
+/// The Print (or Save as PDF) and Cancel buttons. Returns (print, cancel).
+fn footer(ui: &mut egui::Ui, d: &mut PrintDraft, can_print: bool) -> (bool, bool) {
     ui.add_space(12.0);
     let (mut go, mut cancel) = (false, false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let label = if d.printer.is_some() { "Print" } else { "Save as PDF" };
-        if ui.add_enabled_ui(settings.is_ok() && !sheets.is_empty(), |ui| widgets::pill_button(ui, label, true)).inner.clicked() {
+        if ui.add_enabled_ui(can_print, |ui| widgets::pill_button(ui, label, true)).inner.clicked() {
             go = true;
         }
         if widgets::pill_button(ui, "Cancel", false).clicked() {

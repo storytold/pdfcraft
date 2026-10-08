@@ -12,11 +12,15 @@ allow-indexing-slicing-in-tests = true
 # Most of this codebase's long functions are one long linear recipe — an egui
 # panel, a tool dispatch arm, a run through a content stream — where the length
 # is the structure, not a hidden abstraction. 250 lines is where a function
-# should have been split: anything longer is on the refactor list
-# (dialogs::dialogs, automation::tools, canvas::document_area, commands, and
-# annot::appearance::build are all still longer and being split).
+# should have been split, and the ten that were longer (the dialog set, the tool
+# table, the page view, the automation dispatch, the command table, the
+# annotation appearances) have been.
 too-many-lines-threshold = 250
 # Option structs for the PDF features are genuinely a bag of on/off switches
 # (font subsetting, image downsampling, metadata, redaction…), and they are
-# serialized by name; a bitflag per option would only hide the JSON.
-max-struct-bools = 8
+# serialized by name; a bitflag per option would only hide the JSON. The window
+# state has the same character (13 flags on `PrintCraftApp`: which panels are
+# open, full screen, the integrated title bar…), and every one of them is read
+# in one place only.
+max-struct-bools = 13
+

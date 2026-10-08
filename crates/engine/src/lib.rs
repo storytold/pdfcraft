@@ -1288,6 +1288,34 @@ impl EditCtx {
 
 /// Perform an edit on a working copy (the caller discards it on error).
 fn run_edit(doc: &mut printcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
+    // Each group applies the edits it knows about and returns `true`; the groups hold disjoint
+    // variants, so exactly one of them can match.
+    if run_page_edits(doc, edit)? {
+        return Ok(());
+    }
+    if run_annot_edits(doc, cx, edit)? {
+        return Ok(());
+    }
+    if run_form_edits(doc, cx, edit)? {
+        return Ok(());
+    }
+    if run_content_edits(doc, cx, edit)? {
+        return Ok(());
+    }
+    if run_doc_edits(doc, cx, edit)? {
+        return Ok(());
+    }
+    if let Edit::Batch { edits, .. } = edit {
+        for e in edits {
+            run_edit(doc, e, cx)?;
+        }
+    }
+    Ok(())
+}
+
+/// The page tree (rotate, delete, move, insert, replace, boxes, labels) and the bookmarks.
+/// Returns `false` and leaves the document alone for every other edit.
+fn run_page_edits(doc: &mut printcraft_cos::Document, edit: &Edit) -> Result<bool, EditError> {
     match edit {
         Edit::RotatePages { pages, degrees } => printcraft_organize::rotate_pages(doc, pages, *degrees)?,
         Edit::DeletePages { pages } => printcraft_organize::delete_pages(doc, pages)?,
@@ -1295,7 +1323,6 @@ fn run_edit(doc: &mut printcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -
         Edit::InsertBlankPage { at, width, height } => {
             printcraft_organize::insert_blank_page(doc, *at, *width, *height)?;
         }
-        Edit::SetInfo { key, value } => printcraft_organize::set_info(doc, key, value)?,
         Edit::DuplicatePages { pages } => printcraft_organize::duplicate_pages(doc, pages)?,
         Edit::ReplacePages { pages, name, bytes, src_pages } => {
             let src = open_source(name, bytes)?;
@@ -1320,6 +1347,15 @@ fn run_edit(doc: &mut printcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -
         }
         Edit::SetBookmarkPage { path, page } => printcraft_organize::set_bookmark_page(doc, path, *page)?,
         Edit::NumberPages { from, to, style, prefix, first } => printcraft_organize::number_pages(doc, *from, *to, *style, prefix, *first)?,
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// The comments (annotations) and the links.
+/// Returns `false` and leaves the document alone for every other edit.
+fn run_annot_edits(doc: &mut printcraft_cos::Document, cx: &mut EditCtx, edit: &Edit) -> Result<bool, EditError> {
+    match edit {
         Edit::AddAnnotation(a) => {
             printcraft_annot::add_annotation(doc, a, &cx.meta())?;
         }
@@ -1364,6 +1400,32 @@ fn run_edit(doc: &mut printcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -
         Edit::SetAnnotationInfo { page, index, author, subject, icon } => {
             printcraft_annot::set_info(doc, *page, *index, author.as_deref(), subject.as_deref(), *icon, &cx.meta())?;
         }
+        Edit::AddLink { page, rect, action, style } => {
+            printcraft_annot::links::add(doc, *page, *rect, action, style)?;
+        }
+        Edit::SetLink { page, index, rect, action, style } => {
+            printcraft_annot::links::set(doc, *page, *index, *rect, action.as_ref(), style.as_ref())?;
+        }
+        Edit::DeleteLink { page, index } => printcraft_annot::links::delete(doc, *page, *index)?,
+        Edit::RemoveLinks { pages } => {
+            if printcraft_annot::links::remove_all(doc, pages.as_deref())? == 0 {
+                return Err(EditError::Edit(printcraft_edit::EditError::Invalid("there are no links to remove".into())));
+            }
+        }
+        Edit::AddLinks { links, style } => {
+            if printcraft_annot::links::add_many(doc, links, style)? == 0 {
+                return Err(EditError::Edit(printcraft_edit::EditError::Invalid("no web addresses were found".into())));
+            }
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// The form fields and the scripts that run with them.
+/// Returns `false` and leaves the document alone for every other edit.
+fn run_form_edits(doc: &mut printcraft_cos::Document, cx: &mut EditCtx, edit: &Edit) -> Result<bool, EditError> {
+    match edit {
         Edit::SetFieldValue { name, value } => match cx.js.as_mut() {
             Some(js) => printcraft_forms::set_value_with(doc, name, value, js)?,
             None => printcraft_forms::set_value(doc, name, value)?,
@@ -1397,14 +1459,6 @@ fn run_edit(doc: &mut printcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -
         Edit::DeleteField { name } => printcraft_forms::delete_field(doc, name)?,
         Edit::SetTabOrder { pages, order } => printcraft_forms::set_tab_order(doc, pages, *order)?,
         Edit::MoveInTabOrder { name, earlier } => printcraft_forms::move_in_tab_order(doc, name, *earlier)?,
-        Edit::SetInitialView(v) => printcraft_organize::set_initial_view(doc, v)?,
-        Edit::SetAltText { figure, alt } => {
-            let r = printcraft_cos::ObjRef::new(*figure, doc.generation(*figure));
-            a11y::set_alt(doc, r, alt.as_deref()).map_err(|e| EditError::Accessibility(e.to_string()))?;
-        }
-        Edit::EditTextLine { page, line, text } => {
-            printcraft_edit::replace_line(doc, *page, *line, text)?;
-        }
         Edit::SetFieldScript { name, event, script } => {
             printcraft_forms::set_field_script(doc, name, event, script.as_deref())?;
             match cx.js.as_mut() {
@@ -1412,10 +1466,19 @@ fn run_edit(doc: &mut printcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -
                 None => printcraft_forms::recalculate(doc)?,
             };
         }
-        Edit::ConvertPdfA { level } => {
-            printcraft_preflight::convert(doc, *level).map_err(|e| EditError::Invalid(e.to_string()))?;
-        }
         Edit::SetDocumentScript { name, script } => printcraft_forms::set_document_script(doc, name, script.as_deref())?,
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// The added content (OCR, text, images), the marks and the headers that go on the pages.
+/// Returns `false` and leaves the document alone for every other edit.
+fn run_content_edits(doc: &mut printcraft_cos::Document, cx: &mut EditCtx, edit: &Edit) -> Result<bool, EditError> {
+    match edit {
+        Edit::EditTextLine { page, line, text } => {
+            printcraft_edit::replace_line(doc, *page, *line, text)?;
+        }
         Edit::AddOcrText { page, words } => {
             printcraft_edit::stamp(doc, *page, "OCR", printcraft_ocr::text_layer(words))?;
         }
@@ -1437,10 +1500,6 @@ fn run_edit(doc: &mut printcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -
         }
         Edit::EditTextBlock { page, block, text, style } => {
             printcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
-        }
-        Edit::MarkDecorative { figure } => {
-            let r = printcraft_cos::ObjRef::new(*figure, doc.generation(*figure));
-            a11y::mark_decorative(doc, r).map_err(|e| EditError::Accessibility(e.to_string()))?;
         }
         Edit::AddHeaderFooter { pages, settings, replace } => {
             let date = cx.today;
@@ -1492,28 +1551,37 @@ fn run_edit(doc: &mut printcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -
             let (image, _) = printcraft_create::image_xobject(doc, name, bytes)?;
             printcraft_edit::update_content(doc, *page, *index, &AddedContent::Image(printcraft_edit::AddedImage { image, ..old }))?;
         }
+        Edit::Flatten { comments, fields } => {
+            let n = printcraft_model::pages(doc).len();
+            printcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), *comments, *fields)?;
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// The document-wide edits: properties, accessibility, redactions, sanitizing and protection.
+/// Returns `false` and leaves the document alone for every other edit.
+fn run_doc_edits(doc: &mut printcraft_cos::Document, cx: &mut EditCtx, edit: &Edit) -> Result<bool, EditError> {
+    match edit {
+        Edit::SetInfo { key, value } => printcraft_organize::set_info(doc, key, value)?,
+        Edit::SetInitialView(v) => printcraft_organize::set_initial_view(doc, v)?,
+        Edit::SetAltText { figure, alt } => {
+            let r = printcraft_cos::ObjRef::new(*figure, doc.generation(*figure));
+            a11y::set_alt(doc, r, alt.as_deref()).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
+        Edit::ConvertPdfA { level } => {
+            printcraft_preflight::convert(doc, *level).map_err(|e| EditError::Invalid(e.to_string()))?;
+        }
+        Edit::MarkDecorative { figure } => {
+            let r = printcraft_cos::ObjRef::new(*figure, doc.generation(*figure));
+            a11y::mark_decorative(doc, r).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
         Edit::ApplyRedactions { pages } => {
             printcraft_redact::apply(doc, pages.as_deref())?;
         }
         Edit::ClearRedactions => {
             printcraft_redact::clear_marks(doc, None)?;
-        }
-        Edit::AddLink { page, rect, action, style } => {
-            printcraft_annot::links::add(doc, *page, *rect, action, style)?;
-        }
-        Edit::SetLink { page, index, rect, action, style } => {
-            printcraft_annot::links::set(doc, *page, *index, *rect, action.as_ref(), style.as_ref())?;
-        }
-        Edit::DeleteLink { page, index } => printcraft_annot::links::delete(doc, *page, *index)?,
-        Edit::RemoveLinks { pages } => {
-            if printcraft_annot::links::remove_all(doc, pages.as_deref())? == 0 {
-                return Err(EditError::Edit(printcraft_edit::EditError::Invalid("there are no links to remove".into())));
-            }
-        }
-        Edit::AddLinks { links, style } => {
-            if printcraft_annot::links::add_many(doc, links, style)? == 0 {
-                return Err(EditError::Edit(printcraft_edit::EditError::Invalid("no web addresses were found".into())));
-            }
         }
         Edit::ImportData { bytes, .. } => {
             printcraft_xfdf::import(doc, bytes)?;
@@ -1523,10 +1591,6 @@ fn run_edit(doc: &mut printcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -
         }
         Edit::Sanitize => {
             printcraft_redact::sanitize::sanitize(doc)?;
-        }
-        Edit::Flatten { comments, fields } => {
-            let n = printcraft_model::pages(doc).len();
-            printcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), *comments, *fields)?;
         }
         Edit::Protect(p) => {
             p.validate()?;
@@ -1553,13 +1617,9 @@ fn run_edit(doc: &mut printcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -
             }
             doc.remove_encryption();
         }
-        Edit::Batch { edits, .. } => {
-            for e in edits {
-                run_edit(doc, e, cx)?;
-            }
-        }
+        _ => return Ok(false),
     }
-    Ok(())
+    Ok(true)
 }
 
 /// The comment list, read from the object graph (as `inspect` lists comments).

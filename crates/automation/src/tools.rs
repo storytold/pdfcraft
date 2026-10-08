@@ -113,6 +113,21 @@ impl T {
 pub fn tools() -> Vec<ToolDef> {
     let save_out = json!({ "type": "string", "description": "File to write. Omit to open the result as a new unsaved document instead." });
     let open = json!({ "type": "boolean", "description": "Also open the result as a new document (default: only when out is omitted)." });
+    let mut all = document_tools(&save_out, &open);
+    all.extend(bookmark_and_form_tools());
+    all.extend(redaction_and_print_tools());
+    all.extend(page_content_and_link_tools());
+    all.extend(comment_and_signing_tools(&save_out, &open));
+    all.extend(security_and_page_layout_tools());
+    all.extend(accessibility_and_workflow_tools());
+    all.extend(ocr_and_document_tools());
+    all.extend(editing_and_history_tools());
+    all
+}
+
+/// Opening, saving and closing documents, reading and finding their text, and
+/// organising pages: render, extract, rotate, delete, move, insert, combine and split.
+fn document_tools(save_out: &Value, open: &Value) -> Vec<ToolDef> {
     vec![
         t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited.")
             .cmd("file.open")
@@ -187,8 +202,8 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({
                     "paths": { "type": "array", "items": { "type": "string" }, "minItems": 2 },
                     "pages": { "type": "array", "items": { "type": ["string", "null"] } },
-                    "out": save_out,
-                    "open": open,
+                    "out": save_out.clone(),
+                    "open": open.clone(),
                 }),
                 &["paths"],
             )),
@@ -198,6 +213,13 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "every": { "type": "integer", "minimum": 1 }, "before": pages("that start a new part"), "bookmarks": { "type": "boolean" }, "max_mb": { "type": "number", "exclusiveMinimum": 0 }, "out_dir": { "type": "string" } }),
                 &["doc", "out_dir"],
             )),
+    ]
+}
+
+/// The bookmark tree and page numbering, then the form field tools: list, fill,
+/// reset, add a field, stamp and set a field's picture or properties.
+fn bookmark_and_form_tools() -> Vec<ToolDef> {
+    vec![
         t("bookmark_list", "List bookmarks", "The bookmark tree with each bookmark's path, title, target page and open state.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
@@ -306,6 +328,13 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "field"],
         )),
+    ]
+}
+
+/// Tab order, comment and form data import/export, redaction marks, hidden
+/// information and printing.
+fn redaction_and_print_tools() -> Vec<ToolDef> {
+    vec![
         t("form_tab_order", "Set the tab order", "Set the tab order of pages (default all): row (top to bottom, left to right), column, structure, or annotations (unspecified). Or order tabs manually: `field` with `move` earlier|later moves that field one place on its page. Returns the resulting order of fields. Undoable.")
             .with(schema(
                 json!({ "doc": doc(), "order": { "type": "string", "enum": ["row", "column", "structure", "annotations"] }, "pages": pages("to set (default: all)"), "field": { "type": "string" }, "move": { "type": "string", "enum": ["earlier", "later"] } }),
@@ -403,6 +432,12 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
+    ]
+}
+
+/// Content added to a page (text and images) and links.
+fn page_content_and_link_tools() -> Vec<ToolDef> {
+    vec![
         t("content_list", "List added content", "Text and images added with page_add_text/page_add_image (or Edit a PDF ▸ Add content), per page with a 1-based index, rect (points from the top-left of the page), and text style.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
@@ -484,6 +519,12 @@ pub fn tools() -> Vec<ToolDef> {
             .destructive()
             .cmd("edit.remove_links")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
+    ]
+}
+
+/// Comments and digital signatures, then the comment panel commands.
+fn comment_and_signing_tools(save_out: &Value, open: &Value) -> Vec<ToolDef> {
+    vec![
         t("comment_list", "List comments", "Every comment (annotation other than links, form widgets and pop-ups) with its page, index, id, type, author, text, date, rectangle, colour, review status and replies.")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1, "description": "Only this page." } }), &["doc"])),
@@ -589,7 +630,12 @@ pub fn tools() -> Vec<ToolDef> {
         t("comments_summarize", "Summarize comments", "Make a PDF summarising every comment (number, author, type, date, text, replies), sorted by page, author, date or type.")
             .cmd("comment.summarize")
             .with(schema(
-                json!({ "doc": doc(), "sort": { "type": "string", "enum": ["page", "author", "date", "type"] }, "out": save_out, "open": open }),
+                json!({
+                    "doc": doc(),
+                    "sort": { "type": "string", "enum": ["page", "author", "date", "type"] },
+                    "out": save_out.clone(),
+                    "open": open.clone(),
+                }),
                 &["doc"],
             )),
         t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity, line width, rectangle (rectangle/oval/text box) or position (`move` [dx, dy] in points). One undo step.").with(schema(
@@ -604,6 +650,13 @@ pub fn tools() -> Vec<ToolDef> {
             &["doc"],
         )),
         t("comment_delete", "Delete a comment", "Delete a comment with its pop-up and replies. Undoable.").destructive().with(schema(comment_ref(json!({})), &["doc"])),
+    ]
+}
+
+/// Password security, page boxes, headers and footers, watermarks, backgrounds
+/// and exporting pages as images.
+fn security_and_page_layout_tools() -> Vec<ToolDef> {
+    vec![
         t(
             "doc_protect",
             "Protect with passwords",
@@ -711,6 +764,13 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "folder"],
             )),
+    ]
+}
+
+/// Accessibility checking, form data merging, JavaScript, office and PDF/A
+/// export, the Action Wizard and comparing files.
+fn accessibility_and_workflow_tools() -> Vec<ToolDef> {
+    vec![
         t("accessibility_check", "Check for accessibility", "Run the Accessibility Checker's full check (32 rules in 7 categories: document, page_content, forms, alternate_text, tables, lists, headings). Each rule is passed, failed (with findings and pages), manual (needs a person) or skipped. Colour contrast is off unless all is true; rules (ids such as tagged-pdf, figures-alt-text) or categories narrow the check; pages limit the page rules.")
             .ro()
             .cmd("a11y.check")
@@ -823,6 +883,13 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("js_enabled", "JavaScript on or off", "Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript: set it with `enabled`, or read it. With JavaScript off, field scripts other than Acrobat's AF calls don't run.")
             .with(schema(json!({ "enabled": { "type": "boolean" } }), &[])),
+    ]
+}
+
+/// OCR, exporting images and text, Fill & Sign, creating documents, reducing the
+/// file size, the initial view and auditing space usage.
+fn ocr_and_document_tools() -> Vec<ToolDef> {
+    vec![
         t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable (a searchable image; the image is not changed). Pages that already have text are skipped unless skip_text_pages is false. Returns each page's recognised text, word count or why it was skipped. Needs the OCR models (ocr_status). Undoable as one step.")
             .cmd("ocr.recognize")
             .with(schema(
@@ -925,6 +992,13 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("optimize.advanced")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
+    ]
+}
+
+/// Editing existing text and images, saved revisions, optimizing, flattening,
+/// undo, redo and the command list.
+fn editing_and_history_tools() -> Vec<ToolDef> {
+    vec![
         t("text_lines", "List text lines", "The lines of existing text on a page (Edit a PDF ▸ Edit text): number, text, box (top-left-origin points), font and size. Use the number with text_edit.")
             .ro()
             .cmd("edit.edit_text")

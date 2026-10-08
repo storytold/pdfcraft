@@ -32,40 +32,64 @@ impl PrintCraftApp {
     fn execute_unguarded(&mut self, id: &str) -> bool {
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
-            let why = match spec.needs {
-                commands::Needs::Undo => "Nothing to undo".to_string(),
-                commands::Needs::Redo => "Nothing to redo".to_string(),
-                commands::Needs::FillForms if self.active.is_some() => "This document has no form fields you can fill in".to_string(),
-                commands::Needs::HasComments if self.active.is_some() => "This document has no comments to flatten".to_string(),
-                commands::Needs::HasFields if self.active.is_some() => "This document has no form fields to flatten".to_string(),
-                commands::Needs::HasRedactions if self.active.is_some() => {
-                    "There are no redaction marks (mark text, areas or pages first)".to_string()
-                }
-                commands::Needs::Marks(k) if self.active.is_some() => format!(
-                    "This document has no {} to change",
-                    match k {
-                        printcraft_engine::MarkKind::HeaderFooter => "header or footer",
-                        printcraft_engine::MarkKind::Watermark => "watermark",
-                        printcraft_engine::MarkKind::Background => "background",
-                    }
-                ),
-                commands::Needs::Security | commands::Needs::ProtectedSecurity if self.active.is_some() => {
-                    if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(printcraft_engine::Document::allows_security_change) {
-                        "This document isn't password-protected".to_string()
-                    } else {
-                        "Only the document's owner can change its security (open it with the permissions password)".to_string()
-                    }
-                }
-                commands::Needs::Assembly | commands::Needs::Modification | commands::Needs::Annotate if self.active.is_some() => {
-                    "The document's security settings don't allow this change".to_string()
-                }
-                _ => "Open a document first".to_string(),
-            };
+            let why = self.disabled_reason(spec);
             self.notify(why);
             return false;
         }
         let active = self.active;
         let targets = active.map(|i| self.views[i].target_pages()).unwrap_or_default();
+        if let Some(done) = self.file_and_edit_commands(id, active) {
+            return done;
+        }
+        if let Some(done) = self.comment_form_and_page_commands(id, active, &targets) {
+            return done;
+        }
+        if let Some(done) = self.edit_export_and_redact_commands(id, active) {
+            return done;
+        }
+        if let Some(done) = self.form_sign_and_view_commands(id, active) {
+            return done;
+        }
+        if let Some(done) = self.compare_create_and_help_commands(id, active, &targets) {
+            return done;
+        }
+        false
+    }
+
+    /// Why a command is disabled right now, in the words the user sees.
+    fn disabled_reason(&self, spec: &CommandSpec) -> String {
+        match spec.needs {
+            commands::Needs::Undo => "Nothing to undo".to_string(),
+            commands::Needs::Redo => "Nothing to redo".to_string(),
+            commands::Needs::FillForms if self.active.is_some() => "This document has no form fields you can fill in".to_string(),
+            commands::Needs::HasComments if self.active.is_some() => "This document has no comments to flatten".to_string(),
+            commands::Needs::HasFields if self.active.is_some() => "This document has no form fields to flatten".to_string(),
+            commands::Needs::HasRedactions if self.active.is_some() => "There are no redaction marks (mark text, areas or pages first)".to_string(),
+            commands::Needs::Marks(k) if self.active.is_some() => format!(
+                "This document has no {} to change",
+                match k {
+                    printcraft_engine::MarkKind::HeaderFooter => "header or footer",
+                    printcraft_engine::MarkKind::Watermark => "watermark",
+                    printcraft_engine::MarkKind::Background => "background",
+                }
+            ),
+            commands::Needs::Security | commands::Needs::ProtectedSecurity if self.active.is_some() => {
+                if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(printcraft_engine::Document::allows_security_change) {
+                    "This document isn't password-protected".to_string()
+                } else {
+                    "Only the document's owner can change its security (open it with the permissions password)".to_string()
+                }
+            }
+            commands::Needs::Assembly | commands::Needs::Modification | commands::Needs::Annotate if self.active.is_some() => {
+                "The document's security settings don't allow this change".to_string()
+            }
+            _ => "Open a document first".to_string(),
+        }
+    }
+
+    /// Opening, closing and saving files, their security, page numbering, following
+    /// links, undo, redo, find and the view commands.
+    fn file_and_edit_commands(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
             "file.open" => self.open_dialog(),
             "page.combine" => self.combine_dialog(),
@@ -132,8 +156,17 @@ impl PrintCraftApp {
                 }
             }
             "comment.list" => self.right = Some(RightPanel::Comments),
+            _ => return None,
+        }
+        Some(true)
+    }
+
+    /// Picking a comment markup tool, the comment and form panel commands, and the
+    /// page, header & footer, watermark and background commands.
+    fn comment_form_and_page_commands(&mut self, id: &str, active: Option<usize>, targets: &[usize]) -> Option<bool> {
+        match id {
             tool if crate::comments::CommentTool::from_command(tool).is_some() => {
-                let Some(tool) = crate::comments::CommentTool::from_command(tool) else { return false };
+                let Some(tool) = crate::comments::CommentTool::from_command(tool) else { return Some(false) };
                 self.comment_prefs.group_tool[tool.group()] = tool;
                 self.quick_tool = crate::QuickTool::Comment(tool);
                 // Acrobat opens the Comments panel with the commenting tools.
@@ -182,13 +215,13 @@ impl PrintCraftApp {
                 }
             }
             "page.rotate" => {
-                self.apply_edit(Edit::RotatePages { pages: targets, degrees: 90 });
+                self.apply_edit(Edit::RotatePages { pages: targets.to_vec(), degrees: 90 });
             }
             "page.rotate_ccw" => {
-                self.apply_edit(Edit::RotatePages { pages: targets, degrees: -90 });
+                self.apply_edit(Edit::RotatePages { pages: targets.to_vec(), degrees: -90 });
             }
             "page.delete" => {
-                self.apply_edit(Edit::DeletePages { pages: targets });
+                self.apply_edit(Edit::DeletePages { pages: targets.to_vec() });
             }
             "page.insert_blank" => {
                 if let (Some(i), Some(&last)) = (active, targets.last())
@@ -236,6 +269,15 @@ impl PrintCraftApp {
                 };
                 self.apply_edit(Edit::RemoveMarks { kind });
             }
+            _ => return None,
+        }
+        Some(true)
+    }
+
+    /// Exporting, OCR, JavaScript and accessibility, editing text, images and
+    /// links, redaction, hidden information and printing.
+    fn edit_export_and_redact_commands(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
+        match id {
             "export.image" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Image)),
             "export.text" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Text)),
             "a11y.check" => self.start_accessibility_check(),
@@ -321,6 +363,15 @@ impl PrintCraftApp {
             "redact.clear" => {
                 self.apply_edit(Edit::ClearRedactions);
             }
+            _ => return None,
+        }
+        Some(true)
+    }
+
+    /// Tab order, form preparation and data export, signing, the view and zoom
+    /// tools, and copying, cutting and pasting pages.
+    fn form_sign_and_view_commands(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
+        match id {
             "form.tab_order.row" | "form.tab_order.column" | "form.tab_order.structure" => {
                 let order = match id {
                     "form.tab_order.row" => printcraft_engine::TabOrder::Row,
@@ -394,6 +445,15 @@ impl PrintCraftApp {
                 }
             }
             "form.detect" => self.detect_fields(),
+            _ => return None,
+        }
+        Some(true)
+    }
+
+    /// Comparing files, PDF/A, the Action Wizard, the field and Fill & Sign tools,
+    /// creating documents, optimizing, the rest of the page commands and help.
+    fn compare_create_and_help_commands(&mut self, id: &str, active: Option<usize>, targets: &[usize]) -> Option<bool> {
+        match id {
             "doc.compare" => self.dialog = Some(Dialog::CompareFiles),
             "standards.pdfa" => {
                 self.pdfa.issues = None;
@@ -414,7 +474,7 @@ impl PrintCraftApp {
                 }
             }
             field if crate::prepare::FieldTool::from_command(field).is_some() => {
-                let Some(tool) = crate::prepare::FieldTool::from_command(field) else { return false };
+                let Some(tool) = crate::prepare::FieldTool::from_command(field) else { return Some(false) };
                 self.quick_tool = crate::QuickTool::Field(tool);
                 self.left = crate::LeftPanel::Tool("form");
                 self.left_open = true;
@@ -424,7 +484,7 @@ impl PrintCraftApp {
                 self.notify(format!("Click on the page to add a {}, or drag to set its size", tool.label().to_lowercase()));
             }
             fill if crate::fill_sign::FillTool::from_command(fill).is_some() => {
-                let Some(tool) = crate::fill_sign::FillTool::from_command(fill) else { return false };
+                let Some(tool) = crate::fill_sign::FillTool::from_command(fill) else { return Some(false) };
                 self.quick_tool = crate::QuickTool::Fill(tool);
                 let initials = tool == crate::fill_sign::FillTool::Initials;
                 if (tool == crate::fill_sign::FillTool::Signature && self.signature.is_none()) || (initials && self.initials.is_none()) {
@@ -438,7 +498,7 @@ impl PrintCraftApp {
             "create.clipboard" => self.create_from_clipboard(),
             "optimize.reduce" => self.reduce_file_size(),
             "page.duplicate" => {
-                self.apply_edit(Edit::DuplicatePages { pages: targets });
+                self.apply_edit(Edit::DuplicatePages { pages: targets.to_vec() });
             }
             "page.crop" => {
                 self.quick_tool = crate::QuickTool::Crop;
@@ -461,9 +521,9 @@ impl PrintCraftApp {
             "help.shortcuts" => self.dialog = Some(Dialog::Shortcuts),
             "help.about" => self.dialog = Some(Dialog::About),
             "help.check_updates" => self.check_for_updates(),
-            _ => return false,
+            _ => return None,
         }
-        true
+        Some(true)
     }
 
     /// Run the registered keyboard shortcuts (more specific combinations first).

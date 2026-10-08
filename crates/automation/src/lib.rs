@@ -137,27 +137,139 @@ impl Automation {
         let def = tools::find(name).ok_or_else(|| ToolError::UnknownTool(name.into()))?;
         tools::check_args(def, args)?;
         let a = Args(args);
+        if name == "page_render" {
+            return self.page_render(&a).map(|c| vec![c]);
+        }
+        let out = if let Some(v) = self.doc_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.page_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.text_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.image_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.bookmark_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.form_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.link_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.content_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.comment_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.sign_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.redact_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.print_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.export_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.marks_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.action_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.a11y_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.ocr_tools(name, &a)? {
+            v
+        } else if let Some(v) = self.script_tools(name, &a)? {
+            v
+        } else {
+            return Err(ToolError::UnknownTool(name.into()));
+        };
+        Ok(vec![Content::Json(out)])
+    }
+
+    // ---- the tool table ---------------------------------------------------------------------
+    //
+    // One match per family, each answering `None` for the names it does not own; `call` tries them
+    // in turn and reports `UnknownTool` when none of them does. `page_render` returns a
+    // `Vec<Content>` of its own and stays in `call`.
+
+    /// Documents: opening, metadata, revisions, protection, undo/redo, commands.
+    fn doc_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
         let out = match name {
-            "doc_open" => self.doc_open(&a)?,
+            "doc_open" => self.doc_open(a)?,
             "doc_list" => json!({ "documents": self.session.docs().iter().map(summary).collect::<Vec<_>>() }),
-            "doc_info" => info(self.doc(&a)?),
-            "doc_close" => self.doc_close(&a)?,
-            "doc_save" => self.doc_save(&a)?,
+            "doc_info" => info(self.doc(a)?),
+            "doc_close" => self.doc_close(a)?,
+            "doc_save" => self.doc_save(a)?,
             "doc_set_info" => {
                 let edit = Edit::SetInfo { key: a.str("key")?.into(), value: a.str("value")?.into() };
-                self.apply(&a, edit)?
+                self.apply(a, edit)?
             }
-            "page_render" => return self.page_render(&a).map(|c| vec![c]),
-            "text_extract" => self.text_extract(&a)?,
-            "text_find" => self.text_find(&a)?,
+            "doc_combine" => self.doc_combine(a)?,
+            "doc_split" => self.doc_split(a)?,
+            "edit_undo" => {
+                let id = self.doc(a)?.id;
+                let label = self.session.undo(id).map_err(failed)?;
+                json!({ "undone": label, "document": summary(self.doc(a)?) })
+            }
+            "edit_redo" => {
+                let id = self.doc(a)?.id;
+                let label = self.session.redo(id).map_err(failed)?;
+                json!({ "redone": label, "document": summary(self.doc(a)?) })
+            }
+            "command_list" => self.command_list(a)?,
+            "doc_protect" => self.doc_protect(a)?,
+            "doc_create" => self.doc_create(a)?,
+            "doc_flatten" => {
+                let (comments, fields) = (a.opt_bool("comments")?.unwrap_or(true), a.opt_bool("fields")?.unwrap_or(true));
+                if !comments && !fields {
+                    return Err(ToolError::InvalidArgs("nothing to flatten".into()));
+                }
+                self.apply(a, Edit::Flatten { comments, fields })?
+            }
+            "doc_reduce" => {
+                let id = self.doc(a)?.id;
+                let before = self.doc(a)?.bytes.len();
+                let path = self.resolve(a.str("path")?, true)?;
+                let (bytes, merged) = self.session.reduced_bytes(id).map_err(failed)?;
+                write_atomic(&path, &bytes)?;
+                json!({ "path": path.to_string_lossy(), "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged })
+            }
+            "doc_optimize" => self.doc_optimize(a)?,
+            "doc_initial_view" => self.doc_initial_view(a)?,
+            "doc_revisions" => self.doc_revisions(a)?,
+            "doc_audit_space" => {
+                let rows: Vec<Value> = self
+                    .doc(a)?
+                    .audit_space()
+                    .iter()
+                    .map(|u| json!({ "category": u.category.label(), "bytes": u.bytes, "percent": (u.percent * 100.0).round() / 100.0 }))
+                    .collect();
+                json!({ "categories": rows })
+            }
+            "doc_open_revision" => {
+                let id = self.doc(a)?.id;
+                let n = usize::try_from(a.opt_int("revision")?.ok_or_else(|| ToolError::InvalidArgs("revision is required".into()))?).unwrap_or(0);
+                let new = self.session.open_revision(id, n).map_err(failed)?;
+                summary(self.session.get(new).ok_or_else(|| failed("the document vanished"))?)
+            }
+            "doc_unprotect" => {
+                let mut out = self.apply(a, Edit::RemoveProtection)?;
+                out["security"] = security(self.doc(a)?);
+                out
+            }
+            "doc_hidden_info" => self.doc_hidden_info(a)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// Pages: rotation, insertion, deletion, numbering, boxes and replacement.
+    fn page_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
             "page_rotate" => {
                 let degrees = a.int("degrees")?;
                 if degrees % 90 != 0 {
                     return Err(ToolError::InvalidArgs("degrees must be a multiple of 90".into()));
                 }
-                let doc = self.doc(&a)?;
+                let doc = self.doc(a)?;
                 let base = match a.opt_ints("pages")? {
-                    Some(_) => self.pages(&a, "pages")?,
+                    Some(_) => self.pages(a, "pages")?,
                     None => (0..doc.info.pages.len()).collect(),
                 };
                 let parity = match a.opt_str("subset")?.unwrap_or("all") {
@@ -172,43 +284,30 @@ impl Automation {
                     "portrait" => printcraft_engine::PageOrientation::Portrait,
                     o => return Err(ToolError::InvalidArgs(format!("unknown orientation {o:?} (all, landscape, portrait)"))),
                 };
-                let pages = printcraft_engine::filter_pages(&self.doc(&a)?.info, &base, parity, orientation);
+                let pages = printcraft_engine::filter_pages(&self.doc(a)?.info, &base, parity, orientation);
                 if pages.is_empty() {
                     return Err(failed("no pages match the filters"));
                 }
                 let n = pages.len();
-                let mut out = self.apply(&a, Edit::RotatePages { pages, degrees })?;
+                let mut out = self.apply(a, Edit::RotatePages { pages, degrees })?;
                 out["rotated"] = json!(n);
                 out
             }
             "page_delete" => {
-                let pages = self.pages(&a, "pages")?;
-                self.apply(&a, Edit::DeletePages { pages })?
+                let pages = self.pages(a, "pages")?;
+                self.apply(a, Edit::DeletePages { pages })?
             }
             "page_move" => {
-                let pages = self.pages(&a, "pages")?;
-                let to = self.position(&a, "to")?;
-                self.apply(&a, Edit::MovePages { pages, to })?
+                let pages = self.pages(a, "pages")?;
+                let to = self.position(a, "to")?;
+                self.apply(a, Edit::MovePages { pages, to })?
             }
-            "page_insert_blank" => self.insert_blank(&a)?,
-            "page_insert_file" => self.insert_file(&a)?,
-            "page_extract" => self.page_extract(&a)?,
-            "doc_combine" => self.doc_combine(&a)?,
-            "doc_split" => self.doc_split(&a)?,
-            "edit_undo" => {
-                let id = self.doc(&a)?.id;
-                let label = self.session.undo(id).map_err(failed)?;
-                json!({ "undone": label, "document": summary(self.doc(&a)?) })
-            }
-            "edit_redo" => {
-                let id = self.doc(&a)?.id;
-                let label = self.session.redo(id).map_err(failed)?;
-                json!({ "redone": label, "document": summary(self.doc(&a)?) })
-            }
-            "command_list" => self.command_list(&a)?,
+            "page_insert_blank" => self.insert_blank(a)?,
+            "page_insert_file" => self.insert_file(a)?,
+            "page_extract" => self.page_extract(a)?,
             "page_number" => {
                 use printcraft_organize::LabelStyle as L;
-                let n = self.doc(&a)?.info.pages.len();
+                let n = self.doc(a)?.info.pages.len();
                 let (from, to) = (a.int("from")?, a.int("to")?);
                 if from < 1 || to < from || to as usize > n {
                     return Err(ToolError::InvalidArgs(format!("from and to must satisfy 1 ≤ from ≤ to ≤ {n}")));
@@ -224,39 +323,12 @@ impl Automation {
                 };
                 let prefix = a.opt_str("prefix")?.unwrap_or_default().to_string();
                 let first = a.opt_int("start")?.unwrap_or(1).clamp(1, i64::from(u32::MAX)) as u32;
-                let mut out = self.apply(&a, Edit::NumberPages { from: from as usize - 1, to: to as usize - 1, style, prefix, first })?;
-                out["labels"] = json!(self.doc(&a)?.info.pages.iter().map(|p| p.label.clone()).collect::<Vec<_>>());
+                let mut out = self.apply(a, Edit::NumberPages { from: from as usize - 1, to: to as usize - 1, style, prefix, first })?;
+                out["labels"] = json!(self.doc(a)?.info.pages.iter().map(|p| p.label.clone()).collect::<Vec<_>>());
                 out
             }
-            "bookmark_list" => json!({ "bookmarks": bookmark_tree(&self.doc(&a)?.info.outline, &[]) }),
-            "bookmark_add" => {
-                let page = self.page(&a)?;
-                let parent = a.opt_path("parent")?.unwrap_or_default();
-                let index = a.opt_int("position")?.map_or(usize::MAX, |p| (p.max(1) - 1) as usize);
-                let title = a.str("title")?.to_string();
-                self.apply(&a, Edit::AddBookmark { parent, index, title, page })?
-            }
-            "bookmark_rename" => {
-                let (path, title) = (a.path("path")?, a.str("title")?.to_string());
-                self.apply(&a, Edit::RenameBookmark { path, title })?
-            }
-            "bookmark_delete" => {
-                let path = a.path("path")?;
-                self.apply(&a, Edit::DeleteBookmark { path })?
-            }
-            "bookmark_move" => {
-                let from = a.path("path")?;
-                let to_parent = a.opt_path("parent")?.unwrap_or_default();
-                let index = a.opt_int("position")?.map_or(usize::MAX, |p| (p.max(1) - 1) as usize);
-                self.apply(&a, Edit::MoveBookmark { from, to_parent, index })?
-            }
-            "bookmark_set_page" => {
-                let (path, page) = (a.path("path")?, self.page(&a)?);
-                self.apply(&a, Edit::SetBookmarkPage { path, page })?
-            }
-            "doc_protect" => self.doc_protect(&a)?,
             "page_replace" => {
-                let pages = self.pages(&a, "pages")?;
+                let pages = self.pages(a, "pages")?;
                 let path = self.resolve(a.str("path")?, false)?;
                 let bytes = Arc::new(std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?);
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -264,35 +336,28 @@ impl Automation {
                     Some(p) => one_based(&p)?,
                     None => (0..pages.len()).collect(),
                 };
-                self.apply(&a, Edit::ReplacePages { pages, name, bytes, src_pages })?
+                self.apply(a, Edit::ReplacePages { pages, name, bytes, src_pages })?
             }
             "page_duplicate" => {
-                let pages = self.pages(&a, "pages")?;
-                self.apply(&a, Edit::DuplicatePages { pages })?
+                let pages = self.pages(a, "pages")?;
+                self.apply(a, Edit::DuplicatePages { pages })?
             }
-            "page_set_box" => self.page_set_box(&a)?,
-            "doc_create" => self.doc_create(&a)?,
-            "doc_flatten" => {
-                let (comments, fields) = (a.opt_bool("comments")?.unwrap_or(true), a.opt_bool("fields")?.unwrap_or(true));
-                if !comments && !fields {
-                    return Err(ToolError::InvalidArgs("nothing to flatten".into()));
-                }
-                self.apply(&a, Edit::Flatten { comments, fields })?
-            }
-            "doc_reduce" => {
-                let id = self.doc(&a)?.id;
-                let before = self.doc(&a)?.bytes.len();
-                let path = self.resolve(a.str("path")?, true)?;
-                let (bytes, merged) = self.session.reduced_bytes(id).map_err(failed)?;
-                write_atomic(&path, &bytes)?;
-                json!({ "path": path.to_string_lossy(), "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged })
-            }
-            "doc_optimize" => self.doc_optimize(&a)?,
-            "doc_initial_view" => self.doc_initial_view(&a)?,
-            "doc_revisions" => self.doc_revisions(&a)?,
+            "page_set_box" => self.page_set_box(a)?,
+            "page_add_text" => self.page_add_text(a)?,
+            "page_add_image" => self.page_add_image(a)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// Text: extraction, search, lines, paragraphs and editing.
+    fn text_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "text_extract" => self.text_extract(a)?,
+            "text_find" => self.text_find(a)?,
             "text_lines" => {
-                let page = self.page(&a)?;
-                let doc = self.doc(&a)?;
+                let page = self.page(a)?;
+                let doc = self.doc(a)?;
                 let info = &doc.info.pages[page];
                 let r = |x: f32| (f64::from(x) * 100.0).round() / 100.0;
                 let lines: Vec<Value> = doc
@@ -312,75 +377,9 @@ impl Automation {
                     .collect();
                 json!({ "page": page + 1, "count": lines.len(), "lines": lines })
             }
-            "page_images" => {
-                let page = self.page(&a)?;
-                let doc = self.doc(&a)?;
-                let info = &doc.info.pages[page];
-                let r = |x: f32| (f64::from(x) * 100.0).round() / 100.0;
-                let list: Vec<Value> = doc
-                    .page_images(page)
-                    .iter()
-                    .enumerate()
-                    .map(|(i, im)| {
-                        let (u, v) = (info.user_to_view(im.rect[0] as f32, im.rect[1] as f32), info.user_to_view(im.rect[2] as f32, im.rect[3] as f32));
-                        json!({ "image": i + 1, "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))], "pixels": [im.width, im.height], "name": im.name })
-                    })
-                    .collect();
-                json!({ "page": page + 1, "count": list.len(), "images": list })
-            }
-            "image_edit" | "image_save" => {
-                let page = self.page(&a)?;
-                let n = self.doc(&a)?.page_images(page).len();
-                let k = a.int("image")?;
-                if k < 1 || k as usize > n {
-                    return Err(ToolError::InvalidArgs(format!("image {k} is out of range: page {} has {n} images", page + 1)));
-                }
-                let index = k as usize - 1;
-                if name == "image_save" {
-                    let (ext, bytes) = self.doc(&a)?.page_image_file(page, index).map_err(failed)?;
-                    let mut path = self.resolve(a.str("path")?, true)?;
-                    if path.extension().is_none() {
-                        path.set_extension(ext);
-                    }
-                    write_atomic(&path, &bytes)?;
-                    json!({ "path": path.to_string_lossy(), "format": ext, "bytes": bytes.len() })
-                } else {
-                    use printcraft_engine::ImageEdit;
-                    let change = match a.str("action")? {
-                        "move" => {
-                            let r: Vec<f64> =
-                                a.get("rect").and_then(Value::as_array).map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
-                            let r = <[f64; 4]>::try_from(r).map_err(|_| ToolError::InvalidArgs("move needs rect: 4 numbers".into()))?;
-                            // Top-left-origin points → user space.
-                            let info = &self.doc(&a)?.info.pages[page];
-                            let (u0, u1) = (info.view_to_user(r[0] as f32, r[1] as f32), info.view_to_user(r[2] as f32, r[3] as f32));
-                            ImageEdit::Move([
-                                f64::from(u0[0].min(u1[0])),
-                                f64::from(u0[1].min(u1[1])),
-                                f64::from(u0[0].max(u1[0])),
-                                f64::from(u0[1].max(u1[1])),
-                            ])
-                        }
-                        "rotate" => ImageEdit::Rotate(a.opt_int("quarters")?.unwrap_or(1) as i32),
-                        "flip_horizontal" => ImageEdit::Flip { horizontal: true },
-                        "flip_vertical" => ImageEdit::Flip { horizontal: false },
-                        "delete" => ImageEdit::Delete,
-                        "replace" => {
-                            let path = self.resolve(a.str("path")?, false)?;
-                            let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
-                            ImageEdit::Replace {
-                                name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-                                bytes: Arc::new(bytes),
-                            }
-                        }
-                        other => return Err(ToolError::InvalidArgs(format!("unknown action {other:?}"))),
-                    };
-                    self.apply(&a, Edit::EditPageImage { page, index, change })?
-                }
-            }
             "text_paragraphs" => {
-                let page = self.page(&a)?;
-                let doc = self.doc(&a)?;
+                let page = self.page(a)?;
+                let doc = self.doc(a)?;
                 let info = &doc.info.pages[page];
                 let r = |x: f32| (f64::from(x) * 100.0).round() / 100.0;
                 let blocks: Vec<Value> = doc
@@ -402,13 +401,13 @@ impl Automation {
                 json!({ "page": page + 1, "count": blocks.len(), "paragraphs": blocks })
             }
             "text_edit" if a.get("paragraph").is_some() => {
-                let page = self.page(&a)?;
-                let n = self.doc(&a)?.text_blocks(page).len();
+                let page = self.page(a)?;
+                let n = self.doc(a)?.text_blocks(page).len();
                 let k = a.int("paragraph")?;
                 if k < 1 || k as usize > n {
                     return Err(ToolError::InvalidArgs(format!("paragraph {k} is out of range: page {} has {n} paragraphs", page + 1)));
                 }
-                let block = self.doc(&a)?.text_blocks(page)[k as usize - 1].clone();
+                let block = self.doc(a)?.text_blocks(page)[k as usize - 1].clone();
                 let text = a.opt_str("text")?.map(str::to_owned).unwrap_or(block.text);
                 let mut style = printcraft_engine::BlockStyle {
                     size: a.opt_num("size")?,
@@ -444,115 +443,216 @@ impl Automation {
                         other => return Err(ToolError::InvalidArgs(format!("unknown align {other:?}"))),
                     });
                 }
-                let mut out = self.apply(&a, Edit::EditTextBlock { page, block: k as usize - 1, text, style })?;
-                if let Some(b) = self.doc(&a)?.text_blocks(page).get(k as usize - 1) {
+                let mut out = self.apply(a, Edit::EditTextBlock { page, block: k as usize - 1, text, style })?;
+                if let Some(b) = self.doc(a)?.text_blocks(page).get(k as usize - 1) {
                     out["paragraph"] = json!({ "text": b.text, "lines": b.lines.len(), "font": b.base_font });
                 }
                 out
             }
             "text_edit" => {
-                let page = self.page(&a)?;
-                let n = self.doc(&a)?.text_lines(page).len();
+                let page = self.page(a)?;
+                let n = self.doc(a)?.text_lines(page).len();
                 let line = a.int("line")?;
                 if line < 1 || line as usize > n {
                     return Err(ToolError::InvalidArgs(format!("line {line} is out of range: page {} has {n} lines", page + 1)));
                 }
                 let text = a.str("text")?.to_owned();
-                let mut out = self.apply(&a, Edit::EditTextLine { page, line: line as usize - 1, text })?;
-                let after = self.doc(&a)?.text_lines(page);
+                let mut out = self.apply(a, Edit::EditTextLine { page, line: line as usize - 1, text })?;
+                let after = self.doc(a)?.text_lines(page);
                 if let Some(l) = after.get(line as usize - 1) {
                     out["line"] = json!({ "text": l.text, "font": l.base_font });
                 }
                 out
             }
-            "doc_audit_space" => {
-                let rows: Vec<Value> = self
-                    .doc(&a)?
-                    .audit_space()
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// The images on a page: listing, editing and writing them out.
+    fn image_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "page_images" => {
+                let page = self.page(a)?;
+                let doc = self.doc(a)?;
+                let info = &doc.info.pages[page];
+                let r = |x: f32| (f64::from(x) * 100.0).round() / 100.0;
+                let list: Vec<Value> = doc
+                    .page_images(page)
                     .iter()
-                    .map(|u| json!({ "category": u.category.label(), "bytes": u.bytes, "percent": (u.percent * 100.0).round() / 100.0 }))
+                    .enumerate()
+                    .map(|(i, im)| {
+                        let (u, v) = (info.user_to_view(im.rect[0] as f32, im.rect[1] as f32), info.user_to_view(im.rect[2] as f32, im.rect[3] as f32));
+                        json!({ "image": i + 1, "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))], "pixels": [im.width, im.height], "name": im.name })
+                    })
                     .collect();
-                json!({ "categories": rows })
+                json!({ "page": page + 1, "count": list.len(), "images": list })
             }
-            "doc_open_revision" => {
-                let id = self.doc(&a)?.id;
-                let n = usize::try_from(a.opt_int("revision")?.ok_or_else(|| ToolError::InvalidArgs("revision is required".into()))?).unwrap_or(0);
-                let new = self.session.open_revision(id, n).map_err(failed)?;
-                summary(self.session.get(new).ok_or_else(|| failed("the document vanished"))?)
+            "image_edit" | "image_save" => {
+                let page = self.page(a)?;
+                let n = self.doc(a)?.page_images(page).len();
+                let k = a.int("image")?;
+                if k < 1 || k as usize > n {
+                    return Err(ToolError::InvalidArgs(format!("image {k} is out of range: page {} has {n} images", page + 1)));
+                }
+                let index = k as usize - 1;
+                if name == "image_save" {
+                    let (ext, bytes) = self.doc(a)?.page_image_file(page, index).map_err(failed)?;
+                    let mut path = self.resolve(a.str("path")?, true)?;
+                    if path.extension().is_none() {
+                        path.set_extension(ext);
+                    }
+                    write_atomic(&path, &bytes)?;
+                    json!({ "path": path.to_string_lossy(), "format": ext, "bytes": bytes.len() })
+                } else {
+                    use printcraft_engine::ImageEdit;
+                    let change = match a.str("action")? {
+                        "move" => {
+                            let r: Vec<f64> =
+                                a.get("rect").and_then(Value::as_array).map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+                            let r = <[f64; 4]>::try_from(r).map_err(|_| ToolError::InvalidArgs("move needs rect: 4 numbers".into()))?;
+                            // Top-left-origin points → user space.
+                            let info = &self.doc(a)?.info.pages[page];
+                            let (u0, u1) = (info.view_to_user(r[0] as f32, r[1] as f32), info.view_to_user(r[2] as f32, r[3] as f32));
+                            ImageEdit::Move([
+                                f64::from(u0[0].min(u1[0])),
+                                f64::from(u0[1].min(u1[1])),
+                                f64::from(u0[0].max(u1[0])),
+                                f64::from(u0[1].max(u1[1])),
+                            ])
+                        }
+                        "rotate" => ImageEdit::Rotate(a.opt_int("quarters")?.unwrap_or(1) as i32),
+                        "flip_horizontal" => ImageEdit::Flip { horizontal: true },
+                        "flip_vertical" => ImageEdit::Flip { horizontal: false },
+                        "delete" => ImageEdit::Delete,
+                        "replace" => {
+                            let path = self.resolve(a.str("path")?, false)?;
+                            let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+                            ImageEdit::Replace {
+                                name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                                bytes: Arc::new(bytes),
+                            }
+                        }
+                        other => return Err(ToolError::InvalidArgs(format!("unknown action {other:?}"))),
+                    };
+                    self.apply(a, Edit::EditPageImage { page, index, change })?
+                }
             }
-            "doc_export_images" | "doc_export_text" | "doc_export_all_images" => self.export(name, &a)?,
-            "doc_header_footer" | "doc_watermark" | "doc_background" | "doc_remove_marks" => self.marks(name, &a)?,
-            "doc_unprotect" => {
-                let mut out = self.apply(&a, Edit::RemoveProtection)?;
-                out["security"] = security(self.doc(&a)?);
-                out
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// The outline.
+    fn bookmark_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "bookmark_list" => json!({ "bookmarks": bookmark_tree(&self.doc(a)?.info.outline, &[]) }),
+            "bookmark_add" => {
+                let page = self.page(a)?;
+                let parent = a.opt_path("parent")?.unwrap_or_default();
+                let index = a.opt_int("position")?.map_or(usize::MAX, |p| (p.max(1) - 1) as usize);
+                let title = a.str("title")?.to_string();
+                self.apply(a, Edit::AddBookmark { parent, index, title, page })?
             }
-            "form_fields" => self.form_fields(&a)?,
-            "form_fill" => self.form_fill(&a)?,
+            "bookmark_rename" => {
+                let (path, title) = (a.path("path")?, a.str("title")?.to_string());
+                self.apply(a, Edit::RenameBookmark { path, title })?
+            }
+            "bookmark_delete" => {
+                let path = a.path("path")?;
+                self.apply(a, Edit::DeleteBookmark { path })?
+            }
+            "bookmark_move" => {
+                let from = a.path("path")?;
+                let to_parent = a.opt_path("parent")?.unwrap_or_default();
+                let index = a.opt_int("position")?.map_or(usize::MAX, |p| (p.max(1) - 1) as usize);
+                self.apply(a, Edit::MoveBookmark { from, to_parent, index })?
+            }
+            "bookmark_set_page" => {
+                let (path, page) = (a.path("path")?, self.page(a)?);
+                self.apply(a, Edit::SetBookmarkPage { path, page })?
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// Form fields: filling, properties, scripts, actions and tab order.
+    fn form_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "form_fields" => self.form_fields(a)?,
+            "form_fill" => self.form_fill(a)?,
             "form_set_image" => {
                 let path = self.resolve(a.str("path")?, false)?;
                 let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
-                self.apply(&a, Edit::SetFieldImage { name: a.str("field")?.to_owned(), image: Arc::new(bytes) })?
+                self.apply(a, Edit::SetFieldImage { name: a.str("field")?.to_owned(), image: Arc::new(bytes) })?
             }
-            "form_reset" => self.form_reset(&a)?,
-            "form_add_field" => self.form_add_field(&a)?,
-            "form_set_props" => self.form_set_props(&a)?,
-            "form_delete_field" => self.form_delete_field(&a)?,
-            "form_tab_order" => self.form_tab_order(&a)?,
-            "doc_export_data" => self.doc_export_data(&a)?,
-            "doc_import_data" => self.doc_import_data(&a)?,
-            "redact_mark" => self.redact_mark(&a)?,
-            "redact_apply" => self.redact_apply(&a)?,
-            "redact_clear" => self.redact_clear(&a)?,
-            "doc_hidden_info" => self.doc_hidden_info(&a)?,
-            "printers" => Self::printers(),
-            "link_list" => self.link_list(&a)?,
-            "link_add" => self.link_add(&a)?,
-            "link_edit" => self.link_edit(&a)?,
-            "link_delete" => self.link_delete(&a)?,
-            "links_from_urls" => self.links_from_urls(&a)?,
-            "links_remove" => self.links_remove(&a)?,
-            "content_list" => self.content_list(&a)?,
-            "page_add_text" => self.page_add_text(&a)?,
-            "page_add_image" => self.page_add_image(&a)?,
-            "content_update" => self.content_update(&a)?,
-            "content_delete" => self.content_delete(&a)?,
-            "doc_print" => self.doc_print(&a)?,
-            "doc_remove_hidden" => self.doc_remove_hidden(&a)?,
-            "fill_sign_add" => self.fill_sign_add(&a)?,
-            "comment_list" => self.comment_list(&a)?,
-            "comment_add" => self.comment_add(&a)?,
-            "stamp_custom" => self.stamp_custom(&a)?,
-            "comment_reply" => self.comment_reply(&a)?,
-            "comment_set_status" => self.comment_set_status(&a)?,
-            "sign_list" => self.sign_list(&a)?,
-            "accessibility_check" => self.a11y_check(&a)?,
-            "ocr_recognize" => self.ocr_recognize(&a)?,
-            "js_run" => self.js_run(&a)?,
-            "js_document_scripts" => self.js_document_scripts(&a)?,
-            "js_set_document_script" => self.js_set_document_script(&a)?,
-            "js_enabled" => self.js_enabled(&a)?,
-            "form_set_script" => self.form_set_script(&a)?,
-            "form_merge_data" => self.form_merge_data(&a)?,
-            "form_actions" => self.form_actions(&a)?,
-            "form_detect_fields" => self.form_detect_fields(&a)?,
-            "doc_compare" => self.doc_compare(&a)?,
-            "action_list" => Self::action_list(),
-            "pdfa_verify" => self.pdfa_verify(&a)?,
-            "doc_export_office" => self.doc_export_office(&a)?,
-            "pdfa_convert" => self.pdfa_convert(&a)?,
-            "action_run" => self.action_run(&a)?,
-            "doc_compare_report" => self.doc_compare_report(&a)?,
-            "doc_compare_mark" => self.doc_compare_mark(&a)?,
-            "form_set_actions" => self.form_set_actions(&a)?,
-            "ocr_status" => Self::ocr_status(),
-            "ocr_recognize_files" => self.ocr_recognize_files(&a)?,
-            "accessibility_report" => self.a11y_report(&a)?,
-            "accessibility_fix" => self.a11y_fix(&a)?,
-            "accessibility_figures" => self.accessibility_figures(&a)?,
-            "accessibility_set_alt" => self.accessibility_set_alt(&a)?,
-            "sign_id_create" => self.sign_id_create(&a)?,
-            "sign_document" => self.sign_document(&a)?,
+            "form_reset" => self.form_reset(a)?,
+            "form_add_field" => self.form_add_field(a)?,
+            "form_set_props" => self.form_set_props(a)?,
+            "form_delete_field" => self.form_delete_field(a)?,
+            "form_tab_order" => self.form_tab_order(a)?,
+            "form_set_script" => self.form_set_script(a)?,
+            "form_merge_data" => self.form_merge_data(a)?,
+            "form_actions" => self.form_actions(a)?,
+            "form_detect_fields" => self.form_detect_fields(a)?,
+            "form_set_actions" => self.form_set_actions(a)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// Link annotations.
+    fn link_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "link_list" => self.link_list(a)?,
+            "link_add" => self.link_add(a)?,
+            "link_edit" => self.link_edit(a)?,
+            "link_delete" => self.link_delete(a)?,
+            "links_from_urls" => self.links_from_urls(a)?,
+            "links_remove" => self.links_remove(a)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// Content streams: what the pages are made of.
+    fn content_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "content_list" => self.content_list(a)?,
+            "content_update" => self.content_update(a)?,
+            "content_delete" => self.content_delete(a)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// Comments, replies, statuses and stamps.
+    fn comment_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "comment_list" => self.comment_list(a)?,
+            "comment_add" => self.comment_add(a)?,
+            "stamp_custom" => self.stamp_custom(a)?,
+            "comment_reply" => self.comment_reply(a)?,
+            "comment_set_status" => self.comment_set_status(a)?,
+            "comment_mark" => self.comment_mark(a)?,
+            "comment_lock" => self.comment_lock(a)?,
+            "comments_hide" => self.comments_hide(a)?,
+            "comments_summarize" => self.comments_summarize(a)?,
+            "comment_edit" => self.comment_edit(a)?,
+            "comment_delete" => self.comment_delete(a)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// Fill & sign: signing, identities and trust.
+    fn sign_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "fill_sign_add" => self.fill_sign_add(a)?,
+            "sign_list" => self.sign_list(a)?,
+            "sign_id_create" => self.sign_id_create(a)?,
+            "sign_document" => self.sign_document(a)?,
             "sign_keychain_ids" => {
                 #[cfg(target_os = "macos")]
                 let ids: Vec<Value> = printcraft_engine::sign::keychain::identities(None)
@@ -564,16 +664,104 @@ impl Automation {
                 let ids: Vec<Value> = Vec::new();
                 json!({ "count": ids.len(), "ids": ids })
             }
-            "sign_trust" => self.sign_trust(&a)?,
-            "comment_mark" => self.comment_mark(&a)?,
-            "comment_lock" => self.comment_lock(&a)?,
-            "comments_hide" => self.comments_hide(&a)?,
-            "comments_summarize" => self.comments_summarize(&a)?,
-            "comment_edit" => self.comment_edit(&a)?,
-            "comment_delete" => self.comment_delete(&a)?,
-            other => return Err(ToolError::UnknownTool(other.into())),
+            "sign_trust" => self.sign_trust(a)?,
+            _ => return Ok(None),
         };
-        Ok(vec![Content::Json(out)])
+        Ok(Some(out))
+    }
+
+    /// Redaction and hidden content.
+    fn redact_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "redact_mark" => self.redact_mark(a)?,
+            "redact_apply" => self.redact_apply(a)?,
+            "redact_clear" => self.redact_clear(a)?,
+            "doc_remove_hidden" => self.doc_remove_hidden(a)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// Printing.
+    fn print_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "printers" => Self::printers(),
+            "doc_print" => self.doc_print(a)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// Export and data import/export.
+    fn export_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "doc_export_images" | "doc_export_text" | "doc_export_all_images" => self.export(name, a)?,
+            "doc_export_data" => self.doc_export_data(a)?,
+            "doc_import_data" => self.doc_import_data(a)?,
+            "doc_export_office" => self.doc_export_office(a)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// Headers, footers, watermarks and backgrounds (one tool family).
+    fn marks_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "doc_header_footer" | "doc_watermark" | "doc_background" | "doc_remove_marks" => self.marks(name, a)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// Actions, comparison and the PDF/A standards.
+    fn action_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "action_list" => Self::action_list(),
+            "action_run" => self.action_run(a)?,
+            "doc_compare" => self.doc_compare(a)?,
+            "doc_compare_report" => self.doc_compare_report(a)?,
+            "doc_compare_mark" => self.doc_compare_mark(a)?,
+            "pdfa_verify" => self.pdfa_verify(a)?,
+            "pdfa_convert" => self.pdfa_convert(a)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// The accessibility checker and its fixes.
+    fn a11y_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "accessibility_check" => self.a11y_check(a)?,
+            "accessibility_report" => self.a11y_report(a)?,
+            "accessibility_fix" => self.a11y_fix(a)?,
+            "accessibility_figures" => self.accessibility_figures(a)?,
+            "accessibility_set_alt" => self.accessibility_set_alt(a)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// Recognizing text.
+    fn ocr_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "ocr_recognize" => self.ocr_recognize(a)?,
+            "ocr_status" => Self::ocr_status(),
+            "ocr_recognize_files" => self.ocr_recognize_files(a)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
+    }
+
+    /// JavaScript.
+    fn script_tools(&mut self, name: &str, a: &Args) -> Result<Option<Value>> {
+        let out = match name {
+            "js_run" => self.js_run(a)?,
+            "js_document_scripts" => self.js_document_scripts(a)?,
+            "js_set_document_script" => self.js_set_document_script(a)?,
+            "js_enabled" => self.js_enabled(a)?,
+            _ => return Ok(None),
+        };
+        Ok(Some(out))
     }
 
     // ---- documents ---------------------------------------------------------------------------

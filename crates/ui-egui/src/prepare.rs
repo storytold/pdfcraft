@@ -827,223 +827,14 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
             ui.disable();
         }
         match d.tab {
-            FieldTab::General => {
-                egui::Grid::new("field-general").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
-                    let l = ui.label("Name:");
-                    let r = ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(340.0)).labelled_by(l.id);
-                    enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    ui.end_row();
-                    let l = ui.label("Tooltip:");
-                    ui.add(egui::TextEdit::singleline(&mut d.tooltip).desired_width(340.0)).labelled_by(l.id);
-                    ui.end_row();
-                });
-                ui.add_space(12.0);
-                widgets::section_title(ui, "Common Properties");
-                ui.checkbox(&mut d.read_only, "Read Only");
-                ui.checkbox(&mut d.required, "Required");
-            }
-            FieldTab::Appearance => {
-                egui::Grid::new("field-appearance").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
-                    ui.label("Font Size:");
-                    let mut auto = d.font_size == 0.0;
-                    ui.horizontal(|ui| {
-                        if ui.checkbox(&mut auto, "Auto").changed() {
-                            d.font_size = if auto { 0.0 } else { 12.0 };
-                        }
-                        ui.add_enabled(!auto, egui::DragValue::new(&mut d.font_size).range(2.0..=100.0).speed(0.25).suffix(" pt"));
-                    });
-                    ui.end_row();
-                    if let Some(l) = d.look.as_mut() {
-                        ui.label("Font:");
-                        egui::ComboBox::from_id_salt("field-font").selected_text(l.font.label()).show_ui(ui, |ui| {
-                            for f in FieldFont::ALL {
-                                ui.selectable_value(&mut l.font, f, f.label());
-                            }
-                        });
-                        ui.end_row();
-                        ui.label("Text Color:");
-                        if let Some(c) = crate::comments::swatch_grid(ui, Some(l.text)) {
-                            l.text = c;
-                        }
-                        ui.end_row();
-                    }
-                });
-                if let Some(l) = d.look.as_mut() {
-                    widgets::section_title(ui, "Borders and Colors");
-                    egui::Grid::new("field-borders").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                        for (label, slot) in [("Border Color:", &mut l.border), ("Fill Color:", &mut l.fill)] {
-                            ui.label(label);
-                            ui.horizontal(|ui| {
-                                let mut none = slot.is_none();
-                                if ui.checkbox(&mut none, "No color").changed() {
-                                    *slot = if none { None } else { Some([0.0; 3]) };
-                                }
-                                if let Some(c) = crate::comments::swatch_grid(ui, *slot) {
-                                    *slot = Some(c);
-                                }
-                            });
-                            ui.end_row();
-                        }
-                        ui.label("Line Thickness:");
-                        let thick = |w: f64| {
-                            if w <= 1.0 {
-                                "Thin"
-                            } else if w <= 2.0 {
-                                "Medium"
-                            } else {
-                                "Thick"
-                            }
-                        };
-                        egui::ComboBox::from_id_salt("field-width").selected_text(thick(l.width)).show_ui(ui, |ui| {
-                            for (w, label) in [(1.0, "Thin"), (2.0, "Medium"), (3.0, "Thick")] {
-                                ui.selectable_value(&mut l.width, w, label);
-                            }
-                        });
-                        ui.end_row();
-                        ui.label("Line Style:");
-                        egui::ComboBox::from_id_salt("field-style").selected_text(l.style.label()).show_ui(ui, |ui| {
-                            for s in BorderStyle::ALL {
-                                ui.selectable_value(&mut l.style, s, s.label());
-                            }
-                        });
-                        ui.end_row();
-                    });
-                }
-            }
-            FieldTab::Position => {
-                egui::Grid::new("field-position").num_columns(4).spacing([12.0, 10.0]).show(ui, |ui| {
-                    for (i, label) in ["Left:", "Bottom:", "Width:", "Height:"].into_iter().enumerate() {
-                        ui.label(label);
-                        let range = if i < 2 { -14_400.0..=14_400.0 } else { 4.0..=14_400.0 };
-                        ui.add(egui::DragValue::new(&mut d.position[i]).range(range).speed(0.5).suffix(" pt"));
-                        if i % 2 == 1 {
-                            ui.end_row();
-                        }
-                    }
-                });
-                ui.label(egui::RichText::new("Points from the page's bottom-left corner.").small().color(t.text_faint));
-            }
+            FieldTab::General => general_tab(ui, d, &mut enter),
+            FieldTab::Appearance => appearance_tab(ui, d),
+            FieldTab::Position => position_tab(ui, d, t),
             FieldTab::Format => format_tab(ui, d, t),
             FieldTab::Validate => validate_tab(ui, d),
             FieldTab::Calculate => calculate_tab(ui, d, t),
             FieldTab::Actions => actions_tab(ui, d, t),
-            FieldTab::Options => match d.kind {
-                FormFieldKind::Text => {
-                    use printcraft_engine::field_flags as ff;
-                    egui::Grid::new("text-options").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                        ui.label("Alignment:");
-                        egui::ComboBox::from_id_salt("quadding").selected_text(["Left", "Center", "Right"][d.quadding.clamp(0, 2) as usize]).show_ui(
-                            ui,
-                            |ui| {
-                                for (q, l) in [(0, "Left"), (1, "Center"), (2, "Right")] {
-                                    ui.selectable_value(&mut d.quadding, q, l);
-                                }
-                            },
-                        );
-                        ui.end_row();
-                        let l = ui.label("Default Value:");
-                        ui.add(egui::TextEdit::singleline(&mut d.default).desired_width(260.0)).labelled_by(l.id);
-                        ui.end_row();
-                    });
-                    ui.add_space(6.0);
-                    ui.checkbox(&mut d.multiline, "Multi-line");
-                    flag_box(ui, &mut d.flags, ff::DO_NOT_SCROLL, true, "Scroll long text");
-                    flag_box(ui, &mut d.flags, ff::RICH_TEXT, false, "Allow Rich Text Formatting");
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut d.limit, "Limit of");
-                        ui.add_enabled(d.limit, egui::DragValue::new(&mut d.max_len).range(0..=10_000));
-                        ui.label("characters");
-                    });
-                    flag_box(ui, &mut d.flags, ff::PASSWORD, false, "Password");
-                    flag_box(ui, &mut d.flags, ff::FILE_SELECT, false, "Field is used for file selection");
-                    flag_box(ui, &mut d.flags, ff::DO_NOT_SPELL_CHECK, true, "Check spelling");
-                    ui.horizontal(|ui| {
-                        flag_box(ui, &mut d.flags, ff::COMB, false, "Comb of");
-                        if d.flags & ff::COMB != 0 {
-                            d.limit = true;
-                            d.multiline = false;
-                            d.flags &= !(ff::PASSWORD | ff::FILE_SELECT);
-                            if d.max_len == 0 {
-                                d.max_len = 10;
-                            }
-                        }
-                        ui.add_enabled(d.flags & ff::COMB != 0, egui::DragValue::new(&mut d.max_len).range(1..=500));
-                        ui.label("characters");
-                    });
-                }
-                FormFieldKind::CheckBox | FormFieldKind::Radio => {
-                    use printcraft_engine::field_flags as ff;
-                    let on = d.on_state.clone();
-                    ui.label(format!("Export Value: {on}"));
-                    let mut checked = !d.default.is_empty() && d.default == on;
-                    let label = if d.kind == FormFieldKind::CheckBox { "Check box is checked by default" } else { "Button is checked by default" };
-                    if ui.checkbox(&mut checked, label).changed() {
-                        d.default = if checked { on } else { String::new() };
-                    }
-                    if d.kind == FormFieldKind::Radio {
-                        flag_box(ui, &mut d.flags, ff::RADIOS_IN_UNISON, false, "Buttons with the same name and value are selected in unison");
-                    }
-                }
-                _ => {
-                    use printcraft_engine::field_flags as ff;
-                    ui.horizontal(|ui| {
-                        let l = ui.label("Item:");
-                        let r = ui.add(egui::TextEdit::singleline(&mut d.new_option).desired_width(240.0)).labelled_by(l.id);
-                        let typed = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if (widgets::pill_button(ui, "Add", false).clicked() || typed) && !d.new_option.trim().is_empty() {
-                            d.options.push(d.new_option.trim().to_string());
-                            d.new_option.clear();
-                        }
-                    });
-                    ui.add_space(6.0);
-                    widgets::section_title(ui, "Item List");
-                    let mut remove = None;
-                    let mut up = None;
-                    egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
-                        for (i, o) in d.options.iter().enumerate() {
-                            ui.horizontal(|ui| {
-                                ui.label(o);
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.small_button("Delete").on_hover_text(format!("Delete {o}")).clicked() {
-                                        remove = Some(i);
-                                    }
-                                    if i > 0 && ui.small_button("Up").clicked() {
-                                        up = Some(i);
-                                    }
-                                });
-                            });
-                        }
-                    });
-                    if let Some(i) = remove {
-                        d.options.remove(i);
-                    }
-                    if let Some(i) = up {
-                        d.options.swap(i - 1, i);
-                    }
-                    if d.options.is_empty() {
-                        ui.label(egui::RichText::new("Add the choices people pick from.").color(t.text_muted));
-                    }
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        ui.label("Default:");
-                        let shown = if d.default.is_empty() { "(none)".to_string() } else { d.default.clone() };
-                        egui::ComboBox::from_id_salt("choice-default").selected_text(shown).show_ui(ui, |ui| {
-                            ui.selectable_value(&mut d.default, String::new(), "(none)");
-                            for o in d.options.clone() {
-                                ui.selectable_value(&mut d.default, o.clone(), o);
-                            }
-                        });
-                    });
-                    flag_box(ui, &mut d.flags, ff::SORT, false, "Sort items");
-                    if d.kind == FormFieldKind::Combo {
-                        flag_box(ui, &mut d.flags, ff::EDIT, false, "Allow user to enter custom text");
-                        flag_box(ui, &mut d.flags, ff::DO_NOT_SPELL_CHECK, true, "Check spelling");
-                    } else {
-                        flag_box(ui, &mut d.flags, ff::MULTI_SELECT, false, "Multiple selection");
-                    }
-                    flag_box(ui, &mut d.flags, ff::COMMIT_ON_SEL_CHANGE, false, "Commit selected value immediately");
-                }
-            },
+            FieldTab::Options => options_tab(ui, d, t),
         }
     });
     ui.add_space(8.0);
@@ -1059,6 +850,243 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
         }
     });
     (apply, cancel)
+}
+
+/// The General tab: name, tooltip and the common properties. `enter` follows Enter in the name box.
+fn general_tab(ui: &mut egui::Ui, d: &mut FieldDraft, enter: &mut bool) {
+    use crate::widgets;
+    egui::Grid::new("field-general").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
+        let l = ui.label("Name:");
+        let r = ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(340.0)).labelled_by(l.id);
+        *enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        ui.end_row();
+        let l = ui.label("Tooltip:");
+        ui.add(egui::TextEdit::singleline(&mut d.tooltip).desired_width(340.0)).labelled_by(l.id);
+        ui.end_row();
+    });
+    ui.add_space(12.0);
+    widgets::section_title(ui, "Common Properties");
+    ui.checkbox(&mut d.read_only, "Read Only");
+    ui.checkbox(&mut d.required, "Required");
+}
+
+/// The Appearance tab: size, font and text colour, then the borders.
+fn appearance_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
+    use crate::widgets;
+    egui::Grid::new("field-appearance").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
+        ui.label("Font Size:");
+        let mut auto = d.font_size == 0.0;
+        ui.horizontal(|ui| {
+            if ui.checkbox(&mut auto, "Auto").changed() {
+                d.font_size = if auto { 0.0 } else { 12.0 };
+            }
+            ui.add_enabled(!auto, egui::DragValue::new(&mut d.font_size).range(2.0..=100.0).speed(0.25).suffix(" pt"));
+        });
+        ui.end_row();
+        if let Some(l) = d.look.as_mut() {
+            ui.label("Font:");
+            egui::ComboBox::from_id_salt("field-font").selected_text(l.font.label()).show_ui(ui, |ui| {
+                for f in FieldFont::ALL {
+                    ui.selectable_value(&mut l.font, f, f.label());
+                }
+            });
+            ui.end_row();
+            ui.label("Text Color:");
+            if let Some(c) = crate::comments::swatch_grid(ui, Some(l.text)) {
+                l.text = c;
+            }
+            ui.end_row();
+        }
+    });
+    if let Some(l) = d.look.as_mut() {
+        widgets::section_title(ui, "Borders and Colors");
+        borders_grid(ui, l);
+    }
+}
+
+/// The border and fill colours, and the line's thickness and style.
+fn borders_grid(ui: &mut egui::Ui, l: &mut FieldLook) {
+    egui::Grid::new("field-borders").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+        for (label, slot) in [("Border Color:", &mut l.border), ("Fill Color:", &mut l.fill)] {
+            ui.label(label);
+            ui.horizontal(|ui| {
+                let mut none = slot.is_none();
+                if ui.checkbox(&mut none, "No color").changed() {
+                    *slot = if none { None } else { Some([0.0; 3]) };
+                }
+                if let Some(c) = crate::comments::swatch_grid(ui, *slot) {
+                    *slot = Some(c);
+                }
+            });
+            ui.end_row();
+        }
+        ui.label("Line Thickness:");
+        let thick = |w: f64| {
+            if w <= 1.0 {
+                "Thin"
+            } else if w <= 2.0 {
+                "Medium"
+            } else {
+                "Thick"
+            }
+        };
+        egui::ComboBox::from_id_salt("field-width").selected_text(thick(l.width)).show_ui(ui, |ui| {
+            for (w, label) in [(1.0, "Thin"), (2.0, "Medium"), (3.0, "Thick")] {
+                ui.selectable_value(&mut l.width, w, label);
+            }
+        });
+        ui.end_row();
+        ui.label("Line Style:");
+        egui::ComboBox::from_id_salt("field-style").selected_text(l.style.label()).show_ui(ui, |ui| {
+            for s in BorderStyle::ALL {
+                ui.selectable_value(&mut l.style, s, s.label());
+            }
+        });
+        ui.end_row();
+    });
+}
+
+/// The Position tab: left, bottom, width and height in points.
+fn position_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
+    egui::Grid::new("field-position").num_columns(4).spacing([12.0, 10.0]).show(ui, |ui| {
+        for (i, label) in ["Left:", "Bottom:", "Width:", "Height:"].into_iter().enumerate() {
+            ui.label(label);
+            let range = if i < 2 { -14_400.0..=14_400.0 } else { 4.0..=14_400.0 };
+            ui.add(egui::DragValue::new(&mut d.position[i]).range(range).speed(0.5).suffix(" pt"));
+            if i % 2 == 1 {
+                ui.end_row();
+            }
+        }
+    });
+    ui.label(egui::RichText::new("Points from the page's bottom-left corner.").small().color(t.text_faint));
+}
+
+/// The Options tab, which depends on the field's kind.
+fn options_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
+    match d.kind {
+        FormFieldKind::Text => text_options(ui, d),
+        FormFieldKind::CheckBox | FormFieldKind::Radio => toggle_options(ui, d),
+        _ => item_options(ui, d, t),
+    }
+}
+
+/// Text fields: alignment, the default value, and the text flags.
+fn text_options(ui: &mut egui::Ui, d: &mut FieldDraft) {
+    use printcraft_engine::field_flags as ff;
+    egui::Grid::new("text-options").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+        ui.label("Alignment:");
+        egui::ComboBox::from_id_salt("quadding").selected_text(["Left", "Center", "Right"][d.quadding.clamp(0, 2) as usize]).show_ui(ui, |ui| {
+            for (q, l) in [(0, "Left"), (1, "Center"), (2, "Right")] {
+                ui.selectable_value(&mut d.quadding, q, l);
+            }
+        });
+        ui.end_row();
+        let l = ui.label("Default Value:");
+        ui.add(egui::TextEdit::singleline(&mut d.default).desired_width(260.0)).labelled_by(l.id);
+        ui.end_row();
+    });
+    ui.add_space(6.0);
+    ui.checkbox(&mut d.multiline, "Multi-line");
+    flag_box(ui, &mut d.flags, ff::DO_NOT_SCROLL, true, "Scroll long text");
+    flag_box(ui, &mut d.flags, ff::RICH_TEXT, false, "Allow Rich Text Formatting");
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut d.limit, "Limit of");
+        ui.add_enabled(d.limit, egui::DragValue::new(&mut d.max_len).range(0..=10_000));
+        ui.label("characters");
+    });
+    flag_box(ui, &mut d.flags, ff::PASSWORD, false, "Password");
+    flag_box(ui, &mut d.flags, ff::FILE_SELECT, false, "Field is used for file selection");
+    flag_box(ui, &mut d.flags, ff::DO_NOT_SPELL_CHECK, true, "Check spelling");
+    ui.horizontal(|ui| {
+        flag_box(ui, &mut d.flags, ff::COMB, false, "Comb of");
+        if d.flags & ff::COMB != 0 {
+            d.limit = true;
+            d.multiline = false;
+            d.flags &= !(ff::PASSWORD | ff::FILE_SELECT);
+            if d.max_len == 0 {
+                d.max_len = 10;
+            }
+        }
+        ui.add_enabled(d.flags & ff::COMB != 0, egui::DragValue::new(&mut d.max_len).range(1..=500));
+        ui.label("characters");
+    });
+}
+
+/// Check boxes and radio buttons: the export value and the state they start in.
+fn toggle_options(ui: &mut egui::Ui, d: &mut FieldDraft) {
+    use printcraft_engine::field_flags as ff;
+    let on = d.on_state.clone();
+    ui.label(format!("Export Value: {on}"));
+    let mut checked = !d.default.is_empty() && d.default == on;
+    let label = if d.kind == FormFieldKind::CheckBox { "Check box is checked by default" } else { "Button is checked by default" };
+    if ui.checkbox(&mut checked, label).changed() {
+        d.default = if checked { on } else { String::new() };
+    }
+    if d.kind == FormFieldKind::Radio {
+        flag_box(ui, &mut d.flags, ff::RADIOS_IN_UNISON, false, "Buttons with the same name and value are selected in unison");
+    }
+}
+
+/// Drop-downs and list boxes: the choices people pick from, and their flags.
+fn item_options(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
+    use crate::widgets;
+    use printcraft_engine::field_flags as ff;
+    ui.horizontal(|ui| {
+        let l = ui.label("Item:");
+        let r = ui.add(egui::TextEdit::singleline(&mut d.new_option).desired_width(240.0)).labelled_by(l.id);
+        let typed = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (widgets::pill_button(ui, "Add", false).clicked() || typed) && !d.new_option.trim().is_empty() {
+            d.options.push(d.new_option.trim().to_string());
+            d.new_option.clear();
+        }
+    });
+    ui.add_space(6.0);
+    widgets::section_title(ui, "Item List");
+    let mut remove = None;
+    let mut up = None;
+    egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+        for (i, o) in d.options.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(o);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("Delete").on_hover_text(format!("Delete {o}")).clicked() {
+                        remove = Some(i);
+                    }
+                    if i > 0 && ui.small_button("Up").clicked() {
+                        up = Some(i);
+                    }
+                });
+            });
+        }
+    });
+    if let Some(i) = remove {
+        d.options.remove(i);
+    }
+    if let Some(i) = up {
+        d.options.swap(i - 1, i);
+    }
+    if d.options.is_empty() {
+        ui.label(egui::RichText::new("Add the choices people pick from.").color(t.text_muted));
+    }
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label("Default:");
+        let shown = if d.default.is_empty() { "(none)".to_string() } else { d.default.clone() };
+        egui::ComboBox::from_id_salt("choice-default").selected_text(shown).show_ui(ui, |ui| {
+            ui.selectable_value(&mut d.default, String::new(), "(none)");
+            for o in d.options.clone() {
+                ui.selectable_value(&mut d.default, o.clone(), o);
+            }
+        });
+    });
+    flag_box(ui, &mut d.flags, ff::SORT, false, "Sort items");
+    if d.kind == FormFieldKind::Combo {
+        flag_box(ui, &mut d.flags, ff::EDIT, false, "Allow user to enter custom text");
+        flag_box(ui, &mut d.flags, ff::DO_NOT_SPELL_CHECK, true, "Check spelling");
+    } else {
+        flag_box(ui, &mut d.flags, ff::MULTI_SELECT, false, "Multiple selection");
+    }
+    flag_box(ui, &mut d.flags, ff::COMMIT_ON_SEL_CHANGE, false, "Commit selected value immediately");
 }
 
 /// The categories of the Format tab.

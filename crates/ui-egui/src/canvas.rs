@@ -9,7 +9,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2};
-use printcraft_engine::{DocId, Edit};
+use printcraft_engine::{Added, AddedText, DocId, Document, Edit, FormField, LinkItem};
 use printcraft_render::{DocInfo, LinkTarget, PageText, RenderPool, RenderRequest, RequestKind, Tile};
 
 use crate::theme::{self, Tokens};
@@ -909,6 +909,583 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     }
 }
 
+/// The scroll area for one frame: where the pages go, how big they are drawn and where the
+/// scroll starts.
+struct Area {
+    /// The space the document area has for the pages.
+    avail: Rect,
+    /// Every page's rect, in content coordinates.
+    rects: Vec<Rect>,
+    /// The pages to draw: the current one in Single view, all of them in the other views.
+    visible_pages: Vec<usize>,
+    /// How far the content's top sits above the viewport.
+    y_shift: f32,
+    /// The size of the whole content.
+    content_w: f32,
+    content_h: f32,
+    /// Device pixels per point, the render scale, and the tag of a raster at that scale.
+    ppp: f32,
+    scale: f32,
+    tag: u64,
+    /// The Hand tool pans instead of the content widget taking the drag.
+    hand: bool,
+}
+
+/// The tool state every page needs this frame, read from the app and the document once.
+struct PageTools<'a> {
+    /// The picked tool.
+    tool: QuickTool,
+    /// Text selection runs for the Select tool and for the markup tools (highlight…).
+    selects_text: bool,
+    /// The document allows adding annotations.
+    allowed: bool,
+    comments_hidden: bool,
+    can_fill: bool,
+    can_crop: bool,
+    can_modify: bool,
+    /// The Prepare a form panel is open (or a field tool is picked).
+    preparing: bool,
+    /// Edit a PDF: added text and images can be selected, moved and edited.
+    editing_content: bool,
+    /// The form fields, cloned once.
+    form: Arc<Vec<FormField>>,
+    /// The text and images added to the document, cloned once.
+    added: Vec<Added>,
+    /// The document's links, cloned only for the Link tool.
+    doc_links: Vec<LinkItem>,
+    /// The saved signature and initials, cloned once.
+    signature: Option<crate::fill_sign::SavedSig>,
+    initials: Option<crate::fill_sign::SavedSig>,
+    /// The comment author: Fill & Sign and the dynamic stamps use it.
+    author: String,
+    today: (i64, u32, u32),
+    /// The "By … at …" line a dynamic stamp carries.
+    by_line: String,
+    /// The custom stamp the tool picked, cloned once.
+    custom_stamp: Option<crate::stamps_ui::CustomStamp>,
+    /// The style new text gets.
+    text_style: AddedText,
+    /// The comment tools' defaults.
+    prefs: &'a comments::CommentPrefs,
+}
+
+impl PageTools<'_> {
+    /// Redact and Highlight draw their boxes off the text, as in Acrobat.
+    fn area_tool(&self) -> bool {
+        self.tool == QuickTool::Redact && self.can_modify || self.tool == QuickTool::Comment(comments::CommentTool::Highlight) && self.allowed
+    }
+}
+
+/// What drawing the pages collected: the renders to schedule, and what the tools asked the app to
+/// do afterwards.
+#[derive(Default)]
+struct PageFrame {
+    /// The pages and tiles whose pixels are missing: (page, scale, tag, tile).
+    wanted: Vec<(usize, f32, u64, Option<Tile>)>,
+    /// The pages on screen this frame.
+    visible_now: Vec<usize>,
+    /// The page that overlaps the viewport most.
+    current: usize,
+    /// How much of the viewport it covers, so far.
+    best_overlap: f32,
+    /// A page box (crop) rectangle was drawn.
+    open_boxes: bool,
+    /// A stamp was placed, so the tool goes back to Select.
+    stamp_placed: bool,
+    /// An image of the added content was replaced or saved.
+    image_action: Option<crate::edit_text_ui::ImageAction>,
+    /// The Fill & Sign dialog has to open.
+    open_signature: bool,
+    open_initials: bool,
+    /// A form field's properties have to open.
+    field_props: bool,
+    /// A form field was placed, so the tool goes back to Select.
+    field_placed: bool,
+    /// The Add text tool is done with one text box.
+    content_done: bool,
+    /// What the pointer is over, shown in a tooltip.
+    hover_text: Option<(Pos2, String)>,
+    /// A link was clicked.
+    clicked_link: Option<LinkTarget>,
+    /// What the comment tools asked for.
+    canvas_action: Option<comments::CanvasAction>,
+    /// What the page context menu asked for.
+    field_menu: Option<FieldMenu>,
+}
+
+/// One page while it is drawn: the frame's tools, the view, and the page's own geometry.
+struct PagePaint<'a, 'b> {
+    /// The scroll area's `Ui` for this frame.
+    ui: &'a mut egui::Ui,
+    /// The page-content widget's response: clicks, drags and double-clicks.
+    resp: &'a egui::Response,
+    painter: &'a egui::Painter,
+    view: &'a mut DocView,
+    info: &'a DocInfo,
+    /// The frame's tool state.
+    tools: &'a PageTools<'b>,
+    /// What the pages asked for while they were drawn.
+    frame: &'a mut PageFrame,
+    tokens: &'a Tokens,
+    /// The scroll viewport on screen.
+    visible: Rect,
+    /// Device pixels per point, and the tag of a raster at that scale.
+    scale: f32,
+    tag: u64,
+    /// The page drawn (0-based), its rect on screen, and its view → screen transform.
+    page: usize,
+    rect: Rect,
+    xf: PageXform,
+}
+
+impl PagePaint<'_, '_> {
+    /// The page's shadow, its paper, and its pixels: a whole-page raster, or tiles when the page
+    /// is too large to draw in one. A page the renderer failed on shows the reason instead.
+    fn paper(&mut self) {
+        let (i, r, xf, visible, scale, tag) = (self.page, self.rect, self.xf, self.visible, self.scale, self.tag);
+        let painter = self.painter;
+        let ui = &mut *self.ui;
+        let view = &mut *self.view;
+        let info = self.info;
+        let frame = &mut *self.frame;
+        let t = self.tokens;
+        // Soft shadow + paper.
+        painter.add(egui::epaint::Shadow { offset: [0, 3], blur: 14, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
+        painter.rect_filled(r, CornerRadius::ZERO, Color32::WHITE);
+        if let Some(err) = view.errors.get(&i) {
+            painter.rect_filled(r, CornerRadius::ZERO, Color32::from_rgb(0xFB, 0xF4, 0xF4));
+            icons::paint(
+                ui,
+                Rect::from_center_size(r.center() - vec2(0.0, 26.0), vec2(28.0, 28.0)),
+                "triangle-alert",
+                26.0,
+                Color32::from_rgb(0xC8, 0x3A, 0x3A),
+            );
+            let msg = ui.fonts_mut(|f| {
+                f.layout(
+                    format!("This page couldn't be displayed.\n{err}"),
+                    theme::regular(12.5),
+                    Color32::from_rgb(0x6A, 0x2A, 0x2A),
+                    (r.width() - 40.0).max(80.0),
+                )
+            });
+            painter.galley(pos2(r.center().x - msg.size().x / 2.0, r.center().y), msg, Color32::BLACK);
+        } else {
+            let (width_pt, height_pt) = (info.pages[i].width.max(1.0), info.pages[i].height.max(1.0));
+            let tiled = width_pt.max(height_pt) * scale > TILE_THRESHOLD;
+            // Whole-page raster: sharp when small, a low-res backdrop when tiled.
+            let (want_scale, want_tag) = if tiled {
+                let bs = BASE_SIDE / width_pt.max(height_pt);
+                (bs, (bs * 1000.0) as u64)
+            } else {
+                (scale, tag)
+            };
+            if let Some(p) = view.pages.get(&i) {
+                xf.paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
+                if p.tag != want_tag {
+                    frame.wanted.push((i, want_scale, want_tag, None));
+                }
+            } else {
+                frame.wanted.push((i, want_scale, want_tag, None));
+                let now = ui.input(|inp| inp.time);
+                let since = *view.waiting_since.entry(i).or_insert(now);
+                let msg = if now - since > 6.0 { "Still rendering — this page is unusually complex…" } else { "Rendering…" };
+                painter.text(r.center(), Align2::CENTER_CENTER, msg, theme::regular(12.0), t.text_faint);
+            }
+            if tiled && r.intersects(visible) {
+                // Device-pixel geometry of the scaled page, and the visible part of it
+                // (found by mapping the visible screen corners back into the page).
+                let (dw, dh) = ((width_pt * scale).round() as u32, (height_pt * scale).round() as u32);
+                let vis = r.intersect(visible);
+                let corners = [vis.left_top(), vis.right_top(), vis.right_bottom(), vis.left_bottom()].map(|c| xf.screen_to_norm(c));
+                let (u0, u1) = corners.iter().fold((1.0f32, 0.0f32), |(a, b), c| (a.min(c.0), b.max(c.0)));
+                let (v0, v1) = corners.iter().fold((1.0f32, 0.0f32), |(a, b), c| (a.min(c.1), b.max(c.1)));
+                let (vx0, vy0) = ((u0.max(0.0) * dw as f32) as u32, (v0.max(0.0) * dh as f32) as u32);
+                let (vx1, vy1) = (((u1.min(1.0) * dw as f32).ceil() as u32).min(dw), ((v1.min(1.0) * dh as f32).ceil() as u32).min(dh));
+                for ty in vy0 / TILE..=(vy1.saturating_sub(1)) / TILE {
+                    for tx in vx0 / TILE..=(vx1.saturating_sub(1)) / TILE {
+                        let (tile_x, tile_y) = (tx * TILE, ty * TILE);
+                        let (tile_w, tile_h) = (TILE.min(dw.saturating_sub(tile_x)), TILE.min(dh.saturating_sub(tile_y)));
+                        if tile_w == 0 || tile_h == 0 {
+                            continue;
+                        }
+                        match view.tiles.get(&(i, tx, ty)) {
+                            Some((tile_tag, tex)) if *tile_tag == tag => {
+                                let (fw, fh) = (dw as f32, dh as f32);
+                                xf.paint_image(
+                                    painter,
+                                    tex.id(),
+                                    tile_x as f32 / fw,
+                                    tile_y as f32 / fh,
+                                    (tile_x + tile_w) as f32 / fw,
+                                    (tile_y + tile_h) as f32 / fh,
+                                );
+                            }
+                            _ => frame.wanted.push((i, scale, tag, Some(Tile { x: tile_x, y: tile_y, w: tile_w, h: tile_h }))),
+                        }
+                    }
+                }
+            }
+        }
+        painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
+    }
+
+    /// The stamp tools: a click places a stamp or a custom stamp, centred on the click.
+    fn stamps(&mut self) {
+        let (i, xf) = (self.page, self.xf);
+        let tool = self.tools.tool;
+        let ui = &mut *self.ui;
+        let resp = self.resp;
+        let info = self.info;
+        let tools = self.tools;
+        let view = &mut *self.view;
+        let frame = &mut *self.frame;
+        if let QuickTool::Stamp(kind) = tool
+            && tools.allowed
+            && let Some(p) = ui.input(|inp| inp.pointer.hover_pos()).filter(|p| xf.rect.contains(*p))
+        {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            if resp.clicked() {
+                // Centred on the click, upright as the page is shown.
+                let (vx, vy) = xf.screen_to_view(p);
+                let (sw, sh) = kind.size();
+                let corners = [(f64::from(vx) - sw / 2.0, f64::from(vy) - sh / 2.0), (f64::from(vx) + sw / 2.0, f64::from(vy) + sh / 2.0)];
+                let at: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
+                let rect = [
+                    f64::from(at[0][0].min(at[1][0])),
+                    f64::from(at[0][1].min(at[1][1])),
+                    f64::from(at[0][0].max(at[1][0])),
+                    f64::from(at[0][1].max(at[1][1])),
+                ];
+                let by = (kind.group() == printcraft_engine::StampGroup::Dynamic).then(|| tools.by_line.clone());
+                let shape = printcraft_engine::Shape::Stamp { rect, stamp: kind, by };
+                view.pending_edit = Some(printcraft_engine::Edit::AddAnnotation(printcraft_engine::NewAnnotation {
+                    page: i,
+                    style: printcraft_engine::Style::default_for(&shape),
+                    shape,
+                    contents: String::new(),
+                    author: tools.author.clone(),
+                }));
+                frame.stamp_placed = true;
+            }
+        }
+        if let Some(cs) = tools.custom_stamp.as_ref()
+            && tools.allowed
+            && let Some(p) = ui.input(|inp| inp.pointer.hover_pos()).filter(|p| xf.rect.contains(*p))
+        {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            if resp.clicked() {
+                // Centred on the click at its natural size (the engine sizes it).
+                let (vx, vy) = xf.screen_to_view(p);
+                let at = info.pages[i].view_to_user(vx, vy);
+                let (ax, ay) = (f64::from(at[0]), f64::from(at[1]));
+                view.pending_edit = Some(printcraft_engine::Edit::AddCustomStamp {
+                    page: i,
+                    rect: [ax, ay, ax, ay],
+                    name: cs.name.clone(),
+                    file: printcraft_engine::MarkFile { name: cs.file.clone(), bytes: cs.data.clone(), page: cs.page },
+                    author: tools.author.clone(),
+                });
+                frame.stamp_placed = true;
+            }
+        }
+    }
+
+    /// Every tool that reacts to a click or a drag on the page: Fill & Sign, page boxes, form
+    /// fields, area redaction, added content, Edit text, links and comments. Returns whether one
+    /// of them consumed the click.
+    fn tools_input(&mut self, doc: &Document) -> bool {
+        let (i, xf) = (self.page, self.xf);
+        let tool = self.tools.tool;
+        let today = self.tools.today;
+        let ui = &mut *self.ui;
+        let resp = self.resp;
+        let info = self.info;
+        let tools = self.tools;
+        let view = &mut *self.view;
+        let frame = &mut *self.frame;
+        if let QuickTool::Fill(ft) = tool
+            && tools.allowed
+        {
+            match crate::fill_sign::page_input(
+                ui,
+                resp,
+                &xf,
+                i,
+                info,
+                ft,
+                view,
+                tools.signature.as_ref(),
+                tools.initials.as_ref(),
+                &tools.author,
+                today,
+            ) {
+                Some(crate::fill_sign::FillAction::Edit(e)) => view.pending_edit = Some(*e),
+                Some(crate::fill_sign::FillAction::CreateSignature) => frame.open_signature = true,
+                Some(crate::fill_sign::FillAction::CreateInitials) => frame.open_initials = true,
+                None => {}
+            }
+        }
+        if matches!(tool, QuickTool::SignArea { .. }) {
+            crate::sign_ui::page_input(ui, resp, &xf, i, info, view);
+        }
+        if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
+            crate::zoom_snap::page_input(ui, resp, &xf, i, view);
+        }
+        if tool == QuickTool::Crop && crate::crop::page_input(ui, resp, &xf, i, info, view, tools.can_crop) {
+            view.current = i;
+            frame.open_boxes = true;
+        }
+        let on_field = if tools.preparing {
+            let field_tool = match tool {
+                QuickTool::Field(f) => Some(f),
+                _ => None,
+            };
+            let o = crate::prepare::page_input(ui, resp, &xf, i, info, &tools.form, field_tool, tools.can_modify, view);
+            frame.field_props |= o.properties;
+            frame.field_placed |= o.placed;
+            o.consumed || field_tool.is_some()
+        } else {
+            tool == QuickTool::Select && crate::forms_ui::page_input(ui, resp, &xf, i, info, &tools.form, tools.can_fill, view)
+        };
+        let boxing = tools.area_tool() && {
+            let text = view.page_text(i);
+            let over_text = |p: Pos2| {
+                let (vx, vy) = xf.screen_to_view(p);
+                text.as_ref().is_some_and(|t| t.glyphs.iter().any(|g| vx >= g.rect[0] && vx <= g.rect[2] && vy >= g.rect[1] && vy <= g.rect[3]))
+            };
+            crate::redact_ui::page_input(ui, resp, &xf, i, info, over_text, view)
+        };
+        let on_content = tools.editing_content && tools.can_modify && {
+            let o = crate::content_ui::page_input(ui, resp, &xf, i, info, &tools.added, tool == QuickTool::AddText, &tools.text_style, view);
+            frame.content_done |= o.done;
+            o.consumed || tool == QuickTool::AddText
+        };
+        let on_edit_text = tool == QuickTool::EditText && tools.can_modify && {
+            let generation = doc.edit_generation();
+            let lines = match view.edit_lines.get(&i) {
+                Some((g, l)) if *g == generation => l.clone(),
+                _ => {
+                    let l = doc.text_blocks(i);
+                    view.edit_lines.insert(i, (generation, l.clone()));
+                    l
+                }
+            };
+            let images = match view.edit_images.get(&i) {
+                Some((g, l)) if *g == generation => l.clone(),
+                _ => {
+                    let l = doc.page_images(i);
+                    view.edit_images.insert(i, (generation, l.clone()));
+                    l
+                }
+            };
+            // Images first (they can sit under text boxes' corners); then paragraphs.
+            crate::edit_text_ui::image_input(ui, resp, &xf, i, info, &images, view, &mut frame.image_action)
+                || crate::edit_text_ui::page_input(ui, resp, &xf, i, info, &lines, view)
+        };
+        let on_link = tool == QuickTool::Link && tools.can_modify && crate::link_ui::page_input(ui, resp, &xf, i, info, &tools.doc_links, view);
+        let pcx = comments::PageCx { page: i, xf: &xf, info, tool, prefs: tools.prefs, allowed: tools.allowed, hidden: tools.comments_hidden };
+        on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, resp, &pcx, view)
+    }
+
+    /// The text layer: the find matches, the selection, and the I-beam and drag-to-select.
+    fn text_layer(&mut self, hover: Option<Pos2>, consumed: bool) {
+        let (i, r, xf) = (self.page, self.rect, self.xf);
+        let painter = self.painter;
+        let ui = &mut *self.ui;
+        let resp = self.resp;
+        let info = self.info;
+        let tools = self.tools;
+        let view = &mut *self.view;
+        let to_screen = |g: [f32; 4]| xf.view_rect(g);
+        if let Some(text) = view.texts.get(&i).cloned() {
+            if let Some(f) = &view.find {
+                for (k, (mp, range)) in f.matches.iter().enumerate() {
+                    if *mp != i {
+                        continue;
+                    }
+                    let current = f.current == Some(k);
+                    for lr in text.line_rects(range.clone()) {
+                        let fill = if current {
+                            Color32::from_rgba_unmultiplied(255, 140, 0, 110)
+                        } else {
+                            Color32::from_rgba_unmultiplied(255, 214, 0, 90)
+                        };
+                        painter.rect_filled(to_screen(lr).expand(1.0), CornerRadius::same(2), fill);
+                    }
+                }
+            }
+            if let Some(sel) = view.selection.filter(|s| s.page == i) {
+                for lr in text.line_rects(sel.range()) {
+                    painter.rect_filled(to_screen(lr), CornerRadius::same(1), Color32::from_rgba_unmultiplied(0x3A, 0x7B, 0xF0, 70));
+                }
+            }
+            if tools.selects_text
+                && !consumed
+                && let Some(p) = hover.filter(|p| r.contains(*p))
+            {
+                let (vx, vy) = xf.screen_to_view(p);
+                let over_text = text.glyphs.iter().any(|g| vx >= g.rect[0] && vx <= g.rect[2] && vy >= g.rect[1] && vy <= g.rect[3]);
+                let over_link = info.links.iter().any(|l| l.page == i && xf.user_rect(info, i, l.rect).contains(p));
+                if over_text && !over_link {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                }
+                let press_here = ui.input(|inp| inp.pointer.press_origin()).is_some_and(|o| r.contains(o));
+                if resp.drag_started() && press_here && !over_link {
+                    let origin = ui.input(|inp| inp.pointer.press_origin()).unwrap_or(p);
+                    let (ox, oy) = xf.screen_to_view(origin);
+                    view.selection = text.nearest(ox, oy).map(|a| Selection { page: i, anchor: a, head: a });
+                }
+                if resp.dragged()
+                    && let Some(sel) = view.selection.as_mut().filter(|s| s.page == i)
+                    && let Some(h) = text.nearest(vx, vy)
+                {
+                    sel.head = h;
+                }
+                if resp.double_clicked() && over_text {
+                    if let Some(a) = text.nearest(vx, vy) {
+                        // Expand to the word: stop at inferred spaces, explicit spaces and line ends.
+                        let is_break = |k: usize| text.glyphs[k].text.trim().is_empty();
+                        let mut s0 = a;
+                        while s0 > 0 && !text.space_before[s0] && text.line_of[s0 - 1] == text.line_of[s0] && !is_break(s0 - 1) {
+                            s0 -= 1;
+                        }
+                        let mut e = a;
+                        while e + 1 < text.glyphs.len() && !text.space_before[e + 1] && text.line_of[e + 1] == text.line_of[e] && !is_break(e + 1) {
+                            e += 1;
+                        }
+                        view.selection = Some(Selection { page: i, anchor: s0, head: e });
+                    }
+                } else if resp.clicked() && !over_link {
+                    view.selection = None;
+                }
+            }
+        }
+    }
+
+    /// What the tools draw on top of the page, in the order the page stacks them.
+    fn overlays(&mut self) {
+        let (i, xf) = (self.page, self.xf);
+        let tool = self.tools.tool;
+        let painter = self.painter;
+        let ui = &mut *self.ui;
+        let resp = self.resp;
+        let info = self.info;
+        let tools = self.tools;
+        let view = &mut *self.view;
+        // Comments: tools, selection, moving and resizing come before text selection.
+        let pcx = comments::PageCx { page: i, xf: &xf, info, tool, prefs: tools.prefs, allowed: tools.allowed, hidden: tools.comments_hidden };
+        comments::page_after_text(resp, &pcx, view);
+        if tool == QuickTool::Redact && tools.can_modify {
+            crate::redact_ui::after_text(resp, i, info, view);
+        }
+        if tools.area_tool() {
+            crate::redact_ui::paint(ui, painter, i, view);
+        }
+        comments::paint_page(ui, painter, &pcx, view);
+        if tools.editing_content {
+            crate::content_ui::paint_page(ui, painter, &xf, i, info, &tools.added, view);
+        }
+        if tool == QuickTool::Link {
+            crate::link_ui::paint(ui, painter, &xf, i, info, &tools.doc_links, view);
+        }
+        if tools.preparing {
+            crate::prepare::paint_page(ui, painter, &xf, i, info, &tools.form, view);
+        } else {
+            crate::forms_ui::paint_page(ui, painter, &xf, i, info, &tools.form, view);
+        }
+        // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
+        // red border.
+        if view.highlight_fields {
+            for f in tools.form.iter() {
+                let required = f.has(printcraft_engine::field_flags::REQUIRED);
+                for w in f.widgets.iter().filter(|w| w.page == Some(i)) {
+                    let r = w.rect;
+                    let sr = xf.user_rect(info, i, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]);
+                    painter.rect_filled(sr, CornerRadius::same(1), Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48));
+                    let (width, color) =
+                        if required { (2.0, Color32::from_rgb(0xE3, 0x22, 0x22)) } else { (1.0, Color32::from_rgb(0x6E, 0x8E, 0xF5)) };
+                    painter.rect_stroke(sr, CornerRadius::same(1), Stroke::new(width, color), egui::StrokeKind::Inside);
+                }
+            }
+        }
+    }
+
+    /// Link hover and click, then annotation hover (the comment, as Acrobat's popups do).
+    fn hover_pick(&mut self, hover: Option<Pos2>, consumed: bool) {
+        let (i, xf) = (self.page, self.xf);
+        let tool = self.tools.tool;
+        let ui = &mut *self.ui;
+        let resp = self.resp;
+        let info = self.info;
+        let view = &mut *self.view;
+        let frame = &mut *self.frame;
+        if let Some(p) = hover {
+            for l in info.links.iter().filter(|l| l.page == i) {
+                let sr = xf.user_rect(info, i, l.rect);
+                if sr.contains(p) {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    let label = match &l.target {
+                        LinkTarget::Page(n) => format!("Go to page {}", info.pages.get(*n).map_or("?", |p| p.label.as_str())),
+                        LinkTarget::Uri(u) => u.clone(),
+                        LinkTarget::Other(s) => format!("{s} action"),
+                    };
+                    frame.hover_text = Some((p, label));
+                    if resp.clicked() && tool == QuickTool::Select && !consumed {
+                        frame.clicked_link = Some(l.target.clone());
+                    }
+                }
+            }
+            // Annotation hover shows the comment, as Acrobat's popups do.
+            let gesturing = view.comments.gesture.is_some();
+            for a in info.annotations.iter().filter(|a| a.page == i && a.in_reply_to.is_none() && !gesturing) {
+                let sr = xf.user_rect(info, i, a.rect);
+                if sr.contains(p) && frame.hover_text.is_none() {
+                    let who = a.author.clone().unwrap_or_else(|| a.subtype.clone());
+                    let body = a.contents.clone().unwrap_or_default();
+                    frame.hover_text = Some((p, if body.is_empty() { who } else { format!("{who}\n{body}") }));
+                }
+            }
+        }
+    }
+
+    /// Compare files' differences, and the flash of an annotation a panel just navigated to.
+    fn compare_flash(&mut self) {
+        let (i, xf) = (self.page, self.xf);
+        let painter = self.painter;
+        let ui = &mut *self.ui;
+        let info = self.info;
+        let view = &mut *self.view;
+        for (mp, mr, mc) in &view.compare_marks {
+            if *mp == i {
+                let sr = xf.user_rect(info, i, *mr).expand(1.5);
+                painter.rect_filled(sr, CornerRadius::same(2), mc.gamma_multiply(0.28));
+            }
+        }
+        if let Some((fp, fr, t0)) = view.flash
+            && fp == i
+        {
+            let now = ui.input(|inp| inp.time);
+            let t0 = if t0 == 0.0 { now } else { t0 };
+            view.flash = Some((fp, fr, t0));
+            let age = (now - t0) as f32;
+            if age < 1.6 {
+                let a = ((1.6 - age) / 1.6 * 255.0) as u8;
+                let sr = xf.user_rect(info, i, fr).expand(4.0);
+                painter.rect_stroke(
+                    sr,
+                    CornerRadius::same(3),
+                    Stroke::new(2.5, Color32::from_rgba_unmultiplied(0x1B, 0x63, 0xE0, a)),
+                    egui::StrokeKind::Outside,
+                );
+                ui.ctx().request_repaint();
+            } else {
+                view.flash = None;
+            }
+        }
+    }
+}
+
 pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     // The Search panel closed: its search moves to the find bar.
@@ -930,7 +1507,9 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
     let preparing = app.is_preparing();
     // Edit a PDF: added text and images can be selected, moved and edited.
     let editing_content = (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || app.quick_tool == QuickTool::AddText;
-    let text_style = app.text_style.clone();
+    let tool = app.quick_tool;
+    let prefs = &app.comment_prefs;
+    let tools = page_tools(app, doc, tool, preparing, editing_content, prefs);
     let view = &mut app.views[index];
     // Opened without the owner password and something is restricted.
     let secured = doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
@@ -946,6 +1525,83 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
         return;
     }
 
+    let area = page_area(view, ui, info, tool == QuickTool::Hand);
+    if preparing {
+        crate::prepare::after_refresh(view, &tools.form);
+    } else {
+        view.prepare.selected = None;
+    }
+    if editing_content {
+        crate::content_ui::after_refresh(view, &tools.added);
+    } else {
+        view.content.selected = None;
+    }
+    let mut frame = PageFrame { current: view.current, best_overlap: -1.0, ..PageFrame::default() };
+    paint_pages(ui, view, doc, &area, &tools, &t, &mut frame);
+    schedule(view, &doc.renderer, info, &area, want_thumbs, &mut frame, ui.ctx());
+    canvas_overlays(ui, view, info, &tools, &area, &t, &mut frame);
+    finish_frame(app, index, ui, tools.allowed, frame, preparing, editing_content);
+    quick_bar(app, area.avail, ui);
+}
+
+/// The tool state every page needs this frame.
+fn page_tools<'a>(
+    app: &PrintCraftApp,
+    doc: &Document,
+    tool: QuickTool,
+    preparing: bool,
+    editing_content: bool,
+    prefs: &'a comments::CommentPrefs,
+) -> PageTools<'a> {
+    // Text selection runs for the Select tool and for the markup tools (highlight…).
+    let selects_text = match tool {
+        QuickTool::Comment(t) => t.markup().is_some() || t == comments::CommentTool::ReplaceText,
+        QuickTool::Select => !preparing,
+        QuickTool::Redact => true,
+        QuickTool::Hand
+        | QuickTool::Crop
+        | QuickTool::Fill(_)
+        | QuickTool::Field(_)
+        | QuickTool::AddText
+        | QuickTool::EditText
+        | QuickTool::Stamp(_)
+        | QuickTool::CustomStamp(_)
+        | QuickTool::Link
+        | QuickTool::SignArea { .. }
+        | QuickTool::MarqueeZoom
+        | QuickTool::Snapshot => false,
+    };
+    let author = prefs.author.clone();
+    let by_line = app.session.stamp_by_line(&author);
+    PageTools {
+        tool,
+        selects_text,
+        allowed: doc.allows_annotation(),
+        comments_hidden: doc.comments_hidden(),
+        can_fill: doc.allows_form_filling(),
+        can_crop: doc.allows_assembly(),
+        can_modify: doc.allows_modification(),
+        preparing,
+        editing_content,
+        form: doc.form.clone(),
+        added: doc.added.clone(),
+        doc_links: if tool == QuickTool::Link { doc.links.clone() } else { Vec::new() },
+        signature: app.signature.clone(),
+        initials: app.initials.clone(),
+        author,
+        today: app.session.today(),
+        by_line,
+        custom_stamp: match tool {
+            QuickTool::CustomStamp(i) => app.custom_stamps.get(i).cloned(),
+            _ => None,
+        },
+        text_style: app.text_style.clone(),
+        prefs,
+    }
+}
+
+/// Where the pages go this frame, at what scale, and how far the content is scrolled.
+fn page_area(view: &mut DocView, ui: &egui::Ui, info: &DocInfo, hand: bool) -> Area {
     let avail = ui.available_rect_before_wrap();
     view.viewport_w = avail.width();
     view.viewport_h = avail.height();
@@ -979,89 +1635,37 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
         }
         _ => (0.0, rects.last().map_or(0.0, |r| r.bottom() + MARGIN)),
     };
+    let ppp = ui.ctx().pixels_per_point();
+    let scale = view.render_scale(ppp);
+    Area { avail, rects, visible_pages, y_shift, content_w, content_h, ppp, scale, tag: (scale * 1000.0) as u64, hand }
+}
 
+/// The scroll area, with the Hand tool's drag source and the offsets a zoom or a page jump asked for.
+fn scroll_area(view: &mut DocView, area: &Area) -> egui::ScrollArea {
     let mut scroll = egui::ScrollArea::both().auto_shrink([false, false]).scroll_source(egui::scroll_area::ScrollSource {
-        drag: if app.quick_tool == QuickTool::Hand { egui::scroll_area::DragScroll::Always } else { egui::scroll_area::DragScroll::OnTouch },
+        drag: if area.hand { egui::scroll_area::DragScroll::Always } else { egui::scroll_area::DragScroll::OnTouch },
         ..Default::default()
     });
     if let Some((page, fx, fy, rel)) = view.zoom_anchor.take() {
-        let r = rects[page.min(rects.len() - 1)];
-        let point = pos2(r.left() + fx * r.width(), r.top() - y_shift + fy * r.height());
+        let r = area.rects[page.min(area.rects.len() - 1)];
+        let point = pos2(r.left() + fx * r.width(), r.top() - area.y_shift + fy * r.height());
         scroll = scroll.scroll_offset(vec2((point.x - rel.x).max(0.0), (point.y - rel.y).max(0.0)));
     } else if let Some((page, frac)) = view.goto.take() {
-        let page = page.min(rects.len() - 1);
-        let r = rects[page];
-        scroll = scroll.vertical_scroll_offset((r.top() - y_shift - GAP + frac * r.height()).max(0.0));
+        let page = page.min(area.rects.len() - 1);
+        let r = area.rects[page];
+        scroll = scroll.vertical_scroll_offset((r.top() - area.y_shift - GAP + frac * r.height()).max(0.0));
     }
-    let ppp = ui.ctx().pixels_per_point();
-    let scale = view.render_scale(ppp);
-    let tag = (scale * 1000.0) as u64;
-    let hand = app.quick_tool == QuickTool::Hand;
-    let tool = app.quick_tool;
-    // Text selection runs for the Select tool and for the markup tools (highlight…).
-    let selects_text = match tool {
-        QuickTool::Comment(t) => t.markup().is_some() || t == comments::CommentTool::ReplaceText,
-        QuickTool::Select => !preparing,
-        QuickTool::Redact => true,
-        QuickTool::Hand
-        | QuickTool::Crop
-        | QuickTool::Fill(_)
-        | QuickTool::Field(_)
-        | QuickTool::AddText
-        | QuickTool::EditText
-        | QuickTool::Stamp(_)
-        | QuickTool::CustomStamp(_)
-        | QuickTool::Link
-        | QuickTool::SignArea { .. }
-        | QuickTool::MarqueeZoom
-        | QuickTool::Snapshot => false,
-    };
-    let prefs = &app.comment_prefs;
-    let allowed = doc.allows_annotation();
-    let comments_hidden = doc.comments_hidden();
-    let form = doc.form.clone();
-    let can_fill = doc.allows_form_filling();
-    let can_crop = doc.allows_assembly();
-    let mut open_boxes = false;
-    let signature = app.signature.clone();
-    let initials = app.initials.clone();
-    let mut open_initials = false;
-    let author = app.comment_prefs.author.clone();
-    let today = app.session.today();
-    let by_line = app.session.stamp_by_line(&author);
-    let mut stamp_placed = false;
-    let mut image_action: Option<crate::edit_text_ui::ImageAction> = None;
-    let custom_stamp = match app.quick_tool {
-        QuickTool::CustomStamp(i) => app.custom_stamps.get(i).cloned(),
-        _ => None,
-    };
-    let mut open_signature = false;
-    let mut hover_text: Option<(Pos2, String)> = None;
-    let mut clicked_link: Option<LinkTarget> = None;
-    let mut canvas_action: Option<comments::CanvasAction> = None;
-    let mut field_menu: Option<FieldMenu> = None;
-    let mut open_props: Option<(usize, usize)> = None;
-    let mut field_props = false;
-    let mut field_placed = false;
-    let can_modify = doc.allows_modification();
-    if preparing {
-        crate::prepare::after_refresh(view, &form);
-    } else {
-        view.prepare.selected = None;
-    }
-    let added = doc.added.clone();
-    let doc_links = if tool == QuickTool::Link { doc.links.clone() } else { Vec::new() };
-    let mut content_done = false;
-    if editing_content {
-        crate::content_ui::after_refresh(view, &added);
-    } else {
-        view.content.selected = None;
-    }
+    scroll
+}
 
-    let out = scroll.show_viewport(ui, |ui, viewport| {
-        let (resp_rect, resp) = ui.allocate_exact_size(vec2(content_w, content_h), Sense::click_and_drag());
+/// The page widget, every page on screen and the context menu. Fills in what the frame collected.
+fn paint_pages(ui: &mut egui::Ui, view: &mut DocView, doc: &Document, area: &Area, tools: &PageTools<'_>, t: &Tokens, frame: &mut PageFrame) {
+    let info = &doc.info;
+    let scroll = scroll_area(view, area);
+    let _ = scroll.show_viewport(ui, |ui, viewport| {
+        let (resp_rect, resp) = ui.allocate_exact_size(vec2(area.content_w, area.content_h), Sense::click_and_drag());
         // The Hand tool pans: the content widget takes every drag, so scroll by its delta.
-        if hand {
+        if area.hand {
             if resp.dragged() {
                 ui.scroll_with_delta(resp.drag_delta());
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -1069,473 +1673,136 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
             }
         }
-        let origin = resp_rect.min - vec2(0.0, y_shift);
-        let painter = ui.painter();
+        let origin = resp_rect.min - vec2(0.0, area.y_shift);
+        let painter = ui.painter().clone();
         let visible = viewport.translate(resp_rect.min.to_vec2());
-        let mut wanted = Vec::new();
-        let mut visible_now = Vec::new();
         view.screen_rects.clear();
         view.screen_xforms.clear();
-        let mut current = view.current;
-        let mut best_overlap = -1.0f32;
         let hover = ui.input(|i| i.pointer.hover_pos());
-        for &i in &visible_pages {
-            let r = rects[i].translate(origin.to_vec2());
+        for &i in &area.visible_pages {
+            let r = area.rects[i].translate(origin.to_vec2());
             if !r.intersects(visible.expand(400.0)) {
                 continue;
             }
             if r.intersects(visible) {
-                visible_now.push(i);
+                frame.visible_now.push(i);
                 view.screen_rects.push((i, r));
                 view.screen_xforms
                     .push((i, PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) }));
             }
             let overlap = r.intersect(visible).height();
-            if overlap > best_overlap {
-                best_overlap = overlap;
-                current = i;
+            if overlap > frame.best_overlap {
+                frame.best_overlap = overlap;
+                frame.current = i;
             }
             let xf = PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) };
-            // Soft shadow + paper.
-            painter.add(egui::epaint::Shadow { offset: [0, 3], blur: 14, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
-            painter.rect_filled(r, CornerRadius::ZERO, Color32::WHITE);
-            if let Some(err) = view.errors.get(&i) {
-                painter.rect_filled(r, CornerRadius::ZERO, Color32::from_rgb(0xFB, 0xF4, 0xF4));
-                icons::paint(
-                    ui,
-                    Rect::from_center_size(r.center() - vec2(0.0, 26.0), vec2(28.0, 28.0)),
-                    "triangle-alert",
-                    26.0,
-                    Color32::from_rgb(0xC8, 0x3A, 0x3A),
-                );
-                let msg = ui.fonts_mut(|f| {
-                    f.layout(
-                        format!("This page couldn't be displayed.\n{err}"),
-                        theme::regular(12.5),
-                        Color32::from_rgb(0x6A, 0x2A, 0x2A),
-                        (r.width() - 40.0).max(80.0),
-                    )
-                });
-                painter.galley(pos2(r.center().x - msg.size().x / 2.0, r.center().y), msg, Color32::BLACK);
-            } else {
-                let (width_pt, height_pt) = (info.pages[i].width.max(1.0), info.pages[i].height.max(1.0));
-                let tiled = width_pt.max(height_pt) * scale > TILE_THRESHOLD;
-                // Whole-page raster: sharp when small, a low-res backdrop when tiled.
-                let (want_scale, want_tag) = if tiled {
-                    let bs = BASE_SIDE / width_pt.max(height_pt);
-                    (bs, (bs * 1000.0) as u64)
-                } else {
-                    (scale, tag)
-                };
-                if let Some(p) = view.pages.get(&i) {
-                    xf.paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
-                    if p.tag != want_tag {
-                        wanted.push((i, want_scale, want_tag, None));
-                    }
-                } else {
-                    wanted.push((i, want_scale, want_tag, None));
-                    let now = ui.input(|inp| inp.time);
-                    let since = *view.waiting_since.entry(i).or_insert(now);
-                    let msg = if now - since > 6.0 { "Still rendering — this page is unusually complex…" } else { "Rendering…" };
-                    painter.text(r.center(), Align2::CENTER_CENTER, msg, theme::regular(12.0), t.text_faint);
-                }
-                if tiled && r.intersects(visible) {
-                    // Device-pixel geometry of the scaled page, and the visible part of it
-                    // (found by mapping the visible screen corners back into the page).
-                    let (dw, dh) = ((width_pt * scale).round() as u32, (height_pt * scale).round() as u32);
-                    let vis = r.intersect(visible);
-                    let corners = [vis.left_top(), vis.right_top(), vis.right_bottom(), vis.left_bottom()].map(|c| xf.screen_to_norm(c));
-                    let (u0, u1) = corners.iter().fold((1.0f32, 0.0f32), |(a, b), c| (a.min(c.0), b.max(c.0)));
-                    let (v0, v1) = corners.iter().fold((1.0f32, 0.0f32), |(a, b), c| (a.min(c.1), b.max(c.1)));
-                    let (vx0, vy0) = ((u0.max(0.0) * dw as f32) as u32, (v0.max(0.0) * dh as f32) as u32);
-                    let (vx1, vy1) = (((u1.min(1.0) * dw as f32).ceil() as u32).min(dw), ((v1.min(1.0) * dh as f32).ceil() as u32).min(dh));
-                    for ty in vy0 / TILE..=(vy1.saturating_sub(1)) / TILE {
-                        for tx in vx0 / TILE..=(vx1.saturating_sub(1)) / TILE {
-                            let (tile_x, tile_y) = (tx * TILE, ty * TILE);
-                            let (tile_w, tile_h) = (TILE.min(dw.saturating_sub(tile_x)), TILE.min(dh.saturating_sub(tile_y)));
-                            if tile_w == 0 || tile_h == 0 {
-                                continue;
-                            }
-                            match view.tiles.get(&(i, tx, ty)) {
-                                Some((tile_tag, tex)) if *tile_tag == tag => {
-                                    let (fw, fh) = (dw as f32, dh as f32);
-                                    xf.paint_image(
-                                        painter,
-                                        tex.id(),
-                                        tile_x as f32 / fw,
-                                        tile_y as f32 / fh,
-                                        (tile_x + tile_w) as f32 / fw,
-                                        (tile_y + tile_h) as f32 / fh,
-                                    );
-                                }
-                                _ => wanted.push((i, scale, tag, Some(Tile { x: tile_x, y: tile_y, w: tile_w, h: tile_h }))),
-                            }
-                        }
-                    }
-                }
-            }
-            painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
-
-            // Comments: tools, selection, moving and resizing come before text selection.
-            let pcx = comments::PageCx { page: i, xf: &xf, info, tool, prefs, allowed, hidden: comments_hidden };
-            // Form fields take clicks first with the Select tool (as Acrobat fills fields in
-            // every viewing mode); then comments; then text selection.
-            if let QuickTool::Stamp(kind) = tool
-                && allowed
-                && let Some(p) = ui.input(|inp| inp.pointer.hover_pos()).filter(|p| xf.rect.contains(*p))
-            {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-                if resp.clicked() {
-                    // Centred on the click, upright as the page is shown.
-                    let (vx, vy) = xf.screen_to_view(p);
-                    let (sw, sh) = kind.size();
-                    let corners = [(f64::from(vx) - sw / 2.0, f64::from(vy) - sh / 2.0), (f64::from(vx) + sw / 2.0, f64::from(vy) + sh / 2.0)];
-                    let at: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
-                    let rect = [
-                        f64::from(at[0][0].min(at[1][0])),
-                        f64::from(at[0][1].min(at[1][1])),
-                        f64::from(at[0][0].max(at[1][0])),
-                        f64::from(at[0][1].max(at[1][1])),
-                    ];
-                    let by = (kind.group() == printcraft_engine::StampGroup::Dynamic).then(|| by_line.clone());
-                    let shape = printcraft_engine::Shape::Stamp { rect, stamp: kind, by };
-                    view.pending_edit = Some(printcraft_engine::Edit::AddAnnotation(printcraft_engine::NewAnnotation {
-                        page: i,
-                        style: printcraft_engine::Style::default_for(&shape),
-                        shape,
-                        contents: String::new(),
-                        author: author.clone(),
-                    }));
-                    stamp_placed = true;
-                }
-            }
-            if let Some(cs) = custom_stamp.as_ref()
-                && allowed
-                && let Some(p) = ui.input(|inp| inp.pointer.hover_pos()).filter(|p| xf.rect.contains(*p))
-            {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-                if resp.clicked() {
-                    // Centred on the click at its natural size (the engine sizes it).
-                    let (vx, vy) = xf.screen_to_view(p);
-                    let at = info.pages[i].view_to_user(vx, vy);
-                    let (ax, ay) = (f64::from(at[0]), f64::from(at[1]));
-                    view.pending_edit = Some(printcraft_engine::Edit::AddCustomStamp {
-                        page: i,
-                        rect: [ax, ay, ax, ay],
-                        name: cs.name.clone(),
-                        file: printcraft_engine::MarkFile { name: cs.file.clone(), bytes: cs.data.clone(), page: cs.page },
-                        author: author.clone(),
-                    });
-                    stamp_placed = true;
-                }
-            }
-            if let QuickTool::Fill(ft) = tool
-                && allowed
-            {
-                match crate::fill_sign::page_input(ui, &resp, &xf, i, info, ft, view, signature.as_ref(), initials.as_ref(), &author, today) {
-                    Some(crate::fill_sign::FillAction::Edit(e)) => view.pending_edit = Some(*e),
-                    Some(crate::fill_sign::FillAction::CreateSignature) => open_signature = true,
-                    Some(crate::fill_sign::FillAction::CreateInitials) => open_initials = true,
-                    None => {}
-                }
-            }
-            if matches!(tool, QuickTool::SignArea { .. }) {
-                crate::sign_ui::page_input(ui, &resp, &xf, i, info, view);
-            }
-            if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
-                crate::zoom_snap::page_input(ui, &resp, &xf, i, view);
-            }
-            if tool == QuickTool::Crop && crate::crop::page_input(ui, &resp, &xf, i, info, view, can_crop) {
-                view.current = i;
-                open_boxes = true;
-            }
-            let on_field = if preparing {
-                let field_tool = match tool {
-                    QuickTool::Field(f) => Some(f),
-                    _ => None,
-                };
-                let o = crate::prepare::page_input(ui, &resp, &xf, i, info, &form, field_tool, can_modify, view);
-                field_props |= o.properties;
-                field_placed |= o.placed;
-                o.consumed || field_tool.is_some()
-            } else {
-                tool == QuickTool::Select && crate::forms_ui::page_input(ui, &resp, &xf, i, info, &form, can_fill, view)
+            let mut page = PagePaint {
+                ui: &mut *ui,
+                resp: &resp,
+                painter: &painter,
+                view: &mut *view,
+                info,
+                tools,
+                frame: &mut *frame,
+                tokens: t,
+                visible,
+                scale: area.scale,
+                tag: area.tag,
+                page: i,
+                rect: r,
+                xf,
             };
-            // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat).
-            let area_tool = tool == QuickTool::Redact && can_modify || tool == QuickTool::Comment(comments::CommentTool::Highlight) && allowed;
-            let boxing = area_tool && {
-                let text = view.page_text(i);
-                let over_text = |p: Pos2| {
-                    let (vx, vy) = xf.screen_to_view(p);
-                    text.as_ref().is_some_and(|t| t.glyphs.iter().any(|g| vx >= g.rect[0] && vx <= g.rect[2] && vy >= g.rect[1] && vy <= g.rect[3]))
-                };
-                crate::redact_ui::page_input(ui, &resp, &xf, i, info, over_text, view)
-            };
-            let on_content = editing_content && can_modify && {
-                let o = crate::content_ui::page_input(ui, &resp, &xf, i, info, &added, tool == QuickTool::AddText, &text_style, view);
-                content_done |= o.done;
-                o.consumed || tool == QuickTool::AddText
-            };
-            let on_edit_text = tool == QuickTool::EditText && can_modify && {
-                let generation = doc.edit_generation();
-                let lines = match view.edit_lines.get(&i) {
-                    Some((g, l)) if *g == generation => l.clone(),
-                    _ => {
-                        let l = doc.text_blocks(i);
-                        view.edit_lines.insert(i, (generation, l.clone()));
-                        l
-                    }
-                };
-                let images = match view.edit_images.get(&i) {
-                    Some((g, l)) if *g == generation => l.clone(),
-                    _ => {
-                        let l = doc.page_images(i);
-                        view.edit_images.insert(i, (generation, l.clone()));
-                        l
-                    }
-                };
-                // Images first (they can sit under text boxes' corners); then paragraphs.
-                crate::edit_text_ui::image_input(ui, &resp, &xf, i, info, &images, view, &mut image_action)
-                    || crate::edit_text_ui::page_input(ui, &resp, &xf, i, info, &lines, view)
-            };
-            let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(ui, &resp, &xf, i, info, &doc_links, view);
-            let consumed = on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, &resp, &pcx, view);
-
-            // Text layer: find matches, selection, I-beam and drag-to-select.
-            let to_screen = |g: [f32; 4]| xf.view_rect(g);
-            if let Some(text) = view.texts.get(&i).cloned() {
-                if let Some(f) = &view.find {
-                    for (k, (mp, range)) in f.matches.iter().enumerate() {
-                        if *mp != i {
-                            continue;
-                        }
-                        let current = f.current == Some(k);
-                        for lr in text.line_rects(range.clone()) {
-                            let fill = if current {
-                                Color32::from_rgba_unmultiplied(255, 140, 0, 110)
-                            } else {
-                                Color32::from_rgba_unmultiplied(255, 214, 0, 90)
-                            };
-                            painter.rect_filled(to_screen(lr).expand(1.0), CornerRadius::same(2), fill);
-                        }
-                    }
-                }
-                if let Some(sel) = view.selection.filter(|s| s.page == i) {
-                    for lr in text.line_rects(sel.range()) {
-                        painter.rect_filled(to_screen(lr), CornerRadius::same(1), Color32::from_rgba_unmultiplied(0x3A, 0x7B, 0xF0, 70));
-                    }
-                }
-                if selects_text
-                    && !consumed
-                    && let Some(p) = hover.filter(|p| r.contains(*p))
-                {
-                    let (vx, vy) = xf.screen_to_view(p);
-                    let over_text = text.glyphs.iter().any(|g| vx >= g.rect[0] && vx <= g.rect[2] && vy >= g.rect[1] && vy <= g.rect[3]);
-                    let over_link = info.links.iter().any(|l| l.page == i && xf.user_rect(info, i, l.rect).contains(p));
-                    if over_text && !over_link {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
-                    }
-                    let press_here = ui.input(|inp| inp.pointer.press_origin()).is_some_and(|o| r.contains(o));
-                    if resp.drag_started() && press_here && !over_link {
-                        let origin = ui.input(|inp| inp.pointer.press_origin()).unwrap_or(p);
-                        let (ox, oy) = xf.screen_to_view(origin);
-                        view.selection = text.nearest(ox, oy).map(|a| Selection { page: i, anchor: a, head: a });
-                    }
-                    if resp.dragged()
-                        && let Some(sel) = view.selection.as_mut().filter(|s| s.page == i)
-                        && let Some(h) = text.nearest(vx, vy)
-                    {
-                        sel.head = h;
-                    }
-                    if resp.double_clicked() && over_text {
-                        if let Some(a) = text.nearest(vx, vy) {
-                            // Expand to the word: stop at inferred spaces, explicit spaces and line ends.
-                            let is_break = |k: usize| text.glyphs[k].text.trim().is_empty();
-                            let mut s0 = a;
-                            while s0 > 0 && !text.space_before[s0] && text.line_of[s0 - 1] == text.line_of[s0] && !is_break(s0 - 1) {
-                                s0 -= 1;
-                            }
-                            let mut e = a;
-                            while e + 1 < text.glyphs.len() && !text.space_before[e + 1] && text.line_of[e + 1] == text.line_of[e] && !is_break(e + 1)
-                            {
-                                e += 1;
-                            }
-                            view.selection = Some(Selection { page: i, anchor: s0, head: e });
-                        }
-                    } else if resp.clicked() && !over_link {
-                        view.selection = None;
-                    }
-                }
-            }
-
-            comments::page_after_text(&resp, &pcx, view);
-            if tool == QuickTool::Redact && can_modify {
-                crate::redact_ui::after_text(&resp, i, info, view);
-            }
-            if area_tool {
-                crate::redact_ui::paint(ui, painter, i, view);
-            }
-            comments::paint_page(ui, painter, &pcx, view);
-            if editing_content {
-                crate::content_ui::paint_page(ui, painter, &xf, i, info, &added, view);
-            }
-            if tool == QuickTool::Link {
-                crate::link_ui::paint(ui, painter, &xf, i, info, &doc_links, view);
-            }
-            if preparing {
-                crate::prepare::paint_page(ui, painter, &xf, i, info, &form, view);
-            } else {
-                crate::forms_ui::paint_page(ui, painter, &xf, i, info, &form, view);
-            }
-
-            // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
-            // red border.
-            if view.highlight_fields {
-                for f in form.iter() {
-                    let required = f.has(printcraft_engine::field_flags::REQUIRED);
-                    for w in f.widgets.iter().filter(|w| w.page == Some(i)) {
-                        let r = w.rect;
-                        let sr = xf.user_rect(info, i, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]);
-                        painter.rect_filled(sr, CornerRadius::same(1), Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48));
-                        let (width, color) =
-                            if required { (2.0, Color32::from_rgb(0xE3, 0x22, 0x22)) } else { (1.0, Color32::from_rgb(0x6E, 0x8E, 0xF5)) };
-                        painter.rect_stroke(sr, CornerRadius::same(1), Stroke::new(width, color), egui::StrokeKind::Inside);
-                    }
-                }
-            }
-            // Link hover + click.
-            if let Some(p) = hover {
-                for l in info.links.iter().filter(|l| l.page == i) {
-                    let sr = xf.user_rect(info, i, l.rect);
-                    if sr.contains(p) {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        let label = match &l.target {
-                            LinkTarget::Page(n) => format!("Go to page {}", info.pages.get(*n).map_or("?", |p| p.label.as_str())),
-                            LinkTarget::Uri(u) => u.clone(),
-                            LinkTarget::Other(s) => format!("{s} action"),
-                        };
-                        hover_text = Some((p, label));
-                        if resp.clicked() && tool == QuickTool::Select && !consumed {
-                            clicked_link = Some(l.target.clone());
-                        }
-                    }
-                }
-                // Annotation hover shows the comment, as Acrobat's popups do.
-                let gesturing = view.comments.gesture.is_some();
-                for a in info.annotations.iter().filter(|a| a.page == i && a.in_reply_to.is_none() && !gesturing) {
-                    let sr = xf.user_rect(info, i, a.rect);
-                    if sr.contains(p) && hover_text.is_none() {
-                        let who = a.author.clone().unwrap_or_else(|| a.subtype.clone());
-                        let body = a.contents.clone().unwrap_or_default();
-                        hover_text = Some((p, if body.is_empty() { who } else { format!("{who}\n{body}") }));
-                    }
-                }
-            }
-            for (mp, mr, mc) in &view.compare_marks {
-                if *mp == i {
-                    let sr = xf.user_rect(info, i, *mr).expand(1.5);
-                    painter.rect_filled(sr, CornerRadius::same(2), mc.gamma_multiply(0.28));
-                }
-            }
-            if let Some((fp, fr, t0)) = view.flash
-                && fp == i
-            {
-                let now = ui.input(|inp| inp.time);
-                let t0 = if t0 == 0.0 { now } else { t0 };
-                view.flash = Some((fp, fr, t0));
-                let age = (now - t0) as f32;
-                if age < 1.6 {
-                    let a = ((1.6 - age) / 1.6 * 255.0) as u8;
-                    let sr = xf.user_rect(info, i, fr).expand(4.0);
-                    painter.rect_stroke(
-                        sr,
-                        CornerRadius::same(3),
-                        Stroke::new(2.5, Color32::from_rgba_unmultiplied(0x1B, 0x63, 0xE0, a)),
-                        egui::StrokeKind::Outside,
-                    );
-                    ui.ctx().request_repaint();
-                } else {
-                    view.flash = None;
-                }
-            }
+            page.paper();
+            page.stamps();
+            let consumed = page.tools_input(doc);
+            page.text_layer(hover, consumed);
+            page.overlays();
+            page.hover_pick(hover, consumed);
+            page.compare_flash();
         }
         if view.layout != PageLayout::Single {
-            view.current = current;
+            view.current = frame.current;
             if !ui.memory(|m| m.has_focus(egui::Id::new("page-input"))) {
-                view.page_input = (current + 1).to_string();
+                view.page_input = (frame.current + 1).to_string();
             }
         }
-        resp.context_menu(|ui| {
-            // Preparing a form: the selected field's menu.
-            if preparing && let Some((name, wi)) = view.prepare.selected.clone() {
-                // Several fields: Align, Center, Distribute, Set Fields to Same Size.
-                if !view.prepare.also.is_empty() {
-                    use crate::prepare::Arrange as A;
-                    let others = view.prepare.also.clone();
-                    let anchor = (name.clone(), wi);
-                    let mut pick = |ui: &mut egui::Ui, op: A, label: &str| {
-                        if ui.add_enabled(can_modify, egui::Button::new(label)).clicked() {
-                            view.pending_edit = crate::prepare::arrange(&form, &anchor, &others, op);
-                            ui.close();
-                        }
-                    };
-                    ui.menu_button("Align", |ui| {
-                        pick(ui, A::AlignLeft, "Left");
-                        pick(ui, A::AlignRight, "Right");
-                        pick(ui, A::AlignTop, "Top");
-                        pick(ui, A::AlignBottom, "Bottom");
-                        pick(ui, A::AlignCenterV, "Vertically");
-                        pick(ui, A::AlignCenterH, "Horizontally");
-                    });
-                    ui.menu_button("Distribute", |ui| {
-                        pick(ui, A::DistributeH, "Horizontally");
-                        pick(ui, A::DistributeV, "Vertically");
-                    });
-                    ui.menu_button("Set Fields to Same Size", |ui| {
-                        pick(ui, A::SameHeight, "Height");
-                        pick(ui, A::SameWidth, "Width");
-                        pick(ui, A::SameSize, "Both");
-                    });
-                    ui.separator();
-                }
-                if ui.button("Properties…").clicked() {
-                    field_menu = Some(FieldMenu::Properties);
-                    ui.close();
-                }
-                if ui.add_enabled(can_modify, egui::Button::new("Duplicate…")).clicked() {
-                    field_menu = Some(FieldMenu::Duplicate(name.clone()));
-                    ui.close();
-                }
-                ui.separator();
-                if ui.add_enabled(can_modify, egui::Button::new("Delete")).clicked() {
-                    view.prepare.selected = None;
-                    view.pending_edit = Some(printcraft_engine::Edit::DeleteField { name });
-                    ui.close();
-                }
-                return;
-            }
-            canvas_action = comments::context_menu(ui, view, info, prefs, allowed);
-        });
-        (wanted, visible_now)
+        resp.context_menu(|ui| page_context_menu(ui, view, info, tools, frame));
     });
+}
 
+/// The page context menu: the selected field's menu while preparing a form, the comments' menu
+/// otherwise.
+fn page_context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, tools: &PageTools<'_>, frame: &mut PageFrame) {
+    // Preparing a form: the selected field's menu.
+    if tools.preparing
+        && let Some((name, wi)) = view.prepare.selected.clone()
+    {
+        // Several fields: Align, Center, Distribute, Set Fields to Same Size.
+        if !view.prepare.also.is_empty() {
+            use crate::prepare::Arrange as A;
+            let others = view.prepare.also.clone();
+            let anchor = (name.clone(), wi);
+            let mut pick = |ui: &mut egui::Ui, op: A, label: &str| {
+                if ui.add_enabled(tools.can_modify, egui::Button::new(label)).clicked() {
+                    view.pending_edit = crate::prepare::arrange(&tools.form, &anchor, &others, op);
+                    ui.close();
+                }
+            };
+            ui.menu_button("Align", |ui| {
+                pick(ui, A::AlignLeft, "Left");
+                pick(ui, A::AlignRight, "Right");
+                pick(ui, A::AlignTop, "Top");
+                pick(ui, A::AlignBottom, "Bottom");
+                pick(ui, A::AlignCenterV, "Vertically");
+                pick(ui, A::AlignCenterH, "Horizontally");
+            });
+            ui.menu_button("Distribute", |ui| {
+                pick(ui, A::DistributeH, "Horizontally");
+                pick(ui, A::DistributeV, "Vertically");
+            });
+            ui.menu_button("Set Fields to Same Size", |ui| {
+                pick(ui, A::SameHeight, "Height");
+                pick(ui, A::SameWidth, "Width");
+                pick(ui, A::SameSize, "Both");
+            });
+            ui.separator();
+        }
+        if ui.button("Properties…").clicked() {
+            frame.field_menu = Some(FieldMenu::Properties);
+            ui.close();
+        }
+        if ui.add_enabled(tools.can_modify, egui::Button::new("Duplicate…")).clicked() {
+            frame.field_menu = Some(FieldMenu::Duplicate(name.clone()));
+            ui.close();
+        }
+        ui.separator();
+        if ui.add_enabled(tools.can_modify, egui::Button::new("Delete")).clicked() {
+            view.prepare.selected = None;
+            view.pending_edit = Some(printcraft_engine::Edit::DeleteField { name });
+            ui.close();
+        }
+        return;
+    }
+    frame.canvas_action = comments::context_menu(ui, view, info, tools.prefs, tools.allowed);
+}
+
+/// The renders this frame needs: the visible pages first, then their text layers and the thumbnails.
+fn schedule(view: &mut DocView, renderer: &RenderPool, info: &DocInfo, area: &Area, want_thumbs: bool, frame: &mut PageFrame, ctx: &egui::Context) {
     // Bound texture memory: keep sharp rasters only near the current page.
     if view.pages.len() > 24 {
         let cur = view.current;
         view.pages.retain(|&p, _| p.abs_diff(cur) <= 8);
     }
-    // Schedule renders: visible pages first (nearest the current page), then thumbnails.
-    let (mut wanted, visible_now) = out.inner;
     let cur = view.current;
     // Nearest pages first; for each page, the backdrop before its tiles.
-    wanted.sort_by_key(|w| ((w.0 as isize - cur as isize).unsigned_abs(), w.3.is_some()));
+    frame.wanted.sort_by_key(|w| ((w.0 as isize - cur as isize).unsigned_abs(), w.3.is_some()));
     // Tiles for other zoom levels or far-away pages are useless: free them.
-    view.tiles.retain(|(p, _, _), (t, _)| *t == tag && p.abs_diff(cur) <= 2);
+    view.tiles.retain(|(p, _, _), (t, _)| *t == area.tag && p.abs_diff(cur) <= 2);
     let mut queue: Vec<RenderRequest> =
-        wanted.iter().map(|&(page, scale, tag, tile)| RenderRequest { page, kind: RequestKind::Pixels, tile, scale, tag }).collect();
+        frame.wanted.iter().map(|&(page, scale, tag, tile)| RenderRequest { page, kind: RequestKind::Pixels, tile, scale, tag }).collect();
     // Text layers: visible pages for selection, every page while a search is active.
     let need_text = |p: &usize| !view.texts.contains_key(p) && !view.text_failed.contains(p);
-    let mut text_pages: Vec<usize> = if hand { Vec::new() } else { visible_now.iter().copied().filter(need_text).collect() };
+    let mut text_pages: Vec<usize> = if area.hand { Vec::new() } else { frame.visible_now.iter().copied().filter(need_text).collect() };
     if view.find.as_ref().is_some_and(|f| !f.case_query.trim().is_empty()) {
         let n = info.pages.len();
         let rest: Vec<usize> = (0..n).map(|k| (cur + k) % n).filter(need_text).filter(|p| !text_pages.contains(p)).collect();
@@ -1543,7 +1810,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     queue.extend(text_pages.into_iter().map(|page| RenderRequest { page, kind: RequestKind::Text, tile: None, scale: 1.0, tag: TEXT_TAG }));
     if want_thumbs {
-        let s = THUMB_W * ppp / info.pages.iter().map(|p| p.width).fold(1.0, f32::max);
+        let s = THUMB_W * area.ppp / info.pages.iter().map(|p| p.width).fold(1.0, f32::max);
         for page in 0..info.pages.len() {
             if (!view.thumbs.contains_key(&page) || view.stale_thumbs.contains(&page)) && !view.errors.contains_key(&page) {
                 queue.push(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: s, tag: THUMB_TAG });
@@ -1551,14 +1818,17 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
         }
     }
     if queue != view.last_queue {
-        doc.renderer.set_queue(queue.clone());
+        renderer.set_queue(queue.clone());
         view.last_queue = queue;
     }
     if !view.last_queue.is_empty() {
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(30));
+        ctx.request_repaint_after(std::time::Duration::from_millis(30));
     }
+}
 
-    if let Some((pos, text)) = hover_text {
+/// What floats above the pages: the hover tooltip, the find bar, and the editors the tools opened.
+fn canvas_overlays(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, tools: &PageTools<'_>, area: &Area, t: &Tokens, frame: &mut PageFrame) {
+    if let Some((pos, text)) = frame.hover_text.take() {
         egui::Area::new(egui::Id::new("canvas-hover")).order(egui::Order::Tooltip).fixed_pos(pos + vec2(14.0, 16.0)).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_max_width(320.0);
@@ -1566,24 +1836,43 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
             });
         });
     }
-    find_bar(view, info.pages.len(), avail, ui, &t);
-    if let Some(e) = comments::composer(ui.ctx(), view, info, prefs) {
+    find_bar(view, info.pages.len(), area.avail, ui, t);
+    if let Some(e) = comments::composer(ui.ctx(), view, info, tools.prefs) {
         view.pending_edit = Some(e);
     }
     if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::forms_ui::overlay(ui.ctx(), view, info, &form, today) {
+    if let Some(e) = crate::forms_ui::overlay(ui.ctx(), view, info, &tools.form, tools.today) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::fill_sign::type_box(ui.ctx(), view, info, &author) {
+    if let Some(e) = crate::fill_sign::type_box(ui.ctx(), view, info, &tools.author) {
         view.pending_edit = Some(e);
     }
     let typed_text = view.content.draft.is_some();
-    if let Some(e) = crate::content_ui::editor(ui.ctx(), view, info, &added) {
+    if let Some(e) = crate::content_ui::editor(ui.ctx(), view, info, &tools.added) {
         view.pending_edit = Some(e);
     }
-    content_done |= typed_text && view.content.draft.is_none();
+    frame.content_done |= typed_text && view.content.draft.is_none();
+}
+
+/// What the tools asked for: which tool is picked next, and the dialogs and edits the app runs.
+fn finish_frame(app: &mut PrintCraftApp, index: usize, ui: &egui::Ui, allowed: bool, frame: PageFrame, preparing: bool, editing_content: bool) {
+    let PageFrame {
+        open_boxes,
+        stamp_placed,
+        image_action,
+        open_signature,
+        open_initials,
+        mut field_props,
+        field_placed,
+        content_done,
+        clicked_link,
+        canvas_action,
+        field_menu,
+        ..
+    } = frame;
+    let view = &mut app.views[index];
     let form_notice = view.forms.notice.take();
     // One crop, then back to selecting (as Acrobat does).
     let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, printcraft_engine::Edit::SetPageBox { .. }));
@@ -1615,6 +1904,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
         field_props = true;
     }
     let field_props = field_props.then(|| view.prepare.selected.clone()).flatten();
+    let mut open_props = None;
     match canvas_action {
         Some(comments::CanvasAction::Edit(e)) => view.pending_edit = Some(*e),
         Some(comments::CanvasAction::OpenComments) => app.right = Some(RightPanel::Comments),
@@ -1712,7 +2002,6 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
     if let Some((name, action)) = app.views[index].forms.button.take() {
         run_button(app, index, ui.ctx(), &name, action);
     }
-    quick_bar(app, avail, ui);
 }
 
 /// Run a push button's action (the ones that need no JavaScript engine).
