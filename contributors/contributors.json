@@ -1,0 +1,114 @@
+{
+  "schema": 1,
+  "repo": "storytold/pdfcraft",
+  "branch": "main",
+  "head": "d3db99818f533a531dbcd469b2ac71ba35c0d3ec",
+  "head_date": "2026-10-07T20:03:57Z",
+  "commits": 252,
+  "unattributed_commits": 0,
+  "contributors": [
+    {
+      "login": "echelon",
+      "people_entry": true,
+      "github_name": null,
+      "prs": 50,
+      "commits": 229,
+      "lines_added": 218049,
+      "lines_deleted": 10047,
+      "binary_added": 81,
+      "binary_deleted": 25,
+      "first_commit": "2026-09-30T09:17:08Z",
+      "last_commit": "2026-10-07T20:03:57Z"
+    },
+    {
+      "login": "storybored379",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 8,
+      "commits": 8,
+      "lines_added": 350,
+      "lines_deleted": 33,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-04T04:14:56Z",
+      "last_commit": "2026-10-05T20:36:08Z"
+    },
+    {
+      "login": "justinjohn0306",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 2,
+      "commits": 1,
+      "lines_added": 1059,
+      "lines_deleted": 92,
+      "binary_added": 1,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-05T11:48:23Z",
+      "last_commit": "2026-10-05T11:48:23Z"
+    },
+    {
+      "login": "midasdf",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 1,
+      "commits": 1,
+      "lines_added": 174,
+      "lines_deleted": 16,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-05T21:10:09Z",
+      "last_commit": "2026-10-05T21:10:09Z"
+    },
+    {
+      "login": "bflatastic",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 10,
+      "commits": 13,
+      "lines_added": 1053,
+      "lines_deleted": 260,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-06T18:21:42Z",
+      "last_commit": "2026-10-07T02:52:19Z"
+    }
+  ],
+  "models": [
+    {
+      "id": "anthropic/claude-opus/5.5",
+      "company": "Anthropic",
+      "model": "Claude Opus",
+      "version": "5.5",
+      "commits": 239,
+      "lines_added": 158990,
+      "lines_deleted": 9809
+    },
+    {
+      "id": "anthropic/claude-opus/4.8",
+      "company": "Anthropic",
+      "model": "Claude Opus",
+      "version": "4.8",
+      "commits": 1,
+      "lines_added": 1632,
+      "lines_deleted": 3
+    },
+    {
+      "id": "openai/codex",
+      "company": "OpenAI",
+      "model": "Codex",
+      "version": "",
+      "commits": 1,
+      "lines_added": 13,
+      "lines_deleted": 1
+    },
+    {
+      "id": "zhipu/glm",
+      "company": "Zhipu AI",
+      "model": "GLM",
+      "version": "",
+      "commits": 1,
+      "lines_added": 1059,
+      "lines_deleted": 92
+    }
+  ]
+}

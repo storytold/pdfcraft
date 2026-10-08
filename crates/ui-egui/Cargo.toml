@@ -49,3 +49,7 @@ egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.
 skrifa = "0.44"
+
+[build-dependencies]
+serde_json = { workspace = true }
+toml = "1"
