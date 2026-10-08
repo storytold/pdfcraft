@@ -15,6 +15,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
+use pdfcraft_fonts::win_ansi_encodable;
 
 pub mod appearance;
 pub mod links;
@@ -854,6 +855,14 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     if !finite(&style.color) || !style.opacity.is_finite() || !style.width.is_finite() {
         return Err(AnnotError::Invalid("invalid style".into()));
     }
+    // The text-box appearance is drawn with a WinAnsi simple font, which turns what it can't
+    // show into '?'; refuse rather than print the wrong thing (issue #125).
+    if new.shape.subtype() == "FreeText" && !win_ansi_encodable(&new.contents) {
+        return Err(AnnotError::Invalid(format!(
+            "{:?} has characters the text-box appearance font can't show (standard-14 Helvetica is WinAnsi-only)",
+            new.contents
+        )));
+    }
     let rect = rect_for(&new.shape, style)?;
     let mut d = base_dict(new.shape.subtype(), rect, page, &new.contents, &new.author, meta);
     d.set(b"Subj".to_vec(), PdfString::text(subject(&new.shape)));
@@ -1155,6 +1164,13 @@ pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Resul
 pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     let free_text = annot_dict(doc, r).name(b"Subtype") == Some(b"FreeText");
+    // The text-box appearance is drawn with a WinAnsi simple font, which turns what it can't
+    // show into '?'; refuse rather than print the wrong thing, before anything changes (#125).
+    if free_text && !win_ansi_encodable(text) {
+        return Err(AnnotError::Invalid(format!(
+            "{text:?} has characters the text-box appearance font can't show (standard-14 Helvetica is WinAnsi-only)"
+        )));
+    }
     doc.update_dict(r, |d| {
         d.set(b"Contents".to_vec(), PdfString::text(text));
         // The rich-text version follows the new plain text (text boxes), or would contradict it.

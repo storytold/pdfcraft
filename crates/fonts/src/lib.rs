@@ -63,28 +63,36 @@ pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
     lines
 }
 
+/// Encode one character in WinAnsiEncoding (ISO 32000-2 Annex D); `None` when unmappable.
+fn win_ansi_char(c: char) -> Option<u8> {
+    match c {
+        '\u{20}'..='\u{7e}' => Some(c as u8),
+        '\u{a0}'..='\u{ff}' => Some(c as u32 as u8),
+        '€' => Some(0x80),
+        '‚' => Some(0x82),
+        '„' => Some(0x84),
+        '…' => Some(0x85),
+        '‘' => Some(0x91),
+        '’' => Some(0x92),
+        '“' => Some(0x93),
+        '”' => Some(0x94),
+        '•' => Some(0x95),
+        '–' => Some(0x96),
+        '—' => Some(0x97),
+        '™' => Some(0x99),
+        '\t' => Some(b' '),
+        _ => None,
+    }
+}
+
 /// Encode text in WinAnsiEncoding (ISO 32000-2 Annex D); unmappable characters become `?`.
 pub fn win_ansi(s: &str) -> Vec<u8> {
-    s.chars()
-        .map(|c| match c {
-            '\u{20}'..='\u{7e}' => c as u8,
-            '\u{a0}'..='\u{ff}' => c as u32 as u8,
-            '€' => 0x80,
-            '‚' => 0x82,
-            '„' => 0x84,
-            '…' => 0x85,
-            '‘' => 0x91,
-            '’' => 0x92,
-            '“' => 0x93,
-            '”' => 0x94,
-            '•' => 0x95,
-            '–' => 0x96,
-            '—' => 0x97,
-            '™' => 0x99,
-            '\t' => b' ',
-            _ => b'?',
-        })
-        .collect()
+    s.chars().map(|c| win_ansi_char(c).unwrap_or(b'?')).collect()
+}
+
+/// True when every character of `s` survives [`win_ansi`] — nothing would become `?`.
+pub fn win_ansi_encodable(s: &str) -> bool {
+    s.chars().all(|c| win_ansi_char(c).is_some())
 }
 
 /// Bytes as a PDF literal string, `(` … `)`, with delimiters escaped.

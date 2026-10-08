@@ -1359,6 +1359,32 @@ fn tab_order_and_field_appearance_through_tools() {
 }
 
 #[test]
+fn winansi_appearances_refuse_text_they_cannot_show() {
+    // Issue #125: the appearance of filled fields and text-box comments is drawn with a
+    // WinAnsi simple font that turns what it can't show into '?'. Both refuse instead, before
+    // anything is stored, and Latin-1 text keeps filling fine.
+    let dir = workdir("winansi-appearances");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [10, 20, 90, 40], "name": "full-name" }));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "full-name": "Café naïve" } }));
+    let err = a.call("form_fill", &json!({ "doc": doc, "values": { "full-name": "AβZ Ω 日本語" } })).unwrap_err();
+    assert!(err.to_string().contains("can't show"), "{err}");
+    // The stored value is untouched: the refusal happened before anything was written.
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let v = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "full-name").unwrap()["value"].clone();
+    assert_eq!(v, json!("Café naïve"));
+    let err = a
+        .call("comment_add", &json!({ "doc": doc, "page": 1, "type": "textbox", "rect": [10, 200, 190, 240], "contents": "日本語コメント" }))
+        .unwrap_err();
+    assert!(err.to_string().contains("can't show"), "{err}");
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "textbox", "rect": [10, 200, 190, 240], "contents": "Hello" }));
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let index = list["comments"].as_array().unwrap().iter().find(|c| c["contents"] == "Hello").unwrap()["index"].clone();
+    assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": index, "contents": "戻る" })), Err(ToolError::Failed(_))));
+}
+
+#[test]
 fn comments_and_form_data_travel_as_xfdf_fdf_and_text() {
     let dir = workdir("xfdf");
     let mut a = auto(&dir);
