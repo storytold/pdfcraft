@@ -1878,6 +1878,8 @@
 	Write this email?	¿Escribir este correo?
 	{who} in this document wants to open this address in your browser:	{who} de este documento quiere abrir esta dirección en tu navegador:
 	{who} in this document wants to open your email app with this address:	{who} de este documento quiere abrir tu aplicación de correo con esta dirección:
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	Esta dirección web mezcla letras de distintos alfabetos, una forma habitual de imitar el nombre de otro sitio.
+	This web address uses letters from another alphabet, which can look like familiar ones.	Esta dirección web usa letras de otro alfabeto, que pueden parecerse a letras conocidas.
 	Create PDF from images	Crear PDF a partir de imágenes
 	Selected image files: {count}	Archivos de imagen seleccionados: {count}
 	Use image resolution	Usar la resolución de la imagen

@@ -3573,6 +3573,8 @@ name = "pdfcraft-engine"
 version = "0.4.0"
 dependencies = [
  "chrono",
+ "icu_properties",
+ "idna",
  "image",
  "pdfcraft-a11y",
  "pdfcraft-annot",
@@ -3598,6 +3600,7 @@ dependencies = [
  "pdfcraft-xfdf",
  "png 0.18.1",
  "thiserror 2.0.21",
+ "url",
 ]
 
 [[package]]

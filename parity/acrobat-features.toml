@@ -2202,8 +2202,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.link"]
 tools = ["link_add"]
-evidence = ["crates/annot/src/tests.rs::links_are_added_edited_listed_and_removed", "crates/automation/tests/automation.rs::links_through_tools", "crates/ui-egui/tests/document_links.rs::a_link_asks_first_and_opens_when_allowed", "crates/ui-egui/tests/document_links.rs::a_button_uri_action_asks_first", "crates/ui-egui/tests/document_links.rs::an_email_link_cannot_attach_a_local_file"]
-notes = "Opening a document's link or button URI asks first; only http, https and mailto addresses are offered (#90, #91), and an email address that asks the email app to attach or insert a local file is refused."
+evidence = ["crates/annot/src/tests.rs::links_are_added_edited_listed_and_removed", "crates/automation/tests/automation.rs::links_through_tools", "crates/ui-egui/tests/document_links.rs::a_link_asks_first_and_opens_when_allowed", "crates/ui-egui/tests/document_links.rs::a_button_uri_action_asks_first", "crates/ui-egui/tests/document_links.rs::an_email_link_cannot_attach_a_local_file", "crates/ui-egui/tests/document_links.rs::a_lookalike_host_is_shown_in_punycode_and_flagged"]
+notes = "Opening a document's link or button URI asks first; only http, https and mailto addresses are offered (#90, #91), and an email address that asks the email app to attach or insert a local file is refused. The prompt shows the host as the browser receives it: international hosts in punycode, lookalikes that mix alphabets flagged, numeric hosts in their usual form."
 
 [[feature]]
 id = "edit.action-launch"

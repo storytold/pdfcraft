@@ -183,3 +183,42 @@ fn an_email_link_cannot_attach_a_local_file() {
         assert!(toast.contains("attach or insert a file"), "{url}: {toast}");
     }
 }
+
+/// Ask to open `url` from a script and return the harness with the prompt showing.
+fn prompt_for(url: &str) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness();
+    let id = h.state().views[0].id;
+    let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
+    h.state_mut().run_button_script(id, "web", &script);
+    h.run_steps(3);
+    assert_eq!(h.state().pending_link, pending(url, LinkOrigin::Script));
+    h
+}
+
+#[test]
+fn a_lookalike_host_is_shown_in_punycode_and_flagged() {
+    let _gpu = gpu();
+    // `pаypal.com` with a Cyrillic `а` (U+0430).
+    let h = prompt_for("https://p\u{0430}ypal.com/login");
+    h.get_by_label("xn--pypal-4ve.com");
+    assert_eq!(h.query_all_by_label_contains("p\u{0430}ypal.com").count(), 1, "only the full address shows the lookalike form");
+    h.get_by_label_contains("mixes letters from different alphabets");
+}
+
+#[test]
+fn an_international_host_is_shown_in_punycode_and_marked() {
+    let _gpu = gpu();
+    let h = prompt_for("https://bücher.example/");
+    h.get_by_label("xn--bcher-kva.example");
+    assert_eq!(h.query_all_by_label_contains("bücher.example").count(), 1, "only the full address shows the Unicode form");
+    h.get_by_label_contains("letters from another alphabet");
+    assert!(h.query_by_label_contains("mixes letters").is_none());
+}
+
+#[test]
+fn a_numeric_host_is_shown_as_the_address_it_goes_to() {
+    let _gpu = gpu();
+    let h = prompt_for("http://3232235777/admin");
+    h.get_by_label("192.168.1.1");
+    assert!(h.query_by_label_contains("alphabet").is_none());
+}

@@ -1877,6 +1877,8 @@
 	Write this email?	Écrire ce courriel ?
 	{who} in this document wants to open this address in your browser:	{who} dans ce document veut ouvrir cette adresse dans votre navigateur :
 	{who} in this document wants to open your email app with this address:	{who} dans ce document veut ouvrir votre application de courrier avec cette adresse :
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	Cette adresse web mélange des lettres d'alphabets différents, un moyen courant d'imiter le nom d'un autre site.
+	This web address uses letters from another alphabet, which can look like familiar ones.	Cette adresse web utilise des lettres d'un autre alphabet, qui peuvent ressembler à des lettres familières.
 	Create PDF from images	Créer un PDF à partir d'images
 	Selected image files: {count}	Fichiers d'image sélectionnés : {count}
 	Use image resolution	Utiliser la résolution de l'image
