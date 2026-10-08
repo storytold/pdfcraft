@@ -1959,3 +1959,19 @@
 
 @plural	{n} page|{n} pages	{n} страница|{n} страницы|{n} страниц
 @plural	{n} field|{n} fields	{n} поле|{n} поля|{n} полей
+	Create PDF from multiple files…	Создать PDF из нескольких файлов…
+	Optimizing… removing user data	Оптимизация… удаление пользовательских данных
+	Optimizing… image {d} of {t}	Оптимизация… изображение {d} из {t}
+	Optimizing… cleaning up	Оптимизация… очистка
+	Optimizing… merging identical objects	Оптимизация… объединение одинаковых объектов
+	Optimizing… writing the copy	Оптимизация… запись копии
+	Cancelling…	Отмена…
+	Created a PDF from {n} files	PDF создан из файлов: {n}
+	PDF, images and text	PDF, изображения и текст
+	Insert a file before page {label}	Вставить файл перед страницей {label}
+	Insert a file at the end	Вставить файл в конец
+	Save pages	Сохранить страницы
+	Save these pages as one PDF	Сохранить эти страницы в один PDF
+	No changes to save	Нет изменений для сохранения
+	Created a PDF from {n} files; left out: {names}	PDF создан из файлов: {n}; пропущены: {names}
+	Created a PDF from the first {n} files	PDF создан из первых файлов: {n}
