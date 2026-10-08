@@ -77,6 +77,17 @@ usage = "French UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
 sha256 = "b131025cb6c14135440968f08ab6334d70dd3b20271539471878d3825ecc9629"
 
 [[asset]]
+path = "crates/ui-egui/src/i18n/ru.tsv"
+title = "Russian interface translation catalog"
+author = "PdfCraft contributors"
+source = "Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Russian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "2c3586a3994a85db7fca346acb66c2d225717d97e0fad7551018560cd1c65eb0"
+
+[[asset]]
 path = "crates/ui-egui/src/i18n/ja.tsv"
 title = "Japanese interface translation catalog"
 author = "PdfCraft contributors"
