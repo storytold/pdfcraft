@@ -1045,6 +1045,15 @@ impl Automation {
     fn doc_protect(&mut self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::{Algorithm, Changes, Printing, Protection};
         let d = Protection::default();
+        // Restrictions only exist behind a permissions password (ISO 32000-2 §7.6.4.4: /P is
+        // enforced against the owner password; without one everything stays allowed). Refuse a
+        // restriction that could not take effect instead of writing an unrestricted file (#134).
+        let restriction = ["printing", "changes", "copy", "accessibility"].into_iter().find(|k| a.get(k).is_some());
+        if let (None, Some(key)) = (a.opt_str("permissions_password")?, restriction) {
+            return Err(ToolError::InvalidArgs(format!(
+                "`{key}` needs `permissions_password`: with open_password alone the document is encrypted but nothing is restricted"
+            )));
+        }
         let p = Protection {
             open_password: a.opt_str("open_password")?.map(str::to_owned),
             permissions_password: a.opt_str("permissions_password")?.map(str::to_owned),

@@ -747,6 +747,44 @@ fn protecting_through_tools() {
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
 }
 
+/// Restrictions exist only behind a permissions password: open_password alone encrypts and
+/// restricts nothing, and asking for a restriction without one is refused rather than ignored (#134).
+#[test]
+fn protecting_with_an_open_password_alone_restricts_nothing() {
+    let dir = workdir("protect-open-only");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (key, value) in [("copy", json!(false)), ("changes", json!("none")), ("printing", json!("none")), ("accessibility", json!(false))] {
+        match a.call("doc_protect", &json!({ "doc": doc, "open_password": "openme", key: value })) {
+            Err(ToolError::InvalidArgs(m)) => assert!(m.contains(key) && m.contains("permissions_password"), "{key}: {m}"),
+            other => panic!("{key} without permissions_password: {other:?}"),
+        }
+    }
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["security"]["protected"], false, "a refused call changes nothing");
+    let r = ok(&mut a, "doc_protect", json!({ "doc": doc, "open_password": "openme" }));
+    assert_eq!(
+        (r["security"]["protected"].as_bool(), r["security"]["copy"].as_bool(), r["security"]["modify"].as_bool()),
+        (Some(true), Some(true), Some(true))
+    );
+    assert_eq!(r["security"]["printing"], "high");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "open-only.pdf" }));
+    let mut b = auto(&dir);
+    let re = ok(&mut b, "doc_open", json!({ "path": "open-only.pdf", "password": "openme" }))["doc"].as_u64().unwrap();
+    let s = ok(&mut b, "doc_info", json!({ "doc": re }))["security"].clone();
+    assert_eq!(
+        (s["protected"].as_bool(), s["copy"].as_bool(), s["modify"].as_bool(), s["printing"].as_str()),
+        (Some(true), Some(true), Some(true), Some("high"))
+    );
+    ok(&mut b, "page_delete", json!({ "doc": re, "pages": [1] }));
+    // The schema says so too.
+    let def = tools().into_iter().find(|t| t.name == "doc_protect").unwrap();
+    assert!(def.description.contains("permissions_password"), "{}", def.description);
+    for key in ["printing", "changes", "copy", "accessibility"] {
+        let desc = def.input_schema["properties"][key]["description"].as_str().unwrap();
+        assert!(desc.contains("permissions_password"), "{key}: {desc}");
+    }
+}
+
 #[test]
 fn forms_through_tools() {
     let dir = workdir("forms");
