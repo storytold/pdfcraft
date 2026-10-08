@@ -420,6 +420,9 @@ pub fn extract_pages(src: &Document, pages: &[usize]) -> Result<Document, Organi
             crate::set_info(&mut out, key, &v)?;
         }
     }
+    // The pages share their source's resource dictionary, so the part would otherwise carry every
+    // XObject the source lists — images and all (#204). Keep only what these pages draw.
+    crate::prune::prune_unused_xobjects(&mut out)?;
     Ok(out)
 }
 

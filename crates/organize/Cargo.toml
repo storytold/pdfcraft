@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+pdfcraft-content = { workspace = true }
 pdfcraft-cos = { workspace = true }
 thiserror = { workspace = true }
 

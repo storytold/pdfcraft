@@ -3694,6 +3694,7 @@ name = "pdfcraft-organize"
 version = "0.2.1"
 dependencies = [
  "hayro-syntax",
+ "pdfcraft-content",
  "pdfcraft-cos",
  "thiserror 2.0.21",
 ]
@@ -3794,6 +3795,7 @@ dependencies = [
  "serde_json",
  "skrifa 0.44.0",
  "sys-locale",
+ "toml",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

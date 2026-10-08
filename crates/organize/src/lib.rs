@@ -18,6 +18,7 @@ mod dedupe;
 mod import;
 mod labels;
 mod outline;
+mod prune;
 pub mod view;
 
 pub use boxes::{BoxSpec, PageBox, page_boxes, set_page_box};

@@ -26,6 +26,7 @@ mod comments_panel;
 mod compare_ui;
 pub mod control;
 mod create_ui;
+mod credits;
 mod crop;
 mod export_ui;
 mod js_ui;
