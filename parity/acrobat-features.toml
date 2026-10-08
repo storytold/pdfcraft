@@ -2698,8 +2698,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.extract"]
 tools = ["page_extract"]
-evidence = ["crates/ui-egui/tests/editing.rs::extract_button_copies_selected_pages_to_a_new_tab", "crates/automation/tests/automation.rs::combine_extract_and_split"]
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::extract_button_copies_selected_pages_to_a_new_tab", "crates/automation/tests/automation.rs::combine_extract_and_split", "crates/organize/src/tests.rs::extract_and_split_keep_the_pdfx_output_intent_and_identification"]
+notes = "Carries the PDF/X output intent and identification (#263) in a new XMP packet; the source XMP (dates, other schemas) is not copied."
 
 [[feature]]
 id = "organize.extract-separate-files"
@@ -2818,8 +2818,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.split"]
 tools = ["doc_split"]
-evidence = ["crates/ui-egui/tests/editing.rs::split_dialog_writes_one_file_per_part", "crates/organize/src/tests.rs::split_ranges_cover_every_page_once", "crates/organize/src/tests.rs::split_produces_standalone_documents_with_metadata"]
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::split_dialog_writes_one_file_per_part", "crates/organize/src/tests.rs::split_ranges_cover_every_page_once", "crates/organize/src/tests.rs::split_produces_standalone_documents_with_metadata", "crates/organize/src/tests.rs::extract_and_split_keep_the_pdfx_output_intent_and_identification"]
+notes = "Each part carries the PDF/X output intent and identification (#263), as Extract does."
 
 [[feature]]
 id = "organize.split-before-pages"
@@ -2890,8 +2890,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.combine"]
 tools = ["doc_combine"]
-evidence = ["crates/organize/src/tests.rs::combine_concatenates_with_a_bookmark_per_file", "crates/ui-egui/tests/editing.rs::combining_files_opens_a_new_unsaved_tab", "crates/ui-egui/tests/editing.rs::combine_files_opens_in_its_own_tab", "crates/ui-egui/tests/editing.rs::combine_lists_size_and_warns_before_combining", "crates/ui-egui/tests/editing.rs::a_password_protected_file_is_unlocked_with_its_password_and_combined", "crates/ui-egui/tests/editing.rs::a_folder_adds_its_pdfs_in_order_and_optionally_its_subfolders", "crates/ui-egui/tests/ui.rs::pdfs_dropped_on_the_combine_tab_join_its_list", "crates/automation/tests/automation.rs::combine_extract_and_split", "crates/automation/tests/automation.rs::combine_opens_protected_files_with_their_passwords"]
-notes = "Combine files is its own tab: a table of the files (name, pages, size, modified, warnings) with column sorting, resizing and moving; files, folders (with subfolders) and open documents can be added, or dropped on the tab. Problems show before Combine (password, security settings that withhold page assembly, bad page ranges, duplicates); protected files are unlocked with their open or permissions password (also doc_combine passwords). The result is never encrypted, and is not yet offered for protection in the same step."
+evidence = ["crates/organize/src/tests.rs::combine_concatenates_with_a_bookmark_per_file", "crates/ui-egui/tests/editing.rs::combining_files_opens_a_new_unsaved_tab", "crates/ui-egui/tests/editing.rs::combine_files_opens_in_its_own_tab", "crates/ui-egui/tests/editing.rs::combine_lists_size_and_warns_before_combining", "crates/ui-egui/tests/editing.rs::a_password_protected_file_is_unlocked_with_its_password_and_combined", "crates/ui-egui/tests/editing.rs::a_folder_adds_its_pdfs_in_order_and_optionally_its_subfolders", "crates/ui-egui/tests/ui.rs::pdfs_dropped_on_the_combine_tab_join_its_list", "crates/automation/tests/automation.rs::combine_extract_and_split", "crates/automation/tests/automation.rs::combine_opens_protected_files_with_their_passwords", "crates/organize/src/tests.rs::combine_keeps_pdfx_when_every_source_agrees", "crates/organize/src/tests.rs::combine_claims_no_pdfx_when_the_sources_disagree"]
+notes = "Combine files is its own tab: a table of the files (name, pages, size, modified, warnings) with column sorting, resizing and moving; files, folders (with subfolders) and open documents can be added, or dropped on the tab. Problems show before Combine (password, security settings that withhold page assembly, bad page ranges, duplicates); protected files are unlocked with their open or permissions password (also doc_combine passwords). The result is never encrypted, and is not yet offered for protection in the same step. A PDF/X result (output intent, GTS_PDFXVersion, Trapped, XMP pdfxid) only when every source declares the same version and output intent (#263). When they differ the result claims none, and nothing reports that yet; Acrobat behaviour not observed."
 
 [[feature]]
 id = "organize.combine-bookmarks"

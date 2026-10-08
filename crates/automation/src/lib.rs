@@ -1175,7 +1175,15 @@ impl Automation {
         }
         let ranges: Vec<Option<String>> = match a.get("pages") {
             None | Some(Value::Null) => vec![None; paths.len()],
-            Some(Value::Array(v)) if v.len() == paths.len() => v.iter().map(|x| x.as_str().map(str::to_owned)).collect(),
+            Some(Value::Array(v)) if v.len() == paths.len() => v
+                .iter()
+                .enumerate()
+                .map(|(index, value)| match value {
+                    Value::Null => Ok(None),
+                    Value::String(range) => Ok(Some(range.clone())),
+                    _ => Err(ToolError::InvalidArgs(format!("pages[{index}] must be a range string or null"))),
+                })
+                .collect::<Result<_>>()?,
             Some(_) => return Err(ToolError::InvalidArgs("pages must list a range (or null) for each path".into())),
         };
         let passwords: Vec<Option<String>> = match a.get("passwords") {

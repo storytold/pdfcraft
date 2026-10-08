@@ -33,7 +33,8 @@ annotations); sheets place them with a clip. The result is a fresh, unencrypted,
 garbage-collected file (callers check the print permission).
 
 `spool` talks to CUPS (`lpstat -p -d`, `lp` with copies, collation, duplex and monochrome
-options). Other platforms report that printing to a printer isn't available yet; the
+options). The job is piped to `lp` on stdin and never written to a temp file, where another
+local user could read or swap it. Other platforms report that printing to a printer isn't available yet; the
 print-ready PDF can always be saved.
 
 Not yet: Windows and web spoolers, print as image, poster labels, PostScript output, colour

@@ -162,6 +162,40 @@ fn id_dir() -> Option<PathBuf> {
     crate::recovery::RecoveryStore::default_dir().and_then(|d| d.parent().map(|p| p.join("Digital IDs")))
 }
 
+/// Save a new digital ID as `<stem>.p12`, or `<stem> 2.p12`, … when the name is taken. The file
+/// is always created fresh, never opened through a file or link already at the name (checking
+/// first and then writing would let one be planted in between), and on Unix only its owner can
+/// read it: it holds the private key.
+fn save_new_id_file(dir: &std::path::Path, stem: &str, p12: &[u8]) -> std::io::Result<PathBuf> {
+    use std::io::{ErrorKind, Write};
+    for i in 1..=10_000u32 {
+        let path = dir.join(if i == 1 { format!("{stem}.p12") } else { format!("{stem} {i}.p12") });
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+        let file = match opts.open(&path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            // Windows refuses `create_new` on a folder with "access denied"; the name is taken all
+            // the same. A folder we can't write to, with nothing at the name, still fails here.
+            Err(e) if e.kind() == ErrorKind::PermissionDenied && path.symlink_metadata().is_ok() => continue,
+            Err(e) => return Err(e),
+        };
+        // The block closes the file before a failed one is removed (Windows can't remove an open file).
+        let written = {
+            let mut file = file;
+            file.write_all(p12).and_then(|()| file.sync_all())
+        };
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&path);
+            return Err(e);
+        }
+        return Ok(path);
+    }
+    Err(std::io::Error::new(ErrorKind::AlreadyExists, "no free file name for the digital ID"))
+}
+
 /// A Keychain identity by its `keychain:` reference.
 fn keychain_id(reference: &str) -> Result<DigitalId, String> {
     #[cfg(target_os = "macos")]
@@ -266,11 +300,7 @@ impl PdfCraftApp {
         .ok_or("There is no folder to save the digital ID in.")?;
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let stem: String = d.name.trim().chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
-        let path = (1..=u64::MAX)
-            .map(|i| dir.join(if i == 1 { format!("{stem}.p12") } else { format!("{stem} {i}.p12") }))
-            .find(|p| !p.exists())
-            .ok_or("no free file name for the digital ID")?;
-        std::fs::write(&path, &p12).map_err(|e| e.to_string())?;
+        let path = save_new_id_file(&dir, &stem, &p12).map_err(|e| e.to_string())?;
         Ok(self.add_digital_id(&path.to_string_lossy(), &cert))
     }
 
@@ -1078,4 +1108,87 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
 /// The text of an exported certificate (`.cer`, PEM).
 pub fn certificate_pem(c: &Certificate) -> String {
     sign::x509::to_pem(c)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh folder per call: tests run in parallel.
+    fn scratch() -> PathBuf {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("pdfcraft-sign-ui-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Create a digital ID named "Grace Hopper" in `dir`, as Configure New Digital ID ▸ Create
+    /// does. Returns where it was saved.
+    fn create_in(dir: &std::path::Path) -> Result<PathBuf, String> {
+        let mut app = PdfCraftApp::new();
+        app.export_dir_override = Some(dir.to_string_lossy().into_owned());
+        let mut draft = SignDraft::new(0, None, None, None, 0);
+        // P-256 keeps the test fast.
+        let key = KEY_ALGORITHMS.iter().position(|k| k.1 == "p256").unwrap();
+        draft.new_id =
+            NewIdDraft { name: "Grace Hopper".into(), key, password: "secret1".into(), confirm: "secret1".into(), ..NewIdDraft::default() };
+        app.sign_draft = Some(draft);
+        let i = app.create_digital_id()?;
+        Ok(PathBuf::from(&app.digital_ids[i].path))
+    }
+
+    #[test]
+    fn a_new_digital_id_skips_names_already_taken_without_writing_through_them() {
+        let dir = scratch();
+        // Another file's hard link at the first name, and a folder at the second (Windows refuses
+        // `create_new` on a folder with "access denied" rather than "already exists").
+        std::fs::write(dir.join("victim.txt"), "keep me").unwrap();
+        std::fs::hard_link(dir.join("victim.txt"), dir.join("Grace Hopper.p12")).unwrap();
+        std::fs::create_dir(dir.join("Grace Hopper 2.p12")).unwrap();
+        let saved = create_in(&dir).unwrap();
+        assert_eq!(saved, dir.join("Grace Hopper 3.p12"));
+        assert_eq!(std::fs::read_to_string(dir.join("victim.txt")).unwrap(), "keep me");
+        assert!(sign::pkcs12::open(&std::fs::read(&saved).unwrap(), "secret1").is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_digital_id_is_not_written_through_a_dangling_link() {
+        // `exists()` follows links, so a link to a file that doesn't exist yet looked free, and
+        // `fs::write` then created the private key wherever the link pointed.
+        let dir = scratch();
+        let (link, target) = (dir.join("Grace Hopper.p12"), dir.join("elsewhere.p12"));
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&target, &link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&target, &link);
+        #[cfg(not(any(unix, windows)))]
+        let made: std::io::Result<()> = {
+            let _ = (&target, &link);
+            Err(std::io::ErrorKind::Unsupported.into())
+        };
+        if let Err(e) = made {
+            // Windows needs Developer Mode (or admin) for symlinks.
+            eprintln!("skipped: can't create a symlink here: {e}");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let saved = create_in(&dir).unwrap();
+        assert!(!target.exists(), "nothing written through the link");
+        assert_eq!(saved, dir.join("Grace Hopper 2.p12"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_digital_id_is_readable_by_its_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch();
+        let saved = create_in(&dir).unwrap();
+        let mode = std::fs::metadata(&saved).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "the private key is not readable by others: {mode:o}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
