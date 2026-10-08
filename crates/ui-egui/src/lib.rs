@@ -172,6 +172,7 @@ pub enum QuickTool {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dialog {
+    CreateImages,
     Properties(PropsTab),
     About,
     Shortcuts,
@@ -407,6 +408,8 @@ pub struct PdfCraftApp {
     pub space_audit: Vec<pdfcraft_engine::optimize::SpaceUse>,
     /// Combine files: the files staged so far.
     pub combine_draft: Vec<combine_ui::CombineFile>,
+    /// Images waiting for the resolution choice (released on cancel).
+    pub image_import: Option<create_ui::ImageImport>,
     /// The custom stamp library, and the stamp being created.
     pub custom_stamps: Vec<stamps_ui::CustomStamp>,
     pub stamp_draft: stamps_ui::StampDraft,
@@ -595,6 +598,7 @@ impl PdfCraftApp {
             cert_viewer: None,
             space_audit: Vec::new(),
             combine_draft: Vec::new(),
+            image_import: None,
             custom_stamps: Vec::new(),
             stamp_draft: Default::default(),
             optimize_draft: OptimizeDraft::default(),

@@ -84,6 +84,32 @@ fn images_become_pages_at_their_resolution() {
 }
 
 #[test]
+fn image_resolution_override_changes_size_without_resampling() {
+    let images = [("photo.png".into(), png_bytes(true)), ("scan.jpg".into(), jpeg_bytes())];
+    for (dpi, sizes) in [(72.0, [(4.0, 2.0), (3.0, 2.0)]), (300.0, [(0.96, 0.48), (0.72, 0.48)])] {
+        let doc = reopen(&from_images_with_resolution(&images, ImageResolution::Dpi(dpi)).unwrap());
+        for (page, size) in pages(&doc).iter().zip(sizes) {
+            let m = media(page);
+            assert!((m[2] - size.0).abs() < 0.001 && (m[3] - size.1).abs() < 0.001);
+            let res = doc.resolve(page.get(b"Resources").unwrap());
+            let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+            let img = doc.resolve(xo.as_dict().unwrap().get(b"Im0").unwrap());
+            let Object::Stream(stream) = &*img else { panic!("expected an image stream") };
+            if stream.dict.name(b"Filter") == Some(&b"DCTDecode"[..]) {
+                assert_eq!(*stream.raw, jpeg_bytes());
+            } else {
+                assert_eq!(stream.dict.int(b"Width"), Some(4));
+                assert_eq!(stream.dict.int(b"Height"), Some(2));
+                assert!(stream.dict.contains(b"SMask"));
+            }
+        }
+    }
+    for dpi in [0.0, -1.0, f64::NAN, f64::INFINITY, 1201.0] {
+        assert!(matches!(from_images_with_resolution(&images, ImageResolution::Dpi(dpi)), Err(CreateError::Invalid(_))));
+    }
+}
+
+#[test]
 fn text_is_wrapped_and_paginated() {
     let long: String = (0..200).map(|i| format!("Line {i} of a plain text file\n")).collect();
     let doc = reopen(&from_text("notes", &format!("{long}\u{c}After a form feed"), LETTER, 11.0).unwrap());

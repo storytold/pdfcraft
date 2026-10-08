@@ -54,6 +54,20 @@ Assert-Equal $app[0] 'PdfcraftExe' 'Shortcut executable key path'
 $scope = Read-Row 'SELECT `Value` FROM `Property` WHERE `Property` = ''ALLUSERS''' 1
 Assert-Equal $scope[0] '1' 'Per-machine shortcut scope'
 
+# Image context menu opens the DPI chooser; the app component owns every registry row so
+# uninstall removes it. No image default association is changed.
+foreach ($ext in @('png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif', 'bmp', 'jp2', 'j2k', 'jpx')) {
+  $key = 'Software\Classes\SystemFileAssociations\.' + $ext + '\shell\PdfCraft.CreatePdf'
+  $menu = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $key + ''' AND `Name` IS NULL') 3
+  Assert-Equal $menu[0] 'Create PDF with PdfCraft…' "$ext context menu label"
+  Assert-Equal $menu[1] 'PdfcraftApp' "$ext context menu component"
+  Assert-Equal $menu[2] '2' "$ext context menu HKLM root"
+  $command = Read-Row ('SELECT `Value` FROM `Registry` WHERE `Key` = ''' + $key + '\command''') 1
+  Assert-Equal $command[0] '"[#PdfcraftExe]" --create-images "%1"' "$ext context menu command"
+  $selection = Read-Row ('SELECT `Value` FROM `Registry` WHERE `Key` = ''' + $key + ''' AND `Name` = ''MultiSelectModel''') 1
+  Assert-Equal $selection[0] 'Single' "$ext context menu selection"
+}
+
 # Negative sequences are Windows Installer's success/user-exit/failure paths. Only full UI
 # shows these dialogs: an unattended /qn or /qb install must never wait for a Finish click.
 foreach ($exit in @(@('InstallComplete', '-1'), @('InstallCancelled', '-2'), @('InstallFailed', '-3'))) {

@@ -67,6 +67,7 @@ impl Automation {
             "sub_filter": s.sub_filter,
             "algorithm": s.algorithm,
             "timestamp": s.timestamp,
+            "timestamp_time": s.timestamp_time.map(|t| t.to_string()),
             "modification": modification,
             "changes": changes,
             "details": s.details,

@@ -40,6 +40,8 @@ pub struct SignerInfo {
     pub signature: Vec<u8>,
     /// An RFC 3161 timestamp token is attached (unsigned attribute).
     pub timestamp: bool,
+    /// The attached token's raw CMS bytes, when present.
+    pub timestamp_token: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,11 +170,16 @@ fn parse_signer(si: &Tlv<'_>) -> Result<SignerInfo, SignError> {
     let (scheme, scheme_digest) = signature_algorithm(&next)?;
     let signature = it.next().ok_or_else(|| bad("signature"))?.expect(tag::OCTET_STRING, "signature")?.value.to_vec();
     let mut timestamp = false;
+    let mut timestamp_token = None;
     for t in it {
         if t.tag == tag::ctx(1) {
             for a in t.children()? {
-                if a.children()?.first().and_then(|o| o.oid().ok()).as_deref() == Some(TIMESTAMP_TOKEN) {
+                let kids = a.children()?;
+                if kids.first().and_then(|o| o.oid().ok()).as_deref() == Some(TIMESTAMP_TOKEN) {
                     timestamp = true;
+                    // The value is a SET OF ContentInfo: the token's own encoding.
+                    let set = kids.get(1).and_then(|s| s.children().ok());
+                    timestamp_token = set.and_then(|c| c.first().copied()).map(|ci| ci.raw.to_vec());
                 }
             }
         }
@@ -189,9 +196,42 @@ fn parse_signer(si: &Tlv<'_>) -> Result<SignerInfo, SignError> {
         scheme_digest,
         signature,
         timestamp,
+        timestamp_token,
     })
 }
 
+/// Attach an RFC 3161 `signatureTimeStampToken` unsigned attribute to a detached CMS object.
+/// The signed attributes and signature value are preserved byte-for-byte.
+pub fn attach_timestamp_token(cms: &[u8], token: &[u8]) -> Result<Vec<u8>, SignError> {
+    let (content_info, _) = Tlv::parse(cms)?;
+    let ci = content_info.expect(tag::SEQUENCE, "ContentInfo")?.children()?;
+    let [content_type, wrapped] = ci.as_slice() else { return Err(bad("ContentInfo")) };
+    if content_type.oid()? != SIGNED_DATA {
+        return Err(bad("not SignedData"));
+    }
+    let signed_data = wrapped.expect(tag::ctx(0), "content")?.inner()?;
+    let mut sd = signed_data.children()?;
+    // signerInfos is the last field of SignedData (RFC 5652 §5.1); searching from the end
+    // skips the SET OF digest algorithms.
+    let signer_index = sd.iter().rposition(|t| t.tag == tag::SET).ok_or_else(|| bad("no signerInfos"))?;
+    let signer_set = sd[signer_index];
+    let signer = signer_set.children()?.first().copied().ok_or_else(|| bad("no signer"))?;
+    let mut signer_parts: Vec<Vec<u8>> = signer.children()?.into_iter().map(|t| t.raw.to_vec()).collect();
+    if signer_parts.len() < 6 {
+        return Err(bad("malformed signerInfo"));
+    }
+    let attr = der::seq(&[&der::oid(TIMESTAMP_TOKEN), &der::set_of(&[token])]);
+    let unsigned = der::tlv(tag::ctx(1), &attr);
+    signer_parts.push(unsigned);
+    let signer_refs: Vec<&[u8]> = signer_parts.iter().map(Vec::as_slice).collect();
+    let new_signer = der::seq(&signer_refs);
+    let new_signer_set = der::set_of(&[&new_signer]);
+    sd[signer_index] = Tlv::parse_all(&new_signer_set)?;
+    let sd_refs: Vec<&[u8]> = sd.iter().map(|t| t.raw).collect();
+    let new_sd = der::seq(&sd_refs);
+    let wrapped_new = der::explicit(0, &new_sd);
+    Ok(der::seq(&[&der::oid(SIGNED_DATA), &wrapped_new]))
+}
 fn attribute(o: &str, value: &[u8]) -> Vec<u8> {
     der::seq(&[&der::oid(o), &der::set_of(&[value])])
 }
@@ -206,10 +246,38 @@ pub fn sign_detached(
     alg: DigestAlg,
     content_digest: &[u8],
 ) -> Result<Vec<u8>, SignError> {
+    build(key, cert, chain, alg, DATA, None, content_digest)
+}
+
+/// A CMS SignedData that encapsulates `content` under `content_type` (an RFC 3161 token wraps
+/// its TSTInfo this way).
+pub fn sign_encapsulated(
+    key: &PrivateKey,
+    cert: &Certificate,
+    chain: &[Certificate],
+    alg: DigestAlg,
+    content_type: &str,
+    content: &[u8],
+) -> Result<Vec<u8>, SignError> {
+    build(key, cert, chain, alg, content_type, Some(content), &alg.digest(&[content]))
+}
+
+// The parameters mirror the SignedData fields being assembled.
+#[allow(clippy::too_many_arguments)]
+fn build(
+    key: &PrivateKey,
+    cert: &Certificate,
+    chain: &[Certificate],
+    alg: DigestAlg,
+    content_type: &str,
+    content: Option<&[u8]>,
+    content_digest: &[u8],
+) -> Result<Vec<u8>, SignError> {
     let cert_hash = DigestAlg::Sha256.digest(&[&cert.raw]);
     let general_names = der::seq(&[&der::explicit(4, &cert.issuer.raw)]);
     let ess = der::seq(&[&der::seq(&[&der::seq(&[&der::octets(&cert_hash), &der::seq(&[&general_names, &der::uint(&cert.serial)])])])]);
-    let attrs = [attribute(CONTENT_TYPE, &der::oid(DATA)), attribute(MESSAGE_DIGEST, &der::octets(content_digest)), attribute(SIGNING_CERT_V2, &ess)];
+    let attrs =
+        [attribute(CONTENT_TYPE, &der::oid(content_type)), attribute(MESSAGE_DIGEST, &der::octets(content_digest)), attribute(SIGNING_CERT_V2, &ess)];
     let refs: Vec<&[u8]> = attrs.iter().map(Vec::as_slice).collect();
     let set = der::set_of(&refs);
     let signature = key.sign(alg, &set)?;
@@ -219,12 +287,11 @@ pub fn sign_detached(
     let signer = der::seq(&[&der::int(1), &sid, &alg.algorithm(), &signed_attrs, &key.signature_algorithm(alg), &der::octets(&signature)]);
     let mut certs: Vec<&[u8]> = vec![&cert.raw];
     certs.extend(chain.iter().filter(|c| c.raw != cert.raw).map(|c| c.raw.as_slice()));
-    let signed_data = der::seq(&[
-        &der::int(1),
-        &der::set_of(&[&alg.algorithm()]),
-        &der::seq(&[&der::oid(DATA)]),
-        &der::tlv(tag::ctx(0), &certs.concat()),
-        &der::set_of(&[&signer]),
-    ]);
+    let encap = match content {
+        Some(c) => der::seq(&[&der::oid(content_type), &der::explicit(0, &der::octets(c))]),
+        None => der::seq(&[&der::oid(content_type)]),
+    };
+    let signed_data =
+        der::seq(&[&der::int(1), &der::set_of(&[&alg.algorithm()]), &encap, &der::tlv(tag::ctx(0), &certs.concat()), &der::set_of(&[&signer])]);
     Ok(der::seq(&[&der::oid(SIGNED_DATA), &der::explicit(0, &signed_data)]))
 }

@@ -120,6 +120,109 @@ pub struct Certificate {
     /// Key usage bits (bit 0 = digitalSignature, 1 = nonRepudiation, 5 = keyCertSign), if present.
     pub key_usage: Option<u16>,
     pub subject_key_id: Option<Vec<u8>>,
+    /// Authority key identifier (2.5.29.35), when present.
+    pub authority_key_id: Option<Vec<u8>>,
+    /// Extended key usage OIDs (2.5.29.37), when present.
+    pub extended_key_usage: Option<Vec<String>>,
+    /// OCSP responder URLs from the Authority Information Access (1.3.6.1.5.5.7.1.1).
+    pub ocsp_urls: Vec<String>,
+    /// CRL distribution point URLs (2.5.29.31).
+    pub crl_urls: Vec<String>,
+}
+
+/// The certificate extensions `Certificate::parse` reads, gathered tolerantly: an
+/// extension that does not parse leaves its field at the default instead of failing the
+/// certificate (real-world issuers use encodings with edge cases, e.g. a single-URI CRL
+/// distribution point whose `fullName [0]` is IMPLICIT over a bare GeneralName).
+#[derive(Default)]
+struct Extensions {
+    is_ca: bool,
+    key_usage: Option<u16>,
+    subject_key_id: Option<Vec<u8>>,
+    authority_key_id: Option<Vec<u8>>,
+    extended_key_usage: Option<Vec<String>>,
+    ocsp_urls: Vec<String>,
+    crl_urls: Vec<String>,
+}
+
+impl Extensions {
+    fn read(&mut self, oid: &str, value: &Tlv<'_>) {
+        match oid {
+            "2.5.29.19" => {
+                let Ok(bc) = Tlv::parse_all(value.value) else { return };
+                self.is_ca = bc.children().is_ok_and(|c| c.first().is_some_and(|b| b.tag == tag::BOOLEAN && b.value != [0]));
+            }
+            "2.5.29.15" => {
+                let Ok(bits) = Tlv::parse_all(value.value) else { return };
+                let Some((_, b)) = bits.value.split_first() else { return };
+                // Bit 0 is the most significant bit of the first byte.
+                let mut u = 0u16;
+                for (i, byte) in b.iter().take(2).enumerate() {
+                    for j in 0..8 {
+                        if byte & (0x80 >> j) != 0 {
+                            u |= 1 << (i * 8 + j);
+                        }
+                    }
+                }
+                self.key_usage = Some(u);
+            }
+            "2.5.29.14" => {
+                if let Ok(ski) = Tlv::parse_all(value.value) {
+                    self.subject_key_id = Some(ski.value.to_vec());
+                }
+            }
+            // AuthorityKeyIdentifier: the [0] keyIdentifier inside.
+            "2.5.29.35" => {
+                if let Ok(aki) = Tlv::parse_all(value.value) {
+                    self.authority_key_id = aki.children().ok().and_then(|c| c.into_iter().find(|t| t.tag == tag::ctx(0))).map(|t| t.value.to_vec());
+                }
+            }
+            // ExtendedKeyUsage: a SEQUENCE OF OID.
+            "2.5.29.37" => {
+                if let Ok(eku) = Tlv::parse_all(value.value) {
+                    self.extended_key_usage = eku.children().ok().map(|c| c.into_iter().filter_map(|t| t.oid().ok()).collect::<Vec<_>>());
+                }
+            }
+            // Authority Information Access: OCSP and CA-issuer locations.
+            "1.3.6.1.5.5.7.1.1" => {
+                let Ok(aia) = Tlv::parse_all(value.value) else { return };
+                for access in aia.children().unwrap_or_default() {
+                    let Ok(a) = access.children() else { continue };
+                    if a.len() >= 2 && a[0].oid().ok().as_deref() == Some("1.3.6.1.5.5.7.48.1") && a[1].tag == tag::ctx_prim(6) {
+                        self.ocsp_urls.push(String::from_utf8_lossy(a[1].value).into_owned());
+                    }
+                }
+            }
+            // CRL distribution points: full-name URIs.
+            "2.5.29.31" => {
+                let Ok(dps) = Tlv::parse_all(value.value) else { return };
+                for dp in dps.children().unwrap_or_default() {
+                    let Ok(fields) = dp.children() else { continue };
+                    for field in fields {
+                        if field.tag != tag::ctx(0) {
+                            continue;
+                        }
+                        // distributionPoint [0] DistributionPointName, whose fullName choice is
+                        // [0] IMPLICIT GeneralNames: the value is a run of GeneralNames, not a
+                        // wrapped SEQUENCE (and often a single URI).
+                        let Ok(name) = field.inner() else { continue };
+                        if name.tag != tag::ctx(0) {
+                            continue;
+                        }
+                        let mut rest = name.value;
+                        while !rest.is_empty() {
+                            let Ok((n, r)) = Tlv::parse(rest) else { break };
+                            rest = r;
+                            if n.tag == tag::ctx_prim(6) {
+                                self.crl_urls.push(String::from_utf8_lossy(n.value).into_owned());
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 impl Certificate {
@@ -138,42 +241,21 @@ impl Certificate {
         let [nb, na] = validity.as_slice() else { return Err(SignError::Malformed("validity".into())) };
         let subject = Name::parse(&f.next().ok_or_else(|| SignError::Malformed("subject".into()))?)?;
         let public_key = PublicKey::from_spki(&f.next().ok_or_else(|| SignError::Malformed("public key".into()))?)?;
-        let mut is_ca = false;
-        let mut key_usage = None;
-        let mut subject_key_id = None;
+        let mut ext = Extensions::default();
         for t in f {
             if t.tag != tag::ctx(3) {
                 continue;
             }
-            for ext in t.inner()?.children()? {
-                let e = ext.children()?;
+            for ext_tlv in t.inner()?.children()? {
+                let e = ext_tlv.children()?;
                 let Some(o) = e.first().and_then(|o| o.oid().ok()) else { continue };
                 let Some(value) = e.last().filter(|v| v.tag == tag::OCTET_STRING) else { continue };
-                match o.as_str() {
-                    "2.5.29.19" => {
-                        is_ca = Tlv::parse_all(value.value)?.children()?.first().is_some_and(|b| b.tag == tag::BOOLEAN && b.value != [0]);
-                    }
-                    "2.5.29.15" => {
-                        let bits = Tlv::parse_all(value.value)?;
-                        let v = bits.value;
-                        if let Some((_, b)) = v.split_first() {
-                            // Bit 0 is the most significant bit of the first byte.
-                            let mut u = 0u16;
-                            for (i, byte) in b.iter().take(2).enumerate() {
-                                for j in 0..8 {
-                                    if byte & (0x80 >> j) != 0 {
-                                        u |= 1 << (i * 8 + j);
-                                    }
-                                }
-                            }
-                            key_usage = Some(u);
-                        }
-                    }
-                    "2.5.29.14" => subject_key_id = Some(Tlv::parse_all(value.value)?.value.to_vec()),
-                    _ => {}
-                }
+                // A malformed or unreadable extension must never reject the whole certificate:
+                // unreadable ones are skipped and the fields they carry keep their defaults.
+                ext.read(o.as_str(), value);
             }
         }
+        let Extensions { is_ca, key_usage, subject_key_id, authority_key_id, extended_key_usage, ocsp_urls, crl_urls } = ext;
         Ok(Certificate {
             raw: raw.to_vec(),
             tbs: tbs.raw.to_vec(),
@@ -188,6 +270,10 @@ impl Certificate {
             is_ca,
             key_usage,
             subject_key_id,
+            authority_key_id,
+            extended_key_usage,
+            ocsp_urls,
+            crl_urls,
         })
     }
 
@@ -342,4 +428,44 @@ fn base64(s: &str) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod xfa_ext_tests {
+    use super::*;
+
+    #[test]
+    fn a_single_uri_crl_distribution_point_is_read() {
+        // The real extnValue of the Entrust Class 3 Client CA: DistributionPoints with one
+        // full-name URI. `fullName [0]` is IMPLICIT over GeneralNames, so with a single
+        // GeneralName there is no inner SEQUENCE — a run of one element.
+        let uri = b"http://crl.entrust.net/2048ca.crl";
+        let value = der::seq(&[&der::seq(&[&der::tlv(tag::ctx(0), &der::tlv(tag::ctx(0), &der::tlv(tag::ctx_prim(6), uri)))])]);
+        let wrapped = der::tlv(tag::OCTET_STRING, &value);
+        let extn = Tlv::parse_all(&wrapped).unwrap();
+        let mut ext = Extensions::default();
+        ext.read("2.5.29.31", &extn);
+        assert_eq!(ext.crl_urls, vec!["http://crl.entrust.net/2048ca.crl".to_string()]);
+        // Two URIs in one full-name run.
+        let names = [der::tlv(tag::ctx_prim(6), uri), der::tlv(tag::ctx_prim(6), b"http://crl2.example/x.crl")].concat();
+        let two = der::seq(&[&der::seq(&[&der::tlv(tag::ctx(0), &der::tlv(tag::ctx(0), &names))])]);
+        let wrapped = der::tlv(tag::OCTET_STRING, &two);
+        let extn = Tlv::parse_all(&wrapped).unwrap();
+        let mut ext = Extensions::default();
+        ext.read("2.5.29.31", &extn);
+        assert_eq!(ext.crl_urls.len(), 2);
+    }
+
+    #[test]
+    fn a_malformed_extension_is_skipped_not_fatal() {
+        for garbage in [b"".as_slice(), &[0xFF, 0xFF, 0xFF], &[0x30, 0x99], b"not der"] {
+            let wrapped = der::tlv(tag::OCTET_STRING, garbage);
+            let extn = Tlv::parse_all(&wrapped).unwrap();
+            for oid in ["2.5.29.19", "2.5.29.15", "2.5.29.14", "2.5.29.35", "2.5.29.37", "1.3.6.1.5.5.7.1.1", "2.5.29.31"] {
+                let mut ext = Extensions::default();
+                ext.read(oid, &extn); // must not panic and must leave defaults
+                assert!(ext.ocsp_urls.is_empty() && ext.crl_urls.is_empty() && !ext.is_ca);
+            }
+        }
+    }
 }

@@ -138,6 +138,15 @@ pub enum PublicKey {
 }
 
 impl PublicKey {
+    /// The `subjectPublicKey` BIT STRING contents — what OCSP's `issuerKeyHash` covers
+    /// (RFC 6960 §4.1.1). RSA keys are re-encoded; EC points are the stored bytes.
+    pub fn key_bits(&self) -> Vec<u8> {
+        match self {
+            PublicKey::Rsa { n, e } => der::seq(&[&der::uint(n), &der::uint(e)]),
+            PublicKey::P256(bits) | PublicKey::P384(bits) => bits.clone(),
+        }
+    }
+
     pub fn from_spki(spki: &Tlv<'_>) -> Result<PublicKey, SignError> {
         let parts = spki.children()?;
         let [alg, key] = parts.as_slice() else { return Err(SignError::Malformed("SubjectPublicKeyInfo".into())) };

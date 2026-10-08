@@ -574,7 +574,7 @@ milestone = "M4"
 status = "shipped"
 commands = ["file.close"]
 tools = ["doc_close"]
-evidence = ["crates/ui-egui/tests/editing.rs::closing_a_dirty_tab_asks_and_cancel_keeps_it", "crates/ui-egui/tests/editing.rs::closing_a_dirty_tab_can_save_first", "crates/ui-egui/tests/editing.rs::quitting_with_unsaved_changes_asks_for_each_document"]
+evidence = ["crates/ui-egui/tests/editing.rs::closing_a_dirty_tab_asks_and_cancel_keeps_it", "crates/ui-egui/tests/editing.rs::closing_a_dirty_tab_can_save_first", "crates/ui-egui/tests/editing.rs::quitting_with_unsaved_changes_asks_for_each_document", "crates/ui-egui/tests/editing.rs::save_prompt_stays_inside_the_screen_for_a_long_filename"]
 notes = ""
 
 [[feature]]
@@ -5999,11 +5999,11 @@ title = "Add a document timestamp (RFC 3161)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/sign/tests/pdf.rs::a_document_timestamp_covers_the_file_and_validates"]
+notes = "timestamp_document appends a standalone /ETSI.RFC3161 signature dictionary over the whole file; validation discovers and verifies these (imprint, token signature, TSA cert validity) and reports the trusted time. Missing: automation tool and timestamp-server configuration (transport is caller-injected)."
 
 [[feature]]
 id = "sign.timestamp-servers"
@@ -6023,11 +6023,11 @@ title = "PAdES B-T (signature timestamp)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/sign/tests/pdf.rs::signing_with_a_timestamp_embeds_a_verified_rfc3161_token"]
+notes = "Sign with an embedded RFC 3161 token (sign_with_timestamp): imprint and TSA signature verified at signing and validation time, trusted time reported. Missing: timestamp-server configuration and a fetcher (transport is caller-injected), the standalone document timestamp, automation tool."
 
 [[feature]]
 id = "sign.ltv"
@@ -6035,11 +6035,11 @@ title = "Long-term validation (DSS/VRI)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/sign/tests/pdf.rs::embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid", "crates/sign/tests/pdf.rs::an_embedded_verified_revocation_invalidates_the_signature"]
+notes = "dss::embed merges caller-supplied evidence into the catalog /DSS with /VRI entries per signature, deduplicating blobs, as a permitted incremental change; revocation.rs verifies the embedded CRLs and OCSP responses (signature, responder identity, CertID, window) and a verified revocation invalidates the signature. Missing: fetching evidence, automation tool."
 
 [[feature]]
 id = "sign.pades-blta"
@@ -6047,11 +6047,11 @@ title = "PAdES B-LT and B-LTA"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/sign/tests/pdf.rs::sign_then_ltv_then_timestamp_makes_a_b_lta_file"]
+notes = "The B-LT/B-LTA chain works with caller-supplied evidence: sign, embed DSS (B-LT), then append a document timestamp over the result (B-LTA); earlier signatures stay valid with the store classified as a permitted change. Missing: OCSP/CRL verification of the evidence, re-timestamping automation."
 
 [[feature]]
 id = "sign.ocsp-crl"
@@ -6059,11 +6059,11 @@ title = "Revocation checking (OCSP and CRL)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/sign/tests/crypto.rs::crls_verify_and_report_revocation", "crates/sign/tests/crypto.rs::ocsp_responses_verify_and_match_the_certificate", "crates/sign/tests/pdf.rs::an_embedded_verified_revocation_invalidates_the_signature"]
+notes = "RFC 5280 CRLs and RFC 6960 OCSP responses are parsed and verified (issuer/responder signature, delegated responder's OCSP-signing EKU, CertID hash match, validity window) and checked against the DSS during validation. Missing: network fetching of fresh evidence and the OS trust store."
 
 [[feature]]
 id = "sign.validate-all"
@@ -6191,11 +6191,11 @@ title = "Verification time (signing time, timestamp, now)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/sign/tests/pdf.rs::signing_with_a_timestamp_embeds_a_verified_rfc3161_token", "crates/sign/tests/pdf.rs::an_untrusted_timestamp_does_not_set_the_validation_time"]
+notes = "Validation prefers the verified RFC 3161 timestamp time over /M when checking certificate validity and revocation, but only when the TSA chains to the trust store; an untrusted token is reported as an unverified timestamp and its time is not used. Missing: an explicit verification-time option (verify at a chosen date / now) in the validation API."
 
 [[feature]]
 id = "sign.changes-after-signing"
@@ -6811,11 +6811,11 @@ title = "Image compression options when converting"
 area = "J"
 tier = "P2"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["create.images"]
+tools = ["doc_create"]
+evidence = ["crates/create/src/tests.rs::image_resolution_override_changes_size_without_resampling", "crates/automation/tests/automation.rs::creating_images_with_dpi_through_tools", "crates/ui-egui/tests/create.rs::image_import_dialog_chooses_dpi_and_cancels"]
+notes = "Page sizing: embedded resolution (72 dpi fallback), fixed 72 dpi, or custom 1–1200 dpi; pixels are not resampled. Compression options are still absent. Windows image context menu opens the same chooser; other OS context-menu integration not yet."
 
 [[feature]]
 id = "create.pdf-printer"

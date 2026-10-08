@@ -55,6 +55,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut ocr_now = false;
     let mut compare_now = false;
     let mut combine_now = false;
+    let mut images_now = false;
     let mut stamp_now = false;
     let mut alt_now = false;
     let t = Tokens::get(ctx);
@@ -76,6 +77,12 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         w.inactive.bg_fill = t.hover;
         w.hovered.bg_stroke = egui::Stroke::new(1.0, t.text_muted);
         match dialog {
+            Dialog::CreateImages => {
+                let (go, cancel) = crate::create_ui::image_import_body(ui, app);
+                images_now = go;
+                close = go || cancel;
+                return;
+            }
             Dialog::Properties(tab) => {
                 ui.label(egui::RichText::new(tl!("Document Properties")).font(theme::semibold(18.0)));
                 ui.add_space(8.0);
@@ -1257,6 +1264,11 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if combine_now {
         app.combine_staged();
     }
+    if images_now {
+        app.finish_image_import();
+    } else if dialog == Dialog::CreateImages && app.dialog != Some(Dialog::CreateImages) {
+        app.image_import = None;
+    }
     if ocr_now {
         app.start_ocr();
     }
@@ -1324,9 +1336,12 @@ fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ui.set_width(420.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("save", 22.0, t.accent));
-            ui.label(
-                egui::RichText::new(crate::i18n::fmt(tl!("Save changes to “{name}” before closing?"), &[("name", &name)]))
-                    .font(theme::semibold(16.0)),
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(crate::i18n::fmt(tl!("Save changes to “{name}” before closing?"), &[("name", &name)]))
+                        .font(theme::semibold(16.0)),
+                )
+                .wrap(),
             );
         });
         ui.add_space(6.0);
@@ -1425,7 +1440,7 @@ fn password(app: &mut PdfCraftApp, ctx: &egui::Context) {
             ui.label(egui::RichText::new(tl!("Password required")).font(theme::semibold(17.0)));
         });
         ui.add_space(6.0);
-        ui.label(crate::i18n::fmt(tl!("“{name}” is protected. Enter a password to open it."), &[("name", &prompt.name)]));
+        ui.add(egui::Label::new(crate::i18n::fmt(tl!("“{name}” is protected. Enter a password to open it."), &[("name", &prompt.name)])).wrap());
         ui.add_space(8.0);
         let r = ui.add(egui::TextEdit::singleline(&mut prompt.input).password(true).hint_text(tl!("Password")).desired_width(f32::INFINITY));
         // Enter submits. The field keeps focus (we request it every frame), so check the key

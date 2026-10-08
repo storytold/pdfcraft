@@ -388,6 +388,30 @@ fn quitting_with_unsaved_changes_asks_for_each_document() {
 }
 
 #[test]
+fn save_prompt_stays_inside_the_screen_for_a_long_filename() {
+    // Issue #161: an unwrapped title carrying a long filename widened the centered modal past
+    // the viewport, clipping the message and pushing the Save/Cancel buttons off-screen.
+    let name = "Psychology_ The Science of Mind and Behaviour, -- Nigel Holt, Andy Bremner, Michael \
+                Vliek, Ed Sutherland, -- 5, 2024 -- McGraw-Hill Education (UK) Ltd -- isbn13 97815268.pdf";
+    let mut h = Harness::builder().with_size(egui::vec2(1365.0, 719.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes(name, None, fixture(1)).expect("fixture opens");
+        app.close_request = Some(CloseRequest::Tab(0));
+        app
+    });
+    h.run_steps(4);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1365.0, 719.0));
+    let inside = |r: egui::Rect| screen.contains(r.min) && screen.contains(r.max);
+    let title = h.get_by_label_contains("Save changes to");
+    let title_rect = title.rect();
+    assert!(inside(title_rect), "the title rect {title_rect:?} leaves the screen");
+    for button in ["Save", "Cancel", "Don't save"] {
+        let rect = h.get_by_label(button).rect();
+        assert!(inside(rect), "the {button} button rect {rect:?} leaves the screen");
+    }
+}
+
+#[test]
 fn document_properties_edit_is_one_undoable_step() {
     let mut h = harness(1, |app| app.set_option("dialog", "properties").unwrap());
     let title = h.get_by_role_and_label(Role::TextInput, "Title");

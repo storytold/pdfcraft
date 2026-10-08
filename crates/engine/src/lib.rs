@@ -28,6 +28,7 @@ pub use pdfcraft_organize::LabelStyle;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
 pub use pdfcraft_cos::Algorithm;
+pub use pdfcraft_create::ImageResolution;
 pub use pdfcraft_edit::{
     Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, MarkKind, Watermark,
 };
@@ -2252,6 +2253,11 @@ impl Session {
         self.write_new(&pdfcraft_create::from_images(images)?)
     }
 
+    /// Create image pages at embedded resolution or a fixed dpi, without resampling.
+    pub fn create_from_images_with_resolution(&self, images: &[(String, Vec<u8>)], resolution: ImageResolution) -> Result<Arc<Vec<u8>>, EditError> {
+        self.write_new(&pdfcraft_create::from_images_with_resolution(images, resolution)?)
+    }
+
     /// A new document from plain text (US Letter, 11 pt Helvetica).
     pub fn create_from_text(&self, title: &str, text: &str) -> Result<Arc<Vec<u8>>, EditError> {
         self.write_new(&pdfcraft_create::from_text(title, text, pdfcraft_create::LETTER, 11.0)?)
@@ -2573,6 +2579,40 @@ impl Session {
             opts.date = self.signing_date();
         }
         Ok(Arc::new(pdfcraft_sign::sign(&editor.cos, id, &opts)?))
+    }
+
+    /// [`Session::sign`], embedding an RFC 3161 signature timestamp (PAdES B-T) produced by
+    /// `tsa`. The transport lives with the caller; the engine never opens a socket.
+    pub fn sign_with_timestamp(
+        &self,
+        doc: DocId,
+        id: &pdfcraft_sign::DigitalId,
+        mut opts: SignOptions,
+        tsa: &dyn pdfcraft_sign::TimestampAuthority,
+    ) -> Result<Arc<Vec<u8>>, EditError> {
+        let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        if opts.date.is_empty() {
+            opts.date = self.signing_date();
+        }
+        Ok(Arc::new(pdfcraft_sign::sign_with_timestamp(&editor.cos, id, &opts, tsa)?))
+    }
+
+    /// Append a standalone document timestamp (RFC 3161, `/ETSI.RFC3161`) covering the file's
+    /// current state. An empty `date` takes the session clock; the transport is the caller's.
+    pub fn timestamp_document(&self, doc: DocId, tsa: &dyn pdfcraft_sign::TimestampAuthority, date: String) -> Result<Arc<Vec<u8>>, EditError> {
+        let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        let date = if date.is_empty() { self.signing_date() } else { date };
+        Ok(Arc::new(pdfcraft_sign::timestamp_document(&editor.cos, tsa, &date)?))
+    }
+
+    /// Embed revocation evidence into the catalog's `/DSS` with `/VRI` entries per signature
+    /// (PAdES B-LT): an incremental update that never rewrites signed bytes.
+    pub fn embed_ltv(&self, doc: DocId, evidence: &pdfcraft_sign::dss::Evidence) -> Result<Arc<Vec<u8>>, EditError> {
+        let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        Ok(Arc::new(pdfcraft_sign::dss::embed(&editor.cos, evidence)?))
     }
 
     /// Record that the signed file `bytes` was saved (to `path`): like [`Session::mark_saved`],
