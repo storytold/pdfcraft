@@ -935,7 +935,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Opened without the owner password and something is restricted.
     let secured = doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
     let repaired = !doc.repair_log().is_empty();
-    match notices(view, info, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t) {
+    match notices(view, doc, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t) {
         Some(Notice::Repairs) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
         Some(Notice::Security) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
         Some(Notice::Signatures) => app.right = Some(RightPanel::Signatures),
@@ -1905,13 +1905,15 @@ enum Notice {
 /// security, forms and warnings.
 fn notices(
     view: &mut DocView,
-    info: &DocInfo,
+    doc: &pdfcraft_engine::Document,
     secured: bool,
     repaired: bool,
     signed: Option<(&str, Color32, &str, String)>,
     ui: &mut egui::Ui,
     t: &Tokens,
 ) -> Option<Notice> {
+    let info = &doc.info;
+    let xfa = doc.xfa.as_ref();
     if let Some((icon, color, template, arg)) = signed {
         let mut open = false;
         egui::Frame::NONE.fill(t.accent_soft).inner_margin(egui::Margin::symmetric(14, 7)).show(ui, |ui| {
@@ -1934,6 +1936,18 @@ fn notices(
     let mut open_repairs = false;
     let msg = if secured {
         Some(("lock", tl!("This document is secured. Some changes are restricted by its security settings.").to_string(), false))
+    } else if let Some(x) = xfa {
+        let lang = crate::i18n::current();
+        let pages = crate::i18n::trn(lang, x.pages as u64, "{n} page", "{n} pages");
+        let fields = crate::i18n::trn(lang, x.fields as u64, "{n} field", "{n} fields");
+        let mut text =
+            crate::i18n::fmt(tl!("Dynamic XFA form laid out from its template: {pages}, {fields}."), &[("pages", &pages), ("fields", &fields)]);
+        if !x.warnings.is_empty() {
+            text.push(' ');
+            text.push_str(&x.warnings.join("; "));
+            text.push('.');
+        }
+        Some(("text-cursor-input", text, true))
     } else if info.xfa == Some(pdfcraft_render::Xfa::Dynamic) {
         Some((
             "triangle-alert",
@@ -1942,8 +1956,8 @@ fn notices(
         ))
     } else if info.xfa == Some(pdfcraft_render::Xfa::Static) {
         Some((
-            "triangle-alert",
-            tl!("This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.").to_string(),
+            "text-cursor-input",
+            tl!("XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.").to_string(),
             true,
         ))
     } else if !info.fields.is_empty() {

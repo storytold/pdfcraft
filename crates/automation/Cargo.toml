@@ -23,4 +23,5 @@ default = ["mcp"]
 mcp = ["dep:base64"]
 
 [dev-dependencies]
+pdfcraft-xfa = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }

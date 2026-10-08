@@ -15,6 +15,7 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-organize = { workspace = true }
 pdfcraft-annot = { workspace = true }
 pdfcraft-forms = { workspace = true }
+pdfcraft-xfa = { workspace = true }
 pdfcraft-edit = { workspace = true }
 pdfcraft-redact = { workspace = true }
 pdfcraft-print = { workspace = true }

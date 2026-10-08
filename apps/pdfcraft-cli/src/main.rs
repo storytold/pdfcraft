@@ -105,7 +105,18 @@ fn read(path: &str) -> Result<Arc<Vec<u8>>, String> {
 
 fn info(args: &[String]) -> Result<(), String> {
     let path = *positional(args).first().ok_or("info: missing file")?;
-    let info = inspect(read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
+    let bytes = read(path)?;
+    let password = flag(args, "--password");
+    let info = inspect(bytes.clone(), password).map_err(|e| e.to_string())?;
+    // Dynamic XFA forms: say what laying the template out gives (what the app shows).
+    let xfa_layout = (info.xfa == Some(pdfcraft_render::Xfa::Dynamic))
+        .then(|| {
+            let mut s = pdfcraft_engine::Session::new();
+            let id = s.open("info.pdf", None, bytes.clone(), password).ok()?;
+            let d = s.get(id)?;
+            d.xfa.as_ref().map(|x| serde_json::json!({ "pages": x.pages, "fields": x.fields, "warnings": x.warnings }))
+        })
+        .flatten();
     let json = serde_json::json!({
         "file": path,
         "pdf_version": info.pdf_version,
@@ -115,6 +126,7 @@ fn info(args: &[String]) -> Result<(), String> {
         "title": info.title, "author": info.author, "producer": info.producer, "creator": info.creator,
         "encrypted": info.encrypted, "tagged": info.tagged, "javascript": info.has_javascript,
         "xfa": info.xfa.map(|x| match x { pdfcraft_render::Xfa::Static => "static", pdfcraft_render::Xfa::Dynamic => "dynamic" }),
+        "xfa_layout": xfa_layout,
         "bookmarks": info.outline.len(), "annotations": info.annotations.len(), "fields": info.fields.len(),
         "links": info.links.len(), "layers": info.layers.len(), "attachments": info.attachments.len(),
         "page_labels": info.pages.iter().take(8).map(|p| p.label.clone()).collect::<Vec<_>>(),

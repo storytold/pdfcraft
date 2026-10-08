@@ -36,6 +36,7 @@ pdfcraft-export = { path = "crates/export", version = "0.2.0" }
 pdfcraft-edit = { path = "crates/edit", version = "0.2.0" }
 pdfcraft-create = { path = "crates/create", version = "0.2.0" }
 pdfcraft-forms = { path = "crates/forms", version = "0.2.0" }
+pdfcraft-xfa = { path = "crates/xfa", version = "0.2.0" }
 pdfcraft-render = { path = "crates/render", version = "0.2.0" }
 pdfcraft-engine = { path = "crates/engine", version = "0.2.0" }
 pdfcraft-ui-egui = { path = "crates/ui-egui", version = "0.2.0" }

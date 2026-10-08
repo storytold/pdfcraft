@@ -39,6 +39,7 @@ pub use pdfcraft_forms::{
 
 pub use pdfcraft_a11y as a11y;
 pub use pdfcraft_edit::{BlockStyle, PageImage, TextBlock, TextLine};
+pub use pdfcraft_xfa::Report as XfaLayout;
 
 /// A change to an existing page image.
 #[derive(Clone, Debug, PartialEq)]
@@ -216,6 +217,12 @@ pub struct Document {
     config: RenderConfig,
     /// What field scripts printed or asked for (see [`Session::take_js_output`]).
     js_output: js::JsOutput,
+    /// Dynamic XFA forms: what laying the template out produced (pages and fields are
+    /// PdfCraft's; Adobe's viewers draw the form from the XFA packets themselves).
+    pub xfa: Option<XfaLayout>,
+    /// XFA forms: what was approximated, rewritten or could not be written to the XFA data
+    /// (also in `info.warnings`, kept there when the document is re-read).
+    pub xfa_warnings: Vec<String>,
 }
 
 impl Document {
@@ -1699,6 +1706,74 @@ pub struct Session {
     js_off: bool,
 }
 
+/// Lay a dynamic XFA form out (pages and fields) and give its widgets appearances.
+fn xfa_layout(doc: &mut pdfcraft_cos::Document) -> Result<XfaLayout, String> {
+    let report = pdfcraft_xfa::render_into(doc).map_err(|e| e.to_string())?;
+    for f in pdfcraft_forms::fields(doc) {
+        pdfcraft_forms::redraw_field(doc, &f.name).map_err(|e| format!("{}: {e}", f.name))?;
+    }
+    Ok(report)
+}
+
+/// The form's fields as the XFA data layer wants them.
+fn xfa_field_data(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_xfa::FieldDatum> {
+    use pdfcraft_forms::FieldKind as K;
+    pdfcraft_forms::fields(doc)
+        .into_iter()
+        .map(|f| {
+            let data = match f.kind {
+                K::Text | K::Combo | K::List => pdfcraft_xfa::FieldData::Text(f.value.join("\n")),
+                K::CheckBox => pdfcraft_xfa::FieldData::Check(!f.value.is_empty()),
+                K::Radio => pdfcraft_xfa::FieldData::Radio(f.value.first().cloned()),
+                K::PushButton | K::Signature => pdfcraft_xfa::FieldData::None,
+            };
+            pdfcraft_xfa::FieldDatum { obj: f.obj, name: f.name, data }
+        })
+        .collect()
+}
+
+/// Keep the XFA datasets packet in step with the fields after an edit. Returns what could not
+/// be written.
+fn xfa_sync_datasets(doc: &mut pdfcraft_cos::Document) -> Result<Vec<String>, String> {
+    let data = xfa_field_data(doc);
+    pdfcraft_xfa::write_datasets(doc, &data).map(|r| r.warnings).map_err(|e| e.to_string())
+}
+
+/// Most XFA warnings kept per document.
+const MAX_XFA_WARNINGS: usize = 50;
+
+/// Add `new` to `list` (no repeats, at most [`MAX_XFA_WARNINGS`]).
+fn note_warnings(list: &mut Vec<String>, new: &[String]) {
+    for w in new {
+        if !list.contains(w) && list.len() < MAX_XFA_WARNINGS {
+            list.push(w.clone());
+        }
+    }
+}
+
+/// Give the fields the values the XFA datasets hold (a form filled in another viewer). Returns
+/// the names of the fields that changed.
+fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Result<Vec<String>, String> {
+    let data = xfa_field_data(doc);
+    let fields = pdfcraft_forms::fields(doc);
+    let mut changed = Vec::new();
+    for (name, value) in pdfcraft_xfa::read_values(doc, &data) {
+        let Some(f) = fields.iter().find(|f| f.name == name) else { continue };
+        let new = match value {
+            pdfcraft_xfa::FieldData::Text(t) => (f.value.join("\n") != t).then_some(FieldValue::Text(t)),
+            pdfcraft_xfa::FieldData::Check(on) => (f.value.is_empty() == on).then_some(FieldValue::Check(on)),
+            pdfcraft_xfa::FieldData::Radio(sel) => (f.value.first() != sel.as_ref()).then_some(FieldValue::Radio(sel)),
+            pdfcraft_xfa::FieldData::None => None,
+        };
+        if let Some(v) = new
+            && pdfcraft_forms::set_value(doc, &name, &v).is_ok()
+        {
+            changed.push(name);
+        }
+    }
+    Ok(changed)
+}
+
 /// Validate the signature fields of `cos` (written as `bytes`).
 fn signatures_of(cos: &pdfcraft_cos::Document, bytes: &[u8], trust: &TrustStore, cache: &pdfcraft_sign::DigestCache) -> Arc<Vec<SignatureInfo>> {
     Arc::new(pdfcraft_sign::pdf::list_cached(cos, bytes, trust, cache))
@@ -1785,6 +1860,91 @@ impl Session {
             }
             Err(e) => return Err(e),
         };
+        // A dynamic XFA form is a shell around an XML template; lay the template out into real
+        // pages and fields so the rest of the engine works on it. The original bytes stay: the
+        // laid-out form is one appended revision.
+        let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
+        // Write `work` as one more revision and reopen it: what the document then is.
+        let rebase = |work: &pdfcraft_cos::Document| -> Result<(Arc<Vec<u8>>, DocInfo, pdfcraft_cos::Document), String> {
+            let new_bytes = write_incremental(work, &opts).map(Arc::new).map_err(|e| e.to_string())?;
+            let new_info = inspect(new_bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
+            let new_cos = pdfcraft_cos::Document::open_with_password(new_bytes.clone(), password).map_err(|e| e.to_string())?;
+            Ok((new_bytes, new_info, new_cos))
+        };
+        let (bytes, info, cos, xfa) = match (info.xfa, cos) {
+            (Some(pdfcraft_render::Xfa::Dynamic), Ok(Ok(cos))) if pdfcraft_xfa::existing_layout(&cos).is_none() => {
+                let mut work = cos.clone();
+                let laid_out = guard(|| xfa_layout(&mut work))
+                    .unwrap_or_else(|m| Err(format!("laying it out failed unexpectedly ({m})")))
+                    .and_then(|report| rebase(&work).map(|(b, i, c)| (b, i, c, report)));
+                match laid_out {
+                    Ok((b, i, c, report)) => (b, i, Ok(Ok(c)), Some(report)),
+                    Err(e) => {
+                        let mut info = info;
+                        info.warnings.push(format!("This dynamic XFA form could not be laid out: {e}"));
+                        (bytes, info, Ok(Ok(cos)), None)
+                    }
+                }
+            }
+            // A static XFA form, or a dynamic one laid out earlier: its datasets may hold values
+            // filled in by another viewer since; give the fields those values.
+            (Some(_), Ok(Ok(cos))) => {
+                let report = pdfcraft_xfa::existing_layout(&cos);
+                let mut work = cos.clone();
+                let synced =
+                    guard(|| xfa_values_from_datasets(&mut work)).unwrap_or_else(|m| Err(format!("reading its data failed unexpectedly ({m})")));
+                match synced {
+                    Ok(names) if names.is_empty() => (bytes, info, Ok(Ok(cos)), report),
+                    Ok(names) => match rebase(&work) {
+                        Ok((b, mut i, c)) => {
+                            // The fields were rewritten from the XFA data: say so, and which.
+                            let shown: Vec<&str> = names.iter().take(5).map(String::as_str).collect();
+                            let more = if names.len() > shown.len() { format!(" and {} more", names.len() - shown.len()) } else { String::new() };
+                            i.warnings.push(format!(
+                                "{} form field value{} were taken from this form's XFA data (filled in by another viewer): {}{more}",
+                                names.len(),
+                                if names.len() == 1 { "" } else { "s" },
+                                shown.join(", ")
+                            ));
+                            (b, i, Ok(Ok(c)), report)
+                        }
+                        Err(e) => {
+                            let mut info = info;
+                            info.warnings.push(format!("The values in this form's XFA data could not be applied: {e}"));
+                            (bytes, info, Ok(Ok(cos)), report)
+                        }
+                    },
+                    Err(e) => {
+                        let mut info = info;
+                        info.warnings.push(format!("The values in this form's XFA data could not be applied: {e}"));
+                        (bytes, info, Ok(Ok(cos)), report)
+                    }
+                }
+            }
+            (_, cos) => (bytes, info, cos, None),
+        };
+        // XFA notes survive the document being re-read after edits.
+        let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
+        let id = self.push_document(name, path, bytes, info, cos, render_password, password, xfa)?;
+        if let Some(d) = self.docs.iter_mut().find(|d| d.id == id) {
+            note_warnings(&mut d.xfa_warnings, &xfa_warnings);
+        }
+        Ok(id)
+    }
+
+    /// The last step of opening: build the document record and register it.
+    #[allow(clippy::too_many_arguments)]
+    fn push_document(
+        &mut self,
+        name: String,
+        path: Option<String>,
+        bytes: Arc<Vec<u8>>,
+        info: DocInfo,
+        cos: Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>, Box<dyn std::any::Any + Send>>,
+        render_password: Option<String>,
+        password: Option<&str>,
+        xfa: Option<XfaLayout>,
+    ) -> Result<DocId, OpenError> {
         let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let renderer = RenderPool::new(bytes.clone(), render_threads(), config.clone());
         let (editor, read_only_reason) = match cos {
@@ -1825,6 +1985,8 @@ impl Session {
             editor,
             config,
             js_output: Default::default(),
+            xfa,
+            xfa_warnings: Vec::new(),
         });
         Ok(id)
     }
@@ -1840,6 +2002,7 @@ impl Session {
         let js_off = self.js_off;
         let doc = self.doc_mut(id)?;
         let name = doc.name.clone();
+        let is_xfa = doc.info.xfa.is_some();
         let mut cx = EditCtx::new(now, doc.generation ^ (id.0 << 48));
         cx.today = today;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
@@ -1855,6 +2018,13 @@ impl Session {
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
         guard(|| run_edit(&mut next, &edit, &mut cx))
             .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
+        // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
+        let mut xfa_notes = Vec::new();
+        if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full) {
+            xfa_notes = guard(|| xfa_sync_datasets(&mut next))
+                .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
+                .map_err(EditError::Write)?;
+        }
         // Signed documents are only ever saved incrementally: an edit that needs a full rewrite
         // (applying redactions, changing security, sanitizing) would invalidate the signatures.
         let rewrites = |c: &pdfcraft_cos::Document| c.full_save_required() || c.encryption_changed();
@@ -1886,6 +2056,9 @@ impl Session {
         }
         doc.dirty = true;
         doc.generation += 1;
+        note_warnings(&mut doc.xfa_warnings, &xfa_notes);
+        let notes = doc.xfa_warnings.clone();
+        note_warnings(&mut doc.info.warnings, &notes);
         if let Some(js) = cx.js {
             doc.js_output.append(js.output);
         }
@@ -1986,6 +2159,7 @@ impl Session {
                 l.visible = old.visible;
             }
         }
+        note_warnings(&mut info.warnings, &doc.xfa_warnings);
         doc.info = info;
         doc.form = Arc::new(pdfcraft_forms::fields(&editor.cos));
         doc.marks = pdfcraft_edit::marks_present(&editor.cos);

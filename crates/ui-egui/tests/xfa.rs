@@ -1,5 +1,6 @@
-//! XFA forms (#60): not read yet, so the document says so instead of silently showing a
-//! placeholder page or fields whose values Acrobat would override.
+//! XFA forms (#60): a dynamic form is laid out from its template and says so; a static one takes
+//! its values from the XFA data; one whose template can't be read says that instead of silently
+//! showing a placeholder page.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -48,8 +49,22 @@ fn xfa(h: &Harness<'static, PdfCraftApp>) -> Option<pdfcraft_render::Xfa> {
 }
 
 #[test]
+fn a_dynamic_xfa_form_is_laid_out_and_filled() {
+    let h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(2)));
+    assert_eq!(xfa(&h), Some(pdfcraft_render::Xfa::Dynamic));
+    h.get_by_label_contains("laid out from its template: 2 pages, 11 fields");
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.info.pages.len(), 2);
+    assert!(doc.form.iter().any(|f| f.name == "familyName"));
+    // The notice offers to highlight the fields, like any form.
+    h.get_by_label("Highlight fields");
+}
+
+#[test]
 fn a_dynamic_xfa_form_says_its_page_is_a_placeholder() {
-    // No fields, the form lives in the XFA packets (an array of name/stream pairs here).
+    // No fields, the form lives in the XFA packets (an array of name/stream pairs here), but
+    // the packets hold no template: the placeholder page stays, with a notice.
     let h = open(pdf("/AcroForm << /Fields [] /XFA [(template) 5 0 R] >>", "/NeedsRendering true", &[XFA_PACKET]));
     assert_eq!(xfa(&h), Some(pdfcraft_render::Xfa::Dynamic));
     h.get_by_label_contains("dynamic XFA form");
@@ -59,11 +74,18 @@ fn a_dynamic_xfa_form_says_its_page_is_a_placeholder() {
 }
 
 #[test]
-fn a_static_xfa_form_can_be_filled_but_warns_about_its_xfa_data() {
+fn a_static_xfa_form_is_filled_from_its_data_and_says_so() {
     let field = "<< /FT /Tx /T (name) /Rect [20 20 200 40] /Type /Annot /Subtype /Widget /P 3 0 R >>";
     let h = open(pdf("/AcroForm << /Fields [6 0 R] /XFA 5 0 R >>", "", &[XFA_PACKET, field]));
     assert_eq!(xfa(&h), Some(pdfcraft_render::Xfa::Static));
-    h.get_by_label_contains("also contains XFA data");
+    h.get_by_label_contains("XFA data are kept in step");
+    // Values saved in the datasets by another viewer show up in the fields.
+    let h = open(pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name><agree>1</agree></page1></form1>"));
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.form.iter().find(|f| f.name == "form1[0].page1[0].name[0]").unwrap().value, vec!["Ada".to_string()]);
+    assert_eq!(doc.form.iter().find(|f| f.name == "form1[0].page1[0].agree[0]").unwrap().value, vec!["1".to_string()]);
+    assert!(!doc.dirty);
     // The fields can still be highlighted from the notice.
     h.get_by_label("Highlight fields");
 }

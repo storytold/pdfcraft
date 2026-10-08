@@ -1,0 +1,18 @@
+[package]
+name = "pdfcraft-xfa"
+description = "XFA forms: reads a dynamic form's XDP packets and lays its template out as PDF pages and AcroForm fields"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-cos = { workspace = true }
+pdfcraft-fonts = { workspace = true }
+roxmltree = "0.20"
+base64 = "0.22"
+thiserror = { workspace = true }

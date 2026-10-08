@@ -1410,3 +1410,130 @@ fn guard_turns_a_panic_into_an_error() {
     let n = 3;
     assert_eq!(guard(|| -> u8 { panic!("page {n} is bad") }), Err("page 3 is bad".to_string()));
 }
+
+#[test]
+fn dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally() {
+    let original = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(3)));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, original.clone(), None).expect("opens");
+    let doc = s.get(id).unwrap();
+    let x = doc.xfa.as_ref().expect("laid out from the template");
+    assert_eq!((x.pages, x.fields), (2, 14), "{x:?}");
+    assert!(x.warnings.is_empty(), "{:?}", x.warnings);
+    assert_eq!(doc.info.pages.len(), 2, "the placeholder page is gone");
+    assert_eq!(doc.info.xfa, Some(pdfcraft_render::Xfa::Dynamic), "still an XFA form for Adobe's viewers");
+    assert!(!doc.dirty, "laying out is not an edit");
+    assert!(doc.bytes.starts_with(&original[..]), "the layout is an appended revision; the original bytes stay");
+    let names: Vec<&str> = doc.form.iter().map(|f| f.name.as_str()).collect();
+    assert!(names.contains(&"familyName") && names.contains(&"answer") && names.contains(&"what2"), "{names:?}");
+    let family = doc.form.iter().find(|f| f.name == "familyName").unwrap();
+    assert_eq!((family.tooltip.as_deref(), family.max_len), (Some("Your family name"), Some(30)));
+    let answer = doc.form.iter().find(|f| f.name == "answer").unwrap();
+    assert_eq!(answer.widgets.iter().filter_map(|w| w.on_state.clone()).collect::<Vec<_>>(), ["Y", "N"]);
+    assert!(page_texts(&s, id)[0].contains("Sample Form"), "{:?}", page_texts(&s, id));
+    // Fill it in and save: one more incremental revision on top.
+    s.apply(id, Edit::SetFieldValue { name: "familyName".into(), value: FieldValue::Text("Singh".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "answer".into(), value: FieldValue::Radio(Some("N".into())) }).unwrap();
+    assert!(s.get(id).unwrap().dirty);
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved.starts_with(&original[..]));
+    // The datasets packet carries the values too, for Adobe's viewers.
+    let cos = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].head[0].familyName[0]")), Some("Singh"));
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].head[0].answer[0]")), Some("N"));
+    let id2 = s.open("saved.pdf", None, saved, None).unwrap();
+    let d2 = s.get(id2).unwrap();
+    assert_eq!(d2.info.pages.len(), 2, "a saved form is not laid out a second time");
+    assert_eq!(d2.xfa.as_ref().map(|x| (x.pages, x.fields)), Some((2, 14)), "the layout is remembered");
+    assert_eq!(d2.form.iter().find(|f| f.name == "familyName").unwrap().value, vec!["Singh".to_string()]);
+    assert_eq!(d2.form.iter().find(|f| f.name == "answer").unwrap().value, vec!["N".to_string()]);
+}
+
+#[test]
+fn an_xfa_form_without_a_template_opens_with_its_placeholder_and_a_warning() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell("<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"></xdp:xdp>"));
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, bytes, None).expect("opens");
+    let doc = s.get(id).unwrap();
+    assert!(doc.xfa.is_none());
+    assert_eq!(doc.info.pages.len(), 1);
+    assert!(doc.info.warnings.iter().any(|w| w.contains("could not be laid out") && w.contains("no template")), "{:?}", doc.info.warnings);
+}
+
+#[test]
+fn dynamic_xfa_forms_open_with_the_values_and_rows_of_their_data() {
+    let data = "<form><head><familyName>Kaur</familyName><born>2001-02-03</born><answer>Y</answer></head><table><row><what0>a</what0></row><row><what0>b</what0></row><row><what0>c</what0></row></table></form>";
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template_with_data(1, data)));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, bytes, None).expect("opens");
+    let doc = s.get(id).unwrap();
+    let value = |n: &str| doc.form.iter().find(|f| f.name == n).unwrap_or_else(|| panic!("no field {n}")).value.clone();
+    assert_eq!(value("familyName"), vec!["Kaur".to_string()]);
+    assert_eq!(value("born"), vec!["2001-02-03".to_string()]);
+    assert_eq!(value("answer"), vec!["Y".to_string()]);
+    assert_eq!(value("what0_3"), vec!["c".to_string()], "three rows from the data: {:?}", doc.form.iter().map(|f| &f.name).collect::<Vec<_>>());
+    assert!(!doc.dirty);
+}
+
+#[test]
+fn static_xfa_forms_take_their_values_from_the_datasets_and_write_them_back() {
+    let original = Arc::new(pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name><agree>1</agree></page1></form1>"));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("static.pdf", None, original.clone(), None).expect("opens");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.xfa, Some(pdfcraft_render::Xfa::Static));
+    assert!(doc.xfa.is_none(), "nothing was laid out");
+    assert_eq!(doc.form.iter().find(|f| f.name == "form1[0].page1[0].name[0]").unwrap().value, vec!["Ada".to_string()]);
+    assert_eq!(doc.form.iter().find(|f| f.name == "form1[0].page1[0].agree[0]").unwrap().value, vec!["1".to_string()]);
+    assert!(!doc.dirty && doc.bytes.starts_with(&original[..]), "the values are an appended revision");
+    // Rewriting the fields from the XFA data is recorded, not silent.
+    let note = doc.info.warnings.iter().find(|w| w.contains("taken from this form's XFA data")).expect("a warning");
+    assert!(note.starts_with("2 form field values") && note.contains("form1[0].page1[0].name[0]"), "{note}");
+    s.apply(id, Edit::SetFieldValue { name: "form1[0].page1[0].name[0]".into(), value: FieldValue::Text("Grace".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "form1[0].page1[0].agree[0]".into(), value: FieldValue::Check(false) }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).unwrap();
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].page1[0].name[0]")), Some("Grace"));
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].page1[0].agree[0]")), Some(""), "unchecked, with no off value");
+    // Reopening agrees with itself: nothing to apply, nothing dirty.
+    let id2 = s.open("again.pdf", None, saved, None).unwrap();
+    let d2 = s.get(id2).unwrap();
+    assert_eq!(d2.form.iter().find(|f| f.name == "form1[0].page1[0].name[0]").unwrap().value, vec!["Grace".to_string()]);
+    assert!(!d2.dirty);
+    assert!(!d2.info.warnings.iter().any(|w| w.contains("taken from this form's XFA data")), "nothing was rewritten");
+}
+
+#[test]
+fn xfa_data_no_field_binds_to_survives_an_edit_and_save() {
+    // Regression: editing a field replaced the whole data element with the fields' values.
+    let data = concat!(
+        "<form1><page1><name>Ada</name><agree>1</agree><extra xmlns:my=\"urn:my\"><my:note id=\"7\">keep</my:note></extra></page1>",
+        "<history><entry><when>2020</when></entry></history></form1><my:other xmlns:my=\"urn:my\"><my:x>unbound</my:x></my:other>"
+    );
+    let original = Arc::new(pdfcraft_xfa::fixtures::static_shell(data));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("static.pdf", None, original, None).expect("opens");
+    s.apply(id, Edit::SetFieldValue { name: "form1[0].page1[0].name[0]".into(), value: FieldValue::Text("Grace".into()) }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    let xdp = pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp;
+    for kept in [
+        "<extra xmlns:my=\"urn:my\"><my:note id=\"7\">keep</my:note></extra>",
+        "<history><entry><when>2020</when></entry></history>",
+        "<my:other xmlns:my=\"urn:my\"><my:x>unbound</my:x></my:other>",
+    ] {
+        assert!(xdp.contains(kept), "lost {kept:?}: {xdp}");
+    }
+    let data = pdfcraft_xfa::parse_datasets(&xdp).unwrap();
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].page1[0].name[0]")), Some("Grace"));
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].page1[0].agree[0]")), Some("1"));
+    // A value that can't be written is reported on the document.
+    let original = Arc::new(pdfcraft_xfa::fixtures::static_shell("<form1><page1><name><b>rich</b></name></page1></form1>"));
+    let id = s.open("rich.pdf", None, original, None).expect("opens");
+    s.apply(id, Edit::SetFieldValue { name: "form1[0].page1[0].name[0]".into(), value: FieldValue::Text("plain".into()) }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(doc.info.warnings.iter().any(|w| w.contains("structured content")), "{:?}", doc.info.warnings);
+    assert!(doc.xfa_warnings.iter().any(|w| w.contains("structured content")));
+}
