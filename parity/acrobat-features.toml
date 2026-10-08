@@ -1346,8 +1346,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["edit.find"]
 tools = ["text_find"]
-evidence = ["crates/ui-egui/tests/ui.rs::find_counts_matches_across_pages", "crates/ui-egui/tests/ui.rs::find_reports_no_matches", "crates/automation/tests/automation.rs::open_inspect_render_and_find"]
-notes = ""
+evidence = ["crates/ui-egui/tests/ui.rs::find_counts_matches_across_pages", "crates/ui-egui/tests/ui.rs::find_reports_no_matches", "crates/automation/tests/automation.rs::open_inspect_render_and_find", "crates/render/src/text.rs::identity_v_columns_are_searchable_in_reading_order"]
+notes = "Horizontal and WMode 1 vertical text are grouped independently, including a horizontal heading above right-to-left vertical columns. Complex interleaved flows still use a geometric reading-order heuristic."
 
 [[feature]]
 id = "view.find-next-previous"
