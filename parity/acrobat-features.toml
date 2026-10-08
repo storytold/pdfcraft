@@ -9662,8 +9662,8 @@ milestone = "M14"
 status = "partial"
 commands = ["app.preferences"]
 tools = ["js_enabled"]
-evidence = ["crates/ui-egui/tests/javascript.rs::document_scripts_and_preferences"]
-notes = "Preferences dialog with Interface language, Identity and JavaScript; other categories still live in their tools, and it isn't generated from a schema yet."
+evidence = ["crates/ui-egui/tests/javascript.rs::document_scripts_and_preferences", "crates/ui-egui/tests/ui.rs::preferences_selects_default_workspace_for_next_open", "crates/ui-egui/tests/control.rs::control_default_workspace_and_session_override"]
+notes = "Preferences dialog with Interface language, Documents and view (persistent default workspace with session override), Identity and JavaScript; other categories still live in their tools, and it isn't generated from a schema yet."
 
 [[feature]]
 id = "misc.prefs-general"

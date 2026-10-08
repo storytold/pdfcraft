@@ -23,7 +23,9 @@
 //!   comments, selecting text, moving comments). `ui.state` reports `pages_on_screen` to aim at.
 //! - `ui.type {text}`, `ui.key {key, modifiers?}`: keyboard input to the focused widget / app.
 //! - `ui.command {id}`: run a registry command (as the menu would). `ui.commands` lists them.
-//! - `ui.set {key, value}`: the view options of the command line (`--page`, `--zoom`, …).
+//! - `ui.set {key, value}`: view options (`--page`, `--zoom`, …), plus persistent preferences.
+//!   `default-mode=all|read|edit|convert|sign` applies to future PDF opens; `mode` overrides it
+//!   for this session without changing the saved preference. `ui.state.default_mode` reports it.
 //! - `ui.open {path}`: open a file.
 //! - `ui.screenshot {region?}`: PNG of the window (base64), optionally cropped to a rect.
 
@@ -578,6 +580,7 @@ impl Host for crate::PdfCraftApp {
             },
             "home": self.active.is_none(),
             "mode": format!("{:?}", self.mode),
+            "default_mode": self.default_mode,
             "left_panel": if self.left_open { json!(format!("{:?}", self.left)) } else { Value::Null },
             "right_panel": self.right.map(|r| format!("{r:?}")),
             "dialog": self.dialog.map(|d| format!("{d:?}")),

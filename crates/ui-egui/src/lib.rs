@@ -79,13 +79,28 @@ pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore};
 use theme::ThemeKind;
 
 /// Top-level workspace modes (Acrobat's mode bar).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Mode {
+    #[serde(rename = "all")]
     AllTools,
     Read,
     Edit,
     Convert,
     Sign,
+}
+
+impl Mode {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "all" => Some(Self::AllTools),
+            "read" => Some(Self::Read),
+            "edit" => Some(Self::Edit),
+            "convert" => Some(Self::Convert),
+            "sign" => Some(Self::Sign),
+            _ => None,
+        }
+    }
 }
 
 /// What the left panel shows.
@@ -291,6 +306,10 @@ pub struct PdfCraftApp {
     /// `None` shows the Home tab.
     pub active: Option<usize>,
     pub mode: Mode,
+    /// Workspace used for newly opened PDFs; independent of PDF Initial View metadata.
+    pub default_mode: Mode,
+    /// Explicit CLI/control mode lasts for this session and is never persisted.
+    mode_override: Option<Mode>,
     pub left: LeftPanel,
     pub left_open: bool,
     pub right: Option<RightPanel>,
@@ -504,6 +523,8 @@ impl PdfCraftApp {
             views: Vec::new(),
             active: None,
             mode: Mode::AllTools,
+            default_mode: Mode::AllTools,
+            mode_override: None,
             left: LeftPanel::AllTools,
             left_open: true,
             right: None,
@@ -690,6 +711,16 @@ impl PdfCraftApp {
         self.views.push(DocView::new(id, &doc.info));
         self.active = Some(self.views.len() - 1);
         self.apply_initial_view(self.views.len() - 1, &initial);
+        if let Some(mode) = self.mode_override {
+            // Explicit mode options do not reset independent --tool / --left choices.
+            self.mode = mode;
+        } else if self.mode != self.default_mode {
+            // Switch workspace like the mode bar, but a left panel the user (or `--left closed`)
+            // closed stays closed, and an unchanged mode keeps the tool panel the user chose.
+            let left_open = self.left_open;
+            self.select_mode(self.default_mode);
+            self.left_open = left_open;
+        }
         if let Some(p) = path {
             self.recent.retain(|r| r.path != p);
             self.recent.insert(0, RecentFile { name: name.to_string(), path: p, pages, size });
@@ -908,12 +939,25 @@ impl PdfCraftApp {
         self.notify(format!("`{command}` {when}"));
     }
 
+    /// Select the workspace and its matching tool panel, just like the mode bar.
+    pub(crate) fn select_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+        self.left_open = true;
+        self.left = match mode {
+            Mode::Edit => LeftPanel::Tool("edit"),
+            Mode::Convert => LeftPanel::Tool("export"),
+            Mode::Sign => LeftPanel::Tool("fill_sign"),
+            _ => LeftPanel::AllTools,
+        };
+    }
+
     /// Serialize the user's persistent state (recent files, theme). Local only.
     pub fn persist(&self) -> String {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
         serde_json::json!({
             "recent": self.recent,
             "theme": self.theme,
+            "default_mode": self.default_mode,
             "language": self.language,
             "author": self.comment_prefs.author,
             // Drawn signatures keep their original form (older settings read the same).
@@ -941,6 +985,9 @@ impl PdfCraftApp {
         }
         if let Ok(t) = serde_json::from_value::<ThemeKind>(v["theme"].clone()) {
             self.theme = t;
+        }
+        if let Ok(mode) = serde_json::from_value::<Mode>(v["default_mode"].clone()) {
+            self.default_mode = mode;
         }
         if let Ok(language) = serde_json::from_value::<i18n::Language>(v["language"].clone()) {
             self.language = language;
@@ -1010,13 +1057,12 @@ impl PdfCraftApp {
                 }
             }
             ("mode", _) => {
-                self.mode = match value {
-                    "read" => Mode::Read,
-                    "edit" => Mode::Edit,
-                    "convert" => Mode::Convert,
-                    "sign" => Mode::Sign,
-                    _ => Mode::AllTools,
-                }
+                let mode = Mode::parse(value).unwrap_or(Mode::AllTools);
+                self.mode_override = Some(mode);
+                self.mode = mode;
+            }
+            ("default-mode", _) => {
+                self.default_mode = Mode::parse(value).ok_or("default-mode must be all, read, edit, convert or sign")?;
             }
             ("tool", _) => {
                 let g = pdfcraft_engine::catalog::group(value).ok_or_else(|| format!("unknown tool {value}"))?;

@@ -231,6 +231,25 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         });
     });
     ui.add_space(8.0);
+    ui.label(egui::RichText::new(app.language.tr("Documents and view")).font(theme::semibold(13.0)));
+    ui.horizontal(|ui| {
+        ui.label(app.language.tr("Default workspace mode"));
+        for (mode, label) in [
+            (crate::Mode::AllTools, "All Tools"),
+            (crate::Mode::Read, "Read"),
+            (crate::Mode::Edit, "Edit"),
+            (crate::Mode::Convert, "Convert"),
+            (crate::Mode::Sign, "E-Sign"),
+        ] {
+            ui.radio_value(&mut app.default_mode, mode, app.language.tr(label));
+        }
+    });
+    ui.label(
+        egui::RichText::new(app.language.tr("Used when opening PDFs. An explicit launch or control mode takes precedence for the session."))
+            .small()
+            .color(t.text_muted),
+    );
+    ui.add_space(8.0);
     // Identity: the author of new comments (Acrobat: Preferences ▸ Identity).
     ui.label(egui::RichText::new(app.language.tr("Identity")).font(theme::semibold(13.0)));
     ui.horizontal(|ui| {

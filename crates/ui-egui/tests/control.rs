@@ -544,3 +544,16 @@ fn loopback_transport_requires_the_token() {
     assert_eq!(good[1]["result"]["documents"][0]["name"], "doc.pdf");
     assert!(good[2]["error"]["message"].as_str().unwrap().contains("disabled"));
 }
+
+#[test]
+fn control_default_workspace_and_session_override() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({"key": "default-mode", "value": "edit"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["default_mode"], "edit");
+    assert!(call(&mut h, &c, "ui.set", json!({"key": "default-mode", "value": "unknown"})).is_err());
+    h.state_mut().open_bytes("next.pdf", None, fixture(1)).unwrap();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Edit");
+    ok(&mut h, &c, "ui.set", json!({"key": "mode", "value": "read"}));
+    h.state_mut().open_bytes("another.pdf", None, fixture(1)).unwrap();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read");
+}
