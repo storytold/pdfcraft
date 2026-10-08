@@ -59,12 +59,13 @@ fn text_of_a_readable_document_succeeds() {
     assert!(stdout.contains("Page 1") && stdout.contains("Page 3"), "{stdout}");
 }
 
-/// `three.pdf` encrypted with the open password `openme`, via `run --script`.
-fn protected_fixture() -> std::path::PathBuf {
-    let src = tmp("to-protect.pdf");
+/// `three.pdf` encrypted with the open password `openme`, via `run --script`. `tag` keeps each
+/// test's files apart: tests run in parallel and would otherwise overwrite each other's.
+fn protected_fixture(tag: &str) -> std::path::PathBuf {
+    let src = tmp(&format!("to-protect-{tag}.pdf"));
     std::fs::write(&src, fixture(3)).unwrap();
-    let out_path = tmp("protected.pdf");
-    let script = tmp("protect.json");
+    let out_path = tmp(&format!("protected-{tag}.pdf"));
+    let script = tmp(&format!("protect-{tag}.json"));
     let steps = serde_json::json!([
         { "tool": "doc_open", "args": { "path": src } },
         { "tool": "doc_protect", "args": { "doc": 1, "open_password": "openme" } },
@@ -78,7 +79,7 @@ fn protected_fixture() -> std::path::PathBuf {
 
 #[test]
 fn text_of_a_protected_document_without_the_password_fails() {
-    let path = protected_fixture();
+    let path = protected_fixture("no-password");
     let out = Command::new(BIN).args(["text", path.to_str().unwrap()]).output().unwrap();
     assert!(!out.status.success(), "a document that cannot be opened must not exit 0");
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -88,7 +89,7 @@ fn text_of_a_protected_document_without_the_password_fails() {
 
 #[test]
 fn text_of_a_protected_document_with_the_password_succeeds() {
-    let path = protected_fixture();
+    let path = protected_fixture("password");
     let out = Command::new(BIN).args(["text", path.to_str().unwrap(), "--password", "openme"]).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8_lossy(&out.stdout);
