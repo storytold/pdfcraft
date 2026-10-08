@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use printcraft_content::Matrix;
 use printcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
-use crate::{Compression, ImageSettings, OptimizeError, Report, Settings};
+use crate::{Compression, ImageSettings, Report, Settings};
 
 /// Images with more pixels than this are left alone (memory).
 const MAX_PIXELS: u64 = 80_000_000;
@@ -295,7 +295,7 @@ fn process(doc: &Document, stream: &Stream, ppi: f64, settings: &ImageSettings, 
     (after < before).then_some((new, smask))
 }
 
-pub(crate) fn run(doc: &mut Document, pages: &[ObjRef], settings: &Settings, report: &mut Report) -> Result<(), OptimizeError> {
+pub(crate) fn run(doc: &mut Document, pages: &[ObjRef], settings: &Settings, report: &mut Report) {
     let ppi = effective_resolutions(doc, pages);
     // Soft masks are processed with their image, not on their own.
     let masks: HashSet<ObjRef> = ppi
@@ -327,5 +327,4 @@ pub(crate) fn run(doc: &mut Document, pages: &[ObjRef], settings: &Settings, rep
             doc.set(mr, Object::Stream(m));
         }
     }
-    Ok(())
 }

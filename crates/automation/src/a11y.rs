@@ -193,11 +193,11 @@ impl Automation {
         Ok(json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "pages": list }))
     }
 
-    pub(crate) fn ocr_status() -> Result<Value> {
+    pub(crate) fn ocr_status() -> Value {
         use printcraft_engine::ocr;
         let dirs: Vec<String> = ocr::Models::search_dirs().iter().map(|d| d.to_string_lossy().into_owned()).collect();
         let langs: Vec<Value> = ocr::LANGUAGES.iter().map(|(c, n)| json!({ "code": c, "name": n })).collect();
-        Ok(json!({ "available": ocr::available(), "search_dirs": dirs, "languages": langs }))
+        json!({ "available": ocr::available(), "search_dirs": dirs, "languages": langs })
     }
 }
 
@@ -298,7 +298,7 @@ impl Automation {
         self.pdfa_verify(a)
     }
 
-    pub(crate) fn action_list() -> Result<Value> {
+    pub(crate) fn action_list() -> Value {
         use printcraft_engine::actions::{Step, builtin};
         let step_json = |s: &Step| json!({ "step": s.id(), "arg": s.arg() });
         let actions: Vec<Value> = builtin()
@@ -306,7 +306,7 @@ impl Automation {
             .map(|a| json!({ "name": a.name, "description": a.description, "steps": a.steps.iter().map(step_json).collect::<Vec<_>>() }))
             .collect();
         let steps: Vec<Value> = Step::all().iter().map(|s| json!({ "step": s.id(), "label": s.label(), "takes_arg": s.arg().is_some() })).collect();
-        Ok(json!({ "actions": actions, "steps": steps }))
+        json!({ "actions": actions, "steps": steps })
     }
 
     pub(crate) fn action_run(&mut self, a: &Args) -> Result<Value> {

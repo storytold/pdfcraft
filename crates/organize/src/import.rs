@@ -127,7 +127,7 @@ impl Copier<'_> {
     }
 
     /// Rewrite `/P`, `/Dest` and `GoTo` actions on copied annotations.
-    fn fix_annotations(&self, dst: &mut Document, annot_pages: &HashMap<ObjRef, ObjRef>) -> Result<(), OrganizeError> {
+    fn fix_annotations(&self, dst: &mut Document, annot_pages: &HashMap<ObjRef, ObjRef>) {
         for &a in &self.annots {
             let src_dict = dst.get(a).as_dict().cloned();
             let Some(d) = src_dict else { continue };
@@ -177,7 +177,6 @@ impl Copier<'_> {
             }
             dst.set(a, Object::Dict(d));
         }
-        Ok(())
     }
 }
 
@@ -277,7 +276,7 @@ fn import_pages_mapped(
         done.insert(page, new);
         new_pages.push(new);
     }
-    copier.fix_annotations(dst, &annot_pages)?;
+    copier.fix_annotations(dst, &annot_pages);
     register_fields(dst, &copier.fields)?;
     register_layers(dst, src, &copier.ocgs)?;
     let at = at.min(existing.len());

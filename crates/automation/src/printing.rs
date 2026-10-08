@@ -11,9 +11,9 @@ fn bad(m: impl Into<String>) -> ToolError {
 }
 
 impl Automation {
-    pub(crate) fn printers() -> Result<Value> {
+    pub(crate) fn printers() -> Value {
         let list: Vec<Value> = spool::printers().into_iter().map(|p| json!({ "name": p.name, "default": p.default })).collect();
-        Ok(json!({ "count": list.len(), "printers": list }))
+        json!({ "count": list.len(), "printers": list })
     }
 
     pub(crate) fn doc_print(&mut self, a: &Args) -> Result<Value> {

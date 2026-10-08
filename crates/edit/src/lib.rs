@@ -253,10 +253,10 @@ fn check(pages: &[usize], count: usize) -> Result<(), EditError> {
 }
 
 /// The page's `/Contents` as a list of stream references (inline content is promoted).
-fn contents(doc: &mut Document, page: &printcraft_model::Page) -> Result<Vec<Object>, EditError> {
+fn contents(doc: &mut Document, page: &printcraft_model::Page) -> Vec<Object> {
     let obj = doc.get(page.obj);
     let d = obj.as_dict().cloned().unwrap_or_default();
-    Ok(match d.get(b"Contents").cloned() {
+    match d.get(b"Contents").cloned() {
         None => Vec::new(),
         Some(Object::Ref(r)) => match doc.get(r).as_array() {
             Some(a) => a.clone(),
@@ -264,7 +264,7 @@ fn contents(doc: &mut Document, page: &printcraft_model::Page) -> Result<Vec<Obj
         },
         Some(Object::Array(a)) => a,
         Some(other) => vec![Object::Ref(doc.add(other))],
-    })
+    }
 }
 
 /// Add the font (and an opacity state) to the page's own resources.
@@ -331,7 +331,7 @@ fn place(doc: &mut Document, page: &printcraft_model::Page, kind: MarkKind, cont
 
 /// Put content on a page, tagged `tag` (see [`place`]).
 fn place_tagged(doc: &mut Document, page: &printcraft_model::Page, tag: &str, content: &[u8], behind: bool) -> Result<(), EditError> {
-    let mut list = contents(doc, page)?;
+    let mut list = contents(doc, page);
     let mark = Object::Ref(doc.add(Object::Stream(Stream::flate(tagged(tag), content))));
     if behind {
         list.insert(0, mark);
@@ -582,7 +582,7 @@ pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Resu
     let mut removed = 0;
     for &i in pages {
         let page = &all[i];
-        let list = contents(doc, page)?;
+        let list = contents(doc, page);
         let before = list.len();
         let mut kept: Vec<Object> = list.into_iter().filter(|o| stream_tag(doc, o).as_deref() != Some(kind.tag())).collect();
         removed += before - kept.len();

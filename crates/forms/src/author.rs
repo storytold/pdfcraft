@@ -284,13 +284,12 @@ fn add_to_page(doc: &mut Document, page: ObjRef, widget: ObjRef) -> Result<(), F
     Ok(())
 }
 
-fn add_to_fields(doc: &mut Document, af: ObjRef, field: ObjRef) -> Result<(), FormError> {
+fn add_to_fields(doc: &mut Document, af: ObjRef, field: ObjRef) {
     let mut d = doc.get(af).as_dict().cloned().unwrap_or_default();
     let mut list = d.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
     list.push(Object::Ref(field));
     d.set(b"Fields".to_vec(), Object::Array(list));
     doc.set(af, Object::Dict(d));
-    Ok(())
 }
 
 /// The first free "<base>N" name.
@@ -454,7 +453,7 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
             g.set(b"DA".to_vec(), PdfString::literal(b"/ZaDb 0 Tf 0 g".to_vec()));
             g.set(b"Kids".to_vec(), Object::Array(Vec::new()));
             let g = doc.add(Object::Dict(g));
-            add_to_fields(doc, af, g)?;
+            add_to_fields(doc, af, g);
             g
         };
         doc.update_dict(widget, |d| d.set(b"Parent".to_vec(), Object::Ref(group)))?;
@@ -469,7 +468,7 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
         doc.update_dict(widget, |d| d.set(b"AP".to_vec(), Object::Dict(ap)))?;
     } else {
         doc.update_dict(widget, |d| d.set(b"T".to_vec(), PdfString::text(&name)))?;
-        add_to_fields(doc, af, widget)?;
+        add_to_fields(doc, af, widget);
     }
     add_to_page(doc, page_ref, widget)?;
     redraw_field(doc, &field_name)?;

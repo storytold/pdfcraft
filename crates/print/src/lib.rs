@@ -456,7 +456,7 @@ fn appearance_matrix(doc: &Document, form: &Dict, rect: [f64; 4]) -> Option<Matr
 }
 
 /// A Form `XObject` holding page `index` as it prints (user space; `BBox` = crop box).
-fn page_form(doc: &mut Document, index: usize, content: Content) -> Result<ObjRef, PrintError> {
+fn page_form(doc: &mut Document, index: usize, content: Content) -> ObjRef {
     let page = printcraft_model::pages(doc).swap_remove(index);
     let crop = page.crop(doc);
     let mut res = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
@@ -502,7 +502,7 @@ fn page_form(doc: &mut Document, index: usize, content: Content) -> Result<ObjRe
     if let Some(g) = page.dict.get(b"Group") {
         d.set(b"Group".to_vec(), g.clone());
     }
-    Ok(doc.add(Object::Stream(Stream::flate(d, &body))))
+    doc.add(Object::Stream(Stream::flate(d, &body)))
 }
 
 /// Build the print-ready PDF for `settings`. Encryption is not carried over (the file goes to a
@@ -529,7 +529,7 @@ pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError
             let form = if let Some(f) = forms.get(&pl.page) {
                 *f
             } else {
-                let f = page_form(&mut doc, pl.page, settings.content)?;
+                let f = page_form(&mut doc, pl.page, settings.content);
                 forms.insert(pl.page, f);
                 f
             };

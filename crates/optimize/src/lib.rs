@@ -126,7 +126,7 @@ pub struct Report {
 pub fn optimize(doc: &mut Document, settings: &Settings) -> Result<Report, OptimizeError> {
     let mut report = Report::default();
     let pages = printcraft_annot::page_refs(doc).map_err(|_| OptimizeError::NoPages)?;
-    images::run(doc, &pages, settings, &mut report)?;
+    images::run(doc, &pages, settings, &mut report);
     if settings.discard_thumbnails {
         for p in &pages {
             if doc.get(*p).as_dict().is_some_and(|d| d.contains(b"Thumb")) {

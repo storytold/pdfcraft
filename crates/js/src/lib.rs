@@ -511,6 +511,9 @@ fn submit_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsV
     Ok(JsValue::undefined())
 }
 
+// The native table takes every function with this signature; the ones that cannot fail
+// still answer with a `Result`.
+#[expect(clippy::unnecessary_wraps, reason = "every entry of the native table has this signature")]
 fn noop(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::undefined())
 }
@@ -564,6 +567,7 @@ fn launch_url(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     Ok(JsValue::undefined())
 }
 
+#[expect(clippy::unnecessary_wraps, reason = "every entry of the native table has this signature")]
 fn response(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
     // No one to answer: as if the dialog was cancelled.
     Ok(JsValue::null())
@@ -580,6 +584,7 @@ fn console_clear(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     Ok(JsValue::undefined())
 }
 
+#[expect(clippy::unnecessary_wraps, reason = "every entry of the native table has this signature")]
 fn timer(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     // Timers never fire in the sandbox; scripts get an object they can pass to clear*.
     Ok(ObjectInitializer::new(ctx).build().into())

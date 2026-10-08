@@ -444,7 +444,7 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
         let p = page_list(doc).swap_remove(page);
         place_tagged(doc, &p, TAG, &content, false)?;
         let p = page_list(doc).swap_remove(page);
-        let r = contents(doc, &p)?.last().and_then(Object::as_ref).ok_or_else(|| EditError::Invalid("could not add the content".into()))?;
+        let r = contents(doc, &p).last().and_then(Object::as_ref).ok_or_else(|| EditError::Invalid("could not add the content".into()))?;
         doc.set(r, Object::Stream(stream));
         Ok(r)
     }
@@ -523,7 +523,7 @@ pub fn update_content(doc: &mut Document, page: usize, index: usize, c: &Content
 pub fn delete_content(doc: &mut Document, page: usize, index: usize) -> Result<(), EditError> {
     let a = find(doc, page, index)?;
     let p = page_list(doc).swap_remove(page);
-    let list: Vec<Object> = contents(doc, &p)?.into_iter().filter(|o| o.as_ref() != Some(a.obj)).collect();
+    let list: Vec<Object> = contents(doc, &p).into_iter().filter(|o| o.as_ref() != Some(a.obj)).collect();
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), Object::Array(list)))?;
     Ok(())
 }

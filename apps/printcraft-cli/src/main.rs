@@ -52,7 +52,10 @@ fn main() -> ExitCode {
             Some("split") => split(&args[1..]),
             Some("check") => check(&args[1..]),
             Some("check-one") => check_one(&args[1..]),
-            Some("tools") => tools(),
+            Some("tools") => {
+                tools();
+                Ok(())
+            }
             Some("run") => run(&args[1..]),
             Some("ui") => ui(&args[1..]),
             #[cfg(feature = "mcp")]
@@ -405,13 +408,12 @@ fn automation(args: &[String]) -> Result<printcraft_automation::Automation, Stri
     }
 }
 
-fn tools() -> Result<(), String> {
+fn tools() {
     let list: Vec<serde_json::Value> = printcraft_automation::tools()
         .iter()
         .map(|t| serde_json::json!({ "name": t.name, "description": t.description, "read_only": t.read_only, "command": t.command, "input_schema": t.input_schema }))
         .collect();
     println!("{}", serde_json::to_string_pretty(&list).unwrap_or_default());
-    Ok(())
 }
 
 /// Print a tool's result: JSON as JSON; images go to `--out` (or are summarised).
