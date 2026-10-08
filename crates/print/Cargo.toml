@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-print"
+name = "pdfcraft-print"
 description = "Printing: page selection, sizing (fit, actual, shrink, custom), multiple pages per sheet, booklets, posters, comments & forms; print-ready PDF and the system spooler"
 version.workspace = true
 edition.workspace = true
@@ -9,7 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-cos = { workspace = true }
-printcraft-content = { workspace = true }
-printcraft-model = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-content = { workspace = true }
+pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }

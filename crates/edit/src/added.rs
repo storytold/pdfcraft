@@ -7,8 +7,8 @@
 //! content. Boxes are in display space (origin at the bottom-left of the page as shown, after
 //! `/Rotate`), so items stay upright on rotated pages.
 
-use printcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
-use printcraft_fonts::{helvetica_width, literal, win_ansi};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
+use pdfcraft_fonts::{helvetica_width, literal, win_ansi};
 
 use crate::{EditError, check, contents, n, page_list, place_tagged};
 
@@ -133,8 +133,8 @@ impl AddedImage {
 
     /// The matrix from image space (the unit square) to display space: crop, flip, rotate,
     /// then fill the box.
-    fn matrix(&self) -> printcraft_content::Matrix {
-        use printcraft_content::Matrix as M;
+    fn matrix(&self) -> pdfcraft_content::Matrix {
+        use pdfcraft_content::Matrix as M;
         let [l, b, r, t] = self.crop.map(|v| v.clamp(0.0, 0.45));
         let (cw, ch) = ((1.0 - l - r).max(0.05), (1.0 - b - t).max(0.05));
         let mut m = M([1.0 / cw, 0.0, 0.0, 1.0 / ch, -l / cw, -b / ch]);

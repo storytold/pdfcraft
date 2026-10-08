@@ -1,4 +1,4 @@
-//! printcraft-geom — L0 geometry primitives shared by every PrintCraft crate.
+//! pdfcraft-geom — L0 geometry primitives shared by every PdfCraft crate.
 //!
 //! PDF user space is y-up with the origin at the bottom-left of the page; view space is y-down.
 //! `PageRect` is always in PDF user space (points, 1/72 inch).

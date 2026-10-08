@@ -17,8 +17,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use printcraft_content::Matrix;
-use printcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
+use pdfcraft_content::Matrix;
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
 
 pub mod range;
 pub mod spool;
@@ -36,7 +36,7 @@ pub enum PrintError {
     #[error("{0}")]
     Spool(String),
     #[error(transparent)]
-    Cos(#[from] printcraft_cos::CosError),
+    Cos(#[from] pdfcraft_cos::CosError),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -449,7 +449,7 @@ fn appearance_matrix(doc: &Document, form: &Dict, rect: [f64; 4]) -> Option<Matr
 
 /// A Form XObject holding page `index` as it prints (user space; BBox = crop box).
 fn page_form(doc: &mut Document, index: usize, content: Content) -> Result<ObjRef, PrintError> {
-    let page = printcraft_model::pages(doc).swap_remove(index);
+    let page = pdfcraft_model::pages(doc).swap_remove(index);
     let crop = page.crop(doc);
     let mut res = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut body = if content == Content::FormFieldsOnly { Vec::new() } else { decoded_contents(doc, &page.dict) };
@@ -500,7 +500,7 @@ fn page_form(doc: &mut Document, index: usize, content: Content) -> Result<ObjRe
 /// Build the print-ready PDF for `settings`. Encryption is not carried over (the file goes to a
 /// printer or is the user's own copy); callers must check the print permission first.
 pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError> {
-    let pages = printcraft_model::pages(src);
+    let pages = pdfcraft_model::pages(src);
     let sizes: Vec<(f64, f64)> = pages.iter().map(|p| p.display_size(src)).collect();
     let sheets = layout(&sizes, settings)?;
     let mut doc = src.clone();

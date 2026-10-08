@@ -3446,6 +3446,365 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft"
+version = "0.2.1"
+dependencies = [
+ "eframe",
+ "egui",
+ "fmv-macos-events",
+ "pdfcraft-ui-egui",
+ "rustls-native-certs",
+ "serde_json",
+ "ureq",
+ "winresource",
+]
+
+[[package]]
+name = "pdfcraft-a11y"
+version = "0.2.1"
+dependencies = [
+ "pdfcraft-content",
+ "pdfcraft-cos",
+ "pdfcraft-model",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-annot"
+version = "0.2.1"
+dependencies = [
+ "hayro-syntax",
+ "pdfcraft-cos",
+ "pdfcraft-fonts",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-automation"
+version = "0.2.1"
+dependencies = [
+ "base64 0.22.1",
+ "image",
+ "pdfcraft-engine",
+ "pdfcraft-organize",
+ "pdfcraft-render",
+ "png 0.18.1",
+ "serde_json",
+]
+
+[[package]]
+name = "pdfcraft-cli"
+version = "0.2.1"
+dependencies = [
+ "base64 0.22.1",
+ "pdfcraft-automation",
+ "pdfcraft-cos",
+ "pdfcraft-engine",
+ "pdfcraft-render",
+ "serde_json",
+]
+
+[[package]]
+name = "pdfcraft-compare"
+version = "0.2.1"
+
+[[package]]
+name = "pdfcraft-content"
+version = "0.2.1"
+dependencies = [
+ "pdfcraft-cos",
+]
+
+[[package]]
+name = "pdfcraft-cos"
+version = "0.2.1"
+dependencies = [
+ "hayro-syntax",
+ "pdfcraft-crypt",
+ "pdfcraft-filters",
+ "proptest",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-create"
+version = "0.2.1"
+dependencies = [
+ "hayro-syntax",
+ "image",
+ "pdfcraft-cos",
+ "pdfcraft-fonts",
+ "pdfcraft-model",
+ "png 0.18.1",
+ "thiserror 2.0.21",
+ "tiff",
+]
+
+[[package]]
+name = "pdfcraft-crypt"
+version = "0.2.1"
+dependencies = [
+ "aes",
+ "md-5",
+ "proptest",
+ "sha2",
+ "stringprep",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-edit"
+version = "0.2.1"
+dependencies = [
+ "hayro-syntax",
+ "pdfcraft-annot",
+ "pdfcraft-content",
+ "pdfcraft-cos",
+ "pdfcraft-fonts",
+ "pdfcraft-model",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-engine"
+version = "0.2.1"
+dependencies = [
+ "chrono",
+ "image",
+ "pdfcraft-a11y",
+ "pdfcraft-annot",
+ "pdfcraft-compare",
+ "pdfcraft-cos",
+ "pdfcraft-create",
+ "pdfcraft-edit",
+ "pdfcraft-export",
+ "pdfcraft-fonts",
+ "pdfcraft-forms",
+ "pdfcraft-js",
+ "pdfcraft-model",
+ "pdfcraft-ocr",
+ "pdfcraft-optimize",
+ "pdfcraft-organize",
+ "pdfcraft-preflight",
+ "pdfcraft-print",
+ "pdfcraft-redact",
+ "pdfcraft-render",
+ "pdfcraft-sign",
+ "pdfcraft-xfdf",
+ "png 0.18.1",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-export"
+version = "0.2.1"
+dependencies = [
+ "flate2",
+]
+
+[[package]]
+name = "pdfcraft-filters"
+version = "0.2.1"
+dependencies = [
+ "flate2",
+ "proptest",
+ "thiserror 2.0.21",
+ "weezl 0.2.1",
+]
+
+[[package]]
+name = "pdfcraft-fonts"
+version = "0.2.1"
+dependencies = [
+ "pdfcraft-cos",
+ "skrifa 0.44.0",
+]
+
+[[package]]
+name = "pdfcraft-forms"
+version = "0.2.1"
+dependencies = [
+ "hayro-syntax",
+ "pdfcraft-content",
+ "pdfcraft-cos",
+ "pdfcraft-fonts",
+ "pdfcraft-model",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-geom"
+version = "0.2.1"
+
+[[package]]
+name = "pdfcraft-js"
+version = "0.2.1"
+dependencies = [
+ "boa_engine",
+]
+
+[[package]]
+name = "pdfcraft-model"
+version = "0.2.1"
+dependencies = [
+ "pdfcraft-cos",
+]
+
+[[package]]
+name = "pdfcraft-ocr"
+version = "0.2.1"
+dependencies = [
+ "ocrs",
+ "pdfcraft-fonts",
+ "rten",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-optimize"
+version = "0.2.1"
+dependencies = [
+ "image",
+ "pdfcraft-annot",
+ "pdfcraft-content",
+ "pdfcraft-cos",
+ "pdfcraft-model",
+ "pdfcraft-render",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-organize"
+version = "0.2.1"
+dependencies = [
+ "hayro-syntax",
+ "pdfcraft-cos",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-preflight"
+version = "0.2.1"
+dependencies = [
+ "pdfcraft-cos",
+ "pdfcraft-model",
+]
+
+[[package]]
+name = "pdfcraft-print"
+version = "0.2.1"
+dependencies = [
+ "pdfcraft-content",
+ "pdfcraft-cos",
+ "pdfcraft-model",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-redact"
+version = "0.2.1"
+dependencies = [
+ "pdfcraft-annot",
+ "pdfcraft-content",
+ "pdfcraft-cos",
+ "pdfcraft-edit",
+ "pdfcraft-fonts",
+ "pdfcraft-forms",
+ "pdfcraft-model",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-render"
+version = "0.2.1"
+dependencies = [
+ "getrandom 0.4.3",
+ "hayro",
+ "hayro-syntax",
+ "kurbo 0.13.1",
+ "log",
+ "lopdf",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-sign"
+version = "0.2.1"
+dependencies = [
+ "aes",
+ "aws-lc-rs",
+ "cbc",
+ "des",
+ "getrandom 0.4.3",
+ "hmac",
+ "p256",
+ "p384",
+ "pbkdf2",
+ "pdfcraft-annot",
+ "pdfcraft-cos",
+ "pdfcraft-fonts",
+ "rc2",
+ "rsa",
+ "security-framework",
+ "sha1",
+ "sha2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-ui-egui"
+version = "0.2.1"
+dependencies = [
+ "arboard",
+ "base64 0.22.1",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "egui_kittest",
+ "getrandom 0.4.3",
+ "image",
+ "js-sys",
+ "log",
+ "pdfcraft-cos",
+ "pdfcraft-engine",
+ "pdfcraft-fonts",
+ "pdfcraft-model",
+ "pdfcraft-render",
+ "png 0.18.1",
+ "rfd",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "pdfcraft-web"
+version = "0.2.1"
+dependencies = [
+ "eframe",
+ "egui",
+ "js-sys",
+ "pdfcraft-ui-egui",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "pdfcraft-xfdf"
+version = "0.2.1"
+dependencies = [
+ "pdfcraft-annot",
+ "pdfcraft-cos",
+ "pdfcraft-forms",
+ "pdfcraft-model",
+ "roxmltree",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "pem-rfc7468"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3774,365 +4133,6 @@ dependencies = [
  "primefield",
  "serdect",
  "wnaf",
-]
-
-[[package]]
-name = "printcraft"
-version = "0.2.1"
-dependencies = [
- "eframe",
- "egui",
- "fmv-macos-events",
- "printcraft-ui-egui",
- "rustls-native-certs",
- "serde_json",
- "ureq",
- "winresource",
-]
-
-[[package]]
-name = "printcraft-a11y"
-version = "0.2.1"
-dependencies = [
- "printcraft-content",
- "printcraft-cos",
- "printcraft-model",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "printcraft-annot"
-version = "0.2.1"
-dependencies = [
- "hayro-syntax",
- "printcraft-cos",
- "printcraft-fonts",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "printcraft-automation"
-version = "0.2.1"
-dependencies = [
- "base64 0.22.1",
- "image",
- "png 0.18.1",
- "printcraft-engine",
- "printcraft-organize",
- "printcraft-render",
- "serde_json",
-]
-
-[[package]]
-name = "printcraft-cli"
-version = "0.2.1"
-dependencies = [
- "base64 0.22.1",
- "printcraft-automation",
- "printcraft-cos",
- "printcraft-engine",
- "printcraft-render",
- "serde_json",
-]
-
-[[package]]
-name = "printcraft-compare"
-version = "0.2.1"
-
-[[package]]
-name = "printcraft-content"
-version = "0.2.1"
-dependencies = [
- "printcraft-cos",
-]
-
-[[package]]
-name = "printcraft-cos"
-version = "0.2.1"
-dependencies = [
- "hayro-syntax",
- "printcraft-crypt",
- "printcraft-filters",
- "proptest",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "printcraft-create"
-version = "0.2.1"
-dependencies = [
- "hayro-syntax",
- "image",
- "png 0.18.1",
- "printcraft-cos",
- "printcraft-fonts",
- "printcraft-model",
- "thiserror 2.0.21",
- "tiff",
-]
-
-[[package]]
-name = "printcraft-crypt"
-version = "0.2.1"
-dependencies = [
- "aes",
- "md-5",
- "proptest",
- "sha2",
- "stringprep",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "printcraft-edit"
-version = "0.2.1"
-dependencies = [
- "hayro-syntax",
- "printcraft-annot",
- "printcraft-content",
- "printcraft-cos",
- "printcraft-fonts",
- "printcraft-model",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "printcraft-engine"
-version = "0.2.1"
-dependencies = [
- "chrono",
- "image",
- "png 0.18.1",
- "printcraft-a11y",
- "printcraft-annot",
- "printcraft-compare",
- "printcraft-cos",
- "printcraft-create",
- "printcraft-edit",
- "printcraft-export",
- "printcraft-fonts",
- "printcraft-forms",
- "printcraft-js",
- "printcraft-model",
- "printcraft-ocr",
- "printcraft-optimize",
- "printcraft-organize",
- "printcraft-preflight",
- "printcraft-print",
- "printcraft-redact",
- "printcraft-render",
- "printcraft-sign",
- "printcraft-xfdf",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "printcraft-export"
-version = "0.2.1"
-dependencies = [
- "flate2",
-]
-
-[[package]]
-name = "printcraft-filters"
-version = "0.2.1"
-dependencies = [
- "flate2",
- "proptest",
- "thiserror 2.0.21",
- "weezl 0.2.1",
-]
-
-[[package]]
-name = "printcraft-fonts"
-version = "0.2.1"
-dependencies = [
- "printcraft-cos",
- "skrifa 0.44.0",
-]
-
-[[package]]
-name = "printcraft-forms"
-version = "0.2.1"
-dependencies = [
- "hayro-syntax",
- "printcraft-content",
- "printcraft-cos",
- "printcraft-fonts",
- "printcraft-model",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "printcraft-geom"
-version = "0.2.1"
-
-[[package]]
-name = "printcraft-js"
-version = "0.2.1"
-dependencies = [
- "boa_engine",
-]
-
-[[package]]
-name = "printcraft-model"
-version = "0.2.1"
-dependencies = [
- "printcraft-cos",
-]
-
-[[package]]
-name = "printcraft-ocr"
-version = "0.2.1"
-dependencies = [
- "ocrs",
- "printcraft-fonts",
- "rten",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "printcraft-optimize"
-version = "0.2.1"
-dependencies = [
- "image",
- "printcraft-annot",
- "printcraft-content",
- "printcraft-cos",
- "printcraft-model",
- "printcraft-render",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "printcraft-organize"
-version = "0.2.1"
-dependencies = [
- "hayro-syntax",
- "printcraft-cos",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "printcraft-preflight"
-version = "0.2.1"
-dependencies = [
- "printcraft-cos",
- "printcraft-model",
-]
-
-[[package]]
-name = "printcraft-print"
-version = "0.2.1"
-dependencies = [
- "printcraft-content",
- "printcraft-cos",
- "printcraft-model",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "printcraft-redact"
-version = "0.2.1"
-dependencies = [
- "printcraft-annot",
- "printcraft-content",
- "printcraft-cos",
- "printcraft-edit",
- "printcraft-fonts",
- "printcraft-forms",
- "printcraft-model",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "printcraft-render"
-version = "0.2.1"
-dependencies = [
- "getrandom 0.4.3",
- "hayro",
- "hayro-syntax",
- "kurbo 0.13.1",
- "log",
- "lopdf",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "printcraft-sign"
-version = "0.2.1"
-dependencies = [
- "aes",
- "aws-lc-rs",
- "cbc",
- "des",
- "getrandom 0.4.3",
- "hmac",
- "p256",
- "p384",
- "pbkdf2",
- "printcraft-annot",
- "printcraft-cos",
- "printcraft-fonts",
- "rc2",
- "rsa",
- "security-framework",
- "sha1",
- "sha2",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "printcraft-ui-egui"
-version = "0.2.1"
-dependencies = [
- "arboard",
- "base64 0.22.1",
- "eframe",
- "egui",
- "egui_extras",
- "egui_kittest",
- "getrandom 0.4.3",
- "image",
- "js-sys",
- "log",
- "png 0.18.1",
- "printcraft-cos",
- "printcraft-engine",
- "printcraft-fonts",
- "printcraft-model",
- "printcraft-render",
- "rfd",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "printcraft-web"
-version = "0.2.1"
-dependencies = [
- "eframe",
- "egui",
- "js-sys",
- "printcraft-ui-egui",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "printcraft-xfdf"
-version = "0.2.1"
-dependencies = [
- "printcraft-annot",
- "printcraft-cos",
- "printcraft-forms",
- "printcraft-model",
- "roxmltree",
- "thiserror 2.0.21",
 ]
 
 [[package]]

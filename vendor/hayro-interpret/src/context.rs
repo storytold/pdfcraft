@@ -18,12 +18,12 @@ use std::rc::Rc;
 
 /// Maximum nesting depth for interpreting `XObject`'s/patterns/streams.
 pub(crate) const MAX_NESTED_INTERPRETATION_DEPTH: u32 = 50;
-/// PrintCraft patch: maximum nesting for content that is painted recursively by the device
+/// PdfCraft patch: maximum nesting for content that is painted recursively by the device
 /// (tiling patterns, Type 3 glyphs). Either can refer back to itself through resources it
 /// inherits, which recursed until the stack overflowed (found by fuzzing).
 pub(crate) const MAX_PAINT_NESTING: u32 = 16;
 
-/// PrintCraft patch: how many nested paints (a form inside a form, a Type 3 glyph or tiling
+/// PdfCraft patch: how many nested paints (a form inside a form, a Type 3 glyph or tiling
 /// pattern painted from inside another one) one page may do. Nesting depth alone doesn't bound
 /// the work: a glyph that shows ten glyphs of its own font, nested sixteen deep, is 10^16
 /// paints (a fuzzed file hung). Ordinary pages stay far below this.
@@ -33,7 +33,7 @@ std::thread_local! {
     static NESTED_PAINTS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
 }
 
-/// PrintCraft patch: count a paint at `depth` (top-level ones are free); `false` once this
+/// PdfCraft patch: count a paint at `depth` (top-level ones are free); `false` once this
 /// page's budget is spent, and the paint is skipped.
 pub(crate) fn take_nested_paint(depth: u32) -> bool {
     if depth < 2 {
@@ -101,7 +101,7 @@ impl<'a> Context<'a> {
         settings: InterpreterSettings,
     ) -> Self {
         let state = State::new(initial_transform);
-        // PrintCraft patch: a page (or other top-level content) starts with a fresh budget.
+        // PdfCraft patch: a page (or other top-level content) starts with a fresh budget.
         NESTED_PAINTS.with(|n| n.set(0));
 
         Self::new_with(initial_transform, bbox, cache, xref, settings, state, 0)
@@ -122,7 +122,7 @@ impl<'a> Context<'a> {
                 .map(|catalog| OcgState::from_catalog(&catalog))
                 .unwrap_or_default()
         };
-        // PrintCraft patch: apply viewer layer toggles.
+        // PdfCraft patch: apply viewer layer toggles.
         for (num, generation, visible) in settings.ocg_overrides.iter() {
             ocg_state.set_active(hayro_syntax::object::ObjectIdentifier::new(*num, *generation), *visible);
         }

@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-filters"
+name = "pdfcraft-filters"
 description = "PDF stream filters (ISO 32000-2 §7.4): Flate, LZW, predictors, ASCII85, ASCIIHex, RunLength"
 version.workspace = true
 edition.workspace = true

@@ -38,8 +38,8 @@ fn session_with(n: usize) -> (Session, DocId) {
 
 fn page_texts(s: &Session, id: DocId) -> Vec<String> {
     let doc = s.get(id).unwrap();
-    let config = printcraft_render::RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
-    let mut r = printcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+    let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
+    let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
     (0..doc.info.pages.len())
         .map(|p| {
             let r = r.render(RenderRequestFor::text(p));
@@ -51,8 +51,8 @@ fn page_texts(s: &Session, id: DocId) -> Vec<String> {
 /// Shorthand for building text-extraction requests.
 struct RenderRequestFor;
 impl RenderRequestFor {
-    fn text(page: usize) -> printcraft_render::RenderRequest {
-        printcraft_render::RenderRequest { page, kind: printcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() }
+    fn text(page: usize) -> pdfcraft_render::RenderRequest {
+        pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() }
     }
 }
 
@@ -94,7 +94,7 @@ fn failed_edit_changes_nothing() {
     let (mut s, id) = session_with(2);
     let before = s.get(id).unwrap().bytes.clone();
     let err = s.apply(id, Edit::DeletePages { pages: vec![0, 1] }).unwrap_err();
-    assert_eq!(err, EditError::Organize(printcraft_organize::OrganizeError::WouldRemoveAllPages));
+    assert_eq!(err, EditError::Organize(pdfcraft_organize::OrganizeError::WouldRemoveAllPages));
     let doc = s.get(id).unwrap();
     assert!(!doc.dirty);
     assert_eq!(doc.can_undo(), None);
@@ -121,7 +121,7 @@ fn save_is_incremental_stamps_mod_date_and_rebases() {
     s.apply(id, Edit::RotatePages { pages: vec![1], degrees: -90 }).unwrap();
     let second = s.save_bytes(id).unwrap();
     assert_eq!(&second[..saved.len()], &saved[..]);
-    let reopened = printcraft_cos::Document::open(second).unwrap();
+    let reopened = pdfcraft_cos::Document::open(second).unwrap();
     assert_eq!(reopened.revisions().len(), 3);
 }
 
@@ -206,7 +206,7 @@ fn combine_extract_split_and_insert_from_file() {
     let eid = s.open_new("Extract.pdf", ex).unwrap();
     assert_eq!(page_texts(&s, eid), ["Page 3", "Page 1"]);
     // Split every 2 pages.
-    let parts = s.split(id, &printcraft_organize::SplitBy::PageCount(2)).unwrap();
+    let parts = s.split(id, &pdfcraft_organize::SplitBy::PageCount(2)).unwrap();
     assert_eq!(parts.iter().map(|(a, b, _)| (*a, *b)).collect::<Vec<_>>(), [(1, 2), (3, 3)]);
     // Insert pages from a file, undoably, into the open document.
     s.apply(id, Edit::InsertPagesFrom { name: "b.pdf".into(), bytes: other, pages: Some(vec![1]), at: 1 }).unwrap();
@@ -219,9 +219,9 @@ fn combine_extract_split_and_insert_from_file() {
 }
 
 fn protected(user: &str, owner: &str, permissions: i32) -> Arc<Vec<u8>> {
-    let mut doc = printcraft_cos::Document::open(Arc::new(fixture(2))).unwrap();
-    doc.set_encryption(&printcraft_cos::NewEncryption {
-        algorithm: printcraft_cos::Algorithm::Aes256,
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(2))).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
         user_password: user,
         owner_password: owner,
         permissions,
@@ -229,7 +229,7 @@ fn protected(user: &str, owner: &str, permissions: i32) -> Arc<Vec<u8>> {
         seed: [7; 32],
     })
     .unwrap();
-    Arc::new(printcraft_cos::write_full(&doc, &Default::default()).unwrap())
+    Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap())
 }
 
 #[test]
@@ -244,7 +244,7 @@ fn encrypted_documents_open_edit_and_save_encrypted() {
     s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
     let saved = s.save_bytes(id).unwrap();
     assert_eq!(&saved[..bytes.len()], &bytes[..], "incremental");
-    assert!(printcraft_cos::Document::open(saved.clone()).is_err(), "still protected after saving");
+    assert!(pdfcraft_cos::Document::open(saved.clone()).is_err(), "still protected after saving");
     let mut s2 = Session::new();
     let id2 = s2.open("x.pdf", None, saved, Some("pw")).unwrap();
     assert_eq!(s2.get(id2).unwrap().info.pages[0].rotation, 90);
@@ -280,9 +280,9 @@ fn combining_protected_files_is_refused_clearly() {
 
 #[test]
 fn owner_password_of_older_revisions_opens_the_viewer_too() {
-    for alg in [printcraft_cos::Algorithm::Rc4_128, printcraft_cos::Algorithm::Aes128] {
-        let mut doc = printcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
-        doc.set_encryption(&printcraft_cos::NewEncryption {
+    for alg in [pdfcraft_cos::Algorithm::Rc4_128, pdfcraft_cos::Algorithm::Aes128] {
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
+        doc.set_encryption(&pdfcraft_cos::NewEncryption {
             algorithm: alg,
             user_password: "u",
             owner_password: "o",
@@ -291,7 +291,7 @@ fn owner_password_of_older_revisions_opens_the_viewer_too() {
             seed: [1; 32],
         })
         .unwrap();
-        let bytes = Arc::new(printcraft_cos::write_full(&doc, &Default::default()).unwrap());
+        let bytes = Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
         let mut s = Session::new();
         let id = s.open("x.pdf", None, bytes, Some("o")).unwrap_or_else(|e| panic!("{alg:?}: {e}"));
         let d = s.get(id).unwrap();
@@ -332,7 +332,7 @@ fn recovered_documents_reopen_unsaved_at_their_original_path() {
     assert!(s2.autosave_snapshots().is_empty(), "already in the recovery store");
 }
 
-fn outline_titles(items: &[printcraft_render::OutlineItem]) -> Vec<String> {
+fn outline_titles(items: &[pdfcraft_render::OutlineItem]) -> Vec<String> {
     items
         .iter()
         .map(|o| {
@@ -374,7 +374,7 @@ fn bookmark_edits_show_in_the_viewer_undo_and_save() {
 fn number_pages_shows_in_the_viewer_and_undoes() {
     let (mut s, id) = session_with(5);
     let labels = |s: &Session| s.get(id).unwrap().info.pages.iter().map(|p| p.label.clone()).collect::<Vec<_>>();
-    use printcraft_organize::LabelStyle;
+    use pdfcraft_organize::LabelStyle;
     s.apply(id, Edit::NumberPages { from: 0, to: 1, style: LabelStyle::LowerRoman, prefix: String::new(), first: 1 }).unwrap();
     s.apply(id, Edit::NumberPages { from: 2, to: 4, style: LabelStyle::Decimal, prefix: "§".into(), first: 10 }).unwrap();
     // The inspector (lopdf-based, independent) formats them the same way.
@@ -387,8 +387,8 @@ fn number_pages_shows_in_the_viewer_and_undoes() {
 /// RGBA of the pixel at PDF point (x, y) on `page`, rendered at 1 px/pt (page height 300).
 fn pixel(s: &Session, id: DocId, page: usize, x: u32, y: u32) -> [u8; 4] {
     let doc = s.get(id).unwrap();
-    let mut r = printcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
-    let out = r.render(printcraft_render::RenderRequest { page, scale: 1.0, ..Default::default() });
+    let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+    let out = r.render(pdfcraft_render::RenderRequest { page, scale: 1.0, ..Default::default() });
     assert!(out.error.is_none(), "{:?}", out.error);
     let i = (((300 - y) * out.width + x) * 4) as usize;
     out.rgba[i..i + 4].try_into().unwrap()
@@ -468,10 +468,10 @@ fn highlight_multiplies_over_text() {
 
 #[test]
 fn comment_permission_is_enforced() {
-    let mut cos = printcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
     // Owner "own", empty user password, everything allowed except commenting (bit 6).
-    let params = printcraft_cos::NewEncryption {
-        algorithm: printcraft_cos::Algorithm::Aes256,
+    let params = pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
         user_password: "",
         owner_password: "own",
         permissions: !(1 << 5),
@@ -479,7 +479,7 @@ fn comment_permission_is_enforced() {
         seed: [7; 32],
     };
     cos.set_encryption(&params).unwrap();
-    let bytes = printcraft_cos::write_full(&cos, &printcraft_cos::SaveOptions::default()).unwrap();
+    let bytes = pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap();
     let mut s = Session::new();
     let id = s.open("locked.pdf", None, Arc::new(bytes), None).unwrap();
     let err = s.apply(id, rect_comment(0, [10.0, 10.0, 50.0, 50.0])).unwrap_err();
@@ -513,7 +513,7 @@ fn protect_with_an_open_password_then_save_reopen_and_undo() {
     assert_eq!(d.security_summary().unwrap().method, "AES, 256-bit");
     assert_eq!(page_texts(&s, id), ["Page 1", "Page 2"], "still viewable in this session");
     let saved = s.save_bytes(id).unwrap();
-    assert!(printcraft_cos::Document::open(saved.clone()).is_err(), "needs the password");
+    assert!(pdfcraft_cos::Document::open(saved.clone()).is_err(), "needs the password");
     s.mark_saved(id, saved.clone(), None).unwrap();
     // Further edits keep working and saving stays encrypted.
     s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
@@ -526,7 +526,7 @@ fn protect_with_an_open_password_then_save_reopen_and_undo() {
     assert!(s2.get(id2).unwrap().allows_security_change());
     s2.apply(id2, Edit::RemoveProtection).unwrap();
     let plain = s2.save_bytes(id2).unwrap();
-    assert!(printcraft_cos::Document::open(plain).is_ok());
+    assert!(pdfcraft_cos::Document::open(plain).is_ok());
 }
 
 #[test]
@@ -557,7 +557,7 @@ fn protection_is_validated_undoable_and_never_logged() {
     let (mut s, id) = session_with(1);
     assert!(matches!(s.apply(id, Edit::Protect(protection(None, None))), Err(EditError::Protection(_))));
     assert!(matches!(s.apply(id, Edit::Protect(protection(Some("same"), Some("same")))), Err(EditError::Protection(_))));
-    let rc4 = Protection { algorithm: printcraft_cos::Algorithm::Rc4_128, ..protection(Some("pässword"), None) };
+    let rc4 = Protection { algorithm: pdfcraft_cos::Algorithm::Rc4_128, ..protection(Some("pässword"), None) };
     assert!(matches!(s.apply(id, Edit::Protect(rc4)), Err(EditError::Protection(_))));
     assert!(!format!("{:?}", Edit::Protect(protection(Some("hunter2"), Some("x")))).contains("hunter2"));
     s.apply(id, Edit::Protect(protection(Some("pw"), Some("owner")))).unwrap();
@@ -645,7 +645,7 @@ fn comment_edits_refresh_the_list_exactly_as_a_full_inspection_would() {
     s.apply(id, Edit::DeleteAnnotation { page: 1, index: 0 }).unwrap();
     s.undo(id).unwrap();
     let d = s.get(id).unwrap();
-    let full = printcraft_render::inspect(d.bytes.clone(), None).unwrap();
+    let full = pdfcraft_render::inspect(d.bytes.clone(), None).unwrap();
     assert_eq!(format!("{:?}", d.info.annotations), format!("{:?}", full.annotations));
     assert_eq!(d.info.file_size, full.file_size);
     assert_eq!(d.info.annotations.len(), 7);
@@ -659,8 +659,8 @@ fn form_edits_refresh_field_values_without_a_full_inspection() {
     s.apply(id, Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text("Ada".into()) }).unwrap();
     s.apply(id, Edit::SetFieldValue { name: "ok".into(), value: FieldValue::Check(true) }).unwrap();
     let d = s.get(id).unwrap();
-    let full = printcraft_render::inspect(d.bytes.clone(), None).unwrap();
-    let values = |fs: &[printcraft_render::Field]| fs.iter().map(|f| (f.name.clone(), f.value.clone())).collect::<Vec<_>>();
+    let full = pdfcraft_render::inspect(d.bytes.clone(), None).unwrap();
+    let values = |fs: &[pdfcraft_render::Field]| fs.iter().map(|f| (f.name.clone(), f.value.clone())).collect::<Vec<_>>();
     assert_eq!(values(&d.info.fields), values(&full.fields));
     assert_eq!(values(&d.info.fields), [("name".to_string(), Some("Ada".to_string())), ("ok".to_string(), Some("Yes".to_string()))]);
 }
@@ -698,7 +698,7 @@ fn redaction_marks_apply_for_good_and_undo() {
     let (mut s, id) = session_with(2);
     // "Page 1" at 24 pt from x 20: the "1" starts near x 82.7 (Helvetica widths).
     let shape =
-        Shape::Redact { quads: vec![printcraft_annot::rect_quad([80.0, 140.0, 100.0, 180.0])], overlay: String::new(), look: Default::default() };
+        Shape::Redact { quads: vec![pdfcraft_annot::rect_quad([80.0, 140.0, 100.0, 180.0])], overlay: String::new(), look: Default::default() };
     let mark =
         Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Ada".into() });
     s.apply(id, mark).unwrap();
@@ -917,8 +917,8 @@ fn added_images_rotate_flip_and_crop_as_drawn() {
     s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "rb.png".into(), bytes: Arc::new(png) }).unwrap();
     let colour_at = |s: &Session, x: u32, y_from_top: u32| -> [u8; 3] {
         let doc = s.get(id).unwrap();
-        let mut r = printcraft_render::PageRenderer::new(doc.bytes.clone(), Default::default());
-        let out = r.render(printcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), Default::default());
+        let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
         let i = ((y_from_top * out.width + x) * 4) as usize;
         [out.rgba[i], out.rgba[i + 1], out.rgba[i + 2]]
     };
@@ -961,7 +961,7 @@ fn revert_goes_back_to_the_saved_version() {
 fn split_by_size_and_bookmarks_and_page_filters() {
     let (mut s, id) = session_with(6);
     // Every page alone is a few hundred bytes: a limit of about two pages gives three parts.
-    let one = s.split(id, &printcraft_organize::SplitBy::PageCount(1)).unwrap()[0].2.len();
+    let one = s.split(id, &pdfcraft_organize::SplitBy::PageCount(1)).unwrap()[0].2.len();
     let parts = s.split_by_size(id, one * 2 + one / 2).unwrap();
     assert!(parts.len() >= 2 && parts.len() <= 6, "{}", parts.len());
     assert_eq!(parts.last().unwrap().1, 6, "every page is in a part");
@@ -1397,7 +1397,7 @@ fn exporting_office_files_keeps_images() {
     assert_eq!(d.export_pages()[0].images.len(), 1);
     let docx = d.export_office(compare::OfficeFormat::Docx);
     assert!(docx.windows(16).any(|w| w == b"word/media/image"));
-    if let Ok(dir) = std::env::var("PRINTCRAFT_EXPORT_DIR") {
+    if let Ok(dir) = std::env::var("PDFCRAFT_EXPORT_DIR") {
         std::fs::write(format!("{dir}/pic.docx"), &docx).unwrap();
     }
     assert!(String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap().contains("data:image/png;base64,"));

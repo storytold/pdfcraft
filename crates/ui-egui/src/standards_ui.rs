@@ -2,10 +2,10 @@
 //! fixing what can be fixed (Save as PDF/A).
 
 use egui::{Align, Layout};
-use printcraft_engine::pdfa::{Issue, Level};
+use pdfcraft_engine::pdfa::{Issue, Level};
 
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, widgets};
+use crate::{PdfCraftApp, widgets};
 
 /// The dialog's state: the chosen level and the last result.
 #[derive(Clone, Debug, PartialEq)]
@@ -21,7 +21,7 @@ impl Default for PdfaState {
     }
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     pub fn pdfa_verify(&mut self) {
         let Some((_, id)) = self.active_ids() else { return };
         let level = self.pdfa.level;
@@ -31,7 +31,7 @@ impl PrintCraftApp {
 
     pub fn pdfa_convert(&mut self) {
         let level = self.pdfa.level;
-        if self.apply_edit(printcraft_engine::Edit::ConvertPdfA { level }) {
+        if self.apply_edit(pdfcraft_engine::Edit::ConvertPdfA { level }) {
             self.pdfa_verify();
             let left = self.pdfa.issues.as_ref().map_or(0, Vec::len);
             self.notify(if left == 0 {
@@ -44,7 +44,7 @@ impl PrintCraftApp {
 }
 
 /// Returns `true` to close.
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new("PDF/A").font(theme::semibold(18.0)));
     ui.add_space(6.0);
     let declared = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.standards()).unwrap_or_default();

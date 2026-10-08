@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 /// Find a Chrome/Chromium binary. `explicit` (from `--chrome`) wins, then the
-/// `PRINTCRAFT_CHROME` / `CHROME` environment variables, then well-known
+/// `PDFCRAFT_CHROME` / `CHROME` environment variables, then well-known
 /// install locations, then `PATH`.
 pub fn find(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = explicit {
@@ -20,7 +20,7 @@ pub fn find(explicit: Option<&Path>) -> Result<PathBuf> {
         }
         bail!("--chrome {} does not exist", path.display());
     }
-    for var in ["PRINTCRAFT_CHROME", "CHROME"] {
+    for var in ["PDFCRAFT_CHROME", "CHROME"] {
         if let Some(path) = env::var_os(var).map(PathBuf::from)
             && path.is_file()
         {
@@ -63,7 +63,7 @@ pub fn find(explicit: Option<&Path>) -> Result<PathBuf> {
     }
     bail!(
         "could not find Google Chrome or Chromium; install one or pass --chrome <path> \
-         (or set PRINTCRAFT_CHROME)"
+         (or set PDFCRAFT_CHROME)"
     )
 }
 

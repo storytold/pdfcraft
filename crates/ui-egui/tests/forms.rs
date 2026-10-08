@@ -1,11 +1,11 @@
 //! Filling in a form in the real shell (egui_kittest): typing, Tab, check boxes, radios, choices.
 
 use egui_kittest::Harness;
-use printcraft_ui_egui::PrintCraftApp;
+use pdfcraft_ui_egui::PdfCraftApp;
 
-fn harness() -> Harness<'static, PrintCraftApp> {
+fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app.set_option("left", "closed").unwrap();
         // The whole 300×400 pt page on screen.
@@ -22,18 +22,18 @@ fn harness() -> Harness<'static, PrintCraftApp> {
     h
 }
 
-fn value(h: &Harness<'static, PrintCraftApp>, name: &str) -> Vec<String> {
+fn value(h: &Harness<'static, PdfCraftApp>, name: &str) -> Vec<String> {
     let s = h.state();
     s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone()
 }
 
 /// Click the centre of a field's widget.
-fn click_field(h: &mut Harness<'static, PrintCraftApp>, name: &str, widget: usize) {
+fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str, widget: usize) {
     let p = {
         let s = h.state();
         let doc = s.session.get(s.views[0].id).unwrap();
         let f = doc.form.iter().find(|f| f.name == name).unwrap();
-        printcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, widget).expect("on screen").center()
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, widget).expect("on screen").center()
     };
     h.hover_at(p);
     h.run_steps(1);
@@ -125,10 +125,10 @@ fn tabbing_into_a_filled_field_selects_it_so_typing_replaces() {
 fn date_fields_offer_a_calendar() {
     use egui_kittest::kittest::Queryable;
     let mut h = harness();
-    h.state_mut().apply_edit(printcraft_engine::Edit::AddField {
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
         page: 0,
         rect: [50.0, 40.0, 200.0, 60.0],
-        kind: printcraft_engine::NewField::Date,
+        kind: pdfcraft_engine::NewField::Date,
         name: Some("due".into()),
     });
     h.run_steps(4);

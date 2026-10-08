@@ -2,8 +2,8 @@
 //! rectangle; double-click a page to open Set Page Boxes for it.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use printcraft_engine::{BoxSpec, Edit, PageBox};
-use printcraft_render::DocInfo;
+use pdfcraft_engine::{BoxSpec, Edit, PageBox};
+use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
 

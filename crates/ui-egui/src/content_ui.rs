@@ -4,8 +4,8 @@
 //! Delete to remove it. Each change is one undoable engine edit.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use printcraft_engine::{Added, AddedContent, AddedText, Edit, FontFamily, TextAlign};
-use printcraft_render::DocInfo;
+use pdfcraft_engine::{Added, AddedContent, AddedText, Edit, FontFamily, TextAlign};
+use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
@@ -403,7 +403,7 @@ pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens) {
     ui.add_space(4.0);
 }
 
-impl crate::PrintCraftApp {
+impl crate::PdfCraftApp {
     /// Edit a PDF ▸ Add content ▸ Image: pick a file and place it in the middle of the current page.
     pub fn add_image_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -449,7 +449,7 @@ impl crate::PrintCraftApp {
                     self.apply_edit(Edit::EditPageImage {
                         page,
                         index,
-                        change: printcraft_engine::ImageEdit::Replace { name, bytes: std::sync::Arc::new(bytes) },
+                        change: pdfcraft_engine::ImageEdit::Replace { name, bytes: std::sync::Arc::new(bytes) },
                     });
                 }
                 Err(e) => self.notify(format!("Couldn't read {}: {e}", path.display())),
@@ -539,18 +539,18 @@ impl crate::PrintCraftApp {
 
 /// What the image tools ask for.
 pub(crate) enum ImageAction {
-    Update(printcraft_engine::AddedContent),
+    Update(pdfcraft_engine::AddedContent),
     Replace,
 }
 
 /// Edit image: rotate, flip, crop, replace (shown while an added image is selected).
-pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &printcraft_engine::AddedImage) -> Option<ImageAction> {
+pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
     let mut out = None;
     widgets::section_title(ui, "Edit image");
     ui.horizontal(|ui| {
         let mut i = img.clone();
         let r = i.rect;
-        let turn = |i: &mut printcraft_engine::AddedImage, k: u8| {
+        let turn = |i: &mut pdfcraft_engine::AddedImage, k: u8| {
             i.rotation = (i.rotation + k) % 4;
             // The box turns with the picture, around its centre.
             let (cx, cy, w, h) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0, r[2] - r[0], r[3] - r[1]);

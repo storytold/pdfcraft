@@ -107,17 +107,17 @@ mod tests {
 
     #[test]
     fn language_persists_and_invalid_input_keeps_current_language() {
-        let mut app = crate::PrintCraftApp::default();
+        let mut app = crate::PdfCraftApp::default();
         app.set_option("language", "ja").unwrap();
         assert_eq!(app.language, Language::Ja);
         assert!(app.set_option("language", "xx").is_err());
         assert_eq!(app.language, Language::Ja);
-        let mut restored = crate::PrintCraftApp::default();
+        let mut restored = crate::PdfCraftApp::default();
         restored.restore(&app.persist());
         assert_eq!(restored.language, Language::Ja);
         restored.restore(r#"{"language":"xx"}"#);
         assert_eq!(restored.language, Language::Ja);
-        let mut legacy = crate::PrintCraftApp::default();
+        let mut legacy = crate::PdfCraftApp::default();
         legacy.restore("{}");
         assert_eq!(legacy.language, Language::En);
     }

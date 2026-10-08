@@ -1,4 +1,4 @@
-//! printcraft-a11y — accessibility (L4): the Accessibility Checker's full check.
+//! pdfcraft-a11y — accessibility (L4): the Accessibility Checker's full check.
 //!
 //! [`check`] runs the 32 rules in Acrobat's seven categories (Document, Page Content, Forms,
 //! Alternate Text, Tables, Lists, Headings) and returns, per rule, Passed, Failed, Needs manual
@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 
-use printcraft_cos::Document;
+use pdfcraft_cos::Document;
 
 mod alt;
 mod content;
@@ -458,7 +458,7 @@ const MAX_FINDINGS: usize = 200;
 
 /// Run the full check.
 pub fn check(doc: &Document, options: &Options) -> Report {
-    let pages = printcraft_model::pages(doc);
+    let pages = pdfcraft_model::pages(doc);
     let page_list: Vec<usize> = match &options.pages {
         Some(p) => p.iter().copied().filter(|p| *p < pages.len()).collect(),
         None => (0..pages.len()).collect(),

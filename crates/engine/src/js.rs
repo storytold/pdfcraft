@@ -1,13 +1,13 @@
 //! Acrobat JavaScript in documents: field scripts run during form edits ([`JsRunner`], wired
-//! into `forms` through its [`printcraft_forms::Scripts`] hook), and button actions and console
+//! into `forms` through its [`pdfcraft_forms::Scripts`] hook), and button actions and console
 //! input run on request ([`Session::run_javascript`]). What scripts ask of the viewer (alerts,
 //! printing, navigation, links) is kept for the front end in [`JsOutput`].
 //!
 //! Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript is [`Session::set_javascript`]; with it
 //! off, scripts don't run and AF calls keep working natively.
 
-use printcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, ScriptResult, Scripts};
-pub use printcraft_js::{Limits, Outcome, Request};
+use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, ScriptResult, Scripts};
+pub use pdfcraft_js::{Limits, Outcome, Request};
 
 use crate::{DocId, Edit, EditError, Session};
 
@@ -41,8 +41,8 @@ impl JsOutput {
     }
 }
 
-fn kind(k: FieldKind) -> printcraft_js::FieldType {
-    use printcraft_js::FieldType as T;
+fn kind(k: FieldKind) -> pdfcraft_js::FieldType {
+    use pdfcraft_js::FieldType as T;
     match k {
         FieldKind::Text => T::Text,
         FieldKind::CheckBox => T::CheckBox,
@@ -55,25 +55,25 @@ fn kind(k: FieldKind) -> printcraft_js::FieldType {
 }
 
 /// `field.display` from the first widget's annotation flags.
-fn display(doc: &printcraft_cos::Document, f: &Field) -> i32 {
+fn display(doc: &pdfcraft_cos::Document, f: &Field) -> i32 {
     let flags = f.widgets.first().and_then(|w| doc.get(w.obj).as_dict().and_then(|d| d.int(b"F"))).unwrap_or(4);
     if flags & 2 != 0 {
-        printcraft_js::DISPLAY_HIDDEN
+        pdfcraft_js::DISPLAY_HIDDEN
     } else if flags & 32 != 0 {
-        printcraft_js::DISPLAY_NO_VIEW
+        pdfcraft_js::DISPLAY_NO_VIEW
     } else if flags & 4 == 0 {
-        printcraft_js::DISPLAY_NO_PRINT
+        pdfcraft_js::DISPLAY_NO_PRINT
     } else {
-        printcraft_js::DISPLAY_VISIBLE
+        pdfcraft_js::DISPLAY_VISIBLE
     }
 }
 
 /// A form field as scripts see it.
-pub fn field_state(doc: &printcraft_cos::Document, f: &Field) -> printcraft_js::FieldState {
-    let mut s = printcraft_js::FieldState::new(f.name.clone(), kind(f.kind), f.value.clone());
+pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field) -> pdfcraft_js::FieldState {
+    let mut s = pdfcraft_js::FieldState::new(f.name.clone(), kind(f.kind), f.value.clone());
     s.default = f.default.clone();
     s.readonly = f.read_only();
-    s.required = f.has(printcraft_forms::flags::REQUIRED);
+    s.required = f.has(pdfcraft_forms::flags::REQUIRED);
     s.display = display(doc, f);
     s.char_limit = f.max_len;
     s.options = match f.kind {
@@ -84,7 +84,7 @@ pub fn field_state(doc: &printcraft_cos::Document, f: &Field) -> printcraft_js::
 }
 
 /// The changes a script made, against the fields as they were.
-fn changes(before: &[printcraft_js::FieldState], after: &[printcraft_js::FieldState]) -> Vec<FieldChange> {
+fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]) -> Vec<FieldChange> {
     after
         .iter()
         .filter_map(|a| {
@@ -103,27 +103,26 @@ fn changes(before: &[printcraft_js::FieldState], after: &[printcraft_js::FieldSt
 
 /// Runs field scripts with the document's object model and keeps what they print or ask for.
 pub struct JsRunner {
-    pub doc: printcraft_js::DocInfo,
+    pub doc: pdfcraft_js::DocInfo,
     pub doc_scripts: Vec<String>,
     pub output: JsOutput,
     /// The fields in the document as the forms code last read them (for `display`).
-    cos: printcraft_cos::Document,
+    cos: pdfcraft_cos::Document,
 }
 
 impl JsRunner {
-    pub fn new(cos: &printcraft_cos::Document, file_name: &str) -> JsRunner {
-        let doc =
-            printcraft_js::DocInfo { file_name: file_name.to_string(), num_pages: printcraft_model::pages(cos).len(), page: 0, info: info(cos) };
-        JsRunner { doc, doc_scripts: printcraft_forms::document_scripts(cos), output: JsOutput::default(), cos: cos.clone() }
+    pub fn new(cos: &pdfcraft_cos::Document, file_name: &str) -> JsRunner {
+        let doc = pdfcraft_js::DocInfo { file_name: file_name.to_string(), num_pages: pdfcraft_model::pages(cos).len(), page: 0, info: info(cos) };
+        JsRunner { doc, doc_scripts: pdfcraft_forms::document_scripts(cos), output: JsOutput::default(), cos: cos.clone() }
     }
 }
 
 /// The Info dictionary as `this.info` keys (lower-case).
-fn info(cos: &printcraft_cos::Document) -> Vec<(String, String)> {
+fn info(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
     let Some(d) = cos.trailer().get(b"Info").map(|i| cos.resolve(i)).and_then(|i| i.as_dict().cloned()) else { return Vec::new() };
     d.iter()
         .filter_map(|(k, v)| match &*cos.resolve(v) {
-            printcraft_cos::Object::String(s) => Some((String::from_utf8_lossy(k).to_lowercase(), s.to_text())),
+            pdfcraft_cos::Object::String(s) => Some((String::from_utf8_lossy(k).to_lowercase(), s.to_text())),
             _ => None,
         })
         .collect()
@@ -132,8 +131,8 @@ fn info(cos: &printcraft_cos::Document) -> Vec<(String, String)> {
 impl Scripts for JsRunner {
     fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult {
         let states: Vec<_> = fields.iter().map(|f| field_state(&self.cos, f)).collect();
-        let ev = printcraft_js::Event::field(event.name(), &target.name, value);
-        let o = printcraft_js::run(script, &ev, &self.doc, &states, &self.doc_scripts, Limits::default());
+        let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
+        let o = pdfcraft_js::run(script, &ev, &self.doc, &states, &self.doc_scripts, Limits::default());
         self.output.absorb(&o);
         if o.error.is_some() {
             // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
@@ -150,14 +149,14 @@ impl Scripts for JsRunner {
 }
 
 /// A document-level JavaScript: its name and source.
-pub fn document_scripts(cos: &printcraft_cos::Document) -> Vec<(String, String)> {
-    printcraft_forms::document_scripts_named(cos)
+pub fn document_scripts(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
+    pdfcraft_forms::document_scripts_named(cos)
 }
 
 impl crate::Document {
     /// Field Properties ▸ Actions: field `name`'s action per trigger.
-    pub fn field_actions(&self, name: &str) -> Vec<(printcraft_forms::Trigger, printcraft_forms::FieldAction)> {
-        self.editor.as_ref().and_then(|e| printcraft_forms::field_actions(&e.cos, name).ok()).unwrap_or_default()
+    pub fn field_actions(&self, name: &str) -> Vec<(pdfcraft_forms::Trigger, pdfcraft_forms::FieldAction)> {
+        self.editor.as_ref().and_then(|e| pdfcraft_forms::field_actions(&e.cos, name).ok()).unwrap_or_default()
     }
 
     /// Document JavaScripts (name, source), in name order.
@@ -191,13 +190,13 @@ impl Session {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = doc.editor.as_ref().map(|e| e.cos.clone()).ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         let runner = JsRunner::new(&cos, &doc.name);
-        let fields = printcraft_forms::fields(&cos);
+        let fields = pdfcraft_forms::fields(&cos);
         let states: Vec<_> = fields.iter().map(|f| field_state(&cos, f)).collect();
         let event = match target {
-            Some(t) => printcraft_js::Event { will_commit: false, ..printcraft_js::Event::field("Mouse Up", t, "") },
-            None => printcraft_js::Event::doc("Console"),
+            Some(t) => pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
+            None => pdfcraft_js::Event::doc("Console"),
         };
-        let mut o = printcraft_js::run(script, &event, &runner.doc, &states, &runner.doc_scripts, Limits::default());
+        let mut o = pdfcraft_js::run(script, &event, &runner.doc, &states, &runner.doc_scripts, Limits::default());
         let after: Vec<_> = states.iter().map(|s| o.changed.iter().find(|c| c.name == s.name).unwrap_or(s).clone()).collect();
         let changes = changes(&states, &after);
         let resets: Vec<Vec<String>> = o
@@ -228,13 +227,13 @@ impl Session {
 
 /// A page's words for form-field detection, in user space (underscore runs split from the
 /// text around them).
-fn detection_words(text: &printcraft_render::PageText, info: &printcraft_render::PageInfo) -> Vec<printcraft_forms::detect::Word> {
-    page_words(text, info).into_iter().map(|(text, rect)| printcraft_forms::detect::Word { text, rect }).collect()
+fn detection_words(text: &pdfcraft_render::PageText, info: &pdfcraft_render::PageInfo) -> Vec<pdfcraft_forms::detect::Word> {
+    page_words(text, info).into_iter().map(|(text, rect)| pdfcraft_forms::detect::Word { text, rect }).collect()
 }
 
 /// A page's words in reading order, in user space ([x0, y0, x1, y1]); runs of underscores are
 /// words of their own.
-pub(crate) fn page_words(text: &printcraft_render::PageText, info: &printcraft_render::PageInfo) -> Vec<(String, [f64; 4])> {
+pub(crate) fn page_words(text: &pdfcraft_render::PageText, info: &pdfcraft_render::PageInfo) -> Vec<(String, [f64; 4])> {
     let mut words: Vec<(String, [f32; 4])> = Vec::new();
     let mut last_line = u32::MAX;
     // A space glyph ends the word before it.
@@ -277,22 +276,21 @@ pub(crate) fn page_words(text: &printcraft_render::PageText, info: &printcraft_r
 impl Session {
     /// Prepare a form ▸ automatic field detection: the fields `pages` (0-based; empty = all)
     /// seem to ask for, named from their labels, as (page, candidate).
-    pub fn detect_fields(&self, id: DocId, pages: &[usize]) -> Vec<(usize, printcraft_forms::detect::Candidate)> {
+    pub fn detect_fields(&self, id: DocId, pages: &[usize]) -> Vec<(usize, pdfcraft_forms::detect::Candidate)> {
         let Some(doc) = self.get(id) else { return Vec::new() };
         let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Vec::new() };
-        let config = printcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
-        let mut r = printcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+        let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         let mut taken: Vec<String> = doc.form.iter().map(|f| f.name.clone()).collect();
         let all = doc.info.pages.len();
         let list: Vec<usize> = if pages.is_empty() { (0..all).collect() } else { pages.iter().copied().filter(|p| *p < all).collect() };
         let mut out = Vec::new();
         for page in list {
-            let res =
-                r.render(printcraft_render::RenderRequest { page, kind: printcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
+            let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
             let words = res.text.map(|t| detection_words(&t, &doc.info.pages[page])).unwrap_or_default();
-            let shapes = printcraft_forms::detect::page_shapes(cos, page);
+            let shapes = pdfcraft_forms::detect::page_shapes(cos, page);
             let existing: Vec<[f64; 4]> = doc.form.iter().flat_map(|f| f.widgets.iter()).filter(|w| w.page == Some(page)).map(|w| w.rect).collect();
-            for c in printcraft_forms::detect::detect(&words, &shapes, &existing, &taken) {
+            for c in pdfcraft_forms::detect::detect(&words, &shapes, &existing, &taken) {
                 taken.push(c.name.clone());
                 out.push((page, c));
             }
@@ -313,8 +311,8 @@ impl Session {
                 page,
                 rect: c.rect,
                 kind: match c.kind {
-                    printcraft_forms::detect::Kind::Text => printcraft_forms::NewField::Text { multiline: c.rect[3] - c.rect[1] > 30.0 },
-                    printcraft_forms::detect::Kind::CheckBox => printcraft_forms::NewField::CheckBox,
+                    pdfcraft_forms::detect::Kind::Text => pdfcraft_forms::NewField::Text { multiline: c.rect[3] - c.rect[1] > 30.0 },
+                    pdfcraft_forms::detect::Kind::CheckBox => pdfcraft_forms::NewField::CheckBox,
                 },
                 name: Some(c.name),
             })

@@ -1,7 +1,7 @@
 //! Links (ISO 32000-2 §12.5.6.5): create, edit and remove link annotations with Acrobat's Link
 //! Properties (appearance and a go-to-page or open-a-web-page action).
 
-use printcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 
 use crate::{AnnotError, annots, page_ref, page_refs, set_annots};
 
@@ -11,7 +11,7 @@ pub enum LinkAction {
     /// A page of this document (0-based), shown fitting the window (`/Fit`).
     Page(usize),
     Uri(String),
-    /// Something PrintCraft doesn't edit yet (named destination, JavaScript…): kept as is.
+    /// Something PdfCraft doesn't edit yet (named destination, JavaScript…): kept as is.
     Other(String),
 }
 

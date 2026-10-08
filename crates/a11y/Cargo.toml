@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-a11y"
+name = "pdfcraft-a11y"
 description = "Accessibility: the Accessibility Checker (32 rules), its report and fixes"
 version.workspace = true
 edition.workspace = true
@@ -11,7 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-cos = { workspace = true }
-printcraft-model = { workspace = true }
-printcraft-content = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-model = { workspace = true }
+pdfcraft-content = { workspace = true }
 thiserror.workspace = true

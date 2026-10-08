@@ -6,7 +6,7 @@
 //! calculation order, Format when the appearance is drawn — and applies what the script asks
 //! for: the event's value, `rc`, and changes to other fields.
 
-use printcraft_cos::{Document, Object, PdfString};
+use pdfcraft_cos::{Document, Object, PdfString};
 
 use crate::{Field, FieldKind, FieldValue, FormError, fields, flags};
 
@@ -218,7 +218,7 @@ pub fn set_document_script(doc: &mut Document, name: &str, js: Option<&str>) -> 
         }
     }
     if let Some(js) = js {
-        let mut action = printcraft_cos::Dict::new();
+        let mut action = pdfcraft_cos::Dict::new();
         action.set(b"S".to_vec(), Object::name("JavaScript"));
         action.set(b"JS".to_vec(), PdfString::text(js));
         let a = doc.add(Object::Dict(action));
@@ -229,7 +229,7 @@ pub fn set_document_script(doc: &mut Document, name: &str, js: Option<&str>) -> 
         _ => String::new(),
     });
     pairs = kept.into_iter().flat_map(|(k, v)| [k, v]).collect();
-    let mut t = printcraft_cos::Dict::new();
+    let mut t = pdfcraft_cos::Dict::new();
     t.set(b"Names".to_vec(), Object::Array(pairs));
     names.set(b"JavaScript".to_vec(), Object::Dict(t));
     doc.update_dict(root, |c| c.set(b"Names".to_vec(), Object::Dict(names)))?;
@@ -244,7 +244,7 @@ pub fn set_field_script(doc: &mut Document, name: &str, event: &str, js: Option<
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
     let action = |doc: &mut Document, js: &str| {
-        let mut a = printcraft_cos::Dict::new();
+        let mut a = pdfcraft_cos::Dict::new();
         a.set(b"S".to_vec(), Object::name("JavaScript"));
         a.set(b"JS".to_vec(), PdfString::text(js));
         Object::Ref(doc.add(Object::Dict(a)))

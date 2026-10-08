@@ -1,7 +1,7 @@
 //! Field Properties ▸ Actions: what a field does on each trigger (§12.6.3, Table 197: the
 //! widget's `/A` for Mouse Up and its `/AA` D, E, X, Fo, Bl for the others).
 
-use printcraft_cos::{Dict, Document, Object, PdfString};
+use pdfcraft_cos::{Dict, Document, Object, PdfString};
 
 use crate::{FormError, fields};
 
@@ -105,7 +105,7 @@ fn texts(doc: &Document, o: &Object) -> Vec<String> {
     }
 }
 
-fn read(doc: &Document, o: &Object, pages: &[printcraft_cos::ObjRef]) -> Option<FieldAction> {
+fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef]) -> Option<FieldAction> {
     let a = doc.resolve(o);
     let d = a.as_dict()?;
     Some(match d.name(b"S")? {
@@ -158,7 +158,7 @@ pub fn field_actions(doc: &Document, name: &str) -> Result<Vec<(Trigger, FieldAc
     Ok(out)
 }
 
-fn write(doc: &mut Document, a: &FieldAction, pages: &[printcraft_cos::ObjRef]) -> Result<Option<Object>, FormError> {
+fn write(doc: &mut Document, a: &FieldAction, pages: &[pdfcraft_cos::ObjRef]) -> Result<Option<Object>, FormError> {
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("Action"));
     let list = |v: &[String]| Object::Array(v.iter().map(|s| Object::String(PdfString::text(s))).collect());

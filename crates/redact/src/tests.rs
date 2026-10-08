@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use printcraft_annot::{Meta, NewAnnotation, Shape, Style, add_annotation, rect_quad};
-use printcraft_cos::{Document, SaveOptions, write_full, write_incremental};
+use pdfcraft_annot::{Meta, NewAnnotation, Shape, Style, add_annotation, rect_quad};
+use pdfcraft_cos::{Document, SaveOptions, write_full, write_incremental};
 
 use super::*;
 
@@ -60,19 +60,19 @@ fn mark(doc: &mut Document, page: usize, rects: &[[f64; 4]], overlay: &str) {
 
 /// The decoded content streams of a page, joined.
 fn content(doc: &Document, page: usize) -> String {
-    let p = &printcraft_model::pages(doc)[page];
+    let p = &pdfcraft_model::pages(doc)[page];
     let (_, data) = page_streams(doc, &p.dict, page).unwrap();
     data.iter().map(|d| String::from_utf8_lossy(d).into_owned()).collect::<Vec<_>>().join("\n")
 }
 
 /// Glyphs (and inline images) of page `page` under `rects` (the verifier's count).
 fn under(doc: &mut Document, page: usize, rects: &[[f64; 4]]) -> usize {
-    let p = printcraft_model::pages(doc).swap_remove(page);
+    let p = pdfcraft_model::pages(doc).swap_remove(page);
     let (_, data) = page_streams(doc, &p.dict, page).unwrap();
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut rep = Report::default();
     let mut scope = Scope::new(rects, Mode::Verify, &mut rep);
-    process(doc, &mut scope, &data, &res, printcraft_content::Matrix::IDENTITY).residue
+    process(doc, &mut scope, &data, &res, pdfcraft_content::Matrix::IDENTITY).residue
 }
 
 fn reopen(doc: &Document) -> Document {
@@ -146,11 +146,11 @@ fn rotated_text_and_composite_fonts() {
     let mut doc = one_page(src, "", vec![]);
     let font_ref = doc.add(Object::Dict(Dict::new()));
     let parsed = {
-        let mut lx = printcraft_cos::Lexer::new(&t0, 0);
+        let mut lx = pdfcraft_cos::Lexer::new(&t0, 0);
         lx.object().unwrap()
     };
     doc.set(font_ref, parsed);
-    let page = printcraft_model::pages(&doc)[0].obj;
+    let page = pdfcraft_model::pages(&doc)[0].obj;
     doc.update_dict(page, |d| {
         let mut res = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
         let mut fonts = res.get(b"Font").and_then(Object::as_dict).cloned().unwrap();
@@ -178,7 +178,7 @@ fn images_are_removed_or_have_their_pixels_cleared() {
     assert_eq!((r.images_removed, r.images_cleared), (1, 1), "{r:?}");
     let c = content(&doc, 0);
     assert!(!c.contains("/Im1 Do") && !c.contains("/Im2 Do"), "{c}");
-    let p = printcraft_model::pages(&doc).swap_remove(0);
+    let p = pdfcraft_model::pages(&doc).swap_remove(0);
     let res = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
     let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
     let new = xo.iter().find(|(k, _)| k.starts_with(b"PCRedacted")).map(|(_, v)| v.clone()).expect("a cleared copy");
@@ -244,12 +244,12 @@ fn comments_links_and_fields_under_a_mark_go() {
         &Meta::default(),
     )
     .unwrap();
-    printcraft_forms::add_field(&mut doc, 0, [10.0, 50.0, 100.0, 70.0], &printcraft_forms::NewField::Text { multiline: false }, Some("ssn")).unwrap();
+    pdfcraft_forms::add_field(&mut doc, 0, [10.0, 50.0, 100.0, 70.0], &pdfcraft_forms::NewField::Text { multiline: false }, Some("ssn")).unwrap();
     mark(&mut doc, 0, &[[0.0, 0.0, 120.0, 80.0]], "REDACTED");
     let r = apply(&mut doc, None).unwrap();
     assert_eq!((r.annotations, r.fields), (1, 1), "{r:?}");
-    assert!(printcraft_forms::fields(&doc).is_empty());
-    let p = printcraft_model::pages(&doc).swap_remove(0);
+    assert!(pdfcraft_forms::fields(&doc).is_empty());
+    let p = pdfcraft_model::pages(&doc).swap_remove(0);
     assert_eq!(annots_of(&doc, &p.dict).len(), 1, "only the far rectangle stays");
     let c = content(&doc, 0);
     assert!(c.contains("(REDACTED) Tj"), "overlay text: {c}");
@@ -269,7 +269,7 @@ fn nothing_to_apply_and_clearing_marks() {
 #[test]
 fn unreadable_content_fails_closed() {
     let mut doc = one_page(b"", "", vec![]);
-    let page = printcraft_model::pages(&doc)[0].obj;
+    let page = pdfcraft_model::pages(&doc)[0].obj;
     let bad = doc.add(Object::Stream(Stream::from_raw(
         {
             let mut d = Dict::new();
@@ -314,8 +314,8 @@ fn hidden_fixture() -> Document {
     let mut doc = pdf(objs);
     let info = doc.add(Object::Dict({
         let mut d = Dict::new();
-        d.set(b"Title".to_vec(), printcraft_cos::PdfString::text("Secret plan"));
-        d.set(b"Author".to_vec(), printcraft_cos::PdfString::text("Ada"));
+        d.set(b"Title".to_vec(), pdfcraft_cos::PdfString::text("Secret plan"));
+        d.set(b"Author".to_vec(), pdfcraft_cos::PdfString::text("Ada"));
         d
     }));
     doc.trailer_mut().set(b"Info".to_vec(), Object::Ref(info));
@@ -357,8 +357,8 @@ fn hidden_information_is_counted_and_removed() {
     for k in [&b"Outlines"[..], b"OpenAction", b"PieceInfo", b"AcroForm", b"Metadata"] {
         assert!(!cat.contains(k), "{}", String::from_utf8_lossy(k));
     }
-    assert!(printcraft_forms::fields(&doc).is_empty());
-    let p = printcraft_model::pages(&doc).swap_remove(0);
+    assert!(pdfcraft_forms::fields(&doc).is_empty());
+    let p = pdfcraft_model::pages(&doc).swap_remove(0);
     assert!(annots_of(&doc, &p.dict).is_empty());
     let shown = doc.object_numbers().into_iter().any(|n| match &*doc.get(ObjRef::new(n, doc.generation(n))) {
         Object::Stream(s) => s.decoded().is_ok_and(|d| d.windows(5).any(|w| w == b"(Ada)")),
@@ -370,8 +370,7 @@ fn hidden_information_is_counted_and_removed() {
 #[test]
 fn overlay_text_takes_its_font_size_colour_alignment_and_repeats() {
     let mut doc = one_page(b"BT /F1 12 Tf 20 250 Td (Secret salary figures) Tj ET", "", Vec::new());
-    let look =
-        printcraft_annot::OverlayLook { font: printcraft_annot::OverlayFont::Courier, size: 8.0, color: [0.0, 0.0, 1.0], align: 0, repeat: true };
+    let look = pdfcraft_annot::OverlayLook { font: pdfcraft_annot::OverlayFont::Courier, size: 8.0, color: [0.0, 0.0, 1.0], align: 0, repeat: true };
     let shape = Shape::Redact { quads: vec![rect_quad([10.0, 200.0, 290.0, 270.0])], overlay: "REDACTED".into(), look };
     let style = Style::default_for(&shape);
     add_annotation(&mut doc, &NewAnnotation { page: 0, shape, style, contents: String::new(), author: "T".into() }, &Meta::default()).unwrap();
@@ -385,7 +384,7 @@ fn overlay_text_takes_its_font_size_colour_alignment_and_repeats() {
     // 70 pt high at 8 pt × 1.2 leading: several lines, each the word repeated.
     assert!(c.matches(" Tm (REDACTED REDACTED").count() >= 5, "{c}");
     assert!(c.contains("1 0 0 1 11 "), "left aligned at the area's edge: {c}");
-    let p = &printcraft_model::pages(&doc)[0];
+    let p = &pdfcraft_model::pages(&doc)[0];
     let fonts = p
         .dict
         .get(b"Resources")
@@ -413,10 +412,10 @@ fn tags_lose_what_redaction_removed() {
     mark(&mut doc, 0, &[[5.0, 195.0, 60.0, 212.0]], "");
     let report = apply(&mut doc, None).unwrap();
     assert_eq!(report.tags, 1);
-    let secret = doc.get(printcraft_cos::ObjRef::new(9, 0)).as_dict().cloned().unwrap();
+    let secret = doc.get(pdfcraft_cos::ObjRef::new(9, 0)).as_dict().cloned().unwrap();
     assert!(secret.get(b"ActualText").is_none() && secret.get(b"Alt").is_none());
     assert!(secret.get(b"K").is_none(), "its marked content is empty now");
-    let public = doc.get(printcraft_cos::ObjRef::new(10, 0)).as_dict().cloned().unwrap();
+    let public = doc.get(pdfcraft_cos::ObjRef::new(10, 0)).as_dict().cloned().unwrap();
     assert_eq!(public.get(b"K").and_then(Object::as_int), Some(1));
     assert!(public.get(b"ActualText").is_some(), "untouched content keeps its tags");
 }

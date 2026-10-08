@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-organize"
+name = "pdfcraft-organize"
 description = "Page and document-structure edits: rotate, delete, move, insert pages; document info"
 version.workspace = true
 edition.workspace = true
@@ -9,7 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-cos = { workspace = true }
+pdfcraft-cos = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

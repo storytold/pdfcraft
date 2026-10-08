@@ -5,8 +5,8 @@
 //! opens its reply box and "…" menu (Edit, Set status, Delete). Status replies show as a badge.
 
 use egui::{Align, Color32, CornerRadius, Layout, Sense, Stroke, vec2};
-use printcraft_engine::{Edit, NoteIcon, ReviewState, Shape};
-use printcraft_render::{Annotation, DocInfo};
+use pdfcraft_engine::{Edit, NoteIcon, ReviewState, Shape};
+use pdfcraft_render::{Annotation, DocInfo};
 
 use crate::canvas::DocView;
 use crate::comments::{CommentPrefs, CommentTool, SortBy, color32, status_badge};
@@ -128,7 +128,7 @@ pub(crate) fn show(
             if let Some(p) = info.pages.get(page) {
                 let at = p.view_to_user(p.width - 44.0, 24.0);
                 let text = std::mem::take(&mut view.comments.add_box);
-                edit = Some(Edit::AddAnnotation(printcraft_engine::NewAnnotation {
+                edit = Some(Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
                     page,
                     shape: Shape::Note { at: [at[0] as f64, at[1] as f64], icon: NoteIcon::Comment },
                     style: prefs.style(CommentTool::Note),

@@ -5,8 +5,8 @@ use egui::accesskit::Role;
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_engine::Edit;
-use printcraft_ui_egui::{PrintCraftApp, RecoveryStore};
+use pdfcraft_engine::Edit;
+use pdfcraft_ui_egui::{PdfCraftApp, RecoveryStore};
 
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
@@ -34,7 +34,7 @@ fn fixture(n: usize) -> Vec<u8> {
 }
 
 fn store(tag: &str) -> RecoveryStore {
-    let dir = std::env::temp_dir().join(format!("printcraft-recovery-{tag}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pdfcraft-recovery-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     RecoveryStore::new(dir)
 }
@@ -45,7 +45,7 @@ fn files_in(s: &RecoveryStore) -> usize {
 
 /// A session that edits a document, autosaves, and then "crashes" (is dropped).
 fn crashed_session(s: &RecoveryStore, bytes: Vec<u8>, password: Option<&str>, path: Option<&str>) {
-    let mut app = PrintCraftApp::new();
+    let mut app = PdfCraftApp::new();
     app.enable_recovery(s.clone());
     match password {
         Some(pw) => {
@@ -59,9 +59,9 @@ fn crashed_session(s: &RecoveryStore, bytes: Vec<u8>, password: Option<&str>, pa
     // Dropped without a clean quit: the recovery entry stays.
 }
 
-fn harness(s: RecoveryStore) -> Harness<'static, PrintCraftApp> {
+fn harness(s: RecoveryStore) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.enable_recovery(s);
         app
     });
@@ -102,7 +102,7 @@ fn discarding_removes_the_autosaves() {
 #[test]
 fn saving_or_closing_clears_the_entry_and_nothing_is_written_for_clean_documents() {
     let s = store("save");
-    let mut app = PrintCraftApp::new();
+    let mut app = PdfCraftApp::new();
     app.enable_recovery(s.clone());
     app.open_bytes("a.pdf", None, fixture(2)).unwrap();
     app.autosave_now();
@@ -110,9 +110,9 @@ fn saving_or_closing_clears_the_entry_and_nothing_is_written_for_clean_documents
     app.apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 });
     app.autosave_now();
     assert_eq!(s.list().len(), 1);
-    let out = std::env::temp_dir().join(format!("printcraft-recovery-saved-{}.pdf", std::process::id()));
+    let out = std::env::temp_dir().join(format!("pdfcraft-recovery-saved-{}.pdf", std::process::id()));
     app.save_override = Some(out.to_string_lossy().into_owned());
-    assert!(app.save_active(printcraft_ui_egui::SaveTarget::InPlace));
+    assert!(app.save_active(pdfcraft_ui_egui::SaveTarget::InPlace));
     assert_eq!(files_in(&s), 0, "saved: nothing to recover");
     // Edit again, autosave, then close and discard.
     app.apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 });
@@ -129,7 +129,7 @@ fn quitting_cleanly_leaves_nothing_behind() {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe({
         let s = s.clone();
         move |_cc| {
-            let mut app = PrintCraftApp::new();
+            let mut app = PdfCraftApp::new();
             app.enable_recovery(s);
             app.open_bytes("q.pdf", None, fixture(2)).unwrap();
             app
@@ -140,7 +140,7 @@ fn quitting_cleanly_leaves_nothing_behind() {
     h.state_mut().autosave_now();
     assert_eq!(s.list().len(), 1);
     // Quit → "Don't save" → the app closes and the autosave is removed.
-    h.state_mut().close_request = Some(printcraft_ui_egui::CloseRequest::Quit);
+    h.state_mut().close_request = Some(pdfcraft_ui_egui::CloseRequest::Quit);
     h.run_steps(2);
     h.get_by_label("Don't save").click();
     h.run_steps(4);
@@ -151,9 +151,9 @@ fn quitting_cleanly_leaves_nothing_behind() {
 
 #[test]
 fn encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password() {
-    let mut doc = printcraft_cos::Document::open(std::sync::Arc::new(fixture(2))).unwrap();
-    doc.set_encryption(&printcraft_cos::NewEncryption {
-        algorithm: printcraft_cos::Algorithm::Aes256,
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(2))).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
         user_password: "pw",
         owner_password: "owner",
         permissions: -1,
@@ -161,7 +161,7 @@ fn encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password()
         seed: [2; 32],
     })
     .unwrap();
-    let bytes = printcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
     let s = store("encrypted");
     crashed_session(&s, bytes, Some("pw"), None);
     let meta = s.list().remove(0);
@@ -202,17 +202,17 @@ fn incomplete_entries_are_ignored_and_cleaned_up() {
 fn control_click_effects_are_visible_when_the_reply_arrives() {
     let s = store("control");
     crashed_session(&s, fixture(2), None, None);
-    let slot: std::sync::Arc<std::sync::Mutex<Option<printcraft_ui_egui::control::ControlClient>>> = Default::default();
+    let slot: std::sync::Arc<std::sync::Mutex<Option<pdfcraft_ui_egui::control::ControlClient>>> = Default::default();
     let (slot2, s2) = (slot.clone(), s.clone());
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         *slot2.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
         app.enable_recovery(s2);
         app
     });
     h.run_steps(4);
     let c = slot.lock().unwrap().take().unwrap();
-    let call = |h: &mut Harness<'static, PrintCraftApp>, m: &str, p: serde_json::Value| {
+    let call = |h: &mut Harness<'static, PdfCraftApp>, m: &str, p: serde_json::Value| {
         let rx = c.send(m, p);
         for _ in 0..30 {
             h.step();

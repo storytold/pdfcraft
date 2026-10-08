@@ -1,6 +1,6 @@
-//! printcraft-organize — page and document-structure edits (L4).
+//! pdfcraft-organize — page and document-structure edits (L4).
 //!
-//! Every operation mutates a `printcraft_cos::Document` (copy-on-write), so callers snapshot the
+//! Every operation mutates a `pdfcraft_cos::Document` (copy-on-write), so callers snapshot the
 //! document before an edit for undo. Operations never drop data they do not understand.
 //!
 //! Page-tree strategy: before restructuring, inheritable page attributes (`Resources`,
@@ -11,7 +11,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use printcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 
 mod boxes;
 mod dedupe;
@@ -42,7 +42,7 @@ pub enum OrganizeError {
     #[error("{0}")]
     Invalid(String),
     #[error("{0}")]
-    Cos(#[from] printcraft_cos::CosError),
+    Cos(#[from] pdfcraft_cos::CosError),
 }
 
 const INHERITABLE: [&[u8]; 4] = [b"Resources", b"MediaBox", b"CropBox", b"Rotate"];

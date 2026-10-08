@@ -3,8 +3,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use printcraft_content::Matrix;
-use printcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
+use pdfcraft_content::Matrix;
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 /// A Figure element (after the role map).
 #[derive(Clone, Debug, PartialEq)]
@@ -24,7 +24,7 @@ pub enum AltError {
     #[error("object {0} is not a figure")]
     NotAFigure(u32),
     #[error("{0}")]
-    Cos(#[from] printcraft_cos::CosError),
+    Cos(#[from] pdfcraft_cos::CosError),
 }
 
 fn tree_root(doc: &Document) -> Option<Dict> {
@@ -139,7 +139,7 @@ fn content_bbox(doc: &Document, page: &Dict, ids: &HashSet<i64>) -> Option<[f64;
     let mut marks: Vec<bool> = Vec::new();
     let mut bbox = None;
     let mut path: Vec<(f64, f64)> = Vec::new();
-    for op in printcraft_content::parse(&page_content(doc, page)).ops {
+    for op in pdfcraft_content::parse(&page_content(doc, page)).ops {
         let inside = marks.iter().any(|m| *m);
         let top = ctm.last().copied().unwrap_or(Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
         match op.op.as_slice() {
@@ -216,7 +216,7 @@ fn content_bbox(doc: &Document, page: &Dict, ids: &HashSet<i64>) -> Option<[f64;
 pub fn figures(doc: &Document) -> Vec<Figure> {
     let Some(root) = tree_root(doc) else { return Vec::new() };
     let role_map = root.get(b"RoleMap").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
-    let pages = printcraft_model::pages(doc);
+    let pages = pdfcraft_model::pages(doc);
     let index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     elements(doc)
         .into_iter()
@@ -259,21 +259,21 @@ pub fn set_alt(doc: &mut Document, obj: ObjRef, alt: Option<&str>) -> Result<(),
 pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> {
     let d = check_figure(doc, obj)?;
     let ids: HashSet<i64> = mcids(&d).into_iter().collect();
-    let pages = printcraft_model::pages(doc);
+    let pages = pdfcraft_model::pages(doc);
     let pg = d.get(b"Pg").and_then(Object::as_ref).or_else(|| elements(doc).into_iter().find(|(r, _, _)| *r == obj).and_then(|(_, _, p)| p));
     if let Some(page) = pg.and_then(|p| pages.iter().find(|x| x.obj == p)).filter(|_| !ids.is_empty()) {
-        let mut ops = printcraft_content::parse(&page_content(doc, &page.dict)).ops;
+        let mut ops = pdfcraft_content::parse(&page_content(doc, &page.dict)).ops;
         let mut changed = false;
         for op in ops.iter_mut() {
             let ours = op.op == b"BDC"
                 && matches!(op.operands.get(1), Some(Object::Dict(m)) if m.get(b"MCID").and_then(Object::as_int).is_some_and(|n| ids.contains(&n)));
             if ours {
-                *op = printcraft_content::Op::new("BMC", vec![Object::name("Artifact")]);
+                *op = pdfcraft_content::Op::new("BMC", vec![Object::name("Artifact")]);
                 changed = true;
             }
         }
         if changed {
-            let s = doc.add(Object::Stream(Stream::flate(Dict::new(), &printcraft_content::serialize_ops(&ops))));
+            let s = doc.add(Object::Stream(Stream::flate(Dict::new(), &pdfcraft_content::serialize_ops(&ops))));
             doc.update_dict(page.obj, |p| p.set(b"Contents".to_vec(), Object::Ref(s)))?;
             // The parent tree no longer points those ids at the figure.
             if let Some(key) = page.dict.get(b"StructParents").and_then(Object::as_int) {

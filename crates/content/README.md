@@ -1,4 +1,4 @@
-# printcraft-content
+# pdfcraft-content
 
 Layer L2: content streams (ISO 32000-2 §7.8.2, §8, §9).
 

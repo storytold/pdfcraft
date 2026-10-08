@@ -36,7 +36,7 @@ unknown-git = "deny"
 [advisories]
 yanked = "warn"
 ignore = [
-    # Marvin (RSA private-key timing side channel, no fixed `rsa` release). printcraft-sign uses
+    # Marvin (RSA private-key timing side channel, no fixed `rsa` release). pdfcraft-sign uses
     # `rsa` only for public-key signature verification, which the advisory does not affect; RSA
     # private-key operations use aws-lc-rs on native targets and are refused in the browser
     # (ADR-0009). Revisit when a fixed `rsa` ships.

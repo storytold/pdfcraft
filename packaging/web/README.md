@@ -1,22 +1,22 @@
-# Hosting PrintCraft for the web
+# Hosting PdfCraft for the web
 
-`printcraft-web-<version>.zip` (from the GitHub release, or `packaging/web/package.sh`) holds a
-static site in `printcraft-web-<version>/`:
+`pdfcraft-web-<version>.zip` (from the GitHub release, or `packaging/web/package.sh`) holds a
+static site in `pdfcraft-web-<version>/`:
 
 | File | What it is |
 |---|---|
 | `index.html` | The page. It loads everything through relative URLs. |
-| `printcraft-web-<hash>.js` | wasm-bindgen glue (generated, ES module) |
-| `printcraft-web-<hash>_bg.wasm` | The app, about 13 MB, or 5 MB with compression |
+| `pdfcraft-web-<hash>.js` | wasm-bindgen glue (generated, ES module) |
+| `pdfcraft-web-<hash>_bg.wasm` | The app, about 13 MB, or 5 MB with compression |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
 
 ## Any path works
 
-All URLs in `index.html` are relative (`public_url = "./"` in `apps/printcraft-web/Trunk.toml`),
+All URLs in `index.html` are relative (`public_url = "./"` in `apps/pdfcraft-web/Trunk.toml`),
 so the site works at a domain root (`https://example.com/`), under a prefix
-(`https://example.com/tools/printcraft/`) and from a CDN bucket. The asset names carry a content
+(`https://example.com/tools/pdfcraft/`) and from a CDN bucket. The asset names carry a content
 hash, so they can be cached forever. Only `index.html` needs revalidation.
 
 ## Required server settings
@@ -31,7 +31,7 @@ hash, so they can be cached forever. Only `index.html` needs revalidation.
   `.js` files, and `no-cache` on `index.html`.
 - **HTTPS:** WebGPU (and the clipboard) only work in a secure context, which means `https://`
   or `http://localhost`. Over plain HTTP elsewhere, the app falls back to WebGL2.
-- **No special isolation headers:** PrintCraft doesn't use `SharedArrayBuffer`, so it doesn't
+- **No special isolation headers:** PdfCraft doesn't use `SharedArrayBuffer`, so it doesn't
   need `Cross-Origin-Opener-Policy` or `Cross-Origin-Embedder-Policy`. If your site already sends
   COEP `require-corp`, also send `Cross-Origin-Resource-Policy: same-origin` (or `cross-origin`
   when the files live on a CDN) on the app's files.
@@ -39,7 +39,7 @@ hash, so they can be cached forever. Only `index.html` needs revalidation.
 nginx example:
 
 ```nginx
-location /printcraft/ {
+location /pdfcraft/ {
     types { application/wasm wasm; text/javascript js; text/html html; }
     gzip on;
     gzip_types application/wasm text/javascript text/html;
@@ -54,8 +54,8 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
 
 ```html
 <iframe
-  src="https://example.com/printcraft/"
-  title="PrintCraft PDF workbench"
+  src="https://example.com/pdfcraft/"
+  title="PdfCraft PDF workbench"
   style="width: 100%; height: 720px; border: 0;"
   allow="fullscreen; clipboard-read; clipboard-write"
   allowfullscreen>
@@ -75,7 +75,7 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
 
 ## Renderer selection and fallback flags
 
-PrintCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls back to
+PdfCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls back to
 **WebGL2** on its own. URL query flags override this, and they work on the iframe `src` too:
 
 | Flag | Effect |
@@ -84,6 +84,6 @@ PrintCraft renders with wgpu. It uses **WebGPU** when the browser has it and fal
 | `?webgl` | Force the WebGL2 backend (useful when a WebGPU driver misbehaves) |
 | `?cpu` | Force the CPU canvas path (slowest, most compatible) |
 
-For example: `<iframe src="https://example.com/printcraft/?webgl" ...>`.
+For example: `<iframe src="https://example.com/pdfcraft/?webgl" ...>`.
 
 A browser with neither WebGPU nor WebGL2 gets a message in place of the app.

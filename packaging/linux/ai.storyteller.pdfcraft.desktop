@@ -1,14 +1,14 @@
 [Desktop Entry]
 Type=Application
-Name=PrintCraft
+Name=PdfCraft
 GenericName=PDF Editor
 Comment=Read, organize, combine, split and secure PDFs
-Exec=printcraft %F
-TryExec=printcraft
-Icon=ai.storyteller.printcraft
+Exec=pdfcraft %F
+TryExec=pdfcraft
+Icon=ai.storyteller.pdfcraft
 Terminal=false
 StartupNotify=true
-StartupWMClass=printcraft
+StartupWMClass=pdfcraft
 Categories=Office;Viewer;Graphics;
 Keywords=pdf;viewer;editor;annotate;sign;forms;merge;split;
 MimeType=application/pdf;

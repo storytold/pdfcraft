@@ -1,11 +1,11 @@
 //! Clearing the pixels of an image under redaction regions. The image is decoded, every pixel
 //! whose centre maps into a region is set to zero (no ink for image masks), and the result is
 //! written as a new Flate image; the original object is untouched (other pages may use it).
-//! Images whose codec PrintCraft can't decode (DCT, JPX, JBIG2, CCITT) return `None`, and the
+//! Images whose codec PdfCraft can't decode (DCT, JPX, JBIG2, CCITT) return `None`, and the
 //! caller removes the whole image instead; that is fail-closed.
 
-use printcraft_content::{Matrix, overlaps};
-use printcraft_cos::{Document, Object, Stream};
+use pdfcraft_content::{Matrix, overlaps};
+use pdfcraft_cos::{Document, Object, Stream};
 
 /// Most pixels an image may have to be cleared in place (larger ones are removed).
 const MAX_PIXELS: u64 = 64 << 20;

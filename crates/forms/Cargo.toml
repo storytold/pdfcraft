@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-forms"
+name = "pdfcraft-forms"
 description = "Interactive forms (AcroForm): field model, filling, appearances, reset (ISO 32000-2 §12.7)"
 version.workspace = true
 edition.workspace = true
@@ -9,10 +9,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-cos = { workspace = true }
-printcraft-fonts = { workspace = true }
-printcraft-content = { workspace = true }
-printcraft-model = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-fonts = { workspace = true }
+pdfcraft-content = { workspace = true }
+pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

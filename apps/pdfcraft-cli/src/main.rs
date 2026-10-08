@@ -1,24 +1,24 @@
-//! printcraft-cli — headless PrintCraft.
+//! pdfcraft-cli — headless PdfCraft.
 //!
 //! ```text
-//! printcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
-//! printcraft-cli render <file.pdf> --page N [--dpi 96] --out x.pam
-//! printcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
-//! printcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
+//! pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
+//! pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.pam
+//! pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
+//! pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
 //!                       [--insert-blank 1] [--title T] [--author A] [--full]
-//! printcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
-//! printcraft-cli extract <in.pdf> --pages 1,3,5 --out out.pdf
-//! printcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
-//! printcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
-//! printcraft-cli tools                                       automation tools and their JSON Schemas
-//! printcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
-//! printcraft-cli run    --script steps.json [--root DIR]      [{"tool": "doc_open", "args": {…}}, …]
-//! printcraft-cli mcp    [--root DIR]                          MCP server on stdin/stdout (opt-in)
-//! printcraft-cli ui     --control FILE <method> [key=value …] [--out shot.png]
+//! pdfcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
+//! pdfcraft-cli extract <in.pdf> --pages 1,3,5 --out out.pdf
+//! pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
+//! pdfcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
+//! pdfcraft-cli tools                                       automation tools and their JSON Schemas
+//! pdfcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
+//! pdfcraft-cli run    --script steps.json [--root DIR]      [{"tool": "doc_open", "args": {…}}, …]
+//! pdfcraft-cli mcp    [--root DIR]                          MCP server on stdin/stdout (opt-in)
+//! pdfcraft-cli ui     --control FILE <method> [key=value …] [--out shot.png]
 //!                                                            drive a running app started with --control FILE
 //! ```
 //!
-//! `run` and `mcp` drive the same tool table (`printcraft-automation`). In `run`, values parse as
+//! `run` and `mcp` drive the same tool table (`pdfcraft-automation`). In `run`, values parse as
 //! JSON when they can (`pages=[1,3]`, `degrees=90`) and are strings otherwise. A script runs its
 //! steps in one session, so `doc_open` returns id 1, the next document id 2, and so on.
 //!
@@ -37,7 +37,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use printcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, inspect};
+use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, inspect};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -58,19 +58,19 @@ fn main() -> ExitCode {
             #[cfg(feature = "mcp")]
             Some("mcp") => mcp(&args[1..]),
             Some("--version") => {
-                println!("printcraft-cli {}", env!("CARGO_PKG_VERSION"));
-                println!("Discord: {}  (help and feedback)", printcraft_engine::links::DISCORD);
-                println!("Web:     {}", printcraft_engine::links::APP_PAGE);
-                println!("Source:  {}", printcraft_engine::links::GITHUB);
+                println!("pdfcraft-cli {}", env!("CARGO_PKG_VERSION"));
+                println!("Discord: {}  (help and feedback)", pdfcraft_engine::links::DISCORD);
+                println!("Web:     {}", pdfcraft_engine::links::APP_PAGE);
+                println!("Source:  {}", pdfcraft_engine::links::GITHUB);
                 Ok(())
             }
-            _ => Err("usage: printcraft-cli <info|render|text|edit|combine|extract|split|check|tools|run|mcp|ui> …  (see source header for options)\nhelp and feedback: https://discord.gg/artcraft"
+            _ => Err("usage: pdfcraft-cli <info|render|text|edit|combine|extract|split|check|tools|run|mcp|ui> …  (see source header for options)\nhelp and feedback: https://discord.gg/artcraft"
                 .into()),
         };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("printcraft-cli: {e}");
+            eprintln!("pdfcraft-cli: {e}");
             ExitCode::FAILURE
         }
     }
@@ -112,7 +112,7 @@ fn info(args: &[String]) -> Result<(), String> {
         "first_page_pt": info.pages.first().map(|p| [p.width, p.height]),
         "title": info.title, "author": info.author, "producer": info.producer, "creator": info.creator,
         "encrypted": info.encrypted, "tagged": info.tagged, "javascript": info.has_javascript,
-        "xfa": info.xfa.map(|x| match x { printcraft_render::Xfa::Static => "static", printcraft_render::Xfa::Dynamic => "dynamic" }),
+        "xfa": info.xfa.map(|x| match x { pdfcraft_render::Xfa::Static => "static", pdfcraft_render::Xfa::Dynamic => "dynamic" }),
         "bookmarks": info.outline.len(), "annotations": info.annotations.len(), "fields": info.fields.len(),
         "links": info.links.len(), "layers": info.layers.len(), "attachments": info.attachments.len(),
         "page_labels": info.pages.iter().take(8).map(|p| p.label.clone()).collect::<Vec<_>>(),
@@ -150,7 +150,7 @@ fn page_list(s: &str) -> Result<Vec<usize>, String> {
 
 /// Apply page and metadata edits through the engine and save (incrementally unless `--full`).
 fn edit(args: &[String]) -> Result<(), String> {
-    use printcraft_engine::{Edit, Session};
+    use pdfcraft_engine::{Edit, Session};
     let path = *positional(args).first().ok_or("edit: missing file")?;
     let out = flag(args, "--out").ok_or("edit: missing --out")?;
     let mut session = Session::new();
@@ -198,7 +198,7 @@ fn combine(args: &[String]) -> Result<(), String> {
         return Err("combine: give at least two input files".into());
     }
     let sources = inputs.iter().map(|p| Ok((file_stem(p), read(p)?))).collect::<Result<Vec<_>, String>>()?;
-    let bytes = printcraft_engine::Session::new().combine(&sources).map_err(|e| e.to_string())?;
+    let bytes = pdfcraft_engine::Session::new().combine(&sources).map_err(|e| e.to_string())?;
     std::fs::write(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}"))
 }
 
@@ -206,14 +206,14 @@ fn extract(args: &[String]) -> Result<(), String> {
     let path = *positional(args).first().ok_or("extract: missing file")?;
     let out = flag(args, "--out").ok_or("extract: missing --out")?;
     let pages = page_list(flag(args, "--pages").ok_or("extract: missing --pages")?)?;
-    let mut session = printcraft_engine::Session::new();
+    let mut session = pdfcraft_engine::Session::new();
     let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
     let bytes = session.extract(id, &pages).map_err(|e| e.to_string())?;
     std::fs::write(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}"))
 }
 
 fn split(args: &[String]) -> Result<(), String> {
-    use printcraft_engine::SplitBy;
+    use pdfcraft_engine::SplitBy;
     let path = *positional(args).first().ok_or("split: missing file")?;
     let by = match (flag(args, "--every"), flag(args, "--before")) {
         (Some(n), None) => SplitBy::PageCount(n.parse().map_err(|_| "bad --every")?),
@@ -221,7 +221,7 @@ fn split(args: &[String]) -> Result<(), String> {
         _ => return Err("split: give either --every N or --before PAGES".into()),
     };
     let dir = PathBuf::from(flag(args, "--out-dir").unwrap_or("."));
-    let mut session = printcraft_engine::Session::new();
+    let mut session = pdfcraft_engine::Session::new();
     let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
     let stem = file_stem(path);
     for (a, b, bytes) in session.split(id, &by).map_err(|e| e.to_string())? {
@@ -288,7 +288,7 @@ fn check_one(args: &[String]) -> Result<(), String> {
 /// Open with cos, touch every object, edit the catalog, save incrementally and in full (both
 /// output styles), and reopen each result. Errors are fine; panics, hangs and aborts are bugs.
 fn edit_round_trip(bytes: &[u8]) {
-    use printcraft_cos::{Document, Object, SaveOptions, write_full, write_incremental};
+    use pdfcraft_cos::{Document, Object, SaveOptions, write_full, write_incremental};
     let Ok(mut doc) = Document::open(Arc::new(bytes.to_vec())) else { return };
     for num in doc.object_numbers().into_iter().take(20_000) {
         if let Ok(o) = doc.try_get(num)
@@ -298,7 +298,7 @@ fn edit_round_trip(bytes: &[u8]) {
         }
     }
     if let Some(root) = doc.root() {
-        let _ = doc.update_dict(root, |d| d.set(b"PrintCraftFuzz".to_vec(), Object::Bool(true)));
+        let _ = doc.update_dict(root, |d| d.set(b"PdfCraftFuzz".to_vec(), Object::Bool(true)));
     }
     let classic = SaveOptions { object_streams: false, ..SaveOptions::default() };
     for out in [write_incremental(&doc, &SaveOptions::default()), write_full(&doc, &SaveOptions::default()), write_full(&doc, &classic)]
@@ -397,8 +397,8 @@ fn run_child(exe: &Path, file: &Path, dpi: &str, timeout: Duration) -> serde_jso
 
 // ---- automation --------------------------------------------------------------------------------
 
-fn automation(args: &[String]) -> Result<printcraft_automation::Automation, String> {
-    let a = printcraft_automation::Automation::new();
+fn automation(args: &[String]) -> Result<pdfcraft_automation::Automation, String> {
+    let a = pdfcraft_automation::Automation::new();
     match flag(args, "--root") {
         Some(root) => a.with_root(root).map_err(|e| format!("--root {root}: {e}")),
         None => Ok(a),
@@ -406,7 +406,7 @@ fn automation(args: &[String]) -> Result<printcraft_automation::Automation, Stri
 }
 
 fn tools() -> Result<(), String> {
-    let list: Vec<serde_json::Value> = printcraft_automation::tools()
+    let list: Vec<serde_json::Value> = pdfcraft_automation::tools()
         .iter()
         .map(|t| serde_json::json!({ "name": t.name, "description": t.description, "read_only": t.read_only, "command": t.command, "input_schema": t.input_schema }))
         .collect();
@@ -415,11 +415,11 @@ fn tools() -> Result<(), String> {
 }
 
 /// Print a tool's result: JSON as JSON; images go to `--out` (or are summarised).
-fn print_output(content: Vec<printcraft_automation::Content>, out: Option<&str>) -> Result<(), String> {
+fn print_output(content: Vec<pdfcraft_automation::Content>, out: Option<&str>) -> Result<(), String> {
     for c in content {
         match c {
-            printcraft_automation::Content::Json(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default()),
-            printcraft_automation::Content::Png { data, width, height } => match out {
+            pdfcraft_automation::Content::Json(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default()),
+            pdfcraft_automation::Content::Png { data, width, height } => match out {
                 Some(path) => {
                     std::fs::write(path, &data).map_err(|e| format!("{path}: {e}"))?;
                     println!("{}", serde_json::json!({ "image": path, "width": width, "height": height }));
@@ -446,7 +446,7 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         return Ok(());
     }
-    let tool = *positional(args).first().ok_or("run: missing tool name (see `printcraft-cli tools`)")?;
+    let tool = *positional(args).first().ok_or("run: missing tool name (see `pdfcraft-cli tools`)")?;
     let mut obj = serde_json::Map::new();
     for kv in positional(args).iter().skip(1) {
         let (k, v) = kv.split_once('=').ok_or(format!("run: expected key=value, got {kv:?}"))?;
@@ -459,17 +459,17 @@ fn run(args: &[String]) -> Result<(), String> {
 
 #[cfg(feature = "mcp")]
 fn mcp(args: &[String]) -> Result<(), String> {
-    let mut server = printcraft_automation::mcp::McpServer::new(automation(args)?);
-    eprintln!("printcraft-cli: MCP server on stdio (protocol {}); close stdin to stop", printcraft_automation::mcp::PROTOCOL_VERSIONS[0]);
+    let mut server = pdfcraft_automation::mcp::McpServer::new(automation(args)?);
+    eprintln!("pdfcraft-cli: MCP server on stdio (protocol {}); close stdin to stop", pdfcraft_automation::mcp::PROTOCOL_VERSIONS[0]);
     server.serve(std::io::stdin().lock(), std::io::stdout().lock()).map_err(|e| e.to_string())
 }
 
 // ---- UI control channel client -----------------------------------------------------------------
 
-/// One request to a running app's control channel (`printcraft --control FILE`).
+/// One request to a running app's control channel (`pdfcraft --control FILE`).
 fn ui(args: &[String]) -> Result<(), String> {
     use std::io::{BufRead, BufReader, Write as _};
-    let file = flag(args, "--control").ok_or("ui: missing --control FILE (start the app with `printcraft --control FILE`)")?;
+    let file = flag(args, "--control").ok_or("ui: missing --control FILE (start the app with `pdfcraft --control FILE`)")?;
     let info: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?).map_err(|e| format!("{file}: {e}"))?;
     let port = info["port"].as_u64().ok_or(format!("{file}: no port"))?;

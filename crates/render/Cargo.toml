@@ -1,6 +1,6 @@
 [package]
-name = "printcraft-render"
-description = "Page rendering (bootstrap: hayro) and document inspection for PrintCraft"
+name = "pdfcraft-render"
+description = "Page rendering (bootstrap: hayro) and document inspection for PdfCraft"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

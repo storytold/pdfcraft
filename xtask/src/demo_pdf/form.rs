@@ -63,7 +63,7 @@ pub fn build(doc: &mut Document, annotator: &mut Annotator, inputs: FormInputs<'
     });
 
     label(&mut c, LEFT, 510.0, "Comments  (multiline)");
-    let comments = "PrintCraft renders this field from its own appearance stream, so it looks \
+    let comments = "PdfCraft renders this field from its own appearance stream, so it looks \
                     the same in every viewer. Edit it to see your viewer regenerate the text.";
     b.text_field("comments", "Comments", Rect::new(LEFT, 446.0, RIGHT, 506.0), comments, None, 0, |d| {
         d.set("Ff", 4096);
@@ -101,7 +101,7 @@ pub fn build(doc: &mut Document, annotator: &mut Annotator, inputs: FormInputs<'
         "hello",
         "Run JavaScript: app.alert",
         Rect::new(LEFT, 184.0, 250.0, 206.0),
-        "app.alert(\"Hello from the PrintCraft showcase! This alert is a JavaScript action on a push button.\", 3);",
+        "app.alert(\"Hello from the PdfCraft showcase! This alert is a JavaScript action on a push button.\", 3);",
     );
     c.fill_color(colors::INK_3).text(Font::Helv, 7.0, LEFT, 172.0, "JavaScript: shows app.alert(...) in viewers that run document scripts.");
     label(&mut c, COL2, 212.0, "Signature  (unsigned /Sig field)");
@@ -166,7 +166,7 @@ pub fn build(doc: &mut Document, annotator: &mut Annotator, inputs: FormInputs<'
 fn draw_page_chrome(c: &mut Content, folio: &str) {
     c.fill_color(colors::PAPER).rect(0.0, 0.0, PAGE_W, PAGE_H).fill();
     c.fill_color(colors::INK_3);
-    c.tracked_text(Font::Helv, 6.5, LEFT, 757.0, 1.2, "PRINTCRAFT SHOWCASE");
+    c.tracked_text(Font::Helv, 6.5, LEFT, 757.0, 1.2, "PDFCRAFT SHOWCASE");
     let right = "10  \u{00b7}  INTERACTIVE FORM";
     let w = Font::Helv.width(right, 6.5) + 1.2 * (right.chars().count() as f32 - 1.0);
     c.tracked_text(Font::Helv, 6.5, RIGHT - w, 757.0, 1.2, right);

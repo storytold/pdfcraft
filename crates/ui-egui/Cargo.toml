@@ -1,6 +1,6 @@
 [package]
-name = "printcraft-ui-egui"
-description = "The egui shell of PrintCraft"
+name = "pdfcraft-ui-egui"
+description = "The egui shell of PdfCraft"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,9 +9,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-fonts = { workspace = true }
-printcraft-engine = { workspace = true }
-printcraft-render = { workspace = true }
+pdfcraft-fonts = { workspace = true }
+pdfcraft-engine = { workspace = true }
+pdfcraft-render = { workspace = true }
 egui = { workspace = true }
 egui_extras = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "persistence", "links"] }
@@ -36,7 +36,7 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url"] }
 
 [dev-dependencies]
-printcraft-cos = { workspace = true }
-printcraft-model = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-model = { workspace = true }
 egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
