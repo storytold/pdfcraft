@@ -191,3 +191,16 @@ fn spooler_arguments_and_printer_list() {
     );
     assert_eq!(lp_args(&Job::default(), "f.pdf")[0], "-n", "no -d: the default printer");
 }
+
+#[test]
+fn lpstat_output_is_untranslated() {
+    // A localized lpstat (here Polish) is unreadable to parse_lpstat...
+    assert!(parse_lpstat("drukarka Office_Laser jest bezczynna.\ndomyślny cel systemowy: Office_Laser\n").is_empty());
+    // ...so the command must force the C locale, including the SOFTWARE switch macOS CUPS needs.
+    let cmd = spool::lpstat_command();
+    let envs: Vec<_> = cmd.get_envs().map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()))).collect();
+    for key in ["LC_ALL", "LANG"] {
+        assert!(envs.contains(&(key.into(), Some("C".into()))), "{key}=C missing: {envs:?}");
+    }
+    assert!(envs.iter().any(|(k, v)| k == "SOFTWARE" && v.as_deref().is_some_and(|v| !v.is_empty())), "SOFTWARE missing: {envs:?}");
+}

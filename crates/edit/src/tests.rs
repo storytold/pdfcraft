@@ -384,6 +384,62 @@ fn text_lines_are_found_and_replaced_in_place() {
     assert_eq!(lines[1].rect, second);
 }
 
+/// A page whose content is one stream in three pieces, split between tokens: a marked-content
+/// dictionary closes at the start of the middle piece, and the `TJ` array that ends it is shown
+/// by the operator that starts the last one.
+fn split_streams_page() -> Document {
+    let piece = |s: &str| format!("<< /Length {} >>\nstream\n{s}\nendstream", s.len());
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents [4 0 R 5 0 R 6 0 R] /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+        piece("/P << /MCID 0"),
+        piece(">> BDC BT /F1 12 Tf 72 700 Td (Target) Tj 0 -20 Td [(After) -20 (wards)]"),
+        piece("TJ ET EMC"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+/// The page's pieces joined back into one stream: every operator must still have its operands.
+fn assert_split_tokens_kept(doc: &Document, new_text: &str) {
+    let joined = streams(doc, 0).join("\n");
+    assert!(joined.contains(new_text) && !joined.contains("Target"), "{joined}");
+    assert!(joined.contains("[(After) -20 (wards)]"), "the text after the line is gone: {joined}");
+    for op in pdfcraft_content::parse(joined.as_bytes()).ops {
+        let want = match op.op.as_slice() {
+            b"BDC" => 2,
+            b"TJ" => 1,
+            _ => continue,
+        };
+        assert_eq!(op.operands.len(), want, "{} lost its operands: {joined}", String::from_utf8_lossy(&op.op));
+    }
+}
+
+#[test]
+fn editing_text_keeps_the_tokens_a_stream_shares_with_its_neighbours() {
+    let mut doc = split_streams_page();
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Target");
+    text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+    assert_split_tokens_kept(&reopen(&doc), "Edited");
+    // A paragraph rewrite rebuilds the same piece.
+    let mut doc = split_streams_page();
+    text::replace_block(&mut doc, 0, 0, "Rewrapped").unwrap();
+    assert_split_tokens_kept(&reopen(&doc), "Rewrapped");
+}
+
 #[test]
 fn missing_glyphs_substitute_helvetica_and_impossible_text_is_refused() {
     let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
@@ -727,4 +783,52 @@ fn paragraphs_move_and_rewrap_to_a_new_width() {
     // A zero width is clamped to one character's width rather than looping or vanishing.
     text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(0.0), ..Default::default() }).unwrap();
     assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap().iter().map(|b| b.text.split_whitespace().count()).sum::<usize>(), 12);
+}
+
+/// A page split into several content streams, as AutoCAD writes them: the first scales the
+/// page (`0.12 0 0 0.12 0 0 cm`, no `q`), the text comes in a later one.
+fn split_page(first: &str, second: &str) -> Document {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents [4 0 R 5 0 R] /Resources << /Font << /F1 6 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{first}\nendstream", first.len()),
+        format!("<< /Length {} >>\nstream\n{second}\nendstream", second.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+#[test]
+fn the_graphics_state_carries_over_between_content_streams() {
+    let close = |a: f64, b: f64| (a - b).abs() < 0.5;
+    // Text at (1000, 2000) in a space scaled by 0.12: on the page at (120, 240), 12 pt.
+    let mut doc = split_page("0.12 0 0 0.12 0 0 cm", "BT /F1 100 Tf 1000 2000 Td (Site plan) Tj ET");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let l = &lines[0];
+    assert!(close(l.rect[0], 120.0) && l.rect[1] > 230.0 && l.rect[3] < 260.0, "{:?}", l.rect);
+    assert!(close(l.size, 12.0), "{}", l.size);
+    // Editing keeps the paragraph where it was, at its size; moving it moves it in page space.
+    text::rewrite_block(&mut doc, 0, 0, Some("Site plan, rev. B"), &text::BlockStyle { offset: Some([10.0, -20.0]), ..Default::default() }).unwrap();
+    let after = text::text_blocks(&reopen(&doc), 0).unwrap();
+    assert_eq!(after[0].text, "Site plan, rev. B");
+    assert!(close(after[0].rect[0], 130.0) && close(after[0].rect[1], l.rect[1] - 20.0), "{:?}", after[0].rect);
+    assert!(close(after[0].size, 12.0), "{}", after[0].size);
+    // A `q` left open in one stream and closed in the next still restores the state.
+    let doc = split_page("q 0.5 0 0 0.5 0 0 cm", "Q BT /F1 10 Tf 100 100 Td (Footpath) Tj ET");
+    let l = &text::text_lines(&doc, 0).unwrap()[0];
+    assert!(close(l.rect[0], 100.0) && close(l.size, 10.0), "{l:?}");
 }

@@ -740,8 +740,8 @@ impl Document {
                 let (Ok(Object::Int(start)), Ok(Object::Int(count))) = (lx.object(), lx.object()) else {
                     return Err(CosError::Syntax { offset: lx.pos, detail: "bad xref subsection header".into() });
                 };
-                if start < 0 || !(0..=10_000_000).contains(&count) {
-                    return Err(CosError::Syntax { offset: lx.pos, detail: "implausible xref subsection".into() });
+                if !valid_xref_range(start, count) || count > 10_000_000 {
+                    return Err(CosError::Syntax { offset: lx.pos, detail: "invalid xref object range".into() });
                 }
                 for i in 0..count {
                     lx.skip_ws();
@@ -803,12 +803,15 @@ impl Document {
         let mut rows = raw.chunks_exact(row);
         for pair in index.chunks(2) {
             let [start, count] = pair else { break };
-            for i in 0..(*count).max(0) {
+            if !valid_xref_range(*start, *count) {
+                return Err(CosError::Syntax { offset: off, detail: "invalid xref object range".into() });
+            }
+            for i in 0..*count {
                 let Some(r) = rows.next() else { break };
                 let t = field(r, 0, w[0], 1);
                 let a = field(r, w[0], w[1], 0);
                 let b = field(r, w[0] + w[1], w[2], 0);
-                let num = (*start + i).max(0) as u32;
+                let num = (*start + i) as u32;
                 let entry = match t {
                     0 => XrefEntry::Free { next_generation: b.min(u16::MAX as u64) as u16 },
                     1 => XrefEntry::InFile { offset: a, generation: b.min(u16::MAX as u64) as u16 },
@@ -934,6 +937,13 @@ fn generated_id(seed: &[u8; 32]) -> Vec<u8> {
     out
 }
 
+/// Object numbers must fit the representation used by references and the xref map.
+/// Validate the whole subsection before adding entries, so neither arithmetic overflow nor
+/// truncation can turn a damaged range into entries for unrelated objects.
+fn valid_xref_range(start: i64, count: i64) -> bool {
+    u32::try_from(start).is_ok() && count >= 0 && start.checked_add(count).is_some_and(|end| end <= i64::from(u32::MAX) + 1)
+}
+
 /// The most indirect objects a document can have (the classic implementation limit, ISO
 /// 32000-1 Annex C): it bounds how much data a cross-reference stream can hold.
 const MAX_XREF_OBJECTS: usize = 8_388_607;
@@ -957,6 +967,37 @@ mod tests {
         }
         out.extend_from_slice(format!("trailer\n<< /Size {} {trailer} >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
         out
+    }
+
+    #[test]
+    fn invalid_xref_object_ranges_are_reconstructed() {
+        // Original in-memory PDF: an intact catalog followed by a damaged xref section.
+        for stream in [false, true] {
+            for (start, count) in [(i64::MAX, 2), (-1, 2), (4_294_967_296, 1), (4_294_967_295, 2)] {
+                let mut bytes =
+                    b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n".to_vec();
+                let offset = bytes.len();
+                if stream {
+                    bytes.extend_from_slice(
+                        format!("3 0 obj\n<< /Type /XRef /Root 1 0 R /Size 4 /W [1 1 1] /Index [{start} {count}] /Length 6 >>\nstream\n").as_bytes(),
+                    );
+                    bytes.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+                    bytes.extend_from_slice(b"\nendstream\nendobj\n");
+                } else {
+                    bytes.extend_from_slice(
+                        format!("xref\n{start} {count}\n0000000000 65535 f \n0000000000 65535 f \ntrailer\n<< /Root 1 0 R /Size 3 >>\n").as_bytes(),
+                    );
+                }
+                bytes.extend_from_slice(format!("startxref\n{offset}\n%%EOF\n").as_bytes());
+                let doc = Document::open(Arc::new(bytes)).unwrap();
+                assert!(
+                    doc.repair_log().iter().any(|line| line.contains("xref") && line.contains("range")),
+                    "stream={stream}, start={start}, count={count}: {:?}",
+                    doc.repair_log()
+                );
+                assert_eq!(doc.get(ObjRef::new(1, 0)).as_dict().unwrap().name(b"Type"), Some(b"Catalog".as_slice()));
+            }
+        }
     }
 
     #[test]

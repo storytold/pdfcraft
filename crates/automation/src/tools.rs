@@ -307,7 +307,7 @@ pub fn tools() -> Vec<ToolDef> {
                 &["doc"],
             )),
         t("doc_export_data", "Export comments or form data", "Write comments and/or form data to path; the extension picks the format: .xfdf or .fdf (comments and/or fields), .xml, .csv or .txt (form data). what: all (default), comments, fields.")
-            .ro()
+            .destructive()
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "what": { "type": "string", "enum": ["all", "comments", "fields"] } }), &["doc", "path"])),
         t("doc_import_data", "Import comments or form data", "Import comments and/or field values from an XFDF, FDF, XML, CSV or tab-delimited text file (detected from its content). Comments with the same name are replaced; values go through the form's formats and validation. Undoable.")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
@@ -720,7 +720,7 @@ pub fn tools() -> Vec<ToolDef> {
                 &["doc"],
             )),
         t("accessibility_report", "Accessibility report", "Run the full check and write the accessibility report (HTML) to path; returns the results too. Takes the same options as accessibility_check.")
-            .ro()
+            .destructive()
             .cmd("a11y.report")
             .with(schema(
                 json!({
@@ -943,7 +943,7 @@ pub fn tools() -> Vec<ToolDef> {
                 &["doc", "page", "image", "action"],
             )),
         t("image_save", "Save image as", "Write one of a page's images to path: JPEG images unchanged, others as PNG (the extension is added when missing).")
-            .ro()
+            .destructive()
             .cmd("edit.edit_text")
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "image": { "type": "integer", "minimum": 1 }, "path": { "type": "string" } }), &["doc", "page", "image", "path"])),
         t("text_paragraphs", "List paragraphs", "The paragraphs on a page (lines grouped by font, size, alignment and spacing): number, text, its line numbers, box (top-left-origin points), font and size. Use the number with text_edit's paragraph.")

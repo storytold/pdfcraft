@@ -10,6 +10,7 @@ Agent control for PdfCraft: a headless tool table over the engine, and an opt-in
 ```rust
 let mut a = Automation::new().with_root("/work")?;      // optional: confine all paths
 let doc = a.call("doc_open", &json!({ "path": "in.pdf" }))?;   // Vec<Content>
+a.write_output("page1.png", &png)?;                      // save a result yourself, under the same root rules
 tools() -> Vec<ToolDef>                                  // name, title, description, input_schema, read_only, destructive, command
 mcp::McpServer::new(a).serve(stdin, stdout)?             // newline-delimited JSON-RPC 2.0
 ```
@@ -23,7 +24,7 @@ mcp::McpServer::new(a).serve(stdin, stdout)?             // newline-delimited JS
 - Unknown arguments are rejected, so typos fail loudly.
 - Tools that change a document return its summary (`doc`, `pages`, `dirty`, `undo`, `redo`, …).
 - `doc_close` refuses to drop unsaved changes unless `discard_changes: true`. `doc_save` writes atomically, incrementally in place, and in full for a new path.
-- With a root set, every read and write path must resolve inside it (symlinks and `..` included).
+- With a root set, every read and write path must resolve inside it (symlinks and `..` included). Relative paths resolve inside the root, and `..` is resolved by name before the check. Every path outside the root gets the same refusal (`<path> is outside the allowed directory <root>`), whether or not it exists, so a confined agent can't probe the rest of the disk; on Windows another network share or device path (`\\host\share`, `\\?\UNC\…`, `\\.\…`) is refused without being contacted. "Not found" and other filesystem errors are reported only for paths inside the root. Tools that write several files into a folder name them after the document or input file, with separators, colons and control characters replaced by `_`, so a name can't lead them out of the folder. The root itself must be a folder.
 
 ## MCP server
 

@@ -16,7 +16,9 @@ pub use inspect::{
     Annotation, Attachment, AttachmentSource, DocInfo, Field, FieldKind, FontInfo, Layer, Link, LinkTarget, OutlineItem, PageInfo, Xfa,
     attachment_data, inspect, pretty_date,
 };
-pub use raster::{MAX_PIXELS, MAX_SIDE, PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderedPage, RequestKind, Tile, effective_scale};
+pub use raster::{
+    MAX_PIXELS, MAX_SIDE, PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderedPage, RequestKind, Tile, device_pixels, effective_scale,
+};
 pub use text::{PageText, TextGlyph};
 
 /// Errors surfaced to the user when a document cannot be opened.

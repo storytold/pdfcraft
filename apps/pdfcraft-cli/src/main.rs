@@ -20,7 +20,9 @@
 //!
 //! `run` and `mcp` drive the same tool table (`pdfcraft-automation`). In `run`, values parse as
 //! JSON when they can (`pages=[1,3]`, `degrees=90`) and are strings otherwise. A script runs its
-//! steps in one session, so `doc_open` returns id 1, the next document id 2, and so on.
+//! steps in one session, so `doc_open` returns id 1, the next document id 2, and so on. A step's
+//! `"out"` (like `--out`) saves its image there. With `--root DIR`, every path a tool or step
+//! names, `"out"` included, must be inside DIR, and relative paths resolve inside it.
 //!
 //! The MCP server never starts on its own: it runs only when this command is launched (normally
 //! by an agent configured to use it), talks only over stdio, and exits when stdin closes.
@@ -129,10 +131,12 @@ fn text(args: &[String]) -> Result<(), String> {
         Some(p) => vec![p.parse::<usize>().map_err(|_| "bad --page")?.saturating_sub(1)],
         None => (0..r.page_count()).collect(),
     };
+    let mut failed: Vec<usize> = Vec::new();
     for (n, p) in pages.iter().enumerate() {
         let out = r.render(RenderRequest { page: *p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
         if let Some(e) = out.error {
             eprintln!("page {}: {e}", p + 1);
+            failed.push(p + 1);
             continue;
         }
         if n > 0 {
@@ -140,7 +144,11 @@ fn text(args: &[String]) -> Result<(), String> {
         }
         println!("{}", out.text.map(|t| t.plain_text()).unwrap_or_default());
     }
-    Ok(())
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("text: page(s) {} could not be read", failed.iter().map(usize::to_string).collect::<Vec<_>>().join(", ")))
+    }
 }
 
 /// 1-based page list ("1,3,5") → 0-based indices.
@@ -414,15 +422,16 @@ fn tools() -> Result<(), String> {
     Ok(())
 }
 
-/// Print a tool's result: JSON as JSON; images go to `--out` (or are summarised).
-fn print_output(content: Vec<pdfcraft_automation::Content>, out: Option<&str>) -> Result<(), String> {
+/// Print a tool's result: JSON as JSON; images go to `--out` (or are summarised). The image is
+/// written like a tool's own output, so `--root` confines it too.
+fn print_output(auto: &pdfcraft_automation::Automation, content: Vec<pdfcraft_automation::Content>, out: Option<&str>) -> Result<(), String> {
     for c in content {
         match c {
             pdfcraft_automation::Content::Json(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default()),
             pdfcraft_automation::Content::Png { data, width, height } => match out {
                 Some(path) => {
-                    std::fs::write(path, &data).map_err(|e| format!("{path}: {e}"))?;
-                    println!("{}", serde_json::json!({ "image": path, "width": width, "height": height }));
+                    let written = auto.write_output(path, &data).map_err(|e| e.to_string())?;
+                    println!("{}", serde_json::json!({ "image": written.to_string_lossy(), "width": width, "height": height }));
                 }
                 None => println!(
                     "{}",
@@ -442,7 +451,7 @@ fn run(args: &[String]) -> Result<(), String> {
         for (i, step) in steps.iter().enumerate() {
             let tool = step["tool"].as_str().ok_or(format!("step {}: missing \"tool\"", i + 1))?;
             let content = auto.call(tool, &step["args"]).map_err(|e| format!("step {} ({tool}): {e}", i + 1))?;
-            print_output(content, step["out"].as_str())?;
+            print_output(&auto, content, step["out"].as_str()).map_err(|e| format!("step {} ({tool}): {e}", i + 1))?;
         }
         return Ok(());
     }
@@ -454,7 +463,7 @@ fn run(args: &[String]) -> Result<(), String> {
         obj.insert(k.to_string(), value);
     }
     let content = auto.call(tool, &serde_json::Value::Object(obj)).map_err(|e| e.to_string())?;
-    print_output(content, flag(args, "--out"))
+    print_output(&auto, content, flag(args, "--out"))
 }
 
 #[cfg(feature = "mcp")]

@@ -3,7 +3,7 @@
 use pdfcraft_engine::a11y::{Category, Options, Report, Rule, Status};
 use serde_json::{Value, json};
 
-use crate::{Args, Automation, Result, ToolError, failed, write_atomic};
+use crate::{Args, Automation, Result, ToolError, child, failed, write_atomic};
 
 fn status_id(s: Status) -> &'static str {
     match s {
@@ -167,7 +167,7 @@ impl Automation {
                 });
             out.push(match result {
                 Ok(r) => {
-                    let target = folder.join(&name);
+                    let target = child(&folder, &name);
                     write_atomic(&target, &r.bytes)?;
                     let skipped: Vec<usize> = r.pages.iter().filter(|p| p.skipped.is_some()).map(|p| p.page + 1).collect();
                     json!({ "path": p, "output": target.to_string_lossy(), "words": r.words(), "skipped_pages": skipped })
@@ -339,7 +339,7 @@ impl Automation {
                 .and_then(|bytes| run_on(&action, &name, std::sync::Arc::new(bytes), |_, _| {}));
             out.push(match result {
                 Ok(r) => {
-                    let target = folder.join(&name);
+                    let target = child(&folder, &name);
                     write_atomic(&target, &r.bytes)?;
                     json!({ "path": p, "output": target.to_string_lossy(), "log": r.log })
                 }

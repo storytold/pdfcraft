@@ -17,8 +17,9 @@
 //! - `ui.inspect {query?, role?, limit?}`: widgets in tree order with `id` (a string), `role`, `label`,
 //!   `value`, `rect` (points), `enabled`, `toggled`, `selected`, `clickable`, `depth`.
 //! - `ui.click {id}` | `{label}` | `{x, y, button?}`: click a widget (by its AccessKit action) or a
-//!   point (`button`: primary or secondary, for context menus).
-//! - `ui.drag {from: [x, y], to: [x, y], steps?, modifiers?}`: press, move and release (drawing
+//!   point (`button`: primary, secondary, or middle).
+//! - `ui.move {x, y}`: move the pointer without pressing a button (e.g. latched autoscroll).
+//! - `ui.drag {from: [x, y], to: [x, y], steps?, modifiers?, button?}`: press, move and release (drawing
 //!   comments, selecting text, moving comments). `ui.state` reports `pages_on_screen` to aim at.
 //! - `ui.type {text}`, `ui.key {key, modifiers?}`: keyboard input to the focused widget / app.
 //! - `ui.command {id}`: run a registry command (as the menu would). `ui.commands` lists them.
@@ -275,6 +276,17 @@ impl Control {
             "ui.inspect" => Ok(Handled::Now(Ok(self.inspect(p)))),
             "ui.click" => self.click(p),
             "ui.drag" => self.drag(p),
+            "ui.move" => {
+                let point = |key: &str| -> Result<f32, String> {
+                    p.get(key)
+                        .and_then(Value::as_f64)
+                        .map(|n| n as f32)
+                        .filter(|n| n.is_finite())
+                        .ok_or_else(|| format!("ui.move: {key} must be a finite coordinate in points"))
+                };
+                let pos = egui::pos2(point("x")?, point("y")?);
+                Ok(Handled::AfterFrames(self.inject(vec![vec![egui::Event::PointerMoved(pos)]]), json!({ "moved": [pos.x, pos.y] })))
+            }
             "ui.type" => {
                 let text = str_param("text")?.to_string();
                 Ok(Handled::AfterFrames(self.inject(vec![vec![egui::Event::Text(text)]]), json!({ "typed": true })))
@@ -296,7 +308,7 @@ impl Control {
                 Ok(Handled::Screenshot(region))
             }
             other => Err(format!(
-                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.type, ui.key, ui.command, ui.commands, ui.set, ui.open, ui.screenshot)"
+                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.move, ui.drag, ui.type, ui.key, ui.command, ui.commands, ui.set, ui.open, ui.screenshot)"
             )),
         })();
         r.unwrap_or_else(|e| Handled::Now(Err(e)))
@@ -342,7 +354,8 @@ impl Control {
         let (from, to) = (point("from")?, point("to")?);
         let steps = p.get("steps").and_then(Value::as_u64).unwrap_or(8).clamp(1, 200) as usize;
         let modifiers = modifiers(p.get("modifiers"))?;
-        let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
+        let which = pointer_button(p, "ui.drag")?;
+        let button = |pos, pressed| egui::Event::PointerButton { pos, button: which, pressed, modifiers };
         let mut frames = vec![vec![egui::Event::PointerMoved(from)], vec![button(from, true)]];
         for k in 1..=steps {
             frames.push(vec![egui::Event::PointerMoved(from + (to - from) * (k as f32 / steps as f32))]);
@@ -355,11 +368,7 @@ impl Control {
     fn click(&mut self, p: &Value) -> Result<Handled, String> {
         if let (Some(x), Some(y)) = (p.get("x").and_then(Value::as_f64), p.get("y").and_then(Value::as_f64)) {
             let pos = egui::pos2(x as f32, y as f32);
-            let which = match p.get("button").and_then(Value::as_str).unwrap_or("primary") {
-                "primary" | "left" => egui::PointerButton::Primary,
-                "secondary" | "right" => egui::PointerButton::Secondary,
-                other => return Err(format!("ui.click: unknown button {other:?} (primary, secondary)")),
-            };
+            let which = pointer_button(p, "ui.click")?;
             let button = |pressed| egui::Event::PointerButton { pos, button: which, pressed, modifiers: egui::Modifiers::NONE };
             let frames = self.inject(vec![vec![egui::Event::PointerMoved(pos)], vec![button(true)], vec![button(false)]]);
             return Ok(Handled::AfterFrames(frames, json!({ "clicked": [x, y] })));
@@ -448,6 +457,15 @@ fn widget(id: NodeId, n: &accesskit::Node, depth: usize, focused: bool) -> Value
     w
 }
 
+fn pointer_button(p: &Value, method: &str) -> Result<egui::PointerButton, String> {
+    match p.get("button").and_then(Value::as_str).unwrap_or("primary") {
+        "primary" | "left" => Ok(egui::PointerButton::Primary),
+        "secondary" | "right" => Ok(egui::PointerButton::Secondary),
+        "middle" => Ok(egui::PointerButton::Middle),
+        other => Err(format!("{method}: unknown button {other:?} (primary, secondary, middle)")),
+    }
+}
+
 fn modifiers(v: Option<&Value>) -> Result<egui::Modifiers, String> {
     let mut m = egui::Modifiers::NONE;
     for name in v.and_then(Value::as_array).into_iter().flatten() {
@@ -531,6 +549,8 @@ impl Host for crate::PdfCraftApp {
                 "fit": format!("{:?}", v.fit),
                 "layout": format!("{:?}", v.layout),
                 "organize": v.organize,
+                "auto_scrolling": v.auto_scrolling(),
+                "viewport": [v.viewport_rect().min.x, v.viewport_rect().min.y, v.viewport_rect().max.x, v.viewport_rect().max.y],
                 "find_open": v.find.is_some(),
                 "page_errors": v.page_errors().iter().map(|(p, e)| json!({ "page": p + 1, "error": e })).collect::<Vec<_>>(),
                 // Where pages are on screen (points), to aim ui.click / ui.drag at page content.

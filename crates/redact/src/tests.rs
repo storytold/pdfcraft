@@ -118,6 +118,42 @@ fn added_text_parameters_do_not_keep_redacted_text() {
 }
 
 #[test]
+fn operators_split_across_content_streams_are_redacted_whole() {
+    // One content stream in three pieces, split between tokens: a marked-content dictionary
+    // ends in the second piece, and the TJ array that ends it shows its glyphs with the
+    // operator in the third.
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents [4 0 R 7 0 R 8 0 R] /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", b"/P << /MCID 0"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        stream("", b">> BDC BT /F1 10 Tf 10 100 Td [(AB1234CD)]"),
+        stream("", b"TJ ET EMC BT /F1 10 Tf 10 200 Td (KEEP) Tj ET"),
+    ]);
+    assert_eq!(under(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]]), 4, "the verifier sees the split TJ");
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.glyphs, 4, "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("1234"), "redacted glyphs left in the page: {c}");
+    assert!(c.contains("KEEP"), "{c}");
+    assert_eq!(under(&mut doc, 0, &[[40.0, 95.0, 50.0, 110.0]]), 2, "C and D are where they were");
+    // Every operator still has its operands: none was cut off from them.
+    for op in pdfcraft_content::parse(c.as_bytes()).ops {
+        let want = match op.op.as_slice() {
+            b"TJ" | b"Tj" => 1,
+            b"BDC" | b"Tf" | b"Td" => 2,
+            _ => continue,
+        };
+        assert_eq!(op.operands.len(), want, "{} lost its operands in {c}", String::from_utf8_lossy(&op.op));
+    }
+    let doc = reopen(&doc);
+    assert!(!content(&doc, 0).contains("1234"));
+}
+
+#[test]
 fn kerning_spacing_scaling_and_line_operators_are_honoured() {
     // TJ kerning, character and word spacing, 50% horizontal scaling, ' and ".
     let src = b"BT /F1 10 Tf 2 Tc 4 Tw 50 Tz 12 TL 0 200 Td [(AB) -1000 (C D)] TJ (EF) ' 1 0 (GH) \" ET";

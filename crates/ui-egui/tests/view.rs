@@ -46,6 +46,41 @@ fn rect(h: &Harness<'static, PdfCraftApp>, page: usize) -> Option<egui::Rect> {
     h.state().views[0].page_screen_rect(page)
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn middle_button_scrolling_keeps_page_colours_in_both_themes() {
+    use egui_kittest::kittest::Queryable;
+    let _gpu = gpu();
+    for theme in ["light", "dark"] {
+        for organize in [false, true] {
+            let mut h = harness(&[("zoom", "50")]);
+            h.state_mut().set_option("theme", theme).unwrap();
+            h.state_mut().set_option("organize", if organize { "on" } else { "off" }).unwrap();
+            for _ in 0..100 {
+                h.run_steps(2);
+                if !h.state().render_pending() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let page = if organize { h.get_by_label("Page 1").rect() } else { rect(&h, 0).unwrap() };
+            let at = page.center();
+            let ppp = h.ctx.pixels_per_point();
+            let before = *h.render().unwrap().get_pixel((at.x * ppp) as u32, (at.y * ppp) as u32);
+            assert_eq!(before, image::Rgba([255, 255, 255, 255]), "the synthetic page is white");
+            let anchor = h.state().views[0].viewport_rect().center();
+            h.event(egui::Event::PointerMoved(anchor));
+            h.event(egui::Event::PointerButton { pos: anchor, button: egui::PointerButton::Middle, pressed: true, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+            h.event(egui::Event::PointerButton { pos: anchor, button: egui::PointerButton::Middle, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+            assert!(h.state().views[0].auto_scrolling());
+            let during = *h.render().unwrap().get_pixel((at.x * ppp) as u32, (at.y * ppp) as u32);
+            assert_eq!(during, before, "scrolling preserves page colours: theme={theme}, organize={organize}");
+        }
+    }
+}
+
 #[test]
 fn continuous_layout_stacks_pages_vertically() {
     let mut h = harness(&[("layout", "continuous"), ("zoom", "50")]);

@@ -47,7 +47,8 @@
 
   <!-- Documents PdfCraft opens (#73): it is offered under Open With and can be made the default
        for PDFs, without taking over from the system's viewer on install ("Alternate"). Declared by
-       extension and MIME type; LaunchServices maps them to the system's PDF type. Finder hands the
+       UTI (LSItemContentTypes, what modern macOS filters Open With > Recommended Applications on),
+       plus extension and MIME type for backward compatibility. Finder hands the
        file over as an Apple event, which apps/pdfcraft/src/apple_events.rs receives. -->
   <key>CFBundleDocumentTypes</key>
   <array>
@@ -58,6 +59,8 @@
       <string>Editor</string>
       <key>LSHandlerRank</key>
       <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.adobe.pdf</string></array>
       <key>CFBundleTypeExtensions</key>
       <array><string>pdf</string></array>
       <key>CFBundleTypeMIMETypes</key>

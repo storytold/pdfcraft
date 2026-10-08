@@ -70,11 +70,21 @@ pub fn lp_args(job: &Job, file: &str) -> Vec<String> {
     a
 }
 
+/// `lpstat -p -d`, forced to print untranslated messages so [`parse_lpstat`] can read them.
+///
+/// `LC_ALL`/`LANG=C` is enough on Linux. macOS CUPS ignores them and follows the user's
+/// interface language (`AppleLanguages`) unless `SOFTWARE` is set, in which case it uses `LANG`.
+pub fn lpstat_command() -> std::process::Command {
+    let mut c = std::process::Command::new("lpstat");
+    c.args(["-p", "-d"]).env("LC_ALL", "C").env("LANG", "C").env("SOFTWARE", "PdfCraft");
+    c
+}
+
 /// The printers the system knows (empty when there are none or no spooler).
 pub fn printers() -> Vec<Printer> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        match std::process::Command::new("lpstat").args(["-p", "-d"]).output() {
+        match lpstat_command().output() {
             Ok(o) => parse_lpstat(&String::from_utf8_lossy(&o.stdout)),
             Err(_) => Vec::new(),
         }

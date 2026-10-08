@@ -127,6 +127,111 @@ fn command_click_toggles_and_rotation_applies_to_selection() {
 }
 
 #[test]
+fn organize_select_all_shortcut_preserves_current_page_and_sets_range_anchor() {
+    let mut h = organize(4);
+    h.get_by_label("Page 3").click();
+    h.run_steps(1);
+    // Automation may move the current selection without a click's range anchor.
+    h.state_mut().views[0].select_pages(&[1]);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(2);
+    h.get_by_label_contains("4 pages selected");
+    assert_eq!(h.state().views[0].target_pages(), [0, 1, 2, 3]);
+    assert_eq!(h.state().views[0].current, 1, "selecting all keeps the reader's place");
+    assert!(!dirty(&h), "selection doesn't edit the document");
+
+    // Repeating Select all is harmless; deleting all pages still keeps the document intact.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(1);
+    h.key_press(Key::Delete);
+    h.run_steps(2);
+    assert_eq!(page_texts(h.state()).len(), 4);
+    assert!(!dirty(&h));
+    h.get_by_label("Page 4").click_modifiers(Modifiers::SHIFT);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].target_pages(), [1, 2, 3], "Shift-click extends from the current page");
+    h.get_by_label("Page 2").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].target_pages(), [2, 3], "command-click still toggles a page");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().views[0].selected.is_empty());
+}
+
+#[test]
+fn organize_select_all_applies_operations_to_every_page() {
+    let mut h = organize(3);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].target_pages(), [0, 1, 2]);
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(3);
+    let app = h.state();
+    let rotations: Vec<_> = app.session.get(app.views[0].id).unwrap().info.pages.iter().map(|p| p.rotation).collect();
+    assert_eq!(rotations, [90, 90, 90]);
+}
+
+#[test]
+fn organize_select_all_works_without_page_editing_permission() {
+    let mut h = harness(3, |app| {
+        app.apply_edit(pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection {
+            permissions_password: Some("owner".into()),
+            changes: pdfcraft_engine::Changes::None,
+            ..Default::default()
+        }));
+        let bytes = app.session.save_bytes(app.views[0].id).unwrap();
+        app.open_bytes("restricted.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.set_option("organize", "on").unwrap();
+    });
+    let index = h.state().active.unwrap();
+    assert!(!h.state().session.get(h.state().views[index].id).unwrap().allows_assembly());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(2);
+    assert_eq!(h.state().views[index].target_pages(), [0, 1, 2]);
+    assert!(!h.state().session.get(h.state().views[index].id).unwrap().dirty);
+
+    let mut h = organize(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].target_pages(), [0]);
+    assert_eq!(h.state().views[0].selected.len(), 1);
+
+    // The opener refuses zero-page PDFs, but the view method also handles empty geometry.
+    let mut empty = pdfcraft_ui_egui::canvas::DocView::new(pdfcraft_engine::DocId(0), &Default::default());
+    empty.organize = true;
+    assert!(!empty.select_all());
+    assert!(empty.selected.is_empty());
+}
+
+#[test]
+fn organize_select_all_leaves_focused_text_input_and_dialogs_alone() {
+    let mut h = organize(3);
+    h.query_all_by_value("1").next().expect("current page input").focus();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(1);
+    h.query_all_by_value("1").next().expect("current page input").type_text("2");
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].page_input, "2", "Ctrl/Cmd+A selected the field's text");
+    assert!(h.state().views[0].selected.is_empty());
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, 1);
+
+    h.state_mut().execute("help.about");
+    h.run_steps(3);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(2);
+    assert!(h.state().views[0].selected.is_empty(), "a modal dialog isolates the page selection");
+    h.state_mut().dialog = None;
+    h.state_mut().execute("view.palette");
+    h.run_steps(3);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(2);
+    assert!(h.state().views[0].selected.is_empty(), "the palette keeps its own keyboard input");
+}
+
+#[test]
 fn delete_is_refused_when_it_would_remove_every_page() {
     let mut h = organize(2);
     h.state_mut().views[0].select_pages(&[0, 1]);

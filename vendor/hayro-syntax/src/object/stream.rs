@@ -302,8 +302,12 @@ fn parse_proper<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>> {
 }
 
 fn parse_fallback<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>> {
-    let stream_offset = find_needle(r.tail()?, b"stream")?;
-    r.read_bytes(stream_offset)?;
+    // PdfCraft patch: `stream` must be the next token. Scanning ahead to a later
+    // `stream` made a dictionary look like a stream — in particular an indirect
+    // `/AP /N` appearance-state dictionary (`<< /Yes 5 0 R /Off 6 0 R >>`, as Quartz
+    // writes checkboxes). The widget then had no form to draw, so the box disappeared.
+    // A wrong `/Length` still recovers, because that keyword sits directly after the dict.
+    r.skip_white_spaces_and_comments();
     r.forward_tag(b"stream")?;
 
     r.forward_tag(b"\n")
@@ -384,5 +388,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(stream.data, b"abcdefghij");
+    }
+
+    /// A dictionary followed by some other object's stream is not itself a stream.
+    /// `parse_fallback` used to latch onto that later `stream` keyword.
+    #[test]
+    fn dictionary_is_not_a_later_objects_stream() {
+        let data = b"<< /Yes 5 0 R /Off 6 0 R >>\nendobj\n11 0 obj << /Length 5 >> stream\nhello\nendstream";
+        let mut r = Reader::new(data);
+        assert!(r.read_with_context::<Stream<'_>>(&ReaderContext::dummy()).is_none());
     }
 }
