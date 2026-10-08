@@ -21,6 +21,9 @@ use crate::OpenError;
 /// xref streams are far below this.
 const LOAD_STREAM_LIMIT: usize = 256 << 20;
 
+/// At most this many `/State` entries of a set-layer-visibility action are read.
+const MAX_LAYER_STATE: usize = 1024;
+
 /// At most this many layers are read from all of `/RBGroups` together.
 const MAX_LAYER_GROUP_ENTRIES: usize = 4096;
 
@@ -142,6 +145,13 @@ pub struct Link {
 pub enum LinkTarget {
     Page(usize),
     Uri(String),
+    /// A set-layer-visibility action (`SetOCGState`, ISO 32000-2 §12.6.4.13): each change in
+    /// order, naming the layer by its optional content group. With `preserve_rb`, a layer turned
+    /// on turns off the other layers of its radio-button groups.
+    SetLayers {
+        changes: Vec<(LayerOp, (u32, u16))>,
+        preserve_rb: bool,
+    },
     Other(String),
 }
 
@@ -665,11 +675,37 @@ impl<'a> Inspector<'a> {
                 Some("URI") => {
                     LinkTarget::Uri(a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok()).map(|b| String::from_utf8_lossy(b).into_owned())?)
                 }
+                Some("SetOCGState") => self.layer_state(a),
                 Some(other) => LinkTarget::Other(other.to_string()),
                 None => return None,
             }
         };
         Some(Link { page, rect, target })
+    }
+
+    /// A set-OCG-state action: `/State` is `ON`, `OFF` or `Toggle`, each followed by the groups
+    /// it applies to; `/PreserveRB` is true unless it is `false`.
+    fn layer_state(&self, a: &Dictionary) -> LinkTarget {
+        let mut changes = Vec::new();
+        if let Ok(Object::Array(items)) = a.get(b"State").map(|o| self.resolve(o)) {
+            let mut op = None;
+            for item in items.iter().take(MAX_LAYER_STATE) {
+                match item {
+                    Object::Name(n) => {
+                        op = match n.as_slice() {
+                            b"ON" => Some(LayerOp::On),
+                            b"OFF" => Some(LayerOp::Off),
+                            b"Toggle" => Some(LayerOp::Toggle),
+                            _ => None,
+                        }
+                    }
+                    Object::Reference(id) => changes.extend(op.map(|op| (op, *id))),
+                    _ => {}
+                }
+            }
+        }
+        let preserve_rb = !matches!(a.get(b"PreserveRB").map(|o| self.resolve(o)), Ok(Object::Boolean(false)));
+        LinkTarget::SetLayers { changes, preserve_rb }
     }
 
     // ── form fields ─────────────────────────────────────────────────────────────────────────
@@ -1051,6 +1087,23 @@ trailer << /Root 1 0 R >>
         assert_eq!(layers, [((5, 0), "Red", true), ((6, 0), "Green", false), ((7, 0), "Blue", true)]);
         // A group of one constrains nothing; an indirect group is read.
         assert_eq!(info.layer_groups, [vec![(5, 0), (6, 0)], vec![(6, 0), (7, 0)]]);
+    }
+
+    #[test]
+    fn links_read_set_layer_actions() {
+        let info = inspect(Arc::new(LAYERS.to_vec()), None).expect("opens");
+        let targets: Vec<_> = info.links.iter().map(|l| l.target.clone()).collect();
+        use LayerOp::{Off, On, Toggle};
+        assert_eq!(
+            targets,
+            [
+                // Groups before the first name or after an unknown one are skipped, and so is
+                // anything that isn't a group.
+                LinkTarget::SetLayers { changes: vec![(On, (6, 0)), (Toggle, (5, 0)), (Toggle, (7, 0))], preserve_rb: false },
+                // An indirect /State; /PreserveRB defaults to true.
+                LinkTarget::SetLayers { changes: vec![(Off, (5, 0))], preserve_rb: true },
+            ]
+        );
     }
 
     #[test]
