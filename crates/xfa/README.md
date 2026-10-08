@@ -83,8 +83,11 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
 - **Data binding** is the default one only: explicit `bind ref` expressions, global binding and
   data descriptions are not followed, and no standalone XML or XDP data file is imported or
   exported.
-- **Scripting.** JavaScript only: FormCalc scripts (the default language of older forms) are
-  detected and reported, not run. The object model covers what forms commonly use (`xfa.form`
+- **Scripting.** JavaScript (boa) and FormCalc (a native interpreter, `pdfcraft_js::formcalc`)
+  share one object model, one set of effects and one set of budgets. FormCalc covers the
+  language and the common built-ins (arithmetic, logical, string, date/time, financial, unit);
+  not locale-aware pictures beyond simple number and date ones, or `Get`/`Post`/`Put` (refused).
+  The object model covers what forms commonly use (`xfa.form`
   navigation and SOM resolution, `rawValue`, `presence`, `access`, instance managers,
   `xfa.host` messages, reset, print, focus and URLs, `xfa.layout` page numbers, `xfa.event`);
   not `xfa.template`, data descriptions, `xfa.connectionSet`, `border`/`font`/`ui` properties

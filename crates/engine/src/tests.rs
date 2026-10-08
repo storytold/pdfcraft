@@ -1621,10 +1621,10 @@ fn xfa_scripts_initialize_calculate_validate_toggle_and_add_rows() {
     s.run_javascript(id, "", Some("removeRow")).unwrap();
     assert!(!names(&s).iter().any(|n| n == "amount_2"));
     assert_eq!(value(&s, "grand"), vec!["10".to_string()]);
-    // FormCalc is reported, not run.
+    // FormCalc scripts run too.
     let o = s.run_javascript(id, "", Some("legacy")).unwrap();
-    assert!(o.error.as_deref().is_some_and(|e| e.contains("FormCalc")), "{o:?}");
-    assert!(o.alerts.is_empty());
+    assert_eq!(o.error, None);
+    assert_eq!(o.alerts, vec!["FormCalc".to_string()]);
     // Saved and reopened: the visible subform, the values and the rows are what they were.
     let saved = s.save_bytes(id).unwrap();
     let id2 = s.open("again.pdf", None, saved, None).unwrap();
@@ -1634,6 +1634,76 @@ fn xfa_scripts_initialize_calculate_validate_toggle_and_add_rows() {
     assert_eq!(d2.form.iter().find(|f| f.name == "grand").unwrap().value, vec!["10".to_string()]);
     assert_eq!(d2.form.iter().find(|f| f.name == "qty").unwrap().value, vec!["500".to_string()]);
     assert!(!d2.dirty);
+}
+
+#[test]
+fn dynamic_xfa_forms_run_formcalc_scripts() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::formcalc_template()));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("formcalc.pdf", None, bytes, None).expect("opens");
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().value.clone();
+    let names = |s: &Session| s.get(id).unwrap().form.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+    // Initialize set qty; the calculates ran from it, including the English words.
+    assert_eq!(value(&s, "qty"), vec!["2".to_string()], "{:?}", s.take_js_output(id));
+    assert_eq!(value(&s, "total"), vec!["10".to_string()]);
+    assert_eq!(value(&s, "words"), vec!["Ten".to_string()]);
+    assert!(s.take_js_output(id).is_empty());
+    // Editing recalculates and validates.
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("7".into()) }).unwrap();
+    assert_eq!(value(&s, "total"), vec!["35".to_string()]);
+    assert_eq!(value(&s, "words"), vec!["Thirty-Five".to_string()]);
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("500".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.alerts.iter().any(|a| a == "Quantity must be 100 or less"), "{out:?}");
+    assert_eq!(value(&s, "qty"), vec!["500".to_string()]);
+    // Buttons: a row is added, summed and removed; the message box reaches the viewer.
+    let before = names(&s).len();
+    let o = s.run_javascript(id, "", Some("addRow")).unwrap();
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(names(&s).len(), before + 2, "{:?}", names(&s));
+    s.apply(id, Edit::SetFieldValue { name: "amount".into(), value: FieldValue::Text("10".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "amount_2".into(), value: FieldValue::Text("32".into()) }).unwrap();
+    assert_eq!(value(&s, "grand"), vec!["42".to_string()], "{:?}", s.take_js_output(id));
+    let o = s.run_javascript(id, "", Some("hello")).unwrap();
+    assert_eq!(o.alerts, vec!["Hello 500".to_string()]);
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    assert!(names(&s).iter().any(|n| n == "note"), "{:?} {:?}", names(&s), s.take_js_output(id));
+    s.run_javascript(id, "", Some("removeRow")).unwrap();
+    assert!(!names(&s).iter().any(|n| n == "amount_2"));
+    assert_eq!(value(&s, "grand"), vec!["10".to_string()]);
+    // Saved and reopened, the form is what it was.
+    let saved = s.save_bytes(id).unwrap();
+    let id2 = s.open("again.pdf", None, saved, None).unwrap();
+    let d2 = s.get(id2).unwrap();
+    assert_eq!(d2.form.iter().find(|f| f.name == "words").unwrap().value, vec!["Two Thousand Five Hundred".to_string()]);
+    assert!(d2.form.iter().any(|f| f.name == "note"));
+}
+
+#[test]
+fn hostile_formcalc_scripts_cannot_hang_or_bloat_the_document() {
+    let tpl = pdfcraft_xfa::fixtures::formcalc_template()
+        .replace(
+            "<calculate><script>qty * price</script></calculate>",
+            "<calculate><script>table._row.addInstance(1)
+table._row.count</script></calculate>",
+        )
+        .replace("<script>table._row.addInstance(1)</script>", "<script>while (1) do table._row.addInstance(1) endwhile</script>")
+        .replace(
+            "<script>WordNum(total)</script>",
+            "<script>func f(n) do f(n + 1) endfunc
+f(1)</script>",
+        );
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&tpl));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let started = std::time::Instant::now();
+    let id = s.open("hostile.pdf", None, bytes, None).expect("opens");
+    let rows = |s: &Session| s.get(id).unwrap().form.iter().filter(|f| f.name.starts_with("amount")).count();
+    assert!(rows(&s) <= 50, "{} rows", rows(&s));
+    let out = s.take_js_output(id);
+    assert!(out.errors.iter().any(|l| l.contains("nested")), "{out:?}");
+    let o = s.run_javascript(id, "", Some("addRow")).unwrap();
+    assert!(o.error.is_some() || rows(&s) <= 50, "{o:?}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
 }
 
 #[test]

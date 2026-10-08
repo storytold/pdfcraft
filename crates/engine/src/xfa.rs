@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use pdfcraft_js::formcalc::run_formcalc_within;
 use pdfcraft_js::xfa::{XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, run_xfa_within};
 use pdfcraft_xfa::model::Template;
 use pdfcraft_xfa::{FormNode, LiveForm, NodeKind, ScriptEvent};
@@ -241,7 +242,6 @@ struct Runner<'a, 'b> {
     tpl: &'a Template,
     run: &'a mut XfaRun<'b>,
     clock: Clock,
-    formcalc_warned: bool,
     runs: usize,
     skipped: usize,
     relayouts: usize,
@@ -270,7 +270,6 @@ impl<'a, 'b> Runner<'a, 'b> {
             tpl,
             run,
             clock: Clock::start(budget_ms),
-            formcalc_warned: false,
             runs: 0,
             skipped: 0,
             relayouts: 0,
@@ -581,17 +580,15 @@ impl<'a, 'b> Runner<'a, 'b> {
             return Ok(None);
         }
         self.runs += 1;
-        if ev.formcalc {
-            if !self.formcalc_warned {
-                self.error(format!("{}: FormCalc scripts don't run yet (only JavaScript ones)", ev.som));
-                self.formcalc_warned = true;
-            }
-            return Ok(Some(Default::default()));
-        }
         let event = XfaEvent { activity: ev.activity.clone(), target: ev.som.clone(), new_text: new_text.to_string(), prev_text: String::new() };
         let doc_info = XfaDoc { file_name: String::new(), page: 0, page_count: self.run.page_count };
         let root_js = to_js(&self.live().root);
-        let o = run_xfa_within(&ev.script, &event, &doc_info, root_js, limits_for(&ev.activity), timeout_for(&ev.activity));
+        let (limits, timeout) = (limits_for(&ev.activity), timeout_for(&ev.activity));
+        let o = if ev.formcalc {
+            run_formcalc_within(&ev.script, &event, &doc_info, root_js, limits, timeout)
+        } else {
+            run_xfa_within(&ev.script, &event, &doc_info, root_js, limits, timeout)
+        };
         if o.abandoned {
             self.run.ran_away = true;
         }

@@ -160,6 +160,54 @@ pub fn scripted_template() -> String {
     .to_string()
 }
 
+/// [`scripted_template`] with every script in FormCalc (no `contentType`, as Designer writes
+/// the default language): the same fields, plus `words`, the total in English words.
+pub fn formcalc_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <event activity="initialize"><script>if (HasValue(qty) == 0) then qty = 2 endif</script></event>
+  <field name="qty" w="2in" h="0.3in"><ui><numericEdit/></ui><caption placement="left" reserve="0.8in"><value><text>Qty</text></value></caption>
+   <validate><script>HasValue($) == 0 or $ &lt;= 100</script><message><text name="scriptTest">Quantity must be 100 or less</text></message></validate></field>
+  <field name="price" w="2in" h="0.3in"><ui><numericEdit/></ui><caption placement="left" reserve="0.8in"><value><text>Price</text></value></caption><value><integer>5</integer></value></field>
+  <field name="total" w="2in" h="0.3in" access="readOnly"><ui><numericEdit/></ui><caption placement="left" reserve="0.8in"><value><text>Total</text></value></caption>
+   <calculate><script>qty * price</script></calculate></field>
+  <field name="words" w="4in" h="0.3in" access="readOnly"><ui><textEdit/></ui><caption placement="left" reserve="0.8in"><value><text>Words</text></value></caption>
+   <calculate><script>WordNum(total)</script></calculate></field>
+  <field name="more" w="2in" h="0.3in"><ui><checkButton/></ui><caption placement="right" reserve="1.5in"><value><text>More details</text></value></caption><items><integer>1</integer><integer>0</integer></items>
+   <event activity="change"><script>if ($ == 1) then
+  details.presence = "visible"
+else
+  details.presence = "hidden"
+endif</script></event></field>
+  <subform name="details" layout="tb" presence="hidden">
+   <field name="note" w="4in" h="0.3in"><ui><textEdit/></ui><caption placement="left" reserve="0.8in"><value><text>Note</text></value></caption></field>
+  </subform>
+  <subform name="table" layout="table" columnWidths="3in 2in">
+   <subform name="row" layout="row"><occur min="1" max="-1"/>
+    <field name="item" h="0.3in"><ui><textEdit/></ui></field>
+    <field name="amount" h="0.3in"><ui><numericEdit/></ui></field>
+   </subform>
+  </subform>
+  <field name="grand" w="2in" h="0.3in" access="readOnly"><ui><numericEdit/></ui><caption placement="left" reserve="0.8in"><value><text>Sum</text></value></caption>
+   <calculate><script>Sum(table.row[*].amount)</script></calculate></field>
+  <field name="addRow" w="1in" h="0.3in"><ui><button/></ui><caption><value><text>Add row</text></value></caption>
+   <event activity="click"><script>table._row.addInstance(1)</script></event></field>
+  <field name="removeRow" w="1in" h="0.3in"><ui><button/></ui><caption><value><text>Remove row</text></value></caption>
+   <event activity="click"><script>if (table._row.count > 1) then table._row.removeInstance(table._row.count - 1) endif</script></event></field>
+  <field name="hello" w="1in" h="0.3in"><ui><button/></ui><caption><value><text>Hello</text></value></caption>
+   <event activity="click"><script>$host.messageBox(Concat("Hello ", qty))</script></event></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
 /// A PDF shell around `xdp`: one placeholder page, `/NeedsRendering true`, no fields.
 pub fn shell(xdp: &str) -> Vec<u8> {
     let objs: Vec<Vec<u8>> = vec![

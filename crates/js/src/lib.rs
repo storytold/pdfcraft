@@ -991,7 +991,7 @@ fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
 // construct (a few KiB per level, several bytes of source each) by the length limit.
 
 /// Longest script, in bytes.
-const MAX_SCRIPT_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_SCRIPT_BYTES: usize = 256 * 1024;
 /// Deepest nesting of `(`, `[` and `{`.
 const MAX_BRACKET_DEPTH: usize = 64;
 /// Longest run of prefix operators (`!`, `~`, `+`, `-`).
@@ -1140,6 +1140,7 @@ fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], d
     out
 }
 
+pub mod formcalc;
 pub mod xfa;
 
 #[cfg(test)]
