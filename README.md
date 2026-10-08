@@ -369,6 +369,18 @@ git clone https://github.com/storytold/craft-fonts ../craft-fonts
 CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p pdfcraft -- some.pdf
 ```
 
+Each [GitHub release](https://github.com/storytold/pdfcraft/releases) has ready-made builds, on Linux as
+an AppImage, a `.deb`, an `.rpm` and a tarball. On Gentoo, the community [::snakebyte
+overlay](https://github.com/switch87/snakebyte-overlay) packages the Linux release as
+`app-text/pdfcraft-bin` (not maintained by the PdfCraft team):
+
+```sh
+eselect repository add snakebyte git https://github.com/switch87/snakebyte-overlay.git
+emaint sync -r snakebyte
+echo 'app-text/pdfcraft-bin ~amd64' >> /etc/portage/package.accept_keywords/pdfcraft
+emerge --ask app-text/pdfcraft-bin
+```
+
 ## What's next
 
 PdfCraft is young and moving fast. The aim is a workbench where you can view, organize, annotate, fill, sign and edit PDFs, at parity with Acrobat Pro.
