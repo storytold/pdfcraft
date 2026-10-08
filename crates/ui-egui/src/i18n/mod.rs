@@ -217,11 +217,33 @@ fn detect_system_lang() -> Lang {
     {
         return l;
     }
+    #[cfg(target_os = "windows")]
+    if let Some(l) = windows_ui_language().as_deref().and_then(first_supported) {
+        return l;
+    }
     Lang::EN
 }
 
-/// The first supported language in a `defaults read` list like `(\n    "ja-JP",\n    "en-US"\n)`.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+/// The Windows display language, queried once when Auto first resolves (no profile or console).
+#[cfg(target_os = "windows")]
+fn windows_ui_language() -> Option<String> {
+    use std::os::windows::process::CommandExt;
+
+    // Use the system executable rather than searching PATH, as with macOS defaults above.
+    let powershell = std::path::PathBuf::from(std::env::var_os("SystemRoot")?).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    let out = std::process::Command::new(powershell)
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "(Get-UICulture).Name"])
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW: the desktop app has no console.
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8(out.stdout).ok()
+}
+
+/// The first supported language in a macOS `defaults read` list or Windows UI-culture output.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 fn first_supported(list: &str) -> Option<Lang> {
     list.split(['(', ')', ',', '"', '\n']).map(str::trim).filter(|s| !s.is_empty()).find_map(lang_from_tag)
 }
@@ -386,6 +408,28 @@ mod tests {
         assert_eq!(first_supported("(\n    \"ja-JP\",\n    \"en-US\"\n)\n"), Some(JA()));
         assert_eq!(first_supported("(\n    \"fr-FR\",\n    \"en-US\"\n)\n"), Some(Lang::EN));
         assert_eq!(first_supported("("), None);
+    }
+
+    #[test]
+    fn windows_display_language_resolves_chinese_scripts() {
+        for tag in ["zh-CN", "zh-SG", "zh-Hans", "zh-Hans-CN"] {
+            assert_eq!(first_supported(&format!("{tag}\r\n")), Lang::from_code("zh-hans"));
+        }
+        for tag in ["zh-TW", "zh-HK", "zh-MO", "zh-Hant", "zh-Hant-HK"] {
+            assert_eq!(first_supported(&format!("{tag}\r\n")), Lang::from_code("zh-hant"));
+        }
+        assert_eq!(first_supported("en-US\r\n"), Some(Lang::EN));
+        assert_eq!(first_supported("fr-FR\r\n"), None);
+        assert_eq!(first_supported("\r\n"), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_display_language_query_returns_a_locale_tag() {
+        let tag = windows_ui_language().expect("Windows PowerShell should provide the UI culture");
+        let tag = tag.trim();
+        assert!(!tag.is_empty());
+        assert!(tag.split('-').all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric())));
     }
 
     #[test]
