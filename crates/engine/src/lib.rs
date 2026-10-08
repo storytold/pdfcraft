@@ -107,7 +107,7 @@ pub type SplitPart = (usize, usize, Arc<Vec<u8>>);
 use std::sync::Arc;
 
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
-use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
+use pdfcraft_render::{DocInfo, Layer, LayerOp, OpenError, RenderConfig, RenderPool, inspect};
 
 /// Stable identifier of an open document within a session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -472,6 +472,38 @@ impl Document {
 
 fn render_threads() -> usize {
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 8) - 1
+}
+
+/// Render `doc` with the layer visibility in its `info.layers`.
+fn use_layer_choices(doc: &mut Document) {
+    let overrides: Vec<(i32, i32, bool)> = doc.info.layers.iter().map(|l| (l.id.0 as i32, l.id.1 as i32, l.visible)).collect();
+    doc.config.layers = Arc::new(overrides);
+    doc.renderer = RenderPool::new(doc.bytes.clone(), render_threads(), doc.config.clone());
+}
+
+/// Apply a set-layer-visibility action to `layers`, one change at a time, so a toggle flips the
+/// state the changes before it left. Returns whether any layer ended up changed.
+fn apply_layer_state(layers: &mut [Layer], groups: &[Vec<(u32, u16)>], changes: &[(LayerOp, (u32, u16))], preserve_rb: bool) -> bool {
+    let before: Vec<bool> = layers.iter().map(|l| l.visible).collect();
+    let index: std::collections::HashMap<(u32, u16), usize> = layers.iter().enumerate().map(|(i, l)| (l.id, i)).collect();
+    for &(op, ocg) in changes {
+        let Some(layer) = index.get(&ocg).and_then(|&i| layers.get_mut(i)) else { continue };
+        let on = match op {
+            LayerOp::On => true,
+            LayerOp::Off => false,
+            LayerOp::Toggle => !layer.visible,
+        };
+        layer.visible = on;
+        // Turning a layer off leaves the rest of its groups alone.
+        if on && preserve_rb {
+            for other in groups.iter().filter(|g| g.contains(&ocg)).flatten().filter(|&&o| o != ocg) {
+                if let Some(l) = index.get(other).and_then(|&i| layers.get_mut(i)) {
+                    l.visible = false;
+                }
+            }
+        }
+    }
+    layers.iter().zip(before).any(|(l, was)| l.visible != was)
 }
 
 /// A file to combine: its name (the bookmark title), bytes, and page range (`None`: all).
@@ -2721,9 +2753,21 @@ impl Session {
             return false;
         }
         l.visible = visible;
-        let overrides: Vec<(i32, i32, bool)> = doc.info.layers.iter().map(|l| (l.id.0 as i32, l.id.1 as i32, l.visible)).collect();
-        doc.config.layers = Arc::new(overrides);
-        doc.renderer = RenderPool::new(doc.bytes.clone(), render_threads(), doc.config.clone());
+        use_layer_choices(doc);
+        true
+    }
+
+    /// Run a set-layer-visibility action (`SetOCGState`): apply `changes` in order, naming each
+    /// layer by its optional content group; groups that aren't layers are skipped. With
+    /// `preserve_rb`, a layer turned on turns off the other layers of its radio-button groups.
+    /// Returns `true` if any layer changed; callers must drop cached rasters and text for the
+    /// document, as for [`Self::set_layer_visible`].
+    pub fn set_layer_state(&mut self, id: DocId, changes: &[(LayerOp, (u32, u16))], preserve_rb: bool) -> bool {
+        let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { return false };
+        if !apply_layer_state(&mut doc.info.layers, &doc.info.layer_groups, changes, preserve_rb) {
+            return false;
+        }
+        use_layer_choices(doc);
         true
     }
 

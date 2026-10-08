@@ -13,7 +13,7 @@ mod raster;
 pub mod text;
 
 pub use inspect::{
-    Annotation, Attachment, AttachmentSource, DocInfo, Field, FieldKind, FontInfo, Layer, Link, LinkTarget, OutlineItem, PageInfo, Xfa,
+    Annotation, Attachment, AttachmentSource, DocInfo, Field, FieldKind, FontInfo, Layer, LayerOp, Link, LinkTarget, OutlineItem, PageInfo, Xfa,
     attachment_data, inspect, pretty_date,
 };
 pub use raster::{

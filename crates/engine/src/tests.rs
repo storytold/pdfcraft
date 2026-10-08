@@ -159,6 +159,85 @@ fn layer_choices_survive_edits() {
 }
 
 #[test]
+fn set_layer_actions_toggle_in_order_and_keep_radio_groups() {
+    use pdfcraft_render::LayerOp::{Off, On, Toggle};
+    let layer = |n: u32, visible: bool| Layer { id: (n, 0), name: format!("L{n}"), visible };
+    let run = |changes: &[(LayerOp, u32)], preserve_rb: bool| {
+        // L1 and L2 are a radio-button group; L3 is on its own.
+        let mut layers = vec![layer(1, true), layer(2, false), layer(3, true)];
+        let changes: Vec<_> = changes.iter().map(|&(op, n)| (op, (n, 0))).collect();
+        let changed = apply_layer_state(&mut layers, &[vec![(1, 0), (2, 0)]], &changes, preserve_rb);
+        (changed, layers.iter().map(|l| l.visible).collect::<Vec<_>>())
+    };
+    // Turning a layer on turns off the rest of its group, unless the action says not to.
+    assert_eq!(run(&[(On, 2)], true), (true, vec![false, true, true]));
+    assert_eq!(run(&[(On, 2)], false), (true, vec![true, true, true]));
+    // A toggle that turns a layer on does the same.
+    assert_eq!(run(&[(Toggle, 2)], true), (true, vec![false, true, true]));
+    // Turning a layer off leaves its group alone.
+    assert_eq!(run(&[(Off, 1)], true), (true, vec![false, false, true]));
+    // Each toggle sees the state the changes before it left: twice is no change.
+    assert_eq!(run(&[(Toggle, 3), (Toggle, 3)], true), (false, vec![true, false, true]));
+    // Later changes win, and groups that aren't layers are skipped.
+    assert_eq!(run(&[(On, 1), (On, 2), (Off, 99)], true), (true, vec![false, true, true]));
+    // What counts is the end state: on and back off again is no change.
+    assert_eq!(run(&[(On, 2), (On, 1), (Off, 99)], true), (false, vec![true, false, true]));
+}
+
+#[test]
+fn set_layer_actions_change_what_renders() {
+    // A red left half on layer Red (on) and a green right half on layer Green (off); the two
+    // are a radio-button group.
+    let content = "/OC /R BDC 1 0 0 rg 0 0 50 100 re f EMC /OC /G BDC 0 1 0 rg 50 0 50 100 re f EMC";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R] /D << /OFF [6 0 R] /RBGroups [[5 0 R 6 0 R]] >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Properties << /R 5 0 R /G 6 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /OCG /Name (Red) >>".into(),
+        "<< /Type /OCG /Name (Green) >>".into(),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new();
+    let id = s.open("layers.pdf", None, Arc::new(pdf), None).unwrap();
+    // The colours at the middle of the left and right halves, as the document draws now.
+    let halves = |s: &Session| {
+        let doc = s.get(id).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+        let p = r.render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        let at = |x: usize| {
+            let i = (50 * p.width as usize + x) * 4;
+            p.rgba[i..i + 3].to_vec()
+        };
+        (at(25), at(75))
+    };
+    let (red, green, white) = (vec![255, 0, 0], vec![0, 255, 0], vec![255, 255, 255]);
+    assert_eq!(halves(&s), (red.clone(), white.clone()));
+    // Showing Green hides Red, its radio-button partner.
+    assert!(s.set_layer_state(id, &[(LayerOp::On, (6, 0))], true));
+    let visible: Vec<_> = s.get(id).unwrap().info.layers.iter().map(|l| (l.name.as_str(), l.visible)).collect();
+    assert_eq!(visible, [("Red", false), ("Green", true)]);
+    assert_eq!(halves(&s), (white.clone(), green));
+    // Running it again changes nothing.
+    assert!(!s.set_layer_state(id, &[(LayerOp::On, (6, 0))], true));
+    // Turning Green off brings nothing back on.
+    assert!(s.set_layer_state(id, &[(LayerOp::Off, (6, 0))], true));
+    assert_eq!(halves(&s), (white.clone(), white));
+    assert!(!s.set_layer_state(DocId(999), &[(LayerOp::On, (5, 0))], true));
+}
+
+#[test]
 fn edits_to_unknown_documents_are_rejected() {
     let (mut s, _) = session_with(1);
     assert_eq!(s.apply(DocId(999), Edit::DeletePages { pages: vec![0] }), Err(EditError::NoDocument));
