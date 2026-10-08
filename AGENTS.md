@@ -25,7 +25,7 @@ An **asset** is any non-code material that the project includes, ships, embeds, 
 - Screenshots of Adobe software exist only as private, local observation notes under `plan/acrobat/`, which is gitignored. They must **never** be committed, published, linked, shown in docs, used as a design source to trace, or placed anywhere else in the repository or its outputs.
 - The only Adobe-authored material allowed is **non-visual technical data** that is openly licensed and required for PDF compatibility. Each item needs its own entry in `ATTRIBUTION.toml` with `adobe_data = true`, and the list below is closed:
   - The CMap resources (BSD-3-Clause), bundled inside the `hayro-cmap` dependency.
-  - The standard-14 font metrics and encoding tables in the PDF specification. They are data, not typefaces, and are embedded as code in hayro.
+  - The standard-14 font metrics and encoding tables in the PDF specification. They are data, not typefaces. They are embedded as code in hayro, and as our own generated table in `crates/fonts/src/std14.rs` (approved by the owner, 2026-10-08), which is what generated appearances measure with and what survives hayro being retired.
 
   Adding anything to this list needs the user's explicit approval.
 

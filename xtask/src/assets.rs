@@ -43,6 +43,12 @@ pub const BRAND_LICENCE: &str = "LicenseRef-Storyteller-Trademark";
 
 pub const ADOBE_DATA_ALLOWED: &[(&str, &str)] = &[("hayro-cmap", "assets/cmaps.brotli"), ("hayro-interpret", "src/font/generated/metrics.rs")];
 
+/// First-party files on that same closed list: generated tables of Adobe-authored non-visual
+/// technical data we hold ourselves rather than through a dependency. Each still needs an
+/// `[[asset]]` entry with `adobe_data = true`, so its SHA-256 is checked and any change to the
+/// table has to be re-attested deliberately.
+pub const ADOBE_DATA_FILES: &[&str] = &["crates/fonts/src/std14.rs"];
+
 /// File extensions that count as assets wherever they appear in the repository.
 const ASSET_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "svg", "ico", "icns", "webp", "bmp", "tif", "tiff", "avif", "heic", "ttf", "otf", "ttc", "woff", "woff2", "pfb",
@@ -245,7 +251,7 @@ pub fn check(root: &Path, m: &Manifest, repo_files: &[String], lock: &BTreeSet<(
         if visual(&a.kind) && (mentions_adobe(&a.author) || mentions_adobe(&a.source) || mentions_adobe(&a.title)) {
             problems.push(format!("{}: {} from Adobe is forbidden (AGENTS.md §1.1)", a.path, a.kind));
         }
-        if a.adobe_data {
+        if a.adobe_data && !(ADOBE_DATA_FILES.contains(&a.path.as_str()) && a.kind == "data") {
             problems.push(format!("{}: adobe_data is only allowed for the closed list in AGENTS.md §1.1", a.path));
         }
         match std::fs::read(root.join(&a.path)) {
@@ -541,6 +547,28 @@ mod tests {
         assert!(check(&root(), &sneaky, &[], &l).iter().any(|p| p.contains("closed list")));
         let font = Manifest { bundled: vec![bundled("hayro-cmap", "assets/cmaps.brotli", "Adobe", "font", true)], ..Default::default() };
         assert!(check(&root(), &font, &[], &l).iter().any(|p| p.contains("forbidden")));
+    }
+
+    #[test]
+    fn first_party_adobe_data_only_on_the_closed_list() {
+        let l = lock(&[]);
+        // The generated standard-14 table is on the list, as `kind = "data"`.
+        let mut ok = asset("crates/fonts/src/std14.rs", "Adobe (Core14 AFM metrics); tables by the PdfCraft contributors", "data", "MIT");
+        ok.adobe_data = true;
+        let m = Manifest { asset: vec![ok], ..Default::default() };
+        assert!(check(&root(), &m, &[], &l).is_empty(), "{:?}", check(&root(), &m, &[], &l));
+
+        // Any other first-party file claiming it is refused.
+        let mut sneaky = asset("Cargo.toml", "Adobe", "data", "MIT");
+        sneaky.adobe_data = true;
+        let m = Manifest { asset: vec![sneaky], ..Default::default() };
+        assert!(check(&root(), &m, &[], &l).iter().any(|p| p.contains("closed list")));
+
+        // Even on the list, it may only be data — never a typeface.
+        let mut wrong_kind = asset("crates/fonts/src/std14.rs", "Adobe", "font", "MIT");
+        wrong_kind.adobe_data = true;
+        let m = Manifest { asset: vec![wrong_kind], ..Default::default() };
+        assert!(!check(&root(), &m, &[], &l).is_empty());
     }
 
     #[test]
