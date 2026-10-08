@@ -1757,6 +1757,8 @@ fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action: pdfcraft_
         }
         B::Named(n) => match n.as_str() {
             "Print" => app.open_print(),
+            "SaveAs" => app.run_command("file.save_as"),
+            "Save" => app.run_command("file.save"),
             "NextPage" => app.views[index].step_page(true),
             "PrevPage" => app.views[index].step_page(false),
             "FirstPage" => app.views[index].go_to_page(0),
