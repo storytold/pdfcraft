@@ -9290,8 +9290,8 @@ milestone = "M13"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/automation/tests/automation.rs::tool_table_is_well_formed", "crates/automation/tests/automation.rs::edit_undo_redo_and_save_round_trip"]
-notes = ""
+evidence = ["crates/automation/tests/automation.rs::tool_table_is_well_formed", "crates/automation/tests/automation.rs::edit_undo_redo_and_save_round_trip", "apps/pdfcraft-cli/tests/stdout.rs::output_commands_exit_cleanly_when_the_reader_has_closed"]
+notes = "CLI stdout exits cleanly if a pipe reader closes early; other output errors and command failures remain errors."
 
 [[feature]]
 id = "misc.cli-completeness"

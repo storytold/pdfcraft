@@ -295,3 +295,51 @@ fn f1(a: &BTreeMap<String, usize>, b: &BTreeMap<String, usize>) -> f64 {
     let (p, r) = (common as f64 / na as f64, common as f64 / nb as f64);
     if p + r == 0.0 { 0.0 } else { 2.0 * p * r / (p + r) }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::root;
+
+    // Issue #211: Finder lists the app under Open With > Recommended only when the
+    // bundle claims PDFs by UTI (#176).
+    #[test]
+    fn macos_bundle_claims_pdf_by_uti() {
+        let pdf = pdf_document_type();
+        assert!(pdf.contains("<string>com.adobe.pdf</string>"), "claim PDFs by UTI, not just extension/MIME");
+        assert!(pdf.contains("<string>Editor</string>"), "PDF role stays Editor");
+        assert!(pdf.contains("<string>Alternate</string>"), "rank stays Alternate: offered without taking over Preview");
+    }
+
+    // The bundle id must match the app id the binary uses; renames change both (#174).
+    #[test]
+    fn macos_bundle_id_matches_app_id() {
+        assert!(read("packaging/macos/Info.plist.in").contains("<string>ai.storyteller.pdfcraft</string>"), "bundle id");
+        let main = read("apps/pdfcraft/src/main.rs");
+        assert!(main.contains(r#"const APP_ID: &str = "ai.storyteller.pdfcraft""#), "APP_ID drifted from the bundle id");
+    }
+
+    // Committed file with `<!-- -->` comments stripped, so a commented-out claim cannot pass.
+    fn read(rel: &str) -> String {
+        let text = std::fs::read_to_string(root().join(rel)).expect("committed file");
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text.as_str();
+        while let Some(i) = rest.find("<!--") {
+            out.push_str(&rest[..i]);
+            rest = rest[i..].find("-->").map_or("", |j| &rest[i + j + 3..]);
+        }
+        out.push_str(rest);
+        out
+    }
+
+    // The `<dict>` inside `CFBundleDocumentTypes` that mentions the PDF UTI: scoped so a
+    // UTI string anywhere else cannot satisfy the asserts above.
+    fn pdf_document_type() -> String {
+        let plist = read("packaging/macos/Info.plist.in");
+        let docs = plist.split("<key>CFBundleDocumentTypes</key>").nth(1).expect("CFBundleDocumentTypes");
+        docs.split("<dict>")
+            .map(|chunk| chunk.split("</dict>").next().unwrap_or(""))
+            .find(|chunk| chunk.contains("com.adobe.pdf"))
+            .expect("a document type for com.adobe.pdf")
+            .to_string()
+    }
+}
