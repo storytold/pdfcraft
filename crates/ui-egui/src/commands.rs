@@ -417,6 +417,17 @@ impl PdfCraftApp {
                 }
                 self.notify(format!("Click on the page to add a {}, or drag to set its size", tool.label().to_lowercase()));
             }
+            "sign.fill.signature.remove" => self.signature = None,
+            "sign.fill.initials.remove" => self.initials = None,
+            "sign.fill.signature.change" | "sign.fill.initials.change" => {
+                let initials = id == "sign.fill.initials.change";
+                let saved = if initials { self.initials.as_ref() } else { self.signature.as_ref() };
+                self.signature_draft = saved.map_or_else(
+                    || crate::fill_sign::SigDraft::new(initials, &self.comment_prefs.author),
+                    |s| crate::fill_sign::SigDraft::from_saved(initials, s),
+                );
+                self.dialog = Some(Dialog::Signature);
+            }
             fill if crate::fill_sign::FillTool::from_command(fill).is_some() => {
                 let Some(tool) = crate::fill_sign::FillTool::from_command(fill) else { return false };
                 self.quick_tool = crate::QuickTool::Fill(tool);

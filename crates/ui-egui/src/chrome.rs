@@ -119,14 +119,7 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     [(Mode::AllTools, "All tools"), (Mode::Read, "Read"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")]
                 {
                     if widgets::mode_tab(ui, label, app.mode == mode).clicked() {
-                        app.mode = mode;
-                        app.left_open = true;
-                        app.left = match mode {
-                            Mode::Edit => crate::LeftPanel::Tool("edit"),
-                            Mode::Convert => crate::LeftPanel::Tool("export"),
-                            Mode::Sign => crate::LeftPanel::Tool("fill_sign"),
-                            _ => crate::LeftPanel::AllTools,
-                        };
+                        app.select_mode(mode);
                     }
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

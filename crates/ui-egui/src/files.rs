@@ -1,7 +1,7 @@
 //! Multi-document page operations: Combine Files, Insert Pages from File, Extract Pages, Split.
 //!
-//! Desktop builds pick files synchronously. Browsers pick them asynchronously: the chosen
-//! files land in `requests` with their purpose and are handled on the next frame.
+//! Files are picked asynchronously and used on a later frame: desktop builds through `pickers`
+//! (a blocking picker crashes the app on macOS), browsers through `requests`.
 
 use std::sync::Arc;
 
@@ -117,24 +117,7 @@ impl PdfCraftApp {
 
     fn pick_files(&mut self, purpose: FilePurpose, multiple: bool) {
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            let dialog = rfd::FileDialog::new().add_filter("PDF", &["pdf"]);
-            let paths = if multiple { dialog.pick_files().unwrap_or_default() } else { dialog.pick_file().into_iter().collect() };
-            let mut files = Vec::new();
-            for p in paths {
-                let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file.pdf".into());
-                match std::fs::read(&p) {
-                    Ok(b) => files.push((name, b)),
-                    Err(e) => {
-                        self.notify(format!("Couldn't read {name}: {e}"));
-                        return;
-                    }
-                }
-            }
-            if !files.is_empty() {
-                self.use_files(purpose, files);
-            }
-        }
+        self.pick(crate::pickers::PickFor::Files(purpose), rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]), multiple);
         #[cfg(target_arch = "wasm32")]
         {
             let requests = self.requests.clone();
@@ -151,6 +134,25 @@ impl PdfCraftApp {
                     q.push((purpose, files));
                 }
             });
+        }
+    }
+
+    /// Read the picked files and use them.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn use_paths(&mut self, purpose: FilePurpose, paths: &[std::path::PathBuf]) {
+        let mut files = Vec::new();
+        for p in paths {
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file.pdf".into());
+            match std::fs::read(p) {
+                Ok(b) => files.push((name, b)),
+                Err(e) => {
+                    self.notify(format!("Couldn't read {name}: {e}"));
+                    return;
+                }
+            }
+        }
+        if !files.is_empty() {
+            self.use_files(purpose, files);
         }
     }
 

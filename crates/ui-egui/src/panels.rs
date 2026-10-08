@@ -156,6 +156,9 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
         for s in g.sections {
             widgets::section_title(ui, s.title);
             for item in s.items {
+                if g.id == "fill_sign" && (item.command.starts_with("sign.fill.signature") || item.command.starts_with("sign.fill.initials")) {
+                    continue;
+                }
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, item.label));
                 let ready = item.availability == Availability::Ready;
@@ -184,6 +187,12 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                 if resp.on_hover_text(item.command).clicked() {
                     run = Some(item.command);
                 }
+            }
+        }
+        if g.id == "fill_sign" {
+            widgets::section_title(ui, "Sign yourself");
+            if let Some(cmd) = crate::fill_sign::signature_entries(ui, app, t) {
+                run = Some(cmd);
             }
         }
     });

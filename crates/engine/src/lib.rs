@@ -56,19 +56,21 @@ pub enum ImageEdit {
     },
     Delete,
 }
-pub use pdfcraft_fonts::{ScriptOutline, script_outline};
+pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, script_outline};
 
 /// Fill & Sign: `text` in the script font as a typed signature, its left edge at `at` (user
 /// space, vertically centred) and `height` points tall. `None` for text with no outlines.
 pub fn typed_signature_shape(at: [f64; 2], text: &str, height: f64) -> Option<Shape> {
     let o = script_outline(text);
-    let span = (o.ascent - o.descent).max(0.1);
+    let [left, bottom, right, top] = o.bounds();
+    let span = (top - bottom).max(0.1);
+    let width = right - left;
     if o.contours.is_empty() || o.width <= 0.0 {
         return None;
     }
     let k = height / span;
-    let rect = [at[0], at[1] - height / 2.0, at[0] + o.width * k, at[1] + height / 2.0];
-    let contours = o.contours.iter().map(|c| c.iter().map(|p| [p[0] / o.width, (p[1] - o.descent) / span]).collect()).collect();
+    let rect = [at[0], at[1] - height / 2.0, at[0] + width * k, at[1] + height / 2.0];
+    let contours = o.contours.iter().map(|c| c.iter().map(|p| [(p[0] - left) / width, (p[1] - bottom) / span]).collect()).collect();
     Some(Shape::TypedSignature { rect, contours })
 }
 /// Comment geometry helpers (text-box line breaking) for frontends.

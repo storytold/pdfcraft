@@ -452,6 +452,30 @@ fn select_all_key_selects_every_page_in_organize() {
 }
 
 #[test]
+fn saved_signature_can_be_changed_through_the_control_channel() {
+    let (mut h, c) = harness();
+    h.state_mut().signature = Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Ada Lovelace".into()));
+    ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.signature.change" }));
+    h.run_steps(3);
+    assert_eq!(h.state().signature_draft.text, "Ada Lovelace");
+    let fields = ok(&mut h, &c, "ui.inspect", json!({ "role": "TextInput" }));
+    let field = fields["widgets"].as_array().unwrap().iter().find(|w| w["value"] == "Ada Lovelace").expect("the signature text field");
+    let r = field["rect"].as_array().unwrap();
+    let [x0, y0, x1, y1] = [0, 1, 2, 3].map(|i| r[i].as_f64().unwrap());
+    ok(&mut h, &c, "ui.click", json!({ "x": (x0 + x1) / 2.0, "y": (y0 + y1) / 2.0 }));
+    ok(&mut h, &c, "ui.key", json!({ "key": "A", "modifiers": ["command"] }));
+    ok(&mut h, &c, "ui.type", json!({ "text": "Grace Hopper" }));
+    ok(&mut h, &c, "ui.click", json!({ "label": "Apply" }));
+    assert_eq!(h.state().signature, Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Grace Hopper".into())));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], "fill-signature");
+    ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.signature.remove" }));
+    assert_eq!(h.state().signature, None);
+    h.state_mut().initials = Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("GH".into()));
+    ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.initials.remove" }));
+    assert_eq!(h.state().initials, None);
+}
+
+#[test]
 fn drawing_a_comment_by_drag_and_its_context_menu() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.command", json!({ "id": "comment.square" }));
@@ -543,4 +567,17 @@ fn loopback_transport_requires_the_token() {
     assert_eq!(good[0]["result"]["ok"], true);
     assert_eq!(good[1]["result"]["documents"][0]["name"], "doc.pdf");
     assert!(good[2]["error"]["message"].as_str().unwrap().contains("disabled"));
+}
+
+#[test]
+fn control_default_workspace_and_session_override() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({"key": "default-mode", "value": "edit"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["default_mode"], "edit");
+    assert!(call(&mut h, &c, "ui.set", json!({"key": "default-mode", "value": "unknown"})).is_err());
+    h.state_mut().open_bytes("next.pdf", None, fixture(1)).unwrap();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Edit");
+    ok(&mut h, &c, "ui.set", json!({"key": "mode", "value": "read"}));
+    h.state_mut().open_bytes("another.pdf", None, fixture(1)).unwrap();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read");
 }

@@ -2073,6 +2073,9 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                         .gap(6.0)
                         .show(|ui| {
                             for tool in crate::fill_sign::FILL_TOOLS {
+                                if matches!(tool, crate::fill_sign::FillTool::Signature | crate::fill_sign::FillTool::Initials) {
+                                    continue;
+                                }
                                 let on = current_fill == Some(tool);
                                 let (row, click) = ui.allocate_exact_size(vec2(180.0, 28.0), Sense::click());
                                 if click.hovered() {
@@ -2100,6 +2103,11 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                     app.execute(tool.command());
                                     ui.close();
                                 }
+                            }
+                            ui.separator();
+                            if let Some(command) = crate::fill_sign::signature_entries(ui, app, &t) {
+                                app.execute(command);
+                                ui.close();
                             }
                         });
                     if let QuickTool::Comment(tool) = app.quick_tool {

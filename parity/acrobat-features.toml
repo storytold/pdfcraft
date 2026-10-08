@@ -5212,10 +5212,10 @@ area = "F"
 tier = "P0"
 milestone = "M5"
 status = "partial"
-commands = ["sign.fill.signature", "sign.fill.initials"]
+commands = ["sign.fill.signature", "sign.fill.initials", "sign.fill.signature.change", "sign.fill.initials.change", "sign.fill.signature.remove", "sign.fill.initials.remove"]
 tools = ["fill_sign_add"]
-evidence = ["crates/ui-egui/tests/fill_sign.rs::typed_signatures_and_initials", "crates/ui-egui/tests/fill_sign.rs::signing_draws_a_signature_once_and_places_it", "crates/fonts/src/script.rs::a_name_becomes_outlines", "crates/automation/tests/automation.rs::fill_and_sign_through_tools"]
-notes = "signature and initials, typed (Dancing Script outlines as filled paths, no font embedded) or drawn, saved in settings; image signatures not yet"
+evidence = ["crates/ui-egui/tests/fill_sign.rs::typed_signatures_and_initials", "crates/ui-egui/tests/fill_sign.rs::signing_draws_a_signature_once_and_places_it", "crates/ui-egui/tests/fill_sign.rs::changing_saved_signatures_and_initials_preserves_placed_marks", "crates/ui-egui/tests/fill_sign.rs::changing_drawn_signatures_can_be_cancelled_or_switched_to_type", "crates/ui-egui/tests/fill_sign.rs::saved_signature_cards_remove_and_add_without_changing_the_document", "crates/ui-egui/tests/fill_sign.rs::long_typed_names_fit_the_placed_signature_and_keep_every_outline", "crates/ui-egui/src/fill_sign.rs::long_signature_previews_have_clear_margins", "crates/ui-egui/tests/control.rs::saved_signature_can_be_changed_through_the_control_channel", "crates/fonts/src/script.rs::a_name_becomes_outlines", "crates/fonts/src/script.rs::long_names_keep_every_glyph_with_bounded_outline_work", "crates/automation/tests/automation.rs::fill_and_sign_through_tools"]
+notes = "signature and initials, typed (Dancing Script outlines as filled paths, no font embedded) or drawn, saved in settings; preview cards with add/change/remove controls in the panel and picker, also through ui.command; changes leave placed annotations untouched; long names fit within 150 pt with overhangs included in preview/PDF bounds; image signatures not yet"
 
 [[feature]]
 id = "form.fill-sign-flatten"
@@ -9662,8 +9662,8 @@ milestone = "M14"
 status = "partial"
 commands = ["app.preferences"]
 tools = ["js_enabled"]
-evidence = ["crates/ui-egui/tests/javascript.rs::document_scripts_and_preferences"]
-notes = "Preferences dialog with Interface language, Identity and JavaScript; other categories still live in their tools, and it isn't generated from a schema yet."
+evidence = ["crates/ui-egui/tests/javascript.rs::document_scripts_and_preferences", "crates/ui-egui/tests/ui.rs::preferences_selects_default_workspace_for_next_open", "crates/ui-egui/tests/control.rs::control_default_workspace_and_session_override"]
+notes = "Preferences dialog with Interface language, Documents and view (persistent default workspace with session override), Identity and JavaScript; other categories still live in their tools, and it isn't generated from a schema yet."
 
 [[feature]]
 id = "misc.prefs-general"

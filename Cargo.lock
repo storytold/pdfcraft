@@ -3772,6 +3772,7 @@ dependencies = [
  "pdfcraft-model",
  "pdfcraft-render",
  "png 0.18.1",
+ "pollster 1.0.1",
  "rfd",
  "serde",
  "serde_json",
