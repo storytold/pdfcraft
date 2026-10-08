@@ -102,7 +102,7 @@ fn language_switch_preserves_document_and_command_ids() {
     let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
     assert_eq!(documents[0]["dirty"], true);
     let commands = ok(&mut h, &c, "ui.commands", json!({}));
-    for code in ["ja", "zh-hans", "en"] {
+    for code in ["ja", "zh-hans", "fr", "en"] {
         ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": code }));
         h.run_steps(2);
         let state = ok(&mut h, &c, "ui.state", json!({}));
@@ -650,6 +650,14 @@ fn select_all_key_selects_every_page_in_organize() {
     assert_eq!(h.state().views[0].target_pages(), [0, 1, 2, 3, 4]);
     assert_eq!(h.state().views[0].current, 2);
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["dirty"], false);
+}
+
+#[test]
+fn state_reports_the_selected_pages() {
+    let (mut h, c) = harness();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["selected_pages"], json!([]));
+    ok(&mut h, &c, "ui.set", json!({ "key": "select", "value": "2,4" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["selected_pages"], json!([2, 4]));
 }
 
 #[test]

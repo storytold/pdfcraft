@@ -116,8 +116,8 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     22.0,
                     egui::Color32::from_rgb(0xE0, 0x3E, 0x3E),
                 );
-                ui.painter().text(rect.min + vec2(46.0, 15.0), Align2::LEFT_CENTER, &r.name, theme::medium(13.5), t.text);
-                ui.painter().text(rect.min + vec2(46.0, 32.0), Align2::LEFT_CENTER, &r.path, theme::regular(11.0), t.text_faint);
+                ui.painter().text(rect.min + vec2(46.0, 15.0), Align2::LEFT_CENTER, crate::bidi::visual(&r.name), theme::medium(13.5), t.text);
+                ui.painter().text(rect.min + vec2(46.0, 32.0), Align2::LEFT_CENTER, crate::bidi::visual(&r.path), theme::regular(11.0), t.text_faint);
                 ui.painter().text(
                     rect.right_center() - vec2(12.0, 0.0),
                     Align2::RIGHT_CENTER,

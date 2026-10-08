@@ -19,7 +19,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Simplified Chinese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "0be99cfad8d84f76c8a46e2f8da8b2fd8d89d30cac34310198859c195eb5cea0"
+sha256 = "4f002361b308776512acb1e0fad553ba51af7287f60e675846861bd44cc36e46"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/zh-hant.tsv"
@@ -30,7 +30,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Traditional Chinese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "37f3dc97e716eb9f9d115e0a6de47a3c9ec82897aace3fa0d0fb7b237224197b"
+sha256 = "e31ae39637ae02e9aec4c887ca1c52924ba7161f78219a82b1c49e3502e04222"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/cs.tsv"
@@ -63,7 +63,18 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Spanish UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "db79f5eb4ac0072bb42186838d0a9e089652c7bd95f679fd2431c79c74725b74"
+sha256 = "2ec17cb75e1c5936921e55a8a210128383cfd4fb03211d1acd750c1bec1a5d19"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/fr.tsv"
+title = "French interface translation catalog"
+author = "PdfCraft contributors"
+source = "Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "French UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "2587fb0e75d5a8c1e2bb9c918cbb2d8adb34835c8ddec77500ba6517555c0c55"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/ja.tsv"
@@ -74,7 +85,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Japanese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "97777f7f3156f7ecb341dedfc612bf805e2dff8b85cc001d2f5b36a32d1d3b7a"
+sha256 = "9ce3369dac8963a90633b4191680587dd43003c1cf5edf24fe641d8d0e8c6b3c"
 
 [[asset]]
 path = "assets/icons/accessibility.svg"

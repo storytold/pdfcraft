@@ -1,5 +1,5 @@
 //! The Print dialog (Acrobat's File ▸ Print, execution plan M10.5): printer, copies, grayscale;
-//! pages to print (all, current, range with labels; odd/even, reverse); page sizing & handling
+//! pages to print (all, current, range with labels, the selected pages; odd/even, reverse); page sizing & handling
 //! (Size, Poster, Multiple, Booklet); orientation; comments & forms; and a live preview of the
 //! sheets. Printing sends the print-ready PDF to the system spooler; "Save as PDF" writes it.
 
@@ -14,6 +14,8 @@ pub enum Which {
     All,
     Current,
     Range,
+    /// The pages picked in the Pages panel or the organize grid when the dialog opened.
+    Selected,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +37,8 @@ pub struct PrintDraft {
     pub duplex: spool::Duplex,
     pub which: Which,
     pub range: String,
+    /// The pages `Which::Selected` prints (0-based, in page order); empty when none were picked.
+    pub selected: Vec<usize>,
     pub subset: Subset,
     pub reverse: bool,
     pub handling: Handling,
@@ -68,6 +72,7 @@ impl Default for PrintDraft {
             duplex: spool::Duplex::Off,
             which: Which::All,
             range: String::new(),
+            selected: Vec::new(),
             subset: Subset::All,
             reverse: false,
             handling: Handling::Size,
@@ -98,11 +103,17 @@ impl PrintDraft {
             return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
         }
         let range = match self.which {
-            Which::All => None,
-            Which::Current => Some((self.current_page + 1).to_string()),
+            Which::All | Which::Selected => None,
+            Which::Current => Some(self.current_page.saturating_add(1).to_string()),
             Which::Range => Some(self.range.clone()),
         };
-        let pages = print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse).map_err(|e| e.to_string())?;
+        let pages = if self.which == Which::Selected {
+            // Positions, not a typed range: a range would read numbers as page labels first.
+            print::select_listed(count, &self.selected, self.subset, self.reverse)
+        } else {
+            print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse)
+        }
+        .map_err(|e| e.to_string())?;
         let layout = match self.handling {
             Handling::Size => Layout::Size(match self.size {
                 SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),
@@ -138,8 +149,16 @@ impl PdfCraftApp {
         let printers = spool::printers();
         let default = printers.iter().find(|p| p.default).or(printers.first()).map(|p| p.name.clone());
         let current = self.views[i].current;
+        let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
         let keep = std::mem::take(&mut self.print_draft);
-        self.print_draft = PrintDraft { printers, printer: default, current_page: current, sheet: 0, ..keep };
+        // Picked pages are what Print is for (Acrobat's "Selected pages"); without any, a choice
+        // left over from another document falls back to the whole document.
+        let which = match (selected.is_empty(), keep.which) {
+            (false, _) => Which::Selected,
+            (true, Which::Selected) => Which::All,
+            (true, other) => other,
+        };
+        self.print_draft = PrintDraft { printers, printer: default, current_page: current, sheet: 0, selected, which, ..keep };
         self.dialog = Some(crate::Dialog::Print);
     }
 
@@ -316,6 +335,11 @@ pub(crate) fn body(
                     d.which = Which::Range;
                 }
             });
+            // Offered only when pages were picked before the dialog opened.
+            if !d.selected.is_empty() {
+                let label = format!("{} ({})", tl!("Selected pages"), d.selected.len());
+                ui.radio_value(&mut d.which, Which::Selected, label);
+            }
             ui.horizontal(|ui| {
                 ui.label(tl!("More options:"));
                 combo(

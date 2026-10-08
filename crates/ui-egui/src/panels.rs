@@ -409,6 +409,8 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         let a11y = &mut app.a11y;
         let compare = &app.compare;
         let comment_allowed = doc.allows_annotation();
+        // A dialog or the palette owns the keyboard: the panel leaves Escape to it.
+        let modal = app.dialog.is_some() || app.palette_open;
         egui::Panel::right("right_panel")
             .resizable(true)
             .default_size(330.0)
@@ -436,6 +438,11 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(15.5)));
                     if let Some(c) = count {
                         ui.label(egui::RichText::new(c.to_string()).font(theme::medium(13.0)).color(t.text_faint));
+                    }
+                    if panel == RightPanel::Pages && view.selected.len() > 1 {
+                        let n = view.selected.len().to_string();
+                        let picked = crate::i18n::fmt(tl!("{n} pages selected"), &[("n", &n)]);
+                        ui.label(egui::RichText::new(picked).font(theme::medium(12.0)).color(t.accent_text));
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if icons::button(ui, "x", 26.0, false, tl!("Close")).clicked() {
@@ -501,7 +508,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             outline_item(ui, &t, info, item, &[i], info.outline.len(), &mut ctx);
                         }
                     }
-                    RightPanel::Pages => pages(ui, &t, info, view, &mut nav),
+                    RightPanel::Pages => pages(ui, &t, info, view, modal, &mut nav),
                     RightPanel::Fields => fields(ui, &t, info, &doc.form, preparing, &mut nav, &mut panel_edit),
                     RightPanel::Layers => {
                         if info.layers.is_empty() {
@@ -778,19 +785,35 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
     }
 }
 
-fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &crate::DocView, nav: &mut Option<Nav>) {
+/// The page thumbnails. A click goes to the page; ⌘/Ctrl-click and ⇧-click pick several pages
+/// (the selection page commands and Print act on) without moving the document.
+fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocView, modal: bool, nav: &mut Option<Nav>) {
+    // Escape drops the selection while the pointer is over the panel and nothing else wants the key.
+    if !modal
+        && !view.selected.is_empty()
+        && !ui.ctx().egui_wants_keyboard_input()
+        && ui.rect_contains_pointer(ui.clip_rect())
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        view.clear_page_selection(Some(view.current));
+    }
     let w = (ui.available_width() - 40.0).min(150.0);
     for (i, p) in info.pages.iter().enumerate() {
         ui.vertical_centered(|ui| {
             let h = w * p.height / p.width.max(1.0);
             let (rect, resp) = ui.allocate_exact_size(vec2(w + 16.0, h + 16.0), Sense::click());
             let info = crate::i18n::fmt(tl!("Page {label}"), &[("label", &p.label)]);
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, info.clone()));
+            let picked = view.selected.contains(&i);
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, picked, info.clone()));
+            // The current page keeps its heavier border; picked pages share its fill.
             let selected = i == view.current;
-            if selected {
+            if selected || picked {
                 ui.painter().rect_filled(rect, CornerRadius::same(8), t.accent_soft);
             } else if resp.hovered() {
                 ui.painter().rect_filled(rect, CornerRadius::same(8), t.hover);
+            }
+            if picked {
+                ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
             }
             let pr = rect.shrink(8.0);
             ui.painter().rect_filled(pr, CornerRadius::ZERO, Color32::WHITE);
@@ -803,9 +826,15 @@ fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &crate::DocView, n
                 Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { t.accent } else { t.border }),
                 egui::StrokeKind::Outside,
             );
-            ui.label(egui::RichText::new(&p.label).font(theme::medium(12.0)).color(if selected { t.accent_text } else { t.text_muted }));
+            ui.label(egui::RichText::new(&p.label).font(theme::medium(12.0)).color(if selected || picked { t.accent_text } else { t.text_muted }));
             if resp.clicked() {
-                *nav = Some(Nav::Page(i));
+                let m = ui.input(|i| i.modifiers);
+                if m.shift || m.command {
+                    view.click_page(i, m, true);
+                } else {
+                    view.clear_page_selection(Some(i));
+                    *nav = Some(Nav::Page(i));
+                }
             }
         });
         ui.add_space(4.0);

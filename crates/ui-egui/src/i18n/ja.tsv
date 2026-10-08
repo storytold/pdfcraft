@@ -1166,6 +1166,7 @@
 	Detected {n} form fields	フォームフィールドを {n} 件検出しました
 	{field}: {e}	{field}: {e}
 	Current page	現在のページ
+	Selected pages	選択したページ
 	Document language	文書の言語
 	Output	出力
 	Searchable Image (Exact)	検索可能な画像（元の画像を保持）
@@ -1245,6 +1246,7 @@
 	This document has no attachments.	この文書に添付ファイルはありません。
 	Hide layer	レイヤーを非表示
 	Show layer	レイヤーを表示
+	Set layer visibility	レイヤーの表示を設定
 	on page {label}	ページ {label}
 	Save attachment…	添付ファイルを保存…
 	Open in a new tab	新しいタブで開く

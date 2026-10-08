@@ -1603,6 +1603,17 @@ fn info(d: &Document) -> Value {
             "target": match &l.target {
                 pdfcraft_render::LinkTarget::Page(p) => json!({ "page": page1(*p) }),
                 pdfcraft_render::LinkTarget::Uri(u) => json!({ "uri": u }),
+                pdfcraft_render::LinkTarget::SetLayers { changes, preserve_rb } => json!({
+                    "layers": changes.iter().map(|(op, ocg)| json!({
+                        "layer": i.layers.iter().find(|l| l.id == *ocg).map(|l| l.name.as_str()),
+                        "state": match op {
+                            pdfcraft_render::LayerOp::On => "on",
+                            pdfcraft_render::LayerOp::Off => "off",
+                            pdfcraft_render::LayerOp::Toggle => "toggle",
+                        },
+                    })).collect::<Vec<_>>(),
+                    "preserve_rb": preserve_rb,
+                }),
                 pdfcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
             },
         })).collect::<Vec<_>>(),

@@ -3751,6 +3751,7 @@ version = "0.4.0"
 dependencies = [
  "aes",
  "aws-lc-rs",
+ "base64 0.22.1",
  "cbc",
  "des",
  "getrandom 0.4.3",
@@ -3797,6 +3798,7 @@ dependencies = [
  "skrifa 0.44.0",
  "sys-locale",
  "toml",
+ "unicode-bidi",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

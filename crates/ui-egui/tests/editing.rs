@@ -1040,3 +1040,103 @@ fn dragging_a_paragraph_moves_it_and_its_edge_rewraps_it() {
     assert!(near(doc.text_lines(0)[0].rect[0], moved.rect[0]), "it keeps its place");
     assert!(h.state().views[0].line_editor.is_none());
 }
+
+/// The Pages panel, in a window tall enough to show every thumbnail of a short fixture.
+fn pages_panel(pages: usize) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc.pdf", None, fixture(pages)).expect("fixture opens");
+        app.set_option("panel", "pages").unwrap();
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+fn picked(h: &Harness<'static, PdfCraftApp>) -> Vec<usize> {
+    h.state().views[0].selected.iter().copied().collect()
+}
+
+#[test]
+fn pages_panel_command_click_picks_pages_without_moving_the_document() {
+    let mut h = pages_panel(5);
+    // The first ⌘-click on another page keeps the current page (1) selected too.
+    h.get_by_label("Page 3").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    assert_eq!(picked(&h), [0, 2]);
+    assert_eq!(h.state().views[0].current, 0, "picking pages does not turn the page");
+    h.get_by_label_contains("2 pages selected");
+    h.get_by_label("Page 5").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    assert_eq!(picked(&h), [0, 2, 4]);
+    // ⌘-click again takes a page back out.
+    h.get_by_label("Page 3").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    assert_eq!(picked(&h), [0, 4]);
+    // Page commands act on what is picked, as in the organize grid.
+    assert_eq!(h.state().views[0].target_pages(), [0, 4]);
+}
+
+#[test]
+fn pages_panel_shift_click_picks_a_range_and_a_plain_click_starts_over() {
+    let mut h = pages_panel(6);
+    // A plain click goes to the page and is the anchor of the next range.
+    h.get_by_label("Page 2").click_modifiers(Modifiers::NONE);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, 1);
+    assert!(picked(&h).is_empty());
+    h.get_by_label("Page 4").click_modifiers(Modifiers::SHIFT);
+    h.run_steps(2);
+    assert_eq!(picked(&h), [1, 2, 3]);
+    assert_eq!(h.state().views[0].current, 1);
+    // A second ⇧-click ranges from the same anchor, in either direction.
+    h.get_by_label("Page 1").click_modifiers(Modifiers::SHIFT);
+    h.run_steps(2);
+    assert_eq!(picked(&h), [0, 1]);
+    // ⇧ with no earlier click ranges from the current page.
+    h.get_by_label("Page 6").click_modifiers(Modifiers::NONE);
+    h.run_steps(2);
+    assert!(picked(&h).is_empty(), "a plain click drops the selection");
+    assert_eq!(h.state().views[0].current, 5);
+    h.get_by_label("Page 5").click_modifiers(Modifiers::SHIFT);
+    h.run_steps(2);
+    assert_eq!(picked(&h), [4, 5]);
+}
+
+#[test]
+fn pages_panel_escape_clears_and_deleted_pages_leave_the_selection() {
+    let mut h = pages_panel(5);
+    h.get_by_label("Page 2").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    assert_eq!(picked(&h), [0, 1]);
+    // The pointer is still over the panel.
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(picked(&h).is_empty());
+    // Pages that no longer exist drop out of the selection.
+    h.get_by_label("Page 5").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    assert_eq!(picked(&h), [0, 4]);
+    h.state_mut().views[0].select_pages(&[3, 4]);
+    assert!(h.state_mut().execute("page.delete"));
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()).len(), 3);
+    assert!(picked(&h).iter().all(|p| *p < 3), "{:?}", picked(&h));
+}
+
+#[test]
+fn print_shortcut_offers_the_pages_picked_in_the_pages_panel() {
+    let mut h = pages_panel(5);
+    h.get_by_label("Page 2").click_modifiers(Modifiers::NONE);
+    h.run_steps(2);
+    h.get_by_label("Page 4").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    assert_eq!(picked(&h), [1, 3]);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::P);
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Print));
+    assert_eq!(h.state().print_draft.which, pdfcraft_ui_egui::PrintWhich::Selected);
+    assert_eq!(h.state().print_draft.selected, [1, 3]);
+    h.get_by_label("Selected pages (2)");
+    h.get_by_label("Sheet 1 of 2");
+}

@@ -50,6 +50,21 @@ pub fn select_pages(count: usize, range: Option<&str>, labels: &[String], subset
             }
         }
     }
+    narrow(pages, subset, reverse)
+}
+
+/// The pages to print from an explicit list (0-based, e.g. the thumbnails selected in the
+/// interface), in the order given. Unlike a typed range the entries are page positions, never
+/// labels. The subset and `reverse` apply as in [`select_pages`].
+pub fn select_listed(count: usize, pages: &[usize], subset: Subset, reverse: bool) -> Result<Vec<usize>, PrintError> {
+    if let Some(p) = pages.iter().find(|p| **p >= count) {
+        return Err(PrintError::Invalid(format!("page {} is out of range (1–{count})", p.saturating_add(1))));
+    }
+    narrow(pages.to_vec(), subset, reverse)
+}
+
+/// Odd or even positions of the chosen pages, then the print order.
+fn narrow(pages: Vec<usize>, subset: Subset, reverse: bool) -> Result<Vec<usize>, PrintError> {
     let mut out: Vec<usize> = match subset {
         Subset::All => pages,
         Subset::Odd => pages.into_iter().step_by(2).collect(),

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2};
 use pdfcraft_engine::{DocId, Edit};
-use pdfcraft_render::{DocInfo, LinkTarget, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
+use pdfcraft_render::{DocInfo, LayerOp, LinkTarget, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, QuickTool, RightPanel, comments, icons, widgets};
@@ -235,7 +235,7 @@ pub struct DocView {
     /// Turns wheel input into page turns in single-page view.
     wheel: crate::wheel_pager::WheelPager,
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
-    /// Pages selected in the organize grid (0-based). Empty means "the current page".
+    /// Pages selected in the organize grid or the Pages panel (0-based). Empty means "the current page".
     pub selected: BTreeSet<usize>,
     /// Anchor for ⇧-click range selection in the organize grid.
     select_anchor: Option<usize>,
@@ -413,6 +413,37 @@ impl DocView {
         if let Some(first) = self.selected.first() {
             self.current = *first;
         }
+    }
+
+    /// A click on page `i`'s thumbnail, in the organize grid or the Pages panel. ⇧ selects the
+    /// range from the anchor (or the current page); ⌘/Ctrl toggles the page; a plain click
+    /// selects only it. `seed_current` is for the Pages panel, where an empty selection means
+    /// the current page: the first ⌘-click on another page keeps the current one selected too.
+    pub fn click_page(&mut self, i: usize, modifiers: egui::Modifiers, seed_current: bool) {
+        if i >= self.page_count {
+            return;
+        }
+        if modifiers.shift {
+            let a = self.select_anchor.unwrap_or(self.current);
+            self.selected = (a.min(i)..=a.max(i)).collect();
+        } else if modifiers.command {
+            if seed_current && self.selected.is_empty() && i != self.current {
+                self.selected.insert(self.current);
+            }
+            if !self.selected.remove(&i) {
+                self.selected.insert(i);
+            }
+            self.select_anchor = Some(i);
+        } else {
+            self.selected = [i].into();
+            self.select_anchor = Some(i);
+        }
+    }
+
+    /// Drop the page selection; a later ⇧-click ranges from `anchor`.
+    pub fn clear_page_selection(&mut self, anchor: Option<usize>) {
+        self.selected.clear();
+        self.select_anchor = anchor.filter(|a| *a < self.page_count);
     }
 
     pub fn render_pending(&self) -> bool {
@@ -1640,6 +1671,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                                 crate::i18n::fmt(tl!("Go to page {p}"), &[("p", info.pages.get(*n).map(|p| p.label.as_str()).unwrap_or("?"))])
                             }
                             LinkTarget::Uri(u) => u.clone(),
+                            LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
                             LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
                         };
                         hover_text = Some((p, label));
@@ -1858,6 +1890,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     match clicked_link {
         Some(LinkTarget::Page(p)) => view.go_to_page(p),
         Some(LinkTarget::Uri(u)) => app.request_document_url(&u, crate::LinkOrigin::Link),
+        Some(LinkTarget::SetLayers { changes, preserve_rb }) => set_layers(app, index, &changes, preserve_rb),
         Some(LinkTarget::Other(s)) => app.notify_fmt("{s} actions run in the JavaScript engine (M6)", &[("s", &s)]),
         None => {}
     }
@@ -2005,6 +2038,21 @@ fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action: pdfcraft_
                     Some(pdfcraft_engine::Edit::Batch { label: label.into(), edits: vec![pdfcraft_engine::Edit::ApplyScriptChanges { changes }] });
             }
         }
+        B::SetLayers { changes, preserve_rb } => {
+            use pdfcraft_engine::form_scripts::LayerOp as Op;
+            let changes: Vec<(LayerOp, (u32, u16))> = changes
+                .into_iter()
+                .map(|(op, ocg)| {
+                    let op = match op {
+                        Op::On => LayerOp::On,
+                        Op::Off => LayerOp::Off,
+                        Op::Toggle => LayerOp::Toggle,
+                    };
+                    (op, ocg)
+                })
+                .collect();
+            set_layers(app, index, &changes, preserve_rb);
+        }
         B::Alert(m) => app.notify(m),
         B::Submit(url) => app.notify_fmt(
             "{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.",
@@ -2015,6 +2063,15 @@ fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action: pdfcraft_
             let id = app.views[index].id;
             app.run_button_script(id, name, &js);
         }
+    }
+}
+
+/// Run a set-layer-visibility action from a button or link. It changes what is shown, as the
+/// Layers panel does (which follows), not the document.
+fn set_layers(app: &mut PdfCraftApp, index: usize, changes: &[(LayerOp, (u32, u16))], preserve_rb: bool) {
+    let id = app.views[index].id;
+    if app.session.set_layer_state(id, changes, preserve_rb) {
+        app.views[index].invalidate_content();
     }
 }
 
@@ -2563,18 +2620,7 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, pool: &RenderPool, editable
                 ui.painter().text(pos2(c.center().x, pr.bottom() + 16.0), Align2::CENTER_CENTER, &p.label, theme::medium(12.0), t.text_muted);
                 if resp.clicked() {
                     let m = ui.input(|i| i.modifiers);
-                    if m.shift {
-                        let a = view.select_anchor.unwrap_or(view.current);
-                        view.selected = (a.min(i)..=a.max(i)).collect();
-                    } else if m.command {
-                        if !view.selected.remove(&i) {
-                            view.selected.insert(i);
-                        }
-                        view.select_anchor = Some(i);
-                    } else {
-                        view.selected = [i].into();
-                        view.select_anchor = Some(i);
-                    }
+                    view.click_page(i, m, false);
                     view.current = i;
                 }
                 if resp.double_clicked() {

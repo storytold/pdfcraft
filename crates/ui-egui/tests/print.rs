@@ -40,6 +40,49 @@ fn print_dialog_lays_out_sheets_and_saves_a_pdf() {
     let _ = std::fs::remove_file(out);
 }
 
+/// Pages picked beforehand are what the dialog offers to print (Acrobat's "Selected pages").
+#[test]
+fn print_dialog_prints_the_selected_pages() {
+    use pdfcraft_ui_egui::PrintWhich;
+    let mut h = harness();
+    let bytes = h.state().session.create_blank(200.0, 300.0, 5).unwrap();
+    h.state_mut().open_bytes("five.pdf", None, bytes.as_ref().clone()).unwrap();
+    h.run_steps(3);
+    let tab = h.state().views.len() - 1;
+    // Nothing picked: the whole document, and no "Selected pages" choice.
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.which, PrintWhich::All);
+    assert!(h.query_by_label_contains("Selected pages").is_none());
+    h.get_by_label("Sheet 1 of 5");
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+    // Pages 2 and 4 picked.
+    h.state_mut().views[tab].select_pages(&[1, 3]);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.which, PrintWhich::Selected);
+    h.get_by_label("Selected pages (2)");
+    h.get_by_label("Sheet 1 of 2");
+    let out = std::env::temp_dir().join(format!("pdfcraft-print-selected-{}.pdf", std::process::id()));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().print_draft.printer = None;
+    h.run_steps(1);
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    let saved = std::fs::read(&out).expect("saved");
+    let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(saved)).unwrap();
+    assert_eq!(pdfcraft_model::pages(&doc).len(), 2);
+    let _ = std::fs::remove_file(out);
+    // The selection gone, the remembered choice falls back to the whole document.
+    h.state_mut().views[tab].select_pages(&[]);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.which, PrintWhich::All);
+    assert!(h.state().print_draft.selected.is_empty());
+}
+
 #[test]
 fn invalid_ranges_are_explained_in_the_preview() {
     let mut h = harness();

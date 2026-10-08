@@ -50,6 +50,7 @@ pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignStep};
 mod autoscroll;
+mod bidi;
 mod dialogs;
 mod edit_text_ui;
 mod editing;
@@ -75,6 +76,8 @@ pub mod i18n;
 pub(crate) const MAX_AUTHOR_CHARS: usize = 200;
 mod protect;
 mod recovery;
+#[cfg(not(target_arch = "wasm32"))]
+mod system_fonts;
 pub mod theme;
 pub mod updates;
 mod wheel_pager;

@@ -21,6 +21,12 @@ use crate::OpenError;
 /// xref streams are far below this.
 const LOAD_STREAM_LIMIT: usize = 256 << 20;
 
+/// At most this many `/State` entries of a set-layer-visibility action are read.
+const MAX_LAYER_STATE: usize = 1024;
+
+/// At most this many layers are read from all of `/RBGroups` together.
+const MAX_LAYER_GROUP_ENTRIES: usize = 4096;
+
 fn load_options(password: Option<&str>) -> LoadOptions {
     LoadOptions { password: password.map(str::to_owned), max_decompressed_size: Some(LOAD_STREAM_LIMIT), ..LoadOptions::default() }
 }
@@ -46,6 +52,9 @@ pub struct DocInfo {
     pub fields: Vec<Field>,
     pub links: Vec<Link>,
     pub layers: Vec<Layer>,
+    /// Radio-button layer groups (`/OCProperties /D /RBGroups`): turning one layer of a group on
+    /// turns the others off.
+    pub layer_groups: Vec<Vec<(u32, u16)>>,
     pub fonts: Vec<FontInfo>,
     pub attachments: Vec<Attachment>,
     pub warnings: Vec<String>,
@@ -136,7 +145,22 @@ pub struct Link {
 pub enum LinkTarget {
     Page(usize),
     Uri(String),
+    /// A set-layer-visibility action (`SetOCGState`, ISO 32000-2 §12.6.4.13): each change in
+    /// order, naming the layer by its optional content group. With `preserve_rb`, a layer turned
+    /// on turns off the other layers of its radio-button groups.
+    SetLayers {
+        changes: Vec<(LayerOp, (u32, u16))>,
+        preserve_rb: bool,
+    },
     Other(String),
+}
+
+/// What a set-layer-visibility action does to a layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerOp {
+    On,
+    Off,
+    Toggle,
 }
 
 #[derive(Clone, Debug)]
@@ -367,6 +391,7 @@ impl<'a> Inspector<'a> {
             info.xfa = Some(if needs_rendering || info.fields.is_empty() { Xfa::Dynamic } else { Xfa::Static });
         }
         self.layers(catalog, &mut info.layers);
+        info.layer_groups = self.layer_groups(catalog);
         self.fonts(&mut info.fonts);
         if let Some(names) = catalog.get(b"Names").ok().and_then(|o| self.dict(o)) {
             if let Some(ef) = names.get(b"EmbeddedFiles").ok().and_then(|o| self.dict(o)) {
@@ -650,11 +675,37 @@ impl<'a> Inspector<'a> {
                 Some("URI") => {
                     LinkTarget::Uri(a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok()).map(|b| String::from_utf8_lossy(b).into_owned())?)
                 }
+                Some("SetOCGState") => self.layer_state(a),
                 Some(other) => LinkTarget::Other(other.to_string()),
                 None => return None,
             }
         };
         Some(Link { page, rect, target })
+    }
+
+    /// A set-OCG-state action: `/State` is `ON`, `OFF` or `Toggle`, each followed by the groups
+    /// it applies to; `/PreserveRB` is true unless it is `false`.
+    fn layer_state(&self, a: &Dictionary) -> LinkTarget {
+        let mut changes = Vec::new();
+        if let Ok(Object::Array(items)) = a.get(b"State").map(|o| self.resolve(o)) {
+            let mut op = None;
+            for item in items.iter().take(MAX_LAYER_STATE) {
+                match item {
+                    Object::Name(n) => {
+                        op = match n.as_slice() {
+                            b"ON" => Some(LayerOp::On),
+                            b"OFF" => Some(LayerOp::Off),
+                            b"Toggle" => Some(LayerOp::Toggle),
+                            _ => None,
+                        }
+                    }
+                    Object::Reference(id) => changes.extend(op.map(|op| (op, *id))),
+                    _ => {}
+                }
+            }
+        }
+        let preserve_rb = !matches!(a.get(b"PreserveRB").map(|o| self.resolve(o)), Ok(Object::Boolean(false)));
+        LinkTarget::SetLayers { changes, preserve_rb }
     }
 
     // ── form fields ─────────────────────────────────────────────────────────────────────────
@@ -764,6 +815,32 @@ impl<'a> Inspector<'a> {
             let Some(id) = id else { continue };
             out.push(Layer { id, name: self.text(d, b"Name").unwrap_or_else(|| "Layer".into()), visible });
         }
+    }
+
+    /// The default configuration's radio-button groups (`/RBGroups`) of two or more layers.
+    fn layer_groups(&self, catalog: &Dictionary) -> Vec<Vec<ObjectId>> {
+        let groups = catalog
+            .get(b"OCProperties")
+            .ok()
+            .and_then(|o| self.dict(o))
+            .and_then(|p| p.get(b"D").ok())
+            .and_then(|o| self.dict(o))
+            .and_then(|c| c.get(b"RBGroups").ok())
+            .and_then(|o| self.resolve(o).as_array().ok());
+        let mut left = MAX_LAYER_GROUP_ENTRIES;
+        let mut out = Vec::new();
+        for g in groups.into_iter().flatten() {
+            let Ok(members) = self.resolve(g).as_array() else { continue };
+            let group: Vec<ObjectId> = members.iter().filter_map(|x| x.as_reference().ok()).take(left).collect();
+            left = left.saturating_sub(group.len());
+            if group.len() > 1 {
+                out.push(group);
+            }
+            if left == 0 {
+                break;
+            }
+        }
+        out
     }
 
     fn fonts(&self, out: &mut Vec<FontInfo>) {
@@ -987,6 +1064,46 @@ trailer << /Root 1 0 R >>
             assert_eq!(data, expected, "{}", a.name);
         }
         assert_eq!(info.fonts, vec![FontInfo { name: "Helvetica".into(), kind: "Type1".into(), embedded: false, subset: true, encoding: None }]);
+    }
+
+    const LAYERS: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R] /D << /OFF [6 0 R] /RBGroups [[5 0 R 6 0 R] [7 0 R] 8 0 R] >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [10 0 R 11 0 R] >> endobj
+5 0 obj << /Type /OCG /Name (Red) >> endobj
+6 0 obj << /Type /OCG /Name (Green) >> endobj
+7 0 obj << /Type /OCG /Name (Blue) >> endobj
+8 0 obj [6 0 R 7 0 R] endobj
+9 0 obj [/OFF 5 0 R] endobj
+10 0 obj << /Type /Annot /Subtype /Link /Rect [10 10 50 30] /A << /S /SetOCGState /State [7 0 R /ON 6 0 R /Bogus 5 0 R /Toggle 5 0 R 1 7 0 R] /PreserveRB false >> >> endobj
+11 0 obj << /Type /Annot /Subtype /Link /Rect [60 10 100 30] /A << /S /SetOCGState /State 9 0 R >> >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+    #[test]
+    fn radio_button_layer_groups_are_read() {
+        let info = inspect(Arc::new(LAYERS.to_vec()), None).expect("opens");
+        let layers: Vec<_> = info.layers.iter().map(|l| (l.id, l.name.as_str(), l.visible)).collect();
+        assert_eq!(layers, [((5, 0), "Red", true), ((6, 0), "Green", false), ((7, 0), "Blue", true)]);
+        // A group of one constrains nothing; an indirect group is read.
+        assert_eq!(info.layer_groups, [vec![(5, 0), (6, 0)], vec![(6, 0), (7, 0)]]);
+    }
+
+    #[test]
+    fn links_read_set_layer_actions() {
+        let info = inspect(Arc::new(LAYERS.to_vec()), None).expect("opens");
+        let targets: Vec<_> = info.links.iter().map(|l| l.target.clone()).collect();
+        use LayerOp::{Off, On, Toggle};
+        assert_eq!(
+            targets,
+            [
+                // Groups before the first name or after an unknown one are skipped, and so is
+                // anything that isn't a group.
+                LinkTarget::SetLayers { changes: vec![(On, (6, 0)), (Toggle, (5, 0)), (Toggle, (7, 0))], preserve_rb: false },
+                // An indirect /State; /PreserveRB defaults to true.
+                LinkTarget::SetLayers { changes: vec![(Off, (5, 0))], preserve_rb: true },
+            ]
+        );
     }
 
     #[test]

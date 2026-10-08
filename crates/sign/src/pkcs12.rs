@@ -3,12 +3,16 @@
 //!
 //! Reading supports PBES2 (PBKDF2 with HMAC-SHA-1/256/384/512; AES-128/192/256-CBC or
 //! 3DES-CBC) and the legacy PKCS #12 PBE schemes (SHA-1 with 3DES or RC2), and checks the MAC.
+//! Files that aren't clean DER still open: trailing whitespace, PEM armour or a bare
+//! base64 body (#159).
 //! Writing uses PBES2 AES-256-CBC with PBKDF2-HMAC-SHA-256 and an HMAC-SHA-256 MAC, OpenSSL 3's
 //! defaults.
 
+use base64::Engine as _;
 use cbc::cipher::block_padding::Pkcs7;
 use cbc::cipher::{BlockModeDecrypt, BlockModeEncrypt, InnerIvInit, KeyIvInit};
 use hmac::Mac;
+use std::borrow::Cow;
 
 use crate::SignError;
 use crate::der::{self, Tlv, tag};
@@ -282,9 +286,57 @@ fn bags(safe_contents: &[u8], password: &str, out: &mut Vec<Bag>) -> Result<(), 
     Ok(())
 }
 
+fn normalize(bytes: &[u8]) -> Result<Cow<'_, [u8]>, SignError> {
+    let start = bytes.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(0);
+    let end = bytes.iter().rposition(|b| !b.is_ascii_whitespace()).map_or(0, |i| i + 1);
+    let trimmed = bytes.get(start..end).unwrap_or(b""); // hostile input: no slicing by hand
+
+    // 1. A DER file starts with a SEQUENCE tag: borrow, no work.
+    if trimmed.first() == Some(&0x30) {
+        return Ok(Cow::Borrowed(trimmed));
+    }
+    // 2. PEM armor: base64 body between the BEGIN/END lines.
+    if trimmed.starts_with(b"-----BEGIN") {
+        let body = pem_body(trimmed)?;
+        return Ok(Cow::Owned(decode_base64(body)?));
+    }
+    // 3. Raw base64 text, armour or not (a real DER PFX always contains bytes
+    //    outside the base64 alphabet, so this can't swallow a valid file).
+    if trimmed.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'+' || *b == b'/' || *b == b'=' || b.is_ascii_whitespace()) {
+        return Ok(Cow::Owned(decode_base64(trimmed)?));
+    }
+    // 4. Not recognisable: hand the bytes to Tlv::parse_all for a clear error.
+    Ok(Cow::Borrowed(trimmed))
+}
+
+fn decode_base64(input: &[u8]) -> Result<Vec<u8>, SignError> {
+    let compact: Vec<u8> = input.iter().copied().filter(|b| !b.is_ascii_whitespace()).collect();
+    base64::engine::general_purpose::STANDARD.decode(&compact).map_err(|e| SignError::Malformed(format!("PKCS #12: base64: {e}")))
+}
+
+/// The base64 lines between "-----BEGIN …-----" and "-----END …-----".
+fn pem_body(pem: &[u8]) -> Result<&[u8], SignError> {
+    let text = std::str::from_utf8(pem).map_err(|_| bad("PEM file is not valid text"))?;
+    let begin = text.find("-----BEGIN ").ok_or_else(|| bad("PEM file has no BEGIN marker"))?;
+    let body_start = text[begin..].find('\n').map_or(text.len(), |i| begin + i + 1);
+    let body_end = text.find("-----END ").filter(|end| *end >= body_start).ok_or_else(|| bad("PEM file has no END marker"))?;
+    let body = text.as_bytes().get(body_start..body_end).ok_or_else(|| bad("PEM body"))?;
+    if !body.iter().any(|b| !b.is_ascii_whitespace()) {
+        return Err(bad("PEM file has an empty body"));
+    }
+    Ok(body)
+}
+
 /// Open a `.p12` / `.pfx` file. A wrong password is [`SignError::WrongPassword`].
 pub fn open(bytes: &[u8], password: &str) -> Result<DigitalId, SignError> {
-    let pfx = Tlv::parse_all(bytes).map_err(|_| bad("not a PKCS #12 file"))?.children()?;
+    let der = normalize(bytes)?;
+    let pfx = Tlv::parse_all(&der)
+        .map_err(|e| match e {
+            // Keep "not a PKCS #12 file" but carry the exact reason through.
+            SignError::Malformed(why) => bad(&format!("not a PKCS #12 file: {why}")),
+            e => e,
+        })?
+        .children()?;
     let auth_safe = pfx.get(1).ok_or_else(|| bad("authSafe"))?.children()?;
     if auth_safe.first().map(|o| o.oid()).transpose()?.as_deref() != Some(DATA) {
         return Err(SignError::Unsupported("public-key protected PKCS #12 files".into()));

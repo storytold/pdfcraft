@@ -1346,8 +1346,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["edit.find"]
 tools = ["text_find"]
-evidence = ["crates/ui-egui/tests/ui.rs::find_counts_matches_across_pages", "crates/ui-egui/tests/ui.rs::find_reports_no_matches", "crates/automation/tests/automation.rs::open_inspect_render_and_find"]
-notes = ""
+evidence = ["crates/ui-egui/tests/ui.rs::find_counts_matches_across_pages", "crates/ui-egui/tests/ui.rs::find_reports_no_matches", "crates/automation/tests/automation.rs::open_inspect_render_and_find", "crates/render/src/text.rs::identity_v_columns_are_searchable_in_reading_order"]
+notes = "Horizontal and WMode 1 vertical text are grouped independently, including a horizontal heading above right-to-left vertical columns. Complex interleaved flows still use a geometric reading-order heuristic."
 
 [[feature]]
 id = "view.find-next-previous"
@@ -2235,11 +2235,11 @@ title = "Set-layer-visibility action"
 area = "C"
 tier = "P2"
 milestone = "M12"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/layer_actions.rs::links_set_layer_visibility", "crates/ui-egui/tests/layer_actions.rs::push_buttons_set_layer_visibility", "crates/engine/src/tests.rs::set_layer_actions_change_what_renders", "crates/engine/src/tests.rs::set_layer_actions_toggle_in_order_and_keep_radio_groups", "crates/render/src/inspect.rs::links_read_set_layer_actions", "crates/forms/src/tests.rs::push_buttons_read_set_layer_actions"]
+notes = "Links and push buttons run it: ON, OFF and Toggle in order, by optional content group, and with /PreserveRB (the default) a layer turned on turns off the rest of its /RBGroups group. Like the Layers panel it changes the view, not the document (no undo step, not saved). Not yet: creating the action (Link Properties, a field's Actions), bookmarks and other triggers, /Next chains, JavaScript ocg.state, and the Layers panel keeping radio-button groups itself."
 
 [[feature]]
 id = "edit.action-show-hide-field"
@@ -8031,11 +8031,11 @@ title = "Print selected pages from thumbnails"
 area = "L"
 tier = "P2"
 milestone = "M10"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["print.dialog"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::print_shortcut_offers_the_pages_picked_in_the_pages_panel", "crates/ui-egui/tests/editing.rs::pages_panel_command_click_picks_pages_without_moving_the_document", "crates/ui-egui/tests/editing.rs::pages_panel_shift_click_picks_a_range_and_a_plain_click_starts_over", "crates/ui-egui/tests/print.rs::print_dialog_prints_the_selected_pages", "crates/print/src/tests.rs::page_selection"]
+notes = "Ctrl/⌘-click and ⇧-click pick thumbnails in the Pages panel (and the Organize grid); Print opens on \"Selected pages\" and prints them in page order. Missing: the thumbnails' own context-menu Print command, picking by dragging a marquee, arrow-key selection, and a printer on Windows (Save as PDF only there, see print.printer-selection)."
 
 [[feature]]
 id = "print.postscript-output"
@@ -9806,8 +9806,8 @@ milestone = "M14"
 status = "partial"
 commands = ["app.preferences"]
 tools = []
-evidence = ["crates/ui-egui/src/i18n/mod.rs::windows_display_language_resolves_chinese_scripts", "crates/ui-egui/src/i18n/mod.rs::windows_display_language_query_returns_a_locale_tag", "crates/ui-egui/src/i18n/mod.rs::language_persists_and_invalid_input_keeps_current_language", "crates/ui-egui/src/i18n/mod.rs::bundled_catalogs_are_consistent", "crates/ui-egui/src/i18n/mod.rs::japanese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_history_and_diagnostics_preserve_user_values", "crates/ui-egui/tests/control.rs::simplified_chinese_signature_prompts_and_errors_keep_document_state", "crates/ui-egui/tests/control.rs::language_switch_preserves_document_and_command_ids", "crates/ui-egui/tests/control.rs::japanese_controls_and_search_keep_command_ids", "crates/ui-egui/tests/control.rs::japanese_dialogs_errors_and_custom_action_names"]
-notes = "Preferences switches Auto (system language)/English/Japanese/Simplified Chinese/Traditional Chinese/Czech/Brazilian Portuguese and persists; ui.set language auto|en|ja|zh-hans|zh-hant|cs|pt-br and ui.state expose it. TSV catalogs per language (same system as PhotoCraft); every dialog, panel and notice goes through tl!. Japanese, Traditional Chinese and Simplified Chinese cover commands, dialogs, panels, shortcuts and history labels; Czech and Brazilian Portuguese the menus. Engine/OS error details stay untranslated. Auto detects the Windows display language after locale environment overrides, with Chinese script/region mapping and English fallback. Missing: the other catalogs filled in, Chinese font delivery, a full localization audit."
+evidence = ["crates/ui-egui/src/i18n/mod.rs::windows_display_language_resolves_chinese_scripts", "crates/ui-egui/src/i18n/mod.rs::windows_display_language_query_returns_a_locale_tag", "crates/ui-egui/src/i18n/mod.rs::language_persists_and_invalid_input_keeps_current_language", "crates/ui-egui/src/i18n/mod.rs::bundled_catalogs_are_consistent", "crates/ui-egui/src/i18n/mod.rs::japanese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_history_and_diagnostics_preserve_user_values", "crates/ui-egui/tests/control.rs::simplified_chinese_signature_prompts_and_errors_keep_document_state", "crates/ui-egui/tests/control.rs::language_switch_preserves_document_and_command_ids", "crates/ui-egui/tests/control.rs::japanese_controls_and_search_keep_command_ids", "crates/ui-egui/tests/control.rs::japanese_dialogs_errors_and_custom_action_names", "crates/ui-egui/src/i18n/mod.rs::french_is_registered", "crates/ui-egui/src/i18n/mod.rs::french_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::french_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::french_history_and_diagnostics_preserve_user_values"]
+notes = "Preferences switches Auto (system language)/English/Japanese/Simplified Chinese/Traditional Chinese/Czech/Brazilian Portuguese/Spanish/French and persists; ui.set language auto|en|ja|zh-hans|zh-hant|cs|pt-br|es|fr and ui.state expose it. TSV catalogs per language (same system as PhotoCraft); every dialog, panel and notice goes through tl!. Japanese, Traditional Chinese, Simplified Chinese, Spanish and French cover commands, dialogs, panels, shortcuts and history labels; Czech and Brazilian Portuguese the menus. French locales (fr, fr_FR, fr_CA, fr_BE) select the French catalog. Engine/OS error details stay untranslated. Auto detects the Windows display language after locale environment overrides, with Chinese script/region mapping and English fallback. Missing: Czech and Brazilian Portuguese dialogs, Chinese font delivery, a full localization audit."
 
 [[feature]]
 id = "misc.prefs-reading"
@@ -9951,7 +9951,7 @@ status = "planned"
 commands = []
 tools = []
 evidence = []
-notes = ""
+notes = "Only a first step exists: Arabic and Hebrew file names and paths in the tab strip, the recent-files list and Properties have glyphs (a craft-fonts Arab face, or an installed font on desktop) and are shown in display order (crates/ui-egui/src/bidi.rs). Missing: multi-line text (bookmarks, comments, search results), text input, a mirrored layout and a right-to-left interface language."
 
 [[feature]]
 id = "misc.installers"

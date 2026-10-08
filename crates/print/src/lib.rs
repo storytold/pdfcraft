@@ -25,7 +25,7 @@ pub mod spool;
 #[cfg(test)]
 mod tests;
 
-pub use range::{Subset, select_pages};
+pub use range::{Subset, select_listed, select_pages};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum PrintError {

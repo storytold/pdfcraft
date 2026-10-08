@@ -209,6 +209,40 @@ fn crls_verify_and_report_revocation() {
     );
 }
 
+/// Issue #159: `.p12` files that aren't clean DER still open — trailing
+/// whitespace, PEM armour or a bare base64 body — and real damage still fails,
+/// with the reason in the message.
+#[test]
+fn opens_wrapped_pkcs12_files_and_still_rejects_broken_ones() {
+    use base64::Engine as _;
+    let der = data("rsa-aes.p12");
+    let signer = pkcs12::open(&der, "test").unwrap();
+
+    // An editor or a download appends whitespace.
+    let mut trailing = der.clone();
+    trailing.extend_from_slice(b"\r\n \n");
+    assert_eq!(pkcs12::open(&trailing, "test").unwrap().certificate, signer.certificate);
+
+    // PEM armour, the way OpenSSL and government portals present them.
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&der);
+    let mut pem = String::from("-----BEGIN PKCS12-----\n");
+    for line in b64.as_bytes().chunks(64) {
+        pem.push_str(std::str::from_utf8(line).unwrap());
+        pem.push('\n');
+    }
+    pem.push_str("-----END PKCS12-----\n");
+    assert_eq!(pkcs12::open(pem.as_bytes(), "test").unwrap().certificate, signer.certificate);
+
+    // The base64 body alone, armour stripped.
+    assert_eq!(pkcs12::open(b64.as_bytes(), "test").unwrap().certificate, signer.certificate);
+
+    // A truncated file still fails, and says why.
+    let err = pkcs12::open(&der[..64], "test").expect_err("truncated file");
+    assert!(err.to_string().contains("runs past the end"), "{err}");
+    let err = pkcs12::open(b"", "test").expect_err("empty file");
+    assert!(err.to_string().contains("truncated DER"), "{err}");
+}
+
 #[test]
 fn ocsp_responses_verify_and_match_the_certificate() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();

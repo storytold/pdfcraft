@@ -829,6 +829,7 @@
 	Light gray	浅灰色
 	Dark gray	深灰色
 	Current page	当前页
+	Selected pages	选定的页面
 	Document language	文档语言
 	Output	输出
 	Searchable Image (Exact)	可搜索图像（精确）
@@ -1145,6 +1146,7 @@
 	This document has no attachments.	本文档没有附件。
 	Hide layer	隐藏图层
 	Show layer	显示图层
+	Set layer visibility	设置图层可见性
 	on page {label}	第 {label} 页
 	Save attachment…	保存附件…
 	Open in a new tab	在新选项卡中打开
