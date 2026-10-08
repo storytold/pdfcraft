@@ -5,7 +5,9 @@
 //!
 //! Output is a list of pages of resolution-independent items; `pdf` turns them into PDF.
 
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::XfaError;
@@ -19,6 +21,9 @@ pub const MAX_PAGES: usize = 500;
 const MAX_ITEMS: usize = 400_000;
 /// Deepest nesting followed.
 const MAX_DEPTH: usize = 64;
+/// Most size measurements of one layout. Measurements of containers are memoized, so a real
+/// form stays far below this; it bounds the work a hostile template can cause.
+const MAX_MEASURES: usize = 2_000_000;
 /// Most initial instances of one repeating subform.
 const MAX_INSTANCES: usize = 50;
 /// Placeholder for the page count in text laid out before the count is known.
@@ -136,6 +141,16 @@ impl Ctx {
     }
 }
 
+/// (address of a subform or area in the template, available width bits, depth).
+type MeasureKey = (usize, u64, usize);
+
+/// A cached size, with the inherited text defaults it was measured with.
+struct Measured {
+    font: Font,
+    para: Para,
+    size: (f64, f64),
+}
+
 struct Cursor {
     area: usize,
     content: usize,
@@ -148,7 +163,8 @@ struct Cursor {
 struct Layouter<'t> {
     tpl: &'t Template,
     data: Option<&'t DataNode>,
-    areas: Vec<PageArea>,
+    /// Shared so a page's master items keep their addresses (the measurement cache keys on them).
+    areas: Rc<Vec<PageArea>>,
     uses: Vec<usize>,
     pages: Vec<Page>,
     cur: Option<Cursor>,
@@ -159,6 +175,11 @@ struct Layouter<'t> {
     warned: HashSet<String>,
     fields: usize,
     items: usize,
+    /// Container sizes by (address of the subform or area in the template, available width,
+    /// depth), with the inherited font and paragraph they were measured with.
+    measured: RefCell<HashMap<MeasureKey, Measured>>,
+    /// Measurements made so far (see [`MAX_MEASURES`]).
+    measures: Cell<usize>,
 }
 
 /// Index of child `i` among the earlier siblings with the same name (the SOM index).
@@ -181,12 +202,14 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         }],
     };
     let mut values = HashMap::new();
-    collect_values(&[Node::Subform(Box::new(tpl.root.clone()))], &mut values, 0);
+    // One copy of the root for the whole layout: measurements are cached by node address.
+    let root_node = Node::Subform(Box::new(tpl.root.clone()));
+    collect_values(std::slice::from_ref(&root_node), &mut values, 0);
     let mut l = Layouter {
         tpl,
         data,
         uses: vec![0; areas.len()],
-        areas,
+        areas: Rc::new(areas),
         pages: Vec::new(),
         cur: None,
         names: HashMap::new(),
@@ -195,13 +218,15 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         warned: HashSet::new(),
         fields: 0,
         items: 0,
+        measured: RefCell::new(HashMap::new()),
+        measures: Cell::new(0),
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };
     l.new_page()?;
-    let root = &tpl.root;
-    if root.common.presence.occupies() {
-        l.flow_subform(root, None, &ctx, 0, 0)?;
+    if tpl.root.common.presence.occupies() {
+        l.flow_subform(&root_node, None, &ctx, 0, 0)?;
     }
+    l.check_measures()?;
     let total = l.pages.len();
     let count = total.to_string();
     for p in &mut l.pages {
@@ -322,7 +347,16 @@ impl Layouter<'_> {
         }
     }
 
+    /// `TooLarge` once the measurement budget is spent (sizes measured after that are guesses).
+    fn check_measures(&self) -> Result<(), XfaError> {
+        if self.measures.get() > MAX_MEASURES {
+            return Err(XfaError::TooLarge("the form is nested too deeply to lay out".into()));
+        }
+        Ok(())
+    }
+
     fn push(&mut self, item: Item) -> Result<(), XfaError> {
+        self.check_measures()?;
         self.items += 1;
         if self.items > MAX_ITEMS {
             return Err(XfaError::TooLarge("the form has too many objects to lay out".into()));
@@ -355,7 +389,8 @@ impl Layouter<'_> {
         }
         let idx =
             (0..self.areas.len()).find(|&i| self.areas[i].occur_max.is_none_or(|m| self.uses[i] < m)).unwrap_or(self.areas.len().saturating_sub(1));
-        let Some(area) = self.areas.get(idx).cloned() else {
+        let areas = Rc::clone(&self.areas);
+        let Some(area) = areas.get(idx) else {
             return Err(XfaError::Malformed("the template has no page area".into()));
         };
         if let Some(u) = self.uses.get_mut(idx) {
@@ -425,10 +460,13 @@ impl Layouter<'_> {
 
     // ───────────────────────────────────────────────────────────────────────── flow
 
-    fn flow_subform(&mut self, sf: &Subform, avail: Option<(f64, f64)>, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
+    /// Flow `node` (a subform; anything else is ignored) into the content areas.
+    fn flow_subform(&mut self, node: &Node, avail: Option<(f64, f64)>, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if depth > MAX_DEPTH {
             return Ok(());
         }
+        let Node::Subform(sf) = node else { return Ok(()) };
+        self.check_measures()?;
         if sf.break_before_page && self.page_has_flow() {
             self.new_page()?;
         }
@@ -446,11 +484,10 @@ impl Layouter<'_> {
             let w = clamp_opt(sf.common.w.unwrap_or(w), sf.common.min_w, sf.common.max_w).min(w.max(1.0));
             if !matches!(sf.layout, Layout::Tb | Layout::Table) || sf.common.h.is_some() {
                 // Not splittable: one block.
-                let node = Node::Subform(Box::new(sf.clone()));
-                let (_, h) = self.size_of(&node, w, ctx_parent, depth);
+                let (_, h) = self.size_of(node, w, ctx_parent, depth);
                 self.make_room(h)?;
                 let (_, y, _) = self.cursor();
-                self.draw_node(&node, Rect::new(x, y, w, h), ctx_parent, depth, sib + i)?;
+                self.draw_node(node, Rect::new(x, y, w, h), ctx_parent, depth, sib + i)?;
                 self.place(h);
                 continue;
             }
@@ -466,10 +503,10 @@ impl Layouter<'_> {
                             continue;
                         }
                         let csib = sib_index(&sf.children, ci);
-                        if let Node::Subform(c) = child
+                        if let Node::Subform(_) = child
                             && splittable(child)
                         {
-                            self.flow_subform(c, Some((inner_x, inner_w)), &ctx, depth + 1, csib)?;
+                            self.flow_subform(child, Some((inner_x, inner_w)), &ctx, depth + 1, csib)?;
                             continue;
                         }
                         let (cw, ch) = self.size_of(child, inner_w, &ctx, depth + 1);
@@ -533,9 +570,9 @@ impl Layouter<'_> {
                 continue;
             }
             if splittable(child)
-                && let Node::Subform(c) = child
+                && let Node::Subform(_) = child
             {
-                self.flow_subform(c, Some((x, inner_w)), ctx, depth + 1, csib)?;
+                self.flow_subform(child, Some((x, inner_w)), ctx, depth + 1, csib)?;
                 continue;
             }
             let (cw, ch) = self.size_of(child, inner_w, ctx, depth + 1);
@@ -549,12 +586,42 @@ impl Layouter<'_> {
 
     // ───────────────────────────────────────────────────────────────────────── sizing
 
-    /// The size a node takes when given `avail_w` of width.
+    /// The size a node takes when given `avail_w` of width. Containers are measured once per
+    /// (node, width, depth): measuring a width-less container measures its content twice (for
+    /// its width, then its height), which would otherwise be exponential in the nesting.
     fn size_of(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize) -> (f64, f64) {
         let c = node.common();
-        if depth > MAX_DEPTH {
+        let spent = self.measures.get().saturating_add(1);
+        self.measures.set(spent);
+        if depth > MAX_DEPTH || spent > MAX_MEASURES {
             return (c.w.unwrap_or(avail_w), c.h.unwrap_or(0.0));
         }
+        // Only containers recurse; their addresses are stable for the whole layout (the
+        // template is borrowed, the root and page areas are held by the layouter).
+        let key = match node {
+            Node::Subform(s) => Some((&**s as *const Subform as usize, avail_w.to_bits(), depth)),
+            Node::Area(a) => Some((&**a as *const Area as usize, avail_w.to_bits(), depth)),
+            _ => None,
+        };
+        if let Some(key) = key
+            && let Ok(cache) = self.measured.try_borrow()
+            && let Some(m) = cache.get(&key)
+            && m.font == ctx.font
+            && m.para == ctx.para
+        {
+            return m.size;
+        }
+        let size = self.measure(node, avail_w, ctx, depth);
+        if let Some(key) = key
+            && let Ok(mut cache) = self.measured.try_borrow_mut()
+        {
+            cache.insert(key, Measured { font: ctx.font.clone(), para: ctx.para.clone(), size });
+        }
+        size
+    }
+
+    fn measure(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize) -> (f64, f64) {
+        let c = node.common();
         let ctx = ctx.child(c);
         // A container without a width is as wide as its content (a radio group beside its
         // question, say); a leaf without one takes what is available.
@@ -606,15 +673,20 @@ impl Layouter<'_> {
 
     /// The natural width of a container's content within `avail_w`.
     fn content_width(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize) -> f64 {
-        let (children, layout): (Vec<Node>, Layout) = match node {
+        let group: Vec<Node>;
+        let (children, layout): (&[Node], Layout) = match node {
             Node::Subform(s) => {
                 if s.layout == Layout::Table && !s.column_widths.is_empty() {
                     return s.column_widths.iter().sum::<f64>().min(avail_w);
                 }
-                (s.children.clone(), s.layout)
+                (&s.children, s.layout)
             }
-            Node::ExclGroup(g) => (g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect(), g.layout),
-            Node::Area(a) => (a.children.clone(), Layout::Positioned),
+            Node::ExclGroup(g) => {
+                // Fields are leaves: measuring these copies caches nothing.
+                group = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
+                (&group, g.layout)
+            }
+            Node::Area(a) => (&a.children, Layout::Positioned),
             _ => return avail_w,
         };
         let visible = children.iter().filter(|k| k.common().presence.occupies());

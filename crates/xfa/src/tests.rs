@@ -395,3 +395,23 @@ fn static_forms_read_their_values_from_the_datasets() {
     );
     assert_eq!(build_data(&doc, &fields), "<xfa:data><form1><page1><name></name><agree></agree></page1></form1></xfa:data>");
 }
+
+#[test]
+fn nested_width_less_subforms_lay_out_in_polynomial_time() {
+    // Regression: a container without a width measured its content once for its width and
+    // again for its height, at every level: 2^depth measurements. Two children per level make
+    // it worse still. This must finish at once, and lay the innermost fields out.
+    for depth in [40, 60] {
+        let open = "<subform layout=\"lr-tb\"><field name=\"a\" w=\"20pt\" h=\"10pt\"/>".repeat(depth);
+        let xml = format!(
+            "<template><subform layout=\"tb\" name=\"form\">{open}<field name=\"inner\" w=\"30pt\" h=\"10pt\"/>{}</subform></template>",
+            "</subform>".repeat(depth)
+        );
+        let start = std::time::Instant::now();
+        let form = layout_xml(&xml).expect("lays out");
+        assert!(start.elapsed() < std::time::Duration::from_secs(20), "took {:?}", start.elapsed());
+        let names: Vec<String> = form.pages.iter().flat_map(widgets).map(|w| w.name.clone()).collect();
+        assert!(names.iter().any(|n| n == "inner") || depth > 60, "{depth}: {names:?}");
+        assert!(names.len() > 1);
+    }
+}
