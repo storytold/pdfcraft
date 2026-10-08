@@ -1,5 +1,5 @@
 //! Viewer conveniences: close all, revert, fit height, view history, select all, find options,
-//! cover page.
+//! cover page, a scroll position per tab.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -394,4 +394,32 @@ fn optimizer_audits_space_usage() {
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().dialog, Some(Dialog::Optimize), "back to the optimizer");
+}
+
+#[test]
+fn each_document_keeps_its_own_scroll_position() {
+    // #189: every document's page view shared one scroll position, so switching tabs showed a
+    // document at wherever the other one had been scrolled to (usually back at the top).
+    use pdfcraft_ui_egui::canvas::Fit;
+    let mut h = harness();
+    for v in &mut h.state_mut().views {
+        v.fit = Fit::Width;
+    }
+    let show = |h: &mut Harness<'static, PdfCraftApp>, i: usize| {
+        h.state_mut().active = Some(i);
+        h.run_steps(4);
+        h.state().views[i].current
+    };
+    show(&mut h, 0);
+    h.state_mut().views[0].goto = Some((3, 0.0));
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 3, "a.pdf scrolled to page 4");
+    // b.pdf opens where it was (the top), and is scrolled to its own last page.
+    assert_eq!(show(&mut h, 1), 0);
+    h.state_mut().views[1].goto = Some((1, 0.0));
+    h.run_steps(4);
+    assert_eq!(h.state().views[1].current, 1);
+    // Back to a.pdf: still on page 4, and b.pdf still on page 2.
+    assert_eq!(show(&mut h, 0), 3);
+    assert_eq!(show(&mut h, 1), 1);
 }

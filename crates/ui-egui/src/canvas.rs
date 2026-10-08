@@ -1174,6 +1174,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         },
         ..Default::default()
     });
+    // Each document keeps its own scroll position when switching tabs (#189).
+    scroll = scroll.id_salt(("page-view", view.id));
     if let Some((page, fx, fy, rel)) = view.zoom_anchor.take() {
         let r = rects[page.min(rects.len() - 1)];
         let point = pos2(r.left() + fx * r.width(), r.top() - y_shift + fy * r.height());
