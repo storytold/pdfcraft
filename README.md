@@ -381,6 +381,8 @@ echo 'app-text/pdfcraft-bin ~amd64' >> /etc/portage/package.accept_keywords/pdfc
 emerge --ask app-text/pdfcraft-bin
 ```
 
+Logs, environment variables and other development notes are in [docs/development.md](docs/development.md).
+
 ## What's next
 
 PdfCraft is young and moving fast. The aim is a workbench where you can view, organize, annotate, fill, sign and edit PDFs, at parity with Acrobat Pro.

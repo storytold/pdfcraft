@@ -3452,6 +3452,7 @@ dependencies = [
  "eframe",
  "egui",
  "fmv-macos-events",
+ "log",
  "pdfcraft-ui-egui",
  "rustls-native-certs",
  "serde_json",
