@@ -457,6 +457,10 @@ pub struct PdfCraftApp {
     pub stamp_draft: stamps_ui::StampDraft,
     /// PDF Optimizer choices.
     pub optimize_draft: OptimizeDraft,
+    /// The running optimization (Optimize PDF ▸ Advanced optimization).
+    pub optimize_run: Option<optimize_ui::OptimizeRun>,
+    /// A background job's progress card (see [`widgets::progress_notice`]).
+    pub progress_notice: Option<widgets::ProgressNotice>,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.
@@ -659,6 +663,8 @@ impl PdfCraftApp {
             custom_stamps: Vec::new(),
             stamp_draft: Default::default(),
             optimize_draft: OptimizeDraft::default(),
+            optimize_run: None,
+            progress_notice: None,
             page_clipboard: None,
             grid_drop: None,
             last_snapshot: None,
@@ -1105,6 +1111,13 @@ impl PdfCraftApp {
         self.theme = preference.resolve(self.ctx.as_ref().and_then(egui::Context::system_theme), self.theme);
         if let Some(ctx) = &self.ctx {
             theme::apply(ctx, self.theme);
+        }
+    }
+
+    /// Draw the running job's progress card and pass a Cancel click on to the job.
+    fn show_progress(&mut self, ctx: &egui::Context) {
+        if widgets::progress_notice(self, ctx) {
+            self.cancel_optimize();
         }
     }
 
@@ -1636,6 +1649,7 @@ impl eframe::App for PdfCraftApp {
         }
         self.poll_export();
         self.poll_ocr();
+        self.poll_optimize();
         self.poll_action();
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
@@ -1680,6 +1694,7 @@ impl eframe::App for PdfCraftApp {
             );
             dialogs::show(self, &ctx);
             // Notices too: a refused field value or a failed save must be seen in full screen.
+            self.show_progress(&ctx);
             widgets::toast(self, &ctx);
             return;
         }
@@ -1703,6 +1718,7 @@ impl eframe::App for PdfCraftApp {
         self.process_pending_edits();
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
+        self.show_progress(&ctx);
         widgets::toast(self, &ctx);
     }
 }

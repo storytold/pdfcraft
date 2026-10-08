@@ -7107,7 +7107,7 @@ status = "shipped"
 commands = ["optimize.reduce"]
 tools = ["doc_reduce"]
 evidence = ["crates/ui-egui/tests/create.rs::reduce_file_size_writes_a_compact_copy", "crates/engine/src/tests.rs::create_and_reduce", "crates/automation/tests/automation.rs::creating_and_reducing_through_tools", "crates/automation/tests/automation.rs::optimizing_through_tools"]
-notes = "images above 225 ppi to 150 ppi JPEG medium, thumbnails dropped, resources merged, object streams"
+notes = "images above 225 ppi to 150 ppi JPEG medium, thumbnails dropped, resources merged, object streams; runs in the background with a progress bar and Cancel"
 
 [[feature]]
 id = "optimize.compatibility-level"
@@ -7130,8 +7130,8 @@ milestone = "M11"
 status = "partial"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/ui-egui/tests/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy", "crates/automation/tests/automation.rs::optimizing_through_tools"]
-notes = "Images, Discard Objects, Discard User Data, Clean Up; no Fonts or Transparency panels, no space audit"
+evidence = ["crates/ui-egui/tests/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy", "crates/automation/tests/automation.rs::optimizing_through_tools", "crates/ui-egui/src/optimize_ui.rs::the_progress_card_shows_the_stage_and_cancels", "crates/engine/src/tests.rs::an_optimize_job_reports_its_stages_and_can_be_cancelled"]
+notes = "Images, Discard Objects, Discard User Data, Clean Up; runs in the background with a progress bar (per image) and Cancel; no Fonts or Transparency panels, no space audit"
 
 [[feature]]
 id = "optimize.downsample-images"

@@ -1504,6 +1504,15 @@ action wizard	Start	ప్రారంభించు
 	Created 1 link	1 లింక్ సృష్టించబడింది
 	Created {n} links	{n} లింక్‌లు సృష్టించబడ్డాయి
 	Text recognition is already running	టెక్స్ట్ గుర్తింపు ఇప్పటికే అమలవుతోంది
+	Optimizing… removing user data	ఆప్టిమైజ్ చేస్తోంది… వినియోగదారు డేటాను తీసివేస్తోంది
+	Optimizing… image {d} of {t}	ఆప్టిమైజ్ చేస్తోంది… {t}లో {d}వ చిత్రం
+	Optimizing… cleaning up	ఆప్టిమైజ్ చేస్తోంది… చక్కదిద్దుతోంది
+	Optimizing… merging identical objects	ఆప్టిమైజ్ చేస్తోంది… ఒకేలా ఉన్న ఆబ్జెక్ట్‌లను విలీనం చేస్తోంది
+	Optimizing… writing the copy	ఆప్టిమైజ్ చేస్తోంది… కాపీని రాస్తోంది
+	Cancelling…	రద్దు చేస్తోంది…
+	Optimization is already running	ఆప్టిమైజేషన్ ఇప్పటికే అమలవుతోంది
+	Optimization cancelled	ఆప్టిమైజేషన్ రద్దు చేయబడింది
+	Couldn't optimize the file	ఫైల్‌ను ఆప్టిమైజ్ చేయడం సాధ్యం కాలేదు
 	Recognizing text… file {d} of {t}	టెక్స్ట్‌ను గుర్తిస్తోంది… {t}లో {d}వ ఫైల్
 	Recognizing text… page {d} of {t}	టెక్స్ట్‌ను గుర్తిస్తోంది… {t}లో {d}వ పేజీ
 	Recognized 1 word	1 పదం గుర్తించబడింది
