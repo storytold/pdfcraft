@@ -56,3 +56,6 @@ sync_github_name = false
 real_name = "Chester Fung"
 display_name = "Chester Fung"
 sync_github_name = true
+
+[people.amitabhthakur]
+sync_github_name = true

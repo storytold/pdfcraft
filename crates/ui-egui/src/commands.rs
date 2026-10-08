@@ -85,6 +85,7 @@ impl PdfCraftApp {
                 Some(p) => self.open_recent(&p),
                 None => self.notify_tr("No recent files"),
             },
+            "file.pin_folder" => self.pin_folder_dialog(),
             "page.combine" => self.open_combine_tab(),
             "file.save" => {
                 self.save_active(SaveTarget::InPlace);

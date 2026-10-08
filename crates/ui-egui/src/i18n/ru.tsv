@@ -21,6 +21,24 @@
 	Name on new comments	Имя в новых комментариях
 	Open…	Открыть…
 	Open Recent	Открыть недавние
+	Pin folder to Home…	Закрепить папку на главной…
+	Folders	Папки
+	Pin a folder…	Закрепить папку…
+	Pin a folder to Home	Закрепить папку на главной
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Закрепите папку, чтобы видеть здесь её новые PDF, например папку, куда сохраняет файлы сканер или синхронизируемый облачный диск.
+	Unpin	Открепить
+	Unpin {folder}	Открепить {folder}
+	Looking for PDFs…	Поиск PDF…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Эта папка сейчас недоступна. Возможно, она перемещена или её диск либо облачная синхронизация не в сети.
+	No PDFs in this folder yet	В этой папке пока нет PDF
+	Show less	Свернуть
+	Show {n} more	Показать ещё {n}
+	The newest {n} of {total} PDFs	Последние {n} PDF из {total}
+	Pinned folders need the desktop app	Для закреплённых папок нужно настольное приложение
+	Choose a folder on this computer to pin	Выберите папку на этом компьютере, чтобы закрепить её
+	{folder} is already pinned to Home	{folder} уже закреплена на главной
+	You can pin up to {n} folders. Unpin one first.	Можно закрепить не более {n} папок. Сначала открепите одну из них.
+	Pinned {folder} to Home	Папка {folder} закреплена на главной
 	No recent files	Нет недавних файлов
 	New blank PDF	Новый пустой PDF
 	Create PDF from file…	Создать PDF из файла…

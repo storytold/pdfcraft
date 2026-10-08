@@ -67,6 +67,7 @@ mod edit_text_ui;
 mod editing;
 mod files;
 pub mod fill_sign;
+pub mod folders_ui;
 pub mod forms_ui;
 mod home;
 mod icon_data;
@@ -373,6 +374,8 @@ pub struct PdfCraftApp {
     pub palette_query: String,
     pub all_tools_expanded: bool,
     pub recent: Vec<RecentFile>,
+    /// Folders pinned to Home, and what they held when last listed.
+    pub pinned: folders_ui::PinnedFolders,
     pub toast: Option<(String, f64)>,
     /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
     pub integrated_titlebar: bool,
@@ -420,7 +423,7 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
-    /// Background jobs (OCR, actions) run inline instead (tests).
+    /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
     /// files to use instead of a picker.
@@ -612,6 +615,7 @@ impl PdfCraftApp {
             palette_query: String::new(),
             all_tools_expanded: false,
             recent: Vec::new(),
+            pinned: Default::default(),
             toast: None,
             integrated_titlebar: false,
             password_prompt: None,
@@ -1166,6 +1170,7 @@ impl PdfCraftApp {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
         serde_json::json!({
             "recent": self.recent,
+            "pinned_folders": self.pinned.folders,
             "theme": self.theme_preference,
             "default_mode": self.default_mode,
             "default_layout": self.view_defaults.layout.as_str(),
@@ -1199,6 +1204,7 @@ impl PdfCraftApp {
             let r: Vec<RecentFile> = r.into_iter().filter(|f| std::path::Path::new(&f.path).exists()).collect();
             self.recent = r;
         }
+        self.pinned.restore(&v["pinned_folders"]);
         if let Ok(preference) = serde_json::from_value::<ThemePreference>(v["theme"].clone()) {
             self.set_theme_preference(preference);
         }

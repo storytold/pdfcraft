@@ -28,6 +28,24 @@
 	Name on new comments	新しい注釈の作成者名
 	Open…	開く…
 	Open Recent	最近のファイルを開く
+	Pin folder to Home…	フォルダーをホームにピン留め…
+	Folders	フォルダー
+	Pin a folder…	フォルダーをピン留め…
+	Pin a folder to Home	フォルダーをホームにピン留め
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	フォルダーをピン留めすると、スキャナーや同期中のクラウドドライブの保存先など、そのフォルダー内の新しい PDF がここに表示されます。
+	Unpin	ピン留めを外す
+	Unpin {folder}	{folder} のピン留めを外す
+	Looking for PDFs…	PDF を探しています…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	このフォルダーは現在利用できません。移動されたか、ドライブまたはクラウド同期がオフラインになっている可能性があります。
+	No PDFs in this folder yet	このフォルダーにはまだ PDF がありません
+	Show less	表示を減らす
+	Show {n} more	さらに {n} 件表示
+	The newest {n} of {total} PDFs	{total} 件中、新しい {n} 件の PDF
+	Pinned folders need the desktop app	フォルダーのピン留めにはデスクトップ版が必要です
+	Choose a folder on this computer to pin	ピン留めするフォルダーをこのコンピューターから選択してください
+	{folder} is already pinned to Home	{folder} はすでにホームにピン留めされています
+	You can pin up to {n} folders. Unpin one first.	ピン留めできるフォルダーは {n} 個までです。先にいずれかのピン留めを外してください。
+	Pinned {folder} to Home	{folder} をホームにピン留めしました
 	No recent files	最近のファイルがありません
 	New blank PDF	空白の PDF を作成
 	Create PDF from file…	ファイルから PDF を作成…

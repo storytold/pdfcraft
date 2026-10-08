@@ -22,6 +22,24 @@
 	Name on new comments	Nombre en los comentarios nuevos
 	Open…	Abrir…
 	Open Recent	Abrir recientes
+	Pin folder to Home…	Anclar carpeta en Inicio…
+	Folders	Carpetas
+	Pin a folder…	Anclar una carpeta…
+	Pin a folder to Home	Anclar una carpeta en Inicio
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Ancla una carpeta para ver aquí sus PDF más recientes, por ejemplo donde los guarda tu escáner o una unidad en la nube sincronizada.
+	Unpin	Desanclar
+	Unpin {folder}	Desanclar {folder}
+	Looking for PDFs…	Buscando PDF…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Esta carpeta no está disponible ahora. Puede que se haya movido o que su unidad o la sincronización en la nube estén sin conexión.
+	No PDFs in this folder yet	Aún no hay PDF en esta carpeta
+	Show less	Mostrar menos
+	Show {n} more	Mostrar {n} más
+	The newest {n} of {total} PDFs	Los {n} PDF más recientes de {total}
+	Pinned folders need the desktop app	Las carpetas ancladas requieren la aplicación de escritorio
+	Choose a folder on this computer to pin	Elige una carpeta de este equipo para anclarla
+	{folder} is already pinned to Home	{folder} ya está anclada en Inicio
+	You can pin up to {n} folders. Unpin one first.	Puedes anclar hasta {n} carpetas. Desancla una primero.
+	Pinned {folder} to Home	{folder} anclada en Inicio
 	No recent files	No hay archivos recientes
 	New blank PDF	Nuevo PDF en blanco
 	Create PDF from file…	Crear PDF a partir de un archivo…
