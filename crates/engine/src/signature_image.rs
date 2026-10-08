@@ -152,7 +152,7 @@ mod tests {
         let image = SignatureImage::from_bytes(&jpeg.into_inner()).unwrap();
         assert_eq!(image.size(), [60, 20]);
         assert!(image.bytes().starts_with(b"\x89PNG\r\n\x1a\n"));
-        assert!(image.rgba().chunks_exact(4).all(|p| p[3] == 255));
+        assert!(image.rgba().as_chunks::<4>().0.iter().all(|p| p[3] == 255));
     }
 
     #[test]
