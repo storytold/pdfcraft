@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use hayro::hayro_interpret::InterpreterSettings;
+use hayro::hayro_interpret::font::{FontData, FontQuery};
+use hayro::hayro_interpret::hayro_cmap::CidFamily;
 use hayro::hayro_syntax::Pdf;
 use hayro::vello_cpu::color::palette::css::WHITE;
 use hayro::{RenderCache, RenderSettings, render};
@@ -50,7 +52,54 @@ pub struct RenderConfig {
 
 impl RenderConfig {
     fn settings(&self) -> InterpreterSettings {
-        InterpreterSettings { ocg_overrides: self.layers.clone(), hide_comments: self.hide_comments, ..InterpreterSettings::default() }
+        let standard = InterpreterSettings::default().font_resolver;
+        InterpreterSettings {
+            ocg_overrides: self.layers.clone(),
+            hide_comments: self.hide_comments,
+            font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| standard(query))),
+            ..InterpreterSettings::default()
+        }
+    }
+}
+
+/// A Japanese face from craft-fonts for a CID font of the Adobe-Japan1 collection that the PDF
+/// doesn't embed (`HeiseiMin-W3`, `KozGoPro-Medium`, …). hayro's own substitutes for fonts that
+/// aren't embedded are the Latin standard 14, so such text drew nothing. `None` for every other
+/// font, and when PdfCraft was built without craft-fonts. Only Japanese: the pinned craft-fonts
+/// has no other CJK faces, and its later Chinese face is Noto CJK, which AGENTS.md §1.1 rules out.
+fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
+    let FontQuery::Fallback(f) = query else { return None };
+    if f.character_collection.as_ref()?.family != CidFamily::AdobeJapan1 {
+        return None;
+    }
+    let face = match japanese_face(f.post_script_name.as_deref().unwrap_or_default(), f.is_serif, f.is_bold || f.font_weight >= 600) {
+        JapaneseFace::Mincho => pdfcraft_fonts::document_japanese_font(),
+        JapaneseFace::Gothic { bold } => {
+            let faces = pdfcraft_fonts::ui_japanese_fonts();
+            let style = if bold { "Bold" } else { "Regular" };
+            faces.iter().find(|c| c.family == "BIZ UDPGothic" && c.style == style).or(faces.first()).copied()
+        }
+    }?;
+    Some((Arc::new(face.bytes), 0))
+}
+
+#[derive(Debug, PartialEq)]
+enum JapaneseFace {
+    Mincho,
+    Gothic { bold: bool },
+}
+
+/// Which kind of Japanese face stands in for the font named `name`: Mincho names (`HeiseiMin`,
+/// `KozMin`, `Ryumin`, `MS-Mincho`) a serif Mincho; Gothic names (`…Gothic…`, `HeiseiKakuGo`,
+/// `KozGo`, `…Maru…`) a sans Gothic; any other name by the font descriptor's serif flag.
+fn japanese_face(name: &str, serif: bool, bold: bool) -> JapaneseFace {
+    let name = name.to_ascii_lowercase();
+    if name.contains("min") {
+        JapaneseFace::Mincho
+    } else if ["goth", "kakugo", "kozgo", "kaku", "maru"].iter().any(|k| name.contains(k)) || !serif {
+        JapaneseFace::Gothic { bold }
+    } else {
+        JapaneseFace::Mincho
     }
 }
 
@@ -1456,6 +1505,66 @@ trailer << /Root 1 0 R >>
                 let b = &part.rgba[((y * 50 + x) * 4) as usize..][..4];
                 assert_eq!(a, b, "pixel {x},{y}");
             }
+        }
+    }
+
+    /// A Japanese CID font that isn't embedded (Adobe-Japan1, as `HeiseiMin-W3` with
+    /// `UniJIS-UCS2-H` in #260's test file) drew nothing: hayro's substitutes for fonts that
+    /// aren't embedded are Latin-only. With craft-fonts (the build input release builds embed),
+    /// such text now draws in a Japanese face; without it, nothing changes.
+    #[test]
+    fn non_embedded_japanese_cid_fonts_draw_with_a_craft_fonts_face() {
+        let pdf = |base_font: &str| {
+            let content = "BT /F1 40 Tf 5 15 Td <65E5672C> Tj ET";
+            format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /{base_font} /Encoding /UniJIS-UCS2-H /DescendantFonts [6 0 R] >> endobj
+6 0 obj << /Type /Font /Subtype /CIDFontType0 /BaseFont /{base_font} /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 2 >>
+  /FontDescriptor 7 0 R /DW 1000 >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /{base_font} /Flags 6 /FontBBox [0 -141 1000 859] /ItalicAngle 0 /Ascent 859 /Descent -141 /CapHeight 700 /StemV 80 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+                content.len()
+            )
+        };
+        for base_font in ["HeiseiMin-W3", "HeiseiKakuGo-W5"] {
+            let mut r = PageRenderer::new(Arc::new(pdf(base_font).into_bytes()), RenderConfig::default());
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            assert!(p.error.is_none(), "{base_font}: {:?}", p.error);
+            let inked = p.rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count();
+            if pdfcraft_fonts::document_japanese_font().is_none() {
+                eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): no Japanese face to check");
+                continue;
+            }
+            // 日本 at 40 pt covers a few hundred dark pixels; a blank or missing-glyph run doesn't.
+            assert!(inked > 300, "{base_font}: 日本 is drawn ({inked} dark pixels)");
+        }
+    }
+
+    #[test]
+    fn japanese_font_names_pick_mincho_or_gothic() {
+        use super::JapaneseFace::{Gothic, Mincho};
+        for (name, serif, bold, face) in [
+            ("HeiseiMin-W3", false, false, Mincho),
+            ("KozMinPro-Regular", false, false, Mincho),
+            ("Ryumin-Light", false, false, Mincho),
+            ("MS-PMincho", false, false, Mincho),
+            ("HiraMinProN-W3", false, false, Mincho),
+            ("HeiseiKakuGo-W5", true, false, Gothic { bold: false }),
+            ("KozGoPro-Bold", true, true, Gothic { bold: true }),
+            ("GothicBBB-Medium", true, false, Gothic { bold: false }),
+            ("MS-Gothic", false, false, Gothic { bold: false }),
+            ("HiraKakuProN-W6", false, true, Gothic { bold: true }),
+            ("Unknown-Japanese", true, false, Mincho),
+            ("Unknown-Japanese", false, false, Gothic { bold: false }),
+        ] {
+            assert_eq!(super::japanese_face(name, serif, bold), face, "{name}");
         }
     }
 

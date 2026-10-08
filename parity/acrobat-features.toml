@@ -746,8 +746,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster.rs::huge_cid_width_ranges_terminate"]
-notes = "CID-to-Unicode tables are M2.4"
+evidence = ["crates/render/src/raster.rs::huge_cid_width_ranges_terminate", "crates/render/src/raster.rs::non_embedded_japanese_cid_fonts_draw_with_a_craft_fonts_face"]
+notes = "CID-to-Unicode tables are M2.4; a non-embedded Adobe-Japan1 font is drawn in a craft-fonts Japanese face (Mincho or Gothic by name) when built with craft-fonts; non-embedded GB1, CNS1 and Korea1 fonts still draw nothing (no allowed face)"
 
 [[feature]]
 id = "view.render-image-codecs"

@@ -3750,6 +3750,7 @@ dependencies = [
  "kurbo 0.13.1",
  "log",
  "lopdf",
+ "pdfcraft-fonts",
  "thiserror 2.0.21",
 ]
 
