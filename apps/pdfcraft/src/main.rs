@@ -10,7 +10,8 @@
 //!  --cover on|off  --default-layout continuous|two-up|single  --default-zoom fit-width|fit-page|<percent>`
 //!
 //! `--control <file>` enables the UI control channel (off by default): the app listens on a random
-//! loopback port and writes `{"port", "token", "pid"}` to `<file>` (owner-only permissions).
+//! loopback port and writes `{"port", "token", "pid"}` to `<file>` (owner-only permissions). The
+//! app doesn't start if it can't.
 //! Agents then drive it with `pdfcraft-cli ui --control <file> <method> …`.
 
 // Release builds on Windows are GUI-subsystem programs, so launching the app doesn't open a console
@@ -287,11 +288,7 @@ fn app_creator<'a>(
         }
         if let Some(file) = &control_file {
             let client = app.attach_control(&cc.egui_ctx);
-            match pdfcraft_ui_egui::control::serve(client).and_then(|ep| write_control_file(file, ep.port, &ep.token).map(|()| ep.port)) {
-                // Never the token (AGENTS.md §3): it stays in the owner-only file.
-                Ok(port) => log::info!("UI control channel on 127.0.0.1:{port} (connection details in {file})"),
-                Err(e) => log::error!("--control {file}: {e}"),
-            }
+            open_control_channel(file, pdfcraft_ui_egui::control::serve(client))?;
         }
         // Autosave unsaved changes; offer to recover documents a crashed session left behind.
         if let Some(dir) = pdfcraft_ui_egui::RecoveryStore::default_dir() {
@@ -323,6 +320,27 @@ fn app_creator<'a>(
         }
         Ok(Box::new(app))
     })
+}
+
+/// Publish a started control channel in `file`.
+///
+/// A failure stops the app. `--control` was asked for, so carrying on without it would leave a
+/// script driving nothing, and the file that couldn't be replaced may be another user's, planted
+/// at a shared path such as `/tmp/pc.json` to receive the commands. This runs before any document
+/// opens, so nothing is lost.
+fn open_control_channel(file: &str, endpoint: std::io::Result<pdfcraft_ui_egui::control::Endpoint>) -> Result<(), String> {
+    match endpoint.and_then(|ep| write_control_file(file, ep.port, &ep.token).map(|()| ep.port)) {
+        // Never the token (AGENTS.md §3): it stays in the owner-only file.
+        Ok(port) => {
+            log::info!("UI control channel on 127.0.0.1:{port} (connection details in {file})");
+            Ok(())
+        }
+        Err(e) => {
+            let message = format!("--control {file}: {e}. Use a control file in a folder only you can write, such as ~/.pdfcraft-control.json");
+            log::error!("{message}");
+            Err(message)
+        }
+    }
 }
 
 /// Write the control endpoint so that only the current user can read the token.
@@ -497,6 +515,34 @@ fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[D
 
 #[cfg(test)]
 mod tests {
+    use pdfcraft_ui_egui::control::Endpoint;
+
+    fn endpoint() -> std::io::Result<Endpoint> {
+        Ok(Endpoint { port: 4321, token: "0123456789abcdef".into() })
+    }
+
+    #[test]
+    fn a_control_channel_that_cant_be_published_stops_the_app() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-app-control-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = |name: &str| dir.join(name).to_str().unwrap().to_owned();
+
+        // A folder in the way stands in for a file another user created first: the write fails.
+        std::fs::create_dir(dir.join("taken.json")).unwrap();
+        let err = super::open_control_channel(&path("taken.json"), endpoint()).unwrap_err();
+        assert!(err.contains("--control") && err.contains("taken.json") && err.contains("only you can write"), "{err}");
+        // No listener: nothing to publish.
+        let err = super::open_control_channel(&path("pc.json"), Err(std::io::Error::other("no loopback"))).unwrap_err();
+        assert!(err.contains("no loopback"), "{err}");
+        assert!(!dir.join("pc.json").exists());
+
+        super::open_control_channel(&path("pc.json"), endpoint()).unwrap();
+        let written: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("pc.json")).unwrap()).unwrap();
+        assert_eq!((written["port"].as_u64(), written["token"].as_str()), (Some(4321), Some("0123456789abcdef")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn path_from_arg_decodes_file_uris() {
         assert_eq!(super::path_from_arg("file:///home/alice/report.pdf".to_string()), "/home/alice/report.pdf");
