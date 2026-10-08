@@ -109,11 +109,14 @@ pub struct ViewDefaults {
     pub fit: Fit,
     /// The zoom with [`Fit::None`] (1.0 = 100%).
     pub zoom: f32,
+    /// Highlight existing fields: a preference in Acrobat, so it carries over to the next
+    /// document and the next session.
+    pub highlight_fields: bool,
 }
 
 impl Default for ViewDefaults {
     fn default() -> Self {
-        Self { layout: PageLayout::Continuous, fit: Fit::Width, zoom: 1.0 }
+        Self { layout: PageLayout::Continuous, fit: Fit::Width, zoom: 1.0, highlight_fields: false }
     }
 }
 
@@ -340,7 +343,7 @@ impl DocView {
             rotation: 0,
             current: 0,
             organize: false,
-            highlight_fields: false,
+            highlight_fields: defaults.highlight_fields,
             page_input: "1".into(),
             notice_dismissed: false,
             cover: false,
@@ -1202,6 +1205,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(Notice::Repairs) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
         Some(Notice::Security) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
         Some(Notice::Signatures) => app.right = Some(RightPanel::Signatures),
+        Some(Notice::FieldHighlights(on)) => app.view_defaults.highlight_fields = on,
         None => {}
     }
     // No dialog, close prompt or palette over the page: only then does page input count.
@@ -1739,17 +1743,25 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
 
             // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
-            // red border.
+            // red border. Radio buttons are round, and so is theirs (as in Acrobat).
             if view.highlight_fields {
                 for f in form.iter() {
                     let required = f.has(pdfcraft_engine::field_flags::REQUIRED);
+                    let round = f.kind == pdfcraft_engine::FormFieldKind::Radio;
                     for w in f.widgets.iter().filter(|w| w.page == Some(i) && !w.hidden) {
                         let r = w.rect;
                         let sr = xf.user_rect(info, i, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]);
-                        painter.rect_filled(sr, CornerRadius::same(1), Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48));
+                        let tint = Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48);
                         let (width, color) =
                             if required { (2.0, Color32::from_rgb(0xE3, 0x22, 0x22)) } else { (1.0, Color32::from_rgb(0x6E, 0x8E, 0xF5)) };
-                        painter.rect_stroke(sr, CornerRadius::same(1), Stroke::new(width, color), egui::StrokeKind::Inside);
+                        if round {
+                            let radius = sr.width().min(sr.height()) / 2.0;
+                            painter.circle_filled(sr.center(), radius, tint);
+                            painter.circle_stroke(sr.center(), radius - width / 2.0, Stroke::new(width, color));
+                        } else {
+                            painter.rect_filled(sr, CornerRadius::same(1), tint);
+                            painter.rect_stroke(sr, CornerRadius::same(1), Stroke::new(width, color), egui::StrokeKind::Inside);
+                        }
                     }
                 }
             }
@@ -2275,6 +2287,8 @@ enum Notice {
     Security,
     Signatures,
     Repairs,
+    /// Highlight fields was turned on or off.
+    FieldHighlights(bool),
 }
 
 /// The notice bar above the pages: the signature status first (Acrobat's signature bar), then
@@ -2310,6 +2324,7 @@ fn notices(
     }
     let mut open_security = false;
     let mut open_repairs = false;
+    let mut toggled = None;
     let msg = if secured {
         Some(("lock", tl!("This document is secured. Some changes are restricted by its security settings.").to_string(), false))
     } else if let Some(x) = xfa {
@@ -2362,6 +2377,7 @@ fn notices(
                     let label = if view.highlight_fields { tl!("Hide field highlights") } else { tl!("Highlight fields") };
                     if crate::widgets::pill_button(ui, label, view.highlight_fields).clicked() {
                         view.highlight_fields = !view.highlight_fields;
+                        toggled = Some(Notice::FieldHighlights(view.highlight_fields));
                     }
                 }
                 if secured && crate::widgets::pill_button(ui, tl!("Security settings"), false).clicked() {
@@ -2376,7 +2392,7 @@ fn notices(
     if open_repairs {
         return Some(Notice::Repairs);
     }
-    open_security.then_some(Notice::Security)
+    open_security.then_some(Notice::Security).or(toggled)
 }
 
 /// The floating quick-action bar at the left edge of the document area.

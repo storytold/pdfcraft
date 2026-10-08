@@ -254,7 +254,7 @@ mod tests {
         let preview = doc.image_signature_preview(0, 0).unwrap().unwrap();
         assert_eq!(preview.image.rgba(), image.rgba());
         let background = preview.render_background(1.0).unwrap();
-        assert!(background.rgba.chunks_exact(4).all(|p| p == [255, 255, 255, 255]));
+        assert!(background.rgba.as_chunks::<4>().0.iter().all(|p| *p == [255, 255, 255, 255]));
         assert!(Arc::ptr_eq(&bytes, &doc.bytes));
         assert_eq!(doc.edit_generation(), generation);
         assert_eq!(doc.can_undo(), Some("Add signature"));

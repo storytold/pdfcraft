@@ -594,6 +594,7 @@ impl Host for crate::PdfCraftApp {
             "theme_preference": self.theme_preference,
             "language": self.language,
             "notice": self.toast.as_ref().map(|t| t.0.clone()),
+            "progress": self.progress_notice.as_ref().map(|p| json!({ "label": p.label, "fraction": p.fraction })),
             "password_prompt": self.password_prompt.is_some(),
             "close_prompt": self.close_request.is_some(),
         })

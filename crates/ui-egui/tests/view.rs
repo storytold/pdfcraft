@@ -513,6 +513,73 @@ fn highlight_fields_tints_the_field_area() {
     assert_ne!(before, after, "the field area is tinted when highlighting is on");
 }
 
+/// A required radio group (`/Ff` 32768 radio + 2 required) with two 40 pt round buttons.
+const RADIOS: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >> endobj
+4 0 obj << /FT /Btn /Ff 32770 /T (choice) /V /Off /Kids [5 0 R 6 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [50 300 90 340] /AS /Off /P 3 0 R >> endobj
+6 0 obj << /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [150 300 190 340] /AS /Off /P 3 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// #260 (page 8): with fields highlighted, a required radio button gets a round red border, as
+/// Acrobat draws it, not a square one around its corners.
+#[test]
+fn required_radio_buttons_get_a_round_red_border() {
+    let _gpu = gpu();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("radios.pdf", None, RADIOS.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "none").unwrap();
+        app.set_option("fields", "on").unwrap();
+        app
+    });
+    for _ in 0..100 {
+        h.run_steps(2);
+        if !h.state().render_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let r = rect(&h, 0).expect("page 1");
+    let ppp = h.ctx.pixels_per_point();
+    let img = h.render().expect("renders");
+    // The first button spans x 50..90, y 300..340 on the 300×400 pt page (y up).
+    let at = |x: f32, y: f32| {
+        let p = egui::pos2(r.min.x + r.width() * (x / 300.0), r.min.y + r.height() * (1.0 - y / 400.0));
+        *img.get_pixel((p.x * ppp) as u32, (p.y * ppp) as u32)
+    };
+    let red = |p: image::Rgba<u8>| p[0] > 180 && p[1] < 100 && p[2] < 100;
+    // Fit width puts about 4 px in a point: 0.2 to 0.3 pt from an edge is inside a 2 px border.
+    assert!(red(at(50.2, 320.0)), "the left of the circle is red: {:?}", at(50.2, 320.0));
+    assert!(!red(at(50.3, 339.7)), "the widget's corner, outside the circle, is not: {:?}", at(50.3, 339.7));
+}
+
+/// Acrobat's Highlight existing fields is a preference, not a per-document choice: turned on
+/// once, the next document (and the next session) opens with fields highlighted.
+#[test]
+fn field_highlighting_is_remembered() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = form_harness();
+    h.state_mut().set_option("panel", "none").unwrap();
+    h.run_steps(4);
+    assert!(!h.state().views[0].highlight_fields, "off by default");
+    h.get_by_label("Highlight fields").click();
+    h.run_steps(4);
+    assert!(h.state().views[0].highlight_fields);
+    h.state_mut().open_bytes("radios.pdf", None, RADIOS.to_vec()).expect("opens");
+    h.run_steps(4);
+    assert!(h.state().views[1].highlight_fields, "the next document opens highlighted");
+    let saved = h.state().persist();
+    let mut next = PdfCraftApp::new();
+    next.restore(&saved);
+    next.open_bytes("form.pdf", None, FORM.to_vec()).expect("opens");
+    assert!(next.views[0].highlight_fields, "and so does the next session");
+}
+
 #[test]
 fn fonts_tab_lists_fonts_and_embedding() {
     use egui_kittest::kittest::Queryable;

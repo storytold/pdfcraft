@@ -221,15 +221,9 @@ impl PdfCraftApp {
     }
 
     /// Reduce File Size: write a compacted copy with images downsampled (the open document is
-    /// unchanged).
+    /// unchanged). It runs in the background with a progress bar, like the PDF Optimizer.
     pub(crate) fn reduce_file_size(&mut self) {
-        // What's typed in a form field is part of the document (#166).
-        if !self.commit_form_typing() {
-            return;
-        }
-        let Some((_, id)) = self.active_ids() else { return };
-        let result = self.session.reduced_bytes(id).map(|(b, _)| (b, String::new()));
-        self.save_optimized(id, "reduced", result);
+        self.start_optimize(crate::optimize_ui::OptimizeKind::Reduce, &pdfcraft_engine::optimize::Settings::default(), &[]);
     }
 
     /// Save an optimized copy (Reduce File Size, Optimize PDF) next to the original, reporting
