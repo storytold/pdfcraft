@@ -1466,8 +1466,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/ui.rs::drag_selects_text_and_copy_returns_it", "crates/ui-egui/tests/ui.rs::selection_works_in_every_view_rotation"]
-notes = ""
+evidence = ["crates/ui-egui/tests/ui.rs::drag_selects_text_and_copy_returns_it", "crates/ui-egui/tests/ui.rs::selection_works_in_every_view_rotation", "crates/ui-egui/tests/text_select.rs::quick_clicks_select_a_word_then_the_line_then_the_page", "crates/ui-egui/tests/text_select.rs::quick_clicks_with_the_highlighter_mark_only_the_word"]
+notes = "Drag to select; with the Select tool, quick clicks select a word (two), the line (three) or all the text on the page (four). The markup and Redact tools mark a double-clicked word and stop there. Missing: paragraph selection, and ⌘A across the whole document (it selects the current page)."
 
 [[feature]]
 id = "view.copy-text"
