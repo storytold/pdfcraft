@@ -393,7 +393,7 @@ PdfCraft is young and moving fast. The aim is a workbench where you can view, or
 
 - **Good today:** viewing and search; organizing, combining and splitting; most kinds of comment; filling and authoring forms (with sandboxed JavaScript); passwords, redaction and sanitizing; basic digital signatures; printing; the Accessibility Checker; agent control through the CLI and MCP.
 - **Still borrowed:** pages are drawn by the `hayro` crate while our own renderer is built.
-- **Thin or missing:** reliable editing of existing text (especially CJK), OCR beyond Latin script, Office import/export, signature timestamps and long-term validation, PDF/A/X/UA preflight, XFA forms, localization and signed installers.
+- **Thin or missing:** reliable editing of existing text (especially CJK), OCR beyond Latin script, Office import/export, signature timestamps and long-term validation, PDF/A/X/UA preflight, XFA forms and localization.
 - **Hardening:** fuzzing still turns up crashes and hangs on hostile files; each one is fixed with a regression test. Quality has not yet been compared with Acrobat side by side.
 
 **Next, in order:** our own renderer, hardening and a fidelity harness against Acrobat, editing existing content, then the Pro workflows (signatures, OCR, Office, preflight, XFA) and 1.0 polish.
@@ -404,15 +404,9 @@ The honest assessment by area, what's lacking and where we're going are in **[RO
 
 ## Downloads
 
-Every [release](https://github.com/storytold/pdfcraft/releases/latest) ships these builds. `<ver>` is the
-version number; `SHA256SUMS.txt` lists a checksum for every file.
+**New to PdfCraft?** Download it from the [PdfCraft page on getartcraft.com](https://getartcraft.com/apps/pdfcraft). That's the easiest way to install it.
 
-### macOS
-
-| Build | File | Notes |
-|---|---|---|
-| App, universal (Apple silicon + Intel) | `pdfcraft-<ver>-macos-universal.dmg` | Signed and notarized |
-| Command-line tool, universal | `pdfcraft-cli-<ver>-macos-universal.zip` | Signed and notarized |
+**Want a specific build or format?** On GitHub, the [latest release](https://github.com/storytold/pdfcraft/releases/latest) has every build listed below, and [all releases](https://github.com/storytold/pdfcraft/releases) has earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
 
 ### Windows
 
@@ -423,6 +417,13 @@ version number; `SHA256SUMS.txt` lists a checksum for every file.
 | x86 (32-bit) | `pdfcraft-<ver>-windows-x86.msi` | `pdfcraft-<ver>-windows-x86-portable.zip` |
 
 Installers and executables are code-signed.
+
+### macOS
+
+| Build | File | Notes |
+|---|---|---|
+| App, universal (Apple silicon + Intel) | `pdfcraft-<ver>-macos-universal.dmg` | Signed and notarized |
+| Command-line tool, universal | `pdfcraft-cli-<ver>-macos-universal.zip` | Signed and notarized |
 
 ### Linux
 
