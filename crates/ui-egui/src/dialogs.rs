@@ -1031,6 +1031,8 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     ("⇧⌘+ / ⇧⌘−", tl!("Rotate view")),
                     ("Home / End", tl!("First / last page")),
                     ("← / →, ⌘← / ⌘→", tl!("Previous / next page")),
+                    ("V", tl!("Select (V)")),
+                    ("H / Space (hold)", tl!("Hand (H)")),
                     ("Delete", tl!("Delete selected pages (Organize)")),
                     ("⌘A", tl!("Select all pages (Organize)")),
                 ] {

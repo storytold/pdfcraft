@@ -1034,8 +1034,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/view.rs::the_hand_tool_pans_by_dragging"]
-notes = "drag to pan; Grab/Grabbing cursors"
+evidence = ["crates/ui-egui/tests/view.rs::the_hand_tool_pans_by_dragging", "crates/ui-egui/tests/viewer.rs::v_h_and_space_pick_the_quick_tools"]
+notes = "drag to pan; Grab/Grabbing cursors; H picks it, V goes back to Select, Space held pans temporarily"
 
 [[feature]]
 id = "view.rotate-view"

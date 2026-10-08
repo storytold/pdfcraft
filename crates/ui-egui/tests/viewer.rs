@@ -472,6 +472,48 @@ fn arrow_and_page_keys_move_through_a_scrolling_document() {
     assert_eq!(press(&mut h, Key::PageDown, 1), 3);
 }
 
+#[test]
+fn v_h_and_space_pick_the_quick_tools() {
+    // The toolbar's tooltips promise "Select (V)" and "Hand (H)", but the keys did nothing.
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    let press = |h: &mut Harness<'static, PdfCraftApp>, key| {
+        h.key_press(key);
+        h.run_steps(2);
+        h.state().quick_tool
+    };
+    assert_eq!(press(&mut h, Key::H), QuickTool::Hand);
+    assert_eq!(press(&mut h, Key::V), QuickTool::Select);
+    // V leaves any other tool too, as the toolbar button does.
+    h.state_mut().quick_tool = QuickTool::Crop;
+    assert_eq!(press(&mut h, Key::V), QuickTool::Select);
+    // Holding Space pans with the Hand for as long as it is held, then gives the tool back.
+    h.state_mut().quick_tool = QuickTool::Crop;
+    h.key_down(Key::Space);
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand, "Space held");
+    h.key_up(Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop, "Space released");
+    // With a modifier the letters are someone else's shortcut.
+    h.key_press_modifiers(Modifiers::SHIFT, Key::H);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop);
+    // They are letters to a text field: typing in the find bar keeps the tool.
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.state_mut().views[0].open_find();
+    h.run_steps(4);
+    assert_eq!(press(&mut h, Key::H), QuickTool::Select, "typing H in the find bar");
+    h.key_down(Key::Space);
+    h.run_steps(2);
+    h.key_up(Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "typing a space in the find bar");
+}
+
 /// Like [`fixture`], with each page's size given.
 fn sized_fixture(sizes: &[(u32, u32)]) -> Vec<u8> {
     let n = sizes.len();

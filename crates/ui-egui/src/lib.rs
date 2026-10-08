@@ -330,6 +330,8 @@ pub struct PdfCraftApp {
     pub left_open: bool,
     pub right: Option<RightPanel>,
     pub quick_tool: QuickTool,
+    /// The tool to go back to when Space, held for a temporary Hand, is released.
+    space_hand: Option<QuickTool>,
     /// Comment author, per-tool colours and widths, pin.
     pub comment_prefs: comments::CommentPrefs,
     /// Resolved colours, including the current OS theme when following the system.
@@ -558,6 +560,7 @@ impl PdfCraftApp {
             left_open: true,
             right: None,
             quick_tool: QuickTool::Select,
+            space_hand: None,
             comment_prefs: Default::default(),
             theme: ThemeKind::Light,
             theme_preference: ThemePreference::Light,
@@ -1366,7 +1369,42 @@ impl PdfCraftApp {
             {
                 self.views[i].select_all();
             }
+            self.tool_keys(i, ctx);
             canvas::shortcuts(&mut self.views[i], ctx);
+        }
+    }
+}
+
+impl PdfCraftApp {
+    /// The quick tools' keys, as in Acrobat: V selects, H pans, and holding Space pans until it
+    /// is released. Plain letters, so not while a text field, a form field, a dialog or the
+    /// palette has the keyboard.
+    fn tool_keys(&mut self, i: usize, ctx: &egui::Context) {
+        use egui::Key;
+        let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input() && self.views[i].forms.focus.is_none();
+        let (plain, space) = ctx.input(|input| (input.modifiers.is_none(), input.key_down(Key::Space)));
+        if let Some(previous) = self.space_hand
+            && !space
+        {
+            self.space_hand = None;
+            if self.quick_tool == QuickTool::Hand {
+                self.quick_tool = previous;
+            }
+        }
+        if !free || !plain {
+            return;
+        }
+        if ctx.input(|input| input.key_pressed(Key::V)) {
+            self.quick_tool = QuickTool::Select;
+            self.space_hand = None;
+        }
+        if ctx.input(|input| input.key_pressed(Key::H)) {
+            self.quick_tool = QuickTool::Hand;
+            self.space_hand = None;
+        }
+        if space && self.space_hand.is_none() && self.quick_tool != QuickTool::Hand {
+            self.space_hand = Some(self.quick_tool);
+            self.quick_tool = QuickTool::Hand;
         }
     }
 }
