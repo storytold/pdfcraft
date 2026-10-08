@@ -1522,7 +1522,63 @@
 	Sent to {printer}	Enviado a {printer}
 	Sent to {printer}: {msg}	Enviado a {printer}: {msg}
 	Choose a folder for the searchable files	Elige una carpeta para los archivos con búsqueda
-	Files are combined in this order. Leave Pages empty to take every page.	Los archivos se combinan en este orden. Deja Páginas vacío para incluir todas las páginas.
+	Files are combined from top to bottom. Leave Pages empty to take every page.	Los archivos se combinan de arriba abajo. Deja Páginas vacío para incluir todas las páginas.
+	Unlock…	Desbloquear…
+	Select a password-protected file first	Selecciona primero un archivo protegido con contraseña
+	Enter the permissions password to allow combining	Introduce la contraseña de permisos para permitir combinarlo
+	Enter the password that opens it	Introduce la contraseña que lo abre
+	Unlock {name}	Desbloquear {name}
+	Unlock {n} files	Desbloquear {n} archivos
+	The same password is tried on each file.	Se prueba la misma contraseña en cada archivo.
+	Hide password	Ocultar contraseña
+	Show password	Mostrar contraseña
+	Wrong password	Contraseña incorrecta
+	The password is only used to read the file; it isn't saved.	La contraseña solo se usa para leer el archivo; no se guarda.
+	Unlock	Desbloquear
+	Opened, but its security settings don't allow combining. Enter the permissions password.	Se abrió, pero su configuración de seguridad no permite combinarlo. Introduce la contraseña de permisos.
+	Unlocked: the combined file won't be password-protected	Desbloqueado: el archivo combinado no estará protegido con contraseña
+	Unlocked {n} of {m} files	Se desbloquearon {n} de {m} archivos
+	Drop PDFs or folders here, or choose them.	Suelta aquí PDF o carpetas, o elígelos.
+	Add folder…	Añadir carpeta…
+	Add folder and subfolders…	Añadir carpeta y subcarpetas…
+	More ways to add files	Más formas de añadir archivos
+	Every PDF in the folder	Todos los PDF de la carpeta
+	Every PDF in the folder and the folders inside it	Todos los PDF de la carpeta y de las carpetas que contiene
+	Add folder	Añadir carpeta
+	Add folder and subfolders	Añadir carpeta y subcarpetas
+	No PDFs found in {folder}	No se encontraron PDF en {folder}
+	Added the first {n} PDFs in {folder}	Se añadieron los primeros {n} PDF de {folder}
+	Click to sort, drag to move the column. Drag its edge to resize it.	Haz clic para ordenar; arrastra para mover la columna. Arrastra su borde para cambiar el ancho.
+	Reset columns	Restablecer columnas
+	Remove {n} files	Quitar {n} archivos
+	{n} selected	{n} seleccionados
+	sorted ascending	orden ascendente
+	sorted descending	orden descendente
+	Protected: the combined file won't keep its security settings	Protegido: el archivo combinado no conservará su configuración de seguridad
+	Add open documents	Añadir documentos abiertos
+	All open documents	Todos los documentos abiertos
+	No documents are open	No hay documentos abiertos
+	Select a file first	Selecciona primero un archivo
+	1 file	1 archivo
+	{n} files	{n} archivos
+	1 file needs attention	1 archivo necesita atención
+	{n} files need attention	{n} archivos necesitan atención
+	{name} can't be combined: {why}	No se puede combinar {name}: {why}
+	Check the pages of {name}: {why}	Revisa las páginas de {name}: {why}
+	Add the PDFs to combine	Añade los PDF que quieres combinar
+	File name	Nombre de archivo
+	Warnings	Advertencias
+	Drag to reorder	Arrastra para reordenar
+	{k} of {n}	{k} de {n}
+	? of {n}	? de {n}
+	Added more than once	Añadido más de una vez
+	yesterday	ayer
+	{n} days ago	hace {n} días
+	No pages selected	No hay páginas seleccionadas
+	Password-protected	Protegido con contraseña
+	Its security settings don't allow copying pages	Su configuración de seguridad no permite copiar páginas
+	Can't be read: {e}	No se puede leer: {e}
+	Includes unsaved changes	Incluye cambios sin guardar
 	Pages of {name} to combine, e.g. 1-3, 6	Páginas de {name} que combinar, p. ej., 1-3, 6
 	Remove {name}	Quitar {name}
 	Add files…	Añadir archivos…

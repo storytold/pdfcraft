@@ -19,6 +19,7 @@ mod actions_ui;
 pub mod canvas;
 mod chrome;
 mod combine_ui;
+pub use combine_ui::{Columns as CombineColumns, Lock as CombineLock, SortKey};
 mod commands;
 mod comment_props;
 pub mod comments;
@@ -245,8 +246,6 @@ pub enum Dialog {
     ActionWizard,
     /// Standards ▸ PDF/A.
     PdfA,
-    /// Combine files: the files, their order and pages.
-    Combine,
     /// Custom stamps ▸ Create.
     CreateStamp,
     /// Prepare for accessibility ▸ Add alternate text.
@@ -427,6 +426,10 @@ pub struct PdfCraftApp {
     pub space_audit: Vec<pdfcraft_engine::optimize::SpaceUse>,
     /// Combine files: the files staged so far.
     pub combine_draft: Vec<combine_ui::CombineFile>,
+    /// The Combine files tab: whether it is open, shown, its selection and undo history.
+    pub combine_tab: combine_ui::CombineTab,
+    /// The Combine files table's column order and widths (kept in the settings).
+    pub combine_columns: combine_ui::Columns,
     /// Images waiting for the resolution choice (released on cancel).
     pub image_import: Option<create_ui::ImageImport>,
     /// The custom stamp library, and the stamp being created.
@@ -626,6 +629,8 @@ impl PdfCraftApp {
             cert_viewer: None,
             space_audit: Vec::new(),
             combine_draft: Vec::new(),
+            combine_tab: Default::default(),
+            combine_columns: Default::default(),
             image_import: None,
             custom_stamps: Vec::new(),
             stamp_draft: Default::default(),
@@ -1071,6 +1076,7 @@ impl PdfCraftApp {
             "custom_stamps": stamps_ui::encode(&self.custom_stamps),
             "javascript": self.session.javascript(),
             "actions": actions_ui::encode(&self.custom_actions),
+            "combine_columns": self.combine_columns.to_json(),
         })
         .to_string()
     }
@@ -1078,6 +1084,7 @@ impl PdfCraftApp {
     /// Restore state written by `persist`. Unknown or malformed data is ignored.
     pub fn restore(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
+        self.combine_columns = combine_ui::Columns::from_json(&v["combine_columns"]);
         if let Ok(r) = serde_json::from_value::<Vec<RecentFile>>(v["recent"].clone()) {
             // Only keep entries whose files still exist.
             #[cfg(not(target_arch = "wasm32"))]
@@ -1447,9 +1454,18 @@ impl eframe::App for PdfCraftApp {
             }
         }
         self.sync_theme(ctx);
+        // Showing a document hides the Combine files tab.
+        if self.active.is_some() {
+            self.combine_tab.focused = false;
+        }
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         for f in dropped {
-            self.open_dropped(f, ctx);
+            // Files dropped on the Combine files tab join its list instead of opening.
+            if self.combine_showing() {
+                self.drop_into_combine(f, ctx);
+            } else {
+                self.open_dropped(f, ctx);
+            }
         }
         let arrived: Vec<(String, Vec<u8>)> = self.inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
         for (name, bytes) in arrived {
@@ -1527,7 +1543,9 @@ impl eframe::App for PdfCraftApp {
         let title = self
             .active
             .and_then(|i| self.session.get(self.views[i].id))
-            .map_or_else(|| "PdfCraft".to_owned(), |d| format!("{} — PdfCraft", d.display_name()));
+            .map(|d| d.display_name())
+            .or_else(|| self.combine_showing().then(|| tl!("Combine files").to_owned()))
+            .map_or_else(|| "PdfCraft".to_owned(), |name| format!("{name} — PdfCraft"));
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.window_title = title;
@@ -1561,6 +1579,7 @@ impl eframe::App for PdfCraftApp {
         }
         let t = theme::Tokens::get(&ctx);
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| match self.active {
+            None if self.combine_showing() => combine_ui::page(self, ui),
             None => home::show(self, ui),
             Some(i) => canvas::document_area(self, i, ui),
         });

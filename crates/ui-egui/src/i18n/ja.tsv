@@ -1528,7 +1528,63 @@
 	Sent to {printer}	{printer} に送信しました
 	Sent to {printer}: {msg}	{printer} に送信しました: {msg}
 	Choose a folder for the searchable files	検索可能なファイルの保存先フォルダーを選択
-	Files are combined in this order. Leave Pages empty to take every page.	この順序でファイルを結合します。すべてのページを使用する場合は「ページ」を空欄にしてください。
+	Files are combined from top to bottom. Leave Pages empty to take every page.	ファイルは上から順に結合されます。すべてのページを使用する場合は「ページ」を空欄にしてください。
+	Unlock…	ロックを解除…
+	Select a password-protected file first	先にパスワードで保護されたファイルを選択してください
+	Enter the permissions password to allow combining	結合を許可するには権限パスワードを入力してください
+	Enter the password that opens it	ファイルを開くパスワードを入力してください
+	Unlock {name}	{name} のロックを解除
+	Unlock {n} files	{n} 個のファイルのロックを解除
+	The same password is tried on each file.	同じパスワードを各ファイルに試します。
+	Hide password	パスワードを隠す
+	Show password	パスワードを表示
+	Wrong password	パスワードが違います
+	The password is only used to read the file; it isn't saved.	パスワードはファイルの読み込みにのみ使用され、保存されません。
+	Unlock	ロックを解除
+	Opened, but its security settings don't allow combining. Enter the permissions password.	開けましたが、セキュリティ設定により結合が許可されていません。権限パスワードを入力してください。
+	Unlocked: the combined file won't be password-protected	ロック解除済み: 結合後のファイルはパスワードで保護されません
+	Unlocked {n} of {m} files	{m} 個中 {n} 個のファイルのロックを解除しました
+	Drop PDFs or folders here, or choose them.	ここに PDF またはフォルダーをドロップするか、選択してください。
+	Add folder…	フォルダーを追加…
+	Add folder and subfolders…	フォルダーとサブフォルダーを追加…
+	More ways to add files	ファイルを追加するその他の方法
+	Every PDF in the folder	フォルダー内のすべての PDF
+	Every PDF in the folder and the folders inside it	フォルダーとその中のフォルダーにあるすべての PDF
+	Add folder	フォルダーを追加
+	Add folder and subfolders	フォルダーとサブフォルダーを追加
+	No PDFs found in {folder}	{folder} に PDF が見つかりません
+	Added the first {n} PDFs in {folder}	{folder} の最初の {n} 個の PDF を追加しました
+	Click to sort, drag to move the column. Drag its edge to resize it.	クリックで並べ替え、ドラッグで列を移動します。列の端をドラッグすると幅を変更できます。
+	Reset columns	列をリセット
+	Remove {n} files	{n} 個のファイルを削除
+	{n} selected	{n} 個選択
+	sorted ascending	昇順
+	sorted descending	降順
+	Protected: the combined file won't keep its security settings	保護されています: 結合後のファイルにはセキュリティ設定が引き継がれません
+	Add open documents	開いている文書を追加
+	All open documents	開いているすべての文書
+	No documents are open	開いている文書はありません
+	Select a file first	先にファイルを選択してください
+	1 file	1 個のファイル
+	{n} files	{n} 個のファイル
+	1 file needs attention	1 個のファイルに問題があります
+	{n} files need attention	{n} 個のファイルに問題があります
+	{name} can't be combined: {why}	{name} は結合できません: {why}
+	Check the pages of {name}: {why}	{name} のページ指定を確認してください: {why}
+	Add the PDFs to combine	結合する PDF を追加
+	File name	ファイル名
+	Warnings	警告
+	Drag to reorder	ドラッグして並べ替え
+	{k} of {n}	{k}/{n}
+	? of {n}	?/{n}
+	Added more than once	複数回追加されています
+	yesterday	昨日
+	{n} days ago	{n} 日前
+	No pages selected	ページが選択されていません
+	Password-protected	パスワードで保護されています
+	Its security settings don't allow copying pages	セキュリティ設定によりページのコピーが許可されていません
+	Can't be read: {e}	読み込めません: {e}
+	Includes unsaved changes	未保存の変更を含みます
 	Pages of {name} to combine, e.g. 1-3, 6	結合する {name} のページ（例: 1-3, 6）
 	Remove {name}	{name} を削除
 	Add files…	ファイルを追加…

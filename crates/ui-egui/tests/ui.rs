@@ -257,6 +257,46 @@ fn dropping_a_pdf_on_the_window_opens_it() {
 }
 
 #[test]
+fn pdfs_dropped_on_the_combine_tab_join_its_list() {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| PdfCraftApp::new());
+    h.run_steps(3);
+    h.state_mut().execute("page.combine");
+    h.run_steps(2);
+    // An absolute path is read from disk, with its modified time.
+    let path = std::env::temp_dir().join(format!("pdfcraft-combine-drop-{}.pdf", std::process::id()));
+    std::fs::write(&path, FIXTURE).unwrap();
+    let on_disk: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: path.clone(), bytes: Vec::new() });
+    let in_memory: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: "second.pdf".into(), bytes: FIXTURE.to_vec() });
+    h.input_mut().dropped_files.extend([on_disk, in_memory]);
+    h.run_steps(3);
+    std::fs::remove_file(&path).ok();
+    let app = h.state();
+    assert!(app.views.is_empty(), "nothing opens");
+    assert_eq!(app.combine_draft.len(), 2);
+    assert!(app.combine_draft[0].modified.is_some() && app.combine_draft[1].modified.is_none());
+    h.get_by_label("just now");
+}
+
+#[test]
+fn a_folder_dropped_on_the_combine_tab_adds_its_pdfs() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-combine-drop-dir-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("inner")).unwrap();
+    std::fs::write(dir.join("one.pdf"), FIXTURE).unwrap();
+    std::fs::write(dir.join("inner").join("two.pdf"), FIXTURE).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| PdfCraftApp::new());
+    h.run_steps(3);
+    h.state_mut().execute("page.combine");
+    h.run_steps(2);
+    let folder: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: dir.clone(), bytes: Vec::new() });
+    h.input_mut().dropped_files.push(folder);
+    h.run_steps(3);
+    let _ = std::fs::remove_dir_all(&dir);
+    let names: Vec<_> = h.state().combine_draft.iter().map(|f| f.name.clone()).collect();
+    assert_eq!(names, ["two.pdf", "one.pdf"], "subfolders included, in path order");
+}
+
+#[test]
 fn files_and_quit_from_the_operating_system() {
     // #73: macOS hands Finder double-clicks, Open With and Dock drops over as Apple events.
     use pdfcraft_ui_egui::OsEvent;
