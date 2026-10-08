@@ -267,6 +267,30 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             .small()
             .color(t.text_muted),
     );
+    let defaults = &mut app.view_defaults;
+    ui.horizontal(|ui| {
+        ui.label(tl!("Default page display"));
+        for l in crate::canvas::PageLayout::ORDER {
+            ui.radio_value(&mut defaults.layout, l, tl!(l.label()));
+        }
+    });
+    ui.horizontal(|ui| {
+        use crate::canvas::Fit;
+        ui.label(tl!("Default zoom"));
+        ui.radio_value(&mut defaults.fit, Fit::Width, tl!("Fit to width"));
+        ui.radio_value(&mut defaults.fit, Fit::Page, tl!("Zoom to page level"));
+        ui.radio_value(&mut defaults.fit, Fit::None, tl!("Custom"));
+        // Editing the percentage selects Custom.
+        let mut percent = defaults.zoom * 100.0;
+        if ui.add(egui::DragValue::new(&mut percent).range(8.0..=6400.0).max_decimals(0).suffix("%")).changed() {
+            (defaults.fit, defaults.zoom) = (Fit::None, percent / 100.0);
+        }
+    });
+    ui.label(
+        egui::RichText::new(tl!("Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages."))
+            .small()
+            .color(t.text_muted),
+    );
     ui.add_space(8.0);
     // Identity: the author of new comments (Acrobat: Preferences ▸ Identity).
     ui.label(egui::RichText::new(tl!("Identity")).font(theme::semibold(13.0)));

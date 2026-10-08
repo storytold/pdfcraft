@@ -601,6 +601,20 @@ fn inspect_and_click_by_label_and_id() {
 }
 
 #[test]
+fn cover_page_command_needs_two_page_view() {
+    // Agents see the cover toggle as disabled, and get an error, until two-page view.
+    let (mut h, c) = harness();
+    let enabled = |list: Value| list["commands"].as_array().unwrap().iter().find(|x| x["id"] == "view.layout.cover").unwrap()["enabled"].clone();
+    assert_eq!(enabled(ok(&mut h, &c, "ui.commands", json!({}))), false);
+    let err = call(&mut h, &c, "ui.command", json!({ "id": "view.layout.cover" })).unwrap_err();
+    assert!(err.contains("disabled"), "{err}");
+    ok(&mut h, &c, "ui.command", json!({ "id": "view.layout.two_up" }));
+    assert_eq!(enabled(ok(&mut h, &c, "ui.commands", json!({}))), true);
+    ok(&mut h, &c, "ui.command", json!({ "id": "view.layout.cover" }));
+    assert!(h.state().views[0].cover);
+}
+
+#[test]
 fn commands_keys_and_typing() {
     let (mut h, c) = harness();
     let list = ok(&mut h, &c, "ui.commands", json!({}));

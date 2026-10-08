@@ -1860,3 +1860,7 @@
 	{n} measurements use an unsupported format and are left out.	{n} 個測量使用了不支援的格式，已被排除。
 	This area has too many overlapping paths; intersection snapping is limited.	此區域有太多重疊路徑；交點吸附受到限制。
 	This measurement needs at least {n} points.	此測量至少需要 {n} 個點。
+	Switch to two-page view first to show the cover page	請先切換到雙頁檢視，才能顯示封面
+	Page display: {layout}	頁面顯示：{layout}
+	Fit to width scrolling	符合寬度連續捲動
+	Fit one full page	單頁完整顯示

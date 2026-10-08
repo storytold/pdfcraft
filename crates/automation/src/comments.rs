@@ -49,7 +49,9 @@ fn rect_to_user(p: &PageInfo, r: [f64; 4]) -> [f64; 4] {
     [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
 }
 
-fn rect_to_view(p: &PageInfo, r: [f32; 4]) -> [f32; 4] {
+/// A user-space rectangle as the displayed-page rectangle every tool reports and accepts:
+/// origin at the top-left after `/Rotate`, rounded to 1/100 pt.
+pub(crate) fn rect_to_view(p: &PageInfo, r: [f32; 4]) -> [f32; 4] {
     let (a, b) = (p.user_to_view(r[0], r[1]), p.user_to_view(r[2], r[3]));
     let round = |v: f32| (v * 100.0).round() / 100.0;
     [round(a[0].min(b[0])), round(a[1].min(b[1])), round(a[0].max(b[0])), round(a[1].max(b[1]))]

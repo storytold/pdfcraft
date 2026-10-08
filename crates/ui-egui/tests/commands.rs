@@ -124,6 +124,10 @@ fn every_registered_command_is_implemented() {
             let p = pdfcraft_engine::Protection { open_password: Some("pw".into()), ..Default::default() };
             app.apply_edit(pdfcraft_engine::Edit::Protect(p));
         }
+        // The cover toggle needs two-page view first (it is disabled elsewhere).
+        if spec.id == "view.layout.cover" {
+            app.set_option("layout", "two-up").unwrap();
+        }
         let dir = std::env::temp_dir().join(format!("pdfcraft-cmd-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         app.save_override = Some(dir.join("out.pdf").to_string_lossy().into_owned());
@@ -139,6 +143,9 @@ fn disabled_commands_explain_themselves() {
     app.open_bytes("doc.pdf", None, fixture(2)).unwrap();
     assert!(!app.execute("edit.undo"));
     assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Nothing to undo"));
+    // View state counts too: the cover page exists only in two-page view.
+    assert!(!app.execute("view.layout.cover"));
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Switch to two-page view first to show the cover page"));
     assert!(!app.execute("no.such.command"));
 }
 

@@ -1858,14 +1858,21 @@
 	Change {what}	更改{what}
 	Cut and stack	裁切后堆叠
 	Default workspace mode	默认工作区模式
+	Default page display	默认页面显示
+	Default zoom	默认缩放
 	Documents and view	文档与视图
+	Fit one full page	单页完整显示
+	Fit to width scrolling	适合宽度连续滚动
 	Open email app	打开邮件应用
 	Open link	打开链接
 	Open this web page?	是否打开此网页？
+	Page display: {layout}	页面显示：{layout}
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	脚本在沙盒中运行，无法访问文件或网络。脚本请求打开网页时，需要先获得您的许可。关闭 JavaScript 后，Acrobat 的标准格式、验证和计算函数仍可使用。
 	Sign yourself	自行签名
+	Switch to two-page view first to show the cover page	请先切换到双页视图，才能显示封面页
 	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	尚未安装文本识别功能：缺少模型（请运行 `cargo xtask models` 或设置 PDFCRAFT_MODELS）。
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	用于打开 PDF 时。如果启动参数或控制通道明确指定了模式，则本次会话优先使用该模式。
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF 未指定布局或缩放时使用。连续滚动时页面不会逐页吸附。
 	Write this email?	是否撰写此邮件？
 	{who} in this document wants to open this address in your browser:	此文档中的{who}请求在浏览器中打开以下地址：
 	{who} in this document wants to open your email app with this address:	此文档中的{who}请求打开邮件应用并使用以下地址：

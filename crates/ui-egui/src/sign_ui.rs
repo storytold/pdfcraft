@@ -328,7 +328,7 @@ impl PdfCraftApp {
         match self.session.open_revision(id, n) {
             Ok(new) => {
                 let Some(doc) = self.session.get(new) else { return };
-                self.views.push(DocView::new(new, &doc.info));
+                self.views.push(DocView::new(new, &doc.info, self.view_defaults));
                 self.active = Some(self.views.len() - 1);
             }
             Err(e) => self.notify_fmt("Couldn't open revision {n}: {e}", &[("n", &n.to_string()), ("e", &e.to_string())]),
@@ -344,7 +344,7 @@ impl PdfCraftApp {
         match self.session.open(format!("{name}.pdf"), None, std::sync::Arc::new(bytes), doc.password.clone().as_deref()) {
             Ok(new) => {
                 let Some(doc) = self.session.get(new) else { return };
-                self.views.push(DocView::new(new, &doc.info));
+                self.views.push(DocView::new(new, &doc.info, self.view_defaults));
                 self.active = Some(self.views.len() - 1);
             }
             Err(e) => self.notify_fmt("Couldn't open the signed version: {e}", &[("e", &e.to_string())]),

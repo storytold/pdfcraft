@@ -77,6 +77,7 @@ mod protect;
 mod recovery;
 pub mod theme;
 pub mod updates;
+mod wheel_pager;
 mod widgets;
 
 use pdfcraft_engine::{DocId, Session};
@@ -319,6 +320,10 @@ pub struct PdfCraftApp {
     pub mode: Mode,
     /// Workspace used for newly opened PDFs; independent of PDF Initial View metadata.
     pub default_mode: Mode,
+    /// Page display and zoom for newly opened PDFs that don't ask for their own (Preferences ▸
+    /// Documents and view). Continuous scrolling at fit width by default, which never snaps
+    /// between pages.
+    pub view_defaults: canvas::ViewDefaults,
     /// Explicit CLI/control mode lasts for this session and is never persisted.
     mode_override: Option<Mode>,
     pub left: LeftPanel,
@@ -540,6 +545,7 @@ impl PdfCraftApp {
             active: None,
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
+            view_defaults: Default::default(),
             mode_override: None,
             left: LeftPanel::AllTools,
             left_open: true,
@@ -669,6 +675,7 @@ impl PdfCraftApp {
         }
         let view = &mut self.views[index];
         match v.layout {
+            // The view opened in Default page display already.
             L::Default => {}
             L::SinglePage => view.layout = canvas::PageLayout::Single,
             L::SinglePageContinuous => view.layout = canvas::PageLayout::Continuous,
@@ -679,6 +686,7 @@ impl PdfCraftApp {
             }
         }
         match v.magnification {
+            // The view opened at the default zoom already.
             M::Default => {}
             M::ActualSize => view.set_zoom(1.0),
             M::Percent(p) => view.set_zoom((p / 100.0) as f32),
@@ -726,7 +734,7 @@ impl PdfCraftApp {
             };
         }
         let initial = doc.initial_view();
-        self.views.push(DocView::new(id, &doc.info));
+        self.views.push(DocView::new(id, &doc.info, self.view_defaults));
         self.active = Some(self.views.len() - 1);
         self.apply_initial_view(self.views.len() - 1, &initial);
         if let Some(mode) = self.mode_override {
@@ -1010,6 +1018,8 @@ impl PdfCraftApp {
             "recent": self.recent,
             "theme": self.theme_preference,
             "default_mode": self.default_mode,
+            "default_layout": self.view_defaults.layout.as_str(),
+            "default_zoom": self.view_defaults.zoom_name(),
             "language": self.language,
             "author": self.comment_prefs.author,
             // Drawn signatures keep their original form (older settings read the same).
@@ -1040,6 +1050,12 @@ impl PdfCraftApp {
         }
         if let Ok(mode) = serde_json::from_value::<Mode>(v["default_mode"].clone()) {
             self.default_mode = mode;
+        }
+        if let Some(layout) = v["default_layout"].as_str().and_then(canvas::PageLayout::try_parse) {
+            self.view_defaults.layout = layout;
+        }
+        if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
+            self.view_defaults = defaults;
         }
         if let Some(language) = v["language"].as_str().and_then(i18n::normalize_pref) {
             self.language = language.to_string();
@@ -1180,12 +1196,24 @@ impl PdfCraftApp {
             }
             ("page", Some(v)) => v.go_to_page(value.parse::<usize>().map_err(|e| e.to_string())?.saturating_sub(1)),
             ("zoom", Some(v)) => v.set_zoom(value.trim_end_matches('%').parse::<f32>().map_err(|e| e.to_string())? / 100.0),
-            ("layout", Some(v)) => {
-                v.layout = match value {
-                    "two-up" => canvas::PageLayout::TwoUp,
-                    "single" => canvas::PageLayout::Single,
-                    _ => canvas::PageLayout::Continuous,
+            ("layout", Some(v)) => v.set_layout(canvas::PageLayout::try_parse(value).ok_or("layout must be continuous, single or two-up")?),
+            ("cover", Some(v)) => {
+                let on = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("cover must be on or off".into()),
+                };
+                if on && !v.cover_applies() {
+                    return Err("switch to two-page view first to show the cover page".into());
                 }
+                v.set_cover(on);
+            }
+            ("default-layout", _) => {
+                self.view_defaults.layout = canvas::PageLayout::try_parse(value).ok_or("default-layout must be continuous, single or two-up")?;
+            }
+            ("default-zoom", _) => {
+                self.view_defaults =
+                    self.view_defaults.with_zoom(value).ok_or("default-zoom must be fit-width, fit-page or a percentage from 8 to 6400")?;
             }
             ("organize", Some(v)) => v.organize = value != "off",
             ("rotate", Some(v)) => {
@@ -1274,7 +1302,7 @@ impl PdfCraftApp {
                 v.comments.selected = Some((p.saturating_sub(1), i.saturating_sub(1)));
                 v.comments.reveal = true;
             }
-            (k, None) if ["page", "zoom", "layout", "organize", "fields", "find", "rotate", "select", "notice", "comment"].contains(&k) => {
+            (k, None) if ["page", "zoom", "layout", "cover", "organize", "fields", "find", "rotate", "select", "notice", "comment"].contains(&k) => {
                 return Err(format!("`{k}` needs an open document"));
             }
             (other, _) => return Err(format!("unknown option {other}")),

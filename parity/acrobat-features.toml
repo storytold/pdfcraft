@@ -816,10 +816,10 @@ area = "B"
 tier = "P0"
 milestone = "M3"
 status = "shipped"
-commands = []
+commands = ["view.layout.continuous"]
 tools = []
-evidence = ["crates/ui-egui/tests/view.rs::continuous_layout_stacks_pages_vertically"]
-notes = ""
+evidence = ["crates/ui-egui/tests/view.rs::continuous_layout_stacks_pages_vertically", "crates/ui-egui/tests/view.rs::page_display_commands_switch_layouts", "crates/ui-egui/tests/view.rs::default_page_display_is_used_for_new_documents", "crates/ui-egui/src/canvas.rs::fit_page_and_height_hold_still_while_mixed_page_sizes_scroll_past"]
+notes = "the default for PDFs that don't ask for a layout (Preferences ▸ Default page display); pages stack with no snapping. Fit page and Fit height fit the largest page, so the zoom holds still across mixed page sizes"
 
 [[feature]]
 id = "view.layout-single-page"
@@ -828,10 +828,10 @@ area = "B"
 tier = "P0"
 milestone = "M3"
 status = "shipped"
-commands = []
+commands = ["view.layout.single"]
 tools = []
-evidence = ["crates/ui-egui/tests/view.rs::single_page_layout_shows_one_page_at_a_time"]
-notes = ""
+evidence = ["crates/ui-egui/tests/view.rs::single_page_layout_shows_one_page_at_a_time", "crates/ui-egui/tests/view.rs::single_page_wheel_pans_instead_when_zoomed_in", "crates/ui-egui/tests/view.rs::wheel_turns_one_page_per_notch_and_per_trackpad_swipe", "crates/ui-egui/tests/view.rs::rail_page_display_button_switches_layouts", "crates/ui-egui/tests/view.rs::view_menu_page_display_uses_the_same_commands"]
+notes = "when the whole page fits, each wheel notch turns a page and each trackpad swipe turns one, momentum included; zoomed in, the wheel pans and never turns the page. Switched from the View menu, the rail's Page display button or the palette"
 
 [[feature]]
 id = "view.layout-two-up"
@@ -840,7 +840,7 @@ area = "B"
 tier = "P0"
 milestone = "M3"
 status = "shipped"
-commands = []
+commands = ["view.layout.two_up"]
 tools = []
 evidence = ["crates/ui-egui/tests/view.rs::two_up_layout_places_pages_side_by_side", "crates/ui-egui/tests/viewer.rs::two_page_view_steps_a_spread_at_a_time"]
 notes = "next/previous page step a spread at a time"
@@ -864,10 +864,10 @@ area = "B"
 tier = "P1"
 milestone = "M3"
 status = "shipped"
-commands = []
+commands = ["view.layout.cover"]
 tools = []
-evidence = ["crates/ui-egui/tests/viewer.rs::layouts_fit_height_labels_and_system_theme"]
-notes = "View ▸ Show cover page in two-page view"
+evidence = ["crates/ui-egui/tests/viewer.rs::layouts_fit_height_labels_and_system_theme", "crates/ui-egui/tests/view.rs::page_display_commands_switch_layouts"]
+notes = "View ▸ Page display, the rail's Page display button or the palette; disabled outside two-page view"
 
 [[feature]]
 id = "view.page-gaps"
@@ -936,10 +936,10 @@ area = "B"
 tier = "P0"
 milestone = "M3"
 status = "shipped"
-commands = []
+commands = ["view.fit_one_page"]
 tools = []
-evidence = ["crates/ui-egui/tests/view.rs::actual_size_fit_width_and_fit_page"]
-notes = ""
+evidence = ["crates/ui-egui/tests/view.rs::actual_size_fit_width_and_fit_page", "crates/ui-egui/tests/view.rs::rail_page_display_menu_offers_acrobats_view_choices", "crates/ui-egui/tests/view.rs::fit_page_holds_zoom_across_mixed_page_sizes", "crates/ui-egui/tests/view.rs::single_page_fit_page_fits_the_shown_page"]
+notes = "View ▸ Zoom to page level (⌘0) and the rail's Page display menu, which also offers Fit one full page (single-page view at Fit page). Scrolling views fit their largest page so mixed sizes never jump the zoom; single-page view fits the shown page"
 
 [[feature]]
 id = "view.zoom-fit-width"
@@ -948,10 +948,10 @@ area = "B"
 tier = "P0"
 milestone = "M3"
 status = "shipped"
-commands = []
+commands = ["view.fit_width_scrolling"]
 tools = []
-evidence = ["crates/ui-egui/tests/view.rs::actual_size_fit_width_and_fit_page"]
-notes = ""
+evidence = ["crates/ui-egui/tests/view.rs::actual_size_fit_width_and_fit_page", "crates/ui-egui/tests/view.rs::rail_page_display_menu_offers_acrobats_view_choices"]
+notes = "View ▸ Fit to width (⌘2) and the rail's Page display menu's Fit to width scrolling (continuous scrolling at Fit width)"
 
 [[feature]]
 id = "view.zoom-fit-height"
@@ -9683,11 +9683,11 @@ title = "Preferences: page display"
 area = "N"
 tier = "P1"
 milestone = "M14"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/view.rs::default_page_display_is_used_for_new_documents", "crates/ui-egui/tests/view.rs::default_zoom_is_used_for_new_documents", "crates/ui-egui/tests/view.rs::preferences_set_the_default_zoom"]
+notes = "Preferences ▸ Documents and view: Default page display and Default zoom (Fit to width, Zoom to page level or a percentage) for every new tab; a PDF that asks for a layout or zoom gets it. Missing: Acrobat's resolution, rendering and page-content options"
 
 [[feature]]
 id = "misc.prefs-documents"

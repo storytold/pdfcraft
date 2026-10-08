@@ -92,3 +92,15 @@
 	Check for updates…	Zkontrolovat aktualizace…
 	About PdfCraft	O aplikaci PdfCraft
 	Auto	Automaticky
+	Continuous scrolling	Plynulé posouvání
+	Single page	Jednostránkové zobrazení
+	Two-page view	Dvoustránkové zobrazení
+	Show cover page in two-page view	Zobrazit titulní stránku ve dvoustránkovém zobrazení
+	Page display	Zobrazení stránek
+	Page display: {layout}	Zobrazení stránek: {layout}
+	Default page display	Výchozí zobrazení stránek
+	Default zoom	Výchozí zvětšení
+	Custom	Vlastní
+	Fit to width scrolling	Plynulé posouvání s přizpůsobením šířce
+	Fit one full page	Celá jedna stránka
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Používá se, když PDF nepožaduje rozložení ani zvětšení. Plynulé posouvání mezi stránkami neskáče.

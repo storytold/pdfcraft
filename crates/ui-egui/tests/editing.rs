@@ -197,7 +197,7 @@ fn organize_select_all_works_without_page_editing_permission() {
     assert_eq!(h.state().views[0].selected.len(), 1);
 
     // The opener refuses zero-page PDFs, but the view method also handles empty geometry.
-    let mut empty = pdfcraft_ui_egui::canvas::DocView::new(pdfcraft_engine::DocId(0), &Default::default());
+    let mut empty = pdfcraft_ui_egui::canvas::DocView::new(pdfcraft_engine::DocId(0), &Default::default(), Default::default());
     empty.organize = true;
     assert!(!empty.select_all());
     assert!(empty.selected.is_empty());

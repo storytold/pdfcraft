@@ -628,18 +628,18 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_protect",
             "Protect with passwords",
-            "Encrypt the document (applied by the next doc_save, a full rewrite). open_password is needed to open it; permissions_password is needed to change security and lifts the restrictions given by printing/changes/copy. Passwords are never echoed back. Undoable.",
+            "Encrypt the document (applied by the next doc_save, a full rewrite). open_password is needed to open it. permissions_password is needed to change security and lifts the restrictions given by printing/changes/copy/accessibility; those restrictions (and their defaults) apply only when permissions_password is given. With open_password alone the document is encrypted and everything stays allowed, so passing a restriction without permissions_password is an error. Passwords are never echoed back. Undoable.",
         )
         .cmd("protect.password")
         .with(schema(
             json!({
                 "doc": doc(),
-                "open_password": { "type": "string", "minLength": 1 },
-                "permissions_password": { "type": "string", "minLength": 1 },
-                "printing": { "type": "string", "enum": ["none", "low", "high"], "description": "Default high." },
-                "changes": { "type": "string", "enum": ["none", "pages", "fill-sign", "comment-fill-sign", "any-except-extract"], "description": "Default none." },
-                "copy": { "type": "boolean", "description": "Allow copying text and images (default false)." },
-                "accessibility": { "type": "boolean", "description": "Allow screen readers to read the text (default true)." },
+                "open_password": { "type": "string", "minLength": 1, "description": "Required to open the document. On its own it restricts nothing." },
+                "permissions_password": { "type": "string", "minLength": 1, "description": "Required to change security; enables printing/changes/copy/accessibility and their defaults." },
+                "printing": { "type": "string", "enum": ["none", "low", "high"], "description": "Needs permissions_password. Default high." },
+                "changes": { "type": "string", "enum": ["none", "pages", "fill-sign", "comment-fill-sign", "any-except-extract"], "description": "Needs permissions_password. Default none." },
+                "copy": { "type": "boolean", "description": "Allow copying text and images (needs permissions_password; default false)." },
+                "accessibility": { "type": "boolean", "description": "Allow screen readers to read the text (needs permissions_password; default true)." },
                 "compatibility": { "type": "string", "enum": ["aes-256", "aes-128", "rc4-128", "rc4-40"], "description": "Default aes-256 (Acrobat X and later)." },
                 "encrypt_metadata": { "type": "boolean", "description": "Default true." },
             }),

@@ -364,7 +364,7 @@ impl PdfCraftApp {
         match self.session.open_new(name, bytes) {
             Ok(id) => {
                 let Some(doc) = self.session.get(id) else { return };
-                self.views.push(crate::DocView::new(id, &doc.info));
+                self.views.push(crate::DocView::new(id, &doc.info, self.view_defaults));
                 self.active = Some(self.views.len() - 1);
                 self.notify_tr(message);
             }
