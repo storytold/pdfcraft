@@ -399,18 +399,15 @@ pub(crate) fn read_widths(dict: &Dict<'_>, descriptor: &Dict<'_>) -> Option<(Vec
     let missing_width = descriptor.get::<f32>(MISSING_WIDTH).unwrap_or(0.0);
 
     if let (Some(fc), Some(lc), Some(w)) = (first_char, last_char, widths_arr) {
-        let iter = w.iter::<f32>().take(lc.checked_sub(fc)?.checked_add(1)?);
-
-        for _ in 0..fc {
-            widths.push(Width::Missing);
-        }
-
-        for w in iter {
-            widths.push(Width::Value(w));
-        }
-
-        while widths.len() <= (u8::MAX as usize) + 1 {
-            widths.push(Width::Missing);
+        // PdfCraft patch: simple-font codes are single bytes, so only codes up to 255 get an
+        // entry (one per code below /FirstChar was pushed: 4294967295 asked for 34 GB). An
+        // entry that isn't a number leaves its code missing instead of ending the array, and a
+        // /LastChar below /FirstChar means no widths rather than no font.
+        widths = vec![Width::Missing; u8::MAX as usize + 1];
+        for (code, entry) in (fc..=lc.min(u8::MAX as usize)).zip(w.iter::<Object<'_>>()) {
+            if let (Some(slot), Object::Number(n)) = (widths.get_mut(code), entry) {
+                *slot = Width::Value(n.as_f32());
+            }
         }
     }
 

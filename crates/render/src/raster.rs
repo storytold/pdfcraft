@@ -774,6 +774,134 @@ trailer << /Root 1 0 R >>
         assert_eq!(px(30, 58), vec![255, 255, 255, 255], "above /Rect");
     }
 
+    /// ISO 32000-2 §12.5.5: the transformed appearance box is scaled and translated so that its
+    /// lower-left and upper-right corners land on those of /Rect. The translation ignored the
+    /// scale, so a box that doesn't start at the origin and differs in size from /Rect was drawn
+    /// shifted, partly outside /Rect (vendored hayro-interpret patch). MuPDF, Poppler, PDFium and
+    /// pdf.js fill /Rect exactly for each of these.
+    #[test]
+    fn annotation_appearance_box_maps_onto_rect() {
+        let filled = |form: &str, content: &str| {
+            let pdf = format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Square /Rect [10 10 60 40] /AP << /N 5 0 R >> >> endobj
+5 0 obj << /Type /XObject /Subtype /Form {form} /Length {} >> stream
+{content}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+                content.len()
+            );
+            let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            assert!(p.error.is_none(), "{form}: {:?}", p.error);
+            // The bounding box of everything drawn, in device pixels.
+            let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+            for y in 0..p.height {
+                for x in 0..p.width {
+                    if p.rgba[((y * p.width + x) * 4) as usize..][..4] != [255, 255, 255, 255] {
+                        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                    }
+                }
+            }
+            (x0, y0, x1, y1)
+        };
+        // /Rect [10 10 60 40] is device x 10..=59, y 60..=89.
+        let rect = (10, 60, 59, 89);
+        for (form, content) in [
+            ("/BBox [10 10 30 30]", "1 0 0 rg 10 10 20 20 re f"),
+            ("/BBox [0 0 20 20] /Matrix [1 0 0 1 10 10]", "1 0 0 rg 0 0 20 20 re f"),
+            ("/BBox [-20 -5 0 15]", "1 0 0 rg -20 -5 20 20 re f"),
+            // Unchanged: a box at the origin, and an offset box as large as /Rect.
+            ("/BBox [0 0 20 20]", "1 0 0 rg 0 0 20 20 re f"),
+            ("/BBox [100 100 150 130]", "1 0 0 rg 100 100 50 30 re f"),
+        ] {
+            assert_eq!(filled(form, content), rect, "{form}");
+        }
+    }
+
+    /// A Highlight annotation without an appearance stream (common in older and generated files)
+    /// was not drawn at all. Vendored hayro-interpret patch: its /QuadPoints are filled with /C at
+    /// /CA, blended with Multiply, as PdfCraft draws its own highlights (pdfcraft-annot); MuPDF,
+    /// Poppler and PDFium draw these fixtures the same way. An /AP still wins, malformed
+    /// /QuadPoints or no /C draw nothing, and Hidden, NoView and "Hide all comments" still apply.
+    #[test]
+    fn highlights_without_an_appearance_are_drawn() {
+        let render = |annot: &str, config: RenderConfig| {
+            let content = "0 g 100 40 10 20 re f";
+            let pdf = format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Annots [5 0 R] >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Annot /Subtype /Highlight /Rect [15 35 120 65] {annot} >> endobj
+6 0 obj << /Type /XObject /Subtype /Form /BBox [15 35 120 65] /Length 24 >> stream
+0 0 1 rg 15 35 50 30 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+                content.len()
+            );
+            let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), config);
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            assert!(p.error.is_none(), "{annot}: {:?}", p.error);
+            p
+        };
+        let px = |p: &RenderedPage, x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+        let (white, black, yellow) = (vec![255, 255, 255, 255], vec![0, 0, 0, 255], vec![255, 255, 0, 255]);
+        let quad = "/QuadPoints [15 65 120 65 15 35 120 35]";
+
+        let p = render(&format!("{quad} /C [1 1 0]"), RenderConfig::default());
+        assert_eq!(px(&p, 30, 50), yellow, "the quad is filled with /C");
+        assert_eq!(px(&p, 105, 50), black, "Multiply keeps what is underneath");
+        assert_eq!(px(&p, 150, 50), white, "outside the quad");
+        assert_eq!(px(&p, 30, 30), white, "above the quad");
+
+        // Two quads (one per line of text); the gap between them stays white.
+        let p = render("/QuadPoints [15 65 60 65 15 50 60 50 70 50 120 50 70 35 120 35] /C [0 1 1]", RenderConfig::default());
+        assert_eq!(px(&p, 30, 40), vec![0, 255, 255, 255]);
+        assert_eq!(px(&p, 90, 60), vec![0, 255, 255, 255]);
+        assert_eq!((px(&p, 90, 40), px(&p, 30, 60)), (white.clone(), white.clone()));
+
+        // /CA and gray /C.
+        let p = render(&format!("{quad} /C [1 0 0] /CA 0.5"), RenderConfig::default());
+        let half = px(&p, 30, 50);
+        assert!(half[0] == 255 && (126..=129).contains(&half[1]) && half[1] == half[2], "{half:?}");
+        let p = render(&format!("{quad} /C [0.5]"), RenderConfig::default());
+        let gray = px(&p, 30, 50);
+        assert!((126..=129).contains(&gray[0]) && gray[0] == gray[1] && gray[1] == gray[2], "{gray:?}");
+
+        // An appearance stream wins: the blue form, not a yellow highlight.
+        let p = render(&format!("{quad} /C [1 1 0] /AP << /N 6 0 R >>"), RenderConfig::default());
+        assert_eq!(px(&p, 30, 50), vec![0, 0, 255, 255]);
+        assert_eq!(px(&p, 90, 50), white, "no highlight outside the appearance's own drawing");
+
+        // Nothing is drawn for malformed geometry, no colour, or a hidden annotation.
+        let hide = RenderConfig { hide_comments: true, ..RenderConfig::default() };
+        for (annot, config) in [
+            ("/QuadPoints [10 10 20] /C [1 1 0]", RenderConfig::default()),
+            ("/QuadPoints [15 65 120 65 15 35 /x 35] /C [1 1 0]", RenderConfig::default()),
+            ("/QuadPoints [] /C [1 1 0]", RenderConfig::default()),
+            ("/QuadPoints 7 /C [1 1 0]", RenderConfig::default()),
+            (quad, RenderConfig::default()),
+            (&format!("{quad} /C []"), RenderConfig::default()),
+            (&format!("{quad} /C [1 1]"), RenderConfig::default()),
+            (&format!("{quad} /C [1 1 0] /F 2"), RenderConfig::default()),
+            (&format!("{quad} /C [1 1 0] /F 32"), RenderConfig::default()),
+            (&format!("{quad} /C [1 1 0]"), hide),
+        ] {
+            let p = render(annot, config);
+            assert_eq!(px(&p, 30, 50), white, "{annot}");
+            assert_eq!(px(&p, 105, 50), black, "{annot}");
+        }
+    }
+
     #[test]
     fn hiding_comments_keeps_fields() {
         let pdf = b"%PDF-1.7
@@ -1240,6 +1368,79 @@ trailer << /Root 1 0 R >>
         });
         let (px, text) = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("rendering a huge /W range must not hang");
         assert!(px.is_none() && text.is_none(), "{px:?} {text:?}");
+    }
+
+    /// "BBBA" at 20 pt in a Type 3 font whose glyph (for both codes) is a solid 300 × 700 box,
+    /// with the given /FirstChar, /LastChar and /Widths. No font program is needed, and Type 3
+    /// widths are read like those of every other simple font.
+    fn type3_boxes(widths: &str) -> Vec<u8> {
+        let content = "BT /F1 20 Tf 20 40 Td (BBBA) Tj ET";
+        format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] {widths}
+  /Encoding << /Differences [65 /a /a] >> /CharProcs << /a 6 0 R >> >> endobj
+6 0 obj << /Length 27 >> stream
+600 0 d0 100 0 400 700 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len()
+        )
+        .into_bytes()
+    }
+
+    /// Simple-font widths (vendored hayro-interpret patch to `read_widths`): an entry of /Widths
+    /// that isn't a number ended the array, so every later code lost its width, and a /LastChar
+    /// below /FirstChar (or one that overflowed) made the whole font fail to load, replaced by a
+    /// standard font. MuPDF, Poppler, PDFium and pdf.js skip just that entry and keep the font.
+    #[test]
+    fn malformed_simple_font_widths_keep_later_widths_and_the_font() {
+        let render = |widths: &str| {
+            let mut r = PageRenderer::new(Arc::new(type3_boxes(widths)), RenderConfig::default());
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            assert!(p.error.is_none(), "{widths}: {:?}", p.error);
+            p
+        };
+        // Glyph boxes span x 22..28 plus 12 pt per advance, and y 46..60 (y down).
+        let inked = |p: &RenderedPage, x: u32| (47..59).all(|y| p.rgba[((y * p.width + x) * 4) as usize] < 64);
+        for widths in [
+            "/FirstChar 65 /LastChar 66 /Widths [600 600]",
+            "/FirstChar 65 /LastChar 66 /Widths [null 600]",
+            "/FirstChar 65 /LastChar 66 /Widths [/W 600]",
+        ] {
+            let p = render(widths);
+            assert!([25, 37, 49, 61].iter().all(|x| inked(&p, *x)), "{widths}: each B advances 600");
+            assert!(!inked(&p, 31), "{widths}");
+        }
+        for widths in ["/FirstChar 66 /LastChar 65 /Widths [600 600]", "/FirstChar 4294967295 /LastChar 66 /Widths [600 600]"] {
+            let p = render(widths);
+            // The font's own box, drawn without advances (no width applies), not a stand-in font.
+            assert!(inked(&p, 23) && inked(&p, 27), "{widths}: the Type 3 glyph is drawn");
+            assert!(!inked(&p, 37), "{widths}: no width, no advance");
+        }
+    }
+
+    /// Simple-font widths (vendored hayro-interpret patch to `read_widths`): /FirstChar sized an
+    /// allocation, one entry per code below it, before any width was read. 50,000,000 already
+    /// took 276 MB; 4294967295 asks for 34 GB. Codes of a simple font stop at 255.
+    #[test]
+    fn huge_simple_font_first_char_terminates() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(type3_boxes("/FirstChar 4294967295 /LastChar 4294967295 /Widths [600]")), RenderConfig::default());
+            let px = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            let text = r.render(RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
+            let _ = tx.send((px, text.error));
+        });
+        let (px, text) = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("a huge /FirstChar must not exhaust memory");
+        assert!(px.error.is_none() && text.is_none(), "{:?} {text:?}", px.error);
+        assert!(px.rgba[((50 * px.width + 25) * 4) as usize] < 64, "the glyph is drawn");
     }
 
     #[test]

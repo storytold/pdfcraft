@@ -33,8 +33,12 @@ Once the draft is published, the workflow refuses to touch that version again, s
 
 **Test runs:** *Actions ▸ Release ▸ Run workflow* runs the whole pipeline by hand. The optional
 `version` input (such as `0.3.0-rc.1`) overrides `Cargo.toml` for that run only; each job applies it
-with `cargo xtask version set` before building, so the binaries report it too. The jobs use the
-`release` environment, so pick the `release` branch in the dialog.
+with `cargo xtask version set` before building, so the binaries report it too. The signing jobs
+(macOS, Windows) and the draft-release job use the `release` environment, so pick the `release`
+branch in the dialog for a full run. On any other branch the same dispatch is a **dry run**: the
+Linux, Flatpak, FreeBSD and web jobs build and check everything, the signing jobs are refused by the
+environment's branch rule, and the draft-release job (which needs them) is skipped, so nothing is
+published (`gh workflow run release.yml --ref <branch>`).
 
 ## What gets built
 
@@ -44,8 +48,10 @@ with `cargo xtask version set` before building, so the binaries report it too. T
 | Windows 10+ x64 | `pdfcraft-<v>-windows-x64.msi`, `pdfcraft-<v>-windows-x64-portable.zip` | `windows-latest` |
 | Windows 10+ x86 (32-bit) | `pdfcraft-<v>-windows-x86.msi`, `pdfcraft-<v>-windows-x86-portable.zip` | `windows-latest` |
 | Windows 11 on ARM64 | `pdfcraft-<v>-windows-arm64.msi`, `pdfcraft-<v>-windows-arm64-portable.zip` | `windows-latest` (cross-compiled) |
-| Linux x86_64 | `pdfcraft-<v>-linux-x86_64.{AppImage,deb,rpm,tar.gz}` | `ubuntu-22.04` |
-| Linux aarch64 | `pdfcraft-<v>-linux-aarch64.{AppImage,deb,rpm,tar.gz}` | `ubuntu-22.04-arm` |
+| Linux x86_64 | `pdfcraft-<v>-linux-x86_64.{AppImage,AppImage.zsync,deb,rpm,tar.gz}` | `ubuntu-22.04` |
+| Linux aarch64 | `pdfcraft-<v>-linux-aarch64.{AppImage,AppImage.zsync,deb,rpm,tar.gz}` | `ubuntu-22.04-arm` |
+| Flatpak x86_64 | `pdfcraft-<v>-linux-x86_64.flatpak` | `ubuntu-24.04` (repackages the Linux tarball) |
+| Flatpak aarch64 | `pdfcraft-<v>-linux-aarch64.flatpak` | `ubuntu-24.04-arm` (repackages the Linux tarball) |
 | FreeBSD 14 x86_64 | `pdfcraft-<v>-freebsd-x86_64.tar.gz` | FreeBSD VM on `ubuntu-latest` |
 | Web | `pdfcraft-web-<v>.zip` (a static site; see [`packaging/web/README.md`](../packaging/web/README.md)) | `ubuntu-latest` |
 
@@ -127,7 +133,24 @@ The binaries are built on Ubuntu 22.04, the oldest GitHub-hosted image, so they 
 xkbcommon) and the GPU (Vulkan, EGL) are loaded at runtime from the system; the .deb and .rpm declare
 them as dependencies (see `nfpm.yaml`).
 
-Locally (on Linux, with nfpm): `packaging/linux/package.sh` or `--formats "deb tar"`.
+Each AppImage embeds update information
+(`gh-releases-zsync|storytold|pdfcraft|latest|pdfcraft-*-linux-<arch>.AppImage.zsync`), and its
+`.zsync` is published beside it, so AppImageUpdate and AppImageLauncher can update it in place,
+downloading only the changed blocks. `latest` is the newest published, non-pre-release version.
+`package.sh` writes the `.zsync` when `zsyncmake` (the `zsync` package) is installed and warns
+otherwise; the release job checks both.
+
+**Flatpak:** the `flatpak` job turns each arch's tarball into a single-file bundle with
+`packaging/linux/flatpak-bundle.sh` and `flatpak/ai.storyteller.pdfcraft.bundle.yml` (no Rust build;
+the same binaries), then installs it and runs `pdfcraft-cli --version` in the sandbox.
+`flatpak/ai.storyteller.pdfcraft.yml` is the from-source manifest for a later Flathub submission;
+packaging-lint keeps the runtime and sandbox permissions (`finish-args`) of the two identical.
+Printing is not available in the Flatpak yet: it runs `lp`, which the freedesktop runtime lacks
+(the job logs a note); it needs the print portal. Users install the bundle with `flatpak install --user pdfcraft-<v>-linux-<arch>.flatpak`; the
+freedesktop runtime comes from Flathub.
+
+Locally (on Linux, with nfpm): `packaging/linux/package.sh` or `--formats "deb tar"`; then
+`packaging/linux/flatpak-bundle.sh` for the Flatpak.
 
 ### FreeBSD
 

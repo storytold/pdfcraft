@@ -770,8 +770,8 @@ milestone = "M2"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster.rs::widget_appearance_states"]
-notes = ""
+evidence = ["crates/render/src/raster.rs::widget_appearance_states", "crates/render/src/raster.rs::highlights_without_an_appearance_are_drawn"]
+notes = "a Highlight without /AP is drawn from /QuadPoints, /C and /CA; other comment types without /AP are not drawn yet"
 
 [[feature]]
 id = "view.render-error-isolation"

@@ -8,6 +8,8 @@
 #   flatpak run ai.storyteller.pdfcraft
 #
 # For Flathub, replace the `dir` source with a `git` source pinned to a release tag and commit.
+# The single-file .flatpak attached to each release comes from ai.storyteller.pdfcraft.bundle.yml,
+# which repackages the prebuilt release binaries. Keep runtime-version and finish-args identical.
 id: ai.storyteller.pdfcraft
 runtime: org.freedesktop.Platform
 runtime-version: '25.08'
@@ -16,14 +18,24 @@ sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 command: pdfcraft
 finish-args:
-  - --share=ipc
+  # Display: Wayland first; X11 only when no Wayland compositor is running.
   - --socket=wayland
   - --socket=fallback-x11
+  # X11 shared memory (MIT-SHM). Without it the X11 fallback is slow or fails.
+  - --share=ipc
+  # GPU access for the wgpu renderer (Vulkan, or GL as a fallback).
   - --device=dri
-  # Open/Save dialogs use the file-chooser portal (rfd), and drag-and-drop uses the document
-  # portal, so broad filesystem access isn't needed. Pictures is granted for opening files by
-  # path from the command line.
-  - --filesystem=xdg-pictures
+  # Open/Save dialogs go through the file-chooser portal (rfd's xdg-portal backend) and
+  # drag-and-drop through the document portal, so picked files work anywhere without broad
+  # filesystem access. Documents and Downloads, where PDFs usually live, are granted so files
+  # passed by path (the command line, Open Recent, "Save" next to the original) work there.
+  - --filesystem=xdg-documents
+  - --filesystem=xdg-download
+  # Deliberately not granted: network (Flatpak installs update through flatpak, so Help ▸ Check
+  # for updates reports that GitHub is unreachable; the optional --control channel listens on
+  # 127.0.0.1 inside the sandbox) and home/host filesystem access. No CUPS socket either: printing
+  # runs the `lp` command (crates/print), which the freedesktop runtime doesn't ship, so Print
+  # reports that the spooler is unavailable until it goes through the print portal.
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
 modules:
