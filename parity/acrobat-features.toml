@@ -5807,11 +5807,11 @@ title = "Sign with the Windows certificate store"
 area = "H"
 tier = "P0"
 milestone = "M9"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["sign.digital", "sign.certify"]
+tools = ["sign_windows_ids", "sign_document"]
+evidence = ["crates/sign/tests/pdf.rs::signing_with_windows_store_identities", "crates/sign/tests/pdf.rs::windows_store_enumeration_and_missing_identity", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/ui-egui/tests/signing.rs::windows_store_identity_does_not_ask_for_a_file_password"]
+notes = "Current User Personal (My) CNG identities: RSA PKCS #1 v1.5 and DER-encoded ECDSA P-256/P-384. Keys never leave Windows; windows:<fingerprint|common name> for agents and Windows store labels in the desktop ID picker. Tested with throwaway software-backed RSA-2048, P-256 and P-384 certificates (run with --ignored); smart cards and PKCS #11 still planned."
 
 [[feature]]
 id = "sign.pkcs11"

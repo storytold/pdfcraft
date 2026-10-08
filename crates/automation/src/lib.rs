@@ -578,6 +578,17 @@ impl Automation {
                 let ids: Vec<Value> = Vec::new();
                 json!({ "count": ids.len(), "ids": ids })
             }
+            "sign_windows_ids" => {
+                #[cfg(target_os = "windows")]
+                let ids: Vec<Value> = pdfcraft_engine::sign::windows::identities()
+                    .map_err(failed)?
+                    .iter()
+                    .map(|id| json!({ "id": pdfcraft_engine::sign::windows::reference(&id.certificate), "certificate": signing::cert_json(&id.certificate) }))
+                    .collect();
+                #[cfg(not(target_os = "windows"))]
+                let ids: Vec<Value> = Vec::new();
+                json!({ "count": ids.len(), "ids": ids })
+            }
             "sign_trust" => self.sign_trust(&a)?,
             "comment_mark" => self.comment_mark(&a)?,
             "comment_lock" => self.comment_lock(&a)?,

@@ -156,7 +156,7 @@ fn main() -> eframe::Result {
             }
             app.integrated_titlebar = integrated;
             app.update_source = Some(std::sync::Arc::new(updates::latest_release));
-            app.keychain_ids = cfg!(target_os = "macos");
+            app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
             #[cfg(target_os = "macos")]
             {
                 app.os_events = Some(apple_events.connect(&cc.egui_ctx));

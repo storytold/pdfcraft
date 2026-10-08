@@ -170,6 +170,14 @@ fn keychain_id(reference: &str) -> Result<DigitalId, String> {
     Err(format!("{reference}: Keychain identities are only available on macOS"))
 }
 
+/// A Windows store identity by its `windows:` reference.
+fn windows_id(reference: &str) -> Result<DigitalId, String> {
+    #[cfg(target_os = "windows")]
+    return sign::windows::find(reference).map_err(|e| e.to_string());
+    #[cfg(not(target_os = "windows"))]
+    Err(format!("{reference}: Windows certificate store identities are only available on Windows"))
+}
+
 pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
     DigitalIdEntry {
         path: path.to_string(),
@@ -183,16 +191,16 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
 impl PdfCraftApp {
     /// Start signing: the rectangle (or field) is known; show Sign with a Digital ID.
     pub fn start_signing(&mut self, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>) {
-        self.refresh_keychain_ids();
+        self.refresh_os_key_store_ids();
         self.sign_draft = Some(SignDraft::new(page, rect, field, certify, self.digital_ids.len()));
         self.dialog = Some(crate::Dialog::Sign);
     }
 
-    /// List the macOS Keychain's signing identities (after the file-based IDs).
-    fn refresh_keychain_ids(&mut self) {
-        self.digital_ids.retain(|e| !e.path.starts_with("keychain:"));
+    /// List OS key store signing identities (after the file-based IDs).
+    fn refresh_os_key_store_ids(&mut self) {
+        self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:"));
         #[cfg(target_os = "macos")]
-        if self.keychain_ids {
+        if self.os_key_store_ids {
             match sign::keychain::identities(None) {
                 Ok(ids) => {
                     for id in ids {
@@ -200,6 +208,17 @@ impl PdfCraftApp {
                     }
                 }
                 Err(e) => self.notify_fmt("The Keychain's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
+            }
+        }
+        #[cfg(target_os = "windows")]
+        if self.os_key_store_ids {
+            match sign::windows::identities() {
+                Ok(ids) => {
+                    for id in ids {
+                        self.digital_ids.push(entry_for(&sign::windows::reference(&id.certificate), &id.certificate));
+                    }
+                }
+                Err(e) => self.notify_fmt("The Windows store's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
             }
         }
     }
@@ -278,6 +297,8 @@ impl PdfCraftApp {
         let entry = d.selected.and_then(|i| self.digital_ids.get(i)).cloned().ok_or("Choose a digital ID.")?;
         let id = if entry.path.starts_with("keychain:") {
             keychain_id(&entry.path)?
+        } else if entry.path.starts_with("windows:") {
+            windows_id(&entry.path)?
         } else {
             let bytes = std::fs::read(&entry.path).map_err(|e| format!("{}: {e}", entry.path))?;
             sign::pkcs12::open(&bytes, &d.password).map_err(|e| match e {
@@ -429,7 +450,13 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             ui.painter().text(rect.min + vec2(40.0, 9.0), egui::Align2::LEFT_TOP, &e.name, theme::semibold(13.0), t.text);
             let sub = format!(
                 "{keychain}{email}{issued}{issuer}{expires}{date}",
-                keychain = if e.path.starts_with("keychain:") { tl!("Keychain  ·  ").to_string() } else { String::new() },
+                keychain = if e.path.starts_with("keychain:") {
+                    tl!("Keychain  ·  ").to_string()
+                } else if e.path.starts_with("windows:") {
+                    tl!("Windows store  ·  ").to_string()
+                } else {
+                    String::new()
+                },
                 email = if e.email.is_empty() { String::new() } else { format!("{}  ·  ", e.email) },
                 issued = tl!("Issued by: "),
                 issuer = e.issuer,
@@ -622,7 +649,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             &[("verb", if d.certify.is_some() { tl!("Certify") } else { tl!("Sign") }), ("name", &entry.name)],
         ),
     );
-    let in_keychain = entry.path.starts_with("keychain:");
+    let in_os_key_store = entry.path.starts_with("keychain:") || entry.path.starts_with("windows:");
     let mut close = false;
     let mut go = false;
     if d.rect.is_some() || d.field.is_some() {
@@ -664,10 +691,16 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         let l = ui.label(tl!("Location"));
         ui.add(egui::TextEdit::singleline(&mut d.location).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
         ui.end_row();
-        if in_keychain {
+        if in_os_key_store {
             ui.label("");
             ui.label(
-                egui::RichText::new(tl!("The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.")).small().color(t.text_muted),
+                egui::RichText::new(if entry.path.starts_with("windows:") {
+                    tl!("The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.")
+                } else {
+                    tl!("The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.")
+                })
+                .small()
+                .color(t.text_muted),
             );
         } else {
             let l = ui.label(tl!("Digital ID password"));

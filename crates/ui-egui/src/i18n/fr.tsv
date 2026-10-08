@@ -788,6 +788,7 @@
 	Sign with a Digital ID	Signer avec un ID numérique
 	Choose the digital ID that you want to use for signing:	Choisissez l'ID numérique à utiliser pour signer :
 	Keychain  ·  	Trousseau  ·  
+	Windows store  ·  	Magasin Windows  ·  
 	Issued by: 	Émis par : 
 	, Expires: 	, expire : 
 	No digital IDs yet.	Aucun ID numérique pour l'instant.
@@ -817,6 +818,7 @@
 	Annotations, form fill-in, and digital signatures	Annotations, remplissage de formulaire et signatures numériques
 	Form fill-in and digital signatures	Remplissage de formulaire et signatures numériques
 	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	La clé est dans le Trousseau de macOS, qui peut demander l'autorisation d'utilisation par PdfCraft.
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	La clé est dans le magasin de certificats Windows, qui peut demander l'autorisation d'utilisation par PdfCraft.
 	Digital ID password	Mot de passe de l'ID numérique
 	Back	Retour
 	Validate all	Tout valider

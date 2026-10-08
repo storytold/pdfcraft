@@ -444,6 +444,7 @@
 	Sign with a Digital ID	使用数字 ID 签名
 	Choose the digital ID that you want to use for signing:	选择要用于签名的数字 ID：
 	Keychain  ·  	钥匙串 · 
+	Windows store  ·  	Windows 证书存储 · 
 	Issued by: 	颁发者：
 	, Expires: 	，有效期至：
 	No digital IDs yet.	尚无数字 ID。
@@ -473,6 +474,7 @@
 	Annotations, form fill-in, and digital signatures	注释、填写表单和数字签名
 	Form fill-in and digital signatures	填写表单和数字签名
 	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	密钥位于 macOS 钥匙串中，系统可能会询问是否允许 PdfCraft 使用它。
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	密钥位于 Windows 证书存储中，系统可能会询问是否允许 PdfCraft 使用它。
 	Digital ID password	数字 ID 密码
 	Back	返回
 	Validate all	全部验证

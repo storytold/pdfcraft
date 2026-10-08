@@ -3764,6 +3764,7 @@ dependencies = [
  "pdfcraft-fonts",
  "rc2",
  "rsa",
+ "rustls-cng",
  "security-framework",
  "sha1",
  "sha2",
@@ -4736,6 +4737,17 @@ dependencies = [
  "rustls-webpki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rustls-cng"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3eeed9c3e96253f36d1cfdd593388ecca775b532b6ff0c649a3010f6af60fe70"
+dependencies = [
+ "bitflags 2.13.2",
+ "rustls",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

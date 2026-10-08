@@ -1631,6 +1631,13 @@ fn digital_ids_signing_and_validation_through_tools() {
     assert_eq!(ok(&mut a, "sign_list", json!({ "doc": doc }))["count"], 0);
     // A Keychain identity that doesn't exist (macOS) or Keychains at all (elsewhere).
     assert!(matches!(a.call("sign_document", &json!({ "doc": doc, "id": "keychain:No Such Signer", "out": "k.pdf" })), Err(ToolError::Failed(_))));
+    assert!(matches!(a.call("sign_document", &json!({ "doc": doc, "id": "windows:No Such Signer", "out": "w.pdf" })), Err(ToolError::Failed(_))));
+    let store = ok(&mut a, "sign_windows_ids", json!({}));
+    let ids = store["ids"].as_array().unwrap();
+    assert_eq!(store["count"].as_u64().unwrap(), ids.len() as u64);
+    assert!(ids.iter().all(|id| id["id"].as_str().unwrap().starts_with("windows:")));
+    #[cfg(not(windows))]
+    assert!(ids.is_empty());
     assert!(matches!(
         a.call("sign_document", &json!({ "doc": doc, "id": "ada.p12", "password": "wrong!", "out": "signed.pdf" })),
         Err(ToolError::InvalidArgs(_))
