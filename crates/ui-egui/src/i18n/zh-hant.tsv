@@ -1437,7 +1437,63 @@
 	Sent to {printer}	已傳送到{printer}
 	Sent to {printer}: {msg}	已傳送到{printer}：{msg}
 	Choose a folder for the searchable files	選擇可搜尋檔案的資料夾
-	Files are combined in this order. Leave Pages empty to take every page.	檔案將按此順序合併。頁碼留空表示取全部頁面。
+	Files are combined from top to bottom. Leave Pages empty to take every page.	檔案將按從上到下的順序合併。頁碼留空表示取全部頁面。
+	Unlock…	解除鎖定…
+	Select a password-protected file first	請先選取一個受密碼保護的檔案
+	Enter the permissions password to allow combining	輸入權限密碼以允許合併
+	Enter the password that opens it	輸入開啟該檔案的密碼
+	Unlock {name}	解除鎖定 {name}
+	Unlock {n} files	解除鎖定 {n} 個檔案
+	The same password is tried on each file.	將對每個檔案嘗試同一密碼。
+	Hide password	隱藏密碼
+	Show password	顯示密碼
+	Wrong password	密碼錯誤
+	The password is only used to read the file; it isn't saved.	密碼僅用於讀取檔案，不會被儲存。
+	Unlock	解除鎖定
+	Opened, but its security settings don't allow combining. Enter the permissions password.	已開啟，但其安全性設定不允許合併。請輸入權限密碼。
+	Unlocked: the combined file won't be password-protected	已解除鎖定：合併後的檔案將不受密碼保護
+	Unlocked {n} of {m} files	已解除鎖定 {m} 個檔案中的 {n} 個
+	Drop PDFs or folders here, or choose them.	將 PDF 或資料夾拖放到此處，或選取它們。
+	Add folder…	新增資料夾…
+	Add folder and subfolders…	新增資料夾及子資料夾…
+	More ways to add files	更多新增檔案的方式
+	Every PDF in the folder	資料夾中的所有 PDF
+	Every PDF in the folder and the folders inside it	資料夾及其子資料夾中的所有 PDF
+	Add folder	新增資料夾
+	Add folder and subfolders	新增資料夾及子資料夾
+	No PDFs found in {folder}	在 {folder} 中找不到 PDF
+	Added the first {n} PDFs in {folder}	已新增 {folder} 中的前 {n} 個 PDF
+	Click to sort, drag to move the column. Drag its edge to resize it.	按一下以排序，拖曳以移動欄。拖曳欄邊緣可調整寬度。
+	Reset columns	重設欄
+	Remove {n} files	刪除 {n} 個檔案
+	{n} selected	已選取 {n} 個
+	sorted ascending	遞增排序
+	sorted descending	遞減排序
+	Protected: the combined file won't keep its security settings	受保護：合併後的檔案不會保留其安全性設定
+	Add open documents	新增已開啟的文件
+	All open documents	所有已開啟的文件
+	No documents are open	沒有開啟的文件
+	Select a file first	請先選取一個檔案
+	1 file	1 個檔案
+	{n} files	{n} 個檔案
+	1 file needs attention	1 個檔案需要處理
+	{n} files need attention	{n} 個檔案需要處理
+	{name} can't be combined: {why}	無法合併 {name}：{why}
+	Check the pages of {name}: {why}	請檢查 {name} 的頁碼：{why}
+	Add the PDFs to combine	新增要合併的 PDF
+	File name	檔案名稱
+	Warnings	警告
+	Drag to reorder	拖曳以重新排序
+	{k} of {n}	{k}/{n}
+	? of {n}	?/{n}
+	Added more than once	重複新增
+	yesterday	昨天
+	{n} days ago	{n} 天前
+	No pages selected	未選取任何頁面
+	Password-protected	受密碼保護
+	Its security settings don't allow copying pages	其安全性設定不允許複製頁面
+	Can't be read: {e}	無法讀取：{e}
+	Includes unsaved changes	包含未儲存的變更
 	Pages of {name} to combine, e.g. 1-3, 6	要合併的{name}的頁面，例如 1-3、6
 	Remove {name}	刪除{name}
 	Add files…	新增檔案…

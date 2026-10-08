@@ -61,11 +61,19 @@ fn script_image_output_is_confined_to_the_root() {
     assert!(!base.join("outside/escaped.png").exists() && !base.join("outside/new").exists());
     assert_eq!(std::fs::read_to_string(base.join("outside/existing.txt")).unwrap(), "SENTINEL\n");
 
-    // "." is the root itself: refused, without staging a temporary file beside the root.
+    // "." is the root itself: refused, without staging a temporary file beside the root. The
+    // file at the old fixed staging name and the listing are canaries; staging names are random.
     std::fs::write(base.join(".root.pdfcraft-tmp"), "SENTINEL\n").unwrap();
+    let listing = || {
+        let mut names: Vec<_> = std::fs::read_dir(&base).unwrap().map(|e| e.unwrap().file_name()).collect();
+        names.sort();
+        names
+    };
+    let before = listing();
     let o = render_to(&base, &base, Some(&root), ".");
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("is a folder"), "{}", String::from_utf8_lossy(&o.stderr));
     assert_eq!(std::fs::read_to_string(base.join(".root.pdfcraft-tmp")).unwrap(), "SENTINEL\n");
+    assert_eq!(listing(), before, "nothing was left beside the root");
 
     // A relative path resolves inside the root, not in the working directory.
     let o = render_to(&base, &base, Some(&root), "relative.png");

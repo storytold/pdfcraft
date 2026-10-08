@@ -632,6 +632,38 @@ fn permissions_password_restricts_others_but_not_this_session() {
 }
 
 #[test]
+fn combine_source_check_says_why_a_file_cannot_be_combined() {
+    let (mut s, id) = session_with(1);
+    let plain = s.get(id).unwrap().bytes.clone();
+    assert_eq!(crate::combine_source_check(&plain, None), Ok(()));
+    // Page assembly withheld (Changes::None) without a password to open it.
+    let p = Protection { changes: Changes::None, ..protection(None, Some("boss")) };
+    s.apply(id, Edit::Protect(p)).unwrap();
+    let locked = s.save_bytes(id).unwrap();
+    assert_eq!(crate::combine_source_check(&locked, None), Err(crate::SourceProblem::NotPermitted));
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::Protect(protection(Some("pw"), Some("owner")))).unwrap();
+    let secret = s.save_bytes(id).unwrap();
+    assert_eq!(crate::combine_source_check(&secret, None), Err(crate::SourceProblem::Password));
+    assert_eq!(crate::combine_source_check(&secret, Some("nope")), Err(crate::SourceProblem::WrongPassword));
+    // Its open password reads it, but its permissions withhold assembling pages: the owner's
+    // password allows it.
+    assert_eq!(crate::combine_source_check(&secret, Some("pw")), Err(crate::SourceProblem::NotPermitted));
+    assert_eq!(crate::combine_source_check(&secret, Some("owner")), Ok(()));
+    // The permissions password lifts the restriction on copying pages.
+    assert_eq!(crate::combine_source_check(&locked, Some("boss")), Ok(()));
+    // Combining with the passwords: the result opens without any.
+    let s = Session::new();
+    let sources = vec![("secret".to_string(), secret, None), ("locked".to_string(), locked, None)];
+    assert!(s.combine_ranges(&sources).is_err(), "no passwords, no combining");
+    let out = s.combine_unlocked(&sources, &[Some("owner"), Some("boss")]).unwrap();
+    let combined = pdfcraft_cos::Document::open(out).unwrap();
+    assert!(combined.permissions().is_none(), "the combined file is not encrypted");
+    assert_eq!(pdfcraft_organize::page_count(&combined).unwrap(), 2);
+    assert!(matches!(crate::combine_source_check(&Arc::new(b"not a pdf".to_vec()), None), Err(crate::SourceProblem::Unreadable(_))));
+}
+
+#[test]
 fn protection_is_validated_undoable_and_never_logged() {
     let (mut s, id) = session_with(1);
     assert!(matches!(s.apply(id, Edit::Protect(protection(None, None))), Err(EditError::Protection(_))));

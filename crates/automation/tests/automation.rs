@@ -405,12 +405,20 @@ fn root_refusals_do_not_reveal_what_exists_outside() {
 #[test]
 fn writing_to_a_folder_touches_nothing_beside_it() {
     // "." names the root itself. Saving there used to stage its temporary file next to the
-    // root, outside it, overwriting and then deleting any file of that name.
+    // root, outside it, overwriting and then deleting any file of that name. Staging names are
+    // random now and a failed rename removes the staging file, so the "is a folder" refusal is
+    // what this checks; the listings and the file at the old staging name are canaries.
     let (base, root) = sandbox("root-itself");
     let mut a = auto(&root);
     let beside = base.join(".root.pdfcraft-tmp");
     std::fs::write(&beside, "SENTINEL").unwrap();
     std::fs::create_dir_all(root.join("folder")).unwrap();
+    let listing = |dir: &Path| {
+        let mut names: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        names.sort();
+        names
+    };
+    let (base_before, folder_before) = (listing(&base), listing(&root.join("folder")));
     let doc = ok(&mut a, "doc_open", json!({ "path": "inside.pdf" }))["doc"].as_u64().unwrap();
     for p in [".", "", "folder", "folder/"] {
         let e = a.call("doc_save", &json!({ "doc": doc, "path": p })).unwrap_err();
@@ -419,7 +427,8 @@ fn writing_to_a_folder_touches_nothing_beside_it() {
     let png = vec![1, 2, 3];
     assert!(a.write_output(".", &png).is_err());
     assert_eq!(std::fs::read_to_string(&beside).unwrap(), "SENTINEL");
-    assert!(!root.join(".folder.pdfcraft-tmp").exists());
+    assert_eq!(listing(&base), base_before, "nothing was left beside the root");
+    assert_eq!(listing(&root.join("folder")), folder_before, "nothing was left in the folder");
     // `image_save` adds an extension when the path has none, which turned "." into `root.png`
     // beside the root.
     ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 18 }));
@@ -745,6 +754,33 @@ fn protecting_through_tools() {
     ok(&mut b, "doc_save", json!({ "doc": owner, "path": "open.pdf" }));
     let mut c = auto(&dir);
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
+}
+
+#[test]
+fn combine_opens_protected_files_with_their_passwords() {
+    let dir = workdir("combine-passwords");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // Opens with "open"; only "boss" may assemble pages.
+    ok(&mut a, "doc_protect", json!({ "doc": doc, "open_password": "open", "permissions_password": "boss", "changes": "none" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "locked.pdf" }));
+    let combine = |a: &mut Automation, passwords: Value| {
+        a.call("doc_combine", &json!({ "paths": ["locked.pdf", "b.pdf"], "passwords": passwords, "open": true }))
+    };
+    let err = |r: Result<_, ToolError>| match r {
+        Err(ToolError::Failed(m)) => m,
+        Err(other) => panic!("expected a failure, got {other:?}"),
+        Ok(_) => panic!("expected a failure"),
+    };
+    assert!(err(combine(&mut a, Value::Null)).contains("password-protected"));
+    assert!(err(combine(&mut a, json!(["wrong", null]))).contains("password is wrong"));
+    assert!(err(combine(&mut a, json!(["open", null]))).contains("don't allow copying pages"));
+    assert!(matches!(combine(&mut a, json!(["boss"])), Err(ToolError::InvalidArgs(_))), "one per path");
+    let done = ok(&mut a, "doc_combine", json!({ "paths": ["locked.pdf", "b.pdf"], "passwords": ["boss", null], "open": true }));
+    assert!(!done.to_string().contains("boss"), "passwords are never echoed");
+    let out = done["document"]["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, out), ["Page 1", "Page 2", "Page 3", "Page 1", "Page 2"]);
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": out }))["security"]["protected"], false, "the result is not encrypted");
 }
 
 /// Restrictions exist only behind a permissions password: open_password alone encrypts and
