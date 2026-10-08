@@ -471,3 +471,68 @@ fn arrow_and_page_keys_move_through_a_scrolling_document() {
     h.run_steps(4);
     assert_eq!(press(&mut h, Key::PageDown, 1), 3);
 }
+
+/// Like [`fixture`], with each page's size given.
+fn sized_fixture(sizes: &[(u32, u32)]) -> Vec<u8> {
+    let n = sizes.len();
+    let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
+    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} >>", kids.join(" ")));
+    objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
+    for (i, (w, h)) in sizes.iter().enumerate() {
+        objs.push(format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>",
+            5 + 2 * i
+        ));
+        let body = format!("BT /F1 18 Tf 20 150 Td (Page {}) Tj ET", i + 1);
+        objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
+    }
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn page_down_steps_every_spread_when_several_fit_on_screen() {
+    // #188: in two-page view with a cover page, ⌘Page Down skipped spreads (or stuck) once more
+    // than one spread fit on screen: the current page was whichever wholly visible page rounding
+    // made "most visible", so the next step started from the wrong spread.
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
+    // a printed book: portrait cover and back, landscape two-page spreads between
+    let mut sizes = vec![(200, 300)];
+    sizes.extend([(400, 300); 10]);
+    sizes.push((200, 300));
+    for fit in [Fit::Width, Fit::Page, Fit::Height] {
+        let bytes = sized_fixture(&sizes);
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.open_bytes("book.pdf", None, bytes).unwrap();
+            app
+        });
+        h.run_steps(6);
+        h.state_mut().active = Some(0);
+        let v = &mut h.state_mut().views[0];
+        (v.fit, v.layout, v.cover) = (fit, PageLayout::TwoUp, true);
+        h.run_steps(6);
+        let mut step = |key| {
+            h.key_press_modifiers(Modifiers::COMMAND, key);
+            h.run_steps(4);
+            h.state().views[0].current
+        };
+        let down: Vec<usize> = (0..6).map(|_| step(Key::PageDown)).collect();
+        assert_eq!(down, [1, 3, 5, 7, 9, 11], "{fit:?}: cover, five spreads, back cover");
+        let up: Vec<usize> = (0..6).map(|_| step(Key::PageUp)).collect();
+        assert_eq!(up, [9, 7, 5, 3, 1, 0], "{fit:?}");
+    }
+}

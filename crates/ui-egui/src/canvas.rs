@@ -1303,8 +1303,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let mut visible_now = Vec::new();
         view.screen_rects.clear();
         view.screen_xforms.clear();
+        // Visible heights (points) closer than this are equal: one page size can meet the
+        // viewport a fraction of a point differently once the scroll offset is applied.
+        const TIE: f32 = 0.5;
         let mut current = view.current;
         let mut best_overlap = -1.0f32;
+        let mut current_overlap = -1.0f32;
         let pointer = ui.input(|i| i.pointer.hover_pos());
         for &i in &visible_pages {
             let r = rects[i].translate(origin.to_vec2());
@@ -1318,7 +1322,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     .push((i, PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) }));
             }
             let overlap = r.intersect(visible).height();
-            if overlap > best_overlap {
+            if i == view.current {
+                current_overlap = overlap;
+            }
+            // Pages shown equally (two rows wholly on screen) differ only by rounding: the
+            // topmost one counts.
+            if overlap > best_overlap + TIE {
                 best_overlap = overlap;
                 current = i;
             }
@@ -1677,6 +1686,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     view.flash = None;
                 }
             }
+        }
+        // The page navigated to stays current while no page shows more of itself, so the next
+        // page step starts from it rather than from a page further down the screen (#188).
+        if current_overlap >= best_overlap - TIE {
+            current = view.current;
         }
         if view.layout != PageLayout::Single {
             view.current = current;

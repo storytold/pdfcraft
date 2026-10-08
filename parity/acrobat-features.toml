@@ -866,8 +866,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.layout.cover"]
 tools = []
-evidence = ["crates/ui-egui/tests/viewer.rs::layouts_fit_height_labels_and_system_theme", "crates/ui-egui/tests/view.rs::page_display_commands_switch_layouts"]
-notes = "View ▸ Page display, the rail's Page display button or the palette; disabled outside two-page view"
+evidence = ["crates/ui-egui/tests/viewer.rs::layouts_fit_height_labels_and_system_theme", "crates/ui-egui/tests/view.rs::page_display_commands_switch_layouts", "crates/ui-egui/tests/viewer.rs::page_down_steps_every_spread_when_several_fit_on_screen"]
+notes = "View ▸ Page display, the rail's Page display button or the palette; disabled outside two-page view; next / previous page step one spread at a time even when several spreads fit on screen"
 
 [[feature]]
 id = "view.page-gaps"
