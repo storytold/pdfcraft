@@ -316,6 +316,26 @@ fn japanese_paragraph_uses_unicode_type3_fallback() {
     assert_eq!(text::text_blocks(&reopened, 0).unwrap()[0].text, replacement);
 }
 
+#[test]
+fn japanese_paragraph_keeps_ideographic_spaces() {
+    if without_craft_fonts("japanese_paragraph_keeps_ideographic_spaces") {
+        return;
+    }
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Original paragraph) Tj ET");
+    let replacement = "　見本商会　　御中　";
+    let style = text::BlockStyle { width: Some(400.0), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some(replacement), &style).unwrap();
+    let reopened = reopen(&doc);
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].text, replacement);
+    assert_eq!(text::text_blocks(&reopened, 0).unwrap()[0].text, replacement);
+    // Restyling the saved paragraph without new text must also preserve its spacing.
+    let mut doc = reopened;
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { size: Some(14.0), ..style }).unwrap();
+    assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].text, replacement);
+}
+
 /// Without craft-fonts there is no Japanese face: editing in Japanese is a clear error that
 /// leaves the page untouched, never a panic; Latin edits work as before.
 #[test]
