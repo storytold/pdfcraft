@@ -25,8 +25,6 @@ finish-args:
   - --share=ipc
   # GPU access for the wgpu renderer (Vulkan, or GL as a fallback).
   - --device=dri
-  # Print sends the laid-out PDF to the host's CUPS server through `lp` (crates/print).
-  - --socket=cups
   # Open/Save dialogs go through the file-chooser portal (rfd's xdg-portal backend) and
   # drag-and-drop through the document portal, so picked files work anywhere without broad
   # filesystem access. Documents and Downloads, where PDFs usually live, are granted so files
@@ -35,7 +33,9 @@ finish-args:
   - --filesystem=xdg-download
   # Deliberately not granted: network (Flatpak installs update through flatpak, so Help ▸ Check
   # for updates reports that GitHub is unreachable; the optional --control channel listens on
-  # 127.0.0.1 inside the sandbox) and home/host filesystem access.
+  # 127.0.0.1 inside the sandbox) and home/host filesystem access. No CUPS socket either: printing
+  # runs the `lp` command (crates/print), which the freedesktop runtime doesn't ship, so Print
+  # reports that the spooler is unavailable until it goes through the print portal.
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
 modules:
