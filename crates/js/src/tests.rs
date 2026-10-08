@@ -267,6 +267,19 @@ mod xfa_model {
     }
 
     #[test]
+    fn long_values_and_results_are_cut_where_they_are_stored() {
+        // The value kept for later reads is the one the effect saves.
+        let o = go("details.note.rawValue = new Array(100001).join('x'); details.note.rawValue.length", "form1[0].page1[0].total[0]", "calculate");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("65536"));
+        assert!(o.notes.iter().any(|n| n.contains("cut")), "{:?}", o.notes);
+        // A calculate's result is cut like a value set, and noted.
+        let o = go("new Array(100001).join('x')", "form1[0].page1[0].details[0].note[0]", "calculate");
+        assert_eq!(o.result.map(|r| r.chars().count()), Some(65_536));
+        assert!(o.notes.iter().any(|n| n.contains("result")), "{:?}", o.notes);
+    }
+
+    #[test]
     fn values_read_as_numbers_or_strings_and_null_when_empty() {
         let o = go(
             "typeof qty.rawValue + ':' + typeof this.rawValue + ':' + (total.rawValue === null) + ':' + typeof table.row.what.rawValue",
@@ -657,6 +670,41 @@ $host.gotoURL("https://example.org")"#,
             o.effects,
             vec![XfaEffect::ResetData(vec!["qty".into(), "price".into()]), XfaEffect::Print, XfaEffect::LaunchUrl("https://example.org".into())]
         );
+    }
+
+    #[test]
+    fn formcalc_values_results_and_errors_stay_bounded() {
+        let total = "form1[0].page1[0].total[0]";
+        let fast = Limits { loop_iterations: 10_000, recursion: 32 };
+        let ev = XfaEvent { activity: "calculate".into(), target: total.into(), ..Default::default() };
+        let doc = XfaDoc::default();
+        let run = |s: &str| run_formcalc(s, &ev, &doc, &form(), fast);
+        // A long value is cut where it is stored, so it reads back as saved.
+        let o = run("details.note = Space(100000)\nLen(details.note)");
+        assert_eq!(o.error, None);
+        assert_eq!(o.result.as_deref(), Some("65536"));
+        // A calculate's result is cut as values are, with a note.
+        let o = run("Space(100000)");
+        assert_eq!(o.result.map(|r| r.chars().count()), Some(65_536));
+        assert!(o.notes.iter().any(|n| n.contains("result")), "{:?}", o.notes);
+        // A thrown value is the error message: cut like one.
+        let e = run("throw Space(100000)").error.unwrap();
+        assert!(e.chars().count() <= 4_097, "{}", e.len());
+        // Copying and comparing long strings costs steps, so it ends without a clock (wasm).
+        let e = run("var s = Space(1000000)\nfor i = 1 upto 3000 do s endfor").error;
+        assert!(e.is_some_and(|e| e.contains("too long")));
+        let e = run("var s = Space(1000000)\nfor i = 1 upto 3000 do s == \"x\" endfor").error;
+        assert!(e.is_some_and(|e| e.contains("too long")));
+        // Each period IPmt and PPmt walk costs a step.
+        let e = run("for i = 1 upto 600 do IPmt(1e9, 0.01, 1, 1, 10000) endfor").error;
+        assert!(e.is_some_and(|e| e.contains("too long")));
+        // Exists answers no for a name that isn't there, but a limit inside it still stops the script.
+        assert_eq!(run("Exists(nothing.here)").result.as_deref(), Some("0"));
+        assert_eq!(run("Exists(qty)").result.as_deref(), Some("1"));
+        assert!(run("func f(n) do Exists(f(n + 1)) endfunc\nf(1)").error.unwrap().contains("nested"));
+        // An elseif condition's chain counts from zero, not from the last statement of the arm before.
+        let script = format!("if 0 then\nvar x = 1{}\nelseif 1{} then\n2\nendif", "+1".repeat(900), "+1".repeat(200));
+        assert_eq!(run(&script).result.as_deref(), Some("2"));
     }
 
     #[test]

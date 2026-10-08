@@ -1786,6 +1786,22 @@ f(1)</script>",
 }
 
 #[test]
+fn a_formcalc_calculate_result_is_cut_before_it_is_saved() {
+    let tpl = pdfcraft_xfa::fixtures::formcalc_template()
+        .replace("<script>WordNum(total)</script>", "<script>Replace(Space(100000), \" \", \"x\")</script>");
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&tpl));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("long.pdf", None, bytes, None).expect("opens");
+    let words = |s: &Session, id| s.get(id).unwrap().form.iter().find(|f| f.name == "words").unwrap().value.concat();
+    assert_eq!(words(&s, id).chars().count(), 65_536);
+    let out = s.take_js_output(id);
+    assert!(out.errors.iter().any(|e| e.contains("cut")), "{out:?}");
+    let saved = s.save_bytes(id).unwrap();
+    let id2 = s.open("again.pdf", None, saved, None).unwrap();
+    assert!(words(&s, id2).chars().count() <= 65_536);
+}
+
+#[test]
 fn xfa_scripts_stay_off_with_javascript_off() {
     let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()));
     let mut s = Session::new().with_clock(|| 1_700_000_000);

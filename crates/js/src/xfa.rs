@@ -168,6 +168,26 @@ pub(crate) fn clip(m: String) -> String {
     }
 }
 
+/// `v` cut to [`MAX_VALUE`] characters, and whether it was cut.
+pub(crate) fn clip_value(v: String) -> (String, bool) {
+    match v.char_indices().nth(MAX_VALUE) {
+        Some((at, _)) => (v.get(..at).unwrap_or_default().to_string(), true),
+        None => (v, false),
+    }
+}
+
+/// A script's completion value (what a calculate script puts in its field) cut to
+/// [`MAX_VALUE`] characters, as values a script sets are, with a note when it was.
+pub(crate) fn clip_result(out: &mut XfaOutcome) {
+    if let Some(r) = out.result.take() {
+        let (r, cut) = clip_value(r);
+        if cut {
+            out.notes.push(format!("the script's result was longer than {MAX_VALUE} characters; it was cut"));
+        }
+        out.result = Some(r);
+    }
+}
+
 /// One node of the flattened form, shared by the JavaScript and FormCalc engines.
 pub(crate) struct HNode {
     pub(crate) name: String,
@@ -240,13 +260,13 @@ impl XHost {
     pub(crate) fn push(&mut self, e: XfaEffect) {
         let e = match e {
             XfaEffect::MessageBox(m) => XfaEffect::MessageBox(clip(m)),
-            XfaEffect::SetValue { som, value } => match value.char_indices().nth(MAX_VALUE) {
-                Some((at, _)) => {
+            XfaEffect::SetValue { som, value } => {
+                let (value, cut) = clip_value(value);
+                if cut {
                     self.clipped_values += 1;
-                    XfaEffect::SetValue { som, value: value.get(..at).unwrap_or_default().to_string() }
                 }
-                None => XfaEffect::SetValue { som, value },
-            },
+                XfaEffect::SetValue { som, value }
+            }
             other => other,
         };
         let key = match &e {
@@ -322,8 +342,14 @@ impl XHost {
         if n.gone || !matches!(n.kind, XfaKind::Field | XfaKind::ExclGroup) {
             return false;
         }
+        // Cut here, not only in the effect: later reads in the script see what is saved, and
+        // the snapshot stays bounded however often a long value is written.
+        let (text, cut) = clip_value(text);
         n.value = text.clone();
         let som = n.som.clone();
+        if cut {
+            self.clipped_values += 1;
+        }
         self.push(XfaEffect::SetValue { som, value: text });
         true
     }
@@ -1409,5 +1435,6 @@ fn run_here(script: &str, event: &XfaEvent, doc: &XfaDoc, root: XfaNode, limits:
         out.effects = h.effects;
         out.console = h.console;
     }
+    clip_result(&mut out);
     out
 }

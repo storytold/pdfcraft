@@ -14,7 +14,8 @@ use std::rc::Rc;
 
 use crate::Limits;
 use crate::xfa::{
-    HNode, XHost, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, child_named, descendants_named, instances, resolve_som, run_within,
+    HNode, XHost, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, child_named, clip, clip_result, descendants_named, instances,
+    resolve_som, run_within,
 };
 
 /// Deepest nesting the parser follows.
@@ -25,9 +26,23 @@ const MAX_STEPS: u64 = 5_000_000;
 const MAX_STRING: usize = 1 << 20;
 /// Most elements a list may hold.
 const MAX_LIST: usize = 100_000;
-/// Most operators and accessors in one statement (`a + b + …`, `a.b.c…`, brackets included):
+/// Most operators and accessors in one expression (`a + b + …`, `a.b.c…`, brackets included):
 /// the tree is as deep as the chain, and dropping or cloning it recurses.
 const MAX_CHAIN: usize = 1000;
+// The errors a run stops with when it reaches a limit (rather than a fault in the script).
+const RAN_TOO_LONG: &str = "the script ran too long";
+const TOO_DEEP: &str = "the script is nested too deeply";
+const CALLS_TOO_DEEP: &str = "functions are nested too deeply";
+const LOOPED_TOO_MUCH: &str = "the script looped too many times";
+const LIST_TOO_LONG: &str = "a list is too long";
+const STRING_TOO_LONG: &str = "a string is too long";
+
+/// Whether `e` is a limit the run reached: those stop the script even where a fault is
+/// otherwise an answer (`Exists`).
+fn is_limit(e: &str) -> bool {
+    [RAN_TOO_LONG, TOO_DEEP, CALLS_TOO_DEEP, LOOPED_TOO_MUCH, LIST_TOO_LONG, STRING_TOO_LONG].contains(&e)
+}
+
 /// Steps between looks at the clock.
 #[cfg(not(target_arch = "wasm32"))]
 const CLOCK_EVERY: u64 = 256;
@@ -309,25 +324,24 @@ impl Parser {
 
     fn statement(&mut self) -> Result<Stmt, String> {
         let line = self.line();
-        self.chain = 0;
         match self.peek().clone() {
             Tok::Ident(w) if w.eq_ignore_ascii_case("var") => {
                 self.at += 1;
                 let Tok::Ident(name) = self.next() else { return Err(format!("line {line}: expected a name after var")) };
-                let init = if self.eat_op("=") { Some(self.expr()?) } else { None };
+                let init = if self.eat_op("=") { Some(self.top_expr()?) } else { None };
                 Ok(Stmt::Var(name, init))
             }
             Tok::Ident(w) if w.eq_ignore_ascii_case("if") => {
                 self.at += 1;
                 let mut arms = Vec::new();
-                let cond = self.expr()?;
+                let cond = self.top_expr()?;
                 self.expect_kw("then")?;
                 let body = self.block(&["elseif", "else", "endif"])?;
                 arms.push((cond, body));
                 let mut otherwise = None;
                 loop {
                     if self.eat_kw("elseif") {
-                        let c = self.expr()?;
+                        let c = self.top_expr()?;
                         self.expect_kw("then")?;
                         let b = self.block(&["elseif", "else", "endif"])?;
                         arms.push((c, b));
@@ -342,7 +356,7 @@ impl Parser {
             }
             Tok::Ident(w) if w.eq_ignore_ascii_case("while") => {
                 self.at += 1;
-                let cond = self.expr()?;
+                let cond = self.top_expr()?;
                 self.expect_kw("do")?;
                 let body = self.block(&["endwhile"])?;
                 self.expect_kw("endwhile")?;
@@ -352,7 +366,7 @@ impl Parser {
                 self.at += 1;
                 let Tok::Ident(var) = self.next() else { return Err(format!("line {line}: expected a variable after for")) };
                 self.expect_op("=")?;
-                let from = self.expr()?;
+                let from = self.top_expr()?;
                 let up = if self.eat_kw("upto") {
                     true
                 } else if self.eat_kw("downto") {
@@ -360,8 +374,8 @@ impl Parser {
                 } else {
                     return Err(format!("line {line}: expected upto or downto"));
                 };
-                let to = self.expr()?;
-                let step = if self.eat_kw("step") { Some(self.expr()?) } else { None };
+                let to = self.top_expr()?;
+                let step = if self.eat_kw("step") { Some(self.top_expr()?) } else { None };
                 self.expect_kw("do")?;
                 let body = self.block(&["endfor"])?;
                 self.expect_kw("endfor")?;
@@ -375,7 +389,7 @@ impl Parser {
                 let mut list = Vec::new();
                 if !self.is_op(")") {
                     loop {
-                        list.push(self.expr()?);
+                        list.push(self.top_expr()?);
                         if !self.eat_op(",") {
                             break;
                         }
@@ -409,7 +423,7 @@ impl Parser {
             }
             Tok::Ident(w) if w.eq_ignore_ascii_case("return") => {
                 self.at += 1;
-                let v = if matches!(self.peek(), Tok::Newline | Tok::Eof) { None } else { Some(self.expr()?) };
+                let v = if matches!(self.peek(), Tok::Newline | Tok::Eof) { None } else { Some(self.top_expr()?) };
                 Ok(Stmt::Return(v))
             }
             Tok::Ident(w) if w.eq_ignore_ascii_case("break") => {
@@ -426,7 +440,7 @@ impl Parser {
             }
             Tok::Ident(w) if w.eq_ignore_ascii_case("throw") => {
                 self.at += 1;
-                Ok(Stmt::Throw(self.expr()?))
+                Ok(Stmt::Throw(self.top_expr()?))
             }
             Tok::Ident(w) if w.eq_ignore_ascii_case("do") => {
                 // `do … end`: a block as one statement.
@@ -436,14 +450,21 @@ impl Parser {
                 Ok(Stmt::If(vec![(Expr::Num(1.0), body)], None))
             }
             _ => {
-                let e = self.expr()?;
+                let e = self.top_expr()?;
                 if self.eat_op("=") {
-                    let v = self.expr()?;
+                    let v = self.top_expr()?;
                     return Ok(Stmt::Assign(e, v));
                 }
                 Ok(Stmt::Expr(e))
             }
         }
+    }
+
+    /// An expression that starts a tree of its own (a condition, a bound, a statement's
+    /// expression): its operator chain is counted from zero, whatever came before it.
+    fn top_expr(&mut self) -> Result<Expr, String> {
+        self.chain = 0;
+        self.expr()
     }
 
     fn expr(&mut self) -> Result<Expr, String> {
@@ -780,14 +801,14 @@ impl Interp<'_> {
         let before = self.steps;
         self.steps = self.steps.saturating_add(n);
         if self.steps > MAX_STEPS {
-            return Err("the script ran too long".into());
+            return Err(RAN_TOO_LONG.into());
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.steps / CLOCK_EVERY != before / CLOCK_EVERY
             && let Some(d) = self.deadline
             && std::time::Instant::now() > d
         {
-            return Err("the script ran too long".into());
+            return Err(RAN_TOO_LONG.into());
         }
         #[cfg(target_arch = "wasm32")]
         let _ = before;
@@ -800,7 +821,7 @@ impl Interp<'_> {
             if seen.insert(i) {
                 out.push(i);
                 if out.len() > MAX_LIST {
-                    return Err("a list is too long".into());
+                    return Err(LIST_TOO_LONG.into());
                 }
             }
         }
@@ -831,6 +852,32 @@ impl Interp<'_> {
             return Val::Num(v);
         }
         Val::Str(n.value.clone())
+    }
+
+    /// What copying `v` (or the values it stands for) costs, in steps: one per 256 bytes, so
+    /// copying long strings over and over runs out of steps even where there is no clock
+    /// (wasm). A form object counts its value; a list its items too.
+    fn cost(&self, v: &Val) -> u64 {
+        let mut bytes = 0usize;
+        let mut todo = vec![v];
+        while let Some(v) = todo.pop() {
+            match v {
+                Val::Str(s) => bytes = bytes.saturating_add(s.len()),
+                Val::Node(i) => bytes = bytes.saturating_add(self.node(*i).map_or(0, |n| n.value.len())),
+                Val::List(items) => {
+                    bytes = bytes.saturating_add(items.len().saturating_mul(16));
+                    todo.extend(items.iter());
+                }
+                _ => {}
+            }
+        }
+        (bytes / 256) as u64
+    }
+
+    /// [`Self::deref`], charged for the copy.
+    fn take(&mut self, v: Val) -> R<Val> {
+        self.charge(self.cost(&v))?;
+        Ok(self.deref(v))
     }
 
     /// Objects become their values; lists of objects become lists of values.
@@ -1038,7 +1085,7 @@ impl Interp<'_> {
         }
         out.push(v);
         if out.len() > MAX_LIST {
-            return Err("a list is too long".into());
+            return Err(LIST_TOO_LONG.into());
         }
         self.charge(1)
     }
@@ -1171,7 +1218,7 @@ impl Interp<'_> {
         self.depth += 1;
         if self.depth > self.max_depth {
             self.depth -= 1;
-            return Err("the script is nested too deeply".into());
+            return Err(TOO_DEEP.into());
         }
         let r = self.eval_inner(e);
         self.depth -= 1;
@@ -1181,9 +1228,16 @@ impl Interp<'_> {
     fn eval_inner(&mut self, e: &Expr) -> R<Val> {
         Ok(match e {
             Expr::Num(n) => Val::Num(*n),
-            Expr::Str(s) => Val::Str(s.clone()),
+            Expr::Str(s) => {
+                self.charge((s.len() / 256) as u64)?;
+                Val::Str(s.clone())
+            }
             Expr::Null => Val::Null,
-            Expr::Ident(name) => self.ident(name)?,
+            Expr::Ident(name) => {
+                let v = self.ident(name)?;
+                self.charge(self.cost(&v))?;
+                v
+            }
             Expr::Member(base, name) => {
                 let b = self.eval(base)?;
                 self.member(b, name)?
@@ -1243,6 +1297,8 @@ impl Interp<'_> {
                         }
                         _ => {
                             let b = self.eval(r)?;
+                            // Comparing (and dereferencing) long strings is work too.
+                            self.charge(self.cost(&acc).saturating_add(self.cost(&b)))?;
                             self.binary(op, acc, b)?
                         }
                     };
@@ -1307,7 +1363,7 @@ impl Interp<'_> {
                     let mut vals = Vec::new();
                     for a in args {
                         let v = self.eval(a)?;
-                        vals.push(self.deref(v));
+                        vals.push(self.take(v)?);
                     }
                     return self.call_user(&f, vals);
                 }
@@ -1323,7 +1379,7 @@ impl Interp<'_> {
 
     fn call_user(&mut self, f: &Func, vals: Vec<Val>) -> R<Val> {
         if self.scopes.len() > self.max_depth {
-            return Err("functions are nested too deeply".into());
+            return Err(CALLS_TOO_DEEP.into());
         }
         let mut scope = HashMap::new();
         for (i, p) in f.params.iter().enumerate() {
@@ -1346,7 +1402,7 @@ impl Interp<'_> {
         match args.get(i) {
             Some(e) => {
                 let v = self.eval(e)?;
-                Ok(self.deref(v))
+                self.take(v)
             }
             None => Ok(Val::Null),
         }
@@ -1373,14 +1429,14 @@ impl Interp<'_> {
         let mut out = Vec::new();
         for a in args {
             let v = self.eval(a)?;
-            let v = if objects { v } else { self.deref(v) };
+            let v = if objects { v } else { self.take(v)? };
             match v {
                 Val::List(items) => out.extend(items.into_iter().filter(|x| !matches!(x, Val::Null))),
                 Val::Null => {}
                 other => out.push(other),
             }
             if out.len() > MAX_LIST {
-                return Err("a list is too long".into());
+                return Err(LIST_TOO_LONG.into());
             }
         }
         Ok(out)
@@ -1608,7 +1664,7 @@ impl Interp<'_> {
         self.depth += 1;
         if self.depth > self.max_depth {
             self.depth -= 1;
-            return Err("the script is nested too deeply".into());
+            return Err(TOO_DEEP.into());
         }
         let r = self.block_inner(body);
         self.depth -= 1;
@@ -1640,7 +1696,7 @@ impl Interp<'_> {
                 let v = match init {
                     Some(e) => {
                         let v = self.eval(e)?;
-                        self.deref(v)
+                        self.take(v)?
                     }
                     None => Val::Null,
                 };
@@ -1649,13 +1705,13 @@ impl Interp<'_> {
             }
             Stmt::Assign(target, e) => {
                 let v = self.eval(e)?;
-                let v = self.deref(v);
+                let v = self.take(v)?;
                 self.assign(target, v.clone())?;
                 Ok((Flow::Next, Some(v)))
             }
             Stmt::Expr(e) => {
                 let v = self.eval(e)?;
-                let v = self.deref(v);
+                let v = self.take(v)?;
                 Ok((Flow::Next, Some(v)))
             }
             Stmt::If(arms, otherwise) => {
@@ -1745,7 +1801,7 @@ impl Interp<'_> {
                 let v = match e {
                     Some(e) => {
                         let v = self.eval(e)?;
-                        self.deref(v)
+                        self.take(v)?
                     }
                     None => Val::Null,
                 };
@@ -1756,14 +1812,17 @@ impl Interp<'_> {
             Stmt::Exit => Ok((Flow::Exit, None)),
             Stmt::Throw(e) => {
                 let v = self.eval(e)?;
-                Err(self.to_str(&v))
+                self.charge(self.cost(&v))?;
+                // The thrown value becomes the error message the caller keeps: cut it as
+                // messages are.
+                Err(clip(self.to_str(&v)))
             }
         }
     }
 
     fn iterate(&mut self) -> R<()> {
         if self.loops_left == 0 {
-            return Err("the script looped too many times".into());
+            return Err(LOOPED_TOO_MUCH.into());
         }
         self.loops_left -= 1;
         Ok(())
@@ -1931,7 +1990,7 @@ fn words_below_1000(n: u64) -> String {
 
 /// `WordNum`: an integer in English words (up to the billions).
 fn word_num(n: f64, cents: bool) -> String {
-    if !n.is_finite() || n < 0.0 || n >= 1e12 {
+    if !n.is_finite() || !(0.0..1e12).contains(&n) {
         return String::new();
     }
     let cents_total = (n * 100.0).round() as u64;
@@ -1965,7 +2024,7 @@ impl Interp<'_> {
         let v = self.builtin_inner(name, args)?;
         if let Val::Str(s) = &v {
             if s.len() > MAX_STRING {
-                return Err("a string is too long".into());
+                return Err(STRING_TOO_LONG.into());
             }
             self.charge((s.len() / 256) as u64)?;
         }
@@ -2028,11 +2087,13 @@ impl Interp<'_> {
             }
             "exists" => {
                 let Some(e) = args.first() else { return Ok(Val::Num(0.0)) };
-                let found = self.all_of(e);
-                Val::Num(match found {
-                    Ok(v) if !v.is_empty() => 1.0,
-                    _ => 0.0,
-                })
+                // A name that resolves to nothing is the answer "no"; a limit the lookup ran
+                // into (time, steps, depth, size) still stops the script.
+                match self.all_of(e) {
+                    Ok(v) => Val::Num(if v.is_empty() { 0.0 } else { 1.0 }),
+                    Err(e) if is_limit(&e) => return Err(e),
+                    Err(_) => Val::Num(0.0),
+                }
             }
             "hasvalue" => {
                 let v = self.arg(args, 0)?;
@@ -2041,7 +2102,15 @@ impl Interp<'_> {
             "oneof" => {
                 let v = self.arg(args, 0)?;
                 let rest = self.arg_values(args.get(1..).unwrap_or_default())?;
-                let hit = rest.iter().any(|x| self.binary("==", v.clone(), x.clone()).is_ok_and(|r| self.truthy(&r)));
+                let mut hit = false;
+                for x in &rest {
+                    // Each comparison copies and compares `v`: charged per item.
+                    self.charge(self.cost(&v).saturating_add(self.cost(x)).saturating_add(1))?;
+                    if self.binary("==", v.clone(), x.clone()).is_ok_and(|r| self.truthy(&r)) {
+                        hit = true;
+                        break;
+                    }
+                }
                 Val::Num(if hit { 1.0 } else { 0.0 })
             }
             "within" => {
@@ -2060,7 +2129,7 @@ impl Interp<'_> {
                 for i in 0..args.len() {
                     out.push_str(&self.arg_str(args, i)?);
                     if out.len() > MAX_STRING {
-                        return Err("a string is too long".into());
+                        return Err(STRING_TOO_LONG.into());
                     }
                 }
                 Val::Str(out)
@@ -2106,7 +2175,7 @@ impl Interp<'_> {
                 let b = a.saturating_add(del).min(chars.len());
                 let out: String = chars[..a].iter().chain(ins.chars().collect::<Vec<_>>().iter()).chain(chars[b..].iter()).collect();
                 if out.len() > MAX_STRING {
-                    return Err("a string is too long".into());
+                    return Err(STRING_TOO_LONG.into());
                 }
                 Val::Str(out)
             }
@@ -2118,7 +2187,7 @@ impl Interp<'_> {
                 }
                 let grown = s.matches(old.as_str()).count().saturating_mul(new.len()).saturating_add(s.len());
                 if grown > MAX_STRING {
-                    return Err("a string is too long".into());
+                    return Err(STRING_TOO_LONG.into());
                 }
                 Val::Str(s.replace(&old, &new))
             }
@@ -2324,6 +2393,7 @@ impl Interp<'_> {
                 );
                 let (mut balance, mut interest, mut principal) = (pv, 0.0, 0.0);
                 for period in 1..=((first + count - 1.0).min(10_000.0) as u32) {
+                    self.step()?;
                     let i = balance * r;
                     let p = (pmt - i).min(balance);
                     if period >= first as u32 {
@@ -2443,7 +2513,8 @@ pub(crate) fn run_formcalc_at(
         steps: 0,
         loops_left: limits.loop_iterations,
         depth: 0,
-        // Statement nesting counts too, and the frames are large: half the JavaScript limit.
+        // The JavaScript recursion limit, kept to 8..=128: statement nesting counts against it
+        // too, and the interpreter's frames are large.
         max_depth: limits.recursion.clamp(8, 128),
         exited: false,
         #[cfg(not(target_arch = "wasm32"))]
@@ -2465,6 +2536,7 @@ pub(crate) fn run_formcalc_at(
     out.notes = host.notes();
     out.effects = host.effects;
     out.console = host.console;
+    clip_result(&mut out);
     out
 }
 
