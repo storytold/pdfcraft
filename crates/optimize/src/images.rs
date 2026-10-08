@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use pdfcraft_content::Matrix;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
-use crate::{Compression, ImageSettings, OptimizeError, Report, Settings};
+use crate::{Compression, ImageSettings, OptimizeError, Report, Settings, Stage};
 
 /// Images with more pixels than this are left alone (memory).
 const MAX_PIXELS: u64 = 80_000_000;
@@ -292,7 +292,13 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
     (after < before).then_some((new, smask))
 }
 
-pub(crate) fn run(doc: &mut Document, pages: &[ObjRef], settings: &Settings, report: &mut Report) -> Result<(), OptimizeError> {
+pub(crate) fn run(
+    doc: &mut Document,
+    pages: &[ObjRef],
+    settings: &Settings,
+    report: &mut Report,
+    progress: &mut dyn FnMut(Stage) -> bool,
+) -> Result<(), OptimizeError> {
     let ppi = effective_resolutions(doc, pages);
     // Soft masks are processed with their image, not on their own.
     let masks: HashSet<ObjRef> = ppi
@@ -304,7 +310,11 @@ pub(crate) fn run(doc: &mut Document, pages: &[ObjRef], settings: &Settings, rep
         .collect();
     let mut refs: Vec<(ObjRef, f64)> = ppi.into_iter().filter(|(r, _)| !masks.contains(r)).collect();
     refs.sort_by_key(|(r, _)| r.num);
-    for (r, ppi) in refs {
+    let total = refs.len();
+    for (done, (r, ppi)) in refs.into_iter().enumerate() {
+        if !progress(Stage::Images { done, total }) {
+            return Err(OptimizeError::Cancelled);
+        }
         let obj = doc.get(r);
         let Object::Stream(s) = &*obj else { continue };
         report.images += 1;
@@ -323,6 +333,9 @@ pub(crate) fn run(doc: &mut Document, pages: &[ObjRef], settings: &Settings, rep
         if let Some((mr, m)) = smask {
             doc.set(mr, Object::Stream(m));
         }
+    }
+    if !progress(Stage::Images { done: total, total }) {
+        return Err(OptimizeError::Cancelled);
     }
     Ok(())
 }

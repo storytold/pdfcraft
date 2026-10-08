@@ -162,11 +162,11 @@ fn ui_fonts_work_without_craft_fonts() {
     theme::install_fonts(&ctx);
 }
 
-/// Latin-script catalogs (Czech, Brazilian Portuguese, Spanish, French) are drawn entirely by the app's own faces
+/// Latin- and Cyrillic-script catalogs (Czech, Brazilian Portuguese, Spanish, French, Russian) are drawn entirely by the app's own faces
 /// (Inter, JetBrains Mono): no letter falls through to egui's defaults or a CJK fallback. (egui's
 /// `has_glyphs` can't answer this: with only the primary face it is also the replacement face.)
 #[test]
-fn primary_ui_fonts_cover_latin_catalogs() {
+fn primary_ui_fonts_cover_latin_and_cyrillic_catalogs() {
     use skrifa::MetadataProvider as _;
     let defs = theme::font_definitions();
     for (code, catalog) in [
@@ -174,6 +174,7 @@ fn primary_ui_fonts_cover_latin_catalogs() {
         ("pt-br", include_str!("../src/i18n/pt-br.tsv")),
         ("es", include_str!("../src/i18n/es.tsv")),
         ("fr", include_str!("../src/i18n/fr.tsv")),
+        ("ru", include_str!("../src/i18n/ru.tsv")),
     ] {
         let mut text = String::from("áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽãõçâêôàÃÕÇÂÊÔÀñÑüÜ¿¡«»…");
         for line in catalog.lines().filter(|l| !l.starts_with('#')) {

@@ -1499,6 +1499,15 @@
 	Created 1 link	1 lien créé
 	Created {n} links	{n} liens créés
 	Text recognition is already running	La reconnaissance de texte est déjà en cours
+	Optimizing… removing user data	Optimisation… suppression des données utilisateur
+	Optimizing… image {d} of {t}	Optimisation… image {d} sur {t}
+	Optimizing… cleaning up	Optimisation… nettoyage
+	Optimizing… merging identical objects	Optimisation… fusion des objets identiques
+	Optimizing… writing the copy	Optimisation… écriture de la copie
+	Cancelling…	Annulation…
+	Optimization is already running	L'optimisation est déjà en cours
+	Optimization cancelled	Optimisation annulée
+	Couldn't optimize the file	Impossible d'optimiser le fichier
 	Recognizing text… file {d} of {t}	Reconnaissance du texte… fichier {d} sur {t}
 	Recognizing text… page {d} of {t}	Reconnaissance du texte… page {d} sur {t}
 	Recognized 1 word	1 mot reconnu

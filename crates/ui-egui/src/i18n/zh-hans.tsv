@@ -1459,6 +1459,15 @@
 	Created 1 link	已创建 1 个链接
 	Created {n} links	已创建{n}个链接
 	Text recognition is already running	文本识别已在运行
+	Optimizing… removing user data	正在优化…删除用户数据
+	Optimizing… image {d} of {t}	正在优化…第{d}张图像，共{t}张
+	Optimizing… cleaning up	正在优化…清理
+	Optimizing… merging identical objects	正在优化…合并相同对象
+	Optimizing… writing the copy	正在优化…写入副本
+	Cancelling…	正在取消…
+	Optimization is already running	优化已在运行
+	Optimization cancelled	已取消优化
+	Couldn't optimize the file	无法优化文件
 	Recognizing text… file {d} of {t}	正在识别文本…第{d}个文件，共{t}个
 	Recognizing text… page {d} of {t}	正在识别文本…第{d}页，共{t}页
 	Recognized 1 word	识别了 1 个单词

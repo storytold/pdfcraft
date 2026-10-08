@@ -74,8 +74,20 @@ fn plural_fr(n: u64) -> usize {
     usize::from(n > 1)
 }
 
+/// Russian: 1 (but not 11) is `one`, 2–4 (but not 12–14) `few`, everything else `many`.
+fn plural_russian(n: u64) -> usize {
+    match n % 100 {
+        11..=14 => 2,
+        _ => match n % 10 {
+            1 => 0,
+            2..=4 => 1,
+            _ => 2,
+        },
+    }
+}
+
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 9] = [
+pub static LANGUAGES: [LangInfo; 10] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -90,6 +102,8 @@ pub static LANGUAGES: [LangInfo; 9] = [
     LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
     // French; every `fr-*` locale (`fr-FR`, `fr-CA`, `fr-BE` ...) resolves here.
     LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv"), plural: plural_fr, catalog: OnceLock::new() },
+    // Russian; every `ru-*` locale (`ru-RU`, `ru-BY`, `ru-KZ` ...) resolves here.
+    LangInfo { code: "ru", name: "Русский", source: include_str!("ru.tsv"), plural: plural_russian, catalog: OnceLock::new() },
     // Telugu; every `te-*` locale (`te-IN`) resolves here.
     LangInfo { code: "te", name: "తెలుగు", source: include_str!("te.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
 ];
@@ -1095,6 +1109,117 @@ mod tests {
         assert_eq!(fmt(t("This page couldn't be displayed.\n{e}"), &[("e", "OS error {n}")]), "Impossible d'afficher cette page.\nOS error {n}");
         assert_eq!(fmt(t("{n} pages selected"), &[("n", "3")]), "3 pages sélectionnées");
         assert_eq!(tr(fr, "CheckBox"), "Case à cocher");
+        set_current(Lang::EN);
+    }
+
+    #[test]
+    fn russian_is_registered() {
+        let ru = Lang::from_code("ru").expect("ru registered");
+        assert_eq!(ru.name(), "Русский");
+        assert_eq!(normalize_pref("RU"), Some("ru"));
+        assert_eq!(lang_from_tag("ru_RU.UTF-8"), Some(ru));
+        assert_eq!(lang_from_tag("ru-BY"), Some(ru));
+        assert_eq!(first_supported("ru-RU\r\nen-US"), Some(ru));
+        assert_eq!(tr(ru, "File"), "Файл");
+        assert_eq!(tr(ru, "Save as…"), "Сохранить как…");
+        assert_eq!(tr(ru, "Bookmarks"), "Закладки");
+        assert_eq!(tr(ru, "Layers"), "Слои");
+        assert_eq!(tr(ru, "Rapport de l'utilisateur.pdf"), "Rapport de l'utilisateur.pdf");
+        // one (1), few (2-4), many (0, 5+), with 11-14 exception
+        assert_eq!((0..=3).map(|n| (ru.0.plural)(n)).collect::<Vec<_>>(), [2, 0, 1, 1]);
+        assert_eq!(trn(ru, 0, "{n} page", "{n} pages"), "0 страниц");
+        assert_eq!(trn(ru, 1, "{n} page", "{n} pages"), "1 страница");
+        assert_eq!(trn(ru, 2, "{n} page", "{n} pages"), "2 страницы");
+        assert_eq!(trn(ru, 5, "{n} page", "{n} pages"), "5 страниц");
+        assert_eq!(trn(ru, 11, "{n} page", "{n} pages"), "11 страниц");
+        assert_eq!(trn(ru, 21, "{n} page", "{n} pages"), "21 страница");
+        assert_eq!(trn(ru, 22, "{n} page", "{n} pages"), "22 страницы");
+        assert_eq!(trn(ru, 1, "{n} field", "{n} fields"), "1 поле");
+        assert_eq!(trn(ru, 2, "{n} field", "{n} fields"), "2 поля");
+        assert_eq!(trn(ru, 5, "{n} field", "{n} fields"), "5 полей");
+        let mut app = crate::PdfCraftApp::default();
+        app.set_option("language", "ru").unwrap();
+        assert_eq!(app.language, "ru");
+        let mut restored = crate::PdfCraftApp::default();
+        restored.restore(&app.persist());
+        assert_eq!(restored.language, "ru");
+    }
+
+    /// Russian translates every registered command and every All tools group, section and item.
+    #[test]
+    fn russian_covers_commands_and_catalogue() {
+        let ru = Lang::from_code("ru").expect("ru registered");
+        for command in pdfcraft_engine::commands::COMMANDS {
+            assert!(has(ru, command.label), "missing command: {}", command.label);
+            if let Some(menu) = command.menu {
+                assert!(has(ru, menu), "missing menu: {menu}");
+            }
+        }
+        for group in pdfcraft_engine::catalog::TOOL_GROUPS {
+            assert!(has(ru, group.label), "missing group: {}", group.label);
+            for section in group.sections {
+                assert!(has(ru, section.title), "missing section: {}", section.title);
+                for item in section.items {
+                    assert!(has(ru, item.label), "missing item: {}", item.label);
+                }
+            }
+        }
+    }
+
+    /// New tl!("literal") labels must not silently fall back to English.
+    #[test]
+    fn russian_covers_ui_literals() {
+        let ru = Lang::from_code("ru").expect("ru registered");
+        let mut stack = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut literals = std::collections::BTreeSet::new();
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).expect("UI source directory") {
+                let path = entry.expect("UI source entry").path();
+                if path.is_dir() {
+                    if path.file_name().is_some_and(|name| name != "i18n") {
+                        stack.push(path);
+                    }
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let source = std::fs::read_to_string(path).expect("UI source file").replace("\r\n", "\n");
+                    let mut rest = source.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+                    while let Some((_, after)) = rest.split_once("tl!(\"") {
+                        let mut escaped = false;
+                        let end = after
+                            .char_indices()
+                            .find_map(|(i, c)| {
+                                if c == '"' && !escaped {
+                                    return Some(i);
+                                }
+                                escaped = c == '\\' && !escaped;
+                                None
+                            })
+                            .expect("closed tl! literal");
+                        let (raw, tail) = after.split_at(end);
+                        if tail.starts_with("\")") {
+                            let label: String = serde_json::from_str(&format!("\"{raw}\"")).expect("UI literal escapes");
+                            literals.insert(label);
+                        }
+                        rest = tail.strip_prefix('"').expect("closing quote");
+                    }
+                }
+            }
+        }
+        assert!(literals.len() > 900, "source scan found only {} literals", literals.len());
+        let missing: Vec<_> = literals.iter().filter(|label| !has(ru, label)).collect();
+        assert!(missing.is_empty(), "untranslated Russian UI literals: {missing:#?}");
+    }
+
+    #[test]
+    fn russian_history_and_diagnostics_preserve_user_values() {
+        let ru = Lang::from_code("ru").expect("ru registered");
+        set_current(ru);
+        assert_eq!(command_label("Undo Insert pages from Rapport {n}.pdf"), "Отменить Вставить страницы из Rapport {n}.pdf");
+        assert_eq!(command_label("Redo Fill in Contact {key}"), "Повторить Заполнить Contact {key}");
+        assert_eq!(action_label("Change Title"), "Изменить заголовок");
+        assert_eq!(action_label("Custom action {n}"), "Custom action {n}");
+        assert_eq!(fmt(t("This page couldn't be displayed.\n{e}"), &[("e", "OS error {n}")]), "Не удалось отобразить эту страницу.\nOS error {n}");
+        assert_eq!(fmt(t("{n} pages selected"), &[("n", "3")]), "Выбрано 3 страницы");
+        assert_eq!(tr(ru, "CheckBox"), "Флажок");
         set_current(Lang::EN);
     }
 

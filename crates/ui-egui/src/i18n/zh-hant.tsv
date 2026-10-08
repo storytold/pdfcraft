@@ -1417,6 +1417,15 @@
 	Created 1 link	已建立 1 個連結
 	Created {n} links	已建立{n}個連結
 	Text recognition is already running	文字識別已在執行
+	Optimizing… removing user data	正在最佳化…移除使用者資料
+	Optimizing… image {d} of {t}	正在最佳化…第{d}張圖片，共{t}張
+	Optimizing… cleaning up	正在最佳化…清理
+	Optimizing… merging identical objects	正在最佳化…合併相同物件
+	Optimizing… writing the copy	正在最佳化…寫入副本
+	Cancelling…	正在取消…
+	Optimization is already running	最佳化已在執行
+	Optimization cancelled	已取消最佳化
+	Couldn't optimize the file	無法最佳化檔案
 	Recognizing text… file {d} of {t}	正在辨識文字…第{d}個檔案，共{t}個
 	Recognizing text… page {d} of {t}	正在辨識文字…第{d}頁，共{t}頁
 	Recognized 1 word	辨識了 1 個單詞

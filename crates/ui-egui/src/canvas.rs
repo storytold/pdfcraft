@@ -109,11 +109,14 @@ pub struct ViewDefaults {
     pub fit: Fit,
     /// The zoom with [`Fit::None`] (1.0 = 100%).
     pub zoom: f32,
+    /// Highlight existing fields: a preference in Acrobat, so it carries over to the next
+    /// document and the next session.
+    pub highlight_fields: bool,
 }
 
 impl Default for ViewDefaults {
     fn default() -> Self {
-        Self { layout: PageLayout::Continuous, fit: Fit::Width, zoom: 1.0 }
+        Self { layout: PageLayout::Continuous, fit: Fit::Width, zoom: 1.0, highlight_fields: false }
     }
 }
 
@@ -342,7 +345,7 @@ impl DocView {
             rotation: 0,
             current: 0,
             organize: false,
-            highlight_fields: false,
+            highlight_fields: defaults.highlight_fields,
             page_input: "1".into(),
             notice_dismissed: false,
             cover: false,
@@ -954,9 +957,22 @@ impl DocView {
     }
 
     fn render_scale(&self, ppp: f32) -> f32 {
-        // Quantize so tiny fit-width changes don't trigger re-renders.
-        ((self.zoom * PT * ppp) * 64.0).round() / 64.0
+        // Exactly the device scale: a raster at any other scale is resampled on screen, which
+        // blurs every line and glyph (#260).
+        self.zoom * PT * ppp
     }
+}
+
+/// The request tag for a raster at `scale`: equal tags mean the same scale (to 1/65536).
+fn scale_tag(scale: f32) -> u64 {
+    (f64::from(scale) * 65536.0).round() as u64
+}
+
+/// `r` moved so its corner lies on a whole physical pixel, so that a raster drawn from there
+/// maps texel for texel onto the screen.
+fn snap_to_pixels(r: Rect, ppp: f32) -> Rect {
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    Rect::from_min_size(pos2(snap(r.min.x), snap(r.min.y)), r.size())
 }
 
 /// Maps between a page's coordinate spaces and the screen, including view rotation.
@@ -1042,6 +1058,15 @@ impl PageXform {
         };
         let (a, b) = (norm(r[0], r[1]), norm(r[2], r[3]));
         Rect::from_two_pos(self.norm_to_screen(a.0, a.1), self.norm_to_screen(b.0, b.1))
+    }
+
+    /// This transform resized to a raster of `px` device pixels (width, height before the view
+    /// rotation), so each of its texels covers one screen pixel. The rectangle's corner must
+    /// already be on a whole pixel ([`snap_to_pixels`]).
+    fn texel_aligned(&self, px: [usize; 2], ppp: f32) -> PageXform {
+        let (w, h) = (px[0] as f32 / ppp, px[1] as f32 / ppp);
+        let size = if self.rot % 180 == 90 { vec2(h, w) } else { vec2(w, h) };
+        PageXform { rect: Rect::from_min_size(self.rect.min, size), ..*self }
     }
 
     /// Draw a texture covering the normalised page region, rotated with the view.
@@ -1183,6 +1208,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(Notice::Repairs) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
         Some(Notice::Security) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
         Some(Notice::Signatures) => app.right = Some(RightPanel::Signatures),
+        Some(Notice::FieldHighlights(on)) => app.view_defaults.highlight_fields = on,
         None => {}
     }
     // No dialog, close prompt or palette over the page: only then does page input count.
@@ -1281,7 +1307,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     let ppp = ui.ctx().pixels_per_point();
     let scale = view.render_scale(ppp);
-    let tag = (scale * 1000.0) as u64;
+    let tag = scale_tag(scale);
     let hand = app.quick_tool == QuickTool::Hand;
     let tool = app.quick_tool;
     // Text selection runs for the Select tool and for the markup tools (highlight…).
@@ -1383,7 +1409,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let mut current_overlap = -1.0f32;
         let pointer = ui.input(|i| i.pointer.hover_pos());
         for &i in &visible_pages {
-            let r = rects[i].translate(origin.to_vec2());
+            let r = snap_to_pixels(rects[i].translate(origin.to_vec2()), ppp);
             if !r.intersects(visible.expand(400.0)) {
                 continue;
             }
@@ -1426,13 +1452,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 // Whole-page raster: sharp when small, a low-res backdrop when tiled.
                 let (want_scale, want_tag) = if tiled {
                     let bs = BASE_SIDE / pw_pt.max(ph_pt);
-                    (bs, (bs * 1000.0) as u64)
+                    (bs, scale_tag(bs))
                 } else {
                     (scale, tag)
                 };
                 match view.pages.get(&i) {
                     Some(p) => {
-                        xf.paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
+                        if !tiled && p.tag == want_tag {
+                            xf.texel_aligned(p.tex.size(), ppp).paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
+                        } else {
+                            // A backdrop, or a raster at an older scale until the new one arrives.
+                            xf.paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
+                        }
                         if p.tag != want_tag {
                             wanted.push((i, want_scale, want_tag, None));
                         }
@@ -1466,7 +1497,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                             match view.tiles.get(&(i, tx, ty)) {
                                 Some((ttag, tex)) if *ttag == tag => {
                                     let (fw, fh) = (dw as f32, dh as f32);
-                                    xf.paint_image(painter, tex.id(), x as f32 / fw, y as f32 / fh, (x + w) as f32 / fw, (y + h) as f32 / fh);
+                                    xf.texel_aligned([dw as usize, dh as usize], ppp).paint_image(
+                                        painter,
+                                        tex.id(),
+                                        x as f32 / fw,
+                                        y as f32 / fh,
+                                        (x + w) as f32 / fw,
+                                        (y + h) as f32 / fh,
+                                    );
                                 }
                                 _ => wanted.push((i, scale, tag, Some(Tile { x, y, w, h }))),
                             }
@@ -1716,17 +1754,25 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
 
             // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
-            // red border.
+            // red border. Radio buttons are round, and so is theirs (as in Acrobat).
             if view.highlight_fields {
                 for f in form.iter() {
                     let required = f.has(pdfcraft_engine::field_flags::REQUIRED);
+                    let round = f.kind == pdfcraft_engine::FormFieldKind::Radio;
                     for w in f.widgets.iter().filter(|w| w.page == Some(i) && !w.hidden) {
                         let r = w.rect;
                         let sr = xf.user_rect(info, i, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]);
-                        painter.rect_filled(sr, CornerRadius::same(1), Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48));
+                        let tint = Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48);
                         let (width, color) =
                             if required { (2.0, Color32::from_rgb(0xE3, 0x22, 0x22)) } else { (1.0, Color32::from_rgb(0x6E, 0x8E, 0xF5)) };
-                        painter.rect_stroke(sr, CornerRadius::same(1), Stroke::new(width, color), egui::StrokeKind::Inside);
+                        if round {
+                            let radius = sr.width().min(sr.height()) / 2.0;
+                            painter.circle_filled(sr.center(), radius, tint);
+                            painter.circle_stroke(sr.center(), radius - width / 2.0, Stroke::new(width, color));
+                        } else {
+                            painter.rect_filled(sr, CornerRadius::same(1), tint);
+                            painter.rect_stroke(sr, CornerRadius::same(1), Stroke::new(width, color), egui::StrokeKind::Inside);
+                        }
                     }
                 }
             }
@@ -2252,6 +2298,8 @@ enum Notice {
     Security,
     Signatures,
     Repairs,
+    /// Highlight fields was turned on or off.
+    FieldHighlights(bool),
 }
 
 /// The notice bar above the pages: the signature status first (Acrobat's signature bar), then
@@ -2287,6 +2335,7 @@ fn notices(
     }
     let mut open_security = false;
     let mut open_repairs = false;
+    let mut toggled = None;
     let msg = if secured {
         Some(("lock", tl!("This document is secured. Some changes are restricted by its security settings.").to_string(), false))
     } else if let Some(x) = xfa {
@@ -2339,6 +2388,7 @@ fn notices(
                     let label = if view.highlight_fields { tl!("Hide field highlights") } else { tl!("Highlight fields") };
                     if crate::widgets::pill_button(ui, label, view.highlight_fields).clicked() {
                         view.highlight_fields = !view.highlight_fields;
+                        toggled = Some(Notice::FieldHighlights(view.highlight_fields));
                     }
                 }
                 if secured && crate::widgets::pill_button(ui, tl!("Security settings"), false).clicked() {
@@ -2353,7 +2403,7 @@ fn notices(
     if open_repairs {
         return Some(Notice::Repairs);
     }
-    open_security.then_some(Notice::Security)
+    open_security.then_some(Notice::Security).or(toggled)
 }
 
 /// The floating quick-action bar at the left edge of the document area.

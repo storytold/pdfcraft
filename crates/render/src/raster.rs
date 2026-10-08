@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use hayro::hayro_interpret::InterpreterSettings;
+use hayro::hayro_interpret::font::{FontData, FontQuery};
+use hayro::hayro_interpret::hayro_cmap::CidFamily;
 use hayro::hayro_syntax::Pdf;
 use hayro::vello_cpu::color::palette::css::WHITE;
 use hayro::{RenderCache, RenderSettings, render};
@@ -50,7 +52,54 @@ pub struct RenderConfig {
 
 impl RenderConfig {
     fn settings(&self) -> InterpreterSettings {
-        InterpreterSettings { ocg_overrides: self.layers.clone(), hide_comments: self.hide_comments, ..InterpreterSettings::default() }
+        let standard = InterpreterSettings::default().font_resolver;
+        InterpreterSettings {
+            ocg_overrides: self.layers.clone(),
+            hide_comments: self.hide_comments,
+            font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| standard(query))),
+            ..InterpreterSettings::default()
+        }
+    }
+}
+
+/// A Japanese face from craft-fonts for a CID font of the Adobe-Japan1 collection that the PDF
+/// doesn't embed (`HeiseiMin-W3`, `KozGoPro-Medium`, …). hayro's own substitutes for fonts that
+/// aren't embedded are the Latin standard 14, so such text drew nothing. `None` for every other
+/// font, and when PdfCraft was built without craft-fonts. Only Japanese: the pinned craft-fonts
+/// has no other CJK faces, and its later Chinese face is Noto CJK, which AGENTS.md §1.1 rules out.
+fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
+    let FontQuery::Fallback(f) = query else { return None };
+    if f.character_collection.as_ref()?.family != CidFamily::AdobeJapan1 {
+        return None;
+    }
+    let face = match japanese_face(f.post_script_name.as_deref().unwrap_or_default(), f.is_serif, f.is_bold || f.font_weight >= 600) {
+        JapaneseFace::Mincho => pdfcraft_fonts::document_japanese_font(),
+        JapaneseFace::Gothic { bold } => {
+            let faces = pdfcraft_fonts::ui_japanese_fonts();
+            let style = if bold { "Bold" } else { "Regular" };
+            faces.iter().find(|c| c.family == "BIZ UDPGothic" && c.style == style).or(faces.first()).copied()
+        }
+    }?;
+    Some((Arc::new(face.bytes), 0))
+}
+
+#[derive(Debug, PartialEq)]
+enum JapaneseFace {
+    Mincho,
+    Gothic { bold: bool },
+}
+
+/// Which kind of Japanese face stands in for the font named `name`: Mincho names (`HeiseiMin`,
+/// `KozMin`, `Ryumin`, `MS-Mincho`) a serif Mincho; Gothic names (`…Gothic…`, `HeiseiKakuGo`,
+/// `KozGo`, `…Maru…`) a sans Gothic; any other name by the font descriptor's serif flag.
+fn japanese_face(name: &str, serif: bool, bold: bool) -> JapaneseFace {
+    let name = name.to_ascii_lowercase();
+    if name.contains("min") {
+        JapaneseFace::Mincho
+    } else if ["goth", "kakugo", "kozgo", "kaku", "maru"].iter().any(|k| name.contains(k)) || !serif {
+        JapaneseFace::Gothic { bold }
+    } else {
+        JapaneseFace::Mincho
     }
 }
 
@@ -1459,6 +1508,66 @@ trailer << /Root 1 0 R >>
         }
     }
 
+    /// A Japanese CID font that isn't embedded (Adobe-Japan1, as `HeiseiMin-W3` with
+    /// `UniJIS-UCS2-H` in #260's test file) drew nothing: hayro's substitutes for fonts that
+    /// aren't embedded are Latin-only. With craft-fonts (the build input release builds embed),
+    /// such text now draws in a Japanese face; without it, nothing changes.
+    #[test]
+    fn non_embedded_japanese_cid_fonts_draw_with_a_craft_fonts_face() {
+        let pdf = |base_font: &str| {
+            let content = "BT /F1 40 Tf 5 15 Td <65E5672C> Tj ET";
+            format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /{base_font} /Encoding /UniJIS-UCS2-H /DescendantFonts [6 0 R] >> endobj
+6 0 obj << /Type /Font /Subtype /CIDFontType0 /BaseFont /{base_font} /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 2 >>
+  /FontDescriptor 7 0 R /DW 1000 >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /{base_font} /Flags 6 /FontBBox [0 -141 1000 859] /ItalicAngle 0 /Ascent 859 /Descent -141 /CapHeight 700 /StemV 80 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+                content.len()
+            )
+        };
+        for base_font in ["HeiseiMin-W3", "HeiseiKakuGo-W5"] {
+            let mut r = PageRenderer::new(Arc::new(pdf(base_font).into_bytes()), RenderConfig::default());
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            assert!(p.error.is_none(), "{base_font}: {:?}", p.error);
+            let inked = p.rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count();
+            if pdfcraft_fonts::document_japanese_font().is_none() {
+                eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): no Japanese face to check");
+                continue;
+            }
+            // 日本 at 40 pt covers a few hundred dark pixels; a blank or missing-glyph run doesn't.
+            assert!(inked > 300, "{base_font}: 日本 is drawn ({inked} dark pixels)");
+        }
+    }
+
+    #[test]
+    fn japanese_font_names_pick_mincho_or_gothic() {
+        use super::JapaneseFace::{Gothic, Mincho};
+        for (name, serif, bold, face) in [
+            ("HeiseiMin-W3", false, false, Mincho),
+            ("KozMinPro-Regular", false, false, Mincho),
+            ("Ryumin-Light", false, false, Mincho),
+            ("MS-PMincho", false, false, Mincho),
+            ("HiraMinProN-W3", false, false, Mincho),
+            ("HeiseiKakuGo-W5", true, false, Gothic { bold: false }),
+            ("KozGoPro-Bold", true, true, Gothic { bold: true }),
+            ("GothicBBB-Medium", true, false, Gothic { bold: false }),
+            ("MS-Gothic", false, false, Gothic { bold: false }),
+            ("HiraKakuProN-W6", false, true, Gothic { bold: true }),
+            ("Unknown-Japanese", true, false, Mincho),
+            ("Unknown-Japanese", false, false, Gothic { bold: false }),
+        ] {
+            assert_eq!(super::japanese_face(name, serif, bold), face, "{name}");
+        }
+    }
+
     /// An alpha soft mask whose transparency group has no /CS (as Chrome writes gradient text)
     /// must still mask. Regression test for the vendored hayro-interpret patch.
     #[test]
@@ -1481,5 +1590,56 @@ trailer << /Root 1 0 R >>
         let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
         assert_eq!(px(25, 50), vec![255, 0, 0, 255], "inside the mask");
         assert_eq!(px(75, 50), vec![255, 255, 255, 255], "outside the mask");
+    }
+
+    /// ISO 32000-2 §8.5.4: `W` / `W*` clip with the current path once whichever path-painting
+    /// operator ends it has painted it, `S`, `f` or `B` as much as `n`. The vendored interpreter
+    /// applied the clip only on `n`: after `re W* S` everything later painted outside the clip,
+    /// and the forgotten clip stayed pending, so a later `re n` (even after `Q`) clipped
+    /// content that should show. MuPDF, Poppler and PDFium clip in every case below.
+    #[test]
+    fn clipping_path_applies_after_any_painting_operator() {
+        let render = |content: &str| {
+            let pdf = format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+                content.len()
+            );
+            let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            assert!(p.error.is_none(), "{content}: {:?}", p.error);
+            p
+        };
+        let px = |p: &RenderedPage, x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+        let red = vec![255, 0, 0, 255];
+        // The clip is the square x 20..60, y 20..60 (device rows 40..80); then the page is filled red.
+        for op in ["n", "S", "s", "f", "F", "f*", "B", "B*", "b", "b*"] {
+            for clip in ["W", "W*"] {
+                let p = render(&format!("q 0 0 1 RG 4 w 0.8 g 20 20 40 40 re {clip} {op} 1 0 0 rg 0 0 100 100 re f Q"));
+                assert_eq!(px(&p, 40, 60), red, "{clip} {op}: inside the clip");
+                assert_ne!(px(&p, 5, 5), red, "{clip} {op}: outside the clip");
+                assert_ne!(px(&p, 95, 95), red, "{clip} {op}: outside the clip");
+                // The operator that ends the path paints under the old clip: the outer half of
+                // the 4 pt stroke (x 18..20) shows outside the new one.
+                let stroked = !["n", "f", "F", "f*"].contains(&op);
+                let edge = if stroked { vec![0, 0, 255, 255] } else { vec![255, 255, 255, 255] };
+                assert_eq!(px(&p, 18, 60), edge, "{clip} {op}: just outside the clip");
+            }
+        }
+        // A clip is used once: it doesn't linger for a later `n`, inside or outside `q`/`Q`.
+        for content in [
+            "q 0 0 1 RG 70 70 10 10 re W S Q q 10 10 20 20 re n 1 0 0 rg 0 0 100 100 re f Q",
+            "q 0 0 1 RG 0 0 100 100 re W S 10 10 20 20 re n 1 0 0 rg 0 0 100 100 re f Q",
+        ] {
+            let p = render(content);
+            assert!([(5, 5), (50, 50), (95, 95)].iter().all(|(x, y)| px(&p, *x, *y) == red), "{content}: no stray clip");
+        }
     }
 }

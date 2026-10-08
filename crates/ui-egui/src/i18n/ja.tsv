@@ -1508,6 +1508,15 @@
 	Created 1 link	リンクを 1 件作成しました
 	Created {n} links	リンクを {n} 件作成しました
 	Text recognition is already running	テキスト認識はすでに実行中です
+	Optimizing… removing user data	最適化中… ユーザーデータを削除しています
+	Optimizing… image {d} of {t}	最適化中… 画像 {d} / {t}
+	Optimizing… cleaning up	最適化中… クリーンアップしています
+	Optimizing… merging identical objects	最適化中… 同一オブジェクトを統合しています
+	Optimizing… writing the copy	最適化中… コピーを書き込んでいます
+	Cancelling…	キャンセルしています…
+	Optimization is already running	最適化はすでに実行中です
+	Optimization cancelled	最適化をキャンセルしました
+	Couldn't optimize the file	ファイルを最適化できませんでした
 	Recognizing text… file {d} of {t}	テキストを認識中… ファイル {d} / {t}
 	Recognizing text… page {d} of {t}	テキストを認識中… ページ {d} / {t}
 	Recognized 1 word	1 語を認識しました

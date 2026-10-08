@@ -70,16 +70,30 @@ fn opening_images_and_text_converts_them_to_new_pdfs() {
 
 #[test]
 fn reduce_file_size_writes_a_compact_copy() {
+    use egui_kittest::Harness;
     let dir = std::env::temp_dir().join(format!("pdfcraft-reduce-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("reduced.pdf");
-    let mut app = PdfCraftApp::new();
-    app.open_bytes("notes.txt", None, "lorem ipsum ".repeat(500).into_bytes()).unwrap();
-    app.save_override = Some(out.to_string_lossy().into_owned());
-    assert!(app.execute("optimize.reduce"));
+    let out2 = out.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("notes.txt", None, "lorem ipsum ".repeat(500).into_bytes()).unwrap();
+        app.save_override = Some(out2.to_string_lossy().into_owned());
+        app
+    });
+    h.run_steps(2);
+    assert!(h.state_mut().execute("optimize.reduce"));
+    // It runs on a worker thread like the PDF Optimizer, with the progress card meanwhile.
+    let start = std::time::Instant::now();
+    while (h.state().optimize_run.is_some() || !out.exists()) && start.elapsed() < std::time::Duration::from_secs(30) {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    h.run_steps(1);
+    assert!(h.state().optimize_run.is_none() && h.state().progress_notice.is_none(), "the run finished");
     let bytes = std::fs::read(&out).unwrap();
     assert!(bytes.starts_with(b"%PDF-"));
-    assert!(app.session.docs()[0].dirty, "the open document is unchanged");
+    assert!(h.state().session.docs()[0].dirty, "the open document is unchanged");
 }
 
 #[test]
@@ -128,7 +142,16 @@ fn the_pdf_optimizer_dialog_saves_an_optimized_copy() {
         assert!(d.settings.discard_tags && d.discard == vec![pdfcraft_engine::Hidden::Metadata]);
     }
     h.get_by_label("OK").click();
-    h.run_steps(3);
+    // The click is handled next frame. The optimization then runs on a worker thread and the
+    // copy is saved when it is done.
+    h.run_steps(1);
+    let start = std::time::Instant::now();
+    while (h.state().optimize_run.is_some() || !out.exists()) && start.elapsed() < std::time::Duration::from_secs(30) {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    h.run_steps(2);
+    assert!(h.state().progress_notice.is_none(), "the progress card is gone");
     assert!(std::fs::read(&out).unwrap().starts_with(b"%PDF-"));
     assert_eq!(h.state().dialog, None);
 }

@@ -20,6 +20,7 @@ pub mod export;
 pub mod js;
 pub mod links;
 pub mod ocr;
+pub mod optimizer;
 pub mod signature_image;
 pub mod xfa;
 
@@ -193,8 +194,11 @@ pub struct Document {
     pub id: DocId,
     pub name: String,
     pub path: Option<String>,
-    /// The working file: what Save writes and what is displayed.
+    /// The working file: what Save writes.
     pub bytes: Arc<Vec<u8>>,
+    /// What is displayed (the page view, `page_render`, page images): `bytes`, plus appearances
+    /// drawn for display only for comments that have none ([`display_bytes`]). Never saved.
+    pub display: Arc<Vec<u8>>,
     pub info: DocInfo,
     pub renderer: RenderPool,
     /// The password the document was opened with (needed to read attachments, etc.).
@@ -473,6 +477,15 @@ impl Document {
     }
 }
 
+/// What is displayed: the working file, plus (in memory only, never saved) the appearances
+/// PdfCraft draws for comments that have none ([`pdfcraft_annot::with_missing_appearances`]).
+/// The working file is unchanged, and so is everything that reads it (saving, signatures, …).
+fn display_bytes(editor: Option<&Editor>, bytes: &Arc<Vec<u8>>) -> Arc<Vec<u8>> {
+    let Some(display) = editor.and_then(|e| pdfcraft_annot::with_missing_appearances(&e.cos)) else { return bytes.clone() };
+    // Writing fails only as saving the document would; the page then shows as it always did.
+    write_incremental(&display, &SaveOptions::default()).map(Arc::new).unwrap_or_else(|_| bytes.clone())
+}
+
 fn render_threads() -> usize {
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 8) - 1
 }
@@ -481,7 +494,7 @@ fn render_threads() -> usize {
 fn use_layer_choices(doc: &mut Document) {
     let overrides: Vec<(i32, i32, bool)> = doc.info.layers.iter().map(|l| (l.id.0 as i32, l.id.1 as i32, l.visible)).collect();
     doc.config.layers = Arc::new(overrides);
-    doc.renderer = RenderPool::new(doc.bytes.clone(), render_threads(), doc.config.clone());
+    doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
 }
 
 /// Apply a set-layer-visibility action to `layers`, one change at a time, so a toggle flips the
@@ -1836,6 +1849,8 @@ pub enum EditError {
     Sign(String),
     #[error("{0}")]
     Optimize(String),
+    #[error("cancelled")]
+    Cancelled,
     #[error("{0} isn't possible in a signed document: it would rewrite the file and invalidate the signatures")]
     SignedRewrite(String),
     #[error("this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)")]
@@ -2168,7 +2183,6 @@ impl Session {
         xfa: Option<XfaLayout>,
     ) -> Result<DocId, OpenError> {
         let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
-        let renderer = RenderPool::new(bytes.clone(), render_threads(), config.clone());
         let (editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
                 let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };
@@ -2177,6 +2191,8 @@ impl Session {
             Ok(Err(e)) => (None, Some(e.to_string())),
             Err(_) => (None, Some("the document structure could not be read for editing".into())),
         };
+        let display = display_bytes(editor.as_ref(), &bytes);
+        let renderer = RenderPool::new(display.clone(), render_threads(), config.clone());
         let mut form = editor.as_ref().map(|e| pdfcraft_forms::fields(&e.cos)).unwrap_or_default();
         if let Some(e) = editor.as_ref() {
             xfa::mark_script_buttons(&e.cos, &mut form);
@@ -2193,6 +2209,7 @@ impl Session {
             name,
             path,
             bytes,
+            display,
             info,
             renderer,
             password: render_password,
@@ -2411,8 +2428,9 @@ impl Session {
         if !doc.signatures.is_empty() {
             doc.signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
         }
-        doc.bytes = bytes.clone();
-        doc.renderer = RenderPool::new(bytes, render_threads(), doc.config.clone());
+        doc.display = display_bytes(Some(editor), &bytes);
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.bytes = bytes;
         Ok(())
     }
 
@@ -2447,8 +2465,9 @@ impl Session {
         doc.added = pdfcraft_edit::list_added(&editor.cos);
         doc.links = pdfcraft_annot::links::list(&editor.cos);
         doc.signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
-        doc.bytes = bytes.clone();
-        doc.renderer = RenderPool::new(bytes, render_threads(), doc.config.clone());
+        doc.display = display_bytes(Some(editor), &bytes);
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.bytes = bytes;
         Ok(())
     }
 
@@ -2572,21 +2591,10 @@ impl Session {
 
     /// Optimize PDF ▸ Advanced optimization: `settings` for images and objects, plus Remove
     /// Hidden Information's `discard` categories (user data). A full rewrite: signed documents
-    /// are refused. The open document is not changed.
+    /// are refused. The open document is not changed. This is [`Self::optimize_job`] run in
+    /// place, without progress.
     pub fn optimized_bytes(&self, id: DocId, settings: &optimize::Settings, discard: &[Hidden]) -> Result<(Arc<Vec<u8>>, OptimizeReport), EditError> {
-        let doc = self.get(id).ok_or(EditError::NoDocument)?;
-        if doc.is_signed() {
-            return Err(EditError::Signed);
-        }
-        let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
-        let mut cos = editor.cos.clone();
-        let discarded = if discard.is_empty() { Vec::new() } else { pdfcraft_redact::sanitize::remove_hidden(&mut cos, discard)? };
-        let report = optimize::optimize(&mut cos, settings).map_err(|e| EditError::Optimize(e.to_string()))?;
-        let all: Vec<pdfcraft_cos::ObjRef> = cos.object_numbers().into_iter().map(|n| pdfcraft_cos::ObjRef::new(n, cos.generation(n))).collect();
-        let merged = pdfcraft_organize::dedupe_resources(&mut cos, &all, false);
-        let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
-        let bytes = write_full(&cos, &opts).map_err(|e| EditError::Write(e.to_string()))?;
-        Ok((Arc::new(bytes), OptimizeReport { optimize: report, merged, discarded }))
+        self.optimize_job(id, settings, discard)?.run(|_| true)
     }
 
     /// Export comments and/or form data: XFDF and FDF carry either or both; XML, CSV and text
@@ -2847,7 +2855,7 @@ impl Session {
             return false;
         }
         doc.config.hide_comments = hide;
-        doc.renderer = RenderPool::new(doc.bytes.clone(), render_threads(), doc.config.clone());
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         doc.generation += 1;
         true
     }

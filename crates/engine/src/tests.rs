@@ -988,6 +988,39 @@ fn create_and_reduce() {
 }
 
 #[test]
+fn an_optimize_job_reports_its_stages_and_can_be_cancelled() {
+    use crate::optimizer::OptimizeStage;
+    let (s, id) = session_with(2);
+    let settings = optimize::Settings::default();
+    let mut stages = Vec::new();
+    let (bytes, _) = s
+        .optimize_job(id, &settings, &[])
+        .unwrap()
+        .run(|st| {
+            stages.push(st);
+            true
+        })
+        .unwrap();
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert_eq!(stages.first(), Some(&OptimizeStage::Discarding));
+    assert_eq!(&stages[stages.len() - 3..], [OptimizeStage::CleaningUp, OptimizeStage::Merging, OptimizeStage::Writing]);
+    let fractions: Vec<f32> = stages.iter().map(|st| st.fraction()).collect();
+    assert!(fractions.windows(2).all(|w| w[0] <= w[1]), "the bar never goes back: {fractions:?}");
+    assert!(fractions.iter().all(|f| (0.0..=1.0).contains(f)));
+    assert_eq!(
+        OptimizeStage::Images { done: 0, total: 0 }.fraction(),
+        OptimizeStage::Images { done: 5, total: 5 }.fraction(),
+        "no images: no division by zero"
+    );
+
+    // Cancelled at the merge: nothing is written, the open document is untouched.
+    let before = s.get(id).unwrap().bytes.clone();
+    let r = s.optimize_job(id, &settings, &[]).unwrap().run(|st| st != OptimizeStage::Merging);
+    assert!(matches!(r, Err(EditError::Cancelled)), "{r:?}");
+    assert_eq!(s.get(id).unwrap().bytes, before);
+}
+
+#[test]
 fn flattening_keeps_the_look_and_drops_the_objects() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("form.pdf", None, Arc::new(form_fixture()), None).unwrap();
@@ -2008,4 +2041,70 @@ fn runaway_xfa_calculations_at_open_end_quickly_with_a_report() {
     s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("3".into()) }).unwrap();
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
     assert!(s.take_js_output(id).errors.is_empty());
+}
+
+/// The page view's raster of `page` at 1 px/pt (the document's own render pool).
+fn shown(s: &Session, id: DocId, page: usize) -> pdfcraft_render::RenderedPage {
+    let doc = s.get(id).unwrap();
+    doc.renderer.set_queue(vec![pdfcraft_render::RenderRequest { page, scale: 1.0, ..Default::default() }]);
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(p) = doc.renderer.try_recv() {
+            assert!(p.error.is_none(), "{:?}", p.error);
+            return p;
+        }
+        assert!(start.elapsed() < std::time::Duration::from_secs(20), "no render");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// #260 (page 7): comments without an appearance stream, here a FreeText box (`/C` background,
+/// blue `/DA` text) and an Ink stroke, weren't drawn. The page view now draws them from
+/// appearances made for display only; the working file and what Save writes stay as they were.
+#[test]
+fn comments_without_appearances_are_drawn_but_not_saved() {
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [20 200 180 260] /Contents (Box) /DA (/Helv 10 Tf 0 0 1 rg) /Border [0 0 1] /C [.85 .47 .02] >>",
+        b"<< /Type /Annot /Subtype /Ink /Rect [20 20 180 120] /InkList [[30 30 100 110 170 30]] /Border [0 0 4] /C [0 .6 0] >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        bytes.extend_from_slice(o);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let original = Arc::new(bytes);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("comments.pdf", None, original.clone(), None).expect("opens");
+    let check = |s: &Session| {
+        let p = shown(s, id, 0);
+        let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+        // y down: the FreeText box spans rows 40..100, the Ink apex is at (100, 190).
+        assert_eq!(px(100, 90), vec![217, 120, 5, 255], "the FreeText background");
+        // On the apex row: Ink is drawn as a curve through its points (#374), level at the apex.
+        assert_eq!(px(100, 190), vec![0, 153, 0, 255], "the Ink stroke");
+    };
+    check(&s);
+    let doc = s.get(id).unwrap();
+    assert!(Arc::ptr_eq(&doc.bytes, &original), "the working file is the file as opened");
+    assert!(!Arc::ptr_eq(&doc.display, &doc.bytes) && Arc::ptr_eq(&doc.export_source().bytes, &doc.display), "page images show it too");
+    // After an edit (a scoped refresh) they are still drawn, and Save writes no appearances.
+    s.apply(id, rect_comment(0, [150.0, 270.0, 190.0, 290.0])).unwrap();
+    check(&s);
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = pdfcraft_cos::Document::open(saved).unwrap();
+    for r in [pdfcraft_cos::ObjRef::new(4, 0), pdfcraft_cos::ObjRef::new(5, 0)] {
+        assert!(reopened.get(r).as_dict().is_some_and(|d| !d.contains(b"AP")), "{r:?} is saved without /AP");
+    }
 }

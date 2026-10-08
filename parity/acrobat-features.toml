@@ -746,8 +746,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster.rs::huge_cid_width_ranges_terminate"]
-notes = "CID-to-Unicode tables are M2.4"
+evidence = ["crates/render/src/raster.rs::huge_cid_width_ranges_terminate", "crates/render/src/raster.rs::non_embedded_japanese_cid_fonts_draw_with_a_craft_fonts_face"]
+notes = "CID-to-Unicode tables are M2.4; a non-embedded Adobe-Japan1 font is drawn in a craft-fonts Japanese face (Mincho or Gothic by name) when built with craft-fonts; non-embedded GB1, CNS1 and Korea1 fonts still draw nothing (no allowed face)"
 
 [[feature]]
 id = "view.render-image-codecs"
@@ -770,8 +770,8 @@ milestone = "M2"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster.rs::widget_appearance_states", "crates/render/src/raster.rs::highlights_without_an_appearance_are_drawn"]
-notes = "a Highlight without /AP is drawn from /QuadPoints, /C and /CA; other comment types without /AP are not drawn yet"
+evidence = ["crates/render/src/raster.rs::widget_appearance_states", "crates/render/src/raster.rs::highlights_without_an_appearance_are_drawn", "crates/engine/src/tests.rs::comments_without_appearances_are_drawn_but_not_saved"]
+notes = "comments without /AP (FreeText, Ink, notes, stamps, shapes, markup) are drawn from their dictionaries in the page view, page_render and page images, never saved (a read-only document still gets the renderer's Highlight fallback only); Link borders without /AP and printing are not covered yet"
 
 [[feature]]
 id = "view.render-error-isolation"
@@ -3602,8 +3602,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.ink"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/comments.rs::shapes_and_ink_are_drawn_by_dragging"]
-notes = "one ink annotation per stroke"
+evidence = ["crates/ui-egui/tests/comments.rs::shapes_and_ink_are_drawn_by_dragging", "crates/annot/src/tests.rs::ink_strokes_are_smooth_curves_through_their_points"]
+notes = "one ink annotation per stroke; strokes are drawn as smooth curves through their points, as in Acrobat"
 
 [[feature]]
 id = "comment.eraser"
@@ -4302,8 +4302,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/view.rs::highlight_fields_tints_the_field_area"]
-notes = ""
+evidence = ["crates/ui-egui/tests/view.rs::highlight_fields_tints_the_field_area", "crates/ui-egui/tests/view.rs::required_radio_buttons_get_a_round_red_border", "crates/ui-egui/tests/view.rs::field_highlighting_is_remembered"]
+notes = "remembered for the next document and session; required fields get a red border (round for radio buttons); the tint is drawn over the field, where Acrobat paints the highlight colour behind it"
 
 [[feature]]
 id = "form.field-appearance-display"
@@ -7107,7 +7107,7 @@ status = "shipped"
 commands = ["optimize.reduce"]
 tools = ["doc_reduce"]
 evidence = ["crates/ui-egui/tests/create.rs::reduce_file_size_writes_a_compact_copy", "crates/engine/src/tests.rs::create_and_reduce", "crates/automation/tests/automation.rs::creating_and_reducing_through_tools", "crates/automation/tests/automation.rs::optimizing_through_tools"]
-notes = "images above 225 ppi to 150 ppi JPEG medium, thumbnails dropped, resources merged, object streams"
+notes = "images above 225 ppi to 150 ppi JPEG medium, thumbnails dropped, resources merged, object streams; runs in the background with a progress bar and Cancel"
 
 [[feature]]
 id = "optimize.compatibility-level"
@@ -7130,8 +7130,8 @@ milestone = "M11"
 status = "partial"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/ui-egui/tests/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy", "crates/automation/tests/automation.rs::optimizing_through_tools"]
-notes = "Images, Discard Objects, Discard User Data, Clean Up; no Fonts or Transparency panels, no space audit"
+evidence = ["crates/ui-egui/tests/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy", "crates/automation/tests/automation.rs::optimizing_through_tools", "crates/ui-egui/src/optimize_ui.rs::the_progress_card_shows_the_stage_and_cancels", "crates/engine/src/tests.rs::an_optimize_job_reports_its_stages_and_can_be_cancelled"]
+notes = "Images, Discard Objects, Discard User Data, Clean Up; runs in the background with a progress bar (per image) and Cancel; no Fonts or Transparency panels, no space audit"
 
 [[feature]]
 id = "optimize.downsample-images"

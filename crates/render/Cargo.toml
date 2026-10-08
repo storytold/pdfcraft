@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+pdfcraft-fonts = { workspace = true }
 hayro = { workspace = true }
 hayro-syntax = { workspace = true }
 lopdf = { workspace = true }
