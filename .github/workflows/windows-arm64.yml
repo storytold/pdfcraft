@@ -113,7 +113,7 @@ jobs:
           [void]$sb.Append("trailer`n<< /Size $($objs.Count + 1) /Root 1 0 R >>`nstartxref`n$xref`n%%EOF`n")
           New-Item -ItemType Directory -Force smoke | Out-Null
           [System.IO.File]::WriteAllText("$PWD\smoke\hello.pdf", $sb.ToString(), [System.Text.Encoding]::ASCII)
-          $steps = '[{"tool":"doc_open","args":{"path":"hello.pdf"}},{"tool":"text_paragraphs","args":{"doc":1,"page":1}},{"tool":"text_edit","args":{"doc":1,"page":1,"paragraph":1,"text":"Edited on ARM64"}},{"tool":"page_render","args":{"doc":1,"page":1,"dpi":72},"out":"smoke/page.png"},{"tool":"doc_save","args":{"doc":1,"path":"out.pdf"}}]'
+          $steps = '[{"tool":"doc_open","args":{"path":"hello.pdf"}},{"tool":"text_paragraphs","args":{"doc":1,"page":1}},{"tool":"text_edit","args":{"doc":1,"page":1,"paragraph":1,"text":"Edited on ARM64"}},{"tool":"page_render","args":{"doc":1,"page":1,"dpi":72},"out":"page.png"},{"tool":"doc_save","args":{"doc":1,"path":"out.pdf"}}]'
           [System.IO.File]::WriteAllText("$PWD\smoke\steps.json", $steps)
           $out = & $cli run --script smoke\steps.json --root smoke 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0) { Write-Output $out; throw "pdfcraft-cli run exited $LASTEXITCODE" }
