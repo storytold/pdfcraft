@@ -103,6 +103,14 @@ impl PageInfo {
         [a * self.width, b * self.height]
     }
 
+    /// A view-space rectangle → the normalized user-space rectangle covering the same area of the
+    /// page (`[x0, y0, x1, y1]`, `x0 <= x1`, `y0 <= y1`). Under `/Rotate` the corners swap roles,
+    /// so a view rectangle's top-left is not in general the user rectangle's `[x0, y1]`.
+    pub fn view_rect_to_user(&self, r: [f32; 4]) -> [f32; 4] {
+        let (a, b) = (self.view_to_user(r[0], r[1]), self.view_to_user(r[2], r[3]));
+        [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
+    }
+
     /// A view-space rectangle as a text-markup quad in user space: top-left, top-right,
     /// bottom-left, bottom-right as read on screen.
     pub fn view_rect_to_quad(&self, r: [f32; 4]) -> [f64; 8] {

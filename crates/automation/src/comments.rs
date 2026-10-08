@@ -3,7 +3,7 @@
 //! Geometry follows the automation convention: points from the top-left of the displayed page,
 //! y down. It is converted to PDF user space (crop box, `/Rotate`) here.
 
-use pdfcraft_engine::{Edit, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort};
+use pdfcraft_engine::{Edit, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort};
 use pdfcraft_render::{Annotation, PageInfo};
 use serde_json::{Value, json};
 
@@ -47,6 +47,16 @@ fn to_user(p: &PageInfo, x: f64, y: f64) -> [f64; 2] {
 fn rect_to_user(p: &PageInfo, r: [f64; 4]) -> [f64; 4] {
     let (a, b) = (to_user(p, r[0], r[1]), to_user(p, r[2], r[3]));
     [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
+}
+
+/// The engine's `at` for a note or attachment icon whose top-left corner *as displayed* is the
+/// view point (x, y): the top-left (`[x0, y1]`) of the icon's square in user space. Converting
+/// the point alone is only right on unrotated pages — under `/Rotate` that corner of the
+/// displayed square is another corner of the user-space one, and the icon lands one icon-width
+/// away from where it was asked for.
+fn icon_anchor(p: &PageInfo, x: f64, y: f64) -> [f64; 2] {
+    let r = rect_to_user(p, [x, y, x + NOTE_SIZE, y + NOTE_SIZE]);
+    [r[0], r[3]]
 }
 
 /// A user-space rectangle as the displayed-page rectangle every tool reports and accepts:
@@ -191,7 +201,7 @@ impl Automation {
                         Some(n) => NoteIcon::from_name(n).ok_or_else(|| ToolError::InvalidArgs(format!("unknown icon {n:?}")))?,
                         None => NoteIcon::Comment,
                     };
-                    Shape::Note { at: to_user(&info, x, y), icon }
+                    Shape::Note { at: icon_anchor(&info, x, y), icon }
                 }
                 "stamp" => {
                     let want = a.opt_str("stamp")?.unwrap_or("approved").to_ascii_lowercase().replace([' ', '-', '_'], "");
@@ -283,7 +293,7 @@ impl Automation {
                             .ok_or_else(|| ToolError::InvalidArgs(format!("unknown icon {n:?} (PushPin, Paperclip, Graph, Tag)")))?,
                         None => pdfcraft_engine::AttachIcon::PushPin,
                     };
-                    Shape::Attachment { at: to_user(&info, x, y), icon, file, data }
+                    Shape::Attachment { at: icon_anchor(&info, x, y), icon, file, data }
                 }
                 "caret" => {
                     let [x, y] = a.need::<2>("at", "a caret (the insertion point on the baseline)")?;

@@ -1512,6 +1512,33 @@ fn doc_info_rects_are_displayed_page_coordinates() {
     assert!(close(&moved, &rotated["rect"]), "link moved: {moved} vs {}", rotated["rect"]);
 }
 
+/// `comment_add` places a note's or an attachment's icon with its displayed top-left corner at
+/// `at`, on rotated pages too. The engine anchors the icon at the user-space top-left of its
+/// `/Rect`, which after `/Rotate` is another corner of the square as displayed; converting the
+/// point alone put the icon one icon-width off.
+#[test]
+fn note_icons_anchor_at_the_requested_corner_on_rotated_pages() {
+    let dir = workdir("note-anchor");
+    std::fs::write(dir.join("note.txt"), b"attached").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 612, "height": 792, "pages": 4 }))["doc"].as_u64().unwrap();
+    for (page, degrees) in [(2, 90), (3, 180), (4, 270)] {
+        ok(&mut a, "page_rotate", json!({ "doc": doc, "pages": [page], "degrees": degrees }));
+    }
+    for page in 1..=4 {
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": page, "type": "note", "at": [72, 72], "contents": "Fixture note" }));
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": page, "type": "attachment", "at": [200, 300], "path": "note.txt" }));
+    }
+    let comments = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let comments = comments["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 8);
+    for c in comments {
+        let want = if c["type"] == "Text" { [72.0, 72.0, 92.0, 92.0] } else { [200.0, 300.0, 220.0, 320.0] };
+        let rect: Vec<f64> = c["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        assert!(rect.iter().zip(want).all(|(x, y)| (x - y).abs() < 0.01), "page {} {}: rect {rect:?}, want {want:?}", c["page"], c["type"]);
+    }
+}
+
 #[test]
 fn comment_checkmarks_locks_hiding_and_summaries_through_tools() {
     let dir = workdir("comment-polish");
