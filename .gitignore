@@ -1,5 +1,7 @@
 *~
-plan/
+# The original authors' local-only notes. Anchored to the repo root so it does not also hide
+# docs/plan/, which is the committed plan (see docs/plan/README.md).
+/plan/
 /target
 /dist
 /corpus
