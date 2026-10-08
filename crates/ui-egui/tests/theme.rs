@@ -20,7 +20,7 @@ fn assert_theme(h: &Harness<'static, PdfCraftApp>, preference: ThemePreference, 
     assert_eq!(h.state().theme_preference, preference);
     assert_eq!(h.state().theme, kind);
     assert_eq!(Tokens::get(&h.ctx).kind, kind);
-    assert_eq!(h.ctx.style().visuals.dark_mode, kind == ThemeKind::Dark);
+    assert_eq!(h.ctx.global_style().visuals.dark_mode, kind == ThemeKind::Dark);
     assert_eq!(h.ctx.theme(), if kind == ThemeKind::Dark { egui::Theme::Dark } else { egui::Theme::Light });
 }
 
