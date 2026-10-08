@@ -2,6 +2,7 @@
 //! "save changes?" prompt when closing a tab or quitting with unsaved edits.
 
 use pdfcraft_engine::Edit;
+use pdfcraft_platform::staging::{StagingName, create_staging, staging_suffixes};
 
 use crate::PdfCraftApp;
 
@@ -510,7 +511,7 @@ fn write_atomically_with(path: &str, bytes: &[u8], suffixes: impl IntoIterator<I
     let target = std::path::Path::new(path);
     let dir = target.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
     let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("save");
-    let (tmp, f) = create_staging(dir, name, suffixes)?;
+    let (tmp, f) = create_staging(dir, name, StagingName::TagThenSuffix, suffixes)?;
     let result = (|| {
         // Closed at the end of the block, before the rename.
         {
@@ -524,50 +525,6 @@ fn write_atomically_with(path: &str, bytes: &[u8], suffixes: impl IntoIterator<I
         let _ = std::fs::remove_file(&tmp);
     }
     result
-}
-
-/// How many staging names [`create_staging`] tries. A random 64-bit name is only taken if someone
-/// put a file there on purpose, so running out means refusing, not trying harder.
-const STAGING_ATTEMPTS: usize = 16;
-
-/// Create a new, empty staging file in `dir` for the file `name`, one name per suffix. It is
-/// opened with `create_new`, which fails if anything already has the name (a file, a hard link,
-/// a symbolic link even when dangling, a folder), on Windows as everywhere else; such a name is
-/// skipped, never opened, so a file planted at the staging path can't receive or redirect the
-/// save.
-fn create_staging(
-    dir: &std::path::Path,
-    name: &str,
-    suffixes: impl IntoIterator<Item = u64>,
-) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
-    // At most 128 bytes of the target's name, cut between characters, so the staging name fits
-    // the 255-byte (Linux, macOS) and 255-unit (Windows) limits however long that name is.
-    let mut stem = String::new();
-    for c in name.chars() {
-        if stem.len() + c.len_utf8() > 128 {
-            break;
-        }
-        stem.push(c);
-    }
-    for suffix in suffixes.into_iter().take(STAGING_ATTEMPTS) {
-        let tmp = dir.join(format!(".{stem}.pdfcraft-{suffix:016x}.tmp"));
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
-            Ok(file) => return Ok((tmp, file)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            // Windows reports a folder at the name as "access denied"; it is taken all the same.
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && tmp.symlink_metadata().is_ok() => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "every temporary file name tried is taken"))
-}
-
-/// Unpredictable staging-name suffixes, so a name can't be planted in advance. `RandomState` is
-/// keyed from the operating system's random source.
-fn staging_suffixes() -> impl Iterator<Item = u64> {
-    use std::hash::BuildHasher;
-    let state = std::hash::RandomState::new();
-    (0u64..).map(move |i| state.hash_one(i))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -651,7 +608,8 @@ fn bookmark_at<'a>(items: &'a [pdfcraft_render::OutlineItem], path: &[usize]) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{STAGING_ATTEMPTS, staging_suffixes, write_atomically, write_atomically_with};
+    use super::{write_atomically, write_atomically_with};
+    use pdfcraft_platform::staging::{STAGING_ATTEMPTS, staging_suffixes};
     use std::path::{Path, PathBuf};
 
     /// A fresh, empty folder for one staging test.
