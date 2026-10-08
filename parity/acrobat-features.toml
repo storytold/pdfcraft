@@ -274,8 +274,8 @@ milestone = "M1"
 status = "shipped"
 commands = ["file.save"]
 tools = ["doc_save"]
-evidence = ["crates/ui-egui/tests/editing.rs::save_writes_an_incremental_update_and_clears_dirty", "crates/engine/src/tests.rs::save_is_incremental_stamps_mod_date_and_rebases", "crates/organize/src/tests.rs::successive_incremental_saves_stack_revisions"]
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::save_writes_an_incremental_update_and_clears_dirty", "crates/engine/src/tests.rs::save_is_incremental_stamps_mod_date_and_rebases", "crates/organize/src/tests.rs::successive_incremental_saves_stack_revisions", "crates/automation/src/lib.rs::staging_never_writes_through_a_file_planted_at_its_name", "crates/ui-egui/src/editing.rs::saving_never_writes_through_a_file_planted_at_the_staging_name"]
+notes = "The atomic write stages to a new, randomly named file created with create_new, so a file or link planted at the staging path is never written through (desktop app, automation and CLI)."
 
 [[feature]]
 id = "core.save-as-full-rewrite"
