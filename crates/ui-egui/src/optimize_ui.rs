@@ -299,8 +299,11 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.run_inline {
             work();
-        } else {
-            std::thread::Builder::new().name("pdfcraft-optimize".into()).spawn(work).ok();
+        } else if let Err(e) = std::thread::Builder::new().name("pdfcraft-optimize".into()).spawn(work) {
+            // No worker: report the failure instead of waiting for a result that never comes.
+            if let Ok(mut s) = progress.lock() {
+                s.result = Some(Err(EditError::Optimize(e.to_string())));
+            }
         }
         #[cfg(target_arch = "wasm32")]
         work();
