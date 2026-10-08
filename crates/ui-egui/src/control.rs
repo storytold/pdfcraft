@@ -8,7 +8,7 @@
 //! - [`ControlPlugin`], an egui plugin, keeps a copy of the AccessKit tree from every frame's
 //!   output (the widget tree with ids, roles, labels, rects and states) and injects queued input
 //!   events (AccessKit click actions, pointer events, keys, text) at the start of later frames.
-//! - Requests reach the app through a channel; `PrintCraftApp` answers them at the start of a
+//! - Requests reach the app through a channel; `PdfCraftApp` answers them at the start of a
 //!   frame, so they see and change exactly what the user would.
 //!
 //! Methods (JSON in, JSON out):
@@ -17,8 +17,9 @@
 //! - `ui.inspect {query?, role?, limit?}`: widgets in tree order with `id` (a string), `role`, `label`,
 //!   `value`, `rect` (points), `enabled`, `toggled`, `selected`, `clickable`, `depth`.
 //! - `ui.click {id}` | `{label}` | `{x, y, button?}`: click a widget (by its AccessKit action) or a
-//!   point (`button`: primary or secondary, for context menus).
-//! - `ui.drag {from: [x, y], to: [x, y], steps?, modifiers?}`: press, move and release (drawing
+//!   point (`button`: primary, secondary, or middle).
+//! - `ui.move {x, y}`: move the pointer without pressing a button (e.g. latched autoscroll).
+//! - `ui.drag {from: [x, y], to: [x, y], steps?, modifiers?, button?}`: press, move and release (drawing
 //!   comments, selecting text, moving comments). `ui.state` reports `pages_on_screen` to aim at.
 //! - `ui.type {text}`, `ui.key {key, modifiers?}`: keyboard input to the focused widget / app.
 //! - `ui.command {id}`: run a registry command (as the menu would). `ui.commands` lists them.
@@ -105,7 +106,7 @@ pub struct ControlPlugin {
 
 impl egui::Plugin for ControlPlugin {
     fn debug_name(&self) -> &'static str {
-        "printcraft-control"
+        "pdfcraft-control"
     }
 
     fn input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
@@ -163,7 +164,7 @@ pub fn attach(ctx: &egui::Context) -> (Control, ControlClient) {
     (Control { rx, shared, pending: Vec::new(), next_tag: 1 }, ControlClient { tx, ctx: ctx.clone() })
 }
 
-/// What a request needs from the app (implemented by `PrintCraftApp`).
+/// What a request needs from the app (implemented by `PdfCraftApp`).
 pub(crate) trait Host {
     fn state(&self) -> Value;
     fn command(&mut self, id: &str) -> Reply;
@@ -275,6 +276,17 @@ impl Control {
             "ui.inspect" => Ok(Handled::Now(Ok(self.inspect(p)))),
             "ui.click" => self.click(p),
             "ui.drag" => self.drag(p),
+            "ui.move" => {
+                let point = |key: &str| -> Result<f32, String> {
+                    p.get(key)
+                        .and_then(Value::as_f64)
+                        .map(|n| n as f32)
+                        .filter(|n| n.is_finite())
+                        .ok_or_else(|| format!("ui.move: {key} must be a finite coordinate in points"))
+                };
+                let pos = egui::pos2(point("x")?, point("y")?);
+                Ok(Handled::AfterFrames(self.inject(vec![vec![egui::Event::PointerMoved(pos)]]), json!({ "moved": [pos.x, pos.y] })))
+            }
             "ui.type" => {
                 let text = str_param("text")?.to_string();
                 Ok(Handled::AfterFrames(self.inject(vec![vec![egui::Event::Text(text)]]), json!({ "typed": true })))
@@ -296,7 +308,7 @@ impl Control {
                 Ok(Handled::Screenshot(region))
             }
             other => Err(format!(
-                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.type, ui.key, ui.command, ui.commands, ui.set, ui.open, ui.screenshot)"
+                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.move, ui.drag, ui.type, ui.key, ui.command, ui.commands, ui.set, ui.open, ui.screenshot)"
             )),
         })();
         r.unwrap_or_else(|e| Handled::Now(Err(e)))
@@ -342,7 +354,8 @@ impl Control {
         let (from, to) = (point("from")?, point("to")?);
         let steps = p.get("steps").and_then(Value::as_u64).unwrap_or(8).clamp(1, 200) as usize;
         let modifiers = modifiers(p.get("modifiers"))?;
-        let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
+        let which = pointer_button(p, "ui.drag")?;
+        let button = |pos, pressed| egui::Event::PointerButton { pos, button: which, pressed, modifiers };
         let mut frames = vec![vec![egui::Event::PointerMoved(from)], vec![button(from, true)]];
         for k in 1..=steps {
             frames.push(vec![egui::Event::PointerMoved(from + (to - from) * (k as f32 / steps as f32))]);
@@ -355,11 +368,7 @@ impl Control {
     fn click(&mut self, p: &Value) -> Result<Handled, String> {
         if let (Some(x), Some(y)) = (p.get("x").and_then(Value::as_f64), p.get("y").and_then(Value::as_f64)) {
             let pos = egui::pos2(x as f32, y as f32);
-            let which = match p.get("button").and_then(Value::as_str).unwrap_or("primary") {
-                "primary" | "left" => egui::PointerButton::Primary,
-                "secondary" | "right" => egui::PointerButton::Secondary,
-                other => return Err(format!("ui.click: unknown button {other:?} (primary, secondary)")),
-            };
+            let which = pointer_button(p, "ui.click")?;
             let button = |pressed| egui::Event::PointerButton { pos, button: which, pressed, modifiers: egui::Modifiers::NONE };
             let frames = self.inject(vec![vec![egui::Event::PointerMoved(pos)], vec![button(true)], vec![button(false)]]);
             return Ok(Handled::AfterFrames(frames, json!({ "clicked": [x, y] })));
@@ -448,6 +457,15 @@ fn widget(id: NodeId, n: &accesskit::Node, depth: usize, focused: bool) -> Value
     w
 }
 
+fn pointer_button(p: &Value, method: &str) -> Result<egui::PointerButton, String> {
+    match p.get("button").and_then(Value::as_str).unwrap_or("primary") {
+        "primary" | "left" => Ok(egui::PointerButton::Primary),
+        "secondary" | "right" => Ok(egui::PointerButton::Secondary),
+        "middle" => Ok(egui::PointerButton::Middle),
+        other => Err(format!("{method}: unknown button {other:?} (primary, secondary, middle)")),
+    }
+}
+
 fn modifiers(v: Option<&Value>) -> Result<egui::Modifiers, String> {
     let mut m = egui::Modifiers::NONE;
     for name in v.and_then(Value::as_array).into_iter().flatten() {
@@ -510,7 +528,7 @@ fn screenshot_png(image: &egui::ColorImage, region: Option<egui::Rect>, ppp: f32
     Ok(json!({ "png_base64": base64::engine::general_purpose::STANDARD.encode(out), "width": cw, "height": ch, "pixels_per_point": ppp }))
 }
 
-impl Host for crate::PrintCraftApp {
+impl Host for crate::PdfCraftApp {
     fn state(&self) -> Value {
         let active = self.active.and_then(|i| self.views.get(i));
         let docs: Vec<Value> = self
@@ -531,6 +549,8 @@ impl Host for crate::PrintCraftApp {
                 "fit": format!("{:?}", v.fit),
                 "layout": format!("{:?}", v.layout),
                 "organize": v.organize,
+                "auto_scrolling": v.auto_scrolling(),
+                "viewport": [v.viewport_rect().min.x, v.viewport_rect().min.y, v.viewport_rect().max.x, v.viewport_rect().max.y],
                 "find_open": v.find.is_some(),
                 "page_errors": v.page_errors().iter().map(|(p, e)| json!({ "page": p + 1, "error": e })).collect::<Vec<_>>(),
                 // Where pages are on screen (points), to aim ui.click / ui.drag at page content.
@@ -571,7 +591,7 @@ impl Host for crate::PrintCraftApp {
     }
 
     fn command(&mut self, id: &str) -> Reply {
-        let spec = printcraft_engine::commands::command(id).ok_or_else(|| format!("unknown command {id:?} (see ui.commands)"))?;
+        let spec = pdfcraft_engine::commands::command(id).ok_or_else(|| format!("unknown command {id:?} (see ui.commands)"))?;
         if !self.command_enabled(spec) {
             return Err(format!("{id} is disabled right now"));
         }
@@ -580,7 +600,7 @@ impl Host for crate::PrintCraftApp {
     }
 
     fn commands(&self) -> Value {
-        let list: Vec<Value> = printcraft_engine::commands::COMMANDS
+        let list: Vec<Value> = pdfcraft_engine::commands::COMMANDS
             .iter()
             .map(|c| json!({ "id": c.id, "label": c.label, "menu": c.menu, "enabled": self.command_enabled(c), "shortcut": c.shortcut.map(|s| s.label(cfg!(target_os = "macos"))) }))
             .collect();
@@ -628,11 +648,11 @@ pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
     let port = listener.local_addr()?.port();
     let token = random_token()?;
     let expected = token.clone();
-    std::thread::Builder::new().name("printcraft-control".into()).spawn(move || {
+    std::thread::Builder::new().name("pdfcraft-control".into()).spawn(move || {
         for stream in listener.incoming().flatten() {
             let client = client.clone();
             let expected = expected.clone();
-            let _ = std::thread::Builder::new().name("printcraft-control-conn".into()).spawn(move || {
+            let _ = std::thread::Builder::new().name("pdfcraft-control-conn".into()).spawn(move || {
                 let Ok(read) = stream.try_clone() else { return };
                 let mut write = stream;
                 let mut authed = false;

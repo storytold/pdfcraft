@@ -5,11 +5,11 @@
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
-use printcraft_engine::DocId;
-use printcraft_engine::ocr::{LANGUAGES, OcrPage, OcrSettings};
+use pdfcraft_engine::DocId;
+use pdfcraft_engine::ocr::{LANGUAGES, OcrPage, OcrSettings};
 
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, widgets};
+use crate::{PdfCraftApp, widgets};
 
 /// Which pages to read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,9 +58,9 @@ pub struct OcrRun {
     pub progress: Arc<Mutex<OcrProgress>>,
 }
 
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (bool, bool) {
+pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
-    let available = printcraft_engine::ocr::available();
+    let available = pdfcraft_engine::ocr::available();
     let d = &mut app.ocr_draft;
     d.to = d.to.clamp(1, pages);
     d.from = d.from.clamp(1, d.to);
@@ -113,7 +113,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
     });
     if !available {
         ui.label(
-            egui::RichText::new("Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).")
+            egui::RichText::new("Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).")
                 .small()
                 .color(t.text_muted),
         );
@@ -134,7 +134,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
     (go, cancel)
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Recognize text on the pages chosen in the dialog, in the background.
     pub fn start_ocr(&mut self) {
         let Some((vi, id)) = self.active_ids() else { return };
@@ -157,7 +157,7 @@ impl PrintCraftApp {
         let progress = Arc::new(Mutex::new(OcrProgress { total: job.pages.len(), ..Default::default() }));
         let p = progress.clone();
         let work = move || {
-            let result = printcraft_engine::ocr::engine().map(|ocr| {
+            let result = pdfcraft_engine::ocr::engine().map(|ocr| {
                 job.run(&ocr, |done, total| {
                     let Ok(mut s) = p.lock() else { return false };
                     s.done = done;
@@ -173,7 +173,7 @@ impl PrintCraftApp {
         if self.run_inline {
             work();
         } else {
-            std::thread::Builder::new().name("printcraft-ocr".into()).spawn(work).ok();
+            std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
         }
         #[cfg(target_arch = "wasm32")]
         work();
@@ -200,14 +200,14 @@ impl PrintCraftApp {
         let p = progress.clone();
         let work = move || {
             let (mut ok, mut words, mut failed) = (0, 0, Vec::new());
-            match printcraft_engine::ocr::engine() {
+            match pdfcraft_engine::ocr::engine() {
                 Err(e) => failed.push(e),
                 Ok(ocr) => {
                     for (i, (name, bytes)) in files.into_iter().enumerate() {
                         if let Ok(mut s) = p.lock() {
                             s.done = i;
                         }
-                        let r = printcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true);
+                        let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true);
                         let saved = r.and_then(|r| {
                             #[cfg(not(target_arch = "wasm32"))]
                             crate::editing::write_atomically(&dir.join(&name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())?;
@@ -238,7 +238,7 @@ impl PrintCraftApp {
         if self.run_inline {
             work();
         } else {
-            std::thread::Builder::new().name("printcraft-ocr-files".into()).spawn(work).ok();
+            std::thread::Builder::new().name("pdfcraft-ocr-files".into()).spawn(work).ok();
         }
         #[cfg(target_arch = "wasm32")]
         work();

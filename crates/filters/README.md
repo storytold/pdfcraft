@@ -1,8 +1,8 @@
-# printcraft-filters
+# pdfcraft-filters
 
 PDF stream filters: the decoders and encoders behind `/Filter` and `/DecodeParms`.
 
-- **Layer:** L0, standalone. No dependency on any other PrintCraft crate. `cos` depends on it (architecture §3 rule 3).
+- **Layer:** L0, standalone. No dependency on any other PdfCraft crate. `cos` depends on it (architecture §3 rule 3).
 - **Licence:** MIT OR Apache-2.0. Clean-room: written from ISO 32000-2 §7.4, RFC 1950/1951 (through `flate2` with the pure-Rust `miniz_oxide` backend), TIFF 6.0 §14 (predictor 2) and RFC 2083 §6 (PNG filters).
 - `#![forbid(unsafe_code)]`. Builds for `wasm32-unknown-unknown`.
 

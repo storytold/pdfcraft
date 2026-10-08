@@ -509,7 +509,7 @@ impl CidToGIdMap {
     }
 }
 
-/// PrintCraft patch: the largest CID (ISO 32000-2 §9.7.2; CIDs are at most two bytes).
+/// PdfCraft patch: the largest CID (ISO 32000-2 §9.7.2; CIDs are at most two bytes).
 const MAX_CID: u32 = 65_535;
 
 fn read_widths(arr: &Array<'_>) -> Option<HashMap<u32, f32>> {
@@ -526,7 +526,7 @@ fn read_widths(arr: &Array<'_>) -> Option<HashMap<u32, f32>> {
                 first = first.checked_add(1)?;
             }
         } else if let Some((first, second, width)) = iter.next::<(u32, u32, f32)>() {
-            // PrintCraft patch: CIDs stop at 65535. A corrupt range such as
+            // PdfCraft patch: CIDs stop at 65535. A corrupt range such as
             // `0 4294967295 500` inserted billions of entries (found by fuzzing).
             for i in first..=second.min(MAX_CID) {
                 map.insert(i, width);
@@ -554,7 +554,7 @@ fn read_widths2(arr: &Array<'_>) -> Option<HashMap<u32, [f32; 3]>> {
                 first = first.checked_add(1)?;
             }
         } else if let Some((first, second, w, v1, v2)) = iter.next::<(u32, u32, f32, f32, f32)>() {
-            // PrintCraft patch: as in `read_widths`.
+            // PdfCraft patch: as in `read_widths`.
             for i in first..=second.min(MAX_CID) {
                 map.insert(i, [w, v1, v2]);
             }

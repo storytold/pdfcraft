@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-optimize"
+name = "pdfcraft-optimize"
 description = "The PDF Optimizer: image downsampling and recompression, discarding objects, clean-up"
 version.workspace = true
 edition.workspace = true
@@ -11,13 +11,13 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-cos = { workspace = true }
-printcraft-content = { workspace = true }
-printcraft-model = { workspace = true }
-printcraft-annot = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-content = { workspace = true }
+pdfcraft-model = { workspace = true }
+pdfcraft-annot = { workspace = true }
 thiserror.workspace = true
 # JPEG decoding (zune-jpeg) and encoding, and bicubic resampling; already in the tree.
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [dev-dependencies]
-printcraft-render = { workspace = true }
+pdfcraft-render = { workspace = true }

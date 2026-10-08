@@ -2,8 +2,8 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_engine::MarkKind;
-use printcraft_ui_egui::{Dialog, PrintCraftApp};
+use pdfcraft_engine::MarkKind;
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -14,9 +14,9 @@ const FIXTURE: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
-fn harness() -> Harness<'static, PrintCraftApp> {
+fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
         app
     });
@@ -24,7 +24,7 @@ fn harness() -> Harness<'static, PrintCraftApp> {
     h
 }
 
-fn marks(h: &Harness<'static, PrintCraftApp>) -> Vec<MarkKind> {
+fn marks(h: &Harness<'static, PdfCraftApp>) -> Vec<MarkKind> {
     let s = h.state();
     s.session.get(s.views[0].id).unwrap().marks.clone()
 }
@@ -41,7 +41,7 @@ fn header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset() {
     h.get_by_label("Insert Page Number").click();
     h.run_steps(2);
     assert_eq!(h.state().marks_draft.hf.text[4], "<<1>>");
-    h.state_mut().marks_draft.range.subset = printcraft_ui_egui::marks::Subset::Odd;
+    h.state_mut().marks_draft.range.subset = pdfcraft_ui_egui::marks::Subset::Odd;
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(4);

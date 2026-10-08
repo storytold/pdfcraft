@@ -2,7 +2,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use printcraft_filters::{Filter, Params, decode, decode_tolerant};
+use pdfcraft_filters::{Filter, Params, decode, decode_tolerant};
 
 const FILTERS: [Filter; 5] = [Filter::Flate, Filter::Lzw, Filter::AsciiHex, Filter::Ascii85, Filter::RunLength];
 const PREDICTORS: [i64; 8] = [1, 2, 10, 11, 12, 13, 14, 15];

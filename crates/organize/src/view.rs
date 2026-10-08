@@ -2,7 +2,7 @@
 //! panel, page layout, magnification, page; window and interface options) and its language and
 //! binding (ISO 32000-2 §7.7.2 Table 29, §12.2 viewer preferences).
 
-use printcraft_cos::{Dict, Document, Object, PdfString};
+use pdfcraft_cos::{Dict, Document, Object, PdfString};
 
 use crate::OrganizeError;
 
@@ -65,7 +65,7 @@ pub struct InitialView {
     pub right_to_left: bool,
 }
 
-fn catalog(doc: &Document) -> Result<(printcraft_cos::ObjRef, Dict), OrganizeError> {
+fn catalog(doc: &Document) -> Result<(pdfcraft_cos::ObjRef, Dict), OrganizeError> {
     let r = doc.root().ok_or(OrganizeError::NoPageTree)?;
     Ok((r, doc.get(r).as_dict().cloned().ok_or(OrganizeError::NoPageTree)?))
 }

@@ -20,11 +20,11 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use printcraft_content::{Matrix, Op, contains, num, overlaps, parse, serialize_ops, string};
-use printcraft_cos::{Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_content::{Matrix, Op, contains, num, overlaps, parse, serialize_ops, string};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 use crate::{Report, image};
-use printcraft_fonts::pdf::Metrics;
+use pdfcraft_fonts::pdf::Metrics;
 
 const MAX_DEPTH: usize = 12;
 
@@ -207,20 +207,46 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
     let mut clip = false;
     let mut forced_change = false;
 
+    // The streams are one content stream in pieces, which may be split between any two tokens
+    // (ISO 32000-2 §7.8.2): an operator's operands can end one piece and the operator start the
+    // next. Parse them joined, then give each operator back to the piece its keyword is in.
+    let mut joined: Vec<u8> = Vec::new();
+    let mut ends: Vec<usize> = Vec::with_capacity(streams.len());
     for data in streams {
-        let mut parsed = parse(data);
-        if !scope.hidden_layers.is_empty() {
-            let props = res_dict(doc, resources, b"Properties");
-            let (kept, removed) = strip_hidden_layers(doc, scope, parsed.ops, &props);
-            parsed.ops = kept;
-            if removed > 0 {
-                scope.layer_blocks += removed;
-                forced_change = true;
+        joined.extend_from_slice(data);
+        joined.push(b'\n');
+        ends.push(joined.len());
+    }
+    let piece_of = |at: usize| ends.iter().position(|&e| at < e).unwrap_or(ends.len().saturating_sub(1));
+    let mut parsed = parse(&joined);
+    if !scope.hidden_layers.is_empty() {
+        let props = res_dict(doc, resources, b"Properties");
+        let (kept, removed) = strip_hidden_layers(doc, scope, parsed.ops, &props);
+        parsed.ops = kept;
+        if removed > 0 {
+            scope.layer_blocks += removed;
+            forced_change = true;
+        }
+    }
+    let mut pieces: Vec<Vec<Op>> = streams.iter().map(|_| Vec::new()).collect();
+    let mut rewrite: Vec<bool> = vec![forced_change; streams.len()];
+    for op in parsed.ops {
+        let (first, last) = (piece_of(op.span.start), piece_of(op.span.end.saturating_sub(1)));
+        // An operator split across pieces is written whole into its keyword's piece, so every
+        // piece it spans is rewritten.
+        if first < last {
+            for r in rewrite.iter_mut().take(last + 1).skip(first) {
+                *r = true;
             }
         }
-        let mut ops: Vec<Op> = Vec::with_capacity(parsed.ops.len());
-        let mut changed = std::mem::take(&mut forced_change);
-        for op in parsed.ops {
+        if let Some(p) = pieces.get_mut(last) {
+            p.push(op);
+        }
+    }
+
+    for (piece, mut changed) in pieces.into_iter().zip(rewrite) {
+        let mut ops: Vec<Op> = Vec::with_capacity(piece.len());
+        for op in piece {
             let o = op.op.as_slice();
             // Path construction.
             if matches!(o, b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re" | b"W" | b"W*") {

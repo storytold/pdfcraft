@@ -3,8 +3,8 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_engine::{Session, export};
-use printcraft_ui_egui::PrintCraftApp;
+use pdfcraft_engine::{Session, export};
+use pdfcraft_ui_egui::PdfCraftApp;
 
 /// A one-page PDF that is only a picture of a sentence.
 fn scan() -> Vec<u8> {
@@ -18,7 +18,7 @@ fn scan() -> Vec<u8> {
 #[test]
 fn recognize_text_dialog_adds_searchable_text() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("scan.pdf", None, scan()).unwrap();
         app.run_inline = true;
         app
@@ -28,7 +28,7 @@ fn recognize_text_dialog_adds_searchable_text() {
     h.run_steps(2);
     h.get_by_label("Document language");
     h.get_by_label("Output");
-    if !printcraft_engine::ocr::available() {
+    if !pdfcraft_engine::ocr::available() {
         eprintln!("skipped: OCR models not installed");
         return;
     }
@@ -44,17 +44,17 @@ fn recognize_text_dialog_adds_searchable_text() {
 
 #[test]
 fn recognize_text_in_multiple_files_writes_searchable_copies() {
-    if !printcraft_engine::ocr::available() {
+    if !pdfcraft_engine::ocr::available() {
         eprintln!("skipped: OCR models not installed");
         return;
     }
-    let dir = std::env::temp_dir().join(format!("printcraft-ocr-ui-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-ui-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let mut app = PrintCraftApp::new();
+    let mut app = PdfCraftApp::new();
     app.run_inline = true;
     app.export_dir_override = Some(dir.to_string_lossy().into_owned());
-    app.use_files(printcraft_ui_egui::FilePurpose::Ocr, vec![("one.pdf".into(), scan()), ("two.pdf".into(), scan())]);
+    app.use_files(pdfcraft_ui_egui::FilePurpose::Ocr, vec![("one.pdf".into(), scan()), ("two.pdf".into(), scan())]);
     assert!(app.ocr_batch.is_none(), "finished");
     let toast = app.toast.clone().unwrap().0;
     assert!(toast.starts_with("Recognized ") && toast.ends_with("in 2 files"), "{toast}");

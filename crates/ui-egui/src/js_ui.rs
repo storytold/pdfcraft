@@ -2,11 +2,11 @@
 //! the JavaScript console (⌘J), Document JavaScripts, and Preferences ▸ JavaScript.
 
 use egui::{Align, Layout};
-use printcraft_engine::js::{JsOutput, Request};
-use printcraft_engine::{DocId, Edit};
+use pdfcraft_engine::js::{JsOutput, Request};
+use pdfcraft_engine::{DocId, Edit};
 
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, widgets};
+use crate::{PdfCraftApp, widgets};
 
 /// The JavaScript console: the input and the output so far.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -22,10 +22,10 @@ pub struct DocJsDraft {
     pub script: String,
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Act on what scripts produced in document `id`: alerts are shown, console output goes to
-    /// the console, and print / page / link requests are carried out (form submissions are
-    /// reported, never sent).
+    /// the console, print and page requests are carried out, links wait for the user's permission
+    /// (form submissions are reported, never sent).
     pub fn handle_js(&mut self, id: DocId, out: JsOutput) {
         if out.is_empty() {
             return;
@@ -43,13 +43,9 @@ impl PrintCraftApp {
                         self.views[i].go_to_page(p);
                     }
                 }
-                Request::LaunchUrl(u) => {
-                    if let Some(ctx) = &self.ctx {
-                        ctx.open_url(egui::OpenUrl::new_tab(u));
-                    }
-                }
+                Request::LaunchUrl(u) => self.request_document_url(&u, crate::LinkOrigin::Script),
                 Request::Submit(u) => self.notify(format!(
-                    "The form asks to be submitted to {u}; PrintCraft doesn't send form data. Save the document to keep your entries."
+                    "The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries."
                 )),
                 Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
             }
@@ -135,7 +131,7 @@ fn buttons(ui: &mut egui::Ui, primary: &str, others: &[&str]) -> Option<String> 
 }
 
 /// The JavaScript console. Returns `true` to close.
-pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new("JavaScript Console").font(theme::semibold(18.0)));
     ui.add_space(6.0);
     if !app.session.javascript() {
@@ -176,7 +172,7 @@ pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Token
 }
 
 /// Document JavaScripts: list, edit, add and delete. Returns `true` to close.
-pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new("Document JavaScripts").font(theme::semibold(18.0)));
     ui.add_space(6.0);
     let scripts = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.document_scripts()).unwrap_or_default();
@@ -224,7 +220,7 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &T
 }
 
 /// Preferences: interface language, identity and JavaScript. Returns `true` to close.
-pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new(app.language.tr("Preferences")).font(theme::semibold(18.0)));
     ui.horizontal(|ui| {
         ui.label(app.language.tr("Interface language"));
@@ -251,7 +247,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &T
             app.session.set_javascript(on);
         }
         ui.label(
-            egui::RichText::new("Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.")
+            egui::RichText::new("Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.")
                 .small()
                 .color(t.text_muted),
         );

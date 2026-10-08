@@ -1,6 +1,6 @@
 //! Fonts from the optional craft-fonts build input (<https://github.com/storytold/craft-fonts>).
 //!
-//! `build.rs` embeds every font in craft-fonts' manifest when PrintCraft is built with
+//! `build.rs` embeds every font in craft-fonts' manifest when PdfCraft is built with
 //! `CRAFT_FONTS_DIR=<checkout>`; otherwise [`CRAFT_FONTS`] is empty and everything here returns
 //! nothing. Callers must work either way.
 
@@ -75,7 +75,7 @@ const fn find(family: &str, style: &str) -> Option<&'static [u8]> {
 }
 
 /// Shippori Mincho Regular from craft-fonts, the preferred face for Japanese document text.
-/// `None` when PrintCraft was built without craft-fonts.
+/// `None` when PdfCraft was built without craft-fonts.
 pub static SHIPPORI_MINCHO: Option<&[u8]> = find("Shippori Mincho", "Regular");
 
 #[cfg(test)]

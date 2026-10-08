@@ -2,7 +2,7 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_ui_egui::PrintCraftApp;
+use pdfcraft_ui_egui::PdfCraftApp;
 
 /// A tiny PDF with two pages, two bookmarks and one sticky note.
 const FIXTURE: &[u8] = b"%PDF-1.7
@@ -17,9 +17,9 @@ const FIXTURE: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
-fn harness(setup: impl FnOnce(&mut PrintCraftApp) + 'static) -> Harness<'static, PrintCraftApp> {
+fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         setup(&mut app);
         app
     });
@@ -31,7 +31,7 @@ fn harness(setup: impl FnOnce(&mut PrintCraftApp) + 'static) -> Harness<'static,
 #[test]
 fn home_shows_welcome_and_tools() {
     let h = harness(|_| {});
-    h.get_by_label_contains("Welcome to PrintCraft");
+    h.get_by_label_contains("Welcome to PdfCraft");
     assert!(h.query_all_by_label("Organize pages").count() >= 2, "tool list + home card");
     h.get_by_label("Open file");
 }
@@ -41,7 +41,7 @@ fn every_catalog_tool_is_listed_after_view_more() {
     let mut h = harness(|_| {});
     h.get_by_label("View more").click();
     h.run_steps(3);
-    for g in printcraft_engine::catalog::TOOL_GROUPS {
+    for g in pdfcraft_engine::catalog::TOOL_GROUPS {
         assert!(h.query_all_by_label(g.label).count() >= 1, "tool {} missing from All tools", g.label);
     }
 }
@@ -59,7 +59,7 @@ fn opening_a_pdf_shows_comments_and_bookmarks() {
 
 #[test]
 fn garbage_input_is_rejected_without_panicking() {
-    let mut app = PrintCraftApp::new();
+    let mut app = PdfCraftApp::new();
     assert!(app.open_bytes("junk.pdf", None, b"this is not a pdf".to_vec()).is_err());
     assert!(app.open_bytes("empty.pdf", None, Vec::new()).is_err());
     let mut truncated = FIXTURE.to_vec();
@@ -97,7 +97,7 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
 
-fn settle(h: &mut Harness<'static, PrintCraftApp>) {
+fn settle(h: &mut Harness<'static, PdfCraftApp>) {
     for _ in 0..200 {
         h.run_steps(2);
         if !h.state().render_pending() {
@@ -157,15 +157,15 @@ fn drag_selects_text_and_copy_returns_it() {
 
 #[test]
 fn persistence_round_trips_and_tolerates_garbage() {
-    let mut a = PrintCraftApp::new();
-    a.theme = printcraft_ui_egui::theme::ThemeKind::Dark;
+    let mut a = PdfCraftApp::new();
+    a.theme = pdfcraft_ui_egui::theme::ThemeKind::Dark;
     let json = a.persist();
-    let mut b = PrintCraftApp::new();
+    let mut b = PdfCraftApp::new();
     b.restore(&json);
-    assert_eq!(b.theme, printcraft_ui_egui::theme::ThemeKind::Dark);
+    assert_eq!(b.theme, pdfcraft_ui_egui::theme::ThemeKind::Dark);
     b.restore("{not json");
     b.restore("{\"recent\": 5, \"theme\": \"Purple\"}");
-    assert_eq!(b.theme, printcraft_ui_egui::theme::ThemeKind::Dark);
+    assert_eq!(b.theme, pdfcraft_ui_egui::theme::ThemeKind::Dark);
 }
 
 #[test]
@@ -231,7 +231,7 @@ impl egui::DroppedFile for Dropped {
 
 #[test]
 fn dropping_a_pdf_on_the_window_opens_it() {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| PrintCraftApp::new());
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| PdfCraftApp::new());
     h.run_steps(3);
     assert!(h.state().views.is_empty());
     let file: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: "dropped.pdf".into(), bytes: FIXTURE.to_vec() });
@@ -244,8 +244,8 @@ fn dropping_a_pdf_on_the_window_opens_it() {
 #[test]
 fn files_and_quit_from_the_operating_system() {
     // #73: macOS hands Finder double-clicks, Open With and Dock drops over as Apple events.
-    use printcraft_ui_egui::OsEvent;
-    let name = format!("printcraft-os-open-{}.pdf", std::process::id());
+    use pdfcraft_ui_egui::OsEvent;
+    let name = format!("pdfcraft-os-open-{}.pdf", std::process::id());
     let path = std::env::temp_dir().join(&name);
     std::fs::write(&path, FIXTURE).unwrap();
     let queue = std::rc::Rc::new(std::cell::RefCell::new(vec![OsEvent::Open(vec![path.to_string_lossy().into_owned()])]));

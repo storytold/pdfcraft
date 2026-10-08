@@ -1,9 +1,9 @@
-//! printcraft-ui-egui — the first PrintCraft shell (L7).
+//! pdfcraft-ui-egui — the first PdfCraft shell (L7).
 //!
 //! Layout grammar follows plan/acrobat/02-ui-ux.md §1: tab strip, mode bar, left tool panel,
 //! floating quick-action bar, document area, right panel + right rail with page navigation.
 //! Everything here is presentation: documents, rendering and the tool catalogue live in
-//! `printcraft-engine`.
+//! `pdfcraft-engine`.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -40,6 +40,7 @@ pub use create_ui::Clip;
 pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignStep};
+mod autoscroll;
 mod dialogs;
 mod edit_text_ui;
 mod editing;
@@ -69,7 +70,7 @@ pub mod theme;
 pub mod updates;
 mod widgets;
 
-use printcraft_engine::{DocId, Session};
+use pdfcraft_engine::{DocId, Session};
 
 pub use canvas::DocView;
 pub use editing::{CloseRequest, SaveTarget};
@@ -132,7 +133,7 @@ pub enum QuickTool {
     /// Edit a PDF ▸ Edit text: click a line of existing text to edit it.
     EditText,
     /// Add a stamp: click to place this stamp.
-    Stamp(printcraft_engine::StampKind),
+    Stamp(pdfcraft_engine::StampKind),
     /// A custom stamp from the library (its index).
     CustomStamp(usize),
     /// Edit a PDF ▸ Link: draw link areas, select and edit links.
@@ -160,7 +161,7 @@ pub enum Dialog {
     /// Set Page Boxes (crop, trim, bleed, art, media).
     PageBoxes,
     /// Add / Update Header and Footer, Watermark, Background.
-    Marks(printcraft_engine::MarkKind),
+    Marks(pdfcraft_engine::MarkKind),
     /// Export a PDF ▸ Image / Text.
     Export(export_ui::ExportKind),
     /// Fill & Sign ▸ Create signature (the drawing pad).
@@ -284,7 +285,7 @@ pub struct RecentFile {
     pub size: usize,
 }
 
-pub struct PrintCraftApp {
+pub struct PdfCraftApp {
     pub session: Session,
     pub views: Vec<DocView>,
     /// `None` shows the Home tab.
@@ -324,7 +325,7 @@ pub struct PrintCraftApp {
     /// Document Properties ▸ Description fields being edited: (document, Title/Author/Subject/Keywords).
     pub props_draft: Option<(DocId, [String; 4])>,
     /// Document Properties ▸ Initial View (and reading options) being edited.
-    pub view_draft: Option<(DocId, printcraft_engine::InitialView)>,
+    pub view_draft: Option<(DocId, pdfcraft_engine::InitialView)>,
     /// Files picked asynchronously for combine / insert (web).
     pub requests: files::Requests,
     /// Native file pickers in flight (they never block the frame; see `pickers`).
@@ -340,7 +341,7 @@ pub struct PrintCraftApp {
     pub extract_draft: ExtractDraft,
     pub rotate_draft: RotateDraft,
     /// Summarize Comments: sort order.
-    pub summary_sort: printcraft_engine::SummarySort,
+    pub summary_sort: pdfcraft_engine::SummarySort,
     /// The signing dialogs' state.
     pub sign_draft: Option<SignDraft>,
     /// Digital ID files the user has created or added.
@@ -357,7 +358,7 @@ pub struct PrintCraftApp {
     pub run_inline: bool,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
     /// files to use instead of a picker.
-    pub custom_actions: Vec<printcraft_engine::actions::Action>,
+    pub custom_actions: Vec<pdfcraft_engine::actions::Action>,
     pub wizard: actions_ui::Wizard,
     pub action_run: Option<std::sync::Arc<std::sync::Mutex<actions_ui::RunProgress>>>,
     pub action_files_override: Option<Vec<String>>,
@@ -370,13 +371,13 @@ pub struct PrintCraftApp {
     pub js_console: js_ui::JsConsole,
     pub doc_js: js_ui::DocJsDraft,
     pub a11y: a11y_ui::A11yState,
-    pub a11y_skipped: std::collections::BTreeSet<printcraft_engine::a11y::Rule>,
+    pub a11y_skipped: std::collections::BTreeSet<pdfcraft_engine::a11y::Rule>,
     pub alt_draft: a11y_ui::AltDraft,
     /// List the macOS Keychain's signing identities among the digital IDs (the desktop app).
     pub keychain_ids: bool,
     pub cert_viewer: Option<sign_ui::CertViewer>,
     /// The last space audit.
-    pub space_audit: Vec<printcraft_engine::optimize::SpaceUse>,
+    pub space_audit: Vec<pdfcraft_engine::optimize::SpaceUse>,
     /// Combine files: the files staged so far.
     pub combine_draft: Vec<combine_ui::CombineFile>,
     /// The custom stamp library, and the stamp being created.
@@ -443,11 +444,41 @@ pub struct PrintCraftApp {
     pub print_draft: PrintDraft,
     pub link_draft: Option<LinkDraft>,
     /// The style new text gets (Edit a PDF ▸ Format text).
-    pub text_style: printcraft_engine::AddedText,
+    pub text_style: pdfcraft_engine::AddedText,
     /// The Replace Pages dialog's state.
     pub replace_draft: Option<files::ReplaceDraft>,
     /// The last web link the app asked the system to open (tests and automation).
     pub last_opened_url: Option<String>,
+    /// A document asked to open this address; the user hasn't answered yet (#90, #91).
+    pub pending_link: Option<PendingLink>,
+}
+
+/// Where in a document a request to open an address came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkOrigin {
+    /// A link on the page.
+    Link,
+    /// A push button's URI action.
+    Button,
+    /// A script (`app.launchURL`).
+    Script,
+}
+
+impl LinkOrigin {
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Link => "A link",
+            Self::Button => "A button",
+            Self::Script => "A script",
+        }
+    }
+}
+
+/// An address a document asked to open, waiting for the user to allow or cancel it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingLink {
+    pub url: String,
+    pub origin: LinkOrigin,
 }
 
 /// Settings for the Number pages dialog.
@@ -455,18 +486,18 @@ pub struct PrintCraftApp {
 pub struct NumberDraft {
     pub from: usize,
     pub to: usize,
-    pub style: printcraft_engine::LabelStyle,
+    pub style: pdfcraft_engine::LabelStyle,
     pub prefix: String,
     pub start: u32,
 }
 
-impl Default for PrintCraftApp {
+impl Default for PdfCraftApp {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     pub fn new() -> Self {
         Self {
             session: Session::new(),
@@ -555,6 +586,7 @@ impl PrintCraftApp {
             control: None,
             bookmark_rename: None,
             last_opened_url: None,
+            pending_link: None,
             protect_draft: Default::default(),
             boxes_draft: Default::default(),
             marks_draft: Default::default(),
@@ -574,7 +606,7 @@ impl PrintCraftApp {
             link_draft: None,
             text_style: content_ui::default_style(),
             replace_draft: None,
-            number_draft: NumberDraft { from: 1, to: 1, style: printcraft_engine::LabelStyle::Decimal, prefix: String::new(), start: 1 },
+            number_draft: NumberDraft { from: 1, to: 1, style: pdfcraft_engine::LabelStyle::Decimal, prefix: String::new(), start: 1 },
         }
     }
 
@@ -586,8 +618,8 @@ impl PrintCraftApp {
 
     /// Open a document the way it asks to be opened: navigation panel, layout, magnification,
     /// page (Document Properties ▸ Initial View).
-    fn apply_initial_view(&mut self, index: usize, v: &printcraft_engine::InitialView) {
-        use printcraft_engine::{InitialLayout as L, Magnification as M, Navigation as N};
+    fn apply_initial_view(&mut self, index: usize, v: &pdfcraft_engine::InitialView) {
+        use pdfcraft_engine::{InitialLayout as L, Magnification as M, Navigation as N};
         let pages = self.session.get(self.views[index].id).map_or(0, |d| d.info.pages.len());
         match v.navigation {
             N::PageOnly => {}
@@ -630,7 +662,7 @@ impl PrintCraftApp {
     }
 
     fn try_open(&mut self, name: &str, path: Option<String>, bytes: std::sync::Arc<Vec<u8>>, password: Option<&str>) -> Result<(), String> {
-        use printcraft_render::OpenError;
+        use pdfcraft_render::OpenError;
         let size = bytes.len();
         let id = match self.session.open(name, path.clone(), bytes.clone(), password) {
             Ok(id) => id,
@@ -704,7 +736,7 @@ impl PrintCraftApp {
     pub fn attachment_action(&mut self, doc: DocId, index: usize, open: bool) {
         let Some(d) = self.session.get(doc) else { return };
         let Some(att) = d.info.attachments.get(index).cloned() else { return };
-        let data = printcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att);
+        let data = pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att);
         match (data, open) {
             (Err(e), _) => self.notify(format!("Couldn't read {}: {e}", att.name)),
             (Ok(bytes), true) => {
@@ -811,12 +843,40 @@ impl PrintCraftApp {
         client
     }
 
-    /// Open a web link in the system browser (a new tab on the web).
+    /// Open a web link in the system browser (a new tab on the web). Only for PdfCraft's own
+    /// links; an address that came from a document goes through [`Self::request_document_url`].
     pub fn open_url(&mut self, url: &str) {
         if let Some(ctx) = &self.ctx {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
         self.last_opened_url = Some(url.to_string());
+    }
+
+    /// A document asks to open `url` (a link, a button's URI action or `app.launchURL`). Web and
+    /// email addresses wait for the user to allow them; anything else is refused with a notice
+    /// (#90, #91). While one request is waiting, further ones are dropped, so a script can't
+    /// queue up a stream of dialogs.
+    pub fn request_document_url(&mut self, url: &str, origin: LinkOrigin) {
+        match pdfcraft_engine::links::document_url(url) {
+            Ok(url) => {
+                if self.pending_link.is_none() {
+                    self.pending_link = Some(PendingLink { url, origin });
+                }
+            }
+            Err(e) => self.notify(format!(
+                "{} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.",
+                origin.noun()
+            )),
+        }
+    }
+
+    /// The user's answer to [`Self::pending_link`]: open it, or drop it.
+    pub fn resolve_pending_link(&mut self, open: bool) {
+        if let Some(p) = self.pending_link.take()
+            && open
+        {
+            self.open_url(&p.url);
+        }
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
@@ -830,19 +890,19 @@ impl PrintCraftApp {
 
     /// Run a catalogue command. Commands that aren't implemented yet say which milestone ships them.
     pub fn run_command(&mut self, command: &str) {
-        if printcraft_engine::commands::command(command).is_some() {
+        if pdfcraft_engine::commands::command(command).is_some() {
             self.execute(command);
             return;
         }
         // Not implemented yet: say which milestone ships it.
-        let when = printcraft_engine::catalog::TOOL_GROUPS
+        let when = pdfcraft_engine::catalog::TOOL_GROUPS
             .iter()
             .flat_map(|g| g.sections.iter().flat_map(|s| s.items.iter()))
             .find(|i| i.command == command)
             .map(|i| match i.availability {
-                printcraft_engine::catalog::Availability::Planned(m) => format!("ships in milestone {m}"),
-                printcraft_engine::catalog::Availability::Provider => "needs an AI provider (off by default)".to_string(),
-                printcraft_engine::catalog::Availability::Ready => "is available".to_string(),
+                pdfcraft_engine::catalog::Availability::Planned(m) => format!("ships in milestone {m}"),
+                pdfcraft_engine::catalog::Availability::Provider => "needs an AI provider (off by default)".to_string(),
+                pdfcraft_engine::catalog::Availability::Ready => "is available".to_string(),
             })
             .unwrap_or_else(|| "is not available yet".into());
         self.notify(format!("`{command}` {when}"));
@@ -850,7 +910,7 @@ impl PrintCraftApp {
 
     /// Serialize the user's persistent state (recent files, theme). Local only.
     pub fn persist(&self) -> String {
-        let trusted: Vec<String> = self.session.trusted_certificates().iter().map(printcraft_engine::sign::x509::to_pem).collect();
+        let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
         serde_json::json!({
             "recent": self.recent,
             "theme": self.theme,
@@ -910,7 +970,7 @@ impl PrintCraftApp {
             self.session.set_javascript(on);
         }
         if let Ok(pems) = serde_json::from_value::<Vec<String>>(v["trusted"].clone()) {
-            let certs = pems.iter().filter_map(|p| printcraft_engine::sign::x509::load_certificates(p.as_bytes()).ok()).flatten().collect();
+            let certs = pems.iter().filter_map(|p| pdfcraft_engine::sign::x509::load_certificates(p.as_bytes()).ok()).flatten().collect();
             self.session.set_trusted_certificates(certs);
         }
     }
@@ -959,7 +1019,7 @@ impl PrintCraftApp {
                 }
             }
             ("tool", _) => {
-                let g = printcraft_engine::catalog::group(value).ok_or_else(|| format!("unknown tool {value}"))?;
+                let g = pdfcraft_engine::catalog::group(value).ok_or_else(|| format!("unknown tool {value}"))?;
                 self.left = LeftPanel::Tool(g.id);
                 self.left_open = true;
             }
@@ -975,9 +1035,9 @@ impl PrintCraftApp {
                     "split" => Some(Dialog::Split),
                     "protect" => Some(Dialog::Protect),
                     "page-boxes" => Some(Dialog::PageBoxes),
-                    "header-footer" => Some(Dialog::Marks(printcraft_engine::MarkKind::HeaderFooter)),
-                    "watermark" => Some(Dialog::Marks(printcraft_engine::MarkKind::Watermark)),
-                    "background" => Some(Dialog::Marks(printcraft_engine::MarkKind::Background)),
+                    "header-footer" => Some(Dialog::Marks(pdfcraft_engine::MarkKind::HeaderFooter)),
+                    "watermark" => Some(Dialog::Marks(pdfcraft_engine::MarkKind::Watermark)),
+                    "background" => Some(Dialog::Marks(pdfcraft_engine::MarkKind::Background)),
                     "export-image" => Some(Dialog::Export(export_ui::ExportKind::Image)),
                     "export-text" => Some(Dialog::Export(export_ui::ExportKind::Text)),
                     "export-all-images" => Some(Dialog::Export(export_ui::ExportKind::AllImages)),
@@ -1077,7 +1137,7 @@ impl PrintCraftApp {
                         QuickTool::CustomStamp(i)
                     }
                     stamp if stamp.starts_with("stamp-") => QuickTool::Stamp(
-                        printcraft_engine::StampKind::ALL
+                        pdfcraft_engine::StampKind::ALL
                             .into_iter()
                             .find(|k| k.name().trim_start_matches("PC").eq_ignore_ascii_case(&stamp[6..]))
                             .ok_or_else(|| format!("unknown stamp {stamp}"))?,
@@ -1123,19 +1183,33 @@ impl PrintCraftApp {
             }
             return;
         }
+        if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
+            && view.auto_scroll.escape(ctx)
+        {
+            return;
+        }
         self.registry_shortcuts(ctx);
         if self.full_screen && ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.set_full_screen(ctx, false);
         }
         if let Some(i) = self.active {
+            // Select all belongs to the document or page grid, unless a text field or
+            // overlay owns the keyboard. Other canvas shortcuts keep their own handling.
+            if self.dialog.is_none()
+                && !self.palette_open
+                && !ctx.egui_wants_keyboard_input()
+                && ctx.input_mut(|input| input.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, Key::A)))
+            {
+                self.views[i].select_all();
+            }
             canvas::shortcuts(&mut self.views[i], ctx);
         }
     }
 }
 
-impl eframe::App for PrintCraftApp {
+impl eframe::App for PdfCraftApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        storage.set_string("printcraft", self.persist());
+        storage.set_string("pdfcraft", self.persist());
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -1189,6 +1263,14 @@ impl eframe::App for PrintCraftApp {
         self.autosave_tick(now);
         self.poll_updates();
         self.shortcuts(ctx);
+        // Scrolling is transient: never resume after changing tabs, opening a modal/palette,
+        // or returning to a window that lost focus.
+        let blocked = self.dialog.is_some() || self.close_request.is_some() || self.palette_open || !ctx.input(|i| i.focused);
+        for (index, view) in self.views.iter_mut().enumerate() {
+            if blocked || self.active != Some(index) {
+                view.auto_scroll.cancel();
+            }
+        }
         self.process_pending_edits();
         self.poll_export();
         self.poll_ocr();
@@ -1215,7 +1297,7 @@ impl eframe::App for PrintCraftApp {
         let title = self
             .active
             .and_then(|i| self.session.get(self.views[i].id))
-            .map_or_else(|| "PrintCraft".to_owned(), |d| format!("{} — PrintCraft", d.display_name()));
+            .map_or_else(|| "PdfCraft".to_owned(), |d| format!("{} — PdfCraft", d.display_name()));
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.window_title = title;

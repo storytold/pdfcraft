@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-create"
+name = "pdfcraft-create"
 description = "Create PDFs: blank documents, from images (PNG, JPEG) and from plain text"
 version.workspace = true
 edition.workspace = true
@@ -9,9 +9,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-cos = { workspace = true }
-printcraft-model = { workspace = true }
-printcraft-fonts = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-model = { workspace = true }
+pdfcraft-fonts = { workspace = true }
 png = "0.18"
 tiff = "0.11"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif"] }

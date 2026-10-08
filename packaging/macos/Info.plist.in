@@ -7,13 +7,13 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>PrintCraft</string>
+  <string>PdfCraft</string>
   <key>CFBundleName</key>
-  <string>PrintCraft</string>
+  <string>PdfCraft</string>
   <key>CFBundleExecutable</key>
-  <string>PrintCraft</string>
+  <string>PdfCraft</string>
   <key>CFBundleIdentifier</key>
-  <string>ai.storyteller.printcraft</string>
+  <string>ai.storyteller.pdfcraft</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundlePackageType</key>
@@ -24,12 +24,12 @@
   <string>@SHORT_VERSION@</string>
   <key>CFBundleVersion</key>
   <string>@SHORT_VERSION@</string>
-  <key>PrintCraftVersion</key>
+  <key>PdfCraftVersion</key>
   <string>@VERSION@</string>
-  <key>PrintCraftBuildCommit</key>
+  <key>PdfCraftBuildCommit</key>
   <string>@BUILD_SHA@</string>
   <key>CFBundleIconFile</key>
-  <string>PrintCraft</string>
+  <string>PdfCraft</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.graphics-design</string>
   <!-- Must match MACOSX_DEPLOYMENT_TARGET in package.sh. Big Sur is the first release on
@@ -43,12 +43,13 @@
   <key>NSRequiresAquaSystemAppearance</key>
   <false/>
   <key>NSHumanReadableCopyright</key>
-  <string>Copyright © the PrintCraft authors. MIT OR Apache-2.0.</string>
+  <string>Copyright © the PdfCraft authors. MIT OR Apache-2.0.</string>
 
-  <!-- Documents PrintCraft opens (#73): it is offered under Open With and can be made the default
+  <!-- Documents PdfCraft opens (#73): it is offered under Open With and can be made the default
        for PDFs, without taking over from the system's viewer on install ("Alternate"). Declared by
-       extension and MIME type; LaunchServices maps them to the system's PDF type. Finder hands the
-       file over as an Apple event, which apps/printcraft/src/apple_events.rs receives. -->
+       UTI (LSItemContentTypes, what modern macOS filters Open With > Recommended Applications on),
+       plus extension and MIME type for backward compatibility. Finder hands the
+       file over as an Apple event, which apps/pdfcraft/src/apple_events.rs receives. -->
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
@@ -58,6 +59,8 @@
       <string>Editor</string>
       <key>LSHandlerRank</key>
       <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.adobe.pdf</string></array>
       <key>CFBundleTypeExtensions</key>
       <array><string>pdf</string></array>
       <key>CFBundleTypeMIMETypes</key>

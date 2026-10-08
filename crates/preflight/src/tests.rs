@@ -77,7 +77,7 @@ fn convert_fixes_all_but_fonts() {
     assert_eq!(xmp::value(&x, "dc:title").as_deref(), Some("Report"));
     assert_eq!(xmp::value(&x, "xmp:CreateDate").as_deref(), Some("2024-01-05T09:30:00Z"));
     // It survives a save.
-    let bytes = printcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
     let back = Document::open(std::sync::Arc::new(bytes)).unwrap();
     assert_eq!(verify(&back, Level::A2b).len(), 1);
 }

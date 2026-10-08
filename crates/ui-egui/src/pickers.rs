@@ -3,18 +3,19 @@
 //! A blocking `rfd::FileDialog` runs `-[NSOpenPanel runModal]` on macOS: a nested run loop inside
 //! winit's event handler. An event that arrives while it spins re-enters the handler, winit
 //! panics, and because the panic can't unwind out of the AppKit callback the app aborts.
-//! `rfd::AsyncFileDialog` starts the panel as a sheet and returns at once instead. A worker
-//! thread waits for the choice, and the app uses it on a later frame
-//! ([`PrintCraftApp::process_picked`]).
+//! `rfd::AsyncFileDialog` shows the panel without a nested run loop and returns at once instead.
+//! A worker thread waits for the choice, and the app uses it on a later frame
+//! ([`PdfCraftApp::process_picked`]). The panel has no parent window yet, like every other
+//! picker in the app, so it floats rather than opening as a sheet.
 
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use printcraft_engine::DocId;
+use pdfcraft_engine::DocId;
 
-use crate::PrintCraftApp;
+use crate::PdfCraftApp;
 use crate::files::FilePurpose;
 
 /// What the chosen files are for.
@@ -84,7 +85,7 @@ impl Pickers {
     }
 }
 
-impl PrintCraftApp {
+impl PdfCraftApp {
     /// Show a native picker for `pick_for` without blocking the frame. The choice is used on a
     /// later frame by [`Self::process_picked`].
     pub(crate) fn pick(&mut self, pick_for: PickFor, dialog: rfd::AsyncFileDialog, multiple: bool) {

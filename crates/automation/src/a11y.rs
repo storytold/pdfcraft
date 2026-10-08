@@ -1,9 +1,9 @@
 //! Accessibility tools: the full check, the accessibility report, and the automatic fixes.
 
-use printcraft_engine::a11y::{Category, Options, Report, Rule, Status};
+use pdfcraft_engine::a11y::{Category, Options, Report, Rule, Status};
 use serde_json::{Value, json};
 
-use crate::{Args, Automation, Result, ToolError, failed, write_atomic};
+use crate::{Args, Automation, Result, ToolError, child, failed, write_atomic};
 
 fn status_id(s: Status) -> &'static str {
     match s {
@@ -84,7 +84,7 @@ impl Automation {
         let r = doc.accessibility_check(&o).ok_or_else(|| failed("the document can't be read for checking"))?;
         let path = self.resolve(a.str("path")?, true)?;
         let (y, m, d) = self.session.today();
-        let html = printcraft_engine::a11y::report_html(&r, &doc.name, &format!("{y}-{m:02}-{d:02}"));
+        let html = pdfcraft_engine::a11y::report_html(&r, &doc.name, &format!("{y}-{m:02}-{d:02}"));
         write_atomic(&path, html.as_bytes())?;
         let mut out = report_json(&r);
         out["path"] = json!(path.to_string_lossy());
@@ -125,9 +125,9 @@ impl Automation {
         let figure = u32::try_from(a.int("figure")?)
             .map_err(|_| ToolError::InvalidArgs("figure must be a figure number from accessibility_figures".into()))?;
         let edit = if a.opt_bool("decorative")?.unwrap_or(false) {
-            printcraft_engine::Edit::MarkDecorative { figure }
+            pdfcraft_engine::Edit::MarkDecorative { figure }
         } else {
-            printcraft_engine::Edit::SetAltText { figure, alt: a.opt_str("alt")?.map(str::to_owned) }
+            pdfcraft_engine::Edit::SetAltText { figure, alt: a.opt_str("alt")?.map(str::to_owned) }
         };
         let id = self.doc(a)?.id;
         self.session.apply(id, edit).map_err(failed)?;
@@ -136,13 +136,13 @@ impl Automation {
 }
 
 impl Automation {
-    fn ocr_settings(&self, a: &Args) -> Result<printcraft_engine::ocr::OcrSettings> {
-        let mut settings = printcraft_engine::ocr::OcrSettings::default();
+    fn ocr_settings(&self, a: &Args) -> Result<pdfcraft_engine::ocr::OcrSettings> {
+        let mut settings = pdfcraft_engine::ocr::OcrSettings::default();
         if let Some(d) = a.opt_num("dpi")? {
             settings.dpi = d.clamp(72.0, 600.0) as f32;
         }
         if let Some(l) = a.opt_str("language")? {
-            if !printcraft_engine::ocr::LANGUAGES.iter().any(|x| x.0 == l) {
+            if !pdfcraft_engine::ocr::LANGUAGES.iter().any(|x| x.0 == l) {
                 return Err(ToolError::InvalidArgs(format!("unsupported language {l:?}")));
             }
             settings.language = l.into();
@@ -157,17 +157,17 @@ impl Automation {
         let settings = self.ocr_settings(a)?;
         let folder = self.resolve(a.str("folder")?, true)?;
         std::fs::create_dir_all(&folder).map_err(|e| failed(e.to_string()))?;
-        let ocr = printcraft_engine::ocr::engine().map_err(failed)?;
+        let ocr = pdfcraft_engine::ocr::engine().map_err(failed)?;
         let mut out = Vec::new();
         for p in a.strs("paths")? {
             let name = std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document.pdf".into());
             let result =
                 self.resolve(p, false).map_err(|e| e.to_string()).and_then(|src| std::fs::read(&src).map_err(|e| e.to_string())).and_then(|bytes| {
-                    printcraft_engine::ocr::recognize_file(&name, std::sync::Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true)
+                    pdfcraft_engine::ocr::recognize_file(&name, std::sync::Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true)
                 });
             out.push(match result {
                 Ok(r) => {
-                    let target = folder.join(&name);
+                    let target = child(&folder, &name);
                     write_atomic(&target, &r.bytes)?;
                     let skipped: Vec<usize> = r.pages.iter().filter(|p| p.skipped.is_some()).map(|p| p.page + 1).collect();
                     json!({ "path": p, "output": target.to_string_lossy(), "words": r.words(), "skipped_pages": skipped })
@@ -194,15 +194,15 @@ impl Automation {
     }
 
     pub(crate) fn ocr_status(&self) -> Result<Value> {
-        use printcraft_engine::ocr;
+        use pdfcraft_engine::ocr;
         let dirs: Vec<String> = ocr::Models::search_dirs().iter().map(|d| d.to_string_lossy().into_owned()).collect();
         let langs: Vec<Value> = ocr::LANGUAGES.iter().map(|(c, n)| json!({ "code": c, "name": n })).collect();
         Ok(json!({ "available": ocr::available(), "search_dirs": dirs, "languages": langs }))
     }
 }
 
-fn request_json(r: &printcraft_engine::js::Request) -> Value {
-    use printcraft_engine::js::Request as R;
+fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
+    use pdfcraft_engine::js::Request as R;
     match r {
         R::Reset(n) => json!({ "reset": n }),
         R::Print => json!({ "print": true }),
@@ -228,14 +228,14 @@ impl Automation {
     }
 
     pub(crate) fn js_set_document_script(&mut self, a: &Args) -> Result<Value> {
-        let edit = printcraft_engine::Edit::SetDocumentScript { name: a.str("name")?.into(), script: a.opt_str("script")?.map(str::to_string) };
+        let edit = pdfcraft_engine::Edit::SetDocumentScript { name: a.str("name")?.into(), script: a.opt_str("script")?.map(str::to_string) };
         let id = self.doc(a)?.id;
         self.session.apply(id, edit).map_err(failed)?;
         self.js_document_scripts(a)
     }
 
     pub(crate) fn form_set_script(&mut self, a: &Args) -> Result<Value> {
-        let edit = printcraft_engine::Edit::SetFieldScript {
+        let edit = pdfcraft_engine::Edit::SetFieldScript {
             name: a.str("field")?.into(),
             event: a.str("event")?.into(),
             script: a.opt_str("script")?.map(str::to_string),
@@ -252,7 +252,7 @@ impl Automation {
             let path = self.resolve(p, false)?;
             files.push((p.to_string(), std::fs::read(&path).map_err(|e| failed(format!("{p}: {e}")))?));
         }
-        let csv = printcraft_engine::merge_data_files(&files).map_err(failed)?;
+        let csv = pdfcraft_engine::merge_data_files(&files).map_err(failed)?;
         let target = self.resolve(a.str("path")?, true)?;
         write_atomic(&target, csv.as_bytes())?;
         let columns = csv.lines().next().map_or(0, |h| h.split(',').count());
@@ -262,16 +262,16 @@ impl Automation {
     pub(crate) fn doc_export_office(&self, a: &Args) -> Result<Value> {
         let path = self.resolve(a.str("path")?, true)?;
         let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
-        let format = printcraft_engine::compare::OfficeFormat::from_extension(&ext)
+        let format = pdfcraft_engine::compare::OfficeFormat::from_extension(&ext)
             .ok_or_else(|| ToolError::InvalidArgs(format!("unsupported extension {ext:?} (docx, html or rtf)")))?;
         let bytes = self.doc(a)?.export_office(format);
         write_atomic(&path, &bytes)?;
         Ok(json!({ "path": path.to_string_lossy(), "bytes": bytes.len(), "format": format.extension() }))
     }
 
-    fn pdfa_level(&self, a: &Args) -> Result<printcraft_engine::pdfa::Level> {
+    fn pdfa_level(&self, a: &Args) -> Result<pdfcraft_engine::pdfa::Level> {
         let l = a.opt_str("level")?.unwrap_or("2b");
-        printcraft_engine::pdfa::Level::from_id(l).ok_or_else(|| ToolError::InvalidArgs(format!("unknown PDF/A level {l:?} (2b or 3b)")))
+        pdfcraft_engine::pdfa::Level::from_id(l).ok_or_else(|| ToolError::InvalidArgs(format!("unknown PDF/A level {l:?} (2b or 3b)")))
     }
 
     pub(crate) fn pdfa_verify(&self, a: &Args) -> Result<Value> {
@@ -294,12 +294,12 @@ impl Automation {
     pub(crate) fn pdfa_convert(&mut self, a: &Args) -> Result<Value> {
         let level = self.pdfa_level(a)?;
         let id = self.doc(a)?.id;
-        self.session.apply(id, printcraft_engine::Edit::ConvertPdfA { level }).map_err(failed)?;
+        self.session.apply(id, pdfcraft_engine::Edit::ConvertPdfA { level }).map_err(failed)?;
         self.pdfa_verify(a)
     }
 
     pub(crate) fn action_list(&self) -> Result<Value> {
-        use printcraft_engine::actions::{Step, builtin};
+        use pdfcraft_engine::actions::{Step, builtin};
         let step_json = |s: &Step| json!({ "step": s.id(), "arg": s.arg() });
         let actions: Vec<Value> = builtin()
             .iter()
@@ -310,7 +310,7 @@ impl Automation {
     }
 
     pub(crate) fn action_run(&mut self, a: &Args) -> Result<Value> {
-        use printcraft_engine::actions::{Action, Step, builtin, run_on};
+        use pdfcraft_engine::actions::{Action, Step, builtin, run_on};
         let action = if let Some(name) = a.opt_str("action")? {
             builtin()
                 .into_iter()
@@ -339,7 +339,7 @@ impl Automation {
                 .and_then(|bytes| run_on(&action, &name, std::sync::Arc::new(bytes), |_, _| {}));
             out.push(match result {
                 Ok(r) => {
-                    let target = folder.join(&name);
+                    let target = child(&folder, &name);
                     write_atomic(&target, &r.bytes)?;
                     json!({ "path": p, "output": target.to_string_lossy(), "log": r.log })
                 }
@@ -349,25 +349,25 @@ impl Automation {
         Ok(json!({ "action": action.name, "files": out }))
     }
 
-    fn compare_ids(&self, a: &Args) -> Result<(printcraft_engine::DocId, printcraft_engine::DocId)> {
+    fn compare_ids(&self, a: &Args) -> Result<(pdfcraft_engine::DocId, pdfcraft_engine::DocId)> {
         let new = self.doc(a)?.id;
         let other = a.int("other")?;
         let old = u64::try_from(other)
             .ok()
-            .and_then(|o| self.session.get(printcraft_engine::DocId(o)))
+            .and_then(|o| self.session.get(pdfcraft_engine::DocId(o)))
             .map(|d| d.id)
             .ok_or_else(|| ToolError::InvalidArgs(format!("no open document {other}")))?;
         Ok((old, new))
     }
 
     pub(crate) fn doc_compare(&self, a: &Args) -> Result<Value> {
-        use printcraft_engine::compare::Kind;
+        use pdfcraft_engine::compare::Kind;
         let (old, new) = self.compare_ids(a)?;
         let c = self.session.compare(old, new).map_err(failed)?;
         let limit = a.opt_int("limit")?.unwrap_or(500).max(1) as usize;
         let r2 = |r: &[f64; 4]| r.map(|v| (v * 100.0).round() / 100.0);
         let side =
-            |s: &printcraft_engine::compare::Side| json!({ "text": s.text, "page": s.page + 1, "rects": s.rects.iter().map(r2).collect::<Vec<_>>() });
+            |s: &pdfcraft_engine::compare::Side| json!({ "text": s.text, "page": s.page + 1, "rects": s.rects.iter().map(r2).collect::<Vec<_>>() });
         let list: Vec<Value> = c
             .changes
             .iter()
@@ -413,8 +413,8 @@ impl Automation {
             .iter()
             .map(|(p, c)| {
                 let kind = match c.kind {
-                    printcraft_engine::detect::Kind::Text => "text",
-                    printcraft_engine::detect::Kind::CheckBox => "checkbox",
+                    pdfcraft_engine::detect::Kind::Text => "text",
+                    pdfcraft_engine::detect::Kind::CheckBox => "checkbox",
                 };
                 json!({ "page": p + 1, "kind": kind, "name": c.name, "rect": c.rect.map(|v| (v * 100.0).round() / 100.0) })
             })
@@ -426,7 +426,7 @@ impl Automation {
     }
 
     pub(crate) fn form_actions(&self, a: &Args) -> Result<Value> {
-        use printcraft_engine::FieldAction as A;
+        use pdfcraft_engine::FieldAction as A;
         let list: Vec<Value> = self
             .doc(a)?
             .field_actions(a.str("field")?)
@@ -451,7 +451,7 @@ impl Automation {
     }
 
     pub(crate) fn form_set_actions(&mut self, a: &Args) -> Result<Value> {
-        use printcraft_engine::{FieldAction as A, FieldTrigger as T};
+        use pdfcraft_engine::{FieldAction as A, FieldTrigger as T};
         let items = a.get("actions").and_then(Value::as_array).ok_or_else(|| ToolError::InvalidArgs("actions must be an array".into()))?;
         let bad = |m: String| ToolError::InvalidArgs(m);
         let names = |v: &Value| -> Vec<String> {
@@ -483,10 +483,8 @@ impl Automation {
             acts.push((t, act));
         }
         let name = a.str("field")?.to_string();
-        let edit = printcraft_engine::Edit::SetFieldProps {
-            name,
-            props: Box::new(printcraft_engine::FieldProps { actions: Some(acts), ..Default::default() }),
-        };
+        let edit =
+            pdfcraft_engine::Edit::SetFieldProps { name, props: Box::new(pdfcraft_engine::FieldProps { actions: Some(acts), ..Default::default() }) };
         let id = self.doc(a)?.id;
         self.session.apply(id, edit).map_err(failed)?;
         self.form_actions(a)

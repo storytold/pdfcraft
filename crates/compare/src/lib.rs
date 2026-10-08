@@ -1,4 +1,4 @@
-//! printcraft-compare — Compare files: text differences (L4).
+//! pdfcraft-compare — Compare files: text differences (L4).
 //!
 //! Both documents' words (in reading order, with page and box) are diffed with Myers'
 //! O((N+M)·D) algorithm after the common prefix and suffix are set aside; the edit script is

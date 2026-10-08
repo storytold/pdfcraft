@@ -143,7 +143,7 @@ fn imposed_pdf_has_the_sheets_and_honours_comments_and_forms() {
     let doc = fixture(3);
     let out = impose(&doc, &settings(vec![0, 1, 2], Layout::multiple(2))).unwrap();
     let printed = Document::open(Arc::new(out.clone())).unwrap();
-    let pages = printcraft_model::pages(&printed);
+    let pages = pdfcraft_model::pages(&printed);
     assert_eq!(pages.len(), 2);
     assert_eq!(pages[0].crop(&printed), [0.0, 0.0, 792.0, 612.0]);
     // The source pages are form XObjects holding their content.
@@ -190,4 +190,17 @@ fn spooler_arguments_and_printer_list() {
         "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false -- /tmp/x.pdf"
     );
     assert_eq!(lp_args(&Job::default(), "f.pdf")[0], "-n", "no -d: the default printer");
+}
+
+#[test]
+fn lpstat_output_is_untranslated() {
+    // A localized lpstat (here Polish) is unreadable to parse_lpstat...
+    assert!(parse_lpstat("drukarka Office_Laser jest bezczynna.\ndomyślny cel systemowy: Office_Laser\n").is_empty());
+    // ...so the command must force the C locale, including the SOFTWARE switch macOS CUPS needs.
+    let cmd = spool::lpstat_command();
+    let envs: Vec<_> = cmd.get_envs().map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()))).collect();
+    for key in ["LC_ALL", "LANG"] {
+        assert!(envs.contains(&(key.into(), Some("C".into()))), "{key}=C missing: {envs:?}");
+    }
+    assert!(envs.iter().any(|(k, v)| k == "SOFTWARE" && v.as_deref().is_some_and(|v| !v.is_empty())), "SOFTWARE missing: {envs:?}");
 }

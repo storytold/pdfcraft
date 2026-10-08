@@ -4,13 +4,13 @@
 //! categories; [`sanitize`] removes all of them. Every removal makes the next save a full
 //! rewrite, so the earlier revision (which still holds the data) leaves the file.
 
-use printcraft_content::Matrix;
-use printcraft_cos::{Dict, Document, ObjRef, Object};
+use pdfcraft_content::Matrix;
+use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 use crate::interp::{Mode, Scope, process};
 use crate::{RedactError, Report, annots_of, page_streams};
 
-/// The categories of Acrobat's Remove Hidden Information panel that PrintCraft handles.
+/// The categories of Acrobat's Remove Hidden Information panel that PdfCraft handles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Hidden {
     /// Document information (`/Info`) and XMP metadata streams.
@@ -142,9 +142,9 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         return Ok(0);
     }
     let mut total = 0;
-    let n = printcraft_model::pages(doc).len();
+    let n = pdfcraft_model::pages(doc).len();
     for pi in 0..n {
-        let page = printcraft_model::pages(doc).swap_remove(pi);
+        let page = pdfcraft_model::pages(doc).swap_remove(pi);
         let Ok((list, data)) = page_streams(doc, &page.dict, pi) else {
             if write {
                 return Err(RedactError::Unreadable(pi + 1));
@@ -175,7 +175,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
                 _ => Dict::new(),
             };
             dict.remove(b"Length");
-            new_list[i] = Object::Ref(doc.add(Object::Stream(printcraft_cos::Stream::flate(dict, &bytes))));
+            new_list[i] = Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::flate(dict, &bytes))));
             changed = true;
         }
         if changed || !out.xobjects.is_empty() {
@@ -199,7 +199,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
 /// How many items each category would remove (categories with nothing are included as 0).
 pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
     let cat = catalog(doc).map(|c| c.1).unwrap_or_default();
-    let pages = printcraft_model::pages(doc);
+    let pages = pdfcraft_model::pages(doc);
     let annots: Vec<Dict> = pages.iter().flat_map(|p| annots_of(doc, &p.dict)).filter_map(|a| doc.resolve(&a).as_dict().cloned()).collect();
     let count_sub = |s: &[u8]| annots.iter().filter(|a| a.name(b"Subtype") == Some(s)).count();
     let names = sub(doc, &cat, b"Names").unwrap_or_default();
@@ -215,7 +215,7 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
                 }
                 Hidden::Attachments => sub(doc, &names, b"EmbeddedFiles").map_or(0, |t| name_tree_len(doc, &t, 0)) + count_sub(b"FileAttachment"),
                 Hidden::Comments => annots.iter().filter(|a| is_comment(a.name(b"Subtype").unwrap_or(b""))).count(),
-                Hidden::FormFields => printcraft_forms::fields(doc).len(),
+                Hidden::FormFields => pdfcraft_forms::fields(doc).len(),
                 Hidden::HiddenText => content_pass(&mut doc2, true, false, false).unwrap_or(0),
                 Hidden::HiddenLayers => {
                     let off = hidden_layers(doc).len();
@@ -250,13 +250,13 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     }
     if which.contains(&Hidden::FormFields) && count(Hidden::FormFields) > 0 {
         // Fields without appearances get one first, so their values stay visible.
-        for f in printcraft_forms::fields(doc) {
+        for f in pdfcraft_forms::fields(doc) {
             if f.widgets.iter().any(|w| !doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"AP"))) {
-                printcraft_forms::redraw_field(doc, &f.name)?;
+                pdfcraft_forms::redraw_field(doc, &f.name)?;
             }
         }
-        let n = printcraft_model::pages(doc).len();
-        printcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), false, true)?;
+        let n = pdfcraft_model::pages(doc).len();
+        pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), false, true)?;
         doc.update_dict(root, |d| {
             d.remove(b"AcroForm");
         })?;
@@ -268,7 +268,7 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
             || (which.contains(&Hidden::Attachments) && s == b"FileAttachment")
             || (which.contains(&Hidden::LinksActionsScripts) && s == b"Link")
     };
-    for p in printcraft_model::pages(doc) {
+    for p in pdfcraft_model::pages(doc) {
         let list = annots_of(doc, &p.dict);
         let mut removed: Vec<ObjRef> = Vec::new();
         for a in &list {

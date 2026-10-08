@@ -1,8 +1,8 @@
 //! The cryptographic core against files made by OpenSSL 3 (tests/data/README.md).
 
-use printcraft_sign::der::Time;
-use printcraft_sign::keys::DigestAlg;
-use printcraft_sign::{Certificate, Name, PublicKey, SignError, cms, pkcs12};
+use pdfcraft_sign::der::Time;
+use pdfcraft_sign::keys::DigestAlg;
+use pdfcraft_sign::{Certificate, Name, PublicKey, SignError, cms, pkcs12};
 
 fn data(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/data/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
@@ -61,6 +61,7 @@ fn opens_every_openssl_flavour_of_pkcs12() {
 #[test]
 fn certificates_parse_as_openssl_made_them() {
     let c = Certificate::parse(&pem("rsa.crt.pem")).unwrap();
+    // The fixtures were made when the app was called PrintCraft.
     assert_eq!(c.subject.display(), "CN=Test Signer RSA, O=PrintCraft Tests, C=US");
     assert_eq!(c.serial_hex(), "03E9");
     assert!(c.is_self_signed());
@@ -97,7 +98,7 @@ fn signatures_round_trip_for_every_key_type() {
 fn new_digital_ids_are_self_signed_and_survive_a_p12_round_trip() {
     let name = Name::build("Grace Hopper", "Compilers", "Navy", "grace@example.com", "us");
     let now = Time { year: 2026, month: 10, day: 2, hour: 12, minute: 0, second: 0 };
-    for key in [printcraft_sign::PrivateKey::generate_rsa(2048).unwrap(), printcraft_sign::PrivateKey::generate_p256().unwrap()] {
+    for key in [pdfcraft_sign::PrivateKey::generate_rsa(2048).unwrap(), pdfcraft_sign::PrivateKey::generate_p256().unwrap()] {
         let cert = Certificate::self_signed(&name, &key, now, 5, &[0x42, 0x01]).unwrap();
         assert!(cert.is_self_signed());
         assert_eq!(cert.subject.display(), "C=US, O=Navy, OU=Compilers, CN=Grace Hopper, E=grace@example.com");
@@ -119,11 +120,11 @@ fn new_digital_ids_are_self_signed_and_survive_a_p12_round_trip() {
 #[test]
 fn certificates_load_from_pem_and_der_and_export_as_pem() {
     let pem_text = data("rsa.crt.pem");
-    let certs = printcraft_sign::x509::load_certificates(&pem_text).unwrap();
+    let certs = pdfcraft_sign::x509::load_certificates(&pem_text).unwrap();
     assert_eq!(certs.len(), 1);
     let der = certs[0].raw.clone();
-    assert_eq!(printcraft_sign::x509::load_certificates(&der).unwrap()[0], certs[0]);
-    let back = printcraft_sign::x509::to_pem(&certs[0]);
-    assert_eq!(printcraft_sign::x509::load_certificates(back.as_bytes()).unwrap()[0], certs[0]);
-    assert!(printcraft_sign::x509::load_certificates(b"hello").is_err());
+    assert_eq!(pdfcraft_sign::x509::load_certificates(&der).unwrap()[0], certs[0]);
+    let back = pdfcraft_sign::x509::to_pem(&certs[0]);
+    assert_eq!(pdfcraft_sign::x509::load_certificates(back.as_bytes()).unwrap()[0], certs[0]);
+    assert!(pdfcraft_sign::x509::load_certificates(b"hello").is_err());
 }

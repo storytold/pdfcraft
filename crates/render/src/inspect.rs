@@ -1,7 +1,7 @@
 //! Document inspection: everything panels need that is not pixels.
 //!
 //! Page geometry comes from hayro (which resolves inheritance and rotation); the rest comes from
-//! lopdf (bootstrap, replaced by `printcraft-model` in M2). Inspection is *tolerant*: when lopdf
+//! lopdf (bootstrap, replaced by `pdfcraft-model` in M2). Inspection is *tolerant*: when lopdf
 //! cannot load a file that hayro can render, panels are simply empty and `warnings` says why.
 
 use std::collections::{BTreeMap, HashMap, HashSet};

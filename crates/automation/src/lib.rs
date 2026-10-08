@@ -1,10 +1,10 @@
-//! printcraft-automation — agent control for PrintCraft (architecture §13).
+//! pdfcraft-automation — agent control for PdfCraft (architecture §13).
 //!
 //! - **Layer:** L7. Headless: depends on the engine, never on a UI toolkit.
 //! - [`Automation`] is a tool set over an engine [`Session`]: open, inspect, render, extract and
 //!   find text, edit pages and metadata, undo/redo, save, combine, extract and split. Every tool
 //!   has a JSON Schema ([`tools`]) and takes and returns JSON, so the same table drives the MCP
-//!   server ([`mcp`]), `printcraft-cli run` and (later) the UI control channel.
+//!   server ([`mcp`]), `pdfcraft-cli run` and (later) the UI control channel.
 //! - Pages are **1-based** in every tool, as people number them. Rectangles are in PDF points
 //!   with the origin at the top-left of the displayed page.
 //! - An optional root directory confines every path a tool reads or writes.
@@ -27,8 +27,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use printcraft_engine::{DocId, Document, Edit, Session, commands};
-use printcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
+use pdfcraft_engine::{DocId, Document, Edit, Session, commands};
+use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
 use serde_json::{Value, json};
 
 pub use tools::{ToolDef, tools};
@@ -77,7 +77,7 @@ const MAX_DPI: f64 = 600.0;
 /// Page texts of one document version: (the working bytes, one slot per page).
 type TextCache = (Arc<Vec<u8>>, Vec<Option<Arc<PageText>>>);
 
-/// A headless PrintCraft session driven by tool calls.
+/// A headless PdfCraft session driven by tool calls.
 pub struct Automation {
     session: Session,
     root: Option<PathBuf>,
@@ -100,7 +100,11 @@ impl Automation {
 
     /// Confine every path the tools read or write to `root` (relative paths resolve inside it).
     pub fn with_root(mut self, root: impl Into<PathBuf>) -> std::io::Result<Self> {
-        self.root = Some(root.into().canonicalize()?);
+        let root = root.into().canonicalize()?;
+        if !root.is_dir() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "the root must be a folder"));
+        }
+        self.root = Some(root);
         Ok(self)
     }
 
@@ -112,6 +116,20 @@ impl Automation {
 
     pub fn session(&self) -> &Session {
         &self.session
+    }
+
+    /// Save `bytes` that a caller writes on the session's behalf, such as `pdfcraft-cli run`
+    /// saving a rendered page. With a root, it is confined like a tool's own output (a relative
+    /// path resolves inside it) and written atomically. Without one, the path is written as
+    /// given, so `/dev/stdout` and the like still work. Returns where the file went.
+    pub fn write_output(&self, path: &str, bytes: &[u8]) -> Result<PathBuf> {
+        let target = self.resolve(path, true)?;
+        if self.root.is_some() {
+            write_atomic(&target, bytes)?;
+        } else {
+            std::fs::write(&target, bytes).map_err(|e| failed(format!("{path}: {e}")))?;
+        }
+        Ok(target)
     }
 
     /// Run the tool `name` with JSON `args` (an object; `null` means no arguments).
@@ -148,18 +166,18 @@ impl Automation {
                     None => (0..doc.info.pages.len()).collect(),
                 };
                 let parity = match a.opt_str("subset")?.unwrap_or("all") {
-                    "all" => printcraft_engine::PageParity::Both,
-                    "even" => printcraft_engine::PageParity::Even,
-                    "odd" => printcraft_engine::PageParity::Odd,
+                    "all" => pdfcraft_engine::PageParity::Both,
+                    "even" => pdfcraft_engine::PageParity::Even,
+                    "odd" => pdfcraft_engine::PageParity::Odd,
                     s => return Err(ToolError::InvalidArgs(format!("unknown subset {s:?} (all, even, odd)"))),
                 };
                 let orientation = match a.opt_str("orientation")?.unwrap_or("all") {
-                    "all" => printcraft_engine::PageOrientation::Both,
-                    "landscape" => printcraft_engine::PageOrientation::Landscape,
-                    "portrait" => printcraft_engine::PageOrientation::Portrait,
+                    "all" => pdfcraft_engine::PageOrientation::Both,
+                    "landscape" => pdfcraft_engine::PageOrientation::Landscape,
+                    "portrait" => pdfcraft_engine::PageOrientation::Portrait,
                     o => return Err(ToolError::InvalidArgs(format!("unknown orientation {o:?} (all, landscape, portrait)"))),
                 };
-                let pages = printcraft_engine::filter_pages(&self.doc(&a)?.info, &base, parity, orientation);
+                let pages = pdfcraft_engine::filter_pages(&self.doc(&a)?.info, &base, parity, orientation);
                 if pages.is_empty() {
                     return Err(failed("no pages match the filters"));
                 }
@@ -194,7 +212,7 @@ impl Automation {
             }
             "command_list" => self.command_list(&a)?,
             "page_number" => {
-                use printcraft_organize::LabelStyle as L;
+                use pdfcraft_organize::LabelStyle as L;
                 let n = self.doc(&a)?.info.pages.len();
                 let (from, to) = (a.int("from")?, a.int("to")?);
                 if from < 1 || to < from || to as usize > n {
@@ -326,13 +344,18 @@ impl Automation {
                 if name == "image_save" {
                     let (ext, bytes) = self.doc(&a)?.page_image_file(page, index).map_err(failed)?;
                     let mut path = self.resolve(a.str("path")?, true)?;
+                    if path.is_dir() {
+                        // Adding the extension to a folder's name would write beside it: "." is the
+                        // root, so that would land outside it.
+                        return Err(failed(format!("{}: is a folder, not a file", path.display())));
+                    }
                     if path.extension().is_none() {
                         path.set_extension(ext);
                     }
                     write_atomic(&path, &bytes)?;
                     json!({ "path": path.to_string_lossy(), "format": ext, "bytes": bytes.len() })
                 } else {
-                    use printcraft_engine::ImageEdit;
+                    use pdfcraft_engine::ImageEdit;
                     let change = match a.str("action")? {
                         "move" => {
                             let r: Vec<f64> =
@@ -392,7 +415,7 @@ impl Automation {
                 }
                 let block = self.doc(&a)?.text_blocks(page)[k as usize - 1].clone();
                 let text = a.opt_str("text")?.map(str::to_owned).unwrap_or(block.text);
-                let mut style = printcraft_engine::BlockStyle {
+                let mut style = pdfcraft_engine::BlockStyle {
                     size: a.opt_num("size")?,
                     underline: a.opt_bool("underline")?,
                     line_spacing: a.opt_num("line_spacing")?,
@@ -407,9 +430,9 @@ impl Automation {
                 }
                 if let Some(f) = a.opt_str("font")? {
                     let family = match f {
-                        "helvetica" => printcraft_engine::FontFamily::Helvetica,
-                        "times" => printcraft_engine::FontFamily::Times,
-                        "courier" => printcraft_engine::FontFamily::Courier,
+                        "helvetica" => pdfcraft_engine::FontFamily::Helvetica,
+                        "times" => pdfcraft_engine::FontFamily::Times,
+                        "courier" => pdfcraft_engine::FontFamily::Courier,
                         other => return Err(ToolError::InvalidArgs(format!("unknown font {other:?} (helvetica, times, courier)"))),
                     };
                     style.family = Some((family, a.opt_bool("bold")?.unwrap_or(false), a.opt_bool("italic")?.unwrap_or(false)));
@@ -419,10 +442,10 @@ impl Automation {
                 }
                 if let Some(al) = a.opt_str("align")? {
                     style.align = Some(match al {
-                        "left" => printcraft_engine::TextAlign::Left,
-                        "center" => printcraft_engine::TextAlign::Center,
-                        "right" => printcraft_engine::TextAlign::Right,
-                        "justify" => printcraft_engine::TextAlign::Justify,
+                        "left" => pdfcraft_engine::TextAlign::Left,
+                        "center" => pdfcraft_engine::TextAlign::Center,
+                        "right" => pdfcraft_engine::TextAlign::Right,
+                        "justify" => pdfcraft_engine::TextAlign::Justify,
                         other => return Err(ToolError::InvalidArgs(format!("unknown align {other:?}"))),
                     });
                 }
@@ -537,10 +560,10 @@ impl Automation {
             "sign_document" => self.sign_document(&a)?,
             "sign_keychain_ids" => {
                 #[cfg(target_os = "macos")]
-                let ids: Vec<Value> = printcraft_engine::sign::keychain::identities(None)
+                let ids: Vec<Value> = pdfcraft_engine::sign::keychain::identities(None)
                     .map_err(failed)?
                     .iter()
-                    .map(|id| json!({ "id": printcraft_engine::sign::keychain::reference(&id.certificate), "certificate": signing::cert_json(&id.certificate) }))
+                    .map(|id| json!({ "id": pdfcraft_engine::sign::keychain::reference(&id.certificate), "certificate": signing::cert_json(&id.certificate) }))
                     .collect();
                 #[cfg(not(target_os = "macos"))]
                 let ids: Vec<Value> = Vec::new();
@@ -623,7 +646,7 @@ impl Automation {
     }
 
     fn doc_initial_view(&mut self, a: &Args) -> Result<Value> {
-        use printcraft_engine::{InitialLayout as L, Magnification as M, Navigation as N};
+        use pdfcraft_engine::{InitialLayout as L, Magnification as M, Navigation as N};
         let bad = |m: String| ToolError::InvalidArgs(m);
         let mut v = self.doc(a)?.initial_view();
         let before = v.clone();
@@ -711,7 +734,7 @@ impl Automation {
     }
 
     fn doc_optimize(&mut self, a: &Args) -> Result<Value> {
-        use printcraft_engine::optimize::{Compression, ImageSettings, Settings};
+        use pdfcraft_engine::optimize::{Compression, ImageSettings, Settings};
         let id = self.doc(a)?.id;
         let before = self.doc(a)?.bytes.len();
         let path = self.resolve(a.str("path")?, true)?;
@@ -755,7 +778,7 @@ impl Automation {
                 *flag = b;
             }
         }
-        let discard: Vec<printcraft_engine::Hidden> = match a.get("discard") {
+        let discard: Vec<pdfcraft_engine::Hidden> = match a.get("discard") {
             None => Vec::new(),
             Some(v) => v
                 .as_array()
@@ -763,7 +786,7 @@ impl Automation {
                 .iter()
                 .map(|x| {
                     x.as_str()
-                        .and_then(printcraft_engine::Hidden::from_id)
+                        .and_then(pdfcraft_engine::Hidden::from_id)
                         .ok_or_else(|| ToolError::InvalidArgs(format!("unknown discard category {x}")))
                 })
                 .collect::<Result<_>>()?,
@@ -793,12 +816,12 @@ impl Automation {
     }
 
     /// A watermark or background picture: `file` (an image or a PDF) and `file_page` (1-based).
-    fn mark_file(&self, a: &Args) -> Result<Option<printcraft_engine::MarkFile>> {
+    fn mark_file(&self, a: &Args) -> Result<Option<pdfcraft_engine::MarkFile>> {
         let Some(p) = a.opt_str("file")? else { return Ok(None) };
         let path = self.resolve(p, false)?;
         let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
         let page = a.opt_int("file_page")?.unwrap_or(1).max(1) as usize - 1;
-        Ok(Some(printcraft_engine::MarkFile {
+        Ok(Some(pdfcraft_engine::MarkFile {
             name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
             bytes: Arc::new(bytes),
             page,
@@ -812,7 +835,7 @@ impl Automation {
     }
 
     fn marks(&mut self, tool: &str, a: &Args) -> Result<Value> {
-        use printcraft_engine::{Background, HeaderFooter, MarkKind, Watermark};
+        use pdfcraft_engine::{Background, HeaderFooter, MarkKind, Watermark};
         let n = self.doc(a)?.info.pages.len();
         let pages = match a.opt_ints("pages")? {
             Some(_) => self.pages(a, "pages")?,
@@ -891,7 +914,7 @@ impl Automation {
             None => (0..doc.info.pages.len()).collect(),
         };
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
-        let mut ex = printcraft_engine::export::Exporter::new(doc);
+        let mut ex = pdfcraft_engine::export::Exporter::new(doc);
         if tool == "doc_export_text" {
             let path = self.resolve(a.str("path")?, true)?;
             let text = ex.text_of(&pages).map_err(failed)?;
@@ -902,10 +925,10 @@ impl Automation {
         std::fs::create_dir_all(&folder).map_err(|e| failed(format!("{}: {e}", folder.display())))?;
         if tool == "doc_export_all_images" {
             let min = u32::try_from(a.opt_int("min_size")?.unwrap_or(0).max(0)).unwrap_or(u32::MAX);
-            let out = printcraft_engine::export::extract_images(&doc.export_source(), &pages, min).map_err(failed)?;
+            let out = pdfcraft_engine::export::extract_images(&doc.export_source(), &pages, min).map_err(failed)?;
             let mut files = Vec::new();
             for (k, img) in out.images.iter().enumerate() {
-                let path = folder.join(printcraft_engine::export::image_file_name(&stem, img, k + 1));
+                let path = child(&folder, &pdfcraft_engine::export::image_file_name(&stem, img, k + 1));
                 write_atomic(&path, &img.data)?;
                 files.push(json!({ "path": path.to_string_lossy(), "page": img.page + 1, "width": img.width, "height": img.height }));
             }
@@ -915,15 +938,15 @@ impl Automation {
         let dpi = a.opt_num("dpi")?.unwrap_or(150.0);
         let quality = a.opt_int("quality")?.unwrap_or(85).clamp(1, 100) as u8;
         let format = match a.opt_str("format")?.unwrap_or("png") {
-            "png" => printcraft_engine::export::ImageFormat::Png,
-            "jpeg" | "jpg" => printcraft_engine::export::ImageFormat::Jpeg { quality },
-            "tiff" | "tif" => printcraft_engine::export::ImageFormat::Tiff,
+            "png" => pdfcraft_engine::export::ImageFormat::Png,
+            "jpeg" | "jpg" => pdfcraft_engine::export::ImageFormat::Jpeg { quality },
+            "tiff" | "tif" => pdfcraft_engine::export::ImageFormat::Tiff,
             f => return Err(ToolError::InvalidArgs(format!("unknown format {f:?} (png, jpeg, tiff)"))),
         };
         let mut files = Vec::new();
         for p in pages {
             let img = ex.image(p, dpi, format).map_err(failed)?;
-            let path = folder.join(format!("{stem}_page_{}.{}", p + 1, format.extension()));
+            let path = child(&folder, &format!("{stem}_page_{}.{}", p + 1, format.extension()));
             write_atomic(&path, &img)?;
             files.push(path.to_string_lossy().into_owned());
         }
@@ -971,7 +994,7 @@ impl Automation {
     }
 
     fn page_set_box(&mut self, a: &Args) -> Result<Value> {
-        use printcraft_engine::{BoxSpec, PageBox};
+        use pdfcraft_engine::{BoxSpec, PageBox};
         let doc = self.doc(a)?;
         let n = doc.info.pages.len();
         let pages = match a.opt_ints("pages")? {
@@ -1010,7 +1033,7 @@ impl Automation {
     }
 
     fn doc_protect(&mut self, a: &Args) -> Result<Value> {
-        use printcraft_engine::{Algorithm, Changes, Printing, Protection};
+        use pdfcraft_engine::{Algorithm, Changes, Printing, Protection};
         let d = Protection::default();
         let p = Protection {
             open_password: a.opt_str("open_password")?.map(str::to_owned),
@@ -1098,7 +1121,7 @@ impl Automation {
             let mut files = Vec::new();
             for &p in &pages {
                 let bytes = self.session.extract(id, &[p]).map_err(failed)?;
-                let path = dir.join(format!("{stem}-page{}.pdf", p + 1));
+                let path = child(&dir, &format!("{stem}-page{}.pdf", p + 1));
                 write_atomic(&path, &bytes)?;
                 files.push(path.to_string_lossy().into_owned());
             }
@@ -1155,14 +1178,14 @@ impl Automation {
             self.session.split_by_size(id, (mb * 1_048_576.0) as usize).map_err(failed)?
         } else {
             let by = match (a.opt_int("every")?, a.opt_ints("before")?) {
-                (Some(n), None) if n > 0 => printcraft_organize::SplitBy::PageCount(n as usize),
-                (None, Some(b)) => printcraft_organize::SplitBy::Before(one_based(&b)?),
+                (Some(n), None) if n > 0 => pdfcraft_organize::SplitBy::PageCount(n as usize),
+                (None, Some(b)) => pdfcraft_organize::SplitBy::Before(one_based(&b)?),
                 _ if bookmarks => {
                     titles = self.session.bookmark_splits(id);
                     if titles.is_empty() {
                         return Err(failed("the document has no top-level bookmarks"));
                     }
-                    printcraft_organize::SplitBy::Before(titles.iter().map(|t| t.0).collect())
+                    pdfcraft_organize::SplitBy::Before(titles.iter().map(|t| t.0).collect())
                 }
                 _ => return Err(ToolError::InvalidArgs("every must be a positive page count".into())),
             };
@@ -1177,7 +1200,7 @@ impl Automation {
                 Some((_, t)) => format!("{stem}-{}.pdf", safe(t)),
                 None => format!("{stem}-part{}.pdf", i + 1),
             };
-            let path = dir.join(file);
+            let path = child(&dir, &file);
             write_atomic(&path, bytes)?;
             files.push(json!({ "path": path.to_string_lossy(), "first_page": first, "last_page": last }));
         }
@@ -1322,35 +1345,87 @@ impl Automation {
 
     /// Resolve a user-supplied path, enforcing the root (if any). `for_write` allows a file that
     /// does not exist yet (its nearest existing ancestor must be inside the root).
+    ///
+    /// Every path outside the root gets the same refusal, so a confined client can't learn what
+    /// exists out there (#136): `..` is resolved by name first, another network share or device
+    /// namespace is refused without touching it, and the deepest existing ancestor (links
+    /// followed) must be inside the root before anything about the rest is reported.
     fn resolve(&self, path: &str, for_write: bool) -> Result<PathBuf> {
         let p = Path::new(path);
-        let joined = match &self.root {
-            Some(root) if p.is_relative() => root.join(p),
-            _ => p.to_path_buf(),
-        };
-        let Some(root) = &self.root else { return Ok(joined) };
-        let real = if for_write {
-            // Canonicalize the deepest existing ancestor, then re-append the rest.
-            let mut existing = joined.as_path();
-            let mut rest = Vec::new();
-            while !existing.exists() {
-                rest.push(existing.file_name().ok_or_else(|| failed(format!("{path}: invalid path")))?);
-                existing = existing.parent().ok_or_else(|| failed(format!("{path}: invalid path")))?;
-            }
-            if rest.iter().any(|c| *c == "..") {
-                return Err(failed(format!("{path}: '..' is not allowed here")));
-            }
-            let mut real = existing.canonicalize().map_err(|e| failed(format!("{path}: {e}")))?;
-            real.extend(rest.iter().rev());
-            real
-        } else {
-            joined.canonicalize().map_err(|e| failed(format!("{path}: {e}")))?
-        };
-        if !real.starts_with(root) {
-            return Err(failed(format!("{path} is outside the allowed directory {}", root.display())));
+        let Some(root) = &self.root else { return Ok(p.to_path_buf()) };
+        let outside = || failed(format!("{path} is outside the allowed directory {}", root.display()));
+        let joined = lexical(&root.join(p)).ok_or_else(outside)?;
+        if foreign_share(&joined, root) {
+            return Err(outside());
         }
+        let mut existing = joined.as_path();
+        let mut rest = Vec::new();
+        while !existing.exists() {
+            if existing.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err(outside()); // a broken link: going on would tell whether its target exists
+            }
+            match (existing.file_name(), existing.parent()) {
+                (Some(name), Some(parent)) => {
+                    rest.push(name);
+                    existing = parent;
+                }
+                _ => return Err(outside()), // not even a drive or share that exists
+            }
+        }
+        let mut real = existing.canonicalize().map_err(|_| outside())?;
+        if !real.starts_with(root) {
+            return Err(outside());
+        }
+        if !rest.is_empty() && !for_write {
+            // Missing, below a folder inside the root: say why, as the system reports it.
+            real = joined.canonicalize().map_err(|e| failed(format!("{path}: {e}")))?;
+            if !real.starts_with(root) {
+                return Err(outside()); // it appeared, as a link out, since the check above
+            }
+            return Ok(real);
+        }
+        real.extend(rest.iter().rev());
         Ok(real)
     }
+}
+
+/// `path` with `.` and `..` resolved by name, before the filesystem is consulted (Windows does
+/// the same, and so does joining onto a canonical root there). `None` if a `..` would climb
+/// above the start of the path.
+fn lexical(path: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut parts: Vec<Component> = Vec::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => match parts.last() {
+                Some(Component::Normal(_)) => {
+                    parts.pop();
+                }
+                _ => return None,
+            },
+            other => parts.push(other),
+        }
+    }
+    Some(parts.iter().collect())
+}
+
+/// Whether `path` names another network share or device namespace than `root` (Windows
+/// `\\host\share`, `\\?\UNC\…`, `\\.\…`, `\\?\…`). Those are refused by name: even checking
+/// that one exists would contact the host. Drive letters are left to the normal check.
+fn foreign_share(path: &Path, root: &Path) -> bool {
+    use std::path::{Component, Prefix};
+    fn share(p: &Path) -> Option<String> {
+        let Some(Component::Prefix(prefix)) = p.components().next() else { return None };
+        let (kind, a, b) = match prefix.kind() {
+            Prefix::Disk(_) | Prefix::VerbatimDisk(_) => return None,
+            Prefix::UNC(host, share) | Prefix::VerbatimUNC(host, share) => ("unc", host, share),
+            Prefix::DeviceNS(name) => ("device", name, std::ffi::OsStr::new("")),
+            Prefix::Verbatim(name) => ("verbatim", name, std::ffi::OsStr::new("")),
+        };
+        Some(format!("{kind}\\{}\\{}", a.to_string_lossy(), b.to_string_lossy()).to_lowercase())
+    }
+    share(path).is_some_and(|s| share(root).as_ref() != Some(&s))
 }
 
 // ---- JSON helpers ----------------------------------------------------------------------------
@@ -1414,7 +1489,7 @@ impl Args<'_> {
 }
 
 /// The bookmark tree as JSON, with 1-based paths and pages.
-fn bookmark_tree(items: &[printcraft_render::OutlineItem], parent: &[usize]) -> Vec<Value> {
+fn bookmark_tree(items: &[pdfcraft_render::OutlineItem], parent: &[usize]) -> Vec<Value> {
     items
         .iter()
         .enumerate()
@@ -1483,7 +1558,7 @@ fn info(d: &Document) -> Value {
         "tagged": i.tagged,
         "has_javascript": i.has_javascript,
         // XFA forms aren't read yet: "static" (fields work, XFA data ignored) or "dynamic" (placeholder pages).
-        "xfa": i.xfa.map(|x| match x { printcraft_render::Xfa::Static => "static", printcraft_render::Xfa::Dynamic => "dynamic" }),
+        "xfa": i.xfa.map(|x| match x { pdfcraft_render::Xfa::Static => "static", pdfcraft_render::Xfa::Dynamic => "dynamic" }),
         "security": security,
         "pages": i.pages.iter().enumerate().map(|(n, p)| json!({
             "page": n + 1, "label": p.label, "width": p.width, "height": p.height, "rotation": p.rotation,
@@ -1500,9 +1575,9 @@ fn info(d: &Document) -> Value {
         "links": i.links.iter().map(|l| json!({
             "page": page1(l.page), "rect": l.rect,
             "target": match &l.target {
-                printcraft_render::LinkTarget::Page(p) => json!({ "page": page1(*p) }),
-                printcraft_render::LinkTarget::Uri(u) => json!({ "uri": u }),
-                printcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
+                pdfcraft_render::LinkTarget::Page(p) => json!({ "page": page1(*p) }),
+                pdfcraft_render::LinkTarget::Uri(u) => json!({ "uri": u }),
+                pdfcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
             },
         })).collect::<Vec<_>>(),
         "layers": i.layers.iter().map(|l| json!({ "name": l.name, "visible": l.visible })).collect::<Vec<_>>(),
@@ -1515,7 +1590,7 @@ fn info(d: &Document) -> Value {
     })
 }
 
-fn outline(items: &[printcraft_render::OutlineItem]) -> Value {
+fn outline(items: &[pdfcraft_render::OutlineItem]) -> Value {
     Value::Array(items.iter().map(|o| json!({ "title": o.title, "page": o.page.map(|p| p + 1), "children": outline(&o.children) })).collect())
 }
 
@@ -1577,15 +1652,87 @@ fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[u
     out
 }
 
+/// The file `name` inside `dir`, where `name` comes from a document or an argument: separators,
+/// colons (a Windows drive or stream) and control characters become `_`, and a name of only dots
+/// gets a leading `_`, so it is one plain file name and can't lead out of `dir`.
+fn child(dir: &Path, name: &str) -> PathBuf {
+    let mut safe: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':') || c.is_control() { '_' } else { c }).collect();
+    if safe.chars().all(|c| c == '.') {
+        safe.insert(0, '_');
+    }
+    dir.join(safe)
+}
+
 /// Write via a temporary file in the same directory, then rename over the target.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    // A folder can't be replaced, and staging beside it could land outside the root: "." names
+    // the root itself, whose parent isn't ours to write in.
+    if path.is_dir() {
+        return Err(failed(format!("{}: is a folder, not a file", path.display())));
+    }
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let name = path.file_name().ok_or_else(|| failed(format!("{}: not a file path", path.display())))?;
     std::fs::create_dir_all(dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
-    let tmp = dir.join(format!(".{}.printcraft-tmp", name.to_string_lossy()));
+    let tmp = dir.join(format!(".{}.pdfcraft-tmp", name.to_string_lossy()));
     std::fs::write(&tmp, bytes).map_err(|e| failed(format!("{}: {e}", tmp.display())))?;
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         failed(format!("{}: {e}", path.display()))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dot_dot_resolves_by_name_and_never_climbs_above_the_start() {
+        let base = std::env::temp_dir();
+        let l = |rel: &str| lexical(&base.join(rel));
+        assert_eq!(l("a/./b/../c"), Some(base.join("a").join("c")));
+        assert_eq!(l("missing/../../x"), lexical(&base.join("..").join("x")));
+        assert_eq!(l("a/.."), Some(lexical(&base).unwrap()));
+        let deep = "../".repeat(base.components().count() + 1);
+        assert_eq!(lexical(&base.join(&deep)), None);
+        assert_eq!(lexical(Path::new("..")), None);
+    }
+
+    #[test]
+    fn names_from_documents_become_one_plain_file_name() {
+        let dir = std::env::temp_dir().join("out");
+        for name in ["../../x.png", "/abs/x.png", r"..\..\x.png", "C:x.png", r"\\host\share\x.png", "a:stream", "..", ".", "", "tab\there", "ok.png"]
+        {
+            let p = child(&dir, name);
+            assert_eq!(p.parent(), Some(dir.as_path()), "{name:?} -> {}", p.display());
+            assert_eq!(p.components().count(), dir.components().count() + 1, "{name:?} -> {}", p.display());
+        }
+        assert_eq!(child(&dir, "ok.png"), dir.join("ok.png"));
+        assert_eq!(child(&dir, "../x.png"), dir.join(".._x.png"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn other_shares_and_device_paths_are_refused_by_name() {
+        let local = Path::new(r"\\?\C:\work\root");
+        for p in [
+            r"\\host\share\x.pdf",
+            "//host/share/x.pdf",
+            r"\/host/share/x.pdf",
+            r"\\?\UNC\host\share\x.pdf",
+            r"\\.\pipe\x",
+            r"\\.\C:\work\root\x.pdf",
+            r"\\?\GLOBALROOT\Device\x",
+        ] {
+            assert!(foreign_share(Path::new(p), local), "{p}");
+        }
+        for p in [r"C:\work\root\x.pdf", r"c:\elsewhere\x.pdf", r"\\?\C:\work\root\x.pdf", r"D:\x.pdf", r"C:x.pdf"] {
+            assert!(!foreign_share(Path::new(p), local), "{p}");
+        }
+        // A root on a share accepts that share, however it is spelled, and nothing else.
+        let shared = Path::new(r"\\?\UNC\Server\Docs\root");
+        assert!(!foreign_share(Path::new(r"\\server\docs\root\x.pdf"), shared));
+        assert!(!foreign_share(Path::new(r"\\?\UNC\SERVER\DOCS\x.pdf"), shared));
+        assert!(foreign_share(Path::new(r"\\server\other\x.pdf"), shared));
+        assert!(foreign_share(Path::new(r"\\attacker\docs\x.pdf"), shared));
+    }
 }

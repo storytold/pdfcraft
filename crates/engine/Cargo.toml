@@ -1,6 +1,6 @@
 [package]
-name = "printcraft-engine"
-description = "PrintCraft engine façade: session, documents, command/tool catalogue"
+name = "pdfcraft-engine"
+description = "PdfCraft engine façade: session, documents, command/tool catalogue"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,26 +10,26 @@ workspace = true
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["jpeg", "tiff"] }
-printcraft-render = { workspace = true }
-printcraft-cos = { workspace = true }
-printcraft-organize = { workspace = true }
-printcraft-annot = { workspace = true }
-printcraft-forms = { workspace = true }
-printcraft-edit = { workspace = true }
-printcraft-redact = { workspace = true }
-printcraft-print = { workspace = true }
-printcraft-xfdf = { workspace = true }
-printcraft-sign = { workspace = true }
-printcraft-optimize = { workspace = true }
-printcraft-a11y = { workspace = true }
-printcraft-ocr = { workspace = true }
-printcraft-js = { workspace = true }
-printcraft-compare = { workspace = true }
-printcraft-preflight = { workspace = true }
-printcraft-export = { workspace = true }
-printcraft-fonts = { workspace = true }
-printcraft-create = { workspace = true }
-printcraft-model = { workspace = true }
+pdfcraft-render = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-organize = { workspace = true }
+pdfcraft-annot = { workspace = true }
+pdfcraft-forms = { workspace = true }
+pdfcraft-edit = { workspace = true }
+pdfcraft-redact = { workspace = true }
+pdfcraft-print = { workspace = true }
+pdfcraft-xfdf = { workspace = true }
+pdfcraft-sign = { workspace = true }
+pdfcraft-optimize = { workspace = true }
+pdfcraft-a11y = { workspace = true }
+pdfcraft-ocr = { workspace = true }
+pdfcraft-js = { workspace = true }
+pdfcraft-compare = { workspace = true }
+pdfcraft-preflight = { workspace = true }
+pdfcraft-export = { workspace = true }
+pdfcraft-fonts = { workspace = true }
+pdfcraft-create = { workspace = true }
+pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
 png = "0.18"
 

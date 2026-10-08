@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use printcraft_filters::{Filter, Params};
+use pdfcraft_filters::{Filter, Params};
 
 use crate::CosError;
 
@@ -176,7 +176,7 @@ impl Stream {
     pub fn flate(mut dict: Dict, data: &[u8]) -> Self {
         dict.set(b"Filter".to_vec(), Object::Name(b"FlateDecode".to_vec()));
         dict.remove(b"DecodeParms");
-        Self { dict, raw: Arc::new(printcraft_filters::encode_flate(data)) }
+        Self { dict, raw: Arc::new(pdfcraft_filters::encode_flate(data)) }
     }
 
     /// The filter chain declared in the dictionary.
@@ -225,7 +225,7 @@ impl Stream {
         if chain.is_empty() {
             return Ok(self.raw.as_ref().clone());
         }
-        printcraft_filters::decode_tolerant(&chain, &self.raw, max.min(MAX_DECODED)).map(|(v, _)| v).map_err(|e| CosError::Filter(e.to_string()))
+        pdfcraft_filters::decode_tolerant(&chain, &self.raw, max.min(MAX_DECODED)).map(|(v, _)| v).map_err(|e| CosError::Filter(e.to_string()))
     }
 
     /// Decoded data; any corruption is an error.
@@ -234,7 +234,7 @@ impl Stream {
         if chain.is_empty() {
             return Ok(self.raw.as_ref().clone());
         }
-        printcraft_filters::decode(&chain, &self.raw, MAX_DECODED).map_err(|e| CosError::Filter(e.to_string()))
+        pdfcraft_filters::decode(&chain, &self.raw, MAX_DECODED).map_err(|e| CosError::Filter(e.to_string()))
     }
 }
 

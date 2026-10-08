@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-compare"
+name = "pdfcraft-compare"
 description = "Compare files: word-level text differences between two documents, grouped into changes with their places on the pages"
 version.workspace = true
 edition.workspace = true

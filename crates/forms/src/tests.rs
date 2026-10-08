@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use printcraft_cos::{Document, Object, SaveOptions, write_incremental};
+use pdfcraft_cos::{Document, Object, SaveOptions, write_incremental};
 
 use super::*;
 
@@ -133,7 +133,7 @@ fn check_boxes_and_radios_switch_states() {
     let size = field(&all, "size");
     assert_eq!(size.value, ["L"]);
     assert_eq!(size.widgets.iter().map(|w| w.state.clone().unwrap()).collect::<Vec<_>>(), ["Off", "L"]);
-    // The bare check box got PrintCraft's own appearances and kept its other keys.
+    // The bare check box got PdfCraft's own appearances and kept its other keys.
     let bare = field(&all, "bare");
     assert_eq!(bare.value, ["Yes"]);
     assert_eq!(bare.widgets[0].on_state.as_deref(), Some("Yes"));
@@ -208,7 +208,7 @@ fn every_field_type_can_be_added_named_and_drawn() {
     {
         // One page.
         let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
-        let mut p = printcraft_cos::Dict::new();
+        let mut p = pdfcraft_cos::Dict::new();
         p.set(b"Type".to_vec(), Object::name("Page"));
         p.set(b"Parent".to_vec(), Object::Ref(pages));
         p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
@@ -312,7 +312,7 @@ fn properties_rename_and_delete() {
 fn deleting_works_with_a_form_dictionary_inside_the_catalog() {
     let mut doc = fixture();
     let root = doc.root().unwrap();
-    let af = doc.get(printcraft_cos::ObjRef::new(4, 0)).as_dict().cloned().unwrap();
+    let af = doc.get(pdfcraft_cos::ObjRef::new(4, 0)).as_dict().cloned().unwrap();
     doc.update_dict(root, |d| d.set(b"AcroForm".to_vec(), Object::Dict(af))).unwrap();
     let before = fields(&doc).len();
     delete_field(&mut doc, "name").unwrap();
@@ -324,7 +324,7 @@ fn deleting_works_with_a_form_dictionary_inside_the_catalog() {
 fn one_page() -> Document {
     let mut doc = Document::new_empty();
     let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
-    let mut p = printcraft_cos::Dict::new();
+    let mut p = pdfcraft_cos::Dict::new();
     p.set(b"Type".to_vec(), Object::name("Page"));
     p.set(b"Parent".to_vec(), Object::Ref(pages));
     p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
@@ -584,7 +584,7 @@ fn ordering_tabs_manually() {
     }
     // A comment between the widgets keeps its place.
     let page = page_refs(&doc)[0];
-    let mut note = printcraft_cos::Dict::new();
+    let mut note = pdfcraft_cos::Dict::new();
     note.set(b"Type".to_vec(), Object::name("Annot"));
     note.set(b"Subtype".to_vec(), Object::name("Text"));
     note.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
@@ -621,7 +621,7 @@ fn duplicating_a_field_across_pages_shares_its_value() {
     // A second and third page.
     let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
     for _ in 0..2 {
-        let mut p = printcraft_cos::Dict::new();
+        let mut p = pdfcraft_cos::Dict::new();
         p.set(b"Type".to_vec(), Object::name("Page"));
         p.set(b"Parent".to_vec(), Object::Ref(pages));
         p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
@@ -675,7 +675,7 @@ fn image_fields_ask_for_a_picture_and_show_it() {
     {
         d.set(k.to_vec(), v);
     }
-    let img = doc.add(Object::Stream(printcraft_cos::Stream::from_raw(d, vec![0; 24])));
+    let img = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(d, vec![0; 24])));
     set_button_icon(&mut doc, &name, img, (4, 2)).unwrap();
     let w = doc.get(f.widgets[0].obj).as_dict().cloned().unwrap();
     let mk = w.get(b"MK").unwrap().as_dict().unwrap().clone();
@@ -742,12 +742,12 @@ fn detection_finds_blanks_rules_boxes_and_names_them() {
 #[test]
 fn page_shapes_reads_boxes_and_rules() {
     let mut doc = fixture();
-    let page = printcraft_model::pages(&doc)[0].obj;
-    let s = doc.add(printcraft_cos::Object::Stream(printcraft_cos::Stream::flate(
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let s = doc.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(
         Default::default(),
         b"q 2 0 0 2 0 0 cm 10 10 6 6 re S 20 50 m 120 50 l S 0 0 m 5 5 l S 30 300 100 0.5 re f Q",
     )));
-    doc.update_dict(page, |d| d.set(b"Contents".to_vec(), printcraft_cos::Object::Ref(s))).unwrap();
+    doc.update_dict(page, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(s))).unwrap();
     let sh = crate::detect::page_shapes(&doc, 0);
     assert_eq!(sh.boxes, [[20.0, 20.0, 32.0, 32.0]]);
     assert_eq!(sh.rules, [[40.0, 100.0, 240.0, 100.0], [60.0, 600.5, 260.0, 600.5]]);

@@ -99,7 +99,7 @@ pub struct Document {
     header_offset: usize,
     version: String,
     /// The authenticated security handler of an encrypted document.
-    security: Option<Arc<printcraft_crypt::SecurityHandler>>,
+    security: Option<Arc<pdfcraft_crypt::SecurityHandler>>,
     /// Object number of the `/Encrypt` dictionary (never encrypted itself).
     encrypt_num: Option<u32>,
     /// Encryption was added, changed or removed since opening: only a full save can apply it.
@@ -107,7 +107,7 @@ pub struct Document {
     /// Set by edits that must not leave earlier revisions in the file (redaction).
     full_save: bool,
     /// The handler and `/Encrypt` object number that saves use, when encryption changed.
-    out_security: Option<Arc<printcraft_crypt::SecurityHandler>>,
+    out_security: Option<Arc<pdfcraft_crypt::SecurityHandler>>,
     out_encrypt_num: Option<u32>,
 }
 
@@ -255,9 +255,9 @@ impl Document {
             Some(Object::Array(a)) => a.first().and_then(|s| s.as_string()).map(|s| s.bytes.clone()).unwrap_or_default(),
             _ => Vec::new(),
         };
-        let handler = printcraft_crypt::SecurityHandler::open(params, &id0, password).map_err(|e| match e {
-            printcraft_crypt::CryptError::WrongPassword if password.is_none() => CosError::NeedsPassword,
-            printcraft_crypt::CryptError::WrongPassword => CosError::WrongPassword,
+        let handler = pdfcraft_crypt::SecurityHandler::open(params, &id0, password).map_err(|e| match e {
+            pdfcraft_crypt::CryptError::WrongPassword if password.is_none() => CosError::NeedsPassword,
+            pdfcraft_crypt::CryptError::WrongPassword => CosError::WrongPassword,
             other => CosError::Security(other.to_string()),
         })?;
         self.security = Some(Arc::new(handler));
@@ -269,12 +269,12 @@ impl Document {
     }
 
     /// The security handler, when the document is encrypted.
-    pub fn security(&self) -> Option<&printcraft_crypt::SecurityHandler> {
+    pub fn security(&self) -> Option<&pdfcraft_crypt::SecurityHandler> {
         self.security.as_deref()
     }
 
     /// What the opening password allows (`None` for unencrypted documents: everything).
-    pub fn permissions(&self) -> Option<printcraft_crypt::Permissions> {
+    pub fn permissions(&self) -> Option<pdfcraft_crypt::Permissions> {
         self.security().map(|s| s.permissions())
     }
 
@@ -296,19 +296,19 @@ impl Document {
 
     /// The handler used to write: the new one after `set_encryption` / `remove_encryption`,
     /// otherwise the one the document was opened with.
-    pub(crate) fn output_security(&self) -> (Option<&printcraft_crypt::SecurityHandler>, Option<u32>) {
+    pub(crate) fn output_security(&self) -> (Option<&pdfcraft_crypt::SecurityHandler>, Option<u32>) {
         if self.encryption_changed { (self.out_security.as_deref(), self.out_encrypt_num) } else { (self.security.as_deref(), self.encrypt_num) }
     }
 
     /// The security the next save writes: protection applied with `set_encryption`, none after
     /// `remove_encryption`, otherwise the security the document was opened with.
-    pub fn output_handler(&self) -> Option<&printcraft_crypt::SecurityHandler> {
+    pub fn output_handler(&self) -> Option<&pdfcraft_crypt::SecurityHandler> {
         self.output_security().0
     }
 
     /// Protect the document with a password (§7.6.4). Takes effect on the next save, which is
     /// always a full rewrite. Returns the handler (authenticated as owner).
-    pub fn set_encryption(&mut self, params: &printcraft_crypt::NewEncryption) -> Result<(), CosError> {
+    pub fn set_encryption(&mut self, params: &pdfcraft_crypt::NewEncryption) -> Result<(), CosError> {
         // The file identifier is part of the key; make sure it exists and keep it.
         let id0 = match self.trailer.get(b"ID") {
             Some(Object::Array(a)) if a.len() == 2 => a[0].as_string().map(|s| s.bytes.clone()).unwrap_or_default(),
@@ -320,7 +320,7 @@ impl Document {
                 id
             }
         };
-        let h = printcraft_crypt::create(params, &id0).map_err(|e| CosError::Security(e.to_string()))?;
+        let h = pdfcraft_crypt::create(params, &id0).map_err(|e| CosError::Security(e.to_string()))?;
         let d = h.dict();
         let s = |b: &[u8]| Object::String(crate::PdfString { bytes: b.to_vec(), hex: true });
         let mut e = Dict::new();
@@ -740,8 +740,8 @@ impl Document {
                 let (Ok(Object::Int(start)), Ok(Object::Int(count))) = (lx.object(), lx.object()) else {
                     return Err(CosError::Syntax { offset: lx.pos, detail: "bad xref subsection header".into() });
                 };
-                if start < 0 || !(0..=10_000_000).contains(&count) {
-                    return Err(CosError::Syntax { offset: lx.pos, detail: "implausible xref subsection".into() });
+                if !valid_xref_range(start, count) || count > 10_000_000 {
+                    return Err(CosError::Syntax { offset: lx.pos, detail: "invalid xref object range".into() });
                 }
                 for i in 0..count {
                     lx.skip_ws();
@@ -803,12 +803,15 @@ impl Document {
         let mut rows = raw.chunks_exact(row);
         for pair in index.chunks(2) {
             let [start, count] = pair else { break };
-            for i in 0..(*count).max(0) {
+            if !valid_xref_range(*start, *count) {
+                return Err(CosError::Syntax { offset: off, detail: "invalid xref object range".into() });
+            }
+            for i in 0..*count {
                 let Some(r) = rows.next() else { break };
                 let t = field(r, 0, w[0], 1);
                 let a = field(r, w[0], w[1], 0);
                 let b = field(r, w[0] + w[1], w[2], 0);
-                let num = (*start + i).max(0) as u32;
+                let num = (*start + i) as u32;
                 let entry = match t {
                     0 => XrefEntry::Free { next_generation: b.min(u16::MAX as u64) as u16 },
                     1 => XrefEntry::InFile { offset: a, generation: b.min(u16::MAX as u64) as u16 },
@@ -928,10 +931,17 @@ fn generated_id(seed: &[u8; 32]) -> Vec<u8> {
     let mut out = Vec::new();
     for i in 0..2u8 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        (seed, i, b"printcraft id").hash(&mut h);
+        (seed, i, b"pdfcraft id").hash(&mut h);
         out.extend_from_slice(&h.finish().to_be_bytes());
     }
     out
+}
+
+/// Object numbers must fit the representation used by references and the xref map.
+/// Validate the whole subsection before adding entries, so neither arithmetic overflow nor
+/// truncation can turn a damaged range into entries for unrelated objects.
+fn valid_xref_range(start: i64, count: i64) -> bool {
+    u32::try_from(start).is_ok() && count >= 0 && start.checked_add(count).is_some_and(|end| end <= i64::from(u32::MAX) + 1)
 }
 
 /// The most indirect objects a document can have (the classic implementation limit, ISO
@@ -957,6 +967,37 @@ mod tests {
         }
         out.extend_from_slice(format!("trailer\n<< /Size {} {trailer} >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
         out
+    }
+
+    #[test]
+    fn invalid_xref_object_ranges_are_reconstructed() {
+        // Original in-memory PDF: an intact catalog followed by a damaged xref section.
+        for stream in [false, true] {
+            for (start, count) in [(i64::MAX, 2), (-1, 2), (4_294_967_296, 1), (4_294_967_295, 2)] {
+                let mut bytes =
+                    b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n".to_vec();
+                let offset = bytes.len();
+                if stream {
+                    bytes.extend_from_slice(
+                        format!("3 0 obj\n<< /Type /XRef /Root 1 0 R /Size 4 /W [1 1 1] /Index [{start} {count}] /Length 6 >>\nstream\n").as_bytes(),
+                    );
+                    bytes.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+                    bytes.extend_from_slice(b"\nendstream\nendobj\n");
+                } else {
+                    bytes.extend_from_slice(
+                        format!("xref\n{start} {count}\n0000000000 65535 f \n0000000000 65535 f \ntrailer\n<< /Root 1 0 R /Size 3 >>\n").as_bytes(),
+                    );
+                }
+                bytes.extend_from_slice(format!("startxref\n{offset}\n%%EOF\n").as_bytes());
+                let doc = Document::open(Arc::new(bytes)).unwrap();
+                assert!(
+                    doc.repair_log().iter().any(|line| line.contains("xref") && line.contains("range")),
+                    "stream={stream}, start={start}, count={count}: {:?}",
+                    doc.repair_log()
+                );
+                assert_eq!(doc.get(ObjRef::new(1, 0)).as_dict().unwrap().name(b"Type"), Some(b"Catalog".as_slice()));
+            }
+        }
     }
 
     #[test]
@@ -1087,7 +1128,7 @@ mod tests {
         // /W [1 1 1]: at 3 bytes a row that is more than 8,388,607 objects' worth, so it is not
         // decoded (in full: the limit applies while inflating) and the objects are found by
         // reconstruction instead.
-        let bomb = printcraft_filters::encode_flate(&printcraft_filters::encode_flate(&vec![0u8; 32 << 20]));
+        let bomb = pdfcraft_filters::encode_flate(&pdfcraft_filters::encode_flate(&vec![0u8; 32 << 20]));
         let mut bytes = b"%PDF-1.7\n".to_vec();
         let o1 = bytes.len();
         bytes.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");

@@ -1,7 +1,7 @@
 //! XMP metadata for PDF/A: the identification schema and the document information, kept
 //! consistent (ISO 19005-2 §6.6).
 
-use printcraft_cos::Document;
+use pdfcraft_cos::Document;
 
 /// The value of a simple XMP property, written either as an attribute (`pdfaid:part="2"`) or
 /// as an element (`<pdfaid:part>2</pdfaid:part>`, or inside an `rdf:Alt`/`rdf:Seq`).

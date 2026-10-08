@@ -1,6 +1,6 @@
 //! Create a PDF and Reduce File Size in the real shell.
 
-use printcraft_ui_egui::PrintCraftApp;
+use pdfcraft_ui_egui::PdfCraftApp;
 
 fn png() -> Vec<u8> {
     let mut out = Vec::new();
@@ -16,7 +16,7 @@ fn png() -> Vec<u8> {
 
 #[test]
 fn opening_images_and_text_converts_them_to_new_pdfs() {
-    let mut app = PrintCraftApp::new();
+    let mut app = PdfCraftApp::new();
     app.open_bytes("photo.png", Some("/tmp/photo.png".into()), png()).unwrap();
     app.open_bytes("notes.txt", None, b"first line\nsecond line".to_vec()).unwrap();
     app.create_from_images(vec![("a.png".into(), png()), ("b.png".into(), png())]);
@@ -33,10 +33,10 @@ fn opening_images_and_text_converts_them_to_new_pdfs() {
 
 #[test]
 fn reduce_file_size_writes_a_compact_copy() {
-    let dir = std::env::temp_dir().join(format!("printcraft-reduce-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pdfcraft-reduce-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("reduced.pdf");
-    let mut app = PrintCraftApp::new();
+    let mut app = PdfCraftApp::new();
     app.open_bytes("notes.txt", None, "lorem ipsum ".repeat(500).into_bytes()).unwrap();
     app.save_override = Some(out.to_string_lossy().into_owned());
     assert!(app.execute("optimize.reduce"));
@@ -47,8 +47,8 @@ fn reduce_file_size_writes_a_compact_copy() {
 
 #[test]
 fn clipboard_images_and_text_become_new_pdfs() {
-    use printcraft_ui_egui::Clip;
-    let mut app = PrintCraftApp::new();
+    use pdfcraft_ui_egui::Clip;
+    let mut app = PdfCraftApp::new();
     app.create_from_clip(Clip::Image { width: 40, height: 20, rgba: [10u8, 20, 30, 255].repeat(40 * 20) }).unwrap();
     app.create_from_clip(Clip::Text("Pasted\nlines".into())).unwrap();
     let docs = app.session.docs();
@@ -64,12 +64,12 @@ fn clipboard_images_and_text_become_new_pdfs() {
 fn the_pdf_optimizer_dialog_saves_an_optimized_copy() {
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
-    let dir = std::env::temp_dir().join(format!("printcraft-optimizer-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pdfcraft-optimizer-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("optimized.pdf");
     let out2 = out.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         app.open_bytes("notes.txt", None, "lorem ipsum ".repeat(500).into_bytes()).unwrap();
         app.save_override = Some(out2.to_string_lossy().into_owned());
         app
@@ -88,7 +88,7 @@ fn the_pdf_optimizer_dialog_saves_an_optimized_copy() {
     h.run_steps(1);
     {
         let d = &h.state().optimize_draft;
-        assert!(d.settings.discard_tags && d.discard == vec![printcraft_engine::Hidden::Metadata]);
+        assert!(d.settings.discard_tags && d.discard == vec![pdfcraft_engine::Hidden::Metadata]);
     }
     h.get_by_label("OK").click();
     h.run_steps(3);

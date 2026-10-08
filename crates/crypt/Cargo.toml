@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-crypt"
+name = "pdfcraft-crypt"
 description = "PDF standard security handler (ISO 32000-2 §7.6): RC4 and AES, revisions 2–6"
 version.workspace = true
 edition.workspace = true

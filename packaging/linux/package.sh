@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build and package PrintCraft for Linux (<arch> is x86_64 or aarch64):
+# Build and package PdfCraft for Linux (<arch> is x86_64 or aarch64):
 #
-#   $DIST/printcraft-<version>-linux-<arch>.AppImage  any distro with glibc >= the build host's
-#   $DIST/printcraft-<version>-linux-<arch>.deb       Debian, Ubuntu, Mint, Pop!_OS, ...
-#   $DIST/printcraft-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
-#   $DIST/printcraft-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
+#   $DIST/pdfcraft-<version>-linux-<arch>.AppImage  any distro with glibc >= the build host's
+#   $DIST/pdfcraft-<version>-linux-<arch>.deb       Debian, Ubuntu, Mint, Pop!_OS, ...
+#   $DIST/pdfcraft-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
+#   $DIST/pdfcraft-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
 #
 # Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar"]
 #
@@ -15,7 +15,7 @@ set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/linux"
-APP_ID=ai.storyteller.printcraft
+APP_ID=ai.storyteller.pdfcraft
 
 SKIP_BUILD=0
 FORMATS="appimage deb rpm tar"
@@ -34,13 +34,13 @@ case "$ARCH" in
   aarch64 | arm64) ARCH=aarch64; DEB_ARCH=arm64 ;;
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
 esac
-export PRINTCRAFT_MAINTAINER="${PRINTCRAFT_MAINTAINER:-PrintCraft maintainers <printcraft@storyteller.ai>}"
-BASENAME="printcraft-$VERSION-linux-$ARCH"
+export PDFCRAFT_MAINTAINER="${PDFCRAFT_MAINTAINER:-PdfCraft maintainers <pdfcraft@storyteller.ai>}"
+BASENAME="pdfcraft-$VERSION-linux-$ARCH"
 
-echo "==> PrintCraft $VERSION for Linux $ARCH ($FORMATS)"
+echo "==> PdfCraft $VERSION for Linux $ARCH ($FORMATS)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
-  (cd "$ROOT" && cargo build --release --locked -p printcraft -p printcraft-cli)
+  (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli)
 fi
 BIN="$CARGO_TARGET_DIR/release"
 WORK="$CARGO_TARGET_DIR/linux-package"
@@ -48,18 +48,18 @@ STAGE="$WORK/root"
 rm -rf "$WORK"
 
 # ---- stage an FHS tree (shared by every format) -------------------------------------------------
-install -Dm755 "$BIN/printcraft" "$STAGE/usr/bin/printcraft"
-install -Dm755 "$BIN/printcraft-cli" "$STAGE/usr/bin/printcraft-cli"
-strip "$STAGE/usr/bin/printcraft" "$STAGE/usr/bin/printcraft-cli" 2>/dev/null || true
+install -Dm755 "$BIN/pdfcraft" "$STAGE/usr/bin/pdfcraft"
+install -Dm755 "$BIN/pdfcraft-cli" "$STAGE/usr/bin/pdfcraft-cli"
+strip "$STAGE/usr/bin/pdfcraft" "$STAGE/usr/bin/pdfcraft-cli" 2>/dev/null || true
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"
-sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$PRINTCRAFT_BUILD_DATE/g" \
+sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$PDFCRAFT_BUILD_DATE/g" \
   "$HERE/$APP_ID.metainfo.xml.in" >"$STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
 mkdir -p "$STAGE/usr/share/icons"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/usr/share/icons/"
-mkdir -p "$STAGE/usr/share/doc/printcraft"
-copy_docs "$STAGE/usr/share/doc/printcraft"
+mkdir -p "$STAGE/usr/share/doc/pdfcraft"
+copy_docs "$STAGE/usr/share/doc/pdfcraft"
 
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$STAGE/usr/share/applications/$APP_ID.desktop"
@@ -92,10 +92,10 @@ fi
 
 # ---- AppImage -----------------------------------------------------------------------------------
 if has appimage; then
-  APPDIR="$WORK/PrintCraft.AppDir"
+  APPDIR="$WORK/PdfCraft.AppDir"
   cp -R "$STAGE" "$APPDIR"
   mv "$APPDIR/usr/share/doc" "$WORK/doc-unused"
-  ln -s usr/bin/printcraft "$APPDIR/AppRun"
+  ln -s usr/bin/pdfcraft "$APPDIR/AppRun"
   cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
   cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
   ln -s "$APP_ID.png" "$APPDIR/.DirIcon"
@@ -115,6 +115,6 @@ if has appimage; then
   echo "wrote $OUT"
 fi
 
-"$STAGE/usr/bin/printcraft-cli" --version
+"$STAGE/usr/bin/pdfcraft-cli" --version
 echo "==> done"
 ls -lh "$DIST"

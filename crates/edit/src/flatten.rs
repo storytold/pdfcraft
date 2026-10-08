@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 
-use printcraft_cos::{Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 use crate::{EditError, check, n, page_list, place_tagged};
 

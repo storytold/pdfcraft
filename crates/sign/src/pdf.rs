@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use printcraft_cos::{Dict, Document, ObjRef, Object, PdfString, SaveOptions, Stream};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, SaveOptions, Stream};
 
 use crate::SignError;
 use crate::cms::SignedData;
@@ -235,7 +235,7 @@ fn sig_fields(doc: &Document) -> Vec<Field> {
 /// Which page holds each annotation.
 fn annot_pages(doc: &Document) -> HashMap<ObjRef, usize> {
     let mut map = HashMap::new();
-    for (i, p) in printcraft_annot::page_refs(doc).unwrap_or_default().into_iter().enumerate() {
+    for (i, p) in pdfcraft_annot::page_refs(doc).unwrap_or_default().into_iter().enumerate() {
         if let Some(a) = doc.get(p).as_dict().and_then(|d| d.get(b"Annots").map(|a| doc.resolve(a))).and_then(|a| a.as_array().cloned()) {
             for r in a.iter().filter_map(Object::as_ref) {
                 map.insert(r, i);
@@ -301,7 +301,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
 }
 
 fn page_index(doc: &Document, p: ObjRef) -> Option<usize> {
-    printcraft_annot::page_refs(doc).ok()?.iter().position(|r| *r == p)
+    pdfcraft_annot::page_refs(doc).ok()?.iter().position(|r| *r == p)
 }
 
 /// Validate one signature dictionary.
@@ -355,7 +355,7 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
     // The signed revision's number: its cross-reference sections (1 for a reconstructed file).
     info.revision = cache.revision(bytes, covered).map_or(1, |d| d.revisions().len().max(1));
     if info.sub_filter.as_deref() == Some("adbe.x509.rsa_sha1") {
-        info.details.push("This signature uses the legacy adbe.x509.rsa_sha1 format, which PrintCraft does not validate yet.".into());
+        info.details.push("This signature uses the legacy adbe.x509.rsa_sha1 format, which PdfCraft does not validate yet.".into());
         return;
     }
     let sd = match SignedData::parse(&contents) {
@@ -452,7 +452,7 @@ fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Mod
     let Some(old) = old else {
         return Modification::Disallowed(vec!["the signed version could not be read".into()]);
     };
-    let old_content: HashSet<ObjRef> = printcraft_annot::page_refs(&old)
+    let old_content: HashSet<ObjRef> = pdfcraft_annot::page_refs(&old)
         .unwrap_or_default()
         .into_iter()
         .flat_map(|pg| {
@@ -470,7 +470,7 @@ fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Mod
     let (mut allowed, mut disallowed): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
     // Stored at the same place in both (and not edited since): the same bytes, unchanged.
     let same_place = |num: u32| -> bool {
-        use printcraft_cos::XrefEntry;
+        use pdfcraft_cos::XrefEntry;
         if doc.is_edited(num) {
             return false;
         }
@@ -706,7 +706,7 @@ pub fn sign(doc: &Document, id: &DigitalId, opts: &SignOptions) -> Result<Vec<u8
         }
     }
     let mut app = Dict::new();
-    app.set(b"Name".to_vec(), Object::name("PrintCraft"));
+    app.set(b"Name".to_vec(), Object::name("PdfCraft"));
     let mut build = Dict::new();
     build.set(b"App".to_vec(), Object::Dict(app));
     v.set(b"Prop_Build".to_vec(), Object::Dict(build));
@@ -729,7 +729,7 @@ pub fn sign(doc: &Document, id: &DigitalId, opts: &SignOptions) -> Result<Vec<u8
         doc.update_dict(root, |c| c.set(b"Perms".to_vec(), Object::Dict(perms)))?;
     }
     // The field and its widget.
-    let pages = printcraft_annot::page_refs(&doc).map_err(|e| SignError::Pdf(e.to_string()))?;
+    let pages = pdfcraft_annot::page_refs(&doc).map_err(|e| SignError::Pdf(e.to_string()))?;
     let existing = opts
         .field
         .as_deref()
@@ -820,7 +820,7 @@ pub fn sign(doc: &Document, id: &DigitalId, opts: &SignOptions) -> Result<Vec<u8
     doc.update_dict(widget, |w| w.set(b"AP".to_vec(), Object::Dict(apd)))?;
     // Write with the placeholders, then patch them.
     let save = SaveOptions { mod_date: Some(opts.date.clone()), object_streams: false, ..SaveOptions::default() };
-    let mut out = printcraft_cos::write_incremental(&doc, &save)?;
+    let mut out = pdfcraft_cos::write_incremental(&doc, &save)?;
     let (br_at, gap) = locate(&out, reserve)?;
     let (start, end) = gap;
     let ranges = [0usize, start, end, out.len() - end];
@@ -873,7 +873,7 @@ pub fn display_date(pdf: &str) -> String {
 /// The visible signature: the signer's name large on the left, the details on the right
 /// (Acrobat's standard layout), in Helvetica.
 fn appearance(rect: [f64; 4], name: &str, cert: &Certificate, opts: &SignOptions) -> Stream {
-    use printcraft_fonts::{helvetica_width, literal, win_ansi, wrap};
+    use pdfcraft_fonts::{helvetica_width, literal, win_ansi, wrap};
     let (w, h) = ((rect[2] - rect[0]).max(0.0), (rect[3] - rect[1]).max(0.0));
     let a = &opts.appearance;
     let mut lines: Vec<String> = Vec::new();

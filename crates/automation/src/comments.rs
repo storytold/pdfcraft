@@ -3,14 +3,14 @@
 //! Geometry follows the automation convention: points from the top-left of the displayed page,
 //! y down. It is converted to PDF user space (crop box, `/Rotate`) here.
 
-use printcraft_engine::{Edit, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort};
-use printcraft_render::{Annotation, PageInfo};
+use pdfcraft_engine::{Edit, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort};
+use pdfcraft_render::{Annotation, PageInfo};
 use serde_json::{Value, json};
 
 use crate::{Args, Automation, Result, ToolError, failed};
 
 /// Author used when a tool call names none.
-pub(crate) const DEFAULT_AUTHOR: &str = "PrintCraft";
+pub(crate) const DEFAULT_AUTHOR: &str = "PdfCraft";
 
 pub(crate) fn parse_color(s: &str) -> Result<Rgb> {
     let named = match s.to_ascii_lowercase().as_str() {
@@ -277,9 +277,9 @@ impl Automation {
                     let data = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
                     let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     let icon = match a.opt_str("icon")? {
-                        Some(n) => printcraft_engine::AttachIcon::from_name(n)
+                        Some(n) => pdfcraft_engine::AttachIcon::from_name(n)
                             .ok_or_else(|| ToolError::InvalidArgs(format!("unknown icon {n:?} (PushPin, Paperclip, Graph, Tag)")))?,
-                        None => printcraft_engine::AttachIcon::PushPin,
+                        None => pdfcraft_engine::AttachIcon::PushPin,
                     };
                     Shape::Attachment { at: to_user(&info, x, y), icon, file, data }
                 }
@@ -332,7 +332,7 @@ impl Automation {
     }
 
     pub(crate) fn fill_sign_add(&mut self, a: &Args) -> Result<Value> {
-        use printcraft_engine::FillMark;
+        use pdfcraft_engine::FillMark;
         let page = self.page(a)?;
         let info = self.doc(a)?.info.pages[page].clone();
         let [x, y] = a.need::<2>("at", "Fill & Sign")?;
@@ -340,7 +340,7 @@ impl Automation {
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
         let size = 10.0;
         let text_at = |t: &str| {
-            let w = (printcraft_engine::annot_text::text_width(t, size) + 8.0).clamp(20.0, 600.0);
+            let w = (pdfcraft_engine::annot_text::text_width(t, size) + 8.0).clamp(20.0, 600.0);
             let h = size * 1.2 + 6.0;
             Shape::Typewriter { rect: [at[0], at[1] - h, at[0] + w, at[1]], font_size: size }
         };
@@ -359,7 +359,7 @@ impl Automation {
                 let t = a.str("text")?;
                 let h = if kind == "initials" { 24.0 } else { 32.0 };
                 let shape =
-                    printcraft_engine::typed_signature_shape(at, t, h).ok_or_else(|| ToolError::InvalidArgs("text has nothing to draw".into()))?;
+                    pdfcraft_engine::typed_signature_shape(at, t, h).ok_or_else(|| ToolError::InvalidArgs("text has nothing to draw".into()))?;
                 (shape, String::new())
             }
             kind => {
@@ -470,7 +470,7 @@ impl Automation {
             page,
             rect: [ux, uy, ux, uy],
             name,
-            file: printcraft_engine::MarkFile {
+            file: pdfcraft_engine::MarkFile {
                 name: file,
                 bytes: std::sync::Arc::new(bytes),
                 page: a.opt_int("file_page")?.unwrap_or(1).max(1) as usize - 1,

@@ -4,7 +4,7 @@
 //! text, from a
 //! document's working file (so unsaved edits and hidden layers are respected, as on screen).
 
-use printcraft_render::{PageRenderer, RenderRequest, RequestKind};
+use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 
 use crate::Document;
 
@@ -18,7 +18,7 @@ pub struct Exporter {
 #[derive(Clone)]
 pub struct ExportSource {
     pub bytes: std::sync::Arc<Vec<u8>>,
-    pub config: printcraft_render::RenderConfig,
+    pub config: pdfcraft_render::RenderConfig,
     pub pages: usize,
 }
 
@@ -31,13 +31,13 @@ impl Document {
 
 /// Export all images: the images `pages` (0-based) use, each once, skipping those under
 /// `min_side` pixels on their shorter side. JPEGs come out unchanged, other images as PNG.
-pub fn extract_images(src: &ExportSource, pages: &[usize], min_side: u32) -> Result<printcraft_create::ImageExport, String> {
-    let doc = printcraft_cos::Document::open_with_password(src.bytes.clone(), src.config.password.as_deref()).map_err(|e| e.to_string())?;
-    Ok(printcraft_create::extract_images(&doc, pages, min_side))
+pub fn extract_images(src: &ExportSource, pages: &[usize], min_side: u32) -> Result<pdfcraft_create::ImageExport, String> {
+    let doc = pdfcraft_cos::Document::open_with_password(src.bytes.clone(), src.config.password.as_deref()).map_err(|e| e.to_string())?;
+    Ok(pdfcraft_create::extract_images(&doc, pages, min_side))
 }
 
 /// The file name for the `index`-th (1-based) exported image: `<stem>_Page_<n>_Image_<index>.<ext>`.
-pub fn image_file_name(stem: &str, image: &printcraft_create::ExtractedImage, index: usize) -> String {
+pub fn image_file_name(stem: &str, image: &pdfcraft_create::ExtractedImage, index: usize) -> String {
     format!("{stem}_Page_{}_Image_{index:04}.{}", image.page + 1, image.extension)
 }
 

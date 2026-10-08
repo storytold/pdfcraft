@@ -1,7 +1,7 @@
 //! Link tools: list, add, edit and delete links; create links from URLs in the text; remove
 //! all links. Rectangles are points from the top-left of the displayed page.
 
-use printcraft_engine::{Edit, LinkAction, LinkHighlight, LinkStyle};
+use pdfcraft_engine::{Edit, LinkAction, LinkHighlight, LinkStyle};
 use serde_json::{Value, json};
 
 use crate::comments::parse_color;

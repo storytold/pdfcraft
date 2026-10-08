@@ -9,11 +9,11 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2};
-use printcraft_engine::{DocId, Edit};
-use printcraft_render::{DocInfo, LinkTarget, PageText, RenderPool, RenderRequest, RequestKind, Tile};
+use pdfcraft_engine::{DocId, Edit};
+use pdfcraft_render::{DocInfo, LinkTarget, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
 
 use crate::theme::{self, Tokens};
-use crate::{PrintCraftApp, QuickTool, RightPanel, comments, icons, widgets};
+use crate::{PdfCraftApp, QuickTool, RightPanel, comments, icons, widgets};
 
 /// Logical pixels per PDF point at 100% (96 dpi, like browsers).
 pub const PT: f32 = 96.0 / 72.0;
@@ -133,6 +133,7 @@ pub struct DocView {
     viewport_screen: Rect,
     /// Pending zoom anchor: page, position within it (0..1), and offset from the viewport corner.
     zoom_anchor: Option<(usize, f32, f32, Vec2)>,
+    pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
     /// Pages selected in the organize grid (0-based). Empty means "the current page".
     pub selected: BTreeSet<usize>,
     /// Anchor for ⇧-click range selection in the organize grid.
@@ -141,10 +142,10 @@ pub struct DocView {
     pub pending_edit: Option<Edit>,
     /// Edit text: the lines per page (with the document generation they were read at), and the
     /// line being edited.
-    pub(crate) edit_lines: HashMap<usize, (u64, Vec<printcraft_engine::TextBlock>)>,
+    pub(crate) edit_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::TextBlock>)>,
     pub line_editor: Option<crate::edit_text_ui::LineEditor>,
     /// Edit text & images: the images per page (by document generation), and the selected one.
-    pub(crate) edit_images: HashMap<usize, (u64, Vec<printcraft_engine::PageImage>)>,
+    pub(crate) edit_images: HashMap<usize, (u64, Vec<pdfcraft_engine::PageImage>)>,
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
     /// A paragraph box being dragged (moved, or resized from its right edge) in Edit text.
     pub block_drag: Option<crate::edit_text_ui::BlockDrag>,
@@ -201,6 +202,11 @@ impl DocView {
         self.viewport_screen
     }
 
+    /// Whether a middle-button scrolling gesture is active (tests and automation).
+    pub fn auto_scrolling(&self) -> bool {
+        self.auto_scroll.active()
+    }
+
     /// Pages that could not be rendered, with the reason (for automation; 0-based pages).
     pub fn page_errors(&self) -> Vec<(usize, &str)> {
         let mut v: Vec<(usize, &str)> = self.errors.iter().map(|(p, e)| (*p, e.as_str())).collect();
@@ -245,6 +251,7 @@ impl DocView {
             screen_xforms: Vec::new(),
             viewport_screen: Rect::NOTHING,
             zoom_anchor: None,
+            auto_scroll: Default::default(),
             selected: BTreeSet::new(),
             select_anchor: None,
             pending_edit: None,
@@ -548,8 +555,14 @@ impl DocView {
         true
     }
 
-    /// Edit ▸ Select all: every word on the current page.
+    /// Select all: every page in Organize, or every word on the current page.
     pub fn select_all(&mut self) -> bool {
+        if self.organize {
+            self.selected = (0..self.page_count).collect();
+            // Keep the current page as the anchor for the next Shift-click.
+            self.select_anchor = (self.page_count > 0).then_some(self.current);
+            return !self.selected.is_empty();
+        }
         let page = self.current;
         let Some(t) = self.texts.get(&page) else { return false };
         if t.glyphs.is_empty() {
@@ -566,7 +579,7 @@ impl DocView {
     }
 
     /// Displayed page size in points for this view rotation.
-    fn display_size(&self, p: &printcraft_render::PageInfo) -> (f32, f32) {
+    fn display_size(&self, p: &pdfcraft_render::PageInfo) -> (f32, f32) {
         if self.rotation % 180 == 90 { (p.height, p.width) } else { (p.width, p.height) }
     }
 
@@ -713,7 +726,7 @@ impl DocView {
             }
             PageLayout::TwoUp => {
                 // With a cover page, the first page sits alone on the right.
-                let rows: Vec<&[printcraft_render::PageInfo]> = if self.cover && !info.pages.is_empty() {
+                let rows: Vec<&[pdfcraft_render::PageInfo]> = if self.cover && !info.pages.is_empty() {
                     std::iter::once(&info.pages[..1]).chain(info.pages[1..].chunks(2)).collect()
                 } else {
                     info.pages.chunks(2).collect()
@@ -857,9 +870,6 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     if pressed(cmd(Key::G)) {
         view.find_step(true);
     }
-    if pressed(cmd(Key::A)) {
-        view.select_all();
-    }
     if pressed(cmd(Key::OpenBracket)) {
         view.view_history(false);
     }
@@ -898,7 +908,7 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     }
 }
 
-pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
+pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     // The Search panel closed: its search moves to the find bar.
     let search_open = app.right == Some(crate::RightPanel::Search);
@@ -911,6 +921,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
     let Some(doc) = app.session.get(app.views[index].id) else { return };
     let info = &doc.info;
     if info.pages.is_empty() {
+        app.views[index].auto_scroll.cancel();
         ui.centered_and_justified(|ui| ui.label("This document has no pages."));
         return;
     }
@@ -931,7 +942,8 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
         None => {}
     }
     if view.organize {
-        organize_grid(view, info, &doc.renderer, doc.allows_assembly(), ui, &t);
+        let auto_scroll_enabled = app.dialog.is_none() && app.close_request.is_none() && !app.palette_open;
+        organize_grid(view, info, &doc.renderer, doc.allows_assembly(), auto_scroll_enabled, ui, &t);
         return;
     }
 
@@ -950,6 +962,12 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
         }
     }
     view.viewport_screen = avail;
+    let auto_delta = if app.dialog.is_none() && app.close_request.is_none() && !app.palette_open {
+        view.auto_scroll.update(ui, avail, false)
+    } else {
+        view.auto_scroll.cancel();
+        Vec2::ZERO
+    };
 
     let max_w = info.pages.iter().map(|p| view.display_size(p).0).fold(0.0, f32::max)
         * view.zoom
@@ -969,8 +987,15 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
         _ => (0.0, rects.last().map(|r| r.bottom() + MARGIN).unwrap_or(0.0)),
     };
 
+    let middle_gesture = view.auto_scroll.blocks_input();
     let mut scroll = egui::ScrollArea::both().auto_shrink([false, false]).scroll_source(egui::scroll_area::ScrollSource {
-        drag: if app.quick_tool == QuickTool::Hand { egui::scroll_area::DragScroll::Always } else { egui::scroll_area::DragScroll::OnTouch },
+        drag: if middle_gesture {
+            egui::scroll_area::DragScroll::Never
+        } else if app.quick_tool == QuickTool::Hand {
+            egui::scroll_area::DragScroll::Always
+        } else {
+            egui::scroll_area::DragScroll::OnTouch
+        },
         ..Default::default()
     });
     if let Some((page, fx, fy, rel)) = view.zoom_anchor.take() {
@@ -1047,6 +1072,17 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
     }
 
     let out = scroll.show_viewport(ui, |ui, viewport| {
+        // egui's drag responses accept every pointer button. Keep a wheel gesture from also
+        // selecting text, drawing a mark, or panning with the Hand tool.
+        if middle_gesture {
+            let opacity = ui.opacity();
+            ui.disable();
+            // Only interactions pause; the document must keep its original colours.
+            ui.set_opacity(opacity);
+        }
+        if auto_delta != Vec2::ZERO {
+            ui.scroll_with_delta_animation(auto_delta, egui::style::ScrollAnimation::none());
+        }
         let (resp_rect, resp) = ui.allocate_exact_size(vec2(content_w, content_h), Sense::click_and_drag());
         // The Hand tool pans: the content widget takes every drag, so scroll by its delta.
         if hand {
@@ -1132,8 +1168,9 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
                 if tiled && r.intersects(visible) {
                     // Device-pixel geometry of the scaled page, and the visible part of it
-                    // (found by mapping the visible screen corners back into the page).
-                    let (dw, dh) = ((pw_pt * scale).round() as u32, (ph_pt * scale).round() as u32);
+                    // (found by mapping the visible screen corners back into the page). Sides round
+                    // up as whole-page rasters do, so the last partial row and column get tiles.
+                    let (dw, dh) = (device_pixels(pw_pt, scale), device_pixels(ph_pt, scale));
                     let vis = r.intersect(visible);
                     let corners = [vis.left_top(), vis.right_top(), vis.right_bottom(), vis.left_bottom()].map(|c| xf.screen_to_norm(c));
                     let (u0, u1) = corners.iter().fold((1.0f32, 0.0f32), |(a, b), c| (a.min(c.0), b.max(c.0)));
@@ -1176,11 +1213,11 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                     let corners = [(vx as f64 - w / 2.0, vy as f64 - h / 2.0), (vx as f64 + w / 2.0, vy as f64 + h / 2.0)];
                     let u: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
                     let rect = [u[0][0].min(u[1][0]) as f64, u[0][1].min(u[1][1]) as f64, u[0][0].max(u[1][0]) as f64, u[0][1].max(u[1][1]) as f64];
-                    let by = (kind.group() == printcraft_engine::StampGroup::Dynamic).then(|| by_line.clone());
-                    let shape = printcraft_engine::Shape::Stamp { rect, stamp: kind, by };
-                    view.pending_edit = Some(printcraft_engine::Edit::AddAnnotation(printcraft_engine::NewAnnotation {
+                    let by = (kind.group() == pdfcraft_engine::StampGroup::Dynamic).then(|| by_line.clone());
+                    let shape = pdfcraft_engine::Shape::Stamp { rect, stamp: kind, by };
+                    view.pending_edit = Some(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
                         page: i,
-                        style: printcraft_engine::Style::default_for(&shape),
+                        style: pdfcraft_engine::Style::default_for(&shape),
                         shape,
                         contents: String::new(),
                         author: author.clone(),
@@ -1198,11 +1235,11 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                     let (vx, vy) = xf.screen_to_view(p);
                     let u = info.pages[i].view_to_user(vx, vy);
                     let (x, y) = (u[0] as f64, u[1] as f64);
-                    view.pending_edit = Some(printcraft_engine::Edit::AddCustomStamp {
+                    view.pending_edit = Some(pdfcraft_engine::Edit::AddCustomStamp {
                         page: i,
                         rect: [x, y, x, y],
                         name: cs.name.clone(),
-                        file: printcraft_engine::MarkFile { name: cs.file.clone(), bytes: cs.data.clone(), page: cs.page },
+                        file: pdfcraft_engine::MarkFile { name: cs.file.clone(), bytes: cs.data.clone(), page: cs.page },
                         author: author.clone(),
                     });
                     stamp_placed = true;
@@ -1370,7 +1407,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
             // red border.
             if view.highlight_fields {
                 for f in form.iter() {
-                    let required = f.has(printcraft_engine::field_flags::REQUIRED);
+                    let required = f.has(pdfcraft_engine::field_flags::REQUIRED);
                     for w in f.widgets.iter().filter(|w| w.page == Some(i)) {
                         let r = w.rect;
                         let sr = xf.user_rect(info, i, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]);
@@ -1497,6 +1534,8 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
         (wanted, visible_now)
     });
 
+    view.auto_scroll.paint(ui, avail);
+
     // Bound texture memory: keep sharp rasters only near the current page.
     if view.pages.len() > 24 {
         let cur = view.current;
@@ -1563,7 +1602,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     let form_notice = view.forms.notice.take();
     // One crop, then back to selecting (as Acrobat does).
-    let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, printcraft_engine::Edit::SetPageBox { .. }));
+    let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, pdfcraft_engine::Edit::SetPageBox { .. }));
     let mut tool = app.quick_tool;
     comments::keys(ui.ctx(), view, &mut tool, allowed);
     if preparing {
@@ -1600,7 +1639,7 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     match clicked_link {
         Some(LinkTarget::Page(p)) => view.go_to_page(p),
-        Some(LinkTarget::Uri(u)) => ui.ctx().open_url(egui::OpenUrl::new_tab(u)),
+        Some(LinkTarget::Uri(u)) => app.request_document_url(&u, crate::LinkOrigin::Link),
         Some(LinkTarget::Other(s)) => app.notify(format!("{s} actions run in the JavaScript engine (M6)")),
         None => {}
     }
@@ -1658,9 +1697,9 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
         app.views[index].pending_edit = Some(if app.quick_tool == QuickTool::Comment(comments::CommentTool::Highlight) {
             // An area highlight: a highlight over the box.
             let style = app.comment_prefs.style(comments::CommentTool::Highlight);
-            printcraft_engine::Edit::AddAnnotation(printcraft_engine::NewAnnotation {
+            pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
                 page,
-                shape: printcraft_engine::Shape::TextMarkup { kind: printcraft_engine::Markup::Highlight, quads },
+                shape: pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, quads },
                 style,
                 contents: String::new(),
                 author,
@@ -1687,14 +1726,14 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
         app.notify(n);
     }
     if let Some((name, action)) = app.views[index].forms.button.take() {
-        run_button(app, index, ui.ctx(), &name, action);
+        run_button(app, index, &name, action);
     }
     quick_bar(app, avail, ui);
 }
 
 /// Run a push button's action (the ones that need no JavaScript engine).
-fn run_button(app: &mut PrintCraftApp, index: usize, ctx: &egui::Context, name: &str, action: printcraft_engine::form_scripts::ButtonAction) {
-    use printcraft_engine::form_scripts::ButtonAction as B;
+fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action: pdfcraft_engine::form_scripts::ButtonAction) {
+    use pdfcraft_engine::form_scripts::ButtonAction as B;
     let pages = app.session.get(app.views[index].id).map_or(0, |d| d.info.pages.len());
     match action {
         B::Reset { fields, exclude } => {
@@ -1706,7 +1745,7 @@ fn run_button(app: &mut PrintCraftApp, index: usize, ctx: &egui::Context, name: 
                 (false, true) => Some(all.iter().filter(|n| !listed(n)).cloned().collect()),
             };
             app.views[index].forms.focus = None;
-            app.views[index].pending_edit = Some(printcraft_engine::Edit::ResetForm { names });
+            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::ResetForm { names });
         }
         B::Named(n) => match n.as_str() {
             "Print" => app.open_print(),
@@ -1716,11 +1755,11 @@ fn run_button(app: &mut PrintCraftApp, index: usize, ctx: &egui::Context, name: 
             "LastPage" => app.views[index].go_to_page(pages.saturating_sub(1)),
             other => app.notify(format!("{name}: the {other} action isn't supported yet")),
         },
-        B::Uri(u) => ctx.open_url(egui::OpenUrl::new_tab(u)),
+        B::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Button),
         B::GoTo(p) => app.views[index].go_to_page(p.min(pages.saturating_sub(1))),
         B::Alert(m) => app.notify(m),
         B::Submit(url) => {
-            app.notify(format!("{name} submits the form to {url}; PrintCraft doesn't send form data. Save the document to keep your entries."))
+            app.notify(format!("{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries."))
         }
         B::ImportIcon => app.choose_field_image(name),
         B::Script(js) => {
@@ -1859,16 +1898,16 @@ fn notices(
     let mut open_repairs = false;
     let msg = if secured {
         Some(("lock", "This document is secured. Some changes are restricted by its security settings.".to_string(), false))
-    } else if info.xfa == Some(printcraft_render::Xfa::Dynamic) {
+    } else if info.xfa == Some(pdfcraft_render::Xfa::Dynamic) {
         Some((
             "triangle-alert",
-            "This is a dynamic XFA form, which PrintCraft can't display yet. What you see is the file's placeholder page.".to_string(),
+            "This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.".to_string(),
             false,
         ))
-    } else if info.xfa == Some(printcraft_render::Xfa::Static) {
+    } else if info.xfa == Some(pdfcraft_render::Xfa::Static) {
         Some((
             "triangle-alert",
-            "This form also contains XFA data, which PrintCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.".to_string(),
+            "This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.".to_string(),
             true,
         ))
     } else if !info.fields.is_empty() {
@@ -1911,7 +1950,7 @@ fn notices(
 }
 
 /// The floating quick-action bar at the left edge of the document area.
-fn quick_bar(app: &mut PrintCraftApp, area: Rect, ui: &mut egui::Ui) {
+fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let pos = area.left_top() + vec2(14.0, 14.0);
     egui::Area::new(egui::Id::new("quick-bar")).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
@@ -2094,7 +2133,7 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, ui: &mut
                 // selection in Organize Pages).
                 let sel = icons::button(ui, "list", 30.0, false, "Select pages");
                 egui::Popup::menu(&sel).show(|ui| {
-                    use printcraft_engine::{PageOrientation as O, PageParity as P, filter_pages};
+                    use pdfcraft_engine::{PageOrientation as O, PageParity as P, filter_pages};
                     let all: Vec<usize> = (0..n).collect();
                     for (label, parity, orient) in [
                         ("All pages", P::Both, O::Both),
@@ -2130,11 +2169,10 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, ui: &mut
     });
     // Keys act on the selection unless a text field has focus.
     if editable && !ui.ctx().egui_wants_keyboard_input() {
-        use egui::{Key, KeyboardShortcut, Modifiers};
-        let (del, all, esc) = ui.input_mut(|i| {
+        use egui::{Key, Modifiers};
+        let (del, esc) = ui.input_mut(|i| {
             (
                 i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace),
-                i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::A)),
                 i.consume_key(Modifiers::NONE, Key::Escape),
             )
         });
@@ -2152,9 +2190,6 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, ui: &mut
         if del && targets.len() < n {
             view.pending_edit = Some(Edit::DeletePages { pages: targets });
         }
-        if all {
-            view.selected = (0..n).collect();
-        }
         if esc {
             view.selected.clear();
         }
@@ -2169,14 +2204,31 @@ fn drop_gap(cells: &[(usize, Rect)], p: Pos2) -> Option<usize> {
     Some(if p.x < r.center().x { *i } else { i + 1 })
 }
 
-fn organize_grid(view: &mut DocView, info: &DocInfo, pool: &RenderPool, editable: bool, ui: &mut egui::Ui, t: &Tokens) {
+fn organize_grid(view: &mut DocView, info: &DocInfo, pool: &RenderPool, editable: bool, auto_scroll_enabled: bool, ui: &mut egui::Ui, t: &Tokens) {
     let ppp = ui.ctx().pixels_per_point();
     let cell = vec2(190.0, 250.0);
     let mut open_page = None;
     organize_toolbar(view, info, editable, ui, t);
+    let viewport = ui.available_rect_before_wrap();
+    view.viewport_screen = viewport;
+    let auto_delta = if auto_scroll_enabled {
+        view.auto_scroll.update(ui, viewport, true)
+    } else {
+        view.auto_scroll.cancel();
+        Vec2::ZERO
+    };
+    let middle_gesture = view.auto_scroll.blocks_input();
     let mut cells: Vec<(usize, Rect)> = Vec::with_capacity(info.pages.len());
     let mut drop = false;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        if middle_gesture {
+            let opacity = ui.opacity();
+            ui.disable();
+            ui.set_opacity(opacity);
+        }
+        if auto_delta != Vec2::ZERO {
+            ui.scroll_with_delta_animation(auto_delta, egui::style::ScrollAnimation::none());
+        }
         ui.add_space(20.0);
         let cols = ((ui.available_width() - 40.0) / cell.x).floor().max(1.0) as usize;
         let rows = info.pages.len().div_ceil(cols);
@@ -2296,6 +2348,7 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, pool: &RenderPool, editable
             view.org_drag = None;
         }
     });
+    view.auto_scroll.paint(ui, viewport);
     let s = THUMB_W * ppp / info.pages.iter().map(|p| p.width).fold(1.0, f32::max);
     let queue: Vec<RenderRequest> = (0..info.pages.len())
         .filter(|p| (!view.thumbs.contains_key(p) || view.stale_thumbs.contains(p)) && !view.errors.contains_key(p))

@@ -3,8 +3,8 @@
 //! Commands now return at once, and the chosen files are used on a later frame.
 
 use egui_kittest::Harness;
-use printcraft_render::PageRenderer;
-use printcraft_ui_egui::PrintCraftApp;
+use pdfcraft_render::PageRenderer;
+use pdfcraft_ui_egui::PdfCraftApp;
 
 /// An `n`-page document with a proper xref table.
 fn fixture(n: usize) -> Vec<u8> {
@@ -32,16 +32,16 @@ fn fixture(n: usize) -> Vec<u8> {
     out
 }
 
-fn pages(app: &PrintCraftApp, view: usize) -> usize {
+fn pages(app: &PdfCraftApp, view: usize) -> usize {
     let doc = app.session.get(app.views[view].id).unwrap();
     PageRenderer::new(doc.bytes.clone(), Default::default()).page_count()
 }
 
 /// A shell with `docs` open, each the given number of pages.
-fn harness(docs: &[usize]) -> Harness<'static, PrintCraftApp> {
+fn harness(docs: &[usize]) -> Harness<'static, PdfCraftApp> {
     let docs = docs.to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = PrintCraftApp::new();
+        let mut app = PdfCraftApp::new();
         for (i, n) in docs.iter().enumerate() {
             app.open_bytes(&format!("doc{i}.pdf"), None, fixture(*n)).unwrap();
         }

@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "mcp")]
-use printcraft_automation::mcp::McpServer;
-use printcraft_automation::{Automation, Content, ToolError, tools};
+use pdfcraft_automation::mcp::McpServer;
+use pdfcraft_automation::{Automation, Content, ToolError, tools};
 use serde_json::{Value, json};
 
 /// A PDF with `n` 200×300 pt pages reading "Page 1", "Page 2", …
@@ -37,7 +37,7 @@ fn fixture(n: usize) -> Vec<u8> {
 
 /// A fresh directory with `a.pdf` (3 pages) and `b.pdf` (2 pages).
 fn workdir(test: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("printcraft-automation-{test}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pdfcraft-automation-{test}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("a.pdf"), fixture(3)).unwrap();
@@ -77,8 +77,19 @@ fn tool_table_is_well_formed() {
         }
         assert!(!(t.read_only && t.destructive), "{} is both read-only and destructive", t.name);
         if let Some(c) = t.command {
-            assert!(printcraft_engine::commands::command(c).is_some(), "{} names unregistered command {c}", t.name);
+            assert!(pdfcraft_engine::commands::command(c).is_some(), "{} names unregistered command {c}", t.name);
         }
+    }
+}
+
+/// Each of these writes to its required `path` and replaces an existing file there, so the MCP
+/// annotations must not tell clients the call is read-only or harmless (#130).
+#[test]
+fn file_writing_tools_are_not_read_only() {
+    for name in ["doc_export_data", "accessibility_report", "image_save"] {
+        let t = tools().into_iter().find(|t| t.name == name).unwrap();
+        assert!(!t.read_only, "{name} writes a file but advertises read-only");
+        assert!(t.destructive, "{name} overwrites its path but advertises non-destructive");
     }
 }
 
@@ -206,16 +217,268 @@ fn errors_are_specific_and_safe() {
     assert_eq!(ok(&mut a, "doc_list", json!({}))["documents"], json!([]));
 
     // The root confines reads and writes.
-    let outside = std::env::temp_dir().join("printcraft-automation-outside.pdf");
+    let outside = std::env::temp_dir().join("pdfcraft-automation-outside.pdf");
     std::fs::write(&outside, fixture(1)).unwrap();
     assert!(matches!(err(&mut a, "doc_open", json!({ "path": outside.to_str().unwrap() })), ToolError::Failed(m) if m.contains("outside")));
     assert!(
-        matches!(err(&mut a, "doc_open", json!({ "path": "../printcraft-automation-outside.pdf" })), ToolError::Failed(m) if m.contains("outside"))
+        matches!(err(&mut a, "doc_open", json!({ "path": "../pdfcraft-automation-outside.pdf" })), ToolError::Failed(m) if m.contains("outside"))
     );
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
     assert!(a.call("doc_save", &json!({ "doc": doc, "path": "new/../../escape.pdf" })).is_err());
     assert!(a.call("doc_save", &json!({ "doc": doc, "path": outside.to_str().unwrap() })).is_err());
     let _ = std::fs::remove_file(outside);
+}
+
+/// `root/` (with `inside.pdf`) next to `outside/` (with the file `secret.pdf` and the folder
+/// `sub`), all in a fresh temporary directory. Returns (base, canonical root).
+fn sandbox(test: &str) -> (PathBuf, PathBuf) {
+    let base = std::env::temp_dir().join(format!("pdfcraft-automation-{test}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("root")).unwrap();
+    std::fs::create_dir_all(base.join("outside/sub")).unwrap();
+    std::fs::write(base.join("root/inside.pdf"), fixture(1)).unwrap();
+    std::fs::write(base.join("outside/secret.pdf"), fixture(1)).unwrap();
+    let root = base.join("root").canonicalize().unwrap();
+    (base, root)
+}
+
+/// A link `root/<name>` to the directory `target`: a symlink on Unix, a junction on Windows
+/// (which needs no privilege).
+fn link_dir(root: &Path, name: &str, target: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, root.join(name)).unwrap();
+    #[cfg(windows)]
+    {
+        // Rebuilt from components so every separator is `\` (cmd reads `/x` as a switch).
+        let (link, target): (PathBuf, PathBuf) = (root.join(name).components().collect(), target.components().collect());
+        let status = std::process::Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(link).arg(target).output().unwrap();
+        assert!(status.status.success(), "mklink /J failed: {}", String::from_utf8_lossy(&status.stderr));
+    }
+}
+
+#[test]
+fn root_refusals_do_not_reveal_what_exists_outside() {
+    // Regression test for #136: every path outside the root gets the same refusal, whether it
+    // exists, is a file or a folder, or passes through a missing folder.
+    let (base, root) = sandbox("root-oracle");
+    let mut a = auto(&root);
+    let refusal = |p: &str| ToolError::Failed(format!("{p} is outside the allowed directory {}", root.display()));
+    let abs = |rel: &str| base.join(rel).to_str().unwrap().to_owned();
+
+    #[cfg_attr(not(windows), allow(unused_mut))]
+    let mut reads = vec![
+        "../outside/secret.pdf".to_owned(),
+        "../outside/nope.pdf".into(),
+        "../outside/secret.pdf/x".into(),
+        "../outside/sub".into(),
+        "../outside/sub/x".into(),
+        "../nowhere/at/all.pdf".into(),
+        "missing/../../outside/secret.pdf".into(),
+        "missing/../../outside/nope.pdf".into(),
+        "../../../../../../../../../../../../../../../../../../../../../../../../x.pdf".into(),
+        abs("outside/secret.pdf"),
+        abs("outside/nope.pdf"),
+        abs("outside/sub/x"),
+        abs("nowhere/x.pdf"),
+        abs("nowhere/../outside/nope.pdf"),
+        abs("outside/../outside/secret.pdf"),
+        abs("root/../outside/secret.pdf"),
+    ];
+    #[cfg(windows)]
+    {
+        reads.extend([
+            r"..\outside\secret.pdf".to_owned(),
+            r"..\outside/nope.pdf".into(),
+            "../outside/secret.pdf.".into(),
+            "../outside/secret.pdf ".into(),
+            // Another network share or device namespace is refused by name, without contacting
+            // it (`.invalid` never resolves, so a regression fails instead of reaching a host).
+            r"\\pdfcraft-test.invalid\share\secret.pdf".into(),
+            "//pdfcraft-test.invalid/share/secret.pdf".into(),
+            r"\\?\UNC\pdfcraft-test.invalid\share\secret.pdf".into(),
+            r"\\.\pipe\pdfcraft-test".into(),
+            r"\\?\GLOBALROOT\Device\Null".into(),
+        ]);
+        let other = base.join("outside/secret.pdf").canonicalize().unwrap();
+        reads.push(other.to_str().unwrap().to_owned()); // the verbatim \\?\C:\… form
+        if let Some(drive) = (b'D'..=b'Z').rev().map(|d| format!("{}:\\", d as char)).find(|d| !Path::new(d).exists()) {
+            reads.push(format!("{drive}secret.pdf")); // a drive that doesn't exist
+        }
+    }
+    for p in &reads {
+        assert_eq!(a.call("doc_open", &json!({ "path": p })).unwrap_err(), refusal(p), "reading {p}");
+    }
+
+    let writes = [
+        "../outside/sub/../y.pdf".to_owned(),
+        "../outside/nosub/../y.pdf".into(),
+        "../outside/y.pdf".into(),
+        "../outside/nosub/y.pdf".into(),
+        "../outside/secret.pdf".into(),
+        "../outside/secret.pdf/y.pdf".into(),
+        "new/../../escape.pdf".into(),
+        abs("outside/nosub/deeper/y.pdf"),
+    ];
+    let doc = ok(&mut a, "doc_open", json!({ "path": "inside.pdf" }))["doc"].as_u64().unwrap();
+    for p in &writes {
+        assert_eq!(a.call("doc_save", &json!({ "doc": doc, "path": p })).unwrap_err(), refusal(p), "writing {p}");
+    }
+    #[cfg(windows)]
+    {
+        // In a verbatim path `/` is not a separator, so `x/../..` can't climb out of it either.
+        for tail in [r"\x/../../outside/v.pdf", r"\x/../../outside/secret.pdf"] {
+            let p = format!("{}{tail}", root.display());
+            if let Ok(c) = a.call("doc_save", &json!({ "doc": doc, "path": p })) {
+                let Content::Json(v) = &c[0] else { panic!("{p}: expected JSON") };
+                assert!(Path::new(v["path"].as_str().unwrap()).starts_with(&root), "{p} wrote {v}");
+            }
+            // (What lands outside the root, if anything, is checked below.)
+        }
+    }
+
+    // A link inside the root that leads out of it is refused the same way, below it too.
+    link_dir(&base.join("root"), "link", &base.join("outside"));
+    for p in ["link/secret.pdf", "link/nope.pdf", "link/sub/x", "link"] {
+        assert_eq!(a.call("doc_open", &json!({ "path": p })).unwrap_err(), refusal(p), "reading {p}");
+    }
+    for p in ["link/new.pdf", "link/nosub/new.pdf", "link/secret.pdf"] {
+        assert_eq!(a.call("doc_save", &json!({ "doc": doc, "path": p })).unwrap_err(), refusal(p), "writing {p}");
+    }
+    // So is a link whose target is gone: whether a link's target exists stays hidden too.
+    std::fs::create_dir_all(base.join("outside/gone")).unwrap();
+    link_dir(&base.join("root"), "broken", &base.join("outside/gone"));
+    std::fs::remove_dir(base.join("outside/gone")).unwrap();
+    for p in ["broken", "broken/x.pdf", "broken/x/y.pdf"] {
+        assert_eq!(a.call("doc_open", &json!({ "path": p })).unwrap_err(), refusal(p), "reading {p}");
+        assert_eq!(a.call("doc_save", &json!({ "doc": doc, "path": p })).unwrap_err(), refusal(p), "writing {p}");
+    }
+
+    // Nothing was written outside the root, and the outside files are untouched.
+    let mut left: Vec<String> =
+        std::fs::read_dir(base.join("outside")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    left.sort();
+    assert_eq!(left, ["secret.pdf", "sub"]);
+    assert_eq!(std::fs::read(base.join("outside/secret.pdf")).unwrap(), fixture(1));
+    assert!(!base.join("escape.pdf").exists() && !base.join("y.pdf").exists());
+
+    // Inside the root nothing changes: missing files say so, and existing ones open and save,
+    // however the path is spelled.
+    let missing = a.call("doc_open", &json!({ "path": "missing-inside.pdf" })).unwrap_err();
+    assert!(matches!(&missing, ToolError::Failed(m) if m.starts_with("missing-inside.pdf: ") && !m.contains("outside")), "{missing:?}");
+    let not_dir = a.call("doc_open", &json!({ "path": "inside.pdf/x" })).unwrap_err();
+    assert!(matches!(&not_dir, ToolError::Failed(m) if !m.contains("outside")), "{not_dir:?}");
+    #[cfg_attr(not(windows), allow(unused_mut))]
+    let mut opens = vec![
+        "inside.pdf".to_owned(),
+        "./inside.pdf".into(),
+        "sub/../inside.pdf".into(),
+        "../root/inside.pdf".into(),
+        "../outside/../root/inside.pdf".into(),
+        "../nowhere/../root/inside.pdf".into(),
+        abs("root/inside.pdf"),
+        abs("outside/../root/inside.pdf"),
+        abs("nowhere/../root/inside.pdf"),
+        root.join("inside.pdf").to_str().unwrap().to_owned(),
+    ];
+    #[cfg(windows)]
+    {
+        let plain = abs("root/inside.pdf");
+        opens.extend([plain.to_lowercase(), plain.to_uppercase(), r"..\root\inside.pdf".into()]);
+    }
+    for p in &opens {
+        ok(&mut a, "doc_open", json!({ "path": p }));
+    }
+    for p in ["new.pdf", "fresh/dir/new.pdf", "fresh/../also-new.pdf"] {
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": p }));
+    }
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": abs("root/abs-new.pdf") }));
+    for f in ["new.pdf", "fresh/dir/new.pdf", "also-new.pdf", "abs-new.pdf"] {
+        assert!(root.join(f).is_file(), "{f} was written inside the root");
+    }
+
+    // Without a root, paths are used as given.
+    let mut free = Automation::new();
+    ok(&mut free, "doc_open", json!({ "path": abs("outside/secret.pdf") }));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn writing_to_a_folder_touches_nothing_beside_it() {
+    // "." names the root itself. Saving there used to stage its temporary file next to the
+    // root, outside it, overwriting and then deleting any file of that name.
+    let (base, root) = sandbox("root-itself");
+    let mut a = auto(&root);
+    let beside = base.join(".root.pdfcraft-tmp");
+    std::fs::write(&beside, "SENTINEL").unwrap();
+    std::fs::create_dir_all(root.join("folder")).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "inside.pdf" }))["doc"].as_u64().unwrap();
+    for p in [".", "", "folder", "folder/"] {
+        let e = a.call("doc_save", &json!({ "doc": doc, "path": p })).unwrap_err();
+        assert!(matches!(&e, ToolError::Failed(m) if m.contains("is a folder")), "{p:?}: {e:?}");
+    }
+    let png = vec![1, 2, 3];
+    assert!(a.write_output(".", &png).is_err());
+    assert_eq!(std::fs::read_to_string(&beside).unwrap(), "SENTINEL");
+    assert!(!root.join(".folder.pdfcraft-tmp").exists());
+    // `image_save` adds an extension when the path has none, which turned "." into `root.png`
+    // beside the root.
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 18 }));
+    let pic = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["src/inside_page_1.png"] }))["doc"].as_u64().unwrap();
+    for p in [".", "", "folder", "src/.."] {
+        let e = a.call("image_save", &json!({ "doc": pic, "page": 1, "image": 1, "path": p })).unwrap_err();
+        assert!(matches!(&e, ToolError::Failed(m) if m.contains("is a folder")), "{p:?}: {e:?}");
+    }
+    assert!(!base.join("root.png").exists() && !root.join("folder.png").exists());
+    ok(&mut a, "image_save", json!({ "doc": pic, "page": 1, "image": 1, "path": "folder/picture" }));
+    assert!(root.join("folder/picture.png").is_file());
+    // Folder outputs may still name the root.
+    ok(&mut a, "doc_split", json!({ "doc": doc, "every": 1, "out_dir": "." }));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn file_names_from_documents_stay_in_the_output_folder() {
+    // Folder outputs name their files after the document. A document name with separators,
+    // `..` or (on Windows) a drive letter used to take those files out of the folder, and out
+    // of the root.
+    let (base, root) = sandbox("doc-names");
+    let mut a = auto(&root);
+    let names = ["../../escape", "../../escape.pdf", "x/../../../escape.pdf", "/tmp/escape.pdf", r"x\C:escape.pdf", "C:escape.pdf", "..", "."];
+    for (i, name) in names.iter().enumerate() {
+        let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "pages": 2, "name": name }))["doc"].as_u64().unwrap();
+        let out = format!("out{i}");
+        let mut files: Vec<String> = Vec::new();
+        let r = ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": out, "dpi": 10 }));
+        files.extend(r["files"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_owned()));
+        let r = ok(&mut a, "page_extract", json!({ "doc": doc, "pages": [1], "separate": true, "out_dir": out }));
+        files.extend(r["files"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_owned()));
+        let r = ok(&mut a, "doc_split", json!({ "doc": doc, "every": 1, "out_dir": out }));
+        files.extend(r["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap().to_owned()));
+        assert_eq!(files.len(), 5, "{name:?}: {files:?}");
+        for f in &files {
+            let f = Path::new(f);
+            assert_eq!(f.parent(), Some(root.join(&out).as_path()), "{name:?} wrote {}", f.display());
+            assert!(f.is_file(), "{name:?}: {} exists", f.display());
+        }
+    }
+    // The same for the images a page uses, with a document that has one.
+    let doc = ok(&mut a, "doc_open", json!({ "path": "inside.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 18 }));
+    let pic =
+        ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["src/inside_page_1.png"], "name": "../../escape" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_export_all_images", json!({ "doc": pic, "folder": "all" }));
+    let files = r["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1, "{r}");
+    for f in files {
+        assert_eq!(Path::new(f["path"].as_str().unwrap()).parent(), Some(root.join("all").as_path()), "{r}");
+    }
+    let mut left: Vec<String> = std::fs::read_dir(&base).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    left.sort();
+    assert_eq!(left, ["outside", "root"]);
+
+    // The root itself must be a folder.
+    assert!(Automation::new().with_root(root.join("inside.pdf")).is_err());
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[test]
@@ -265,7 +528,7 @@ fn mcp_session_over_stdio() {
     assert_eq!(replies.len(), 4, "the notification gets no reply");
 
     assert_eq!(replies[0]["result"]["protocolVersion"], "2025-03-26");
-    assert_eq!(replies[0]["result"]["serverInfo"]["name"], "printcraft");
+    assert_eq!(replies[0]["result"]["serverInfo"]["name"], "pdfcraft");
     assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), tools().len());
     assert_eq!(replies[2]["result"]["structuredContent"]["pages"], 3);
     assert_eq!(replies[2]["result"]["isError"], false);
@@ -283,7 +546,7 @@ fn mcp_errors() {
     assert_eq!(rpc(&mut s, 1, "initialize", json!({ "protocolVersion": "1999-01-01" }))["result"]["protocolVersion"], "2025-06-18");
     assert_eq!(rpc(&mut s, 2, "ping", json!({}))["result"], json!({}));
     assert_eq!(rpc(&mut s, 3, "prompts/list", json!({}))["error"]["code"], -32601);
-    assert_eq!(rpc(&mut s, 6, "resources/read", json!({ "uri": "printcraft://doc/9/info" }))["error"]["code"], -32602);
+    assert_eq!(rpc(&mut s, 6, "resources/read", json!({ "uri": "pdfcraft://doc/9/info" }))["error"]["code"], -32602);
     assert_eq!(rpc(&mut s, 4, "tools/call", json!({ "name": "nope" }))["error"]["code"], -32602);
     let failed = rpc(&mut s, 5, "tools/call", json!({ "name": "doc_open", "arguments": { "path": "/definitely/not/here.pdf" } }));
     assert_eq!(failed["result"]["isError"], true);
@@ -303,19 +566,19 @@ fn mcp_resources_expose_open_documents() {
     rpc(&mut s, 4, "tools/call", json!({ "name": "doc_open", "arguments": { "path": "a.pdf" } }));
     let list = rpc(&mut s, 5, "resources/list", json!({}))["result"]["resources"].as_array().cloned().unwrap();
     assert_eq!(list.len(), 2 + 3, "info, text and three page images");
-    assert_eq!(list[0]["uri"], "printcraft://doc/1/info");
+    assert_eq!(list[0]["uri"], "pdfcraft://doc/1/info");
     let read = |s: &mut McpServer, uri: &str| rpc(s, 6, "resources/read", json!({ "uri": uri }))["result"]["contents"][0].clone();
-    let text = read(&mut s, "printcraft://doc/1/text");
+    let text = read(&mut s, "pdfcraft://doc/1/text");
     assert_eq!(text["mimeType"], "text/plain");
     assert!(text["text"].as_str().unwrap().contains("Page 2\nPage 2"), "{text}");
-    assert_eq!(read(&mut s, "printcraft://doc/1/page/3/text")["text"], "Page 3");
-    let info: Value = serde_json::from_str(read(&mut s, "printcraft://doc/1/info")["text"].as_str().unwrap()).unwrap();
+    assert_eq!(read(&mut s, "pdfcraft://doc/1/page/3/text")["text"], "Page 3");
+    let info: Value = serde_json::from_str(read(&mut s, "pdfcraft://doc/1/info")["text"].as_str().unwrap()).unwrap();
     assert_eq!(info["pages"].as_array().unwrap().len(), 3);
-    let img = read(&mut s, "printcraft://doc/1/page/1/image?dpi=36");
+    let img = read(&mut s, "pdfcraft://doc/1/page/1/image?dpi=36");
     use base64::Engine as _;
     let png = base64::engine::general_purpose::STANDARD.decode(img["blob"].as_str().unwrap()).unwrap();
     assert_eq!(&png[1..4], b"PNG");
-    assert_eq!(rpc(&mut s, 7, "resources/read", json!({ "uri": "printcraft://doc/1/page/9/image" }))["error"]["code"], -32602);
+    assert_eq!(rpc(&mut s, 7, "resources/read", json!({ "uri": "pdfcraft://doc/1/page/9/image" }))["error"]["code"], -32602);
 }
 
 #[test]
@@ -487,7 +750,7 @@ fn protecting_through_tools() {
 #[test]
 fn forms_through_tools() {
     let dir = workdir("forms");
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/demo/printcraft-showcase.pdf");
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/demo/pdfcraft-showcase.pdf");
     if !src.exists() {
         eprintln!("skipped: run `cargo xtask demo-pdf` for the showcase form");
         return;
@@ -1121,9 +1384,9 @@ fn links_through_tools() {
     assert_eq!(list["count"], 3);
     let added = list["links"].as_array().unwrap().iter().find(|l| l["to_page"] == 1).unwrap().clone();
     assert_eq!(added["rect"], json!([72.0, 300.0, 200.0, 320.0]));
-    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": added["index"], "url": "https://printcraft.dev" }));
+    ok(&mut a, "link_edit", json!({ "doc": doc, "page": 1, "index": added["index"], "url": "https://pdfcraft.dev" }));
     let list = ok(&mut a, "link_list", json!({ "doc": doc }));
-    assert!(list["links"].as_array().unwrap().iter().any(|l| l["url"] == "https://printcraft.dev"));
+    assert!(list["links"].as_array().unwrap().iter().any(|l| l["url"] == "https://pdfcraft.dev"));
     ok(&mut a, "link_delete", json!({ "doc": doc, "page": 1, "index": added["index"] }));
     let r = ok(&mut a, "links_remove", json!({ "doc": doc }));
     assert_eq!(r["removed"], 2);

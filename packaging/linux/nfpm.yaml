@@ -3,7 +3,7 @@
 # exports VERSION and NFPM_ARCH.
 #
 #   nfpm package -f packaging/linux/nfpm.yaml -p deb -t dist/release/
-name: printcraft
+name: pdfcraft
 arch: ${NFPM_ARCH}
 platform: linux
 version: ${VERSION}
@@ -12,14 +12,14 @@ version_schema: semver
 release: 1
 section: graphics
 priority: optional
-maintainer: ${PRINTCRAFT_MAINTAINER}
+maintainer: ${PDFCRAFT_MAINTAINER}
 vendor: Learning Machines LLC
-homepage: https://getartcraft.com/apps/printcraft
+homepage: https://getartcraft.com/apps/pdfcraft
 license: MIT OR Apache-2.0
 description: |-
   Open-source, native PDF workbench: read, comment, fill and sign forms,
   organize, combine, split, edit, redact, protect and export PDFs.
-  Includes printcraft-cli, a headless command runner and opt-in MCP server.
+  Includes pdfcraft-cli, a headless command runner and opt-in MCP server.
 
 # The binaries link only glibc and libgcc_s directly. Windowing (X11/Wayland, xkbcommon) and the
 # GPU (Vulkan, EGL/GL) are loaded at runtime, so they are dependencies/recommendations here
@@ -54,11 +54,11 @@ overrides:
       - xdg-desktop-portal
 
 contents:
-  - src: ${STAGE}/usr/bin/printcraft
-    dst: /usr/bin/printcraft
+  - src: ${STAGE}/usr/bin/pdfcraft
+    dst: /usr/bin/pdfcraft
     file_info: { mode: 0755 }
-  - src: ${STAGE}/usr/bin/printcraft-cli
-    dst: /usr/bin/printcraft-cli
+  - src: ${STAGE}/usr/bin/pdfcraft-cli
+    dst: /usr/bin/pdfcraft-cli
     file_info: { mode: 0755 }
   - src: ${STAGE}/usr/share/
     dst: /usr/share/

@@ -1,5 +1,5 @@
 [package]
-name = "printcraft-preflight"
+name = "pdfcraft-preflight"
 description = "Standards: verify PDF/A (ISO 19005) conformance and convert documents to PDF/A-2b or 3b"
 version.workspace = true
 edition.workspace = true
@@ -11,5 +11,5 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-printcraft-cos = { workspace = true }
-printcraft-model = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-model = { workspace = true }

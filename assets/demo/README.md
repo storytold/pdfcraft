@@ -1,15 +1,15 @@
-# PrintCraft showcase PDF
+# PdfCraft showcase PDF
 
 `showcase.html` is the source of a 13-page, US Letter test document for
 viewing and rendering. The PDF is built on your machine and is not committed:
 
 ```sh
-cargo xtask demo-pdf            # writes dist/demo/printcraft-showcase.pdf
+cargo xtask demo-pdf            # writes dist/demo/pdfcraft-showcase.pdf
 cargo xtask demo-pdf --chrome /path/to/chrome --out /tmp/showcase.pdf
 ```
 
 You need Google Chrome, Chromium or Edge. The tool looks for it in the usual
-install locations and on `PATH`, or uses `--chrome` or the `PRINTCRAFT_CHROME`
+install locations and on `PATH`, or uses `--chrome` or the `PDFCRAFT_CHROME`
 environment variable if you set one.
 
 ## How it is built
@@ -27,7 +27,7 @@ environment variable if you set one.
 3. **Post-processing with `lopdf`** (`xtask/src/demo_pdf/`) adds what a
    browser cannot emit:
    - **Annotations.** The HTML contains marker links to
-     `https://mark.printcraft.invalid/<kind>/<id>`. Chrome turns each one into
+     `https://mark.pdfcraft.invalid/<kind>/<id>`. Chrome turns each one into
      a Link annotation whose `/Rect` follows the layout. The xtask replaces
      each marker with a real annotation: Highlight, Underline, StrikeOut,
      Squiggly, Caret, Text with Popup and a threaded reply and review state,
@@ -75,4 +75,4 @@ count is not 12, because the post-processing uses fixed page indices.
 
 To check the result, look at the output of `pdfinfo`, `pdffonts` and
 `qpdf --check`, and render the pages with
-`pdftoppm -r 60 -png dist/demo/printcraft-showcase.pdf /tmp/showcase`.
+`pdftoppm -r 60 -png dist/demo/pdfcraft-showcase.pdf /tmp/showcase`.

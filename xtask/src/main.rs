@@ -1,4 +1,4 @@
-//! Project automation for PrintCraft, run via `cargo xtask <command>`.
+//! Project automation for PdfCraft, run via `cargo xtask <command>`.
 
 use std::process::ExitCode;
 
@@ -22,13 +22,13 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("ci", "fmt --check, clippy -D warnings, test, layers, wasm, assets, deny, parity (stops at first failure)", gates::ci),
     ("assets", "Enforce the asset policy (AGENTS.md §1) against ATTRIBUTION.toml; --write regenerates ATTRIBUTION.md", assets::run),
     ("corpus", "Fetch test corpora into corpus/ (git-ignored): pdf.js test PDFs", gates::corpus),
-    ("check", "Robustness sweep over corpus/ with printcraft-cli; fails on crashes or regressions vs xtask/baselines", gates::check),
+    ("check", "Robustness sweep over corpus/ with pdfcraft-cli; fails on crashes or regressions vs xtask/baselines", gates::check),
     ("fuzz", "Mutation fuzzing of open/render/edit/save in child processes; findings in fuzz-out/ (--time 300)", fuzz::run),
     ("parity", "Validate parity/acrobat-features.toml against the registry, tools and tests; report progress (--json, --partial)", parity::run),
     ("text-oracle", "Compare text extraction with pdftotext over corpus/ (word F1; target median ≥ 0.97)", gates::text_oracle),
     ("screenshots", "Regenerate the README screenshots in docs/images/ and their ATTRIBUTION entries", screenshots::run),
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
-    ("demo-pdf", "Build dist/demo/printcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),
+    ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),
 ];
 
 fn version_cmd(args: &[String]) -> anyhow::Result<()> {
