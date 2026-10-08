@@ -57,6 +57,21 @@ fn opening_a_pdf_shows_comments_and_bookmarks() {
     h.get_by_label("Beta section");
 }
 
+/// A right-to-left file name opens, lays out and paints; the tab's accessible name keeps the
+/// logical text (only the painted label is put in visual order).
+#[test]
+fn a_tab_with_an_arabic_file_name_keeps_its_logical_accessible_name() {
+    let name = "واحد اثنين.pdf";
+    let mut h = harness(move |app| app.open_bytes(name, None, FIXTURE.to_vec()).expect("fixture opens"));
+    let tab = h.get_by_label(name).rect();
+    assert!(tab.width() > 64.0 && tab.height() > 0.0, "{tab:?}");
+    // A name longer than the tab's 28-character limit is cut on a character boundary.
+    let long = "واحد اثنين ثلاثة أربعة خمسة ستة سبعة ثمانية.pdf";
+    h.state_mut().open_bytes(long, None, FIXTURE.to_vec()).expect("fixture opens");
+    h.run_steps(3);
+    h.get_by_label(long);
+}
+
 #[test]
 fn garbage_input_is_rejected_without_panicking() {
     let mut app = PdfCraftApp::new();

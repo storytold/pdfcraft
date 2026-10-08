@@ -3797,6 +3797,7 @@ dependencies = [
  "skrifa 0.44.0",
  "sys-locale",
  "toml",
+ "unicode-bidi",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

@@ -6,6 +6,7 @@ use pdfcraft_ui_egui::theme;
 
 const JAPANESE: &str = "日本語の文字";
 const CHINESE: &str = "简体中文欢迎";
+const ARABIC: &str = "واحد اثنين";
 
 fn families() -> Vec<FontId> {
     vec![FontId::proportional(13.0), FontId::monospace(13.0), theme::medium(13.0), theme::semibold(17.0)]
@@ -70,6 +71,51 @@ fn chinese_ui_text_prefers_the_chinese_face() {
     for w in layout_widths(&mut fonts, CHINESE) {
         assert!(w > 13.0 * 0.8 * CHINESE.chars().count() as f32, "{w}");
     }
+}
+
+/// Built with a craft-fonts Arabic face, Arabic text has real glyphs in every family, from a
+/// face placed after the app's own fonts.
+#[test]
+fn arabic_ui_text_uses_craft_fonts() {
+    let arabic: Vec<String> = pdfcraft_fonts::ui_arabic_fonts().iter().map(|f| f.name()).collect();
+    if arabic.is_empty() {
+        eprintln!("skipping arabic_ui_text_uses_craft_fonts: no Arab face bundled (set CRAFT_FONTS_DIR with an Arabic face to run it)");
+        return;
+    }
+    let defs = theme::font_definitions();
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        let stack = &defs.families[&family];
+        let first_ar = stack.iter().position(|n| arabic.contains(n)).expect("an Arab face is a fallback");
+        let own = stack.iter().position(|n| n == "Inter" || n == "JetBrainsMono").expect("the app's own font");
+        assert!(own < first_ar, "{family:?}: {stack:?}");
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, ARABIC), "{id:?} lacks {ARABIC}");
+    }
+}
+
+/// On a machine with a suitable installed font, the installed definitions end every family
+/// with it and Arabic text has glyphs; the embedded-only definitions never name it.
+#[test]
+fn system_fallback_fills_missing_scripts() {
+    assert!(!theme::font_definitions().font_data.contains_key(theme::SYSTEM_FALLBACK));
+    let defs = theme::installed_font_definitions(false);
+    if !defs.font_data.contains_key(theme::SYSTEM_FALLBACK) {
+        eprintln!("skipping system_fallback_fills_missing_scripts: no installed fallback font (or PDFCRAFT_SYSTEM_FONTS=0)");
+        assert!(defs.families.values().all(|stack| !stack.iter().any(|n| n == theme::SYSTEM_FALLBACK)));
+        return;
+    }
+    for (family, stack) in &defs.families {
+        assert_eq!(stack.last().map(String::as_str), Some(theme::SYSTEM_FALLBACK), "{family:?}: {stack:?}");
+        assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_FALLBACK).count(), 1, "{family:?}");
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, ARABIC), "{id:?} lacks {ARABIC}");
+        assert!(fonts.has_glyphs(&id, "PdfCraft"), "{id:?}");
+    }
+    assert!(layout_widths(&mut fonts, ARABIC).iter().all(|w| w.is_finite() && *w > 0.0));
 }
 
 /// Without craft-fonts the interface fonts still install and lay out any text (Japanese falls

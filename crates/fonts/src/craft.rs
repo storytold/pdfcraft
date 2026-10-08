@@ -43,6 +43,16 @@ pub fn ui_chinese_fonts() -> Vec<&'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.covers("Hans")).collect()
 }
 
+/// The `Arab` craft-fonts faces for Arabic-script interface text (file names, document titles),
+/// in manifest order. Empty when built without craft-fonts or when it has no Arabic face.
+pub fn ui_arabic_fonts() -> Vec<&'static CraftFont> {
+    arabic(CRAFT_FONTS.iter())
+}
+
+fn arabic<'a>(faces: impl IntoIterator<Item = &'a CraftFont>) -> Vec<&'a CraftFont> {
+    faces.into_iter().filter(|f| f.covers("Arab")).collect()
+}
+
 /// Interface CJK faces in fallback order for the UI language: Simplified Chinese first when
 /// `prefer_hans`, otherwise Japanese first (the historical default).
 ///
@@ -137,6 +147,23 @@ mod tests {
         assert_eq!(zh, ["FakeHans", "BIZ UDPGothic", "Shippori Mincho"]);
         let ja: Vec<&str> = order_cjk([&mincho, &faces[2], &faces[1]], false).iter().map(|f| f.family).collect();
         assert_eq!(ja, ["BIZ UDPGothic", "Shippori Mincho", "FakeHans"]);
+    }
+
+    #[test]
+    fn arabic_faces_are_picked_by_script_in_manifest_order() {
+        // Synthetic faces: the filter must not depend on the real build input.
+        static BYTES: &[u8] = b"fake";
+        static ARAB_LATN: &[&str] = &["Arab", "Latn"];
+        static JPAN: &[&str] = &["Jpan"];
+        let naskh = CraftFont { family: "FakeNaskh", style: "Regular", scripts: ARAB_LATN, bytes: BYTES };
+        let biz = CraftFont { family: "BIZ UDPGothic", style: "Regular", scripts: JPAN, bytes: BYTES };
+        let kufi = CraftFont { family: "FakeKufi", style: "Regular", scripts: ARAB_LATN, bytes: BYTES };
+        let faces = [naskh, biz, kufi];
+        let ar: Vec<&str> = arabic(&faces).iter().map(|f| f.family).collect();
+        assert_eq!(ar, ["FakeNaskh", "FakeKufi"]);
+        // An Arabic face is never a CJK fallback, and the other way round.
+        assert!(order_cjk(&faces, false).iter().all(|f| f.family == "BIZ UDPGothic"));
+        assert_eq!(ui_arabic_fonts().len(), CRAFT_FONTS.iter().filter(|f| f.covers("Arab")).count());
     }
 
     #[test]
