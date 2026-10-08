@@ -19,14 +19,6 @@ enum Codes {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum Std14 {
-    Helvetica,
-    Times,
-    Courier,
-    Symbolic,
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub struct Metrics {
     codes: Codes,
     /// Simple fonts: `/FirstChar` and `/Widths`.
@@ -38,7 +30,8 @@ pub struct Metrics {
     /// Code → CID for embedded non-identity CMaps (`cidrange` / `cidchar`).
     cid_map: Vec<(u32, u32, u32)>,
     default: f64,
-    std14: Option<Std14>,
+    /// The standard-14 face to measure with when the dictionary carries no `/Widths`.
+    std14: Option<crate::Std14>,
     /// Glyph units → text space (0.001, or `/FontMatrix[0]` for Type 3).
     pub scale: f64,
     /// Glyph box in text space per unit of font size.
@@ -276,7 +269,7 @@ impl Metrics {
             cid_ranges: Vec::new(),
             cid_map: Vec::new(),
             default: 500.0,
-            std14: Some(Std14::Helvetica),
+            std14: Some(crate::Std14::Helvetica),
             scale: 0.001,
             ascent: 0.9,
             descent: -0.25,
@@ -384,16 +377,10 @@ impl Metrics {
                     }
                 }
             } else if m.widths.is_empty() {
-                let base = String::from_utf8_lossy(font.name(b"BaseFont").unwrap_or(b"")).to_ascii_lowercase();
-                m.std14 = Some(if base.contains("courier") {
-                    Std14::Courier
-                } else if base.contains("times") {
-                    Std14::Times
-                } else if base.contains("symbol") || base.contains("dingbats") {
-                    Std14::Symbolic
-                } else {
-                    Std14::Helvetica
-                });
+                let base = String::from_utf8_lossy(font.name(b"BaseFont").unwrap_or(b"")).into_owned();
+                // The real face, bold and italic included: the published metrics differ by style,
+                // so Times-Bold is not Times-Roman and neither is Helvetica scaled.
+                m.std14 = crate::Std14::from_base_font(&base).or(Some(crate::Std14::Helvetica));
             }
         }
         if let Some(d) = descriptor {
@@ -455,14 +442,13 @@ impl Metrics {
         if let Some(w) = code.checked_sub(self.first).and_then(|i| self.widths.get(i as usize)) {
             return w * self.scale;
         }
-        match &self.std14 {
-            Some(Std14::Courier) => 0.6,
-            Some(Std14::Symbolic) => 0.75,
-            Some(f) => {
-                let c = char::from_u32(code).filter(|c| !c.is_control()).unwrap_or('n');
-                let w = crate::helvetica_width(&c.to_string(), 1.0);
-                if *f == Std14::Times { w * 0.92 } else { w }
-            }
+        match self.std14 {
+            // A font with no /Widths is one of the standard 14; use its published metrics.
+            // Codes the font's encoding leaves undefined fall back to /MissingWidth.
+            Some(f) => match u8::try_from(code).map(|c| f.width(c)).unwrap_or(0.0) {
+                0.0 => self.default * self.scale,
+                w => w / 1000.0,
+            },
             None => self.default * self.scale,
         }
     }
