@@ -11,33 +11,51 @@
 - **Then:** D2, D3, then F1 (exact standard-14 metrics), F2, F3, then H1 (`pdfcraft-testkit`).
 - **Last verified green:** see the baseline below; re-measure before quoting.
 
-## Verified baseline (2026-10-07, `main` at `827c61b`, Windows 10)
+## Verified baseline (2026-10-08, `main` at `d801407`, v0.4.0, Windows 10)
 
-Measured, not quoted. Re-measure rather than trusting this table if it is more than a few
-sessions old.
+Measured, not quoted. **Re-measure before quoting:** `main` moved 47 commits in the 24 hours
+before this reading, so a table more than a day old is already wrong.
 
 | Check | Result |
 |---|---|
-| `cargo xtask parity` | 806 counted features: **411 shipped, 70 partial — 51.0% (55.3% weighted)** |
-| Toolless shipped features | **93** (AGENTS.md §3 violation; tracked as D4) |
+| `cargo xtask parity` | 806 counted features: **413 shipped, 73 partial — 51.2% (55.8% weighted)** |
+| Toolless shipped features | **94** (AGENTS.md §3 violation; tracked as D4) |
 | Crates | 29 library crates; **13 have no README** (D5) |
-| Open PRs / issues | 6 open PRs (all community, all based on `main`) / 65 open issues |
+| Open PRs / issues | 13 open PRs / ~65 open issues |
 
-Parity by tier: P0 88.4% shipped, P1 53.4%, P2 7.5%, P3 2.3%. Effort-weighted ≈ 30–35%.
+Parity by tier: P0 88.8% shipped, P1 53.4%, P2 8.1%, P3 2.3%. Effort-weighted ≈ 30–35%.
 
-Not re-measured this session: `cargo test --workspace`, clippy, the corpus sweep (`xtask check`),
-the nightly fuzz job, and the wasm32 check. Run them before relying on "green".
+Not re-measured at this commit: `cargo test --workspace`, clippy, the corpus sweep
+(`xtask check`), the nightly fuzz job. `xtask layers`, `xtask assets` and `xtask parity` were run.
+
+### The repository moves fast, and PRs rot
+
+Between 2026-10-07 and 2026-10-08, 47 commits landed on `main` — mostly community PRs — and
+**every one of the six PRs that were open the day before went from mergeable to `CONFLICTING`.**
+Two operational consequences, which matter more here than on a slower project:
+
+- **Review small PRs quickly or they die of rebase.** A PR that sits a day needs its author to do
+  work again. Latency is a cost paid by contributors, not by us.
+- **Ask the author to rebase; do not rebase for them, and never rewrite their branch.** Their
+  commits are theirs. See `execution-plan.md` §1.4.
 
 ## Recent landings worth knowing
 
-Since the plan was first drafted: the rename to **PdfCraft** (#174), XFA dynamic layout (#121),
-the non-network half of signatures — RFC 3161 timestamps, document timestamps, DSS/VRI and
-revocation verification (#69) — Measure distance/perimeter/area (#208), CJK, Czech and pt-BR
-catalogs with a Windows display-language fix (#209, #216), `--root` confinement leak fixes (#164),
-and theme and picker fixes (#212, #221).
+**v0.4.0 is tagged.** Since the plan was first drafted: the rename to **PdfCraft** (#174), XFA
+dynamic layout (#121) and FormCalc (#301), the non-network half of signatures (#69), signing with
+the **Windows certificate store** (#304, which closes the `sign.windows-cert-store` P0 gap),
+Measure distance/perimeter/area (#208), print the Pages-panel selection (#296), set-layer-visibility
+actions (#292), find text in mixed horizontal/vertical PDFs (#287), ideographic spaces preserved
+when rewriting paragraphs (#309), `.p12` files with armour or whitespace (#298), French and
+Simplified Chinese catalogs (#291, #311), RTL file names in the tab strip (#285), annotation
+appearance box mapping (#277) and `/Widths` handling (#276), Flatpak and AppImage packaging (#275),
+and `--root` confinement leak fixes (#164).
 
 Two crates that the architecture table listed as *reserved* now exist: **`measure`** (L4, #208)
 and **`xfa`** (L3, #121).
+
+Most of this is community work. The first-party lane should pick what the community is *not*
+doing — the foundation items below — rather than racing it on features.
 
 ## Blockers
 
@@ -51,9 +69,9 @@ and **`xfa`** (L3, #121).
    text) — together roughly a third of the remaining effort. Phase F clears it: tranche 4.1 is
    active now, tranche 4.2 follows the harness.
 4. **Fidelity is unmeasured.** No side-by-side harness exists. `shipped` means "has at least one
-   cited test", and many shipped features rest on exactly one. Treat 51.0% as a coverage map, not
+   cited test", and many shipped features rest on exactly one. Treat 51.2% as a coverage map, not
    a quality claim. Phase H exists to fix the measurement.
-5. **93 shipped features have no automation tool**, contradicting AGENTS.md §3. Tracked as D4;
+5. **94 shipped features have no automation tool**, contradicting AGENTS.md §3. Tracked as D4;
    `cargo xtask parity` lists them by name.
 6. **The original `plan/` is not present on this machine.** It is gitignored and local-only, so
    the Acrobat observation notes (`plan/acrobat/`) and the ADRs are unavailable here. UI-fidelity

@@ -264,7 +264,7 @@ work under "foundation and architecture before features".
 
 Pick these up when they block, or between larger tasks.
 
-- [ ] **D4. Tools for toolless features.** `cargo xtask parity` reports **93 shipped features with
+- [ ] **D4. Tools for toolless features.** `cargo xtask parity` reports **94 shipped features with
       no automation tool**. That contradicts AGENTS.md §3. *Accept:* the parity note shrinks, each
       new tool has an end-to-end test in `crates/automation/tests/automation.rs`.
 - [ ] **D5. Crate READMEs.** 13 crates have none (`compare`, `cos`, `crypt`, `edit`, `engine`,
