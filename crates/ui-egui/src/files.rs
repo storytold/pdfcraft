@@ -286,6 +286,10 @@ impl PdfCraftApp {
 
     /// Copy the selected pages (or the current page) into a new unsaved document tab.
     pub fn extract_selection(&mut self) {
+        // What's typed in a form field is part of the document (#166).
+        if !self.commit_form_typing() {
+            return;
+        }
         let Some((i, id)) = self.active_ids() else { return };
         let pages = self.views[i].target_pages();
         let stem = self.session.get(id).map(|d| strip_pdf(&d.name).to_string()).unwrap_or_default();
@@ -408,6 +412,10 @@ impl PdfCraftApp {
     /// Split the active document and write the parts: into a chosen folder (desktop, written on
     /// a later frame once the user has chosen it) or as downloads (web).
     pub fn split_active(&mut self, plan: &SplitPlan) {
+        // What's typed in a form field is part of the document (#166).
+        if !self.commit_form_typing() {
+            return;
+        }
         let Some((_, id)) = self.active_ids() else { return };
         let stem = self.session.get(id).map(|d| strip_pdf(&d.name).to_string()).unwrap_or_else(|| "document".into());
         let (parts, titles) = match plan {
@@ -502,6 +510,10 @@ impl PdfCraftApp {
     /// Export all comments / form data: the format follows the file name's extension.
     /// Export a PDF ▸ Word, HTML or RTF: ask where (`save_override` in tests), then write.
     pub fn export_office_dialog(&mut self, format: pdfcraft_engine::compare::OfficeFormat) {
+        // What's typed in a form field is part of the document (#166).
+        if !self.commit_form_typing() {
+            return;
+        }
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
@@ -593,12 +605,20 @@ impl PdfCraftApp {
     }
 
     pub fn export_data_dialog(&mut self, comments: bool, fields: bool) {
+        // What's typed in a form field is part of the document (#166).
+        if !self.commit_form_typing() {
+            return;
+        }
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         #[cfg(not(target_arch = "wasm32"))]
         {
             let write = move |app: &mut Self, path: std::path::PathBuf| {
+                // Include what was typed while the save panel was open (#166).
+                if !app.commit_typing_in(id) {
+                    return;
+                }
                 let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
                 let format = pdfcraft_engine::DataFormat::from_extension(&ext).unwrap_or(pdfcraft_engine::DataFormat::Xfdf);
                 match app.session.export_data(id, format, comments, fields) {

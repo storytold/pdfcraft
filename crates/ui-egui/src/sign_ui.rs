@@ -268,6 +268,11 @@ impl PdfCraftApp {
 
     /// Sign as …: open the ID, sign, save the signed file (Save As), and show it.
     fn finish_signing(&mut self) -> Result<(), String> {
+        // What's typed in a form field is signed with the document (#166). A rejected value keeps
+        // the dialog open; the notice says why.
+        if !self.commit_form_typing() {
+            return Err(String::new());
+        }
         let Some((_, doc_id)) = self.active_ids() else { return Err("no document".into()) };
         let d = self.sign_draft.clone().ok_or("nothing to sign")?;
         let entry = d.selected.and_then(|i| self.digital_ids.get(i)).cloned().ok_or("Choose a digital ID.")?;
@@ -296,6 +301,11 @@ impl PdfCraftApp {
         let name = self.session.get(doc_id).map(|d| d.name.clone()).unwrap_or_default();
         let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         let sign_and_save = move |app: &mut Self, path: PathBuf| -> Result<(), String> {
+            // Sign what was typed while the save panel was open, too (#166); a refused value
+            // has said why already.
+            if !app.commit_typing_in(doc_id) {
+                return Err(String::new());
+            }
             let signed = app.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?;
             crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()).map_err(|e| format!("Could not save: {e}"))?;
             app.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
@@ -316,7 +326,9 @@ impl PdfCraftApp {
                 // meanwhile. Once the picker shows, the dialog closes; an error from here on
                 // arrives as a notice. If no picker could show, the dialog stays open.
                 let asked = self.ask_one(crate::pickers::Ask::Save(dialog), Some(doc_id), move |app, path| {
-                    if let Err(e) = sign_and_save(app, path) {
+                    if let Err(e) = sign_and_save(app, path)
+                        && !e.is_empty()
+                    {
                         app.notify(e);
                     }
                 });

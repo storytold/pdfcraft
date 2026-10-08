@@ -34,6 +34,9 @@ pub struct Focus {
 #[derive(Clone, Debug, Default)]
 pub struct FormView {
     pub focus: Option<Focus>,
+    /// The draft whose edit is queued (`DocView::pending_edit`): if the field refuses the value,
+    /// the editor reopens with it rather than losing the typing.
+    pub(crate) committed: Option<Focus>,
     /// A message for the app to show (e.g. "buttons run JavaScript").
     pub notice: Option<FormNotice>,
     /// A push button was clicked: (its field name, what it does).
@@ -141,16 +144,25 @@ pub(crate) fn page_input(
     true
 }
 
-/// The edit for the focused field, if its draft differs from the field's value.
-fn commit(view: &mut DocView, form: &[FormField]) {
-    let Some(focus) = view.forms.focus.take() else { return };
-    let Some(f) = form.iter().find(|f| f.name == focus.name) else { return };
+/// The edit the focused field's draft makes, if it differs from the field's value.
+pub(crate) fn draft_edit(focus: &Focus, form: &[FormField]) -> Option<Edit> {
+    let f = form.iter().find(|f| f.name == focus.name)?;
     let value = match f.kind {
-        FormFieldKind::Text if f.value.first().map(String::as_str).unwrap_or("") != focus.text => FieldValue::Text(focus.text),
-        FormFieldKind::List if f.has(field_flags::MULTI_SELECT) && focus.picked != f.value => FieldValue::Choice(focus.picked),
-        _ => return,
+        FormFieldKind::Text if f.value.first().map(String::as_str).unwrap_or("") != focus.text => FieldValue::Text(focus.text.clone()),
+        FormFieldKind::List if f.has(field_flags::MULTI_SELECT) && focus.picked != f.value => FieldValue::Choice(focus.picked.clone()),
+        _ => return None,
     };
-    view.pending_edit = Some(Edit::SetFieldValue { name: f.name.clone(), value });
+    Some(Edit::SetFieldValue { name: f.name.clone(), value })
+}
+
+/// Close the focused field's editor, queueing the edit for its draft if it differs from the
+/// field's value.
+pub(crate) fn commit(view: &mut DocView, form: &[FormField]) {
+    let Some(focus) = view.forms.focus.take() else { return };
+    if let Some(edit) = draft_edit(&focus, form) {
+        view.pending_edit = Some(edit);
+        view.forms.committed = Some(focus);
+    }
 }
 
 const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];

@@ -443,6 +443,9 @@ pub struct PdfCraftApp {
     last_autosave: f64,
     pending_recovered: Option<RecoveryMeta>,
     allow_quit: bool,
+    /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
+    /// `registry_shortcuts`).
+    deferred_commands: Vec<(&'static str, Option<DocId>)>,
     /// The dialog seen at the last check, and a counter bumped whenever it changes (see
     /// [`Self::dialog_epoch`]).
     dialog_seen: Option<Dialog>,
@@ -627,6 +630,7 @@ impl PdfCraftApp {
             last_autosave: 0.0,
             pending_recovered: None,
             allow_quit: false,
+            deferred_commands: Vec::new(),
             dialog_seen: None,
             dialog_epoch: 0,
             ctx: None,
@@ -1424,6 +1428,8 @@ impl eframe::App for PdfCraftApp {
         let now = ctx.input(|i| i.time);
         self.autosave_tick(now);
         self.poll_updates();
+        // Shortcuts deferred last frame: the text field has taken that frame's typing since.
+        let deferred = std::mem::take(&mut self.deferred_commands);
         self.shortcuts(ctx);
         // Scrolling is transient: never resume after changing tabs, opening a modal/palette,
         // or returning to a window that lost focus.
@@ -1433,7 +1439,16 @@ impl eframe::App for PdfCraftApp {
                 view.auto_scroll.cancel();
             }
         }
-        self.process_pending_edits();
+        // A field that refused its value this frame keeps the shortcut from saving or printing
+        // behind the user's back; so does a save prompt opened since.
+        if self.process_pending_edits() && self.close_request.is_none() {
+            for (id, doc) in deferred {
+                // Only in the document the shortcut was pressed in.
+                if self.active_ids().map(|(_, active)| active) == doc {
+                    self.execute(id);
+                }
+            }
+        }
         self.poll_export();
         self.poll_ocr();
         self.poll_action();
@@ -1477,6 +1492,8 @@ impl eframe::App for PdfCraftApp {
                 },
             );
             dialogs::show(self, &ctx);
+            // Notices too: a refused field value or a failed save must be seen in full screen.
+            widgets::toast(self, &ctx);
             return;
         }
         chrome::tab_strip(self, ui);

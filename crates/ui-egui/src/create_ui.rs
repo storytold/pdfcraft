@@ -243,6 +243,10 @@ impl PdfCraftApp {
     /// Reduce File Size: write a compacted copy with images downsampled (the open document is
     /// unchanged).
     pub(crate) fn reduce_file_size(&mut self) {
+        // What's typed in a form field is part of the document (#166).
+        if !self.commit_form_typing() {
+            return;
+        }
         let Some((_, id)) = self.active_ids() else { return };
         let result = self.session.reduced_bytes(id).map(|(b, _)| (b, String::new()));
         self.save_optimized(id, "reduced", result);

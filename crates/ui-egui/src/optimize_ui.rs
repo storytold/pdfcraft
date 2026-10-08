@@ -190,6 +190,10 @@ pub(crate) fn audit_body(ui: &mut egui::Ui, rows: &[pdfcraft_engine::optimize::S
 impl PdfCraftApp {
     /// Optimize PDF with the dialog's choices and save the copy.
     pub fn optimize_with_draft(&mut self) {
+        // What's typed in a form field is part of the document (#166).
+        if !self.commit_form_typing() {
+            return;
+        }
         let Some((_, id)) = self.active_ids() else { return };
         let d = self.optimize_draft.clone();
         let result = self.session.optimized_bytes(id, &d.settings, &d.discard).map(|(b, r)| {

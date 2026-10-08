@@ -102,10 +102,13 @@ impl PdfCraftApp {
     }
 
     /// Apply any edit a view queued this frame (organize toolbar, keys).
-    pub(crate) fn process_pending_edits(&mut self) {
-        let Some(i) = self.active else { return };
-        if let Some(edit) = self.views.get_mut(i).and_then(|v| v.pending_edit.take()) {
-            self.apply_edit(edit);
+    /// Returns false when a field refused the typing queued for it (its editor is open again).
+    pub(crate) fn process_pending_edits(&mut self) -> bool {
+        let Some(i) = self.active else { return true };
+        let applied = self.apply_queued_edit(i);
+        if !applied {
+            // Nor may a shortcut pressed with it (⌘S right after Enter) run behind the refusal.
+            self.deferred_commands.clear();
         }
         match self.views.get_mut(i).and_then(|v| v.pending_action.take()) {
             Some(crate::canvas::ViewAction::InsertFromFile) => self.insert_from_file_dialog(),
@@ -115,11 +118,16 @@ impl PdfCraftApp {
             Some(crate::canvas::ViewAction::PastePages) => self.paste_pages(),
             None => {}
         }
+        applied
     }
 
     /// Organize ▸ Copy / Cut: remember the selected pages (the document as it is now); Cut also
     /// deletes them (one page always stays).
     pub fn copy_pages(&mut self, cut: bool) {
+        // What's typed in a form field is part of the document (#166).
+        if !self.commit_form_typing() {
+            return;
+        }
         let Some((i, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let pages = self.views[i].target_pages();
@@ -154,6 +162,80 @@ impl PdfCraftApp {
         }
     }
 
+    /// Make the active document say what its form shows (#166): apply an edit still queued on
+    /// its tab, then commit the text in a field's open editor, which otherwise commits only on
+    /// Enter, Tab or clicking away (the editor closes, as clicking away would). Run before
+    /// anything reads the document: Save, Print, Export, Optimize, Sign, Extract, Split, Copy
+    /// pages and button scripts.
+    ///
+    /// Returns false when the field rejects the value (a validation script or format; the user
+    /// is told why). The editor stays open with the text, and the caller must stop: nothing is
+    /// saved, printed or exported without it.
+    pub(crate) fn commit_form_typing(&mut self) -> bool {
+        let Some((i, id)) = self.active_ids() else { return true };
+        if !self.apply_queued_edit(i) {
+            return false;
+        }
+        let Some(draft) = self.views.get(i).and_then(|v| v.forms.focus.clone()) else { return true };
+        let Some(edit) = self.session.get(id).and_then(|d| crate::forms_ui::draft_edit(&draft, &d.form)) else {
+            return true; // nothing typed that the document doesn't already have
+        };
+        if let Some(view) = self.views.get_mut(i) {
+            view.forms.focus = None;
+        }
+        if self.apply_edit(edit) {
+            return true;
+        }
+        if let Some(view) = self.views.get_mut(i) {
+            let mut draft = draft;
+            draft.request_focus = true;
+            view.forms.focus = Some(draft);
+        }
+        false
+    }
+
+    /// Apply the edit queued on tab `i` (the active one). Returns false only when it was a
+    /// field's typing and the field refused it (#166): the editor reopens with the text, and the
+    /// user has been told why, so the typing isn't lost and the caller can stop.
+    fn apply_queued_edit(&mut self, i: usize) -> bool {
+        let Some(edit) = self.views.get_mut(i).and_then(|v| v.pending_edit.take()) else { return true };
+        let committed = self.views.get_mut(i).and_then(|v| v.forms.committed.take());
+        let typed = match (&edit, &committed) {
+            (Edit::SetFieldValue { name, .. }, Some(draft)) => *name == draft.name,
+            _ => false,
+        };
+        if self.apply_edit(edit) || !typed {
+            return true;
+        }
+        if let (Some(mut draft), Some(view)) = (committed, self.views.get_mut(i)) {
+            draft.request_focus = true;
+            view.forms.focus = Some(draft);
+        }
+        false
+    }
+
+    /// [`Self::commit_form_typing`] for document `id`, which may not be the active tab (a save
+    /// panel answering later, Close All). If its tab has typing or a queued edit, the tab is
+    /// brought forward first, so the commit and any field scripts act on that document.
+    pub(crate) fn commit_typing_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        if self.active != Some(i) {
+            let typing = self.views.get(i).is_some_and(|v| v.pending_edit.is_some() || v.forms.focus.is_some());
+            if !typing {
+                return true;
+            }
+            self.active = Some(i);
+        }
+        self.commit_form_typing()
+    }
+
+    /// Whether tab `index` has work that isn't saved: edits, or form typing not committed yet.
+    pub(crate) fn has_unsaved_work(&self, index: usize) -> bool {
+        let Some(v) = self.views.get(index) else { return false };
+        let Some(doc) = self.session.get(v.id) else { return false };
+        doc.dirty || v.pending_edit.is_some() || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
+    }
+
     /// Save the active document. Returns `true` if it was written.
     pub fn save_active(&mut self, target: SaveTarget) -> bool {
         match self.active {
@@ -172,6 +254,12 @@ impl PdfCraftApp {
     /// [`Self::save_view`], then `after` once the document is written: now, or on a later frame
     /// when the user had to choose where. `after` never runs when the save fails or is cancelled.
     pub(crate) fn save_then(&mut self, index: usize, target: SaveTarget, after: impl FnOnce(&mut Self) + Send + 'static) -> bool {
+        // What's typed in a field is part of what's saved (#166).
+        if let Some(id) = self.views.get(index).map(|v| v.id)
+            && !self.commit_typing_in(id)
+        {
+            return false;
+        }
         let Some(id) = self.views.get(index).map(|v| v.id) else { return false };
         let Some(doc) = self.session.get(id) else { return false };
         let (name, path) = (doc.name.clone(), doc.path.clone());
@@ -229,6 +317,11 @@ impl PdfCraftApp {
     /// Write document `id` to `dest` and make it the document's file. Returns `true` if written.
     #[cfg(not(target_arch = "wasm32"))]
     fn save_doc_to(&mut self, id: pdfcraft_engine::DocId, dest: &str) -> bool {
+        // Save As answers on a later frame: commit what was typed meanwhile, too (#166), even
+        // if another tab is active by then.
+        if !self.commit_typing_in(id) {
+            return false;
+        }
         let Some(name) = self.session.get(id).map(|d| d.name.clone()) else {
             self.notify_tr("The document was closed before it could be saved.");
             return false;
@@ -264,8 +357,10 @@ impl PdfCraftApp {
 
     /// Close a tab, asking first if it has unsaved changes.
     pub fn request_close_tab(&mut self, index: usize) {
-        let dirty = self.views.get(index).and_then(|v| self.session.get(v.id)).is_some_and(|d| d.dirty);
-        if dirty && let Some(id) = self.views.get(index).map(|v| v.id) {
+        // Text typed into a field counts as an unsaved change.
+        if self.has_unsaved_work(index)
+            && let Some(id) = self.views.get(index).map(|v| v.id)
+        {
             self.close_request = Some(CloseRequest::Tab(id));
         } else {
             self.close_tab(index);
@@ -275,7 +370,7 @@ impl PdfCraftApp {
     /// File ▸ Close all: clean documents close at once; each one with unsaved changes asks.
     pub fn close_all(&mut self) {
         for i in (0..self.views.len()).rev() {
-            if !self.session.get(self.views[i].id).is_some_and(|d| d.dirty) {
+            if !self.has_unsaved_work(i) {
                 self.close_tab(i);
             }
         }
@@ -302,7 +397,7 @@ impl PdfCraftApp {
 
     /// The first tab with unsaved changes.
     pub fn first_dirty(&self) -> Option<usize> {
-        self.views.iter().position(|v| self.session.get(v.id).is_some_and(|d| d.dirty))
+        (0..self.views.len()).find(|&i| self.has_unsaved_work(i))
     }
 
     /// Answer the save prompt: `Some(true)` save, `Some(false)` discard, `None` cancel.
@@ -328,6 +423,9 @@ impl PdfCraftApp {
             Some(false) => self.close_and_continue(ctx, index, req),
             Some(true) => {
                 let Some(id) = self.views.get(index).map(|v| v.id) else { return };
+                // Bring the document forward: what's typed in its form is committed and saved
+                // with it, and a field that rejects the value is shown where the user can fix it.
+                self.active = Some(index);
                 // Close only once the save has actually been written, which may be on a later
                 // frame when the user has to choose where. A failed or cancelled save keeps the
                 // document open.
@@ -364,6 +462,7 @@ impl PdfCraftApp {
         if !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
+        // `first_dirty` counts text typed into a field as an unsaved change.
         if !self.allow_quit && self.first_dirty().is_some() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.close_request = Some(CloseRequest::Quit);
