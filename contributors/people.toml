@@ -31,3 +31,8 @@ sync_github_name = false
 real_name = "Jose Antonio Abad"
 display_name = "jaabadmi"
 sync_github_name = false
+
+[people.AutoHenry]
+real_name = "Hal Goff"
+display_name = "Hal Goff, HG Studio"
+sync_github_name = false
