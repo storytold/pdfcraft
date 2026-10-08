@@ -763,6 +763,11 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
             let t = &af::keystroke(&f.actions.format, &f.name, t).map_err(FormError::Invalid)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
             let t = &scripting::accept(doc, f, t, scripts)?;
+            // Check before anything is stored: the appearance shows `t` with a WinAnsi simple
+            // font, which turns what it can't show into '?' (issue #125).
+            if !pdfcraft_fonts::win_ansi_encodable(t) {
+                return invalid(format!("{t:?} has characters the field's appearance font can't show (standard-14 Helvetica is WinAnsi-only)"));
+            }
             doc.update_dict(f.obj, |d| {
                 if t.is_empty() {
                     d.remove(b"V");
@@ -888,8 +893,8 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
     };
     for w in &f.widgets {
         let stream = match &shown {
-            Some(s) => appearance::field_appearance_as(doc, f, w, std::slice::from_ref(s), false),
-            None => appearance::field_appearance(doc, f, w, values),
+            Some(s) => appearance::field_appearance_as(doc, f, w, std::slice::from_ref(s), false)?,
+            None => appearance::field_appearance(doc, f, w, values)?,
         };
         let ap = doc.add(Object::Stream(stream));
         let mut apd = Dict::new();

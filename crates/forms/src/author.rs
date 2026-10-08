@@ -544,7 +544,7 @@ pub fn redraw_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
     for w in &f.widgets {
         let ap = match f.kind {
             FieldKind::Text | FieldKind::Combo | FieldKind::List => {
-                let s = appearance::field_appearance(doc, &f, w, &f.value);
+                let s = appearance::field_appearance(doc, &f, w, &f.value)?;
                 let r = doc.add(Object::Stream(s));
                 let mut d = Dict::new();
                 d.set(b"N".to_vec(), Object::Ref(r));

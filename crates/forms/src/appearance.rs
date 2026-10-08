@@ -10,9 +10,9 @@
 //! visible. Widths use the approximate Helvetica metrics of `pdfcraft-fonts`.
 
 use pdfcraft_cos::{Dict, Document, Object, Stream};
-use pdfcraft_fonts::{helvetica_width, literal, win_ansi, wrap};
+use pdfcraft_fonts::{helvetica_width, literal, win_ansi, win_ansi_encodable, wrap};
 
-use crate::{Field, FieldKind, Widget, acroform, flags};
+use crate::{Field, FieldKind, FormError, Widget, acroform, flags};
 
 /// Format a number for content streams.
 fn n(v: f64) -> String {
@@ -171,13 +171,22 @@ fn frame(doc: &Document, wd: &Dict, w: f64, h: f64) -> (String, f64) {
 }
 
 /// The appearance of a text or choice field's widget showing `values`.
-pub fn field_appearance(doc: &Document, f: &Field, w: &Widget, values: &[String]) -> Stream {
+pub fn field_appearance(doc: &Document, f: &Field, w: &Widget, values: &[String]) -> Result<Stream, FormError> {
     field_appearance_as(doc, f, w, values, true)
 }
 
 /// [`field_appearance`], where `format` false means `values` are already what to show (a
 /// custom Format script ran).
-pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> Stream {
+pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> Result<Stream, FormError> {
+    // The appearance is drawn with a WinAnsi simple font, which turns what it can't show into
+    // '?'; refuse rather than print the wrong thing (the stored value stays untouched).
+    for v in values {
+        if !win_ansi_encodable(v) {
+            return Err(FormError::Invalid(format!(
+                "{v:?} has characters the field's appearance font can't show (standard-14 Helvetica is WinAnsi-only)"
+            )));
+        }
+    }
     // The Format event: what is shown, not what is stored.
     let formatted: Vec<String>;
     let values = if format
@@ -309,7 +318,7 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     d.set(b"Subtype".to_vec(), Object::name("Form"));
     d.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, width, height].iter().map(|v| Object::Real(*v)).collect()));
     d.set(b"Resources".to_vec(), Object::Dict(res));
-    Stream::flate(d, &content)
+    Ok(Stream::flate(d, &content))
 }
 
 /// On/Off appearances for a check box or radio button that has none (a check mark or a dot,
