@@ -1,0 +1,15 @@
+# pdfcraft-measure
+
+Layer L4 implements distance, connected-line perimeter and simple polygon area measurements in PDF user space. It uses the public measurement model in ISO 32000-2 §12.9 (measurement properties: viewports, rectilinear measure and number format dictionaries) and the measurement intents of line, polyline and polygon annotations (§12.5.6).
+
+Measurements are ordinary Line, PolyLine or Polygon annotations with a rectilinear Measure dictionary and a normal appearance containing the numeric caption. Their scale is stored with the annotation, so changing a drawing scale does not change earlier measurements. Moving, restyling, replying to and deleting them uses the existing comment workflow.
+
+Scale::calibrate derives a conversion from two points and a known real-world distance. set_scale appends a named rectangular page viewport, preserving existing viewports. scale_at selects the last viewport containing the first measurement vertex. Default measurements account for UserUnit; display-coordinate conversion accounts for crop boxes and page rotation.
+
+The desktop Measure objects panel exposes all three tools, live values and coordinate deltas, 45-degree constraints, vertex cancellation, snapping, calibration and CSV export. Automation provides measure_distance, measure_perimeter, measure_area, measure_info, measure_list, measure_scale, measure_snap and measure_export. Tool coordinates and explicit units-per-point scales use physical display points.
+
+Snapping interprets painted paths and nested Form XObjects, including graphics-state transforms. Cubic paths are flattened to a maximum deviation of 0.2 user units. Raster edges, glyph outlines, clipping and optional-content visibility are not interpreted. Extraction stops at 20,000 segments, 40,000 endpoint and midpoint targets, 16 MiB of decoded content, 4,096 streams, 32 nested forms or 256 nested `q`; intersection searches use at most 256 nearby segments. Extraction is lenient: a content stream that can't be decoded is skipped and counted, and the rest of the page still snaps. The UI and automation report these limits.
+
+Imported single-unit decimal rectilinear scales support differing X and Y conversion factors when CYX is present. Unit labels are text strings and may be non-ASCII ("m²"). Compound units (such as feet and inches), fraction formats and non-rectilinear scales are not supported: `list` reports such measurements, and ones with invalid geometry, under `unsupported` with a reason instead of failing, and leaves their PDF data untouched. A polygon whose last vertex repeats the first is treated as closed. Interoperability with Acrobat-authored measurements is untested. Geospatial and 3D measuring are outside this component.
+
+Synthetic tests cover geometry, calibration, viewport precedence, coordinate transforms, saved annotations and captions, snapping targets, cyclic forms, malformed arguments, permissions, undo, save/reopen, rendering and spreadsheet-safe CSV. No sample PDF or font assets are added.

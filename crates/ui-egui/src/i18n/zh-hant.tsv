@@ -1815,3 +1815,48 @@
 	Fill & Sign: remove saved initials	填寫與簽署：刪除已儲存的姓名縮寫
 	Change signature	變更簽名
 	Change initials	變更姓名縮寫
+
+	Measure distance	測量距離
+	Measure perimeter	測量周長
+	Measure area	測量面積
+	Set measurement scale	設定測量比例
+	Measurement information	測量資訊
+	Measurement snapping	測量吸附
+	Export measurements as CSV	將測量結果匯出為 CSV
+	Distance	距離
+	Perimeter	周長
+	Area	面積
+	Drawing scale	圖面比例
+	Snapping	吸附
+	Export measurements	匯出測量結果
+	Open a PDF to measure it.	開啟 PDF 以進行測量。
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	按一下頂點。按 Enter 或按兩下以完成周長或面積測量。按一下起點以封閉區域。
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift 限制為 45 度角。Backspace 移除頂點。Escape 取消。
+	Angle	角度
+	Click the first point to begin.	按一下起點以開始。
+	Snap to drawing	吸附至圖面
+	Endpoints	端點
+	Midpoints	中點
+	Intersections	交點
+	Paths	路徑
+	Sensitivity	靈敏度
+	Unit	單位
+	Decimals	小數位數
+	Calibrate from two points	使用兩點校準
+	Entire page	整個頁面
+	Viewport rectangle in page points (x, y, width, height)	以頁面點數指定視埠矩形（x、y、寬度、高度）
+	Viewport	視埠
+	Apply scale	套用比例
+	Saved measurements	已儲存的測量
+	Saved measurements.	已儲存測量結果。
+	Endpoint	端點
+	Midpoint	中點
+	Intersection	交點
+	Path	路徑
+	This drawing exceeds the snapping limit; only the first paths are used.	此圖面超過吸附上限；僅使用最前面的路徑。
+	Some page content couldn't be read; snapping uses the rest.	部分頁面內容無法讀取；將對其餘內容進行貼齊。
+	Unsupported measurements	不支援的測量
+	Label	標籤
+	{n} measurements use an unsupported format and are left out.	{n} 個測量使用了不支援的格式，已被排除。
+	This area has too many overlapping paths; intersection snapping is limited.	此區域有太多重疊路徑；交點吸附受到限制。
+	This measurement needs at least {n} points.	此測量至少需要 {n} 個點。

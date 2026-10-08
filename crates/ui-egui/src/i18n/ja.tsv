@@ -1822,3 +1822,48 @@
 	Fill & Sign: remove saved initials	入力と署名：保存済みのイニシャルを削除
 	Change signature	署名を変更
 	Change initials	イニシャルを変更
+
+	Measure distance	距離を測定
+	Measure perimeter	周長を測定
+	Measure area	面積を測定
+	Set measurement scale	測定縮尺を設定
+	Measurement information	測定情報
+	Measurement snapping	測定のスナップ
+	Export measurements as CSV	測定結果をCSVに書き出す
+	Distance	距離
+	Perimeter	周長
+	Area	面積
+	Drawing scale	図面の縮尺
+	Snapping	スナップ
+	Export measurements	測定結果を書き出す
+	Open a PDF to measure it.	測定するPDFを開いてください。
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	頂点をクリックします。Enterまたはダブルクリックで周長や面積の測定を終了します。最初の点をクリックすると面積を閉じます。
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shiftで45度刻みに制限します。Backspaceで頂点を削除し、Escapeで取り消します。
+	Angle	角度
+	Click the first point to begin.	最初の点をクリックして開始します。
+	Snap to drawing	図面にスナップ
+	Endpoints	端点
+	Midpoints	中点
+	Intersections	交点
+	Paths	パス
+	Sensitivity	感度
+	Unit	単位
+	Decimals	小数桁数
+	Calibrate from two points	2点で校正
+	Entire page	ページ全体
+	Viewport rectangle in page points (x, y, width, height)	ページ上の矩形（ポイント単位：x、y、幅、高さ）
+	Viewport	ビューポート
+	Apply scale	縮尺を適用
+	Saved measurements	保存済みの測定
+	Saved measurements.	測定結果を保存しました。
+	Endpoint	端点
+	Midpoint	中点
+	Intersection	交点
+	Path	パス
+	This drawing exceeds the snapping limit; only the first paths are used.	図面がスナップの上限を超えているため、最初のパスのみを使用します。
+	Some page content couldn't be read; snapping uses the rest.	ページの内容の一部を読み取れませんでした。残りの内容にスナップします。
+	Unsupported measurements	未対応の測定
+	Label	ラベル
+	{n} measurements use an unsupported format and are left out.	{n} 件の測定は未対応の形式のため除外されました。
+	This area has too many overlapping paths; intersection snapping is limited.	この領域は重なるパスが多すぎるため、交点へのスナップを制限します。
+	This measurement needs at least {n} points.	この測定には少なくとも{n}点が必要です。

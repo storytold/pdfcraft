@@ -151,6 +151,7 @@ pub struct DocView {
     pub block_drag: Option<crate::edit_text_ui::BlockDrag>,
     /// Commenting state: selected comment, gestures, composer.
     pub comments: crate::comments::CommentView,
+    pub measure: crate::measure_ui::MeasureView,
     /// Form filling state: the focused field.
     pub forms: crate::forms_ui::FormView,
     /// Prepare a form: the selected field and the gesture in progress.
@@ -262,6 +263,7 @@ impl DocView {
             block_drag: None,
             pending_action: None,
             comments: Default::default(),
+            measure: Default::default(),
             forms: Default::default(),
             prepare: Default::default(),
             content: Default::default(),
@@ -1018,6 +1020,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         QuickTool::Select => !preparing,
         QuickTool::Redact => true,
         QuickTool::Hand
+        | QuickTool::Measure(_)
         | QuickTool::Crop
         | QuickTool::Fill(_)
         | QuickTool::Field(_)
@@ -1194,6 +1197,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 
             // Comments: tools, selection, moving and resizing come before text selection.
             let pcx = comments::PageCx { page: i, xf: &xf, info, tool, prefs, allowed, hidden: comments_hidden };
+            if let QuickTool::Measure(measure_tool) = tool {
+                crate::measure_ui::page_input(ui, &resp, doc, view, &pcx, measure_tool);
+            }
+
             // Form fields take clicks first with the Select tool (as Acrobat fills fields in
             // every viewing mode); then comments; then text selection.
             if let QuickTool::Stamp(kind) = tool

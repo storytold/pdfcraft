@@ -1412,6 +1412,41 @@ fn guard_turns_a_panic_into_an_error() {
 }
 
 #[test]
+fn measurement_edits_are_transactional_and_honour_annotation_permissions() {
+    let mut session = Session::default();
+    let id = session.open("plan.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    let m = measure::NewMeasurement {
+        page: 0,
+        kind: measure::Kind::Distance,
+        points: vec![[10.0, 20.0], [40.0, 60.0]],
+        scale: measure::Scale::new(0.1, "m", 2).unwrap(),
+        style: Style::default(),
+        label: "Wall".into(),
+        author: "Tester".into(),
+    };
+    session.apply(id, Edit::AddMeasurement(m.clone())).unwrap();
+    let before = session.get(id).unwrap().bytes.clone();
+    assert_eq!(session.get(id).unwrap().measurements().unwrap().measurements[0].reading.label, "5.00 m");
+    let mut invalid = m.clone();
+    invalid.points[1][0] = f64::INFINITY;
+    assert!(session.apply(id, Edit::AddMeasurement(invalid)).is_err());
+    assert_eq!(session.get(id).unwrap().bytes, before);
+    session.undo(id).unwrap();
+    assert!(session.get(id).unwrap().measurements().unwrap().measurements.is_empty());
+    session.redo(id).unwrap();
+    assert_eq!(session.get(id).unwrap().bytes, before);
+    let p = pdfcraft_cos::Permissions { bits: 0, owner: false };
+    assert_eq!(check_permission(&Edit::AddMeasurement(m), &p), Err(EditError::NotPermitted("comments")));
+    assert_eq!(
+        check_permission(
+            &Edit::SetMeasurementScale { page: 0, bbox: [0.0, 0.0, 100.0, 100.0], name: "Detail".into(), scale: measure::Scale::default() },
+            &p
+        ),
+        Err(EditError::NotPermitted("comments"))
+    );
+}
+
+#[test]
 fn dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally() {
     let original = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(3)));
     let mut s = Session::new().with_clock(|| 1_700_000_000);

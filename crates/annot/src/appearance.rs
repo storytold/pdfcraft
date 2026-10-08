@@ -181,6 +181,11 @@ fn form(bbox: [f64; 4], content: &[u8], resources: Dict) -> Stream {
 
 /// Draw the normal appearance of an annotation, or `None` if this subtype/variant isn't supported.
 pub fn build(d: &Dict) -> Option<Stream> {
+    // Imported measurement appearances may include leaders, captions and formatting that
+    // this builder cannot reproduce. Preserve them rather than silently losing detail.
+    if d.contains(b"Measure") && !d.contains(b"PCMeasureValue") {
+        return None;
+    }
     let subtype = d.name(b"Subtype")?.to_vec();
     let rect = nums(d, b"Rect").filter(|r| r.len() == 4)?;
     let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
@@ -582,7 +587,31 @@ pub fn build(d: &Dict) -> Option<Stream> {
         }
         _ => return None,
     }
-    Some(form(rect, c.as_bytes(), res))
+    // PdfCraft measurement captions are kept separate from the comment's free-form text.
+    // A restyle regenerates the path and its value together.
+    let mut out = c.into_bytes();
+    if let Some(value) = d.get(b"PCMeasureValue").and_then(Object::as_string) {
+        let value = value.to_text();
+        if value.chars().count() <= 256 && matches!(subtype.as_slice(), b"Line" | b"PolyLine" | b"Polygon") {
+            let size = 10.0;
+            let x = (rect[0] + rect[2] - text_width(&value, size)) * 0.5;
+            let y = rect[3] - 12.0;
+            let col = stroke.unwrap_or([0.0, 0.47, 0.84]);
+            out.extend(format!("{}BT /Helv {} Tf {} {} Td ", rg(col), n(size), n(x), n(y)).bytes());
+            // WinAnsi bytes (e.g. 0xB2 for "²") go into the stream as-is, not through UTF-8.
+            out.extend(literal(&win_ansi(&value)));
+            out.extend_from_slice(b" Tj ET\n");
+            let mut font = Dict::new();
+            font.set(b"Type".to_vec(), Object::name("Font"));
+            font.set(b"Subtype".to_vec(), Object::name("Type1"));
+            font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+            font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+            let mut fonts = Dict::new();
+            fonts.set(b"Helv".to_vec(), Object::Dict(font));
+            res.set(b"Font".to_vec(), Object::Dict(fonts));
+        }
+    }
+    Some(form(rect, &out, res))
 }
 
 /// A rubber stamp: a rounded frame (a pointed tag for sign-here stamps) with the label in bold

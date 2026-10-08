@@ -768,3 +768,59 @@ fn control_default_workspace_and_session_override() {
     h.state_mut().open_bytes("another.pdf", None, fixture(1)).unwrap();
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read");
 }
+
+#[test]
+fn measurement_tools_draw_live_calibrate_save_and_export() {
+    let (mut h, c) = harness_pages(1);
+    let doc = h.state().views[0].id;
+    h.state_mut().set_option("zoom", "100").unwrap();
+    ok(&mut h, &c, "ui.command", json!({"id":"measure.scale"}));
+    h.run_steps(3);
+    h.state_mut().views[0].measure.drawing_points = 10.0;
+    h.state_mut().views[0].measure.real_distance = 1.0;
+    h.state_mut().views[0].measure.unit = "m".into();
+    h.get_by_label("Apply scale").click();
+    h.run_steps(3);
+    let scale = h.state().session.get(doc).unwrap().measurement_scale(0, [20.0, 20.0]).unwrap();
+    assert!((scale.x - 0.1).abs() < 1e-10);
+    let click = |h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, x: f32, y: f32| {
+        let r = h.state().views[0].page_screen_rect(0).unwrap();
+        ok(h, c, "ui.click", json!({"x":r.left()+x*r.width()/200.0,"y":r.top()+y*r.height()/300.0}));
+        h.run_steps(2);
+    };
+    for (command, points) in [
+        ("measure.distance", vec![(20.0, 30.0), (80.0, 110.0)]),
+        ("measure.perimeter", vec![(20.0, 130.0), (80.0, 130.0), (80.0, 210.0)]),
+        ("measure.area", vec![(100.0, 130.0), (160.0, 130.0), (160.0, 210.0), (100.0, 210.0)]),
+    ] {
+        ok(&mut h, &c, "ui.command", json!({"id":command}));
+        for (x, y) in points {
+            click(&mut h, &c, x, y);
+        }
+        if command != "measure.distance" {
+            ok(&mut h, &c, "ui.key", json!({"key":"Enter"}));
+            h.run_steps(3);
+        }
+    }
+    let measurements = h.state().session.get(doc).unwrap().measurements().unwrap().measurements;
+    assert_eq!(measurements.len(), 3);
+    for (m, value) in measurements.iter().zip([10.0, 14.0, 48.0]) {
+        assert!((m.reading.value - value).abs() < 0.01, "{m:?}");
+    }
+    ok(&mut h, &c, "ui.command", json!({"id":"edit.undo"}));
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(doc).unwrap().measurements().unwrap().measurements.len(), 2);
+    ok(&mut h, &c, "ui.command", json!({"id":"edit.redo"}));
+    h.run_steps(2);
+    let dir = std::env::temp_dir().join(format!("pdfcraft-measure-ui-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    h.state_mut().export_dir_override = Some(dir.to_string_lossy().into());
+    ok(&mut h, &c, "ui.command", json!({"id":"measure.export"}));
+    h.run_steps(2);
+    assert!(std::fs::read_to_string(dir.join("measurements.csv")).unwrap().contains("m^2"));
+    h.state_mut().set_option("quick", "measure-calibrate").unwrap();
+    click(&mut h, &c, 30.0, 50.0);
+    click(&mut h, &c, 130.0, 50.0);
+    assert!((h.state().views[0].measure.drawing_points - 100.0).abs() < 0.01);
+    let _ = std::fs::remove_dir_all(dir);
+}

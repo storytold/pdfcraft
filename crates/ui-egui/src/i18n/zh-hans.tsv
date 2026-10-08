@@ -1634,6 +1634,51 @@
 	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	在 PdfCraft 中打开的文件会显示在这里。将 PDF 拖放到任意位置即可打开。
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft 可离线工作。无遥测、无账号，除非您自行添加服务商，否则无云端处理。
 
+	Measure distance	测量距离
+	Measure perimeter	测量周长
+	Measure area	测量面积
+	Set measurement scale	设置测量比例
+	Measurement information	测量信息
+	Measurement snapping	测量吸附
+	Export measurements as CSV	将测量结果导出为 CSV
+	Distance	距离
+	Perimeter	周长
+	Area	面积
+	Drawing scale	图面比例
+	Snapping	吸附
+	Export measurements	导出测量结果
+	Open a PDF to measure it.	打开 PDF 以进行测量。
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	单击顶点。按 Enter 或双击以完成周长或面积测量。单击起点以闭合区域。
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift 限制为 45 度角。Backspace 移除顶点。Escape 取消。
+	Angle	角度
+	Click the first point to begin.	单击起点以开始。
+	Snap to drawing	吸附到图面
+	Endpoints	端点
+	Midpoints	中点
+	Intersections	交点
+	Paths	路径
+	Sensitivity	灵敏度
+	Unit	单位
+	Decimals	小数位数
+	Calibrate from two points	使用两点校准
+	Entire page	整个页面
+	Viewport rectangle in page points (x, y, width, height)	以页面点数指定视口矩形（x、y、宽度、高度）
+	Viewport	视口
+	Apply scale	应用比例
+	Saved measurements	已保存的测量
+	Saved measurements.	已保存测量结果。
+	Endpoint	端点
+	Midpoint	中点
+	Intersection	交点
+	Path	路径
+	This drawing exceeds the snapping limit; only the first paths are used.	此图面超过吸附上限；仅使用最前面的路径。
+	Some page content couldn't be read; snapping uses the rest.	部分页面内容无法读取；将对其余内容进行对齐。
+	Unsupported measurements	不支持的测量
+	Label	标签
+	{n} measurements use an unsupported format and are left out.	{n} 个测量使用了不支持的格式，已被排除。
+	This area has too many overlapping paths; intersection snapping is limited.	此区域有太多重叠路径；交点吸附受到限制。
+	This measurement needs at least {n} points.	此测量至少需要 {n} 个点。
+
 # Remaining dialogs, generated history labels and diagnostics. Translated from the English meaning.
 	{0}: {1}	{0}：{1}
 	{dpi} pixels/inch	{dpi} 像素/英寸

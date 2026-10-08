@@ -39,6 +39,7 @@ pub use pdfcraft_forms::{
 
 pub use pdfcraft_a11y as a11y;
 pub use pdfcraft_edit::{BlockStyle, PageImage, TextBlock, TextLine};
+pub use pdfcraft_measure as measure;
 pub use pdfcraft_xfa::Report as XfaLayout;
 
 /// A change to an existing page image.
@@ -147,7 +148,8 @@ fn scope_of(edit: &Edit) -> Scope {
     match edit {
         // A file attachment also changes the Attachments list.
         Edit::AddAnnotation(a) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
-        Edit::AddAnnotation(_)
+        Edit::AddMeasurement(_)
+        | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
@@ -253,6 +255,29 @@ impl Document {
     /// Edit a PDF ▸ Edit text: the paragraphs on `page` (0-based).
     pub fn text_blocks(&self, page: usize) -> Vec<pdfcraft_edit::TextBlock> {
         self.editor.as_ref().and_then(|e| pdfcraft_edit::text_blocks(&e.cos, page).ok()).unwrap_or_default()
+    }
+
+    /// Saved measurement annotations, calculated from their geometry and PDF scales, plus
+    /// the ones that couldn't be read (unsupported formats are skipped, not fatal).
+    pub fn measurements(&self) -> Result<measure::Listing, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        Ok(measure::list(&e.cos))
+    }
+    pub fn measurement_scale(&self, page: usize, at: measure::Point) -> Result<measure::Scale, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        measure::scale_at(&e.cos, page, at).map_err(|e| e.to_string())
+    }
+    pub fn measurement_to_user(&self, page: usize, point: measure::Point) -> Result<measure::Point, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        measure::view_to_user(&e.cos, page, point).map_err(|e| e.to_string())
+    }
+    pub fn measurement_to_view(&self, page: usize, point: measure::Point) -> Result<measure::Point, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        measure::user_to_view(&e.cos, page, point).map_err(|e| e.to_string())
+    }
+    pub fn measurement_paths(&self, page: usize) -> Result<measure::snap::Geometry, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        measure::snap::geometry(&e.cos, page).map_err(|e| e.to_string())
     }
 
     /// A counter that changes with every edit (for caches of derived data).
@@ -677,6 +702,15 @@ pub enum Edit {
         prefix: String,
         first: u32,
     },
+    /// Add a calibrated distance, perimeter or area annotation.
+    AddMeasurement(measure::NewMeasurement),
+    /// Store a drawing scale for a rectangular viewport (PDF user space).
+    SetMeasurementScale {
+        page: usize,
+        bbox: [f64; 4],
+        name: String,
+        scale: measure::Scale,
+    },
     /// Add a comment (sticky note, highlight, shape, drawing, text box…).
     AddAnnotation(NewAnnotation),
     /// A custom stamp from a picture file (a PDF page or an image) on `page`. A zero-size
@@ -1010,6 +1044,8 @@ impl Edit {
             Edit::MoveBookmark { .. } => "Move bookmark".into(),
             Edit::SetBookmarkPage { .. } => "Set bookmark destination".into(),
             Edit::NumberPages { .. } => "Number pages".into(),
+            Edit::AddMeasurement(m) => format!("Measure {}", m.kind.name()),
+            Edit::SetMeasurementScale { .. } => "Set measurement scale".into(),
             Edit::AddAnnotation(a) => format!("Add {}", annotation_noun(&a.shape)),
             Edit::AddCustomStamp { .. } => "Add stamp".into(),
             Edit::DeleteAnnotation { .. } => "Delete comment".into(),
@@ -1146,7 +1182,8 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
                 Err(EditError::NotPermitted("page changes"))
             }
         }
-        Edit::AddAnnotation(_)
+        Edit::AddMeasurement(_)
+        | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
@@ -1159,7 +1196,8 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::MoveAnnotation { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
-        | Edit::SetAnnotationInfo { .. } => {
+        | Edit::SetAnnotationInfo { .. }
+        | Edit::SetMeasurementScale { .. } => {
             if p.annotate() {
                 Ok(())
             } else {
@@ -1323,6 +1361,10 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         }
         Edit::SetBookmarkPage { path, page } => pdfcraft_organize::set_bookmark_page(doc, path, *page)?,
         Edit::NumberPages { from, to, style, prefix, first } => pdfcraft_organize::number_pages(doc, *from, *to, *style, prefix, *first)?,
+        Edit::AddMeasurement(m) => {
+            measure::add(doc, m, &cx.meta())?;
+        }
+        Edit::SetMeasurementScale { page, bbox, name, scale } => measure::set_scale(doc, *page, *bbox, name, scale)?,
         Edit::AddAnnotation(a) => {
             pdfcraft_annot::add_annotation(doc, a, &cx.meta())?;
         }
@@ -1650,6 +1692,8 @@ pub enum EditError {
     Bookmark(#[from] pdfcraft_organize::OutlineError),
     #[error("{0}")]
     Comment(#[from] pdfcraft_annot::AnnotError),
+    #[error(transparent)]
+    Measure(#[from] measure::MeasureError),
     #[error("{0}")]
     Protection(String),
     #[error("{0}")]

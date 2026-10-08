@@ -30,6 +30,7 @@ mod crop;
 mod export_ui;
 mod js_ui;
 mod marks_ui;
+mod measure_ui;
 mod ocr_ui;
 mod optimize_ui;
 mod search_ui;
@@ -142,6 +143,7 @@ pub enum QuickTool {
     Hand,
     /// A commenting tool (Add comments).
     Comment(comments::CommentTool),
+    Measure(measure_ui::Tool),
     /// Crop pages by dragging a rectangle.
     Crop,
     /// A Fill & Sign tool.
@@ -1219,6 +1221,9 @@ impl PdfCraftApp {
                 // `--quick select|hand|note|freetext|highlight|underline|strikeout|ink|line|arrow|square|circle`
                 self.quick_tool = match value {
                     "select" => QuickTool::Select,
+                    measure if measure.starts_with("measure-") => QuickTool::Measure(
+                        measure_ui::Tool::from_name(measure.trim_start_matches("measure-")).ok_or_else(|| format!("unknown tool {measure}"))?,
+                    ),
                     "hand" => QuickTool::Hand,
                     "crop" => QuickTool::Crop,
                     "redact" => QuickTool::Redact,

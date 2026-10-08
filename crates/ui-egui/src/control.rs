@@ -563,6 +563,7 @@ impl Host for crate::PdfCraftApp {
                 "comment_composer_open": v.comments.composer.is_some(),
             })),
             "quick_tool": match self.quick_tool {
+                crate::QuickTool::Measure(t) => format!("measure-{}", t.name()),
                 crate::QuickTool::Select => "select".to_string(),
                 crate::QuickTool::Hand => "hand".to_string(),
                 crate::QuickTool::Crop => "crop".to_string(),

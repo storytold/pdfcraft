@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+pdfcraft-measure = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["jpeg", "tiff"] }
 pdfcraft-render = { workspace = true }
 pdfcraft-cos = { workspace = true }

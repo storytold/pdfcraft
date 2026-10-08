@@ -18,6 +18,7 @@ mod forms;
 mod links;
 #[cfg(feature = "mcp")]
 pub mod mcp;
+mod measure;
 mod printing;
 mod redact;
 mod signing;
@@ -525,6 +526,14 @@ impl Automation {
             "doc_print" => self.doc_print(&a)?,
             "doc_remove_hidden" => self.doc_remove_hidden(&a)?,
             "fill_sign_add" => self.fill_sign_add(&a)?,
+            "measure_distance" => self.measurement_add(&a, pdfcraft_engine::measure::Kind::Distance)?,
+            "measure_perimeter" => self.measurement_add(&a, pdfcraft_engine::measure::Kind::Perimeter)?,
+            "measure_area" => self.measurement_add(&a, pdfcraft_engine::measure::Kind::Area)?,
+            "measure_info" => self.measurement_info(&a)?,
+            "measure_list" => self.measurement_list(&a)?,
+            "measure_scale" => self.measurement_scale(&a)?,
+            "measure_snap" => self.measurement_snap(&a)?,
+            "measure_export" => self.measurement_export(&a)?,
             "comment_list" => self.comment_list(&a)?,
             "comment_add" => self.comment_add(&a)?,
             "stamp_custom" => self.stamp_custom(&a)?,

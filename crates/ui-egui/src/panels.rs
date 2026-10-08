@@ -128,6 +128,10 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
             );
         });
     }
+    if g.id == "measure" {
+        crate::measure_ui::panel(app, ui, t);
+        return;
+    }
     // Add a stamp: the palette.
     if g.id == "stamp" {
         stamp_palette(app, ui, t);

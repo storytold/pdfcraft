@@ -1923,3 +1923,103 @@ fn cut_stack_printing_through_tools() {
     assert!(a.call("doc_print", &json!({"doc": doc, "layout": "multiple", "order": "cut-stack", "path": "../escaped.pdf"})).is_err());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn measurements_calibrate_draw_save_reopen_and_export() {
+    let dir = workdir("measurements");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let scale = ok(&mut a, "measure_scale", json!({"doc":doc,"page":1,"points":[[10,10],[70,10]],"distance":6,"unit":"m","precision":3}));
+    assert!((scale["scale"]["x"].as_f64().unwrap() - 0.1).abs() < 1e-12);
+    for (tool, points) in [
+        ("measure_distance", json!([[10, 20], [70, 100]])),
+        ("measure_perimeter", json!([[10, 20], [70, 20], [70, 100]])),
+        ("measure_area", json!([[10, 20], [70, 20], [70, 100], [10, 100]])),
+    ] {
+        ok(&mut a, tool, json!({"doc":doc,"page":1,"points":points,"label":"Room, \"A\"","author":"Tester"}));
+    }
+    let all = ok(&mut a, "measure_list", json!({"doc":doc}));
+    assert_eq!(all["count"], 3);
+    assert_eq!(all["unsupported"], json!([]));
+    assert_eq!(all["truncated"], false);
+    for (m, value) in all["measurements"].as_array().unwrap().iter().zip([10.0, 14.0, 48.0]) {
+        assert!((m["reading"]["value"].as_f64().unwrap() - value).abs() < 1e-6);
+        assert_eq!(m["page"], 1);
+        assert_eq!(m["label"], "Room, \"A\"");
+    }
+    let preview = ok(&mut a, "measure_info", json!({"doc":doc,"page":1,"type":"area","points":[[10,20],[70,20],[70,100],[10,100]]}));
+    assert!((preview["reading"]["value"].as_f64().unwrap() - 48.0).abs() < 1e-6);
+    let rendered = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap();
+    assert!(matches!(rendered.first(), Some(Content::Png { .. })));
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "measure_list", json!({"doc":doc}))["count"], 2);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"measured.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"measured.pdf"}))["doc"].as_u64().unwrap();
+    let after = ok(&mut a, "measure_list", json!({"doc":reopened}));
+    assert_eq!(after["measurements"], all["measurements"]);
+    let exported = ok(&mut a, "measure_export", json!({"doc":reopened,"out":"measurements.csv"}));
+    assert_eq!((exported["count"].as_u64(), exported["unsupported"].as_u64()), (Some(3), Some(0)));
+    let csv = std::fs::read_to_string(dir.join("measurements.csv")).unwrap();
+    assert!(csv.contains("area,48,\"m^2\",\"Room, \"\"A\"\"\""), "{csv}");
+    assert!(a.call("measure_export", &json!({"doc":doc,"out":"../outside.csv"})).is_err());
+    // A new viewport changes future readings, without recalibrating saved measurements.
+    ok(&mut a, "measure_scale", json!({"doc":doc,"page":1,"units_per_point":1,"rect":[0,0,50,50],"unit":"cm"}));
+    assert_eq!(ok(&mut a, "measure_scale", json!({"doc":doc,"page":1,"at":[20,20]}))["scale"]["unit"], "cm");
+    assert_eq!(ok(&mut a, "measure_scale", json!({"doc":doc,"page":1,"at":[80,80]}))["scale"]["unit"], "m");
+    assert_eq!(ok(&mut a, "measure_list", json!({"doc":doc}))["measurements"], all["measurements"]);
+    // Rotate the page, then measure in its displayed coordinates.
+    ok(&mut a, "page_rotate", json!({"doc":doc,"pages":[1],"degrees":90}));
+    ok(&mut a, "measure_distance", json!({"doc":doc,"page":1,"points":[[100,100],[180,160]]}));
+    let all = ok(&mut a, "measure_list", json!({"doc":doc}));
+    let last = all["measurements"].as_array().unwrap().last().unwrap();
+    assert!((last["reading"]["value"].as_f64().unwrap() - 10.0).abs() < 1e-6);
+    assert_eq!(last["points"], json!([[100.0, 100.0], [180.0, 160.0]]));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn measurements_bad_arguments_leave_document_and_history_unchanged() {
+    let dir = workdir("measurement-errors");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "doc_list", json!({}));
+    for (tool, args) in [
+        ("measure_distance", json!({"doc":doc,"page":1,"points":[[0,0]]})),
+        ("measure_distance", json!({"doc":doc,"page":1,"points":[[0,0],[0,0]]})),
+        ("measure_area", json!({"doc":doc,"page":1,"points":[[0,0],[20,20],[0,20],[20,0]]})),
+        ("measure_scale", json!({"doc":doc,"page":1,"points":[[0,0],[0,0]],"distance":10})),
+        ("measure_snap", json!({"doc":doc,"page":1,"at":[1e100,0]})),
+        ("measure_scale", json!({"doc":doc,"page":1,"units_per_point":1,"precision":8})),
+    ] {
+        assert!(a.call(tool, &args).is_err(), "{tool} {args}");
+        assert_eq!(ok(&mut a, "doc_list", json!({})), before);
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn measurement_snap_tool_covers_all_targets() {
+    let dir = workdir("measurement-snap");
+    let mut a = auto(&dir);
+    let source = String::from_utf8(fixture(1)).unwrap();
+    let old = "BT /F1 24 Tf 20 150 Td (Page 1) Tj ET";
+    let drawing = "10 20 m 110 20 l S 60 0 m 60 80 l S";
+    assert!(drawing.len() <= old.len());
+    let source = source.replace(old, &format!("{drawing:<width$}", width = old.len()));
+    std::fs::write(dir.join("drawing.pdf"), source).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({"path":"drawing.pdf"}))["doc"].as_u64().unwrap();
+    for (at, kind, point, midpoints) in [
+        ([11, 280], "endpoint", [10, 280], true),
+        ([60, 259], "midpoint", [60, 260], true),
+        ([59, 279], "intersection", [60, 280], false),
+        ([32, 278], "path", [32, 280], true),
+    ] {
+        let snap = ok(&mut a, "measure_snap", json!({"doc":doc,"page":1,"at":at,"tolerance":3,"midpoints":midpoints}));
+        assert_eq!(snap["snap"]["kind"], kind);
+        assert_eq!(snap["snap"]["point"], json!(point.map(f64::from)));
+        assert_eq!(snap["truncated"], false);
+    }
+    assert!(ok(&mut a, "measure_snap", json!({"doc":doc,"page":1,"at":[180,180]}))["snap"].is_null());
+    let _ = std::fs::remove_dir_all(dir);
+}
