@@ -28,6 +28,7 @@
 	New blank PDF	新增空白 PDF
 	Create PDF from file…	從檔案建立 PDF…
 	Create PDF from images…	從圖片建立 PDF…
+	Create PDF from multiple files…	從多個檔案建立 PDF…
 	Create PDF from clipboard	從剪貼簿建立 PDF
 	Combine files…	合併檔案…
 	Save	儲存
@@ -1534,6 +1535,7 @@
 	Created a comment summary	已建立註解摘要
 	Couldn't open {name}: {e}	無法開啟{name}：{e}
 	Couldn't read {name}: {e}	無法讀取{name}：{e}
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	可攜模式已關閉：無法寫入{folder}（{error}）。設定改為儲存在你的使用者資料夾中。
 	Couldn't save: {e}	無法儲存：{e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Web 端附件下載將於 M3.10 到來（{n} 位元組已就緒）
 	`{command}` {when}	`{command}` {when}
@@ -1926,5 +1928,15 @@
 	Page display: {layout}	頁面顯示：{layout}
 	Fit to width scrolling	符合寬度連續捲動
 	Fit one full page	單頁完整顯示
+	Created a PDF from {n} files	已從 {n} 個檔案建立 PDF
+	PDF, images and text	PDF、圖片和文字
+	Insert a file before page {label}	在第 {label} 頁之前插入檔案
+	Insert a file at the end	在結尾插入檔案
+	Save pages	儲存頁面
+	Save these pages as one PDF	將這些頁面儲存為一個 PDF
+	No changes to save	沒有要儲存的變更
+	Created a PDF from {n} files; left out: {names}	已從 {n} 個檔案建立 PDF；已略過：{names}
+	Created a PDF from the first {n} files	已從前 {n} 個檔案建立 PDF
+	None of those files can be made into a PDF; use PDFs, images or .txt files	這些檔案都無法轉換為 PDF；請使用 PDF、圖片或 .txt 檔案
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	選擇 PNG 或 JPEG 圖像（最大 4 MiB）。透明度會保留。
 	Couldn't import the signature image: {e}	無法匯入簽名圖像：{e}

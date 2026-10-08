@@ -381,25 +381,9 @@ pub(crate) fn page_input(
     };
     if let Some(SavedSig::Image(image)) = saved {
         if let Some(rect) = image.rect(at, tool == FillTool::Initials) {
-            // Map each corner, rather than the bounding box, so page and view rotations
-            // turn the preview exactly as they turn the placed stamp.
             let tex = image_texture(ui, image, preview);
-            let mut mesh = egui::Mesh::with_texture(tex);
-            let corners = [(rect[0], rect[3], 0.0, 0.0), (rect[2], rect[3], 1.0, 0.0), (rect[2], rect[1], 1.0, 1.0), (rect[0], rect[1], 0.0, 1.0)];
-            if let Some(p) = info.pages.get(page) {
-                for (x, y, u, v) in corners {
-                    let p = p.user_to_view(x as f32, y as f32);
-                    mesh.vertices.push(egui::epaint::Vertex {
-                        pos: xf.norm_to_screen(p[0] / xf.pw, p[1] / xf.ph),
-                        uv: pos2(u, v),
-                        color: Color32::WHITE,
-                    });
-                }
-                mesh.add_triangle(0, 1, 2);
-                mesh.add_triangle(0, 2, 3);
-                ui.painter().add(egui::Shape::mesh(mesh));
-                ui.ctx().set_cursor_icon(egui::CursorIcon::None);
-            }
+            xf.paint_user_image(ui.painter(), tex, info, page, rect, Color32::WHITE);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         }
     } else {
         ui.ctx().set_cursor_icon(if tool == FillTool::Text { egui::CursorIcon::Text } else { egui::CursorIcon::Crosshair });
@@ -500,7 +484,7 @@ pub(crate) fn signature_pad(
     let title = if d.editing { tl!("Change {what}") } else { tl!("Create {what}") };
     ui.label(egui::RichText::new(crate::i18n::fmt(title, &[("what", what)])).font(crate::theme::semibold(18.0)));
     ui.horizontal(|ui| {
-        if crate::widgets::pill_button(ui, tl!("Type"), !d.drawing && !d.image_mode).clicked() {
+        if crate::widgets::pill_button(ui, tl_ctx!("signature pad", "Type"), !d.drawing && !d.image_mode).clicked() {
             d.drawing = false;
             d.image_mode = false;
         }

@@ -14,9 +14,14 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    harness_bytes(FIXTURE)
+}
+
+fn harness_bytes(fixture: &[u8]) -> Harness<'static, PdfCraftApp> {
+    let fixture = fixture.to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
-        app.open_bytes("form.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("form.pdf", None, fixture.clone()).unwrap();
         app.set_option("left", "closed").unwrap();
         app.set_option("zoom", "150").unwrap();
         app.set_option("author", "Ada").unwrap();
@@ -507,6 +512,250 @@ fn image_signature_placement_selects_resize_handles_and_requires_reselecting_to_
     click(&mut h, 40.0, 100.0);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
     assert_eq!(h.state().views[0].comments.selected, Some((0, 2)));
+    std::fs::remove_file(path).unwrap();
+}
+
+fn assert_rect(actual: [f32; 4], expected: [f32; 4]) {
+    assert!(actual.iter().zip(expected).all(|(a, b)| (*a - b).abs() < 0.001), "{actual:?} != {expected:?}");
+}
+
+fn pixel_at(h: &Harness<'static, PdfCraftApp>, pixels: &image::RgbaImage, x: f32, y: f32) -> [u8; 4] {
+    let p = at(h, x, y);
+    pixels.get_pixel(p.x.round() as u32, p.y.round() as u32).0
+}
+
+fn has_blue_near(pixels: &image::RgbaImage, p: Pos2) -> bool {
+    (-5..=5).any(|dy| {
+        (-5..=5).any(|dx| {
+            let v = pixels.get_pixel((p.x as i32 + dx) as u32, (p.y as i32 + dy) as u32).0;
+            i32::from(v[2]) > i32::from(v[0]) + 40 && i32::from(v[2]) > i32::from(v[1]) + 35
+        })
+    })
+}
+
+#[test]
+fn image_signature_live_resize_and_move_preserve_background_and_hide_moving_handles() {
+    // Original synthetic page content; a white patch over the old image would fail this test.
+    const GREEN_PAGE: &[u8] = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R >> endobj\n4 0 obj << /Length 36 >> stream\n0.8 1 0.7 rg 0 0 300 400 re f\nendstream\nendobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+    let mut h = harness_bytes(GREEN_PAGE);
+    let path = signature_file("live");
+    let image = pdfcraft_engine::SignatureImage::read(std::fs::File::open(&path).unwrap()).unwrap();
+    h.state_mut().signature = Some(SavedSig::Image(image));
+    h.state_mut().execute("sign.fill.signature");
+    click(&mut h, 40.0, 250.0);
+    rendered_ink(&mut h, 90.0, 250.0);
+    let generation = h.state().session.get(h.state().views[0].id).unwrap().edit_generation();
+    let corner = at(&h, 136.0, 234.0);
+    h.drag_at(corner);
+    h.run_steps(1);
+    let end = at(&h, 184.0, 228.0);
+    h.hover_at(end);
+    // Wait only for the one-time background preparation. Later pointer frames are immediate.
+    rendered_ink(&mut h, 160.0, 242.0);
+    let end = at(&h, 220.0, 236.0);
+    h.hover_at(end);
+    h.run_steps(2);
+    let resized = h.render().unwrap();
+    assert!(pixel_at(&h, &resized, 200.0, 236.0)[..3].iter().all(|v| *v < 60), "ink resizes before release");
+    let assert_green = |v: [u8; 4]| {
+        assert!(v[1] > 230 && i32::from(v[1]) > i32::from(v[0]) + 10 && i32::from(v[1]) > i32::from(v[2]) + 10, "page content is preserved: {v:?}")
+    };
+    assert_green(pixel_at(&h, &resized, 90.0, 250.0));
+    assert!(has_blue_near(&resized, at(&h, 220.0, 266.0)), "resizing keeps its handles visible");
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.edit_generation(), generation, "pointer frames never edit the document");
+    assert_eq!(doc.can_undo(), Some("Add signature"));
+    assert_rect(doc.info.annotations[0].rect, [40.0, 234.0, 136.0, 266.0]);
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        resized.save(format!("{dir}/image-signature-live-resize.png")).unwrap();
+    }
+    h.drop_at(end);
+    h.run_steps(3);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Resize comment"));
+
+    let start = at(&h, 130.0, 236.0);
+    h.drag_at(start);
+    h.run_steps(1);
+    for (x, y) in [(140.0, 180.0), (150.0, 140.0)] {
+        h.hover_at(at(&h, x, y));
+        h.run_steps(2);
+        let moving = h.render().unwrap();
+        assert!(pixel_at(&h, &moving, x, y)[..3].iter().all(|v| *v < 60), "ink follows each pointer position");
+        assert_green(pixel_at(&h, &moving, 130.0, 236.0));
+        assert_green(pixel_at(&h, &moving, x - 85.0, y));
+        for (hx, hy) in [
+            (x - 90.0, y + 30.0),
+            (x, y + 30.0),
+            (x + 90.0, y + 30.0),
+            (x + 90.0, y),
+            (x + 90.0, y - 30.0),
+            (x, y - 30.0),
+            (x - 90.0, y - 30.0),
+            (x - 90.0, y),
+        ] {
+            assert!(!has_blue_near(&moving, at(&h, hx, hy)), "moving hides the frame and all eight handles");
+        }
+        assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Resize comment"));
+        if y == 140.0
+            && let Ok(dir) = std::env::var("PDFCRAFT_SHOTS")
+        {
+            moving.save(format!("{dir}/image-signature-live-move.png")).unwrap();
+        }
+    }
+    let end = at(&h, 150.0, 140.0);
+    h.drop_at(end);
+    h.run_steps(2);
+    let released = h.render().unwrap();
+    assert!(has_blue_near(&released, at(&h, 240.0, 170.0)), "the frame returns immediately on release");
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Move comment"));
+    assert_eq!(doc.edit_generation(), generation + 2, "one edit for each completed gesture");
+    assert_rect(doc.info.annotations[0].rect, [60.0, 110.0, 240.0, 170.0]);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        released.save(format!("{dir}/image-signature-move-released.png")).unwrap();
+    }
+    h.state_mut().undo();
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_rect(h.state().session.get(h.state().views[0].id).unwrap().info.annotations[0].rect, [40.0, 234.0, 136.0, 266.0]);
+    rendered_ink(&mut h, 90.0, 250.0);
+    click(&mut h, 90.0, 250.0);
+    h.drag_at(at(&h, 90.0, 250.0));
+    h.run_steps(1);
+    h.hover_at(at(&h, 150.0, 180.0));
+    rendered_ink(&mut h, 150.0, 180.0);
+    assert_eq!(
+        h.state().session.get(h.state().views[0].id).unwrap().can_undo(),
+        Some("Add signature"),
+        "moving preview is still read-only before Escape"
+    );
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.gesture.is_none(), "Escape must cancel before releasing the mouse");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Add signature"), "Escape must not commit");
+    h.drop_at(at(&h, 150.0, 180.0));
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.gesture.is_none());
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Add signature"), "Escape cancels without an undo step");
+    assert_rect(doc.info.annotations[0].rect, [40.0, 234.0, 136.0, 266.0]);
+    let cancelled = h.render().unwrap();
+    assert_green(pixel_at(&h, &cancelled, 150.0, 180.0));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn embedded_image_signature_live_gestures_follow_document_and_view_rotation() {
+    let path = signature_file("live-rotations");
+    let image = pdfcraft_engine::SignatureImage::read(std::fs::File::open(&path).unwrap()).unwrap();
+    for (document_rotation, view_rotation) in [(90, 0), (0, 90), (90, 270)] {
+        let mut h = harness();
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: document_rotation });
+        while h.state().views[0].rotation != view_rotation {
+            h.state_mut().views[0].rotate_view(true);
+        }
+        h.state_mut().set_option("zoom", "100").unwrap();
+        h.state_mut().signature = Some(SavedSig::Image(image.clone()));
+        h.state_mut().execute("sign.fill.signature");
+        h.run_steps(3);
+        click(&mut h, 40.0, 250.0);
+        rendered_ink(&mut h, 90.0, 250.0);
+        // Future placements may use a different signature: drag the PDF's embedded image.
+        h.state_mut().signature = None;
+        h.drag_at(at(&h, 136.0, 234.0));
+        h.run_steps(1);
+        let end = at(&h, 184.0, 228.0);
+        h.hover_at(end);
+        rendered_ink(&mut h, 160.0, 242.0);
+        let pixels = h.render().unwrap();
+        assert!(pixel_at(&h, &pixels, 58.0, 254.0)[..3].iter().all(|v| *v < 60), "asymmetric ink rotates during resize");
+        assert!(pixel_at(&h, &pixels, 58.0, 230.0)[..3].iter().all(|v| *v > 240), "alpha isn't flipped");
+        h.drop_at(end);
+        h.run_steps(3);
+        h.drag_at(at(&h, 112.0, 242.0));
+        h.run_steps(1);
+        h.hover_at(at(&h, 132.0, 142.0));
+        h.run_steps(2);
+        let pixels = h.render().unwrap();
+        assert!(pixel_at(&h, &pixels, 132.0, 142.0)[..3].iter().all(|v| *v < 60), "image moves before release");
+        assert!(pixel_at(&h, &pixels, 160.0, 242.0)[..3].iter().all(|v| *v > 240), "old ink is removed during movement");
+        assert!(!has_blue_near(&pixels, at(&h, 204.0, 166.0)));
+        h.drop_at(at(&h, 132.0, 142.0));
+        h.run_steps(2);
+        assert!(has_blue_near(&h.render().unwrap(), at(&h, 204.0, 166.0)));
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn image_signature_corners_restore_original_aspect_after_edge_resize_and_reopen() {
+    let path = signature_file("aspect");
+    let image = pdfcraft_engine::SignatureImage::read(std::fs::File::open(&path).unwrap()).unwrap();
+    let mut h = harness();
+    h.state_mut().signature = Some(SavedSig::Image(image));
+    h.state_mut().execute("sign.fill.signature");
+    click(&mut h, 70.0, 210.0);
+    // Side handles stretch just their own axis; pointer movement along the other axis is ignored.
+    for (from, to, expected) in
+        [([166.0, 210.0], [214.0, 216.0], [70.0, 194.0, 214.0, 226.0]), ([142.0, 194.0], [150.0, 170.0], [70.0, 170.0, 214.0, 226.0])]
+    {
+        h.drag_at(at(&h, from[0], from[1]));
+        h.run_steps(1);
+        let end = at(&h, to[0], to[1]);
+        h.hover_at(end);
+        h.run_steps(2);
+        h.drop_at(end);
+        h.run_steps(3);
+        assert_rect(h.state().session.get(h.state().views[0].id).unwrap().info.annotations[0].rect, expected);
+    }
+    let bytes = h.state().session.get(h.state().views[0].id).unwrap().bytes.clone();
+    // Reopened PDFs have no saved signature setting: each corner must use the embedded 3:1 image,
+    // rather than the stretched 144:56 annotation rectangle.
+    for (hx, hy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+        let mut h = harness_bytes(&bytes);
+        assert!(h.state().signature.is_none());
+        h.state_mut().views[0].comments.selected = Some((0, 0));
+        h.run_steps(3);
+        rendered_ink(&mut h, 142.0, 198.0);
+        let generation = h.state().session.get(h.state().views[0].id).unwrap().edit_generation();
+        let (x, y) = (if hx < 0.0 { 70.0 } else { 214.0 }, if hy < 0.0 { 170.0 } else { 226.0 });
+        h.drag_at(at(&h, x, y));
+        h.run_steps(1);
+        let end = at(&h, x + hx * 10.0, y + hy * 10.0);
+        h.hover_at(end);
+        let expected = [
+            if hx < 0.0 { 16.0 } else { 70.0 },
+            if hy < 0.0 { 160.0 } else { 170.0 },
+            if hx < 0.0 { 214.0 } else { 268.0 },
+            if hy < 0.0 { 226.0 } else { 236.0 },
+        ];
+        let ink_x = expected[0] + 198.0 * if hx < 0.0 { 0.15 } else { 0.85 };
+        let pixels = rendered_ink(&mut h, ink_x, (expected[1] + expected[3]) / 2.0);
+        assert!(has_blue_near(&pixels, at(&h, if hx < 0.0 { expected[0] } else { expected[2] }, if hy < 0.0 { expected[1] } else { expected[3] })));
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        assert_eq!(doc.edit_generation(), generation, "corner previews remain read-only");
+        assert_rect(doc.info.annotations[0].rect, [70.0, 170.0, 214.0, 226.0]);
+        if hx > 0.0
+            && hy < 0.0
+            && let Ok(dir) = std::env::var("PDFCRAFT_SHOTS")
+        {
+            pixels.save(format!("{dir}/image-signature-aspect-corner.png")).unwrap();
+        }
+        h.drop_at(end);
+        h.run_steps(3);
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        assert_rect(doc.info.annotations[0].rect, expected);
+        assert_eq!(doc.edit_generation(), generation + 1);
+        assert_eq!(doc.can_undo(), Some("Resize comment"));
+        assert!(((expected[2] - expected[0]) / (expected[3] - expected[1]) - 3.0).abs() < 0.001);
+        h.state_mut().undo();
+        h.run_steps(3);
+        assert_rect(h.state().session.get(h.state().views[0].id).unwrap().info.annotations[0].rect, [70.0, 170.0, 214.0, 226.0]);
+        h.state_mut().redo();
+        h.run_steps(3);
+        assert_rect(h.state().session.get(h.state().views[0].id).unwrap().info.annotations[0].rect, expected);
+    }
     std::fs::remove_file(path).unwrap();
 }
 

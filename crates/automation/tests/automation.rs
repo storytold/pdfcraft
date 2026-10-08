@@ -1433,6 +1433,69 @@ fn image_signatures_through_tools_preserve_transparency_and_survive_save() {
 }
 
 #[test]
+fn image_signature_preview_layers_are_read_only_and_survive_encrypted_save() {
+    let dir = workdir("signature-preview");
+    let mut png = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png, 120, 40);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let rgba: Vec<u8> = (0..40)
+            .flat_map(|y| (0..120).flat_map(move |x| if (40..80).contains(&x) && (10..30).contains(&y) { [20, 40, 60, 128] } else { [0, 0, 0, 0] }))
+            .collect();
+        encoder.write_header().unwrap().write_image_data(&rgba).unwrap();
+    }
+    std::fs::write(dir.join("signature.png"), png).unwrap();
+    std::fs::write(dir.join("form.pdf"), fixture(1)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_rotate", json!({ "doc": doc, "pages": [1], "degrees": 90 }));
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "initials", "at": [20, 40], "path": "signature.png" }));
+    let background = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
+    let Content::Png { data: expected, .. } = &background[0] else { panic!() };
+    let expected = image::load_from_memory(expected).unwrap().to_rgba8();
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "signature", "at": [120, 100], "path": "signature.png" }));
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": 2, "opacity": 0.5 }));
+    ok(&mut a, "doc_protect", json!({ "doc": doc, "open_password": "preview-test" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "signed.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "signed.pdf", "password": "preview-test" }))["doc"].as_u64().unwrap();
+    for doc in [doc, reopened] {
+        let before = ok(&mut a, "doc_info", json!({ "doc": doc }));
+        let d = a.session().docs().iter().find(|d| d.id.0 == doc).unwrap();
+        let generation = d.edit_generation();
+        let bytes = d.bytes.clone();
+        let output = a.call("comment_image_preview", &json!({ "doc": doc, "page": 1, "index": 2, "dpi": 72 })).unwrap();
+        let [Content::Json(meta), Content::Png { data: background, .. }] = output.as_slice() else { panic!("labeled background layer") };
+        let image = a.call("comment_image_preview", &json!({ "doc": doc, "page": 1, "index": 2, "layer": "image" })).unwrap();
+        let [Content::Json(image_meta), Content::Png { data: signature, width, height }] = image.as_slice() else { panic!("labeled image layer") };
+        assert_eq!(meta["layer"], "background");
+        assert_eq!(image_meta["layer"], "image");
+        assert_eq!(meta["rotation"], 90);
+        assert_eq!(meta["opacity"], 0.5);
+        assert_eq!((*width, *height), (120, 40));
+        assert_eq!(image::load_from_memory(background).unwrap().to_rgba8(), expected, "page text and the other signature remain");
+        let signature = image::load_from_memory(signature).unwrap().to_rgba8();
+        assert_eq!(signature.get_pixel(5, 20).0[3], 0);
+        assert_eq!(signature.get_pixel(60, 20).0, [20, 40, 60, 128], "embedded alpha and colour survive reopen");
+        assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc })), before);
+        let d = a.session().docs().iter().find(|d| d.id.0 == doc).unwrap();
+        assert_eq!(d.edit_generation(), generation);
+        assert!(std::sync::Arc::ptr_eq(&bytes, &d.bytes));
+        assert!(d.image_signature_preview(0, 1).unwrap().unwrap().render_background(f32::NAN).is_err());
+        assert!(d.image_signature_preview(0, 999).is_err());
+    }
+    assert!(tools().iter().find(|t| t.name == "comment_image_preview").unwrap().read_only);
+    for dpi in [0, 601] {
+        assert!(matches!(
+            a.call("comment_image_preview", &json!({ "doc": reopened, "page": 1, "index": 2, "dpi": dpi })),
+            Err(ToolError::InvalidArgs(_))
+        ));
+    }
+    ok(&mut a, "fill_sign_add", json!({ "doc": reopened, "page": 1, "type": "check", "at": [10, 10] }));
+    assert!(a.call("comment_image_preview", &json!({ "doc": reopened, "page": 1, "index": 3 })).is_err());
+}
+
+#[test]
 fn creating_and_reducing_through_tools() {
     let dir = workdir("create");
     std::fs::write(dir.join("notes.txt"), "Meeting notes\nAction items").unwrap();
@@ -1445,6 +1508,62 @@ fn creating_and_reducing_through_tools() {
     let r = ok(&mut a, "doc_reduce", json!({ "doc": t, "path": "notes-small.pdf" }));
     assert!(r["bytes_after"].as_u64().unwrap() > 0 && dir.join("notes-small.pdf").exists());
     assert!(matches!(a.call("doc_create", &json!({ "from": "images", "paths": ["notes.txt"] })), Err(ToolError::Failed(_))));
+}
+
+#[test]
+fn creating_from_multiple_files_through_tools() {
+    let dir = workdir("create-multiple");
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 4, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.write_header().unwrap().write_image_data(&[100; 4 * 2 * 3]).unwrap();
+    }
+    std::fs::write(dir.join("scan.png"), png).unwrap();
+    std::fs::write(dir.join("notes.txt"), "hello").unwrap();
+    std::fs::write(dir.join("report.docx"), b"PK\x03\x04").unwrap();
+    let mut a = auto(&dir);
+
+    // Combine: every file converted, in the order given, with a bookmark per file.
+    let made = ok(
+        &mut a,
+        "doc_create_multiple",
+        json!({ "paths": ["notes.txt", "a.pdf", "scan.png"], "pages": [null, "3", null], "out": "all.pdf", "open": true }),
+    );
+    let doc = made["document"]["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, doc), ["hello", "Page 3", ""]);
+    let titles: Vec<String> = ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["title"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(titles, ["notes", "a", "scan"]);
+    assert!(dir.join("all.pdf").is_file());
+    // A file that can't be converted fails the whole combine, naming it.
+    let err = a.call("doc_create_multiple", &json!({ "paths": ["a.pdf", "report.docx"] })).unwrap_err();
+    assert!(matches!(&err, ToolError::Failed(m) if m.contains("report.docx") && m.contains("can't be converted")), "{err}");
+    assert!(matches!(a.call("doc_create_multiple", &json!({ "paths": [] })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(a.call("doc_create_multiple", &json!({ "paths": ["a.pdf"], "mode": "zip" })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(a.call("doc_create_multiple", &json!({ "paths": ["a.pdf"], "mode": "separate" })), Err(ToolError::InvalidArgs(_))));
+
+    // Separate: one PDF per file; PDFs are skipped, a bad file doesn't stop the rest, and an
+    // existing file is never overwritten.
+    std::fs::create_dir_all(dir.join("out")).unwrap();
+    std::fs::write(dir.join("out/notes.pdf"), b"mine").unwrap();
+    let args = json!({ "paths": ["notes.txt", "report.docx", "a.pdf", "scan.png", "missing.txt"], "mode": "separate", "out_dir": "out" });
+    let made = ok(&mut a, "doc_create_multiple", args);
+    let files = made["files"].as_array().unwrap();
+    assert!(files[0]["output"].as_str().unwrap().ends_with("notes (2).pdf"), "{files:?}");
+    assert!(files[1]["error"].as_str().unwrap().contains("can't be converted"));
+    assert_eq!(files[2]["skipped"], "already a PDF");
+    assert!(files[3]["output"].as_str().unwrap().ends_with("scan.pdf"));
+    assert!(files[4]["error"].is_string());
+    assert_eq!(std::fs::read(dir.join("out/notes.pdf")).unwrap(), b"mine");
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "out/notes (2).pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, reopened), ["hello"]);
+    assert!(!dir.join("out/a.pdf").exists());
 }
 
 #[test]

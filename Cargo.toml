@@ -40,6 +40,7 @@ pdfcraft-forms = { path = "crates/forms", version = "0.4.0" }
 pdfcraft-xfa = { path = "crates/xfa", version = "0.4.0" }
 pdfcraft-render = { path = "crates/render", version = "0.4.0" }
 pdfcraft-engine = { path = "crates/engine", version = "0.4.0" }
+pdfcraft-platform = { path = "crates/platform", version = "0.4.0" }
 pdfcraft-ui-egui = { path = "crates/ui-egui", version = "0.4.0" }
 pdfcraft-automation = { path = "crates/automation", version = "0.4.0", default-features = false }
 

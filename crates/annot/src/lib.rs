@@ -662,6 +662,21 @@ fn annot_dict(doc: &Document, r: ObjRef) -> Dict {
     doc.get(r).as_dict().cloned().unwrap_or_default()
 }
 
+/// The embedded image of a Fill & Sign image signature or initials (0-based target).
+/// Other stamps have appearances that can't be represented by this image alone.
+pub fn signature_image(doc: &Document, page: usize, index: usize) -> Result<Option<ObjRef>, AnnotError> {
+    let p = page_ref(doc, page)?;
+    let list = annots(doc, p);
+    let entry = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    let obj = doc.resolve(entry);
+    let Some(d) = obj.as_dict() else { return Ok(None) };
+    Ok((d.name(b"Subtype") == Some(b"Stamp")
+        && matches!(d.name(b"Name"), Some(b"PCCustomSignature" | b"PCCustomInitials"))
+        && matches!(d.get(b"PCPictureImage"), Some(Object::Bool(true))))
+    .then(|| d.reference(b"PCPicture"))
+    .flatten())
+}
+
 // ── building ────────────────────────────────────────────────────────────────────────────────
 
 /// Annotation flags (§12.5.3).

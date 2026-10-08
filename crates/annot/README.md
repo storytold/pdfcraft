@@ -23,6 +23,7 @@ set_review_state(&mut doc, page, index, ReviewState::Accepted, "Ada", &meta)?;
 move_annotation(&mut doc, page, index, dx, dy, &meta)?;
 set_style(&mut doc, page, index, Some(rgb), Some(0.5), Some(2.0), &meta)?;
 delete_annotation(&mut doc, page, index)?;
+signature_image(&doc, page, index)?; // embedded image XObject of Fill & Sign signature/initials
 ```
 
 A comment is addressed by `(page, index in /Annots)`, the same pair

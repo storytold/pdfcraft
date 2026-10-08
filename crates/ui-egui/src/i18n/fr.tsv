@@ -24,6 +24,7 @@
 	New blank PDF	Nouveau PDF vierge
 	Create PDF from file…	Créer un PDF à partir d'un fichier…
 	Create PDF from images…	Créer un PDF à partir d'images…
+	Create PDF from multiple files…	Créer un PDF à partir de plusieurs fichiers…
 	Create PDF from clipboard	Créer un PDF à partir du presse-papiers
 	Combine files…	Combiner des fichiers…
 	Save	Enregistrer
@@ -1560,6 +1561,7 @@
 	Created a comment summary	Un résumé des commentaires a été créé
 	Couldn't open {name}: {e}	Impossible d'ouvrir {name} : {e}
 	Couldn't read {name}: {e}	Impossible de lire {name} : {e}
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Le mode portable est désactivé : impossible d'écrire dans {folder} ({error}). Les réglages sont conservés dans votre dossier utilisateur.
 	Couldn't save: {e}	Impossible d'enregistrer : {e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Le téléchargement des pièces jointes sur le web arrivera avec M3.10 ({n} octets prêts)
 	`{command}` {when}	`{command}` {when}
@@ -1933,6 +1935,16 @@
 	Lines +/−	Lignes +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login} : {prs} PR, {commits} commits, +{added} / −{deleted} lignes (Δ {delta}), +{bin_added} / −{bin_deleted} fichiers binaires, {first} – {last}
 	Set layer visibility	Définir la visibilité des calques
+	Created a PDF from {n} files	PDF créé à partir de {n} fichiers
+	PDF, images and text	PDF, images et texte
+	Insert a file before page {label}	Insérer un fichier avant la page {label}
+	Insert a file at the end	Insérer un fichier à la fin
+	Save pages	Enregistrer les pages
+	Save these pages as one PDF	Enregistrer ces pages dans un seul PDF
+	No changes to save	Aucune modification à enregistrer
+	Created a PDF from {n} files; left out: {names}	PDF créé à partir de {n} fichiers ; ignorés : {names}
+	Created a PDF from the first {n} files	PDF créé à partir des {n} premiers fichiers
+	None of those files can be made into a PDF; use PDFs, images or .txt files	Aucun de ces fichiers ne peut être converti en PDF ; utilisez des PDF, des images ou des fichiers .txt
 
 # Combine files tab
 	1 file	1 fichier

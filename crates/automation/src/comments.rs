@@ -7,7 +7,7 @@ use pdfcraft_engine::{Edit, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, ReviewSt
 use pdfcraft_render::{Annotation, PageInfo};
 use serde_json::{Value, json};
 
-use crate::{Args, Automation, Result, ToolError, failed};
+use crate::{Args, Automation, Content, DEFAULT_DPI, MAX_DPI, Result, ToolError, encode_png, failed};
 
 /// Author used when a tool call names none.
 pub(crate) const DEFAULT_AUTHOR: &str = "PdfCraft";
@@ -86,6 +86,34 @@ impl Args<'_> {
 }
 
 impl Automation {
+    /// One of the read-only layers the GUI uses to drag/resize an embedded image signature.
+    pub(crate) fn comment_image_preview(&self, a: &Args) -> Result<Vec<Content>> {
+        let (page, index) = self.comment_target(a)?;
+        let dpi = a.opt_num("dpi")?.unwrap_or(DEFAULT_DPI);
+        if !(1.0..=MAX_DPI).contains(&dpi) {
+            return Err(ToolError::InvalidArgs(format!("dpi must be between 1 and {MAX_DPI}")));
+        }
+        let doc = self.doc(a)?;
+        let preview = doc.image_signature_preview(page, index).map_err(failed)?.ok_or_else(|| failed("choose an image signature or initials"))?;
+        let annotation = doc.info.annotations.iter().find(|c| c.page == page && c.index == index).ok_or_else(|| failed("no such comment"))?;
+        let info = doc.info.pages.get(page).ok_or_else(|| failed("no such page"))?;
+        let [w, h] = preview.image.size();
+        let layer = a.opt_str("layer")?.unwrap_or("background");
+        let image = match layer {
+            "image" => Content::Png { data: preview.image.bytes().as_ref().clone(), width: w as u32, height: h as u32 },
+            "background" => {
+                let out = preview.render_background((dpi / 72.0) as f32).map_err(failed)?;
+                Content::Png { data: encode_png(out.width, out.height, &out.rgba)?, width: out.width, height: out.height }
+            }
+            _ => return Err(ToolError::InvalidArgs("layer must be background or image".into())),
+        };
+        Ok(vec![
+            Content::Json(json!({ "page": page + 1, "index": index + 1, "rect": rect_to_view(info, annotation.rect), "rotation": info.rotation,
+                "layer": layer, "opacity": preview.opacity, "dpi": dpi })),
+            image,
+        ])
+    }
+
     /// Comments of a document, optionally only of one 0-based page.
     fn comments(&self, a: &Args) -> Result<Vec<Annotation>> {
         let doc = self.doc(a)?;

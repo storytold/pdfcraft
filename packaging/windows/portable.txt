@@ -1,0 +1,9 @@
+PdfCraft portable mode
+
+While this file sits next to pdfcraft.exe, PdfCraft keeps its settings, log files, crash-recovery
+autosaves and new digital IDs in the PdfCraftData folder beside it, and writes nothing to
+%APPDATA% or %LOCALAPPDATA%. Copy the whole folder to move PdfCraft with its settings.
+
+Delete this file to use the normal per-user folders (%APPDATA%\PdfCraft and
+%LOCALAPPDATA%\PdfCraft) instead. If PdfCraftData can't be written (for example on a read-only
+drive), PdfCraft says so and uses the per-user folders instead.

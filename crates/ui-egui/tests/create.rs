@@ -132,3 +132,63 @@ fn the_pdf_optimizer_dialog_saves_an_optimized_copy() {
     assert!(std::fs::read(&out).unwrap().starts_with(b"%PDF-"));
     assert_eq!(h.state().dialog, None);
 }
+
+fn mixed_files(app: &PdfCraftApp) -> Vec<(String, Vec<u8>)> {
+    let pdf = app.session.create_from_text("a", "from a pdf").unwrap();
+    vec![
+        ("notes.txt".into(), b"from text".to_vec()),
+        ("report.docx".into(), b"PK\x03\x04".to_vec()),
+        ("a.pdf".into(), pdf.to_vec()),
+        ("photo.png".into(), png()),
+    ]
+}
+
+#[test]
+fn multiple_files_open_as_one_document_in_the_page_grid() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let path = std::env::temp_dir().join(format!("pdfcraft-create-multiple-{}.pdf", std::process::id()));
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 720.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let files = mixed_files(&app);
+        app.use_files(pdfcraft_ui_egui::FilePurpose::CreateMultiple, files);
+        app
+    });
+    h.run_steps(4);
+    {
+        let app = h.state();
+        assert_eq!(app.views.len(), 1);
+        assert!(app.views[0].organize, "the pages are shown as a grid");
+        let doc = app.session.get(app.views[0].id).unwrap();
+        assert_eq!(doc.name, "Combined.pdf");
+        assert!(doc.dirty && doc.path.is_none(), "unsaved until the user saves it");
+        assert_eq!(doc.info.pages.len(), 3, "the Word file can't be converted and is left out");
+        assert_eq!(doc.info.outline.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(), ["notes", "a", "photo"]);
+    }
+    h.get_by_label_contains("left out: report.docx");
+    h.get_by_label("Insert a file before page 2");
+    if let Ok(path) = std::env::var("PDFCRAFT_CREATE_MULTIPLE_SHOT") {
+        h.run_steps(20);
+        h.render().unwrap().save(path).unwrap();
+    }
+    // Remove the middle page and save what is left.
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.get_by_label("Delete pages (Delete)").click();
+    h.run_steps(3);
+    h.state_mut().save_override = Some(path.to_string_lossy().into_owned());
+    h.get_by_label("Save pages").click();
+    h.run_steps(4);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert!(!doc.dirty && doc.info.pages.len() == 2);
+    assert!(std::fs::read(&path).unwrap().starts_with(b"%PDF-"));
+}
+
+#[test]
+fn multiple_files_that_cannot_be_converted_open_nothing() {
+    let mut app = PdfCraftApp::new();
+    app.use_files(pdfcraft_ui_egui::FilePurpose::CreateMultiple, vec![("report.docx".into(), b"PK\x03\x04".to_vec())]);
+    assert!(app.views.is_empty());
+    assert!(app.toast.is_some());
+}

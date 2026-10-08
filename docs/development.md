@@ -8,9 +8,12 @@ collects what the desktop app reads from its environment and where it writes its
 The desktop app writes its `log` records to standard error and to `logs/pdfcraft.log` in its
 settings folder, next to `app.ron`: Linux and FreeBSD `~/.local/share/pdfcraft/logs/` (or
 `$XDG_DATA_HOME/pdfcraft/logs/`), macOS `~/Library/Application Support/PdfCraft/logs/`, Windows
-`%APPDATA%\PdfCraft\data\logs\`. A start from a desktop menu, Finder or the Start menu has no
-terminal, so this file is what to attach to a bug report: a failed autosave, a page that would not
-render, a render worker that could not start and the report of an internal error all land there.
+`%APPDATA%\PdfCraft\data\logs\`. In portable mode (a `portable.txt` file next to the executable, as
+the Windows portable zip ships) the settings folder is `PdfCraftData\` beside the executable, and
+crash recovery and new digital IDs go there too. A start from a desktop menu, Finder or the Start
+menu has no terminal, so this file is what to attach to a bug report: a failed autosave, a page that
+would not render, a render worker that could not start and the report of an internal error all land
+there.
 Each launch moves the previous log to `pdfcraft.1.log` (and that one to `pdfcraft.2.log`), so the
 log of a run that crashed survives the next start. The file stops growing at 16 MiB. `--version`
 writes no file.

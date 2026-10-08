@@ -259,7 +259,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool
             }
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, tl!("Start"), true).clicked() {
+            if widgets::pill_button(ui, tl_ctx!("action wizard", "Start"), true).clicked() {
                 close = true;
                 app.start_selected_action();
             }

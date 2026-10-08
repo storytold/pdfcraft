@@ -113,8 +113,10 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
   child process before signing, so the MSI isn't held open when signtool runs. The ARM64 install
   smoke test checks that both all-users shortcuts point at the installed `pdfcraft.exe` and are
   removed on uninstall, and that `INSTALLDESKTOPSHORTCUT=0` skips the desktop one.
-- The portable zip holds both executables, the README, the licences, and the OFL licence of each
-  embedded craft-fonts family.
+- The portable zip holds both executables, the README, the licences, the OFL licence of each
+  embedded craft-fonts family, and `portable.txt`. That marker beside `pdfcraft.exe` keeps the
+  settings, logs, crash recovery and new digital IDs in `PdfCraftData\` next to the exe instead of
+  `%APPDATA%` and `%LOCALAPPDATA%` (`crates/ui-egui/src/portable.rs`).
 - **Signing:** `packaging/windows/sign.ps1` signs both executables and the MSI with `signtool`
   (SHA-256, RFC 3161 timestamp), from a `.pfx` (`WINDOWS_CERTIFICATE`) or Azure Trusted Signing
   (`AZURE_*`), whichever is configured. It is the one place to change when signing changes.

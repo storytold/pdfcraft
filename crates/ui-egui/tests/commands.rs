@@ -51,6 +51,7 @@ const PICKERS: &[&str] = &[
     "file.save_as",
     "create.file",
     "create.images",
+    "create.multiple",
     "page.replace",
     "create.clipboard",
     "a11y.report",

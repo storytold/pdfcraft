@@ -26,6 +26,7 @@
 	New blank PDF	Nuevo PDF en blanco
 	Create PDF from file…	Crear PDF a partir de un archivo…
 	Create PDF from images…	Crear PDF a partir de imágenes…
+	Create PDF from multiple files…	Crear PDF a partir de varios archivos…
 	Create PDF from clipboard	Crear PDF a partir del portapapeles
 	Combine files…	Combinar archivos…
 	Save	Guardar
@@ -1619,6 +1620,7 @@
 	Created a comment summary	Se ha creado un resumen de comentarios
 	Couldn't open {name}: {e}	No se pudo abrir {name}: {e}
 	Couldn't read {name}: {e}	No se pudo leer {name}: {e}
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	El modo portátil está desactivado: no se puede escribir en {folder} ({error}). La configuración se guarda en tu carpeta de usuario.
 	Couldn't save: {e}	No se pudo guardar: {e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	La descarga de archivos adjuntos en la versión web llegará con M3.10 ({n} bytes listos)
 	`{command}` {when}	`{command}` {when}
@@ -1957,5 +1959,15 @@
 	Default page display	Presentación de página predeterminada
 	Default zoom	Zoom predeterminado
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Se usa cuando un PDF no pide una presentación ni un zoom. El desplazamiento continuo nunca salta de página en página.
+	Created a PDF from {n} files	Se creó un PDF a partir de {n} archivos
+	PDF, images and text	PDF, imágenes y texto
+	Insert a file before page {label}	Insertar un archivo antes de la página {label}
+	Insert a file at the end	Insertar un archivo al final
+	Save pages	Guardar páginas
+	Save these pages as one PDF	Guardar estas páginas en un solo PDF
+	No changes to save	No hay cambios que guardar
+	Created a PDF from {n} files; left out: {names}	Se creó un PDF a partir de {n} archivos; omitidos: {names}
+	Created a PDF from the first {n} files	Se creó un PDF a partir de los primeros {n} archivos
+	None of those files can be made into a PDF; use PDFs, images or .txt files	Ninguno de esos archivos se puede convertir en PDF; use archivos PDF, imágenes o .txt
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Elija una imagen PNG o JPEG (hasta 4 MiB). Se conserva la transparencia.
 	Couldn't import the signature image: {e}	No se pudo importar la imagen de la firma: {e}

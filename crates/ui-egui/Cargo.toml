@@ -12,6 +12,7 @@ workspace = true
 pdfcraft-fonts = { workspace = true }
 pdfcraft-engine = { workspace = true }
 pdfcraft-render = { workspace = true }
+pdfcraft-platform = { workspace = true }
 egui = { workspace = true }
 egui_extras = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "persistence", "links"] }
@@ -34,6 +35,13 @@ arboard = { version = "3.6", default-features = false, features = ["image-data"]
 pollster = "1.0"
 # Checks that an installed fallback font parses and has the glyphs; the same skrifa egui uses.
 skrifa = "0.44"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Where the pointer is while files are dragged over the window (winit doesn't say): safe AppKit
+# calls only. All three are already in the tree through arboard and rfd.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "NSScreen"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry"] }
 
 [target.'cfg(windows)'.dependencies]
 # Auto interface language: the Windows display language, without starting a process.

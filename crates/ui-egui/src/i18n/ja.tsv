@@ -32,6 +32,7 @@
 	New blank PDF	空白の PDF を作成
 	Create PDF from file…	ファイルから PDF を作成…
 	Create PDF from images…	画像から PDF を作成…
+	Create PDF from multiple files…	複数のファイルから PDF を作成…
 	Create PDF from clipboard	クリップボードから PDF を作成
 	Combine files…	ファイルを結合…
 	Save	保存
@@ -1625,6 +1626,7 @@
 	Created a comment summary	注釈の一覧を作成しました
 	Couldn't open {name}: {e}	{name} を開けませんでした: {e}
 	Couldn't read {name}: {e}	{name} を読み取れませんでした: {e}
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	ポータブルモードは無効です: {folder} に書き込めません ({error})。設定は代わりにユーザーフォルダーに保存されます。
 	Couldn't save: {e}	保存できませんでした: {e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Web 版の添付ファイルのダウンロードは M3.10 で対応予定です（{n} バイト準備済み）
 	`{command}` {when}	`{command}`: {when}
@@ -1933,5 +1935,15 @@
 	Page display: {layout}	ページ表示：{layout}
 	Fit to width scrolling	幅に合わせてスクロール
 	Fit one full page	1ページずつ全体を表示
+	Created a PDF from {n} files	{n} 個のファイルから PDF を作成しました
+	PDF, images and text	PDF、画像、テキスト
+	Insert a file before page {label}	ページ {label} の前にファイルを挿入
+	Insert a file at the end	最後にファイルを挿入
+	Save pages	ページを保存
+	Save these pages as one PDF	これらのページを 1 つの PDF として保存
+	No changes to save	保存する変更はありません
+	Created a PDF from {n} files; left out: {names}	{n} 個のファイルから PDF を作成しました。除外: {names}
+	Created a PDF from the first {n} files	最初の {n} 個のファイルから PDF を作成しました
+	None of those files can be made into a PDF; use PDFs, images or .txt files	これらのファイルは PDF にできません。PDF、画像、.txt ファイルを使用してください
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	PNG または JPEG 画像を選択してください（最大 4 MiB）。透明度は保持されます。
 	Couldn't import the signature image: {e}	署名画像を読み込めませんでした: {e}

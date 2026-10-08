@@ -39,16 +39,24 @@ const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256
 /// The app was called PrintCraft before; settings saved then are under this key.
 const LEGACY_STORAGE_KEY: &str = "printcraft";
 
-/// The settings folder: `app.ron` and the `logs` folder (docs/development.md). eframe would
-/// otherwise derive it from the app id; keep it under "PdfCraft".
+/// The settings folder: `app.ron` and the `logs` folder (docs/development.md). In portable mode
+/// it is `PdfCraftData` beside the executable (#157). eframe would otherwise derive it from the
+/// app id; keep it under "PdfCraft".
 fn settings_dir() -> Option<std::path::PathBuf> {
+    if let Some(dir) = pdfcraft_ui_egui::portable::data_dir() {
+        return Some(dir.to_path_buf());
+    }
     eframe::storage_dir("PdfCraft")
 }
 
 /// Move the settings and crash-recovery folders of the app's former name, PrintCraft, to the new
 /// name once, so an upgrade keeps recent files, preferences and unsaved work. Best effort: a
-/// folder is left alone when the new one already exists or the move fails.
+/// folder is left alone when the new one already exists or the move fails. A portable copy leaves
+/// the per-user folders alone.
 fn migrate_legacy_folders() {
+    if pdfcraft_ui_egui::portable::data_dir().is_some() {
+        return;
+    }
     let mut moves = vec![(eframe::storage_dir("PrintCraft"), settings_dir())];
     // Recovery lives in the settings folder except on Windows, where it is under %LOCALAPPDATA%.
     if cfg!(windows) {
@@ -172,6 +180,13 @@ fn main() -> eframe::Result {
             // Autosave unsaved changes; offer to recover documents a crashed session left behind.
             if let Some(dir) = pdfcraft_ui_egui::RecoveryStore::default_dir() {
                 app.enable_recovery(pdfcraft_ui_egui::RecoveryStore::new(dir));
+            }
+            // A portable marker whose data folder can't be written (#157): say where settings went.
+            if let Some(w) = &pdfcraft_ui_egui::portable::current().unwritable {
+                app.notify_fmt(
+                    "Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.",
+                    &[("folder", &w.folder.display().to_string()), ("error", &w.error)],
+                );
             }
             if create_images {
                 if let Err(e) = app.begin_image_import_paths(&files) {

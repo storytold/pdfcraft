@@ -297,6 +297,46 @@ fn combine_extract_split_and_insert_from_file() {
     assert!(matches!(bad, Err(EditError::Source(_))));
 }
 
+/// A minimal baseline JPEG (headers only; the data is embedded as is).
+fn jpeg_bytes() -> Vec<u8> {
+    let mut v = vec![0xFF, 0xD8];
+    v.extend_from_slice(&[0xFF, 0xE0, 0, 16, b'J', b'F', b'I', b'F', 0, 1, 1, 1, 0x01, 0x2C, 0x01, 0x2C, 0, 0]);
+    v.extend_from_slice(&[0xFF, 0xC0, 0, 17, 8, 0, 2, 0, 3, 3, 1, 0x11, 0, 2, 0x11, 1, 3, 0x11, 1]);
+    v.extend_from_slice(&[0xFF, 0xD9]);
+    v
+}
+
+#[test]
+fn mixed_files_convert_and_combine_in_order() {
+    let mut s = Session::new();
+    let pdf = Arc::new(fixture(2));
+    let (kind, same) = s.convert_to_pdf("a.pdf", &pdf).unwrap();
+    assert_eq!(kind, SourceKind::Pdf);
+    assert!(Arc::ptr_eq(&same, &pdf), "a PDF is passed through untouched");
+    let (kind, image) = s.convert_to_pdf("scan.jpg", &Arc::new(jpeg_bytes())).unwrap();
+    assert_eq!(kind, SourceKind::Image);
+    let (kind, text) = s.convert_to_pdf("notes.txt", &Arc::new(b"hello".to_vec())).unwrap();
+    assert_eq!(kind, SourceKind::Text);
+    let combined = s.combine_ranges(&[("notes".into(), text, None), ("a".into(), pdf, Some("2".into())), ("scan".into(), image, None)]).unwrap();
+    let id = s.open_new("Combined.pdf", combined).unwrap();
+    assert_eq!(page_texts(&s, id), ["hello", "Page 2", ""]);
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["notes→1", "a→2", "scan→3"]);
+}
+
+#[test]
+fn files_that_cannot_be_converted_are_refused_clearly() {
+    let s = Session::new();
+    let err = s.convert_to_pdf("report.docx", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();
+    assert_eq!(err, EditError::Source("report.docx: this file type can't be converted; use a PDF, an image or a .txt file".into()));
+    assert!(matches!(s.convert_to_pdf("empty", &Arc::new(Vec::new())), Err(EditError::Source(_))));
+    // Damaged inputs of a known type fail with an error, not a panic.
+    assert!(s.convert_to_pdf("bad.png", &Arc::new(b"\x89PNG\r\n\x1a\nnope".to_vec())).is_err());
+    assert!(s.convert_to_pdf("bad.jpg", &Arc::new(vec![0xFF, 0xD8, 0xFF])).is_err());
+    assert!(s.convert_to_pdf("bad.pdf", &Arc::new(b"%PDF-1.7 nope".to_vec())).is_err());
+    let err = s.convert_to_pdf("locked.pdf", &protected("pw", "o", -1)).unwrap_err();
+    assert_eq!(err, EditError::Source("locked.pdf: it is password-protected".into()));
+}
+
 fn protected(user: &str, owner: &str, permissions: i32) -> Arc<Vec<u8>> {
     let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(2))).unwrap();
     doc.set_encryption(&pdfcraft_cos::NewEncryption {
