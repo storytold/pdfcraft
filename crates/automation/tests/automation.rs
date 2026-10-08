@@ -1465,6 +1465,53 @@ fn links_through_tools() {
     assert!(matches!(a.call("link_add", &json!({ "doc": doc, "page": 1, "rect": [0, 0, 50, 20] })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// doc_info reports annotation and link rectangles in the tools' displayed-page convention,
+/// the same values comment_list and link_list give, so they can be fed back to link_edit (#129).
+#[test]
+fn doc_info_rects_are_displayed_page_coordinates() {
+    let dir = workdir("info-rects");
+    let mut a = auto(&dir);
+    // Page 2 is rotated so an unrotated-only y flip cannot pass.
+    let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 612, "height": 792, "pages": 2 }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_rotate", json!({ "doc": doc, "pages": [2], "degrees": 90 }));
+    for page in 1..=2 {
+        ok(
+            &mut a,
+            "comment_add",
+            json!({ "doc": doc, "page": page, "type": "note", "at": [72, 72], "author": "Example", "contents": "Fixture note" }),
+        );
+        ok(&mut a, "link_add", json!({ "doc": doc, "page": page, "rect": [72, 100, 200, 120], "url": "https://example.com" }));
+    }
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "fixture.pdf" }));
+    let re = ok(&mut a, "doc_open", json!({ "path": "fixture.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": re }));
+    let comments = ok(&mut a, "comment_list", json!({ "doc": re }));
+    let links = ok(&mut a, "link_list", json!({ "doc": re }));
+    let close = |a: &Value, b: &Value| {
+        let (a, b) = (a.as_array().unwrap(), b.as_array().unwrap());
+        a.len() == 4 && a.iter().zip(b).all(|(x, y)| (x.as_f64().unwrap() - y.as_f64().unwrap()).abs() < 0.01)
+    };
+    for page in 1..=2 {
+        let page = json!(page);
+        let find = |items: &Value| items.as_array().unwrap().iter().find(|x| x["page"] == page).unwrap()["rect"].clone();
+        let (info_note, note) = (find(&info["annotations"]), find(&comments["comments"]));
+        assert!(close(&info_note, &note), "page {page}: doc_info note {info_note} vs comment_list {note}");
+        if page == 1 {
+            assert!(close(&note, &json!([72.0, 72.0, 92.0, 92.0])), "note {note}");
+        }
+        let (info_link, link) = (find(&info["links"]), find(&links["links"]));
+        assert!(close(&info_link, &link), "page {page}: doc_info link {info_link} vs link_list {link}");
+        assert!(close(&link, &json!([72.0, 100.0, 200.0, 120.0])), "page {page}: link {link}");
+    }
+    // Reusing the doc_info rectangle in a geometry-taking edit leaves the link where it is.
+    let rotated = links["links"].as_array().unwrap().iter().find(|l| l["page"] == 2).unwrap().clone();
+    let from_info = info["links"].as_array().unwrap().iter().find(|l| l["page"] == 2).unwrap()["rect"].clone();
+    ok(&mut a, "link_edit", json!({ "doc": re, "page": 2, "index": rotated["index"], "rect": from_info }));
+    let after = ok(&mut a, "link_list", json!({ "doc": re }));
+    let moved = after["links"].as_array().unwrap().iter().find(|l| l["page"] == 2).unwrap()["rect"].clone();
+    assert!(close(&moved, &rotated["rect"]), "link moved: {moved} vs {}", rotated["rect"]);
+}
+
 #[test]
 fn comment_checkmarks_locks_hiding_and_summaries_through_tools() {
     let dir = workdir("comment-polish");
