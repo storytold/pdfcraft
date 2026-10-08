@@ -1482,4 +1482,55 @@ trailer << /Root 1 0 R >>
         assert_eq!(px(25, 50), vec![255, 0, 0, 255], "inside the mask");
         assert_eq!(px(75, 50), vec![255, 255, 255, 255], "outside the mask");
     }
+
+    /// ISO 32000-2 §8.5.4: `W` / `W*` clip with the current path once whichever path-painting
+    /// operator ends it has painted it, `S`, `f` or `B` as much as `n`. The vendored interpreter
+    /// applied the clip only on `n`: after `re W* S` everything later painted outside the clip,
+    /// and the forgotten clip stayed pending, so a later `re n` (even after `Q`) clipped
+    /// content that should show. MuPDF, Poppler and PDFium clip in every case below.
+    #[test]
+    fn clipping_path_applies_after_any_painting_operator() {
+        let render = |content: &str| {
+            let pdf = format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+                content.len()
+            );
+            let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            assert!(p.error.is_none(), "{content}: {:?}", p.error);
+            p
+        };
+        let px = |p: &RenderedPage, x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+        let red = vec![255, 0, 0, 255];
+        // The clip is the square x 20..60, y 20..60 (device rows 40..80); then the page is filled red.
+        for op in ["n", "S", "s", "f", "F", "f*", "B", "B*", "b", "b*"] {
+            for clip in ["W", "W*"] {
+                let p = render(&format!("q 0 0 1 RG 4 w 0.8 g 20 20 40 40 re {clip} {op} 1 0 0 rg 0 0 100 100 re f Q"));
+                assert_eq!(px(&p, 40, 60), red, "{clip} {op}: inside the clip");
+                assert_ne!(px(&p, 5, 5), red, "{clip} {op}: outside the clip");
+                assert_ne!(px(&p, 95, 95), red, "{clip} {op}: outside the clip");
+                // The operator that ends the path paints under the old clip: the outer half of
+                // the 4 pt stroke (x 18..20) shows outside the new one.
+                let stroked = !["n", "f", "F", "f*"].contains(&op);
+                let edge = if stroked { vec![0, 0, 255, 255] } else { vec![255, 255, 255, 255] };
+                assert_eq!(px(&p, 18, 60), edge, "{clip} {op}: just outside the clip");
+            }
+        }
+        // A clip is used once: it doesn't linger for a later `n`, inside or outside `q`/`Q`.
+        for content in [
+            "q 0 0 1 RG 70 70 10 10 re W S Q q 10 10 20 20 re n 1 0 0 rg 0 0 100 100 re f Q",
+            "q 0 0 1 RG 0 0 100 100 re W S 10 10 20 20 re n 1 0 0 rg 0 0 100 100 re f Q",
+        ] {
+            let p = render(content);
+            assert!([(5, 5), (50, 50), (95, 95)].iter().all(|(x, y)| px(&p, *x, *y) == red), "{content}: no stray clip");
+        }
+    }
 }

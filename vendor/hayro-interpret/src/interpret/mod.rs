@@ -5,7 +5,7 @@ use crate::convert::{convert_line_cap, convert_line_join};
 use crate::device::Device;
 use crate::font::{Font, FontData, FontQuery, StandardFont};
 use crate::interpret::path::{
-    close_path, fill_path, fill_path_impl, fill_stroke_path, stroke_path,
+    apply_pending_clip, close_path, fill_path, fill_path_impl, fill_stroke_path, stroke_path,
 };
 use crate::interpret::state::{TextStateFont, handle_gs};
 use crate::interpret::text::TextRenderingMode;
@@ -479,15 +479,7 @@ pub fn interpret<'a>(
                 stroke_path(context, device);
             }
             TypedInstruction::EndPath(_) => {
-                if let Some(clip) = *context.clip()
-                    && !context.path().elements().is_empty()
-                {
-                    let clip_path = context.get().ctm * context.path().clone();
-                    context.push_clip_path(clip_path, clip, device);
-
-                    *(context.clip_mut()) = None;
-                }
-
+                apply_pending_clip(context, device);
                 context.path_mut().truncate(0);
             }
             TypedInstruction::NonStrokeColor(c) => {
