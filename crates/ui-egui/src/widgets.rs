@@ -64,7 +64,8 @@ pub fn search_box(ui: &mut egui::Ui, placeholder: &str, width: f32) -> Response 
     ui.painter().rect(rect, CornerRadius::same(16), fill, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     icons::paint(ui, Rect::from_min_size(rect.min + vec2(10.0, 8.0), vec2(16.0, 16.0)), "search", 15.0, t.text_muted);
     ui.painter().text(rect.left_center() + vec2(34.0, 0.0), Align2::LEFT_CENTER, placeholder, theme::regular(13.0), t.text_faint);
-    ui.painter().text(rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, "⌘K", theme::regular(11.5), t.text_faint);
+    let shortcut = ui.ctx().format_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::K));
+    ui.painter().text(rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, shortcut, theme::regular(11.5), t.text_faint);
     resp.on_hover_cursor(egui::CursorIcon::Text)
 }
 
@@ -105,7 +106,15 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 .corner_radius(CornerRadius::same(8))
                 .inner_margin(egui::Margin::symmetric(16, 10))
                 .show(ui, |ui| {
-                    ui.label(egui::RichText::new(msg).color(if t.dark() { Color32::from_rgb(0x22, 0x22, 0x26) } else { Color32::WHITE }));
+                    // An Area remembers its previous content width. A short notice
+                    // must not force the next validation message into a narrow column.
+                    // Allow natural short labels; wrap longer ones within the viewport,
+                    // including the frame's 32 points and 16-point outside margins.
+                    ui.set_max_width((screen.width() - 64.0).clamp(1.0, 560.0));
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(msg).color(if t.dark() { Color32::from_rgb(0x22, 0x22, 0x26) } else { Color32::WHITE }))
+                            .wrap(),
+                    );
                 });
         });
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -272,4 +281,46 @@ pub fn icon_pill(ui: &mut egui::Ui, icon: &str, label: &str, primary: bool) -> R
     crate::icons::paint(ui, Rect::from_min_size(rect.min + vec2(12.0, 7.0), vec2(16.0, 16.0)), icon, 15.0, text);
     ui.painter().text(rect.left_center() + vec2(34.0, 0.0), Align2::LEFT_CENTER, label, font, text);
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::Pos2;
+
+    fn toast_rect(app: &mut PdfCraftApp, ctx: &egui::Context, width: f32, now: &mut f64) -> Rect {
+        // Let the Area settle after a notice/viewport change, without advancing to
+        // expiry. No native rendering or renderer worker is needed for this layout.
+        for _ in 0..3 {
+            *now += 0.016;
+            let output = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(width, 900.0))), time: Some(*now), ..Default::default() },
+                |ui| toast(app, ui.ctx()),
+            );
+            output.drop_without_applying_deltas();
+        }
+        ctx.memory(|memory| memory.area_rect(egui::Id::new("toast")).unwrap())
+    }
+
+    #[test]
+    fn toast_width_adapts_to_long_notices_and_narrow_viewports() {
+        let ctx = egui::Context::default();
+        let mut app = PdfCraftApp::new();
+        let mut now = 1.0;
+        app.notify("Saved");
+        let short = toast_rect(&mut app, &ctx, 1280.0, &mut now);
+        assert!(short.width() < 160.0, "short notices retain their natural width: {short:?}");
+        app.notify("Fill in name failed: The value entered is not valid for the field [ name ]");
+        let long = toast_rect(&mut app, &ctx, 1280.0, &mut now);
+        assert!(long.width() > 300.0, "a previous short Area must not squeeze validation feedback: {long:?}");
+        assert!(long.height() < 85.0, "ordinary feedback must not become a seven-line column: {long:?}");
+        for width in [320.0, 180.0] {
+            let rect = toast_rect(&mut app, &ctx, width, &mut now);
+            assert!(rect.width() <= width - 32.0 + 1.0, "frame and viewport margins must fit: {rect:?}");
+            assert!(rect.left() >= 15.0 && rect.right() <= width - 15.0, "notice remains horizontally on screen: {rect:?}");
+        }
+        app.notify("Saved");
+        let again = toast_rect(&mut app, &ctx, 1280.0, &mut now);
+        assert!((again.width() - short.width()).abs() < 1.0, "long notices must not impose a permanent minimum width");
+    }
 }
