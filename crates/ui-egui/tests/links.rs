@@ -16,19 +16,18 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, P
 }
 
 #[test]
-fn top_bar_has_no_discord_button() {
+fn top_bar_and_home_have_no_community_links() {
     let h = harness(|_| {});
-    assert!(h.query_by_label("Discord").is_none());
+    assert!(links::LINKS.is_empty());
+    assert!(h.query_by_label_contains("community").is_none());
 }
 
 #[test]
-fn home_screen_shows_linkco_header_and_no_community_links() {
+fn home_screen_shows_linkco_header_and_tools() {
     let h = harness(|_| {});
     h.get_by_label("Linkco PDF Editor");
     h.get_by_label("Professional PDF tools for everyday document work.");
     h.get_by_label("View all tools →");
-    assert!(h.query_by_label_contains("Discord").is_none());
-    assert!(h.query_by_label_contains("ArtCraft").is_none());
 }
 
 #[test]

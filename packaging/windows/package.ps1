@@ -105,6 +105,21 @@ Invoke-Native 'test-msi' { & (Get-Process -Id $PID).Path -NoProfile -File (Join-
 Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Msi, '.wixpdb'))
 & (Join-Path $PSScriptRoot 'sign.ps1') $Msi
 
+# ---- EXE Setup (NSIS, when makensis is installed) ----------------------------------------------
+$Makensis = Get-Command makensis -ErrorAction SilentlyContinue
+if ($Makensis) {
+  $SetupExe = Join-Path $Dist "LinkcoPDFEditorSetup.exe"
+  Invoke-Native 'makensis' {
+    & $Makensis.Source `
+      "/DVERSION=$MsiVersion" `
+      "/DBIN_DIR=$Stage" `
+      "/DICON_PATH=$(Join-Path $Root 'assets\app-icon\pdfcraft.ico')" `
+      "/DOUT_FILE=$SetupExe" `
+      (Join-Path $PSScriptRoot 'installer.nsi')
+  }
+  & (Join-Path $PSScriptRoot 'sign.ps1') $SetupExe
+}
+
 # ---- portable zip ------------------------------------------------------------------------------
 $Portable = Join-Path $TargetDir "windows-package\LinkcoPDFEditor-$Version-windows-$Arch-portable"
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue

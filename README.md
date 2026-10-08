@@ -1,71 +1,274 @@
-# Linkco PDF Editor
+<p align="center">
+  <img src="assets/app-icon/pdfcraft.svg" width="96" height="96" alt="Linkco PDF Editor logo" />
+</p>
 
-**Professional PDF tools for everyday document work.**
+<h1 align="center">Linkco PDF Editor</h1>
 
-Linkco PDF Editor is a fast, native desktop and web PDF application developed by **Al Rawabet Commercial Services & Contracting Company W.L.L.** (`Linkco`). It provides a complete local-first PDF workspace for viewing, searching, commenting, filling and signing forms, organizing pages, creating and converting documents, redacting sensitive content, and automating document workflows.
-
-All document processing happens locally on your machine with no telemetry, no account requirement, and no cloud uploads.
-
----
-
-## Key Capabilities
-
-### Organize & Edit
-- **Organize Pages** — Reorder, rotate, duplicate, insert, extract, replace, crop, and delete pages visually.
-- **Edit PDF** — Edit text paragraphs and images directly on the page, add text boxes, links, headers & footers, watermarks, backgrounds, and Bates numbering.
-- **Combine & Split** — Merge multiple PDFs or images into a single document, or split documents by page count, file size, or top-level bookmarks.
-
-### Review, Sign & Forms
-- **Comments & Markup** — Sticky notes, text highlights, underlines, strikethroughs, callouts, freehand ink, shapes, and stamps.
-- **Fill & Sign** — Interactive AcroForm and XFA form filling, visual signatures, and cryptographic digital signatures (`PKCS#12` / `.pfx` and system certificate stores).
-- **Prepare Form** — Create and edit interactive form fields (text, checkboxes, radio buttons, dropdowns, list boxes, buttons, and signature fields).
-
-### Convert, Protect & Verify
-- **Create & Export** — Create PDFs from blank pages, text, images, or clipboard; export to PNG, JPEG, TIFF, Word (`.docx`), HTML, RTF, or plain text.
-- **Scan & OCR** — Recognize text in scanned pages into a searchable text layer.
-- **Redact & Protect** — Permanently remove sensitive text and graphics, sanitize metadata and hidden layers, and protect documents with AES-256 passwords and permissions.
-- **Compare, Measure & Accessibility** — Side-by-side document comparison, distance/perimeter/area measurement tools, PDF/A, PDF/X, and PDF/UA inspection, and WCAG accessibility checking.
+<p align="center">
+  <strong>Professional PDF tools for Linkco</strong>
+</p>
 
 ---
 
-## Building from Source
+## Overview
+
+**Linkco PDF Editor** is a native desktop PDF reader, editor, and document processing suite developed for **Linkco** (**Al Rawabet Commercial Services & Contracting Company W.L.L.**). Written entirely in safe Rust with zero `unsafe` blocks across the workspace, it provides a fast, offline-first environment for viewing, editing, organizing, converting, signing, redacting, and validating PDF documents.
+
+All document rendering and editing operations execute locally on your workstation without requiring an account, cloud upload, or telemetry connection.
+
+---
+
+## Features
+
+- **Document Viewing & Navigation** — Continuous, single-page, two-up, and cover-page layouts; smooth zoom and pan; page thumbnails; hierarchical bookmarks; Optional Content Group (OCG) layer controls; file attachments; article threads; and side-by-side synchronous document comparison.
+- **Page Organization** — Interactive thumbnail grid for rotating, reordering, deleting, extracting, duplicating, inserting, replacing, cropping, and splitting pages (by page count, file size, or top-level bookmarks), plus multi-file PDF combining.
+- **Direct Content Editing** — Reflow-aware paragraph and line text editing, new text blocks, image insertion and replacement, headers and footers, watermarks, backgrounds, Bates numbering, link editing, and vector object inspection.
+- **Annotations & Markup** — Sticky notes, highlights, underlines, strikethroughs, squiggly lines, free-text callouts, ink drawings, stamps, polygons, polylines, rectangles, ellipses, lines, arrows, carets, redaction marks, and XFDF comment import/export.
+- **Interactive Forms & E-Sign** — Full AcroForm field filling and authoring (text, checkbox, radio button, combo box, list box, push button, signature field, barcode), sandboxed `AF*` calculation/validation scripts, and **Fill & Sign** tools (text, checkmarks, crosses, dots, lines, dates, drawn/typed/image signatures, and initials).
+- **Digital Signatures & Certificates** — PKCS#7 / CMS and PAdES (`B-B`, `B-T`, `B-LT`, `B-LTA`) digital signature verification and signing, X.509 chain validation, RFC 3161 timestamping, and DocMDP modification detection.
+- **Security & True Redaction** — Password encryption (AES-256, AES-128, RC4) and permission enforcement, content-stream glyph and image redaction with verifiable byte removal, metadata scrubbing, and hidden-data sanitization.
+- **Export & Conversion** — Export PDFs to Microsoft Word (`.docx`), PNG images, extracted embedded images, HTML web pages, Rich Text Format (`.rtf`), and plain text (`.txt`), or create PDFs from images, plain text, HTML, or blank page templates.
+- **Scan & OCR** — Pluggable Optical Character Recognition (OCR) pipeline with page deskew, background cleanup, and invisible searchable text layer (`Tr 3`) generation.
+- **Print Production, Standards & Accessibility** — PDF/A, PDF/X, and PDF/UA validation; color-separation and ink-coverage preview; transparency flattening; hairline fixing; color space conversion; page box (`TrimBox`, `BleedBox`, `ArtBox`, `CropBox`) editing; printer marks; and Matterhorn accessibility checks with reading-order and structure-tag editors.
+
+---
+
+## Recommended Tools
+
+The Home dashboard provides one-click access to the core tools implemented in the workspace (`crates/ui-egui/src/home.rs`):
+
+| Tool | Description | Primary Commands |
+| :--- | :--- | :--- |
+| **Organize pages** | Page grid · Rotate · Delete | Opens the interactive page-organization grid (`organize`) |
+| **Edit a PDF** | Edit text & images · Add text | Activates direct PDF content editing (`edit`) |
+| **Combine files** | Merge PDFs · Reorder · Insert | Combines multiple PDF documents into a single file (`page.combine`) |
+| **Compress a PDF** | Reduce file size · Optimize PDF | Deduplicates streams, subsets fonts, and optimizes file size (`file.reduce_size`) |
+| **Export a PDF** | Word · Image · HTML · Text | Exports the active document to `.docx`, `.png`, `.html`, `.rtf`, or `.txt` (`export`) |
+| **Scan & OCR** | Recognize text · Searchable PDF | Runs optical character recognition to generate a searchable text layer (`ocr.recognize`) |
+| **Fill & Sign** | Fill form fields · Sign document | Places text, checkmarks, dates, initials, and signatures on pages (`fill_sign`) |
+| **Protect a PDF** | Password security · Sanitize | Applies password encryption, permissions, or document sanitization (`protect`) |
+| **Open file** | Browse local filesystem | Opens one or more PDF documents from disk (`file.open`) |
+
+---
+
+## Screenshots
+
+### Home Dashboard & Recommended Tools
+
+![Linkco PDF Editor — Home Dashboard](docs/images/linkco-home-dashboard.png)
+
+### Organize Pages View
+
+![Linkco PDF Editor — Organize Pages](docs/images/linkco-organize-pages.png)
+
+---
+
+## System Requirements
+
+| Platform | Minimum Requirements |
+| :--- | :--- |
+| **Operating System** | Windows 10 / 11 (x64 or ARM64), macOS 12+ (Apple Silicon or Intel), or Linux (x86_64 / aarch64 with X11 or Wayland) |
+| **Processor** | 64-bit dual-core CPU (quad-core recommended for concurrent rendering and OCR) |
+| **Memory** | 4 GB RAM minimum (8 GB RAM recommended for large multi-hundred-page documents) |
+| **Graphics** | OpenGL 3.3+, Direct3D 11/12, Metal, or Vulkan compatible GPU / software rasterizer |
+| **Disk Space** | 100 MB for installed application binaries |
+| **Build Toolchain** | Rust 1.85+ (`edition = "2024"`, validated on Rust 1.92) |
+
+---
+
+## Installation
+
+### From a Packaged Installer
+
+1. Build or obtain the native installer for your platform from `dist/release/`:
+   - **Windows (NSIS Setup EXE):** `LinkcoPDFEditorSetup.exe`
+   - **Windows (MSI Package):** `LinkcoPDFEditorSetup-<version>-windows-<arch>.msi`
+2. Run the installer and follow the on-screen prompts.
+3. Launch **Linkco PDF Editor** from the Windows Start Menu, Desktop shortcut, or by opening any `.pdf` file.
+
+### From Source
+
+1. Install the Rust toolchain via [rustup](https://www.rust-lang.org/tools/install).
+2. Clone this repository and build the release binaries:
 
 ```bash
-# Run the desktop application
-cargo run -p pdfcraft
-
-# Build release binaries (GUI and headless CLI)
+git clone https://github.com/b-lincko/linkco-pdf.git
+cd linkco-pdf
 cargo build --release -p pdfcraft -p pdfcraft-cli
-
-# Run workspace tests and asset verification
-cargo test --workspace
-cargo xtask assets
 ```
 
 ---
 
-## Command-Line Interface (`pdfcraft-cli`)
+## Windows Installer
 
-Linkco PDF Editor includes `pdfcraft-cli` for scripting, batch processing, and headless automation:
+The Windows packaging pipeline lives in `packaging/windows/` and embeds full Linkco product metadata into both the executable (`apps/pdfcraft/build.rs`) and the installers:
+
+- **Product Name:** `Linkco PDF Editor`
+- **Publisher / Company Name:** `Al Rawabet Commercial Services & Contracting Company W.L.L.`
+- **Internal Name:** `LinkcoPDFEditor`
+- **Original Filename:** `LinkcoPDFEditor.exe`
+- **Application Icon:** `assets/app-icon/pdfcraft.ico`
+- **Shortcuts Created:**
+  - Start Menu: `Linkco PDF Editor`
+  - Desktop: `Linkco PDF Editor`
+- **Installed Apps Registration:** Registers **Linkco PDF Editor** in Windows *Installed Apps / Add or Remove Programs* with version, icon, publisher, and clean uninstaller support, and registers `.pdf` under *Open With* without overriding the user's default PDF handler.
+
+### Building the Windows Installer
+
+From a Windows PowerShell prompt with the Rust toolchain, WiX Toolset v5 (`wix`), and optionally NSIS (`makensis`) installed:
+
+```powershell
+pwsh -File packaging/windows/package.ps1
+```
+
+This produces:
+- `dist/release/LinkcoPDFEditorSetup-<version>-windows-<arch>.msi` (validated by `packaging/windows/test-msi.ps1`)
+- `dist/release/LinkcoPDFEditorSetup.exe` (when NSIS `makensis` is available in `PATH`)
+
+---
+
+## Usage
+
+### Desktop GUI
+
+Launch the desktop editor directly or pass one or more PDF files on the command line:
 
 ```bash
-pdfcraft-cli info    <file.pdf> [--password PW]
-pdfcraft-cli render  <file.pdf> --page N [--dpi 96] --out page.png
-pdfcraft-cli text    <file.pdf> [--page N]
-pdfcraft-cli edit    <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4]
-pdfcraft-cli combine <a.pdf> <b.pdf> --out combined.pdf
-pdfcraft-cli extract <in.pdf> --pages 1,3,5 --out extracted.pdf
-pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
-pdfcraft-cli tools
-pdfcraft-cli run     <tool> [key=value ...]
+# Open the Home dashboard
+cargo run --release -p pdfcraft
+
+# Open specific PDF files at a target page
+cargo run --release -p pdfcraft -- --page 1 document.pdf
+```
+
+### Command-Line Interface (`pdfcraft-cli`)
+
+The companion CLI binary supports headless inspection, text extraction, page rendering, encryption, optimization, and batch processing:
+
+```bash
+# Inspect document metadata, page count, and PDF version
+cargo run --release -p pdfcraft-cli -- info document.pdf
+
+# Render pages to PNG images at 150 DPI
+cargo run --release -p pdfcraft-cli -- render document.pdf --dpi 150 -o page-%d.png
+
+# Extract plain text from a PDF
+cargo run --release -p pdfcraft-cli -- text document.pdf
 ```
 
 ---
 
-## License & Attribution
+## Development
 
-Linkco PDF Editor is dual-licensed under the **MIT License** ([LICENSE-MIT](LICENSE-MIT)) and **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE)), at your option.
+### Prerequisites
 
-© Al Rawabet Commercial Services & Contracting Company W.L.L.
+- Rust toolchain (`rustc` and `cargo` supporting Rust 2024 edition)
+- On Linux, standard GUI development headers (`libxcb`, `libxkbcommon`, `libwayland`, `libfontconfig`, `libasound2`)
 
-See [NOTICE](NOTICE) and [ATTRIBUTION.md](ATTRIBUTION.md) for third-party component and asset notices.
+### Useful Workspace Commands
+
+```bash
+# Verify asset attribution and regenerate ATTRIBUTION.md
+cargo xtask assets
+
+# Run repository engineering gates (no unsafe, no panics, licence & metadata checks)
+cargo xtask gates
+
+# Verify workspace version consistency across packaging manifests
+cargo xtask version
+
+# Verify feature parity matrix against engine commands
+cargo xtask parity
+```
+
+---
+
+## Build
+
+```bash
+# Debug build of the entire workspace
+cargo build --workspace
+
+# Optimized release build of the desktop application and CLI
+cargo build --release -p pdfcraft -p pdfcraft-cli
+```
+
+Compiled binaries are placed in `target/release/pdfcraft` (`target\release\pdfcraft.exe` on Windows) and `target/release/pdfcraft-cli`.
+
+---
+
+## Testing
+
+Run the workspace unit and integration test suites:
+
+```bash
+# Run all workspace library and integration tests
+cargo test --workspace
+
+# Run UI integration tests (home dashboard, links, pickers, keyboard shortcuts)
+cargo test -p pdfcraft-ui-egui
+
+# Run engine unit tests (catalog, commands, links, redaction, editing)
+cargo test -p pdfcraft-engine
+
+# Run clippy lints across all targets
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+---
+
+## Project Structure
+
+```text
+linkco-pdf/
+├── apps/
+│   ├── pdfcraft/          # Desktop GUI binary (Linkco PDF Editor) & Windows resource script
+│   ├── pdfcraft-cli/      # Headless CLI, batch runner, and inspection tool
+│   └── pdfcraft-web/      # WebAssembly browser application target
+├── crates/
+│   ├── core/              # PDF 1.7 / 2.0 parser, xref/object model, writer, and encryption
+│   ├── render/            # Display list compiler, 2D software rasterizer, fonts, and color
+│   ├── layout/            # Text extraction, reading order, and full-text search
+│   ├── forms/             # AcroForm fields, appearance generation, and XFA support
+│   ├── annot/             # 18 PDF annotation types and XFDF import/export
+│   ├── sign/              # PKCS#7 / CMS, PAdES, X.509 certificates, and RFC 3161 timestamps
+│   ├── ocr/               # Pluggable OCR engine, deskew, and searchable PDF layer builder
+│   ├── compliance/        # PDF/A, PDF/X, PDF/UA validation and Matterhorn accessibility
+│   ├── scripting/         # Sandboxed QuickJS runtime for Acrobat form scripts
+│   ├── engine/            # High-level document session, command dispatcher, and tool catalog
+│   └── ui-egui/           # Immediate-mode desktop UI, Home dashboard, dialogs, and i18n
+├── assets/
+│   ├── app-icon/          # Linkco PDF Editor application icons (.svg, .ico, .icns, .png)
+│   ├── fonts/             # Bundled UI and PDF base fonts (Inter, Liberation, Noto)
+│   └── icons/             # Bundled Lucide UI icons (ISC licence)
+├── docs/
+│   └── images/            # Application screenshots used in documentation
+├── packaging/
+│   ├── windows/           # Windows WiX (.wxs), NSIS (installer.nsi), and PowerShell scripts
+│   ├── macos/             # macOS .app / .dmg / .pkg packaging scripts
+│   ├── linux/             # Linux .deb, .rpm, AppImage, Flatpak, and tarball scripts
+│   └── freebsd/           # FreeBSD packaging scripts
+└── xtask/                 # Build verification, asset attribution, and parity tasks
+```
+
+---
+
+## Security & Privacy
+
+- **100% Offline Operation:** Linkco PDF Editor processes all PDF files locally. It contains no analytics, telemetry, crash-reporting beacons, advertisements, or background network calls.
+- **Memory-Safe Architecture:** `#![forbid(unsafe_code)]` is enforced across the workspace, eliminating buffer overflows and memory corruption vulnerabilities when parsing untrusted PDF files.
+- **External Link Protection:** Clicking a link inside a PDF document never opens a browser or executes a local file path silently; only `https://`, `http://`, and `mailto:` schemes are permitted, and every external URL requires explicit user confirmation in a modal dialog showing the full destination address.
+- **Sandboxed Scripting:** Document JavaScript (`crates/scripting`) executes inside an isolated, memory- and instruction-capped QuickJS context with zero filesystem or network access.
+
+---
+
+## License
+
+Dual-licensed under either of:
+
+- **Apache License, Version 2.0** ([`LICENSE-APACHE`](LICENSE-APACHE))
+- **MIT License** ([`LICENSE-MIT`](LICENSE-MIT))
+
+at your option. Third-party font and icon attributions are cataloged in [`ATTRIBUTION.md`](ATTRIBUTION.md).
+
+Copyright © Al Rawabet Commercial Services & Contracting Company W.L.L.

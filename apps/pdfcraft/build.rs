@@ -12,14 +12,17 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
+    let version = env!("CARGO_PKG_VERSION");
     let mut res = winresource::WindowsResource::new();
     res.set_icon("../../assets/app-icon/pdfcraft.ico")
         .set("ProductName", "Linkco PDF Editor")
-        .set("FileDescription", "Linkco PDF Editor")
         .set("CompanyName", "Al Rawabet Commercial Services & Contracting Company W.L.L.")
-        .set("LegalCopyright", "© Al Rawabet Commercial Services & Contracting Company W.L.L.")
-        .set("OriginalFilename", "pdfcraft.exe")
-        .set("InternalName", "Linkco PDF Editor");
+        .set("FileDescription", "Linkco PDF Editor")
+        .set("InternalName", "LinkcoPDFEditor")
+        .set("OriginalFilename", "LinkcoPDFEditor.exe")
+        .set("ProductVersion", version)
+        .set("FileVersion", version)
+        .set("LegalCopyright", "© Al Rawabet Commercial Services & Contracting Company W.L.L.");
     if let Err(e) = res.compile() {
         if std::env::var_os("PDFCRAFT_REQUIRE_WINRES").is_some() {
             println!("cargo::error=embedding Windows resources failed: {e}");

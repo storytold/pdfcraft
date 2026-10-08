@@ -1151,7 +1151,6 @@
 	Searchable Image (Exact)	Imagen con búsqueda (exacta)
 	Adds invisible text over each word; the page image is not changed	Añade texto invisible sobre cada palabra; la imagen de la página no cambia
 	Downsample to	Reducir resolución a
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	El reconocimiento de texto no está instalado: faltan sus modelos (ejecuta `cargo xtask models` o define PRINTCRAFT_MODELS).
 	Settings	Ajustes
 	Optional	Opcional
 	Planned · {m}	Previsto · {m}
@@ -1606,7 +1605,6 @@
 	Signed and all signatures are valid.	Firmado y todas las firmas son válidas.
 	At least one signature has problems.	Al menos una firma tiene problemas.
 	This document is secured. Some changes are restricted by its security settings.	Este documento está protegido. Su configuración de seguridad restringe algunos cambios.
-	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Este formulario también contiene datos XFA, que PdfCraft aún no lee. Puedes rellenar sus campos, pero Acrobat puede mostrar los valores XFA en su lugar.
 	This document contains {n} interactive form fields.	Este documento contiene {n} campos de formulario interactivos.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Este archivo estaba dañado y se ha reparado. Al guardar se conserva la versión reparada.
 	Dismiss	Cerrar
@@ -1655,7 +1653,6 @@
 	there are no pages to print	no hay páginas que imprimir
 	the document has no tags	el documento no tiene etiquetas
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	los modelos de reconocimiento de texto no están instalados (ejecuta `cargo xtask models` o define PRINTCRAFT_MODELS)
 	the image is empty	la imagen está vacía
 	this file isn't XFDF, FDF, XML or text form data	este archivo no contiene datos de formulario XFDF, FDF, XML ni de texto
 	nothing in the file matches this document	nada en el archivo coincide con este documento

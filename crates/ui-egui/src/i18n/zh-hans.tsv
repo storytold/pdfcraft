@@ -831,7 +831,6 @@
 	Searchable Image (Exact)	可搜索图像（精确）
 	Adds invisible text over each word; the page image is not changed	在每个词上添加不可见文本；页面图像保持不变
 	Downsample to	降采样至
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	未安装文本识别：缺少模型（运行 `cargo xtask models`，或设置 PRINTCRAFT_MODELS）。
 	Settings	设置
 	Protect	保护
 	Advanced options	高级选项
@@ -1533,7 +1532,6 @@
 	Signed and all signatures are valid.	已签名，所有签名均有效。
 	At least one signature has problems.	至少一个签名存在问题。
 	This document is secured. Some changes are restricted by its security settings.	本文档已加密。其安全设置限制了部分更改。
-	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	此表单还包含 XFA 数据，PdfCraft 暂不读取。您可以填写字段，但 Acrobat 可能显示 XFA 值。
 	This document contains {n} interactive form fields.	本文档包含 {n} 个交互式表单域。
 	This file was damaged and has been repaired. Saving keeps the repaired version.	此文件已损坏并已修复。保存将保留修复后的版本。
 	Dismiss	关闭
@@ -1820,7 +1818,6 @@
 	the image is empty	图像为空
 	The operation failed.	操作失败。
 	the password is incorrect	密码不正确
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	尚未安装文本识别模型（请运行 `cargo xtask models` 或设置 PRINTCRAFT_MODELS）
 	The title in the metadata and the document information differ	元数据与文档信息中的标题不一致
 	the title must not be empty	标题不能为空
 	there are no pages to print	没有可打印的页面

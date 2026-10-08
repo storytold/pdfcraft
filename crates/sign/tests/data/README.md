@@ -16,16 +16,16 @@ The password of every `.p12` is `test`.
 Regenerate with:
 
 ```sh
-openssl req -x509 -newkey rsa:2048 -nodes -keyout rsa.key -out rsa.crt -days 3650 -subj "/CN=Test Signer RSA/O=PrintCraft Tests/C=US" -set_serial 1001
+openssl req -x509 -newkey rsa:2048 -nodes -keyout rsa.key -out rsa.crt -days 3650 -subj "/CN=Test Signer RSA/O=Linkco PDF Tests/C=US" -set_serial 1001
 openssl pkcs12 -export -inkey rsa.key -in rsa.crt -out rsa-aes.p12 -passout pass:test -name "Test Signer RSA"
 openssl pkcs12 -export -legacy -inkey rsa.key -in rsa.crt -out rsa-legacy.p12 -passout pass:test -name "Test Signer RSA"
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout ec.key -out ec.crt -days 3650 -subj "/CN=Test Signer EC/O=PrintCraft Tests" -set_serial 2002
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout ec.key -out ec.crt -days 3650 -subj "/CN=Test Signer EC/O=Linkco PDF Tests" -set_serial 2002
 openssl pkcs12 -export -inkey ec.key -in ec.crt -out ec-p256.p12 -passout pass:test
 openssl pkcs12 -export -legacy -inkey ec.key -in ec.crt -out ec-legacy.p12 -passout pass:test -name "Test Signer EC"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-384 -nodes -keyout ec3.key -out ec3.crt -days 3650 -subj "/CN=Test Signer P384" -set_serial 3003
 openssl pkcs12 -export -inkey ec3.key -in ec3.crt -out ec-p384.p12 -passout pass:test -certpbe AES-128-CBC -keypbe AES-128-CBC -macalg sha1
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout ca.key -out ca.crt -days 3650 -subj "/CN=PrintCraft Test Root CA/O=PrintCraft Tests" -set_serial 1 -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign"
-openssl req -newkey rsa:2048 -nodes -keyout leaf.key -out leaf.csr -subj "/CN=Ada Lovelace/O=PrintCraft Tests/emailAddress=ada@example.com"
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout ca.key -out ca.crt -days 3650 -subj "/CN=Linkco PDF Test Root CA/O=Linkco PDF Tests" -set_serial 1 -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign"
+openssl req -newkey rsa:2048 -nodes -keyout leaf.key -out leaf.csr -subj "/CN=Ada Lovelace/O=Linkco PDF Tests/emailAddress=ada@example.com"
 printf "basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,nonRepudiation\n" > leaf.ext
 openssl x509 -req -in leaf.csr -CA ca.crt -CAkey ca.key -set_serial 77 -days 3650 -extfile leaf.ext -out leaf.crt
 openssl pkcs12 -export -inkey leaf.key -in leaf.crt -certfile ca.crt -out chain.p12 -passout pass:test -name "Ada Lovelace"

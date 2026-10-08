@@ -1157,7 +1157,6 @@
 	Searchable Image (Exact)	検索可能な画像（元の画像を保持）
 	Adds invisible text over each word; the page image is not changed	各単語に非表示のテキストを重ねます。ページ画像は変更しません
 	Downsample to	ダウンサンプル:
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	テキスト認識がインストールされていません。モデルがありません（`cargo xtask models` を実行するか PRINTCRAFT_MODELS を設定してください）。
 	Settings	設定
 	Optional	任意
 	Planned · {m}	予定 · {m}
@@ -1612,7 +1611,6 @@
 	Signed and all signatures are valid.	署名済みで、すべての署名が有効です。
 	At least one signature has problems.	問題のある署名があります。
 	This document is secured. Some changes are restricted by its security settings.	この文書は保護されています。セキュリティ設定により一部の変更が制限されています。
-	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	このフォームには PdfCraft がまだ読み取れない XFA データも含まれます。フィールドには入力できますが、Acrobat は代わりに XFA の値を表示する場合があります。
 	This document contains {n} interactive form fields.	この文書には対話型フォームフィールドが {n} 個あります。
 	This file was damaged and has been repaired. Saving keeps the repaired version.	このファイルは破損していたため修復しました。保存すると修復済みの状態が保持されます。
 	Dismiss	閉じる
@@ -1661,7 +1659,6 @@
 	there are no pages to print	印刷するページはありません
 	the document has no tags	文書にタグはありません
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	テキスト認識モデルがインストールされていません（`cargo xtask models` を実行するか PRINTCRAFT_MODELS を設定してください）
 	the image is empty	画像が空です
 	this file isn't XFDF, FDF, XML or text form data	このファイルは XFDF、FDF、XML、テキストのフォームデータではありません
 	nothing in the file matches this document	この文書に一致する項目がファイルにありません

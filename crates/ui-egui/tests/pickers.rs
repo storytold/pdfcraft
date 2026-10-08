@@ -56,7 +56,7 @@ fn harness(docs: &[usize]) -> Harness<'static, PdfCraftApp> {
 
 #[test]
 fn file_open_returns_at_once_and_opens_the_pick_on_the_next_frame() {
-    let dir = std::env::temp_dir().join(format!("printcraft-pickers-open-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pdfcraft-pickers-open-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("picked.pdf");
     std::fs::write(&file, fixture(2)).unwrap();
@@ -73,7 +73,7 @@ fn file_open_returns_at_once_and_opens_the_pick_on_the_next_frame() {
 
 #[test]
 fn insert_from_file_uses_the_pick_on_the_next_frame() {
-    let dir = std::env::temp_dir().join(format!("printcraft-pickers-insert-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pdfcraft-pickers-insert-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("more.pdf");
     std::fs::write(&file, fixture(2)).unwrap();
@@ -89,7 +89,7 @@ fn insert_from_file_uses_the_pick_on_the_next_frame() {
 
 #[test]
 fn a_pick_for_a_document_that_is_no_longer_active_is_dropped() {
-    let dir = std::env::temp_dir().join(format!("printcraft-pickers-switch-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pdfcraft-pickers-switch-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("more.pdf");
     std::fs::write(&file, fixture(2)).unwrap();

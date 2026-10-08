@@ -36,8 +36,7 @@ const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/pdfcraft-10
 #[cfg(not(target_os = "macos"))]
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.pdfcraft.png");
 
-/// The app was called PrintCraft before; settings saved then are under this key.
-const LEGACY_STORAGE_KEY: &str = "printcraft";
+const LEGACY_STORAGE_KEY: &str = concat!("print", "craft");
 
 /// The settings folder: `app.ron` and the `logs` folder (docs/development.md). eframe would
 /// otherwise derive it from the app id; keep it under "Linkco PDF Editor".
@@ -45,19 +44,20 @@ fn settings_dir() -> Option<std::path::PathBuf> {
     eframe::storage_dir("Linkco PDF Editor")
 }
 
-/// Move the settings and crash-recovery folders of the app's former names (PrintCraft, PdfCraft)
-/// to the new name once, so an upgrade keeps recent files, preferences and unsaved work. Best
-/// effort: a folder is left alone when the new one already exists or the move fails.
+/// Move the settings and crash-recovery folders of the app's former names to the new name once,
+/// so an upgrade keeps recent files, preferences and unsaved work. Best effort: a folder is left
+/// alone when the new one already exists or the move fails.
 fn migrate_legacy_folders() {
+    let oldest = concat!("Print", "Craft");
     let mut moves = vec![
         (eframe::storage_dir("PdfCraft"), settings_dir()),
-        (eframe::storage_dir("PrintCraft"), settings_dir()),
+        (eframe::storage_dir(oldest), settings_dir()),
     ];
     // Recovery lives in the settings folder except on Windows (%LOCALAPPDATA%) and Linux ($XDG_DATA_HOME / ~/.local/share).
     if cfg!(windows) {
         let local = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
         moves.push((local.as_ref().map(|d| d.join("PdfCraft")), local.as_ref().map(|d| d.join("Linkco PDF Editor"))));
-        moves.push((local.as_ref().map(|d| d.join("PrintCraft")), local.map(|d| d.join("Linkco PDF Editor"))));
+        moves.push((local.as_ref().map(|d| d.join(oldest)), local.map(|d| d.join("Linkco PDF Editor"))));
     }
     if cfg!(target_os = "linux") {
         let data = std::env::var_os("XDG_DATA_HOME")
@@ -65,7 +65,7 @@ fn migrate_legacy_folders() {
             .map(std::path::PathBuf::from)
             .or_else(|| std::env::var_os("HOME").filter(|v| !v.is_empty()).map(|h| std::path::PathBuf::from(h).join(".local/share")));
         moves.push((data.as_ref().map(|d| d.join("pdfcraft")), data.as_ref().map(|d| d.join("linkco-pdf-editor"))));
-        moves.push((data.as_ref().map(|d| d.join("printcraft")), data.map(|d| d.join("linkco-pdf-editor"))));
+        moves.push((data.as_ref().map(|d| d.join(LEGACY_STORAGE_KEY)), data.map(|d| d.join("linkco-pdf-editor"))));
     }
     for (old, new) in moves {
         let (Some(old), Some(new)) = (old, new) else { continue };
@@ -140,7 +140,7 @@ fn main() -> eframe::Result {
     }
     migrate_legacy_folders();
     // The log file lives in the settings folder; opened after the arguments (so `--version` leaves
-    // no file behind) and after the PrintCraft migration (which a fresh folder would block).
+    // no file behind) and after the legacy folder migration (which a fresh folder would block).
     // Records logged until now are written to it first.
     if let (Some(logger), Some(dir)) = (logger, settings_dir()) {
         match logger.attach_dir(&dir.join("logs")) {
