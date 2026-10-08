@@ -157,6 +157,8 @@ pub enum Request {
     /// `field.setFocus()`.
     Focus(String),
     Beep,
+    /// `app.execMenuItem("SaveAs")` (XFA forms' Save buttons).
+    SaveAs,
 }
 
 /// What running a script did.
@@ -1137,6 +1139,8 @@ fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], d
     }
     out
 }
+
+pub mod xfa;
 
 #[cfg(test)]
 mod tests;

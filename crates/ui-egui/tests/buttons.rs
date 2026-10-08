@@ -1,20 +1,22 @@
 //! Push buttons run their actions (Reset form, Named, …) without a JavaScript engine.
 
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 /// Two pages; page 1 has a text field "name" (filled), a Reset button, a Next page button and a
 /// Print button (a JavaScript one-liner).
 fn fixture() -> Vec<u8> {
     let objs = [
-        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 7 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
         "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>",
-        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >>",
         "<< /Type /Page /Parent 2 0 R >>",
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada) /Rect [20 340 280 360] /P 3 0 R >>",
         "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (reset) /Rect [20 300 100 320] /P 3 0 R /A << /S /ResetForm >> >>",
         "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (next) /Rect [120 300 200 320] /P 3 0 R /A << /S /Named /N /NextPage >> >>",
         "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (print) /Rect [220 300 280 320] /P 3 0 R /AA << /U << /S /JavaScript /JS (this.print\\({bUI: true}\\);) >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (save) /Rect [20 260 100 280] /P 3 0 R /A << /S /Named /N /Save >> >>",
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offs = Vec::new();
@@ -48,9 +50,14 @@ fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
 
 #[test]
 fn buttons_reset_navigate_and_print() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-buttons-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("buttons.pdf");
+    std::fs::write(&path, fixture()).unwrap();
+    let path_str = path.to_string_lossy().into_owned();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
-        app.open_bytes("buttons.pdf", None, fixture()).unwrap();
+        app.open_bytes("buttons.pdf", Some(path_str), fixture()).unwrap();
         app.set_option("zoom", "150").unwrap();
         app
     });
@@ -65,6 +72,15 @@ fn buttons_reset_navigate_and_print() {
     assert_eq!(h.state().dialog, Some(Dialog::Print), "this.print() opens the Print dialog");
     h.state_mut().dialog = None;
     h.run_steps(2);
+    // A document's Save named action never writes the file unasked (PdfCraft's XFA buttons
+    // use SaveAs, which opens the Save As dialog, as a script's `execMenuItem` does): the
+    // reset above made the document dirty, and the click leaves it so.
+    let before = std::fs::read(&path).unwrap();
+    click_field(&mut h, "save");
+    h.run_steps(4);
+    h.get_by_label_contains("isn't supported");
+    assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty, "not saved");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "the file is untouched");
     click_field(&mut h, "next");
     h.run_steps(4);
     assert_eq!(h.state().views[0].current, 1, "the NextPage action");

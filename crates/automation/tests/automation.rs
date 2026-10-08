@@ -2023,3 +2023,32 @@ fn measurement_snap_tool_covers_all_targets() {
     assert!(ok(&mut a, "measure_snap", json!({"doc":doc,"page":1,"at":[180,180]}))["snap"].is_null());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn xfa_scripts_run_for_buttons_and_field_changes_through_tools() {
+    let dir = workdir("xfa-scripts");
+    std::fs::write(dir.join("scripted.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "scripted.pdf" }))["doc"].as_u64().unwrap();
+    let field = |a: &mut Automation, n: &str| {
+        let f = ok(a, "form_fields", json!({ "doc": doc }));
+        f["fields"].as_array().unwrap().iter().find(|f| f["name"] == n).cloned()
+    };
+    // Opening ran the initialize and calculate scripts.
+    assert_eq!(field(&mut a, "qty").unwrap()["value"], "2");
+    assert_eq!(field(&mut a, "total").unwrap()["value"], "10");
+    // Filling recalculates; a bad value shows its message (the tool reports alerts in js output? no: it is applied, the value stays).
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "qty": "4" } }));
+    assert_eq!(field(&mut a, "total").unwrap()["value"], "20");
+    // A button's XFA click script runs through js_run, like any button.
+    let before = ok(&mut a, "doc_info", json!({ "doc": doc }))["xfa_layout"]["fields"].as_u64().unwrap();
+    let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "", "field": "addRow" }));
+    assert!(r["error"].is_null(), "{r}");
+    assert!(field(&mut a, "amount_2").is_some());
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["xfa_layout"]["fields"].as_u64().unwrap(), before + 2);
+    // Undo takes the row away again.
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert!(field(&mut a, "amount_2").is_none());
+    let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "", "field": "hello" }));
+    assert_eq!(r["alerts"], json!(["Hello 4"]));
+}

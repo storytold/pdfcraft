@@ -1757,6 +1757,9 @@ fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action: pdfcraft_
         }
         B::Named(n) => match n.as_str() {
             "Print" => app.open_print(),
+            // What PdfCraft's XFA buttons use, and what a script's `execMenuItem("Save")`
+            // does too: the Save As dialog, so a click never overwrites the file unasked.
+            "SaveAs" => app.run_command("file.save_as"),
             "NextPage" => app.views[index].step_page(true),
             "PrevPage" => app.views[index].step_page(false),
             "FirstPage" => app.views[index].go_to_page(0),

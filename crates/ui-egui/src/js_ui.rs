@@ -48,6 +48,7 @@ impl PdfCraftApp {
                     "The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.",
                     &[("u", &u)],
                 ),
+                Request::SaveAs => self.run_command("file.save_as"),
                 Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
             }
         }
