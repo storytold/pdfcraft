@@ -1229,6 +1229,106 @@ trailer << /Root 1 0 R >>
         assert_eq!(&page.rgba[((20 * 40 + 2) * 4)..][..4], &[255, 255, 255, 255], "beyond the butt cap");
     }
 
+    /// Render a 40 × 40 pt page at 1:1 on its own thread, with `/GS1` (from `gs1`) in its
+    /// resources, and fail instead of waiting when the renderer stalls.
+    fn render_with_gs1(content: &str, gs1: &str) -> RenderedPage {
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /ExtGState << /GS1 {gs1} >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len()
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("must not stall the renderer");
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page
+    }
+
+    /// The pixel at device (x, y), y down, of a 40-pixel-wide page.
+    fn px40(page: &RenderedPage, x: usize, y: usize) -> &[u8] {
+        &page.rgba[((y * 40 + x) * 4)..][..4]
+    }
+
+    /// From `cargo xtask fuzz`: an ExtGState `/D [[11] 0]` on a line that starts at x =
+    /// 92234775807 cut it into billions of dashes, and stroke expansion allocated more than
+    /// 5 GB. A tiny dash on an ordinary line does the same (`[0.000001] 0 d` on 20 pt passed
+    /// 10 GB), and so does a long pattern on many short subpaths, because every subpath restarts
+    /// it. Vendored hayro patch: a stroke whose dash pattern could cut it into more than
+    /// `MAX_DASHES_PER_STROKE` pieces is drawn solid.
+    #[test]
+    fn dash_patterns_that_cut_a_stroke_into_billions_of_pieces_render() {
+        let red = [255, 0, 0, 255];
+        // The fuzzed shape. A line that far out isn't drawn even undashed (its coordinates are
+        // beyond the rasterizer's range), so this case only proves the page finishes and the
+        // content after the stroke is drawn.
+        let page = render_with_gs1("1 0 0 RG 4 w /GS1 gs 92234775807 20 m 30 20 l S 0 0 1 rg 0 0 4 4 re f", "<< /D [[11] 0] >>");
+        assert_eq!(px40(&page, 1, 38), &[0, 0, 255, 255], "the square after the stroke is drawn");
+        for (what, content, gs1) in [
+            ("a tiny dash on an ordinary line", "1 0 0 RG 4 w [0.000001] 0 d 10 20 m 30 20 l S", "<< >>"),
+            ("a tiny dash from an ExtGState", "1 0 0 RG 4 w /GS1 gs 10 20 m 30 20 l S", "<< /D [[0.000001] 0] >>"),
+            (
+                "a tiny dash under a shrinking matrix",
+                "1 0 0 RG 0.0000001 0 0 0.0000001 0 0 cm 40000000 w [1] 0 d 100000000 200000000 m 300000000 200000000 l S",
+                "<< >>",
+            ),
+        ] {
+            let page = render_with_gs1(content, gs1);
+            // Device row 20 is user y 20; the stroke covers x 10 to 30.
+            for x in [12, 20, 28] {
+                assert_eq!(px40(&page, x, 20), &red, "{what}: ({x}, 20) is drawn, solid");
+            }
+            assert_eq!(px40(&page, 35, 20), &[255, 255, 255, 255], "{what}: beyond the end of the line");
+        }
+        // A long pattern on many short subpaths: 9,999 tiny dashes, then a long one, restarted on
+        // each of 10,000 subpaths 0.01 pt long, is 100 million pieces from a 300 KB stream.
+        let mut many = String::from("1 0 0 RG 4 w [");
+        many.push_str(&"0.000001 ".repeat(9_999));
+        many.push_str("1000] 0 d ");
+        many.push_str(&"10 20 m 10.01 20 l ".repeat(10_000));
+        many.push_str("S 0 0 1 rg 0 0 4 4 re f");
+        let page = render_with_gs1(&many, "<< >>");
+        assert_eq!(px40(&page, 1, 38), &[0, 0, 255, 255], "a pattern restarted on many subpaths finishes");
+        // A fine pattern below the cap still dashes: 200,000 pieces of 0.0001 pt cover about
+        // half of each pixel, so the line is neither solid red nor missing.
+        let page = render_with_gs1("1 0 0 RG 4 w [0.0001] 0 d 10 20 m 30 20 l S", "<< >>");
+        let p = px40(&page, 20, 20);
+        assert!(p[0] == 255 && (40..=215).contains(&p[1]), "a fine dash below the cap is drawn dashed: {p:?}");
+        // An ordinary dash pattern still dashes: butt-capped 4 pt dashes from x 0.
+        let page = render_with_gs1("1 0 0 RG 4 w [4 4] 0 d 0 20 m 40 20 l S", "<< >>");
+        assert_eq!(px40(&page, 2, 20), &red, "inside the first dash");
+        assert_eq!(px40(&page, 6, 20), &[255, 255, 255, 255], "inside the first gap");
+        assert_eq!(px40(&page, 10, 20), &red, "inside the second dash");
+    }
+
+    /// From `cargo xtask fuzz` triage: a dash array whose entries sum to less than zero made
+    /// kurbo's search for the starting dash loop for ever (`[-1 -1] 0 d` never finished).
+    /// ISO 32000-2 §8.4.3.6 requires nonnegative entries. Vendored hayro patch: a pattern with a
+    /// negative entry, or a period that isn't positive, is drawn solid.
+    #[test]
+    fn invalid_dash_patterns_terminate_and_are_drawn_solid() {
+        for (what, content, gs1) in [
+            ("[-1 -1]", "1 0 0 RG 4 w [-1 -1] 0 d 10 20 m 30 20 l S", "<< >>"),
+            ("[-1] with a phase", "1 0 0 RG 4 w [-1] 5 d 10 20 m 30 20 l S", "<< >>"),
+            ("[-2 -3] from an ExtGState", "1 0 0 RG 4 w /GS1 gs 10 20 m 30 20 l S", "<< /D [[-2 -3] 0] >>"),
+            ("[-1 3], a negative entry in a positive period", "1 0 0 RG 4 w [-1 3] 0 d 10 20 m 30 20 l S", "<< >>"),
+        ] {
+            let page = render_with_gs1(content, gs1);
+            for x in [12, 20, 28] {
+                assert_eq!(px40(&page, x, 20), &[255, 0, 0, 255], "{what}: ({x}, 20) is drawn, solid");
+            }
+        }
+    }
+
     /// From the nightly `cargo xtask fuzz`: a Type 3 glyph that shows several glyphs of its own
     /// font. The nesting cap bounds the depth but not the breadth: eight glyphs per glyph, sixteen
     /// deep, is 8^16 paints. Vendored hayro-interpret patch: nested paints (forms, Type 3 glyphs,
