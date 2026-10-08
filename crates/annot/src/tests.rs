@@ -141,6 +141,28 @@ fn every_tool_creates_a_drawable_comment() {
     assert_eq!(all[1].reference(b"Popup"), entries[2].as_ref());
 }
 
+/// #260 (page 7): Acrobat draws an Ink annotation as a smooth curve through its `/InkList`
+/// points, where PdfCraft drew straight segments between them. Three or more points now make a
+/// Catmull-Rom spline through every point (as cubic Béziers); two points stay a line, one a dot.
+#[test]
+fn ink_strokes_are_smooth_curves_through_their_points() {
+    let mut doc = fixture();
+    let strokes = vec![vec![[0.0, 0.0], [10.0, 10.0], [20.0, 0.0]], vec![[30.0, 0.0], [40.0, 10.0]], vec![[50.0, 50.0]]];
+    let i = add_annotation(&mut doc, &new(0, Shape::Ink { strokes }), &meta("ink")).unwrap();
+    let ap = ap_content(&doc, &list(&doc, 0)[i]);
+    // Tangents at each point run parallel to the chord between its neighbours (the ends use
+    // their own point): (0,0)→(10,10) leaves along (10,10) and arrives along (20,0).
+    assert!(ap.contains("0 0 m\n1.667 1.667 6.667 10 10 10 c\n13.333 10 18.333 1.667 20 0 c\nS\n"), "{ap}");
+    assert!(ap.contains("30 0 m\n40 10 l\nS\n"), "{ap}");
+    assert!(ap.contains("50 50 m\n50.01 50 l\nS\n"), "{ap}");
+    // /Rect holds the whole curve: rising to (20, 20) and dropping to (21, 0), it swings above
+    // y 20 (its control point is at y 21.667), beyond the points' own bounds plus the margin.
+    let rise = Shape::Ink { strokes: vec![vec![[0.0, 0.0], [10.0, 10.0], [20.0, 20.0], [21.0, 0.0]]] };
+    let j = add_annotation(&mut doc, &new(0, rise), &meta("rise")).unwrap();
+    let top = rect(&list(&doc, 0)[j])[3];
+    assert!(top >= 21.667 + 2.0 - 0.01, "/Rect top {top}");
+}
+
 #[test]
 fn indirect_annots_array_is_updated_in_place() {
     let mut doc = fixture();

@@ -3602,8 +3602,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.ink"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/comments.rs::shapes_and_ink_are_drawn_by_dragging"]
-notes = "one ink annotation per stroke"
+evidence = ["crates/ui-egui/tests/comments.rs::shapes_and_ink_are_drawn_by_dragging", "crates/annot/src/tests.rs::ink_strokes_are_smooth_curves_through_their_points"]
+notes = "one ink annotation per stroke; strokes are drawn as smooth curves through their points, as in Acrobat"
 
 [[feature]]
 id = "comment.eraser"
