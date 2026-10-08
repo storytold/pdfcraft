@@ -70,7 +70,7 @@ fn plural_pt(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 6] = [
+pub static LANGUAGES: [LangInfo; 7] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -81,6 +81,8 @@ pub static LANGUAGES: [LangInfo; 6] = [
     LangInfo { code: "cs", name: "Čeština", source: include_str!("cs.tsv"), plural: plural_cs, catalog: OnceLock::new() },
     // Brazilian Portuguese; `pt`, `pt-BR` and `pt-PT` locales all resolve here (see `candidates`).
     LangInfo { code: "pt-br", name: "Português (Brasil)", source: include_str!("pt-br.tsv"), plural: plural_pt, catalog: OnceLock::new() },
+    // Spanish (European vocabulary); every `es-*` locale (`es-ES`, `es-MX`, `es-419` ...) resolves here.
+    LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -660,6 +662,45 @@ mod tests {
         let mut restored = crate::PdfCraftApp::default();
         restored.restore(&app.persist());
         assert_eq!(restored.language, "pt-br");
+    }
+
+    #[test]
+    fn spanish_is_registered() {
+        let es = Lang::from_code("es").expect("es registered");
+        assert_eq!(es.name(), "Español");
+        assert_eq!(normalize_pref("ES"), Some("es"));
+        assert_eq!(lang_from_tag("es_ES.UTF-8"), Some(es));
+        assert_eq!(lang_from_tag("es-MX"), Some(es));
+        assert_eq!(first_supported("es-ES\r\nen-US"), Some(es));
+        assert_eq!(tr(es, "File"), "Archivo");
+        assert_eq!(tr(es, "Save as…"), "Guardar como…");
+        assert_eq!(tr(es, "Informe del usuario.pdf"), "Informe del usuario.pdf");
+        assert_eq!(trn(es, 1, "{n} page", "{n} pages"), "1 página");
+        assert_eq!(trn(es, 3, "{n} page", "{n} pages"), "3 páginas");
+        let mut app = crate::PdfCraftApp::default();
+        app.set_option("language", "es").unwrap();
+        assert_eq!(app.language, "es");
+        let mut restored = crate::PdfCraftApp::default();
+        restored.restore(&app.persist());
+        assert_eq!(restored.language, "es");
+    }
+
+    /// Spanish translates every registered command and every All tools group, section and item.
+    #[test]
+    fn spanish_covers_commands_and_catalogue() {
+        let es = Lang::from_code("es").expect("es registered");
+        for command in pdfcraft_engine::commands::COMMANDS {
+            assert!(has(es, command.label), "missing command: {}", command.label);
+        }
+        for group in pdfcraft_engine::catalog::TOOL_GROUPS {
+            assert!(has(es, group.label), "missing group: {}", group.label);
+            for section in group.sections {
+                assert!(has(es, section.title), "missing section: {}", section.title);
+                for item in section.items {
+                    assert!(has(es, item.label), "missing item: {}", item.label);
+                }
+            }
+        }
     }
 
     /// Czech covers every registered menu title and menu command label (#68), keeps ellipses, and
