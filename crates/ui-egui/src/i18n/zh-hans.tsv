@@ -1833,3 +1833,11 @@
 	nothing to undo	没有可撤销的操作
 	pages	页
 	there are no redaction marks to apply	没有可应用的密文标记
+	Create PDF from images	从图像创建 PDF
+	Selected image files: {count}	已选择的图像文件：{count}
+	Use image resolution	使用图像分辨率
+	Use each image's embedded DPI; use 72 DPI when it is absent.	使用各图像内嵌的 DPI；若未指定，则使用 72 DPI。
+	Use 72 DPI (one point per pixel)	使用 72 DPI（每像素 1 点）
+	Use custom DPI	使用自定义 DPI
+	DPI sets the printed page size without resampling the image.	DPI 用于设置打印页面尺寸，不会对图像重新采样。
+	Create	创建

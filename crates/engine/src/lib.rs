@@ -28,6 +28,7 @@ pub use pdfcraft_organize::LabelStyle;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
 pub use pdfcraft_cos::Algorithm;
+pub use pdfcraft_create::ImageResolution;
 pub use pdfcraft_edit::{
     Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, MarkKind, Watermark,
 };
@@ -2076,6 +2077,11 @@ impl Session {
     /// A new document with one page per image (PNG, JPEG).
     pub fn create_from_images(&self, images: &[(String, Vec<u8>)]) -> Result<Arc<Vec<u8>>, EditError> {
         self.write_new(&pdfcraft_create::from_images(images)?)
+    }
+
+    /// Create image pages at embedded resolution or a fixed dpi, without resampling.
+    pub fn create_from_images_with_resolution(&self, images: &[(String, Vec<u8>)], resolution: ImageResolution) -> Result<Arc<Vec<u8>>, EditError> {
+        self.write_new(&pdfcraft_create::from_images_with_resolution(images, resolution)?)
     }
 
     /// A new document from plain text (US Letter, 11 pt Helvetica).

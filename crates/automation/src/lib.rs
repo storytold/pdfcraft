@@ -961,6 +961,7 @@ impl Automation {
                 ("Untitled.pdf".to_string(), self.session.create_blank(w, h, n).map_err(failed)?)
             }
             "images" => {
+                let resolution = a.opt_num("dpi")?.map_or(pdfcraft_engine::ImageResolution::Embedded, pdfcraft_engine::ImageResolution::Dpi);
                 let mut images = Vec::new();
                 for p in a.strs("paths")? {
                     let path = self.resolve(p, false)?;
@@ -972,7 +973,7 @@ impl Automation {
                 } else {
                     "Images.pdf".into()
                 };
-                (name, self.session.create_from_images(&images).map_err(failed)?)
+                (name, self.session.create_from_images_with_resolution(&images, resolution).map_err(failed)?)
             }
             "text" => {
                 let (title, text) = match (a.opt_str("text")?, a.opt_str("path")?) {

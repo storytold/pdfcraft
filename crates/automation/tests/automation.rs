@@ -1042,6 +1042,39 @@ fn creating_and_reducing_through_tools() {
 }
 
 #[test]
+fn creating_images_with_dpi_through_tools() {
+    let dir = workdir("image-dpi");
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 300, 150);
+        enc.set_color(png::ColorType::Rgb);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.set_pixel_dims(Some(png::PixelDimensions { xppu: 11811, yppu: 5906, unit: png::Unit::Meter }));
+        enc.write_header().unwrap().write_image_data(&vec![100; 300 * 150 * 3]).unwrap();
+    }
+    std::fs::write(dir.join("scan.png"), png).unwrap();
+    let mut a = auto(&dir);
+    for (dpi, width, height) in [(None, 72.0, 72.0), (Some(72.0), 300.0, 150.0), (Some(300.0), 72.0, 36.0)] {
+        let mut args = json!({ "from": "images", "paths": ["scan.png"] });
+        if let Some(dpi) = dpi {
+            args["dpi"] = json!(dpi);
+        }
+        let doc = ok(&mut a, "doc_create", args)["doc"].as_u64().unwrap();
+        let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+        assert!((info["pages"][0]["width"].as_f64().unwrap() - width).abs() < 0.02);
+        assert!((info["pages"][0]["height"].as_f64().unwrap() - height).abs() < 0.02);
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": "made.pdf" }));
+        let reopened = ok(&mut a, "doc_open", json!({ "path": "made.pdf" }))["doc"].as_u64().unwrap();
+        let render = a.call("page_render", &json!({ "doc": reopened, "page": 1, "dpi": 72 })).unwrap();
+        let Content::Png { width: w, height: h, .. } = &render[0] else { panic!("expected PNG") };
+        assert!((*w as f64 - width).abs() <= 1.0 && (*h as f64 - height).abs() <= 1.0);
+    }
+    for dpi in [0.0, -72.0, 1201.0] {
+        assert!(a.call("doc_create", &json!({ "from": "images", "paths": ["scan.png"], "dpi": dpi })).is_err());
+    }
+}
+
+#[test]
 fn flattening_through_tools() {
     let dir = workdir("flatten");
     let mut a = auto(&dir);

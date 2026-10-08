@@ -15,6 +15,43 @@ fn png() -> Vec<u8> {
 }
 
 #[test]
+fn image_import_dialog_chooses_dpi_and_cancels() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.begin_image_import(vec![("scan.png".into(), png())]);
+        app
+    });
+    h.run_steps(3);
+    if let Ok(path) = std::env::var("PDFCRAFT_IMAGE_IMPORT_SHOT") {
+        h.render().unwrap().save(path).unwrap();
+    }
+    h.get_by_label("Use 72 DPI (one point per pixel)").click();
+    h.run_steps(1);
+    h.get_by_label("Create").click();
+    h.run_steps(3);
+    assert!(h.state().image_import.is_none());
+    let page = &h.state().session.docs()[0].info.pages[0];
+    assert_eq!((page.width, page.height), (8.0, 4.0));
+    h.state_mut().begin_image_import(vec![("scan.png".into(), png())]);
+    h.state_mut().image_import.as_mut().unwrap().dpi = 144.0;
+    h.run_steps(2);
+    h.get_by_label("Use custom DPI").click();
+    h.run_steps(1);
+    h.get_by_label("Create").click();
+    h.run_steps(3);
+    let page = &h.state().session.docs()[1].info.pages[0];
+    assert_eq!((page.width, page.height), (4.0, 2.0));
+    h.state_mut().begin_image_import(vec![("scan.png".into(), png())]);
+    h.run_steps(2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(h.state().image_import.is_none());
+    assert_eq!(h.state().session.docs().len(), 2);
+}
+
+#[test]
 fn opening_images_and_text_converts_them_to_new_pdfs() {
     let mut app = PdfCraftApp::new();
     app.open_bytes("photo.png", Some("/tmp/photo.png".into()), png()).unwrap();

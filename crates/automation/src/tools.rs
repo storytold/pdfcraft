@@ -885,6 +885,7 @@ pub fn tools() -> Vec<ToolDef> {
             json!({
                 "from": { "type": "string", "enum": ["blank", "images", "text"] },
                 "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+                "dpi": { "type": "number", "minimum": 1, "maximum": 1200, "description": "For images: override the embedded resolution without resampling. 72 gives one point per pixel; omit to use each image's resolution (72 when absent)." },
                 "text": { "type": "string" },
                 "path": { "type": "string" },
                 "pages": { "type": "integer", "minimum": 1, "maximum": 10000 },
