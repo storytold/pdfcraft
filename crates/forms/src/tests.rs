@@ -747,6 +747,47 @@ fn push_buttons_read_hide_actions() {
 }
 
 #[test]
+fn push_buttons_read_set_layer_actions() {
+    use af::LayerOp::{Off, On, Toggle};
+    let mut doc = fixture();
+    let go = field(&fields(&doc), "go").obj;
+    let ocg = |n: u32| Object::Ref(ObjRef::new(n, 0));
+    let button = |doc: &mut Document, state: Option<Object>, preserve_rb: Option<Object>| {
+        let mut a = Dict::new();
+        a.set(b"S".to_vec(), Object::name("SetOCGState"));
+        if let Some(state) = state {
+            a.set(b"State".to_vec(), state);
+        }
+        if let Some(p) = preserve_rb {
+            a.set(b"PreserveRB".to_vec(), p);
+        }
+        doc.update_dict(go, |d| d.set(b"A".to_vec(), Object::Dict(a))).unwrap();
+        field(&fields(doc), "go").button.clone()
+    };
+    let layers = |changes: &[(af::LayerOp, u32)], preserve_rb: bool| {
+        Some(af::ButtonAction::SetLayers { changes: changes.iter().map(|&(op, n)| (op, (n, 0))).collect(), preserve_rb })
+    };
+    // Each name applies to the groups after it; /PreserveRB false is read.
+    let state = Object::Array(vec![Object::name("ON"), ocg(30), ocg(31), Object::name("OFF"), ocg(32), Object::name("Toggle"), ocg(30)]);
+    assert_eq!(button(&mut doc, Some(state), Some(Object::Bool(false))), layers(&[(On, 30), (On, 31), (Off, 32), (Toggle, 30)], false));
+    // An indirect /State; groups before the first name or after an unknown one, and entries that
+    // aren't groups, are skipped. /PreserveRB defaults to true, also when it isn't a boolean.
+    let state = doc.add(Object::Array(vec![
+        ocg(29),
+        Object::name("OFF"),
+        ocg(30),
+        Object::Int(7),
+        Object::name("Hide"),
+        ocg(31),
+        Object::name("Toggle"),
+        ocg(32),
+    ]));
+    assert_eq!(button(&mut doc, Some(Object::Ref(state)), Some(Object::Int(0))), layers(&[(Off, 30), (Toggle, 32)], true));
+    // No /State: an action that changes nothing (the button still has an action).
+    assert_eq!(button(&mut doc, None, None), layers(&[], true));
+}
+
+#[test]
 fn detection_finds_blanks_rules_boxes_and_names_them() {
     use crate::detect::*;
     let w = |t: &str, x0: f64, y0: f64, x1: f64| Word { text: t.into(), rect: [x0, y0, x1, y0 + 10.0] };

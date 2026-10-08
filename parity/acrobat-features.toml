@@ -2235,11 +2235,11 @@ title = "Set-layer-visibility action"
 area = "C"
 tier = "P2"
 milestone = "M12"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/layer_actions.rs::links_set_layer_visibility", "crates/ui-egui/tests/layer_actions.rs::push_buttons_set_layer_visibility", "crates/engine/src/tests.rs::set_layer_actions_change_what_renders", "crates/engine/src/tests.rs::set_layer_actions_toggle_in_order_and_keep_radio_groups", "crates/render/src/inspect.rs::links_read_set_layer_actions", "crates/forms/src/tests.rs::push_buttons_read_set_layer_actions"]
+notes = "Links and push buttons run it: ON, OFF and Toggle in order, by optional content group, and with /PreserveRB (the default) a layer turned on turns off the rest of its /RBGroups group. Like the Layers panel it changes the view, not the document (no undo step, not saved). Not yet: creating the action (Link Properties, a field's Actions), bookmarks and other triggers, /Next chains, JavaScript ocg.state, and the Layers panel keeping radio-button groups itself."
 
 [[feature]]
 id = "edit.action-show-hide-field"

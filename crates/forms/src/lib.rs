@@ -180,6 +180,9 @@ fn text_of(o: &Object) -> Option<String> {
     }
 }
 
+/// At most this many `/State` entries of a set-layer-visibility action are read.
+const MAX_LAYER_STATE: usize = 1024;
+
 /// A push button's mouse-up action (`/A`, or `/AA /U`, on the field or its widget).
 fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef]) -> Option<af::ButtonAction> {
     let pick = |dict: &Dict| -> Option<Object> {
@@ -233,6 +236,29 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef]) -> Option<af::But
             };
             let hide = !a.get(b"H").is_some_and(|h| matches!(&*doc.resolve(h), Object::Bool(false)));
             af::ButtonAction::ShowHide { fields, hide }
+        }
+        b"SetOCGState" => {
+            // /State: ON, OFF or Toggle, each followed by the groups it applies to.
+            let mut changes = Vec::new();
+            if let Some(state) = a.get(b"State") {
+                let mut op = None;
+                for item in doc.resolve(state).as_array().into_iter().flatten().take(MAX_LAYER_STATE) {
+                    match item {
+                        Object::Name(n) => {
+                            op = match n.as_slice() {
+                                b"ON" => Some(af::LayerOp::On),
+                                b"OFF" => Some(af::LayerOp::Off),
+                                b"Toggle" => Some(af::LayerOp::Toggle),
+                                _ => None,
+                            }
+                        }
+                        Object::Ref(r) => changes.extend(op.map(|op| (op, (r.num, r.generation)))),
+                        _ => {}
+                    }
+                }
+            }
+            let preserve_rb = !a.get(b"PreserveRB").is_some_and(|p| matches!(&*doc.resolve(p), Object::Bool(false)));
+            af::ButtonAction::SetLayers { changes, preserve_rb }
         }
         b"JavaScript" => af::button_script(&script(doc, &action)?),
         _ => return None,

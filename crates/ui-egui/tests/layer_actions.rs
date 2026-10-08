@@ -1,5 +1,5 @@
-//! Set-layer-visibility actions (`SetOCGState`) on links show and hide layers, as the Layers
-//! panel does.
+//! Set-layer-visibility actions (`SetOCGState`) on links and push buttons show and hide layers,
+//! as the Layers panel does.
 
 use egui::Pos2;
 use egui_kittest::Harness;
@@ -87,6 +87,19 @@ fn links_set_layer_visibility() {
     // Toggling Green off turns nothing back on.
     click(&mut h, link);
     assert_eq!(shown(&h), layers(false, false));
+    let s = h.state();
+    assert!(!s.session.get(s.views[0].id).unwrap().dirty, "showing and hiding layers doesn't change the document");
+}
+
+#[test]
+fn push_buttons_set_layer_visibility() {
+    // Both on, as the Layers panel can leave them.
+    let mut h = harness(|app| app.set_option("layer", "Green=on").unwrap());
+    assert_eq!(shown(&h), layers(true, true));
+    // Turning Red on (it already is) turns Green, its radio-button partner, off.
+    let button = at(&h, 70.0, 35.0);
+    click(&mut h, button);
+    assert_eq!(shown(&h), layers(true, false));
     let s = h.state();
     assert!(!s.session.get(s.views[0].id).unwrap().dirty, "showing and hiding layers doesn't change the document");
 }

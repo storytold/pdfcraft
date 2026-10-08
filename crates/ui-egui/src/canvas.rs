@@ -2007,6 +2007,21 @@ fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action: pdfcraft_
                     Some(pdfcraft_engine::Edit::Batch { label: label.into(), edits: vec![pdfcraft_engine::Edit::ApplyScriptChanges { changes }] });
             }
         }
+        B::SetLayers { changes, preserve_rb } => {
+            use pdfcraft_engine::form_scripts::LayerOp as Op;
+            let changes: Vec<(LayerOp, (u32, u16))> = changes
+                .into_iter()
+                .map(|(op, ocg)| {
+                    let op = match op {
+                        Op::On => LayerOp::On,
+                        Op::Off => LayerOp::Off,
+                        Op::Toggle => LayerOp::Toggle,
+                    };
+                    (op, ocg)
+                })
+                .collect();
+            set_layers(app, index, &changes, preserve_rb);
+        }
         B::Alert(m) => app.notify(m),
         B::Submit(url) => app.notify_fmt(
             "{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.",
