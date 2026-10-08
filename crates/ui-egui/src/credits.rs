@@ -12,6 +12,9 @@ use crate::theme::Tokens;
 /// The About dialog is a modal that sizes to its content; the lists scroll inside this height.
 const LIST_HEIGHT: f32 = 380.0;
 
+/// English lookup keys for the model table, also checked by catalog coverage tests.
+pub const MODEL_COLUMNS: [&str; 6] = ["Company", "Model", "Version", "Commits", "% of all commits", "Lines +/−"];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Contributor {
     pub login: &'static str,
@@ -325,7 +328,7 @@ pub fn models_ui(ui: &mut egui::Ui) {
     let assisted: u64 = MODELS.iter().map(|m| m.commits).max().unwrap_or(0).max(1);
     egui::ScrollArea::both().id_salt("credits_models").max_height(LIST_HEIGHT).auto_shrink([false, true]).show(ui, |ui| {
         egui::Grid::new("credits_models").striped(true).num_columns(6).show(ui, |ui| {
-            for h in ["Company", "Model", "Version", "Commits", "% of all commits", "Lines +/−"] {
+            for h in MODEL_COLUMNS {
                 ui.label(RichText::new(crate::i18n::t(h)).strong());
             }
             ui.end_row();

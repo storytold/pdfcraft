@@ -1806,8 +1806,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.edit_text"]
 tools = ["text_edit"]
-evidence = ["crates/edit/src/tests.rs::paragraphs_are_found_and_rewrapped", "crates/edit/src/tests.rs::text_lines_are_found_and_replaced_in_place", "crates/ui-egui/tests/editing.rs::editing_existing_text_in_place", "crates/automation/tests/automation.rs::editing_existing_text_through_tools"]
-notes = "edited paragraphs are rewrapped to the box width with the font's own advance widths and the original line spacing, starting at the original text matrix; text state and fill colour restored after; a single line grows to the right margin"
+evidence = ["crates/edit/src/tests.rs::japanese_paragraph_keeps_ideographic_spaces", "crates/edit/src/tests.rs::paragraphs_are_found_and_rewrapped", "crates/edit/src/tests.rs::text_lines_are_found_and_replaced_in_place", "crates/ui-egui/tests/editing.rs::editing_existing_text_in_place", "crates/automation/tests/automation.rs::editing_existing_text_through_tools"]
+notes = "edited paragraphs are rewrapped to the box width with the font's own advance widths and the original line spacing, starting at the original text matrix; text state and fill colour restored after; a single line grows to the right margin; U+3000 ideographic spaces are preserved (including paragraph edges and repeated spaces); Japanese font-style fallback remains limited (#184)"
 
 [[feature]]
 id = "edit.text-move-resize"

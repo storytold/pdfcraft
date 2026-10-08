@@ -129,6 +129,10 @@ M0 → M1 → M2 → M3 → M4 must happen in order. After M4, M5–M12 can run 
 
 Newest first. One line per session: the date, what moved, and the new overall percentage.
 
+- **2026-10-09 (M14, Simplified Chinese About):** The About tabs, contributor controls and statistics, and model table now have Simplified Chinese translations, along with multiline link-privacy and cut-and-stack guidance. Coverage checks include direct `i18n::t` calls, multiline literals and dynamic credit labels; UI control checks exercise the translated About tabs and tables. Chinese font delivery remains incomplete; overall ≈ 30–35% (unchanged).
+
+- **2026-10-09 (M14, #305):** Windows MSI rejects per-user installation overrides while allowing removal of legacy per-user installs and keeps its progress message visible. README documents unattended deployment without a desktop shortcut. Compiled x64 MSI checks pass; ARM64 install regressions added for CI. Overall estimate unchanged (about 30–35%).
+
 - **2026-10-08 (M14, French):** Français (`fr`) is a complete interface catalog (about 1,880 entries), selected automatically for `fr`, `fr_FR`, `fr_CA` and other French locales, and from Preferences. Coverage tests check commands, All tools labels and every `tl!` literal; history labels keep captured names. Latin UI faces cover the catalog. Localization remains partial for Czech and Brazilian Portuguese; overall ≈ 30–35% (unchanged).
 
 - **2026-10-08 (M14, right-to-left file names):** A tab with an Arabic or Hebrew file name showed replacement boxes. The interface now takes an `Arab` face from craft-fonts when the build input has one, and on desktop falls back to one font installed on the machine for characters no embedded face has (`PDFCRAFT_SYSTEM_FONTS=0` turns that off; README screenshots do). File names and paths in the tab strip, the recent-files list and Properties are put in display order, since egui joins the letters but does not reorder runs. Still missing: multi-line text (bookmarks, comments, search results), text input and a mirrored layout, so `misc.rtl-ui` stays planned; the craft-fonts revision pinned for releases predates its Arabic face, so release builds rely on the installed font until the pin moves. Overall estimate unchanged (about 30–35%).
@@ -234,4 +238,3 @@ Newest first. One line per session: the date, what moved, and the new overall pe
   - Robustness sweep (963 of 983 files open, 0 crashes), text layer, find and select, tiles, web build, polish.
   - Overall ≈ 3–4%.
 - **2026-09-30 (session 1):** planning complete; viewer vertical slice.
-

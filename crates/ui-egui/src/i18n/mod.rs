@@ -776,7 +776,24 @@ mod tests {
         }
     }
 
-    /// New tl!("literal") labels must not silently fall back to English in the complete catalog.
+    #[test]
+    fn simplified_chinese_covers_about_credit_labels() {
+        let zh = Lang::from_code("zh-hans").expect("zh-hans registered");
+        for label in ["About", "Contributors", "Models"].into_iter().chain(crate::credits::MODEL_COLUMNS) {
+            assert!(has(zh, label), "missing About label: {label}");
+        }
+        for mode in crate::credits::NameMode::ALL {
+            assert!(has(zh, mode.label()), "missing name mode: {}", mode.label());
+        }
+        for key in crate::credits::SortKey::ALL {
+            let (label, header) = key.label();
+            for text in [label, header] {
+                assert!(has(zh, text), "missing contributor sort/header: {text}");
+            }
+        }
+    }
+
+    /// Direct tl! and i18n::t labels must not silently fall back to English in the complete catalog.
     #[test]
     fn simplified_chinese_covers_ui_literals() {
         let zh = Lang::from_code("zh-hans").expect("zh-hans registered");
@@ -791,9 +808,14 @@ mod tests {
                         stack.push(path);
                     }
                 } else if path.extension().is_some_and(|ext| ext == "rs") {
-                    let source = std::fs::read_to_string(path).expect("UI source file").replace("\r\n", "\n");
+                    let source = std::fs::read_to_string(path).expect("UI source file").replace("\r\n", "\n").replace("crate::i18n::t(", "tl!(");
                     let mut rest = source.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
-                    while let Some((_, after)) = rest.split_once("tl!(\"") {
+                    while let Some((_, after)) = rest.split_once("tl!(") {
+                        let after = after.trim_start();
+                        let Some(after) = after.strip_prefix('"') else {
+                            rest = after;
+                            continue;
+                        };
                         let mut escaped = false;
                         let end = after
                             .char_indices()
@@ -806,7 +828,9 @@ mod tests {
                             })
                             .expect("closed tl! literal");
                         let (raw, tail) = after.split_at(end);
-                        if tail.starts_with("\")") {
+                        let closing = tail.strip_prefix('"').expect("closing quote").trim_start();
+                        let closing = closing.strip_prefix(',').unwrap_or(closing).trim_start();
+                        if closing.starts_with(')') {
                             // Current UI literals use the shared Rust/JSON string escapes.
                             let label: String = serde_json::from_str(&format!("\"{raw}\"")).expect("UI literal escapes");
                             literals.insert(label);
@@ -836,6 +860,25 @@ mod tests {
         assert_eq!(trn(zh, 1, "{n} page", "{n} pages"), "1 页");
         assert_eq!(trn(zh, 0, "{n} field", "{n} fields"), "0 个字段");
         assert_eq!(trn(zh, 2, "{n} field", "{n} fields"), "2 个字段");
+        assert_eq!(fmt(t("{n} contributors · {c} commits"), &[("n", "2"), ("c", "1,234")]), "2 位贡献者 · 1,234 次提交");
+        let contributor = crate::credits::Contributor {
+            login: "reader{n}",
+            display_name: Some("Save"),
+            real_name: None,
+            prs: 2,
+            commits: 3,
+            lines_added: 10,
+            lines_deleted: 4,
+            binary_added: 1,
+            binary_deleted: 0,
+            first_commit: "2026-10-01T00:00:00Z",
+            last_commit: "2026-10-09T00:00:00Z",
+        };
+        assert_eq!(
+            contributor.summary(),
+            "@reader{n}：2 个 PR，3 次提交，新增 10 行 / 删除 4 行（净增 +6 行），新增 1 个 / 删除 0 个二进制资源，2026-10-01 – 2026-10-09"
+        );
+        assert_eq!(contributor.name(crate::credits::NameMode::DisplayName), "Save");
         set_current(Lang::EN);
     }
 

@@ -8,6 +8,47 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept.
 
+# About, contributor/model credits, and multiline interface guidance.
+	About	关于
+	Contributors	贡献者
+	Models	模型
+	Show	显示
+	Username	用户名
+	Display name	显示名称
+	Real name	真实姓名
+	Sort	排序
+	Name (A–Z)	名称（A–Z）
+	Merged PRs	已合并的 PR
+	PRs	PR 数
+	Commits	提交数
+	Lines added	新增行数
+	Lines deleted	删除行数
+	Line delta	净增行数
+	Binary assets added	新增二进制资源
+	Binary assets removed	删除二进制资源
+	First commit	首次提交
+	Last commit	最近提交
+	+LOC	新增行
+	−LOC	删除行
+	ΔLOC	净增行
+	+Bin	新增资源
+	−Bin	删除资源
+	First	首次提交
+	Last	最近提交
+	Reverse the order	反转排序
+	Grab bag	名称列表
+	Table	表格
+	{n} contributors · {c} commits	{n} 位贡献者 · {c} 次提交
+	No contributor data was built into this copy.	此版本未包含贡献者数据。
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}：{prs} 个 PR，{commits} 次提交，新增 {added} 行 / 删除 {deleted} 行（净增 {delta} 行），新增 {bin_added} 个 / 删除 {bin_deleted} 个二进制资源，{first} – {last}
+	No model credits were built into this copy.	此版本未包含模型贡献记录。
+	Company	公司
+	Model	模型
+	% of all commits	占全部提交的比例
+	Lines +/−	新增 / 删除行数
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	仅在您信任此文档时继续。链接地址可能携带文档中的信息，例如您在表单中输入的内容。
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	请使用单面打印。保持纸张顺序，沿裁切标记切开，然后按从左到右、从上到下的顺序叠放各摞纸张。
+
 	Menu	菜单
 	File	文件
 	Edit	编辑

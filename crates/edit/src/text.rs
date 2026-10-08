@@ -800,13 +800,13 @@ fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
             } else {
                 b.text.push(' ');
             }
-            b.text.push_str(l.text.trim());
+            b.text.push_str(l.text.trim_matches(paragraph_separator));
             b.rect = [b.rect[0].min(l.rect[0]), b.rect[1].min(l.rect[1]), b.rect[2].max(l.rect[2]), b.rect[3].max(l.rect[3])];
             b.lines.push(i);
         } else {
             gap = None;
             blocks.push(TextBlock {
-                text: l.text.trim().to_string(),
+                text: l.text.trim_matches(paragraph_separator).to_string(),
                 rect: l.rect,
                 base_font: l.base_font.clone(),
                 size: l.size,
@@ -820,11 +820,17 @@ fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
     blocks
 }
 
+// An ideographic space carries intentional Japanese spacing, including paragraph indentation.
+// Keep other whitespace normalization unchanged.
+fn paragraph_separator(c: char) -> bool {
+    c.is_whitespace() && c != '\u{3000}'
+}
+
 /// Greedy word wrapping to `width` with `advance` giving a string's width.
 fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec<String> {
     let mut out = Vec::new();
     let mut line = String::new();
-    for word in text.split_whitespace() {
+    for word in text.split(paragraph_separator).filter(|word| !word.is_empty()) {
         let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
         if !line.is_empty() && advance(&candidate) > width {
             out.push(std::mem::take(&mut line));
@@ -882,7 +888,7 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     let streams = content_streams(doc, &p.dict);
     let (stream_obj, data) = streams.get(first.stream).cloned().ok_or_else(|| EditError::Invalid("the page's content changed".into()))?;
     let ops = parse(&data).ops;
-    let text = text.unwrap_or(&b.text).split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = text.unwrap_or(&b.text).split(paragraph_separator).filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" ");
     let o = &first.origin;
     let (font_name, old_size) = o.state.font.clone().ok_or_else(|| EditError::Invalid("the paragraph has no font".into()))?;
     let k = o.k.max(1e-6);
@@ -1104,4 +1110,18 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
         }
     })?;
     Ok(LineEdit { substituted })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paragraph_wrapping_keeps_ideographic_spaces() {
+        let width = |s: &str| s.chars().count() as f64;
+        assert_eq!(wrap("A　　B C", 4.0, width), ["A　　B", "C"]);
+        assert_eq!(wrap("A\u{a0}B C", 3.0, width), ["A B", "C"]);
+        assert_eq!(wrap("A\u{2028}B C", 3.0, width), ["A B", "C"]);
+        assert_eq!(wrap(" \tA  B\r\nC ", 3.0, width), ["A B", "C"]);
+    }
 }

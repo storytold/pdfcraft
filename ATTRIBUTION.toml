@@ -19,7 +19,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Simplified Chinese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "fbc6e61d3f602ada7f292a034174070c00c7c789290334714f3fff5c013af2ad"
+sha256 = "5da2aa2944fcad4720972062f0f97800f73b8bfa5dd0fff6c28f4ec0f8ee19f9"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/zh-hant.tsv"

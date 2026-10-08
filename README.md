@@ -418,6 +418,15 @@ The honest assessment by area, what's lacking and where we're going are in **[RO
 
 Installers and executables are code-signed.
 
+The MSI installs for all users and requires administrator privileges. For unattended deployment
+without a desktop shortcut, run from an elevated terminal:
+
+```powershell
+msiexec /i "pdfcraft-<ver>-windows-x64.msi" /qn /norestart INSTALLDESKTOPSHORTCUT=0
+```
+
+Use the MSI for your architecture. Per-user installation overrides are not supported.
+
 ### macOS
 
 | Build | File | Notes |
