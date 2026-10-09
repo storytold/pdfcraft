@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
-use pdfcraft_fonts::{GlyphError, GlyphOutline, ShapedCluster, Std14, arabic_glyph, helvetica_width, literal, shape_arabic, win_ansi};
+use pdfcraft_fonts::{GlyphError, GlyphOutline, ShapedCluster, Std14, arabic_glyph, literal, shape_arabic, win_ansi};
 use unicode_bidi::{Level, ParagraphBidiInfo};
 
 use crate::{EditError, check, contents, n, page_list, place_tagged};
@@ -65,8 +65,11 @@ impl Family {
     }
 
     /// Advance width of `s` at `size` points, from the published standard-14 metrics.
-    pub fn width(self, s: &str, size: f64, bold: bool) -> f64 {
-        self.std14(bold, false).text_width(s, size)
+    ///
+    /// `italic` matters: the item is written out as the oblique/italic face (see [`Family::base_font`]),
+    /// whose published widths differ from the upright face (Times-Italic `A` is 611, Times-Roman 722).
+    pub fn width(self, s: &str, size: f64, bold: bool, italic: bool) -> f64 {
+        self.std14(bold, italic).text_width(s, size)
     }
 
     /// The standard-14 face this family means at the given style.
@@ -225,7 +228,7 @@ fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
         // sum of its words' and shaping stays linear in the paragraph's length. The space is the
         // paragraph's; a space between Latin words is drawn in the item's font, a few hundredths
         // of an em apart.
-        let measure = |s: &str| if arabic { arabic_width(t, s, rtl) } else { t.family.width(s, t.size, t.bold) };
+        let measure = |s: &str| if arabic { arabic_width(t, s, rtl) } else { t.family.width(s, t.size, t.bold, t.italic) };
         let space = measure(" ");
         let (mut line, mut line_w) = (String::new(), 0.0);
         for word in para.split(' ') {
@@ -348,7 +351,7 @@ fn arabic_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f6
     let width = pieces
         .iter()
         .map(|p| match p {
-            Piece::Latin(s) => t.family.width(s, t.size, t.bold),
+            Piece::Latin(s) => t.family.width(s, t.size, t.bold, t.italic),
             Piece::Arabic(clusters) => clusters.iter().map(|c| c.advance).sum::<f64>() * t.size,
         })
         .sum();
@@ -358,7 +361,7 @@ fn arabic_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f6
 /// The width of `s` in an Arabic item; the item's font's estimate if it can't be shaped (drawing
 /// then reports why).
 fn arabic_width(t: &AddedText, s: &str, rtl: bool) -> f64 {
-    arabic_layout(t, s, rtl).map(|(_, w)| w).unwrap_or_else(|_| t.family.width(s, t.size, t.bold))
+    arabic_layout(t, s, rtl).map(|(_, w)| w).unwrap_or_else(|_| t.family.width(s, t.size, t.bold, t.italic))
 }
 
 fn arabic_error(e: GlyphError, text: &str) -> EditError {
@@ -457,7 +460,7 @@ fn draw_arabic(doc: &mut Document, t: &AddedText, latin: &str, taken: &Dict, fon
                     out.extend(literal(&win_ansi(s)));
                     out.extend_from_slice(b" Tj\n");
                     current = Some(latin);
-                    pen += t.family.width(s, t.size, t.bold) + tw * s.matches(' ').count() as f64;
+                    pen += t.family.width(s, t.size, t.bold, t.italic) + tw * s.matches(' ').count() as f64;
                 }
                 Piece::Arabic(clusters) => {
                     for c in clusters {
@@ -598,7 +601,7 @@ fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict, existing:
             let [cr, cg, cb] = t.color.map(|v| v.clamp(0.0, 1.0));
             out.extend(format!("BT /{name} {} Tf {} {} {} rg\n", n(t.size), n(cr), n(cg), n(cb)).bytes());
             for (i, line) in lines(t).iter().enumerate() {
-                let w = t.family.width(line, t.size, t.bold);
+                let w = t.family.width(line, t.size, t.bold, t.italic);
                 let x = match t.align {
                     Align::Left | Align::Justify => r[0],
                     Align::Center => r[0] + ((r[2] - r[0]) - w) / 2.0,
