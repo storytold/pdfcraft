@@ -1995,3 +1995,7 @@
 	Created a PDF from {n} files; left out: {names}	PDF создан из файлов: {n}; пропущены: {names}
 	Created a PDF from the first {n} files	PDF создан из первых файлов: {n}
 	Go to page…	Перейти на страницу…
+	Mouse wheel scroll speed	Скорость прокрутки колесом мыши
+scroll speed	Slow	Низкая
+scroll speed	Normal	Обычная
+scroll speed	Fast	Высокая

@@ -2043,3 +2043,7 @@ signature pad	Type	Въвеждане
 action wizard	Start	Старт
 	Margins (in)	Полета (in)
 	Reopen the files that were open when PdfCraft last closed	Отваряй отново файловете, които бяха отворени при последното затваряне на PdfCraft
+	Mouse wheel scroll speed	Скорост на превъртане с колелцето на мишката
+scroll speed	Slow	Ниска
+scroll speed	Normal	Нормална
+scroll speed	Fast	Висока

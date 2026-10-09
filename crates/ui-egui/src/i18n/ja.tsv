@@ -1976,3 +1976,7 @@
 	Couldn't import the signature image: {e}	署名画像を読み込めませんでした: {e}
 	Go to page…	ページへ移動…
 	Reopen the files that were open when PdfCraft last closed	前回 PdfCraft を閉じたときに開いていたファイルを再度開く
+	Mouse wheel scroll speed	マウスホイールのスクロール速度
+scroll speed	Slow	遅い
+scroll speed	Normal	標準
+scroll speed	Fast	速い

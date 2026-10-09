@@ -1969,3 +1969,7 @@
 	Couldn't import the signature image: {e}	無法匯入簽名圖像：{e}
 	Go to page…	轉到頁面…
 	Reopen the files that were open when PdfCraft last closed	重新開啟上次關閉 PdfCraft 時開啟的檔案
+	Mouse wheel scroll speed	滑鼠滾輪捲動速度
+scroll speed	Slow	慢
+scroll speed	Normal	正常
+scroll speed	Fast	快

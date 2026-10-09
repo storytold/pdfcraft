@@ -298,6 +298,12 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     // The web build has no file paths to reopen.
     #[cfg(not(target_arch = "wasm32"))]
     ui.checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed"));
+    ui.horizontal(|ui| {
+        ui.label(tl!("Mouse wheel scroll speed"));
+        for speed in crate::scroll_speed::ScrollSpeed::ALL {
+            ui.radio_value(&mut app.scroll_speed, speed, tl_ctx!("scroll speed", speed.label()));
+        }
+    });
     ui.add_space(8.0);
     // Identity: the author of new comments (Acrobat: Preferences ▸ Identity).
     ui.label(egui::RichText::new(tl!("Identity")).font(theme::semibold(13.0)));

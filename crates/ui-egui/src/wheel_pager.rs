@@ -11,9 +11,10 @@
 
 use egui::{MouseWheelUnit, TouchPhase};
 
-/// How far one wheel notch scrolls, in points (egui's native `line_scroll_speed`). Smooth
-/// input turns a page once it has moved this far, so a light swipe turns and resting fingers
-/// don't; smooth line deltas count this many points per line.
+/// One wheel notch, in points (egui's default desktop `line_scroll_speed`, fixed so paging
+/// doesn't change with the scroll speed preference). Smooth input turns a page once it has
+/// moved this far, so a light swipe turns and resting fingers don't; smooth line deltas count
+/// this many points per line.
 const NOTCH_POINTS: f32 = 40.0;
 /// A phase-less point delta at least this big is a wheel notch: egui draws the same line
 /// between wheel steps, which it smooths, and trackpad input, which it passes through.

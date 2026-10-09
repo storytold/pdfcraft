@@ -582,3 +582,37 @@ fn page_down_steps_every_spread_when_several_fit_on_screen() {
         assert_eq!(up, [9, 7, 5, 3, 1, 0], "{fit:?}");
     }
 }
+
+/// #444, #186: a mouse-wheel notch scrolls as far as the scroll speed preference says;
+/// trackpad (point) scrolling keeps its own speed. The choice is saved.
+#[test]
+fn the_scroll_speed_preference_scales_mouse_wheel_notches() {
+    use pdfcraft_ui_egui::scroll_speed::ScrollSpeed;
+    let scrolled = |speed: ScrollSpeed, unit: egui::MouseWheelUnit, dy: f32| -> f32 {
+        let mut h = harness();
+        h.state_mut().scroll_speed = speed;
+        h.run_steps(2);
+        let i = h.state().active.expect("a document is shown");
+        let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[i].page_screen_rect(0).expect("page 1 on screen").min.y;
+        let before = top(&h);
+        h.event(egui::Event::PointerMoved(h.state().views[i].viewport_rect().center()));
+        h.event(egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, -dy), phase: egui::TouchPhase::Move, modifiers: egui::Modifiers::NONE });
+        // egui spreads a wheel notch over a few frames.
+        h.run_steps(30);
+        before - top(&h)
+    };
+    let line = egui::MouseWheelUnit::Line;
+    let normal = scrolled(ScrollSpeed::Normal, line, 1.0);
+    assert!((normal - ScrollSpeed::Normal.line_points()).abs() < 1.0, "one notch at Normal scrolled {normal}");
+    let (slow, fast) = (scrolled(ScrollSpeed::Slow, line, 1.0), scrolled(ScrollSpeed::Fast, line, 1.0));
+    assert!((slow * 2.0 - normal).abs() < 1.0 && (fast - normal * 2.0).abs() < 1.0, "slow {slow}, normal {normal}, fast {fast}");
+    let point = egui::MouseWheelUnit::Point;
+    let (normal_points, fast_points) = (scrolled(ScrollSpeed::Normal, point, 30.0), scrolled(ScrollSpeed::Fast, point, 30.0));
+    assert!(normal_points > 0.0 && (normal_points - fast_points).abs() < 1.0, "trackpad: {normal_points} vs {fast_points}");
+    let mut app = PdfCraftApp::new();
+    app.set_option("scroll_speed", "fast").unwrap();
+    assert!(app.set_option("scroll_speed", "warp").unwrap_err().contains("slow, normal, or fast"));
+    let mut again = PdfCraftApp::new();
+    again.restore(&app.persist());
+    assert_eq!(again.scroll_speed, ScrollSpeed::Fast);
+}
