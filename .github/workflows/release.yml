@@ -222,6 +222,9 @@ jobs:
         run: |
           dpkg-deb --info dist/release/*.deb
           dpkg-deb --contents dist/release/*.deb | grep -E 'usr/bin/pdfcraft$|metainfo|applications'
+          # The OCR models (#103), where the installed app looks: <bin>/../share/pdfcraft/models.
+          dpkg-deb --contents dist/release/*.deb | grep -E 'usr/share/pdfcraft/models/.+\.rten$'
+          tar -tzf dist/release/*.tar.gz | grep -E '/share/pdfcraft/models/.+\.rten$'
           ldd target/release/pdfcraft
           python3 -c "import yaml; m = yaml.safe_load(open('packaging/linux/flatpak/ai.storyteller.pdfcraft.yml')); assert m['id'] == 'ai.storyteller.pdfcraft'"
           for appimage in dist/release/*.AppImage; do

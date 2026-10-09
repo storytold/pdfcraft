@@ -899,7 +899,7 @@
 	Searchable Image (Exact)	Изображение с възможност за търсене (точно)
 	Adds invisible text over each word; the page image is not changed	Добавя невидим текст върху всяка дума; изображението на страницата не се променя
 	Downsample to	Намали разделителната способност до
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	Разпознаването на текст не е инсталирано: моделите му липсват (изпълнете `cargo xtask models` или задайте PRINTCRAFT_MODELS).
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Разпознаването на текст не е инсталирано: файловете на моделите му липсват. Инсталирайте PdfCraft отново или задайте в PDFCRAFT_MODELS папката, която ги съдържа.
 	Settings	Настройки
 	Protect	Защита
 	Advanced options	Разширени опции
@@ -1968,7 +1968,7 @@
 	the image is empty	изображението е празно
 	The operation failed.	Операцията е неуспешна.
 	the password is incorrect	паролата е грешна
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	моделите за разпознаване на текст не са инсталирани (изпълнете `cargo xtask models` или задайте PRINTCRAFT_MODELS)
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	моделите за разпознаване на текст не са инсталирани (инсталирайте PdfCraft отново или задайте в PDFCRAFT_MODELS папката, която ги съдържа)
 	The title in the metadata and the document information differ	Заглавието в метаданните и в информацията за документа се различават
 	the title must not be empty	заглавието не може да е празно
 	there are no pages to print	няма страници за печат
@@ -1997,7 +1997,6 @@
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Скриптовете се изпълняват в изолирана среда без достъп до файлове или мрежа. Скрипт, който иска да отвори уебстраница, първо се нуждае от вашето разрешение. При изключен JavaScript стандартните функции на Acrobat за форматиране, валидиране и изчисляване продължават да работят.
 	Sign yourself	Подпишете сами
 	Switch to two-page view first to show the cover page	Първо превключете към изглед с две страници, за да се покаже корицата
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	Разпознаването на текст не е инсталирано: моделите му липсват (изпълнете `cargo xtask models` или задайте PDFCRAFT_MODELS).
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	Използва се при отваряне на PDF файлове. Изрично зададен режим при стартиране или управление има предимство за сесията.
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Използва се, когато PDF файлът не задава оформление или мащаб. Непрекъснатото превъртане никога не спира на границите между страниците.
 	Write this email?	Да се напише ли този имейл?

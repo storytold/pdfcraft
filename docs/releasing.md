@@ -68,6 +68,14 @@ pinned in `release.yml` and builds with `CRAFT_FONTS_DIR` and `CRAFT_FONTS_REQUI
 embed its Japanese fonts and fail rather than ship without them (`AGENTS.md` §1.4). Bump the pin
 deliberately.
 
+**OCR models:** every desktop package ships the Scan & OCR models (#103). The packaging scripts call
+`stage_models` (`packaging/env.sh`; `package.ps1` on Windows), which runs `cargo xtask models` to
+fetch every `kind = "model"` file in `ATTRIBUTION.toml` (verified by SHA-256) with its licence text
+and an `ATTRIBUTION.txt`, straight into the package, so packaging needs the network. They go where
+`pdfcraft_ocr::Models::dirs_beside_exe` looks: `models\` beside `pdfcraft.exe` (MSI, portable zip),
+`PdfCraft.app/Contents/Resources/models` (macOS), and `share/pdfcraft/models` beside `bin/`
+(deb, rpm, tar.gz, AppImage, Flatpak, FreeBSD). The web build doesn't include them yet.
+
 ### macOS
 
 `packaging/macos/package.sh` builds both architectures, joins them with `lipo`, and assembles

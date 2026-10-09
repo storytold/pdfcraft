@@ -1173,7 +1173,7 @@ comment menu	Edit	సవరించు
 	Searchable Image (Exact)	వెతకగలిగే చిత్రం (యథాతథం)
 	Adds invisible text over each word; the page image is not changed	ప్రతి పదంపై కనిపించని టెక్స్ట్‌ను జోడిస్తుంది; పేజీ చిత్రం మారదు
 	Downsample to	ఈ రిజల్యూషన్‌కు తగ్గించు
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	టెక్స్ట్ గుర్తింపు ఇన్‌స్టాల్ చేయబడలేదు: దానికి అవసరమైన మోడల్‌లు లేవు (`cargo xtask models`ను అమలు చేయండి, లేదా PRINTCRAFT_MODELSను సెట్ చేయండి).
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	టెక్స్ట్ గుర్తింపు ఇన్‌స్టాల్ కాలేదు: దాని మోడల్ ఫైల్‌లు లేవు. PdfCraftను మళ్లీ ఇన్‌స్టాల్ చేయండి, లేదా వాటిని కలిగి ఉన్న ఫోల్డర్‌కు PDFCRAFT_MODELSను సెట్ చేయండి.
 	Settings	సెట్టింగ్‌లు
 	Optional	ఐచ్ఛికం
 	Planned · {m}	ప్రణాళికలో ఉంది · {m}
@@ -1693,7 +1693,7 @@ action wizard	Start	ప్రారంభించు
 	there are no pages to print	ముద్రించడానికి పేజీలు ఏవీ లేవు
 	the document has no tags	పత్రంలో ట్యాగ్‌లు లేవు
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	టెక్స్ట్ గుర్తింపు మోడల్‌లు ఇన్‌స్టాల్ చేయబడలేదు (`cargo xtask models` అమలు చేయండి, లేదా PRINTCRAFT_MODELS సెట్ చేయండి)
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	టెక్స్ట్ గుర్తింపు మోడల్‌లు ఇన్‌స్టాల్ చేయబడలేదు (PdfCraftను మళ్లీ ఇన్‌స్టాల్ చేయండి, లేదా వాటిని కలిగి ఉన్న ఫోల్డర్‌కు PDFCRAFT_MODELSను సెట్ చేయండి)
 	the image is empty	చిత్రం ఖాళీగా ఉంది
 	this file isn't XFDF, FDF, XML or text form data	ఈ ఫైల్ XFDF, FDF, XML లేదా టెక్స్ట్ ఫారం డేటా కాదు
 	nothing in the file matches this document	ఫైల్‌లోని ఏదీ ఈ పత్రంతో సరిపోలడం లేదు
@@ -1888,7 +1888,6 @@ action wizard	Start	ప్రారంభించు
 	Open this web page?	ఈ వెబ్ పేజీని తెరవాలా?
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	స్క్రిప్ట్‌లు ఫైల్ లేదా నెట్‌వర్క్ యాక్సెస్ లేని శాండ్‌బాక్స్‌లో అమలవుతాయి. వెబ్ పేజీని తెరవమని అడిగే స్క్రిప్ట్‌కు ముందుగా మీ అనుమతి అవసరం. JavaScript ఆఫ్‌లో ఉన్నా, Acrobat ప్రామాణిక ఫార్మాట్, ధృవీకరణ, గణన ఫంక్షన్‌లు పని చేస్తూనే ఉంటాయి.
 	Sign yourself	స్వయంగా సంతకం చేయడం
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	టెక్స్ట్ గుర్తింపు ఇన్‌స్టాల్ కాలేదు: దాని మోడల్‌లు లేవు (`cargo xtask models` అమలు చేయండి, లేదా PDFCRAFT_MODELS సెట్ చేయండి).
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	PDFలను తెరిచేటప్పుడు ఉపయోగించబడుతుంది. ప్రారంభించేటప్పుడు లేదా కంట్రోల్ ద్వారా స్పష్టంగా ఇచ్చిన మోడ్‌కు ఆ సెషన్‌లో ప్రాధాన్యత ఉంటుంది.
 	Write this email?	ఈ ఇమెయిల్ రాయాలా?
 	{who} in this document wants to open this address in your browser:	ఈ పత్రంలోని {who} ఈ చిరునామాను మీ బ్రౌజర్‌లో తెరవాలనుకుంటోంది:
