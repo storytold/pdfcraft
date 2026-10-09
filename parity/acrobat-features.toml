@@ -5531,7 +5531,7 @@ status = "shipped"
 commands = ["redact.search"]
 tools = ["redact_mark"]
 evidence = ["crates/redact/src/patterns.rs::phone_numbers", "crates/redact/src/patterns.rs::credit_cards_need_a_valid_checksum", "crates/automation/tests/automation.rs::redacting_through_tools"]
-notes = "phone, e-mail, credit card (Luhn), SSN, dates (English US forms)"
+notes = "phone (North American, E.164 with + country code, national with trunk 0), e-mail, credit card (Luhn), SSN, dates (English US forms)"
 
 [[feature]]
 id = "protect.redact-pattern-locales"
