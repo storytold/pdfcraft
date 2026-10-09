@@ -2217,7 +2217,9 @@ fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: 
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.add(icons::image("search", 16.0, t.text_muted));
+                        let mut layouter = crate::bidi::field_layouter;
                         let edit = egui::TextEdit::singleline(&mut find.query)
+                            .layouter(&mut layouter)
                             .id(egui::Id::new("find-input"))
                             .hint_text(tl!("Find text"))
                             .desired_width(220.0)

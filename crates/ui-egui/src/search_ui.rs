@@ -17,7 +17,11 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
     let l = ui.label(egui::RichText::new(tl!("What word or phrase would you like to search for?")).color(t.text_muted));
     let r = ui
         .add(
-            egui::TextEdit::singleline(&mut find.query).id(egui::Id::new("search-panel-input")).hint_text(tl!("Search")).desired_width(f32::INFINITY),
+            egui::TextEdit::singleline(&mut find.query)
+                .layouter(&mut crate::bidi::field_layouter)
+                .id(egui::Id::new("search-panel-input"))
+                .hint_text(tl!("Search"))
+                .desired_width(f32::INFINITY),
         )
         .labelled_by(l.id);
     if find.focus {

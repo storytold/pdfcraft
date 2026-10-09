@@ -282,9 +282,12 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
         let [cr, cg, cb] = t.style.color.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
+            let font = egui::FontId::proportional((t.style.size as f32 * zoom).max(8.0));
+            let mut layouter = crate::bidi::styled_layouter(font.clone(), Some(Color32::from_rgb(cr, cg, cb)), true);
             let resp = ui.add(
                 egui::TextEdit::multiline(&mut t.text)
-                    .font(egui::FontId::proportional((t.style.size as f32 * zoom).max(8.0)))
+                    .layouter(&mut layouter)
+                    .font(font)
                     .desired_width(r.width().max(60.0))
                     .desired_rows(1)
                     .background_color(Color32::from_rgba_unmultiplied(255, 255, 255, 235))

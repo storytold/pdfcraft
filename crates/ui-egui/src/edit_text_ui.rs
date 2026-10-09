@@ -469,8 +469,10 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             }
             egui::Frame::NONE.fill(Color32::WHITE).stroke(Stroke::new(1.5, ACCENT)).inner_margin(egui::Margin::symmetric(2, 0)).show(ui, |ui| {
                 let rows = ed.text.lines().count().max(1);
+                let mut layouter = crate::bidi::styled_layouter(font.clone(), Some(text_color), true);
                 let r = ui.add(
                     egui::TextEdit::multiline(&mut ed.text)
+                        .layouter(&mut layouter)
                         .id(egui::Id::new("edit-text-line-input"))
                         .font(font.clone())
                         .text_color(text_color)

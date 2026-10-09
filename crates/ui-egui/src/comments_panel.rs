@@ -107,7 +107,13 @@ pub(crate) fn show(
     let mut edit = None;
     // Search (the header's magnifier toggles it).
     if let Some(q) = view.comments.search.as_mut() {
-        let r = ui.add(egui::TextEdit::singleline(q).hint_text(tl!("Search comments")).desired_width(f32::INFINITY).id_salt("comment-search"));
+        let r = ui.add(
+            egui::TextEdit::singleline(q)
+                .layouter(&mut crate::bidi::field_layouter)
+                .hint_text(tl!("Search comments"))
+                .desired_width(f32::INFINITY)
+                .id_salt("comment-search"),
+        );
         if view.comments.search_focus {
             r.request_focus();
             view.comments.search_focus = false;
@@ -118,6 +124,7 @@ pub(crate) fn show(
     if allowed {
         let r = ui.add(
             egui::TextEdit::singleline(&mut view.comments.add_box)
+                .layouter(&mut crate::bidi::field_layouter)
                 .hint_text(tl!("Add a comment"))
                 .desired_width(f32::INFINITY)
                 .margin(egui::Margin::symmetric(8, 6))
@@ -263,7 +270,11 @@ fn card(
             let mut buttons_left = f32::INFINITY;
             let head = ui.horizontal(|ui| {
                 avatar(ui, t, Some(subtype_icon(&a.subtype)), None, color);
-                ui.label(egui::RichText::new(a.author.as_deref().unwrap_or_else(|| tl!("Unknown author"))).font(theme::semibold(12.5)).color(t.text));
+                ui.label(
+                    egui::RichText::new(crate::bidi::shown(a.author.as_deref().unwrap_or_else(|| tl!("Unknown author"))))
+                        .font(theme::semibold(12.5))
+                        .color(t.text),
+                );
                 if let Some(m) = &a.modified {
                     ui.add(egui::Label::new(egui::RichText::new(m).font(theme::regular(11.0)).color(t.text_faint)).truncate());
                 }
@@ -291,7 +302,13 @@ fn card(
             egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 4, bottom: 0 }).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 if editing && let Some((_, _, text)) = view.comments.editing.as_mut() {
-                    let r = ui.add(egui::TextEdit::multiline(text).desired_rows(2).desired_width(f32::INFINITY).id_salt(("comment-edit", key)));
+                    let r = ui.add(
+                        egui::TextEdit::multiline(text)
+                            .layouter(&mut crate::bidi::multiline_field_layouter)
+                            .desired_rows(2)
+                            .desired_width(f32::INFINITY)
+                            .id_salt(("comment-edit", key)),
+                    );
                     if !r.has_focus() && !ui.memory(|m| m.focused().is_some()) {
                         r.request_focus();
                     }
@@ -312,7 +329,7 @@ fn card(
                     let text = if body.is_empty() {
                         egui::RichText::new(tl!(kind_label(a))).italics().color(t.text_faint)
                     } else {
-                        egui::RichText::new(body).color(t.text)
+                        egui::RichText::new(crate::bidi::shown(body)).color(t.text)
                     };
                     let mut label = egui::Label::new(text.font(theme::regular(13.0))).wrap();
                     if !selected {
@@ -336,14 +353,19 @@ fn card(
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(r.author.as_deref().unwrap_or_else(|| tl!("Reply"))).font(theme::semibold(12.0)));
+                            ui.label(
+                                egui::RichText::new(crate::bidi::shown(r.author.as_deref().unwrap_or_else(|| tl!("Reply"))))
+                                    .font(theme::semibold(12.0)),
+                            );
                             if let Some(m) = &r.modified {
                                 ui.add(egui::Label::new(egui::RichText::new(m).font(theme::regular(11.0)).color(t.text_faint)).truncate());
                             }
                         });
                         ui.add(
-                            egui::Label::new(egui::RichText::new(r.contents.as_deref().unwrap_or("")).font(theme::regular(12.5)).color(t.text))
-                                .wrap(),
+                            egui::Label::new(
+                                egui::RichText::new(crate::bidi::shown(r.contents.as_deref().unwrap_or(""))).font(theme::regular(12.5)).color(t.text),
+                            )
+                            .wrap(),
                         );
                     });
                 });
@@ -356,6 +378,7 @@ fn card(
                     ui.horizontal(|ui| {
                         let r = ui.add(
                             egui::TextEdit::singleline(&mut view.comments.reply)
+                                .layouter(&mut crate::bidi::field_layouter)
                                 .hint_text(tl!("Add a reply"))
                                 .desired_width(ui.available_width() - 56.0)
                                 .id_salt(("comment-reply", key)),

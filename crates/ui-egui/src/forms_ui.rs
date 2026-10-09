@@ -291,6 +291,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
             egui::Area::new(egui::Id::new(("form-editor", view.id.0))).order(egui::Order::Foreground).fixed_pos(rect.min).show(ctx, |ui| {
                 ui.set_min_size(rect.size());
                 let Some(fx) = view.forms.focus.as_mut() else { return };
+                let mut layouter = crate::bidi::styled_layouter(egui::FontId::proportional(font), Some(Color32::BLACK), multiline);
                 let mut te = if multiline { egui::TextEdit::multiline(&mut fx.text) } else { egui::TextEdit::singleline(&mut fx.text) };
                 te = te
                     .desired_width(rect.width() - 6.0)
@@ -302,6 +303,9 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
                     .id(egui::Id::new(("form-field", view.id.0, &f.name, focus.widget)));
                 if let Some(max) = f.max_len {
                     te = te.char_limit(max);
+                }
+                if !f.has(field_flags::PASSWORD) {
+                    te = te.layouter(&mut layouter);
                 }
                 if multiline {
                     te = te.desired_rows(((rect.height() / (font * 1.3)).floor() as usize).max(1));

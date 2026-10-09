@@ -300,8 +300,13 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     ui.label(egui::RichText::new(tl!("Identity")).font(theme::semibold(13.0)));
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Name on new comments"));
-        ui.add(egui::TextEdit::singleline(&mut app.comment_prefs.author).desired_width(220.0).char_limit(crate::MAX_AUTHOR_CHARS))
-            .labelled_by(label.id);
+        ui.add(
+            egui::TextEdit::singleline(&mut app.comment_prefs.author)
+                .layouter(&mut crate::bidi::field_layouter)
+                .desired_width(220.0)
+                .char_limit(crate::MAX_AUTHOR_CHARS),
+        )
+        .labelled_by(label.id);
     });
     ui.add_space(8.0);
     ui.label(egui::RichText::new("JavaScript").font(theme::semibold(13.0)));

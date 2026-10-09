@@ -28,6 +28,73 @@ pub fn visual_rtl(text: &str) -> Cow<'_, str> {
     reorder(text, Level::rtl())
 }
 
+/// [`visual`] or [`visual_rtl`] by the text's own first strong character, for text the user
+/// types (a name in a field): Hebrew reads from the right, Latin from the left.
+pub fn visual_auto(text: &str) -> Cow<'_, str> {
+    match unicode_bidi::get_base_direction(text) {
+        unicode_bidi::Direction::Rtl => visual_rtl(text),
+        _ => visual(text),
+    }
+}
+
+/// Text someone wrote (a comment, an author name, a bookmark title) ready to hand to an egui label:
+/// each line in display order by its own direction ([`visual_auto`]). Text without right-to-left
+/// characters comes back borrowed and unchanged. As with [`multiline_field_layouter`], a line
+/// that wraps keeps display order across the whole line.
+pub fn shown(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(is_rtl_script) {
+        return Cow::Borrowed(text);
+    }
+    Cow::Owned(text.split('\n').map(visual_auto).collect::<Vec<_>>().join("\n"))
+}
+
+/// A [`egui::TextEdit::layouter`] for a single-line field that draws what the user typed in
+/// display order ([`visual_auto`]): a Hebrew name or search reads from the right. Only the drawing
+/// changes; the field still holds and edits the text as typed. Font and colour are the `TextEdit`
+/// defaults, so use it on fields that don't set their own `font`.
+pub fn field_layouter(ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap_width: f32) -> std::sync::Arc<egui::Galley> {
+    layout_typed(ui, buf.as_str(), None)
+}
+
+/// [`field_layouter`] for a multi-line field: each line takes its own direction. A line that wraps
+/// keeps its words in display order across the whole line, so the rows of a long right-to-left
+/// paragraph come out in the wrong order; lines that fit are exact.
+pub fn multiline_field_layouter(ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32) -> std::sync::Arc<egui::Galley> {
+    layout_typed(ui, buf.as_str(), Some(wrap_width))
+}
+
+/// [`field_layouter`] / [`multiline_field_layouter`] for a field that sets its own font and text
+/// colour (`TextEdit::font`, `TextEdit::text_color`): pass the same ones here.
+pub fn styled_layouter(
+    font: egui::FontId,
+    color: Option<egui::Color32>,
+    multiline: bool,
+) -> impl FnMut(&egui::Ui, &dyn egui::TextBuffer, f32) -> std::sync::Arc<egui::Galley> {
+    move |ui, buf, wrap_width| layout_typed_with(ui, buf.as_str(), multiline.then_some(wrap_width), Some(font.clone()), color)
+}
+
+fn layout_typed(ui: &egui::Ui, text: &str, wrap_width: Option<f32>) -> std::sync::Arc<egui::Galley> {
+    layout_typed_with(ui, text, wrap_width, None, None)
+}
+
+fn layout_typed_with(
+    ui: &egui::Ui,
+    text: &str,
+    wrap_width: Option<f32>,
+    font: Option<egui::FontId>,
+    color: Option<egui::Color32>,
+) -> std::sync::Arc<egui::Galley> {
+    let shown = shown(text).into_owned();
+    let font = font.unwrap_or_else(|| egui::FontSelection::default().resolve(ui.style()));
+    let color = color.or(ui.visuals().override_text_color).unwrap_or_else(|| ui.visuals().widgets.inactive.text_color());
+    let mut job = match wrap_width {
+        Some(w) => egui::text::LayoutJob::simple(shown, font, color, w),
+        None => egui::text::LayoutJob::simple_singleline(shown, font, color),
+    };
+    job.keep_trailing_whitespace = true;
+    ui.fonts_mut(|f| f.layout_job(job))
+}
+
 fn reorder(text: &str, base: Level) -> Cow<'_, str> {
     if !text.chars().any(is_rtl_script) {
         return Cow::Borrowed(text);
@@ -147,6 +214,21 @@ mod tests {
         for s in ["", "PDF", "Save as…", "{n} pages"] {
             assert!(matches!(visual_rtl(s), Cow::Borrowed(v) if v == s), "{s:?}");
         }
+    }
+
+    #[test]
+    fn each_line_of_written_text_takes_its_own_direction() {
+        assert_eq!(shown("נטלי זכריה\nNatalie Z.\nשלום עולם."), "זכריה נטלי\nNatalie Z.\n.עולם שלום");
+        assert!(matches!(shown("plain\ntext"), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn typed_text_takes_its_own_direction() {
+        // A Hebrew name keeps its first word on the right; a Latin one is left alone.
+        assert_eq!(visual_auto("נטלי זכריה"), "זכריה נטלי");
+        assert_eq!(visual_auto("Natalie Zecharya"), "Natalie Zecharya");
+        assert_eq!(visual_auto("Natalie זכריה כהן"), "Natalie כהן זכריה");
+        assert_eq!(visual_auto(""), "");
     }
 
     #[test]

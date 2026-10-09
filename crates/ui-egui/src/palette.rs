@@ -109,8 +109,10 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 ui.set_width(560.0);
                 ui.horizontal(|ui| {
                     ui.add(icons::image("search", 18.0, t.text_muted));
+                    let mut layouter = crate::bidi::styled_layouter(theme::regular(15.0), None, false);
                     let r = ui.add(
                         egui::TextEdit::singleline(&mut app.palette_query)
+                            .layouter(&mut layouter)
                             .hint_text(tl!("Search tools and commands…"))
                             .frame(egui::Frame::NONE)
                             .font(theme::regular(15.0))

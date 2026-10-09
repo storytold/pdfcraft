@@ -65,7 +65,13 @@ pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) 
     egui::Grid::new("stamp-create").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
         let l = ui.label(tl!("Category:"));
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut d.category).desired_width(200.0).hint_text(tl!("e.g. My stamps"))).labelled_by(l.id);
+            ui.add(
+                egui::TextEdit::singleline(&mut d.category)
+                    .layouter(&mut crate::bidi::field_layouter)
+                    .desired_width(200.0)
+                    .hint_text(tl!("e.g. My stamps")),
+            )
+            .labelled_by(l.id);
             if !categories.is_empty() {
                 egui::ComboBox::from_id_salt("stamp-categories").selected_text("").width(24.0).show_ui(ui, |ui| {
                     for c in &categories {
@@ -78,7 +84,7 @@ pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) 
         });
         ui.end_row();
         let l = ui.label(tl!("Name:"));
-        ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(200.0)).labelled_by(l.id);
+        ui.add(egui::TextEdit::singleline(&mut d.name).layouter(&mut crate::bidi::field_layouter).desired_width(200.0)).labelled_by(l.id);
         ui.end_row();
     });
     ui.add_space(12.0);
@@ -103,10 +109,11 @@ pub(crate) fn palette_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Toke
     categories.sort();
     categories.dedup();
     for c in categories {
-        ui.label(egui::RichText::new(&c).small().color(t.text_muted));
+        ui.label(egui::RichText::new(crate::bidi::shown(&c)).small().color(t.text_muted));
         for (i, s) in app.custom_stamps.iter().enumerate().filter(|(_, s)| s.category == c) {
             let active = app.quick_tool == QuickTool::CustomStamp(i);
-            let resp = ui.add(egui::Button::selectable(active, s.name.as_str()).min_size(egui::vec2(ui.available_width(), 28.0)));
+            let resp =
+                ui.add(egui::Button::selectable(active, crate::bidi::shown(&s.name).as_ref()).min_size(egui::vec2(ui.available_width(), 28.0)));
             if resp.clicked() {
                 app.quick_tool = QuickTool::CustomStamp(i);
             }
