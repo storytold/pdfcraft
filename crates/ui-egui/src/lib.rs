@@ -1645,6 +1645,7 @@ impl eframe::App for PdfCraftApp {
         for (index, view) in self.views.iter_mut().enumerate() {
             if blocked || self.active != Some(index) {
                 view.auto_scroll.cancel();
+                view.drag_pan.cancel();
             }
         }
         // A field that refused its value this frame keeps the shortcut from saving or printing

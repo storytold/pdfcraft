@@ -235,11 +235,15 @@ pub struct DocView {
     screen_xforms: Vec<(usize, PageXform)>,
     /// The scroll viewport on screen last frame.
     viewport_screen: Rect,
-    /// Pending zoom anchor: page, position within it (0..1), and offset from the viewport corner.
+    /// Pending zoom anchor: page, fractional position (also in gutters), and viewport offset.
     zoom_anchor: Option<(usize, f32, f32, Vec2)>,
     /// Turns wheel input into page turns in single-page view.
     wheel: crate::wheel_pager::WheelPager,
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
+    pub(crate) drag_pan: crate::autoscroll::DragPan,
+    /// Actual ScrollArea offset, including ordinary wheel and scrollbar movement.
+    scroll_offset: Vec2,
+    max_scroll_offset: Vec2,
     /// Pages selected in the organize grid or the Pages panel (0-based). Empty means "the current page".
     pub selected: BTreeSet<usize>,
     /// Anchor for ⇧-click range selection in the organize grid.
@@ -327,6 +331,16 @@ impl DocView {
         self.auto_scroll.active()
     }
 
+    /// Whether the Windows viewer currently owns a held middle-button gesture.
+    pub fn middle_panning(&self) -> bool {
+        self.drag_pan.middle_active()
+    }
+
+    /// Whether a transient middle-button or Space + primary drag is captured.
+    pub fn drag_panning(&self) -> bool {
+        self.drag_pan.active()
+    }
+
     /// Pages that could not be rendered, with the reason (for automation; 0-based pages).
     pub fn page_errors(&self) -> Vec<(usize, &str)> {
         let mut v: Vec<(usize, &str)> = self.errors.iter().map(|(p, e)| (*p, e.as_str())).collect();
@@ -377,6 +391,9 @@ impl DocView {
             zoom_anchor: None,
             wheel: Default::default(),
             auto_scroll: Default::default(),
+            drag_pan: Default::default(),
+            scroll_offset: Vec2::ZERO,
+            max_scroll_offset: Vec2::ZERO,
             selected: BTreeSet::new(),
             select_anchor: None,
             pending_edit: None,
@@ -814,17 +831,31 @@ impl DocView {
 
     /// Zoom keeping the centre of the view still.
     pub fn set_zoom(&mut self, zoom: f32) {
-        let centre = self.viewport_screen.center();
+        // CLI/view options can set zoom before the first layout. Rect::NOTHING has no
+        // finite centre yet, but an initial zoom still needs to leave the default fit mode.
+        let centre = if self.viewport_screen.is_positive() { self.viewport_screen.center() } else { Pos2::ZERO };
         self.zoom_at(zoom, centre);
     }
 
     /// Zoom keeping the document point under `screen_pos` still (pinch, ⌘-scroll).
     pub fn zoom_at(&mut self, zoom: f32, screen_pos: Pos2) {
-        let anchor = self.screen_rects.iter().find(|(_, r)| r.expand(GAP).contains(screen_pos)).map(|(p, r)| {
-            let f = (screen_pos - r.min) / r.size();
-            (*p, f.x.clamp(0.0, 1.0), f.y.clamp(0.0, 1.0), screen_pos - self.viewport_screen.min)
-        });
-        self.zoom = zoom.clamp(0.08, 64.0);
+        if !zoom.is_finite() || !screen_pos.is_finite() {
+            return;
+        }
+        let zoom = zoom.clamp(0.08, 64.0);
+        if zoom == self.zoom && self.fit == Fit::None {
+            return;
+        }
+        // In gutters/gaps, anchor relative to the nearest page rather than jumping to its top.
+        // Fractions outside 0..1 preserve the pointer's position outside the page as well.
+        let anchor =
+            self.screen_rects.iter().min_by(|(_, a), (_, b)| a.distance_sq_to_pos(screen_pos).total_cmp(&b.distance_sq_to_pos(screen_pos))).map(
+                |(p, r)| {
+                    let f = (screen_pos - r.min) / r.size();
+                    (*p, f.x, f.y, screen_pos - self.viewport_screen.min)
+                },
+            );
+        self.zoom = zoom;
         self.fit = Fit::None;
         match anchor {
             Some(a) => self.zoom_anchor = Some(a),
@@ -1191,6 +1222,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let info = &doc.info;
     if info.pages.is_empty() {
         app.views[index].auto_scroll.cancel();
+        app.views[index].drag_pan.cancel();
         ui.centered_and_justified(|ui| ui.label(tl!("This document has no pages.")));
         return;
     }
@@ -1214,6 +1246,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // No dialog, close prompt or palette over the page: only then does page input count.
     let unobstructed = app.dialog.is_none() && app.close_request.is_none() && !app.palette_open;
     if view.organize {
+        view.drag_pan.cancel();
         organize_grid(view, info, &doc.renderer, doc.allows_assembly(), doc.dirty, unobstructed, ui, &t);
         return;
     }
@@ -1225,7 +1258,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 
     // Pinch / ctrl+scroll zoom, anchored on the current page.
     let zoom_delta = ui.input(|i| i.zoom_delta());
-    if (zoom_delta - 1.0).abs() > 0.001 && ui.rect_contains_pointer(avail) {
+    // Exclude the previous frame's scrollbar tracks from gesture activation.
+    let navigation_rect = if view.viewport_screen.is_positive() { avail.intersect(view.viewport_screen) } else { avail };
+    let navigation_enabled = app.dialog.is_none() && app.close_request.is_none() && !app.palette_open && ui.is_enabled() && ui.input(|i| i.focused);
+    if zoom_delta.is_finite() && zoom_delta > 0.0 && zoom_delta != 1.0 && navigation_enabled && ui.rect_contains_pointer(navigation_rect) {
         let z = view.zoom * zoom_delta;
         match ui.input(|i| i.pointer.hover_pos()) {
             Some(p) => view.zoom_at(z, p),
@@ -1233,6 +1269,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
     }
     view.viewport_screen = avail;
+    let space_hand = cfg!(target_os = "windows")
+        && navigation_enabled
+        && ui.input(|i| i.key_down(egui::Key::Space))
+        && !ui.ctx().egui_wants_keyboard_input()
+        && view.line_editor.is_none()
+        && view.content.draft.is_none();
+    let pan_delta = if cfg!(target_os = "windows") && navigation_enabled {
+        view.drag_pan.update(ui, navigation_rect, space_hand)
+    } else {
+        view.drag_pan.cancel();
+        Vec2::ZERO
+    };
     let auto_delta = if unobstructed {
         view.auto_scroll.update(ui, avail, false)
     } else {
@@ -1246,7 +1294,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         * if view.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
     let content_w = (max_w + 2.0 * SIDE).max(avail.width());
     let rects = view.layout(info, content_w);
-    let middle_gesture = view.auto_scroll.blocks_input();
+    let middle_gesture = view.auto_scroll.blocks_input() || view.drag_pan.blocks_input() || (space_hand && ui.rect_contains_pointer(navigation_rect));
     // Single page: when the whole page fits, the wheel would do nothing, so it turns pages
     // instead; zoomed in far enough to pan, it pans. Touch drags are untouched: with nothing
     // to pan, touch users turn pages with the rail buttons, the page box and the arrow keys.
@@ -1285,6 +1333,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     };
 
     let mut scroll = egui::ScrollArea::both().auto_shrink([false, false]).scroll_source(egui::scroll_area::ScrollSource {
+        mouse_wheel: !view.drag_pan.blocks_input(),
         drag: if middle_gesture {
             egui::scroll_area::DragScroll::Never
         } else if app.quick_tool == QuickTool::Hand {
@@ -1304,6 +1353,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let page = page.min(rects.len() - 1);
         let r = rects[page];
         scroll = scroll.vertical_scroll_offset((r.top() - y_shift - GAP + frac * r.height()).max(0.0));
+    } else if view.drag_pan.blocks_input() {
+        // Apply before painting, without inertia or animation; ScrollArea enforces its bounds.
+        // Also pin a stationary/released drag, preventing prior wheel momentum from drifting.
+        scroll = scroll.scroll_offset((view.scroll_offset - pan_delta).max(Vec2::ZERO).min(view.max_scroll_offset));
     }
     let ppp = ui.ctx().pixels_per_point();
     let scale = view.render_scale(ppp);
@@ -1902,7 +1955,15 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         (wanted, visible_now)
     });
 
+    view.scroll_offset = out.state.offset;
+    view.max_scroll_offset = (out.content_size - out.inner_rect.size()).max(Vec2::ZERO);
+    view.viewport_screen = out.inner_rect;
     view.auto_scroll.paint(ui, avail);
+    if view.drag_pan.active() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if space_hand && ui.rect_contains_pointer(view.viewport_screen) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
 
     // Bound texture memory: keep sharp rasters only near the current page.
     if view.pages.len() > 24 {
