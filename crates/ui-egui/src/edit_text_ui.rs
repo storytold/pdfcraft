@@ -37,6 +37,9 @@ pub struct LineEditor {
     /// horizontal scale (%), and what they were.
     pub extras: Extras,
     extras0: Extras,
+    /// The document changed in another window while this paragraph was open: the first Apply
+    /// asks the user to check the text (the paragraph may not be the same any more).
+    pub(crate) stale: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -85,6 +88,43 @@ impl LineEditor {
     /// paragraph rewraps to its own width and the box doesn't grow).
     pub fn growth(&self) -> Option<f32> {
         (self.max_width > self.rect.width()).then_some(self.max_width)
+    }
+
+    /// Something the user typed must not be applied to a paragraph that is not the one they
+    /// opened: when the document changed in another window (or the paragraph is gone) the first
+    /// Apply is refused, the editor stays open with its text, and the user is told. A second
+    /// Apply goes through when the paragraph still exists.
+    pub(crate) fn must_check_first(&mut self, info: &DocInfo, doc: &pdfcraft_engine::Document) -> bool {
+        let at_stake = self.text != self.original || self.style() != pdfcraft_engine::BlockStyle::default();
+        let stale = std::mem::take(&mut self.stale);
+        let missing = self.page >= info.pages.len() || doc.text_blocks(self.page).len() <= self.block;
+        if at_stake && (stale || missing) {
+            self.focus = true;
+            return true;
+        }
+        false
+    }
+
+    /// An editor on paragraph `block` of `page` holding `text` (tests).
+    #[doc(hidden)]
+    pub fn test_new(page: usize, block: usize, text: &str) -> Self {
+        Self {
+            page,
+            block,
+            text: text.to_owned(),
+            original: String::new(),
+            rect: Rect::NOTHING,
+            source_rect: [0.0; 4],
+            multiline: false,
+            max_width: 0.0,
+            size: 12.0,
+            focus: false,
+            look: pdfcraft_engine::AddedText::default(),
+            look0: pdfcraft_engine::AddedText::default(),
+            extras: Extras::default(),
+            extras0: Extras::default(),
+            stale: false,
+        }
     }
 
     /// The formatting the panel changed.
@@ -168,6 +208,14 @@ pub struct ImageSelection {
     pub index: usize,
     /// Dragging: the start point and, for a corner, the opposite corner (screen).
     drag: Option<(Pos2, Option<Pos2>)>,
+}
+
+impl ImageSelection {
+    /// Image `index` on `page`, selected (tests).
+    #[doc(hidden)]
+    pub fn test_new(page: usize, index: usize) -> Self {
+        Self { page, index, drag: None }
+    }
 }
 
 /// What a drag on a paragraph box takes hold of.
@@ -483,26 +531,38 @@ pub(crate) fn page_input(
             look0: look_of(l),
             extras: Extras::default(),
             extras0: Extras::default(),
+            stale: false,
         });
     }
     true
 }
 
 /// The inline editor; returns the edit once the text is applied.
-pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -> Option<Edit> {
+pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, doc: &pdfcraft_engine::Document) -> Option<Edit> {
     // Clicks outside the document (the Format text panel) keep the paragraph open.
     let outside = ctx.input(|i| i.pointer.latest_pos()).is_some_and(|p| !view.viewport_rect().contains(p));
     let page = view.line_editor.as_ref()?.page;
-    let xf = view.page_xform(page)?;
-    let viewport_right = view.viewport_rect().right();
+    // The paragraph's page was deleted in another window: the editor stays, beside the page area.
+    let gone = page >= info.pages.len();
+    let xf = view.page_xform(page);
+    if xf.is_none() && !gone {
+        return None; // scrolled away
+    }
+    let viewport = view.viewport_rect();
     let ed = view.line_editor.as_mut()?;
-    // Reproject the source box every frame. The page may have been zoomed, scrolled or rotated
-    // while the format panel was open.
-    ed.rect = xf.user_rect(info, ed.page, ed.source_rect).expand(2.0);
-    let right = xf.rect.right().min(viewport_right) - 6.0;
-    ed.max_width = if ed.multiline { ed.rect.width() } else { (right - ed.rect.left()).max(ed.rect.width()) };
-    let scale = (ed.rect.width() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(1.0)).max(0.01);
-    ed.size = (ed.look.size as f32 * scale).clamp(8.0, 72.0);
+    if let Some(xf) = &xf {
+        // Reproject the source box every frame. The page may have been zoomed, scrolled or
+        // rotated while the format panel was open.
+        ed.rect = xf.user_rect(info, ed.page, ed.source_rect).expand(2.0);
+        let right = xf.rect.right().min(viewport.right()) - 6.0;
+        ed.max_width = if ed.multiline { ed.rect.width() } else { (right - ed.rect.left()).max(ed.rect.width()) };
+        let scale = (ed.rect.width() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(1.0)).max(0.01);
+        ed.size = (ed.look.size as f32 * scale).clamp(8.0, 72.0);
+    } else {
+        ed.rect = Rect::from_min_size(viewport.left_top() + egui::vec2(24.0, 24.0), egui::vec2(280.0, 60.0));
+        ed.max_width = ed.rect.width();
+        ed.size = 14.0;
+    }
     let font = editor_font(&ed.look, ed.size);
     let text_color = color32(ed.look.color);
     let mut done = None;
@@ -544,6 +604,10 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             });
         },
     );
+    if done == Some(true) && view.line_editor.as_mut().is_some_and(|ed| ed.must_check_first(info, doc)) {
+        view.elsewhere_notice = true;
+        done = None;
+    }
     match done {
         Some(apply) => {
             let ed = view.line_editor.take()?;

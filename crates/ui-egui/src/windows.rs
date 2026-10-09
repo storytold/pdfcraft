@@ -462,11 +462,15 @@ impl PdfCraftApp {
         // What the view did itself counts as seen; anything newer (another window's edit in
         // the same frame) still reaches it.
         let from = view.seen_generation.max(view.handled_generation);
-        match doc.changes_since(from) {
+        let change = doc.changes_since(from);
+        match &change {
             None => {}
-            Some(Change::Pages(pages)) => pages.into_iter().for_each(|p| view.page_changed(p)),
-            Some(Change::Remap(map)) => view.document_changed_with(&doc.info, Some(&map)),
+            Some(Change::Pages(pages)) => pages.iter().for_each(|p| view.page_changed(*p)),
+            Some(Change::Remap(map)) => view.document_changed_with(&doc.info, Some(map)),
             Some(Change::All) => view.document_changed(&doc.info),
+        }
+        if let Some(change) = &change {
+            view.foreign_change(doc, change);
         }
         if view.seen_display_generation.max(view.handled_display_generation) != doc.display_generation() {
             view.invalidate_content();
@@ -1348,6 +1352,115 @@ mod sync_tests {
             // The text of the old page 3 (now page 2) arrives again.
             v.test_deliver_text(2, "a needle here");
             assert_eq!(v.find_match_pages(), vec![2], "hit on the page's new number");
+        });
+    }
+
+    /// Delete the last page through the main window (the other window's view does not know yet).
+    fn delete_last_page(app: &mut PdfCraftApp) {
+        app.views[0].select_pages(&[3]);
+        assert!(app.apply_edit(Edit::DeletePages { pages: vec![3] }));
+        app.sync_views();
+    }
+
+    #[test]
+    fn selections_on_a_page_deleted_elsewhere_are_dropped() {
+        let (mut app, other, _doc, _ctx) = two_views();
+        app.with_window(other, |a| {
+            let v = &mut a.views[0];
+            v.comments.selected = Some((3, 0));
+            v.links.selected = Some((3, 0));
+            v.content.selected = Some((3, 0));
+            v.image_selection = Some(crate::edit_text_ui::ImageSelection::test_new(3, 0));
+            v.prepare.selected = Some(("nothing".into(), 0));
+        });
+        delete_last_page(&mut app);
+        app.with_window(other, |a| {
+            let v = &a.views[0];
+            assert!(v.comments.selected.is_none(), "comment selection");
+            assert!(v.links.selected.is_none(), "link selection");
+            assert!(v.content.selected.is_none(), "content selection");
+            assert!(v.image_selection.is_none(), "image selection");
+            assert!(v.prepare.selected.is_none(), "prepare selection");
+        });
+    }
+
+    #[test]
+    fn a_comment_selection_follows_its_page_and_survives_when_it_still_exists() {
+        let (mut app, other, doc, _ctx) = two_views();
+        assert!(app.apply_edit(comment(3)));
+        let index = app.session.get(doc).unwrap().info.annotations[0].index;
+        app.sync_views();
+        app.with_window(other, |a| a.views[0].comments.selected = Some((3, index)));
+        // Page 1 goes: the comment's page is page 2 now, and the selection moved with it.
+        app.views[0].select_pages(&[1]);
+        assert!(app.apply_edit(Edit::DeletePages { pages: vec![1] }));
+        app.sync_views();
+        assert_eq!(app.with_window(other, |a| a.views[0].comments.selected).unwrap(), Some((2, index)));
+        // The comment is deleted by the main window: the selection goes.
+        assert!(app.apply_edit(Edit::DeleteAnnotation { page: 2, index }));
+        app.sync_views();
+        assert_eq!(app.with_window(other, |a| a.views[0].comments.selected).unwrap(), None);
+    }
+
+    #[test]
+    fn a_paragraph_being_edited_when_its_page_is_deleted_elsewhere_stays_open_with_its_text() {
+        let (mut app, other, doc, _ctx) = two_views();
+        app.with_window(other, |a| a.views[0].line_editor = Some(crate::edit_text_ui::LineEditor::test_new(3, 0, "my text")));
+        delete_last_page(&mut app);
+        app.with_window(other, |a| {
+            let info = a.session.get(doc).unwrap().info.clone();
+            let d = a.session.get(doc).unwrap();
+            let ed = a.views[0].line_editor.as_mut().expect("still open");
+            assert_eq!(ed.text, "my text");
+            assert!(ed.must_check_first(&info, d), "the first Apply is refused");
+            assert!(ed.must_check_first(&info, d), "and so is every later one: the page is gone");
+        });
+    }
+
+    #[test]
+    fn a_paragraph_edit_after_a_change_elsewhere_is_confirmed_once() {
+        let (mut app, other, doc, _ctx) = two_views();
+        app.with_window(other, |a| a.views[0].line_editor = Some(crate::edit_text_ui::LineEditor::test_new(0, 0, "changed")));
+        assert!(app.apply_edit(Edit::RotatePages { pages: vec![2], degrees: 90 }));
+        app.sync_views();
+        app.with_window(other, |a| {
+            let d = a.session.get(doc).unwrap();
+            let info = d.info.clone();
+            let ed = a.views[0].line_editor.as_mut().unwrap();
+            assert!(ed.stale);
+            // The page has no paragraphs at all: still refused (the target is gone).
+            assert!(ed.must_check_first(&info, d));
+            assert!(!ed.stale, "asked once");
+        });
+    }
+
+    #[test]
+    fn a_comment_draft_on_a_deleted_page_is_kept_and_not_posted() {
+        let (mut app, other, _doc, _ctx) = two_views();
+        app.with_window(other, |a| a.views[0].comments.test_open_composer(3, "my note"));
+        delete_last_page(&mut app);
+        app.with_window(other, |a| {
+            let cv = &mut a.views[0].comments;
+            assert!(cv.composer.as_ref().is_some_and(|c| c.text == "my note"));
+            assert!(cv.post_must_wait(true));
+            // An empty draft has nothing to lose.
+            if let Some(c) = cv.composer.as_mut() {
+                c.text.clear();
+            }
+            assert!(!cv.post_must_wait(true));
+        });
+    }
+
+    #[test]
+    fn a_comment_draft_is_confirmed_after_a_rebuild_elsewhere_then_posts() {
+        let (mut app, other, _doc, _ctx) = two_views();
+        app.with_window(other, |a| a.views[0].comments.test_open_composer(0, "my note"));
+        assert!(app.apply_edit(Edit::RotatePages { pages: vec![2], degrees: 90 }));
+        app.sync_views();
+        app.with_window(other, |a| {
+            let cv = &mut a.views[0].comments;
+            assert!(cv.post_must_wait(false), "first Post: look first");
+            assert!(!cv.post_must_wait(false), "second Post goes through");
         });
     }
 }

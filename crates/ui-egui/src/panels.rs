@@ -310,7 +310,11 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             changed = true;
         }
         changed |= crate::edit_text_ui::extras_panel(ui, &mut ed.extras);
-        if changed {
+        let page_exists = app.session.get(app.views[i].id).is_some_and(|d| ed.page < d.info.pages.len());
+        if changed && !page_exists {
+            app.views[i].elsewhere_notice = true; // the page is gone: keep the text, apply nothing
+            app.views[i].line_editor = Some(ed);
+        } else if changed {
             let edit = pdfcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };
             if app.apply_edit(edit) {
                 ed.applied();

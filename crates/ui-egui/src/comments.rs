@@ -354,6 +354,27 @@ pub enum ComposerKind {
     Edit(usize),
 }
 
+impl CommentView {
+    /// The composer's text must not land on a page or comment that changed in another window
+    /// without the user looking first: the first Post is refused (the card stays, with its text);
+    /// a second goes through when the target still exists.
+    pub(crate) fn post_must_wait(&mut self, target_gone: bool) -> bool {
+        let stale = std::mem::take(&mut self.composer_stale);
+        let Some(c) = self.composer.as_mut() else { return false };
+        if (target_gone || stale) && !c.text.trim().is_empty() {
+            c.focus = true;
+            return true;
+        }
+        false
+    }
+
+    /// Open a note composer on `page` holding `text` (tests).
+    #[doc(hidden)]
+    pub fn test_open_composer(&mut self, page: usize, text: &str) {
+        self.composer = Some(Composer { page, at: [20.0, 20.0], kind: ComposerKind::Note, text: text.to_owned(), focus: false });
+    }
+}
+
 /// The floating "Add a comment" card.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Composer {
@@ -374,6 +395,8 @@ pub struct CommentView {
     /// Escape ends egui's drag too; ignore its synthetic release until the mouse is up.
     cancelled_drag: bool,
     pub composer: Option<Composer>,
+    /// The document changed in another window while the composer was open.
+    pub(crate) composer_stale: bool,
     /// Reply being typed under the selected card.
     pub reply: String,
     /// Inline edit of a card's text in the Comments panel: (page, index, text).
@@ -1048,14 +1071,24 @@ fn new_comment(cx: &PageCx<'_>, tool: CommentTool, shape: Shape, contents: Strin
 
 /// The floating composer card (new note, new text box, edit). Returns the edit to apply.
 pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs) -> Option<Edit> {
-    let c = view.comments.composer.as_ref()?;
-    let page = c.page;
-    let Some(xf) = view.page_xform(page) else {
-        // Scrolled away: keep the draft until the page is back.
+    let Some(c) = view.comments.composer.as_ref() else {
+        view.comments.composer_stale = false;
         return None;
     };
-    let cx = PageCx { page, xf: &xf, info, tool: QuickTool::Select, prefs, allowed: true, hidden: false };
-    let anchor = cx.to_screen(c.at);
+    let page = c.page;
+    // The page was deleted in another window (or the comment being edited is gone): the draft
+    // stays, beside the page area, until the user has looked at it.
+    let target_gone =
+        page >= info.pages.len() || matches!(c.kind, ComposerKind::Edit(i) if !info.annotations.iter().any(|a| a.page == page && a.index == i));
+    let xf = view.page_xform(page);
+    if xf.is_none() && page < info.pages.len() {
+        // Scrolled away: keep the draft until the page is back.
+        return None;
+    }
+    let anchor = match &xf {
+        Some(xf) => PageCx { page, xf, info, tool: QuickTool::Select, prefs, allowed: true, hidden: false }.to_screen(c.at),
+        None => view.viewport_rect().left_top() + vec2(24.0, 24.0),
+    };
     let t = Tokens::get(ctx);
     let mut post = false;
     let mut cancel = false;
@@ -1121,6 +1154,12 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     if !post {
         return None;
     }
+    if view.comments.post_must_wait(target_gone) {
+        view.elsewhere_notice = true;
+        return None;
+    }
+    let xf = xf?;
+    let cx = PageCx { page, xf: &xf, info, tool: QuickTool::Select, prefs, allowed: true, hidden: false };
     let c = view.comments.composer.take()?;
     let text = c.text.trim_end().to_string();
     match c.kind {

@@ -756,3 +756,31 @@ fn random_window_operations_keep_the_windows_consistent() {
         }
     }
 }
+
+#[test]
+fn a_page_deleted_in_one_window_leaves_the_other_window_drawing_without_a_stale_selection_or_editor() {
+    let mut h = form_harness();
+    let doc = h.state().views[0].id;
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 200.0, height: 200.0 }));
+    let other = h.state_mut().test_add_parked_view(doc).unwrap();
+    h.run_steps(3);
+    h.state_mut().with_window(other, |a| {
+        let v = &mut a.views[0];
+        v.comments.selected = Some((1, 0));
+        v.links.selected = Some((1, 0));
+        v.content.selected = Some((1, 0));
+        v.test_select_image(1, 0);
+        v.test_open_line_editor(1, 0, "kept");
+        v.comments.test_open_composer(1, "also kept");
+    });
+    h.state_mut().views[0].select_pages(&[1]);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![1] }));
+    h.run_steps(6);
+    h.state_mut().with_window(other, |a| {
+        let v = &a.views[0];
+        assert!(v.comments.selected.is_none() && v.links.selected.is_none() && v.content.selected.is_none() && v.image_selection.is_none());
+        assert_eq!(v.line_editor.as_ref().map(|e| e.text.as_str()), Some("kept"), "typed text stays");
+        assert_eq!(v.comments.composer.as_ref().map(|c| c.text.as_str()), Some("also kept"));
+    });
+    assert_windows_ok(h.state());
+}

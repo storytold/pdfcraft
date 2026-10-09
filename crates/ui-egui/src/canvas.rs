@@ -240,6 +240,9 @@ pub struct DocView {
     /// change). A later change from another window is newer than these and still reaches it.
     pub(crate) handled_generation: u64,
     pub(crate) handled_display_generation: u64,
+    /// An open editor could not apply its text because the document changed in another window:
+    /// the app tells the user (see `foreign_change`).
+    pub(crate) elsewhere_notice: bool,
     viewport_w: f32,
     viewport_h: f32,
     page_count: usize,
@@ -389,6 +392,7 @@ impl DocView {
             change_handled: false,
             handled_generation: 0,
             handled_display_generation: 0,
+            elsewhere_notice: false,
             viewport_w: 800.0,
             viewport_h: 600.0,
             page_count: info.pages.len(),
@@ -460,6 +464,70 @@ impl DocView {
         self.goto = None;
         self.zoom_anchor = None;
         self.flash = None;
+    }
+
+    /// What another window did to the document: selections whose page or item is gone are
+    /// dropped, those on moved pages follow, and an open editor learns that its target may have
+    /// changed (it asks before applying; nothing the user typed is discarded).
+    pub(crate) fn foreign_change(&mut self, doc: &pdfcraft_engine::Document, change: &pdfcraft_engine::Change) {
+        use pdfcraft_engine::Change;
+        let pages = doc.info.pages.len();
+        let map = match change {
+            Change::Remap(m) => Some(m),
+            _ => None,
+        };
+        // Where an old page is now (`None`: gone).
+        let follow = |p: usize| -> Option<usize> {
+            let n = match map {
+                Some(m) => m.old_to_new.get(p).copied().flatten()?,
+                None => p,
+            };
+            (n < pages).then_some(n)
+        };
+        // A page of the old list in selections that follow pages, with a check on the item.
+        let keep_item = |sel: Option<(usize, usize)>, exists: &dyn Fn(usize, usize) -> bool| -> Option<(usize, usize)> {
+            let (p, i) = sel?;
+            let p = follow(p)?;
+            exists(p, i).then_some((p, i))
+        };
+        self.comments.selected = keep_item(self.comments.selected, &|p, i| doc.info.annotations.iter().any(|a| a.page == p && a.index == i));
+        self.links.selected = keep_item(self.links.selected, &|p, i| doc.links.iter().any(|l| l.page == p && l.index == i));
+        self.content.selected = keep_item(self.content.selected, &|p, i| doc.added.iter().filter(|a| a.page == p).count() > i);
+        if let Some(s) = self.image_selection.as_mut() {
+            match follow(s.page) {
+                Some(p) if doc.page_images(p).len() > s.index => s.page = p,
+                _ => self.image_selection = None,
+            }
+        }
+        let has_field = |name: &str| doc.form.iter().any(|f| f.name == name);
+        if self.prepare.selected.as_ref().is_some_and(|(n, _)| !has_field(n)) {
+            self.prepare.selected = None;
+        }
+        self.prepare.also.retain(|(n, _)| has_field(n));
+        // Editors keep their text. A form field that is gone has nothing to type into any more.
+        if self.forms.focus.as_ref().is_some_and(|f| !has_field(&f.name)) {
+            self.forms.focus = None;
+            self.elsewhere_notice = true;
+        }
+        let rebuilt = !matches!(change, Change::Pages(_));
+        if let Some(ed) = self.line_editor.as_mut() {
+            match follow(ed.page) {
+                Some(p) => ed.page = p,
+                None => ed.page = usize::MAX, // gone: shown beside the page, applied nowhere
+            }
+            ed.stale |= rebuilt;
+        }
+        if let Some(c) = self.comments.composer.as_mut() {
+            match follow(c.page) {
+                Some(p) => c.page = p,
+                None => c.page = usize::MAX,
+            }
+            let touched = match change {
+                Change::Pages(set) => set.contains(&c.page),
+                _ => true,
+            };
+            self.comments.composer_stale |= touched;
+        }
     }
 
     /// Pages an organize command acts on: the selection, or the current page.
@@ -572,6 +640,18 @@ impl DocView {
             .collect();
         self.texts.insert(page, Arc::new(pdfcraft_render::text::layout(glyphs)));
         self.refresh_find_page(page);
+    }
+
+    /// Open the paragraph editor on `block` of `page` holding `text` (tests).
+    #[doc(hidden)]
+    pub fn test_open_line_editor(&mut self, page: usize, block: usize, text: &str) {
+        self.line_editor = Some(crate::edit_text_ui::LineEditor::test_new(page, block, text));
+    }
+
+    /// Select image `index` on `page` in Edit text (tests).
+    #[doc(hidden)]
+    pub fn test_select_image(&mut self, page: usize, index: usize) {
+        self.image_selection = Some(crate::edit_text_ui::ImageSelection::test_new(page, index));
     }
 
     /// The pages the search found something on (tests).
@@ -2068,7 +2148,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if let Some(e) = comments::composer(ui.ctx(), view, info, prefs) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
+    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info, doc) {
         view.pending_edit = Some(e);
     }
     if let Some(e) = crate::forms_ui::overlay(ui.ctx(), view, info, &form, today) {
@@ -2082,6 +2162,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         view.pending_edit = typed;
     }
     let form_notice = view.forms.notice.take();
+    let elsewhere_notice = std::mem::take(&mut view.elsewhere_notice);
     // One crop, then back to selecting (as Acrobat does).
     let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, pdfcraft_engine::Edit::SetPageBox { .. }));
     let mut tool = app.quick_tool;
@@ -2207,6 +2288,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         app.boxes_draft.range = crate::pageboxes::Range::Current;
         app.boxes_draft.seeded = None;
         app.dialog = Some(crate::Dialog::PageBoxes);
+    }
+    if elsewhere_notice {
+        app.notify_tr("The document was changed in another window. Check your text, then apply it again.");
     }
     if let Some(n) = form_notice {
         match n {
