@@ -308,6 +308,7 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         work();
         self.optimize_run = Some(OptimizeRun { doc: id, kind, progress });
+        self.job_started("optimize");
         self.poll_optimize();
     }
 

@@ -897,6 +897,13 @@ impl PdfCraftApp {
         self.next_view_no = next;
     }
 
+    /// A background job of `kind` was started in the window that is loaded: its progress and its
+    /// result belong there, also when the job before it ended in the same frame and nobody has
+    /// noticed yet.
+    pub(crate) fn job_started(&mut self, kind: &'static str) {
+        self.job_origin.insert(kind, self.current_window);
+    }
+
     /// Remember which window started each background job (and forget finished ones), so its
     /// progress and its result show where the user asked for it.
     pub(crate) fn note_job_origins(&mut self) {
@@ -1248,6 +1255,21 @@ mod tests {
         app.export_status = None;
         app.note_job_origins();
         assert!(app.job_origin.is_empty());
+    }
+
+    #[test]
+    fn a_job_started_as_the_last_one_ended_reports_in_its_own_window() {
+        let (mut app, child, _) = two_windows();
+        // An export started in the main window ended, and nobody noticed yet (no note_job_origins).
+        app.job_origin.insert("export", WindowId::ROOT);
+        // In the same frame the child starts one.
+        app.with_window(child, |a| {
+            a.export_status = Some(Default::default());
+            a.job_started("export");
+        });
+        app.poll_in_origin("export", |a| a.notify("second job"));
+        assert!(app.toast.is_none(), "not in the main window");
+        assert_eq!(app.with_window(child, |a| a.toast.as_ref().map(|t| t.0.clone())).unwrap().as_deref(), Some("second job"));
     }
 
     #[test]
