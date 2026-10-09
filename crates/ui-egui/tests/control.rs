@@ -903,3 +903,64 @@ fn measurement_tools_draw_live_calibrate_save_and_export() {
     assert!((h.state().views[0].measure.drawing_points - 100.0).abs() < 0.01);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// --- several windows ---
+
+#[test]
+fn requests_can_name_a_window() {
+    let (mut h, c) = harness_pages(3);
+    let windows = call(&mut h, &c, "ui.windows", json!({})).unwrap();
+    assert_eq!(windows["windows"].as_array().map(Vec::len), Some(1));
+    call(&mut h, &c, "ui.command", json!({ "id": "window.new_view" })).unwrap();
+    h.run_steps(4);
+    let windows = call(&mut h, &c, "ui.windows", json!({})).unwrap();
+    let list = windows["windows"].as_array().unwrap();
+    assert_eq!(list.len(), 2, "{windows}");
+    assert_eq!(list[0]["tabs"][0]["name"], "doc.pdf");
+    assert_eq!((list[0]["tabs"][0]["view_no"].as_u64(), list[1]["tabs"][0]["view_no"].as_u64()), (Some(1), Some(2)));
+    let child = list[1]["id"].as_u64().unwrap();
+    // The state of each window, by number; the zoom is the window's own.
+    call(&mut h, &c, "ui.set", json!({ "key": "zoom", "value": "250", "window": child })).unwrap();
+    let main = call(&mut h, &c, "ui.state", json!({ "window": 0 })).unwrap();
+    let other = call(&mut h, &c, "ui.state", json!({ "window": child })).unwrap();
+    assert_eq!(other["active"]["zoom_percent"], 250.0);
+    assert_ne!(main["active"]["zoom_percent"], 250.0);
+    assert_eq!((main["window"].as_u64(), other["window"].as_u64(), main["window_count"].as_u64()), (Some(0), Some(child), Some(2)));
+    // Commands run in the window they name.
+    call(&mut h, &c, "ui.window_close", json!({ "window": child })).unwrap();
+    h.run_steps(4);
+    assert_eq!(call(&mut h, &c, "ui.windows", json!({})).unwrap()["windows"].as_array().map(Vec::len), Some(1));
+}
+
+#[test]
+fn a_window_that_does_not_exist_is_an_error_not_a_crash() {
+    let (mut h, c) = harness_pages(1);
+    for bad in [json!(7), json!(4294967295u64), json!(99999999999u64), json!(-1), json!("x"), json!(1.5)] {
+        for method in ["ui.state", "ui.window_close", "ui.window_focus", "ui.window_new_view"] {
+            let r = call(&mut h, &c, method, json!({ "window": bad }));
+            assert!(r.as_ref().is_err_and(|e| e.contains("no window")), "{method} {bad}: {r:?}");
+        }
+    }
+    let r = call(&mut h, &c, "ui.window_move_tab", json!({ "doc_index": 0, "to": 12 }));
+    assert!(r.is_err_and(|e| e.contains("no window")));
+    let r = call(&mut h, &c, "ui.window_move_tab", json!({ "doc_index": 9 }));
+    assert!(r.is_err_and(|e| e.contains("no tab")));
+    let r = call(&mut h, &c, "ui.window_close", json!({}));
+    assert!(r.is_err(), "the main window is not closed this way");
+    let r = call(&mut h, &c, "ui.screenshot", json!({ "window": 3 }));
+    assert!(r.is_err_and(|e| e.contains("no window")));
+}
+
+#[test]
+fn a_tab_can_be_moved_to_a_new_window_through_the_channel() {
+    let (mut h, c) = harness_pages(2);
+    call(&mut h, &c, "ui.open", json!({ "path": "/dev/null/none.pdf" })).unwrap_err();
+    h.state_mut().open_bytes("second.pdf", None, fixture(2)).unwrap();
+    h.run_steps(2);
+    call(&mut h, &c, "ui.window_move_tab", json!({ "doc_index": 1 })).unwrap();
+    h.run_steps(4);
+    let windows = call(&mut h, &c, "ui.windows", json!({})).unwrap();
+    let list = windows["windows"].as_array().unwrap();
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[1]["tabs"][0]["name"], "second.pdf");
+}

@@ -35,3 +35,25 @@ covers every target starting with it (`pdfcraft*=debug`). The logger is
 | `WGPU_BACKEND` | Graphics backend; by default Windows uses Direct3D 12, falling back to OpenGL |
 | `CRAFT_FONTS_DIR` | Build time: a [craft-fonts](https://github.com/storytold/craft-fonts) checkout to embed (Japanese fonts) |
 | `PDFCRAFT_SYSTEM_FONTS` | `0` stops the desktop app from using an installed font for characters its embedded fonts lack (`cargo xtask screenshots` sets it) |
+
+## Several windows
+
+PdfCraft can show one document in several windows (Window ▸ New window, or a right-click on a
+tab). They share the document, its undo history and its unsaved state; each has its own page,
+zoom, selection and panels. With the control channel running, every window can be driven:
+
+```bash
+cargo run -p pdfcraft -- --control /tmp/pc.json some.pdf &
+cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json command id=window.new_view
+cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json windows
+cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json state --window 1
+cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json set key=zoom value=200 --window 1
+cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json screenshot --window 1 --out /tmp/w1.png
+cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json window_move_tab doc_index=0
+cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json window_close --window 1
+```
+
+Without `--window`, a request goes to the window that has the focus. `inspect`, `click`, `drag`,
+`type` and `key` still work on the main window. In tests, windows are drawn inside the main one
+(egui's embedded viewports), so `egui_kittest` can click in all of them; see
+`crates/ui-egui/tests/windows.rs`.

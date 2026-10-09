@@ -30,6 +30,15 @@
 //!   reports the choice and `ui.state.theme` reports the resolved light/dark colours.
 //! - `ui.open {path}`: open a file.
 //! - `ui.screenshot {region?}`: PNG of the window (base64), optionally cropped to a rect.
+//!
+//! Several windows: `ui.state`, `ui.command`, `ui.set`, `ui.open` and `ui.screenshot` take an
+//! optional `window` (a number from `ui.windows`; the window that has the focus when left out).
+//! `ui.inspect`, `ui.click`, `ui.drag`, `ui.move`, `ui.type` and `ui.key` still act on the main
+//! window's widget tree. A number that is no window answers `no window N`.
+//! - `ui.windows`: every window with its `id`, `title`, `focused` and `tabs` (`name`, `view_no`, `dirty`).
+//! - `ui.window_new_view {window?}`: show the window's document in a new window.
+//! - `ui.window_move_tab {window?, doc_index, to?}`: move tab `doc_index` to window `to` (a new one without it).
+//! - `ui.window_close {window}` and `ui.window_focus {window?}`.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -145,6 +154,8 @@ enum Pending {
     Screenshot {
         tag: u64,
         region: Option<egui::Rect>,
+        /// The window's viewport: its screenshot arrives in that viewport's input.
+        viewport: egui::ViewportId,
         reply: Sender<Reply>,
         /// When it was requested (egui time, seconds).
         since: f64,
@@ -169,12 +180,21 @@ pub fn attach(ctx: &egui::Context) -> (Control, ControlClient) {
 }
 
 /// What a request needs from the app (implemented by `PdfCraftApp`).
+///
+/// `window` is the window a request is for (`None`: the one that has the focus).
 pub(crate) trait Host {
-    fn state(&self) -> Value;
-    fn command(&mut self, id: &str) -> Reply;
+    fn state(&mut self, window: Option<u32>) -> Reply;
+    fn command(&mut self, window: Option<u32>, id: &str) -> Reply;
     fn commands(&self) -> Value;
-    fn set(&mut self, key: &str, value: &str) -> Reply;
-    fn open(&mut self, path: &str) -> Reply;
+    fn set(&mut self, window: Option<u32>, key: &str, value: &str) -> Reply;
+    fn open(&mut self, window: Option<u32>, path: &str) -> Reply;
+    fn windows(&mut self) -> Value;
+    fn window_new_view(&mut self, window: Option<u32>) -> Reply;
+    fn window_move_tab(&mut self, window: Option<u32>, doc_index: usize, to: Option<u32>) -> Reply;
+    fn window_close(&mut self, window: Option<u32>) -> Reply;
+    fn window_focus(&mut self, window: Option<u32>) -> Reply;
+    /// The egui viewport of window `window`, if there is such a window.
+    fn viewport_of(&mut self, window: Option<u32>) -> Result<egui::ViewportId, String>;
 }
 
 impl Control {
@@ -190,11 +210,12 @@ impl Control {
                     let until_pass = self.passes() + u64::from(frames);
                     self.pending.push(Pending::Frames { until_pass, since: now_secs(), reply: req.reply, value });
                 }
-                Handled::Screenshot(region) => {
+                Handled::Screenshot(region, viewport) => {
                     let tag = self.next_tag;
                     self.next_tag += 1;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(tag)));
-                    self.pending.push(Pending::Screenshot { tag, region, reply: req.reply, since: now_secs() });
+                    ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Screenshot(egui::UserData::new(tag)));
+                    ctx.request_repaint_of(viewport);
+                    self.pending.push(Pending::Screenshot { tag, region, viewport, reply: req.reply, since: now_secs() });
                 }
             }
         }
@@ -204,18 +225,26 @@ impl Control {
     }
 
     fn finish_pending(&mut self, ctx: &egui::Context) {
-        let shots: Vec<(u64, Arc<egui::ColorImage>)> = ctx.input(|i| {
-            i.raw
-                .events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Screenshot { user_data, image, .. } => {
-                        user_data.data.as_ref().and_then(|d| d.downcast_ref::<u64>()).map(|tag| (*tag, image.clone()))
-                    }
-                    _ => None,
-                })
-                .collect()
-        });
+        let mut viewports: Vec<egui::ViewportId> =
+            self.pending.iter().filter_map(|p| if let Pending::Screenshot { viewport, .. } = p { Some(*viewport) } else { None }).collect();
+        viewports.push(egui::ViewportId::ROOT);
+        viewports.sort();
+        viewports.dedup();
+        let mut shots: Vec<(u64, Arc<egui::ColorImage>)> = Vec::new();
+        for viewport in viewports {
+            shots.extend(ctx.input_for(viewport, |i| {
+                i.raw
+                    .events
+                    .iter()
+                    .filter_map(|e| match e {
+                        egui::Event::Screenshot { user_data, image, .. } => {
+                            user_data.data.as_ref().and_then(|d| d.downcast_ref::<u64>()).map(|tag| (*tag, image.clone()))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        }
         let ppp = ctx.pixels_per_point();
         let now = now_secs();
         let passes = self.passes();
@@ -233,7 +262,7 @@ impl Control {
                     let _ = reply.send(Err(not_drawn("handling the input")));
                 }
                 p @ Pending::Frames { .. } => keep.push(p),
-                Pending::Screenshot { tag, region, reply, since } => match shots.iter().find(|(t, _)| *t == tag) {
+                Pending::Screenshot { tag, region, viewport, reply, since } => match shots.iter().find(|(t, _)| *t == tag) {
                     Some((_, image)) => {
                         let _ = reply.send(screenshot_png(image, region, ppp));
                     }
@@ -242,7 +271,7 @@ impl Control {
                     None if now - since > NOT_DRAWN_TIMEOUT => {
                         let _ = reply.send(Err(not_drawn("the screenshot")));
                     }
-                    None => keep.push(Pending::Screenshot { tag, region, reply, since }),
+                    None => keep.push(Pending::Screenshot { tag, region, viewport, reply, since }),
                 },
             }
         }
@@ -264,19 +293,40 @@ impl Control {
 
     fn handle(&mut self, ctx: &egui::Context, host: &mut impl Host, method: &str, p: &Value) -> Handled {
         let str_param = |k: &str| p.get(k).and_then(Value::as_str).ok_or_else(|| format!("{method}: missing string parameter {k}"));
+        // Which window the request is for. A number that does not fit is no window.
+        let window: Result<Option<u32>, String> = match p.get("window") {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v.as_u64().and_then(|n| u32::try_from(n).ok()).map(Some).ok_or_else(|| format!("no window {v}")),
+        };
         let r: Result<Handled, String> = (|| match method {
-            "ui.state" => Ok(Handled::Now(Ok(host.state()))),
+            "ui.state" => Ok(Handled::Now(host.state(window?))),
             "ui.commands" => Ok(Handled::Now(Ok(host.commands()))),
-            "ui.command" => Ok(Handled::Now(host.command(str_param("id")?))),
+            "ui.windows" => Ok(Handled::Now(Ok(host.windows()))),
+            "ui.window_new_view" => Ok(Handled::Now(host.window_new_view(window?))),
+            "ui.window_move_tab" => {
+                let index = p
+                    .get("doc_index")
+                    .and_then(Value::as_u64)
+                    .and_then(|n| usize::try_from(n).ok())
+                    .ok_or("ui.window_move_tab: doc_index must be the tab's number")?;
+                let to = match p.get("to") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(v.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| format!("no window {v}"))?),
+                };
+                Ok(Handled::Now(host.window_move_tab(window?, index, to)))
+            }
+            "ui.window_close" => Ok(Handled::Now(host.window_close(window?))),
+            "ui.window_focus" => Ok(Handled::Now(host.window_focus(window?))),
+            "ui.command" => Ok(Handled::Now(host.command(window?, str_param("id")?))),
             "ui.set" => {
                 let value = match p.get("value") {
                     Some(Value::String(s)) => s.clone(),
                     Some(v) => v.to_string(),
                     None => return Err("ui.set: missing parameter value".into()),
                 };
-                Ok(Handled::Now(host.set(str_param("key")?, &value)))
+                Ok(Handled::Now(host.set(window?, str_param("key")?, &value)))
             }
-            "ui.open" => Ok(Handled::Now(host.open(str_param("path")?))),
+            "ui.open" => Ok(Handled::Now(host.open(window?, str_param("path")?))),
             "ui.inspect" => Ok(Handled::Now(Ok(self.inspect(p)))),
             "ui.click" => self.click(p),
             "ui.drag" => self.drag(p),
@@ -309,10 +359,10 @@ impl Control {
                     Some(r) => Some(rect_param(r)?),
                 };
                 ctx.request_repaint();
-                Ok(Handled::Screenshot(region))
+                Ok(Handled::Screenshot(region, host.viewport_of(window?)?))
             }
             other => Err(format!(
-                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.move, ui.drag, ui.type, ui.key, ui.command, ui.commands, ui.set, ui.open, ui.screenshot)"
+                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.move, ui.drag, ui.type, ui.key, ui.command, ui.commands, ui.set, ui.open, ui.screenshot, ui.windows, ui.window_new_view, ui.window_move_tab, ui.window_close, ui.window_focus)"
             )),
         })();
         r.unwrap_or_else(|e| Handled::Now(Err(e)))
@@ -419,7 +469,7 @@ impl Control {
 enum Handled {
     Now(Reply),
     AfterFrames(u32, Value),
-    Screenshot(Option<egui::Rect>),
+    Screenshot(Option<egui::Rect>, egui::ViewportId),
 }
 
 fn widget(id: NodeId, n: &accesskit::Node, depth: usize, focused: bool) -> Value {
@@ -532,8 +582,15 @@ fn screenshot_png(image: &egui::ColorImage, region: Option<egui::Rect>, ppp: f32
     Ok(json!({ "png_base64": base64::engine::general_purpose::STANDARD.encode(out), "width": cw, "height": ch, "pixels_per_point": ppp }))
 }
 
-impl Host for crate::PdfCraftApp {
-    fn state(&self) -> Value {
+impl crate::PdfCraftApp {
+    /// Run `f` with the window a request names (default: the focused one) loaded.
+    fn in_window(&mut self, window: Option<u32>, f: impl FnOnce(&mut Self) -> Reply) -> Reply {
+        let id = window.map_or(self.focused_window, crate::WindowId);
+        self.with_window(id, f).unwrap_or_else(|| Err(format!("no window {}", id.0)))
+    }
+
+    /// The state of the loaded window (`ui.state`).
+    fn loaded_state(&self) -> Value {
         let active = self.active.and_then(|i| self.views.get(i));
         let docs: Vec<Value> = self
             .views
@@ -600,13 +657,30 @@ impl Host for crate::PdfCraftApp {
         })
     }
 
-    fn command(&mut self, id: &str) -> Reply {
+    fn command_here(&mut self, id: &str) -> Reply {
         let spec = pdfcraft_engine::commands::command(id).ok_or_else(|| format!("unknown command {id:?} (see ui.commands)"))?;
         if !self.command_enabled(spec) {
             return Err(format!("{id} is disabled right now"));
         }
         self.execute(id);
         Ok(json!({ "ran": id }))
+    }
+}
+
+impl Host for crate::PdfCraftApp {
+    fn state(&mut self, window: Option<u32>) -> Reply {
+        self.in_window(window, |a| {
+            let mut state = a.loaded_state();
+            if let Some(map) = state.as_object_mut() {
+                map.insert("window".into(), json!(a.current_window().0));
+                map.insert("window_count".into(), json!(a.window_count()));
+            }
+            Ok(state)
+        })
+    }
+
+    fn command(&mut self, window: Option<u32>, id: &str) -> Reply {
+        self.in_window(window, |a| a.command_here(id))
     }
 
     fn commands(&self) -> Value {
@@ -617,24 +691,89 @@ impl Host for crate::PdfCraftApp {
         json!({ "commands": list })
     }
 
-    fn set(&mut self, key: &str, value: &str) -> Reply {
-        self.set_option(key, value).map(|()| json!({ "set": key, "value": value }))
+    fn set(&mut self, window: Option<u32>, key: &str, value: &str) -> Reply {
+        self.in_window(window, |a| a.set_option(key, value).map(|()| json!({ "set": key, "value": value })))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn open(&mut self, path: &str) -> Reply {
-        let before = self.views.len();
-        self.open_path(path);
-        if self.views.len() > before || self.password_prompt.is_some() {
-            Ok(json!({ "opened": path, "password_prompt": self.password_prompt.is_some() }))
-        } else {
-            Err(self.toast.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| format!("couldn't open {path}")))
-        }
+    fn open(&mut self, window: Option<u32>, path: &str) -> Reply {
+        self.in_window(window, |a| {
+            let before = a.views.len();
+            a.open_path(path);
+            if a.views.len() > before || a.password_prompt.is_some() {
+                Ok(json!({ "opened": path, "password_prompt": a.password_prompt.is_some() }))
+            } else {
+                Err(a.toast.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| format!("couldn't open {path}")))
+            }
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn open(&mut self, _path: &str) -> Reply {
+    fn open(&mut self, _window: Option<u32>, _path: &str) -> Reply {
         Err("ui.open needs a file system; on the web, drop the file on the page".into())
+    }
+
+    fn windows(&mut self) -> Value {
+        let focused = self.focused_window;
+        let list: Vec<Value> = self
+            .window_ids()
+            .into_iter()
+            .filter_map(|id| {
+                self.with_window(id, |a| {
+                    let tabs: Vec<Value> = a
+                        .views
+                        .iter()
+                        .filter_map(|v| {
+                            let d = a.session.get(v.id)?;
+                            Some(json!({ "name": d.name, "view_no": v.view_no, "dirty": d.dirty }))
+                        })
+                        .collect();
+                    json!({ "id": id.0, "title": a.window_title, "focused": id == focused, "tabs": tabs })
+                })
+            })
+            .collect();
+        json!({ "windows": list })
+    }
+
+    fn window_new_view(&mut self, window: Option<u32>) -> Reply {
+        self.in_window(window, |a| a.command_here("window.new_view"))
+    }
+
+    fn window_move_tab(&mut self, window: Option<u32>, doc_index: usize, to: Option<u32>) -> Reply {
+        let to = match to {
+            Some(n) if !self.has_window(crate::WindowId(n)) => return Err(format!("no window {n}")),
+            other => other.map(crate::WindowId),
+        };
+        self.in_window(window, |a| {
+            let doc = a.views.get(doc_index).map(|v| v.id).ok_or_else(|| format!("no tab {doc_index}"))?;
+            let from = a.current_window();
+            a.pending_window_ops.push(crate::WindowOp::MoveTab { doc, from, to });
+            Ok(json!({ "moved": doc_index }))
+        })
+    }
+
+    fn window_close(&mut self, window: Option<u32>) -> Reply {
+        self.in_window(window, |a| {
+            let id = a.current_window();
+            if id == crate::WindowId::ROOT {
+                return Err("the main window closes with the app (use the file ▸ close commands for its tabs)".into());
+            }
+            a.pending_window_ops.push(crate::WindowOp::Close(id));
+            Ok(json!({ "closing": id.0 }))
+        })
+    }
+
+    fn window_focus(&mut self, window: Option<u32>) -> Reply {
+        self.in_window(window, |a| {
+            let id = a.current_window();
+            a.pending_window_ops.push(crate::WindowOp::Focus(id));
+            Ok(json!({ "focused": id.0 }))
+        })
+    }
+
+    fn viewport_of(&mut self, window: Option<u32>) -> Result<egui::ViewportId, String> {
+        let id = window.map_or(self.focused_window, crate::WindowId);
+        if self.has_window(id) { Ok(id.viewport()) } else { Err(format!("no window {}", id.0)) }
     }
 }
 

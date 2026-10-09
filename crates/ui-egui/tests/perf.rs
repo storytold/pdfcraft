@@ -138,3 +138,74 @@ fn panels_with_hundreds_of_items_stay_within_the_frame_budget() {
         assert!(avg < BUDGET, "{panel}: average frame {avg:?}");
     }
 }
+
+/// The median of `frames` frames (one `step` each), after a few to settle.
+fn median_frame(frames: usize, mut step: impl FnMut(usize)) -> std::time::Duration {
+    for f in 0..4 {
+        step(f);
+    }
+    let mut times: Vec<std::time::Duration> = (0..frames)
+        .map(|f| {
+            let t = std::time::Instant::now();
+            step(f);
+            t.elapsed()
+        })
+        .collect();
+    times.sort();
+    times[times.len() / 2]
+}
+
+/// Several windows cost frames, since each window is drawn every frame (the budget in the plan
+/// is twice one window for four; the bound here is looser so a busy CI machine does not flake).
+#[test]
+fn four_windows_cost_a_few_times_one_window() {
+    if overloaded() {
+        return;
+    }
+    let _turn = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let bytes = big(500);
+    let measure = |windows: usize, distinct_documents: bool| {
+        let b = bytes.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("big.pdf", None, b).expect("opens");
+            app
+        });
+        h.run_steps(4);
+        for i in 1..windows {
+            if distinct_documents {
+                h.state_mut().open_bytes(&format!("other-{i}.pdf"), None, big(500)).expect("opens");
+                assert!(h.state_mut().execute("window.move_tab_new"));
+            } else {
+                assert!(h.state_mut().execute("window.new_view"));
+            }
+            h.run_steps(3);
+        }
+        assert_eq!(h.state().window_count(), windows);
+        let ids = h.state().window_ids();
+        let mut best = std::time::Duration::MAX;
+        for _ in 0..3 {
+            let median = median_frame(30, |f| {
+                for w in &ids {
+                    h.state_mut().with_window(*w, |a| {
+                        if let Some(v) = a.views.first_mut() {
+                            v.goto = Some((((f + 1) * 7 + w.0 as usize * 31) % 500, 0.3));
+                        }
+                    });
+                }
+                h.step();
+            });
+            best = best.min(median);
+        }
+        best
+    };
+    let one = measure(1, false);
+    let two = measure(2, false);
+    let four = measure(4, false);
+    let four_documents = measure(4, true);
+    eprintln!("PERF windows: 1 {one:?}, 2 {two:?}, 4 {four:?}, 4 different documents {four_documents:?}");
+    let allowed = |t: std::time::Duration| t < one * 3 + std::time::Duration::from_millis(15);
+    assert!(allowed(four), "four views of one document: {four:?} against {one:?} for one");
+    assert!(allowed(four_documents), "four documents in four windows: {four_documents:?} against {one:?} for one");
+}
