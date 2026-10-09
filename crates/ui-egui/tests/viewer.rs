@@ -1,5 +1,5 @@
 //! Viewer conveniences: close all, revert, fit height, view history, select all, find options,
-//! cover page.
+//! cover page, a scroll position per tab.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -394,4 +394,187 @@ fn optimizer_audits_space_usage() {
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().dialog, Some(Dialog::Optimize), "back to the optimizer");
+}
+
+#[test]
+fn each_document_keeps_its_own_scroll_position() {
+    // #189: every document's page view shared one scroll position, so switching tabs showed a
+    // document at wherever the other one had been scrolled to (usually back at the top).
+    use pdfcraft_ui_egui::canvas::Fit;
+    let mut h = harness();
+    for v in &mut h.state_mut().views {
+        v.fit = Fit::Width;
+    }
+    let show = |h: &mut Harness<'static, PdfCraftApp>, i: usize| {
+        h.state_mut().active = Some(i);
+        h.run_steps(4);
+        h.state().views[i].current
+    };
+    show(&mut h, 0);
+    h.state_mut().views[0].goto = Some((3, 0.0));
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 3, "a.pdf scrolled to page 4");
+    // b.pdf opens where it was (the top), and is scrolled to its own last page.
+    assert_eq!(show(&mut h, 1), 0);
+    h.state_mut().views[1].goto = Some((1, 0.0));
+    h.run_steps(4);
+    assert_eq!(h.state().views[1].current, 1);
+    // Back to a.pdf: still on page 4, and b.pdf still on page 2.
+    assert_eq!(show(&mut h, 0), 3);
+    assert_eq!(show(&mut h, 1), 1);
+}
+
+#[test]
+fn arrow_and_page_keys_move_through_a_scrolling_document() {
+    // #185: in the continuous (default) and two-page views the arrow keys and Page Down / Up did
+    // nothing without ⌘.
+    use egui::Key;
+    use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].fit = Fit::Width;
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].layout, PageLayout::Continuous);
+    let press = |h: &mut Harness<'static, PdfCraftApp>, key, times: usize| {
+        for _ in 0..times {
+            h.key_press(key);
+            h.run_steps(2);
+        }
+        h.run_steps(2);
+        h.state().views[0].current
+    };
+    // → / ← turn pages, as in Acrobat
+    assert_eq!(press(&mut h, Key::ArrowRight, 2), 2);
+    assert_eq!(press(&mut h, Key::ArrowLeft, 1), 1);
+    assert_eq!(press(&mut h, Key::ArrowLeft, 1), 0);
+    // ↓ scrolls a line at a time, Page Down a screen: count the presses that reach page 2
+    let presses = |h: &mut Harness<'static, PdfCraftApp>, key| {
+        let mut n = 0;
+        while h.state().views[0].current == 0 {
+            press(h, key, 1);
+            n += 1;
+            assert!(n < 500, "{key:?} never reached page 2");
+        }
+        n
+    };
+    let lines = presses(&mut h, Key::ArrowDown);
+    assert_eq!(press(&mut h, Key::ArrowUp, lines + 1), 0);
+    let screens = presses(&mut h, Key::PageDown);
+    assert_eq!(press(&mut h, Key::PageUp, screens + 1), 0);
+    assert!(screens >= 2 && lines > 2 * screens, "a fit-width page: {lines} lines, {screens} screens");
+    // two-page view: → moves a spread
+    h.state_mut().views[0].layout = PageLayout::TwoUp;
+    h.run_steps(4);
+    assert_eq!(press(&mut h, Key::ArrowRight, 1), 2);
+    // single-page view keeps Page Down for the next page
+    h.state_mut().views[0].layout = PageLayout::Single;
+    h.run_steps(4);
+    assert_eq!(press(&mut h, Key::PageDown, 1), 3);
+}
+
+#[test]
+fn v_h_and_space_pick_the_quick_tools() {
+    // The toolbar's tooltips promise "Select (V)" and "Hand (H)", but the keys did nothing.
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    let press = |h: &mut Harness<'static, PdfCraftApp>, key| {
+        h.key_press(key);
+        h.run_steps(2);
+        h.state().quick_tool
+    };
+    assert_eq!(press(&mut h, Key::H), QuickTool::Hand);
+    assert_eq!(press(&mut h, Key::V), QuickTool::Select);
+    // V leaves any other tool too, as the toolbar button does.
+    h.state_mut().quick_tool = QuickTool::Crop;
+    assert_eq!(press(&mut h, Key::V), QuickTool::Select);
+    // Holding Space pans with the Hand for as long as it is held, then gives the tool back.
+    h.state_mut().quick_tool = QuickTool::Crop;
+    h.key_down(Key::Space);
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand, "Space held");
+    h.key_up(Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop, "Space released");
+    // With a modifier the letters are someone else's shortcut.
+    h.key_press_modifiers(Modifiers::SHIFT, Key::H);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop);
+    // They are letters to a text field: typing in the find bar keeps the tool.
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.state_mut().views[0].open_find();
+    h.run_steps(4);
+    assert_eq!(press(&mut h, Key::H), QuickTool::Select, "typing H in the find bar");
+    h.key_down(Key::Space);
+    h.run_steps(2);
+    h.key_up(Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "typing a space in the find bar");
+}
+
+/// Like [`fixture`], with each page's size given.
+fn sized_fixture(sizes: &[(u32, u32)]) -> Vec<u8> {
+    let n = sizes.len();
+    let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
+    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} >>", kids.join(" ")));
+    objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
+    for (i, (w, h)) in sizes.iter().enumerate() {
+        objs.push(format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>",
+            5 + 2 * i
+        ));
+        let body = format!("BT /F1 18 Tf 20 150 Td (Page {}) Tj ET", i + 1);
+        objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
+    }
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn page_down_steps_every_spread_when_several_fit_on_screen() {
+    // #188: in two-page view with a cover page, ⌘Page Down skipped spreads (or stuck) once more
+    // than one spread fit on screen: the current page was whichever wholly visible page rounding
+    // made "most visible", so the next step started from the wrong spread.
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
+    // a printed book: portrait cover and back, landscape two-page spreads between
+    let mut sizes = vec![(200, 300)];
+    sizes.extend([(400, 300); 10]);
+    sizes.push((200, 300));
+    for fit in [Fit::Width, Fit::Page, Fit::Height] {
+        let bytes = sized_fixture(&sizes);
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.open_bytes("book.pdf", None, bytes).unwrap();
+            app
+        });
+        h.run_steps(6);
+        h.state_mut().active = Some(0);
+        let v = &mut h.state_mut().views[0];
+        (v.fit, v.layout, v.cover) = (fit, PageLayout::TwoUp, true);
+        h.run_steps(6);
+        let mut step = |key| {
+            h.key_press_modifiers(Modifiers::COMMAND, key);
+            h.run_steps(4);
+            h.state().views[0].current
+        };
+        let down: Vec<usize> = (0..6).map(|_| step(Key::PageDown)).collect();
+        assert_eq!(down, [1, 3, 5, 7, 9, 11], "{fit:?}: cover, five spreads, back cover");
+        let up: Vec<usize> = (0..6).map(|_| step(Key::PageUp)).collect();
+        assert_eq!(up, [9, 7, 5, 3, 1, 0], "{fit:?}");
+    }
 }

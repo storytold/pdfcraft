@@ -17,6 +17,10 @@ pub const SOM_KEY: &[u8] = b"PCSom";
 /// Private key on the AcroForm: what laying the form out produced, so a reopened file is not
 /// laid out again.
 pub const LAYOUT_KEY: &[u8] = b"PCXfaLayout";
+/// Private key on generated push buttons whose template has a click script: the button has no
+/// PDF action (the script is XFA's, not Acrobat JavaScript); PdfCraft runs the script by the
+/// field's SOM path.
+pub const CLICK_KEY: &[u8] = b"PCXfaClick";
 
 /// Width and height of a JPEG from its first frame header (SOF0–SOF15, not the DNL/JPG/DAC/DHT
 /// markers). `None` for anything else.
@@ -187,6 +191,8 @@ impl Emitter<'_> {
                 }
                 if let Some(v) = &w.value {
                     d.set(b"V".to_vec(), Object::String(PdfString::text(v)));
+                }
+                if let Some(v) = &w.default {
                     d.set(b"DV".to_vec(), Object::String(PdfString::text(v)));
                 }
                 if let WidgetKind::Date(pattern) = &w.kind {
@@ -202,7 +208,7 @@ impl Emitter<'_> {
                 let checked = w.value.is_some();
                 d.set(b"V".to_vec(), Object::name(if checked { &on } else { "Off" }));
                 d.set(b"AS".to_vec(), Object::name(if checked { &on } else { "Off" }));
-                if checked {
+                if w.default.as_deref().is_some_and(|dv| crate::data::is_on(dv, &on)) {
                     d.set(b"DV".to_vec(), Object::name(&on));
                 }
                 let mut nd = Dict::new();
@@ -254,7 +260,11 @@ impl Emitter<'_> {
                 d.set(b"FT".to_vec(), Object::name("Btn"));
                 ff |= 1 << 16;
                 mk.set(b"CA".to_vec(), Object::String(PdfString::text(caption)));
-                if let Some(a) = &w.action {
+                if let Some(Action::Script(_)) = &w.action {
+                    // An XFA click script is no Acrobat JavaScript: no PDF action, which other
+                    // viewers would run; PdfCraft finds the script by the field's SOM path.
+                    d.set(CLICK_KEY.to_vec(), Object::Bool(true));
+                } else if let Some(a) = &w.action {
                     let mut ad = Dict::new();
                     match a {
                         Action::Reset => {
@@ -272,6 +282,7 @@ impl Emitter<'_> {
                             ad.set(b"S".to_vec(), Object::name("URI"));
                             ad.set(b"URI".to_vec(), Object::String(PdfString::literal(u.as_bytes().to_vec())));
                         }
+                        Action::Script(_) => {}
                     }
                     d.set(b"A".to_vec(), Object::Dict(ad));
                 }

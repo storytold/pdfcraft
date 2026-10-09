@@ -274,8 +274,8 @@ milestone = "M1"
 status = "shipped"
 commands = ["file.save"]
 tools = ["doc_save"]
-evidence = ["crates/ui-egui/tests/editing.rs::save_writes_an_incremental_update_and_clears_dirty", "crates/engine/src/tests.rs::save_is_incremental_stamps_mod_date_and_rebases", "crates/organize/src/tests.rs::successive_incremental_saves_stack_revisions"]
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::save_writes_an_incremental_update_and_clears_dirty", "crates/engine/src/tests.rs::save_is_incremental_stamps_mod_date_and_rebases", "crates/organize/src/tests.rs::successive_incremental_saves_stack_revisions", "crates/automation/src/lib.rs::staging_never_writes_through_a_file_planted_at_its_name", "crates/ui-egui/src/editing.rs::saving_never_writes_through_a_file_planted_at_the_staging_name"]
+notes = "The atomic write stages to a new, randomly named file created with create_new, so a file or link planted at the staging path is never written through (desktop app, automation and CLI)."
 
 [[feature]]
 id = "core.save-as-full-rewrite"
@@ -656,10 +656,10 @@ area = "A"
 tier = "P1"
 milestone = "M3"
 status = "shipped"
-commands = []
+commands = ["file.open_recent"]
 tools = []
-evidence = ["crates/ui-egui/tests/ui.rs::persistence_round_trips_and_tolerates_garbage"]
-notes = "never reads other apps' lists"
+evidence = ["crates/ui-egui/tests/ui.rs::persistence_round_trips_and_tolerates_garbage", "crates/ui-egui/tests/commands.rs::the_open_recent_menu_lists_files_and_opens_one", "crates/ui-egui/tests/commands.rs::the_open_recent_menu_is_disabled_while_the_list_is_empty"]
+notes = "never reads other apps' lists; File ▸ Open Recent lists them (#290), an already-open file focuses its tab instead of reopening it"
 
 [[feature]]
 id = "core.usage-rights-preserve"
@@ -746,8 +746,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster.rs::huge_cid_width_ranges_terminate"]
-notes = "CID-to-Unicode tables are M2.4"
+evidence = ["crates/render/src/raster.rs::huge_cid_width_ranges_terminate", "crates/render/src/raster.rs::non_embedded_japanese_cid_fonts_draw_with_a_craft_fonts_face"]
+notes = "CID-to-Unicode tables are M2.4; a non-embedded Adobe-Japan1 font is drawn in a craft-fonts Japanese face (Mincho or Gothic by name) when built with craft-fonts; non-embedded GB1, CNS1 and Korea1 fonts still draw nothing (no allowed face)"
 
 [[feature]]
 id = "view.render-image-codecs"
@@ -770,8 +770,8 @@ milestone = "M2"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster.rs::widget_appearance_states"]
-notes = ""
+evidence = ["crates/render/src/raster.rs::widget_appearance_states", "crates/render/src/raster.rs::highlights_without_an_appearance_are_drawn", "crates/engine/src/tests.rs::comments_without_appearances_are_drawn_but_not_saved"]
+notes = "comments without /AP (FreeText, Ink, notes, stamps, shapes, markup) are drawn from their dictionaries in the page view, page_render and page images, never saved (a read-only document still gets the renderer's Highlight fallback only); Link borders without /AP and printing are not covered yet"
 
 [[feature]]
 id = "view.render-error-isolation"
@@ -816,10 +816,10 @@ area = "B"
 tier = "P0"
 milestone = "M3"
 status = "shipped"
-commands = []
+commands = ["view.layout.continuous"]
 tools = []
-evidence = ["crates/ui-egui/tests/view.rs::continuous_layout_stacks_pages_vertically"]
-notes = ""
+evidence = ["crates/ui-egui/tests/view.rs::continuous_layout_stacks_pages_vertically", "crates/ui-egui/tests/view.rs::page_display_commands_switch_layouts", "crates/ui-egui/tests/view.rs::default_page_display_is_used_for_new_documents", "crates/ui-egui/src/canvas.rs::fit_page_and_height_hold_still_while_mixed_page_sizes_scroll_past"]
+notes = "the default for PDFs that don't ask for a layout (Preferences ▸ Default page display); pages stack with no snapping. Fit page and Fit height fit the largest page, so the zoom holds still across mixed page sizes"
 
 [[feature]]
 id = "view.layout-single-page"
@@ -828,10 +828,10 @@ area = "B"
 tier = "P0"
 milestone = "M3"
 status = "shipped"
-commands = []
+commands = ["view.layout.single"]
 tools = []
-evidence = ["crates/ui-egui/tests/view.rs::single_page_layout_shows_one_page_at_a_time"]
-notes = ""
+evidence = ["crates/ui-egui/tests/view.rs::single_page_layout_shows_one_page_at_a_time", "crates/ui-egui/tests/view.rs::single_page_wheel_pans_instead_when_zoomed_in", "crates/ui-egui/tests/view.rs::wheel_turns_one_page_per_notch_and_per_trackpad_swipe", "crates/ui-egui/tests/view.rs::rail_page_display_button_switches_layouts", "crates/ui-egui/tests/view.rs::view_menu_page_display_uses_the_same_commands"]
+notes = "when the whole page fits, each wheel notch turns a page and each trackpad swipe turns one, momentum included; zoomed in, the wheel pans and never turns the page. Switched from the View menu, the rail's Page display button or the palette"
 
 [[feature]]
 id = "view.layout-two-up"
@@ -840,7 +840,7 @@ area = "B"
 tier = "P0"
 milestone = "M3"
 status = "shipped"
-commands = []
+commands = ["view.layout.two_up"]
 tools = []
 evidence = ["crates/ui-egui/tests/view.rs::two_up_layout_places_pages_side_by_side", "crates/ui-egui/tests/viewer.rs::two_page_view_steps_a_spread_at_a_time"]
 notes = "next/previous page step a spread at a time"
@@ -864,10 +864,10 @@ area = "B"
 tier = "P1"
 milestone = "M3"
 status = "shipped"
-commands = []
+commands = ["view.layout.cover"]
 tools = []
-evidence = ["crates/ui-egui/tests/viewer.rs::layouts_fit_height_labels_and_system_theme"]
-notes = "View ▸ Show cover page in two-page view"
+evidence = ["crates/ui-egui/tests/viewer.rs::layouts_fit_height_labels_and_system_theme", "crates/ui-egui/tests/view.rs::page_display_commands_switch_layouts", "crates/ui-egui/tests/viewer.rs::page_down_steps_every_spread_when_several_fit_on_screen"]
+notes = "View ▸ Page display, the rail's Page display button or the palette; disabled outside two-page view; next / previous page step one spread at a time even when several spreads fit on screen"
 
 [[feature]]
 id = "view.page-gaps"
@@ -936,10 +936,10 @@ area = "B"
 tier = "P0"
 milestone = "M3"
 status = "shipped"
-commands = []
+commands = ["view.fit_one_page"]
 tools = []
-evidence = ["crates/ui-egui/tests/view.rs::actual_size_fit_width_and_fit_page"]
-notes = ""
+evidence = ["crates/ui-egui/tests/view.rs::actual_size_fit_width_and_fit_page", "crates/ui-egui/tests/view.rs::rail_page_display_menu_offers_acrobats_view_choices", "crates/ui-egui/tests/view.rs::fit_page_holds_zoom_across_mixed_page_sizes", "crates/ui-egui/tests/view.rs::single_page_fit_page_fits_the_shown_page"]
+notes = "View ▸ Zoom to page level (⌘0) and the rail's Page display menu, which also offers Fit one full page (single-page view at Fit page). Scrolling views fit their largest page so mixed sizes never jump the zoom; single-page view fits the shown page"
 
 [[feature]]
 id = "view.zoom-fit-width"
@@ -948,10 +948,10 @@ area = "B"
 tier = "P0"
 milestone = "M3"
 status = "shipped"
-commands = []
+commands = ["view.fit_width_scrolling"]
 tools = []
-evidence = ["crates/ui-egui/tests/view.rs::actual_size_fit_width_and_fit_page"]
-notes = ""
+evidence = ["crates/ui-egui/tests/view.rs::actual_size_fit_width_and_fit_page", "crates/ui-egui/tests/view.rs::rail_page_display_menu_offers_acrobats_view_choices"]
+notes = "View ▸ Fit to width (⌘2) and the rail's Page display menu's Fit to width scrolling (continuous scrolling at Fit width)"
 
 [[feature]]
 id = "view.zoom-fit-height"
@@ -1034,8 +1034,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/view.rs::the_hand_tool_pans_by_dragging"]
-notes = "drag to pan; Grab/Grabbing cursors"
+evidence = ["crates/ui-egui/tests/view.rs::the_hand_tool_pans_by_dragging", "crates/ui-egui/tests/viewer.rs::v_h_and_space_pick_the_quick_tools"]
+notes = "drag to pan; Grab/Grabbing cursors; H picks it, V goes back to Select, Space held pans temporarily"
 
 [[feature]]
 id = "view.rotate-view"
@@ -1106,8 +1106,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/control.rs::state_and_view_options", "crates/ui-egui/tests/ui.rs::theme_and_view_options_apply", "crates/ui-egui/tests/viewer.rs::two_page_view_steps_a_spread_at_a_time"]
-notes = "in two-page view, next and previous page move a whole spread (with or without a cover page)"
+evidence = ["crates/ui-egui/tests/control.rs::state_and_view_options", "crates/ui-egui/tests/ui.rs::theme_and_view_options_apply", "crates/ui-egui/tests/viewer.rs::two_page_view_steps_a_spread_at_a_time", "crates/ui-egui/tests/viewer.rs::arrow_and_page_keys_move_through_a_scrolling_document"]
+notes = "in two-page view, next and previous page move a whole spread (with or without a cover page); → / ← turn pages in every layout, ↓ / ↑ scroll a line and Page Down / Page Up a screen (the page in single-page view), as in Acrobat"
 
 [[feature]]
 id = "view.goto-page-label"
@@ -1166,8 +1166,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = ["doc_list"]
-evidence = ["crates/ui-egui/tests/editing.rs::combining_files_opens_a_new_unsaved_tab", "crates/ui-egui/tests/control.rs::state_and_view_options"]
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::combining_files_opens_a_new_unsaved_tab", "crates/ui-egui/tests/control.rs::state_and_view_options", "crates/ui-egui/tests/viewer.rs::each_document_keeps_its_own_scroll_position"]
+notes = "each tab keeps its own scroll position (#189)"
 
 [[feature]]
 id = "view.multiple-windows"
@@ -1346,8 +1346,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["edit.find"]
 tools = ["text_find"]
-evidence = ["crates/ui-egui/tests/ui.rs::find_counts_matches_across_pages", "crates/ui-egui/tests/ui.rs::find_reports_no_matches", "crates/automation/tests/automation.rs::open_inspect_render_and_find"]
-notes = ""
+evidence = ["crates/ui-egui/tests/ui.rs::find_counts_matches_across_pages", "crates/ui-egui/tests/ui.rs::find_reports_no_matches", "crates/automation/tests/automation.rs::open_inspect_render_and_find", "crates/render/src/text.rs::identity_v_columns_are_searchable_in_reading_order"]
+notes = "Horizontal and WMode 1 vertical text are grouped independently, including a horizontal heading above right-to-left vertical columns. Complex interleaved flows still use a geometric reading-order heuristic."
 
 [[feature]]
 id = "view.find-next-previous"
@@ -1466,8 +1466,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/ui.rs::drag_selects_text_and_copy_returns_it", "crates/ui-egui/tests/ui.rs::selection_works_in_every_view_rotation"]
-notes = ""
+evidence = ["crates/ui-egui/tests/ui.rs::drag_selects_text_and_copy_returns_it", "crates/ui-egui/tests/ui.rs::selection_works_in_every_view_rotation", "crates/ui-egui/tests/text_select.rs::quick_clicks_select_a_word_then_the_line_then_the_page", "crates/ui-egui/tests/text_select.rs::quick_clicks_with_the_highlighter_mark_only_the_word"]
+notes = "Drag to select; with the Select tool, quick clicks select a word (two), the line (three) or all the text on the page (four). The markup and Redact tools mark a double-clicked word and stop there. Missing: paragraph selection, and ⌘A across the whole document (it selects the current page)."
 
 [[feature]]
 id = "view.copy-text"
@@ -1608,10 +1608,10 @@ area = "B"
 tier = "P1"
 milestone = "M3"
 status = "shipped"
-commands = []
+commands = ["file.pin_folder"]
 tools = []
-evidence = ["crates/ui-egui/tests/ui.rs::home_shows_welcome_and_tools"]
-notes = ""
+evidence = ["crates/ui-egui/tests/ui.rs::home_shows_welcome_and_tools", "crates/ui-egui/tests/folders.rs::a_pinned_folder_lists_its_newest_pdfs_on_home", "crates/ui-egui/tests/folders.rs::clicking_a_pinned_pdf_opens_it_and_adds_it_to_recent", "crates/ui-egui/tests/folders.rs::pinned_folders_survive_a_restart"]
+notes = "Desktop: folders pinned to Home (File ▸ Pin folder to Home…, up to 8) list their newest PDFs, read on a worker thread and refreshed every few seconds while Home shows; a folder that can't be read (moved, offline synced drive) stays pinned and says so. Pinned folders are local paths, so a cloud drive works through its synced folder (iCloud Drive, OneDrive, Dropbox). Not yet: subfolders, search within a pinned folder, the web build."
 
 [[feature]]
 id = "view.all-tools"
@@ -1806,8 +1806,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.edit_text"]
 tools = ["text_edit"]
-evidence = ["crates/edit/src/tests.rs::paragraphs_are_found_and_rewrapped", "crates/edit/src/tests.rs::text_lines_are_found_and_replaced_in_place", "crates/ui-egui/tests/editing.rs::editing_existing_text_in_place", "crates/automation/tests/automation.rs::editing_existing_text_through_tools"]
-notes = "edited paragraphs are rewrapped to the box width with the font's own advance widths and the original line spacing, starting at the original text matrix; text state and fill colour restored after; a single line grows to the right margin"
+evidence = ["crates/edit/src/tests.rs::japanese_fallback_reports_the_face_after_save_and_reopen", "crates/edit/src/tests.rs::japanese_paragraph_keeps_ideographic_spaces", "crates/edit/src/tests.rs::paragraphs_are_found_and_rewrapped", "crates/edit/src/tests.rs::text_lines_are_found_and_replaced_in_place", "crates/ui-egui/tests/editing.rs::editing_existing_text_in_place", "crates/automation/tests/automation.rs::editing_existing_text_through_tools"]
+notes = "edited paragraphs are rewrapped to the box width with the font's own advance widths and the original line spacing, starting at the original text matrix; text state and fill colour restored after; a single line grows to the right margin; U+3000 ideographic spaces are preserved (including paragraph edges and repeated spaces); Japanese Type 3 fallback reports its face through FontDescriptor/FontName after editing and save/reopen; source family/weight matching remains limited (#184)"
 
 [[feature]]
 id = "edit.text-move-resize"
@@ -2202,8 +2202,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.link"]
 tools = ["link_add"]
-evidence = ["crates/annot/src/tests.rs::links_are_added_edited_listed_and_removed", "crates/automation/tests/automation.rs::links_through_tools", "crates/ui-egui/tests/document_links.rs::a_link_asks_first_and_opens_when_allowed", "crates/ui-egui/tests/document_links.rs::a_button_uri_action_asks_first"]
-notes = "Opening a document's link or button URI asks first; only http, https and mailto addresses are offered (#90, #91)."
+evidence = ["crates/annot/src/tests.rs::links_are_added_edited_listed_and_removed", "crates/automation/tests/automation.rs::links_through_tools", "crates/ui-egui/tests/document_links.rs::a_link_asks_first_and_opens_when_allowed", "crates/ui-egui/tests/document_links.rs::a_button_uri_action_asks_first", "crates/ui-egui/tests/document_links.rs::an_email_link_cannot_attach_a_local_file", "crates/ui-egui/tests/document_links.rs::a_lookalike_host_is_shown_in_punycode_and_flagged"]
+notes = "Opening a document's link or button URI asks first; only http, https and mailto addresses are offered (#90, #91), and an email address that asks the email app to attach or insert a local file is refused. The prompt shows the host as the browser receives it: international hosts in punycode, lookalikes that mix alphabets flagged, numeric hosts in their usual form."
 
 [[feature]]
 id = "edit.action-launch"
@@ -2235,11 +2235,11 @@ title = "Set-layer-visibility action"
 area = "C"
 tier = "P2"
 milestone = "M12"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/layer_actions.rs::links_set_layer_visibility", "crates/ui-egui/tests/layer_actions.rs::push_buttons_set_layer_visibility", "crates/engine/src/tests.rs::set_layer_actions_change_what_renders", "crates/engine/src/tests.rs::set_layer_actions_toggle_in_order_and_keep_radio_groups", "crates/render/src/inspect.rs::links_read_set_layer_actions", "crates/forms/src/tests.rs::push_buttons_read_set_layer_actions"]
+notes = "Links and push buttons run it: ON, OFF and Toggle in order, by optional content group, and with /PreserveRB (the default) a layer turned on turns off the rest of its /RBGroups group. Like the Layers panel it changes the view, not the document (no undo step, not saved). Not yet: creating the action (Link Properties, a field's Actions), bookmarks and other triggers, /Next chains, JavaScript ocg.state, and the Layers panel keeping radio-button groups itself."
 
 [[feature]]
 id = "edit.action-show-hide-field"
@@ -2638,8 +2638,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.insert"]
 tools = ["page_insert_file"]
-evidence = ["crates/organize/src/tests.rs::inserting_pages_from_another_file_is_an_incremental_edit", "crates/ui-egui/tests/editing.rs::inserting_a_file_goes_after_the_selection_and_undoes"]
-notes = ""
+evidence = ["crates/organize/src/tests.rs::inserting_pages_from_another_file_is_an_incremental_edit", "crates/ui-egui/tests/editing.rs::inserting_a_file_goes_after_the_selection_and_undoes", "crates/ui-egui/tests/editing.rs::plus_between_pages_inserts_picked_files_there_in_order"]
+notes = "After the selection (toolbar, File menu) or at any gap of the page grid (a + between pages and at both ends); several files at once, in order; images and .txt files are converted first; the inserted pages end up selected. The page_insert_file tool takes PDFs only. Missing: choosing which pages of the file to insert in the app."
 
 [[feature]]
 id = "organize.insert-from-clipboard"
@@ -2683,11 +2683,11 @@ title = "Insert by dropping files onto the page grid"
 area = "D"
 tier = "P1"
 milestone = "M4"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["page.organize"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::files_dropped_between_pages_are_inserted_there", "crates/ui-egui/tests/editing.rs::files_dropped_before_the_pointer_is_known_wait_for_it", "crates/ui-egui/tests/editing.rs::files_dropped_outside_the_page_grid_still_open_as_documents"]
+notes = "Desktop: PDFs, images and .txt files dropped on the Organize page grid are inserted at the gap under the pointer, in order, and selected (elsewhere a dropped file still opens as a document). While the files hover, a bar at the gap and a + badge follow the pointer; on macOS the pointer is read from AppKit, because the windowing layer sends no moves during a file drag. Missing: on Windows and Linux there is no live position, so the grid is only outlined and the files go to the gap the pointer is at right after the drop (or the end after a second); the web build (dropped files open as documents). Covered by simulated drop events; a real drag from Finder is not in the automated tests."
 
 [[feature]]
 id = "organize.extract-pages"
@@ -2698,8 +2698,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.extract"]
 tools = ["page_extract"]
-evidence = ["crates/ui-egui/tests/editing.rs::extract_button_copies_selected_pages_to_a_new_tab", "crates/automation/tests/automation.rs::combine_extract_and_split"]
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::extract_button_copies_selected_pages_to_a_new_tab", "crates/automation/tests/automation.rs::combine_extract_and_split", "crates/organize/src/tests.rs::extract_and_split_keep_the_pdfx_output_intent_and_identification"]
+notes = "Carries the PDF/X output intent and identification (#263) in a new XMP packet; the source XMP (dates, other schemas) is not copied."
 
 [[feature]]
 id = "organize.extract-separate-files"
@@ -2818,8 +2818,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.split"]
 tools = ["doc_split"]
-evidence = ["crates/ui-egui/tests/editing.rs::split_dialog_writes_one_file_per_part", "crates/organize/src/tests.rs::split_ranges_cover_every_page_once", "crates/organize/src/tests.rs::split_produces_standalone_documents_with_metadata"]
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::split_dialog_writes_one_file_per_part", "crates/organize/src/tests.rs::split_ranges_cover_every_page_once", "crates/organize/src/tests.rs::split_produces_standalone_documents_with_metadata", "crates/organize/src/tests.rs::extract_and_split_keep_the_pdfx_output_intent_and_identification"]
+notes = "Each part carries the PDF/X output intent and identification (#263), as Extract does."
 
 [[feature]]
 id = "organize.split-before-pages"
@@ -2890,8 +2890,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.combine"]
 tools = ["doc_combine"]
-evidence = ["crates/organize/src/tests.rs::combine_concatenates_with_a_bookmark_per_file", "crates/ui-egui/tests/editing.rs::combining_files_opens_a_new_unsaved_tab", "crates/automation/tests/automation.rs::combine_extract_and_split"]
-notes = ""
+evidence = ["crates/organize/src/tests.rs::combine_concatenates_with_a_bookmark_per_file", "crates/ui-egui/tests/editing.rs::combining_files_opens_a_new_unsaved_tab", "crates/ui-egui/tests/editing.rs::combine_files_opens_in_its_own_tab", "crates/ui-egui/tests/editing.rs::combine_lists_size_and_warns_before_combining", "crates/ui-egui/tests/editing.rs::a_password_protected_file_is_unlocked_with_its_password_and_combined", "crates/ui-egui/tests/editing.rs::a_folder_adds_its_pdfs_in_order_and_optionally_its_subfolders", "crates/ui-egui/tests/ui.rs::pdfs_dropped_on_the_combine_tab_join_its_list", "crates/automation/tests/automation.rs::combine_extract_and_split", "crates/automation/tests/automation.rs::combine_opens_protected_files_with_their_passwords", "crates/organize/src/tests.rs::combine_keeps_pdfx_when_every_source_agrees", "crates/organize/src/tests.rs::combine_claims_no_pdfx_when_the_sources_disagree"]
+notes = "Combine files is its own tab: a table of the files (name, pages, size, modified, warnings) with column sorting, resizing and moving; files, folders (with subfolders) and open documents can be added, or dropped on the tab. Problems show before Combine (password, security settings that withhold page assembly, bad page ranges, duplicates); protected files are unlocked with their open or permissions password (also doc_combine passwords). The result is never encrypted, and is not yet offered for protection in the same step. A PDF/X result (output intent, GTS_PDFXVersion, Trapped, XMP pdfxid) only when every source declares the same version and output intent (#263). When they differ the result claims none, and nothing reports that yet; Acrobat behaviour not observed."
 
 [[feature]]
 id = "organize.combine-bookmarks"
@@ -2915,7 +2915,7 @@ status = "shipped"
 commands = ["page.combine"]
 tools = ["doc_combine"]
 evidence = ["crates/ui-egui/tests/editing.rs::combine_files_takes_chosen_pages_in_the_order_listed", "crates/automation/tests/automation.rs::combine_extract_and_split"]
-notes = "Combine files list: order (move up/down), remove, add files, a page range per file (such as 1-3, 6; in the order given); bookmarks to left-out pages lose their destination"
+notes = "A page range per file (such as 1-3, 6; in the order given), checked as it is typed, with the page count it takes; bookmarks to left-out pages lose their destination"
 
 [[feature]]
 id = "organize.combine-sort"
@@ -2923,11 +2923,11 @@ title = "Sort and reorder files before combining"
 area = "D"
 tier = "P2"
 milestone = "M4"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["page.combine"]
+tools = ["doc_combine"]
+evidence = ["crates/ui-egui/tests/editing.rs::column_headings_sort_the_list_and_flip_on_the_second_click", "crates/ui-egui/tests/editing.rs::ctrl_and_shift_clicks_select_several_files_that_move_and_go_together", "crates/ui-egui/tests/editing.rs::undo_and_redo_restore_the_combine_list", "crates/automation/tests/automation.rs::combine_extract_and_split"]
+notes = "Sort by any column (name in natural order, pages, size, modified, warnings), ascending or descending; multi-select (Ctrl/Shift) and move up/down, Alt+arrows or drag; every change undoable. doc_combine combines in the order its paths are given."
 
 [[feature]]
 id = "organize.combine-options"
@@ -2935,11 +2935,11 @@ title = "Combine options (file size, convert to PDF/A, include open files)"
 area = "D"
 tier = "P2"
 milestone = "M11"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["page.combine"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::open_documents_can_be_added_to_combine"]
+notes = "Include open files: Add open documents (with their unsaved changes). Missing: file-size options and converting the result to PDF/A."
 
 [[feature]]
 id = "organize.resource-dedupe"
@@ -3602,8 +3602,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.ink"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/comments.rs::shapes_and_ink_are_drawn_by_dragging"]
-notes = "one ink annotation per stroke"
+evidence = ["crates/ui-egui/tests/comments.rs::shapes_and_ink_are_drawn_by_dragging", "crates/annot/src/tests.rs::ink_strokes_are_smooth_curves_through_their_points"]
+notes = "one ink annotation per stroke; strokes are drawn as smooth curves through their points, as in Acrobat"
 
 [[feature]]
 id = "comment.eraser"
@@ -4302,8 +4302,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/view.rs::highlight_fields_tints_the_field_area"]
-notes = ""
+evidence = ["crates/ui-egui/tests/view.rs::highlight_fields_tints_the_field_area", "crates/ui-egui/tests/view.rs::required_radio_buttons_get_a_round_red_border", "crates/ui-egui/tests/view.rs::field_highlighting_is_remembered"]
+notes = "remembered for the next document and session; required fields get a red border (round for radio buttons); the tint is drawn over the field, where Acrobat paints the highlight colour behind it"
 
 [[feature]]
 id = "form.field-appearance-display"
@@ -5129,9 +5129,9 @@ tier = "P1"
 milestone = "M12"
 status = "partial"
 commands = ["file.open"]
-tools = ["doc_open", "doc_info", "form_fields", "form_fill"]
-evidence = ["crates/xfa/src/tests.rs::layout_places_captions_fields_and_sizes_containers_to_their_content", "crates/xfa/src/tests.rs::tables_break_across_pages_and_repeat_their_header_row", "crates/xfa/src/tests.rs::rendering_into_the_pdf_replaces_the_placeholder_page_and_adds_fields", "crates/engine/src/tests.rs::dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally", "crates/automation/tests/automation.rs::dynamic_xfa_forms_open_render_fill_and_save_through_tools", "crates/ui-egui/tests/xfa.rs::a_dynamic_xfa_form_is_laid_out_and_filled", "crates/xfa/src/tests.rs::nested_width_less_subforms_lay_out_in_polynomial_time"]
-notes = "laid out from the template on open by the xfa crate (positioned, tb, lr-tb, table/row, page masters, breaks, repeated header rows, captions, rich text, JPEG images) into real pages and AcroForm fields (text, date with AFDate formats, check boxes, radio groups, buttons with reset/print/save/URL), filled from the datasets packet (including rows another viewer added), saved as an incremental revision with the values merged into the datasets so Adobe's viewers show them; doc_info reports xfa_layout. Missing: no FormCalc or XFA JavaScript, so rows don't grow by button and calculations don't run; choice lists are text fields; signature, image and barcode fields are blank; PNG images; keep rules; metrics are approximate and Acrobat fidelity is eyeballed on real forms, not measured (#60)"
+tools = ["doc_open", "doc_info", "form_fields", "form_fill", "js_run"]
+evidence = ["crates/xfa/src/tests.rs::layout_places_captions_fields_and_sizes_containers_to_their_content", "crates/xfa/src/tests.rs::tables_break_across_pages_and_repeat_their_header_row", "crates/xfa/src/tests.rs::rendering_into_the_pdf_replaces_the_placeholder_page_and_adds_fields", "crates/engine/src/tests.rs::dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally", "crates/automation/tests/automation.rs::dynamic_xfa_forms_open_render_fill_and_save_through_tools", "crates/ui-egui/tests/xfa.rs::a_dynamic_xfa_form_is_laid_out_and_filled", "crates/xfa/src/tests.rs::nested_width_less_subforms_lay_out_in_polynomial_time", "crates/js/src/tests.rs::instance_managers_add_remove_and_count", "crates/xfa/src/tests.rs::the_form_tree_carries_values_presence_instances_and_the_events", "crates/engine/src/tests.rs::xfa_scripts_initialize_calculate_validate_toggle_and_add_rows", "crates/automation/tests/automation.rs::xfa_scripts_run_for_buttons_and_field_changes_through_tools", "crates/ui-egui/tests/xfa.rs::xfa_buttons_run_their_scripts_in_the_app", "crates/engine/src/tests.rs::hostile_xfa_open_scripts_are_merged_capped_kept_from_printing_and_noted", "crates/engine/src/tests.rs::runaway_xfa_calculations_at_open_end_quickly_with_a_report", "crates/xfa/src/tests.rs::the_live_form_of_nested_repeating_subforms_stops_at_its_node_budget", "crates/xfa/src/tests.rs::data_ops_of_one_event_are_one_datasets_rewrite"]
+notes = "laid out from the template on open by the xfa crate (positioned, tb, lr-tb, table/row, page masters, breaks, repeated header rows, captions, rich text, JPEG images) into real pages and AcroForm fields (text, date with AFDate formats, check boxes, radio groups, buttons with reset/print/save/URL), filled from the datasets packet (including rows another viewer added), saved as an incremental revision with the values merged into the datasets so Adobe's viewers show them; doc_info reports xfa_layout. XFA JavaScript and FormCalc (form.xfa-formcalc) run in the js crate's XFA object model (xfa.form, SOM resolution, rawValue, presence, access, instance managers, xfa.host, xfa.layout, xfa.event): initialize and calculate on open, exit, validate and calculate after a field changes, click for buttons (through js_run and the app), with rows added and removed, subforms shown and hidden, and the form laid out again, all as one undo step and kept in the file. Hostile scripts are bounded per event (merged and capped effects, messages and console lines, lower loop limits and a time budget on open and calculate, one datasets rewrite per event, print/save/links/focus from clicks only, a runaway script abandoned and the form's scripts turned off) and what open-time scripts changed is noted. Missing: loops inside nested calls are only stopped by abandoning their thread, and script memory is not capped; the change event per keystroke; xfa.template, connections and data descriptions; a hidden instance of a repeating subform hides them all; choice lists are text fields; signature, image and barcode fields are blank; PNG images; keep rules; metrics are approximate and Acrobat fidelity is eyeballed on real forms, not measured (#60)"
 
 [[feature]]
 id = "form.xfa-formcalc"
@@ -5139,11 +5139,11 @@ title = "FormCalc scripting"
 area = "F"
 tier = "P1"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["file.open"]
+tools = ["doc_open", "form_fill", "js_run"]
+evidence = ["crates/js/src/tests.rs::arithmetic_strings_and_comparisons_follow_formcalc_rules", "crates/js/src/tests.rs::built_in_functions_cover_the_common_set", "crates/js/src/tests.rs::control_flow_variables_and_functions_work", "crates/js/src/tests.rs::form_objects_resolve_assign_and_record_effects", "crates/js/src/tests.rs::hostile_formcalc_scripts_end_with_an_error_and_bounded_output", "crates/js/src/tests.rs::formcalc_values_results_and_errors_stay_bounded", "crates/engine/src/tests.rs::dynamic_xfa_forms_run_formcalc_scripts", "crates/engine/src/tests.rs::hostile_formcalc_scripts_cannot_hang_or_bloat_the_document", "crates/engine/src/tests.rs::a_formcalc_calculate_result_is_cut_before_it_is_saved"]
+notes = "a native FormCalc interpreter (crates/js/src/formcalc.rs) over the same form table, effects and budgets as the XFA JavaScript model: expressions and FormCalc coercions, var, if/while/for/foreach/func, accessors ($, $host, $form, $record, $layout, $event, xfa., .., [n], [*], _name instance managers) and the arithmetic, logical, string, date/time, financial and unit built-ins. Bounded: steps and loop iterations, statement and expression nesting, operator/accessor chain length, strings (1 MiB; messages and thrown errors clipped to 4 KiB, field values and calculate results to 64 KiB, noted; copying and comparing long strings is charged to the step budget, so it ends on wasm, which has no clock), lists (each object once), clamped dates, the instance cap, and a deadline the script itself honours after the engine stops waiting. Missing: locale-aware pictures beyond simple number and date ones, Format/Parse time and text pictures, Get/Post/Put (refused), $template/$connectionSet, user-defined functions across scripts, a cap on a script's total memory (each string and list is capped, but many variables can each hold one), real Uuid() values (deterministic, from the step count) and the wall clock on wasm (Date() reads 1970-01-01 and Time() midnight there), and checking against Acrobat on real Designer forms beyond the fixtures"
 
 [[feature]]
 id = "form.xfa-data"
@@ -5211,11 +5211,11 @@ title = "Fill & Sign: typed, drawn or image signature and initials"
 area = "F"
 tier = "P0"
 milestone = "M5"
-status = "partial"
+status = "shipped"
 commands = ["sign.fill.signature", "sign.fill.initials", "sign.fill.signature.change", "sign.fill.initials.change", "sign.fill.signature.remove", "sign.fill.initials.remove"]
-tools = ["fill_sign_add"]
-evidence = ["crates/ui-egui/tests/fill_sign.rs::typed_signatures_and_initials", "crates/ui-egui/tests/fill_sign.rs::signing_draws_a_signature_once_and_places_it", "crates/ui-egui/tests/fill_sign.rs::changing_saved_signatures_and_initials_preserves_placed_marks", "crates/ui-egui/tests/fill_sign.rs::changing_drawn_signatures_can_be_cancelled_or_switched_to_type", "crates/ui-egui/tests/fill_sign.rs::saved_signature_cards_remove_and_add_without_changing_the_document", "crates/ui-egui/tests/fill_sign.rs::long_typed_names_fit_the_placed_signature_and_keep_every_outline", "crates/ui-egui/src/fill_sign.rs::long_signature_previews_have_clear_margins", "crates/ui-egui/tests/control.rs::saved_signature_can_be_changed_through_the_control_channel", "crates/fonts/src/script.rs::a_name_becomes_outlines", "crates/fonts/src/script.rs::long_names_keep_every_glyph_with_bounded_outline_work", "crates/automation/tests/automation.rs::fill_and_sign_through_tools"]
-notes = "signature and initials, typed (Dancing Script outlines as filled paths, no font embedded) or drawn, saved in settings; preview cards with add/change/remove controls in the panel and picker, also through ui.command; changes leave placed annotations untouched; long names fit within 150 pt with overhangs included in preview/PDF bounds; image signatures not yet"
+tools = ["fill_sign_add", "comment_edit", "comment_image_preview"]
+evidence = ["crates/ui-egui/tests/fill_sign.rs::image_signature_corners_restore_original_aspect_after_edge_resize_and_reopen", "crates/ui-egui/src/comments.rs::proportional_corners_keep_the_opposite_anchor_and_edges_stretch_one_axis", "crates/ui-egui/tests/fill_sign.rs::image_signature_live_resize_and_move_preserve_background_and_hide_moving_handles", "crates/ui-egui/tests/fill_sign.rs::embedded_image_signature_live_gestures_follow_document_and_view_rotation", "crates/automation/tests/automation.rs::image_signature_preview_layers_are_read_only_and_survive_encrypted_save", "crates/engine/src/signature_image.rs::embedded_signature_preview_preserves_alpha_without_editing_the_document", "crates/engine/src/signature_image.rs::oversized_embedded_signature_preview_is_rejected_before_decoding", "crates/ui-egui/tests/fill_sign.rs::image_signature_preview_follows_pointer_at_page_size_with_zoom_and_rotation", "crates/ui-egui/tests/fill_sign.rs::image_signature_placement_selects_resize_handles_and_requires_reselecting_to_repeat", "crates/ui-egui/tests/fill_sign.rs::typed_signatures_and_initials", "crates/ui-egui/tests/fill_sign.rs::signing_draws_a_signature_once_and_places_it", "crates/ui-egui/tests/fill_sign.rs::changing_saved_signatures_and_initials_preserves_placed_marks", "crates/ui-egui/tests/fill_sign.rs::changing_drawn_signatures_can_be_cancelled_or_switched_to_type", "crates/ui-egui/tests/fill_sign.rs::saved_signature_cards_remove_and_add_without_changing_the_document", "crates/ui-egui/tests/fill_sign.rs::long_typed_names_fit_the_placed_signature_and_keep_every_outline", "crates/ui-egui/src/fill_sign.rs::long_signature_previews_have_clear_margins", "crates/ui-egui/tests/control.rs::saved_signature_can_be_changed_through_the_control_channel", "crates/fonts/src/script.rs::a_name_becomes_outlines", "crates/fonts/src/script.rs::long_names_keep_every_glyph_with_bounded_outline_work", "crates/automation/tests/automation.rs::fill_and_sign_through_tools", "crates/ui-egui/tests/fill_sign.rs::image_signatures_and_initials_can_be_imported_placed_and_remembered", "crates/ui-egui/tests/fill_sign.rs::image_import_cancel_clear_and_errors_preserve_saved_signatures", "crates/engine/src/signature_image.rs::image_signatures_preserve_alpha_and_fit_the_signature_box", "crates/engine/src/signature_image.rs::invalid_and_oversized_signature_images_are_rejected", "crates/engine/src/signature_image.rs::jpeg_signatures_are_normalized_to_png", "crates/engine/src/signature_image.rs::jpeg_signature_orientation_is_applied_before_preview_and_embedding", "crates/engine/src/signature_image.rs::very_wide_image_signatures_keep_the_requested_rectangle", "crates/automation/tests/automation.rs::image_signatures_through_tools_preserve_transparency_and_survive_save"]
+notes = "signature and initials, typed (Dancing Script outlines as filled paths, no font embedded), drawn or imported from local PNG/JPEG images; saved in settings with preview cards and add/change/remove controls; changes leave placed annotations untouched; images preserve alpha, aspect ratio and EXIF orientation, fit within 150 pt by 32 pt (24 pt for initials), and are normalized without source paths or metadata; image previews follow the pointer at placement size with zoom and rotation; signatures/initials place once then select the new annotation; embedded image signatures resize and move live, hiding the frame during movement and restoring it on release; corner handles preserve the original aspect ratio of the embedded image with the opposite corner anchored, while edge midpoint handles stretch width or height independently; cached background layers preserve page content and alpha, including reopened/encrypted documents; Escape cancels a gesture without committing; stamps resize through selection handles or comment_edit with their original appearance; native and web asynchronous pickers; fill_sign_add accepts path instead of text; image imports capped at 4 MiB, 4 megapixels and 4096 pixels per side"
 
 [[feature]]
 id = "form.fill-sign-flatten"
@@ -5807,11 +5807,11 @@ title = "Sign with the Windows certificate store"
 area = "H"
 tier = "P0"
 milestone = "M9"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["sign.digital", "sign.certify"]
+tools = ["sign_windows_ids", "sign_document"]
+evidence = ["crates/sign/tests/pdf.rs::signing_with_windows_store_identities", "crates/sign/tests/pdf.rs::windows_store_enumeration_and_missing_identity", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/ui-egui/tests/signing.rs::windows_store_identity_does_not_ask_for_a_file_password"]
+notes = "Current User Personal (My) CNG identities: RSA PKCS #1 v1.5 and DER-encoded ECDSA P-256/P-384. Keys never leave Windows; windows:<fingerprint|common name> for agents and Windows store labels in the desktop ID picker. Tested with throwaway software-backed RSA-2048, P-256 and P-384 certificates (run with --ignored); smart cards and PKCS #11 still planned."
 
 [[feature]]
 id = "sign.pkcs11"
@@ -6798,12 +6798,12 @@ id = "create.create-multiple"
 title = "Convert many files to PDF in one run"
 area = "J"
 tier = "P1"
-milestone = "M13"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+milestone = "M10"
+status = "shipped"
+commands = ["create.multiple"]
+tools = ["doc_create_multiple"]
+evidence = ["crates/engine/src/tests.rs::mixed_files_convert_and_combine_in_order", "crates/engine/src/tests.rs::files_that_cannot_be_converted_are_refused_clearly", "crates/automation/tests/automation.rs::creating_from_multiple_files_through_tools", "crates/ui-egui/tests/create.rs::multiple_files_open_as_one_document_in_the_page_grid", "crates/ui-egui/tests/editing.rs::plus_between_pages_inserts_picked_files_there_in_order", "crates/ui-egui/tests/editing.rs::save_pages_writes_what_the_grid_shows"]
+notes = "Create ▸ Multiple files: the picked PDFs, images (PNG, JPEG, JPEG 2000, TIFF, GIF, BMP) and .txt files open as one unsaved document in the page grid, in the order picked (a bookmark per file); there pages are removed, reordered, more files inserted at any gap (a + button, or dropped there), and Save pages writes what is shown. One PDF per file is offered by the doc_create_multiple tool only (mode separate), not in the app. Missing: Office, HTML and Markdown inputs, PDF Portfolio output, per-file image resolution choice, progress and cancel for large batches (conversion runs on the UI thread). The combined file has combine's limits: untagged, no page labels or document info carried over, and its per-file bookmarks are not updated when pages are later moved between files."
 
 [[feature]]
 id = "create.image-conversion-options"
@@ -7107,7 +7107,7 @@ status = "shipped"
 commands = ["optimize.reduce"]
 tools = ["doc_reduce"]
 evidence = ["crates/ui-egui/tests/create.rs::reduce_file_size_writes_a_compact_copy", "crates/engine/src/tests.rs::create_and_reduce", "crates/automation/tests/automation.rs::creating_and_reducing_through_tools", "crates/automation/tests/automation.rs::optimizing_through_tools"]
-notes = "images above 225 ppi to 150 ppi JPEG medium, thumbnails dropped, resources merged, object streams"
+notes = "images above 225 ppi to 150 ppi JPEG medium, thumbnails dropped, resources merged, object streams; runs in the background with a progress bar and Cancel"
 
 [[feature]]
 id = "optimize.compatibility-level"
@@ -7130,8 +7130,8 @@ milestone = "M11"
 status = "partial"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/ui-egui/tests/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy", "crates/automation/tests/automation.rs::optimizing_through_tools"]
-notes = "Images, Discard Objects, Discard User Data, Clean Up; no Fonts or Transparency panels, no space audit"
+evidence = ["crates/ui-egui/tests/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy", "crates/automation/tests/automation.rs::optimizing_through_tools", "crates/ui-egui/src/optimize_ui.rs::the_progress_card_shows_the_stage_and_cancels", "crates/engine/src/tests.rs::an_optimize_job_reports_its_stages_and_can_be_cancelled"]
+notes = "Images, Discard Objects, Discard User Data, Clean Up; runs in the background with a progress bar (per image) and Cancel; no Fonts or Transparency panels, no space audit"
 
 [[feature]]
 id = "optimize.downsample-images"
@@ -8031,11 +8031,11 @@ title = "Print selected pages from thumbnails"
 area = "L"
 tier = "P2"
 milestone = "M10"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["print.dialog"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::print_shortcut_offers_the_pages_picked_in_the_pages_panel", "crates/ui-egui/tests/editing.rs::pages_panel_command_click_picks_pages_without_moving_the_document", "crates/ui-egui/tests/editing.rs::pages_panel_shift_click_picks_a_range_and_a_plain_click_starts_over", "crates/ui-egui/tests/print.rs::print_dialog_prints_the_selected_pages", "crates/print/src/tests.rs::page_selection"]
+notes = "Ctrl/⌘-click and ⇧-click pick thumbnails in the Pages panel (and the Organize grid); Print opens on \"Selected pages\" and prints them in page order. Missing: the thumbnails' own context-menu Print command, picking by dragging a marquee, arrow-key selection, and a printer on Windows (Save as PDF only there, see print.printer-selection)."
 
 [[feature]]
 id = "print.postscript-output"
@@ -9555,7 +9555,7 @@ status = "na"
 commands = []
 tools = []
 evidence = []
-notes = "Adobe cloud; use OS file dialogs and synced folders"
+notes = "Adobe cloud; use OS file dialogs and synced folders, which can be pinned to Home (view.home-view)"
 
 [[feature]]
 id = "misc.cross-device-sync"
@@ -9683,11 +9683,11 @@ title = "Preferences: page display"
 area = "N"
 tier = "P1"
 milestone = "M14"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/view.rs::default_page_display_is_used_for_new_documents", "crates/ui-egui/tests/view.rs::default_zoom_is_used_for_new_documents", "crates/ui-egui/tests/view.rs::preferences_set_the_default_zoom"]
+notes = "Preferences ▸ Documents and view: Default page display and Default zoom (Fit to width, Zoom to page level or a percentage) for every new tab; a PDF that asks for a layout or zoom gets it. Missing: Acrobat's resolution, rendering and page-content options"
 
 [[feature]]
 id = "misc.prefs-documents"
@@ -9806,8 +9806,8 @@ milestone = "M14"
 status = "partial"
 commands = ["app.preferences"]
 tools = []
-evidence = ["crates/ui-egui/src/i18n/mod.rs::windows_display_language_resolves_chinese_scripts", "crates/ui-egui/src/i18n/mod.rs::windows_display_language_query_returns_a_locale_tag", "crates/ui-egui/src/i18n/mod.rs::language_persists_and_invalid_input_keeps_current_language", "crates/ui-egui/src/i18n/mod.rs::bundled_catalogs_are_consistent", "crates/ui-egui/src/i18n/mod.rs::japanese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_history_and_diagnostics_preserve_user_values", "crates/ui-egui/tests/control.rs::simplified_chinese_signature_prompts_and_errors_keep_document_state", "crates/ui-egui/tests/control.rs::language_switch_preserves_document_and_command_ids", "crates/ui-egui/tests/control.rs::japanese_controls_and_search_keep_command_ids", "crates/ui-egui/tests/control.rs::japanese_dialogs_errors_and_custom_action_names"]
-notes = "Preferences switches Auto (system language)/English/Japanese/Simplified Chinese/Traditional Chinese/Czech/Brazilian Portuguese and persists; ui.set language auto|en|ja|zh-hans|zh-hant|cs|pt-br and ui.state expose it. TSV catalogs per language (same system as PhotoCraft); every dialog, panel and notice goes through tl!. Japanese, Traditional Chinese and Simplified Chinese cover commands, dialogs, panels, shortcuts and history labels; Czech and Brazilian Portuguese the menus. Engine/OS error details stay untranslated. Auto detects the Windows display language after locale environment overrides, with Chinese script/region mapping and English fallback. Missing: the other catalogs filled in, Chinese font delivery, a full localization audit."
+evidence = ["crates/ui-egui/src/i18n/mod.rs::windows_display_language_resolves_chinese_scripts", "crates/ui-egui/src/i18n/mod.rs::windows_display_language_query_returns_a_locale_tag", "crates/ui-egui/src/i18n/mod.rs::language_persists_and_invalid_input_keeps_current_language", "crates/ui-egui/src/i18n/mod.rs::bundled_catalogs_are_consistent", "crates/ui-egui/src/i18n/mod.rs::japanese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_history_and_diagnostics_preserve_user_values", "crates/ui-egui/tests/control.rs::simplified_chinese_signature_prompts_and_errors_keep_document_state", "crates/ui-egui/tests/control.rs::language_switch_preserves_document_and_command_ids", "crates/ui-egui/tests/control.rs::japanese_controls_and_search_keep_command_ids", "crates/ui-egui/tests/control.rs::japanese_dialogs_errors_and_custom_action_names", "crates/ui-egui/src/i18n/mod.rs::french_is_registered", "crates/ui-egui/src/i18n/mod.rs::french_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::french_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::french_history_and_diagnostics_preserve_user_values", "crates/ui-egui/src/i18n/mod.rs::telugu_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::telugu_labels_have_glyphs"]
+notes = "Preferences switches Auto (system language)/English/Japanese/Simplified Chinese/Traditional Chinese/Czech/Brazilian Portuguese/Spanish/French/Telugu and persists; ui.set language auto|en|ja|zh-hans|zh-hant|cs|pt-br|es|fr|te and ui.state expose it. TSV catalogs per language (same system as PhotoCraft); every dialog, panel and notice goes through tl!. Japanese, Traditional Chinese, Simplified Chinese, Spanish and French cover commands, dialogs, panels, shortcuts and history labels; Czech and Brazilian Portuguese the menus. French locales (fr, fr_FR, fr_CA, fr_BE) select the French catalog. Engine/OS error details stay untranslated. Auto detects the Windows display language after locale environment overrides, with Chinese script/region mapping and English fallback. Missing: Czech and Brazilian Portuguese dialogs, Chinese and Telugu font delivery in releases, a full localization audit."
 
 [[feature]]
 id = "misc.prefs-reading"
@@ -9951,7 +9951,7 @@ status = "planned"
 commands = []
 tools = []
 evidence = []
-notes = ""
+notes = "Only a first step exists: Arabic and Hebrew file names and paths in the tab strip, the recent-files list and Properties have glyphs (a craft-fonts Arab face, or an installed font on desktop) and are shown in display order (crates/ui-egui/src/bidi.rs). Missing: multi-line text (bookmarks, comments, search results), text input, a mirrored layout and a right-to-left interface language."
 
 [[feature]]
 id = "misc.installers"

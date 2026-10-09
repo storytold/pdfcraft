@@ -459,15 +459,20 @@ fn export_csv(app: &mut PdfCraftApp) {
                 ));
             }
             #[cfg(not(target_arch = "wasm32"))]
-            if let Some(path) = app
-                .export_dir_override
-                .as_ref()
-                .map(|d| std::path::PathBuf::from(d).join("measurements.csv"))
-                .or_else(|| rfd::FileDialog::new().set_file_name("measurements.csv").add_filter("CSV", &["csv"]).save_file())
             {
-                match crate::editing::write_atomically(&path.to_string_lossy(), csv.as_bytes()) {
+                let write = move |app: &mut PdfCraftApp, path: std::path::PathBuf| match crate::editing::write_atomically(
+                    &path.to_string_lossy(),
+                    csv.as_bytes(),
+                ) {
                     Ok(()) => app.notify(tl!("Saved measurements.")),
                     Err(e) => app.notify(e.to_string()),
+                };
+                match app.export_dir_override.as_ref().map(|d| std::path::PathBuf::from(d).join("measurements.csv")) {
+                    Some(path) => write(app, path),
+                    None => {
+                        let dialog = rfd::AsyncFileDialog::new().set_file_name("measurements.csv").add_filter("CSV", &["csv"]);
+                        app.ask_one(crate::pickers::Ask::Save(dialog), None, write);
+                    }
                 }
             }
             #[cfg(target_arch = "wasm32")]

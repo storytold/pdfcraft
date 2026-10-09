@@ -23,6 +23,7 @@ set_review_state(&mut doc, page, index, ReviewState::Accepted, "Ada", &meta)?;
 move_annotation(&mut doc, page, index, dx, dy, &meta)?;
 set_style(&mut doc, page, index, Some(rgb), Some(0.5), Some(2.0), &meta)?;
 delete_annotation(&mut doc, page, index)?;
+signature_image(&doc, page, index)?; // embedded image XObject of Fill & Sign signature/initials
 ```
 
 A comment is addressed by `(page, index in /Annots)`, the same pair
@@ -37,6 +38,8 @@ deterministic; the engine supplies them.
   cloudy borders or callouts, instead of leaving a stale appearance.
 - Replies get the parent's `/Rect` and an empty appearance: they appear in comment lists but
   never paint a second icon.
+- Resizing a stamp changes its `/Rect` and preserves its original appearance and resources;
+  viewers scale that appearance into the new rectangle. Locked stamps refuse the edit.
 
 ## Not yet
 

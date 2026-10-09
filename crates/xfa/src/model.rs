@@ -332,6 +332,8 @@ pub struct Subform {
     pub common: Common,
     pub layout: Layout,
     pub children: Vec<Node>,
+    /// `<event activity="…"><script>` on the subform (initialize, calculate, …).
+    pub scripts: Vec<Script>,
     pub page_set: Option<PageSet>,
     pub occur: Occur,
     /// `<breakBefore targetType="pageArea">`: start on a new page.
@@ -357,6 +359,7 @@ pub struct ExclGroup {
     pub layout: Layout,
     pub fields: Vec<Field>,
     pub tooltip: Option<String>,
+    pub scripts: Vec<Script>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -379,6 +382,8 @@ pub enum Ui {
 pub struct Script {
     pub activity: String,
     pub text: String,
+    /// FormCalc (the default language), not JavaScript.
+    pub formcalc: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -410,7 +415,16 @@ pub struct Field {
     pub access: Access,
     /// The edit picture clause (`<ui>…<picture>`), e.g. `date{YYYY-MM-DD}`.
     pub picture: Option<String>,
+    /// `<event activity="…"><script>`: click, change, exit, initialize, …
     pub scripts: Vec<Script>,
+    /// `<calculate><script>`: the value is the script's result.
+    pub calculate: Option<Script>,
+    /// `<validate><script>`: false (or an exception) shows `validate_message`; the value stays,
+    /// as Acrobat marks the field invalid rather than reverting it.
+    pub validate: Option<Script>,
+    pub validate_message: Option<String>,
+    /// Numeric fields (numericEdit, or a decimal/integer/float value) give scripts numbers.
+    pub numeric: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

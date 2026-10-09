@@ -101,3 +101,53 @@ fn ordinary_forms_and_documents_have_no_xfa_notice() {
     let h = open(pdf("/AcroForm << /Fields [] /XFA 42 >>", "", &[]));
     assert_eq!(xfa(&h), Some(pdfcraft_render::Xfa::Dynamic));
 }
+
+/// Click the centre of a field's widget.
+fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
+    let p = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("no field {name}"));
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
+    };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(4);
+}
+
+#[test]
+fn xfa_buttons_run_their_scripts_in_the_app() {
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()));
+    for _ in 0..40 {
+        h.run_steps(2);
+        if !h.state().render_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let names = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().map(|f| f.name.clone()).collect::<Vec<_>>()
+    };
+    assert!(!names(&h).iter().any(|n| n == "amount_2"));
+    click_field(&mut h, "addRow");
+    assert!(names(&h).iter().any(|n| n == "amount_2"), "{:?}", names(&h));
+    // The message box shows as a notice.
+    click_field(&mut h, "hello");
+    h.get_by_label_contains("Hello 2");
+}
+
+#[test]
+fn messages_from_scripts_run_on_open_show_right_away() {
+    let tpl = pdfcraft_xfa::fixtures::scripted_template()
+        .replace("if (qty.rawValue === null) qty.rawValue = 2;", r#"xfa.host.messageBox("Welcome to the form"); xfa.host.print();"#);
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&tpl));
+    h.run_steps(2);
+    h.get_by_label_contains("Welcome to the form");
+    assert_eq!(h.state().dialog, None, "an initialize script can't open the Print dialog");
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().session.take_js_output(id).is_empty(), "nothing waits for the next edit");
+}

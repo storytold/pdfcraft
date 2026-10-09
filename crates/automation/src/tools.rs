@@ -185,14 +185,28 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "pages": pages("to extract"), "out": save_out.clone(), "open": open.clone(), "separate": { "type": "boolean" }, "out_dir": { "type": "string" }, "delete": { "type": "boolean" } }),
                 &["doc", "pages"],
             )),
-        t("doc_combine", "Combine files", "Combine PDFs, in order, into one (bookmarks are kept under one entry per file). pages optionally chooses each file's pages, in step with paths: a range such as \"1-3, 6\" or null for all pages.")
+        t("doc_combine", "Combine files", "Combine PDFs, in order, into one (bookmarks are kept under one entry per file). pages optionally chooses each file's pages, in step with paths: a range such as \"1-3, 6\" or null for all pages. passwords, also in step with paths, opens encrypted files (the open password, or the permissions password where a file's security doesn't allow copying pages; null for none). The result is not encrypted. Passwords are never echoed back.")
             .cmd("page.combine")
             .with(schema(
                 json!({
                     "paths": { "type": "array", "items": { "type": "string" }, "minItems": 2 },
                     "pages": { "type": "array", "items": { "type": ["string", "null"] } },
+                    "passwords": { "type": "array", "items": { "type": ["string", "null"] } },
                     "out": save_out,
                     "open": open,
+                }),
+                &["paths"],
+            )),
+        t("doc_create_multiple", "Create PDF from multiple files", "Convert several files (PDFs, PNG/JPEG/JPEG 2000/TIFF/GIF/BMP images, .txt files) to PDF in one run. mode \"combine\" (default) joins them, in order, into one PDF with a bookmark per file; pages optionally chooses each file's pages, in step with paths (a range such as \"1-3, 6\" or null). mode \"separate\" writes one PDF per file into out_dir (files that are already PDFs are skipped; existing files are never overwritten) and reports each file's result.")
+            .cmd("create.multiple")
+            .with(schema(
+                json!({
+                    "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": pdfcraft_engine::MAX_CREATE_FILES },
+                    "mode": { "type": "string", "enum": ["combine", "separate"] },
+                    "pages": { "type": "array", "items": { "type": ["string", "null"] } },
+                    "out": save_out.clone(),
+                    "open": open.clone(),
+                    "out_dir": { "type": "string", "description": "Folder for mode \"separate\"." },
                 }),
                 &["paths"],
             )),
@@ -570,16 +584,20 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["name", "password", "path"],
         )),
+        t("sign_windows_ids", "List Windows store digital IDs", "Windows: signing identities in the Current User Personal certificate store (certificate details and the windows: reference sign_document takes). Private keys remain in CNG; Windows may ask permission to use them.")
+            .ro()
+            .cmd("sign.digital")
+            .with(schema(json!({}), &[])),
         t("sign_keychain_ids", "List Keychain digital IDs", "macOS: the signing identities in the user's keychains (certificate details and the keychain: reference sign_document takes). The private keys stay in the Keychain, which may ask the user to allow their use.")
             .ro()
             .cmd("sign.digital")
             .with(schema(json!({}), &[])),
-        t("sign_document", "Sign a document", "Sign with a digital ID (a .p12/.pfx path, or on macOS a Keychain identity: \"keychain:<common name or fingerprint>\" from sign_keychain_ids) and save the signed file to `out` (signing always saves, as in Acrobat; the document then shows the signed file). Sign an existing empty signature field (`field`), or a new one on `page` at `rect` (omit rect for an invisible signature). certify: no_changes, form_fill or comments makes a certification signature. PAdES B-B, SHA-256 (SHA-384 for P-384 keys).")
+        t("sign_document", "Sign a document", "Sign with a digital ID (a .p12/.pfx path, or on macOS a Keychain identity: \"keychain:<common name or fingerprint>\" from sign_keychain_ids, or on Windows a store identity: \"windows:<common name or fingerprint>\" from sign_windows_ids) and save the signed file to `out` (signing always saves, as in Acrobat; the document then shows the signed file). Sign an existing empty signature field (`field`), or a new one on `page` at `rect` (omit rect for an invisible signature). certify: no_changes, form_fill or comments makes a certification signature. PAdES B-B, SHA-256 (SHA-384 for P-384 keys).")
             .cmd("sign.digital")
             .with(schema(
                 json!({
                     "doc": doc(),
-                    "id": { "type": "string", "description": "Path of the digital ID (.p12 / .pfx)." },
+                    "id": { "type": "string", "description": "Digital ID file (.p12 / .pfx), keychain: reference on macOS, or windows: reference on Windows." },
                     "password": { "type": "string" },
                     "field": { "type": "string" },
                     "page": { "type": "integer", "minimum": 1 },
@@ -613,7 +631,7 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "sort": { "type": "string", "enum": ["page", "author", "date", "type"] }, "out": save_out, "open": open }),
                 &["doc"],
             )),
-        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity, line width, rectangle (rectangle/oval/text box) or position (`move` [dx, dy] in points). One undo step.").with(schema(
+        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity, line width, rectangle (rectangle/oval/text box/stamp) or position (`move` [dx, dy] in points). Stamps keep their original appearance when resized. One undo step.").with(schema(
             comment_ref(json!({
                 "contents": { "type": "string" },
                 "color": color(),
@@ -624,22 +642,24 @@ pub fn tools() -> Vec<ToolDef> {
             })),
             &["doc"],
         )),
+        t("comment_image_preview", "Preview image signature layers", "Return a PNG of the page without the selected image signature/initials (layer=background, default), or its embedded image with alpha (layer=image). Includes the displayed rectangle, document rotation and annotation opacity. Cache these layers for live placement/resizing; commit once with comment_edit. Does not change the document or undo history.")
+            .ro().with(schema(comment_ref(json!({ "layer": { "type": "string", "enum": ["background", "image"], "default": "background" }, "dpi": { "type": "number", "minimum": 1, "maximum": 600, "default": 96 } })), &["doc"])),
         t("comment_delete", "Delete a comment", "Delete a comment with its pop-up and replies. Undoable.").destructive().with(schema(comment_ref(json!({})), &["doc"])),
         t(
             "doc_protect",
             "Protect with passwords",
-            "Encrypt the document (applied by the next doc_save, a full rewrite). open_password is needed to open it; permissions_password is needed to change security and lifts the restrictions given by printing/changes/copy. Passwords are never echoed back. Undoable.",
+            "Encrypt the document (applied by the next doc_save, a full rewrite). open_password is needed to open it. permissions_password is needed to change security and lifts the restrictions given by printing/changes/copy/accessibility; those restrictions (and their defaults) apply only when permissions_password is given. With open_password alone the document is encrypted and everything stays allowed, so passing a restriction without permissions_password is an error. Passwords are never echoed back. Undoable.",
         )
         .cmd("protect.password")
         .with(schema(
             json!({
                 "doc": doc(),
-                "open_password": { "type": "string", "minLength": 1 },
-                "permissions_password": { "type": "string", "minLength": 1 },
-                "printing": { "type": "string", "enum": ["none", "low", "high"], "description": "Default high." },
-                "changes": { "type": "string", "enum": ["none", "pages", "fill-sign", "comment-fill-sign", "any-except-extract"], "description": "Default none." },
-                "copy": { "type": "boolean", "description": "Allow copying text and images (default false)." },
-                "accessibility": { "type": "boolean", "description": "Allow screen readers to read the text (default true)." },
+                "open_password": { "type": "string", "minLength": 1, "description": "Required to open the document. On its own it restricts nothing." },
+                "permissions_password": { "type": "string", "minLength": 1, "description": "Required to change security; enables printing/changes/copy/accessibility and their defaults." },
+                "printing": { "type": "string", "enum": ["none", "low", "high"], "description": "Needs permissions_password. Default high." },
+                "changes": { "type": "string", "enum": ["none", "pages", "fill-sign", "comment-fill-sign", "any-except-extract"], "description": "Needs permissions_password. Default none." },
+                "copy": { "type": "boolean", "description": "Allow copying text and images (needs permissions_password; default false)." },
+                "accessibility": { "type": "boolean", "description": "Allow screen readers to read the text (needs permissions_password; default true)." },
                 "compatibility": { "type": "string", "enum": ["aes-256", "aes-128", "rc4-128", "rc4-40"], "description": "Default aes-256 (Acrobat X and later)." },
                 "encrypt_metadata": { "type": "boolean", "description": "Default true." },
             }),
@@ -771,7 +791,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("form_merge_data", "Merge data files into spreadsheet", "Collect the field values of form data files (FDF, XFDF) or filled-in PDF forms into one CSV file at path: a column per field name, a row per file. Returns the row and column counts.")
             .cmd("form.merge_data")
             .with(schema(json!({ "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 }, "path": { "type": "string" } }), &["paths", "path"])),
-        t("js_run", "Run JavaScript", "Run Acrobat JavaScript in the document, as the JavaScript console does (or as push button `field`'s Mouse Up script when field is given). The form object model is available: this/getField, event, app, util, console, display, color, and the document-level scripts. Field changes and resetForm are applied as one undoable step; returns the script's alerts, console output, requests (print, page, url, submit) and error.")
+        t("js_run", "Run JavaScript", "Run Acrobat JavaScript in the document, as the JavaScript console does (or as push button `field`'s Mouse Up script when field is given; on a laid-out XFA form, `field` runs that button's XFA click script instead, JavaScript or FormCalc, which can add and remove rows and show or hide subforms). The form object model is available: this/getField, event, app, util, console, display, color, and the document-level scripts. Field changes and resetForm are applied as one undoable step; returns the script's alerts, console output, requests (print, page, url, submit) and error.")
             .cmd("tools.js_console")
             .with(schema(
                 json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." } }),
@@ -888,7 +908,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "fill_sign_add",
             "Fill & Sign: type text or place a mark",
-            "Fill in a form that has no fields, as Acrobat's Fill & Sign does: type text (`text`, 10 pt), place a check, cross, dot or line, today's date, or a typed signature or initials (`text` drawn in a script font as filled outlines; at is its left edge, centred vertically), at `at` [x, y] in points from the top-left of the page (the text's top-left; a mark's centre). Creates movable, undoable annotations.",
+            "Fill in a form that has no fields, as Acrobat's Fill & Sign does: type text (`text`, 10 pt), place a check, cross, dot or line, today's date, or a signature or initials (either `text` drawn in a script font, or `path` to a local PNG/JPEG image up to 4 MiB and 4 megapixels, preserving transparency). `at` [x, y] is in points from the top-left of the page: text's top-left, mark's centre, signature's left edge centred vertically. Image signatures fit within 150 pt wide and 32 pt tall (24 pt for initials). Creates movable, undoable annotations.",
         )
         .cmd("sign.fill.text")
         .with(schema(
@@ -898,6 +918,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "type": { "type": "string", "enum": ["text", "check", "cross", "dot", "line", "date", "signature", "initials"] },
                 "at": point(),
                 "text": { "type": "string", "minLength": 1 },
+                "path": { "type": "string", "description": "PNG or JPEG for signature/initials; pass either path or text." },
                 "author": { "type": "string" },
             }),
             &["doc", "page", "type", "at"],
@@ -977,7 +998,7 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("edit.edit_text")
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 } }), &["doc", "page"])),
-        t("text_edit", "Edit text", "Replace the text of one paragraph (paragraph, from text_paragraphs: rewrapped to the paragraph's width with its line spacing) or one line (line, from text_lines) in place, keeping position, size and colour. For a paragraph, also change its formatting: font (helvetica, times, courier) with bold/italic, size (points), color (#rrggbb), align (left, center, right, justify), underline, line_spacing (× size), char_spacing (points) and scale (horizontal, percent), or move it (dx, dy in points; up is +dy) and rewrap it to a new width (points); text may then be omitted. Its own font is reused when it can show every character; otherwise the line is set in Helvetica (the result shows the font used). Text that no available font can show is refused. Undoable.")
+        t("text_edit", "Edit text", "Replace the text of one paragraph (paragraph, from text_paragraphs: rewrapped to the paragraph's width with its line spacing) or one line (line, from text_lines) in place, keeping position, size and colour. For a paragraph, also change its formatting: font (helvetica, times, courier) with bold/italic, size (points), color (#rrggbb), align (left, center, right, justify), underline, line_spacing (× size), char_spacing (points) and scale (horizontal, percent), or move it (dx, dy in points; up is +dy) and rewrap it to a new width (points); text may then be omitted. Its own font is reused when it can show every character and no font/weight change is requested; otherwise it uses a standard font matching the source style or, for Japanese, real Mincho/Gothic fallback outlines matching the requested/source family and available weight (the result shows the font used). Missing Japanese weights use Regular, not synthetic bold; the small web build has only Gothic Regular. Paragraph bold may be set without font to keep the source family. Text that no available font can show is refused. Undoable.")
             .cmd("edit.edit_text")
             .with(schema(
                 json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "line": { "type": "integer", "minimum": 1 },

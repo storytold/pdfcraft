@@ -662,6 +662,21 @@ fn annot_dict(doc: &Document, r: ObjRef) -> Dict {
     doc.get(r).as_dict().cloned().unwrap_or_default()
 }
 
+/// The embedded image of a Fill & Sign image signature or initials (0-based target).
+/// Other stamps have appearances that can't be represented by this image alone.
+pub fn signature_image(doc: &Document, page: usize, index: usize) -> Result<Option<ObjRef>, AnnotError> {
+    let p = page_ref(doc, page)?;
+    let list = annots(doc, p);
+    let entry = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    let obj = doc.resolve(entry);
+    let Some(d) = obj.as_dict() else { return Ok(None) };
+    Ok((d.name(b"Subtype") == Some(b"Stamp")
+        && matches!(d.name(b"Name"), Some(b"PCCustomSignature" | b"PCCustomInitials"))
+        && matches!(d.get(b"PCPictureImage"), Some(Object::Bool(true))))
+    .then(|| d.reference(b"PCPicture"))
+    .flatten())
+}
+
 // ── building ────────────────────────────────────────────────────────────────────────────────
 
 /// Annotation flags (§12.5.3).
@@ -724,12 +739,19 @@ fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotError> {
         | Shape::TextBox { rect, .. }
         | Shape::Typewriter { rect, .. }
         | Shape::Stamp { rect, .. }
-        | Shape::CustomStamp { rect, .. }
         | Shape::TypedSignature { rect, .. }
         | Shape::Mark { rect, .. } => {
             let r = normalize(*rect);
             if !finite(rect) || r[2] - r[0] < 1.0 || r[3] - r[1] < 1.0 {
                 return Err(bad("rectangle (too small)"));
+            }
+            r
+        }
+        Shape::CustomStamp { rect, .. } => {
+            let r = normalize(*rect);
+            // Image signatures may be very thin; a positive PDF appearance box still works.
+            if !finite(rect) || r[2] <= r[0] || r[3] <= r[1] {
+                return Err(bad("rectangle (empty)"));
             }
             r
         }
@@ -744,7 +766,13 @@ fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotError> {
             if strokes.iter().all(|s| s.is_empty()) || !strokes.iter().flatten().all(|p| finite(p)) {
                 return Err(bad("drawing (no points)"));
             }
-            grow(bounds(strokes.iter().flatten().copied()).unwrap_or_default(), half + 1.0)
+            // Strokes of three or more points are drawn as curves, which stay within their
+            // points and control points.
+            let controls = strokes.iter().filter(|s| s.len() > 2).flat_map(|s| {
+                let pts: Vec<(f64, f64)> = s.iter().map(|p| (p[0], p[1])).collect();
+                appearance::smooth_segments(&pts).into_iter().flat_map(|[a, b, _]| [[a.0, a.1], [b.0, b.1]])
+            });
+            grow(bounds(strokes.iter().flatten().copied().chain(controls)).unwrap_or_default(), half + 1.0)
         }
         Shape::Polygon { vertices, cloud } => {
             let b = bounds(vertices.iter().copied())
@@ -1066,6 +1094,30 @@ pub fn set_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
     Ok(())
 }
 
+/// A copy of `doc` in which every annotation without a normal appearance (`/AP /N`) has the one
+/// [`appearance::build`] draws from its dictionary, for displaying the document (`None` when no
+/// annotation needs one). Many files carry comments without appearances (FreeText, Ink, notes,
+/// stamps, …) that viewers draw from the dictionary. `doc` is not changed: saving writes the file
+/// as it was. Links, form fields and pop-ups keep their own handling.
+pub fn with_missing_appearances(doc: &Document) -> Option<Document> {
+    let mut copy: Option<Document> = None;
+    for page in page_refs(doc).ok()? {
+        for r in annots(doc, page).iter().filter_map(Object::as_ref) {
+            let d = annot_dict(doc, r);
+            if matches!(d.name(b"Subtype"), None | Some(b"Link" | b"Widget" | b"Popup")) {
+                continue;
+            }
+            let has_normal = d.get(b"AP").is_some_and(|ap| doc.resolve(ap).as_dict().is_some_and(|ap| ap.contains(b"N")));
+            if has_normal || appearance::build(&d).is_none() {
+                continue;
+            }
+            // Fails only when `r` isn't a dictionary, which `build` above has just ruled out.
+            set_appearance(copy.get_or_insert_with(|| doc.clone()), r).ok();
+        }
+    }
+    copy
+}
+
 /// Format a number for content streams and DA strings.
 pub(crate) fn n(v: f64) -> String {
     let s = format!("{:.3}", if v.abs() < 5e-4 { 0.0 } else { v });
@@ -1353,12 +1405,24 @@ pub fn move_annotation(doc: &mut Document, page: usize, index: usize, dx: f64, d
     Ok(())
 }
 
-/// Resize a rectangle, oval or text box to `rect`; its appearance is redrawn.
+/// Resize a rectangle, oval, text box or stamp to `rect`. Stamps keep their appearance,
+/// which PDF viewers scale from its bounding box into the new rectangle.
 pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    if subtype == "Stamp" {
+        let rect = normalize(rect);
+        if !finite(&rect) || rect[2] <= rect[0] || rect[3] <= rect[1] {
+            return Err(AnnotError::Invalid("invalid rectangle (too small)".into()));
+        }
+        doc.update_dict(r, |d| {
+            d.set(b"Rect".to_vec(), num_array(&rect));
+            touch(d, meta);
+        })?;
+        return Ok(());
+    }
     if !matches!(subtype.as_str(), "Square" | "Circle" | "FreeText") {
         return Err(AnnotError::Invalid(format!("{subtype} comments can't be resized")));
     }

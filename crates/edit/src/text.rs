@@ -16,7 +16,7 @@ use std::rc::Rc;
 use pdfcraft_content::{Matrix, Op, parse, serialize_ops};
 use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 use pdfcraft_fonts::pdf::Metrics;
-use pdfcraft_fonts::{GlyphError, japanese_glyph};
+use pdfcraft_fonts::{CraftFont, GlyphError, japanese_glyph_from};
 
 use crate::EditError;
 
@@ -27,7 +27,7 @@ pub struct TextLine {
     pub text: String,
     /// Its box in user space.
     pub rect: [f64; 4],
-    /// The font's resource name and `/BaseFont`, and its size in text space.
+    /// The font's resource name and `/BaseFont` (or Type 3 descriptor's `/FontName`), and its size in text space.
     pub font: String,
     pub base_font: String,
     pub size: f64,
@@ -510,7 +510,9 @@ fn source_family(base_font: &str) -> crate::added::Family {
     let name = base_font.to_ascii_lowercase();
     if ["courier", "mono", "consolas", "menlo", "monaco", "lucida console"].iter().any(|s| name.contains(s)) {
         crate::added::Family::Courier
-    } else if !name.contains("sans") && ["times", "serif", "roman", "cambria", "georgia", "palatino", "garamond"].iter().any(|s| name.contains(s)) {
+    } else if !name.contains("sans")
+        && ["times", "serif", "roman", "mincho", "cambria", "georgia", "palatino", "garamond"].iter().any(|s| name.contains(s))
+    {
         crate::added::Family::Times
     } else {
         crate::added::Family::Helvetica
@@ -533,8 +535,8 @@ fn pdf_num(v: f64) -> String {
     if v.fract() == 0.0 { format!("{v:.0}") } else { format!("{v:.4}").trim_end_matches('0').trim_end_matches('.').to_string() }
 }
 
-fn type3_path(ch: char) -> Result<(Vec<u8>, f64), EditError> {
-    let glyph = japanese_glyph(ch).map_err(|e| match e {
+fn type3_path(face: &CraftFont, ch: char) -> Result<(Vec<u8>, f64), EditError> {
+    let glyph = japanese_glyph_from(face, ch).map_err(|e| match e {
         GlyphError::NoFont => no_japanese_font(),
         GlyphError::Missing => EditError::Invalid(format!("Japanese fallback font has no glyph for U+{:04X}", ch as u32)),
         GlyphError::TooComplex => EditError::Invalid(format!("Japanese fallback glyph U+{:04X} is too complex", ch as u32)),
@@ -568,8 +570,9 @@ fn no_japanese_font() -> EditError {
     )
 }
 
-fn type3_font(doc: &mut Document, fonts_res: &mut Dict, text: &str) -> Result<Type3Fallback, EditError> {
-    let family = pdfcraft_fonts::document_japanese_font().ok_or_else(no_japanese_font)?.family;
+fn type3_font(doc: &mut Document, fonts_res: &mut Dict, text: &str, family: crate::added::Family, bold: bool) -> Result<Type3Fallback, EditError> {
+    let face = pdfcraft_fonts::document_japanese_font_for_style(family == crate::added::Family::Times, bold).ok_or_else(no_japanese_font)?;
+    let family = face.family;
     let mut chars = Vec::new();
     for ch in text.chars() {
         if !chars.contains(&ch) {
@@ -593,7 +596,7 @@ fn type3_font(doc: &mut Document, fonts_res: &mut Dict, text: &str) -> Result<Ty
     for (i, ch) in chars.into_iter().enumerate() {
         let code = u8::try_from(i + 1).map_err(|_| EditError::Invalid("Japanese replacement has too many unique characters".into()))?;
         let glyph_name = format!("g{code:02X}");
-        let (path, width) = type3_path(ch)?;
+        let (path, width) = type3_path(face, ch)?;
         let mut pd = Dict::new();
         pd.set(b"Length".to_vec(), path.len() as i64);
         let proc_ref = doc.add(Object::Stream(Stream::from_raw(pd, path)));
@@ -614,6 +617,14 @@ fn type3_font(doc: &mut Document, fonts_res: &mut Dict, text: &str) -> Result<Ty
     font.set(b"Type".to_vec(), Object::name("Font"));
     font.set(b"Subtype".to_vec(), Object::name("Type3"));
     font.set(b"Name".to_vec(), Object::name("PCJapanese"));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
+    descriptor.set(b"FontName".to_vec(), Object::name(&format!("{}-{}", face.family, face.style).replace(' ', "")));
+    descriptor.set(b"FontFamily".to_vec(), Object::String(PdfString::literal(face.family.as_bytes().to_vec())));
+    descriptor.set(b"Flags".to_vec(), Object::Int(if face.family.contains("Mincho") { 6 } else { 4 }));
+    descriptor.set(b"ItalicAngle".to_vec(), Object::Int(0));
+    // PDF 1.7 tables 5.9 and 5.19: a Type 3 descriptor is indirect; Ascent/Descent may be omitted.
+    font.set(b"FontDescriptor".to_vec(), Object::Ref(doc.add(Object::Dict(descriptor))));
     font.set(b"FontBBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(-300), Object::Int(1000), Object::Int(1000)]));
     font.set(
         b"FontMatrix".to_vec(),
@@ -670,7 +681,7 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
         Some(bytes) => replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))])),
         None => {
             if needs_type3(&text) {
-                let fallback = type3_font(doc, &mut fonts_res, &text)?;
+                let fallback = type3_font(doc, &mut fonts_res, &text, source_family(&target.base_font), target.bold)?;
                 let bytes = type3_encode(&fallback, &text)
                     .ok_or_else(|| EditError::Invalid(format!("\"{text}\" can't be shown by the Japanese fallback")))?;
                 let size = font_size_before(&ops, first).unwrap_or(target.size);
@@ -800,13 +811,13 @@ fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
             } else {
                 b.text.push(' ');
             }
-            b.text.push_str(l.text.trim());
+            b.text.push_str(l.text.trim_matches(paragraph_separator));
             b.rect = [b.rect[0].min(l.rect[0]), b.rect[1].min(l.rect[1]), b.rect[2].max(l.rect[2]), b.rect[3].max(l.rect[3])];
             b.lines.push(i);
         } else {
             gap = None;
             blocks.push(TextBlock {
-                text: l.text.trim().to_string(),
+                text: l.text.trim_matches(paragraph_separator).to_string(),
                 rect: l.rect,
                 base_font: l.base_font.clone(),
                 size: l.size,
@@ -820,11 +831,17 @@ fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
     blocks
 }
 
+// An ideographic space carries intentional Japanese spacing, including paragraph indentation.
+// Keep other whitespace normalization unchanged.
+fn paragraph_separator(c: char) -> bool {
+    c.is_whitespace() && c != '\u{3000}'
+}
+
 /// Greedy word wrapping to `width` with `advance` giving a string's width.
 fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec<String> {
     let mut out = Vec::new();
     let mut line = String::new();
-    for word in text.split_whitespace() {
+    for word in text.split(paragraph_separator).filter(|word| !word.is_empty()) {
         let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
         if !line.is_empty() && advance(&candidate) > width {
             out.push(std::mem::take(&mut line));
@@ -851,6 +868,8 @@ pub fn replace_block(doc: &mut Document, page: usize, block: usize, text: &str) 
 pub struct BlockStyle {
     /// A standard font family, bold, italic.
     pub family: Option<(crate::added::Family, bool, bool)>,
+    /// Override weight without choosing a different family (`None` keeps the source weight).
+    pub bold: Option<bool>,
     /// Font size in points (user space).
     pub size: Option<f64>,
     /// Fill colour (RGB 0–1).
@@ -882,7 +901,7 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     let streams = content_streams(doc, &p.dict);
     let (stream_obj, data) = streams.get(first.stream).cloned().ok_or_else(|| EditError::Invalid("the page's content changed".into()))?;
     let ops = parse(&data).ops;
-    let text = text.unwrap_or(&b.text).split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = text.unwrap_or(&b.text).split(paragraph_separator).filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" ");
     let o = &first.origin;
     let (font_name, old_size) = o.state.font.clone().ok_or_else(|| EditError::Invalid("the paragraph has no font".into()))?;
     let k = o.k.max(1e-6);
@@ -898,10 +917,11 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     }
     let o_state = ts_state.clone();
     let metrics = fonts_res.get(font_name.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()).map(|d| Metrics::from_dict(doc, &d));
-    let reuse = style.family.is_none() && metrics.as_ref().is_some_and(|m| m.encode(&text).is_some());
-    let type3 = if !reuse && needs_type3(&text) { Some(type3_font(doc, &mut fonts_res, &text)?) } else { None };
-    // The standard font used when the paragraph's own can't be (chosen, or substituted).
+    let reuse = style.family.is_none() && style.bold.is_none() && metrics.as_ref().is_some_and(|m| m.encode(&text).is_some());
+    // The chosen style also determines the real Japanese fallback outlines and advances.
     let (family, bold, italic) = style.family.unwrap_or((source_family(&b.base_font), b.bold, b.italic));
+    let bold = style.bold.unwrap_or(bold);
+    let type3 = if !reuse && needs_type3(&text) { Some(type3_font(doc, &mut fonts_res, &text, family, bold)?) } else { None };
     let std_width = move |s: &str, size: f64| -> f64 {
         match family {
             crate::added::Family::Courier => s.chars().count() as f64 * 0.6 * size,
@@ -1104,4 +1124,18 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
         }
     })?;
     Ok(LineEdit { substituted })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paragraph_wrapping_keeps_ideographic_spaces() {
+        let width = |s: &str| s.chars().count() as f64;
+        assert_eq!(wrap("A　　B C", 4.0, width), ["A　　B", "C"]);
+        assert_eq!(wrap("A\u{a0}B C", 3.0, width), ["A B", "C"]);
+        assert_eq!(wrap("A\u{2028}B C", 3.0, width), ["A B", "C"]);
+        assert_eq!(wrap(" \tA  B\r\nC ", 3.0, width), ["A B", "C"]);
+    }
 }

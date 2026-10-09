@@ -2,7 +2,7 @@
 
 use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, vec2};
 
-use crate::canvas::{Fit, PageLayout};
+use crate::canvas::{DocView, Fit, PageLayout};
 use crate::theme::{self, ThemePreference, Tokens};
 use crate::{Dialog, Mode, PdfCraftApp, PropsTab, RightPanel, icons, widgets};
 
@@ -24,19 +24,30 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                if icons::button(ui, "house", 28.0, app.active.is_none(), tl!("Home")).clicked() {
+                if icons::button(ui, "house", 28.0, app.active.is_none() && !app.combine_showing(), tl!("Home")).clicked() {
                     app.active = None;
+                    app.combine_tab.focused = false;
                 }
                 let mut close = None;
                 for i in 0..app.views.len() {
                     let Some(doc) = app.session.get(app.views[i].id) else { continue };
                     let (name, dirty) = (doc.display_name(), doc.dirty);
-                    if tab(ui, &t, &name, dirty, app.active == Some(i), &mut close, i).clicked() {
+                    if tab(ui, &t, "file-text", &name, dirty, app.active == Some(i), &mut close, i).clicked() {
                         app.active = Some(i);
                     }
                 }
                 if let Some(i) = close {
                     app.request_close_tab(i);
+                }
+                if app.combine_tab.open {
+                    // After the document tabs; its index can't clash with theirs.
+                    let mut close = None;
+                    if tab(ui, &t, "files", tl!("Combine files"), false, app.combine_showing(), &mut close, usize::MAX).clicked() {
+                        app.open_combine_tab();
+                    }
+                    if close.is_some() {
+                        app.close_combine_tab();
+                    }
                 }
                 ui.add_space(4.0);
                 if widgets::ghost_button(ui, "plus", tl!("Open")).on_hover_text(tl!("Open a PDF (⌘O)")).clicked() {
@@ -77,9 +88,12 @@ fn theme_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
-fn tab(ui: &mut egui::Ui, t: &Tokens, name: &str, dirty: bool, active: bool, close: &mut Option<usize>, index: usize) -> egui::Response {
+#[allow(clippy::too_many_arguments)]
+fn tab(ui: &mut egui::Ui, t: &Tokens, icon: &str, name: &str, dirty: bool, active: bool, close: &mut Option<usize>, index: usize) -> egui::Response {
     let font = theme::regular(13.0);
     let label: String = if name.chars().count() > 28 { format!("{}…", name.chars().take(27).collect::<String>()) } else { name.to_string() };
+    // Painted text only: the accessibility name below keeps the logical order.
+    let label = crate::bidi::visual(&label).into_owned();
     let text_w = ui.fonts_mut(|f| f.layout_no_wrap(label.clone(), font.clone(), t.text).size().x);
     let (rect, resp) = ui.allocate_exact_size(vec2(text_w + 64.0, 30.0), Sense::click());
     let a11y = if dirty { format!("{name} (edited)") } else { name.to_string() };
@@ -92,13 +106,7 @@ fn tab(ui: &mut egui::Ui, t: &Tokens, name: &str, dirty: bool, active: bool, clo
         Color32::TRANSPARENT
     };
     ui.painter().rect_filled(rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg);
-    icons::paint(
-        ui,
-        Rect::from_min_size(rect.min + vec2(6.0, 7.0), vec2(16.0, 16.0)),
-        "file-text",
-        15.0,
-        if active { t.accent } else { t.text_muted },
-    );
+    icons::paint(ui, Rect::from_min_size(rect.min + vec2(6.0, 7.0), vec2(16.0, 16.0)), icon, 15.0, if active { t.accent } else { t.text_muted });
     ui.painter().text(rect.min + vec2(28.0, rect.height() / 2.0), Align2::LEFT_CENTER, label, font, if active { t.text } else { t.text_muted });
     let x_rect = Rect::from_center_size(rect.right_center() - vec2(16.0, 0.0), vec2(20.0, 20.0));
     let x = ui.interact(x_rect, ui.id().with(("tabclose", index)), Sense::click());
@@ -114,7 +122,8 @@ fn tab(ui: &mut egui::Ui, t: &Tokens, name: &str, dirty: bool, active: bool, clo
     if x.clicked() {
         *close = Some(index);
     }
-    resp.on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", name)]) } else { name.to_string() })
+    let shown = crate::bidi::visual(name);
+    resp.on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", shown.as_ref())]) } else { shown.into_owned() })
 }
 
 pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
@@ -210,18 +219,8 @@ fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     v.view_history(true);
                 }
                 ui.separator();
-                ui.label(egui::RichText::new(tl!("Page display")).color(t.text_faint).small());
-                for (l, label) in
-                    [(PageLayout::Continuous, "Continuous scrolling"), (PageLayout::TwoUp, "Two-page view"), (PageLayout::Single, "Single page")]
-                {
-                    if ui.radio(v.layout == l, tl!(label)).clicked() {
-                        v.layout = l;
-                        v.goto = Some((v.current, 0.0));
-                    }
-                }
-                if ui.add_enabled(v.layout == PageLayout::TwoUp, egui::Checkbox::new(&mut v.cover, tl!("Show cover page in two-page view"))).changed()
-                {
-                    v.goto = Some((v.current, 0.0));
+                if let Some(id) = page_display_menu(ui, &app.views[i]) {
+                    app.execute(id);
                 }
                 ui.separator();
             }
@@ -295,6 +294,7 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
             // Page navigation cluster at the bottom (as in Acrobat's rail).
             let view = &mut app.views[index];
+            let mut page_display = None;
             ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 if icons::button(ui, "zoom-out", 32.0, false, tl!("Zoom out (⌘−)")).clicked() {
@@ -303,10 +303,20 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 if icons::button(ui, "zoom-in", 32.0, false, tl!("Zoom in (⌘+)")).clicked() {
                     view.zoom_step(true);
                 }
+                // Between rotate and zoom, as in Acrobat. Its command runs once `view` is free.
+                let tip = crate::i18n::fmt(tl!("Page display: {layout}"), &[("layout", tl!(view.layout.label()))]);
+                let resp = icons::button(ui, view.layout.icon(), 32.0, false, &tip);
+                page_display = egui::Popup::menu(&resp)
+                    .show(|ui| {
+                        ui.set_min_width(220.0);
+                        rail_view_menu(ui, view)
+                    })
+                    .and_then(|r| r.inner);
                 if icons::button(ui, "rotate-cw", 32.0, false, tl!("Rotate view clockwise (⇧⌘+)")).clicked() {
                     view.rotate_view(true);
                 }
-                let fit_icon = if view.fit == Fit::Width { "maximize" } else { "columns-2" };
+                // Not `columns-2` while fitting the page: that is the two-page view's icon.
+                let fit_icon = if view.fit == Fit::Width { "maximize" } else { "maximize-2" };
                 if icons::button(ui, fit_icon, 32.0, false, tl!("Toggle fit page / fit width")).clicked() {
                     view.fit = if view.fit == Fit::Width { Fit::Page } else { Fit::Width };
                     view.goto = Some((view.current, 0.0));
@@ -341,5 +351,64 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                 }
             });
+            if let Some(id) = page_display {
+                app.execute(id);
+            }
         });
+}
+
+/// View ▸ Page display and the rail's Page display menu: the layouts and the cover page.
+/// Returns the command a click asks for, for the caller to run.
+fn page_display_menu(ui: &mut egui::Ui, view: &DocView) -> Option<&'static str> {
+    let t = Tokens::get(ui.ctx());
+    ui.label(egui::RichText::new(tl!("Page display")).color(t.text_faint).small());
+    let mut picked = None;
+    for l in PageLayout::ORDER {
+        if ui.radio(view.layout == l, tl!(l.label())).clicked() {
+            picked = Some(l.command());
+        }
+    }
+    let mut cover = view.cover;
+    if ui.add_enabled(view.cover_applies(), egui::Checkbox::new(&mut cover, tl!("Show cover page in two-page view"))).changed() {
+        picked = Some("view.layout.cover");
+    }
+    if picked.is_some() {
+        ui.close();
+    }
+    picked
+}
+
+/// The rail's Page display menu: Acrobat's view choices around the page display. Zoom changes
+/// apply at once; the command a click asks for is returned for the caller to run.
+fn rail_view_menu(ui: &mut egui::Ui, view: &mut DocView) -> Option<&'static str> {
+    let mut picked = None;
+    for (id, label) in [("view.fit_width_scrolling", "Fit to width scrolling"), ("view.fit_one_page", "Fit one full page")] {
+        if ui.button(tl!(label)).clicked() {
+            picked = Some(id);
+        }
+    }
+    ui.separator();
+    if ui.button(tl!("Actual size")).clicked() {
+        view.set_zoom(1.0);
+        ui.close();
+    }
+    if ui.button(tl!("Zoom to page level")).clicked() {
+        view.set_fit(Fit::Page);
+        ui.close();
+    }
+    if ui.button(tl!("Fit visible")).clicked() {
+        picked = Some("view.fit_visible");
+    }
+    ui.separator();
+    picked = page_display_menu(ui, view).or(picked);
+    ui.separator();
+    for (id, label) in [("view.read_mode", "Read mode"), ("view.full_screen", "Full screen mode")] {
+        if ui.button(tl!(label)).clicked() {
+            picked = Some(id);
+        }
+    }
+    if picked.is_some() {
+        ui.close();
+    }
+    picked
 }

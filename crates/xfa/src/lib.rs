@@ -14,18 +14,23 @@ pub mod model;
 pub mod packets;
 pub mod parse;
 pub mod pdf;
+pub mod script;
 pub mod text;
 
 use pdfcraft_cos::Document;
 
 pub use data::{
-    DataNode, DatasetsWrite, FieldData, FieldDatum, build_data, iso_to_pattern, parse_datasets, pattern_to_iso, read_values, som_to_path,
-    write_datasets,
+    DataNode, DataOp, DataPath, DatasetsWrite, FieldData, FieldDatum, add_data_instances, build_data, iso_to_pattern, parse_datasets, pattern_to_iso,
+    read_values, remove_data_instance, som_to_path, write_data_ops, write_data_value, write_datasets, write_datasets_reusing,
 };
 pub use layout::{Action, BorderShape, Form, Item, MAX_PAGES, Page, Widget, WidgetKind, layout};
 pub use packets::{Encoding, Packets, decode as decode_packet, encode as encode_packet, read_packets};
 pub use parse::{measure, parse};
-pub use pdf::{LAYOUT_KEY, SOM_KEY, existing_layout};
+pub use pdf::{CLICK_KEY, LAYOUT_KEY, SOM_KEY, existing_layout};
+pub use script::{
+    FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, fields_by_som, form_tree,
+    has_scripts, overrides, rerender, set_overrides, template_of,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum XfaError {
@@ -77,7 +82,11 @@ pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     if packets.xdp.trim().is_empty() {
         return Err(XfaError::Malformed("the XFA packets hold no template".into()));
     }
-    let form = layout_xml(&packets.xdp)?;
+    let (tpl, parse_warnings) = parse(&packets.xdp)?;
+    let data = parse_datasets(&packets.xdp);
+    let laid = apply_overrides(&tpl, &overrides(doc));
+    let mut form = layout(&laid, data.as_ref())?;
+    form.warnings.splice(0..0, parse_warnings);
     if form.pages.is_empty() {
         return Err(XfaError::Malformed("the template laid out to no pages".into()));
     }

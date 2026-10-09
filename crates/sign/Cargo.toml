@@ -15,6 +15,7 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-annot = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 thiserror.workspace = true
+base64 = "0.22"
 sha1 = "0.11"
 sha2 = "0.11"
 p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
@@ -31,6 +32,10 @@ rc2 = "0.9"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 getrandom = "0.4"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Safe Windows certificate store and CNG signing wrappers (MIT OR Apache-2.0).
+rustls-cng = { version = "0.7.1", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Signing with Keychain identities (MIT OR Apache-2.0).

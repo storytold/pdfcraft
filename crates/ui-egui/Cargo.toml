@@ -12,6 +12,7 @@ workspace = true
 pdfcraft-fonts = { workspace = true }
 pdfcraft-engine = { workspace = true }
 pdfcraft-render = { workspace = true }
+pdfcraft-platform = { workspace = true }
 egui = { workspace = true }
 egui_extras = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "persistence", "links"] }
@@ -22,6 +23,8 @@ log = { workspace = true }
 rfd = { workspace = true }
 png = "0.18"
 base64 = "0.22"
+# Right-to-left file names in the chrome (egui shapes but does not reorder); already in the tree.
+unicode-bidi = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Control-channel tokens.
@@ -30,12 +33,22 @@ getrandom = "0.4"
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
 # Waits for native file pickers off the UI thread (already in the tree through wgpu).
 pollster = "1.0"
+# Checks that an installed fallback font parses and has the glyphs; the same skrifa egui uses.
+skrifa = "0.44"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Where the pointer is while files are dragged over the window (winit doesn't say): safe AppKit
+# calls only. All three are already in the tree through arboard and rfd.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "NSScreen"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry"] }
 
 [target.'cfg(windows)'.dependencies]
 # Auto interface language: the Windows display language, without starting a process.
 sys-locale = "0.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+rfd = { workspace = true, features = ["file-handle-inner"] }
 wasm-bindgen-futures = "0.4"
 wasm-bindgen = "0.2"
 js-sys = "0.3"

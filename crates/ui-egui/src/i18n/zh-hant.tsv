@@ -20,12 +20,33 @@
 	Identity	個人資訊
 	Name on new comments	新註解的作者名稱
 	Open…	開啟…
+	Open Recent	開啟最近的檔案
+	Pin folder to Home…	將資料夾釘選到首頁…
+	Folders	資料夾
+	Pin a folder…	釘選資料夾…
+	Pin a folder to Home	將資料夾釘選到首頁
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	釘選資料夾後，即可在此列出其中最新的 PDF，例如掃描器或同步雲端硬碟儲存檔案的位置。
+	Unpin	取消釘選
+	Unpin {folder}	取消釘選 {folder}
+	Looking for PDFs…	正在尋找 PDF…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	此資料夾目前無法使用。它可能已被移動，或其所在磁碟或雲端同步處於離線狀態。
+	No PDFs in this folder yet	此資料夾中還沒有 PDF
+	Show less	顯示較少
+	Show {n} more	再顯示 {n} 個
+	The newest {n} of {total} PDFs	共 {total} 個 PDF 中最新的 {n} 個
+	Pinned folders need the desktop app	釘選資料夾需要桌面版應用程式
+	Choose a folder on this computer to pin	請選擇這部電腦上要釘選的資料夾
+	{folder} is already pinned to Home	{folder} 已釘選到首頁
+	You can pin up to {n} folders. Unpin one first.	最多可釘選 {n} 個資料夾。請先取消釘選一個。
+	Pinned {folder} to Home	已將 {folder} 釘選到首頁
+	No recent files	沒有最近的檔案
 	Open	開啟
 	Open file	開啟檔案
 	Home	首頁
 	New blank PDF	新增空白 PDF
 	Create PDF from file…	從檔案建立 PDF…
 	Create PDF from images…	從圖片建立 PDF…
+	Create PDF from multiple files…	從多個檔案建立 PDF…
 	Create PDF from clipboard	從剪貼簿建立 PDF
 	Combine files…	合併檔案…
 	Save	儲存
@@ -443,6 +464,7 @@
 	Sign with a Digital ID	使用數位 ID 簽署
 	Choose the digital ID that you want to use for signing:	選擇要用於簽名的數位 ID：
 	Keychain  ·  	鑰匙串 · 
+	Windows store  ·  	Windows 憑證存放區 · 
 	Issued by: 	頒發者：
 	, Expires: 	，有效期至：
 	No digital IDs yet.	尚無數位 ID。
@@ -472,6 +494,7 @@
 	Annotations, form fill-in, and digital signatures	註解、填寫表單和數位簽章
 	Form fill-in and digital signatures	填寫表單和數位簽章
 	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	金鑰位於 macOS 鑰匙串中，系統可能會詢問是否允許 PdfCraft 使用它。
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	金鑰位於 Windows 憑證存放區中，系統可能會詢問是否允許 PdfCraft 使用它。
 	Digital ID password	數位 ID 密碼
 	Back	返回
 	Validate all	全部驗證
@@ -828,6 +851,7 @@
 	Light gray	淺灰色
 	Dark gray	深灰色
 	Current page	當前頁
+	Selected pages	選取的頁面
 	Document language	文件語言
 	Output	輸出
 	Searchable Image (Exact)	可搜尋圖片（精確）
@@ -1144,6 +1168,7 @@
 	This document has no attachments.	本文件沒有附件。
 	Hide layer	隱藏圖層
 	Show layer	顯示圖層
+	Set layer visibility	設定圖層可見性
 	on page {label}	第 {label} 頁
 	Save attachment…	儲存附件…
 	Open in a new tab	在新索引標籤中開啟
@@ -1410,6 +1435,15 @@
 	Created 1 link	已建立 1 個連結
 	Created {n} links	已建立{n}個連結
 	Text recognition is already running	文字識別已在執行
+	Optimizing… removing user data	正在最佳化…移除使用者資料
+	Optimizing… image {d} of {t}	正在最佳化…第{d}張圖片，共{t}張
+	Optimizing… cleaning up	正在最佳化…清理
+	Optimizing… merging identical objects	正在最佳化…合併相同物件
+	Optimizing… writing the copy	正在最佳化…寫入副本
+	Cancelling…	正在取消…
+	Optimization is already running	最佳化已在執行
+	Optimization cancelled	已取消最佳化
+	Couldn't optimize the file	無法最佳化檔案
 	Recognizing text… file {d} of {t}	正在辨識文字…第{d}個檔案，共{t}個
 	Recognizing text… page {d} of {t}	正在辨識文字…第{d}頁，共{t}頁
 	Recognized 1 word	辨識了 1 個單詞
@@ -1433,7 +1467,63 @@
 	Sent to {printer}	已傳送到{printer}
 	Sent to {printer}: {msg}	已傳送到{printer}：{msg}
 	Choose a folder for the searchable files	選擇可搜尋檔案的資料夾
-	Files are combined in this order. Leave Pages empty to take every page.	檔案將按此順序合併。頁碼留空表示取全部頁面。
+	Files are combined from top to bottom. Leave Pages empty to take every page.	檔案將按從上到下的順序合併。頁碼留空表示取全部頁面。
+	Unlock…	解除鎖定…
+	Select a password-protected file first	請先選取一個受密碼保護的檔案
+	Enter the permissions password to allow combining	輸入權限密碼以允許合併
+	Enter the password that opens it	輸入開啟該檔案的密碼
+	Unlock {name}	解除鎖定 {name}
+	Unlock {n} files	解除鎖定 {n} 個檔案
+	The same password is tried on each file.	將對每個檔案嘗試同一密碼。
+	Hide password	隱藏密碼
+	Show password	顯示密碼
+	Wrong password	密碼錯誤
+	The password is only used to read the file; it isn't saved.	密碼僅用於讀取檔案，不會被儲存。
+	Unlock	解除鎖定
+	Opened, but its security settings don't allow combining. Enter the permissions password.	已開啟，但其安全性設定不允許合併。請輸入權限密碼。
+	Unlocked: the combined file won't be password-protected	已解除鎖定：合併後的檔案將不受密碼保護
+	Unlocked {n} of {m} files	已解除鎖定 {m} 個檔案中的 {n} 個
+	Drop PDFs or folders here, or choose them.	將 PDF 或資料夾拖放到此處，或選取它們。
+	Add folder…	新增資料夾…
+	Add folder and subfolders…	新增資料夾及子資料夾…
+	More ways to add files	更多新增檔案的方式
+	Every PDF in the folder	資料夾中的所有 PDF
+	Every PDF in the folder and the folders inside it	資料夾及其子資料夾中的所有 PDF
+	Add folder	新增資料夾
+	Add folder and subfolders	新增資料夾及子資料夾
+	No PDFs found in {folder}	在 {folder} 中找不到 PDF
+	Added the first {n} PDFs in {folder}	已新增 {folder} 中的前 {n} 個 PDF
+	Click to sort, drag to move the column. Drag its edge to resize it.	按一下以排序，拖曳以移動欄。拖曳欄邊緣可調整寬度。
+	Reset columns	重設欄
+	Remove {n} files	刪除 {n} 個檔案
+	{n} selected	已選取 {n} 個
+	sorted ascending	遞增排序
+	sorted descending	遞減排序
+	Protected: the combined file won't keep its security settings	受保護：合併後的檔案不會保留其安全性設定
+	Add open documents	新增已開啟的文件
+	All open documents	所有已開啟的文件
+	No documents are open	沒有開啟的文件
+	Select a file first	請先選取一個檔案
+	1 file	1 個檔案
+	{n} files	{n} 個檔案
+	1 file needs attention	1 個檔案需要處理
+	{n} files need attention	{n} 個檔案需要處理
+	{name} can't be combined: {why}	無法合併 {name}：{why}
+	Check the pages of {name}: {why}	請檢查 {name} 的頁碼：{why}
+	Add the PDFs to combine	新增要合併的 PDF
+	File name	檔案名稱
+	Warnings	警告
+	Drag to reorder	拖曳以重新排序
+	{k} of {n}	{k}/{n}
+	? of {n}	?/{n}
+	Added more than once	重複新增
+	yesterday	昨天
+	{n} days ago	{n} 天前
+	No pages selected	未選取任何頁面
+	Password-protected	受密碼保護
+	Its security settings don't allow copying pages	其安全性設定不允許複製頁面
+	Can't be read: {e}	無法讀取：{e}
+	Includes unsaved changes	包含未儲存的變更
 	Pages of {name} to combine, e.g. 1-3, 6	要合併的{name}的頁面，例如 1-3、6
 	Remove {name}	刪除{name}
 	Add files…	新增檔案…
@@ -1472,6 +1562,7 @@
 	Created a comment summary	已建立註解摘要
 	Couldn't open {name}: {e}	無法開啟{name}：{e}
 	Couldn't read {name}: {e}	無法讀取{name}：{e}
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	可攜模式已關閉：無法寫入{folder}（{error}）。設定改為儲存在你的使用者資料夾中。
 	Couldn't save: {e}	無法儲存：{e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Web 端附件下載將於 M3.10 到來（{n} 位元組已就緒）
 	`{command}` {when}	`{command}` {when}
@@ -1860,3 +1951,20 @@
 	{n} measurements use an unsupported format and are left out.	{n} 個測量使用了不支援的格式，已被排除。
 	This area has too many overlapping paths; intersection snapping is limited.	此區域有太多重疊路徑；交點吸附受到限制。
 	This measurement needs at least {n} points.	此測量至少需要 {n} 個點。
+	Switch to two-page view first to show the cover page	請先切換到雙頁檢視，才能顯示封面
+	Page display: {layout}	頁面顯示：{layout}
+	Fit to width scrolling	符合寬度連續捲動
+	Fit one full page	單頁完整顯示
+	Created a PDF from {n} files	已從 {n} 個檔案建立 PDF
+	PDF, images and text	PDF、圖片和文字
+	Insert a file before page {label}	在第 {label} 頁之前插入檔案
+	Insert a file at the end	在結尾插入檔案
+	Save pages	儲存頁面
+	Save these pages as one PDF	將這些頁面儲存為一個 PDF
+	No changes to save	沒有要儲存的變更
+	Created a PDF from {n} files; left out: {names}	已從 {n} 個檔案建立 PDF；已略過：{names}
+	Created a PDF from the first {n} files	已從前 {n} 個檔案建立 PDF
+	None of those files can be made into a PDF; use PDFs, images or .txt files	這些檔案都無法轉換為 PDF；請使用 PDF、圖片或 .txt 檔案
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	選擇 PNG 或 JPEG 圖像（最大 4 MiB）。透明度會保留。
+	Couldn't import the signature image: {e}	無法匯入簽名圖像：{e}
+	Go to page…	轉到頁面…

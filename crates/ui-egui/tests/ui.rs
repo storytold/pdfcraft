@@ -57,6 +57,21 @@ fn opening_a_pdf_shows_comments_and_bookmarks() {
     h.get_by_label("Beta section");
 }
 
+/// A right-to-left file name opens, lays out and paints; the tab's accessible name keeps the
+/// logical text (only the painted label is put in visual order).
+#[test]
+fn a_tab_with_an_arabic_file_name_keeps_its_logical_accessible_name() {
+    let name = "واحد اثنين.pdf";
+    let mut h = harness(move |app| app.open_bytes(name, None, FIXTURE.to_vec()).expect("fixture opens"));
+    let tab = h.get_by_label(name).rect();
+    assert!(tab.width() > 64.0 && tab.height() > 0.0, "{tab:?}");
+    // A name longer than the tab's 28-character limit is cut on a character boundary.
+    let long = "واحد اثنين ثلاثة أربعة خمسة ستة سبعة ثمانية.pdf";
+    h.state_mut().open_bytes(long, None, FIXTURE.to_vec()).expect("fixture opens");
+    h.run_steps(3);
+    h.get_by_label(long);
+}
+
 #[test]
 fn garbage_input_is_rejected_without_panicking() {
     let mut app = PdfCraftApp::new();
@@ -239,6 +254,46 @@ fn dropping_a_pdf_on_the_window_opens_it() {
     h.run_steps(3);
     assert_eq!(h.state().views.len(), 1, "the dropped PDF opens in a tab");
     h.get_by_label_contains("dropped.pdf");
+}
+
+#[test]
+fn pdfs_dropped_on_the_combine_tab_join_its_list() {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| PdfCraftApp::new());
+    h.run_steps(3);
+    h.state_mut().execute("page.combine");
+    h.run_steps(2);
+    // An absolute path is read from disk, with its modified time.
+    let path = std::env::temp_dir().join(format!("pdfcraft-combine-drop-{}.pdf", std::process::id()));
+    std::fs::write(&path, FIXTURE).unwrap();
+    let on_disk: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: path.clone(), bytes: Vec::new() });
+    let in_memory: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: "second.pdf".into(), bytes: FIXTURE.to_vec() });
+    h.input_mut().dropped_files.extend([on_disk, in_memory]);
+    h.run_steps(3);
+    std::fs::remove_file(&path).ok();
+    let app = h.state();
+    assert!(app.views.is_empty(), "nothing opens");
+    assert_eq!(app.combine_draft.len(), 2);
+    assert!(app.combine_draft[0].modified.is_some() && app.combine_draft[1].modified.is_none());
+    h.get_by_label("just now");
+}
+
+#[test]
+fn a_folder_dropped_on_the_combine_tab_adds_its_pdfs() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-combine-drop-dir-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("inner")).unwrap();
+    std::fs::write(dir.join("one.pdf"), FIXTURE).unwrap();
+    std::fs::write(dir.join("inner").join("two.pdf"), FIXTURE).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| PdfCraftApp::new());
+    h.run_steps(3);
+    h.state_mut().execute("page.combine");
+    h.run_steps(2);
+    let folder: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: dir.clone(), bytes: Vec::new() });
+    h.input_mut().dropped_files.push(folder);
+    h.run_steps(3);
+    let _ = std::fs::remove_dir_all(&dir);
+    let names: Vec<_> = h.state().combine_draft.iter().map(|f| f.name.clone()).collect();
+    assert_eq!(names, ["two.pdf", "one.pdf"], "subfolders included, in path order");
 }
 
 #[test]

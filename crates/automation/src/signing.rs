@@ -125,6 +125,12 @@ impl Automation {
             #[cfg(not(target_os = "macos"))]
             return Err(failed(format!("keychain:{r}: Keychain identities are only available on macOS")));
         }
+        if let Some(r) = a.str("id")?.strip_prefix("windows:") {
+            #[cfg(target_os = "windows")]
+            return sign::windows::find(&format!("windows:{r}")).map_err(failed);
+            #[cfg(not(target_os = "windows"))]
+            return Err(failed(format!("windows:{r}: Windows certificate store identities are only available on Windows")));
+        }
         let path = self.resolve(a.str("id")?, false)?;
         let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
         sign::pkcs12::open(&bytes, a.opt_str("password")?.unwrap_or("")).map_err(|e| match e {

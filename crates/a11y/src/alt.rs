@@ -144,10 +144,8 @@ fn content_bbox(doc: &Document, page: &Dict, ids: &HashSet<i64>) -> Option<[f64;
         let top = ctm.last().copied().unwrap_or(Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
         match op.op.as_slice() {
             b"q" => ctm.push(top),
-            b"Q" => {
-                if ctm.len() > 1 {
-                    ctm.pop();
-                }
+            b"Q" if ctm.len() > 1 => {
+                ctm.pop();
             }
             b"cm" => {
                 if let Some(m) = Matrix::from_operands(&op.operands)

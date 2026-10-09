@@ -381,12 +381,16 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
     let value_el = child(n, "value");
     let max_chars =
         value_el.and_then(|v| child(v, "text")).and_then(|t| t.attribute("maxChars")).and_then(|m| m.trim().parse::<usize>().ok()).filter(|m| *m > 0);
-    let mut scripts = Vec::new();
-    for ev in children(n, "event") {
-        if let Some(s) = child(ev, "script") {
-            scripts.push(Script { activity: ev.attribute("activity").unwrap_or("").to_string(), text: text_of(s) });
-        }
-    }
+    let scripts = parse_events(n);
+    let numeric = matches!(kind, Ui::NumericEdit)
+        || value_el.is_some_and(|v| v.children().any(|c| c.is_element() && matches!(c.tag_name().name(), "decimal" | "integer" | "float")));
+    let validate_el = child(n, "validate");
+    let validate_message = validate_el
+        .and_then(|v| child(v, "message"))
+        .and_then(|m| children(m, "text").find(|t| t.attribute("name") == Some("scriptTest")).or_else(|| child(m, "text")))
+        .map(text_of)
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
     Field {
         common: parse_common(n),
         ui: kind,
@@ -408,7 +412,28 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         },
         picture: ui.and_then(|u| child(u, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
         scripts,
+        calculate: child(n, "calculate").and_then(|c| child(c, "script")).map(|s| parse_script(s, "calculate")),
+        validate: validate_el.and_then(|v| child(v, "script")).map(|s| parse_script(s, "validate")),
+        validate_message,
+        numeric,
     }
+}
+
+fn parse_script(s: XmlNode, activity: &str) -> Script {
+    let ct = s.attribute("contentType").unwrap_or("");
+    Script { activity: activity.to_string(), text: text_of(s).trim().to_string(), formcalc: !ct.to_ascii_lowercase().contains("javascript") }
+}
+
+/// `<event activity="…"><script>…</script></event>` children.
+fn parse_events(n: XmlNode) -> Vec<Script> {
+    let mut scripts = Vec::new();
+    for ev in children(n, "event").take(64) {
+        if let Some(s) = child(ev, "script") {
+            let activity = ev.attribute("activity").unwrap_or("click");
+            scripts.push(parse_script(s, activity));
+        }
+    }
+    scripts
 }
 
 fn parse_occur(n: Option<XmlNode>) -> Occur {
@@ -478,6 +503,7 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
         common,
         layout: Layout::parse(n.attribute("layout")),
         children: children_out,
+        scripts: parse_events(n),
         page_set,
         occur: parse_occur(child(n, "occur")),
         break_before_page: break_to_page("breakBefore")
@@ -511,6 +537,7 @@ fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<No
             layout: Layout::parse(c.attribute("layout")),
             fields: children(c, "field").map(|f| parse_field(f, warnings)).collect(),
             tooltip: child(c, "assist").and_then(|a| child(a, "toolTip")).map(text_of).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
+            scripts: parse_events(c),
         })),
         _ => return None,
     })

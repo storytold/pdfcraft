@@ -8,6 +8,47 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept.
 
+# About, contributor/model credits, and multiline interface guidance.
+	About	关于
+	Contributors	贡献者
+	Models	模型
+	Show	显示
+	Username	用户名
+	Display name	显示名称
+	Real name	真实姓名
+	Sort	排序
+	Name (A–Z)	名称（A–Z）
+	Merged PRs	已合并的 PR
+	PRs	PR 数
+	Commits	提交数
+	Lines added	新增行数
+	Lines deleted	删除行数
+	Line delta	净增行数
+	Binary assets added	新增二进制资源
+	Binary assets removed	删除二进制资源
+	First commit	首次提交
+	Last commit	最近提交
+	+LOC	新增行
+	−LOC	删除行
+	ΔLOC	净增行
+	+Bin	新增资源
+	−Bin	删除资源
+	First	首次提交
+	Last	最近提交
+	Reverse the order	反转排序
+	Grab bag	名称列表
+	Table	表格
+	{n} contributors · {c} commits	{n} 位贡献者 · {c} 次提交
+	No contributor data was built into this copy.	此版本未包含贡献者数据。
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}：{prs} 个 PR，{commits} 次提交，新增 {added} 行 / 删除 {deleted} 行（净增 {delta} 行），新增 {bin_added} 个 / 删除 {bin_deleted} 个二进制资源，{first} – {last}
+	No model credits were built into this copy.	此版本未包含模型贡献记录。
+	Company	公司
+	Model	模型
+	% of all commits	占全部提交的比例
+	Lines +/−	新增 / 删除行数
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	仅在您信任此文档时继续。链接地址可能携带文档中的信息，例如您在表单中输入的内容。
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	请使用单面打印。保持纸张顺序，沿裁切标记切开，然后按从左到右、从上到下的顺序叠放各摞纸张。
+
 	Menu	菜单
 	File	文件
 	Edit	编辑
@@ -20,12 +61,33 @@
 	Identity	身份
 	Name on new comments	新注释的作者姓名
 	Open…	打开…
+	Open Recent	打开最近的文件
+	Pin folder to Home…	将文件夹固定到主页…
+	Folders	文件夹
+	Pin a folder…	固定文件夹…
+	Pin a folder to Home	将文件夹固定到主页
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	固定一个文件夹，即可在此列出其中最新的 PDF，例如扫描仪或同步云盘保存文件的位置。
+	Unpin	取消固定
+	Unpin {folder}	取消固定 {folder}
+	Looking for PDFs…	正在查找 PDF…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	此文件夹当前不可用。它可能已被移动，或其所在驱动器或云同步处于离线状态。
+	No PDFs in this folder yet	此文件夹中还没有 PDF
+	Show less	收起
+	Show {n} more	再显示 {n} 个
+	The newest {n} of {total} PDFs	共 {total} 个 PDF 中最新的 {n} 个
+	Pinned folders need the desktop app	固定文件夹需要桌面版应用
+	Choose a folder on this computer to pin	请选择此电脑上要固定的文件夹
+	{folder} is already pinned to Home	{folder} 已固定到主页
+	You can pin up to {n} folders. Unpin one first.	最多可固定 {n} 个文件夹。请先取消固定一个。
+	Pinned {folder} to Home	已将 {folder} 固定到主页
+	No recent files	没有最近的文件
 	Open	打开
 	Open file	打开文件
 	Home	主页
 	New blank PDF	新建空白 PDF
 	Create PDF from file…	从文件创建 PDF…
 	Create PDF from images…	从图像创建 PDF…
+	Create PDF from multiple files…	从多个文件创建 PDF…
 	Create PDF from clipboard	从剪贴板创建 PDF
 	Combine files…	合并文件…
 	Save	保存
@@ -444,6 +506,7 @@
 	Sign with a Digital ID	使用数字 ID 签名
 	Choose the digital ID that you want to use for signing:	选择要用于签名的数字 ID：
 	Keychain  ·  	钥匙串 · 
+	Windows store  ·  	Windows 证书存储 · 
 	Issued by: 	颁发者：
 	, Expires: 	，有效期至：
 	No digital IDs yet.	尚无数字 ID。
@@ -473,6 +536,7 @@
 	Annotations, form fill-in, and digital signatures	注释、填写表单和数字签名
 	Form fill-in and digital signatures	填写表单和数字签名
 	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	密钥位于 macOS 钥匙串中，系统可能会询问是否允许 PdfCraft 使用它。
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	密钥位于 Windows 证书存储中，系统可能会询问是否允许 PdfCraft 使用它。
 	Digital ID password	数字 ID 密码
 	Back	返回
 	Validate all	全部验证
@@ -829,6 +893,7 @@
 	Light gray	浅灰色
 	Dark gray	深灰色
 	Current page	当前页
+	Selected pages	选定的页面
 	Document language	文档语言
 	Output	输出
 	Searchable Image (Exact)	可搜索图像（精确）
@@ -1145,6 +1210,7 @@
 	This document has no attachments.	本文档没有附件。
 	Hide layer	隐藏图层
 	Show layer	显示图层
+	Set layer visibility	设置图层可见性
 	on page {label}	第 {label} 页
 	Save attachment…	保存附件…
 	Open in a new tab	在新选项卡中打开
@@ -1411,6 +1477,15 @@
 	Created 1 link	已创建 1 个链接
 	Created {n} links	已创建{n}个链接
 	Text recognition is already running	文本识别已在运行
+	Optimizing… removing user data	正在优化…删除用户数据
+	Optimizing… image {d} of {t}	正在优化…第{d}张图像，共{t}张
+	Optimizing… cleaning up	正在优化…清理
+	Optimizing… merging identical objects	正在优化…合并相同对象
+	Optimizing… writing the copy	正在优化…写入副本
+	Cancelling…	正在取消…
+	Optimization is already running	优化已在运行
+	Optimization cancelled	已取消优化
+	Couldn't optimize the file	无法优化文件
 	Recognizing text… file {d} of {t}	正在识别文本…第{d}个文件，共{t}个
 	Recognizing text… page {d} of {t}	正在识别文本…第{d}页，共{t}页
 	Recognized 1 word	识别了 1 个单词
@@ -1434,7 +1509,63 @@
 	Sent to {printer}	已发送到{printer}
 	Sent to {printer}: {msg}	已发送到{printer}：{msg}
 	Choose a folder for the searchable files	选择可搜索文件的文件夹
-	Files are combined in this order. Leave Pages empty to take every page.	文件将按此顺序合并。页码留空表示取全部页面。
+	Files are combined from top to bottom. Leave Pages empty to take every page.	文件按从上到下的顺序合并。页码留空表示取全部页面。
+	Unlock…	解锁…
+	Select a password-protected file first	请先选择一个受密码保护的文件
+	Enter the permissions password to allow combining	输入权限密码以允许合并
+	Enter the password that opens it	输入打开该文件的密码
+	Unlock {name}	解锁 {name}
+	Unlock {n} files	解锁 {n} 个文件
+	The same password is tried on each file.	将对每个文件尝试同一密码。
+	Hide password	隐藏密码
+	Show password	显示密码
+	Wrong password	密码错误
+	The password is only used to read the file; it isn't saved.	密码仅用于读取文件，不会被保存。
+	Unlock	解锁
+	Opened, but its security settings don't allow combining. Enter the permissions password.	已打开，但其安全设置不允许合并。请输入权限密码。
+	Unlocked: the combined file won't be password-protected	已解锁：合并后的文件将不受密码保护
+	Unlocked {n} of {m} files	已解锁 {m} 个文件中的 {n} 个
+	Drop PDFs or folders here, or choose them.	将 PDF 或文件夹拖放到此处，或选择它们。
+	Add folder…	添加文件夹…
+	Add folder and subfolders…	添加文件夹及子文件夹…
+	More ways to add files	更多添加文件的方式
+	Every PDF in the folder	文件夹中的所有 PDF
+	Every PDF in the folder and the folders inside it	文件夹及其子文件夹中的所有 PDF
+	Add folder	添加文件夹
+	Add folder and subfolders	添加文件夹及子文件夹
+	No PDFs found in {folder}	在 {folder} 中未找到 PDF
+	Added the first {n} PDFs in {folder}	已添加 {folder} 中的前 {n} 个 PDF
+	Click to sort, drag to move the column. Drag its edge to resize it.	单击以排序，拖动以移动列。拖动列边缘可调整宽度。
+	Reset columns	重置列
+	Remove {n} files	删除 {n} 个文件
+	{n} selected	已选择 {n} 个
+	sorted ascending	升序
+	sorted descending	降序
+	Protected: the combined file won't keep its security settings	受保护：合并后的文件不会保留其安全设置
+	Add open documents	添加已打开的文档
+	All open documents	所有已打开的文档
+	No documents are open	没有打开的文档
+	Select a file first	请先选择一个文件
+	1 file	1 个文件
+	{n} files	{n} 个文件
+	1 file needs attention	1 个文件需要处理
+	{n} files need attention	{n} 个文件需要处理
+	{name} can't be combined: {why}	无法合并 {name}：{why}
+	Check the pages of {name}: {why}	请检查 {name} 的页码：{why}
+	Add the PDFs to combine	添加要合并的 PDF
+	File name	文件名
+	Warnings	警告
+	Drag to reorder	拖动以重新排序
+	{k} of {n}	{k}/{n}
+	? of {n}	?/{n}
+	Added more than once	重复添加
+	yesterday	昨天
+	{n} days ago	{n} 天前
+	No pages selected	未选择任何页面
+	Password-protected	受密码保护
+	Its security settings don't allow copying pages	其安全设置不允许复制页面
+	Can't be read: {e}	无法读取：{e}
+	Includes unsaved changes	包含未保存的更改
 	Pages of {name} to combine, e.g. 1-3, 6	要合并的{name}的页面，例如 1-3、6
 	Remove {name}	删除{name}
 	Add files…	添加文件…
@@ -1473,6 +1604,7 @@
 	Created a comment summary	已创建注释摘要
 	Couldn't open {name}: {e}	无法打开{name}：{e}
 	Couldn't read {name}: {e}	无法读取{name}：{e}
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	便携模式已关闭：无法写入{folder}（{error}）。设置改为保存在你的用户文件夹中。
 	Couldn't save: {e}	无法保存：{e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Web 端附件下载将于 M3.10 到来（{n} 字节已就绪）
 	`{command}` {when}	`{command}` {when}
@@ -1858,17 +1990,26 @@
 	Change {what}	更改{what}
 	Cut and stack	裁切后堆叠
 	Default workspace mode	默认工作区模式
+	Default page display	默认页面显示
+	Default zoom	默认缩放
 	Documents and view	文档与视图
+	Fit one full page	单页完整显示
+	Fit to width scrolling	适合宽度连续滚动
 	Open email app	打开邮件应用
 	Open link	打开链接
 	Open this web page?	是否打开此网页？
+	Page display: {layout}	页面显示：{layout}
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	脚本在沙盒中运行，无法访问文件或网络。脚本请求打开网页时，需要先获得您的许可。关闭 JavaScript 后，Acrobat 的标准格式、验证和计算函数仍可使用。
 	Sign yourself	自行签名
+	Switch to two-page view first to show the cover page	请先切换到双页视图，才能显示封面页
 	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	尚未安装文本识别功能：缺少模型（请运行 `cargo xtask models` 或设置 PDFCRAFT_MODELS）。
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	用于打开 PDF 时。如果启动参数或控制通道明确指定了模式，则本次会话优先使用该模式。
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF 未指定布局或缩放时使用。连续滚动时页面不会逐页吸附。
 	Write this email?	是否撰写此邮件？
 	{who} in this document wants to open this address in your browser:	此文档中的{who}请求在浏览器中打开以下地址：
 	{who} in this document wants to open your email app with this address:	此文档中的{who}请求打开邮件应用并使用以下地址：
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	此网址混用了不同字母表的字母，这是仿冒其他网站名称的常见手法。
+	This web address uses letters from another alphabet, which can look like familiar ones.	此网址使用了其他字母表的字母，它们可能看起来像熟悉的字母。
 	CheckBox	复选框
 	Create link	创建链接
 	Duplicate field	复制字段
@@ -1890,3 +2031,16 @@
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA 表单：字段与 XFA 数据保持同步，以便其他阅读器显示您填写的内容。
 @plural	{n} page|{n} pages	{n} 页
 @plural	{n} field|{n} fields	{n} 个字段
+	Created a PDF from {n} files	已从 {n} 个文件创建 PDF
+	PDF, images and text	PDF、图像和文本
+	Insert a file before page {label}	在第 {label} 页之前插入文件
+	Insert a file at the end	在末尾插入文件
+	Save pages	保存页面
+	Save these pages as one PDF	将这些页面保存为一个 PDF
+	No changes to save	没有要保存的更改
+	Created a PDF from {n} files; left out: {names}	已从 {n} 个文件创建 PDF；已忽略：{names}
+	Created a PDF from the first {n} files	已从前 {n} 个文件创建 PDF
+	None of those files can be made into a PDF; use PDFs, images or .txt files	这些文件都无法转换为 PDF；请使用 PDF、图像或 .txt 文件
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	选择 PNG 或 JPEG 图像（最大 4 MiB）。透明度会保留。
+	Couldn't import the signature image: {e}	无法导入签名图像：{e}
+	Go to page…	转到页面…

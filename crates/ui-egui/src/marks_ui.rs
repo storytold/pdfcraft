@@ -145,6 +145,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     let count = doc.info.pages.len();
     let page = doc.info.pages.get(current).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
     let d = &mut app.marks_draft;
+    let mut browse = false;
     let verb = if d.replace { tl!("Update") } else { tl!("Add") };
     let title = match kind {
         MarkKind::HeaderFooter => crate::i18n::fmt(tl!("{verb} Header and Footer"), &[("verb", verb)]),
@@ -224,7 +225,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 ui.radio_value(&mut d.use_file, true, tl!("File"));
             });
             if d.use_file {
-                file_source(ui, d, MarkKind::Watermark);
+                browse |= file_source(ui, d, MarkKind::Watermark);
             }
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
@@ -279,7 +280,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 ui.radio_value(&mut d.use_file, true, tl!("File"));
             });
             if d.use_file {
-                file_source(ui, d, MarkKind::Background);
+                browse |= file_source(ui, d, MarkKind::Background);
             }
             ui.horizontal(|ui| {
                 ui.label(tl!("Opacity"));
@@ -398,6 +399,23 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
             cancel = true;
         }
     });
+    // Browse…: the picker answers on a later frame, into the draft.
+    #[cfg(not(target_arch = "wasm32"))]
+    if browse {
+        let dialog = rfd::AsyncFileDialog::new()
+            .add_filter(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"]);
+        let epoch = app.dialog_epoch();
+        app.ask_one(crate::pickers::Ask::File(dialog), None, move |app, p| {
+            // Only into the dialog that asked: not one closed meanwhile, or opened again since.
+            if app.dialog_epoch() != epoch {
+                return;
+            }
+            app.marks_draft.file =
+                std::fs::read(&p).ok().map(|b| (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), std::sync::Arc::new(b)));
+        });
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = browse;
     (apply, cancel)
 }
 
@@ -406,19 +424,16 @@ fn mark_file(d: &MarksDraft) -> Option<pdfcraft_engine::MarkFile> {
     Some(pdfcraft_engine::MarkFile { name, bytes, page: d.file_page.max(1) - 1 })
 }
 
-/// Source ▸ File: Browse…, the page of a PDF, and the size relative to the page.
-fn file_source(ui: &mut egui::Ui, d: &mut MarksDraft, kind: MarkKind) {
+/// Source ▸ File: Browse…, the page of a PDF, and the size relative to the page. Returns true
+/// when Browse… was clicked (the caller shows the picker once it no longer borrows the draft).
+fn file_source(ui: &mut egui::Ui, d: &mut MarksDraft, kind: MarkKind) -> bool {
+    // Browse… is desktop-only.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut browse = false;
     ui.horizontal(|ui| {
         #[cfg(not(target_arch = "wasm32"))]
-        if ui.button(tl!("Browse…")).clicked()
-            && let Some(p) = rfd::FileDialog::new()
-                .add_filter(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                .pick_file()
-        {
-            match std::fs::read(&p) {
-                Ok(b) => d.file = Some((p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), std::sync::Arc::new(b))),
-                Err(_) => d.file = None,
-            }
+        if ui.button(tl!("Browse…")).clicked() {
+            browse = true;
         }
         ui.label(d.file.as_ref().map(|f| f.0.clone()).unwrap_or_else(|| tl!("No file chosen").to_string()));
         if d.file.as_ref().is_some_and(|f| f.1.starts_with(b"%PDF")) {
@@ -434,6 +449,7 @@ fn file_source(ui: &mut egui::Ui, d: &mut MarksDraft, kind: MarkKind) {
             *scale = pct / 100.0;
         }
     });
+    browse
 }
 
 /// The edit the dialog's OK makes.

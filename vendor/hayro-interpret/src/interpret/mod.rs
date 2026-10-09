@@ -1,11 +1,11 @@
-use crate::FillRule;
+use crate::{BlendMode, FillRule};
 use crate::color::ColorSpace;
 use crate::context::Context;
 use crate::convert::{convert_line_cap, convert_line_join};
 use crate::device::Device;
 use crate::font::{Font, FontData, FontQuery, StandardFont};
 use crate::interpret::path::{
-    close_path, fill_path, fill_path_impl, fill_stroke_path, stroke_path,
+    apply_pending_clip, close_path, fill_path, fill_path_impl, fill_stroke_path, stroke_path,
 };
 use crate::interpret::state::{TextStateFont, handle_gs};
 use crate::interpret::text::TextRenderingMode;
@@ -17,10 +17,12 @@ use crate::x_object::{
 };
 use hayro_syntax::content::TypedIter;
 use hayro_syntax::content::ops::TypedInstruction;
-use hayro_syntax::object::dict::keys::{ANNOTS, AP, AS, F, MCID, N, OC, RECT, SUBTYPE};
+use hayro_syntax::object::dict::keys::{
+    ANNOTS, AP, AS, C, CA, F, MCID, N, OC, QUADPOINTS, RECT, SUBTYPE,
+};
 use hayro_syntax::object::{Array, Dict, Object, Rect, Stream, dict_or_stream};
 use hayro_syntax::page::{Page, Resources};
-use kurbo::{Affine, Point, Shape};
+use kurbo::{Affine, BezPath, Point, Shape};
 use smallvec::smallvec;
 use std::sync::Arc;
 
@@ -211,14 +213,33 @@ pub fn interpret_page<'a>(
                 // corner with the greatest x and y coordinates) of the
                 // transformed appearance box to the corresponding corners
                 // of the annotation’s rectangle.
-                let affine = Affine::new([
+                // PdfCraft patch: the translation is taken after scaling (it was
+                // `/Rect.x0 - box.x0`, right only for a box at the origin or a scale of 1).
+                let (sx, sy) = (
                     annot_rect.width() / transformed_rect.width(),
-                    0.0,
-                    0.0,
                     annot_rect.height() / transformed_rect.height(),
-                    annot_rect.x0 - transformed_rect.x0,
-                    annot_rect.y0 - transformed_rect.y0,
+                );
+                let affine = Affine::new([
+                    sx,
+                    0.0,
+                    0.0,
+                    sy,
+                    annot_rect.x0 - sx * transformed_rect.x0,
+                    annot_rect.y0 - sy * transformed_rect.y0,
                 ]);
+
+                // PdfCraft patch: a /BBox or /Matrix that collapses the appearance box to a line
+                // or a point leaves nothing to map onto /Rect: the scales above divide by zero,
+                // and the infinite or NaN matrix reached the device with everything the
+                // appearance draws. Clipped to such a box the appearance shows nothing, so skip
+                // it, as when the mapping overflows.
+                if !(transformed_rect.is_finite()
+                    && transformed_rect.width() > 0.0
+                    && transformed_rect.height() > 0.0
+                    && affine.is_finite())
+                {
+                    continue;
+                }
 
                 // 3) Matrix shall be concatenated with A to form a matrix
                 // AA that maps from the appearance’s coordinate system to
@@ -230,9 +251,66 @@ pub fn interpret_page<'a>(
                 draw_form_xobject(resources, &apx, context, device);
                 context.pop_root_transform();
                 context.restore_state(device);
+            } else if annot.get::<hayro_syntax::object::Name<'_>>(SUBTYPE).as_deref() == Some(b"Highlight") {
+                // PdfCraft patch: a Highlight without a usable normal appearance was not drawn.
+                draw_highlight_without_appearance(&annot, context, device);
             }
         }
     }
+}
+
+/// PdfCraft patch: the normal appearance of a Highlight annotation that has none (ISO 32000-2
+/// §12.5.6.10), drawn as PdfCraft draws its own highlights (pdfcraft-annot): each /QuadPoints
+/// quadrilateral filled with /C at /CA opacity, blended with Multiply so the marked-up content
+/// stays legible. /QuadPoints that aren't groups of eight numbers, or a /C that isn't a gray, RGB
+/// or CMYK colour (absent or empty means transparent), draw nothing.
+fn draw_highlight_without_appearance<'a>(
+    annot: &Dict<'a>,
+    context: &mut Context<'a>,
+    device: &mut impl Device<'a>,
+) {
+    let numbers = |key| -> Option<Vec<f32>> {
+        annot
+            .get::<Array<'_>>(key)?
+            .iter::<Object<'_>>()
+            .map(|o| match o {
+                Object::Number(n) => Some(n.as_f32()),
+                _ => None,
+            })
+            .collect()
+    };
+    let Some(quad_points) = numbers(QUADPOINTS).filter(|q| !q.is_empty() && q.len() % 8 == 0)
+    else {
+        return;
+    };
+    let (color_space, color) = match numbers(C).as_deref() {
+        Some(&[g]) => (ColorSpace::device_gray(), smallvec![g]),
+        Some(&[r, g, b]) => (ColorSpace::device_rgb(), smallvec![r, g, b]),
+        Some(&[c, m, y, k]) => (ColorSpace::device_cmyk(), smallvec![c, m, y, k]),
+        _ => return,
+    };
+
+    let mut path = BezPath::new();
+    // Corners in /QuadPoints order: upper left, upper right, lower left, lower right.
+    for &[x1, y1, x2, y2, x3, y3, x4, y4] in quad_points.as_chunks::<8>().0 {
+        path.move_to((x1 as f64, y1 as f64));
+        path.line_to((x2 as f64, y2 as f64));
+        path.line_to((x4 as f64, y4 as f64));
+        path.line_to((x3 as f64, y3 as f64));
+        path.close_path();
+    }
+
+    context.save_state();
+    let state = &mut context.get_mut().graphics_state;
+    state.none_stroke_cs = color_space;
+    state.non_stroke_color = color;
+    state.non_stroke_pattern = None;
+    state.non_stroke_alpha = annot.get::<f32>(CA).unwrap_or(1.0).clamp(0.0, 1.0);
+    state.soft_mask = None;
+    state.blend_mode = BlendMode::Multiply;
+    *context.path_mut() = path;
+    fill_path(context, device, FillRule::NonZero);
+    context.restore_state(device);
 }
 
 /// Interpret the instructions from `ops` and render them into the device.
@@ -401,15 +479,7 @@ pub fn interpret<'a>(
                 stroke_path(context, device);
             }
             TypedInstruction::EndPath(_) => {
-                if let Some(clip) = *context.clip()
-                    && !context.path().elements().is_empty()
-                {
-                    let clip_path = context.get().ctm * context.path().clone();
-                    context.push_clip_path(clip_path, clip, device);
-
-                    *(context.clip_mut()) = None;
-                }
-
+                apply_pending_clip(context, device);
                 context.path_mut().truncate(0);
             }
             TypedInstruction::NonStrokeColor(c) => {

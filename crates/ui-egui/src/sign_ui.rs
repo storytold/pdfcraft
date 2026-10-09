@@ -157,9 +157,44 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
     }
 }
 
-/// Where new digital IDs are saved: next to the recovery folder (`…/PdfCraft/Digital IDs`).
+/// Where new digital IDs are saved: next to the recovery folder (`…/PdfCraft/Digital IDs`, or
+/// `PdfCraftData/Digital IDs` in portable mode).
 fn id_dir() -> Option<PathBuf> {
     crate::recovery::RecoveryStore::default_dir().and_then(|d| d.parent().map(|p| p.join("Digital IDs")))
+}
+
+/// Save a new digital ID as `<stem>.p12`, or `<stem> 2.p12`, … when the name is taken. The file
+/// is always created fresh, never opened through a file or link already at the name (checking
+/// first and then writing would let one be planted in between), and on Unix only its owner can
+/// read it: it holds the private key.
+fn save_new_id_file(dir: &std::path::Path, stem: &str, p12: &[u8]) -> std::io::Result<PathBuf> {
+    use std::io::{ErrorKind, Write};
+    for i in 1..=10_000u32 {
+        let path = dir.join(if i == 1 { format!("{stem}.p12") } else { format!("{stem} {i}.p12") });
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+        let file = match opts.open(&path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            // Windows refuses `create_new` on a folder with "access denied"; the name is taken all
+            // the same. A folder we can't write to, with nothing at the name, still fails here.
+            Err(e) if e.kind() == ErrorKind::PermissionDenied && path.symlink_metadata().is_ok() => continue,
+            Err(e) => return Err(e),
+        };
+        // The block closes the file before a failed one is removed (Windows can't remove an open file).
+        let written = {
+            let mut file = file;
+            file.write_all(p12).and_then(|()| file.sync_all())
+        };
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&path);
+            return Err(e);
+        }
+        return Ok(path);
+    }
+    Err(std::io::Error::new(ErrorKind::AlreadyExists, "no free file name for the digital ID"))
 }
 
 /// A Keychain identity by its `keychain:` reference.
@@ -168,6 +203,14 @@ fn keychain_id(reference: &str) -> Result<DigitalId, String> {
     return sign::keychain::find(reference).map_err(|e| e.to_string());
     #[cfg(not(target_os = "macos"))]
     Err(format!("{reference}: Keychain identities are only available on macOS"))
+}
+
+/// A Windows store identity by its `windows:` reference.
+fn windows_id(reference: &str) -> Result<DigitalId, String> {
+    #[cfg(target_os = "windows")]
+    return sign::windows::find(reference).map_err(|e| e.to_string());
+    #[cfg(not(target_os = "windows"))]
+    Err(format!("{reference}: Windows certificate store identities are only available on Windows"))
 }
 
 pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
@@ -183,16 +226,16 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
 impl PdfCraftApp {
     /// Start signing: the rectangle (or field) is known; show Sign with a Digital ID.
     pub fn start_signing(&mut self, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>) {
-        self.refresh_keychain_ids();
+        self.refresh_os_key_store_ids();
         self.sign_draft = Some(SignDraft::new(page, rect, field, certify, self.digital_ids.len()));
         self.dialog = Some(crate::Dialog::Sign);
     }
 
-    /// List the macOS Keychain's signing identities (after the file-based IDs).
-    fn refresh_keychain_ids(&mut self) {
-        self.digital_ids.retain(|e| !e.path.starts_with("keychain:"));
+    /// List OS key store signing identities (after the file-based IDs).
+    fn refresh_os_key_store_ids(&mut self) {
+        self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:"));
         #[cfg(target_os = "macos")]
-        if self.keychain_ids {
+        if self.os_key_store_ids {
             match sign::keychain::identities(None) {
                 Ok(ids) => {
                     for id in ids {
@@ -200,6 +243,17 @@ impl PdfCraftApp {
                     }
                 }
                 Err(e) => self.notify_fmt("The Keychain's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
+            }
+        }
+        #[cfg(target_os = "windows")]
+        if self.os_key_store_ids {
+            match sign::windows::identities() {
+                Ok(ids) => {
+                    for id in ids {
+                        self.digital_ids.push(entry_for(&sign::windows::reference(&id.certificate), &id.certificate));
+                    }
+                }
+                Err(e) => self.notify_fmt("The Windows store's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
             }
         }
     }
@@ -247,11 +301,7 @@ impl PdfCraftApp {
         .ok_or("There is no folder to save the digital ID in.")?;
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let stem: String = d.name.trim().chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
-        let path = (1..=u64::MAX)
-            .map(|i| dir.join(if i == 1 { format!("{stem}.p12") } else { format!("{stem} {i}.p12") }))
-            .find(|p| !p.exists())
-            .ok_or("no free file name for the digital ID")?;
-        std::fs::write(&path, &p12).map_err(|e| e.to_string())?;
+        let path = save_new_id_file(&dir, &stem, &p12).map_err(|e| e.to_string())?;
         Ok(self.add_digital_id(&path.to_string_lossy(), &cert))
     }
 
@@ -268,11 +318,18 @@ impl PdfCraftApp {
 
     /// Sign as …: open the ID, sign, save the signed file (Save As), and show it.
     fn finish_signing(&mut self) -> Result<(), String> {
+        // What's typed in a form field is signed with the document (#166). A rejected value keeps
+        // the dialog open; the notice says why.
+        if !self.commit_form_typing() {
+            return Err(String::new());
+        }
         let Some((_, doc_id)) = self.active_ids() else { return Err("no document".into()) };
         let d = self.sign_draft.clone().ok_or("nothing to sign")?;
         let entry = d.selected.and_then(|i| self.digital_ids.get(i)).cloned().ok_or("Choose a digital ID.")?;
         let id = if entry.path.starts_with("keychain:") {
             keychain_id(&entry.path)?
+        } else if entry.path.starts_with("windows:") {
+            windows_id(&entry.path)?
         } else {
             let bytes = std::fs::read(&entry.path).map_err(|e| format!("{}: {e}", entry.path))?;
             sign::pkcs12::open(&bytes, &d.password).map_err(|e| match e {
@@ -291,26 +348,50 @@ impl PdfCraftApp {
             appearance: d.appearance.clone(),
             ..SignOptions::default()
         };
-        let signed = self.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?;
-        // Signing saves, as in Acrobat: choose where (a cancelled save cancels signing).
+        // Signing saves, as in Acrobat: choose where (a cancelled save cancels signing). The
+        // document is signed once the user has chosen.
         let name = self.session.get(doc_id).map(|d| d.name.clone()).unwrap_or_default();
         let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
-        let path = match self.save_override.clone() {
-            Some(p) => Some(PathBuf::from(p)),
-            #[cfg(not(target_arch = "wasm32"))]
-            None => rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem}_signed.pdf")).save_file(),
-            #[cfg(target_arch = "wasm32")]
-            None => None,
+        let sign_and_save = move |app: &mut Self, path: PathBuf| -> Result<(), String> {
+            // Sign what was typed while the save panel was open, too (#166); a refused value
+            // has said why already.
+            if !app.commit_typing_in(doc_id) {
+                return Err(String::new());
+            }
+            let signed = app.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?;
+            crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()).map_err(|e| format!("Could not save: {e}"))?;
+            app.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
+            if let Some(view) = app.views.iter_mut().find(|v| v.id == doc_id) {
+                view.invalidate_content();
+            }
+            app.right = Some(crate::RightPanel::Signatures);
+            app.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]);
+            Ok(())
         };
-        let Some(path) = path else { return Err(String::new()) };
-        std::fs::write(&path, signed.as_slice()).map_err(|e| format!("Could not save: {e}"))?;
-        self.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
-        if let Some((i, _)) = self.active_ids() {
-            self.views[i].invalidate_content();
+        match self.save_override.clone() {
+            Some(p) => sign_and_save(self, PathBuf::from(p)),
+            #[cfg(not(target_arch = "wasm32"))]
+            None => {
+                let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem}_signed.pdf"));
+                // The signature's page, rectangle and field refer to the document as it is now:
+                // the pick is dropped (with a notice) if it is edited or switched away from
+                // meanwhile. Once the picker shows, the dialog closes; an error from here on
+                // arrives as a notice. If no picker could show, the dialog stays open.
+                let asked = self.ask_one(crate::pickers::Ask::Save(dialog), Some(doc_id), move |app, path| {
+                    if let Err(e) = sign_and_save(app, path)
+                        && !e.is_empty()
+                    {
+                        app.notify(e);
+                    }
+                });
+                if asked { Ok(()) } else { Err(String::new()) }
+            }
+            #[cfg(target_arch = "wasm32")]
+            None => {
+                let _ = (stem, sign_and_save);
+                Err(String::new())
+            }
         }
-        self.right = Some(crate::RightPanel::Signatures);
-        self.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]);
-        Ok(())
     }
 
     /// Trust a certificate (Signatures panel ▸ Add to trusted certificates), revalidating.
@@ -328,7 +409,7 @@ impl PdfCraftApp {
         match self.session.open_revision(id, n) {
             Ok(new) => {
                 let Some(doc) = self.session.get(new) else { return };
-                self.views.push(DocView::new(new, &doc.info));
+                self.views.push(DocView::new(new, &doc.info, self.view_defaults));
                 self.active = Some(self.views.len() - 1);
             }
             Err(e) => self.notify_fmt("Couldn't open revision {n}: {e}", &[("n", &n.to_string()), ("e", &e.to_string())]),
@@ -344,7 +425,7 @@ impl PdfCraftApp {
         match self.session.open(format!("{name}.pdf"), None, std::sync::Arc::new(bytes), doc.password.clone().as_deref()) {
             Ok(new) => {
                 let Some(doc) = self.session.get(new) else { return };
-                self.views.push(DocView::new(new, &doc.info));
+                self.views.push(DocView::new(new, &doc.info, self.view_defaults));
                 self.active = Some(self.views.len() - 1);
             }
             Err(e) => self.notify_fmt("Couldn't open the signed version: {e}", &[("e", &e.to_string())]),
@@ -400,7 +481,13 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             ui.painter().text(rect.min + vec2(40.0, 9.0), egui::Align2::LEFT_TOP, &e.name, theme::semibold(13.0), t.text);
             let sub = format!(
                 "{keychain}{email}{issued}{issuer}{expires}{date}",
-                keychain = if e.path.starts_with("keychain:") { tl!("Keychain  ·  ").to_string() } else { String::new() },
+                keychain = if e.path.starts_with("keychain:") {
+                    tl!("Keychain  ·  ").to_string()
+                } else if e.path.starts_with("windows:") {
+                    tl!("Windows store  ·  ").to_string()
+                } else {
+                    String::new()
+                },
                 email = if e.email.is_empty() { String::new() } else { format!("{}  ·  ", e.email) },
                 issued = tl!("Issued by: "),
                 issuer = e.issuer,
@@ -443,6 +530,9 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let mut close = false;
     let mut go = false;
+    // Browse… is desktop-only.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut browse = false;
     ui.radio_value(&mut d.new_id.create, false, tl!("Use a Digital ID from a file"));
     ui.radio_value(&mut d.new_id.create, true, tl!("Create a new Digital ID (self-signed, saved to a password-protected file)"));
     ui.add_space(8.0);
@@ -487,10 +577,8 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut n.file).desired_width(220.0)).labelled_by(l.id);
                 #[cfg(not(target_arch = "wasm32"))]
-                if ui.button(tl!("Browse…")).clicked()
-                    && let Some(p) = rfd::FileDialog::new().add_filter(tl!("Digital ID"), &["p12", "pfx"]).pick_file()
-                {
-                    n.file = p.to_string_lossy().into_owned();
+                if ui.button(tl!("Browse…")).clicked() {
+                    browse = true;
                 }
             });
             ui.end_row();
@@ -529,6 +617,22 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             Err(e) => d.error = Some(e),
         }
     }
+    // The picker answers on a later frame, into the draft if the same dialog is still open.
+    #[cfg(not(target_arch = "wasm32"))]
+    if browse {
+        let dialog = rfd::AsyncFileDialog::new().add_filter(tl!("Digital ID"), &["p12", "pfx"]);
+        let epoch = app.dialog_epoch();
+        app.ask_one(crate::pickers::Ask::File(dialog), None, move |app, p| {
+            // Not one closed meanwhile, or opened again since.
+            if app.dialog_epoch() == epoch
+                && let Some(d) = app.sign_draft.as_mut()
+            {
+                d.new_id.file = p.to_string_lossy().into_owned();
+            }
+        });
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = browse;
     close
 }
 
@@ -576,7 +680,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             &[("verb", if d.certify.is_some() { tl!("Certify") } else { tl!("Sign") }), ("name", &entry.name)],
         ),
     );
-    let in_keychain = entry.path.starts_with("keychain:");
+    let in_os_key_store = entry.path.starts_with("keychain:") || entry.path.starts_with("windows:");
     let mut close = false;
     let mut go = false;
     if d.rect.is_some() || d.field.is_some() {
@@ -618,10 +722,16 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         let l = ui.label(tl!("Location"));
         ui.add(egui::TextEdit::singleline(&mut d.location).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
         ui.end_row();
-        if in_keychain {
+        if in_os_key_store {
             ui.label("");
             ui.label(
-                egui::RichText::new(tl!("The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.")).small().color(t.text_muted),
+                egui::RichText::new(if entry.path.starts_with("windows:") {
+                    tl!("The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.")
+                } else {
+                    tl!("The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.")
+                })
+                .small()
+                .color(t.text_muted),
             );
         } else {
             let l = ui.label(tl!("Digital ID password"));
@@ -999,4 +1109,87 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
 /// The text of an exported certificate (`.cer`, PEM).
 pub fn certificate_pem(c: &Certificate) -> String {
     sign::x509::to_pem(c)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh folder per call: tests run in parallel.
+    fn scratch() -> PathBuf {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("pdfcraft-sign-ui-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Create a digital ID named "Grace Hopper" in `dir`, as Configure New Digital ID ▸ Create
+    /// does. Returns where it was saved.
+    fn create_in(dir: &std::path::Path) -> Result<PathBuf, String> {
+        let mut app = PdfCraftApp::new();
+        app.export_dir_override = Some(dir.to_string_lossy().into_owned());
+        let mut draft = SignDraft::new(0, None, None, None, 0);
+        // P-256 keeps the test fast.
+        let key = KEY_ALGORITHMS.iter().position(|k| k.1 == "p256").unwrap();
+        draft.new_id =
+            NewIdDraft { name: "Grace Hopper".into(), key, password: "secret1".into(), confirm: "secret1".into(), ..NewIdDraft::default() };
+        app.sign_draft = Some(draft);
+        let i = app.create_digital_id()?;
+        Ok(PathBuf::from(&app.digital_ids[i].path))
+    }
+
+    #[test]
+    fn a_new_digital_id_skips_names_already_taken_without_writing_through_them() {
+        let dir = scratch();
+        // Another file's hard link at the first name, and a folder at the second (Windows refuses
+        // `create_new` on a folder with "access denied" rather than "already exists").
+        std::fs::write(dir.join("victim.txt"), "keep me").unwrap();
+        std::fs::hard_link(dir.join("victim.txt"), dir.join("Grace Hopper.p12")).unwrap();
+        std::fs::create_dir(dir.join("Grace Hopper 2.p12")).unwrap();
+        let saved = create_in(&dir).unwrap();
+        assert_eq!(saved, dir.join("Grace Hopper 3.p12"));
+        assert_eq!(std::fs::read_to_string(dir.join("victim.txt")).unwrap(), "keep me");
+        assert!(sign::pkcs12::open(&std::fs::read(&saved).unwrap(), "secret1").is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_digital_id_is_not_written_through_a_dangling_link() {
+        // `exists()` follows links, so a link to a file that doesn't exist yet looked free, and
+        // `fs::write` then created the private key wherever the link pointed.
+        let dir = scratch();
+        let (link, target) = (dir.join("Grace Hopper.p12"), dir.join("elsewhere.p12"));
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&target, &link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&target, &link);
+        #[cfg(not(any(unix, windows)))]
+        let made: std::io::Result<()> = {
+            let _ = (&target, &link);
+            Err(std::io::ErrorKind::Unsupported.into())
+        };
+        if let Err(e) = made {
+            // Windows needs Developer Mode (or admin) for symlinks.
+            eprintln!("skipped: can't create a symlink here: {e}");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let saved = create_in(&dir).unwrap();
+        assert!(!target.exists(), "nothing written through the link");
+        assert_eq!(saved, dir.join("Grace Hopper 2.p12"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_digital_id_is_readable_by_its_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch();
+        let saved = create_in(&dir).unwrap();
+        let mode = std::fs::metadata(&saved).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "the private key is not readable by others: {mode:o}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

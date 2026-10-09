@@ -1,5 +1,5 @@
 //! The Print dialog (Acrobat's File ▸ Print, execution plan M10.5): printer, copies, grayscale;
-//! pages to print (all, current, range with labels; odd/even, reverse); page sizing & handling
+//! pages to print (all, current, range with labels, the selected pages; odd/even, reverse); page sizing & handling
 //! (Size, Poster, Multiple, Booklet); orientation; comments & forms; and a live preview of the
 //! sheets. Printing sends the print-ready PDF to the system spooler; "Save as PDF" writes it.
 
@@ -14,6 +14,8 @@ pub enum Which {
     All,
     Current,
     Range,
+    /// The pages picked in the Pages panel or the organize grid when the dialog opened.
+    Selected,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +37,8 @@ pub struct PrintDraft {
     pub duplex: spool::Duplex,
     pub which: Which,
     pub range: String,
+    /// The pages `Which::Selected` prints (0-based, in page order); empty when none were picked.
+    pub selected: Vec<usize>,
     pub subset: Subset,
     pub reverse: bool,
     pub handling: Handling,
@@ -68,6 +72,7 @@ impl Default for PrintDraft {
             duplex: spool::Duplex::Off,
             which: Which::All,
             range: String::new(),
+            selected: Vec::new(),
             subset: Subset::All,
             reverse: false,
             handling: Handling::Size,
@@ -98,11 +103,17 @@ impl PrintDraft {
             return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
         }
         let range = match self.which {
-            Which::All => None,
-            Which::Current => Some((self.current_page + 1).to_string()),
+            Which::All | Which::Selected => None,
+            Which::Current => Some(self.current_page.saturating_add(1).to_string()),
             Which::Range => Some(self.range.clone()),
         };
-        let pages = print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse).map_err(|e| e.to_string())?;
+        let pages = if self.which == Which::Selected {
+            // Positions, not a typed range: a range would read numbers as page labels first.
+            print::select_listed(count, &self.selected, self.subset, self.reverse)
+        } else {
+            print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse)
+        }
+        .map_err(|e| e.to_string())?;
         let layout = match self.handling {
             Handling::Size => Layout::Size(match self.size {
                 SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),
@@ -138,13 +149,27 @@ impl PdfCraftApp {
         let printers = spool::printers();
         let default = printers.iter().find(|p| p.default).or(printers.first()).map(|p| p.name.clone());
         let current = self.views[i].current;
+        let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
         let keep = std::mem::take(&mut self.print_draft);
-        self.print_draft = PrintDraft { printers, printer: default, current_page: current, sheet: 0, ..keep };
+        // Picked pages are what Print is for (Acrobat's "Selected pages"); without any, a choice
+        // left over from another document falls back to the whole document.
+        let which = match (selected.is_empty(), keep.which) {
+            (false, _) => Which::Selected,
+            (true, Which::Selected) => Which::All,
+            (true, other) => other,
+        };
+        self.print_draft = PrintDraft { printers, printer: default, current_page: current, sheet: 0, selected, which, ..keep };
         self.dialog = Some(crate::Dialog::Print);
     }
 
-    /// Print (or save) with the dialog's settings. Returns `true` on success.
+    /// Print (or save) with the dialog's settings. Returns `true` on success. Save as PDF without
+    /// a preset path returns `true` once the save picker is showing; the file is written on a
+    /// later frame, when the user has chosen where.
     pub fn print_now(&mut self) -> bool {
+        // What's typed in a form field is part of what's printed (#166).
+        if !self.commit_form_typing() {
+            return false;
+        }
         let Some((_, id)) = self.active_ids() else { return false };
         let Some(doc) = self.session.get(id) else { return false };
         let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
@@ -178,28 +203,51 @@ impl PdfCraftApp {
                     false
                 }
             },
+            None => self.save_print_pdf(&name, bytes),
+        }
+    }
+
+    /// Print ▸ Save as PDF on the desktop: write to `save_override` (tests and automation), or
+    /// ask where and write on a later frame. Returns `true` once written, or once the save picker
+    /// is showing.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_print_pdf(&mut self, name: &str, bytes: Vec<u8>) -> bool {
+        let write = move |app: &mut Self, path: std::path::PathBuf| match crate::editing::write_atomically(&path.to_string_lossy(), &bytes) {
+            Ok(()) => {
+                app.notify_fmt("Saved the print-ready PDF to {path}", &[("path", &path.display().to_string())]);
+                true
+            }
+            Err(e) => {
+                app.notify_fmt("Could not save: {e}", &[("e", &e.to_string())]);
+                false
+            }
+        };
+        match self.save_override.clone() {
+            Some(p) => write(self, p.into()),
             None => {
-                let path = match self.save_override.clone() {
-                    Some(p) => Some(std::path::PathBuf::from(p)),
-                    #[cfg(not(target_arch = "wasm32"))]
-                    None => {
-                        let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF");
-                        rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem} (print).pdf")).save_file()
-                    }
-                    #[cfg(target_arch = "wasm32")]
-                    None => None,
-                };
-                let Some(path) = path else { return false };
-                match std::fs::write(&path, &bytes) {
-                    Ok(()) => {
-                        self.notify_fmt("Saved the print-ready PDF to {path}", &[("path", &path.display().to_string())]);
-                        true
-                    }
-                    Err(e) => {
-                        self.notify_fmt("Could not save: {e}", &[("e", &e.to_string())]);
-                        false
-                    }
-                }
+                let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF");
+                let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem} (print).pdf"));
+                self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, path| {
+                    write(app, path);
+                })
+            }
+        }
+    }
+
+    /// Print ▸ Save as PDF in a browser: download it, as Save does (#170). There is no folder to
+    /// choose and no file system to write to, so `save_override` doesn't apply.
+    #[cfg(target_arch = "wasm32")]
+    fn save_print_pdf(&mut self, name: &str, bytes: Vec<u8>) -> bool {
+        let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF");
+        let file = format!("{stem} (print).pdf");
+        match crate::editing::download(&file, &bytes) {
+            Ok(()) => {
+                self.notify_fmt("Downloaded {name}", &[("name", &file)]);
+                true
+            }
+            Err(e) => {
+                self.notify_fmt("Couldn't download {name}: {e}", &[("name", &file), ("e", &e)]);
+                false
             }
         }
     }
@@ -287,6 +335,11 @@ pub(crate) fn body(
                     d.which = Which::Range;
                 }
             });
+            // Offered only when pages were picked before the dialog opened.
+            if !d.selected.is_empty() {
+                let label = format!("{} ({})", tl!("Selected pages"), d.selected.len());
+                ui.radio_value(&mut d.which, Which::Selected, label);
+            }
             ui.horizontal(|ui| {
                 ui.label(tl!("More options:"));
                 combo(

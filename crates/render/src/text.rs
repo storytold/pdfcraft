@@ -146,6 +146,41 @@ impl PageText {
             .map(|(i, _)| i)
     }
 
+    /// The word around glyph `i` as its first and last glyph (double-click): it stops at word
+    /// gaps, blank glyphs and line ends.
+    pub fn word_at(&self, i: usize) -> Option<(usize, usize)> {
+        self.glyphs.get(i)?;
+        let blank = |k: usize| self.glyphs.get(k).is_none_or(|g| g.text.trim().is_empty());
+        // Glyph `k` (≥ 1) follows glyph `k - 1` with no word gap or line break between them.
+        let joined = |k: usize| !self.space_before.get(k).copied().unwrap_or(true) && self.line_of.get(k - 1) == self.line_of.get(k);
+        let mut first = i;
+        while first > 0 && joined(first) && !blank(first - 1) {
+            first -= 1;
+        }
+        let mut last = i;
+        while joined(last + 1) && !blank(last + 1) {
+            last += 1;
+        }
+        Some((first, last))
+    }
+
+    /// The line around glyph `i` as its first and last glyph (triple-click). A line's glyphs are
+    /// consecutive.
+    pub fn line_at(&self, i: usize) -> Option<(usize, usize)> {
+        self.glyphs.get(i)?;
+        let line = self.line_of.get(i)?;
+        let same = |k: usize| self.line_of.get(k) == Some(line);
+        let mut first = i;
+        while first > 0 && same(first - 1) {
+            first -= 1;
+        }
+        let mut last = i;
+        while same(last + 1) {
+            last += 1;
+        }
+        Some((first, last))
+    }
+
     /// Merge the boxes of `range` into one rectangle per line (for highlighting).
     pub fn line_rects(&self, range: std::ops::Range<usize>) -> Vec<[f32; 4]> {
         let mut out: Vec<(u32, [f32; 4])> = Vec::new();
@@ -167,9 +202,8 @@ impl PageText {
 }
 
 struct TextDevice {
-    glyphs: Vec<TextGlyph>,
-    /// How many glyphs run in each view direction: right, down, left, up.
-    directions: [usize; 4],
+    /// Separate flows by writing direction: right, down, left, up.
+    glyphs: [Vec<TextGlyph>; 4],
 }
 
 impl<'a> Device<'a> for TextDevice {
@@ -206,7 +240,14 @@ impl<'a> Device<'a> for TextDevice {
             Glyph::Type3(g) => g.advance_width().filter(|a| a.is_finite() && *a > 0.0).map(f64::from).unwrap_or(600.0),
         };
         // The baseline direction in view space (y down), to the nearest quarter turn.
-        let (dx, dy) = (t.as_coeffs()[0], t.as_coeffs()[1]);
+        let coefficients = t.as_coeffs();
+        let (dx, dy) = if matches!(glyph, Glyph::Outline(g) if g.is_vertical()) {
+            // PDF vertical fonts advance along negative glyph-space y (WMode 1), while
+            // keeping the glyph outline upright. Its x axis is not the writing direction.
+            (-coefficients[2], -coefficients[3])
+        } else {
+            (coefficients[0], coefficients[1])
+        };
         let dir = if dx.abs() >= dy.abs() {
             if dx >= 0.0 { 0 } else { 2 }
         } else if dy > 0.0 {
@@ -214,7 +255,6 @@ impl<'a> Device<'a> for TextDevice {
         } else {
             3
         };
-        self.directions[dir] += text.chars().count();
         let em = Rect::new(0.0, -200.0, advance, 800.0);
         let b = (t * em.to_path(0.1)).bounding_box();
         if !(b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite()) || b.width() > 10_000.0 || b.height() > 10_000.0 {
@@ -225,7 +265,7 @@ impl<'a> Device<'a> for TextDevice {
             let n = text.chars().count().max(1) as f64;
             let w = b.width() / n;
             let x0 = b.x0 + w * i as f64;
-            self.glyphs.push(TextGlyph { text: ch.to_string(), rect: [x0 as f32, b.y0 as f32, (x0 + w) as f32, b.y1 as f32] });
+            self.glyphs[dir].push(TextGlyph { text: ch.to_string(), rect: [x0 as f32, b.y0 as f32, (x0 + w) as f32, b.y1 as f32] });
         }
     }
     fn draw_image(&mut self, _: Image<'a, '_>, _: Affine) {}
@@ -244,18 +284,32 @@ pub(crate) fn extract_page(pdf: &Pdf, page: usize, settings: &InterpreterSetting
     let settings = settings.clone();
     let initial = p.initial_transform(true).to_kurbo();
     let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, w as f64, h as f64), &cache, p.xref(), settings);
-    let mut dev = TextDevice { glyphs: Vec::new(), directions: [0; 4] };
+    let mut dev = TextDevice { glyphs: Default::default() };
     interpret_page(p, &mut ctx, &mut dev);
-    // Lay out in the frame where most text runs left to right, so a page shown rotated (by
-    // `/Rotate` or by its content matrix) still reads along its lines; then map the boxes back.
-    // Pages whose `/Rotate` is cancelled by counter-rotated content stay as they are.
-    let quarter = (0..4u8).max_by_key(|q| (dev.directions[*q as usize], *q == 0)).unwrap_or(0);
-    for g in &mut dev.glyphs {
-        g.rect = to_upright(g.rect, quarter, w, h);
+    // A horizontal heading must not force a vertical body back into horizontal line grouping.
+    // Group each writing direction independently, then join flows from their topmost position.
+    let mut flows = Vec::new();
+    for (quarter, mut glyphs) in dev.glyphs.into_iter().enumerate() {
+        if glyphs.is_empty() {
+            continue;
+        }
+        let top = glyphs.iter().map(|g| g.rect[1]).fold(f32::INFINITY, f32::min);
+        for g in &mut glyphs {
+            g.rect = to_upright(g.rect, quarter as u8, w, h);
+        }
+        let mut text = layout(glyphs);
+        for g in &mut text.glyphs {
+            g.rect = from_upright(g.rect, quarter as u8, w, h);
+        }
+        flows.push((top, text));
     }
-    let mut text = layout(dev.glyphs);
-    for g in &mut text.glyphs {
-        g.rect = from_upright(g.rect, quarter, w, h);
+    flows.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut text = PageText::default();
+    for (_, flow) in flows {
+        let offset = text.line_of.last().map_or(0, |line| line.saturating_add(1));
+        text.line_of.extend(flow.line_of.into_iter().map(|line| line.saturating_add(offset)));
+        text.glyphs.extend(flow.glyphs);
+        text.space_before.extend(flow.space_before);
     }
     Some(text)
 }
@@ -509,6 +563,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn identity_v_columns_are_searchable_in_reading_order() {
+        use lopdf::{Document, Object, Stream, dictionary};
+        for encoding in ["Identity-V", "UniJIS-UCS2-V"] {
+            let mut doc = Document::with_version("1.7");
+            let cmap = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /TestUnicode def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 5 beginbfchar <0001> <65E5> <0002> <672C> <0003> <8A9E> <0004> <6587> <0005> <7AE0> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+            let cmap = if encoding == "Identity-V" {
+                cmap.to_vec()
+            } else {
+                let mut mapping = String::from_utf8(cmap.to_vec()).unwrap();
+                for (code, unicode) in [("0001", "65E5"), ("0002", "672C"), ("0003", "8A9E"), ("0004", "6587"), ("0005", "7AE0")] {
+                    mapping = mapping.replace(&format!("<{code}> <{unicode}>"), &format!("<{unicode}> <{unicode}>"));
+                }
+                mapping.into_bytes()
+            };
+            let unicode = doc.add_object(Stream::new(dictionary! {}, cmap));
+            let cid = doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => "TestVertical",
+            "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+            "DW" => 1000, "DW2" => vec![Object::Integer(880), Object::Integer(-1000)], "CIDToGIDMap" => "Identity"
+        });
+            let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "TestVertical", "Encoding" => encoding, "DescendantFonts" => vec![Object::Reference(cid)], "ToUnicode" => unicode });
+            let horizontal = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "TestVertical", "Encoding" => "Identity-H", "DescendantFonts" => vec![Object::Reference(cid)], "ToUnicode" => unicode });
+            let (first, second) = if encoding == "Identity-V" { ("000100020003", "00040005") } else { ("65E5672C8A9E", "65877AE0") };
+            let operators =
+                format!("BT /H1 20 Tf 1 0 0 1 40 280 Tm <{first}> Tj /F1 20 Tf 1 0 0 1 200 250 Tm <{first}> Tj 1 0 0 1 170 250 Tm <{second}> Tj ET");
+            let content = doc.add_object(Stream::new(dictionary! {}, operators.into_bytes()));
+            let pages = doc.new_object_id();
+            let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(300), Object::Integer(300)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font, "H1" => horizontal}}, "Contents" => content });
+            doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+            let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+            doc.trailer.set("Root", catalog);
+            let mut bytes = Vec::new();
+            doc.save_to(&mut bytes).unwrap();
+            let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+            let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
+            assert_eq!(text.plain_text(), "日本語\n日本語\n文章");
+            assert_eq!(text.find("日本語"), vec![0..3, 3..6]);
+            assert_eq!(text.find("文章"), vec![6..8]);
+            let rects = text.line_rects(3..6);
+            assert_eq!(rects.len(), 1);
+            assert!(rects[0][3] - rects[0][1] > rects[0][2] - rects[0][0], "a vertical search highlight: {rects:?}");
+            assert!(text.glyphs[3].rect[0] > text.glyphs[6].rect[0], "columns read right to left in page view coordinates");
+        }
+    }
+
+    #[test]
     fn upright_mapping_round_trips() {
         let r = [10.0, 20.0, 30.0, 25.0];
         for q in 0..4 {
@@ -590,5 +690,25 @@ mod tests {
         let mut v = Vec::new();
         word(&mut v, "每个字", 10.0, 10.0, 9.0);
         assert_eq!(layout(v).plain_text(), "每个字");
+    }
+
+    /// Two lines, "ab cd" and "e fg": words stop at blank glyphs, word gaps and line ends.
+    #[test]
+    fn words_and_lines_around_a_glyph() {
+        let t = PageText {
+            glyphs: Vec::from(["a", "b", " ", "c", "d", "e", "f", "g"].map(|s| TextGlyph { text: s.into(), rect: [0.0; 4] })),
+            line_of: vec![0, 0, 0, 0, 0, 1, 1, 1],
+            space_before: vec![false, false, false, false, false, false, true, false],
+        };
+        assert_eq!(t.word_at(1), Some((0, 1)));
+        assert_eq!(t.word_at(3), Some((3, 4)));
+        assert_eq!(t.word_at(4), Some((3, 4)));
+        assert_eq!(t.word_at(5), Some((5, 5)));
+        assert_eq!(t.word_at(7), Some((6, 7)));
+        assert_eq!(t.line_at(2), Some((0, 4)));
+        assert_eq!(t.line_at(6), Some((5, 7)));
+        assert_eq!(t.word_at(8), None);
+        assert_eq!(t.line_at(8), None);
+        assert_eq!(PageText::default().line_at(0), None);
     }
 }

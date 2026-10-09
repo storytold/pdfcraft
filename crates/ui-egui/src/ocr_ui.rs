@@ -188,15 +188,28 @@ impl PdfCraftApp {
             self.notify_tr("Text recognition is already running");
             return;
         }
+        // The settings showing now, not when the folder arrives.
         let settings = OcrSettings { dpi: self.ocr_draft.dpi as f32, language: self.ocr_draft.language.clone(), ..Default::default() };
+        #[cfg(not(target_arch = "wasm32"))]
+        match self.export_dir_override.clone() {
+            Some(d) => self.ocr_files_into(files, settings, d.into()),
+            None => {
+                let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Choose a folder for the searchable files").to_string());
+                self.ask_one(crate::pickers::Ask::Folder(dialog), None, move |app, dir| app.ocr_files_into(files, settings, dir));
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.ocr_files_into(files, settings);
+    }
+
+    /// [`Self::ocr_files`] once the folder for the searchable files is known.
+    fn ocr_files_into(&mut self, files: Vec<(String, Vec<u8>)>, settings: OcrSettings, #[cfg(not(target_arch = "wasm32"))] dir: std::path::PathBuf) {
+        // Another batch may have started while the folder picker was open.
+        if self.ocr_batch.is_some() {
+            self.notify_tr("Text recognition is already running");
+            return;
+        }
         let progress = Arc::new(Mutex::new(BatchProgress { total: files.len(), ..Default::default() }));
-        #[cfg(not(target_arch = "wasm32"))]
-        let dir = match &self.export_dir_override {
-            Some(d) => Some(std::path::PathBuf::from(d)),
-            None => rfd::FileDialog::new().set_title(tl!("Choose a folder for the searchable files").to_string()).pick_folder(),
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        let Some(dir) = dir else { return };
         let p = progress.clone();
         // The summary is written on the worker thread: draw it in the UI's language.
         let lang = crate::i18n::current();

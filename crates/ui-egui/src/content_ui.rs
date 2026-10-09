@@ -404,28 +404,35 @@ pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens) {
 }
 
 impl crate::PdfCraftApp {
+    /// Pick an image file for the active document, read it, and call `then` with its name and
+    /// bytes: now when `save_override` answers (tests and automation never see a native dialog),
+    /// otherwise on a later frame, and only if that document is still the active one.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn pick_image(&mut self, title: &str, then: impl FnOnce(&mut Self, String, Vec<u8>) + Send + 'static) {
+        let read = |app: &mut Self, path: std::path::PathBuf| match std::fs::read(&path) {
+            Ok(bytes) => {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                then(app, name, bytes);
+            }
+            Err(e) => app.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
+        };
+        match self.save_override.clone() {
+            Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => read(self, p.into()),
+            Some(_) => {}
+            None => {
+                let dialog = rfd::AsyncFileDialog::new()
+                    .add_filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
+                    .set_title(title);
+                let target = self.active_ids().map(|(_, id)| id);
+                self.ask_one(crate::pickers::Ask::File(dialog), target, read);
+            }
+        }
+    }
+
     /// Edit a PDF ▸ Add content ▸ Image: pick a file and place it in the middle of the current page.
     pub fn add_image_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            let picked = match self.save_override.clone() {
-                Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => Some(std::path::PathBuf::from(p)),
-                // Tests and automation set `save_override` and never see a native dialog.
-                Some(_) => None,
-                None => rfd::FileDialog::new()
-                    .add_filter(tl!("Images").to_string(), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                    .set_title(tl!("Choose an image"))
-                    .pick_file(),
-            };
-            let Some(path) = picked else { return };
-            match std::fs::read(&path) {
-                Ok(bytes) => {
-                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    self.add_image(name, bytes);
-                }
-                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
-            }
-        }
+        self.pick_image(tl!("Choose an image"), |app, name, bytes| app.add_image(name, bytes));
         #[cfg(target_arch = "wasm32")]
         self.notify_tr("Adding images arrives on the web with file pickers for images");
     }
@@ -433,28 +440,13 @@ impl crate::PdfCraftApp {
     /// Edit text & images ▸ Replace Image: pick a file to draw in a page image's place.
     pub(crate) fn replace_page_image_dialog(&mut self, page: usize, index: usize) {
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            let picked = match self.save_override.clone() {
-                Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => Some(std::path::PathBuf::from(p)),
-                Some(_) => None,
-                None => rfd::FileDialog::new()
-                    .add_filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                    .set_title(tl!("Replace image"))
-                    .pick_file(),
-            };
-            let Some(path) = picked else { return };
-            match std::fs::read(&path) {
-                Ok(bytes) => {
-                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    self.apply_edit(Edit::EditPageImage {
-                        page,
-                        index,
-                        change: pdfcraft_engine::ImageEdit::Replace { name, bytes: std::sync::Arc::new(bytes) },
-                    });
-                }
-                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
-            }
-        }
+        self.pick_image(tl!("Replace image"), move |app, name, bytes| {
+            app.apply_edit(Edit::EditPageImage {
+                page,
+                index,
+                change: pdfcraft_engine::ImageEdit::Replace { name, bytes: std::sync::Arc::new(bytes) },
+            });
+        });
         #[cfg(target_arch = "wasm32")]
         self.notify_fmt(
             "Replacing images on page {p} arrives on the web with image pickers ({i})",
@@ -479,21 +471,10 @@ impl crate::PdfCraftApp {
     pub fn choose_field_image(&mut self, name: &str) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let picked = match self.save_override.clone() {
-                Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => Some(std::path::PathBuf::from(p)),
-                Some(_) => None,
-                None => rfd::FileDialog::new()
-                    .add_filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                    .set_title(tl!("Select Icon"))
-                    .pick_file(),
-            };
-            let Some(path) = picked else { return };
-            match std::fs::read(&path) {
-                Ok(bytes) => {
-                    self.apply_edit(Edit::SetFieldImage { name: name.to_string(), image: std::sync::Arc::new(bytes) });
-                }
-                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
-            }
+            let name = name.to_string();
+            self.pick_image(tl!("Select Icon"), move |app, _, bytes| {
+                app.apply_edit(Edit::SetFieldImage { name, image: std::sync::Arc::new(bytes) });
+            });
         }
         #[cfg(target_arch = "wasm32")]
         self.notify_fmt("{name}: choosing images arrives on the web with file pickers for images", &[("name", &name)]);
@@ -502,24 +483,9 @@ impl crate::PdfCraftApp {
     /// Edit image ▸ Replace: pick a file for the selected image.
     pub fn replace_image_dialog(&mut self, page: usize, index: usize) {
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            let picked = match self.save_override.clone() {
-                Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => Some(std::path::PathBuf::from(p)),
-                Some(_) => None,
-                None => rfd::FileDialog::new()
-                    .add_filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                    .set_title(tl!("Replace image"))
-                    .pick_file(),
-            };
-            let Some(path) = picked else { return };
-            match std::fs::read(&path) {
-                Ok(bytes) => {
-                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    self.apply_edit(Edit::ReplaceImage { page, index, name, bytes: std::sync::Arc::new(bytes) });
-                }
-                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
-            }
-        }
+        self.pick_image(tl!("Replace image"), move |app, name, bytes| {
+            app.apply_edit(Edit::ReplaceImage { page, index, name, bytes: std::sync::Arc::new(bytes) });
+        });
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (page, index);

@@ -206,6 +206,10 @@ fn run(
 impl PdfCraftApp {
     /// Start exporting the active document with the dialog's settings.
     pub(crate) fn start_export(&mut self, kind: ExportKind) {
+        // What's typed in a form field is part of the document (#166).
+        if !self.commit_form_typing() {
+            return;
+        }
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let src = doc.export_source();
@@ -217,29 +221,34 @@ impl PdfCraftApp {
         let status: ExportStatus = Arc::new(Mutex::new(Some((0, pages.len(), None))));
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let dir = match &self.export_dir_override {
-                Some(d) => Some(std::path::PathBuf::from(d)),
-                None => rfd::FileDialog::new().set_title(tl!("Choose a folder for the exported files").to_string()).pick_folder(),
-            };
-            let Some(dir) = dir else { return };
-            let st = status.clone();
-            let shown = dir.display().to_string();
-            let lang = crate::i18n::current();
-            let work = move || {
-                let sink = |name: &str, bytes: Vec<u8>| {
-                    crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &bytes).map_err(|e| format!("{name}: {e}"))
+            let start = move |app: &mut Self, dir: std::path::PathBuf, inline: bool| {
+                let st = status.clone();
+                let shown = dir.display().to_string();
+                let lang = crate::i18n::current();
+                let work = move || {
+                    let sink = |name: &str, bytes: Vec<u8>| {
+                        crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &bytes).map_err(|e| format!("{name}: {e}"))
+                    };
+                    let msg = run(src, kind, dpi, format, min_side, pages, stem, sink, &st, lang);
+                    if let Ok(mut s) = st.lock() {
+                        let (done, total) = s.as_ref().map_or((0, 0), |(d, t, _)| (*d, *t));
+                        let done_msg = crate::i18n::fmt(tl!("{msg} to {dir}"), &[("msg", &msg), ("dir", &shown)]);
+                        *s = Some((done.max(total), total, Some(done_msg)));
+                    }
                 };
-                let msg = run(src, kind, dpi, format, min_side, pages, stem, sink, &st, lang);
-                if let Ok(mut s) = st.lock() {
-                    let (done, total) = s.as_ref().map_or((0, 0), |(d, t, _)| (*d, *t));
-                    let done_msg = crate::i18n::fmt(tl!("{msg} to {dir}"), &[("msg", &msg), ("dir", &shown)]);
-                    *s = Some((done.max(total), total, Some(done_msg)));
+                if inline {
+                    work(); // tests and automation: synchronous
+                } else {
+                    std::thread::Builder::new().name("pdfcraft-export".into()).spawn(work).ok();
                 }
+                app.export_status = Some(status);
             };
-            if self.export_dir_override.is_some() {
-                work(); // tests and automation: synchronous
-            } else {
-                std::thread::Builder::new().name("pdfcraft-export".into()).spawn(work).ok();
+            match self.export_dir_override.clone() {
+                Some(d) => start(self, d.into(), true),
+                None => {
+                    let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Choose a folder for the exported files").to_string());
+                    self.ask_one(crate::pickers::Ask::Folder(dialog), None, move |app, dir| start(app, dir, false));
+                }
             }
         }
         #[cfg(target_arch = "wasm32")]
@@ -259,8 +268,8 @@ impl PdfCraftApp {
             if let Ok(mut s) = status.lock() {
                 *s = Some((0, 0, Some(msg)));
             }
+            self.export_status = Some(status);
         }
-        self.export_status = Some(status);
     }
 
     /// Show export progress, and the result once it is done.

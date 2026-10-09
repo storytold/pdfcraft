@@ -44,12 +44,24 @@ impl PdfCraftApp {
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        let dir = match &self.export_dir_override {
-            Some(d) => Some(std::path::PathBuf::from(d)),
-            None => rfd::FileDialog::new().set_title(tl!("Choose a folder for the results").to_string()).pick_folder(),
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        let Some(dir) = dir else { return };
+        match self.export_dir_override.clone() {
+            Some(d) => self.run_action_into(action, files, d.into()),
+            None => {
+                let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Choose a folder for the results").to_string());
+                self.ask_one(crate::pickers::Ask::Folder(dialog), None, move |app, dir| app.run_action_into(action, files, dir));
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.run_action_into(action, files);
+    }
+
+    /// [`Self::run_action_on`] once the folder for the results is known.
+    fn run_action_into(&mut self, action: Action, files: Vec<(String, Vec<u8>)>, #[cfg(not(target_arch = "wasm32"))] dir: std::path::PathBuf) {
+        // Another run may have started while the folder picker was open.
+        if self.action_run.is_some() {
+            self.notify_tr("An action is already running");
+            return;
+        }
         let progress = Arc::new(Mutex::new(RunProgress { total: files.len(), ..Default::default() }));
         let p = progress.clone();
         // The summary is written on the worker thread: draw it in the UI's language.
@@ -126,24 +138,27 @@ impl PdfCraftApp {
         let Some(action) = self.wizard.selected.as_ref().and_then(|n| self.all_actions().into_iter().find(|a| &a.name == n)) else { return };
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let paths = match &self.action_files_override {
-                Some(p) => p.iter().map(std::path::PathBuf::from).collect(),
-                None => rfd::FileDialog::new()
-                    .set_title(crate::i18n::fmt(tl!("Files for {name}"), &[("name", &action.name)]))
-                    .add_filter("PDF", &["pdf"])
-                    .pick_files()
-                    .unwrap_or_default(),
-            };
-            let mut files = Vec::new();
-            for p in paths {
-                let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                match std::fs::read(&p) {
-                    Ok(b) => files.push((name, b)),
-                    Err(e) => return self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+            let title = crate::i18n::fmt(tl!("Files for {name}"), &[("name", &action.name)]);
+            let run = move |app: &mut Self, paths: Vec<std::path::PathBuf>| {
+                let mut files = Vec::new();
+                for p in paths {
+                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    match std::fs::read(&p) {
+                        Ok(b) => files.push((name, b)),
+                        Err(e) => return app.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+                    }
                 }
-            }
-            if !files.is_empty() {
-                self.run_action_on(action, files);
+                if !files.is_empty() {
+                    // Asks for the results folder: a second picker, now that this one has closed.
+                    app.run_action_on(action, files);
+                }
+            };
+            match self.action_files_override.clone() {
+                Some(p) => run(self, p.into_iter().map(std::path::PathBuf::from).collect()),
+                None => {
+                    let dialog = rfd::AsyncFileDialog::new().set_title(title).add_filter("PDF", &["pdf"]);
+                    self.ask(crate::pickers::Ask::Files(dialog), None, run);
+                }
             }
         }
         #[cfg(target_arch = "wasm32")]
@@ -244,7 +259,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool
             }
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, tl!("Start"), true).clicked() {
+            if widgets::pill_button(ui, tl_ctx!("action wizard", "Start"), true).clicked() {
                 close = true;
                 app.start_selected_action();
             }

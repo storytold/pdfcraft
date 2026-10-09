@@ -41,20 +41,7 @@ pub(crate) fn image_import_body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bo
 }
 
 /// File types Open accepts besides PDF (converted on open).
-pub const CONVERTIBLE: [&str; 12] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "txt", "text"];
-
-fn is_image(bytes: &[u8]) -> bool {
-    bytes.starts_with(&[0xFF, 0xD8])
-        || bytes.starts_with(b"\x89PNG\r\n\x1a\n")
-        || bytes.starts_with(b"II*\0")
-        || bytes.starts_with(b"MM\0*")
-        || bytes.starts_with(b"GIF8")
-        // JPEG 2000: a JP2 file or a raw codestream.
-        || bytes.starts_with(&[0, 0, 0, 0x0C, b'j', b'P', b' ', b' '])
-        || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51])
-        // BMP: "BM" and a known header size (so text starting with "BM" stays text).
-        || (bytes.starts_with(b"BM") && bytes.get(14..18).is_some_and(|h| matches!(u32::from_le_bytes([h[0], h[1], h[2], h[3]]), 12 | 40 | 52 | 56 | 108 | 124)))
-}
+pub use pdfcraft_engine::CONVERTIBLE;
 
 /// What Create ▸ Clipboard found on the clipboard.
 #[derive(Clone, Debug, PartialEq)]
@@ -101,18 +88,11 @@ impl PdfCraftApp {
     /// Convert a non-PDF file (image, text) into a new tab. Returns `None` when `bytes` is not
     /// something Create understands (the caller then tries to open it as a PDF).
     pub(crate) fn open_converted(&mut self, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
-        let head = &bytes[..bytes.len().min(1024)];
-        if head.windows(5).any(|w| w == b"%PDF-") {
+        use pdfcraft_engine::SourceKind;
+        if !matches!(pdfcraft_engine::source_kind(name, bytes), Some(SourceKind::Image | SourceKind::Text)) {
             return None;
         }
-        let created = if is_image(bytes) {
-            self.session.create_from_images(&[(name.to_string(), bytes.to_vec())])
-        } else if name.to_ascii_lowercase().ends_with(".txt") {
-            let text = String::from_utf8_lossy(bytes);
-            self.session.create_from_text(stem(name), &text)
-        } else {
-            return None;
-        };
+        let created = self.session.convert_to_pdf(name, &Arc::new(bytes.to_vec())).map(|(_, pdf)| pdf);
         Some(self.open_created_bytes(&format!("{}.pdf", stem(name)), created.map_err(|e| e.to_string())))
     }
 
@@ -120,7 +100,7 @@ impl PdfCraftApp {
         let bytes = created?;
         let id = self.session.open_new(name, bytes).map_err(|e| e.to_string())?;
         let info = &self.session.get(id).ok_or("the new document could not be opened")?.info;
-        self.views.push(crate::DocView::new(id, info));
+        self.views.push(crate::DocView::new(id, info, self.view_defaults));
         self.active = Some(self.views.len() - 1);
         Ok(())
     }
@@ -166,24 +146,22 @@ impl PdfCraftApp {
     pub(crate) fn create_from_images_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let Some(files) = rfd::FileDialog::new()
+            let dialog = rfd::AsyncFileDialog::new()
                 .add_filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                .set_title(tl!("Choose images"))
-                .pick_files()
-            else {
-                return;
-            };
-            let mut images = Vec::new();
-            for f in files {
-                match std::fs::read(&f) {
-                    Ok(b) => images.push((f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), b)),
-                    Err(e) => {
-                        self.notify_fmt("Couldn't read {name}: {e}", &[("name", &f.display().to_string()), ("e", &e.to_string())]);
-                        return;
+                .set_title(tl!("Choose images"));
+            self.ask(crate::pickers::Ask::Files(dialog), None, |app, files| {
+                let mut images = Vec::new();
+                for f in files {
+                    match std::fs::read(&f) {
+                        Ok(b) => images.push((f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), b)),
+                        Err(e) => {
+                            app.notify_fmt("Couldn't read {name}: {e}", &[("name", &f.display().to_string()), ("e", &e.to_string())]);
+                            return;
+                        }
                     }
                 }
-            }
-            self.begin_image_import(images);
+                app.begin_image_import(images);
+            });
         }
         #[cfg(target_arch = "wasm32")]
         self.notify_tr("On the web, open or drop an image to convert it");
@@ -243,11 +221,9 @@ impl PdfCraftApp {
     }
 
     /// Reduce File Size: write a compacted copy with images downsampled (the open document is
-    /// unchanged).
+    /// unchanged). It runs in the background with a progress bar, like the PDF Optimizer.
     pub(crate) fn reduce_file_size(&mut self) {
-        let Some((_, id)) = self.active_ids() else { return };
-        let result = self.session.reduced_bytes(id).map(|(b, _)| (b, String::new()));
-        self.save_optimized(id, "reduced", result);
+        self.start_optimize(crate::optimize_ui::OptimizeKind::Reduce, &pdfcraft_engine::optimize::Settings::default(), &[]);
     }
 
     /// Save an optimized copy (Reduce File Size, Optimize PDF) next to the original, reporting
@@ -267,14 +243,15 @@ impl PdfCraftApp {
                 return;
             }
         };
-        let saved = |app: &mut PdfCraftApp, place: String| {
-            let pct = 100.0 * (1.0 - bytes.len() as f64 / before.max(1) as f64);
+        let after = bytes.len();
+        let saved = move |app: &mut PdfCraftApp, place: String| {
+            let pct = 100.0 * (1.0 - after as f64 / before.max(1) as f64);
             app.notify_fmt(
                 "Saved {place}: {before} → {after} ({pct}% smaller){detail}",
                 &[
                     ("place", &place),
                     ("before", &crate::panels::human_size(before)),
-                    ("after", &crate::panels::human_size(bytes.len())),
+                    ("after", &crate::panels::human_size(after)),
                     ("pct", &format!("{pct:.0}")),
                     ("detail", &detail),
                 ],
@@ -282,14 +259,16 @@ impl PdfCraftApp {
         };
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let path = match &self.save_override {
-                Some(p) => Some(p.clone()),
-                None => rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(&name).save_file().map(|p| p.to_string_lossy().into_owned()),
+            let write = move |app: &mut Self, path: String| match crate::editing::write_atomically(&path, &bytes) {
+                Ok(()) => saved(app, path),
+                Err(e) => app.notify_fmt("Couldn't write {path}: {e}", &[("path", &path), ("e", &e.to_string())]),
             };
-            let Some(path) = path else { return };
-            match crate::editing::write_atomically(&path, &bytes) {
-                Ok(()) => saved(self, path),
-                Err(e) => self.notify_fmt("Couldn't write {path}: {e}", &[("path", &path), ("e", &e.to_string())]),
+            match self.save_override.clone() {
+                Some(p) => write(self, p),
+                None => {
+                    let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(&name);
+                    self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, p| write(app, p.to_string_lossy().into_owned()));
+                }
             }
         }
         #[cfg(target_arch = "wasm32")]

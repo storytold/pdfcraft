@@ -33,6 +33,17 @@ pub enum OptimizeError {
     NoPages,
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
+    #[error("the optimization was cancelled")]
+    Cancelled,
+}
+
+/// Where an optimization is, reported to [`optimize_with_progress`]'s callback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    /// About to process image `done` (0-based) of `total`; `done == total` once all are done.
+    Images { done: usize, total: usize },
+    /// Discarding objects, cleaning up links and compressing unencoded streams.
+    CleanUp,
 }
 
 /// How resampled (or recompressed) images are stored.
@@ -118,9 +129,18 @@ pub struct Report {
 
 /// Optimize `doc` in place.
 pub fn optimize(doc: &mut Document, settings: &Settings) -> Result<Report, OptimizeError> {
+    optimize_with_progress(doc, settings, &mut |_| true)
+}
+
+/// [`optimize`], calling `progress` before each image and before the clean-up. Returning `false`
+/// stops with [`OptimizeError::Cancelled`]; `doc` is then partly optimized and should be dropped.
+pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress: &mut dyn FnMut(Stage) -> bool) -> Result<Report, OptimizeError> {
     let mut report = Report::default();
     let pages = pdfcraft_annot::page_refs(doc).map_err(|_| OptimizeError::NoPages)?;
-    images::run(doc, &pages, settings, &mut report)?;
+    images::run(doc, &pages, settings, &mut report, progress)?;
+    if !progress(Stage::CleanUp) {
+        return Err(OptimizeError::Cancelled);
+    }
     if settings.discard_thumbnails {
         for p in &pages {
             if doc.get(*p).as_dict().is_some_and(|d| d.contains(b"Thumb")) {

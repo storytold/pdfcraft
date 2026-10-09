@@ -1,4 +1,5 @@
-//! Home tab: recommended tools, open card, recent files (local only, never another app's list).
+//! Home tab: recommended tools, open card, pinned folders and recent files (local only, never
+//! another app's list).
 
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, vec2};
 use pdfcraft_engine::catalog;
@@ -96,6 +97,12 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     });
                 });
 
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                ui.add_space(26.0);
+                crate::folders_ui::section(app, ui);
+            }
+
             ui.add_space(26.0);
             ui.label(egui::RichText::new(tl!("Recent")).font(theme::semibold(17.0)));
             ui.add_space(8.0);
@@ -116,8 +123,8 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     22.0,
                     egui::Color32::from_rgb(0xE0, 0x3E, 0x3E),
                 );
-                ui.painter().text(rect.min + vec2(46.0, 15.0), Align2::LEFT_CENTER, &r.name, theme::medium(13.5), t.text);
-                ui.painter().text(rect.min + vec2(46.0, 32.0), Align2::LEFT_CENTER, &r.path, theme::regular(11.0), t.text_faint);
+                ui.painter().text(rect.min + vec2(46.0, 15.0), Align2::LEFT_CENTER, crate::bidi::visual(&r.name), theme::medium(13.5), t.text);
+                ui.painter().text(rect.min + vec2(46.0, 32.0), Align2::LEFT_CENTER, crate::bidi::visual(&r.path), theme::regular(11.0), t.text_faint);
                 ui.painter().text(
                     rect.right_center() - vec2(12.0, 0.0),
                     Align2::RIGHT_CENTER,
@@ -130,12 +137,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
             }
             if let Some(p) = open {
-                if let Some(i) = app.views.iter().position(|v| app.session.get(v.id).and_then(|d| d.path.as_deref()) == Some(p.as_str())) {
-                    app.active = Some(i);
-                } else {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    app.open_path(&p);
-                }
+                app.open_recent(&p);
             }
             ui.add_space(20.0);
             widgets::section_title(ui, tl!("Privacy"));

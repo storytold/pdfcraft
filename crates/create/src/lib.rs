@@ -374,6 +374,45 @@ fn tiff_pages(name: &str, bytes: &[u8]) -> Result<Vec<Embedded>, CreateError> {
     Ok(out)
 }
 
+/// What a file picked for Create is, by its bytes (and, for text, its name).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceKind {
+    Pdf,
+    Image,
+    Text,
+}
+
+/// File extensions Create converts to PDF (images and plain text).
+pub const CONVERTIBLE: [&str; 12] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "txt", "text"];
+
+fn is_image(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0xFF, 0xD8])
+        || bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        || bytes.starts_with(b"II*\0")
+        || bytes.starts_with(b"MM\0*")
+        || bytes.starts_with(b"GIF8")
+        // JPEG 2000: a JP2 file or a raw codestream.
+        || bytes.starts_with(JP2_SIGNATURE)
+        || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51])
+        // BMP: "BM" and a known header size (so text starting with "BM" stays text).
+        || (bytes.starts_with(b"BM")
+            && bytes.get(14..18).and_then(|h| <[u8; 4]>::try_from(h).ok()).is_some_and(|h| matches!(u32::from_le_bytes(h), 12 | 40 | 52 | 56 | 108 | 124)))
+}
+
+/// Whether `bytes` named `name` is a PDF, an image Create can embed, or plain text (a `.txt` or
+/// `.text` file). `None` for anything else.
+pub fn source_kind(name: &str, bytes: &[u8]) -> Option<SourceKind> {
+    let head = bytes.get(..bytes.len().min(1024)).unwrap_or_default();
+    if head.windows(5).any(|w| w == b"%PDF-") {
+        return Some(SourceKind::Pdf);
+    }
+    if is_image(bytes) {
+        return Some(SourceKind::Image);
+    }
+    let lower = name.to_ascii_lowercase();
+    (lower.ends_with(".txt") || lower.ends_with(".text")).then_some(SourceKind::Text)
+}
+
 /// Detect the image format from its bytes; a TIFF may hold several pages.
 fn embed(name: &str, bytes: &[u8]) -> Result<Vec<Embedded>, CreateError> {
     if bytes.starts_with(&[0xFF, 0xD8]) {

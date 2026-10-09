@@ -48,6 +48,7 @@ impl PdfCraftApp {
                     "The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.",
                     &[("u", &u)],
                 ),
+                Request::SaveAs => self.run_command("file.save_as"),
                 Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
             }
         }
@@ -58,6 +59,10 @@ impl PdfCraftApp {
 
     /// Run a push button's JavaScript (its Mouse Up action).
     pub fn run_button_script(&mut self, id: DocId, field: &str, script: &str) {
+        // A script reads the fields: include what's still being typed in one (#166).
+        if !self.commit_form_typing() {
+            return;
+        }
         match self.session.run_javascript(id, script, Some(field)) {
             Ok(o) => {
                 if let Some(i) = self.views.iter().position(|v| v.id == id)
@@ -252,7 +257,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     ui.horizontal(|ui| {
         ui.label(tl!("Default workspace mode"));
         for (mode, label) in [
-            (crate::Mode::AllTools, "All Tools"),
+            (crate::Mode::AllTools, "All tools"),
             (crate::Mode::Read, "Read"),
             (crate::Mode::Edit, "Edit"),
             (crate::Mode::Convert, "Convert"),
@@ -263,6 +268,30 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     });
     ui.label(
         egui::RichText::new(tl!("Used when opening PDFs. An explicit launch or control mode takes precedence for the session."))
+            .small()
+            .color(t.text_muted),
+    );
+    let defaults = &mut app.view_defaults;
+    ui.horizontal(|ui| {
+        ui.label(tl!("Default page display"));
+        for l in crate::canvas::PageLayout::ORDER {
+            ui.radio_value(&mut defaults.layout, l, tl!(l.label()));
+        }
+    });
+    ui.horizontal(|ui| {
+        use crate::canvas::Fit;
+        ui.label(tl!("Default zoom"));
+        ui.radio_value(&mut defaults.fit, Fit::Width, tl!("Fit to width"));
+        ui.radio_value(&mut defaults.fit, Fit::Page, tl!("Zoom to page level"));
+        ui.radio_value(&mut defaults.fit, Fit::None, tl!("Custom"));
+        // Editing the percentage selects Custom.
+        let mut percent = defaults.zoom * 100.0;
+        if ui.add(egui::DragValue::new(&mut percent).range(8.0..=6400.0).max_decimals(0).suffix("%")).changed() {
+            (defaults.fit, defaults.zoom) = (Fit::None, percent / 100.0);
+        }
+    });
+    ui.label(
+        egui::RichText::new(tl!("Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages."))
             .small()
             .color(t.text_muted),
     );

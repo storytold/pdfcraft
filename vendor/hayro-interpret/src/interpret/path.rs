@@ -12,12 +12,14 @@ pub(crate) fn fill_path<'a>(
     fill_rule: FillRule,
 ) {
     fill_path_impl(context, device, fill_rule, None);
+    apply_pending_clip(context, device);
 
     context.path_mut().truncate(0);
 }
 
 pub(crate) fn stroke_path<'a>(context: &mut Context<'a>, device: &mut impl Device<'a>) {
     stroke_path_impl(context, device, None);
+    apply_pending_clip(context, device);
 
     context.path_mut().truncate(0);
 }
@@ -29,8 +31,21 @@ pub(crate) fn fill_stroke_path<'a>(
 ) {
     fill_path_impl(context, device, fill_rule, None);
     stroke_path_impl(context, device, None);
+    apply_pending_clip(context, device);
 
     context.path_mut().truncate(0);
+}
+
+/// PdfCraft patch: a clip set by `W` / `W*` takes effect once the path-painting operator that
+/// ends the path has painted it, whichever operator that is (ISO 32000-2 §8.5.4). Upstream
+/// applied it only on `n`, and otherwise left it pending for some later, unrelated `n`.
+pub(crate) fn apply_pending_clip<'a>(context: &mut Context<'a>, device: &mut impl Device<'a>) {
+    if let Some(rule) = context.clip_mut().take()
+        && !context.path().elements().is_empty()
+    {
+        let clip_path = context.get().ctm * context.path().clone();
+        context.push_clip_path(clip_path, rule, device);
+    }
 }
 
 pub(crate) fn close_path(context: &mut Context<'_>) {

@@ -30,19 +30,25 @@ fn main() {
                     // `?file=<url>` opens a PDF from a URL (same-origin or CORS-enabled).
                     if let Some(url) = query_param("file") {
                         let inbox = app.inbox.clone();
+                        let failed = app.failed_inbox.clone();
                         let ctx = cc.egui_ctx.clone();
                         wasm_bindgen_futures::spawn_local(async move {
+                            let name = url.rsplit('/').next().unwrap_or("document.pdf").split('?').next().unwrap_or("document.pdf").to_string();
                             match fetch_bytes(&url).await {
                                 Ok(bytes) => {
-                                    let name =
-                                        url.rsplit('/').next().unwrap_or("document.pdf").split('?').next().unwrap_or("document.pdf").to_string();
                                     if let Ok(mut q) = inbox.lock() {
                                         q.push((name, bytes));
                                     }
-                                    ctx.request_repaint();
                                 }
-                                Err(e) => eframe::web_sys::console::error_1(&format!("PdfCraft: could not fetch {url}: {e}").into()),
+                                Err(e) => {
+                                    eframe::web_sys::console::error_1(&format!("PdfCraft: could not fetch {url}: {e}").into());
+                                    // Shown in the app too, not only in the console (#173).
+                                    if let Ok(mut q) = failed.lock() {
+                                        q.push((name, e));
+                                    }
+                                }
                             }
+                            ctx.request_repaint();
                         });
                     }
                     Ok(Box::new(app))

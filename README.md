@@ -58,6 +58,7 @@
   <a href="#how-its-built">How it's built</a> ·
   <a href="#get-started">Get started</a> ·
   <a href="#whats-next">What's next</a> ·
+  <a href="#downloads">Downloads</a> ·
   <a href="#the-crafting-apps">Crafting Apps</a>
 </p>
 
@@ -290,6 +291,8 @@ Every engine feature is reachable without the GUI, through one table of JSON-Sch
   { "mcpServers": { "pdfcraft": { "command": "pdfcraft-cli", "args": ["mcp", "--root", "/path/to/your/pdfs"] } } }
   ```
 
+  `--compact` shrinks the tool list the agent has to read: `tools/list` returns about ten core tools plus `tool_search` and `tool_call`, which find and run every other tool, so the list costs far fewer tokens. Every tool still works.
+
   `--root` confines every file the agent can read or write to one directory. Builds that should not include the server at all can use `cargo build -p pdfcraft-cli --no-default-features`.
 
 - **The Rust API** (`pdfcraft_automation::Automation::call`), for embedding.
@@ -369,6 +372,21 @@ git clone https://github.com/storytold/craft-fonts ../craft-fonts
 CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p pdfcraft -- some.pdf
 ```
 
+Each [GitHub release](https://github.com/storytold/pdfcraft/releases) has ready-made builds for macOS,
+Windows, Linux (AppImage, Flatpak, `.deb`, `.rpm` and a tarball), FreeBSD and the web; see
+[Downloads](#downloads). On Gentoo, the community [::snakebyte
+overlay](https://github.com/switch87/snakebyte-overlay) packages the Linux release as
+`app-text/pdfcraft-bin` (not maintained by the PdfCraft team):
+
+```sh
+eselect repository add snakebyte git https://github.com/switch87/snakebyte-overlay.git
+emaint sync -r snakebyte
+echo 'app-text/pdfcraft-bin ~amd64' >> /etc/portage/package.accept_keywords/pdfcraft
+emerge --ask app-text/pdfcraft-bin
+```
+
+Logs, environment variables and other development notes are in [docs/development.md](docs/development.md).
+
 ## What's next
 
 PdfCraft is young and moving fast. The aim is a workbench where you can view, organize, annotate, fill, sign and edit PDFs, at parity with Acrobat Pro.
@@ -377,12 +395,72 @@ PdfCraft is young and moving fast. The aim is a workbench where you can view, or
 
 - **Good today:** viewing and search; organizing, combining and splitting; most kinds of comment; filling and authoring forms (with sandboxed JavaScript); passwords, redaction and sanitizing; basic digital signatures; printing; the Accessibility Checker; agent control through the CLI and MCP.
 - **Still borrowed:** pages are drawn by the `hayro` crate while our own renderer is built.
-- **Thin or missing:** reliable editing of existing text (especially CJK), OCR beyond Latin script, Office import/export, signature timestamps and long-term validation, PDF/A/X/UA preflight, XFA forms, localization and signed installers.
+- **Thin or missing:** reliable editing of existing text (especially CJK), OCR beyond Latin script, Office import/export, signature timestamps and long-term validation, PDF/A/X/UA preflight, XFA forms and localization.
 - **Hardening:** fuzzing still turns up crashes and hangs on hostile files; each one is fixed with a regression test. Quality has not yet been compared with Acrobat side by side.
 
 **Next, in order:** our own renderer, hardening and a fidelity harness against Acrobat, editing existing content, then the Pro workflows (signatures, OCR, Office, preflight, XFA) and 1.0 polish.
 
 The honest assessment by area, what's lacking and where we're going are in **[ROADMAP.md](ROADMAP.md#honest-assessment-2026-10-05)**, with the full plan, progress and estimates.
+
+---
+
+## Downloads
+
+**New to PdfCraft?** Download it from the [PdfCraft page on getartcraft.com](https://getartcraft.com/apps/pdfcraft). That's the easiest way to install it.
+
+**Want a specific build or format?** On GitHub, the [latest release](https://github.com/storytold/pdfcraft/releases/latest) has every build listed below, and [all releases](https://github.com/storytold/pdfcraft/releases) has earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
+
+### Windows
+
+| Build | Installer | Portable |
+|---|---|---|
+| x64 (64-bit Intel/AMD) | `pdfcraft-<ver>-windows-x64.msi` | `pdfcraft-<ver>-windows-x64-portable.zip` |
+| arm64 (Snapdragon and other ARM PCs) | `pdfcraft-<ver>-windows-arm64.msi` | `pdfcraft-<ver>-windows-arm64-portable.zip` |
+| x86 (32-bit) | `pdfcraft-<ver>-windows-x86.msi` | `pdfcraft-<ver>-windows-x86-portable.zip` |
+
+Installers and executables are code-signed.
+
+The portable zip runs from any folder, a USB stick included. Its `portable.txt` keeps the settings,
+logs and crash recovery in a `PdfCraftData` folder next to `pdfcraft.exe`, so nothing is written to
+`%APPDATA%`; delete that file to use the normal per-user folders.
+
+The MSI installs for all users and requires administrator privileges. For unattended deployment
+without a desktop shortcut, run from an elevated terminal:
+
+```powershell
+msiexec /i "pdfcraft-<ver>-windows-x64.msi" /qn /norestart INSTALLDESKTOPSHORTCUT=0
+```
+
+Use the MSI for your architecture. Per-user installation overrides are not supported.
+
+### macOS
+
+| Build | File | Notes |
+|---|---|---|
+| App, universal (Apple silicon + Intel) | `pdfcraft-<ver>-macos-universal.dmg` | Signed and notarized |
+| Command-line tool, universal | `pdfcraft-cli-<ver>-macos-universal.zip` | Signed and notarized |
+
+### Linux
+
+| Format | x86_64 | aarch64 (ARM64) | Notes |
+|---|---|---|---|
+| AppImage | `pdfcraft-<ver>-linux-x86_64.AppImage` | `pdfcraft-<ver>-linux-aarch64.AppImage` | Runs anywhere; updates itself with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`.zsync` files) |
+| Flatpak | `pdfcraft-<ver>-linux-x86_64.flatpak` | `pdfcraft-<ver>-linux-aarch64.flatpak` | Sandboxed; `flatpak install --user <file>` |
+| Debian/Ubuntu | `pdfcraft-<ver>-linux-x86_64.deb` | `pdfcraft-<ver>-linux-aarch64.deb` | |
+| Fedora/RHEL/openSUSE | `pdfcraft-<ver>-linux-x86_64.rpm` | `pdfcraft-<ver>-linux-aarch64.rpm` | |
+| Tarball | `pdfcraft-<ver>-linux-x86_64.tar.gz` | `pdfcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
+
+### FreeBSD
+
+| Build | File |
+|---|---|
+| x86_64 | `pdfcraft-<ver>-freebsd-x86_64.tar.gz` |
+
+### Web (WebAssembly)
+
+| Build | File | Notes |
+|---|---|---|
+| Static site | `pdfcraft-web-<ver>.zip` | Runs in a modern browser; host it on any static server |
 
 ---
 

@@ -70,16 +70,30 @@ fn opening_images_and_text_converts_them_to_new_pdfs() {
 
 #[test]
 fn reduce_file_size_writes_a_compact_copy() {
+    use egui_kittest::Harness;
     let dir = std::env::temp_dir().join(format!("pdfcraft-reduce-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("reduced.pdf");
-    let mut app = PdfCraftApp::new();
-    app.open_bytes("notes.txt", None, "lorem ipsum ".repeat(500).into_bytes()).unwrap();
-    app.save_override = Some(out.to_string_lossy().into_owned());
-    assert!(app.execute("optimize.reduce"));
+    let out2 = out.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("notes.txt", None, "lorem ipsum ".repeat(500).into_bytes()).unwrap();
+        app.save_override = Some(out2.to_string_lossy().into_owned());
+        app
+    });
+    h.run_steps(2);
+    assert!(h.state_mut().execute("optimize.reduce"));
+    // It runs on a worker thread like the PDF Optimizer, with the progress card meanwhile.
+    let start = std::time::Instant::now();
+    while (h.state().optimize_run.is_some() || !out.exists()) && start.elapsed() < std::time::Duration::from_secs(30) {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    h.run_steps(1);
+    assert!(h.state().optimize_run.is_none() && h.state().progress_notice.is_none(), "the run finished");
     let bytes = std::fs::read(&out).unwrap();
     assert!(bytes.starts_with(b"%PDF-"));
-    assert!(app.session.docs()[0].dirty, "the open document is unchanged");
+    assert!(h.state().session.docs()[0].dirty, "the open document is unchanged");
 }
 
 #[test]
@@ -128,7 +142,76 @@ fn the_pdf_optimizer_dialog_saves_an_optimized_copy() {
         assert!(d.settings.discard_tags && d.discard == vec![pdfcraft_engine::Hidden::Metadata]);
     }
     h.get_by_label("OK").click();
-    h.run_steps(3);
+    // The click is handled next frame. The optimization then runs on a worker thread and the
+    // copy is saved when it is done.
+    h.run_steps(1);
+    let start = std::time::Instant::now();
+    while (h.state().optimize_run.is_some() || !out.exists()) && start.elapsed() < std::time::Duration::from_secs(30) {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    h.run_steps(2);
+    assert!(h.state().progress_notice.is_none(), "the progress card is gone");
     assert!(std::fs::read(&out).unwrap().starts_with(b"%PDF-"));
     assert_eq!(h.state().dialog, None);
+}
+
+fn mixed_files(app: &PdfCraftApp) -> Vec<(String, Vec<u8>)> {
+    let pdf = app.session.create_from_text("a", "from a pdf").unwrap();
+    vec![
+        ("notes.txt".into(), b"from text".to_vec()),
+        ("report.docx".into(), b"PK\x03\x04".to_vec()),
+        ("a.pdf".into(), pdf.to_vec()),
+        ("photo.png".into(), png()),
+    ]
+}
+
+#[test]
+fn multiple_files_open_as_one_document_in_the_page_grid() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let path = std::env::temp_dir().join(format!("pdfcraft-create-multiple-{}.pdf", std::process::id()));
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 720.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let files = mixed_files(&app);
+        app.use_files(pdfcraft_ui_egui::FilePurpose::CreateMultiple, files);
+        app
+    });
+    h.run_steps(4);
+    {
+        let app = h.state();
+        assert_eq!(app.views.len(), 1);
+        assert!(app.views[0].organize, "the pages are shown as a grid");
+        let doc = app.session.get(app.views[0].id).unwrap();
+        assert_eq!(doc.name, "Combined.pdf");
+        assert!(doc.dirty && doc.path.is_none(), "unsaved until the user saves it");
+        assert_eq!(doc.info.pages.len(), 3, "the Word file can't be converted and is left out");
+        assert_eq!(doc.info.outline.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(), ["notes", "a", "photo"]);
+    }
+    h.get_by_label_contains("left out: report.docx");
+    h.get_by_label("Insert a file before page 2");
+    if let Ok(path) = std::env::var("PDFCRAFT_CREATE_MULTIPLE_SHOT") {
+        h.run_steps(20);
+        h.render().unwrap().save(path).unwrap();
+    }
+    // Remove the middle page and save what is left.
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.get_by_label("Delete pages (Delete)").click();
+    h.run_steps(3);
+    h.state_mut().save_override = Some(path.to_string_lossy().into_owned());
+    h.get_by_label("Save pages").click();
+    h.run_steps(4);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert!(!doc.dirty && doc.info.pages.len() == 2);
+    assert!(std::fs::read(&path).unwrap().starts_with(b"%PDF-"));
+}
+
+#[test]
+fn multiple_files_that_cannot_be_converted_open_nothing() {
+    let mut app = PdfCraftApp::new();
+    app.use_files(pdfcraft_ui_egui::FilePurpose::CreateMultiple, vec![("report.docx".into(), b"PK\x03\x04".to_vec())]);
+    assert!(app.views.is_empty());
+    assert!(app.toast.is_some());
 }

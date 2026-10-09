@@ -1,4 +1,5 @@
-//! `text` must fail loudly when a page it was asked for cannot be read (#131).
+//! `text` must fail loudly when a page it was asked for cannot be read (#131), and when the
+//! document itself cannot be opened, e.g. a password-protected file without `--password` (#132).
 
 use std::process::Command;
 
@@ -56,4 +57,155 @@ fn text_of_a_readable_document_succeeds() {
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Page 1") && stdout.contains("Page 3"), "{stdout}");
+}
+
+/// `three.pdf` encrypted with the open password `openme`, via `run --script`. `tag` keeps each
+/// test's files apart: tests run in parallel and would otherwise overwrite each other's.
+fn protected_fixture(tag: &str) -> std::path::PathBuf {
+    let src = tmp(&format!("to-protect-{tag}.pdf"));
+    std::fs::write(&src, fixture(3)).unwrap();
+    let out_path = tmp(&format!("protected-{tag}.pdf"));
+    let script = tmp(&format!("protect-{tag}.json"));
+    let steps = serde_json::json!([
+        { "tool": "doc_open", "args": { "path": src } },
+        { "tool": "doc_protect", "args": { "doc": 1, "open_password": "openme" } },
+        { "tool": "doc_save", "args": { "doc": 1, "path": out_path } },
+    ]);
+    std::fs::write(&script, steps.to_string()).unwrap();
+    let out = Command::new(BIN).args(["run", "--script", script.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success(), "protecting the fixture failed: {}", String::from_utf8_lossy(&out.stderr));
+    out_path
+}
+
+#[test]
+fn text_of_a_protected_document_without_the_password_fails() {
+    let path = protected_fixture("no-password");
+    let out = Command::new(BIN).args(["text", path.to_str().unwrap()]).output().unwrap();
+    assert!(!out.status.success(), "a document that cannot be opened must not exit 0");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("password"), "the reason must be named: {stderr}");
+    assert!(out.stdout.is_empty(), "{}", String::from_utf8_lossy(&out.stdout));
+}
+
+#[test]
+fn text_of_a_protected_document_with_the_password_succeeds() {
+    let path = protected_fixture("password");
+    let out = Command::new(BIN).args(["text", path.to_str().unwrap(), "--password", "openme"]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Page 1") && stdout.contains("Page 3"), "{stdout}");
+}
+
+mod page_argument_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct PageDir(PathBuf);
+
+    impl PageDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            for _ in 0..128 {
+                let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!("pdfcraft-page-{}-{serial}", std::process::id()));
+                match std::fs::create_dir(&path) {
+                    Ok(()) => return Self(path),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("creating page test directory: {error}"),
+                }
+            }
+            panic!("no unused page test directory after 128 attempts");
+        }
+    }
+
+    impl Drop for PageDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn malformed_page_values_fail_before_reading_or_printing_document_text() {
+        let dir = PageDir::new();
+        let path = dir.0.join("three.pdf");
+        let bytes = fixture(3);
+        std::fs::write(&path, &bytes).unwrap();
+        let missing = dir.0.join("missing.pdf");
+        let invalid = [
+            vec!["--page", "0"],
+            vec!["--page", ""],
+            vec!["--page", "bad"],
+            vec!["--page", "-1"],
+            vec!["--page", "1.5"],
+            vec!["--page", "18446744073709551616"],
+            vec!["--page"],
+            vec!["--page", "--password", "unused"],
+            vec!["--page", "2", "--page"],
+        ];
+        for input in [&path, &missing] {
+            for args in &invalid {
+                let out = Command::new(BIN).arg("text").arg(input).args(args).output().unwrap();
+                assert_eq!(out.status.code(), Some(1), "{args:?}: {out:?}");
+                assert!(out.stdout.is_empty(), "{args:?}: no text may be printed");
+                assert_eq!(String::from_utf8(out.stderr).unwrap().trim(), "pdfcraft-cli: bad --page: expected a positive page number");
+                assert_eq!(std::fs::read(&path).unwrap(), bytes);
+                assert!(!missing.exists());
+            }
+        }
+    }
+
+    #[test]
+    fn valid_page_values_preserve_all_page_selection_and_first_duplicate_semantics() {
+        let dir = PageDir::new();
+        let path = dir.0.join("three.pdf");
+        let bytes = fixture(3);
+        std::fs::write(&path, &bytes).unwrap();
+        for (args, expected) in [
+            (vec![], vec!["Page 1", "Page 2", "Page 3"]),
+            (vec!["--page", "1"], vec!["Page 1"]),
+            (vec!["--page", "2"], vec!["Page 2"]),
+            (vec!["--page", "3"], vec!["Page 3"]),
+            (vec!["--page", "2", "--page", "1"], vec!["Page 2"]),
+        ] {
+            let out = Command::new(BIN).arg("text").arg(&path).args(args).output().unwrap();
+            assert!(out.status.success(), "{out:?}");
+            assert!(out.stderr.is_empty());
+            let text = String::from_utf8(out.stdout).unwrap();
+            assert_eq!(text.split('').map(str::trim).collect::<Vec<_>>(), expected);
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn an_option_shaped_password_is_not_parsed_as_a_page_flag() {
+        let dir = PageDir::new();
+        let source = dir.0.join("three.pdf");
+        let bytes = fixture(3);
+        std::fs::write(&source, &bytes).unwrap();
+        let protected = dir.0.join("protected.pdf");
+        let script = dir.0.join("protect.json");
+        let steps = serde_json::json!([
+            { "tool": "doc_open", "args": { "path": source } },
+            { "tool": "doc_protect", "args": { "doc": 1, "open_password": "--page" } },
+            { "tool": "doc_save", "args": { "doc": 1, "path": protected } },
+        ]);
+        std::fs::write(&script, steps.to_string()).unwrap();
+        let out = Command::new(BIN).args(["run", "--script"]).arg(&script).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let protected_bytes = std::fs::read(&protected).unwrap();
+        for (args, expected) in [
+            (vec!["--password", "--page"], vec!["Page 1", "Page 2", "Page 3"]),
+            (vec!["--page", "2", "--password", "--page"], vec!["Page 2"]),
+            (vec!["--password", "--page", "--page", "2"], vec!["Page 2"]),
+        ] {
+            let out = Command::new(BIN).arg("text").arg(&protected).args(args).output().unwrap();
+            assert!(out.status.success(), "{out:?}");
+            assert!(out.stderr.is_empty());
+            let text = String::from_utf8(out.stdout).unwrap();
+            assert_eq!(text.split('').map(str::trim).collect::<Vec<_>>(), expected);
+            assert_eq!(std::fs::read(&protected).unwrap(), protected_bytes);
+            assert_eq!(std::fs::read(&source).unwrap(), bytes);
+        }
+    }
 }

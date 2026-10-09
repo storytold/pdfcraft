@@ -1,6 +1,6 @@
 //! The system print spooler. On macOS and Linux this is CUPS: printers come from `lpstat`, jobs
-//! go to `lp` with the job options (copies, collation, duplex, colour). Other platforms report
-//! that printing isn't available yet; the print-ready PDF can still be saved.
+//! are piped to `lp` with the job options (copies, collation, duplex, colour). Other platforms
+//! report that printing isn't available yet; the print-ready PDF can still be saved.
 
 use crate::PrintError;
 
@@ -45,8 +45,8 @@ pub fn parse_lpstat(out: &str) -> Vec<Printer> {
         .collect()
 }
 
-/// The `lp` arguments for a job printing `file`.
-pub fn lp_args(job: &Job, file: &str) -> Vec<String> {
+/// The `lp` arguments for a job. There is no file argument: `lp` reads the job from stdin.
+pub fn lp_args(job: &Job) -> Vec<String> {
     let mut a = Vec::new();
     if let Some(p) = &job.printer {
         a.extend(["-d".to_string(), p.clone()]);
@@ -65,8 +65,6 @@ pub fn lp_args(job: &Job, file: &str) -> Vec<String> {
     }
     // The sheets are already laid out at their final size.
     opt("fit-to-page=false");
-    a.push("--".into());
-    a.push(file.to_string());
     a
 }
 
@@ -99,23 +97,72 @@ pub fn printers() -> Vec<Printer> {
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, PrintError> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        let dir = std::env::temp_dir().join(format!("pdfcraft-print-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).map_err(|e| PrintError::Spool(e.to_string()))?;
-        let file = dir.join(format!("job-{}.pdf", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos())));
-        std::fs::write(&file, pdf).map_err(|e| PrintError::Spool(e.to_string()))?;
-        let out = std::process::Command::new("lp").args(lp_args(job, &file.to_string_lossy())).output();
-        let _ = std::fs::remove_file(&file);
-        let out = out.map_err(|e| PrintError::Spool(format!("the print spooler is not available: {e}")))?;
-        if out.status.success() {
-            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-        } else {
-            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            Err(PrintError::Spool(if err.is_empty() { "the print job was refused".into() } else { err }))
-        }
+        submit_via(std::process::Command::new("lp"), pdf, job)
     }
     #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
     {
         let _ = (pdf, job);
         Err(PrintError::Spool("printing to a printer isn't available on this platform yet; save the print-ready PDF instead".into()))
     }
+}
+
+/// [`submit`] with the spooler command given, so tests can stand in for `lp`.
+///
+/// The job goes to `lp` on stdin, never through a file: a predictable job folder in a shared
+/// temp directory lets another local user read printed documents or swap the file before `lp`
+/// reads it.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+pub(crate) fn submit_via(mut lp: std::process::Command, pdf: &[u8], job: &Job) -> Result<String, PrintError> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = lp
+        .args(lp_args(job))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| PrintError::Spool(format!("the print spooler is not available: {e}")))?;
+    let stdin = child.stdin.take();
+    // Feed the job on its own thread while collecting the output, so neither side can fill a
+    // pipe and wait on the other. Dropping `stdin` at the end closes it: the end of the job.
+    let fed_and_out = std::thread::scope(|s| {
+        let feeder = std::thread::Builder::new().name("print job".into()).spawn_scoped(s, move || match stdin {
+            Some(mut stdin) => stdin.write_all(pdf),
+            None => Err(std::io::Error::other("no pipe to the spooler")),
+        });
+        match feeder {
+            Ok(feeder) => {
+                let out = child.wait_with_output();
+                Ok((feeder.join(), out))
+            }
+            Err(e) => {
+                // No thread to feed it: stop `lp` rather than leave it with an empty job.
+                let _ = child.kill();
+                let _ = child.wait();
+                Err(PrintError::Spool(format!("the print job could not be sent to the spooler: {e}")))
+            }
+        }
+    });
+    let (fed, out) = fed_and_out?;
+    let out = out.map_err(|e| PrintError::Spool(format!("the print spooler is not available: {e}")))?;
+    if !out.status.success() {
+        // `lp` may refuse before reading the job (an unknown printer); its message says why,
+        // and the broken pipe that leaves behind does not.
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(PrintError::Spool(if err.is_empty() { "the print job was refused".into() } else { err }));
+    }
+    match fed {
+        Ok(Ok(())) => Ok(job_message(&out.stdout)),
+        Ok(Err(e)) => Err(PrintError::Spool(format!("the print job could not be sent to the spooler: {e}"))),
+        Err(_) => Err(PrintError::Spool("the print job could not be sent to the spooler".into())),
+    }
+}
+
+/// `lp`'s reply ("request id is Office-12"), without the "(0 file(s))" CUPS adds when the job came
+/// on stdin: it reads as if nothing was sent.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+pub(crate) fn job_message(stdout: &[u8]) -> String {
+    let s = String::from_utf8_lossy(stdout);
+    let s = s.trim();
+    s.strip_suffix("(0 file(s))").map_or(s, str::trim_end).to_string()
 }

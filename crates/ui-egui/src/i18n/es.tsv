@@ -1,0 +1,2001 @@
+# Spanish (es) catalog. Format: see the header of ja.tsv
+# (context <TAB> source <TAB> translation; @id, @plural and other contexts; escapes \n \t \\).
+# Plural forms (see `plural_one_other` in i18n/mod.rs): one (1) | other.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Spanish computing vocabulary (European Spanish, informal "tú"). No proprietary localisation
+# resource, string table or product UI (Acrobat's included) was consulted or copied; add entries
+# the same way.
+# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
+# the trailing "…" of dialog commands is kept.
+
+	Menu	Menú
+	File	Archivo
+	Edit	Edición
+	Pages	Páginas
+	View	Ver
+	Help	Ayuda
+	Preferences	Preferencias
+	Preferences…	Preferencias…
+	Interface language	Idioma de la interfaz
+	Identity	Identidad
+	Name on new comments	Nombre en los comentarios nuevos
+	Open…	Abrir…
+	Open Recent	Abrir recientes
+	Pin folder to Home…	Anclar carpeta en Inicio…
+	Folders	Carpetas
+	Pin a folder…	Anclar una carpeta…
+	Pin a folder to Home	Anclar una carpeta en Inicio
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Ancla una carpeta para ver aquí sus PDF más recientes, por ejemplo donde los guarda tu escáner o una unidad en la nube sincronizada.
+	Unpin	Desanclar
+	Unpin {folder}	Desanclar {folder}
+	Looking for PDFs…	Buscando PDF…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Esta carpeta no está disponible ahora. Puede que se haya movido o que su unidad o la sincronización en la nube estén sin conexión.
+	No PDFs in this folder yet	Aún no hay PDF en esta carpeta
+	Show less	Mostrar menos
+	Show {n} more	Mostrar {n} más
+	The newest {n} of {total} PDFs	Los {n} PDF más recientes de {total}
+	Pinned folders need the desktop app	Las carpetas ancladas requieren la aplicación de escritorio
+	Choose a folder on this computer to pin	Elige una carpeta de este equipo para anclarla
+	{folder} is already pinned to Home	{folder} ya está anclada en Inicio
+	You can pin up to {n} folders. Unpin one first.	Puedes anclar hasta {n} carpetas. Desancla una primero.
+	Pinned {folder} to Home	{folder} anclada en Inicio
+	No recent files	No hay archivos recientes
+	New blank PDF	Nuevo PDF en blanco
+	Create PDF from file…	Crear PDF a partir de un archivo…
+	Create PDF from images…	Crear PDF a partir de imágenes…
+	Create PDF from multiple files…	Crear PDF a partir de varios archivos…
+	Create PDF from clipboard	Crear PDF a partir del portapapeles
+	Combine files…	Combinar archivos…
+	Save	Guardar
+	Save as…	Guardar como…
+	Close file	Cerrar archivo
+	Close all	Cerrar todo
+	Revert	Volver a la versión guardada
+	Print…	Imprimir…
+	Document properties…	Propiedades del documento…
+	Undo	Deshacer
+	Redo	Rehacer
+	Find…	Buscar…
+	Advanced search…	Búsqueda avanzada…
+	Copy pages	Copiar páginas
+	Cut pages	Cortar páginas
+	Paste pages	Pegar páginas
+	Fit visible	Ajustar al contenido visible
+	Marquee zoom	Zoom por selección
+	Take a snapshot	Tomar una instantánea
+	Full screen mode	Modo de pantalla completa
+	Read mode	Modo de lectura
+	Switch light / dark theme	Cambiar entre tema claro y oscuro
+	Comments panel	Panel de comentarios
+	Form fields panel	Panel de campos de formulario
+	Clear form	Borrar formulario
+	Find tools and commands…	Buscar herramientas y comandos…
+	Zoom	Zoom
+	Actual size	Tamaño real
+	Zoom to page level	Ajustar a la página
+	Fit to width	Ajustar al ancho
+	Display theme	Tema de visualización
+	Side panels	Paneles laterales
+	Enable Acrobat JavaScript	Activar Acrobat JavaScript
+	OK	Aceptar
+	Join our Discord	Únete a nuestro Discord
+	Close	Cerrar
+	Next / previous match	Coincidencia siguiente / anterior
+	Copy selected text	Copiar el texto seleccionado
+	Double-click	Doble clic
+	Select a word	Seleccionar una palabra
+	Clear selection / close find	Borrar la selección / cerrar la búsqueda
+	Zoom in / out (also pinch or ⌘-scroll)	Acercar / alejar (también con pellizco o ⌘ + desplazamiento)
+	Rotate view	Girar la vista
+	First / last page	Primera / última página
+	Previous / next page	Página anterior / siguiente
+	Delete selected pages (Organize)	Eliminar las páginas seleccionadas (Organizar)
+	Select all pages (Organize)	Seleccionar todas las páginas (Organizar)
+	Home	Inicio
+	Open	Abrir
+	Open a PDF (⌘O)	Abrir un PDF (⌘O)
+	Dark gray theme	Tema gris oscuro
+	Light theme	Tema claro
+	All tools	Todas las herramientas
+	Read	Leer
+	Convert	Convertir
+	E-Sign	Firma electrónica
+	Print (⌘P)	Imprimir (⌘P)
+	Save (M4)	Guardar (M4)
+	Document properties (⌘D)	Propiedades del documento (⌘D)
+	Find tools and commands	Buscar herramientas y comandos
+	Fit to height	Ajustar al alto
+	Zoom in	Acercar
+	Zoom out	Alejar
+	Rotate view clockwise	Girar la vista a la derecha
+	Rotate view counterclockwise	Girar la vista a la izquierda
+	Page navigation	Navegación de páginas
+	Previous view	Vista anterior
+	Next view	Vista siguiente
+	Page display	Presentación de página
+	Continuous scrolling	Desplazamiento continuo
+	Two-page view	Vista de dos páginas
+	Single page	Una sola página
+	Show cover page in two-page view	Mostrar la portada en la vista de dos páginas
+	Use system setting	Usar la configuración del sistema
+	Light gray	Gris claro
+	Dark gray	Gris oscuro
+	Comments	Comentarios
+	Bookmarks	Marcadores
+	Fields	Campos
+	Layers	Capas
+	Attachments	Archivos adjuntos
+	Signatures	Firmas
+	Accessibility Checker	Comprobador de accesibilidad
+	Search	Buscar
+	Compare	Comparar
+	Page thumbnails	Miniaturas de página
+	Form fields	Campos de formulario
+	Zoom out (⌘−)	Alejar (⌘−)
+	Zoom in (⌘+)	Acercar (⌘+)
+	Rotate view clockwise (⇧⌘+)	Girar la vista a la derecha (⇧⌘+)
+	Toggle fit page / fit width	Alternar entre ajustar a la página y al ancho
+	Next page	Página siguiente
+	Previous page	Página anterior
+	Current page — type a page number or label (such as iv) and press Enter	Página actual: escribe un número o una etiqueta de página (por ejemplo, iv) y pulsa Intro
+	Welcome to PdfCraft	Te damos la bienvenida a PdfCraft
+	An open-source PDF workbench — local, private, and scriptable.	Un banco de trabajo PDF de código abierto: local, privado y automatizable.
+	Join the ArtCraft community	Únete a la comunidad de ArtCraft
+	Get help, share feedback and follow development on Discord.	Recibe ayuda, comparte tu opinión y sigue el desarrollo en Discord.
+	Recommended tools	Herramientas recomendadas
+	Use now	Usar ahora
+	Open file	Abrir archivo
+	Recent	Recientes
+	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Los archivos que abras en PdfCraft aparecerán aquí. Suelta un PDF en cualquier parte para abrirlo.
+	Privacy	Privacidad
+	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft funciona sin conexión. Sin telemetría, sin cuenta y sin procesamiento en la nube, salvo que añadas un proveedor.
+	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Los scripts se ejecutan en un entorno aislado, sin acceso a archivos ni a la red. Con JavaScript desactivado, las funciones estándar de formato, validación y cálculo de Acrobat siguen funcionando.
+	Back to all tools	Volver a todas las herramientas
+	Close panel	Cerrar panel
+	View less	Ver menos
+	View more	Ver más
+	Available	Disponible
+	Ready	Listo
+	Search tools and commands…	Buscar herramientas y comandos…
+	No matching tools	Ninguna herramienta coincide
+	Tool	Herramienta
+	Command	Comando
+	Add a sticky note	Añadir una nota adhesiva
+	Add a text box	Añadir un cuadro de texto
+	Highlight text	Resaltar texto
+	Underline text	Subrayar texto
+	Strikethrough text	Tachar texto
+	Squiggly underline text	Subrayar texto con línea ondulada
+	Draw freehand	Dibujar a mano alzada
+	Draw a line	Dibujar una línea
+	Draw an arrow	Dibujar una flecha
+	Draw a rectangle	Dibujar un rectángulo
+	Draw an oval	Dibujar un óvalo
+	Draw a polygon	Dibujar un polígono
+	Draw connected lines	Dibujar líneas conectadas
+	Draw a cloud	Dibujar una nube
+	Add a callout	Añadir una llamada
+	Insert text	Insertar texto
+	Replace text	Reemplazar texto
+	Attach a file	Adjuntar un archivo
+	Erase drawings	Borrar dibujos
+	Flatten comments	Acoplar comentarios
+	Import comments…	Importar comentarios…
+	Add a stamp	Añadir un sello
+	Export all comments to data file…	Exportar todos los comentarios a un archivo de datos…
+	Hide all comments	Ocultar todos los comentarios
+	Summarize comments	Resumir comentarios
+	Import form data…	Importar datos de formulario…
+	Export form data…	Exportar datos de formulario…
+	PDF/A…	PDF/A…
+	Action Wizard…	Asistente de acciones…
+	Prepare for distribution…	Preparar para distribución…
+	Optimize scanned documents…	Optimizar documentos escaneados…
+	Compare files…	Comparar archivos…
+	Detect form fields	Detectar campos de formulario
+	Merge data files into spreadsheet…	Combinar archivos de datos en una hoja de cálculo…
+	Flatten form fields	Acoplar campos de formulario
+	Prepare a form	Preparar un formulario
+	Tab order: by rows	Orden de tabulación: por filas
+	Tab order: by columns	Orden de tabulación: por columnas
+	Tab order: by document structure	Orden de tabulación: según la estructura del documento
+	Add text	Añadir texto
+	Edit text & images	Editar texto e imágenes
+	Add or edit links	Añadir o editar enlaces
+	Create links from URLs	Crear enlaces a partir de URL
+	Remove all links	Quitar todos los enlaces
+	Add Bates numbering…	Añadir numeración Bates…
+	Add image…	Añadir imagen…
+	Redact text and images	Censurar texto e imágenes
+	Redact pages…	Censurar páginas…
+	Find text and redact…	Buscar texto y censurar…
+	Redaction properties…	Propiedades de censura…
+	Apply redactions…	Aplicar censuras…
+	Clear redaction marks	Borrar marcas de censura
+	Remove hidden information…	Quitar información oculta…
+	Sanitize document…	Sanear documento…
+	Field properties…	Propiedades del campo…
+	Add a text field	Añadir un campo de texto
+	Add a checkbox	Añadir una casilla de verificación
+	Add a radio button	Añadir un botón de opción
+	Add a drop-down list	Añadir una lista desplegable
+	Add a list box	Añadir un cuadro de lista
+	Add a button	Añadir un botón
+	Add an image field	Añadir un campo de imagen
+	Add a date field	Añadir un campo de fecha
+	Add a digital signature field	Añadir un campo de firma digital
+	Digitally sign	Firmar digitalmente
+	Certify (visible signature)	Certificar (firma visible)
+	Certify (invisible signature)	Certificar (firma invisible)
+	Validate all signatures	Validar todas las firmas
+	Signatures panel	Panel de firmas
+	Fill & Sign: add text	Rellenar y firmar: añadir texto
+	Fill & Sign: checkmark	Rellenar y firmar: marca de verificación
+	Fill & Sign: cross	Rellenar y firmar: cruz
+	Fill & Sign: dot	Rellenar y firmar: punto
+	Fill & Sign: line	Rellenar y firmar: línea
+	Fill & Sign: date	Rellenar y firmar: fecha
+	Fill & Sign: sign	Rellenar y firmar: firmar
+	Fill & Sign: initials	Rellenar y firmar: iniciales
+	Export to image…	Exportar a imagen…
+	Reduce file size…	Reducir tamaño del archivo…
+	Optimize PDF…	Optimizar PDF…
+	Export to text…	Exportar a texto…
+	Export to Word…	Exportar a Word…
+	Export to HTML…	Exportar a HTML…
+	Export to RTF…	Exportar a RTF…
+	JavaScript console…	Consola de JavaScript…
+	Document JavaScripts…	JavaScripts del documento…
+	Recognize text…	Reconocer texto…
+	Recognize text in multiple files…	Reconocer texto en varios archivos…
+	Check for accessibility…	Comprobar accesibilidad…
+	Open accessibility report	Abrir informe de accesibilidad
+	Change reading options…	Cambiar opciones de lectura…
+	Add alternate text…	Añadir texto alternativo…
+	Export all images…	Exportar todas las imágenes…
+	Add header & footer…	Añadir encabezado y pie de página…
+	Update header & footer…	Actualizar encabezado y pie de página…
+	Remove header & footer	Quitar encabezado y pie de página
+	Add watermark…	Añadir marca de agua…
+	Update watermark…	Actualizar marca de agua…
+	Remove watermark	Quitar marca de agua
+	Add background…	Añadir fondo…
+	Update background…	Actualizar fondo…
+	Remove background	Quitar fondo
+	Protect using password…	Proteger con contraseña…
+	Remove security	Quitar seguridad
+	Security properties…	Propiedades de seguridad…
+	Organize pages	Organizar páginas
+	New bookmark	Nuevo marcador
+	Rotate pages clockwise	Girar páginas a la derecha
+	Rotate pages counterclockwise	Girar páginas a la izquierda
+	Delete pages	Eliminar páginas
+	Insert blank page	Insertar página en blanco
+	Rotate pages…	Girar páginas…
+	Duplicate pages	Duplicar páginas
+	Crop pages	Recortar páginas
+	Set page boxes…	Definir cuadros de página…
+	Insert pages from file…	Insertar páginas desde un archivo…
+	Replace pages…	Reemplazar páginas…
+	Extract pages…	Extraer páginas…
+	Split document…	Dividir documento…
+	Number pages…	Numerar páginas…
+	Keyboard shortcuts	Atajos de teclado
+	Join the ArtCraft Discord	Únete al Discord de ArtCraft
+	PdfCraft web page	Página web de PdfCraft
+	PdfCraft on GitHub	PdfCraft en GitHub
+	ArtCraft website	Sitio web de ArtCraft
+	Check for updates…	Buscar actualizaciones…
+	About PdfCraft	Acerca de PdfCraft
+	Export a PDF	Exportar un PDF
+	Export to	Exportar a
+	Microsoft Word (.docx)	Microsoft Word (.docx)
+	Spreadsheet (.xlsx)	Hoja de cálculo (.xlsx)
+	Presentation (.pptx)	Presentación (.pptx)
+	Image (PNG)	Imagen (PNG)
+	Export all images	Exportar todas las imágenes
+	HTML web page	Página web HTML
+	Rich Text Format (.rtf)	Formato de texto enriquecido (.rtf)
+	Text (plain)	Texto (sin formato)
+	PostScript / EPS	PostScript / EPS
+	Fill & Sign	Rellenar y firmar
+	Fill	Rellenar
+	Checkmark	Marca de verificación
+	Cross	Cruz
+	Dot	Punto
+	Line	Línea
+	Date	Fecha
+	Signature	Firma
+	Initials	Iniciales
+	Edit a PDF	Editar un PDF
+	Modify page	Modificar página
+	Rotate pages	Girar páginas
+	Insert pages	Insertar páginas
+	Extract pages	Extraer páginas
+	Add content	Añadir contenido
+	Text	Texto
+	Image	Imagen
+	Header and footer	Encabezado y pie de página
+	Watermark	Marca de agua
+	Link	Enlace
+	Bates numbering	Numeración Bates
+	Background	Fondo
+	Attach file	Adjuntar archivo
+	Create a PDF	Crear un PDF
+	Create from	Crear a partir de
+	Single file	Un solo archivo
+	Multiple files	Varios archivos
+	Images	Imágenes
+	Clipboard	Portapapeles
+	Blank page	Página en blanco
+	Combine files	Combinar archivos
+	Combine	Combinar
+	Add files to combine	Añadir archivos para combinar
+	Page options	Opciones de página
+	Page grid	Cuadrícula de páginas
+	Rotate	Girar
+	Delete	Eliminar
+	Extract	Extraer
+	Insert	Insertar
+	Replace	Reemplazar
+	Split	Dividir
+	More	Más
+	Set page boxes	Definir cuadros de página
+	Page labels	Etiquetas de página
+	Page transitions	Transiciones de página
+	Add comments	Añadir comentarios
+	Markup	Marcas de texto
+	Sticky note	Nota adhesiva
+	Underline	Subrayado
+	Strikethrough	Tachado
+	Squiggly underline	Subrayado ondulado
+	Text box	Cuadro de texto
+	Drawing	Dibujo
+	Rectangle	Rectángulo
+	Oval	Óvalo
+	Arrow	Flecha
+	Cloud	Nube
+	Stamp	Sello
+	Review	Revisión
+	Comment list	Lista de comentarios
+	Scan & OCR	Escaneado y OCR
+	Recognize text	Reconocer texto
+	In this file	En este archivo
+	In multiple files	En varios archivos
+	Enhance scanned file	Mejorar archivo escaneado
+	Correct recognized text	Corregir texto reconocido
+	Protect a PDF	Proteger un PDF
+	Protect	Proteger
+	Protect with password	Proteger con contraseña
+	Remove hidden information	Quitar información oculta
+	Advanced options	Opciones avanzadas
+	Encrypt with certificate	Cifrar con certificado
+	Security properties	Propiedades de seguridad
+	Redact a PDF	Censurar un PDF
+	Redact	Censurar
+	Redact pages	Censurar páginas
+	Find text and redact	Buscar texto y censurar
+	Set properties	Definir propiedades
+	Sanitize document	Sanear documento
+	Compress a PDF	Comprimir un PDF
+	Optimize	Optimizar
+	Reduce file size	Reducir tamaño del archivo
+	Advanced optimization	Optimización avanzada
+	Audit space usage	Auditar uso del espacio
+	Field list	Lista de campos
+	Field properties	Propiedades del campo
+	Tab order by rows	Orden de tabulación por filas
+	Tab order by columns	Orden de tabulación por columnas
+	Import data	Importar datos
+	Export data	Exportar datos
+	Add form components	Añadir componentes de formulario
+	Text field	Campo de texto
+	Checkbox	Casilla de verificación
+	Radio button	Botón de opción
+	Drop-down list	Lista desplegable
+	List box	Cuadro de lista
+	Button	Botón
+	Image field	Campo de imagen
+	Date field	Campo de fecha
+	Digital signature	Firma digital
+	Stamps	Sellos
+	Stamp palette	Paleta de sellos
+	Use a certificate	Usar un certificado
+	Certificates	Certificados
+	Timestamp	Marca de tiempo
+	Use print production	Usar producción de impresión
+	Print production	Producción de impresión
+	Output preview	Vista previa de salida
+	Preflight	Comprobaciones preliminares
+	Convert colors	Convertir colores
+	Add printer marks	Añadir marcas de impresión
+	Fix hairlines	Corregir líneas finas
+	Measure objects	Medir objetos
+	Measure	Medir
+	Measuring tool	Herramienta de medición
+	Geospatial location	Ubicación geoespacial
+	Compare files	Comparar archivos
+	Select files to compare	Seleccionar archivos para comparar
+	Use guided actions	Usar acciones guiadas
+	Actions list	Lista de acciones
+	Action Wizard	Asistente de acciones
+	Make accessible	Hacer accesible
+	Prepare for distribution	Preparar para distribución
+	Optimize scanned documents	Optimizar documentos escaneados
+	Archive documents	Archivar documentos
+	Prepare for accessibility	Preparar para accesibilidad
+	Accessibility	Accesibilidad
+	Automatically tag PDF	Etiquetar PDF automáticamente
+	Change reading options	Cambiar opciones de lectura
+	Check for accessibility	Comprobar accesibilidad
+	Add alternate text	Añadir texto alternativo
+	Fix reading order	Corregir orden de lectura
+	Apply PDF standards	Aplicar estándares PDF
+	Standards	Estándares
+	Save as PDF/A	Guardar como PDF/A
+	Save as PDF/X	Guardar como PDF/X
+	Save as PDF/UA	Guardar como PDF/UA
+	Add search index	Añadir índice de búsqueda
+	Index	Índice
+	Manage embedded index	Gestionar índice incrustado
+	Use JavaScript	Usar JavaScript
+	JavaScript	JavaScript
+	Console	Consola
+	Document JavaScripts	JavaScripts del documento
+	Document actions	Acciones del documento
+	AI assistant	Asistente de IA
+	Bring your own model (off by default)	Usa tu propio modelo (desactivado por defecto)
+	Summarize	Resumir
+	Ask about this document	Preguntar sobre este documento
+	Translate	Traducir
+	pages	páginas
+	Planned	Previsto
+	Planned for milestone	Previsto para el hito
+	open to see what it will include	abre para ver qué incluirá
+	Optional: needs an AI provider you configure	Opcional: necesita un proveedor de IA que configures
+	Coming in milestone	Llegará en el hito
+	Items marked Ready work today.	Los elementos marcados como Listo ya funcionan.
+	Preview	Vista previa
+	Edit fields	Editar campos
+	Try the form as people filling it in will see it	Prueba el formulario tal como lo verán quienes lo rellenen
+	Redact all	Censurar todo
+	Clear all	Borrar todo
+	Rotate page	Girar página
+	Delete page	Eliminar página
+	Move page	Mover página
+	Move pages	Mover páginas
+	Duplicate page	Duplicar página
+	Replace page	Reemplazar página
+	Replace pages	Reemplazar páginas
+	Crop page	Recortar página
+	Cancel	Cancelar
+	Don't save	No guardar
+	Apply	Aplicar
+	Run	Ejecutar
+	Clear	Borrar
+	Sanitize	Sanear
+	Mark all	Marcar todo
+	Save changes to “{name}” before closing?	¿Guardar los cambios en «{name}» antes de cerrar?
+	Your changes will be lost if you don't save them.	Los cambios se perderán si no los guardas.
+	Password required	Se requiere contraseña
+	“{name}” is protected. Enter a password to open it.	«{name}» está protegido. Introduce una contraseña para abrirlo.
+	Password	Contraseña
+	Incorrect password. Try again.	Contraseña incorrecta. Inténtalo de nuevo.
+	Recognize Text	Reconocer texto
+	Password protection will be applied when you save	La protección con contraseña se aplicará al guardar
+	Saved the print-ready PDF to {path}	PDF listo para imprimir guardado en {path}
+	Could not save: {e}	No se pudo guardar: {e}
+	Earlier in tab order	Antes en el orden de tabulación
+	Later in tab order	Después en el orden de tabulación
+	From:	Desde:
+	To:	Hasta:
+	High Resolution	Alta resolución
+	Print	Imprimir
+	Verify to see what the document needs.	Verifica para ver qué necesita el documento.
+	Set Page Boxes	Definir cuadros de página
+	Signature panel	Panel de firmas
+	{month} {day}, {y}	{day} de {month} de {y}
+	The document's security settings don't allow filling in form fields	La configuración de seguridad del documento no permite rellenar campos de formulario
+	{name} is read-only	{name} es de solo lectura
+	{name} has no action	{name} no tiene ninguna acción
+	Previous month	Mes anterior
+	Next month	Mes siguiente
+	January	enero
+	February	febrero
+	March	marzo
+	April	abril
+	May	mayo
+	June	junio
+	July	julio
+	August	agosto
+	September	septiembre
+	October	octubre
+	November	noviembre
+	December	diciembre
+	Done	Hecho
+	This certificate is in your list of trusted certificates.	Este certificado está en tu lista de certificados de confianza.
+	This certificate is trusted through a certificate above it in the chain.	Este certificado es de confianza a través de un certificado superior de la cadena.
+	This certificate is not trusted. Signatures made with it show an unknown identity.	Este certificado no es de confianza. Las firmas hechas con él muestran una identidad desconocida.
+	Add to Trusted Certificates	Añadir a certificados de confianza
+	Export…	Exportar…
+	PDF Optimizer	Optimizador de PDF
+	Discard Objects	Descartar objetos
+	Discard User Data	Descartar datos de usuario
+	Clean Up	Limpieza
+	Color Images	Imágenes en color
+	Grayscale Images	Imágenes en escala de grises
+	Bicubic downsampling to	Reducción de resolución bicúbica a
+	for images above	para imágenes por encima de
+	Compression	Compresión
+	ZIP	ZIP
+	Retain existing	Conservar la existente
+	Minimum	Mínima
+	Low	Baja
+	High	Alta
+	Maximum	Máxima
+	Each image is measured where pages draw it; an image is replaced only if the result is smaller.	Cada imagen se mide donde las páginas la dibujan; solo se reemplaza si el resultado es más pequeño.
+	Discard all links, actions and JavaScript	Descartar todos los enlaces, acciones y JavaScript
+	Discard alternate images	Descartar imágenes alternativas
+	Discard embedded page thumbnails	Descartar miniaturas de página incrustadas
+	Discard document tags	Descartar etiquetas del documento
+	Discard embedded print settings	Descartar ajustes de impresión incrustados
+	Discard bookmarks	Descartar marcadores
+	Discard hidden layer content	Descartar contenido de capas ocultas
+	Discard all comments, forms and multimedia	Descartar todos los comentarios, formularios y multimedia
+	Discard document information and metadata	Descartar información y metadatos del documento
+	Discard all object data (file attachments)	Descartar todos los datos de objeto (archivos adjuntos)
+	Discard private data of other applications	Descartar datos privados de otras aplicaciones
+	Discard hidden text	Descartar texto oculto
+	Use Flate to encode streams that are not encoded	Usar Flate para codificar las secuencias sin codificar
+	Remove invalid links and bookmarks	Quitar enlaces y marcadores no válidos
+	Remove unreferenced named destinations	Quitar destinos con nombre sin referencias
+	Compress document structure (object streams)	Comprimir la estructura del documento (secuencias de objetos)
+	Remove unused objects and merge identical ones	Quitar objetos sin usar y fusionar los idénticos
+	Audit space usage…	Auditar uso del espacio…
+	Space Audit	Auditoría de espacio
+	Bytes	Bytes
+	Content Streams	Secuencias de contenido
+	X Object Forms	Formularios XObject
+	Structure Info	Información de estructura
+	Thumbnails	Miniaturas
+	Named Destinations	Destinos con nombre
+	Color Spaces	Espacios de color
+	Shadings	Sombreados
+	Patterns (graphics objects)	Patrones (objetos gráficos)
+	Extended Graphics States	Estados gráficos extendidos
+	Embedded Files	Archivos incrustados
+	Document Overhead	Sobrecarga del documento
+	Total	Total
+	Text Field Properties	Propiedades del campo de texto
+	Check Box Properties	Propiedades de la casilla de verificación
+	Radio Button Properties	Propiedades del botón de opción
+	Dropdown Properties	Propiedades de la lista desplegable
+	List Box Properties	Propiedades del cuadro de lista
+	Button Properties	Propiedades del botón
+	Digital Signature Properties	Propiedades de la firma digital
+	Position	Posición
+	Options	Opciones
+	Validate	Validar
+	Calculate	Calcular
+	Actions	Acciones
+	This field is locked. Unlock it to change its properties.	Este campo está bloqueado. Desbloquéalo para cambiar sus propiedades.
+	Tooltip:	Información sobre herramientas:
+	Common Properties	Propiedades comunes
+	Read Only	Solo lectura
+	Required	Obligatorio
+	Font Size:	Tamaño de fuente:
+	Auto	Automático
+	Text Color:	Color del texto:
+	Borders and Colors	Bordes y colores
+	Border Color:	Color del borde:
+	Fill Color:	Color de relleno:
+	No color	Sin color
+	Beveled	Biselado
+	Left:	Izquierda:
+	Bottom:	Inferior:
+	Width:	Ancho:
+	Height:	Alto:
+	Points from the page's bottom-left corner.	Puntos desde la esquina inferior izquierda de la página.
+	Alignment:	Alineación:
+	Default Value:	Valor predeterminado:
+	Multi-line	Varias líneas
+	Scroll long text	Desplazar el texto largo
+	Allow Rich Text Formatting	Permitir formato de texto enriquecido
+	Limit of	Límite de
+	characters	caracteres
+	Field is used for file selection	El campo se usa para seleccionar archivos
+	Check spelling	Revisar ortografía
+	Comb of	Peine de
+	Export Value: {on}	Valor de exportación: {on}
+	Check box is checked by default	La casilla está marcada por defecto
+	Button is checked by default	El botón está marcado por defecto
+	Buttons with the same name and value are selected in unison	Los botones con el mismo nombre y valor se seleccionan a la vez
+	Item:	Elemento:
+	Item List	Lista de elementos
+	Up	Subir
+	Delete {o}	Eliminar {o}
+	Add the choices people pick from.	Añade las opciones entre las que se podrá elegir.
+	Default:	Predeterminado:
+	(none)	(ninguno)
+	Sort items	Ordenar elementos
+	Allow user to enter custom text	Permitir al usuario introducir texto personalizado
+	Multiple selection	Selección múltiple
+	Commit selected value immediately	Confirmar el valor seleccionado inmediatamente
+	Number	Número
+	Percentage	Porcentaje
+	Time	Hora
+	Special	Especial
+	Select format category:	Selecciona la categoría de formato:
+	The value is shown as typed.	El valor se muestra tal como se escribe.
+	Decimal places:	Decimales:
+	Separator style:	Estilo de separador:
+	Currency symbol:	Símbolo de moneda:
+	Before the number	Antes del número
+	Negative number style:	Estilo de los números negativos:
+	Format:	Formato:
+	Custom:	Personalizado:
+	Zip Code	Código postal
+	Zip Code + 4	Código postal + 4
+	Phone Number	Número de teléfono
+	Social Security Number	Número de la Seguridad Social
+	Arbitrary Mask	Máscara arbitraria
+	Mask:	Máscara:
+	9 digit, A letter, O letter or digit, X any character	9 dígito, A letra, O letra o dígito, X cualquier carácter
+	Example: {sample}	Ejemplo: {sample}
+	Field value is not validated	El valor del campo no se valida
+	Field value is in range:	El valor del campo está en el intervalo:
+	Add an Action	Añadir una acción
+	Select Trigger:	Selecciona el desencadenador:
+	Mouse Up	Al soltar el botón del ratón
+	Mouse Down	Al pulsar el botón del ratón
+	Mouse Enter	Al entrar el ratón
+	Mouse Exit	Al salir el ratón
+	On Focus	Al recibir el foco
+	On Blur	Al perder el foco
+	Select Action:	Selecciona la acción:
+	Open a web link	Abrir un enlace web
+	Reset a form	Restablecer un formulario
+	Execute a menu item	Ejecutar un elemento de menú
+	Show a field	Mostrar un campo
+	Hide a field	Ocultar un campo
+	Submit a form	Enviar un formulario
+	Fields to reset (comma-separated; empty: all)	Campos que restablecer (separados por comas; vacío: todos)
+	Print, NextPage, PrevPage, FirstPage or LastPage	Print, NextPage, PrevPage, FirstPage o LastPage
+	Field names (comma-separated)	Nombres de campo (separados por comas)
+	URL to submit to	URL de envío
+	Script:	Script:
+	Value:	Valor:
+	No actions	Sin acciones
+	Value is not calculated	El valor no se calcula
+	Value is the	El valor es
+	sum (+)	la suma (+)
+	product (x)	el producto (x)
+	average	la media
+	minimum	el mínimo
+	maximum	el máximo
+	of the following fields:	de los campos siguientes:
+	Simplified field notation:	Notación de campos simplificada:
+	Field names with + - * / and parentheses; put \\ before spaces in names.	Nombres de campo con + - * / y paréntesis; pon \\ antes de los espacios en los nombres.
+	Format text	Dar formato al texto
+	Bold	Negrita
+	Italic	Cursiva
+	Align left	Alinear a la izquierda
+	Centre	Centrar
+	Align right	Alinear a la derecha
+	Justify	Justificar
+	Standard fonts; text outside Windows-1252 isn't supported yet.	Fuentes estándar; el texto fuera de Windows-1252 aún no es compatible.
+	Edit image	Editar imagen
+	Rotate counterclockwise	Girar a la izquierda
+	Rotate clockwise	Girar a la derecha
+	Flip horizontal	Voltear horizontalmente
+	Flip vertical	Voltear verticalmente
+	Replace image	Reemplazar imagen
+	Crop (% trimmed from each side)	Recortar (% eliminado de cada lado)
+	Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.	Haz clic en la página para añadir texto; cada clic inicia un cuadro nuevo y ✓ termina. Arrastra los elementos para moverlos, arrastra una esquina para cambiar el tamaño y haz doble clic en el texto para editarlo.
+	Choose an image	Elige una imagen
+	Export to Image	Exportar a imagen
+	Export to Text	Exportar a texto
+	Export All Images	Exportar todas las imágenes
+	Resolution	Resolución
+	Format	Formato
+	Quality	Calidad
+	One {f} file per page, named after the document.	Un archivo {f} por página, con el nombre del documento.
+	Exclude images smaller than	Excluir imágenes más pequeñas que
+	No limit	Sin límite
+	Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.	Cada imagen una sola vez, con el nombre del documento y la página. Las imágenes JPEG se guardan sin cambios; las demás, como PNG.
+	Plain text in reading order; pages are separated by form feeds.	Texto sin formato en orden de lectura; las páginas se separan con saltos de página.
+	Create {what}	Crear {what}
+	initials	iniciales
+	signature	firma
+	Create Custom Stamp	Crear sello personalizado
+	From {file}	De {file}
+	Category:	Categoría:
+	e.g. My stamps	p. ej., Mis sellos
+	Name:	Nombre:
+	Custom	Personalizado
+	Delete stamp	Eliminar sello
+	Create custom stamp…	Crear sello personalizado…
+	From a PDF page or an image	A partir de una página PDF o una imagen
+	Line spacing	Interlineado
+	Character spacing	Espaciado entre caracteres
+	Horizontal scale	Escala horizontal
+	Rotate Clockwise	Girar a la derecha
+	Rotate Counterclockwise	Girar a la izquierda
+	Flip Horizontal	Voltear horizontalmente
+	Flip Vertical	Voltear verticalmente
+	Replace Image…	Reemplazar imagen…
+	Save Image As…	Guardar imagen como…
+	Check for updates	Buscar actualizaciones
+	No check has run yet.	Aún no se ha hecho ninguna comprobación.
+	Checking for a newer version…	Buscando una versión más reciente…
+	PdfCraft {v} is available.	PdfCraft {v} está disponible.
+	You have version {c}. Download the new version from its release page.	Tienes la versión {c}. Descarga la nueva versión desde su página de publicación.
+	PdfCraft {c} is up to date.	PdfCraft {c} está actualizado.
+	Couldn't check for updates: {e}	No se pudieron buscar actualizaciones: {e}
+	You have version {c}. All releases are listed at {page}.	Tienes la versión {c}. Todas las versiones aparecen en {page}.
+	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Consulta a GitHub cuál es la última versión. No se descarga ni se instala nada automáticamente.
+	Download	Descargar
+	Later	Más tarde
+	none	ninguno
+	Declared conformance: {shown}	Conformidad declarada: {shown}
+	Output intent: {list}	Propósito de salida: {list}
+	Conformance level:	Nivel de conformidad:
+	No problems found: the document conforms to {level}.	No se han encontrado problemas: el documento cumple {level}.
+	 (page {p})	 (página {p})
+	  · not fixable here	  · no se puede corregir aquí
+	Verify	Verificar
+	Box	Cuadro
+	Units	Unidades
+	Set to zero	Poner a cero
+	Current page ({n})	Página actual ({n})
+	Subset	Subconjunto
+	Update	Actualizar
+	Add	Añadir
+	{verb} Header and Footer	{verb} encabezado y pie de página
+	{verb} Watermark	{verb} marca de agua
+	{verb} Background	{verb} fondo
+	Margins (in)	Márgenes (pulgadas)
+	Left Header Text	Texto del encabezado izquierdo
+	Center Header Text	Texto del encabezado central
+	Right Header Text	Texto del encabezado derecho
+	Left Footer Text	Texto del pie izquierdo
+	Center Footer Text	Texto del pie central
+	Right Footer Text	Texto del pie derecho
+	Insert Page Number	Insertar número de página
+	Insert Date	Insertar fecha
+	Start page number	Número de página inicial
+	Source	Origen
+	Fit to page	Ajustar a la página
+	Rotation	Rotación
+	Appear behind page	Mostrar detrás de la página
+	Appear on top of page	Mostrar encima de la página
+	From colour	A partir de un color
+	Page Range Options	Opciones de intervalo de páginas
+	Preview: page {p} of {n}	Vista previa: página {p} de {n}
+	Applies to 1 page	Se aplica a 1 página
+	Applies to {n} pages	Se aplica a {n} páginas
+	Replaces the existing one on those pages.	Reemplaza al existente en esas páginas.
+	PDF or image	PDF o imagen
+	No file chosen	Ningún archivo elegido
+	Page number	Número de página
+	Scale relative to target page	Escala relativa a la página de destino
+	Link Properties	Propiedades del enlace
+	Create Link	Crear enlace
+	Link Appearance	Aspecto del enlace
+	Link Type:	Tipo de enlace:
+	Visible Rectangle	Rectángulo visible
+	Invisible Rectangle	Rectángulo invisible
+	Highlight Style:	Estilo de resaltado:
+	Invert	Invertir
+	Outline	Contorno
+	Inset	Hundido
+	Line Thickness:	Grosor de línea:
+	Thin	Fino
+	Thick	Grueso
+	Line Style:	Estilo de línea:
+	Solid	Continua
+	Dashed	Discontinua
+	Color:	Color:
+	Link Action	Acción del enlace
+	Open a web page	Abrir una página web
+	Go to a page view	Ir a una vista de página
+	Type the web address.	Escribe la dirección web.
+	This document has no signatures.	Este documento no tiene firmas.
+	The Keychain's digital IDs couldn't be listed: {e}	No se pudieron listar los ID digitales del Llavero: {e}
+	Signed and saved to {path}	Firmado y guardado en {path}
+	Couldn't open revision {n}: {e}	No se pudo abrir la revisión {n}: {e}
+	Couldn't open the signed version: {e}	No se pudo abrir la versión firmada: {e}
+	Sign with a Digital ID	Firmar con un ID digital
+	Choose the digital ID that you want to use for signing:	Elige el ID digital que quieres usar para firmar:
+	Keychain  ·  	Llavero  ·  
+	Windows store  ·  	Almacén de Windows  ·  
+	Issued by: 	Emitido por: 
+	, Expires: 	, caduca: 
+	No digital IDs yet.	Aún no hay ningún ID digital.
+	Configure New Digital ID	Configurar un nuevo ID digital
+	Continue	Continuar
+	Configure a Digital ID for Signing	Configurar un ID digital para firmar
+	Use a Digital ID from a file	Usar un ID digital de un archivo
+	Create a new Digital ID (self-signed, saved to a password-protected file)	Crear un nuevo ID digital (autofirmado, guardado en un archivo protegido con contraseña)
+	Name	Nombre
+	Organizational Unit	Unidad organizativa
+	Organization Name	Nombre de la organización
+	Email Address	Dirección de correo electrónico
+	Country/Region	País/región
+	Key Algorithm	Algoritmo de clave
+	Confirm Password	Confirmar contraseña
+	Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.	Válido durante 5 años, para firmas digitales. Los ID autofirmados no suelen ser de confianza para otras personas.
+	File (.p12, .pfx)	Archivo (.p12, .pfx)
+	Digital ID	ID digital
+	Browse…	Examinar…
+	{verb} as "{name}"	{verb} como «{name}»
+	Certify	Certificar
+	The signature will be invisible.	La firma será invisible.
+	Distinguished name	Nombre distintivo
+	Labels	Etiquetas
+	Permitted actions after certifying	Acciones permitidas después de certificar
+	No changes allowed	No se permite ningún cambio
+	Annotations, form fill-in, and digital signatures	Anotaciones, rellenado de formularios y firmas digitales
+	Form fill-in and digital signatures	Rellenado de formularios y firmas digitales
+	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	La clave está en el Llavero de macOS, que puede pedirte permiso para que PdfCraft la use.
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	La clave está en el almacén de certificados de Windows, que puede pedirte permiso para que PdfCraft la use.
+	Digital ID password	Contraseña del ID digital
+	Back	Atrás
+	Validate all	Validar todas
+	Sign this field…	Firmar este campo…
+	Signature is valid:	La firma es válida:
+	Signature validity is UNKNOWN:	La validez de la firma es DESCONOCIDA:
+	Signature is INVALID:	La firma NO ES VÁLIDA:
+	Signature Details	Detalles de la firma
+	Reason	Motivo
+	Signing time	Hora de la firma
+	Algorithm	Algoritmo
+	Signer	Firmante
+	Issued by	Emitido por
+	Valid	Validez
+	Field	Campo
+	Field: {field} on page {p}	Campo: {field} en la página {p}
+	Add to trusted certificates	Añadir a certificados de confianza
+	View signed version	Ver versión firmada
+	Show certificate…	Mostrar certificado…
+	Export certificate…	Exportar certificado…
+	Certificate Viewer	Visor de certificados
+	This dialog shows the details of a certificate and its chain.	Este cuadro de diálogo muestra los detalles de un certificado y su cadena.
+	Trust	Confianza
+	Issued to	Emitido para
+	Valid from	Válido desde
+	Valid to	Válido hasta
+	Intended usage	Uso previsto
+	Any	Cualquiera
+	Version	Versión
+	Serial number	Número de serie
+	Issuer	Emisor
+	Validity starts	Inicio de la validez
+	Validity ends	Fin de la validez
+	Public key	Clave pública
+	Key usage	Uso de la clave
+	Not present	No presente
+	Self-signed	Autofirmado
+	Edit Action	Editar acción
+	New Action	Nueva acción
+	Action name:	Nombre de la acción:
+	Description:	Descripción:
+	Steps	Pasos
+	Add the steps this action runs, in order.	Añade los pasos que ejecuta esta acción, en orden.
+	Add Step	Añadir paso
+	An action with this name already exists.	Ya existe una acción con este nombre.
+	New Action…	Nueva acción…
+	Edit…	Editar…
+	Add watermark	Añadir marca de agua
+	Add header	Añadir encabezado
+	Add footer	Añadir pie de página
+	Set document title	Definir título del documento
+	Run a JavaScript	Ejecutar un JavaScript
+	Prepare for Distribution	Preparar para distribución
+	Remove hidden information and flatten comments and form fields, so recipients see only the pages.	Quita la información oculta y acopla los comentarios y los campos de formulario, para que los destinatarios vean solo las páginas.
+	Optimize Scanned Documents	Optimizar documentos escaneados
+	Make scans searchable, then make them smaller.	Hace que los escaneos permitan búsquedas y luego reduce su tamaño.
+	Add Page Numbers	Añadir números de página
+	Number every page in the footer.	Numera todas las páginas en el pie.
+	Mark as Confidential	Marcar como confidencial
+	A diagonal CONFIDENTIAL watermark on every page.	Una marca de agua diagonal CONFIDENCIAL en todas las páginas.
+	Sanitize Documents	Sanear documentos
+	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	Quita la información oculta, los metadatos, los scripts y el contenido incrustado, y reescribe los archivos.
+	Type text	Escribe texto
+	Text to insert	Texto que insertar
+	Replacement text	Texto de reemplazo
+	Edit text…	Editar texto…
+	Add a sticky note here	Añadir una nota adhesiva aquí
+	{kind} Properties	Propiedades de {kind}
+	Appearance	Aspecto
+	General	General
+	Review History	Historial de revisión
+	This comment's appearance can't be changed yet.	El aspecto de este comentario todavía no se puede cambiar.
+	Icon	Icono
+	Thickness	Grosor
+	Modified	Fecha de modificación
+	No status has been set.	No se ha establecido ningún estado.
+	Compare Files	Comparar archivos
+	Old file:	Archivo antiguo:
+	Open the older version first	Abre primero la versión más antigua
+	New file:	Archivo nuevo:
+	Text is compared word by word; the differences are shown on the new file.	El texto se compara palabra por palabra; las diferencias se muestran en el archivo nuevo.
+	Compare this file with an older version: Compare files… in All tools.	Compara este archivo con una versión anterior: Comparar archivos… en Todas las herramientas.
+	No differences in the text.	No hay diferencias en el texto.
+	{n} {kind}	{n} {kind}
+	Inserted	Inserción
+	Deleted	Eliminación
+	Replaced	Sustitución
+	Visual	Visual
+	Mark as comments	Marcar como comentarios
+	Report…	Informe…
+	{kind} · page {p}	{kind} · página {p}
+	Set Alternate Text	Definir texto alternativo
+	This document has no tagged figures.	Este documento no tiene figuras etiquetadas.
+	 on page {p}	 en la página {p}
+	Figure {i} of {n}{page}	Figura {i} de {n}{page}
+	No preview	Sin vista previa
+	Alternate text	Texto alternativo
+	Describe the figure	Describe la figura
+	Decorative figure	Figura decorativa
+	Previous figure	Figura anterior
+	Next figure	Figura siguiente
+	Save & Close	Guardar y cerrar
+	Accessibility Checker Options	Opciones del comprobador de accesibilidad
+	Report Options	Opciones del informe
+	Create accessibility report	Crear informe de accesibilidad
+	Page Range	Intervalo de páginas
+	All pages in document	Todas las páginas del documento
+	Checking Options ({on} of 32 in all categories)	Opciones de comprobación ({on} de 32 en todas las categorías)
+	Show this dialog when the Checker starts	Mostrar este cuadro de diálogo al iniciar el comprobador
+	Select All	Seleccionar todo
+	Clear All	Borrar todo
+	Start Checking	Iniciar comprobación
+	This document hasn't been checked yet.	Este documento todavía no se ha comprobado.
+	No issues found	No se han encontrado problemas
+	1 issue	1 problema
+	{n} issues	{n} problemas
+	{label} (1 issue)	{label} (1 problema)
+	{label} ({n} issues)	{label} ({n} problemas)
+	Check again	Comprobar de nuevo
+	Report	Informe
+	Show the accessibility report	Mostrar el informe de accesibilidad
+	Collapse	Contraer
+	Expand	Expandir
+	{rule} - {status}	{rule} - {status}
+	Passed	Superada
+	Failed	No superada
+	Needs manual check	Requiere comprobación manual
+	Skipped	Omitida
+	Fix	Corregir
+	Skip Rule	Omitir regla
+	Explain	Explicar
+	Check Again	Comprobar de nuevo
+	Show Report	Mostrar informe
+	Options…	Opciones…
+	Go to the page	Ir a la página
+	Page Content	Contenido de la página
+	Forms	Formularios
+	Alternate Text	Texto alternativo
+	Tables	Tablas
+	Lists	Listas
+	Headings	Títulos
+	Accessibility permission flag	Indicador de permiso de accesibilidad
+	Accessibility permission flag is set	El indicador de permiso de accesibilidad está activado
+	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	La configuración de seguridad debe permitir que la tecnología de apoyo lea el contenido («Activar el acceso al texto para dispositivos lectores de pantalla»). Cambia la seguridad del documento para permitirlo.
+	Image-only PDF	PDF de solo imagen
+	Document is not image-only PDF	El documento no es un PDF de solo imagen
+	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Las páginas que son solo imágenes de texto no se pueden leer en voz alta ni permiten búsquedas. Reconoce el texto (OCR) para añadir una capa de texto.
+	Document is tagged PDF	El documento es un PDF etiquetado
+	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	Las etiquetas dan al documento una estructura lógica que sigue la tecnología de apoyo. Etiqueta el documento (Etiquetar PDF automáticamente).
+	Logical Reading Order	Orden de lectura lógico
+	Document structure provides a logical reading order	La estructura del documento proporciona un orden de lectura lógico
+	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	Comprueba que las etiquetas se leen en el orden en que lo haría una persona que ve. Usa la herramienta Orden de lectura o el panel Etiquetas para corregirlo.
+	Primary language	Idioma principal
+	Text language is specified	El idioma del texto está especificado
+	Screen readers choose their voice from the document's language. Set it in Document Properties > Advanced > Language.	Los lectores de pantalla eligen la voz según el idioma del documento. Defínelo en Propiedades del documento > Avanzado > Idioma.
+	Document title is showing in title bar	El título del documento se muestra en la barra de título
+	The window should show a meaningful title rather than the file name. Set a title and Initial View > Show: Document Title.	La ventana debe mostrar un título descriptivo en lugar del nombre del archivo. Define un título y Vista inicial > Mostrar: Título del documento.
+	Bookmarks are present in large documents	Los documentos grandes tienen marcadores
+	Documents of more than 20 pages need bookmarks for navigation. Add bookmarks for the main sections.	Los documentos de más de 20 páginas necesitan marcadores para navegar. Añade marcadores para las secciones principales.
+	Color contrast	Contraste de color
+	Document has appropriate color contrast	El documento tiene un contraste de color adecuado
+	Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.	El texto debe contrastar lo suficiente con el fondo para las personas con baja visión. Comprueba los colores a simple vista o con una herramienta de contraste.
+	Tagged content	Contenido etiquetado
+	All page content is tagged	Todo el contenido de la página está etiquetado
+	Everything on a page must be tagged or marked as an artifact (decoration, headers, footers). Tag the untagged content.	Todo lo que hay en una página debe estar etiquetado o marcado como artefacto (decoración, encabezados, pies de página). Etiqueta el contenido sin etiquetar.
+	Tagged annotations	Anotaciones etiquetadas
+	All annotations are tagged	Todas las anotaciones están etiquetadas
+	Comments, links and fields must be in the tag tree to be announced. Tag the annotations.	Los comentarios, enlaces y campos deben estar en el árbol de etiquetas para que se anuncien. Etiqueta las anotaciones.
+	Tab order	Orden de tabulación
+	Tab order is consistent with structure order	El orden de tabulación coincide con el orden de la estructura
+	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	Las páginas con enlaces, comentarios o campos deben tabularse en el orden de la estructura. La corrección define el orden de tabulación de cada página como Usar la estructura del documento.
+	Character encoding	Codificación de caracteres
+	Reliable character encoding is provided	Se proporciona una codificación de caracteres fiable
+	Fonts must map their characters to Unicode so text can be read and copied. Fix the fonts or recreate the PDF.	Las fuentes deben asignar sus caracteres a Unicode para que el texto se pueda leer y copiar. Corrige las fuentes o vuelve a crear el PDF.
+	Tagged multimedia	Multimedia etiquetada
+	All multimedia objects are tagged	Todos los objetos multimedia están etiquetados
+	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	El vídeo, el sonido y el contenido multimedia enriquecido deben estar etiquetados para que se anuncien. Etiqueta las anotaciones multimedia.
+	Screen flicker	Parpadeo de pantalla
+	Page will not cause screen flicker	La página no provocará parpadeo de pantalla
+	Animation that flashes can cause seizures. Check scripts and media for flicker.	Las animaciones con destellos pueden provocar convulsiones. Comprueba si los scripts y el contenido multimedia parpadean.
+	Scripts	Scripts
+	No inaccessible scripts	Sin scripts inaccesibles
+	Timed responses	Respuestas con límite de tiempo
+	Page does not require timed responses	La página no requiere respuestas con límite de tiempo
+	People may need more time to respond. Check that nothing has a time limit.	Algunas personas pueden necesitar más tiempo para responder. Comprueba que nada tenga un límite de tiempo.
+	Navigation links	Enlaces de navegación
+	Navigation links are not repetitive	Los enlaces de navegación no son repetitivos
+	Repeated navigation links should be skippable. Check links that appear on every page.	Los enlaces de navegación repetidos deben poder omitirse. Comprueba los enlaces que aparecen en todas las páginas.
+	Tagged form fields	Campos de formulario etiquetados
+	All form fields are tagged	Todos los campos de formulario están etiquetados
+	Form fields must be in the tag tree (Form tags) to be announced. Tag the form fields.	Los campos de formulario deben estar en el árbol de etiquetas (etiquetas Form) para que se anuncien. Etiqueta los campos de formulario.
+	Field descriptions	Descripciones de campo
+	All form fields have description	Todos los campos de formulario tienen descripción
+	Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.	Cada campo necesita una información sobre herramientas que indique qué introducir. Añádela en Propiedades del campo > General > Información sobre herramientas.
+	Figures alternate text	Texto alternativo de las figuras
+	Figures require alternate text	Las figuras requieren texto alternativo
+	Pictures need alternate text that describes them, or must be marked decorative. Add alternate text to each figure.	Las imágenes necesitan un texto alternativo que las describa, o deben marcarse como decorativas. Añade texto alternativo a cada figura.
+	Nested alternate text	Texto alternativo anidado
+	Alternate text that will never be read	Texto alternativo que nunca se leerá
+	Alternate text inside an element that already has alternate text is never read. Remove the inner alternate text.	El texto alternativo dentro de un elemento que ya tiene texto alternativo nunca se lee. Quita el texto alternativo interior.
+	Associated with content	Asociado a contenido
+	Alternate text must be associated with some content	El texto alternativo debe estar asociado a algún contenido
+	Alternate text on an element without page content is never reached. Remove it or attach the element to content.	El texto alternativo de un elemento sin contenido de página nunca se alcanza. Quítalo o vincula el elemento a algún contenido.
+	Hides annotation	Oculta una anotación
+	Alternate text should not hide annotation	El texto alternativo no debe ocultar la anotación
+	Alternate text on an element that contains a link or field hides that annotation from assistive technology. Move the alternate text.	El texto alternativo de un elemento que contiene un enlace o un campo oculta esa anotación a la tecnología de apoyo. Mueve el texto alternativo.
+	Other elements alternate text	Texto alternativo de otros elementos
+	Other elements that require alternate text	Otros elementos que requieren texto alternativo
+	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Las fórmulas y otros elementos similares que no son texto necesitan texto alternativo. Añádeselo.
+	Rows	Filas
+	TR must be a child of Table, THead, TBody, or TFoot	TR debe ser hijo de Table, THead, TBody o TFoot
+	Table cells belong in a row. Fix the table's tags.	Las celdas de una tabla van dentro de una fila. Corrige las etiquetas de la tabla.
+	Headers	Encabezados
+	Tables should have headers	Las tablas deben tener encabezados
+	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	Las celdas de encabezado (TH) indican a quien escucha qué contiene cada columna o fila. Marca las celdas de encabezado.
+	Regularity	Regularidad
+	Tables must contain the same number of columns in each row and rows in each column	Las tablas deben tener el mismo número de columnas en cada fila y de filas en cada columna
+	Irregular tables confuse cell navigation. Give every row the same number of cells (counting spans).	Las tablas irregulares dificultan la navegación por celdas. Da a todas las filas el mismo número de celdas (contando las combinadas).
+	Summary	Resumen
+	Tables must have a summary	Las tablas deben tener un resumen
+	A summary describes the table's purpose and layout. Add a Summary attribute to each table.	Un resumen describe el propósito y la disposición de la tabla. Añade un atributo Summary a cada tabla.
+	List items	Elementos de lista
+	LI must be a child of L	LI debe ser hijo de L
+	List items belong in a list. Fix the list's tags.	Los elementos de lista van dentro de una lista. Corrige las etiquetas de la lista.
+	Lbl and LBody	Lbl y LBody
+	Lbl and LBody must be children of LI	Lbl y LBody deben ser hijos de LI
+	List labels and bodies belong in a list item. Fix the list's tags.	Las etiquetas y los cuerpos de lista van dentro de un elemento de lista. Corrige las etiquetas de la lista.
+	Appropriate nesting	Anidamiento adecuado
+	Heading levels shouldn't skip (an H1 followed by an H3). Retag the headings.	Los niveles de título no deben saltarse (un H1 seguido de un H3). Vuelve a etiquetar los títulos.
+	TH and TD	TH y TD
+	TH and TD must be children of TR	TH y TD deben ser hijos de TR
+	Mark Page Range	Marcar intervalo de páginas
+	Pages from	Páginas desde
+	Single word or phrase	Una palabra o frase
+	Text to find	Texto que buscar
+	Patterns	Patrones
+	Phone Numbers	Números de teléfono
+	Email Addresses	Direcciones de correo electrónico
+	Credit Cards	Tarjetas de crédito
+	Social Security Numbers	Números de la Seguridad Social
+	Dates	Fechas
+	Text in images isn't found; recognise text (OCR) first.	El texto de las imágenes no se encuentra; reconoce antes el texto (OCR).
+	No matches.	Sin coincidencias.
+	{n} match(es) marked for redaction.	{n} coincidencia(s) marcada(s) para censurar.
+	Redaction Tool Properties	Propiedades de la herramienta de censura
+	Redacted area fill colour:	Color de relleno del área censurada:
+	Use overlay text	Usar texto superpuesto
+	Custom text:	Texto personalizado:
+	Font:	Fuente:
+	Font size:	Tamaño de fuente:
+	Auto-size text to fit redaction region	Ajustar automáticamente el tamaño del texto a la zona censurada
+	Font colour:	Color de fuente:
+	Repeat overlay text	Repetir el texto superpuesto
+	Text alignment:	Alineación del texto:
+	Center	Centro
+	Apply redactions	Aplicar censuras
+	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Vas a aplicar 1 marca de censura. El texto, las imágenes y los dibujos que hay bajo las marcas, y los comentarios y campos de formulario que se solapan con ellas, se eliminan de forma permanente.
+	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Vas a aplicar {n} marcas de censura. El texto, las imágenes y los dibujos que hay bajo las marcas, y los comentarios y campos de formulario que se solapan con ellas, se eliminan de forma permanente.
+	Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it.	Guarda el documento después: al guardar se reescribe todo el archivo para que no quede rastro del contenido eliminado.
+	Select the items to remove from this document.	Selecciona los elementos que quieres quitar de este documento.
+	Metadata	Metadatos
+	File attachments	Archivos adjuntos
+	Comments and markups	Comentarios y marcas
+	Hidden text	Texto oculto
+	Hidden layers	Capas ocultas
+	Links, actions and JavaScripts	Enlaces, acciones y JavaScripts
+	Private data of other applications	Datos privados de otras aplicaciones
+	None found	No se ha encontrado nada
+	Form fields are flattened: their values stay visible. Saving rewrites the whole file.	Los campos de formulario se acoplan: sus valores siguen visibles. Al guardar se reescribe todo el archivo.
+	Remove	Quitar
+	Sanitizing removes hidden information from the document: metadata, file attachments, comments, form fields (flattened), hidden text and layers, bookmarks, links, actions and scripts, and private application data.	Sanear quita la información oculta del documento: metadatos, archivos adjuntos, comentarios, campos de formulario (acoplados), texto y capas ocultos, marcadores, enlaces, acciones y scripts, y datos privados de aplicaciones.
+	Save the document afterwards; saving rewrites the whole file so nothing removed stays in it.	Guarda el documento después; al guardar se reescribe todo el archivo para que no quede nada de lo eliminado.
+	Printer:	Impresora:
+	Save as PDF	Guardar como PDF
+	{name} (default)	{name} (predeterminada)
+	Copies:	Copias:
+	Collate	Intercalar
+	Print in grayscale	Imprimir en escala de grises
+	Two-sided:	A doble cara:
+	Off	Desactivado
+	Flip on long edge	Voltear por el borde largo
+	Flip on short edge	Voltear por el borde corto
+	Paper:	Papel:
+	Pages to Print	Páginas que imprimir
+	More options:	Más opciones:
+	All pages in range	Todas las páginas del intervalo
+	Odd pages only	Solo páginas impares
+	Even pages only	Solo páginas pares
+	Reverse pages	Invertir páginas
+	Page Sizing & Handling	Tamaño y gestión de páginas
+	Size	Tamaño
+	Poster	Póster
+	Multiple	Varias por hoja
+	Booklet	Folleto
+	Fit	Ajustar
+	Shrink oversized pages	Reducir páginas demasiado grandes
+	Custom scale:	Escala personalizada:
+	Tile scale:	Escala de mosaico:
+	Overlap:	Solapamiento:
+	Cut marks	Marcas de corte
+	Pages per sheet:	Páginas por hoja:
+	Page order:	Orden de las páginas:
+	Horizontal	Horizontal
+	Horizontal reversed	Horizontal invertido
+	Vertical	Vertical
+	Vertical reversed	Vertical invertido
+	Print page border	Imprimir borde de página
+	Auto-rotate pages	Girar páginas automáticamente
+	Booklet subset:	Subconjunto de folleto:
+	Both sides	Ambas caras
+	Front side only	Solo cara anterior
+	Back side only	Solo cara posterior
+	Binding:	Encuadernación:
+	Left	Izquierda
+	Right	Derecha
+	Orientation:	Orientación:
+	Auto portrait/landscape	Vertical/horizontal automático
+	Portrait	Vertical
+	Landscape	Horizontal
+	Comments & Forms	Comentarios y formularios
+	Document	Documento
+	Document and markups	Documento y marcas
+	Document and stamps	Documento y sellos
+	Form fields only	Solo campos de formulario
+	Previous sheet	Hoja anterior
+	Next sheet	Hoja siguiente
+	No sheets	Sin hojas
+	Sheet {s} of {n}	Hoja {s} de {n}
+	Removed 1 hidden item. Save to remove them from the file.	Se ha quitado 1 elemento oculto. Guarda para eliminarlo del archivo.
+	Removed {n} hidden items. Save to remove them from the file.	Se han quitado {n} elementos ocultos. Guarda para eliminarlos del archivo.
+	Document sanitized. Save to finish: saving rewrites the whole file.	Documento saneado. Guarda para terminar: al guardar se reescribe todo el archivo.
+	Applied 1 redaction mark. Save to remove the content from the file.	Se ha aplicado 1 marca de censura. Guarda para eliminar el contenido del archivo.
+	Applied {n} redaction marks. Save to remove the content from the file.	Se han aplicado {n} marcas de censura. Guarda para eliminar el contenido del archivo.
+	JavaScript Console	Consola de JavaScript
+	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript está desactivado (Preferencias > JavaScript).
+	Output appears here.	La salida aparece aquí.
+	Script Name:	Nombre del script:
+	This document has no document-level scripts.	Este documento no tiene scripts de nivel de documento.
+	No form fields were detected	No se ha detectado ningún campo de formulario
+	Detected 1 form field	Se ha detectado 1 campo de formulario
+	Detected {n} form fields	Se han detectado {n} campos de formulario
+	{field}: {e}	{field}: {e}
+	Current page	Página actual
+	Selected pages	Páginas seleccionadas
+	Document language	Idioma del documento
+	Output	Salida
+	Searchable Image (Exact)	Imagen con búsqueda (exacta)
+	Adds invisible text over each word; the page image is not changed	Añade texto invisible sobre cada palabra; la imagen de la página no cambia
+	Downsample to	Reducir resolución a
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	El reconocimiento de texto no está instalado: faltan sus modelos (ejecuta `cargo xtask models` o define PRINTCRAFT_MODELS).
+	Settings	Ajustes
+	Optional	Opcional
+	Planned · {m}	Previsto · {m}
+	Planned for milestone {m} — open to see what it will include	Previsto para el hito {m}: abre para ver qué incluirá
+	Coming in milestone {m}. Items marked Ready work today.	Llegará en el hito {m}. Los elementos marcados como Listo ya funcionan.
+	1 mark	1 marca
+	{n} marks	{n} marcas
+	Dynamic	Dinámicos
+	Sign Here	Firme aquí
+	Standard Business	Empresariales estándar
+	Choose a stamp, then click on the page to place it.	Elige un sello y haz clic en la página para colocarlo.
+	Note	Nota
+	Polyline	Polilínea
+	Attachment	Adjunto
+	Callout	Llamada
+	Typewriter	Máquina de escribir
+	Checked	Marcado
+	Unchecked	Sin marcar
+	Marked	Marcado
+	Locked	Bloqueado
+	Search comments	Buscar en los comentarios
+	Add a comment	Añadir un comentario
+	No comments yet.	Aún no hay comentarios.
+	Pick a tool in the quick bar, or type above.	Elige una herramienta en la barra rápida o escribe arriba.
+	No comments match.	Ningún comentario coincide.
+	Unknown author	Autor desconocido
+	No colour	Sin color
+	Remove checkmark	Quitar marca de verificación
+	Mark with checkmark	Marcar con marca de verificación
+	Reply	Responder
+	Add a reply	Añadir una respuesta
+	Post	Publicar
+	Page {label}	Página {label}
+	{kind} — click to show it on the page	{kind}: haz clic para mostrarlo en la página
+	Set status	Definir estado
+	Copy text	Copiar texto
+	Properties…	Propiedades…
+	Make Current Properties Default	Usar las propiedades actuales como predeterminadas
+	More options	Más opciones
+	Sort by	Ordenar por
+	Author	Autor
+	Type	Tipo
+	Colour	Color
+	Show all comments	Mostrar todos los comentarios
+	Create PDF comment summary…	Crear resumen de comentarios en PDF…
+	Export all to data file…	Exportar todo a un archivo de datos…
+	Filter comments	Filtrar comentarios
+	Status	Estado
+	Accepted	Aceptado
+	Rejected	Rechazado
+	Cancelled	Cancelado
+	Completed	Completado
+	Show all	Mostrar todo
+	Yellow	Amarillo
+	Orange	Naranja
+	Red	Rojo
+	Pink	Rosa
+	Purple	Morado
+	Blue	Azul
+	Light blue	Azul claro
+	Green	Verde
+	Gray	Gris
+	Black	Negro
+	Bookmark options	Opciones de marcadores
+	Expand all bookmarks	Expandir todos los marcadores
+	Expand top-level bookmarks	Expandir los marcadores de primer nivel
+	Collapse all bookmarks	Contraer todos los marcadores
+	New bookmark (⌘B)	Nuevo marcador (⌘B)
+	This document has no bookmarks.	Este documento no tiene marcadores.
+	This document has no layers.	Este documento no tiene capas.
+	This document has no attachments.	Este documento no tiene archivos adjuntos.
+	Hide layer	Ocultar capa
+	Show layer	Mostrar capa
+	Set layer visibility	Definir visibilidad de capas
+	on page {label}	en la página {label}
+	Save attachment…	Guardar archivo adjunto…
+	Open in a new tab	Abrir en una pestaña nueva
+	This document has no pages.	Este documento no tiene páginas.
+	Find text	Buscar texto
+	No matches	Sin coincidencias
+	Searching… {s}/{p}	Buscando… {s}/{p}
+	{c} of {n}{more}	{c} de {n}{more}
+	Previous (⇧⌘G)	Anterior (⇧⌘G)
+	Next (⌘G)	Siguiente (⌘G)
+	Find options	Opciones de búsqueda
+	Whole words only	Solo palabras completas
+	Case-sensitive	Distinguir mayúsculas y minúsculas
+	Close (Esc)	Cerrar (Esc)
+	Align	Alinear
+	Top	Arriba
+	Bottom	Abajo
+	Center horizontally	Centrar horizontalmente
+	Center vertically	Centrar verticalmente
+	Distribute	Distribuir
+	Horizontally	Horizontalmente
+	Vertically	Verticalmente
+	Set Fields to Same Size	Igualar el tamaño de los campos
+	Height	Alto
+	Width	Ancho
+	Both	Ambos
+	Duplicate…	Duplicar…
+	All pages	Todas las páginas
+	Odd pages	Páginas impares
+	Even pages	Páginas pares
+	Landscape pages	Páginas horizontales
+	Portrait pages	Páginas verticales
+	Move earlier	Mover antes
+	Move later	Mover después
+	Back to the document	Volver al documento
+	Protect Using Password	Proteger con contraseña
+	Requires user to enter a password for:	Requiere que el usuario introduzca una contraseña para:
+	Viewing	Ver
+	Editing	Editar
+	Type Password	Escribe la contraseña
+	Re-type Password	Vuelve a escribir la contraseña
+	Strength: {s}	Seguridad: {s}
+	Strong	Fuerte
+	Medium	Media
+	Weak	Débil
+	Advanced Options {chevron}	Opciones avanzadas {chevron}
+	Compatibility	Compatibilidad
+	Acrobat X and later (256-bit AES)	Acrobat X y posteriores (AES de 256 bits)
+	Acrobat 7.0 and later (128-bit AES)	Acrobat 7.0 y posteriores (AES de 128 bits)
+	Acrobat 5.0 and later (128-bit RC4)	Acrobat 5.0 y posteriores (RC4 de 128 bits)
+	Acrobat 3.0 and later (40-bit RC4)	Acrobat 3.0 y posteriores (RC4 de 40 bits)
+	Encrypt	Cifrar
+	All document contents	Todo el contenido del documento
+	All document contents except metadata	Todo el contenido del documento excepto los metadatos
+	Printing allowed	Impresión permitida
+	Low Resolution (150 dpi)	Baja resolución (150 ppp)
+	Changes allowed	Cambios permitidos
+	Inserting, deleting, and rotating pages	Insertar, eliminar y girar páginas
+	Filling in form fields and signing existing signature fields	Rellenar campos de formulario y firmar campos de firma existentes
+	Commenting, filling in form fields, and signing existing signature fields	Comentar, rellenar campos de formulario y firmar campos de firma existentes
+	Any except extracting pages	Cualquiera excepto extraer páginas
+	Enable copying of text, images, and other content	Permitir copiar texto, imágenes y otro contenido
+	Enable text access for screen reader devices for the visually impaired	Permitir el acceso al texto a los dispositivos lectores de pantalla para personas con discapacidad visual
+	Type a password.	Escribe una contraseña.
+	The passwords don't match.	Las contraseñas no coinciden.
+	This compatibility level supports only plain ASCII passwords.	Este nivel de compatibilidad solo admite contraseñas en ASCII simple.
+	Anyone opening the document will need this password. It's applied when you save.	Cualquiera que abra el documento necesitará esta contraseña. Se aplica al guardar.
+	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	El documento se abre sin contraseña; esta contraseña hace falta para cambiar las restricciones. Se aplica al guardar.
+	Recover unsaved documents?	¿Recuperar documentos sin guardar?
+	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft no se cerró correctamente. Estos documentos tenían cambios que se guardaron automáticamente:
+	just now	ahora mismo
+	{n} min ago	hace {n} min
+	{n} h ago	hace {n} h
+	 · password-protected	 · protegido con contraseña
+	Recover	Recuperar
+	Discard	Descartar
+	Version {v}	Versión {v}
+	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	Una aplicación PDF de código abierto, de sala limpia, escrita en Rust. MIT OR Apache-2.0.
+	Part of	Parte de
+	Summarize Options	Opciones de resumen
+	Choose a layout:	Elige una disposición:
+	Comments only	Solo comentarios
+	Sort comments by:	Ordenar comentarios por:
+	Create PDF Comment Summary	Crear resumen de comentarios en PDF
+	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	¿Revertir a la última versión guardada de «{name}»? Los cambios hechos desde entonces no se podrán deshacer después.
+	Number pages	Numerar páginas
+	Style	Estilo
+	None (prefix only)	Ninguno (solo prefijo)
+	Prefix	Prefijo
+	Start	Inicio
+	Labels: {preview}. Later pages keep their labels.	Etiquetas: {preview}. Las páginas posteriores conservan sus etiquetas.
+	Even and Odd Pages	Páginas pares e impares
+	Even Pages Only	Solo páginas pares
+	Odd Pages Only	Solo páginas impares
+	Landscape and Portrait Pages	Páginas horizontales y verticales
+	Landscape Pages	Páginas horizontales
+	Portrait Pages	Páginas verticales
+	Duplicate Field	Duplicar campo
+	Duplicate "{name}" onto:	Duplicar «{name}» en:
+	1 page selected.	1 página seleccionada.
+	{n} pages selected.	{n} páginas seleccionadas.
+	Delete pages after extracting	Eliminar las páginas después de extraerlas
+	Extract pages as separate files	Extraer las páginas como archivos independientes
+	Rotate Pages	Girar páginas
+	Direction:	Dirección:
+	Clockwise 90 degrees	90 grados a la derecha
+	Counterclockwise 90 degrees	90 grados a la izquierda
+	180 degrees	180 grados
+	Pages:	Páginas:
+	All	Todas
+	Selection	Selección
+	From	Desde
+	Rotate:	Girar:
+	Repairs	Reparaciones
+	Repair log	Registro de reparaciones
+	Split document	Dividir documento
+	Number of pages	Número de páginas
+	Pages per file	Páginas por archivo
+	File size	Tamaño de archivo
+	At most	Como máximo
+	Top-level bookmarks ({n})	Marcadores de primer nivel ({n})
+	Before each selected page (select pages in Organize)	Antes de cada página seleccionada (selecciona páginas en Organizar)
+	Creates 1 file from {n} pages.	Crea 1 archivo a partir de {n} páginas.
+	Creates {f} files from {n} pages.	Crea {f} archivos a partir de {n} páginas.
+	Each file holds as many of the {n} pages as fit.	Cada archivo contiene tantas de las {n} páginas como quepan.
+	Replace Pages	Reemplazar páginas
+	Original: replace pages	Original: reemplazar las páginas
+	to	a
+	to {n}	a {n}
+	Replacement: pages of {name}	Reemplazo: páginas de {name}
+	of {name}	de {name}
+	Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.	Solo cambia el contenido de la página: los enlaces, comentarios, campos de formulario y marcadores de las páginas originales se conservan.
+	The replacement file doesn't have that many pages.	El archivo de reemplazo no tiene tantas páginas.
+	Tagged PDF	PDF etiquetado
+	Document Properties	Propiedades del documento
+	Description	Descripción
+	Initial View	Vista inicial
+	Security	Seguridad
+	Fonts	Fuentes
+	Advanced	Avanzado
+	Title	Título
+	Subject	Asunto
+	Keywords	Palabras clave
+	Application	Aplicación
+	PDF producer	Productor del PDF
+	Layout and Magnification	Presentación y ampliación
+	Navigation tab	Pestaña de navegación
+	Page Only	Solo página
+	Bookmarks Panel and Page	Panel de marcadores y página
+	Pages Panel and Page	Panel de páginas y página
+	Attachments Panel and Page	Panel de archivos adjuntos y página
+	Layers Panel and Page	Panel de capas y página
+	Page layout	Presentación de página
+	Default	Predeterminado
+	Single Page	Una sola página
+	Single Page Continuous	Una sola página continua
+	Two-Up (Facing)	Dos páginas (enfrentadas)
+	Two-Up Continuous (Facing)	Dos páginas continuas (enfrentadas)
+	Two-Up (Cover Page)	Dos páginas (portada)
+	Two-Up Continuous (Cover Page)	Dos páginas continuas (portada)
+	Magnification	Ampliación
+	Actual Size	Tamaño real
+	Fit Page	Ajustar a la página
+	Fit Width	Ajustar al ancho
+	Fit Height	Ajustar al alto
+	Fit Visible	Ajustar al contenido visible
+	Open to page	Abrir en la página
+	of {pages}	de {pages}
+	Window Options	Opciones de ventana
+	Resize window to initial page	Ajustar la ventana a la página inicial
+	Center window on screen	Centrar la ventana en la pantalla
+	Open in Full Screen mode	Abrir en modo de pantalla completa
+	Show:	Mostrar:
+	File Name	Nombre del archivo
+	Document Title	Título del documento
+	User Interface Options	Opciones de la interfaz de usuario
+	Hide menu bar	Ocultar la barra de menús
+	Hide toolbars	Ocultar las barras de herramientas
+	Hide window controls	Ocultar los controles de ventana
+	Security method	Método de seguridad
+	No security	Sin seguridad
+	Restrictions	Restricciones
+	None — everything is allowed	Ninguna: todo está permitido
+	Password security	Seguridad mediante contraseña
+	Encryption	Cifrado
+	Opened with	Abierto con
+	— (protection is applied when you save)	— (la protección se aplica al guardar)
+	Owner password (no restrictions apply)	Contraseña de propietario (no se aplica ninguna restricción)
+	User password	Contraseña de usuario
+	Change settings…	Cambiar ajustes…
+	Printing	Impresión
+	Not allowed	No permitido
+	Allowed	Permitido
+	High resolution	Alta resolución
+	Low resolution	Baja resolución
+	Changing the document	Modificación del documento
+	Document assembly	Ensamblaje del documento
+	Content copying	Copia de contenido
+	Content copying for accessibility	Copia de contenido para accesibilidad
+	Commenting	Comentarios
+	Filling of form fields	Rellenado de campos de formulario
+	No fonts are referenced by the pages.	Las páginas no hacen referencia a ninguna fuente.
+	PDF version	Versión de PDF
+	Location	Ubicación
+	Page size	Tamaño de página
+	Yes	Sí
+	No	No
+	Revisions	Revisiones
+	View revision {n}	Ver revisión {n}
+	Open the file as it was saved then	Abre el archivo tal como se guardó entonces
+	Binding	Encuadernación
+	Left Edge	Borde izquierdo
+	Right Edge	Borde derecho
+	Language	Idioma
+	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Guardado {place}: {before} → {after} ({pct}% más pequeño){detail}
+	Couldn't save the image: {e}	No se pudo guardar la imagen: {e}
+	Adding images arrives on the web with file pickers for images	Añadir imágenes llegará a la versión web con los selectores de archivos de imagen
+	Replacing images on page {p} arrives on the web with image pickers ({i})	Reemplazar imágenes en la página {p} llegará a la versión web con los selectores de imagen ({i})
+	{name}: choosing images arrives on the web with file pickers for images	{name}: elegir imágenes llegará a la versión web con los selectores de archivos de imagen
+	Replacing images arrives on the web with image file pickers	Reemplazar imágenes llegará a la versión web con los selectores de archivos de imagen
+	Couldn't create a PDF: {e}	No se pudo crear un PDF: {e}
+	The clipboard has no image or text	El portapapeles no contiene ninguna imagen ni texto
+	On the web, open or drop an image to convert it	En la versión web, abre o suelta una imagen para convertirla
+	Couldn't optimize the file: {e}	No se pudo optimizar el archivo: {e}
+	Couldn't write {path}: {e}	No se pudo escribir {path}: {e}
+	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	El formulario pide enviarse a {u}; PdfCraft no envía datos de formulario. Guarda el documento para conservar lo que has introducido.
+	{s} actions run in the JavaScript engine (M6)	Las acciones {s} se ejecutan en el motor de JavaScript (M6)
+	{name}: the {other} action isn't supported yet	{name}: la acción {other} aún no es compatible
+	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} envía el formulario a {url}; PdfCraft no envía datos de formulario. Guarda el documento para conservar lo que has introducido.
+	Export stopped: {e}	Exportación detenida: {e}
+	Exported 1 image	Se ha exportado 1 imagen
+	Exported {n} images	Se han exportado {n} imágenes
+	 ({s} not exported: {first})	 ({s} sin exportar: {first})
+	Exported the text of 1 page	Se ha exportado el texto de 1 página
+	Exported the text of {n} pages	Se ha exportado el texto de {n} páginas
+	{msg} to {dir}	{msg} en {dir}
+	Exporting… {d} of {t}	Exportando… {d} de {t}
+	Choose a folder for the exported files	Elige una carpeta para los archivos exportados
+	New {tool} comments will look like this one	Los nuevos comentarios de {tool} tendrán este aspecto
+	This document can't be checked: it couldn't be read for editing	Este documento no se puede comprobar: no se pudo leer para editarlo
+	The checker found no problems in this document.	El comprobador no ha encontrado problemas en este documento.
+	The checker found 1 problem which may prevent the document from being fully accessible.	El comprobador ha encontrado 1 problema que puede impedir que el documento sea totalmente accesible.
+	The checker found {n} problems which may prevent the document from being fully accessible.	El comprobador ha encontrado {n} problemas que pueden impedir que el documento sea totalmente accesible.
+	The text is the same	El texto es el mismo
+	1 difference found	Se ha encontrado 1 diferencia
+	{n} differences found	Se han encontrado {n} diferencias
+	Added 1 comment	Se ha añadido 1 comentario
+	Added {n} comments	Se han añadido {n} comentarios
+	Choose a folder for the results	Elige una carpeta para los resultados
+	Files for {name}	Archivos para {name}
+	An action is already running	Ya hay una acción en ejecución
+	Running action… file {d} of {t}	Ejecutando acción… archivo {d} de {t}
+	No unlinked web addresses were found in the text	No se han encontrado direcciones web sin enlazar en el texto
+	Created 1 link	Se ha creado 1 enlace
+	Created {n} links	Se han creado {n} enlaces
+	Text recognition is already running	El reconocimiento de texto ya está en ejecución
+	Optimizing… removing user data	Optimizando… eliminando datos de usuario
+	Optimizing… image {d} of {t}	Optimizando… imagen {d} de {t}
+	Optimizing… cleaning up	Optimizando… limpiando
+	Optimizing… merging identical objects	Optimizando… combinando objetos idénticos
+	Optimizing… writing the copy	Optimizando… escribiendo la copia
+	Cancelling…	Cancelando…
+	Optimization is already running	La optimización ya está en ejecución
+	Optimization cancelled	Optimización cancelada
+	Couldn't optimize the file	No se pudo optimizar el archivo
+	Recognizing text… file {d} of {t}	Reconociendo texto… archivo {d} de {t}
+	Recognizing text… page {d} of {t}	Reconociendo texto… página {d} de {t}
+	Recognized 1 word	Se ha reconocido 1 palabra
+	Recognized {n} words	Se han reconocido {n} palabras
+	{words} on {pages}	{words} en {pages}
+	; 1 page already had text	; 1 página ya tenía texto
+	; {n} pages already had text	; {n} páginas ya tenían texto
+	Recognized {w} words in 1 file	Se han reconocido {w} palabras en 1 archivo
+	Recognized {w} words in {n} files	Se han reconocido {w} palabras en {n} archivos
+	; failed: {list}	; con errores: {list}
+	1 file done	1 archivo terminado
+	{n} files done	{n} archivos terminados
+	The selected area has been copied ({w} × {h} pixels)	Se ha copiado el área seleccionada ({w} × {h} píxeles)
+	Couldn't take the snapshot: {e}	No se pudo tomar la instantánea: {e}
+	Couldn't recover {name}: {e}	No se pudo recuperar {name}: {e}
+	The document now conforms to {level}; save it to keep the changes	El documento ahora cumple {level}; guárdalo para conservar los cambios
+	Fixed what could be fixed; 1 problem remains	Se ha corregido lo que se podía corregir; queda 1 problema
+	Fixed what could be fixed; {n} problems remain	Se ha corregido lo que se podía corregir; quedan {n} problemas
+	Custom stamps arrive on the web with file pickers for images	Los sellos personalizados llegarán a la versión web con los selectores de archivos de imagen
+	{file} is too large for a stamp (at most {n} MB)	{file} es demasiado grande para un sello (como máximo {n} MB)
+	Sent to {printer}	Enviado a {printer}
+	Sent to {printer}: {msg}	Enviado a {printer}: {msg}
+	Choose a folder for the searchable files	Elige una carpeta para los archivos con búsqueda
+	Files are combined from top to bottom. Leave Pages empty to take every page.	Los archivos se combinan de arriba abajo. Deja Páginas vacío para incluir todas las páginas.
+	Unlock…	Desbloquear…
+	Select a password-protected file first	Selecciona primero un archivo protegido con contraseña
+	Enter the permissions password to allow combining	Introduce la contraseña de permisos para permitir combinarlo
+	Enter the password that opens it	Introduce la contraseña que lo abre
+	Unlock {name}	Desbloquear {name}
+	Unlock {n} files	Desbloquear {n} archivos
+	The same password is tried on each file.	Se prueba la misma contraseña en cada archivo.
+	Hide password	Ocultar contraseña
+	Show password	Mostrar contraseña
+	Wrong password	Contraseña incorrecta
+	The password is only used to read the file; it isn't saved.	La contraseña solo se usa para leer el archivo; no se guarda.
+	Unlock	Desbloquear
+	Opened, but its security settings don't allow combining. Enter the permissions password.	Se abrió, pero su configuración de seguridad no permite combinarlo. Introduce la contraseña de permisos.
+	Unlocked: the combined file won't be password-protected	Desbloqueado: el archivo combinado no estará protegido con contraseña
+	Unlocked {n} of {m} files	Se desbloquearon {n} de {m} archivos
+	Drop PDFs or folders here, or choose them.	Suelta aquí PDF o carpetas, o elígelos.
+	Add folder…	Añadir carpeta…
+	Add folder and subfolders…	Añadir carpeta y subcarpetas…
+	More ways to add files	Más formas de añadir archivos
+	Every PDF in the folder	Todos los PDF de la carpeta
+	Every PDF in the folder and the folders inside it	Todos los PDF de la carpeta y de las carpetas que contiene
+	Add folder	Añadir carpeta
+	Add folder and subfolders	Añadir carpeta y subcarpetas
+	No PDFs found in {folder}	No se encontraron PDF en {folder}
+	Added the first {n} PDFs in {folder}	Se añadieron los primeros {n} PDF de {folder}
+	Click to sort, drag to move the column. Drag its edge to resize it.	Haz clic para ordenar; arrastra para mover la columna. Arrastra su borde para cambiar el ancho.
+	Reset columns	Restablecer columnas
+	Remove {n} files	Quitar {n} archivos
+	{n} selected	{n} seleccionados
+	sorted ascending	orden ascendente
+	sorted descending	orden descendente
+	Protected: the combined file won't keep its security settings	Protegido: el archivo combinado no conservará su configuración de seguridad
+	Add open documents	Añadir documentos abiertos
+	All open documents	Todos los documentos abiertos
+	No documents are open	No hay documentos abiertos
+	Select a file first	Selecciona primero un archivo
+	1 file	1 archivo
+	{n} files	{n} archivos
+	1 file needs attention	1 archivo necesita atención
+	{n} files need attention	{n} archivos necesitan atención
+	{name} can't be combined: {why}	No se puede combinar {name}: {why}
+	Check the pages of {name}: {why}	Revisa las páginas de {name}: {why}
+	Add the PDFs to combine	Añade los PDF que quieres combinar
+	File name	Nombre de archivo
+	Warnings	Advertencias
+	Drag to reorder	Arrastra para reordenar
+	{k} of {n}	{k} de {n}
+	? of {n}	? de {n}
+	Added more than once	Añadido más de una vez
+	yesterday	ayer
+	{n} days ago	hace {n} días
+	No pages selected	No hay páginas seleccionadas
+	Password-protected	Protegido con contraseña
+	Its security settings don't allow copying pages	Su configuración de seguridad no permite copiar páginas
+	Can't be read: {e}	No se puede leer: {e}
+	Includes unsaved changes	Incluye cambios sin guardar
+	Pages of {name} to combine, e.g. 1-3, 6	Páginas de {name} que combinar, p. ej., 1-3, 6
+	Remove {name}	Quitar {name}
+	Add files…	Añadir archivos…
+	Add at least two files	Añade al menos dos archivos
+	Couldn't add {name}: {e}	No se pudo añadir {name}: {e}
+	Couldn't combine files: {e}	No se pudieron combinar los archivos: {e}
+	Export comments	Exportar comentarios
+	Export form data	Exportar datos de formulario
+	Comment and form data	Datos de comentarios y formularios
+	Export	Exportar
+	Select data files to merge	Selecciona los archivos de datos que combinar
+	Form data and PDF forms	Datos de formulario y formularios PDF
+	Save the spreadsheet	Guardar la hoja de cálculo
+	Save the accessibility report	Guardar el informe de accesibilidad
+	Save image	Guardar imagen
+	Export certificate	Exportar certificado
+	Choose a folder for the extracted pages	Elige una carpeta para las páginas extraídas
+	Choose a folder for the split files	Elige una carpeta para los archivos divididos
+	Couldn't use {name}: {e}	No se pudo usar {name}: {e}
+	Couldn't extract pages: {e}	No se pudieron extraer las páginas: {e}
+	Couldn't write {name}: {e}	No se pudo escribir {name}: {e}
+	Wrote 1 file to {dir}	Se ha escrito 1 archivo en {dir}
+	Wrote {n} files to {dir}	Se han escrito {n} archivos en {dir}
+	No pages match those choices	Ninguna página coincide con esas opciones
+	Couldn't split: {e}	No se pudo dividir: {e}
+	Couldn't summarize comments: {e}	No se pudieron resumir los comentarios: {e}
+	Couldn't open the result: {e}	No se pudo abrir el resultado: {e}
+	Importing data arrives on the web with file pickers for data files	Importar datos llegará a la versión web con los selectores de archivos de datos
+	Exported to {path}	Exportado a {path}
+	Merging data files needs the desktop app	Combinar archivos de datos requiere la aplicación de escritorio
+	Merged 1 file into {path}	Se ha combinado 1 archivo en {path}
+	Merged {n} files into {path}	Se han combinado {n} archivos en {path}
+	Combined {n} files	Se han combinado {n} archivos
+	Extracted 1 page	Se ha extraído 1 página
+	Extracted {n} pages	Se han extraído {n} páginas
+	Created a comment summary	Se ha creado un resumen de comentarios
+	Couldn't open {name}: {e}	No se pudo abrir {name}: {e}
+	Couldn't read {name}: {e}	No se pudo leer {name}: {e}
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	El modo portátil está desactivado: no se puede escribir en {folder} ({error}). La configuración se guarda en tu carpeta de usuario.
+	Couldn't save: {e}	No se pudo guardar: {e}
+	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	La descarga de archivos adjuntos en la versión web llegará con M3.10 ({n} bytes listos)
+	`{command}` {when}	`{command}` {when}
+	ships in milestone {m}	llegará en el hito {m}
+	needs an AI provider (off by default)	necesita un proveedor de IA (desactivado por defecto)
+	is available	está disponible
+	is not available yet	aún no está disponible
+	{label} failed: {e}	{label} ha fallado: {e}
+	Undid {label}	Deshecho: {label}
+	Redid {label}	Rehecho: {label}
+	A document needs at least one page: copy instead	Un documento necesita al menos una página: copia en su lugar
+	Cut {what}	Cortado: {what}
+	Copied {what}	Copiado: {what}
+	1 page	1 página
+	{n} pages	{n} páginas
+	Copy or cut pages first	Copia o corta páginas primero
+	Couldn't save {name}: {e}	No se pudo guardar {name}: {e}
+	Saved {name}	{name} guardado
+	Saved, but reopening failed: {e}	Guardado, pero no se pudo volver a abrir: {e}
+	Downloaded {name}	{name} descargado
+	Couldn't download {name}: {e}	No se pudo descargar {name}: {e}
+	Reverted to the last saved version	Revertido a la última versión guardada
+	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	No ha funcionado: un error interno lo ha detenido ({m}). Tus documentos no han cambiado.
+	Nothing to undo	Nada que deshacer
+	Nothing to redo	Nada que rehacer
+	This document has no form fields you can fill in	Este documento no tiene campos de formulario que puedas rellenar
+	This document has no comments to flatten	Este documento no tiene comentarios que acoplar
+	This document has no form fields to flatten	Este documento no tiene campos de formulario que acoplar
+	There are no redaction marks (mark text, areas or pages first)	No hay marcas de censura (marca primero texto, áreas o páginas)
+	This document has no {kind} to change	Este documento no tiene {kind} que cambiar
+	header or footer	encabezado ni pie de página
+	watermark	marca de agua
+	background	fondo
+	This document isn't password-protected	Este documento no está protegido con contraseña
+	Only the document's owner can change its security (open it with the permissions password)	Solo el propietario del documento puede cambiar su seguridad (ábrelo con la contraseña de permisos)
+	The document's security settings don't allow this change	La configuración de seguridad del documento no permite este cambio
+	Open a document first	Abre primero un documento
+	Security will be removed when you save	La seguridad se quitará al guardar
+	Click text or an image to edit it	Haz clic en un texto o una imagen para editarlo
+	Drag a rectangle to create a link; double-click a link to edit it	Arrastra un rectángulo para crear un enlace; haz doble clic en un enlace para editarlo
+	There are no redaction marks to apply	No hay marcas de censura que aplicar
+	Drag to draw the area where the signature should appear.	Arrastra para dibujar el área donde debe aparecer la firma.
+	Couldn't fit the visible content: {e}	No se pudo ajustar al contenido visible: {e}
+	Drag a rectangle around the area to copy	Arrastra un rectángulo alrededor del área que quieres copiar
+	Click on the page to add a {tool}, or drag to set its size	Haz clic en la página para añadir {tool}, o arrastra para definir su tamaño
+	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	Arrastra un rectángulo en una página para recortarla; haz doble clic en una página para Definir cuadros de página
+	Keep tool selected: on	Mantener la herramienta seleccionada: activado
+	Keep tool selected	Mantener la herramienta seleccionada
+	Opacity	Opacidad
+	Line thickness	Grosor de línea
+	What word or phrase would you like to search for?	¿Qué palabra o frase quieres buscar?
+	Searching… {s} of {p} pages	Buscando… {s} de {p} páginas
+	 (searching… {s} of {p} pages)	 (buscando… {s} de {p} páginas)
+	1 instance	1 resultado
+	{n} instances	{n} resultados
+	Go to this result	Ir a este resultado
+	Highlight	Resaltar
+	Draw	Dibujar
+	Polygon	Polígono
+	Connected lines	Líneas conectadas
+	Eraser	Borrador
+	Sign	Firmar
+	Certified by {by}	Certificado por {by}
+	At least one signature is invalid.	Al menos una firma no es válida.
+	Signed and all signatures are valid.	Firmado y todas las firmas son válidas.
+	At least one signature has problems.	Al menos una firma tiene problemas.
+	This document is secured. Some changes are restricted by its security settings.	Este documento está protegido. Su configuración de seguridad restringe algunos cambios.
+	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Este es un formulario XFA dinámico, que PdfCraft aún no puede mostrar. Lo que ves es la página de marcador de posición del archivo.
+	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Este formulario también contiene datos XFA, que PdfCraft aún no lee. Puedes rellenar sus campos, pero Acrobat puede mostrar los valores XFA en su lugar.
+	This document contains {n} interactive form fields.	Este documento contiene {n} campos de formulario interactivos.
+	This file was damaged and has been repaired. Saving keeps the repaired version.	Este archivo estaba dañado y se ha reparado. Al guardar se conserva la versión reparada.
+	Dismiss	Cerrar
+	Hide field highlights	Ocultar resaltado de campos
+	Highlight fields	Resaltar campos
+	Security settings	Configuración de seguridad
+	Details	Detalles
+	Select (V)	Seleccionar (V)
+	Hand (H)	Mano (H)
+	Delete pages (Delete)	Eliminar páginas (Supr)
+	Insert a blank page after the selection	Insertar una página en blanco después de la selección
+	Insert pages from a file…	Insertar páginas desde un archivo…
+	Extract pages to a new document	Extraer páginas a un documento nuevo
+	Split into files…	Dividir en archivos…
+	Select pages	Seleccionar páginas
+	Cut	Cortar
+	Copy	Copiar
+	Paste after	Pegar después
+	Rename	Cambiar nombre
+	Set to current page ({n})	Asignar a la página actual ({n})
+	Move up	Subir
+	Move down	Bajar
+	Indent	Aumentar sangría
+	Outdent	Reducir sangría
+	This document has no form fields.	Este documento no tiene campos de formulario.
+	Tab order: move a field with its arrows.	Orden de tabulación: mueve un campo con sus flechas.
+	Unplaced	Sin colocar
+	Has JavaScript actions (run in M6)	Tiene acciones de JavaScript (se ejecutan en M6)
+	Page	Página
+	None	Ninguno
+	Delete selected fields	Eliminar los campos seleccionados
+	Diagnostic details	Detalles de diagnóstico
+	The operation failed.	La operación ha fallado.
+	no such document	no existe ese documento
+	nothing to undo	nada que deshacer
+	nothing to redo	nada que rehacer
+	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	este documento está firmado: reescribirlo invalidaría sus firmas (guárdalo de forma incremental)
+	the document is protected by a password	el documento está protegido con contraseña
+	the password is incorrect	la contraseña es incorrecta
+	the document has no page tree	el documento no tiene árbol de páginas
+	a document must keep at least one page	un documento debe conservar al menos una página
+	a bookmark cannot be moved inside itself	un marcador no se puede mover dentro de sí mismo
+	the title must not be empty	el título no puede estar vacío
+	the document has no form fields	el documento no tiene campos de formulario
+	there are no redaction marks to apply	no hay marcas de censura que aplicar
+	there are no pages to print	no hay páginas que imprimir
+	the document has no tags	el documento no tiene etiquetas
+	{0}: {1}	{0}: {1}
+	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	los modelos de reconocimiento de texto no están instalados (ejecuta `cargo xtask models` o define PRINTCRAFT_MODELS)
+	the image is empty	la imagen está vacía
+	this file isn't XFDF, FDF, XML or text form data	este archivo no contiene datos de formulario XFDF, FDF, XML ni de texto
+	nothing in the file matches this document	nada en el archivo coincide con este documento
+	This page couldn't be displayed.\n{e}	No se pudo mostrar esta página.\n{e}
+	Go to page {p}	Ir a la página {p}
+	{s} action	Acción {s}
+	Page {p} of {n}	Página {p} de {n}
+	1 page selected	1 página seleccionada
+	{n} pages selected	{n} páginas seleccionadas
+	{name} — unsaved changes	{name}: cambios sin guardar
+	{kind} field	Campo {kind}
+	Select a file for the stamp	Selecciona un archivo para el sello
+	JavaScript, e.g. getField("total").value	JavaScript, p. ej., getField("total").value
+	Font: Helvetica	Fuente: Helvetica
+	e.g. en-US	p. ej., es-ES
+	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	Renderizado: hayro (inicial) · Interfaz: egui · Iconos: Lucide (ISC) · Fuentes: Inter, JetBrains Mono, Dancing Script (OFL)
+	CheckBox	Casilla de verificación
+	Radio	Botón de opción
+	PushButton	Botón
+	Combo	Lista desplegable
+	List	Lista
+	Unknown	Desconocido
+	The document has no XMP metadata	El documento no tiene metadatos XMP
+	The title in the metadata and the document information differ	El título de los metadatos y el de la información del documento son distintos
+	The document is encrypted	El documento está cifrado
+	Device colour is used, but there is no PDF/A output intent	Se usa color de dispositivo, pero no hay propósito de salida PDF/A
+	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	Se usa DeviceCMYK: necesita un propósito de salida CMYK (no se añade automáticamente)
+	The document has additional actions (/AA)	El documento tiene acciones adicionales (/AA)
+	The document has document-level JavaScript	El documento tiene JavaScript de nivel de documento
+	The form asks viewers to make appearances (NeedAppearances)	El formulario pide a los visores que generen las apariencias (NeedAppearances)
+	A form field has additional actions	Un campo de formulario tiene acciones adicionales
+	A stream uses LZW compression	Una secuencia usa compresión LZW
+	A stream refers to an external file	Una secuencia hace referencia a un archivo externo
+	An image asks to be interpolated	Una imagen pide ser interpolada
+	An image has alternates or OPI information	Una imagen tiene alternativas o información OPI
+	PostScript XObjects aren't allowed	No se permiten XObjects PostScript
+	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	Los archivos incrustados deben ser a su vez archivos PDF/A (usa PDF/A-3 para otros)
+	An embedded file has no AFRelationship	Un archivo incrustado no tiene AFRelationship
+	Select Icon	Seleccionar icono
+	Choose images	Elegir imágenes
+	{dpi} pixels/inch	{dpi} píxeles/pulgada
+	Type your {what}.	Escribe tu {what}.
+	Draw your {what} below.	Dibuja tu {what} abajo.
+	Your name	Tu nombre
+	Images and text (converted to PDF)	Imágenes y texto (convertidos a PDF)
+	Images and text	Imágenes y texto
+	Check Box Style:	Estilo de la casilla:
+	Button Style:	Estilo del botón:
+	Check	Marca
+	Circle	Círculo
+	Diamond	Rombo
+	Square	Cuadrado
+	Star	Estrella
+	{month} {y}	{month} de {y}
+	Change {key}	Cambiar {key}
+	Insert pages from {name}	Insertar páginas de {name}
+	Fill in {name}	Rellenar {name}
+	Set the image of {name}	Definir la imagen de {name}
+	Edit script of {name}	Editar el script de {name}
+	Import {name}	Importar {name}
+	Add bookmark	Añadir marcador
+	Rename bookmark	Cambiar nombre del marcador
+	Delete bookmark	Eliminar marcador
+	Move bookmark	Mover marcador
+	Set bookmark destination	Definir destino del marcador
+	Add stamp	Añadir sello
+	Delete comment	Eliminar comentario
+	Edit comment	Editar comentario
+	Erase	Borrar
+	Lock comment	Bloquear comentario
+	Unlock comment	Desbloquear comentario
+	Move comment	Mover comentario
+	Resize comment	Cambiar tamaño del comentario
+	Change comment properties	Cambiar propiedades del comentario
+	Add field	Añadir campo
+	Change field properties	Cambiar propiedades del campo
+	Delete field	Eliminar campo
+	Duplicate field	Duplicar campo
+	Set tab order	Definir orden de tabulación
+	Change initial view	Cambiar vista inicial
+	Set alternate text	Definir texto alternativo
+	Mark figure as decorative	Marcar figura como decorativa
+	Run JavaScript	Ejecutar JavaScript
+	Delete document JavaScript	Eliminar JavaScript del documento
+	Edit document JavaScript	Editar JavaScript del documento
+	Edit text	Editar texto
+	Move image	Mover imagen
+	Rotate image	Girar imagen
+	Flip image	Voltear imagen
+	Delete image	Eliminar imagen
+	Add header & footer	Añadir encabezado y pie de página
+	Update header & footer	Actualizar encabezado y pie de página
+	Update watermark	Actualizar marca de agua
+	Add background	Añadir fondo
+	Update background	Actualizar fondo
+	Add image	Añadir imagen
+	Edit content	Editar contenido
+	Delete content	Eliminar contenido
+	Remove redaction marks	Quitar marcas de censura
+	Add link	Añadir enlace
+	Change link properties	Cambiar propiedades del enlace
+	Delete link	Eliminar enlace
+	Create link	Crear enlace
+	Flatten	Acoplar
+	Add sticky note	Añadir nota adhesiva
+	Add highlight	Añadir resaltado
+	Add underline	Añadir subrayado
+	Add strikethrough	Añadir tachado
+	Add squiggly underline	Añadir subrayado ondulado
+	Add rectangle	Añadir rectángulo
+	Add oval	Añadir óvalo
+	Add arrow	Añadir flecha
+	Add line	Añadir línea
+	Add drawing	Añadir dibujo
+	Add text box	Añadir cuadro de texto
+	Add checkmark	Añadir marca de verificación
+	Add cross	Añadir cruz
+	Add dot	Añadir punto
+	Add signature	Añadir firma
+	Add redaction mark	Añadir marca de censura
+	Add cloud	Añadir nube
+	Add polygon	Añadir polígono
+	Add connected lines	Añadir líneas conectadas
+	Add callout	Añadir llamada
+	Add inserted text	Añadir texto insertado
+	Add file attachment	Añadir archivo adjunto
+	Set status Accepted	Definir estado Aceptado
+	Set status Rejected	Definir estado Rechazado
+	Set status Cancelled	Definir estado Cancelado
+	Set status Completed	Definir estado Completado
+	Set status None	Definir estado Ninguno
+	Set status Unmarked	Definir estado Sin marcar
+	Save as PDF/A-1b	Guardar como PDF/A-1b
+	Save as PDF/A-2b	Guardar como PDF/A-2b
+	Save as PDF/A-3b	Guardar como PDF/A-3b
+	Fill & Sign: change signature	Rellenar y firmar: cambiar firma
+	Fill & Sign: change initials	Rellenar y firmar: cambiar iniciales
+	Fill & Sign: remove saved signature	Rellenar y firmar: quitar la firma guardada
+	Fill & Sign: remove saved initials	Rellenar y firmar: quitar las iniciales guardadas
+	Change signature	Cambiar firma
+	Change initials	Cambiar iniciales
+	Measure distance	Medir distancia
+	Measure perimeter	Medir perímetro
+	Measure area	Medir área
+	Set measurement scale	Definir escala de medición
+	Measurement information	Información de medición
+	Measurement snapping	Ajuste de medición
+	Export measurements as CSV	Exportar mediciones como CSV
+	Distance	Distancia
+	Perimeter	Perímetro
+	Area	Área
+	Drawing scale	Escala del dibujo
+	Snapping	Ajuste
+	Export measurements	Exportar mediciones
+	Open a PDF to measure it.	Abre un PDF para medirlo.
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	Haz clic en los vértices. Intro o un doble clic termina un perímetro o un área. Haz clic en el primer punto para cerrar un área.
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Mayús restringe a 45 grados. Retroceso quita un vértice. Escape cancela.
+	Angle	Ángulo
+	Click the first point to begin.	Haz clic en el primer punto para empezar.
+	Snap to drawing	Ajustar al dibujo
+	Endpoints	Extremos
+	Midpoints	Puntos medios
+	Intersections	Intersecciones
+	Paths	Trazados
+	Sensitivity	Sensibilidad
+	Unit	Unidad
+	Decimals	Decimales
+	Calibrate from two points	Calibrar a partir de dos puntos
+	Entire page	Página completa
+	Viewport rectangle in page points (x, y, width, height)	Rectángulo de la ventana gráfica en puntos de página (x, y, ancho, alto)
+	Viewport	Ventana gráfica
+	Apply scale	Aplicar escala
+	Saved measurements	Mediciones guardadas
+	Saved measurements.	Mediciones guardadas.
+	Endpoint	Extremo
+	Midpoint	Punto medio
+	Intersection	Intersección
+	Path	Trazado
+	This drawing exceeds the snapping limit; only the first paths are used.	Este dibujo supera el límite de ajuste; solo se usan los primeros trazados.
+	Some page content couldn't be read; snapping uses the rest.	Parte del contenido de la página no se pudo leer; el ajuste usa el resto.
+	Unsupported measurements	Mediciones no compatibles
+	Label	Etiqueta
+	{n} measurements use an unsupported format and are left out.	{n} mediciones usan un formato no compatible y se omiten.
+	This area has too many overlapping paths; intersection snapping is limited.	Esta área tiene demasiados trazados superpuestos; el ajuste a intersecciones está limitado.
+	This measurement needs at least {n} points.	Esta medición necesita al menos {n} puntos.
+	Change {what}	Cambiar {what}
+	Cut and stack	Cortar y apilar
+	Default workspace mode	Modo de espacio de trabajo predeterminado
+	Documents and view	Documentos y vista
+	Open email app	Abrir la aplicación de correo
+	Open link	Abrir enlace
+	Open this web page?	¿Abrir esta página web?
+	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Los scripts se ejecutan en un entorno aislado, sin acceso a archivos ni a la red. Un script que pida abrir una página web necesita antes tu permiso. Con JavaScript desactivado, las funciones estándar de formato, validación y cálculo de Acrobat siguen funcionando.
+	Sign yourself	Firmar tú mismo
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	El reconocimiento de texto no está instalado: faltan sus modelos (ejecuta `cargo xtask models` o define PDFCRAFT_MODELS).
+	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	Se usa al abrir archivos PDF. Un modo de inicio o de control explícito tiene prioridad durante la sesión.
+	Write this email?	¿Escribir este correo?
+	{who} in this document wants to open this address in your browser:	{who} de este documento quiere abrir esta dirección en tu navegador:
+	{who} in this document wants to open your email app with this address:	{who} de este documento quiere abrir tu aplicación de correo con esta dirección:
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	Esta dirección web mezcla letras de distintos alfabetos, una forma habitual de imitar el nombre de otro sitio.
+	This web address uses letters from another alphabet, which can look like familiar ones.	Esta dirección web usa letras de otro alfabeto, que pueden parecerse a letras conocidas.
+	Create PDF from images	Crear PDF a partir de imágenes
+	Selected image files: {count}	Archivos de imagen seleccionados: {count}
+	Use image resolution	Usar la resolución de la imagen
+	Use each image's embedded DPI; use 72 DPI when it is absent.	Usa los PPP incrustados de cada imagen; usa 72 PPP si no los tiene.
+	Use 72 DPI (one point per pixel)	Usar 72 PPP (un punto por píxel)
+	Use custom DPI	Usar PPP personalizados
+	DPI sets the printed page size without resampling the image.	Los PPP determinan el tamaño de la página impresa sin remuestrear la imagen.
+	Create	Crear
+	Dynamic XFA form laid out from its template: {pages}, {fields}.	Formulario XFA dinámico maquetado a partir de su plantilla: {pages}, {fields}.
+	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formulario XFA: sus campos y sus datos XFA se mantienen sincronizados, para que otros visores muestren lo que rellenes.
+@plural	{n} page|{n} pages	{n} página|{n} páginas
+@plural	{n} field|{n} fields	{n} campo|{n} campos
+	Switch to two-page view first to show the cover page	Cambia primero a la vista de dos páginas para mostrar la portada
+	Page display: {layout}	Presentación de página: {layout}
+	Fit to width scrolling	Desplazamiento ajustado al ancho
+	Fit one full page	Ajustar una página completa
+	Default page display	Presentación de página predeterminada
+	Default zoom	Zoom predeterminado
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Se usa cuando un PDF no pide una presentación ni un zoom. El desplazamiento continuo nunca salta de página en página.
+	Created a PDF from {n} files	Se creó un PDF a partir de {n} archivos
+	PDF, images and text	PDF, imágenes y texto
+	Insert a file before page {label}	Insertar un archivo antes de la página {label}
+	Insert a file at the end	Insertar un archivo al final
+	Save pages	Guardar páginas
+	Save these pages as one PDF	Guardar estas páginas en un solo PDF
+	No changes to save	No hay cambios que guardar
+	Created a PDF from {n} files; left out: {names}	Se creó un PDF a partir de {n} archivos; omitidos: {names}
+	Created a PDF from the first {n} files	Se creó un PDF a partir de los primeros {n} archivos
+	None of those files can be made into a PDF; use PDFs, images or .txt files	Ninguno de esos archivos se puede convertir en PDF; use archivos PDF, imágenes o .txt
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Elija una imagen PNG o JPEG (hasta 4 MiB). Se conserva la transparencia.
+	Couldn't import the signature image: {e}	No se pudo importar la imagen de la firma: {e}
+	Go to page…	Ir a la página…

@@ -113,7 +113,7 @@ fn language_switch_preserves_document_and_command_ids() {
     let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
     assert_eq!(documents[0]["dirty"], true);
     let commands = ok(&mut h, &c, "ui.commands", json!({}));
-    for code in ["ja", "zh-hans", "en"] {
+    for code in ["ja", "zh-hans", "fr", "en"] {
         ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": code }));
         h.run_steps(2);
         let state = ok(&mut h, &c, "ui.state", json!({}));
@@ -722,6 +722,33 @@ fn japanese_dialogs_errors_and_custom_action_names() {
 }
 
 #[test]
+fn simplified_chinese_about_tabs_and_credit_controls() {
+    let (mut h, c) = harness();
+    let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
+    ok(&mut h, &c, "ui.set", json!({"key": "language", "value": "zh-hans"}));
+    ok(&mut h, &c, "ui.set", json!({"key": "dialog", "value": "about"}));
+    for label in ["关于", "贡献者", "模型"] {
+        let found = ok(&mut h, &c, "ui.inspect", json!({"query": label}));
+        assert!(found["widgets"].as_array().unwrap().iter().any(|w| w["label"] == label), "{found}");
+    }
+    ok(&mut h, &c, "ui.click", json!({"label": "贡献者"}));
+    for label in ["用户名", "显示名称", "真实姓名", "排序", "名称列表", "表格", "首次提交"] {
+        let found = ok(&mut h, &c, "ui.inspect", json!({"query": label}));
+        assert!(found["count"].as_u64().unwrap() > 0, "{label}: {found}");
+    }
+    ok(&mut h, &c, "ui.click", json!({"label": "表格"}));
+    for label in ["新增行", "删除行", "净增行", "新增资源", "删除资源"] {
+        let found = ok(&mut h, &c, "ui.inspect", json!({"query": label}));
+        assert!(found["count"].as_u64().unwrap() > 0, "{label}: {found}");
+    }
+    ok(&mut h, &c, "ui.click", json!({"label": "模型"}));
+    let columns = ok(&mut h, &c, "ui.inspect", json!({"query": "占全部提交的比例"}));
+    let empty = ok(&mut h, &c, "ui.inspect", json!({"query": "此版本未包含模型贡献记录。"}));
+    assert!(columns["count"].as_u64().unwrap() > 0 || empty["count"].as_u64().unwrap() > 0, "{columns}, {empty}");
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"], documents);
+}
+
+#[test]
 fn simplified_chinese_signature_prompts_and_errors_keep_document_state() {
     let (mut h, c) = harness();
     let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
@@ -776,6 +803,20 @@ fn inspect_and_click_by_label_and_id() {
 }
 
 #[test]
+fn cover_page_command_needs_two_page_view() {
+    // Agents see the cover toggle as disabled, and get an error, until two-page view.
+    let (mut h, c) = harness();
+    let enabled = |list: Value| list["commands"].as_array().unwrap().iter().find(|x| x["id"] == "view.layout.cover").unwrap()["enabled"].clone();
+    assert_eq!(enabled(ok(&mut h, &c, "ui.commands", json!({}))), false);
+    let err = call(&mut h, &c, "ui.command", json!({ "id": "view.layout.cover" })).unwrap_err();
+    assert!(err.contains("disabled"), "{err}");
+    ok(&mut h, &c, "ui.command", json!({ "id": "view.layout.two_up" }));
+    assert_eq!(enabled(ok(&mut h, &c, "ui.commands", json!({}))), true);
+    ok(&mut h, &c, "ui.command", json!({ "id": "view.layout.cover" }));
+    assert!(h.state().views[0].cover);
+}
+
+#[test]
 fn commands_keys_and_typing() {
     let (mut h, c) = harness();
     let list = ok(&mut h, &c, "ui.commands", json!({}));
@@ -811,6 +852,14 @@ fn select_all_key_selects_every_page_in_organize() {
     assert_eq!(h.state().views[0].target_pages(), [0, 1, 2, 3, 4]);
     assert_eq!(h.state().views[0].current, 2);
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["dirty"], false);
+}
+
+#[test]
+fn state_reports_the_selected_pages() {
+    let (mut h, c) = harness();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["selected_pages"], json!([]));
+    ok(&mut h, &c, "ui.set", json!({ "key": "select", "value": "2,4" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["selected_pages"], json!([2, 4]));
 }
 
 #[test]

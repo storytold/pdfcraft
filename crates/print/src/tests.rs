@@ -68,6 +68,13 @@ fn page_selection() {
     assert!(matches!(select_pages(5, Some("7"), &[], Subset::All, false), Err(PrintError::Invalid(_))));
     assert!(matches!(select_pages(5, Some("x"), &[], Subset::All, false), Err(PrintError::Invalid(_))));
     assert_eq!(select_pages(1, None, &[], Subset::Even, false), Err(PrintError::NoPages));
+    // An explicit list (selected thumbnails): positions, never labels, in the order given.
+    assert_eq!(select_listed(5, &[1, 3], Subset::All, false).unwrap(), [1, 3]);
+    assert_eq!(select_listed(5, &[0, 2, 4], Subset::Even, false).unwrap(), [2]);
+    assert_eq!(select_listed(5, &[0, 2, 4], Subset::Odd, true).unwrap(), [4, 0]);
+    assert!(matches!(select_listed(5, &[1, 5], Subset::All, false), Err(PrintError::Invalid(_))));
+    assert!(matches!(select_listed(0, &[usize::MAX], Subset::All, false), Err(PrintError::Invalid(_))));
+    assert_eq!(select_listed(5, &[], Subset::All, false), Err(PrintError::NoPages));
 }
 
 #[test]
@@ -186,10 +193,10 @@ fn spooler_arguments_and_printer_list() {
     let job =
         Job { printer: Some("Office_Laser".into()), copies: 3, collate: false, duplex: Duplex::LongEdge, grayscale: true, title: "memo.pdf".into() };
     assert_eq!(
-        lp_args(&job, "/tmp/x.pdf").join(" "),
-        "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false -- /tmp/x.pdf"
+        lp_args(&job).join(" "),
+        "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false"
     );
-    assert_eq!(lp_args(&Job::default(), "f.pdf")[0], "-n", "no -d: the default printer");
+    assert_eq!(lp_args(&Job::default())[0], "-n", "no -d: the default printer");
 }
 
 #[test]
@@ -267,4 +274,88 @@ fn multiple_rejects_hostile_grids_without_panicking() {
     for size in [(0.0, 300.0), (200.0, f64::NAN), (f64::INFINITY, 300.0), (f64::from_bits(1), f64::from_bits(1))] {
         assert!(matches!(layout(&[size], &settings(vec![0], cut_stack(2, 2))), Err(PrintError::Invalid(_))));
     }
+}
+
+/// Set on the child process when a test runs this test binary as a stand-in for `lp`.
+const STAND_IN_LP: &str = "PDFCRAFT_STAND_IN_LP";
+
+/// Not a test of its own: [`stand_in_lp`] re-runs this binary with only this test selected, and it
+/// then plays `lp`. It records its arguments and stdin in the folder named by [`STAND_IN_LP`], or,
+/// when the folder is `refuse`, exits without reading stdin, the way `lp` refuses an unknown
+/// printer.
+#[test]
+fn stand_in_for_lp() {
+    let Some(record) = std::env::var_os(STAND_IN_LP) else { return };
+    if record == "refuse" {
+        eprintln!("lp: The printer or class does not exist.");
+        std::process::exit(1);
+    }
+    let record = std::path::PathBuf::from(record);
+    let args: Vec<String> = std::env::args().skip_while(|a| a != "--").skip(1).collect();
+    let mut stdin = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::stdin(), &mut stdin).unwrap();
+    std::fs::write(record.join("args"), args.join(" ")).unwrap();
+    std::fs::write(record.join("stdin"), stdin).unwrap();
+}
+
+/// A spooler command that runs [`stand_in_for_lp`] with `record` (see there).
+fn stand_in_lp(record: &std::ffi::OsStr) -> std::process::Command {
+    let mut c = std::process::Command::new(std::env::current_exe().unwrap());
+    c.args(["--exact", "tests::stand_in_for_lp", "--nocapture", "--"]).env(STAND_IN_LP, record);
+    c
+}
+
+#[test]
+fn print_jobs_reach_lp_on_stdin_never_through_a_shared_temp_folder() {
+    // The job used to be written to `<temp>/pdfcraft-print-<pid>/job-<time>.pdf` and handed to `lp`
+    // by name. In a shared /tmp another local user can predict that folder, create it first (or
+    // plant a symlink there) and so read every printed document or swap the file before `lp`
+    // reads it. Piping the job to `lp` leaves nothing on disk.
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let record =
+        std::env::temp_dir().join(format!("pdfcraft-print-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    std::fs::create_dir(&record).unwrap();
+    // Bigger than any pipe buffer, so the spooler must read while the job is still being written.
+    let pdf: Vec<u8> = b"%PDF-1.7 synthetic print job\n".iter().copied().cycle().take(3 << 20).collect();
+    let job = Job { title: "memo.pdf".into(), ..Job::default() };
+    let sent = spool::submit_via(stand_in_lp(record.as_os_str()), &pdf, &job);
+    let args = std::fs::read_to_string(record.join("args"));
+    let stdin = std::fs::read(record.join("stdin"));
+    let _ = std::fs::remove_dir_all(&record);
+    assert!(sent.is_ok(), "{sent:?}");
+    assert_eq!(
+        args.unwrap(),
+        "-n 1 -t memo.pdf -o collate=true -o sides=one-sided -o fit-to-page=false",
+        "no file argument: lp reads the job from stdin"
+    );
+    assert!(stdin.unwrap() == pdf, "lp receives the whole job on stdin");
+    let predictable = std::env::temp_dir().join(format!("pdfcraft-print-{}", std::process::id()));
+    assert!(!predictable.exists(), "nothing is created at {predictable:?}, a name other local users can predict");
+}
+
+#[test]
+fn a_refused_print_job_reports_the_spoolers_message() {
+    // `lp` refuses an unknown printer without reading the job; the user sees why, not a broken pipe.
+    let pdf = vec![b'%'; 3 << 20];
+    let err = spool::submit_via(stand_in_lp("refuse".as_ref()), &pdf, &Job::default());
+    assert_eq!(err, Err(PrintError::Spool("lp: The printer or class does not exist.".into())));
+}
+
+#[test]
+fn the_spoolers_reply_drops_the_file_count_of_a_job_sent_on_stdin() {
+    assert_eq!(
+        spool::job_message(
+            b"request id is Office_Laser-12 (0 file(s))
+"
+        ),
+        "request id is Office_Laser-12"
+    );
+    assert_eq!(
+        spool::job_message(
+            b"request id is Office_Laser-13 (1 file(s))
+"
+        ),
+        "request id is Office_Laser-13 (1 file(s))"
+    );
+    assert_eq!(spool::job_message(b""), "");
 }

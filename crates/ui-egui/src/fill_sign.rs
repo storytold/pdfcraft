@@ -4,7 +4,7 @@
 //! any comment.
 
 use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
-use pdfcraft_engine::{Edit, FillMark, NewAnnotation, Shape, Style};
+use pdfcraft_engine::{Edit, FillMark, NewAnnotation, Shape, SignatureImage, Style};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
@@ -26,11 +26,31 @@ pub const FILL_TOOLS: [FillTool; 8] =
     [FillTool::Text, FillTool::Cross, FillTool::Check, FillTool::Dot, FillTool::Line, FillTool::Date, FillTool::Signature, FillTool::Initials];
 
 /// A saved signature or initials: drawn strokes (normalised to the pad width, y up) or typed
-/// text (drawn in the script font).
+/// text (drawn in the script font), or a locally imported image.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SavedSig {
     Drawn(Vec<Vec<[f32; 2]>>),
     Typed(String),
+    Image(#[serde(with = "image_data")] SignatureImage),
+}
+
+mod image_data {
+    use base64::Engine as _;
+    use pdfcraft_engine::{SignatureImage, signature_image::MAX_SIGNATURE_IMAGE_BYTES};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(image: &SignatureImage, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&base64::engine::general_purpose::STANDARD.encode(image.bytes().as_slice()))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<SignatureImage, D::Error> {
+        let encoded = String::deserialize(d)?;
+        if encoded.len() > MAX_SIGNATURE_IMAGE_BYTES.div_ceil(3) * 4 {
+            return Err(serde::de::Error::custom("signature image exceeds 4 MiB"));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(serde::de::Error::custom)?;
+        SignatureImage::from_bytes(&bytes).map_err(serde::de::Error::custom)
+    }
 }
 
 /// The Create signature / initials dialog.
@@ -40,6 +60,9 @@ pub struct SigDraft {
     pub text: String,
     /// The Draw tab (otherwise Type).
     pub drawing: bool,
+    /// The Image tab. The file is held in the draft until Apply.
+    pub image_mode: bool,
+    pub image: Option<SignatureImage>,
     /// Creating initials (otherwise the signature).
     pub initials: bool,
     /// Replacing an existing saved value.
@@ -49,7 +72,7 @@ pub struct SigDraft {
 impl SigDraft {
     pub fn new(initials: bool, name: &str) -> Self {
         let text = if initials { name.split_whitespace().filter_map(|w| w.chars().next()).collect() } else { name.trim().to_string() };
-        Self { strokes: Vec::new(), text, drawing: false, initials, editing: false }
+        Self { text, initials, ..Default::default() }
     }
 
     /// Edit a copy of the saved value; Cancel must leave the original untouched.
@@ -57,11 +80,14 @@ impl SigDraft {
         match saved {
             SavedSig::Drawn(strokes) => Self { strokes: strokes.clone(), drawing: true, initials, editing: true, ..Default::default() },
             SavedSig::Typed(text) => Self { text: text.clone(), initials, editing: true, ..Default::default() },
+            SavedSig::Image(image) => Self { image: Some(image.clone()), image_mode: true, initials, editing: true, ..Default::default() },
         }
     }
 
     fn ready(&self) -> bool {
-        if self.drawing {
+        if self.image_mode {
+            self.image.is_some()
+        } else if self.drawing {
             self.strokes.iter().any(|s| s.len() > 1)
         } else {
             !self.text.trim().is_empty()
@@ -69,8 +95,14 @@ impl SigDraft {
         }
     }
 
-    pub fn saved(&self) -> SavedSig {
-        if self.drawing { SavedSig::Drawn(self.strokes.clone()) } else { SavedSig::Typed(self.text.trim().to_string()) }
+    pub fn saved(&self) -> Option<SavedSig> {
+        if self.image_mode {
+            self.image.clone().map(SavedSig::Image)
+        } else if self.drawing {
+            Some(SavedSig::Drawn(self.strokes.clone()))
+        } else {
+            Some(SavedSig::Typed(self.text.trim().to_string()))
+        }
     }
 }
 
@@ -183,6 +215,7 @@ pub fn typed_signature_at(page: usize, at: [f64; 2], text: &str, height: f64, au
 pub fn place(page: usize, at: [f64; 2], sig: &SavedSig, initials: bool, author: &str) -> Option<Edit> {
     match sig {
         SavedSig::Drawn(strokes) => signature_at(page, at, strokes, author),
+        SavedSig::Image(image) => image.edit(page, at, initials, author),
         SavedSig::Typed(text) => {
             let [left, bottom, right, top] = pdfcraft_engine::script_outline(text).bounds();
             let height = if initials { 24.0_f64 } else { 32.0_f64 };
@@ -267,9 +300,9 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp,
             match saved {
                 SavedSig::Typed(text) => {
                     let cache = &mut app.saved_signature_previews[i];
-                    if cache.as_ref().is_none_or(|(s, _)| s != text) {
+                    if cache.as_ref().is_none_or(|(s, _)| s != saved) {
                         *cache = Some((
-                            text.clone(),
+                            saved.clone(),
                             ui.ctx().load_texture(format!("saved-{what}"), script_preview(text, 480, 104), egui::TextureOptions::LINEAR),
                         ));
                     }
@@ -282,6 +315,9 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp,
                             Color32::WHITE,
                         );
                     }
+                }
+                SavedSig::Image(image) => {
+                    image_preview(ui, preview_rect, image, &mut app.saved_signature_previews[i]);
                 }
                 SavedSig::Drawn(strokes) => {
                     let bounds = strokes
@@ -317,7 +353,7 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp,
     command
 }
 
-/// Clicks with a Fill & Sign tool on one page. Returns `true` when the click was used.
+/// Preview and clicks with a Fill & Sign tool on one page.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn page_input(
     ui: &egui::Ui,
@@ -329,18 +365,32 @@ pub(crate) fn page_input(
     view: &mut DocView,
     signature: Option<&SavedSig>,
     initials: Option<&SavedSig>,
+    preview: &mut Option<(SavedSig, egui::TextureHandle)>,
     author: &str,
     today: (i64, u32, u32),
 ) -> Option<FillAction> {
     let pointer = ui.input(|i| i.pointer.hover_pos())?;
-    if !xf.rect.contains(pointer) {
-        return None;
-    }
-    ui.ctx().set_cursor_icon(if tool == FillTool::Text { egui::CursorIcon::Text } else { egui::CursorIcon::Crosshair });
-    if !resp.clicked() {
+    if !resp.contains_pointer() || !xf.rect.contains(pointer) {
         return None;
     }
     let at = to_user(xf, info, page, pointer);
+    let saved = match tool {
+        FillTool::Signature => signature,
+        FillTool::Initials => initials,
+        _ => None,
+    };
+    if let Some(SavedSig::Image(image)) = saved {
+        if let Some(rect) = image.rect(at, tool == FillTool::Initials) {
+            let tex = image_texture(ui, image, preview);
+            xf.paint_user_image(ui.painter(), tex, info, page, rect, Color32::WHITE);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+        }
+    } else {
+        ui.ctx().set_cursor_icon(if tool == FillTool::Text { egui::CursorIcon::Text } else { egui::CursorIcon::Crosshair });
+    }
+    if !resp.clicked() {
+        return None;
+    }
     match tool {
         FillTool::Text => {
             view.fill_text = Some(TypeBox { page, at: [at[0], at[1] + TEXT_SIZE * 0.6], text: String::new(), focus: true });
@@ -351,11 +401,11 @@ pub(crate) fn page_input(
             Some(FillAction::Edit(Box::new(typed(page, [at[0], at[1] + TEXT_SIZE * 0.6], &format!("{m}/{d}/{y}"), author))))
         }
         FillTool::Signature => match signature {
-            Some(s) => place(page, at, s, false, author).map(|e| FillAction::Edit(Box::new(e))),
+            Some(s) => place(page, at, s, false, author).map(|e| FillAction::Signature(Box::new(e))),
             None => Some(FillAction::CreateSignature),
         },
         FillTool::Initials => match initials {
-            Some(s) => place(page, at, s, true, author).map(|e| FillAction::Edit(Box::new(e))),
+            Some(s) => place(page, at, s, true, author).map(|e| FillAction::Signature(Box::new(e))),
             None => Some(FillAction::CreateInitials),
         },
         mark => {
@@ -371,6 +421,8 @@ pub(crate) fn page_input(
 #[derive(Clone, Debug, PartialEq)]
 pub enum FillAction {
     Edit(Box<Edit>),
+    /// Place once, then select the new signature or initials for adjustment.
+    Signature(Box<Edit>),
     /// No signature yet: open the signature pad.
     CreateSignature,
     /// No initials yet.
@@ -421,20 +473,42 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     None
 }
 
-/// The signature pad: draw with the pointer; returns the strokes (normalised) on Apply.
-pub(crate) fn signature_pad(ui: &mut egui::Ui, t: &Tokens, d: &mut SigDraft, preview: &mut Option<(String, egui::TextureHandle)>) -> (bool, bool) {
+/// The signature pad: type, draw or import an image. Returns Apply, Cancel and Browse.
+pub(crate) fn signature_pad(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    d: &mut SigDraft,
+    preview: &mut Option<(SavedSig, egui::TextureHandle)>,
+) -> (bool, bool, bool) {
     let what = if d.initials { tl!("initials") } else { tl!("signature") };
     let title = if d.editing { tl!("Change {what}") } else { tl!("Create {what}") };
     ui.label(egui::RichText::new(crate::i18n::fmt(title, &[("what", what)])).font(crate::theme::semibold(18.0)));
     ui.horizontal(|ui| {
-        if crate::widgets::pill_button(ui, tl!("Type"), !d.drawing).clicked() {
+        if crate::widgets::pill_button(ui, tl_ctx!("signature pad", "Type"), !d.drawing && !d.image_mode).clicked() {
             d.drawing = false;
+            d.image_mode = false;
         }
-        if crate::widgets::pill_button(ui, tl!("Draw"), d.drawing).clicked() {
+        if crate::widgets::pill_button(ui, tl!("Draw"), d.drawing && !d.image_mode).clicked() {
             d.drawing = true;
+            d.image_mode = false;
+        }
+        if crate::widgets::pill_button(ui, tl!("Image"), d.image_mode).clicked() {
+            d.image_mode = true;
         }
     });
     ui.add_space(6.0);
+    if d.image_mode {
+        ui.label(egui::RichText::new(tl!("Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.")).color(t.text_muted));
+        let browse = crate::widgets::ghost_button(ui, "folder", tl!("Browse…")).clicked();
+        let (rect, _) = ui.allocate_exact_size(vec2(460.0, 150.0), Sense::hover());
+        ui.painter().rect_filled(rect, CornerRadius::same(6), Color32::WHITE);
+        ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+        if let Some(image) = &d.image {
+            image_preview(ui, rect.shrink(8.0), image, preview);
+        }
+        let (apply, cancel) = pad_buttons(ui, d);
+        return (apply, cancel, browse);
+    }
     if !d.drawing {
         let l = ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Type your {what}."), &[("what", what)])).color(t.text_muted));
         ui.add(
@@ -448,14 +522,16 @@ pub(crate) fn signature_pad(ui: &mut egui::Ui, t: &Tokens, d: &mut SigDraft, pre
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, CornerRadius::same(6), Color32::WHITE);
         painter.rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-        if preview.as_ref().is_none_or(|(s, _)| *s != d.text) {
+        let key = SavedSig::Typed(d.text.clone());
+        if preview.as_ref().is_none_or(|(s, _)| *s != key) {
             let img = script_preview(&d.text, 920, 300);
-            *preview = Some((d.text.clone(), ui.ctx().load_texture("typed-signature", img, egui::TextureOptions::LINEAR)));
+            *preview = Some((key, ui.ctx().load_texture("typed-signature", img, egui::TextureOptions::LINEAR)));
         }
         if let Some((_, tex)) = preview {
             painter.image(tex.id(), rect.shrink(4.0), egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
-        return pad_buttons(ui, d);
+        let (apply, cancel) = pad_buttons(ui, d);
+        return (apply, cancel, false);
     }
     ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Draw your {what} below."), &[("what", what)])).color(t.text_muted));
     let strokes = &mut d.strokes;
@@ -481,7 +557,33 @@ pub(crate) fn signature_pad(ui: &mut egui::Ui, t: &Tokens, d: &mut SigDraft, pre
         let pts: Vec<Pos2> = s.iter().map(|p| pos2(rect.left() + p[0] * rect.width(), rect.bottom() - p[1] * rect.width())).collect();
         painter.add(egui::Shape::line(pts, Stroke::new(2.0, Color32::BLACK)));
     }
-    pad_buttons(ui, d)
+    let (apply, cancel) = pad_buttons(ui, d);
+    (apply, cancel, false)
+}
+
+fn image_texture(ui: &egui::Ui, image: &SignatureImage, cache: &mut Option<(SavedSig, egui::TextureHandle)>) -> egui::TextureId {
+    let key = SavedSig::Image(image.clone());
+    if cache.as_ref().is_some_and(|(s, _)| *s != key) {
+        *cache = None;
+    }
+    let (_, tex) = cache.get_or_insert_with(|| {
+        let pixels = egui::ColorImage::from_rgba_unmultiplied(image.size(), image.rgba());
+        (key, ui.ctx().load_texture("signature-image", pixels, egui::TextureOptions::LINEAR))
+    });
+    tex.id()
+}
+
+fn image_preview(ui: &egui::Ui, rect: egui::Rect, image: &SignatureImage, cache: &mut Option<(SavedSig, egui::TextureHandle)>) {
+    let tex = image_texture(ui, image, cache);
+    let [w, h] = image.size();
+    let size = vec2(w as f32, h as f32);
+    let size = size * (rect.width() / size.x).min(rect.height() / size.y);
+    ui.painter().image(
+        tex,
+        egui::Rect::from_center_size(rect.center(), size),
+        egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
 }
 
 fn pad_buttons(ui: &mut egui::Ui, d: &mut SigDraft) -> (bool, bool) {
@@ -491,6 +593,7 @@ fn pad_buttons(ui: &mut egui::Ui, d: &mut SigDraft) -> (bool, bool) {
         if ui.button(tl!("Clear")).clicked() {
             d.strokes.clear();
             d.text.clear();
+            d.image = None;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let ready = d.ready();
@@ -503,6 +606,99 @@ fn pad_buttons(ui: &mut egui::Ui, d: &mut SigDraft) -> (bool, bool) {
         });
     });
     (apply, cancel)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Default)]
+pub(crate) struct ImageInbox {
+    busy: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    picked: std::sync::Arc<std::sync::Mutex<Option<PickedImage>>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+struct PickedImage {
+    epoch: u64,
+    initials: bool,
+    bytes: Option<Result<Vec<u8>, String>>,
+}
+
+impl crate::PdfCraftApp {
+    /// Browse asynchronously, answering only into the dialog that asked for the image.
+    pub(crate) fn pick_signature_image(&mut self) {
+        let epoch = self.dialog_epoch();
+        let initials = self.signature_draft.initials;
+        let dialog = rfd::AsyncFileDialog::new().add_filter(tl!("Image"), &["png", "jpg", "jpeg"]);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.ask_one(crate::pickers::Ask::File(dialog), None, move |app, path| {
+            if app.dialog_epoch() != epoch || app.dialog != Some(crate::Dialog::Signature) || app.signature_draft.initials != initials {
+                return;
+            }
+            let result =
+                std::fs::File::open(path).map_err(pdfcraft_engine::signature_image::SignatureImageError::from).and_then(SignatureImage::read);
+            app.use_signature_image(result.map_err(|e| e.to_string()));
+        });
+        #[cfg(target_arch = "wasm32")]
+        {
+            use std::sync::atomic::Ordering;
+            if self.signature_images.busy.swap(true, Ordering::SeqCst) {
+                self.notify_tr("Another file dialog is still open. Finish with it first.");
+                return;
+            }
+            let inbox = self.signature_images.clone();
+            let ctx = self.ctx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let bytes = if let Some(file) = dialog.pick_file().await {
+                    if file.inner().size() > pdfcraft_engine::signature_image::MAX_SIGNATURE_IMAGE_BYTES as f64 {
+                        Some(Err(pdfcraft_engine::signature_image::SignatureImageError::Size.to_string()))
+                    } else {
+                        // `pick_file` returns a readable handle. Read its Blob directly so a
+                        // rejected browser read is an error (rfd's read helper unwraps it).
+                        Some(match wasm_bindgen_futures::JsFuture::from(file.inner().array_buffer()).await {
+                            Ok(buffer) => {
+                                let bytes = js_sys::Uint8Array::new(&buffer);
+                                if bytes.length() as usize > pdfcraft_engine::signature_image::MAX_SIGNATURE_IMAGE_BYTES {
+                                    Err(pdfcraft_engine::signature_image::SignatureImageError::Size.to_string())
+                                } else {
+                                    Ok(bytes.to_vec())
+                                }
+                            }
+                            Err(error) => Err(format!("{error:?}")),
+                        })
+                    }
+                } else {
+                    None
+                };
+                *inbox.picked.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(PickedImage { epoch, initials, bytes });
+                if let Some(ctx) = ctx {
+                    ctx.request_repaint();
+                }
+            });
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn process_signature_images(&mut self) {
+        let picked = self.signature_images.picked.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        let Some(picked) = picked else { return };
+        self.signature_images.busy.store(false, std::sync::atomic::Ordering::SeqCst);
+        if self.dialog_epoch() != picked.epoch || self.dialog != Some(crate::Dialog::Signature) || self.signature_draft.initials != picked.initials {
+            return;
+        }
+        let Some(bytes) = picked.bytes else { return };
+        let result = bytes
+            .and_then(|bytes| pdfcraft_engine::guard(|| SignatureImage::from_bytes(&bytes)).map_err(|e| e.to_string())?.map_err(|e| e.to_string()));
+        self.use_signature_image(result);
+    }
+
+    fn use_signature_image(&mut self, result: Result<SignatureImage, String>) {
+        match result {
+            Ok(image) => {
+                self.signature_draft.image = Some(image);
+                self.toast = None;
+            }
+            Err(e) => self.notify_fmt("Couldn't import the signature image: {e}", &[("e", &e)]),
+        }
+    }
 }
 
 #[cfg(test)]

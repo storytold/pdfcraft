@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
-//! pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.pam
+//! pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
 //! pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
 //! pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
 //!                       [--insert-blank 1] [--title T] [--author A] [--full]
@@ -13,7 +13,8 @@
 //! pdfcraft-cli tools                                       automation tools and their JSON Schemas
 //! pdfcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
 //! pdfcraft-cli run    --script steps.json [--root DIR]      [{"tool": "doc_open", "args": {…}}, …]
-//! pdfcraft-cli mcp    [--root DIR]                          MCP server on stdin/stdout (opt-in)
+//! pdfcraft-cli mcp    [--root DIR] [--compact]              MCP server on stdin/stdout (opt-in)
+//!                                                            --compact lists a core set of tools plus tool_search and tool_call
 //! pdfcraft-cli ui     --control FILE <method> [key=value …] [--out shot.png]
 //!                                                            drive a running app started with --control FILE
 //! ```
@@ -39,6 +40,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use pdfcraft_engine::export::ImageFormat;
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, inspect};
 
 fn main() -> ExitCode {
@@ -174,16 +176,43 @@ fn info(args: &[String]) -> Result<(), CliError> {
 
 fn text(args: &[String]) -> Result<(), CliError> {
     let path = *positional(args).first().ok_or("text: missing file")?;
-    let mut r = PageRenderer::new(read(path)?, RenderConfig { password: flag(args, "--password").map(Arc::from), ..Default::default() });
-    let pages: Vec<usize> = match flag(args, "--page") {
-        Some(p) => vec![p.parse::<usize>().map_err(|_| "bad --page")?.saturating_sub(1)],
+    let mut selected_page = None;
+    // Validate every supplied value before reading, retaining the first valid selection.
+    let mut options = args.iter();
+    while let Some(option) = options.next() {
+        if option == "--page" {
+            let page = options
+                .next()
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|page| *page > 0)
+                .ok_or("bad --page: expected a positive page number")?;
+            selected_page.get_or_insert(page - 1);
+        } else if option.starts_with("--") {
+            // Match positional(): an option's operand is not itself another option.
+            options.next();
+        }
+    }
+    let password = flag(args, "--password");
+    let bytes = read(path)?;
+    let mut r = PageRenderer::new(bytes.clone(), RenderConfig { password: password.map(Arc::from), ..Default::default() });
+    // A document the renderer could not open (wrong or missing password, unparseable file) has
+    // no pages, and "extract every page" of nothing would print nothing and exit 0 (#132). Ask
+    // `inspect` why instead, so a protected file fails the same way `info` does.
+    if r.page_count() == 0 {
+        let info = inspect(bytes, password).map_err(|e| format!("text: {e}"))?;
+        if !info.pages.is_empty() {
+            return Err("text: the document could not be parsed".into());
+        }
+    }
+    let pages: Vec<usize> = match selected_page {
+        Some(page) => vec![page],
         None => (0..r.page_count()).collect(),
     };
     let mut failed: Vec<usize> = Vec::new();
     for (n, p) in pages.iter().enumerate() {
         let out = r.render(RenderRequest { page: *p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
         if let Some(e) = out.error {
-            eprintln!("page {}: {e}", p + 1);
+            let _ = writeln!(std::io::stderr().lock(), "page {}: {e}", p + 1);
             failed.push(p + 1);
             continue;
         }
@@ -250,11 +279,11 @@ fn edit(args: &[String]) -> Result<(), CliError> {
             "--move" => {
                 let (pages, to) = value.split_once(':').ok_or("--move PAGES:TO")?;
                 let to: usize = to.parse().map_err(|_| "bad target")?;
-                edits.push(Edit::MovePages { pages: page_list(pages)?, to: to.saturating_sub(1) });
+                edits.push(Edit::MovePages { pages: page_list(pages)?, to: to.checked_sub(1).ok_or("--move target must be at least 1")? });
             }
             "--insert-blank" => {
                 let at: usize = value.parse().map_err(|_| "bad position")?;
-                edits.push(Edit::InsertBlankPage { at: at.saturating_sub(1), width: 612.0, height: 792.0 });
+                edits.push(Edit::InsertBlankPage { at: at.checked_sub(1).ok_or("--insert-blank must be at least 1")?, width: 612.0, height: 792.0 });
             }
             "--title" => edits.push(Edit::SetInfo { key: "Title".into(), value: value.into() }),
             "--author" => edits.push(Edit::SetInfo { key: "Author".into(), value: value.into() }),
@@ -310,7 +339,11 @@ fn split(args: &[String]) -> Result<(), CliError> {
     let mut session = pdfcraft_engine::Session::new();
     let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
     let stem = file_stem(path);
-    for (a, b, bytes) in session.split(id, &by).map_err(|e| e.to_string())? {
+    let parts = session.split(id, &by).map_err(|e| e.to_string())?;
+    // An output folder that does not exist yet is created (#249); one that can't be is reported
+    // as the folder's problem, not as the first part's.
+    std::fs::create_dir_all(&dir).map_err(|e| format!("split: --out-dir {}: {e}", dir.display()))?;
+    for (a, b, bytes) in parts {
         let name = dir.join(if a == b { format!("{stem}-p{a}.pdf") } else { format!("{stem}-p{a}-{b}.pdf") });
         std::fs::write(&name, bytes.as_slice()).map_err(|e| format!("{}: {e}", name.display()))?;
         stdout_line(format_args!("{}", name.display()))?;
@@ -321,18 +354,33 @@ fn split(args: &[String]) -> Result<(), CliError> {
 fn render(args: &[String]) -> Result<(), CliError> {
     let path = *positional(args).first().ok_or("render: missing file")?;
     let page: usize = flag(args, "--page").unwrap_or("1").parse().map_err(|_| "bad --page")?;
+    let page_index = page.checked_sub(1).ok_or("--page must be at least 1")?;
     let dpi: f32 = flag(args, "--dpi").unwrap_or("96").parse().map_err(|_| "bad --dpi")?;
-    let out = flag(args, "--out").ok_or("render: missing --out (.pam)")?;
+    let out = flag(args, "--out").ok_or("render: missing --out (.png, .jpg, .tif or .pam)")?;
+    // The file is what its name says (#248): a `.png` used to get a netpbm PAM stream.
+    let format = match Path::new(out).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+        Some("png") => Some(ImageFormat::Png),
+        Some("jpg" | "jpeg") => Some(ImageFormat::Jpeg { quality: 90 }),
+        Some("tif" | "tiff") => Some(ImageFormat::Tiff),
+        Some("pam") => None,
+        _ => return Err(format!("render: --out {out}: use a .png, .jpg, .tif or .pam name").into()),
+    };
     let mut r = PageRenderer::new(read(path)?, RenderConfig { password: flag(args, "--password").map(Arc::from), ..Default::default() });
-    let p = r.render(RenderRequest { page: page.saturating_sub(1), kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0 });
+    let p = r.render(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0 });
     if let Some(e) = p.error {
         return Err(e.into());
     }
-    // PAM (netpbm RGB_ALPHA) keeps this tool dependency-free; convert with any image tool.
-    let mut f = std::fs::File::create(out).map_err(|e| e.to_string())?;
-    write!(f, "P7\nWIDTH {}\nHEIGHT {}\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", p.width, p.height).map_err(|e| e.to_string())?;
-    f.write_all(&p.rgba).map_err(|e| e.to_string())?;
-    eprintln!("rendered page {page} at {dpi} dpi: {}×{} px in {} ms", p.width, p.height, p.millis);
+    let bytes = match format {
+        Some(f) => pdfcraft_engine::export::encode_image(p.width, p.height, &p.rgba, f)?,
+        None => {
+            // PAM (netpbm RGB_ALPHA): the raw premultiplied pixels, for tools that read it.
+            let mut pam = format!("P7\nWIDTH {}\nHEIGHT {}\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", p.width, p.height).into_bytes();
+            pam.extend_from_slice(&p.rgba);
+            pam
+        }
+    };
+    std::fs::write(out, bytes).map_err(|e| format!("{out}: {e}"))?;
+    let _ = writeln!(std::io::stderr().lock(), "rendered page {page} at {dpi} dpi: {}×{} px in {} ms", p.width, p.height, p.millis);
     Ok(())
 }
 
@@ -549,8 +597,14 @@ fn run(args: &[String]) -> Result<(), CliError> {
 
 #[cfg(feature = "mcp")]
 fn mcp(args: &[String]) -> Result<(), CliError> {
-    let mut server = pdfcraft_automation::mcp::McpServer::new(automation(args)?);
-    eprintln!("pdfcraft-cli: MCP server on stdio (protocol {}); close stdin to stop", pdfcraft_automation::mcp::PROTOCOL_VERSIONS[0]);
+    let compact = args.iter().any(|a| a == "--compact");
+    let mut server = pdfcraft_automation::mcp::McpServer::new(automation(args)?).with_compact(compact);
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "pdfcraft-cli: MCP server on stdio (protocol {}{}); close stdin to stop",
+        pdfcraft_automation::mcp::PROTOCOL_VERSIONS[0],
+        if compact { ", compact tool list" } else { "" }
+    );
     server.serve(std::io::stdin().lock(), std::io::stdout().lock()).map_err(|e| CliError::Message(e.to_string()))
 }
 
