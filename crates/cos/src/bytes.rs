@@ -23,6 +23,11 @@ impl Bytes {
         self.range.len() < self.buf.len() && !Arc::ptr_eq(&self.buf, owner)
     }
 
+    /// Whether these bytes are (a view into) `buf`, holding no memory of their own.
+    pub(crate) fn shares(&self, buf: &Arc<Vec<u8>>) -> bool {
+        Arc::ptr_eq(&self.buf, buf)
+    }
+
     /// The same bytes, in a buffer of their own.
     pub(crate) fn detached(&self) -> Self {
         Self::from(self.to_vec())

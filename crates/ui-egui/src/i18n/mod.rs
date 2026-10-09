@@ -1820,4 +1820,12 @@ mod tests {
             }
         }
     }
+
+    /// Preferences ▸ Date format ▸ Language offers exactly the interface languages, in order.
+    #[test]
+    fn date_languages_are_the_interface_languages() {
+        let interface: Vec<(&str, &str)> = Lang::all().map(|l| (l.code(), l.name())).collect();
+        let dates: Vec<(&str, &str)> = pdfcraft_engine::dates::DATE_LANGUAGES.iter().map(|l| (l.code, l.name)).collect();
+        assert_eq!(dates, interface);
+    }
 }
