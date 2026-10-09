@@ -43,6 +43,7 @@ pub use pdfcraft_forms::{
 };
 
 pub use pdfcraft_a11y as a11y;
+pub use pdfcraft_ai as ai;
 pub use pdfcraft_edit::{BlockStyle, PageImage, TextBlock, TextLine};
 pub use pdfcraft_measure as measure;
 pub use pdfcraft_xfa::Report as XfaLayout;

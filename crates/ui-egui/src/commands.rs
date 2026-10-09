@@ -289,6 +289,11 @@ impl PdfCraftApp {
                 self.dialog = Some(Dialog::DocumentJs);
             }
             "app.preferences" => self.dialog = Some(Dialog::Preferences),
+            assistant if crate::ai_ui::Kind::from_command(assistant).is_some() => {
+                if let Some(kind) = crate::ai_ui::Kind::from_command(assistant) {
+                    self.open_assistant(kind);
+                }
+            }
             "ocr.recognize_batch" => self.ocr_files_dialog(),
             "edit.edit_text" => {
                 self.quick_tool = crate::QuickTool::EditText;

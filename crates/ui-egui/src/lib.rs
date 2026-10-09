@@ -24,6 +24,8 @@ macro_rules! tl_ctx {
 
 mod a11y_ui;
 mod actions_ui;
+mod ai_ui;
+pub use ai_ui::{AiPrefs, AiTransport, Assistant, Kind as AssistantKind};
 pub mod canvas;
 mod chrome;
 mod combine_ui;
@@ -261,6 +263,8 @@ pub enum Dialog {
     DocumentJs,
     /// Preferences.
     Preferences,
+    /// The AI assistant: Summarize, Ask about this document, Translate.
+    Assistant,
     /// Compare files: choose the older version.
     CompareFiles,
     /// Action Wizard.
@@ -370,6 +374,13 @@ pub struct PdfCraftApp {
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
     pub update_source: Option<updates::UpdateSource>,
     pub(crate) updates: updates::Updates,
+    /// The optional AI assistant (off by default): its provider settings, the key typed for
+    /// this session (never saved), how to send requests (the desktop app sets it; see `ai_ui`)
+    /// and the dialog's state.
+    pub ai_prefs: AiPrefs,
+    pub ai_key: String,
+    pub ai_transport: Option<AiTransport>,
+    pub assistant: Assistant,
     pub palette_open: bool,
     pub palette_query: String,
     pub all_tools_expanded: bool,
@@ -610,6 +621,10 @@ impl PdfCraftApp {
             language: i18n::AUTO.to_string(),
             dialog: None,
             update_source: None,
+            ai_prefs: Default::default(),
+            ai_key: String::new(),
+            ai_transport: None,
+            assistant: Default::default(),
             updates: updates::Updates::default(),
             palette_open: false,
             palette_query: String::new(),
@@ -1190,6 +1205,8 @@ impl PdfCraftApp {
             "javascript": self.session.javascript(),
             "actions": actions_ui::encode(&self.custom_actions),
             "combine_columns": self.combine_columns.to_json(),
+            // The provider settings only: the API key is never written.
+            "ai": self.ai_prefs.to_json(),
         })
         .to_string()
     }
@@ -1198,6 +1215,7 @@ impl PdfCraftApp {
     pub fn restore(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
         self.combine_columns = combine_ui::Columns::from_json(&v["combine_columns"]);
+        self.ai_prefs = AiPrefs::from_json(&v["ai"]);
         if let Ok(r) = serde_json::from_value::<Vec<RecentFile>>(v["recent"].clone()) {
             // Only keep entries whose files still exist.
             #[cfg(not(target_arch = "wasm32"))]
@@ -1335,6 +1353,7 @@ impl PdfCraftApp {
                     "js-console" => Some(Dialog::JsConsole),
                     "document-js" => Some(Dialog::DocumentJs),
                     "preferences" => Some(Dialog::Preferences),
+                    "assistant" => Some(Dialog::Assistant),
                     "compare-files" => Some(Dialog::CompareFiles),
                     "action-wizard" => Some(Dialog::ActionWizard),
                     "pdfa" => Some(Dialog::PdfA),
@@ -1460,6 +1479,17 @@ impl PdfCraftApp {
                 };
             }
             ("author", _) => self.comment_prefs.author = value.to_string(),
+            // Preferences ▸ AI assistant. There is deliberately no option for the key.
+            ("ai", _) => {
+                self.ai_prefs.enabled = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("ai must be on or off".into()),
+                }
+            }
+            ("ai-api", _) => self.ai_prefs.api = pdfcraft_engine::ai::Api::parse(value).ok_or("ai-api must be openai or anthropic")?,
+            ("ai-endpoint", _) => self.ai_prefs.endpoint = value.trim().chars().take(pdfcraft_engine::ai::MAX_ENDPOINT_CHARS).collect(),
+            ("ai-model", _) => self.ai_prefs.model = value.trim().chars().take(pdfcraft_engine::ai::MAX_MODEL_CHARS).collect(),
             ("comment", Some(v)) => {
                 // `--comment 2:4` selects the 4th annotation of page 2 (1-based, as comment_list reports).
                 let (p, i) = value.split_once(':').ok_or("comment: PAGE:INDEX")?;
@@ -1636,6 +1666,7 @@ impl eframe::App for PdfCraftApp {
         let now = ctx.input(|i| i.time);
         self.autosave_tick(now);
         self.poll_updates();
+        self.poll_assistant();
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
         self.shortcuts(ctx);

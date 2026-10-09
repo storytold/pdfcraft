@@ -1994,3 +1994,26 @@
 	Created a PDF from {n} files; left out: {names}	PDF создан из файлов: {n}; пропущены: {names}
 	Created a PDF from the first {n} files	PDF создан из первых файлов: {n}
 	Go to page…	Перейти на страницу…
+
+# The optional AI assistant (Preferences and the Summarize / Ask / Translate dialog).
+	Enable the AI assistant	Включить AI-ассистента
+	Off by default. When it is on, Summarize, Ask about this document and Translate send the document's text to the endpoint you set here, and nowhere else. The key is never saved with your settings.	По умолчанию выключено. Когда включено, команды «Суммировать», «Спросить об этом документе» и «Перевести» отправляют текст документа на указанный здесь адрес и больше никуда. Ключ никогда не сохраняется вместе с настройками.
+	Provider type	Тип провайдера
+	Endpoint URL	URL конечной точки
+	Model	Модель
+	API key (this session only)	Ключ API (только на этот сеанс)
+	Or the environment variable holding it	Или переменная окружения, в которой он хранится
+	The environment variable name may only have letters, digits and underscores	Имя переменной окружения может содержать только буквы, цифры и знаки подчёркивания
+	The environment variable {name} is not set	Переменная окружения {name} не задана
+	The AI assistant is off. Turn it on and choose a provider in Preferences.	AI-ассистент выключен. Включите его и выберите провайдера в настройках.
+	The AI assistant isn't available in this build	AI-ассистент недоступен в этой сборке
+	Couldn't start the request	Не удалось запустить запрос
+	The request stopped unexpectedly	Запрос неожиданно прервался
+	Sends this document's text to {endpoint} (model {model}).	Отправляет текст этого документа на {endpoint} (модель {model}).
+	Your question	Ваш вопрос
+	Translate into	Перевести на
+	Waiting for the AI provider…	Ожидание ответа AI-провайдера…
+	The answer appears here.	Ответ появится здесь.
+	Only the first {n} of {t} pages with text fit in the request.	В запрос поместились только первые {n} из {t} страниц с текстом.
+	The AI assistant couldn't answer: {e}	AI-ассистент не смог ответить: {e}
+	Ask	Спросить

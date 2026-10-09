@@ -18,6 +18,8 @@ serde_json = { workspace = true }
 pdfcraft-engine = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-automation = { workspace = true }
+# The optional AI assistant tools: off until a provider is named in the environment.
+pdfcraft-ai = { workspace = true, features = ["http"] }
 base64 = "0.22"
 
 [features]

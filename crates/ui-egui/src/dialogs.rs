@@ -874,6 +874,11 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 close = crate::js_ui::preferences_body(ui, app, &t);
                 return;
             }
+            Dialog::Assistant => {
+                ui.set_width(640.0);
+                close = crate::ai_ui::body(ui, app, &t);
+                return;
+            }
             Dialog::RecognizeText => {
                 let (go, cancel) = crate::ocr_ui::body(ui, app, &t);
                 ocr_now = go;

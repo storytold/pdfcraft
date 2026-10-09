@@ -35,3 +35,6 @@ covers every target starting with it (`pdfcraft*=debug`). The logger is
 | `WGPU_BACKEND` | Graphics backend; by default Windows uses Direct3D 12, falling back to OpenGL |
 | `CRAFT_FONTS_DIR` | Build time: a [craft-fonts](https://github.com/storytold/craft-fonts) checkout to embed (Japanese fonts) |
 | `PDFCRAFT_SYSTEM_FONTS` | `0` stops the desktop app from using an installed font for characters its embedded fonts lack (`cargo xtask screenshots` sets it) |
+| `PDFCRAFT_AI_ENDPOINT`, `PDFCRAFT_AI_MODEL` | `pdfcraft-cli run` / `mcp` only: the provider the `ai_*` tools send document text to. Unset (the default), those tools are off. The desktop app uses Preferences ▸ AI assistant instead |
+| `PDFCRAFT_AI_API` | `openai` (default; chat completions, as local servers speak) or `anthropic` (Messages API) |
+| `PDFCRAFT_AI_KEY` | The provider's API key, when it needs one. Only sent over `https://` or to a server on this computer |

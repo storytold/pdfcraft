@@ -152,6 +152,18 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("edit.find")
             .with(schema(json!({ "doc": doc(), "query": { "type": "string", "minLength": 1 }, "limit": { "type": "integer", "minimum": 1, "description": "Maximum matches (default 500)." } }), &["doc", "query"])),
+        t("ai_summarize", "Summarize with the AI assistant", "Optional, off by default: needs an AI provider the user configured (PDFCRAFT_AI_ENDPOINT and PDFCRAFT_AI_MODEL). Sends the text of some or all pages to that provider and returns its summary, with how many pages were sent and whether text was left out to fit the provider's input budget.")
+            .ro()
+            .cmd("ai.summary")
+            .with(schema(json!({ "doc": doc(), "pages": pages("to send (default: all)") }), &["doc"])),
+        t("ai_ask", "Ask the AI assistant about a document", "Optional, off by default: needs an AI provider the user configured. Sends the text of some or all pages with a question to that provider and returns its answer, which is asked to cite pages like (p. 3). The answer is the model's and is not checked against the document.")
+            .ro()
+            .cmd("ai.ask")
+            .with(schema(json!({ "doc": doc(), "question": { "type": "string", "minLength": 1, "maxLength": 4000 }, "pages": pages("to send (default: all)") }), &["doc", "question"])),
+        t("ai_translate", "Translate with the AI assistant", "Optional, off by default: needs an AI provider the user configured. Sends the text of some or all pages to that provider and returns its translation as text. The document itself is not changed.")
+            .ro()
+            .cmd("ai.translate")
+            .with(schema(json!({ "doc": doc(), "language": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The language to translate into, e.g. Italian." }, "pages": pages("to send (default: all)") }), &["doc", "language"])),
         t("page_rotate", "Rotate pages", "Rotate pages by a multiple of 90 degrees (positive is clockwise): the listed pages (default all), filtered like Acrobat's Rotate Pages by subset (all, even, odd page numbers) and orientation (all, landscape, portrait). Undoable.")
             .cmd("page.rotate")
             .with(schema(

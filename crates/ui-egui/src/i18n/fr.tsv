@@ -2033,3 +2033,25 @@
 	Pinned {folder} to Home	{folder} épinglé à l'Accueil
 	No recent files	Aucun fichier récent
 	Go to page…	Aller à la page…
+
+# The optional AI assistant (Preferences and the Summarize / Ask / Translate dialog).
+	Enable the AI assistant	Activer l'assistant IA
+	Off by default. When it is on, Summarize, Ask about this document and Translate send the document's text to the endpoint you set here, and nowhere else. The key is never saved with your settings.	Désactivé par défaut. Une fois activé, Résumer, Interroger ce document et Traduire envoient le texte du document au point d'accès défini ici, et nulle part ailleurs. La clé n'est jamais enregistrée avec vos réglages.
+	Provider type	Type de fournisseur
+	Endpoint URL	URL du point d'accès
+	API key (this session only)	Clé d'API (cette session uniquement)
+	Or the environment variable holding it	Ou la variable d'environnement qui la contient
+	The environment variable name may only have letters, digits and underscores	Le nom de la variable d'environnement ne peut contenir que des lettres, des chiffres et des tirets bas
+	The environment variable {name} is not set	La variable d'environnement {name} n'est pas définie
+	The AI assistant is off. Turn it on and choose a provider in Preferences.	L'assistant IA est désactivé. Activez-le et choisissez un fournisseur dans les Préférences.
+	The AI assistant isn't available in this build	L'assistant IA n'est pas disponible dans cette version
+	Couldn't start the request	Impossible de lancer la requête
+	The request stopped unexpectedly	La requête s'est arrêtée de façon inattendue
+	Sends this document's text to {endpoint} (model {model}).	Envoie le texte de ce document à {endpoint} (modèle {model}).
+	Your question	Votre question
+	Translate into	Traduire en
+	Waiting for the AI provider…	En attente du fournisseur d'IA…
+	The answer appears here.	La réponse s'affiche ici.
+	Only the first {n} of {t} pages with text fit in the request.	Seules les {n} premières des {t} pages contenant du texte tiennent dans la requête.
+	The AI assistant couldn't answer: {e}	L'assistant IA n'a pas pu répondre : {e}
+	Ask	Demander

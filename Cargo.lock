@@ -3453,6 +3453,7 @@ dependencies = [
  "egui",
  "fmv-macos-events",
  "log",
+ "pdfcraft-ai",
  "pdfcraft-ui-egui",
  "rustls-native-certs",
  "serde_json",
@@ -3468,6 +3469,16 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-model",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-ai"
+version = "0.4.0"
+dependencies = [
+ "rustls-native-certs",
+ "serde_json",
+ "thiserror 2.0.21",
+ "ureq",
 ]
 
 [[package]]
@@ -3500,6 +3511,7 @@ name = "pdfcraft-cli"
 version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
+ "pdfcraft-ai",
  "pdfcraft-automation",
  "pdfcraft-cos",
  "pdfcraft-engine",
@@ -3578,6 +3590,7 @@ dependencies = [
  "idna",
  "image",
  "pdfcraft-a11y",
+ "pdfcraft-ai",
  "pdfcraft-annot",
  "pdfcraft-compare",
  "pdfcraft-cos",

@@ -294,6 +294,10 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("tools.document_js", "Document JavaScripts…", None, None, Modification, "file-code"),
     c("ocr.recognize", "Recognize text…", None, None, Modification, "scan-text"),
     c("ocr.recognize_batch", "Recognize text in multiple files…", None, None, Nothing, "files"),
+    // The optional AI assistant (off until a provider is set in Preferences; see `pdfcraft_ai`).
+    c("ai.summary", "Summarize", None, None, Document, "sparkles"),
+    c("ai.ask", "Ask about this document", None, None, Document, "message-circle-reply"),
+    c("ai.translate", "Translate", None, None, Document, "languages"),
     c("a11y.check", "Check for accessibility…", None, None, Document, "accessibility"),
     c("a11y.report", "Open accessibility report", None, None, Document, "file-text"),
     c("a11y.reading_options", "Change reading options…", None, None, Document, "book-open"),

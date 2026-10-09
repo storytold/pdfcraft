@@ -2044,3 +2044,25 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	选择 PNG 或 JPEG 图像（最大 4 MiB）。透明度会保留。
 	Couldn't import the signature image: {e}	无法导入签名图像：{e}
 	Go to page…	转到页面…
+
+# The optional AI assistant (Preferences and the Summarize / Ask / Translate dialog).
+	Enable the AI assistant	启用 AI 助手
+	Off by default. When it is on, Summarize, Ask about this document and Translate send the document's text to the endpoint you set here, and nowhere else. The key is never saved with your settings.	默认关闭。启用后，“摘要”“询问本文档”和“翻译”会把文档的文本发送到您在此处设置的端点，不会发送到其他任何地方。密钥绝不会随设置一起保存。
+	Provider type	服务商类型
+	Endpoint URL	端点 URL
+	API key (this session only)	API 密钥（仅本次会话）
+	Or the environment variable holding it	或保存密钥的环境变量
+	The environment variable name may only have letters, digits and underscores	环境变量名只能包含字母、数字和下划线
+	The environment variable {name} is not set	未设置环境变量 {name}
+	The AI assistant is off. Turn it on and choose a provider in Preferences.	AI 助手已关闭。请在首选项中启用它并选择服务商。
+	The AI assistant isn't available in this build	此版本不提供 AI 助手
+	Couldn't start the request	无法发起请求
+	The request stopped unexpectedly	请求意外中止
+	Sends this document's text to {endpoint} (model {model}).	将本文档的文本发送到 {endpoint}（模型 {model}）。
+	Your question	您的问题
+	Translate into	翻译为
+	Waiting for the AI provider…	正在等待 AI 服务商…
+	The answer appears here.	回答会显示在这里。
+	Only the first {n} of {t} pages with text fit in the request.	请求中只容纳了 {t} 个含文本页面中的前 {n} 个。
+	The AI assistant couldn't answer: {e}	AI 助手无法回答：{e}
+	Ask	询问

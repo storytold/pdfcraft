@@ -258,7 +258,7 @@ Press <kbd>⌘K</kbd> to search every tool and command, or browse the **All tool
 ## Runs everywhere, stays yours
 
 - **Native on macOS, Windows, Linux and FreeBSD**, and **in the browser** through WebAssembly, from the same Rust codebase. Windows builds come for x64, x86 and ARM64 (Windows on ARM, no emulation); every ARM64 change is tested on ARM64 hardware in CI.
-- **Private by design.** Documents never leave your machine. There's no account, no telemetry and no cloud processing.
+- **Private by design.** Documents never leave your machine. There's no account, no telemetry and no cloud processing. The one exception is yours to make: the optional [AI assistant](#an-optional-ai-assistant-with-your-own-model) is off until you turn it on, and then sends a document's text only to the provider you set.
 - **Engine first.** Parsing, rendering and editing live in reusable library crates. The interface is one swappable layer on top.
 - **Scriptable.** The `pdfcraft-cli` tool (see [Built for agents, too](#built-for-agents-too)) covers inspecting, rendering, extracting text, editing, combining, extracting pages and splitting. Robustness sweeps run on the same engine as the app.
 
@@ -298,6 +298,24 @@ Every engine feature is reachable without the GUI, through one table of JSON-Sch
 - **The Rust API** (`pdfcraft_automation::Automation::call`), for embedding.
 
 Edits stay in memory, undoable, until `doc_save`. Saving to the same file appends an incremental update, so the original bytes are preserved, and the write is atomic. Unsaved changes are never discarded silently.
+
+### An optional AI assistant, with your own model
+
+**Summarize**, **Ask about this document** and **Translate** (All tools ▸ AI assistant) work through a provider you choose. PdfCraft ships none: no endpoint, no model, no key, and the assistant is **off by default**.
+
+- **Turn it on:** Preferences ▸ AI assistant ▸ *Enable the AI assistant*, then set the provider type, endpoint and model. A local model needs no key, for example [Ollama](https://ollama.com) at `http://localhost:11434/v1`. For a hosted provider, type the key for the session or name an environment variable that holds it. The key is never saved with your settings.
+- **What it sends:** when you run one of the three commands, the text of the open document goes to that endpoint and nowhere else. Up to 60,000 characters fit in one request; the dialog says when a long document was cut. A key is only sent over `https://` or to a server on your own computer.
+- **Two provider types:** OpenAI-compatible chat completions (Ollama, llama.cpp, LM Studio and most gateways) and the Anthropic Messages API.
+- **Headless too:** the `ai_summarize`, `ai_ask` and `ai_translate` tools are off unless you start `pdfcraft-cli` with a provider in its environment:
+
+  ```sh
+  PDFCRAFT_AI_ENDPOINT=http://localhost:11434/v1 PDFCRAFT_AI_MODEL=llama3 \
+    pdfcraft-cli run --script ask.json      # [{"tool":"doc_open","args":{"path":"paper.pdf"}}, {"tool":"ai_ask","args":{"doc":1,"question":"What is the main result?"}}]
+  ```
+
+  `PDFCRAFT_AI_API=anthropic` selects the Messages API, and `PDFCRAFT_AI_KEY` supplies a key.
+
+It is early: one question at a time, answers appear when complete, long documents are cut rather than indexed, page citations are the model's own and unchecked, Translate returns text rather than a translated PDF, and the web build has no assistant. Answers are only as good as the model you bring. Details in [crates/ai/README.md](crates/ai/README.md).
 
 ### Driving the app itself
 

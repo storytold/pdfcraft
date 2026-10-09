@@ -7075,11 +7075,11 @@ title = "Translate documents"
 area = "J"
 tier = "P3"
 milestone = "M13"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = "through an optional AiProvider; never Adobe's cloud"
+status = "partial"
+commands = ["ai.translate"]
+tools = ["ai_translate"]
+evidence = ["crates/ui-egui/tests/assistant.rs::ask_and_translate_carry_what_the_user_typed", "crates/automation/tests/ai.rs::ai_tools_send_the_page_text_and_return_the_answer"]
+notes = "through an optional AI provider; never Adobe's cloud. Partial: returns the translation as text only (no translated PDF, no layout), and only the first 60,000 characters of a long document."
 
 [[feature]]
 id = "create.cloud-office-conversion"
@@ -9395,11 +9395,11 @@ title = "AI provider interface (local model or own endpoint), off by default"
 area = "N"
 tier = "P2"
 milestone = "M13"
-status = "planned"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ai/src/tests.rs::an_openai_compatible_request_carries_the_document_as_fenced_data", "crates/ai/src/tests.rs::an_anthropic_request_uses_the_messages_format", "crates/ai/src/tests.rs::unusable_settings_and_requests_are_refused_before_anything_is_sent", "crates/ai/src/http.rs::a_local_server_is_asked_and_its_answer_read", "crates/ui-egui/tests/assistant.rs::the_assistant_is_off_by_default_and_points_to_preferences", "crates/ui-egui/tests/assistant.rs::settings_keep_the_provider_but_never_the_key", "crates/automation/tests/ai.rs::ai_tools_are_off_until_a_provider_is_configured"]
+notes = "Two wire formats: OpenAI-compatible chat completions (local servers such as Ollama, llama.cpp, LM Studio) and the Anthropic Messages API. Set in Preferences (desktop) or PDFCRAFT_AI_* (CLI and MCP). Missing: streaming, cancelling a request, saving the key (OS keychain), the web build, model listing, a test against a real provider."
 
 [[feature]]
 id = "misc.ai-summary"
@@ -9407,11 +9407,11 @@ title = "Summarize a document"
 area = "N"
 tier = "P2"
 milestone = "M13"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["ai.summary"]
+tools = ["ai_summarize"]
+evidence = ["crates/ui-egui/tests/assistant.rs::summarize_sends_the_document_text_and_shows_the_answer", "crates/automation/tests/ai.rs::ai_tools_send_the_page_text_and_return_the_answer"]
+notes = "Sends the page text with a summary prompt and shows the answer as text. Partial: only the first 60,000 characters of a long document are sent (reported, not chunked), quality depends entirely on the user's model, and nothing compares it with Acrobat's AI Assistant."
 
 [[feature]]
 id = "misc.ai-ask"
@@ -9419,11 +9419,11 @@ title = "Ask questions with citations to pages"
 area = "N"
 tier = "P2"
 milestone = "M13"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["ai.ask"]
+tools = ["ai_ask"]
+evidence = ["crates/ui-egui/tests/assistant.rs::ask_and_translate_carry_what_the_user_typed", "crates/automation/tests/ai.rs::ai_tools_send_the_page_text_and_return_the_answer"]
+notes = "One question, one answer. Partial: page citations are asked for in the prompt but not verified or clickable; no conversation history; long documents are cut to the first 60,000 characters (no retrieval)."
 
 [[feature]]
 id = "misc.ai-conversational-edit"

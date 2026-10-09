@@ -87,6 +87,8 @@ pub struct Automation {
     renderers: HashMap<DocId, (Arc<Vec<u8>>, PageRenderer)>,
     /// Extracted page text per document version (the working bytes it was taken from).
     texts: HashMap<DocId, TextCache>,
+    /// The AI provider the `ai_*` tools use. `None` (the default) leaves them off.
+    ai: Option<(pdfcraft_engine::ai::Provider, Arc<dyn pdfcraft_engine::ai::Transport>)>,
 }
 
 impl Default for Automation {
@@ -97,7 +99,7 @@ impl Default for Automation {
 
 impl Automation {
     pub fn new() -> Self {
-        Self { session: Session::new(), root: None, renderers: HashMap::new(), texts: HashMap::new() }
+        Self { session: Session::new(), root: None, renderers: HashMap::new(), texts: HashMap::new(), ai: None }
     }
 
     /// Confine every path the tools read or write to `root` (relative paths resolve inside it).
@@ -108,6 +110,13 @@ impl Automation {
         }
         self.root = Some(root);
         Ok(self)
+    }
+
+    /// Turn the `ai_*` tools on: they send document text to `provider` through `transport`.
+    /// Without this call they fail with a message saying how to configure a provider.
+    pub fn with_ai(mut self, provider: pdfcraft_engine::ai::Provider, transport: Arc<dyn pdfcraft_engine::ai::Transport>) -> Self {
+        self.ai = Some((provider, transport));
+        self
     }
 
     /// Use a fixed clock for saves (deterministic output in tests).
@@ -158,6 +167,7 @@ impl Automation {
             "comment_image_preview" => return self.comment_image_preview(&a),
             "text_extract" => self.text_extract(&a)?,
             "text_find" => self.text_find(&a)?,
+            "ai_summarize" | "ai_ask" | "ai_translate" => self.ai_task(name, &a)?,
             "page_rotate" => {
                 let degrees = a.int("degrees")?;
                 if degrees % 90 != 0 {
@@ -1408,6 +1418,41 @@ impl Automation {
         let texts = self.page_texts(id, &pages)?;
         let out: Vec<Value> = pages.iter().zip(texts).map(|(p, t)| json!({ "page": p + 1, "text": t.plain_text() })).collect();
         Ok(json!({ "pages": out }))
+    }
+
+    /// The optional AI assistant: send the text of some or all pages to the configured provider.
+    fn ai_task(&mut self, tool: &str, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::ai;
+        let task = match tool {
+            "ai_ask" => ai::Task::Ask { question: a.str("question")?.to_string() },
+            "ai_translate" => ai::Task::Translate { language: a.str("language")?.to_string() },
+            _ => ai::Task::Summarize,
+        };
+        let doc = self.doc(a)?;
+        let id = doc.id;
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..doc.info.pages.len()).collect(),
+        };
+        let Some((provider, transport)) = self.ai.clone() else {
+            return Err(failed(
+                "no AI provider is configured (the assistant is off by default). To turn it on, start pdfcraft-cli with PDFCRAFT_AI_ENDPOINT and PDFCRAFT_AI_MODEL set (plus PDFCRAFT_AI_API=anthropic for the Messages API, and PDFCRAFT_AI_KEY if the provider needs a key)",
+            ));
+        };
+        let texts = self.page_texts(id, &pages)?;
+        let pages: Vec<ai::Page> = pages.iter().zip(texts).map(|(p, t)| ai::Page { number: p + 1, text: t.plain_text() }).collect();
+        let answer = ai::run(&provider, transport.as_ref(), &task, &pages).map_err(|e| match e {
+            ai::AiError::Request(m) => ToolError::InvalidArgs(m),
+            other => failed(other),
+        })?;
+        Ok(json!({
+            "answer": answer.text,
+            "pages_sent": answer.coverage.pages_sent,
+            "pages_with_text": answer.coverage.pages_total,
+            "truncated": answer.coverage.truncated,
+            "model": provider.model.trim(),
+            "endpoint": provider.endpoint.trim(),
+        }))
     }
 
     fn text_find(&mut self, a: &Args) -> Result<Value> {

@@ -12,15 +12,15 @@ Detailed task lists and acceptance tests are in `plan/execution-plan.md` (local-
 
 The unit is **wall-clock hours of agent work** (Claude Opus 5.5 coding continuously; human review time not included).
 
-**Where we are (2026-10-07, measured by `cargo xtask parity` over 806 tracked Acrobat Pro features; 23 more are Adobe-cloud-only and out of scope):**
+**Where we are (2026-10-09, measured by `cargo xtask parity` over 806 tracked Acrobat Pro features; 23 more are Adobe-cloud-only and out of scope):**
 
 | Tier | Features | Shipped | Partial | Shipped % | Weighted % (partial = ½) |
 |---|---|---|---|---|---|
-| P0 (must-have for 1.0) | 251 | 222 | 25 | 88.4% | 93.4% |
-| P1 | 326 | 174 | 38 | 53.4% | 59.2% |
-| P2 | 186 | 14 | 7 | 7.5% | 9.4% |
-| P3 | 43 | 1 | 0 | 2.3% | 2.3% |
-| **All** | **806** | **411** | **70** | **51.0%** | **55.3%** |
+| P0 (must-have for 1.0) | 251 | 224 | 24 | 89.2% | 94.0% |
+| P1 | 326 | 175 | 41 | 53.7% | 60.0% |
+| P2 | 186 | 17 | 11 | 9.1% | 12.1% |
+| P3 | 43 | 1 | 1 | 2.3% | 3.5% |
+| **All** | **806** | **417** | **77** | **51.7%** | **56.5%** |
 
 **Effort-weighted parity: ≈ 30–35%.** Feature counts overstate progress: the remaining features include the hardest ones (our own renderer and font engine, editing existing text and reflow, OCR beyond Latin, XFA, PDF/A/X/UA preflight, Office export, long-term signature validation). Weighting each milestone by its estimated size gives about a third of the total work done. See **[Honest assessment](#honest-assessment-2026-10-05)** for what the numbers don't show.
 
@@ -40,7 +40,7 @@ Read this before choosing work. The feature table above counts what exists; this
 
 | Dimension | State | In one line |
 |---|---|---|
-| Feature count | 51.0% shipped (P0 88%, P1 53%, P2 8%, P3 2%) | A typical viewer, annotator, form-filler or page organizer is mostly covered |
+| Feature count | 51.7% shipped (P0 89%, P1 54%, P2 9%, P3 2%) | A typical viewer, annotator, form-filler or page organizer is mostly covered |
 | Effort | ≈ 30–35% | The remaining work is the hardest: M2 15%, M7 17%, M11 18%, M12 23%, M14 0% |
 | Foundations | Weakest | Rendering is still the bootstrap `hayro`; the inspector is `lopdf`; 18 vendored patches carried |
 | Robustness | Early beta | Each 15-minute fuzz run found new out-of-memory crashes or hangs until 2026-10-05 |
@@ -62,7 +62,7 @@ Read this before choosing work. The feature table above counts what exists; this
 | C Edit | 46% | Added text and images stay editable; header/footer/watermark. Missing: robust editing of existing text and images (fonts, subsets, reflow) |
 | L Print | 36% | Acrobat-style sizing, n-up, booklet, CUPS. Missing: Windows and web printing, production options |
 | J Create | 32% | From images, text, clipboard; Word/HTML/RTF export. Missing: Office import, Excel/PowerPoint export |
-| N Misc | 27% | CLI, MCP, UI control channel, Action Wizard. Missing: AI providers, performance budgets |
+| N Misc | 28% | CLI, MCP, UI control channel, Action Wizard, an optional AI assistant (bring your own model; text answers only). Missing: AI on long documents (chunking, retrieval), verified citations, performance budgets |
 | K Optimize | 26% | Reduce File Size, Optimizer. Missing: preflight, PDF/X/UA, transparency/fonts panels |
 | I OCR | 19% | Searchable image for Latin script. Missing: other scripts and accents, editable-text output, deskew |
 
@@ -102,7 +102,7 @@ Hours are for a single agent (low–high). "Done" is the estimated fraction of t
 | M10 | OCR, create, export, print | 200–350 | 33% | 130–235 | Done: create from blank/text/PNG/JPEG/TIFF (multi-page)/GIF/BMP; export PNG/JPEG/TIFF and text; Print (Acrobat's sizing, n-up, booklet, poster, comments & forms, preview, CUPS spooler, print-ready PDF). Done since: embedded/72/custom DPI choices for image imports; export all images; OCR (searchable image for pages, ranges and multiple files); single-sided cut-and-stack imposition with cut marks, through Print and doc_print; Create PDF from multiple files (PDFs, images and text, edited as pages in the grid). Missing: OCR languages beyond Latin, editable-text OCR output, Office export/import, Windows/web printing |
 | M11 | Optimize, preflight, PDF/A/X/UA, print production | 200–350 | 18% | 165–290 | Done: new `optimize` crate: Reduce File Size and the PDF Optimizer (images measured where drawn, bicubic downsampling, JPEG/ZIP recompression only when smaller, discard objects and user data, Flate clean-up, resource merging, object streams). Missing: fonts and transparency panels, space audit, preflight, PDF/A/X/UA |
 | M12 | Accessibility, compare, measure, search, XFA | 200–380 | 23% | 155–295 | Done: new `a11y` crate with the Accessibility Checker (all 32 rules, report, Fix/Skip/Explain, options dialog and results panel, agent tools). Done since: 2D distance, perimeter and area measurements with persistent viewport calibration, snapping, live information and CSV export. Missing: autotag, Tags/Order/Content panels, Reading Order tool, alt-text workflow, compare, geospatial/3D measurement, search index, XFA |
-| M13 | Automation (MCP, Action Wizard, CLI) + AI providers | 60–120 | 45% | 33–66 | Done: MCP resources (document info, text, page images); headless tool table (123 tools incl. signing, optimizing, initial view, links, stamps, data exchange, comment review, forms authoring and scripts, redaction, sanitize, print, add content), opt-in MCP server over stdio, CLI `run`/`tools` (closed stdout pipes exit cleanly), UI control channel with drag. Missing: Action Wizard, AI providers |
+| M13 | Automation (MCP, Action Wizard, CLI) + AI providers | 60–120 | 52% | 29–58 | Done: MCP resources (document info, text, page images); headless tool table (123 tools incl. signing, optimizing, initial view, links, stamps, data exchange, comment review, forms authoring and scripts, redaction, sanitize, print, add content), opt-in MCP server over stdio, CLI `run`/`tools` (closed stdout pipes exit cleanly), UI control channel with drag; optional AI assistant, off by default (`ai` crate: OpenAI-compatible and Anthropic Messages providers set by the user; Summarize, Ask and Translate as text in the app and as `ai_*` tools). Missing: Action Wizard; for AI: long documents (only the first 60,000 characters are sent), verified and clickable page citations, streaming and cancelling, conversation history, a translated PDF, a saved key, the web build |
 | M14 | 1.0 polish: performance, localization, installers | 120–250 | 5% | 115–240 | Done: PhotoCraft's translation system (`i18n/`: TSV catalogs, `tl!`, command-id and plural entries, system-language detection, strict catalog tests); every dialog, panel and notice goes through `tl!`; Japanese, Traditional Chinese, Simplified Chinese, Russian, Spanish and French catalogs have ≈1,800 entries each; Simplified Chinese and French coverage is checked against the UI source; Czech and Brazilian Portuguese for menus. French locales (`fr`, `fr_FR`, `fr_CA`) follow the French catalog. Missing: more catalogs filled in, installers, performance budgets |
 | | **Total (original plan sizing)** | **2,085–3,840** | **≈ 35%** | **≈ 1,350–2,500 at the planned rate; ≈ 600–1,100 at the measured rate** | |
 
@@ -135,6 +135,8 @@ M0 → M1 → M2 → M3 → M4 must happen in order. After M4, M5–M12 can run 
 - **2026-10-08 (M9, #179):** Windows Current User Personal certificate store identities join file-based digital IDs, signing through CNG without exporting keys. RSA-2048 and ECDSA P-256 round trips use temporary certificates with cleanup guards; enumeration, missing identities, automation errors and the password-free UI have regression coverage. Smart cards and PKCS #11 remain planned; overall effort estimate unchanged.
 
 Newest first. One line per session: the date, what moved, and the new overall percentage.
+
+- **2026-10-09 (M13, AI assistant):** The All tools ▸ AI assistant group works: Summarize, Ask about this document and Translate send the document's text to a provider the user sets in Preferences ▸ AI assistant, and show the answer as text. It is off by default and PdfCraft ships no endpoint, model or key. New `ai` crate (L4, no network code without its `http` feature): OpenAI-compatible chat completions for local servers and the Anthropic Messages API; a key is never saved, never printed, and only sent over https or to this computer; redirects are refused; a long document is cut to 60,000 characters and the dialog says so. Headless: `ai_summarize`, `ai_ask`, `ai_translate`, on only with `PDFCRAFT_AI_ENDPOINT` and `PDFCRAFT_AI_MODEL`. Tests use a stand-in provider and a local socket; none runs against a real model. `misc.ai-provider` shipped; summary, ask and translate are partial (no chunking or retrieval, unverified citations, no streaming, text-only translation, no web build). French, Russian and Simplified Chinese cover the new labels; other languages show them in English. The README's privacy statement now names this one opt-in exception. Overall estimate unchanged (about 30–35%).
 
 - **2026-10-09 (community, Home pinned folders):** Home gets a Folders section: File ▸ Pin folder to Home… (or "Pin a folder…" on Home) pins up to 8 folders, and each lists its newest PDFs (name, how long ago, size; 8 at first, up to 100 with Show more), one click to open, Unpin to remove. Folders are read on a worker thread and listed again every few seconds while Home shows, so new scans appear without reopening anything; a folder that can't be read (moved, offline synced drive) stays pinned and says so. Each folder is described by where it is ("iCloud Drive", "OneDrive · Contoso", "Documents › Work") rather than its full path, so two folders called "Scans" can be told apart. Cloud drives work through their local synced folder; nothing is read through a provider's API. Settings keep only absolute paths, without duplicates. Command label translated in every catalog; Home strings in French, Spanish, Japanese and both Chinese catalogs. Not yet: subfolders, search inside a pinned folder, the web build. Overall estimate unchanged (about 30–35%).
 

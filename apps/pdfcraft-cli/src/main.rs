@@ -25,6 +25,11 @@
 //! `"out"` (like `--out`) saves its image there. With `--root DIR`, every path a tool or step
 //! names, `"out"` included, must be inside DIR, and relative paths resolve inside it.
 //!
+//! The `ai_summarize`, `ai_ask` and `ai_translate` tools are off unless `PDFCRAFT_AI_ENDPOINT` and
+//! `PDFCRAFT_AI_MODEL` name a provider (`PDFCRAFT_AI_API=openai|anthropic`, default `openai`, the
+//! chat-completions format local servers speak; `PDFCRAFT_AI_KEY` when it needs a key). They send
+//! the document's text to that endpoint and nowhere else.
+//!
 //! The MCP server never starts on its own: it runs only when this command is launched (normally
 //! by an agent configured to use it), talks only over stdio, and exits when stdin closes.
 //!
@@ -531,8 +536,26 @@ fn run_child(exe: &Path, file: &Path, dpi: &str, timeout: Duration) -> serde_jso
 
 // ---- automation --------------------------------------------------------------------------------
 
+/// The AI provider named in the environment, if any. The `ai_*` tools are off without one:
+/// nothing here has a default endpoint, model or key.
+fn ai_provider() -> Result<Option<pdfcraft_ai::Provider>, String> {
+    let var = |name: &str| std::env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    let (Some(endpoint), model) = (var("PDFCRAFT_AI_ENDPOINT"), var("PDFCRAFT_AI_MODEL")) else { return Ok(None) };
+    let model = model.ok_or("PDFCRAFT_AI_ENDPOINT is set but PDFCRAFT_AI_MODEL is not")?;
+    let api = match var("PDFCRAFT_AI_API") {
+        Some(name) => pdfcraft_ai::Api::parse(&name).ok_or_else(|| format!("PDFCRAFT_AI_API must be openai or anthropic, not {name:?}"))?,
+        None => pdfcraft_ai::Api::OpenAi,
+    };
+    let provider = pdfcraft_ai::Provider::new(api, endpoint, model).with_key(var("PDFCRAFT_AI_KEY"));
+    provider.url().map_err(|e| format!("AI provider: {e}"))?;
+    Ok(Some(provider))
+}
+
 fn automation(args: &[String]) -> Result<pdfcraft_automation::Automation, String> {
-    let a = pdfcraft_automation::Automation::new();
+    let mut a = pdfcraft_automation::Automation::new();
+    if let Some(provider) = ai_provider()? {
+        a = a.with_ai(provider, Arc::new(pdfcraft_ai::http::HttpTransport));
+    }
     match flag(args, "--root") {
         Some(root) => a.with_root(root).map_err(|e| format!("--root {root}: {e}")),
         None => Ok(a),

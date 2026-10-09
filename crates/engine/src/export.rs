@@ -84,6 +84,24 @@ impl Exporter {
         }
     }
 
+    /// The text of `pages` (0-based) for the AI assistant, numbered from 1. A page whose text
+    /// can't be read counts as empty; when none can, the first error is returned.
+    pub fn assistant_pages(&mut self, pages: &[usize]) -> Result<Vec<pdfcraft_ai::Page>, String> {
+        let mut first_error = None;
+        let mut out = Vec::with_capacity(pages.len().min(self.pages));
+        for &p in pages {
+            let text = self.text(p).unwrap_or_else(|e| {
+                first_error.get_or_insert(e);
+                String::new()
+            });
+            out.push(pdfcraft_ai::Page { number: p.saturating_add(1), text });
+        }
+        match first_error {
+            Some(e) if out.iter().all(|p| p.text.trim().is_empty()) => Err(e),
+            _ => Ok(out),
+        }
+    }
+
     /// The text of several pages, separated by form feeds (as `pdftotext` does).
     pub fn text_of(&mut self, pages: &[usize]) -> Result<String, String> {
         let mut out = String::new();

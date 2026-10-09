@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 pdfcraft-measure = { workspace = true }
+pdfcraft-ai = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
 pdfcraft-render = { workspace = true }
 pdfcraft-cos = { workspace = true }

@@ -1,0 +1,24 @@
+[package]
+name = "pdfcraft-ai"
+description = "Optional AI assistant for PdfCraft: summarize, ask and translate through a provider the user configures"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The `http` transport: the same client and trust setup as Help ▸ Check for updates (rustls with
+# the OS's trusted roots; no bundled root list).
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"], optional = true }
+rustls-native-certs = { version = "0.8", optional = true }
+
+[features]
+# Sends requests over HTTP(S). Off by default: the crate itself has no network code, and only the
+# desktop app and the CLI turn this on.
+http = ["dep:ureq", "dep:rustls-native-certs"]
