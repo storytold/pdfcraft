@@ -66,28 +66,25 @@ pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
     lines
 }
 
-/// Encode text in WinAnsiEncoding (ISO 32000-2 Annex D); unmappable characters become `?`.
+/// The WinAnsiEncoding (ISO 32000-2 Annex D) code for `c`, if the encoding has one.
+///
+/// Codes 0x80–0x9F come from the same table the text extractor decodes with, so encoding and
+/// decoding agree (Š š Ž ž Œ œ Ÿ ƒ † ‡ ˆ ˜ ‰ ‹ › as well as quotes, dashes, € and ™).
+pub fn win_ansi_byte(c: char) -> Option<u8> {
+    match c {
+        '\u{20}'..='\u{7e}' | '\u{a0}'..='\u{ff}' => u8::try_from(u32::from(c)).ok(),
+        _ => {
+            let high = encodings::WIN_ANSI.get(0x80..0xa0)?;
+            let i = high.iter().position(|&u| u != 0 && u == u32::from(c))?;
+            u8::try_from(0x80 + i).ok()
+        }
+    }
+}
+
+/// Encode text in WinAnsiEncoding (ISO 32000-2 Annex D); tabs become spaces and unmappable
+/// characters become `?`.
 pub fn win_ansi(s: &str) -> Vec<u8> {
-    s.chars()
-        .map(|c| match c {
-            '\u{20}'..='\u{7e}' => c as u8,
-            '\u{a0}'..='\u{ff}' => c as u32 as u8,
-            '€' => 0x80,
-            '‚' => 0x82,
-            '„' => 0x84,
-            '…' => 0x85,
-            '‘' => 0x91,
-            '’' => 0x92,
-            '“' => 0x93,
-            '”' => 0x94,
-            '•' => 0x95,
-            '–' => 0x96,
-            '—' => 0x97,
-            '™' => 0x99,
-            '\t' => b' ',
-            _ => b'?',
-        })
-        .collect()
+    s.chars().map(|c| if c == '\t' { b' ' } else { win_ansi_byte(c).unwrap_or(b'?') }).collect()
 }
 
 /// Bytes as a PDF literal string, `(` … `)`, with delimiters escaped.
@@ -121,5 +118,22 @@ mod tests {
         assert!(long.len() > 3 && long.concat() == "Supercalifragilisticexpialidocious");
         assert_eq!(win_ansi("Café — 5€ ☃"), b"Caf\xe9 \x97 5\x80 ?");
         assert_eq!(literal(b"a(b)\\c"), b"(a\\(b\\)\\\\c)");
+    }
+
+    #[test]
+    fn win_ansi_covers_the_0x80_to_0x9f_glyphs() {
+        // Every character in the WinAnsiEncoding table encodes to its code and back (#347).
+        for (code, &u) in encodings::WIN_ANSI.iter().enumerate() {
+            let Some(c) = char::from_u32(u).filter(|_| u != 0) else { continue };
+            assert_eq!(win_ansi_byte(c), Some(code as u8), "{c:?} (U+{u:04X})");
+            assert_eq!(win_ansi(&c.to_string()), [code as u8]);
+        }
+        assert_eq!(
+            win_ansi("Šta? žaba, œuvre — „ok“ ‰ ƒ † ‡ ˆ ˜ ‹›Ÿ"),
+            b"\x8ata? \x9eaba, \x9cuvre \x97 \x84ok\x93 \x89 \x83 \x86 \x87 \x88 \x98 \x8b\x9b\x9f"
+        );
+        // Not in WinAnsi: č ć still need the fallback font; undefined codes are never produced.
+        assert_eq!(win_ansi("čć\u{81}\u{8d}\t"), b"???? ");
+        assert_eq!(win_ansi_byte('\0'), None);
     }
 }

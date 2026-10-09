@@ -499,7 +499,7 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
 type Encoder = Box<dyn Fn(&str) -> Option<Vec<u8>>>;
 
 fn is_win_ansi_char(c: char) -> bool {
-    matches!(c, '\u{20}'..='\u{7e}' | '\u{a0}'..='\u{ff}' | '€' | '‚' | '„' | '…' | '‘' | '’' | '“' | '”' | '•' | '–' | '—' | '™' | '\t')
+    c == '\t' || pdfcraft_fonts::win_ansi_byte(c).is_some()
 }
 
 fn needs_type3(text: &str) -> bool {
