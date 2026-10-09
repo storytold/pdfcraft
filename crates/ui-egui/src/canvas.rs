@@ -203,6 +203,9 @@ pub struct DocView {
     /// Pending keyboard scrolling, in points down (negative: up): ↓ / ↑, and Page Down /
     /// Page Up where the pages scroll.
     pub key_scroll: f32,
+    /// Single-page view, as last drawn: the page shown and whether the view was at its top and
+    /// at its bottom, so ↑ / ↓ turn the page there instead of doing nothing (#273).
+    single_edges: Option<(usize, bool, bool)>,
     /// Briefly outline an annotation after navigating to it from a panel.
     pub flash: Option<(usize, [f32; 4], f64)>,
     /// Compare files: differences shaded on this document's pages (page, user-space box, colour).
@@ -353,6 +356,7 @@ impl DocView {
             forward: Vec::new(),
             goto: None,
             key_scroll: 0.0,
+            single_edges: None,
             flash: None,
             compare_marks: Vec::new(),
             pages: HashMap::new(),
@@ -991,21 +995,28 @@ pub struct PageXform {
 }
 
 impl PageXform {
-    /// Draw an image in PDF user space, preserving orientation through both page rotations.
+    /// Draw an image in the PDF user-space `rect` as a custom stamp's appearance draws it: turned
+    /// back by `turn` (the page /Rotate it was placed for), so with the page's own rotation it
+    /// reads upright as displayed.
     pub(crate) fn paint_user_image(
         &self,
         painter: &egui::Painter,
         tex: egui::TextureId,
-        info: &DocInfo,
-        page: usize,
+        p: &pdfcraft_render::PageInfo,
         rect: [f64; 4],
+        turn: i64,
         color: Color32,
     ) {
-        let Some(p) = info.pages.get(page) else { return };
         let mut mesh = egui::Mesh::with_texture(tex);
-        for (x, y, u, v) in [(rect[0], rect[3], 0.0, 0.0), (rect[2], rect[3], 1.0, 0.0), (rect[2], rect[1], 1.0, 1.0), (rect[0], rect[1], 0.0, 1.0)] {
-            let p = p.user_to_view(x as f32, y as f32);
-            mesh.vertices.push(egui::epaint::Vertex { pos: self.norm_to_screen(p[0] / self.pw, p[1] / self.ph), uv: pos2(u, v), color });
+        let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
+        let (shown_w, shown_h) = if turn % 180 == 0 { (w, h) } else { (h, w) };
+        let [a, b, c, d, e, f] = pdfcraft_model::view_matrix_for(turn, rect);
+        for (u, v) in [(0.0_f32, 0.0_f32), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+            // The texture's (u, v), from its top-left, in the picture's upright frame, then in user space.
+            let (dx, dy) = (f64::from(u) * shown_w, f64::from(1.0 - v) * shown_h);
+            let (x, y) = (a * dx + c * dy + e, b * dx + d * dy + f);
+            let q = p.user_to_view(x as f32, y as f32);
+            mesh.vertices.push(egui::epaint::Vertex { pos: self.norm_to_screen(q[0] / self.pw, q[1] / self.ph), uv: pos2(u, v), color });
         }
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(0, 2, 3);
@@ -1159,12 +1170,31 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     if key(Key::ArrowLeft) || (key(Key::PageUp) && (command || !scrolls)) {
         view.step_page(false);
     }
-    // ↓ / ↑ scroll a line, and Page Down / Page Up a screen where the pages scroll.
+    // ↓ / ↑ scroll a line, and Page Down / Page Up a screen where the pages scroll. In
+    // single-page view, ↓ / ↑ turn the page once there is nothing left to scroll that way, as
+    // the wheel does (#273): always on a page that fits.
     if !command {
         let screen = (view.viewport_h - KEY_SCROLL_LINE).max(KEY_SCROLL_LINE);
         let steps = [(Key::ArrowDown, KEY_SCROLL_LINE), (Key::ArrowUp, -KEY_SCROLL_LINE), (Key::PageDown, screen), (Key::PageUp, -screen)];
         for (k, by) in steps {
-            if key(k) && (scrolls || matches!(k, Key::ArrowDown | Key::ArrowUp)) {
+            let arrow = matches!(k, Key::ArrowDown | Key::ArrowUp);
+            if !key(k) || !(scrolls || arrow) {
+                continue;
+            }
+            let forward = k == Key::ArrowDown;
+            // Only an up-to-date view counts: the page drawn is the current one, with no jump pending.
+            let at_end = !scrolls
+                && view.goto.is_none()
+                && view.single_edges.is_some_and(|(page, top, bottom)| page == view.current && if forward { bottom } else { top });
+            if at_end {
+                let before = view.current;
+                view.step_page(forward);
+                if !forward && view.current != before {
+                    // Going back up lands on the bottom of the previous page.
+                    view.goto = Some((view.current, 1.0));
+                }
+                view.single_edges = None;
+            } else {
                 view.key_scroll += by;
             }
         }
@@ -1798,8 +1828,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         }
                     }
                 }
-                // Annotation hover shows the comment, as Acrobat's popups do.
-                let gesturing = view.comments.gesture.is_some();
+                // Annotation hover shows the comment, as Acrobat's popups do; not while drawing
+                // freehand, where it would cover the next stroke (#429).
+                let freehand = matches!(tool, QuickTool::Comment(comments::CommentTool::Ink | comments::CommentTool::Eraser));
+                let gesturing = view.comments.gesture.is_some() || freehand;
                 for a in info.annotations.iter().filter(|a| a.page == i && a.in_reply_to.is_none() && !gesturing) {
                     let sr = xf.user_rect(info, i, a.rect);
                     if sr.contains(p) && hover_text.is_none() {
@@ -1901,6 +1933,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         });
         (wanted, visible_now)
     });
+    view.single_edges = visible_pages.first().copied().filter(|_| view.layout == PageLayout::Single).map(|page| {
+        // At the top once the page's top edge shows where going to a page puts it (a gap
+        // below the window's top). Within a point, as for wheel paging, so layout rounding
+        // can't hide an edge.
+        let max_y = (out.content_size.y - out.inner_rect.height()).max(0.0);
+        (page, out.state.offset.y <= MARGIN - GAP + 1.0, out.state.offset.y >= max_y - 1.0)
+    });
 
     view.auto_scroll.paint(ui, avail);
 
@@ -2001,7 +2040,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let field_props = field_props.then(|| view.prepare.selected.clone()).flatten();
     match canvas_action {
         Some(comments::CanvasAction::Edit(e)) => view.pending_edit = Some(*e),
-        Some(comments::CanvasAction::OpenComments) => app.right = Some(RightPanel::Comments),
+        // `choose_right_panel` would borrow all of `app` while `view` is held; same effect.
+        Some(comments::CanvasAction::OpenComments) => {
+            app.right = Some(RightPanel::Comments);
+            app.comments_panel_closed = false;
+        }
         Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
         None => {}
     }

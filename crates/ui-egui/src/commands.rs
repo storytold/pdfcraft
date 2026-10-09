@@ -180,13 +180,13 @@ impl PdfCraftApp {
             "view.theme.system" => self.set_theme_preference(ThemePreference::System),
             "view.theme.light" => self.set_theme_preference(ThemePreference::Light),
             "view.theme.dark" => self.set_theme_preference(ThemePreference::Dark),
-            "comment.list" => self.right = Some(RightPanel::Comments),
+            "comment.list" => self.choose_right_panel(Some(RightPanel::Comments)),
             tool if crate::comments::CommentTool::from_command(tool).is_some() => {
                 let Some(tool) = crate::comments::CommentTool::from_command(tool) else { return false };
                 self.comment_prefs.group_tool[tool.group()] = tool;
                 self.quick_tool = crate::QuickTool::Comment(tool);
-                // Acrobat opens the Comments panel with the commenting tools.
-                if self.right.is_none() {
+                // Acrobat opens the Comments panel with the commenting tools, unless the user closed it.
+                if self.right.is_none() && !self.comments_panel_closed {
                     self.right = Some(RightPanel::Comments);
                 }
                 // A text selection made before picking a markup tool is marked right away.

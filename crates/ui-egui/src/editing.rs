@@ -52,11 +52,27 @@ impl PdfCraftApp {
                     }
                     Edit::InsertBlankPage { at, .. } => view.select_pages(&[at.min(info.pages.len() - 1)]),
                     Edit::DeletePages { .. } => view.select_pages(&[]),
+                    // A stroke drawn with the pen stays unselected, so the selection box and
+                    // author popup don't sit over the next stroke (#429).
+                    Edit::AddAnnotation(a)
+                        if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. })
+                            && self.quick_tool == crate::QuickTool::Comment(crate::comments::CommentTool::Ink) =>
+                    {
+                        view.comments.selected = None;
+                    }
                     Edit::AddAnnotation(a) => {
                         // Select the new comment (appended last among the page's comments).
                         let newest = info.annotations.iter().filter(|x| x.page == a.page && x.in_reply_to.is_none()).map(|x| x.index).max();
                         view.comments.selected = newest.map(|n| (a.page, n));
                         view.comments.reveal = true;
+                        // A new highlight opens its note for typing straight away, as in Acrobat,
+                        // unless a note typed into another card is still unsaved.
+                        if let (pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, .. }, Some(n)) = (&a.shape, newest)
+                            && a.contents.is_empty()
+                            && view.comments.editing.as_ref().is_none_or(|(_, _, text)| text.is_empty())
+                        {
+                            view.comments.editing = Some((a.page, n, String::new()));
+                        }
                     }
                     Edit::DeleteAnnotation { .. } => view.comments.selected = None,
                     _ => {}
@@ -419,7 +435,13 @@ impl PdfCraftApp {
                 if let Some(i) = self.active
                     && let Some(d) = self.session.get(id)
                 {
-                    self.views[i].document_changed(&d.info);
+                    let view = &mut self.views[i];
+                    view.document_changed(&d.info);
+                    // Revert discards this source's uncommitted typing as well as model edits.
+                    // Otherwise a later Save could write a rejected draft back into the file.
+                    view.forms.focus = None;
+                    view.forms.committed = None;
+                    view.pending_edit = None;
                 }
                 self.notify_tr("Reverted to the last saved version");
             }
@@ -450,6 +472,14 @@ impl PdfCraftApp {
                 }
             },
         };
+        // Quitting closes the unsaved tabs one by one (and brings each forward to save it):
+        // remember what was open, and which tab was active, before the first one goes (#442).
+        if req == CloseRequest::Quit {
+            match choice {
+                Some(_) => self.note_quit_session(),
+                None => self.forget_quit_session(),
+            }
+        }
         match choice {
             None => {} // cancelled: nothing closes
             Some(false) => self.close_and_continue(ctx, index, req),
@@ -786,5 +816,97 @@ mod tests {
         perms.set_readonly(false);
         std::fs::set_permissions(&target, perms).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod revert_draft_tests {
+    use super::*;
+    use crate::forms_ui::Focus;
+    use pdfcraft_engine::FieldValue;
+
+    fn focus(text: &str) -> Focus {
+        Focus {
+            name: "name".into(),
+            widget: 0,
+            text: text.into(),
+            picked: Vec::new(),
+            request_focus: false,
+            select_all: false,
+            calendar: None,
+            calendar_rect: None,
+        }
+    }
+
+    fn app() -> PdfCraftApp {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("source.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+        app
+    }
+
+    fn queue_draft(app: &mut PdfCraftApp, index: usize, text: &str) {
+        app.views[index].forms.focus = Some(focus(text));
+        let form = app.session.get(app.views[index].id).unwrap().form.clone();
+        crate::forms_ui::commit(&mut app.views[index], &form);
+        assert!(app.views[index].forms.committed.is_some() && app.views[index].pending_edit.is_some());
+    }
+
+    #[test]
+    fn successful_revert_clears_focused_or_queued_drafts_only_on_its_document() {
+        for queued in [false, true] {
+            let mut app = app();
+            let source = app.views[0].id;
+            assert!(app.apply_edit(Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text("Committed change".into()) }));
+            if queued {
+                queue_draft(&mut app, 0, "Queued source draft");
+            } else {
+                app.views[0].forms.focus = Some(focus("Focused source draft"));
+            }
+            app.open_bytes("other.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+            let other = app.views[1].id;
+            assert!(app.apply_edit(Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text("Other committed value".into()) }));
+            queue_draft(&mut app, 1, "Other queued draft");
+            app.views[1].forms.focus = Some(focus("Other focused draft"));
+            let other_bytes = app.session.get(other).unwrap().bytes.clone();
+            let other_generation = app.session.get(other).unwrap().edit_generation();
+            let source_generation = app.session.get(source).unwrap().edit_generation();
+            app.active = Some(0);
+            app.revert_active();
+            let reverted = app.session.get(source).unwrap();
+            assert!(!reverted.dirty);
+            assert_eq!(reverted.edit_generation(), source_generation + 1);
+            assert!(reverted.form.iter().find(|field| field.name == "name").unwrap().value.is_empty());
+            assert!(app.views[0].forms.focus.is_none() && app.views[0].forms.committed.is_none() && app.views[0].pending_edit.is_none());
+            assert!(!app.has_unsaved_work(0));
+            assert_eq!(app.views[1].forms.focus.as_ref().unwrap().text, "Other focused draft");
+            assert_eq!(app.views[1].forms.committed.as_ref().unwrap().text, "Other queued draft");
+            assert!(
+                matches!(&app.views[1].pending_edit, Some(Edit::SetFieldValue { name, value: FieldValue::Text(text) }) if name == "name" && text == "Other queued draft")
+            );
+            let untouched = app.session.get(other).unwrap();
+            assert_eq!(untouched.bytes, other_bytes);
+            assert_eq!(untouched.edit_generation(), other_generation);
+            assert!(untouched.dirty && app.has_unsaved_work(1));
+            assert_eq!(app.active_ids(), Some((0, source)));
+        }
+    }
+
+    #[test]
+    fn failed_revert_preserves_focused_and_queued_drafts() {
+        let mut app = app();
+        let source = app.views[0].id;
+        queue_draft(&mut app, 0, "Queued draft");
+        app.views[0].forms.focus = Some(focus("Focused draft"));
+        // Exercise the ordinary NoDocument error boundary without a corrupt fixture.
+        // This verifies UI failure preservation, not other engine refresh failures.
+        app.session.close(source);
+        app.revert_active();
+        assert_eq!(app.views[0].forms.focus.as_ref().unwrap().text, "Focused draft");
+        assert_eq!(app.views[0].forms.committed.as_ref().unwrap().text, "Queued draft");
+        assert!(
+            matches!(&app.views[0].pending_edit, Some(Edit::SetFieldValue { name, value: FieldValue::Text(text) }) if name == "name" && text == "Queued draft")
+        );
+        assert_eq!(app.active_ids(), Some((0, source)));
+        assert_eq!(app.toast.as_ref().unwrap().0, pdfcraft_engine::EditError::NoDocument.to_string());
     }
 }

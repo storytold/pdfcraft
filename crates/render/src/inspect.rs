@@ -304,30 +304,35 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
         Err(p) => return Err(OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p)))),
     }
     let options = load_options(password);
-    let structure = catch_unwind(AssertUnwindSafe(|| match Document::load_mem_with_options(&bytes, options) {
-        Ok(doc) => {
-            let mut tmp = DocInfo::default();
-            std::mem::swap(&mut tmp.pages, &mut info.pages);
-            Inspector::new(&doc).fill(&mut tmp);
-            Ok(tmp)
-        }
-        Err(e) => Err(e.to_string()),
+    inspect_structure(&mut info, |tmp| {
+        let doc = Document::load_mem_with_options(&bytes, options).map_err(|e| e.to_string())?;
+        Inspector::new(&doc).fill(tmp);
+        Ok(())
+    });
+    if info.pages.is_empty() {
+        return Err(OpenError::Invalid("the document has no pages".into()));
+    }
+    Ok(info)
+}
+
+// Commit auxiliary metadata only after inspection succeeds; renderer geometry is the fallback.
+fn inspect_structure(info: &mut DocInfo, fill: impl FnOnce(&mut DocInfo) -> Result<(), String>) {
+    let structure = catch_unwind(AssertUnwindSafe(|| {
+        let mut tmp = DocInfo { pages: info.pages.clone(), ..Default::default() };
+        fill(&mut tmp)?;
+        Ok::<_, String>(tmp)
     }));
     match structure {
         Ok(Ok(mut filled)) => {
             filled.file_size = info.file_size;
             filled.pdf_version = std::mem::take(&mut info.pdf_version);
-            info = filled;
+            *info = filled;
         }
         Ok(Err(e)) => info.warnings.push(format!("Some document structure (bookmarks, comments, fields) could not be read: {e}")),
         Err(p) => {
             info.warnings.push(format!("Document structure inspection crashed and was skipped: {}", crate::raster::panic_message(&p)));
         }
     }
-    if info.pages.is_empty() {
-        return Err(OpenError::Invalid("the document has no pages".into()));
-    }
-    Ok(info)
 }
 
 struct Inspector<'a> {
@@ -955,7 +960,8 @@ fn alpha(n: usize) -> String {
 /// A PDF date (`D:20261001123000Z`) as "2026-10-01 12:30"; other strings unchanged.
 pub fn pretty_date(s: &str) -> String {
     let d = s.trim_start_matches("D:");
-    if d.len() >= 12 && d[..12].bytes().all(|b| b.is_ascii_digit()) {
+    if let Some(d) = d.get(..12).filter(|d| d.bytes().all(|b| b.is_ascii_digit())) {
+        // Twelve ASCII digits make every slice below a UTF-8 character boundary.
         format!("{}-{}-{} {}:{}", &d[0..4], &d[4..6], &d[6..8], &d[8..10], &d[10..12])
     } else {
         s.to_string()
@@ -1005,6 +1011,65 @@ mod tests {
         assert!(e.to_string().contains("longer than the data"), "{e}");
         // A real frame still decodes: two 3-byte rows, the second Up-filtered.
         assert_eq!(lopdf::filters::png::decode_frame(&[0, 1, 2, 3, 2, 1, 1, 1], 1, 3).unwrap(), [1, 2, 3, 2, 3, 4]);
+    }
+
+    #[test]
+    fn empty_png_predictor_frames_do_not_allocate_rows() {
+        // usize::MAX cannot be reserved, so the old code safely errors before allocating.
+        // An empty frame needs no rows regardless of the declared width.
+        assert!(lopdf::filters::png::decode_frame(&[], 1, usize::MAX).unwrap().is_empty());
+    }
+
+    fn tiff_predictor_stream(data: Vec<u8>, columns: i64, colors: i64, bits: i64) -> lopdf::Stream {
+        let mut params = lopdf::Dictionary::new();
+        params.set("Predictor", 2i64);
+        params.set("Columns", columns);
+        params.set("Colors", colors);
+        params.set("BitsPerComponent", bits);
+        let mut dict = lopdf::Dictionary::new();
+        dict.set("DecodeParms", params);
+        let mut stream = lopdf::Stream::new(dict, data);
+        stream.compress().unwrap();
+        assert_eq!(stream.dict.get(b"Filter").unwrap().as_name().unwrap(), b"FlateDecode");
+        stream
+    }
+
+    #[test]
+    fn tiff_subbyte_predictor_row_width_overflow_is_refused() {
+        // Each multiplication overflows before any scratch allocation in the old debug build.
+        for bits in [1, 2, 4] {
+            let stream = tiff_predictor_stream(vec![0; 64], i64::MAX, 3, bits);
+            assert!(
+                matches!(stream.decompressed_content_with_limit(64), Err(lopdf::Error::Decompress(lopdf::DecompressError::Predictor(_)))),
+                "{bits}-bit row"
+            );
+        }
+    }
+
+    #[test]
+    fn tiff_subbyte_predictor_scratch_is_bounded_by_available_samples() {
+        // 1/2-bit row widths fit usize on 32- and 64-bit hosts; Colors previously made Vec<u16>
+        // reject the capacity before allocating. A partial row has no preceding pixel.
+        for bits in [1, 2] {
+            let data = vec![0b1010_0110; 64];
+            let stream = tiff_predictor_stream(data.clone(), 1, i64::try_from(isize::MAX).unwrap(), bits);
+            assert_eq!(stream.decompressed_content_with_limit(64).unwrap(), data, "{bits}-bit row");
+        }
+    }
+
+    #[test]
+    fn tiff_subbyte_predictors_keep_components_rows_and_padding() {
+        // Repeated tiny rows compress through the public Stream API. Rows remain independent,
+        // differences wrap at each component depth, and trailing padding bits survive.
+        for (columns, colors, bits, encoded, decoded) in [
+            (16, 1, 1, vec![255, 170, 8, 255], vec![170, 204, 15, 85]),
+            (6, 1, 2, vec![85, 179], vec![108, 147]),
+            (3, 1, 4, vec![25, 16], vec![26, 176]),
+            (2, 2, 4, vec![18, 34], vec![18, 52]),
+        ] {
+            let stream = tiff_predictor_stream(encoded.repeat(32), columns, colors, bits);
+            assert_eq!(stream.decompressed_content_with_limit(128).unwrap(), decoded.repeat(32), "{bits}-bit, {colors} colours");
+        }
     }
 
     #[test]
@@ -1104,6 +1169,94 @@ trailer << /Root 1 0 R >>
                 LinkTarget::SetLayers { changes: vec![(Off, (5, 0))], preserve_rb: true },
             ]
         );
+    }
+
+    #[test]
+    fn structure_failure_preserves_renderer_pages() {
+        for crash in [true, false] {
+            let mut info = DocInfo {
+                file_size: 321,
+                pdf_version: "1.7".into(),
+                pages: vec![PageInfo { width: 300.0, height: 200.0, label: "1".into(), crop: [10.0, 20.0, 210.0, 320.0], rotation: 90 }],
+                ..Default::default()
+            };
+            inspect_structure(&mut info, |tmp| {
+                tmp.pages.clear();
+                tmp.title = Some("partially inspected".into());
+                if crash {
+                    panic!("synthetic structure inspection failure");
+                }
+                Err("synthetic structure inspection failure".into())
+            });
+
+            assert_eq!(info.pages.len(), 1);
+            let page = &info.pages[0];
+            assert_eq!((page.width, page.height, page.label.as_str(), page.crop, page.rotation), (300.0, 200.0, "1", [10.0, 20.0, 210.0, 320.0], 90));
+            assert_eq!(info.file_size, 321);
+            assert_eq!(info.pdf_version, "1.7");
+            assert!(info.title.is_none());
+            assert_eq!(info.warnings.len(), 1);
+            assert!(info.warnings[0].contains("synthetic structure inspection failure"));
+            assert_eq!(info.warnings[0].contains("crashed"), crash);
+        }
+    }
+
+    #[test]
+    fn invalid_dates_with_unicode_are_unchanged() {
+        for input in ["", "D:", "D:20260930104", "D:202609x01045", "yesterday"] {
+            assert_eq!(pretty_date(input), input);
+        }
+        // Cover every position before the 12-byte prefix, including characters that
+        // straddle its end. None of these strings is an ASCII PDF date.
+        for character in ['é', '€', '😀'] {
+            for prefix_len in 0..12 {
+                let input = format!("D:{}{character}123456789012", "1".repeat(prefix_len));
+                assert_eq!(pretty_date(&input), input, "{character} after {prefix_len} digits");
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_annotation_date_does_not_prevent_opening() {
+        use lopdf::dictionary;
+
+        let date = "D:12345678901éX";
+        let mut encoded_date = vec![0xFE, 0xFF];
+        encoded_date.extend(date.encode_utf16().flat_map(u16::to_be_bytes));
+        let mut doc = Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let annot_id = doc.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Text",
+            "Rect" => vec![10.into(), 10.into(), 30.into(), 30.into()],
+            "M" => Object::String(encoded_date, lopdf::StringFormat::Hexadecimal),
+        });
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 200.into(), 300.into()],
+            "Annots" => vec![annot_id.into()],
+        });
+        doc.objects.insert(
+            pages_id,
+            dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }
+            .into(),
+        );
+        let catalog_id = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog_id);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).expect("write synthetic fixture");
+
+        let info = inspect(Arc::new(bytes), None).expect("opens despite a non-date /M string");
+        assert_eq!(info.pages.len(), 1);
+        assert_eq!((info.pages[0].width, info.pages[0].height), (200.0, 300.0));
+        assert_eq!(info.annotations.len(), 1);
+        assert_eq!(info.annotations[0].modified.as_deref(), Some(date));
+        assert!(info.warnings.is_empty(), "{:?}", info.warnings);
     }
 
     #[test]

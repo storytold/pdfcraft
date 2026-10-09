@@ -15,6 +15,7 @@ fn source(answer: Result<&str, &str>) -> UpdateSource {
 fn harness(answer: Result<&str, &str>) -> Harness<'static, PdfCraftApp> {
     Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.update_source = Some(source(answer));
         app
     })
@@ -78,6 +79,7 @@ fn nothing_is_asked_until_the_user_checks() {
     let counted = calls.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         // Settings from a build that had the startup option are ignored.
         app.restore(r#"{"check_updates_at_start": true}"#);
         let counted = counted.clone();

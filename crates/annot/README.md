@@ -1,6 +1,6 @@
 # pdfcraft-annot
 
-Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends only on `pdfcraft-cos`.
+Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`, `pdfcraft-fonts` and `pdfcraft-model`.
 
 ## What it does
 
@@ -40,6 +40,10 @@ deterministic; the engine supplies them.
   never paint a second icon.
 - Resizing a stamp changes its `/Rect` and preserves its original appearance and resources;
   viewers scale that appearance into the new rectangle. Locked stamps refuse the edit.
+- Natural-size image stamps placed by the engine counterrotate their appearance on rotated
+  pages. Image restyling retains that appearance matrix. Explicit rectangles, image signatures
+  and PDF-page stamps still use their existing placement behavior; page-rotation support for
+  those paths is not complete.
 
 ## Not yet
 

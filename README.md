@@ -133,7 +133,7 @@ Search the whole document as you type, step through matches with <kbd>⌘G</kbd>
 
 ## Navigate long documents
 
-Bookmarks, page thumbnails and the document's own page labels (i, ii, 1, 2…) keep you oriented in long documents.
+Bookmarks, page thumbnails and the document's own page labels (i, ii, 1, 2…) keep you oriented in long documents. Search bookmark titles in the Bookmarks panel to find nested entries even when their parents are collapsed. Matches keep their ancestors for context; Clear restores the unfiltered tree without changing its expansion state.
 
 <table>
 <tr>
@@ -171,6 +171,8 @@ Open **Organize pages** to see every page at once:
 - *Incremental:* the original bytes stay byte-for-byte intact.
 - *Atomic:* the file is written to a temporary copy, then swapped in.
 - *Verified:* independently checked with qpdf.
+
+When open documents exceed the window width, scroll over the tab strip with the mouse wheel or trackpad, or use its horizontal scrollbar. Opening or switching to a document brings its tab into view.
 
 Unsaved documents carry a dot on their tab, and closing or quitting asks before anything is lost. Changes are autosaved every minute. If PdfCraft ever quits unexpectedly, it offers to recover your work the next time it opens. Encrypted documents stay encrypted on disk.
 

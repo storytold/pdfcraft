@@ -46,6 +46,7 @@ fn files_in(s: &RecoveryStore) -> usize {
 /// A session that edits a document, autosaves, and then "crashes" (is dropped).
 fn crashed_session(s: &RecoveryStore, bytes: Vec<u8>, password: Option<&str>, path: Option<&str>) {
     let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
     app.enable_recovery(s.clone());
     match password {
         Some(pw) => {
@@ -62,6 +63,7 @@ fn crashed_session(s: &RecoveryStore, bytes: Vec<u8>, password: Option<&str>, pa
 fn harness(s: RecoveryStore) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.enable_recovery(s);
         app
     });
@@ -103,6 +105,7 @@ fn discarding_removes_the_autosaves() {
 fn saving_or_closing_clears_the_entry_and_nothing_is_written_for_clean_documents() {
     let s = store("save");
     let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
     app.enable_recovery(s.clone());
     app.open_bytes("a.pdf", None, fixture(2)).unwrap();
     app.autosave_now();
@@ -130,6 +133,7 @@ fn quitting_cleanly_leaves_nothing_behind() {
         let s = s.clone();
         move |_cc| {
             let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
             app.enable_recovery(s);
             app.open_bytes("q.pdf", None, fixture(2)).unwrap();
             app
@@ -206,6 +210,7 @@ fn control_click_effects_are_visible_when_the_reply_arrives() {
     let (slot2, s2) = (slot.clone(), s.clone());
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         *slot2.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
         app.enable_recovery(s2);
         app
