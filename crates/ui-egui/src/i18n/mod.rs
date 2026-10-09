@@ -449,11 +449,15 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn windows_display_language_query_returns_a_locale_tag() {
-        let tag = windows_ui_language().expect("Windows should report a display language");
-        let tag = tag.trim();
-        assert!(!tag.is_empty());
-        assert!(tag.split('-').all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric())));
+    fn windows_display_language_query_returns_locale_tags() {
+        let tags = windows_ui_language().expect("Windows should report display languages");
+        let tags = tags.trim();
+        assert!(!tags.is_empty());
+        // GetUserPreferredUILanguages may return several tags, one per line.
+        for tag in tags.lines() {
+            assert!(!tag.is_empty());
+            assert!(tag.split('-').all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric())), "{tag:?}");
+        }
     }
 
     #[test]
