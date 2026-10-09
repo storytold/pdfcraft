@@ -629,6 +629,55 @@ mod tests {
         }
     }
 
+    /// Every `tl!("…")` literal in the UI source (test modules aside), unescaped.
+    fn ui_literals() -> std::collections::BTreeSet<String> {
+        let mut stack = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut literals = std::collections::BTreeSet::new();
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).expect("UI source directory") {
+                let path = entry.expect("UI source entry").path();
+                if path.is_dir() {
+                    if path.file_name().is_some_and(|name| name != "i18n") {
+                        stack.push(path);
+                    }
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let source = std::fs::read_to_string(path).expect("UI source file").replace("\r\n", "\n");
+                    let mut rest = source.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+                    while let Some((_, after)) = rest.split_once("tl!(\"") {
+                        let mut escaped = false;
+                        let end = after
+                            .char_indices()
+                            .find_map(|(i, c)| {
+                                if c == '"' && !escaped {
+                                    return Some(i);
+                                }
+                                escaped = c == '\\' && !escaped;
+                                None
+                            })
+                            .expect("closed tl! literal");
+                        let (raw, tail) = after.split_at(end);
+                        if tail.starts_with("\")") {
+                            let label: String = serde_json::from_str(&format!("\"{raw}\"")).expect("UI literal escapes");
+                            literals.insert(label);
+                        }
+                        rest = tail.strip_prefix('"').expect("closing quote");
+                    }
+                }
+            }
+        }
+        literals
+    }
+
+    /// Japanese translates every `tl!("…")` literal in the UI source, so a new string can't ship in
+    /// English by accident (the same check French, German, Russian and Simplified Chinese have).
+    #[test]
+    fn japanese_covers_ui_literals() {
+        let literals = ui_literals();
+        assert!(literals.len() > 900, "source scan found only {} literals", literals.len());
+        let missing: Vec<_> = literals.iter().filter(|label| !has(JA(), label)).collect();
+        assert!(missing.is_empty(), "untranslated Japanese UI literals: {missing:#?}");
+    }
+
     /// With craft-fonts, every Japanese translation has glyphs: with all interface faces (desktop)
     /// and with BIZ UDPGothic Regular alone (the web build's only Japanese face).
     #[test]
