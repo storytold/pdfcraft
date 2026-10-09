@@ -8,12 +8,13 @@
   level) is active, with H (fidelity harness) next.
 - **Done and merged:** D2 and D3 (#351, tool-argument fuzzing and the root-confinement proof),
   D5 in part (#332, `cos` and `engine` READMEs).
-- **Done, awaiting review:** D1 (#339, corpus pin), F1 (#357, exact standard-14 metrics), and this
-  plan itself (#223).
-- **Next unchecked task:** **F2 — encoding and code-to-Unicode completeness** (§4.1). It needs no
-  new decisions and no new dependencies, and it is read from the font dictionary alone.
-- **Then:** F3 (deterministic fallback), then H1 (`pdfcraft-testkit`), then D4 (the 96 toolless
-  features) and the remaining 11 crate READMEs.
+- **Done, awaiting review:** D1 (#339, corpus pin), F1 (#357, exact standard-14 metrics), F2's
+  first half (#610, stacked on #357), and this plan itself (#223).
+- **Next unchecked task:** **F3 — deterministic fallback** (§4.1). F2's remainder is either
+  blocked on the Adobe Glyph List decision below or belongs with F5, so F3 is the next thing that
+  needs no decision.
+- **Then:** H1 (`pdfcraft-testkit`), then D4 (the 96 toolless features) and the remaining 11 crate
+  READMEs. H3 also owes F1 the golden appearance streams its acceptance criteria asked for.
 - **Last verified green:** see the baseline below; re-measure before quoting.
 
 ## Verified baseline (2026-10-09, `main` at `efb3439`, Windows 10)
@@ -167,6 +168,20 @@ already permitted and already present:
       black-box observation pass under the AGENTS.md §1.1 rules (synthetic fixtures only, nothing
       committed). H1–H5 do not block on this; H3's goldens pin *our* output against regressions,
       which is a different question from matching Acrobat.
+- [ ] **The Adobe Glyph List, for Symbol and ZapfDingbats meanings.** Those two fonts carry
+      built-in encodings that are not Latin, so code 0x61 in Symbol is `alpha`, not `a`. F2 (#610)
+      stopped reporting the wrong letter, but reporting the *right* one needs glyph-name-to-Unicode
+      for roughly 190 names each. Two ways, and it is an owner call because of the first:
+      - **Extend the AGENTS.md §1.1 closed list to the Adobe Glyph List.** It is already vendored
+        at `vendor/hayro-interpret/src/font/generated/glyph_names.rs` (8,119 entries) and is
+        non-visual technical data of exactly the kind §1.1 contemplates — but the list names the
+        CMap resources and the standard-14 metrics and encoding tables, and the AGL is neither, so
+        it needs the same explicit approval `std14.rs` got.
+      - **Hand-write the two tables from the Unicode charts.** Allowed today with no approval,
+        since Unicode is not Adobe, but ~380 entries written by hand and hard to verify without
+        the AGL to check against — which rather defeats the point.
+      Until one is chosen, text in those fonts is skipped rather than mis-decoded, which is
+      recorded on `protect.redact-patterns` in `parity/`.
 - [ ] **Who owns community PRs.** PhotoCraft runs a separate integration session for incoming PRs,
       merges and `main` breakage. PdfCraft has none, so **61 open PRs — 37 of them already
       conflicting — are currently unowned.** At this volume this is the largest single source of

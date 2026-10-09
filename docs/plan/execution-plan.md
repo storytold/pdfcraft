@@ -337,12 +337,23 @@ today, which is why they come before the harness rather than after it.
       Adobe-derived data was invisible to `xtask assets` until #357 taught the gate about
       first-party closed-list entries; and `Family::width` was measuring italic items with upright
       metrics while writing them out as `/Times-Italic`, which the rebase caught, not the tests.
-- [ ] **F2. Encoding and code-to-Unicode completeness.** The symbolic TrueType rules ((3,0) and
+- [~] **F2. Encoding and code-to-Unicode completeness.** *(first half done — #610.)* The symbolic TrueType rules ((3,0) and
       (1,0) cmaps, the 0xF000 offset), `/Differences` with glyph names, and embedded CMap
       codespace and CID ranges — all readable from the dictionary alone. Improves text extraction,
       find and copy on fonts with no `/ToUnicode` (`view.render-cid-fonts`, a P0 partial).
       *Accept:* `fonts::encodings` tests cover each rule; the H4 text baseline improves on a
       no-`/ToUnicode` fixture and regresses nowhere.
+      **Half done — #610** (stacked on #357): glyph names now follow the published naming
+      algorithm (`.` suffixes, `_` ligature components, multi-value `uniXXXX`), and Symbol,
+      ZapfDingbats and MacExpert no longer report Latin letters they do not have. That last one
+      mattered more than its size: the map feeds `redact`'s pattern matching, so the old behaviour
+      was a silent redaction failure, not a cosmetic one.
+      *Remaining:* the symbolic TrueType cmap rules ((3,0) and (1,0), the 0xF000 offset) need the
+      font *program* and so belong with F5, not here — the task description put them at the
+      dictionary level, which was wrong. Mapping Symbol and ZapfDingbats *correctly* rather than
+      merely not-wrongly is blocked on the Adobe Glyph List decision in `STATUS.md` §Open.
+      Predefined non-identity CMaps (`UniJIS-UCS2-H` and friends) for *decoding* still need the
+      `hayro-cmap` resources, which are already on the §1.1 closed list.
 - [ ] **F3. Deterministic fallback.** One documented chain when a font is missing, unembedded or
       broken, with the choice *recorded* rather than silent, so callers can report it. *Accept:* a
       document whose embedded font fails to parse still lays out, and `doc_info` says which face
