@@ -87,7 +87,7 @@ fn plural_russian(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 10] = [
+pub static LANGUAGES: [LangInfo; 11] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -106,6 +106,8 @@ pub static LANGUAGES: [LangInfo; 10] = [
     LangInfo { code: "ru", name: "Русский", source: include_str!("ru.tsv"), plural: plural_russian, catalog: OnceLock::new() },
     // Telugu; every `te-*` locale (`te-IN`) resolves here.
     LangInfo { code: "te", name: "తెలుగు", source: include_str!("te.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
+    // Italian; every `it-*` locale (`it-IT`) resolves here.
+    LangInfo { code: "it", name: "Italiano", source: include_str!("it.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
