@@ -8,7 +8,7 @@ fn main() -> Result<(), String> {
     let out = std::env::args().nth(1).ok_or("usage: print_dialog <output.png>")?;
     let mut app = PdfCraftApp::new();
     let bytes = app.session.create_blank(2592.0, 1728.0, 1).map_err(|e| e.to_string())?;
-    app.open_bytes("Synthetic ARCH D.pdf", None, bytes.as_ref().clone()).map_err(|e| e.to_string())?;
+    app.open_bytes("Synthetic ARCH D.pdf", None, bytes.as_ref().clone())?;
     app.print_draft.paper = print::matching_paper((2592.0, 1728.0)).ok_or("ARCH D preset is missing")?;
     app.print_draft.size = SizeMode::Actual;
     app.dialog = Some(Dialog::Print);

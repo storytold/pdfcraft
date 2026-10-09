@@ -380,14 +380,14 @@ pub(crate) fn body(
                 ui.horizontal(|ui| {
                     ui.label(format!("PDF page: {:.2} × {:.2} in", source.0 / 72.0, source.1 / 72.0));
                     let matched = print::matching_paper(source);
-                    if ui.add_enabled(matched.is_some(), egui::Button::new("Match page at 100%")).clicked() {
-                        if let Some(paper) = matched {
-                            d.paper = paper;
-                            d.handling = Handling::Size;
-                            d.size = SizeMode::Actual;
-                            d.orientation = Orientation::Auto;
-                            d.sheet = 0;
-                        }
+                    if ui.add_enabled(matched.is_some(), egui::Button::new("Match page at 100%")).clicked()
+                        && let Some(paper) = matched
+                    {
+                        d.paper = paper;
+                        d.handling = Handling::Size;
+                        d.size = SizeMode::Actual;
+                        d.orientation = Orientation::Auto;
+                        d.sheet = 0;
                     }
                 });
             }
@@ -619,13 +619,13 @@ pub(crate) fn body(
             if let Some(s) = sheets.get(d.sheet) {
                 let (w, h) = (s.size.0 / 72.0, s.size.1 / 72.0);
                 ui.label(egui::RichText::new(format!("{w:.2} × {h:.2} in")).small().color(t.text_muted));
-                if d.handling == Handling::Size {
-                    if let Some(p) = s.placed.first() {
-                        let scale = p.matrix.0[0].hypot(p.matrix.0[1]) * 100.0;
-                        ui.label(format!("Print scale: {scale:.2}%"));
-                        if (scale - 100.0).abs() > 0.01 {
-                            ui.label(egui::RichText::new("Drawing scale changes. Use Actual size for full-scale plans.").small().color(t.text_muted));
-                        }
+                if d.handling == Handling::Size
+                    && let Some(p) = s.placed.first()
+                {
+                    let scale = p.matrix.0[0].hypot(p.matrix.0[1]) * 100.0;
+                    ui.label(format!("Print scale: {scale:.2}%"));
+                    if (scale - 100.0).abs() > 0.01 {
+                        ui.label(egui::RichText::new("Drawing scale changes. Use Actual size for full-scale plans.").small().color(t.text_muted));
                     }
                 }
             }
