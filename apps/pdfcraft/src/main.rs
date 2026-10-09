@@ -689,8 +689,15 @@ mod tests {
         };
         let instance = pollster::block_on(native.wgpu_options.wgpu_setup.new_instance());
         let options = wgpu::RequestAdapterOptions { power_preference: setup.power_preference, ..Default::default() };
-        let adapter = pollster::block_on(instance.request_adapter(&options)).expect("a GPU adapter (WARP or llvmpipe on CI)");
-        let (device, _queue) = pollster::block_on(adapter.request_device(&(setup.device_descriptor)(&adapter))).expect("a device");
+        // CI runners have a software adapter (WARP, llvmpipe); a machine without any skips.
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&options)) else {
+            eprintln!("skipping: no GPU adapter on this machine");
+            return;
+        };
+        let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&(setup.device_descriptor)(&adapter))) else {
+            eprintln!("skipping: the adapter gives no device");
+            return;
+        };
         let texture = |width: u32| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("issue-519"),
