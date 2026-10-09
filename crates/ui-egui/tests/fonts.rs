@@ -8,6 +8,7 @@ const JAPANESE: &str = "日本語の文字";
 const CHINESE: &str = "简体中文欢迎";
 const ARABIC: &str = "واحد اثنين";
 const TELUGU: &str = "తెలుగు ఫైల్";
+const KOREAN: &str = "한국어 테스트_문서.pdf";
 
 fn families() -> Vec<FontId> {
     vec![FontId::proportional(13.0), FontId::monospace(13.0), theme::medium(13.0), theme::semibold(17.0)]
@@ -145,6 +146,45 @@ fn system_fallback_fills_missing_scripts() {
         assert!(fonts.has_glyphs(&id, "PdfCraft"), "{id:?}");
     }
     assert!(layout_widths(&mut fonts, ARABIC).iter().all(|w| w.is_finite() && *w > 0.0));
+}
+
+/// No embedded face has Hangul, so Korean file names and bookmarks (#407) come from an installed
+/// Korean face. On a machine with one, every family has it once, after every embedded face and
+/// before the broad-coverage fallback, and Korean text has glyphs in every family.
+/// `PDFCRAFT_TEST_REQUIRE_HANGUL=1` turns the skip into a failure (on Windows with Malgun Gothic).
+#[test]
+fn system_hangul_fallback_draws_korean_names() {
+    for prefer_hans in [false, true] {
+        assert!(!theme::font_definitions_for(prefer_hans).font_data.contains_key(theme::SYSTEM_HANGUL_FALLBACK));
+    }
+    let defs = theme::installed_font_definitions(false);
+    if !defs.font_data.contains_key(theme::SYSTEM_HANGUL_FALLBACK) {
+        assert!(defs.families.values().all(|stack| !stack.iter().any(|n| n == theme::SYSTEM_HANGUL_FALLBACK)));
+        assert!(
+            std::env::var_os("PDFCRAFT_TEST_REQUIRE_HANGUL").is_none_or(|v| v != "1"),
+            "PDFCRAFT_TEST_REQUIRE_HANGUL=1 but no installed Hangul font was loaded"
+        );
+        eprintln!("skipping system_hangul_fallback_draws_korean_names: no installed Hangul font (or PDFCRAFT_SYSTEM_FONTS=0)");
+        return;
+    }
+    for prefer_hans in [false, true] {
+        let defs = theme::installed_font_definitions(prefer_hans);
+        let embedded = theme::font_definitions_for(prefer_hans);
+        for (family, stack) in &defs.families {
+            assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_HANGUL_FALLBACK).count(), 1, "{family:?}");
+            let at = stack.iter().position(|n| n == theme::SYSTEM_HANGUL_FALLBACK);
+            assert_eq!(at, Some(embedded.families[family].len()), "{family:?}: {stack:?}");
+            if defs.font_data.contains_key(theme::SYSTEM_FALLBACK) {
+                assert_eq!(stack.last().map(String::as_str), Some(theme::SYSTEM_FALLBACK), "{family:?}: {stack:?}");
+            }
+        }
+        let mut fonts = Fonts::new(TextOptions::default(), defs);
+        for id in families() {
+            assert!(fonts.has_glyphs(&id, KOREAN), "{id:?} lacks {KOREAN}");
+            assert!(fonts.has_glyphs(&id, "PdfCraft"), "{id:?}");
+        }
+        assert!(layout_widths(&mut fonts, KOREAN).iter().all(|w| w.is_finite() && *w > 0.0));
+    }
 }
 
 /// Without craft-fonts the interface fonts still install and lay out any text (Japanese falls
