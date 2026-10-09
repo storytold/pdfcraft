@@ -27,7 +27,7 @@ pub struct TextLine {
     pub text: String,
     /// Its box in user space.
     pub rect: [f64; 4],
-    /// The font's resource name and `/BaseFont`, and its size in text space.
+    /// The font's resource name and `/BaseFont` (or Type 3 descriptor's `/FontName`), and its size in text space.
     pub font: String,
     pub base_font: String,
     pub size: f64,
@@ -569,7 +569,8 @@ fn no_japanese_font() -> EditError {
 }
 
 fn type3_font(doc: &mut Document, fonts_res: &mut Dict, text: &str) -> Result<Type3Fallback, EditError> {
-    let family = pdfcraft_fonts::document_japanese_font().ok_or_else(no_japanese_font)?.family;
+    let face = pdfcraft_fonts::document_japanese_font().ok_or_else(no_japanese_font)?;
+    let family = face.family;
     let mut chars = Vec::new();
     for ch in text.chars() {
         if !chars.contains(&ch) {
@@ -614,6 +615,14 @@ fn type3_font(doc: &mut Document, fonts_res: &mut Dict, text: &str) -> Result<Ty
     font.set(b"Type".to_vec(), Object::name("Font"));
     font.set(b"Subtype".to_vec(), Object::name("Type3"));
     font.set(b"Name".to_vec(), Object::name("PCJapanese"));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
+    descriptor.set(b"FontName".to_vec(), Object::name(&format!("{}-{}", face.family, face.style).replace(' ', "")));
+    descriptor.set(b"FontFamily".to_vec(), Object::String(PdfString::literal(face.family.as_bytes().to_vec())));
+    descriptor.set(b"Flags".to_vec(), Object::Int(if face.family.contains("Mincho") { 6 } else { 4 }));
+    descriptor.set(b"ItalicAngle".to_vec(), Object::Int(0));
+    // PDF 1.7 tables 5.9 and 5.19: a Type 3 descriptor is indirect; Ascent/Descent may be omitted.
+    font.set(b"FontDescriptor".to_vec(), Object::Ref(doc.add(Object::Dict(descriptor))));
     font.set(b"FontBBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(-300), Object::Int(1000), Object::Int(1000)]));
     font.set(
         b"FontMatrix".to_vec(),

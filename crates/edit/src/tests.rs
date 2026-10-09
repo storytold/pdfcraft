@@ -305,6 +305,30 @@ fn japanese_line_uses_unicode_type3_fallback() {
 }
 
 #[test]
+fn japanese_fallback_reports_the_face_after_save_and_reopen() {
+    if without_craft_fonts("japanese_fallback_reports_the_face_after_save_and_reopen") {
+        return;
+    }
+    let face = pdfcraft_fonts::document_japanese_font().unwrap();
+    let expected = format!("{}-{}", face.family, face.style).replace(' ', "");
+    for paragraph in [false, true] {
+        let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+        let replacement = "見本商会　御中";
+        if paragraph {
+            text::replace_block(&mut doc, 0, 0, replacement).unwrap();
+        } else {
+            text::replace_line(&mut doc, 0, 0, replacement).unwrap();
+        }
+        for d in [&doc, &reopen(&doc)] {
+            let lines = text::text_lines(d, 0).unwrap();
+            assert_eq!(lines[0].text, replacement);
+            assert_eq!(lines[0].base_font, expected, "report the real fallback face, not an empty BaseFont");
+            assert_eq!(text::text_blocks(d, 0).unwrap()[0].base_font, expected);
+        }
+    }
+}
+
+#[test]
 fn japanese_paragraph_uses_unicode_type3_fallback() {
     if without_craft_fonts("japanese_paragraph_uses_unicode_type3_fallback") {
         return;

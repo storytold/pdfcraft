@@ -47,7 +47,7 @@ pub struct Metrics {
     pub composite: bool,
     /// Code → Unicode text.
     unicode: HashMap<u32, String>,
-    /// `/BaseFont`, and whether it is a subset (`ABCDEF+Name`: other glyphs are missing).
+    /// `/BaseFont` (or Type 3 descriptor's `/FontName`), and whether it is a subset (`ABCDEF+Name`: other glyphs are missing).
     pub base_font: String,
     pub subset: bool,
     /// Whether the PDF identifies this face as bold or italic. These come from the
@@ -162,7 +162,16 @@ impl Metrics {
 
     pub fn from_dict(doc: &Document, font: &Dict) -> Self {
         let mut m = Self::read_metrics(doc, font);
-        let base = String::from_utf8_lossy(font.name(b"BaseFont").unwrap_or(b"")).into_owned();
+        let base = font
+            .name(b"BaseFont")
+            .map(|name| String::from_utf8_lossy(name).into_owned())
+            .or_else(|| {
+                (font.name(b"Subtype") == Some(b"Type3"))
+                    .then(|| dict(doc, font.get(b"FontDescriptor")))
+                    .flatten()
+                    .and_then(|d| d.name(b"FontName").map(|name| String::from_utf8_lossy(name).into_owned()))
+            })
+            .unwrap_or_default();
         m.subset = base.len() > 7 && base.as_bytes()[6] == b'+' && base[..6].bytes().all(|b| b.is_ascii_uppercase());
         let (bold, italic) = style_from_name(&base);
         m.bold |= bold;
@@ -263,11 +272,18 @@ impl Metrics {
             let weight = d.get(b"FontWeight").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(0.0);
             m.italic |= flags & 64 != 0 || angle.abs() > 0.1;
             m.bold |= flags & 262_144 != 0 || weight >= 600.0;
-            let a = d.get(b"Ascent").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(0.0) / 1000.0;
-            let de = d.get(b"Descent").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(0.0) / 1000.0;
+            // Type 3 descriptors may omit these metrics; the glyph-space FontBBox still applies.
+            let ascent = d.get(b"Ascent").and_then(|v| doc.resolve(v).as_f64());
+            let descent = d.get(b"Descent").and_then(|v| doc.resolve(v).as_f64());
             // Fonts often claim 0; never shrink the glyph box below a sensible minimum.
-            m.ascent = if a > 0.3 { a.min(1.5) } else { 0.9 };
-            m.descent = if de < -0.05 { de.max(-0.6) } else { -0.25 };
+            if ascent.is_some() || subtype != b"Type3" {
+                let a = ascent.unwrap_or(0.0) / 1000.0;
+                m.ascent = if a > 0.3 { a.min(1.5) } else { 0.9 };
+            }
+            if descent.is_some() || subtype != b"Type3" {
+                let de = descent.unwrap_or(0.0) / 1000.0;
+                m.descent = if de < -0.05 { de.max(-0.6) } else { -0.25 };
+            }
         }
         m
     }
@@ -503,6 +519,36 @@ mod tests {
         }
         let _ = doc;
         d
+    }
+
+    #[test]
+    fn type3_descriptor_names_the_font_without_changing_its_metrics() {
+        let mut doc = Document::new_empty();
+        let mut f = font(
+            &mut doc,
+            vec![
+                ("Subtype", Object::name("Type3")),
+                (
+                    "FontMatrix",
+                    Object::Array(vec![Object::Real(0.001), Object::Int(0), Object::Int(0), Object::Real(0.001), Object::Int(0), Object::Int(0)]),
+                ),
+                ("FontBBox", Object::Array(vec![Object::Int(0), Object::Int(-300), Object::Int(1000), Object::Int(1000)])),
+            ],
+        );
+        let before = Metrics::from_dict(&doc, &f);
+        let mut descriptor = Dict::new();
+        descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
+        descriptor.set(b"FontName".to_vec(), Object::name("ExampleMincho-Regular"));
+        descriptor.set(b"Flags".to_vec(), Object::Int(6));
+        descriptor.set(b"ItalicAngle".to_vec(), Object::Int(0));
+        let reference = doc.add(Object::Dict(descriptor));
+        f.set(b"FontDescriptor".to_vec(), Object::Ref(reference));
+        let after = Metrics::from_dict(&doc, &f);
+        assert_eq!(after.base_font, "ExampleMincho-Regular");
+        assert_eq!((after.ascent, after.descent, after.scale), (before.ascent, before.descent, before.scale));
+        assert!(!after.bold && !after.italic && !after.subset);
+        f.set(b"BaseFont".to_vec(), Object::name("ExplicitName"));
+        assert_eq!(Metrics::from_dict(&doc, &f).base_font, "ExplicitName", "an explicit BaseFont takes precedence");
     }
 
     #[test]
