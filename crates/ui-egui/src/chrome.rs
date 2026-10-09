@@ -38,6 +38,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     changed
                 });
                 let mut close = None;
+                let mut menu_action: Option<(usize, TabAction)> = None;
                 ui.scope(|ui| {
                     ui.style_mut().always_scroll_the_only_direction = true;
                     egui::ScrollArea::horizontal()
@@ -56,9 +57,17 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     if response.clicked() {
                                         app.active = Some(i);
                                     }
+                                    response.context_menu(|ui| {
+                                        if let Some(action) = tab_menu(app, ui, i) {
+                                            menu_action = Some((i, action));
+                                        }
+                                    });
                                 }
                                 if let Some(i) = close {
                                     app.request_close_tab(i);
+                                }
+                                if let Some((i, action)) = menu_action {
+                                    app.apply_tab_action(i, action);
                                 }
                                 if app.combine_tab.open {
                                     // After the document tabs; its index can't clash with theirs.
@@ -113,6 +122,147 @@ fn theme_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             app.execute(command);
             ui.close();
         }
+    }
+}
+
+/// What the tab's context menu asked for.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum TabAction {
+    NewWindow,
+    MoveToNewWindow,
+    MoveToWindow(crate::WindowId),
+    Close,
+    CloseOthers,
+    CloseToTheRight,
+    CopyPath,
+    Reveal,
+    MergeAll,
+}
+
+/// The right-click menu of document tab `i`.
+fn tab_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, i: usize) -> Option<TabAction> {
+    let mut action = None;
+    fn pick(ui: &mut egui::Ui, action: &mut Option<TabAction>, label: &str, enabled: bool, a: TabAction) {
+        if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+            *action = Some(a);
+            ui.close();
+        }
+    }
+    let desktop = !cfg!(target_arch = "wasm32");
+    let path = app.views.get(i).and_then(|v| app.session.get(v.id)).and_then(|d| d.path.clone());
+    if desktop {
+        pick(ui, &mut action, tl!("In new window"), true, TabAction::NewWindow);
+        pick(ui, &mut action, tl!("Move to new window"), app.views.len() > 1, TabAction::MoveToNewWindow);
+        if app.window_count() > 1 {
+            let current = app.current_window();
+            let mut others: Vec<(crate::WindowId, String)> = Vec::new();
+            for w in app.window_ids().into_iter().filter(|w| *w != current) {
+                let label = app.with_window(w, |a| a.active.and_then(|i| a.views.get(i)).and_then(|v| a.display_label(v))).flatten();
+                others.push((w, label.unwrap_or_else(|| "PdfCraft".to_owned())));
+            }
+            ui.menu_button(tl!("Move to window"), |ui| {
+                for (w, label) in &others {
+                    if ui.button(label).clicked() {
+                        action = Some(TabAction::MoveToWindow(*w));
+                        ui.close();
+                    }
+                }
+            });
+        }
+        ui.separator();
+    }
+    pick(ui, &mut action, tl!("Close"), true, TabAction::Close);
+    pick(ui, &mut action, tl!("Close other tabs"), app.views.len() > 1, TabAction::CloseOthers);
+    pick(ui, &mut action, tl!("Close tabs to the right"), i + 1 < app.views.len(), TabAction::CloseToTheRight);
+    if path.is_some() {
+        ui.separator();
+        pick(ui, &mut action, tl!("Copy path"), true, TabAction::CopyPath);
+        if desktop {
+            let reveal = if cfg!(target_os = "macos") {
+                tl!("Show in Finder")
+            } else if cfg!(target_os = "windows") {
+                tl!("Show in Explorer")
+            } else {
+                tl!("Show in folder")
+            };
+            pick(ui, &mut action, reveal, true, TabAction::Reveal);
+        }
+    }
+    if desktop && app.window_count() > 1 {
+        ui.separator();
+        pick(ui, &mut action, tl!("Merge all windows"), true, TabAction::MergeAll);
+    }
+    action
+}
+
+impl PdfCraftApp {
+    /// Do what the tab menu of tab `i` chose.
+    pub(crate) fn apply_tab_action(&mut self, i: usize, action: TabAction) {
+        let Some(view) = self.views.get(i) else { return };
+        let doc = view.id;
+        let from = self.current_window();
+        match action {
+            TabAction::NewWindow => self.pending_window_ops.push(crate::WindowOp::NewView { doc, from }),
+            TabAction::MoveToNewWindow => self.pending_window_ops.push(crate::WindowOp::MoveTab { doc, from, to: None }),
+            TabAction::MoveToWindow(to) => self.pending_window_ops.push(crate::WindowOp::MoveTab { doc, from, to: Some(to) }),
+            TabAction::Close => self.request_close_tab(i),
+            TabAction::CloseOthers => self.close_tabs_where(|at| at != i),
+            TabAction::CloseToTheRight => self.close_tabs_where(|at| at > i),
+            TabAction::CopyPath => {
+                if let (Some(path), Some(ctx)) = (self.session.get(doc).and_then(|d| d.path.clone()), self.ctx.clone()) {
+                    ctx.copy_text(path);
+                }
+            }
+            TabAction::Reveal => {
+                if let Some(path) = self.session.get(doc).and_then(|d| d.path.clone()) {
+                    self.reveal_in_file_manager(&path);
+                }
+            }
+            TabAction::MergeAll => self.pending_window_ops.push(crate::WindowOp::MergeAll),
+        }
+    }
+
+    /// Close the tabs `which` picks (by index): the ones with nothing unsaved at once, and ask
+    /// about the first one that has.
+    fn close_tabs_where(&mut self, which: impl Fn(usize) -> bool) {
+        let mut ask = None;
+        for at in (0..self.views.len()).rev().filter(|at| which(*at)) {
+            let id = self.views[at].id;
+            if self.view_count(id) > 1 || !self.has_unsaved_work(at) {
+                self.request_close_tab(at);
+            } else {
+                ask = Some(id);
+            }
+        }
+        if let Some(id) = ask
+            && self.close_request.is_none()
+        {
+            self.close_request = Some(crate::CloseRequest::Tab(id));
+        }
+    }
+
+    /// Show a file in Finder, Explorer or the file manager. The path goes to the program as an
+    /// argument, never through a shell.
+    fn reveal_in_file_manager(&mut self, path: &str) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut command;
+            if cfg!(target_os = "macos") {
+                command = std::process::Command::new("open");
+                command.arg("-R").arg(path);
+            } else if cfg!(target_os = "windows") {
+                command = std::process::Command::new("explorer");
+                command.arg(format!("/select,{path}"));
+            } else {
+                command = std::process::Command::new("xdg-open");
+                command.arg(std::path::Path::new(path).parent().unwrap_or(std::path::Path::new(".")));
+            }
+            if let Err(e) = command.spawn() {
+                self.notify_fmt("Couldn't show the file: {e}", &[("e", &e.to_string())]);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = path;
     }
 }
 

@@ -242,3 +242,87 @@ fn window_commands_know_when_they_apply() {
     assert!(!h.state_mut().execute("window.close"));
     assert!(h.state().window_count() == 1);
 }
+
+// --- the tab's context menu ---
+
+#[test]
+fn the_tab_menu_opens_a_new_window() {
+    let mut h = two_docs_harness();
+    h.get_by_label("one.pdf").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("In new window").click();
+    h.run_steps(4);
+    assert_eq!(h.state().window_count(), 2);
+    assert_windows_ok(h.state());
+    // The tab stays; the second view is numbered.
+    assert_eq!(h.state().views.len(), 2);
+    h.get_by_label("one.pdf:1");
+    h.get_by_label("one.pdf:2");
+}
+
+#[test]
+fn closing_other_tabs_keeps_a_document_with_unsaved_changes_and_asks() {
+    let mut h = two_docs_harness();
+    h.state_mut().active = Some(1);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    let dirty = h.state().views[1].id;
+    h.get_by_label("one.pdf").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Close other tabs").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 2, "it stays");
+    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Tab(dirty)), "and asks");
+}
+
+#[test]
+fn closing_other_tabs_closes_the_clean_ones() {
+    let mut h = two_docs_harness();
+    h.get_by_label("one.pdf").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Close other tabs").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 1);
+    assert!(h.state().close_request.is_none());
+}
+
+#[test]
+fn copy_path_puts_the_path_on_the_clipboard() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-tabmenu-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("menu.pdf");
+    std::fs::write(&path, include_bytes!("data/form.pdf")).unwrap();
+    let file = path.to_string_lossy().into_owned();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
+        let file = file.clone();
+        move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_path(&file);
+            app
+        }
+    });
+    h.run_steps(4);
+    h.get_by_label("menu.pdf").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Copy path").click();
+    // The frame that applies the choice reports the command; look at every frame.
+    let mut copied: Vec<String> = Vec::new();
+    for _ in 0..4 {
+        h.run_steps(1);
+        copied.extend(
+            h.output().platform_output.commands.iter().filter_map(|c| if let egui::OutputCommand::CopyText(t) = c { Some(t.clone()) } else { None }),
+        );
+    }
+    assert!(copied.contains(&file), "{copied:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_tab_without_a_file_offers_no_path_entries() {
+    let mut h = two_docs_harness();
+    h.get_by_label("one.pdf").click_secondary();
+    h.run_steps(2);
+    assert!(h.query_by_label("Copy path").is_none());
+    assert!(h.query_by_label("Merge all windows").is_none(), "one window: nothing to merge");
+    h.get_by_label("Close");
+}

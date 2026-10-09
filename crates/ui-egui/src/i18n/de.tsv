@@ -2050,3 +2050,12 @@ action wizard	Start	Starten
 	Move tab to new window	Tab in neues Fenster verschieben
 	Merge all windows	Alle Fenster zusammenführen
 	Close window	Fenster schließen
+	In new window	In neuem Fenster öffnen
+	Move to new window	In neues Fenster verschieben
+	Move to window	In Fenster verschieben
+	Close other tabs	Andere Tabs schließen
+	Close tabs to the right	Tabs rechts schließen
+	Copy path	Pfad kopieren
+	Show in Finder	Im Finder zeigen
+	Show in Explorer	Im Explorer zeigen
+	Show in folder	Im Ordner zeigen
