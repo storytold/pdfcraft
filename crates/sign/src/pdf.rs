@@ -23,6 +23,10 @@ use crate::keys::DigestAlg;
 use crate::pkcs12::DigitalId;
 use crate::x509::{Certificate, build_chain};
 
+#[cfg(test)]
+#[path = "pdf_discovery_tests.rs"]
+mod discovery_tests;
+
 /// Digests of signed byte ranges (and parsed signed revisions), kept across revalidations of
 /// one document: incremental edits only append to the file, so the signed bytes and their
 /// digest don't change, and rehashing a large file on every edit was the expensive part of
@@ -34,6 +38,50 @@ pub struct DigestCache {
     map: std::sync::Mutex<HashMap<RangeKey, Vec<u8>>>,
     /// Signed revisions opened for change classification, by length and fingerprint.
     revisions: std::sync::Mutex<HashMap<(usize, [u8; 32]), Document>>,
+    /// Candidate identities only: validation still uses current bytes and current trust.
+    discovery: std::sync::Mutex<Option<TimestampCandidates>>,
+    #[cfg(test)]
+    discovery_scans: std::sync::atomic::AtomicUsize,
+}
+
+/// Keep only the most recently visited source/overlay. In particular, this must not retain
+/// a Document, its bytes, or parsed signature dictionaries across edits and saves.
+#[derive(Debug)]
+struct TimestampCandidates {
+    source: pdfcraft_cos::SourceIdentity,
+    modified: Vec<u32>,
+    candidates: Vec<ObjRef>,
+}
+
+const DISCOVERY_CACHE_LIMIT: usize = 4096;
+
+fn is_document_timestamp(object: &Object) -> bool {
+    object.as_dict().is_some_and(|d| d.name(b"Type") == Some(b"Sig") && d.name(b"SubFilter") == Some(b"ETSI.RFC3161") && d.contains(b"ByteRange"))
+}
+
+/// Only dictionary/null edits have a local effect on candidate membership. Changes to an
+/// object stream or a scalar used as an indirect /Length can affect unedited objects too.
+/// Checking both the original and current objects also covers freeing those dependencies.
+/// Unsupported or unreadable edits deliberately fall back to the complete bounded scan.
+fn changed_timestamp_candidates(doc: &Document, numbers: &[u32]) -> Option<Vec<ObjRef>> {
+    for (reference, object) in doc.scan_original_objects_subset(numbers.to_vec()) {
+        match object.ok()?.as_ref() {
+            Object::Dict(_) => {}
+            Object::Null if matches!(doc.xref_entry(reference.num), None | Some(pdfcraft_cos::XrefEntry::Free { .. })) => {}
+            _ => return None,
+        }
+    }
+    let mut candidates = Vec::new();
+    for (reference, object) in doc.scan_objects_subset(numbers.to_vec()) {
+        let object = object.ok()?;
+        if !matches!(object.as_ref(), Object::Dict(_) | Object::Null) {
+            return None;
+        }
+        if is_document_timestamp(&object) {
+            candidates.push(reference);
+        }
+    }
+    Some(candidates)
 }
 
 /// (end of first range, start of second, end of second, algorithm, fingerprint).
@@ -53,6 +101,61 @@ fn fingerprint(covered: &[u8]) -> [u8; 32] {
 }
 
 impl DigestCache {
+    fn timestamp_candidates(&self, doc: &Document) -> Vec<ObjRef> {
+        let mut slot = self.discovery.lock().ok();
+        let previous = slot.as_mut().and_then(|slot| slot.take());
+        let source = doc.source_identity();
+        let modified = doc.modified_objects();
+        // Reconstructed/unknown input and output-security changes take the original path.
+        let eligible = slot.is_some()
+            && doc.repair_log().is_empty()
+            && !doc.revisions().is_empty()
+            && !doc.encryption_changed()
+            && modified.len() <= DISCOVERY_CACHE_LIMIT;
+        if eligible && let Some(previous) = previous.filter(|previous| previous.source == source) {
+            // Undo/redo can remove overlays as well as add them. Revisit the union so an
+            // original candidate replaced or freed in the last snapshot can reappear.
+            let mut changed = previous.modified;
+            changed.extend_from_slice(&modified);
+            changed.sort_unstable();
+            changed.dedup();
+            if changed.len() <= DISCOVERY_CACHE_LIMIT
+                && let Some(mut candidates) = changed_timestamp_candidates(doc, &changed)
+            {
+                candidates.extend(previous.candidates.into_iter().filter(|r| changed.binary_search(&r.num).is_err()));
+                candidates.sort_unstable_by_key(|r| r.num);
+                if candidates.len() <= DISCOVERY_CACHE_LIMIT
+                    && let Some(slot) = slot.as_mut()
+                {
+                    **slot = Some(TimestampCandidates { source, modified, candidates: candidates.clone() });
+                }
+                return candidates;
+            }
+        }
+        #[cfg(test)]
+        self.discovery_scans.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut complete = true;
+        let candidates: Vec<_> = doc
+            .scan_objects_checked()
+            .filter_map(|(reference, object)| match object {
+                Ok(object) => is_document_timestamp(&object).then_some(reference),
+                Err(_) => {
+                    complete = false;
+                    None
+                }
+            })
+            .collect();
+        if eligible
+            && complete
+            && candidates.len() <= DISCOVERY_CACHE_LIMIT
+            && changed_timestamp_candidates(doc, &modified).is_some()
+            && let Some(slot) = slot.as_mut()
+        {
+            **slot = Some(TimestampCandidates { source, modified, candidates: candidates.clone() });
+        }
+        candidates
+    }
+
     /// The signed revision `bytes[..end]`, parsed (and kept).
     fn revision(&self, bytes: &[u8], end: usize) -> Option<Document> {
         let key = (end, fingerprint(&bytes[..end]));
@@ -261,7 +364,8 @@ pub fn list(doc: &Document, bytes: &[u8], trust: &TrustStore) -> Vec<SignatureIn
     list_cached(doc, bytes, trust, &DigestCache::default())
 }
 
-/// [`list`], reusing digests from `cache`.
+/// [`list`], reusing digests and standalone-timestamp discovery from `cache`. Field/widget
+/// structure and validation against `bytes` and `trust` are read again on every call.
 pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &DigestCache) -> Vec<SignatureInfo> {
     let pages = annot_pages(doc);
     let mut out = Vec::new();
@@ -311,14 +415,14 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
         out.push(info);
     }
     // Standalone document timestamps (ISO 32000-2 §12.8.2.2) live outside AcroForm fields.
-    for num in doc.object_numbers() {
-        let r = ObjRef { num, generation: doc.generation(num) };
+    let candidates = cache.timestamp_candidates(doc).into_iter().map(|r| r.num).collect();
+    for (r, o) in doc.scan_objects_subset(candidates) {
         if field_values.contains(&r) {
             continue;
         }
-        let o = doc.get(r);
+        let Ok(o) = o else { continue };
         let Some(d) = o.as_dict() else { continue };
-        if d.name(b"Type") != Some(b"Sig") || d.name(b"SubFilter") != Some(b"ETSI.RFC3161") || !d.contains(b"ByteRange") {
+        if !is_document_timestamp(&o) {
             continue;
         }
         let mut info = SignatureInfo {
@@ -707,9 +811,7 @@ pub(crate) fn signature_contents(doc: &Document) -> Vec<Vec<u8>> {
             }
         }
     }
-    for num in doc.object_numbers() {
-        let r = ObjRef { num, generation: doc.generation(num) };
-        let o = doc.get(r);
+    for (r, o) in doc.scan_objects() {
         let Some(d) = o.as_dict() else { continue };
         if d.name(b"Type") == Some(b"Sig") && d.name(b"SubFilter") == Some(b"ETSI.RFC3161") {
             add(d, Some(r));

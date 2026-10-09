@@ -13,6 +13,8 @@ const MAX_DEPTH: usize = 64;
 const MAX_NODES: u32 = 2_000_000;
 /// Largest decoded inline image.
 const MAX_IMAGE: usize = 32 << 20;
+/// Most items a choice list keeps.
+const MAX_ITEMS: usize = 1000;
 /// Longest text run kept.
 const MAX_TEXT: usize = 1 << 20;
 
@@ -48,6 +50,23 @@ fn child<'a, 'd>(n: XmlNode<'a, 'd>, name: &str) -> Option<XmlNode<'a, 'd>> {
 
 fn children<'a, 'd>(n: XmlNode<'a, 'd>, name: &'a str) -> impl Iterator<Item = XmlNode<'a, 'd>> + 'a {
     n.children().filter(move |c| c.is_element() && c.tag_name().name() == name)
+}
+
+/// The text of an image element: base64 is read whole up to the image cap (`text_of` stops at
+/// 1 MiB, which would cut a photo short).
+fn image_text_of(n: XmlNode) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    for d in n.descendants() {
+        if d.is_text()
+            && let Some(t) = d.text()
+        {
+            out.extend(t.bytes().filter(|b| !b.is_ascii_whitespace()));
+            if out.len() > MAX_IMAGE / 3 * 4 + 4 {
+                return None;
+            }
+        }
+    }
+    Some(out)
 }
 
 fn text_of(n: XmlNode) -> String {
@@ -302,7 +321,10 @@ fn parse_value(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Value {
                 return Value::Text(text_of(c));
             }
             "image" => {
-                let raw: Vec<u8> = text_of(c).bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+                let Some(raw) = image_text_of(c) else {
+                    warnings.push("an image is larger than 32 MB; it is left out".into());
+                    return Value::Empty;
+                };
                 let data = if c.attribute("transferEncoding").is_none_or(|e| e == "base64") {
                     match base64::engine::general_purpose::STANDARD.decode(&raw) {
                         Ok(d) => d,
@@ -353,13 +375,35 @@ fn parse_caption(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Option<Capti
     })
 }
 
-fn parse_items(n: XmlNode) -> Vec<String> {
-    // Several <items> lists may exist (display and bound values); the first one is what the
-    // widget shows / the check button's on and off values.
-    let Some(items) = children(n, "items").find(|i| i.attribute("presence") != Some("hidden")).or_else(|| child(n, "items")) else {
-        return Vec::new();
+/// The field's item lists: what is shown (the first `<items>` that is not the saved values,
+/// also a check button's on and off values) and, for choice lists, the values saved to the
+/// data (`<items save="1">`, usually hidden), empty when the shown text is the value.
+fn parse_items(n: XmlNode, warnings: &mut Vec<String>) -> (Vec<String>, Vec<String>) {
+    let lists: Vec<XmlNode> = children(n, "items").collect();
+    let is_saved = |i: &XmlNode| i.attribute("save") == Some("1") || i.attribute("presence") == Some("hidden");
+    let mut over = false;
+    let mut texts = |i: &XmlNode| -> Vec<String> {
+        let all: Vec<String> = i.children().filter(|c| c.is_element()).map(text_of).take(MAX_ITEMS + 1).collect();
+        if all.len() > MAX_ITEMS {
+            over = true;
+        }
+        all.into_iter().take(MAX_ITEMS).collect()
     };
-    items.children().filter(|c| c.is_element()).map(text_of).take(1000).collect()
+    let shown = lists.iter().find(|i| !is_saved(i)).or(lists.first());
+    let saved = lists.iter().find(|i| is_saved(i) && shown.is_none_or(|s| s != *i));
+    let shown: Vec<String> = shown.map(&mut texts).unwrap_or_default();
+    let mut saved: Vec<String> = saved.map(&mut texts).unwrap_or_default();
+    if over && warnings.len() < 100 {
+        warnings.push(format!(
+            "{} has more than {MAX_ITEMS} items; the rest are left out",
+            n.attribute("name").map_or_else(|| "a choice list".to_string(), |name| format!("the choice list {name}"))
+        ));
+    }
+    // A saved list shorter than the shown one is padded with the shown text.
+    if !saved.is_empty() && saved.len() < shown.len() {
+        saved.extend(shown.iter().skip(saved.len()).cloned());
+    }
+    (shown, saved)
 }
 
 fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
@@ -384,6 +428,18 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
     let scripts = parse_events(n);
     let numeric = matches!(kind, Ui::NumericEdit)
         || value_el.is_some_and(|v| v.children().any(|c| c.is_element() && matches!(c.tag_name().name(), "decimal" | "integer" | "float")));
+    let (items, item_values) = parse_items(n, warnings);
+    let choice = match (kind == Ui::ChoiceList, ui_el) {
+        (true, Some(e)) => {
+            let open = e.attribute("open").unwrap_or("onEntry");
+            ChoiceList {
+                list_box: matches!(open, "always" | "multiSelect"),
+                multi: open == "multiSelect",
+                editable: e.attribute("textEntry").is_some_and(|t| t == "1" || t == "true"),
+            }
+        }
+        _ => ChoiceList::default(),
+    };
     let validate_el = child(n, "validate");
     let validate_message = validate_el
         .and_then(|v| child(v, "message"))
@@ -401,7 +457,9 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         multiline: ui_el.is_some_and(|e| e.attribute("multiLine").is_some_and(|m| m == "1" || m == "true")),
         caption: parse_caption(child(n, "caption"), warnings),
         value: parse_value(value_el, warnings),
-        items: parse_items(n),
+        items,
+        item_values,
+        choice,
         max_chars,
         tooltip: child(n, "assist").and_then(|a| child(a, "toolTip")).map(text_of).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
         access: match n.attribute("access") {

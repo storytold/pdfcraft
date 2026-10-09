@@ -51,16 +51,25 @@ impl PdfString {
     }
 
     /// Decode a text string: UTF-16BE (BOM), UTF-8 (BOM, PDF 2.0) or PDFDocEncoding.
+    ///
+    /// Lenient beyond the spec, as readers are: invalid sequences after a BOM decode lossily
+    /// instead of dropping the string, a BOM-less string whose bytes are valid UTF-8 with
+    /// non-ASCII bytes (written by some producers) is read as UTF-8 rather than as
+    /// PDFDocEncoding mojibake, and stray leading U+FEFF (doubled BOMs) are removed.
     pub fn to_text(&self) -> String {
-        let b = &self.bytes;
-        if b.len() >= 2 && b[0] == 0xFE && b[1] == 0xFF {
-            let units: Vec<u16> = b[2..].as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
-            return String::from_utf16_lossy(&units);
-        }
-        if b.len() >= 3 && b[..3] == [0xEF, 0xBB, 0xBF] {
-            return String::from_utf8_lossy(&b[3..]).into_owned();
-        }
-        b.iter().map(|&c| pdfdoc_char(c)).collect()
+        let s = match self.bytes.as_slice() {
+            [0xFE, 0xFF, rest @ ..] => {
+                let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
+                String::from_utf16_lossy(&units)
+            }
+            [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+            b => match std::str::from_utf8(b) {
+                // Pure ASCII is identical either way; only non-ASCII UTF-8 needs the switch.
+                Ok(utf8) if !b.is_ascii() => utf8.to_owned(),
+                _ => b.iter().map(|&c| pdfdoc_char(c)).collect(),
+            },
+        };
+        if s.starts_with('\u{FEFF}') { s.trim_start_matches('\u{FEFF}').to_owned() } else { s }
     }
 }
 
@@ -382,6 +391,31 @@ mod tests {
             assert_eq!(PdfString::text(s).to_text(), s);
         }
         assert!(!PdfString::text("abc").bytes.starts_with(&[0xFE, 0xFF]));
+    }
+
+    #[test]
+    fn text_string_encodings() {
+        // UTF-16BE with BOM.
+        let mut utf16 = vec![0xFE, 0xFF];
+        utf16.extend("第一章 概述".encode_utf16().flat_map(u16::to_be_bytes));
+        assert_eq!(PdfString::literal(utf16).to_text(), "第一章 概述");
+        // UTF-8 with BOM (PDF 2.0): the BOM is not part of the text.
+        let mut utf8 = vec![0xEF, 0xBB, 0xBF];
+        utf8.extend_from_slice("第一章".as_bytes());
+        assert_eq!(PdfString::literal(utf8).to_text(), "第一章");
+        // Invalid UTF-8 after the BOM decodes lossily instead of vanishing.
+        assert_eq!(PdfString::literal(vec![0xEF, 0xBB, 0xBF, b'A', 0xFF, b'B']).to_text(), "A\u{FFFD}B");
+        // BOM-less raw UTF-8 from producers that skip the BOM.
+        assert_eq!(PdfString::literal("目录".as_bytes()).to_text(), "目录");
+        // PDFDocEncoding Latin-1 (not valid UTF-8) stays PDFDocEncoding.
+        assert_eq!(PdfString::literal(vec![b'C', b'a', b'f', 0xE9]).to_text(), "Café");
+        // Doubled BOMs leave no U+FEFF behind.
+        assert_eq!(PdfString::literal(vec![0xFE, 0xFF, 0xFE, 0xFF, 0x00, b'A']).to_text(), "A");
+        assert_eq!(PdfString::literal(vec![0xEF, 0xBB, 0xBF, 0xEF, 0xBB, 0xBF, b'A']).to_text(), "A");
+        // Odd trailing byte and empty strings never panic.
+        assert_eq!(PdfString::literal(vec![0xFE, 0xFF, 0x00, b'A', 0x00]).to_text(), "A");
+        assert_eq!(PdfString::literal(vec![0xFE, 0xFF]).to_text(), "");
+        assert_eq!(PdfString::literal(Vec::new()).to_text(), "");
     }
 
     #[test]

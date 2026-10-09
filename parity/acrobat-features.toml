@@ -902,8 +902,8 @@ milestone = "M3"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/control.rs::middle_click_autoscroll_latches_has_a_dead_zone_and_scrolls_both_directions", "crates/ui-egui/tests/control.rs::organize_pages_supports_autoscroll_without_selecting_or_reordering_pages", "crates/ui-egui/tests/control.rs::moving_before_middle_button_release_keeps_scrolling_without_starting_page_tools", "crates/ui-egui/tests/control.rs::farther_from_the_click_scrolls_faster_in_the_viewer_and_page_grid", "crates/ui-egui/tests/control.rs::autoscroll_uses_the_initial_click_position_when_input_arrives_in_one_frame", "crates/ui-egui/tests/control.rs::autoscroll_uses_elapsed_frame_time_and_preserves_fractional_motion_in_both_views"]
-notes = "Linux-only middle-button vertical autoscroll in the document and Organize Pages; other targets retain their existing middle-button input behavior. Click to toggle, release keeps scrolling on, and a Chromium-style nonlinear curve increases speed with vertical screen distance from the initial click. A 15-point dead zone pauses immediately. Continuous redraws use elapsed frame time and preserve fractional movement, tested at 30/60/120/144 fps. Cancels on another middle click, Escape, other pointer/wheel input, focus loss, tab changes and dialogs. Driven headlessly through the opt-in UI control channel (ui.click/ui.move/ui.drag). Keyboard-started timed scrolling is not implemented."
+evidence = ["crates/ui-egui/tests/control.rs::middle_click_autoscroll_latches_has_a_dead_zone_and_scrolls_both_directions", "crates/ui-egui/tests/control.rs::organize_pages_supports_autoscroll_without_selecting_or_reordering_pages", "crates/ui-egui/tests/control.rs::moving_before_middle_button_release_keeps_scrolling_without_starting_page_tools", "crates/ui-egui/tests/control.rs::farther_from_the_click_scrolls_faster_in_the_viewer_and_page_grid", "crates/ui-egui/tests/control.rs::autoscroll_uses_the_initial_click_position_when_input_arrives_in_one_frame", "crates/ui-egui/tests/control.rs::autoscroll_uses_elapsed_frame_time_and_preserves_fractional_motion_in_both_views", "crates/ui-egui/tests/control.rs::middle_button_pans_while_held_outside_linux", "crates/ui-egui/tests/comments.rs::a_middle_drag_with_a_drawing_tool_scrolls_instead_of_drawing"]
+notes = "Linux-only middle-button vertical autoscroll in the document and Organize Pages; Windows and macOS pan 1:1 while the middle button is held (Grabbing cursor, no latch). On every target the middle button never reaches the page tools, so it scrolls instead of drawing, selecting, cropping or moving. Click to toggle, release keeps scrolling on, and a Chromium-style nonlinear curve increases speed with vertical screen distance from the initial click. A 15-point dead zone pauses immediately. Continuous redraws use elapsed frame time and preserve fractional movement, tested at 30/60/120/144 fps. Cancels on another middle click, Escape, other pointer/wheel input, focus loss, tab changes and dialogs. Driven headlessly through the opt-in UI control channel (ui.click/ui.move/ui.drag). Keyboard-started timed scrolling is not implemented."
 
 [[feature]]
 id = "view.zoom-in-out"
@@ -1235,11 +1235,11 @@ title = "Page operations from the thumbnails panel (drag reorder, context menu)"
 area = "B"
 tier = "P1"
 milestone = "M4"
-status = "planned"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::dragging_pages_panel_thumbnails_reorders_pages", "crates/ui-egui/tests/viewer.rs::pages_panel_thumbnails_have_a_context_menu"]
+notes = "Drag the selection (or the page grabbed) to reorder, with a drop bar and edge scrolling; right-click offers Extract pages, Cut, Copy and Paste after. Not yet: Rotate, Delete, Insert and Page labels in the menu, dragging pages between documents, or dropping files onto the panel."
 
 [[feature]]
 id = "view.bookmarks-panel"
@@ -1806,8 +1806,8 @@ milestone = "M7"
 status = "partial"
 commands = ["edit.edit_text"]
 tools = ["text_lines", "text_paragraphs", "text_edit"]
-evidence = ["crates/edit/src/tests.rs::paragraphs_are_found_and_rewrapped", "crates/edit/src/tests.rs::text_lines_are_found_and_replaced_in_place", "crates/ui-egui/tests/editing.rs::editing_existing_text_in_place", "crates/automation/tests/automation.rs::editing_existing_text_through_tools"]
-notes = "click a paragraph box and retype it in place (font reused or Helvetica substituted, colour and spacing kept, rewrapped); drag a box to move it or its right-edge handle to rewrap it (edit.text-move-resize); per-character formatting changes are next"
+evidence = ["crates/edit/src/tests.rs::paragraphs_are_found_and_rewrapped", "crates/edit/src/tests.rs::text_lines_are_found_and_replaced_in_place", "crates/ui-egui/tests/editing.rs::editing_existing_text_in_place", "crates/automation/tests/automation.rs::editing_existing_text_through_tools", "crates/edit/src/tests.rs::a_line_whose_operator_starts_the_next_stream_can_be_edited", "crates/automation/tests/automation.rs::a_line_split_across_content_streams_is_listed_and_edited"]
+notes = "click a paragraph box and retype it in place (font reused or Helvetica substituted, colour and spacing kept, rewrapped); a page's /Contents pieces are parsed joined, so a line whose operands and operator sit in different pieces is listed and edited (lines and paragraphs still don't join across pieces; Edit image still parses each piece alone); drag a box to move it or its right-edge handle to rewrap it (edit.text-move-resize); per-character formatting changes are next"
 
 [[feature]]
 id = "edit.text-reflow"
@@ -2047,7 +2047,7 @@ status = "shipped"
 commands = ["edit.edit_text"]
 tools = ["image_edit"]
 evidence = ["crates/edit/src/tests.rs::page_images_move_turn_replace_and_delete", "crates/ui-egui/tests/editing.rs::editing_existing_images_on_the_page", "crates/automation/tests/automation.rs::editing_page_images_through_tools"]
-notes = "existing page images: rotate either way about the centre, flip horizontally or vertically (a q/cm/Q wrapper); added images too"
+notes = "existing raster images and grouped Form artwork: rotate either way about the centre, flip horizontally or vertically (a q/cm/Q wrapper); Forms stay intact as groups; added images too"
 
 [[feature]]
 id = "edit.image-move-resize"
@@ -2058,8 +2058,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.edit_text"]
 tools = ["image_edit"]
-evidence = ["crates/edit/src/tests.rs::page_images_move_turn_replace_and_delete", "crates/ui-egui/tests/editing.rs::editing_existing_images_on_the_page", "crates/automation/tests/automation.rs::editing_page_images_through_tools"]
-notes = "existing page images: select, drag to move, drag a corner to resize keeping proportions; Delete removes; added images too"
+evidence = ["crates/edit/src/tests.rs::form_artwork_edits_only_the_selected_placement", "crates/ui-egui/tests/editing.rs::editing_existing_form_artwork_on_the_page", "crates/automation/tests/automation.rs::editing_form_artwork_through_tools", "crates/edit/src/tests.rs::page_images_move_turn_replace_and_delete", "crates/ui-egui/tests/editing.rs::editing_existing_images_on_the_page", "crates/automation/tests/automation.rs::editing_page_images_through_tools"]
+notes = "existing raster images and grouped Form artwork: select, drag to move, drag a corner to resize keeping proportions; Delete removes one placement. Forms include their nested content as a group; individual internal elements and inline images are not supported. See docs/editing-images.md; added images too"
 
 [[feature]]
 id = "edit.image-extract"
@@ -2815,11 +2815,11 @@ title = "Thumbnail size slider"
 area = "D"
 tier = "P2"
 milestone = "M4"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["page.organize"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::page_grid_zooms_with_its_buttons_keys_and_pinch", "crates/ui-egui/tests/editing.rs::a_zoomed_page_grid_still_inserts_and_moves_at_the_right_gap", "crates/ui-egui/tests/editing.rs::zoomed_pages_in_view_are_rendered_at_the_size_drawn"]
+notes = "Organize page grid: 50–300% with toolbar buttons (and a percentage that resets to 100%), trackpad pinch or Ctrl/⌘ + wheel about the page under the pointer, and ⌘+ / ⌘− / ⌘0; pages drawn larger than their thumbnails are rendered at the size drawn while they are in view (the thumbnail stands in until then, and after an edit), so text stays sharp however long the document is. Missing: a slider as in Acrobat; the size is per document view and not remembered between sessions; the Pages side panel has no size control."
 
 [[feature]]
 id = "organize.split-every-n"
@@ -4398,7 +4398,7 @@ milestone = "M6"
 status = "partial"
 commands = ["form.fields"]
 tools = ["form_fill", "form_set_props"]
-evidence = ["crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/forms/src/tests.rs::choices_accept_exports_or_display_text", "crates/forms/src/tests.rs::rotated_fields_draw_in_their_quadrant", "crates/forms/src/tests.rs::a_rotated_field_draws_along_the_vertical_edge", "crates/automation/tests/automation.rs::rotating_a_field_through_tools", "crates/ui-egui/tests/prepare.rs::position_tab_rotates_a_field"]
+evidence = ["crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/forms/src/tests.rs::choices_accept_exports_or_display_text", "crates/forms/src/tests.rs::rotated_fields_draw_in_their_quadrant", "crates/engine/tests/form_rotation.rs::a_rotated_field_draws_along_the_vertical_edge", "crates/automation/tests/automation.rs::rotating_a_field_through_tools", "crates/ui-egui/tests/prepare.rs::position_tab_rotates_a_field"]
 notes = "auto-size, comb, multiline, password, quadding, /MK colours and /MK /R rotation (0, 90, 180, 270); approximate Helvetica metrics"
 
 [[feature]]
@@ -5142,8 +5142,8 @@ milestone = "M12"
 status = "partial"
 commands = ["file.open"]
 tools = ["doc_open", "doc_info", "form_fields", "form_fill", "js_run"]
-evidence = ["crates/xfa/src/tests.rs::layout_places_captions_fields_and_sizes_containers_to_their_content", "crates/xfa/src/tests.rs::tables_break_across_pages_and_repeat_their_header_row", "crates/xfa/src/tests.rs::rendering_into_the_pdf_replaces_the_placeholder_page_and_adds_fields", "crates/engine/src/tests.rs::dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally", "crates/automation/tests/automation.rs::dynamic_xfa_forms_open_render_fill_and_save_through_tools", "crates/ui-egui/tests/xfa.rs::a_dynamic_xfa_form_is_laid_out_and_filled", "crates/xfa/src/tests.rs::nested_width_less_subforms_lay_out_in_polynomial_time", "crates/js/src/tests.rs::instance_managers_add_remove_and_count", "crates/xfa/src/tests.rs::the_form_tree_carries_values_presence_instances_and_the_events", "crates/engine/src/tests.rs::xfa_scripts_initialize_calculate_validate_toggle_and_add_rows", "crates/automation/tests/automation.rs::xfa_scripts_run_for_buttons_and_field_changes_through_tools", "crates/ui-egui/tests/xfa.rs::xfa_buttons_run_their_scripts_in_the_app", "crates/engine/src/tests.rs::hostile_xfa_open_scripts_are_merged_capped_kept_from_printing_and_noted", "crates/engine/src/tests.rs::runaway_xfa_calculations_at_open_end_quickly_with_a_report", "crates/xfa/src/tests.rs::the_live_form_of_nested_repeating_subforms_stops_at_its_node_budget", "crates/xfa/src/tests.rs::data_ops_of_one_event_are_one_datasets_rewrite"]
-notes = "laid out from the template on open by the xfa crate (positioned, tb, lr-tb, table/row, page masters, breaks, repeated header rows, captions, rich text, JPEG images) into real pages and AcroForm fields (text, date with AFDate formats, check boxes, radio groups, buttons with reset/print/save/URL), filled from the datasets packet (including rows another viewer added), saved as an incremental revision with the values merged into the datasets so Adobe's viewers show them; doc_info reports xfa_layout. XFA JavaScript and FormCalc (form.xfa-formcalc) run in the js crate's XFA object model (xfa.form, SOM resolution, rawValue, presence, access, instance managers, xfa.host, xfa.layout, xfa.event): initialize and calculate on open, exit, validate and calculate after a field changes, click for buttons (through js_run and the app), with rows added and removed, subforms shown and hidden, and the form laid out again, all as one undo step and kept in the file. Hostile scripts are bounded per event (merged and capped effects, messages and console lines, lower loop limits and a time budget on open and calculate, one datasets rewrite per event, print/save/links/focus from clicks only, a runaway script abandoned and the form's scripts turned off) and what open-time scripts changed is noted. Missing: loops inside nested calls are only stopped by abandoning their thread, and script memory is not capped; the change event per keystroke; xfa.template, connections and data descriptions; a hidden instance of a repeating subform hides them all; choice lists are text fields; signature, image and barcode fields are blank; PNG images; keep rules; metrics are approximate and Acrobat fidelity is eyeballed on real forms, not measured (#60)"
+evidence = ["crates/xfa/src/tests.rs::layout_places_captions_fields_and_sizes_containers_to_their_content", "crates/xfa/src/tests.rs::tables_break_across_pages_and_repeat_their_header_row", "crates/xfa/src/tests.rs::rendering_into_the_pdf_replaces_the_placeholder_page_and_adds_fields", "crates/engine/src/tests.rs::dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally", "crates/automation/tests/automation.rs::dynamic_xfa_forms_open_render_fill_and_save_through_tools", "crates/ui-egui/tests/xfa.rs::a_dynamic_xfa_form_is_laid_out_and_filled", "crates/xfa/src/tests.rs::nested_width_less_subforms_lay_out_in_polynomial_time", "crates/js/src/tests.rs::instance_managers_add_remove_and_count", "crates/xfa/src/tests.rs::the_form_tree_carries_values_presence_instances_and_the_events", "crates/engine/src/tests.rs::xfa_scripts_initialize_calculate_validate_toggle_and_add_rows", "crates/automation/tests/automation.rs::xfa_scripts_run_for_buttons_and_field_changes_through_tools", "crates/ui-egui/tests/xfa.rs::xfa_buttons_run_their_scripts_in_the_app", "crates/engine/src/tests.rs::hostile_xfa_open_scripts_are_merged_capped_kept_from_printing_and_noted", "crates/engine/src/tests.rs::runaway_xfa_calculations_at_open_end_quickly_with_a_report", "crates/xfa/src/tests.rs::the_live_form_of_nested_repeating_subforms_stops_at_its_node_budget", "crates/xfa/src/tests.rs::data_ops_of_one_event_are_one_datasets_rewrite", "crates/xfa/src/tests.rs::choice_lists_signatures_passwords_and_pictures_become_fields_and_images", "crates/xfa/src/tests.rs::choice_values_come_from_the_data_as_saved_values_and_several_for_lists", "crates/xfa/src/tests.rs::pictures_are_sized_from_their_headers_and_hostile_ones_are_refused_unallocated", "crates/engine/src/tests.rs::xfa_choice_lists_signature_and_picture_fields_open_fill_script_and_save"]
+notes = "laid out from the template on open by the xfa crate (positioned, tb, lr-tb, table/row, page masters, breaks, repeated header rows, captions, rich text, JPEG/PNG/GIF images) into real pages and AcroForm fields (text, password, date with AFDate formats, check boxes, radio groups, drop-downs and list boxes with shown/saved item pairs and multi-select, signature fields, image fields showing their picture (pictures decoded once per document, at most 20 million pixels, and reused across re-layouts), buttons with reset/print/save/URL), filled from the datasets packet (including rows another viewer added), saved as an incremental revision with the values merged into the datasets so Adobe's viewers show them; doc_info reports xfa_layout. XFA JavaScript and FormCalc (form.xfa-formcalc) run in the js crate's XFA object model (xfa.form, SOM resolution, rawValue, presence, access, instance managers, xfa.host, xfa.layout, xfa.event): initialize and calculate on open, exit, validate and calculate after a field changes, click for buttons (through js_run and the app), with rows added and removed, subforms shown and hidden, and the form laid out again, all as one undo step and kept in the file. Hostile scripts are bounded per event (merged and capped effects, messages and console lines, lower loop limits and a time budget on open and calculate, one datasets rewrite per event, print/save/links/focus from clicks only, a runaway script abandoned and the form's scripts turned off) and what open-time scripts changed is noted. Missing: loops inside nested calls are only stopped by abandoning their thread, and script memory is not capped; the change event per keystroke; xfa.template, connections and data descriptions; a hidden instance of a repeating subform hides them all; choosing a new picture for an image field; barcodes are drawn as their text, not bars; keep rules; metrics are approximate and Acrobat fidelity is eyeballed on real forms, not measured (#60)"
 
 [[feature]]
 id = "form.xfa-formcalc"
@@ -5213,9 +5213,9 @@ tier = "P0"
 milestone = "M5"
 status = "shipped"
 commands = ["sign.fill.date"]
-tools = ["fill_sign_add"]
-evidence = ["crates/ui-egui/tests/fill_sign.rs::text_marks_and_date", "crates/automation/tests/automation.rs::fill_and_sign_through_tools"]
-notes = "local date, m/d/yyyy"
+tools = ["fill_sign_add", "fill_sign_date_format"]
+evidence = ["crates/ui-egui/tests/fill_sign.rs::text_marks_and_date", "crates/automation/tests/automation.rs::fill_and_sign_through_tools", "crates/ui-egui/tests/date_format.rs::fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered", "crates/engine/src/dates.rs::presets_write_the_day_in_their_own_order", "crates/engine/src/dates.rs::names_follow_the_date_language", "crates/ui-egui/tests/date_format.rs::month_names_follow_the_date_language_or_else_the_interface_language", "crates/ui-egui/tests/date_format.rs::a_date_the_pdf_cannot_hold_is_refused_with_a_warning_first"]
+notes = "local date in Preferences ▸ Date format (default m/d/yyyy; 12 presets or any pattern in Acrobat date letters with \\ escapes, checked and previewed as typed, remembered; only whole date codes accepted; month and weekday names in the interface languages, Czech months in the genitive after a day, following the interface language unless one is picked; fill_sign_add takes a one-off format and language). Beyond Acrobat: its Fill & Sign has no format setting (only Acrobat Sign accounts do). Missing: Fill & Sign text is Helvetica/WinAnsi, so a date with letters outside Western European (Czech ř, Japanese, Chinese names) is refused with a warning instead of being saved as ?; the OS locale's format isn't offered as a preset; names in languages without an interface translation"
 
 [[feature]]
 id = "form.fill-sign-signature"
@@ -5235,11 +5235,11 @@ title = "Fill & Sign: flatten on save"
 area = "F"
 tier = "P0"
 milestone = "M5"
-status = "partial"
+status = "shipped"
 commands = ["comment.flatten"]
-tools = ["doc_flatten"]
-evidence = ["crates/edit/src/tests.rs::flattening_draws_appearances_into_the_page_and_removes_the_comments", "crates/engine/src/tests.rs::flattening_keeps_the_look_and_drops_the_objects", "crates/automation/tests/automation.rs::flattening_through_tools"]
-notes = "Flatten comments flattens Fill & Sign items; no flatten-on-save option yet"
+tools = ["doc_save", "doc_flatten"]
+evidence = ["crates/edit/src/tests.rs::fill_sign_flatten_bakes_marks_keeps_other_comments_and_does_not_reuse_pcfl0", "crates/engine/src/tests.rs::flattening_fill_and_sign_keeps_other_comments_fields_and_undoes", "crates/engine/src/tests.rs::flattening_fill_and_sign_is_refused_without_permission_to_change", "crates/automation/tests/automation.rs::saving_with_flatten_fill_sign_bakes_marks_and_leaves_other_comments", "crates/ui-egui/tests/fill_sign.rs::saving_flattens_fill_and_sign_only_when_the_preference_is_on"]
+notes = "Preferences ▸ Fill & Sign, and doc_save flatten_fill_sign, bake text, marks and signatures into the page. The option defaults off, so a normal save leaves them editable. Other comments and form fields stay. Flatten comments still flattens every comment."
 
 [[feature]]
 id = "form.autofill-profile"
@@ -7829,9 +7829,9 @@ tier = "P0"
 milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
-tools = ["printers", "doc_print"]
-evidence = ["crates/print/src/tests.rs::spooler_arguments_and_printer_list"]
-notes = "CUPS printers via lpstat; Save as PDF; Windows spooler pending"
+tools = ["printers", "printer_options", "doc_print"]
+evidence = ["crates/print/src/tests.rs::spooler_arguments_and_printer_list", "crates/print/src/tests.rs::printer_options_come_from_the_ppd", "crates/print/src/tests.rs::printer_option_defaults_and_job_arguments", "crates/ui-egui/tests/print.rs::print_dialog_shows_the_printer_driver_options"]
+notes = "CUPS printers via lpstat; Save as PDF; Windows spooler pending. Properties…: on CUPS the driver's own PPD job options (tray, paper type, finishing …, not installable options or what the dialog sets) for this job, sent as lp -o; on Windows the driver's Printing Preferences window (printui), saved as that printer's per-user defaults rather than per job"
 
 [[feature]]
 id = "print.copies-collate"
@@ -9349,8 +9349,8 @@ tier = "P0"
 milestone = "M13"
 status = "shipped"
 commands = []
-tools = []
-evidence = ["crates/automation/tests/automation.rs::mcp_session_over_stdio", "crates/automation/tests/automation.rs::mcp_errors"]
+tools = ["command_list", "command_run", "command_batch", "doc_inspect", "render_preview"]
+evidence = ["crates/automation/tests/automation.rs::mcp_session_over_stdio", "crates/automation/tests/automation.rs::mcp_errors", "crates/automation/tests/automation.rs::conventions_core_tools_preserve_root_and_batch_errors", "crates/automation/tests/automation.rs::conventions_annotations_and_strict_keys_in_both_modes"]
 notes = ""
 
 [[feature]]
@@ -9374,7 +9374,7 @@ milestone = "M13"
 status = "shipped"
 commands = []
 tools = ["doc_info", "text_extract", "page_render"]
-evidence = ["crates/automation/tests/automation.rs::mcp_resources_expose_open_documents", "crates/automation/src/mcp.rs::resource_uris_parse"]
+evidence = ["crates/automation/tests/automation.rs::mcp_resources_expose_open_documents", "crates/automation/src/mcp.rs::resource_uris_parse", "crates/automation/tests/automation.rs::conventions_resources"]
 notes = "resources/list, resources/templates/list and resources/read: pdfcraft://doc/{doc}/info (JSON), /text, /page/{page}/text, /page/{page}/image?dpi= (PNG)"
 
 [[feature]]
@@ -9675,7 +9675,7 @@ status = "partial"
 commands = ["app.preferences"]
 tools = ["js_enabled"]
 evidence = ["crates/ui-egui/tests/javascript.rs::document_scripts_and_preferences", "crates/ui-egui/tests/ui.rs::preferences_selects_default_workspace_for_next_open", "crates/ui-egui/tests/control.rs::control_default_workspace_and_session_override"]
-notes = "Preferences dialog with Interface language, Documents and view (persistent default workspace with session override), Identity and JavaScript; other categories still live in their tools, and it isn't generated from a schema yet."
+notes = "Preferences dialog with Interface language, Documents and view (persistent default workspace with session override), Identity, Fill & Sign (flatten on save, off by default) and JavaScript; other categories still live in their tools, and it isn't generated from a schema yet."
 
 [[feature]]
 id = "misc.prefs-general"
@@ -9818,8 +9818,8 @@ milestone = "M14"
 status = "partial"
 commands = ["app.preferences"]
 tools = []
-evidence = ["crates/ui-egui/src/i18n/mod.rs::windows_display_language_resolves_chinese_scripts", "crates/ui-egui/src/i18n/mod.rs::windows_display_language_query_returns_a_locale_tag", "crates/ui-egui/src/i18n/mod.rs::language_persists_and_invalid_input_keeps_current_language", "crates/ui-egui/src/i18n/mod.rs::bundled_catalogs_are_consistent", "crates/ui-egui/src/i18n/mod.rs::japanese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_history_and_diagnostics_preserve_user_values", "crates/ui-egui/tests/control.rs::simplified_chinese_signature_prompts_and_errors_keep_document_state", "crates/ui-egui/tests/control.rs::language_switch_preserves_document_and_command_ids", "crates/ui-egui/tests/control.rs::japanese_controls_and_search_keep_command_ids", "crates/ui-egui/tests/control.rs::japanese_dialogs_errors_and_custom_action_names", "crates/ui-egui/src/i18n/mod.rs::french_is_registered", "crates/ui-egui/src/i18n/mod.rs::french_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::french_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::french_history_and_diagnostics_preserve_user_values", "crates/ui-egui/src/i18n/mod.rs::german_certificate_subject_has_a_distinct_context", "crates/ui-egui/src/widgets.rs::search_placeholder_never_overlaps_the_shortcut", "crates/ui-egui/src/home.rs::translated_card_description_leaves_room_for_the_action", "crates/ui-egui/tests/control.rs::german_preferences_and_search_keep_command_ids", "crates/ui-egui/src/i18n/mod.rs::telugu_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::telugu_labels_have_glyphs", "crates/ui-egui/src/i18n/mod.rs::hungarian_is_registered", "crates/ui-egui/src/i18n/mod.rs::hungarian_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::hungarian_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::hungarian_history_and_diagnostics_preserve_user_values", "crates/ui-egui/src/i18n/mod.rs::ukrainian_is_registered_and_persists", "crates/ui-egui/src/i18n/mod.rs::ukrainian_integer_plurals_cover_teens_and_large_counts", "crates/ui-egui/src/i18n/mod.rs::ukrainian_calendar_uses_month_case_for_dates", "crates/ui-egui/src/i18n/mod.rs::ukrainian_catalog_does_not_leave_english_ui_text", "crates/ui-egui/src/i18n/mod.rs::ukrainian_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::ukrainian_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::ukrainian_history_and_diagnostics_preserve_user_values"]
-notes = "Preferences switches Auto (system language)/English/Japanese/Simplified Chinese/Traditional Chinese/Czech/Brazilian Portuguese/German/Spanish/French/Telugu/Hungarian/Ukrainian and persists; ui.set language auto|en|ja|zh-hans|zh-hant|cs|pt-br|de|es|fr|te|hu|uk and ui.state expose it. TSV catalogs per language (same system as PhotoCraft); every dialog, panel and notice goes through tl!. Japanese, Traditional Chinese, Simplified Chinese, German, Spanish, French and Hungarian cover commands, dialogs, panels, shortcuts and history labels; Czech and Brazilian Portuguese the menus. French locales (fr, fr_FR, fr_CA, fr_BE) select the French catalog, German locales (de, de_DE, de_AT, de_CH) the German one, Hungarian locales (hu, hu_HU) the Hungarian one. German search hints reserve shortcut space, Home cards bound translated text, certificate Subject has its own context, and inserted tool names keep their capitalization. Engine/OS error details stay untranslated. Auto detects the Windows display language after locale environment overrides, with Chinese script/region mapping and English fallback. Missing: Czech and Brazilian Portuguese dialogs, Chinese and Telugu font delivery in releases, a full localization audit."
+evidence = ["crates/ui-egui/src/i18n/mod.rs::windows_display_language_resolves_chinese_scripts", "crates/ui-egui/src/i18n/mod.rs::neutral_locale_does_not_override_display_language", "crates/ui-egui/src/i18n/mod.rs::windows_display_language_query_returns_a_locale_tag", "crates/ui-egui/src/i18n/mod.rs::language_persists_and_invalid_input_keeps_current_language", "crates/ui-egui/src/i18n/mod.rs::bundled_catalogs_are_consistent", "crates/ui-egui/src/i18n/mod.rs::japanese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_history_and_diagnostics_preserve_user_values", "crates/ui-egui/tests/control.rs::simplified_chinese_signature_prompts_and_errors_keep_document_state", "crates/ui-egui/tests/control.rs::language_switch_preserves_document_and_command_ids", "crates/ui-egui/tests/control.rs::japanese_controls_and_search_keep_command_ids", "crates/ui-egui/tests/control.rs::japanese_dialogs_errors_and_custom_action_names", "crates/ui-egui/src/i18n/mod.rs::french_is_registered", "crates/ui-egui/src/i18n/mod.rs::french_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::french_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::french_history_and_diagnostics_preserve_user_values", "crates/ui-egui/src/i18n/mod.rs::german_certificate_subject_has_a_distinct_context", "crates/ui-egui/src/widgets.rs::search_placeholder_never_overlaps_the_shortcut", "crates/ui-egui/src/home.rs::translated_card_description_leaves_room_for_the_action", "crates/ui-egui/tests/control.rs::german_preferences_and_search_keep_command_ids", "crates/ui-egui/src/i18n/mod.rs::telugu_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::telugu_labels_have_glyphs", "crates/ui-egui/src/i18n/mod.rs::hungarian_is_registered", "crates/ui-egui/src/i18n/mod.rs::hungarian_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::hungarian_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::hungarian_history_and_diagnostics_preserve_user_values", "crates/ui-egui/src/i18n/mod.rs::ukrainian_is_registered_and_persists", "crates/ui-egui/src/i18n/mod.rs::ukrainian_integer_plurals_cover_teens_and_large_counts", "crates/ui-egui/src/i18n/mod.rs::ukrainian_calendar_uses_month_case_for_dates", "crates/ui-egui/src/i18n/mod.rs::ukrainian_catalog_does_not_leave_english_ui_text", "crates/ui-egui/src/i18n/mod.rs::ukrainian_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::ukrainian_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::ukrainian_history_and_diagnostics_preserve_user_values"]
+notes = "Preferences switches Auto (system language)/English/Japanese/Simplified Chinese/Traditional Chinese/Czech/Brazilian Portuguese/German/Spanish/French/Telugu/Hungarian/Ukrainian and persists; ui.set language auto|en|ja|zh-hans|zh-hant|cs|pt-br|de|es|fr|te|hu|uk and ui.state expose it. TSV catalogs per language (same system as PhotoCraft); every dialog, panel and notice goes through tl!. Japanese, Traditional Chinese, Simplified Chinese, German, Spanish, French and Hungarian cover commands, dialogs, panels, shortcuts and history labels; Czech and Brazilian Portuguese the menus. French locales (fr, fr_FR, fr_CA, fr_BE) select the French catalog, German locales (de, de_DE, de_AT, de_CH) the German one, Hungarian locales (hu, hu_HU) the Hungarian one. German search hints reserve shortcut space, Home cards bound translated text, certificate Subject has its own context, and inserted tool names keep their capitalization. Engine/OS error details stay untranslated. Auto detects the Windows display language after explicitly named supported locale overrides; neutral C/POSIX launcher locales are skipped on Windows, with Chinese script/region mapping and English fallback. Missing: Czech and Brazilian Portuguese dialogs, Chinese and Telugu font delivery in releases, a full localization audit."
 
 [[feature]]
 id = "misc.prefs-reading"

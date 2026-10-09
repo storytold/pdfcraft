@@ -23,6 +23,8 @@ const MARGIN: f32 = 28.0;
 const SIDE: f32 = 70.0;
 const THUMB_TAG: u64 = 1 << 63;
 const TEXT_TAG: u64 = 1 << 62;
+/// A page rendered for the organize grid at the size it is drawn there.
+const GRID_TAG: u64 = 1 << 61;
 /// The tag of a raster that is out of date (shown until its replacement arrives).
 const STALE_TAG: u64 = u64::MAX;
 /// Pages whose raster would exceed this many device pixels on a side are drawn in tiles.
@@ -31,6 +33,33 @@ const TILE: u32 = 1024;
 /// Longest side of the low-resolution backdrop drawn under tiles.
 const BASE_SIDE: f32 = 2048.0;
 const THUMB_W: f32 = 132.0;
+const THUMB_H: f32 = 176.0;
+const THUMB_BYTES: usize = 24 * 1024 * 1024;
+const PAGE_BYTES: usize = 128 * 1024 * 1024;
+const TILE_BYTES: usize = 128 * 1024 * 1024;
+const UPLOAD_BYTES_PER_FRAME: usize = 16 * 1024 * 1024;
+const RESULTS_PER_FRAME: usize = 8;
+/// A defensive ceiling for unusually large viewports / n-up previews.
+const MAX_THUMB_DEMAND: usize = 256;
+/// At most this many whole-page rasters are cached beyond the ones on screen.
+const MAX_CACHED_PAGES: usize = 24;
+
+fn rgba_bytes(width: usize, height: usize) -> usize {
+    width.saturating_mul(height).saturating_mul(4)
+}
+
+fn texture_bytes(tex: &TextureHandle) -> usize {
+    let [w, h] = tex.size();
+    rgba_bytes(w, h)
+}
+
+/// Visible grid rows, plus one adjacent row in either direction. Work is independent of
+/// document length, including after a large scroll jump.
+fn thumbnail_rows(top: f32, bottom: f32, row_height: f32, rows: usize) -> Range<usize> {
+    let first = (top.max(0.0) / row_height).floor() as usize;
+    let end = (bottom.max(0.0) / row_height).ceil() as usize;
+    first.saturating_sub(1).min(rows)..end.saturating_add(1).min(rows)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fit {
@@ -181,6 +210,21 @@ struct PageTex {
     tex: TextureHandle,
 }
 
+/// Retained RGBA texture accounting for automation and performance regressions. These
+/// surface bytes exclude driver overhead and temporary upload buffers; they are not RSS.
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
+pub struct RasterMemory {
+    pub thumbnail_count: usize,
+    pub thumbnail_bytes: usize,
+    pub page_count: usize,
+    pub page_bytes: usize,
+    pub tile_count: usize,
+    pub tile_bytes: usize,
+    pub thumbnail_demand: usize,
+    /// Last submitted missing results; workers may have completed some since submission.
+    pub pending_requests: usize,
+}
+
 pub struct DocView {
     pub id: DocId,
     pub zoom: f32,
@@ -219,11 +263,18 @@ pub struct DocView {
     errors: HashMap<usize, String>,
     /// When each still-missing page was first shown, to flag unusually slow renders.
     waiting_since: HashMap<usize, f64>,
-    thumbs: HashMap<usize, TextureHandle>,
+    thumbs: HashMap<usize, PageTex>,
+    /// This frame's consumers, with visible cells ahead of prefetch.
+    thumb_demand: HashMap<usize, bool>,
+    frame_queue: Vec<RenderRequest>,
+    /// Pages on screen this frame. Their rasters and tiles are always admitted: the viewport
+    /// bounds them, and the byte and count limits apply to prefetch only.
+    frame_visible: HashSet<usize>,
     /// Thumbnails that are out of date (still shown until their replacement arrives).
     stale_thumbs: HashSet<usize>,
-    /// Sharp tiles of large pages: (page, tile x, tile y) → (scale tag, texture).
-    tiles: HashMap<(usize, u32, u32), (u64, TextureHandle)>,
+    /// Sharp tiles of large pages: (page, scale tag, tile x, tile y) → texture. Tiles of an
+    /// earlier zoom stay, drawn stretched, until those of the current one cover the page.
+    tiles: HashMap<(usize, u64, u32, u32), TextureHandle>,
     /// Text layers, extracted in the background on demand (selection, find, copy).
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
     pub(crate) text_failed: HashSet<usize>,
@@ -284,6 +335,8 @@ pub struct DocView {
     pub sign: crate::sign_ui::SignView,
     /// Organize: the pages being dragged to a new place.
     pub org_drag: Option<Vec<usize>>,
+    /// Pages panel: the pages being dragged to a new place.
+    pub panel_drag: Option<Vec<usize>>,
     /// Marquee Zoom / Snapshot: the rectangle being dragged (page, start), and a finished one.
     pub marquee: Option<(usize, Pos2)>,
     pub marquee_done: Option<crate::zoom_snap::Marquee>,
@@ -300,6 +353,29 @@ pub struct DocView {
     /// The page-grid gap under the pointer this frame (where dropped files go), when it can
     /// take pages.
     pub grid_gap: Option<usize>,
+    /// How large the page grid draws its pages (1.0 = the usual thumbnails).
+    grid_zoom: f32,
+    /// A zoom asked for this frame (toolbar, pinch, keys); the grid applies it once it has laid
+    /// out, so it can keep the same pages in view.
+    grid_zoom_request: Option<f32>,
+    /// The page to keep in place after a grid zoom, and how far below the top of the grid its
+    /// cell was.
+    grid_anchor: Option<(usize, f32)>,
+    /// Sharp renders of the pages the grid shows larger than a thumbnail: only those in view,
+    /// at the size drawn (device pixels wide).
+    grid_pages: HashMap<usize, (u32, TextureHandle)>,
+}
+
+/// The page grid's zoom range and the step of its buttons and keys.
+pub const GRID_ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.5..=3.0;
+const GRID_ZOOM_STEP: f32 = 1.25;
+/// How far a sharp grid render may be from the size drawn before it is redone: a pinch changes
+/// the size on every frame, and a slightly soft or slightly large image is fine meanwhile.
+const GRID_SHARP: std::ops::RangeInclusive<f32> = 0.9..=1.6;
+
+/// Whether an image `have` device pixels wide is good enough to draw `want` pixels wide.
+fn sharp_enough(have: u32, want: f32) -> bool {
+    want > 0.0 && GRID_SHARP.contains(&(have as f32 / want))
 }
 
 /// Organize-toolbar actions that need the app (file pickers, new tabs, dialogs).
@@ -321,6 +397,19 @@ pub enum ViewAction {
 }
 
 impl DocView {
+    pub fn raster_memory(&self) -> RasterMemory {
+        RasterMemory {
+            thumbnail_count: self.thumbs.len(),
+            thumbnail_bytes: self.thumbs.values().fold(0usize, |n, p| n.saturating_add(texture_bytes(&p.tex))),
+            page_count: self.pages.len(),
+            page_bytes: self.pages.values().fold(0usize, |n, p| n.saturating_add(texture_bytes(&p.tex))),
+            tile_count: self.tiles.len(),
+            tile_bytes: self.tiles.values().fold(0usize, |n, tex| n.saturating_add(texture_bytes(tex))),
+            thumbnail_demand: self.thumb_demand.len(),
+            pending_requests: self.last_queue.len(),
+        }
+    }
+
     /// Where `page` is drawn on screen this frame (`None` when it is not on screen).
     pub fn page_screen_rect(&self, page: usize) -> Option<Rect> {
         self.screen_xforms.iter().find(|(p, _)| *p == page).map(|(_, xf)| xf.rect)
@@ -334,6 +423,11 @@ impl DocView {
     /// Whether a middle-button scrolling gesture is active (tests and automation).
     pub fn auto_scrolling(&self) -> bool {
         self.auto_scroll.active()
+    }
+
+    /// Whether a held middle-button pan is active, outside Linux (tests and automation).
+    pub fn middle_panning(&self) -> bool {
+        self.auto_scroll.panning()
     }
 
     /// Pages that could not be rendered, with the reason (for automation; 0-based pages).
@@ -370,6 +464,9 @@ impl DocView {
             errors: HashMap::new(),
             waiting_since: HashMap::new(),
             thumbs: HashMap::new(),
+            thumb_demand: HashMap::new(),
+            frame_queue: Vec::new(),
+            frame_visible: HashSet::new(),
             stale_thumbs: HashSet::new(),
             tiles: HashMap::new(),
             texts: HashMap::new(),
@@ -400,6 +497,10 @@ impl DocView {
             pending_action: None,
             insert_at: None,
             grid_gap: None,
+            grid_zoom: 1.0,
+            grid_zoom_request: None,
+            grid_anchor: None,
+            grid_pages: HashMap::new(),
             comments: Default::default(),
             measure: Default::default(),
             forms: Default::default(),
@@ -411,6 +512,7 @@ impl DocView {
             crop_drag: None,
             sign: Default::default(),
             org_drag: None,
+            panel_drag: None,
             marquee: None,
             marquee_done: None,
             fill_text: None,
@@ -440,6 +542,8 @@ impl DocView {
         self.goto_point = None;
         self.zoom_anchor = None;
         self.flash = None;
+        // A thumbnail drag holds page indexes from before the change.
+        self.panel_drag = None;
     }
 
     /// Pages an organize command acts on: the selection, or the current page.
@@ -498,6 +602,8 @@ impl DocView {
             p.tag = STALE_TAG;
         }
         self.stale_thumbs.extend(self.thumbs.keys().copied());
+        // Pages may have moved: a sharp render of another page would be worse than a soft one.
+        self.grid_pages.clear();
         self.tiles.clear();
         self.texts.clear();
         self.text_failed.clear();
@@ -520,7 +626,7 @@ impl DocView {
         if self.thumbs.contains_key(&page) {
             self.stale_thumbs.insert(page);
         }
-        self.tiles.retain(|(p, _, _), _| *p != page);
+        self.tiles.retain(|(p, _, _, _), _| *p != page);
         self.texts.remove(&page);
         self.text_failed.remove(&page);
         self.errors.remove(&page);
@@ -555,7 +661,7 @@ impl DocView {
 
     /// A page's thumbnail texture, when rendered (the print preview uses them).
     pub(crate) fn thumb_id(&self, page: usize) -> Option<egui::TextureId> {
-        self.thumbs.get(&page).map(|t| t.id())
+        self.thumbs.get(&page).map(|t| t.tex.id())
     }
 
     pub(crate) fn page_text(&self, page: usize) -> Option<Arc<PageText>> {
@@ -663,7 +769,7 @@ impl DocView {
     }
 
     pub fn thumb(&self, page: usize) -> Option<&TextureHandle> {
-        self.thumbs.get(&page)
+        self.thumbs.get(&page).map(|t| &t.tex)
     }
 
     pub fn go_to_page(&mut self, page: usize) {
@@ -890,6 +996,23 @@ impl DocView {
         true
     }
 
+    /// How large the page grid draws its pages (1.0 = the usual thumbnails).
+    pub fn grid_zoom(&self) -> f32 {
+        self.grid_zoom
+    }
+
+    /// Zoom the page grid; out-of-range values are clamped and nonsense is ignored.
+    pub fn set_grid_zoom(&mut self, zoom: f32) {
+        if zoom.is_finite() {
+            self.grid_zoom = zoom.clamp(*GRID_ZOOM_RANGE.start(), *GRID_ZOOM_RANGE.end());
+        }
+    }
+
+    /// How many device pixels wide the grid's sharp render of `page` is, if it has one.
+    pub fn grid_page_pixels(&self, page: usize) -> Option<u32> {
+        self.grid_pages.get(&page).map(|(w, _)| *w)
+    }
+
     /// Zoom keeping the centre of the view still.
     pub fn set_zoom(&mut self, zoom: f32) {
         let centre = self.viewport_screen.center();
@@ -921,55 +1044,263 @@ impl DocView {
         }
     }
 
-    /// Pull finished renders into textures.
-    pub fn receive(&mut self, ctx: &egui::Context, pool: &RenderPool) {
-        let mut got = false;
-        // Inline (single-threaded, e.g. web) rendering happens inside try_recv: one page per frame.
-        let budget = if pool.is_inline() { 1 } else { usize::MAX };
-        let mut n = 0;
-        while n < budget
-            && let Some(r) = pool.try_recv()
-        {
-            n += 1;
-            got = true;
-            if r.request.kind == RequestKind::Text {
-                match r.text {
-                    Some(t) => {
-                        self.texts.insert(r.request.page, t);
-                        self.refresh_find_page(r.request.page);
-                    }
-                    None => {
-                        log::warn!("page {} text: {}", r.request.page + 1, r.error.unwrap_or_default());
-                        self.text_failed.insert(r.request.page);
-                    }
+    /// Start collecting demand from every consumer before scheduling or uploading results.
+    pub(crate) fn begin_render_frame(&mut self) {
+        self.thumb_demand.clear();
+        self.frame_queue.clear();
+        self.frame_visible.clear();
+    }
+
+    pub(crate) fn need_thumbnail(&mut self, page: usize, visible: bool) {
+        if page >= self.page_count {
+            return;
+        }
+        if let Some(priority) = self.thumb_demand.get_mut(&page) {
+            *priority |= visible;
+        } else if self.thumb_demand.len() < MAX_THUMB_DEMAND {
+            self.thumb_demand.insert(page, visible);
+        } else if visible && let Some(prefetch) = self.thumb_demand.iter().find_map(|(&p, &v)| (!v).then_some(p)) {
+            self.thumb_demand.remove(&prefetch);
+            self.thumb_demand.insert(page, true);
+        }
+    }
+
+    /// Only the displayed document owns raster textures. Tabs keep their document and view
+    /// state, but do not each retain a separate full application texture allowance.
+    pub(crate) fn suspend_rendering(&mut self, pool: &RenderPool) {
+        self.begin_render_frame();
+        self.pages.clear();
+        self.tiles.clear();
+        self.thumbs.clear();
+        self.grid_pages.clear();
+        self.stale_thumbs.clear();
+        self.waiting_since.clear();
+        // Signature previews own a separate renderer and image/background textures.
+        self.signature_drag = Default::default();
+        if !self.last_queue.is_empty() {
+            pool.set_queue(Vec::new());
+            self.last_queue.clear();
+        }
+        // Results already finished for this tab would otherwise sit in its pool, rasters and
+        // all, until the tab is shown again. (An inline pool renders inside try_recv: skip it.)
+        if !pool.is_inline() {
+            while pool.try_recv().is_some() {}
+        }
+    }
+
+    fn thumbnail_requests(&self, info: &DocInfo, ppp: f32) -> Vec<RenderRequest> {
+        let mut pages: Vec<_> = self.thumb_demand.iter().map(|(&p, &visible)| (p, visible)).collect();
+        pages.sort_unstable_by_key(|&(p, visible)| (!visible, p));
+        // At high DPI or in a very large viewport every demanded cell still fits the same
+        // byte allowance. Both dimensions are capped, including tall/wide page boxes.
+        // The count is rounded up to a power of two: the scale is part of each request's tag,
+        // so a density that followed every row scrolling in or out would re-render them all.
+        let per_thumb = THUMB_BYTES / pages.len().max(1).next_power_of_two();
+        let density = ppp.clamp(0.25, 4.0).min((per_thumb as f32 / (4.0 * THUMB_W * THUMB_H)).sqrt() * 0.98);
+        pages
+            .into_iter()
+            .filter_map(|(page, _)| {
+                let p = info.pages.get(page)?;
+                let scale = (THUMB_W / p.width.max(1.0)).min(THUMB_H / p.height.max(1.0)) * density;
+                Some(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag: THUMB_TAG | u64::from(scale.to_bits()) })
+            })
+            .collect()
+    }
+
+    /// Admit current demand within explicit byte limits. Cached and pending surfaces share
+    /// the allowance, so an evicted page can be requested again without a permanent done set.
+    fn prepare_render_queue(&mut self, info: &DocInfo, ppp: f32) -> Vec<RenderRequest> {
+        let requests = std::mem::take(&mut self.frame_queue);
+        let mut queue = Vec::new();
+        let mut pages = HashSet::new();
+        let mut tiles = HashSet::new();
+        let mut tile_tags = HashSet::new();
+        let mut grid = Vec::new();
+        let (mut page_bytes, mut tile_bytes) = (0usize, 0usize);
+        for req in requests.iter().filter(|r| r.kind == RequestKind::Pixels) {
+            let Some(p) = info.pages.get(req.page) else { continue };
+            // Organize-grid renders: only the cells in view that need one (organize_grid).
+            if req.tag & GRID_TAG != 0 {
+                grid.push(*req);
+                continue;
+            }
+            // On-screen work is always admitted (the viewport bounds it); the limits only
+            // decide how much prefetch fits beside it.
+            let visible = self.frame_visible.contains(&req.page);
+            if let Some(tile) = req.tile {
+                let key = (req.page, req.tag, tile.x / TILE, tile.y / TILE);
+                let bytes = rgba_bytes(tile.w as usize, tile.h as usize);
+                if (!visible && tile_bytes.saturating_add(bytes) > TILE_BYTES) || !tiles.insert(key) {
+                    continue;
                 }
-                continue;
-            }
-            if let Some(e) = r.error {
-                log::warn!("page {}: {e}", r.request.page + 1);
-                self.errors.insert(r.request.page, e);
-                continue;
-            }
-            let img = texture_image([r.width as usize, r.height as usize], r.rgba);
-            let page = r.request.page;
-            if let Some(t) = r.request.tile {
-                let tex = ctx.load_texture(format!("tile-{:?}-{page}-{}-{}", self.id, t.x, t.y), img, TextureOptions::LINEAR);
-                self.tiles.insert((page, t.x / TILE, t.y / TILE), (r.request.tag, tex));
-                continue;
-            }
-            if r.request.tag & THUMB_TAG != 0 {
-                let tex = ctx.load_texture(format!("thumb-{:?}-{page}", self.id), img, TextureOptions::LINEAR);
-                self.thumbs.insert(page, tex);
-                self.stale_thumbs.remove(&page);
+                tile_bytes = tile_bytes.saturating_add(bytes);
+                tile_tags.insert(req.tag);
+                if !self.tiles.contains_key(&key) {
+                    queue.push(*req);
+                }
             } else {
-                let tex = ctx.load_texture(format!("page-{:?}-{page}", self.id), img, TextureOptions::LINEAR);
-                self.pages.insert(page, PageTex { tag: r.request.tag, tex });
-                self.signature_drag.page_received(page);
-                self.waiting_since.remove(&page);
+                let bytes = rgba_bytes(device_pixels(p.width, req.scale) as usize, device_pixels(p.height, req.scale) as usize);
+                if (!visible && (page_bytes.saturating_add(bytes) > PAGE_BYTES || pages.len() >= MAX_CACHED_PAGES)) || !pages.insert(req.page) {
+                    continue;
+                }
+                page_bytes = page_bytes.saturating_add(bytes);
+                if self.pages.get(&req.page).is_none_or(|p| p.tag != req.tag) {
+                    queue.push(*req);
+                }
             }
         }
-        if got {
-            ctx.request_repaint();
+        // Pages no longer demanded stay cached while the allowance has room, nearest to the
+        // current page first, so turning back a page shows it at once instead of rendering.
+        let mut undemanded: Vec<usize> = self.pages.keys().copied().filter(|p| !pages.contains(p)).collect();
+        undemanded.sort_by_key(|p| p.abs_diff(self.current));
+        let mut kept = pages.len();
+        for page in undemanded {
+            let bytes = self.pages.get(&page).map_or(0, |p| texture_bytes(&p.tex));
+            if kept < MAX_CACHED_PAGES && page_bytes.saturating_add(bytes) <= PAGE_BYTES {
+                page_bytes = page_bytes.saturating_add(bytes);
+                kept += 1;
+                pages.insert(page);
+            }
+        }
+        self.pages.retain(|p, _| pages.contains(p));
+        // Tiles of an earlier zoom (not a demanded scale) stay while the canvas keeps them, a
+        // bounded few under a page whose current tiles are still missing (OLD_TILES).
+        self.tiles.retain(|key, _| tiles.contains(key) || !tile_tags.contains(&key.1));
+        queue.extend(grid);
+        let thumbs = self.thumbnail_requests(info, ppp);
+        let mut thumb_bytes = 0usize;
+        let mut admitted = HashSet::new();
+        for req in thumbs {
+            let Some(p) = info.pages.get(req.page) else { continue };
+            let bytes = rgba_bytes(device_pixels(p.width, req.scale) as usize, device_pixels(p.height, req.scale) as usize);
+            if thumb_bytes.saturating_add(bytes) > THUMB_BYTES || self.errors.contains_key(&req.page) {
+                continue;
+            }
+            thumb_bytes += bytes;
+            admitted.insert(req.page);
+            if self.thumbs.get(&req.page).is_none_or(|t| t.tag != req.tag) || self.stale_thumbs.contains(&req.page) {
+                queue.push(req);
+            }
+        }
+        self.thumbs.retain(|p, _| admitted.contains(p));
+        self.stale_thumbs.retain(|p| admitted.contains(p));
+        // Visible main pages and thumbnails take precedence over background search work.
+        queue.extend(requests.into_iter().filter(|r| r.kind == RequestKind::Text));
+        queue
+    }
+
+    pub(crate) fn finish_render_frame(&mut self, ctx: &egui::Context, info: &DocInfo, pool: &RenderPool) {
+        let queue = self.prepare_render_queue(info, ctx.pixels_per_point());
+        if queue != self.last_queue {
+            pool.set_queue(queue.clone());
+            self.last_queue = queue;
+        }
+        self.receive(ctx, pool);
+        if !self.last_queue.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        }
+    }
+
+    /// Pull a bounded batch of current results into textures. Demand is committed first, so
+    /// offscreen results and obsolete scale/configuration tags never allocate a ColorImage.
+    pub fn receive(&mut self, ctx: &egui::Context, pool: &RenderPool) {
+        let budget = if pool.is_inline() { 1 } else { RESULTS_PER_FRAME };
+        let mut uploaded = 0usize;
+        #[cfg(not(target_arch = "wasm32"))]
+        let started = std::time::Instant::now();
+        for _ in 0..budget {
+            let Some(r) = pool.try_recv() else { break };
+            uploaded = uploaded.saturating_add(self.receive_result(ctx, r));
+            // One whole-page upload may exceed the frame allowance; it must still progress.
+            if uploaded >= UPLOAD_BYTES_PER_FRAME {
+                break;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if started.elapsed() >= std::time::Duration::from_millis(4) {
+                break;
+            }
+        }
+    }
+
+    fn receive_result(&mut self, ctx: &egui::Context, r: pdfcraft_render::RenderedPage) -> usize {
+        if !self.last_queue.contains(&r.request) {
+            return 0;
+        }
+        ctx.request_repaint();
+        if r.request.kind == RequestKind::Text {
+            match r.text {
+                Some(t) => {
+                    self.texts.insert(r.request.page, t);
+                    self.refresh_find_page(r.request.page);
+                }
+                None => {
+                    log::warn!("page {} text: {}", r.request.page + 1, r.error.unwrap_or_default());
+                    self.text_failed.insert(r.request.page);
+                }
+            }
+            return 0;
+        }
+        if let Some(e) = r.error {
+            log::warn!("page {}: {e}", r.request.page + 1);
+            self.errors.insert(r.request.page, e);
+            return 0;
+        }
+        let page = r.request.page;
+        let bytes = rgba_bytes(r.width as usize, r.height as usize);
+        if bytes != r.rgba.len() || !self.admit_texture(r.request, bytes) {
+            return 0;
+        }
+        // The length was checked above, so the renderer's buffer becomes the texture data as is.
+        let img = texture_image([r.width as usize, r.height as usize], r.rgba);
+        if let Some(t) = r.request.tile {
+            let tex = ctx.load_texture(format!("tile-{:?}-{page}-{}-{}", self.id, t.x, t.y), img, TextureOptions::LINEAR);
+            self.tiles.insert((page, r.request.tag, t.x / TILE, t.y / TILE), tex);
+        } else if r.request.tag & GRID_TAG != 0 {
+            let tex = ctx.load_texture(format!("grid-{:?}-{page}", self.id), img, TextureOptions::LINEAR);
+            self.grid_pages.insert(page, (r.width, tex));
+        } else if r.request.tag & THUMB_TAG != 0 {
+            let tex = ctx.load_texture(format!("thumb-{:?}-{page}", self.id), img, TextureOptions::LINEAR);
+            self.thumbs.insert(page, PageTex { tag: r.request.tag, tex });
+            self.stale_thumbs.remove(&page);
+        } else {
+            let tex = ctx.load_texture(format!("page-{:?}-{page}", self.id), img, TextureOptions::LINEAR);
+            self.pages.insert(page, PageTex { tag: r.request.tag, tex });
+            self.signature_drag.page_received(page);
+            self.waiting_since.remove(&page);
+        }
+        bytes
+    }
+
+    /// Check real dimensions before conversion, including stale textures kept during edits.
+    /// Dropping an old handle releases its backend allocation after the current frame.
+    fn admit_texture(&mut self, req: RenderRequest, bytes: usize) -> bool {
+        // An on-screen page or tile is always taken (the viewport bounds it): it may evict
+        // off-screen rasters but never another on-screen one, and is never refused.
+        let visible = req.tag & THUMB_TAG == 0 && self.frame_visible.contains(&req.page);
+        // Organize-grid renders are bounded by the cells in view (organize_grid).
+        if req.tag & GRID_TAG != 0 {
+            return true;
+        }
+        if let Some(t) = req.tile {
+            let key = (req.page, req.tag, t.x / TILE, t.y / TILE);
+            self.tiles.remove(&key);
+            let retained = self.tiles.values().fold(0usize, |n, tex| n.saturating_add(texture_bytes(tex)));
+            visible || bytes <= TILE_BYTES.saturating_sub(retained)
+        } else {
+            let thumb = req.tag & THUMB_TAG != 0;
+            let (cache, limit) = if thumb { (&mut self.thumbs, THUMB_BYTES) } else { (&mut self.pages, PAGE_BYTES) };
+            cache.remove(&req.page);
+            let mut retained = cache.values().fold(0usize, |n, p| n.saturating_add(texture_bytes(&p.tex)));
+            // A zoom/DPI change can temporarily retain larger stale images than the new
+            // demand estimates. Evict those first, then let the current demand refill them.
+            let on_screen = |p: &usize| !thumb && self.frame_visible.contains(p);
+            while retained.saturating_add(bytes) > limit {
+                let Some(page) = cache.keys().copied().filter(|p| !on_screen(p)).max_by_key(|p| p.abs_diff(self.current)) else { break };
+                if let Some(old) = cache.remove(&page) {
+                    retained = retained.saturating_sub(texture_bytes(&old.tex));
+                }
+            }
+            visible || bytes <= limit.saturating_sub(retained)
         }
     }
 
@@ -1045,6 +1376,14 @@ impl DocView {
 fn scale_tag(scale: f32) -> u64 {
     (f64::from(scale) * 65536.0).round() as u64
 }
+
+/// The scale of a raster tagged by [`scale_tag`].
+fn tag_scale(tag: u64) -> f32 {
+    (tag as f64 / 65536.0) as f32
+}
+
+/// Tiles of earlier zooms kept for a page while its current tiles are rendered.
+const OLD_TILES: usize = 64;
 
 /// `r` moved so its corner lies on a whole physical pixel, so that a raster drawn from there
 /// maps texel for texel onto the screen.
@@ -1186,15 +1525,29 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Minus)) {
         view.rotate_view(false);
     }
-    if pressed(cmd(Key::Plus)) || pressed(cmd(Key::Equals)) {
-        view.zoom_step(true);
-    }
-    if pressed(cmd(Key::Minus)) {
-        view.zoom_step(false);
-    }
-    if pressed(cmd(Key::Num0)) {
-        view.fit = Fit::Page;
-        view.goto = Some((view.current, 0.0));
+    // In the page grid ⌘+ / ⌘− / ⌘0 size its pages instead (looking is always allowed).
+    let (zoom_in, zoom_out, zoom_reset) = (pressed(cmd(Key::Plus)) || pressed(cmd(Key::Equals)), pressed(cmd(Key::Minus)), pressed(cmd(Key::Num0)));
+    if view.organize {
+        if zoom_in {
+            view.grid_zoom_request = Some(view.grid_zoom * GRID_ZOOM_STEP);
+        }
+        if zoom_out {
+            view.grid_zoom_request = Some(view.grid_zoom / GRID_ZOOM_STEP);
+        }
+        if zoom_reset {
+            view.grid_zoom_request = Some(1.0);
+        }
+    } else {
+        if zoom_in {
+            view.zoom_step(true);
+        }
+        if zoom_out {
+            view.zoom_step(false);
+        }
+        if zoom_reset {
+            view.fit = Fit::Page;
+            view.goto = Some((view.current, 0.0));
+        }
     }
     if pressed(cmd(Key::Num1)) {
         view.set_zoom(1.0);
@@ -1298,7 +1651,6 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         ui.centered_and_justified(|ui| ui.label(tl!("This document has no pages.")));
         return;
     }
-    let want_thumbs = app.right == Some(RightPanel::Pages) || app.views[index].organize || app.dialog == Some(crate::Dialog::Print);
     // The Prepare a form panel is open (or a field tool is picked): fields are edited, not filled.
     let preparing = app.is_preparing();
     // Edit a PDF: added text and images can be selected, moved and edited.
@@ -1318,7 +1670,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // No dialog, close prompt or palette over the page: only then does page input count.
     let unobstructed = app.dialog.is_none() && app.close_request.is_none() && !app.palette_open;
     if view.organize {
-        organize_grid(view, info, &doc.renderer, doc.allows_assembly(), doc.dirty, unobstructed, ui, &t);
+        organize_grid(view, info, doc.allows_assembly(), doc.dirty, unobstructed, ui, &t);
         return;
     }
 
@@ -1451,6 +1803,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut open_initials = false;
     let author = app.comment_prefs.author.clone();
     let today = app.session.today();
+    // In Preferences ▸ Date format, or why it can't be stamped into the PDF.
+    let date_text = crate::date_text_for_pdf(&app.session);
+    let mut refused: Option<String> = None;
     let by_line = app.session.stamp_by_line(&author);
     let mut stamp_placed = false;
     let mut image_action: Option<crate::edit_text_ui::ImageAction> = None;
@@ -1530,6 +1885,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let mut current = view.current;
         let mut best_overlap = -1.0f32;
         let mut current_overlap = -1.0f32;
+        let mut current_height = f32::INFINITY;
         let pointer = ui.input(|i| i.pointer.hover_pos());
         for &i in &visible_pages {
             let r = snap_to_pixels(rects[i].translate(origin.to_vec2()), ppp);
@@ -1545,6 +1901,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             let overlap = r.intersect(visible).height();
             if i == view.current {
                 current_overlap = overlap;
+                current_height = r.height();
             }
             // Pages shown equally (two rows wholly on screen) differ only by rounding: the
             // topmost one counts.
@@ -1582,6 +1939,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 } else {
                     (scale, tag)
                 };
+                // Under tiles, a whole-page raster sharper than the backdrop (from before the page
+                // grew past the tiling size) is a better backdrop: keep demanding it as it is.
+                match view.pages.get(&i).filter(|p| tiled && p.tag != STALE_TAG && tag_scale(p.tag) >= want_scale) {
+                    Some(p) => wanted.push((i, tag_scale(p.tag), p.tag, None)),
+                    None => wanted.push((i, want_scale, want_tag, None)),
+                }
                 match view.pages.get(&i) {
                     Some(p) => {
                         if !tiled && p.tag == want_tag {
@@ -1590,12 +1953,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                             // A backdrop, or a raster at an older scale until the new one arrives.
                             xf.paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
                         }
-                        if p.tag != want_tag {
-                            wanted.push((i, want_scale, want_tag, None));
-                        }
                     }
                     None => {
-                        wanted.push((i, want_scale, want_tag, None));
                         let now = ui.input(|inp| inp.time);
                         let since = *view.waiting_since.entry(i).or_insert(now);
                         let msg = if now - since > 6.0 { "Still rendering — this page is unusually complex…" } else { "Rendering…" };
@@ -1613,6 +1972,21 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     let (v0, v1) = corners.iter().fold((1.0f32, 0.0f32), |(a, b), c| (a.min(c.1), b.max(c.1)));
                     let (vx0, vy0) = ((u0.max(0.0) * dw as f32) as u32, (v0.max(0.0) * dh as f32) as u32);
                     let (vx1, vy1) = (((u1.min(1.0) * dw as f32).ceil() as u32).min(dw), ((v1.min(1.0) * dh as f32).ceil() as u32).min(dh));
+                    // Tiles of earlier zooms first, stretched, the nearest scale last (on top):
+                    // until the current tiles arrive, a zoom shows them rather than the backdrop.
+                    let mut older: Vec<(f32, u32, u32, &TextureHandle)> = view
+                        .tiles
+                        .iter()
+                        .filter(|((p, t, _, _), _)| *p == i && *t != tag)
+                        .map(|((_, t, tx, ty), tex)| (tag_scale(*t), *tx, *ty, tex))
+                        .collect();
+                    older.sort_by(|a, b| (b.0 / scale).ln().abs().total_cmp(&(a.0 / scale).ln().abs()));
+                    for (s, tx, ty, tex) in older {
+                        let (ow, oh) = (device_pixels(pw_pt, s) as f32, device_pixels(ph_pt, s) as f32);
+                        let [w, h] = tex.size();
+                        let (x, y) = ((tx * TILE) as f32, (ty * TILE) as f32);
+                        xf.paint_image(painter, tex.id(), x / ow, y / oh, (x + w as f32) / ow, (y + h as f32) / oh);
+                    }
                     for ty in vy0 / TILE..=(vy1.saturating_sub(1)) / TILE {
                         for tx in vx0 / TILE..=(vx1.saturating_sub(1)) / TILE {
                             let (x, y) = (tx * TILE, ty * TILE);
@@ -1620,19 +1994,17 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                             if w == 0 || h == 0 {
                                 continue;
                             }
-                            match view.tiles.get(&(i, tx, ty)) {
-                                Some((ttag, tex)) if *ttag == tag => {
-                                    let (fw, fh) = (dw as f32, dh as f32);
-                                    xf.texel_aligned([dw as usize, dh as usize], ppp).paint_image(
-                                        painter,
-                                        tex.id(),
-                                        x as f32 / fw,
-                                        y as f32 / fh,
-                                        (x + w) as f32 / fw,
-                                        (y + h) as f32 / fh,
-                                    );
-                                }
-                                _ => wanted.push((i, scale, tag, Some(Tile { x, y, w, h }))),
+                            wanted.push((i, scale, tag, Some(Tile { x, y, w, h })));
+                            if let Some(tex) = view.tiles.get(&(i, tag, tx, ty)) {
+                                let (fw, fh) = (dw as f32, dh as f32);
+                                xf.texel_aligned([dw as usize, dh as usize], ppp).paint_image(
+                                    painter,
+                                    tex.id(),
+                                    x as f32 / fw,
+                                    y as f32 / fh,
+                                    (x + w) as f32 / fw,
+                                    (y + h) as f32 / fh,
+                                );
                             }
                         }
                     }
@@ -1707,7 +2079,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     initials.as_ref(),
                     &mut app.signature_preview,
                     &author,
-                    today,
+                    &date_text,
                 ) {
                     Some(crate::fill_sign::FillAction::Edit(e)) => view.pending_edit = Some(*e),
                     Some(crate::fill_sign::FillAction::Signature(e)) => {
@@ -1716,6 +2088,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     }
                     Some(crate::fill_sign::FillAction::CreateSignature) => open_signature = true,
                     Some(crate::fill_sign::FillAction::CreateInitials) => open_initials = true,
+                    Some(crate::fill_sign::FillAction::Refused(why)) => refused = Some(why),
                     None => {}
                 }
             }
@@ -1974,7 +2347,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
         // The page navigated to stays current while no page shows more of itself, so the next
         // page step starts from it rather than from a page further down the screen (#188).
-        if current_overlap >= best_overlap - TIE {
+        // It also stays current while it is wholly on screen: a short page (a cheque) gone to
+        // from the Pages panel shows less of itself than the tall page below it, and must not
+        // hand the highlight to that page.
+        if current_overlap >= best_overlap - TIE || current_overlap >= current_height - TIE {
             current = view.current;
         }
         if view.layout != PageLayout::Single {
@@ -2046,18 +2422,22 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 
     view.auto_scroll.paint(ui, avail);
 
-    // Bound texture memory: keep sharp rasters only near the current page.
-    if view.pages.len() > 24 {
-        let cur = view.current;
-        view.pages.retain(|&p, _| p.abs_diff(cur) <= 8);
-    }
-    // Schedule renders: visible pages first (nearest the current page), then thumbnails.
+    // Collect all main-page demand, including cached surfaces, for byte admission later.
     let (mut wanted, visible_now) = out.inner;
     let cur = view.current;
-    // Nearest pages first; for each page, the backdrop before its tiles.
-    wanted.sort_by_key(|w| ((w.0 as isize - cur as isize).unsigned_abs(), w.3.is_some()));
-    // Tiles for other zoom levels or far-away pages are useless: free them.
-    view.tiles.retain(|(p, _, _), (t, _)| *t == tag && p.abs_diff(cur) <= 2);
+    wanted.sort_by_key(|w| (!visible_now.contains(&w.0), w.0.abs_diff(cur), w.3.is_some()));
+    // Tiles of far-away pages are useless: free them. Tiles of other zooms stay only while a
+    // current tile of their page is still missing, at most `OLD_TILES` of them, nearest scale first.
+    let missing: HashSet<usize> = wanted.iter().filter(|w| w.3.is_some()).map(|w| w.0).collect();
+    view.tiles.retain(|(p, t, _, _), _| p.abs_diff(cur) <= 2 && (*t == tag || missing.contains(p)));
+    let mut older: Vec<(f32, (usize, u64, u32, u32))> =
+        view.tiles.keys().filter(|k| k.1 != tag).map(|k| ((tag_scale(k.1) / scale).ln().abs(), *k)).collect();
+    if older.len() > OLD_TILES {
+        older.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (_, k) in older.drain(OLD_TILES..) {
+            view.tiles.remove(&k);
+        }
+    }
     let mut queue: Vec<RenderRequest> =
         wanted.iter().map(|&(page, scale, tag, tile)| RenderRequest { page, kind: RequestKind::Pixels, tile, scale, tag }).collect();
     // Text layers: visible pages for selection, every page while a search is active.
@@ -2069,21 +2449,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         text_pages.extend(rest);
     }
     queue.extend(text_pages.into_iter().map(|page| RenderRequest { page, kind: RequestKind::Text, tile: None, scale: 1.0, tag: TEXT_TAG }));
-    if want_thumbs {
-        let s = THUMB_W * ppp / info.pages.iter().map(|p| p.width).fold(1.0, f32::max);
-        for page in 0..info.pages.len() {
-            if (!view.thumbs.contains_key(&page) || view.stale_thumbs.contains(&page)) && !view.errors.contains_key(&page) {
-                queue.push(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: s, tag: THUMB_TAG });
-            }
-        }
-    }
-    if queue != view.last_queue {
-        doc.renderer.set_queue(queue.clone());
-        view.last_queue = queue;
-    }
-    if !view.last_queue.is_empty() {
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(30));
-    }
+    view.frame_queue = queue;
+    view.frame_visible = visible_now.iter().copied().collect();
 
     if let Some((pos, text)) = hover_text {
         egui::Area::new(egui::Id::new("canvas-hover")).order(egui::Order::Tooltip).fixed_pos(pos + vec2(14.0, 16.0)).show(ui.ctx(), |ui| {
@@ -2227,6 +2594,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(crate::edit_text_ui::ImageAction::Replace(page, index)) => app.replace_page_image_dialog(page, index),
         Some(crate::edit_text_ui::ImageAction::Save(page, index)) => app.save_page_image(page, index),
         None => {}
+    }
+    if let Some(why) = refused {
+        app.notify_error(why);
     }
     if open_signature || open_initials {
         app.signature_draft = crate::fill_sign::SigDraft::new(open_initials, &app.comment_prefs.author);
@@ -2508,7 +2878,8 @@ fn notices(
             tl!("XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.").to_string(),
             true,
         ))
-    } else if !info.fields.is_empty() {
+    } else if info.fields.iter().any(|f| f.kind != pdfcraft_render::FieldKind::PushButton) {
+        // Push buttons alone (LaTeX `animate` frames, navigation buttons) leave nothing to fill in.
         Some((
             "text-cursor-input",
             crate::i18n::fmt(tl!("This document contains {n} interactive form fields."), &[("n", &info.fields.len().to_string())]),
@@ -2782,6 +3153,30 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: b
                 if save.on_hover_text(tl!("Save these pages as one PDF")).on_disabled_hover_text(tl!("No changes to save")).clicked() {
                     view.pending_action = Some(ViewAction::Save);
                 }
+                ui.add_space(8.0);
+                // Page size in the grid (right to left: in, the percentage, out).
+                let zoom = view.grid_zoom;
+                if ui
+                    .add_enabled_ui(zoom < *GRID_ZOOM_RANGE.end(), |ui| icons::button(ui, "zoom-in", 30.0, false, tl!("Larger pages")))
+                    .inner
+                    .clicked()
+                {
+                    view.grid_zoom_request = Some(zoom * GRID_ZOOM_STEP);
+                }
+                let percent = egui::Button::new(egui::RichText::new(format!("{:.0}%", zoom * 100.0)).font(theme::medium(12.0)).color(t.text_muted))
+                    .frame(false);
+                let percent = ui.add_sized([44.0, 30.0], percent);
+                percent.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Reset page size")));
+                if percent.on_hover_text(tl!("Reset page size")).clicked() {
+                    view.grid_zoom_request = Some(1.0);
+                }
+                if ui
+                    .add_enabled_ui(zoom > *GRID_ZOOM_RANGE.start(), |ui| icons::button(ui, "zoom-out", 30.0, false, tl!("Smaller pages")))
+                    .inner
+                    .clicked()
+                {
+                    view.grid_zoom_request = Some(zoom / GRID_ZOOM_STEP);
+                }
             });
         });
     });
@@ -2837,19 +3232,11 @@ fn gap_button(ui: &mut egui::Ui, gap: usize, at: Pos2, height: f32, label: Strin
     resp.on_hover_text(label).clicked()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn organize_grid(
-    view: &mut DocView,
-    info: &DocInfo,
-    pool: &RenderPool,
-    editable: bool,
-    dirty: bool,
-    auto_scroll_enabled: bool,
-    ui: &mut egui::Ui,
-    t: &Tokens,
-) {
+fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool, auto_scroll_enabled: bool, ui: &mut egui::Ui, t: &Tokens) {
     let ppp = ui.ctx().pixels_per_point();
-    let cell = vec2(190.0, 250.0);
+    // The page image scales with the zoom; the padding and the page number don't.
+    let cell = vec2(146.0 * view.grid_zoom + 44.0, 194.0 * view.grid_zoom + 56.0);
+    let anchor = view.grid_anchor.take();
     let mut open_page = None;
     organize_toolbar(view, info, editable, dirty, ui, t);
     let viewport = ui.available_rect_before_wrap();
@@ -2861,9 +3248,13 @@ fn organize_grid(
         Vec2::ZERO
     };
     let middle_gesture = view.auto_scroll.blocks_input();
-    let mut cells: Vec<(usize, Rect)> = Vec::with_capacity(info.pages.len());
-    let mut drop = false;
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    let mut cells: Vec<(usize, Rect)> = Vec::new();
+    // The pages in view that are drawn larger than their thumbnails, and those of them that
+    // need a sharper render than they have.
+    let (mut in_view, mut sharper): (Vec<usize>, Vec<RenderRequest>) = (Vec::new(), Vec::new());
+    // The source cell can scroll out of the virtualized rows during a drag.
+    let mut drop = view.org_drag.is_some() && ui.input(|i| i.pointer.primary_released());
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show_viewport(ui, |ui, clip| {
         if middle_gesture {
             let opacity = ui.opacity();
             ui.disable();
@@ -2876,14 +3267,19 @@ fn organize_grid(
         let cols = ((ui.available_width() - 40.0) / cell.x).floor().max(1.0) as usize;
         let rows = info.pages.len().div_ceil(cols);
         let left = (ui.available_width() - cols as f32 * cell.x) / 2.0;
-        for row in 0..rows {
-            let (row_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), cell.y), Sense::hover());
+        let (grid, _) = ui.allocate_exact_size(vec2(ui.available_width(), rows as f32 * cell.y), Sense::hover());
+        for row in thumbnail_rows(clip.top() - 20.0, clip.bottom() - 20.0, cell.y, rows) {
+            let row_rect = Rect::from_min_size(grid.min + vec2(0.0, row as f32 * cell.y), vec2(grid.width(), cell.y));
             for col in 0..cols {
                 let i = row * cols + col;
                 let Some(p) = info.pages.get(i) else { break };
                 let c = Rect::from_min_size(pos2(row_rect.left() + left + col as f32 * cell.x, row_rect.top()), cell);
+                view.need_thumbnail(i, c.intersects(ui.clip_rect()));
                 let resp = ui.interact(c, ui.id().with(("org", i)), if editable { Sense::click_and_drag() } else { Sense::click() });
                 cells.push((i, c));
+                if let Some((_, above)) = anchor.filter(|(page, _)| *page == i) {
+                    ui.scroll_to_rect_animation(c.translate(vec2(0.0, -above)), Some(egui::Align::Min), egui::style::ScrollAnimation::none());
+                }
                 // Drag pages to move them (the selection, or the page grabbed).
                 if resp.drag_started() {
                     if !view.selected.contains(&i) {
@@ -2911,7 +3307,19 @@ fn organize_grid(
                 }
                 ui.painter().rect_filled(pr.translate(vec2(0.0, 1.5)), CornerRadius::same(1), t.page_shadow);
                 ui.painter().rect_filled(pr, CornerRadius::ZERO, Color32::WHITE);
-                if let Some(tex) = view.thumbs.get(&i) {
+                // A page drawn larger than its thumbnail gets a render at the size drawn, while
+                // it is in view; until that arrives the thumbnail stands in.
+                let want = size.x * ppp;
+                let thumb = view.thumbs.get(&i).map(|t| &t.tex);
+                let thumb_ok = thumb.is_some_and(|t| t.size()[0] as f32 >= want * GRID_SHARP.start());
+                let sharp = view.grid_pages.get(&i).filter(|_| !thumb_ok);
+                if !thumb_ok && ui.is_rect_visible(c) {
+                    in_view.push(i);
+                    if !sharp.is_some_and(|(w, _)| sharp_enough(*w, want)) && !view.errors.contains_key(&i) {
+                        sharper.push(RenderRequest { page: i, kind: RequestKind::Pixels, tile: None, scale: want / p.width.max(1.0), tag: GRID_TAG });
+                    }
+                }
+                if let Some(tex) = sharp.map(|(_, t)| t).or(thumb) {
                     ui.painter().image(tex.id(), pr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                 }
                 ui.painter().rect_stroke(pr, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
@@ -2959,6 +3367,7 @@ fn organize_grid(
                 }
             }
             if let Some((i, c)) = cells.last()
+                && i + 1 == info.pages.len()
                 && gap_button(ui, i + 1, pos2(c.right(), mid(c)), cell.y - 56.0, tl!("Insert a file at the end").to_string(), t)
             {
                 view.pending_action = Some(ViewAction::InsertFromFileAt(i + 1));
@@ -3020,15 +3429,27 @@ fn organize_grid(
         }
     }
     view.auto_scroll.paint(ui, viewport);
-    let s = THUMB_W * ppp / info.pages.iter().map(|p| p.width).fold(1.0, f32::max);
-    let queue: Vec<RenderRequest> = (0..info.pages.len())
-        .filter(|p| (!view.thumbs.contains_key(p) || view.stale_thumbs.contains(p)) && !view.errors.contains_key(p))
-        .map(|page| RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: s, tag: THUMB_TAG })
-        .collect();
-    if queue != view.last_queue {
-        pool.set_queue(queue.clone());
-        view.last_queue = queue;
+    // Pinch, or Ctrl/⌘ with the wheel, zooms the grid about the page under the pointer.
+    let pinch = ui.input(|i| i.zoom_delta());
+    if (pinch - 1.0).abs() > 0.001 && pointer.is_some() && !middle_gesture {
+        view.grid_zoom_request = Some(view.grid_zoom * pinch);
     }
+    if let Some(zoom) = view.grid_zoom_request.take() {
+        let before = view.grid_zoom;
+        view.set_grid_zoom(zoom);
+        if view.grid_zoom != before {
+            // Keep the page under the pointer (or else the first one in view) where it is.
+            let under = pointer.and_then(|p| cells.iter().find(|(_, r)| r.contains(p)));
+            let anchor = under.or_else(|| cells.iter().find(|(_, r)| r.bottom() > viewport.top()));
+            view.grid_anchor = anchor.map(|(i, r)| (*i, r.top() - viewport.top()));
+            ui.ctx().request_repaint();
+        }
+    }
+    // Sharp renders are kept only for the pages in view, so their memory stays small however
+    // long the document is. They come first; the thumbnails of the other pages follow.
+    view.grid_pages.retain(|page, _| in_view.contains(page));
+    // Sharp renders of the pages in view join this frame's demand ahead of the thumbnails.
+    view.frame_queue.extend(sharper);
     if let Some(p) = open_page {
         view.organize = false;
         view.go_to_page(p);
@@ -3071,6 +3492,23 @@ trailer << /Root 1 0 R >>
         assert_eq!(img.pixels.as_ptr().cast::<u8>(), at, "the renderer's own buffer");
     }
 
+    #[test]
+    fn grid_zoom_is_clamped_and_sharp_renders_tolerate_a_pinch() {
+        assert!(sharp_enough(900, 876.0) && sharp_enough(800, 876.0) && sharp_enough(1300, 876.0));
+        assert!(!sharp_enough(264, 876.0), "a thumbnail stretched over a zoomed page");
+        assert!(!sharp_enough(876, 200.0), "far larger than drawn: wasteful");
+        assert!(!sharp_enough(100, 0.0) && !sharp_enough(100, f32::NAN));
+        let mut v = view(3, PageLayout::Continuous);
+        for odd in [f32::NAN, f32::INFINITY] {
+            v.set_grid_zoom(odd);
+            assert_eq!(v.grid_zoom(), 1.0);
+        }
+        v.set_grid_zoom(99.0);
+        assert_eq!(v.grid_zoom(), 3.0);
+        v.set_grid_zoom(-4.0);
+        assert_eq!(v.grid_zoom(), 0.5);
+    }
+
     fn view(pages: usize, layout: PageLayout) -> DocView {
         let info = pdfcraft_render::DocInfo {
             pages: (0..pages)
@@ -3079,6 +3517,345 @@ trailer << /Root 1 0 R >>
             ..Default::default()
         };
         DocView::new(DocId(1), &info, ViewDefaults { layout, ..Default::default() })
+    }
+
+    fn thumbnail_info(count: usize) -> DocInfo {
+        DocInfo {
+            pages: (0..count)
+                .map(|i| {
+                    let (width, height) = match i % 3 {
+                        0 => (612.0, 792.0),
+                        1 => (200.0, 4000.0),
+                        _ => (4000.0, 200.0),
+                    };
+                    pdfcraft_render::PageInfo { width, height, label: (i + 1).to_string(), crop: [0.0, 0.0, width, height], rotation: 0 }
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ten_thousand_pages_only_demand_viewport_and_prefetch_at_both_densities() {
+        let info = thumbnail_info(10_000);
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        let cols = 4;
+        let rows = info.pages.len().div_ceil(cols);
+        for ppp in [1.0, 2.0] {
+            for row in [0, 1234, rows - 1] {
+                v.begin_render_frame();
+                let range = thumbnail_rows(row as f32 * 250.0, row as f32 * 250.0 + 750.0, 250.0, rows);
+                for p in range.start * cols..(range.end * cols).min(info.pages.len()) {
+                    v.need_thumbnail(p, p / cols == row);
+                }
+                let queue = v.prepare_render_queue(&info, ppp);
+                assert!(queue.len() <= 5 * cols, "only three visible rows and two prefetch rows");
+                assert_eq!(queue.first().unwrap().page / cols, row, "visible cells precede prefetch");
+                let bytes: usize = queue
+                    .iter()
+                    .map(|r| {
+                        let p = &info.pages[r.page];
+                        let (w, h) = (device_pixels(p.width, r.scale), device_pixels(p.height, r.scale));
+                        assert!(w <= (THUMB_W * ppp).ceil() as u32);
+                        assert!(h <= (THUMB_H * ppp).ceil() as u32);
+                        rgba_bytes(w as usize, h as usize)
+                    })
+                    .sum();
+                assert!(bytes <= THUMB_BYTES);
+                assert_eq!(queue, v.prepare_render_queue(&info, ppp), "unchanged demand reconstructs the same work");
+            }
+        }
+    }
+
+    #[test]
+    fn oversized_thumbnail_viewport_scales_all_admitted_cells_to_one_budget() {
+        let info = thumbnail_info(10_000);
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        for page in 0..MAX_THUMB_DEMAND {
+            v.need_thumbnail(page, true);
+        }
+        let queue = v.prepare_render_queue(&info, 2.0);
+        assert_eq!(queue.len(), MAX_THUMB_DEMAND);
+        let bytes: usize = queue
+            .iter()
+            .map(|r| {
+                let p = &info.pages[r.page];
+                rgba_bytes(device_pixels(p.width, r.scale) as usize, device_pixels(p.height, r.scale) as usize)
+            })
+            .sum();
+        assert!(bytes <= THUMB_BYTES);
+    }
+
+    fn solid_result(request: RenderRequest, w: u32, h: u32) -> pdfcraft_render::RenderedPage {
+        pdfcraft_render::RenderedPage {
+            request,
+            width: w,
+            height: h,
+            rgba: pdfcraft_render::Pixels::from(vec![u32::MAX; rgba_bytes(w as usize, h as usize) / 4]),
+            text: None,
+            error: None,
+            millis: 0,
+        }
+    }
+
+    #[test]
+    fn thumbnails_release_on_scroll_panel_close_and_request_again_after_eviction() {
+        let ctx = egui::Context::default();
+        let info = thumbnail_info(10_000);
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        v.need_thumbnail(0, true);
+        let first = v.prepare_render_queue(&info, 1.0);
+        v.last_queue = first.clone();
+        assert_eq!(v.receive_result(&ctx, solid_result(first[0], 132, 171)), 132 * 171 * 4);
+        assert!(v.prepare_render_queue(&info, 1.0).is_empty());
+        v.begin_render_frame();
+        v.need_thumbnail(9999, true);
+        v.prepare_render_queue(&info, 1.0);
+        assert!(v.thumbs.is_empty(), "jump releases old handles");
+        v.begin_render_frame();
+        v.need_thumbnail(0, true);
+        assert_eq!(v.prepare_render_queue(&info, 1.0), first, "an evicted result must be requested again");
+        v.begin_render_frame();
+        assert!(v.prepare_render_queue(&info, 1.0).is_empty(), "closing consumers cancels thumbnail work");
+    }
+
+    #[test]
+    fn stale_results_are_rejected_before_conversion_after_dpi_invalidation_and_suspend() {
+        let ctx = egui::Context::default();
+        let info = thumbnail_info(1);
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        v.need_thumbnail(0, true);
+        let first = v.prepare_render_queue(&info, 1.0)[0];
+        v.last_queue = v.prepare_render_queue(&info, 2.0);
+        // Valid pixels: only the request gate can keep these out (a size check can't).
+        let obsolete = || solid_result(first, 132, 171);
+        assert_eq!(v.receive_result(&ctx, obsolete()), 0);
+        assert!(v.thumbs.is_empty(), "a result for the old DPI is not uploaded");
+        // The same result is uploaded while its request is current.
+        v.last_queue = vec![first];
+        assert_eq!(v.receive_result(&ctx, obsolete()), 132 * 171 * 4);
+        v.thumbs.clear();
+        v.invalidate_content();
+        assert_eq!(v.receive_result(&ctx, obsolete()), 0);
+        assert!(v.thumbs.is_empty(), "nor after the content changed");
+        let pool = RenderPool::new_inline(Arc::new(Vec::new()), Default::default());
+        v.last_queue = vec![first];
+        v.suspend_rendering(&pool);
+        assert_eq!(v.receive_result(&ctx, obsolete()), 0);
+        assert!(v.thumbs.is_empty(), "nor after the tab was suspended");
+    }
+
+    #[test]
+    fn editing_after_layout_preserves_stale_page_until_replacement() {
+        let ctx = egui::Context::default();
+        let info = thumbnail_info(1);
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        let req = RenderRequest { scale: 1.0, tag: 1000, ..Default::default() };
+        v.last_queue = vec![req];
+        v.receive_result(&ctx, solid_result(req, 10, 10));
+        v.frame_queue = vec![req];
+        v.page_changed(0);
+        assert_eq!(v.prepare_render_queue(&info, 1.0), vec![req]);
+        assert_eq!(v.pages.get(&0).unwrap().tag, STALE_TAG);
+    }
+
+    #[test]
+    fn page_and_tile_admission_accounts_for_bytes_before_count_limits() {
+        let mut info = thumbnail_info(40);
+        for p in &mut info.pages {
+            p.width = 4000.0;
+            p.height = 4000.0;
+        }
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        v.frame_queue = (0..40).map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }).collect();
+        let queue = v.prepare_render_queue(&info, 1.0);
+        assert_eq!(queue.len(), 2, "128 MiB admits two 4000-square pages, not 24");
+        v.frame_queue = (0..40)
+            .map(|page| RenderRequest { page, scale: 1.0, tag: 1000, tile: Some(Tile { x: 0, y: 0, w: 1024, h: 1024 }), ..Default::default() })
+            .collect();
+        assert_eq!(v.prepare_render_queue(&info, 1.0).len(), 32);
+        assert!(!v.admit_texture(RenderRequest::default(), PAGE_BYTES + 1));
+    }
+
+    #[test]
+    fn on_screen_pages_and_tiles_are_admitted_beyond_the_prefetch_allowance() {
+        let ctx = egui::Context::default();
+        let mut info = thumbnail_info(40);
+        for p in &mut info.pages {
+            p.width = 2000.0;
+            p.height = 2000.0;
+        }
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        // Ten 16 MB pages on screen (a zoomed-out HiDPI view) exceed the 128 MiB allowance.
+        v.frame_visible = (0..10).collect();
+        v.frame_queue = (0..40).map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }).collect();
+        let queue = v.prepare_render_queue(&info, 1.0);
+        let pages: Vec<usize> = queue.iter().map(|r| r.page).collect();
+        assert_eq!(pages, (0..10).collect::<Vec<_>>(), "every on-screen page, and no prefetch past the allowance");
+        v.last_queue = queue.clone();
+        for req in &queue {
+            assert!(v.receive_result(&ctx, solid_result(*req, 2000, 2000)) > 0, "on-screen page {} uploaded", req.page);
+        }
+        assert_eq!(v.pages.len(), 10, "none evicted another on-screen page");
+        // A 5K viewport needs more 1024-pixel tiles than the tile allowance holds.
+        v.frame_queue = (0..40)
+            .map(|x| RenderRequest { page: 0, scale: 1.0, tag: 1000, tile: Some(Tile { x: x * TILE, y: 0, w: 1024, h: 1024 }), ..Default::default() })
+            .collect();
+        assert_eq!(v.prepare_render_queue(&info, 1.0).len(), 40);
+    }
+
+    #[test]
+    fn a_page_turned_back_to_is_still_cached() {
+        let ctx = egui::Context::default();
+        let info = thumbnail_info(10);
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        let req = |page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() };
+        v.frame_visible = [0].into();
+        v.frame_queue = vec![req(0)];
+        v.last_queue = v.prepare_render_queue(&info, 1.0);
+        v.receive_result(&ctx, solid_result(req(0), 100, 130));
+        // Single-page view moves on to page 1: page 0 is no longer demanded.
+        v.begin_render_frame();
+        v.current = 1;
+        v.frame_visible = [1].into();
+        v.frame_queue = vec![req(1)];
+        assert_eq!(v.prepare_render_queue(&info, 1.0), vec![req(1)]);
+        assert!(v.pages.contains_key(&0), "kept while the allowance has room");
+        // And back: nothing to render.
+        v.begin_render_frame();
+        v.current = 0;
+        v.frame_visible = [0].into();
+        v.frame_queue = vec![req(0)];
+        assert!(v.prepare_render_queue(&info, 1.0).is_empty());
+    }
+
+    #[test]
+    fn thumbnail_tags_do_not_change_as_a_row_scrolls_in_or_out() {
+        let info = thumbnail_info(10_000);
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        let tags = |v: &mut DocView, cells: usize| {
+            v.begin_render_frame();
+            for page in 0..cells {
+                v.need_thumbnail(page, true);
+            }
+            v.thumbnail_requests(&info, 2.0).into_iter().map(|r| (r.page, r.tag)).collect::<HashMap<_, _>>()
+        };
+        // 2x on a large screen: about 70 cells, give or take a row of six.
+        let (a, b) = (tags(&mut v, 70), tags(&mut v, 76));
+        assert!((0..70).all(|p| a[&p] == b[&p]), "a row more or less re-renders nothing");
+    }
+
+    #[test]
+    fn many_open_documents_share_one_raster_allowance_and_close_releases_handles() {
+        let ctx = egui::Context::default();
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_blank(612.0, 792.0, 1).unwrap();
+        for index in 0..6 {
+            app.open_bytes(&format!("synthetic-{index}.pdf"), None, bytes.as_ref().clone()).unwrap();
+            let view = app.views.last_mut().unwrap();
+            let request = RenderRequest { tag: THUMB_TAG, ..Default::default() };
+            view.last_queue = vec![request];
+            view.receive_result(&ctx, solid_result(request, 132, 171));
+            view.need_thumbnail(0, true);
+        }
+        app.finish_render_frame(&ctx);
+        let total: usize = app.views.iter().map(|v| v.thumbs.values().map(|p| texture_bytes(&p.tex)).sum::<usize>()).sum();
+        assert!(total <= 132 * 171 * 4);
+        assert!(app.views.iter().take(5).all(|v| v.thumbs.is_empty() && v.last_queue.is_empty()));
+        app.close_tab(5);
+        assert!(app.views.iter().all(|v| v.thumbs.is_empty()));
+    }
+
+    #[test]
+    fn suspended_signature_preview_releases_layers_and_rebuilds_without_editing() {
+        let ctx = egui::Context::default();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(12, 4, image::Rgba([20, 30, 40, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let image = pdfcraft_engine::SignatureImage::from_bytes(png.get_ref()).unwrap();
+        let mut session = pdfcraft_engine::Session::new();
+        let blank = session.create_blank(300.0, 400.0, 1).unwrap();
+        let id = session.open_new("signature-preview.pdf", blank).unwrap();
+        let info = session.get(id).unwrap().info.pages[0].clone();
+        session.apply(id, image.edit(0, &info, [20.0, 100.0], false, "Test").unwrap()).unwrap();
+        let doc = session.get(id).unwrap();
+        let bytes = doc.bytes.clone();
+        let generation = doc.edit_generation();
+        let mut v = DocView::new(id, &doc.info, ViewDefaults::default());
+        v.comments.selected = Some((0, 0));
+        v.signature_drag.prepare(&ctx, doc, v.comments.selected, 1.0);
+        assert!(v.signature_drag.contains(0, 0));
+
+        v.suspend_rendering(&doc.renderer);
+        assert!(!v.signature_drag.contains(0, 0), "inactive tabs release the preview pool and textures");
+        assert_eq!(v.comments.selected, Some((0, 0)), "the user's selection survives suspension");
+        v.signature_drag.prepare(&ctx, doc, v.comments.selected, 1.0);
+        assert!(v.signature_drag.contains(0, 0), "reactivating the view rebuilds the selected image's preview");
+        assert!(Arc::ptr_eq(&bytes, &doc.bytes));
+        assert_eq!(doc.edit_generation(), generation);
+        assert_eq!(doc.can_undo(), Some("Add signature"));
+        assert!(doc.dirty);
+    }
+
+    #[test]
+    fn virtualized_organizer_keeps_insert_gaps_at_document_positions() {
+        use egui_kittest::kittest::Queryable;
+
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            let bytes = app.session.create_blank(300.0, 400.0, 100).unwrap();
+            app.open_bytes("organize-gaps.pdf", None, bytes.as_ref().clone()).unwrap();
+            app.views[0].organize = true;
+            app
+        });
+        h.run_steps(4);
+        assert!(h.state().views[0].thumb_demand.len() < 50);
+        assert_eq!(h.query_all_by_label("Insert a file at the end").count(), 0, "the last virtualized cell is not the final page");
+        let center = h.state().views[0].viewport_rect().center();
+        h.hover_at(center);
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -100_000.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        // Well past egui's longest scroll animation (about 0.3 s).
+        h.run_steps(40);
+        h.get_by_label("Insert a file at the end");
+        let before_last = h.get_by_label("Insert a file before page 100").rect().center();
+        h.hover_at(before_last);
+        h.run_steps(2);
+        assert_eq!(h.state().views[0].grid_gap, Some(99), "external drops use the document index after virtualized scrolling");
+        assert!(h.state().views[0].thumb_demand.len() < 50);
+    }
+
+    #[test]
+    fn real_shell_pages_organizer_and_print_only_collect_current_thumbnail_consumers() {
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            let bytes = app.session.create_blank(612.0, 792.0, 10_000).unwrap();
+            app.open_bytes("synthetic-ten-thousand.pdf", None, bytes.as_ref().clone()).unwrap();
+            app.right = Some(RightPanel::Pages);
+            app
+        });
+        h.run_steps(4);
+        assert!((1..20).contains(&h.state().views[0].thumb_demand.len()));
+        h.state_mut().right = None;
+        h.state_mut().views[0].organize = true;
+        h.run_steps(2);
+        assert!((1..50).contains(&h.state().views[0].thumb_demand.len()));
+        h.state_mut().views[0].organize = false;
+        h.state_mut().dialog = Some(crate::Dialog::Print);
+        h.state_mut().print_draft.sheet = 9999;
+        h.run_steps(2);
+        assert_eq!(h.state().views[0].thumb_demand.keys().copied().collect::<Vec<_>>(), vec![9999]);
+        h.state_mut().print_draft.handling = crate::PrintHandling::Booklet;
+        h.state_mut().print_draft.sheet = 0;
+        h.run_steps(2);
+        assert_eq!(h.state().views[0].thumb_demand.len(), 2, "booklet only needs its two placed pages");
+        h.state_mut().dialog = None;
+        h.run_steps(2);
+        assert!(h.state().views[0].thumb_demand.is_empty());
+        assert!(h.state().views[0].thumbs.is_empty());
     }
 
     /// One mouse-wheel notch (a line) at `at` seconds.

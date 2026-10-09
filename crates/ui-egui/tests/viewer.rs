@@ -676,3 +676,62 @@ fn page_down_steps_every_spread_when_several_fit_on_screen() {
         assert_eq!(up, [9, 7, 5, 3, 1, 0], "{fit:?}");
     }
 }
+
+/// Open `sizes` in Fit width, continuous, with the Pages panel showing.
+fn pages_panel_harness(sizes: &[(u32, u32)]) -> Harness<'static, PdfCraftApp> {
+    let bytes = sized_fixture(sizes);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("cheques.pdf", None, bytes).unwrap();
+        app.right = Some(pdfcraft_ui_egui::RightPanel::Pages);
+        app
+    });
+    h.run_steps(6);
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
+    h.run_steps(6);
+    h
+}
+
+/// A thumbnail in the Pages panel (the panel lists pages as "Page n" buttons).
+fn thumbnail(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Pos2 {
+    h.get_all_by_label(label).find(|n| n.rect().left() > 1000.0).expect("the Pages panel thumbnail").rect().center()
+}
+
+/// Press and release `button` at `at`.
+fn press(h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2, button: egui::PointerButton) {
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers: Default::default() });
+}
+
+#[test]
+fn a_short_page_gone_to_from_the_pages_panel_stays_current() {
+    // A short page (a cheque) above a tall one: going to it scrolls it to the top, where the tall
+    // page below shows more of itself. The current page, and the Pages panel's highlight, moved
+    // to the tall page.
+    let mut h = pages_panel_harness(&[(600, 250), (600, 1800), (600, 250), (600, 1800)]);
+    for page in [1, 0, 2] {
+        let at = thumbnail(&h, &format!("Page {}", page + 1));
+        press(&mut h, at, egui::PointerButton::Primary);
+        h.run_steps(6);
+        assert_eq!(h.state().views[0].current, page, "clicked page {}", page + 1);
+    }
+}
+
+#[test]
+fn pages_panel_thumbnails_have_a_context_menu() {
+    let mut h = pages_panel_harness(&[(200, 300); 4]);
+    let at = thumbnail(&h, "Page 3");
+    press(&mut h, at, egui::PointerButton::Secondary);
+    h.run_steps(2);
+    // The page right-clicked becomes the selection the menu acts on.
+    assert_eq!(h.state().views[0].target_pages(), vec![2]);
+    for item in ["Extract pages", "Cut", "Paste after"] {
+        h.get_by_label(item);
+    }
+    h.get_by_label("Copy").click();
+    h.run_steps(3);
+    assert_eq!(h.state().page_clipboard.as_ref().map(|c| c.pages.clone()), Some(vec![2]));
+}

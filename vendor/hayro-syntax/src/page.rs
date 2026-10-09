@@ -251,7 +251,9 @@ impl<'a> Page<'a> {
     pub fn page_stream(&self) -> Option<&[u8]> {
         let convert_single = |s: Stream<'_>| {
             let data = s.decoded().ok()?;
-            Some(data.to_vec())
+            // PdfCraft patch: take the decoded buffer instead of copying it (up to
+            // `MAX_DECODED_STREAM` twice over).
+            Some(data.into_owned())
         };
 
         self.page_streams
@@ -259,12 +261,23 @@ impl<'a> Page<'a> {
                 if let Some(stream) = self.inner.get::<Stream<'_>>(CONTENTS) {
                     convert_single(stream)
                 } else if let Some(array) = self.inner.get::<Array<'_>>(CONTENTS) {
-                    let streams = array.iter::<Stream<'_>>().flat_map(convert_single);
-
                     let mut collected = vec![];
 
-                    for stream in streams {
-                        collected.extend(stream);
+                    for stream in array.iter::<Stream<'_>>() {
+                        // PdfCraft patch: the streams share one `MAX_DECODED_STREAM` (an array
+                        // naming one inflating stream twenty times decoded 5 GB).
+                        let left =
+                            crate::filter::MAX_DECODED_STREAM.saturating_sub(collected.len());
+                        if left == 0 {
+                            break;
+                        }
+                        let Ok(data) = stream.decoded_within(left) else {
+                            continue;
+                        };
+                        // Exactly what this stream and its separator need: growing by doubling
+                        // here held 1 GB for a 256 MiB stream.
+                        collected.reserve_exact(data.len() + 1);
+                        collected.extend_from_slice(&data);
                         // Streams must have at least one whitespace in-between.
                         collected.push(b' ');
                     }

@@ -208,6 +208,62 @@ endif</script></event></field>
     .to_string()
 }
 
+/// A 2 × 2 RGBA PNG: red, green / blue, transparent.
+pub fn tiny_png() -> Vec<u8> {
+    TINY_PNG.to_vec()
+}
+
+const TINY_PNG: &[u8] = b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x02\x00\x00\x00\x02\x08\x06\x00\x00\x00\x72\xb6\x0d\x24\x00\x00\x00\x13\x49\x44\x41\x54\x78\xda\x63\xf8\xcf\xc0\xf0\x1f\x0c\x81\x34\x88\x60\x00\x00\x3f\xd2\x05\xfb\x7f\xe6\x6a\x2b\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82";
+
+/// A 1 × 1 white GIF.
+pub const TINY_GIF: &[u8] = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;";
+
+/// A form with the other field kinds: `country`, a drop-down whose shown names save as codes
+/// (`Canada`/`CA`, `France`/`FR`, `Japan`/`JP`; default `FR`); `langs`, a multi-select list
+/// box (`English`, `French`, `Spanish`); `other`, an editable drop-down (`A`, `B`); `pin`, a
+/// password field; `sign`, a signature field; `photo`, an image field whose template picture
+/// is [`tiny_png`]; `code`, a barcode field with value `12345`; `logo`, a draw showing
+/// [`TINY_GIF`]; `summary`, calculated (JavaScript) from `country`. `data` is the children of
+/// `xfa:data` (empty for none).
+pub fn fields_template(data: &str) -> String {
+    use base64::Engine;
+    let png = base64::engine::general_purpose::STANDARD.encode(tiny_png());
+    let gif = base64::engine::general_purpose::STANDARD.encode(TINY_GIF);
+    let datasets = if data.is_empty() {
+        String::new()
+    } else {
+        format!("<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets>")
+    };
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <field name="country" w="3in" h="0.3in"><ui><choiceList/></ui><caption placement="left" reserve="1in"><value><text>Country</text></value></caption>
+   <items><text>Canada</text><text>France</text><text>Japan</text></items>
+   <items save="1" presence="hidden"><text>CA</text><text>FR</text><text>JP</text></items>
+   <value><text>FR</text></value></field>
+  <field name="langs" w="3in" h="0.8in"><ui><choiceList open="multiSelect"/></ui><caption placement="left" reserve="1in"><value><text>Languages</text></value></caption>
+   <items><text>English</text><text>French</text><text>Spanish</text></items></field>
+  <field name="other" w="3in" h="0.3in"><ui><choiceList open="onEntry" textEntry="1"/></ui><items><text>A</text><text>B</text></items></field>
+  <field name="pin" w="2in" h="0.3in"><ui><passwordEdit/></ui><caption placement="left" reserve="0.5in"><value><text>PIN</text></value></caption></field>
+  <field name="sign" w="3in" h="0.6in"><ui><signature/></ui><caption placement="top" reserve="0.2in"><value><text>Sign here</text></value></caption><border><edge/></border></field>
+  <field name="photo" w="1in" h="1in"><ui><imageEdit/></ui><value><image contentType="image/png">{png}</image></value></field>
+  <field name="code" w="2in" h="0.5in"><ui><barcode type="code128A"/></ui><value><text>12345</text></value><border><edge/></border></field>
+  <draw name="logo" w="0.5in" h="0.5in"><value><image contentType="image/gif">{gif}</image></value></draw>
+  <field name="summary" w="3in" h="0.3in" access="readOnly"><ui><textEdit/></ui>
+   <calculate><script contentType="application/x-javascript">"Country: " + (country.rawValue || "none")</script></calculate></field>
+ </subform>
+</subform>
+</template>
+{datasets}
+</xdp:xdp>
+"##
+    )
+}
+
 /// A PDF shell around `xdp`: one placeholder page, `/NeedsRendering true`, no fields.
 pub fn shell(xdp: &str) -> Vec<u8> {
     let objs: Vec<Vec<u8>> = vec![

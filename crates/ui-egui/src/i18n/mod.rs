@@ -252,7 +252,7 @@ pub fn system_lang() -> Lang {
 #[cfg(not(target_arch = "wasm32"))]
 fn detect_system_lang() -> Lang {
     for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
-        if let Some(l) = std::env::var(var).ok().filter(|v| !v.is_empty()).and_then(|v| lang_from_tag(&v)) {
+        if let Some(l) = std::env::var(var).ok().and_then(|v| language_override(&v)) {
             return l;
         }
     }
@@ -270,6 +270,17 @@ fn detect_system_lang() -> Lang {
         return l;
     }
     Lang::EN
+}
+
+/// A named locale can override the display language. On Windows, the neutral
+/// C/POSIX locale inherited from a launcher says nothing about the user's UI language.
+#[cfg(not(target_arch = "wasm32"))]
+fn language_override(tag: &str) -> Option<Lang> {
+    let tag = tag.trim();
+    if cfg!(target_os = "windows") && matches!(candidates(tag).first().map(String::as_str), Some("c" | "posix")) {
+        return None;
+    }
+    lang_from_tag(tag)
 }
 
 /// The Windows display languages in preference order, one tag per line, queried once when Auto
@@ -474,6 +485,20 @@ mod tests {
         assert_eq!(first_supported("en-US\r\n"), Some(Lang::EN));
         assert_eq!(first_supported("fr-FR\r\n"), Lang::from_code("fr"));
         assert_eq!(first_supported("\r\n"), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn neutral_locale_does_not_override_display_language() {
+        let fr = Lang::from_code("fr").unwrap();
+        for tag in ["C", "C.UTF-8", "POSIX", "posix.UTF-8", "", "  C.UTF-8  ", "unsupported"] {
+            assert_eq!(language_override(tag), None, "{tag}");
+            assert_eq!(language_override(tag).or_else(|| first_supported("unsupported-XY\nfr-FR\nen-US")), Some(fr));
+        }
+        assert_eq!(["C.UTF-8", "POSIX", "fr_FR.UTF-8"].into_iter().find_map(language_override), Some(fr));
+        assert_eq!(language_override("fr_FR.UTF-8"), Some(fr));
+        assert_eq!(language_override("en_US.UTF-8"), Some(Lang::EN));
+        assert_eq!(language_override("ja_JP.UTF-8"), Some(JA()));
     }
 
     #[cfg(target_os = "windows")]
@@ -1819,5 +1844,13 @@ mod tests {
                 assert_eq!(e.translation.ends_with('…'), command.label.ends_with('…'), "{}: ellipsis mismatch: {}", l.code, e.source);
             }
         }
+    }
+
+    /// Preferences ▸ Date format ▸ Language offers exactly the interface languages, in order.
+    #[test]
+    fn date_languages_are_the_interface_languages() {
+        let interface: Vec<(&str, &str)> = Lang::all().map(|l| (l.code(), l.name())).collect();
+        let dates: Vec<(&str, &str)> = pdfcraft_engine::dates::DATE_LANGUAGES.iter().map(|l| (l.code, l.name)).collect();
+        assert_eq!(dates, interface);
     }
 }

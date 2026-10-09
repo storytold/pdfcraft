@@ -9,9 +9,11 @@ use crate::{ClipPath, Device, FillRule, InterpreterSettings, StrokeProps};
 use hayro_syntax::content::ops::Transform;
 use hayro_syntax::object::Dict;
 use hayro_syntax::object::Name;
+use hayro_syntax::object::Stream;
 use hayro_syntax::page::Resources;
 use hayro_syntax::xref::XRef;
 use kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape};
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -31,6 +33,58 @@ pub(crate) const MAX_NESTED_PAINTS: u32 = 50_000;
 
 std::thread_local! {
     static NESTED_PAINTS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
+    static CONTENT_LEFT: core::cell::Cell<usize> = const { core::cell::Cell::new(MAX_PAGE_CONTENT) };
+}
+
+/// PdfCraft patch: decoded content-stream bytes one page may hold at once: its contents, and
+/// the forms, tiling patterns and Type 3 glyph procedures being painted. Each stream already
+/// stops at `MAX_DECODED_STREAM`, but forms nest fifty deep and every level keeps its content
+/// while the next one runs: a form painting itself around a stream that inflates to 256 MiB
+/// would have held over 12 GB. A level gives its bytes back when it finishes, so content
+/// painted again and again doesn't use the budget up. Ordinary pages hold a few megabytes.
+pub(crate) const MAX_PAGE_CONTENT: usize = 512 << 20;
+
+/// PdfCraft patch: a content stream decoded within the page's [`MAX_PAGE_CONTENT`]. The bytes
+/// it decoded count against the budget until it is dropped; a stream without filters is
+/// borrowed from the file and costs nothing.
+pub(crate) struct DecodedContent<'a> {
+    data: Cow<'a, [u8]>,
+    held: usize,
+}
+
+impl AsRef<[u8]> for DecodedContent<'_> {
+    fn as_ref(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+impl Drop for DecodedContent<'_> {
+    fn drop(&mut self) {
+        let held = self.held;
+        CONTENT_LEFT.with(|c| c.set(c.get().saturating_add(held).min(MAX_PAGE_CONTENT)));
+    }
+}
+
+/// PdfCraft patch: decode a content stream within what is left of this page's
+/// [`MAX_PAGE_CONTENT`]. `None` once the budget is spent (the content is skipped).
+pub(crate) fn decode_content<'a>(stream: &Stream<'a>) -> Option<DecodedContent<'a>> {
+    let left = CONTENT_LEFT.with(core::cell::Cell::get);
+    if left == 0 {
+        warn!("page content budget exceeded");
+        return None;
+    }
+    let data = stream.decoded_within(left).ok()?;
+    let held = match &data {
+        Cow::Owned(v) => v.len(),
+        Cow::Borrowed(_) => 0,
+    };
+    charge_content(held);
+    Some(DecodedContent { data, held })
+}
+
+/// PdfCraft patch: count `len` bytes held for the rest of the page (its own contents).
+pub(crate) fn charge_content(len: usize) {
+    CONTENT_LEFT.with(|c| c.set(c.get().saturating_sub(len)));
 }
 
 /// PdfCraft patch: count a paint at `depth` (top-level ones are free); `false` once this
@@ -101,8 +155,10 @@ impl<'a> Context<'a> {
         settings: InterpreterSettings,
     ) -> Self {
         let state = State::new(initial_transform);
-        // PdfCraft patch: a page (or other top-level content) starts with a fresh budget.
+        // PdfCraft patch: a page (or other top-level content) starts with fresh budgets.
         NESTED_PAINTS.with(|n| n.set(0));
+        CONTENT_LEFT.with(|c| c.set(MAX_PAGE_CONTENT));
+        crate::encode::reset_mesh_budget();
 
         Self::new_with(initial_transform, bbox, cache, xref, settings, state, 0)
     }
