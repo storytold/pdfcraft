@@ -14,7 +14,8 @@ pdfcraft-content = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
-# Display order of right-to-left lines in added text; already in the tree via the interface.
+# Display order of right-to-left lines in added text, and reading and writing order in Edit text;
+# already in the tree via the interface.
 unicode-bidi = "0.3"
 
 [dev-dependencies]

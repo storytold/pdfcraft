@@ -1971,11 +1971,11 @@ title = "Edit right-to-left and CJK text"
 area = "C"
 tier = "P1"
 milestone = "M7"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["text_lines", "text_paragraphs", "text_edit"]
+evidence = ["crates/edit/src/tests.rs::hebrew_lines_read_in_typing_order", "crates/edit/src/tests.rs::hebrew_edits_are_drawn_right_to_left_and_keep_their_right_edge", "crates/edit/src/tests.rs::hebrew_letters_the_page_font_lacks_use_the_hebrew_face", "crates/edit/src/bidi.rs::hebrew_sentences_numbers_latin_and_brackets_round_trip"]
+notes = "Hebrew: lines and paragraphs read in typing order and are written back in drawing order, right-aligned by default; letters the page's font lacks use the craft-fonts Noto Sans Hebrew face as Type 3 glyphs. Japanese uses its Type 3 fallback. Missing: Hebrew points (niqqud) in replacement text, writing Arabic (shaping), right-to-left typing in the edit box (misc.rtl-ui), lines a producer draws word by word from the right, vertical CJK."
 
 [[feature]]
 id = "edit.rotated-text-editing"

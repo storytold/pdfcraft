@@ -591,6 +591,7 @@ mod flatten;
 pub use flatten::flatten;
 pub mod images;
 pub use images::{ImageChange, PageImage, change_image, page_images, rect_to_rect, turn_about_centre};
+pub mod bidi;
 pub mod text;
 pub use text::{BlockStyle, LineEdit, TextBlock, TextLine, replace_block, replace_line, rewrite_block, text_blocks, text_lines};
 pub mod added;

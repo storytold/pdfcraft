@@ -66,6 +66,25 @@ pub fn ui_telugu_fonts() -> Vec<&'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.covers("Telu")).collect()
 }
 
+/// The `Hebr` craft-fonts faces for Hebrew interface text (file names, document titles, text
+/// being edited), in manifest order. Empty when built without craft-fonts or when it has no
+/// Hebrew face.
+pub fn ui_hebrew_fonts() -> Vec<&'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.covers("Hebr")).collect()
+}
+
+/// The face for Hebrew text written into PDFs: the `Hebr` face of the asked weight, else its
+/// Regular, else any `Hebr` face. `None` without craft-fonts or without a Hebrew face.
+pub fn document_hebrew_font(bold: bool) -> Option<&'static CraftFont> {
+    hebrew_face(CRAFT_FONTS, bold)
+}
+
+fn hebrew_face(faces: &[CraftFont], bold: bool) -> Option<&CraftFont> {
+    let hebr = || faces.iter().filter(|f| f.covers("Hebr"));
+    let style = if bold { "Bold" } else { "Regular" };
+    hebr().find(|f| f.style == style).or_else(|| hebr().find(|f| f.style == "Regular")).or_else(|| hebr().next())
+}
+
 /// Interface CJK faces in fallback order for the UI language: Simplified Chinese first when
 /// `prefer_hans`, otherwise Japanese first (the historical default).
 ///
@@ -235,6 +254,23 @@ mod tests {
         // An Arabic face is never a CJK fallback, and the other way round.
         assert!(order_cjk(&faces, false).iter().all(|f| f.family == "BIZ UDPGothic"));
         assert_eq!(ui_arabic_fonts().len(), CRAFT_FONTS.iter().filter(|f| f.covers("Arab")).count());
+    }
+
+    #[test]
+    fn hebrew_document_faces_follow_the_weight() {
+        static HEBR_LATN: &[&str] = &["Hebr", "Latn"];
+        let faces = [
+            CraftFont { family: "BIZ UDPGothic", style: "Bold", scripts: &["Jpan"], bytes: b"not-hebrew" },
+            CraftFont { family: "FakeHebrew", style: "Regular", scripts: HEBR_LATN, bytes: b"regular" },
+            CraftFont { family: "FakeHebrew", style: "Bold", scripts: HEBR_LATN, bytes: b"bold" },
+        ];
+        assert_eq!(hebrew_face(&faces, false).map(|f| f.bytes), Some(&b"regular"[..]));
+        assert_eq!(hebrew_face(&faces, true).map(|f| f.bytes), Some(&b"bold"[..]));
+        // No bold face: Regular, never a face of another script.
+        assert_eq!(hebrew_face(&faces[..2], true).map(|f| f.bytes), Some(&b"regular"[..]));
+        assert!(hebrew_face(&faces[..1], false).is_none());
+        assert_eq!(ui_hebrew_fonts().len(), CRAFT_FONTS.iter().filter(|f| f.covers("Hebr")).count());
+        assert_eq!(document_hebrew_font(false).is_some(), CRAFT_FONTS.iter().any(|f| f.covers("Hebr")));
     }
 
     #[test]
