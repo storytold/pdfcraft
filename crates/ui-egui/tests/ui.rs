@@ -72,6 +72,7 @@ fn home_removes_one_recent_file_or_clears_them_all() {
     // Tall enough that the Recent list is on screen without scrolling.
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         for name in ["first.pdf", "second.pdf", "third.pdf"] {
             app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0 });
         }
@@ -171,11 +172,65 @@ fn overflowing_tabs_can_be_reached_by_scrolling() {
     }
 }
 
+/// Whether a node labelled `label` is there and enabled (`None`: not there).
+fn enabled(h: &Harness<'static, PdfCraftApp>, label: &str) -> Option<bool> {
+    h.query_by_label(label)?;
+    Some(h.query_by(|n| n.label().as_deref() == Some(label) && n.is_disabled()).is_none())
+}
+
+#[test]
+fn tabs_shrink_to_fit_then_arrows_step_through_them_and_open_stays_in_sight() {
+    // Five long names are wider than the strip: the tabs shrink instead of running under the
+    // buttons on the right, Open sits after them, and no arrows show.
+    let name = |i: usize| format!("Statement {i} for the office records, scanned.pdf");
+    let mut h = harness(move |app| {
+        for i in 0..5 {
+            app.open_bytes(&name(i), None, FIXTURE.to_vec()).unwrap();
+        }
+    });
+    let open = h.get_by_label("Open").rect();
+    let discord = h.get_by_label("Discord").rect();
+    assert!(open.right() <= discord.left(), "Open {open:?} must not run under Discord {discord:?}");
+    let mut previous_right = f32::MIN;
+    for i in 0..5 {
+        let tab = h.get_by_label(&name(i)).rect();
+        assert!(tab.left() >= previous_right - 0.5, "tabs must not overlap: {i} at {tab:?}");
+        assert!(tab.right() <= open.left() + 0.5, "every tab fits before Open: {i} at {tab:?}, Open at {open:?}");
+        assert!(tab.width() >= 179.0, "tabs keep most of their name: {i} is {tab:?}");
+        previous_right = tab.right();
+    }
+    assert_eq!(enabled(&h, "Scroll tabs left"), None, "no arrows while every tab fits");
+    // Seven don't fit even at their narrowest: arrows show. The newest tab is active and in
+    // sight at the end, so only the left arrow can go further.
+    for i in 5..7 {
+        h.state_mut().open_bytes(&name(i), None, FIXTURE.to_vec()).unwrap();
+    }
+    h.run_steps(6);
+    assert_eq!((enabled(&h, "Scroll tabs left"), enabled(&h, "Scroll tabs right")), (Some(true), Some(false)));
+    let first = h.get_by_label(&name(0)).rect();
+    h.get_by_label("Scroll tabs left").click();
+    h.run_steps(4);
+    assert!(h.get_by_label(&name(0)).rect().left() > first.left(), "the left arrow scrolls the tabs back");
+    assert_eq!(enabled(&h, "Scroll tabs right"), Some(true), "and then there is more to the right");
+    let open = h.get_by_label("Open").rect();
+    let right = h.get_by_label("Scroll tabs right").rect();
+    assert!(right.right() <= open.left() + 0.5 && open.right() <= h.get_by_label("Discord").rect().left());
+    // Twenty: Open stays in sight left of Discord.
+    for i in 0..13 {
+        h.state_mut().open_bytes(&format!("more-{i:02}.pdf"), None, FIXTURE.to_vec()).unwrap();
+    }
+    h.run_steps(4);
+    let open = h.get_by_label("Open").rect();
+    let discord = h.get_by_label("Discord").rect();
+    assert!(open.left() > 0.0 && open.right() <= discord.left(), "Open {open:?} stays in sight left of Discord {discord:?}");
+}
+
 #[test]
 fn narrow_tab_strips_accept_vertical_wheel_scrolling() {
     for width in [600.0, 900.0] {
         let mut h = Harness::builder().with_size(egui::vec2(width, 700.0)).build_eframe(|_cc| {
             let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
             for i in 0..12 {
                 app.open_bytes(&format!("narrow-{i:02}.pdf"), None, FIXTURE.to_vec()).unwrap();
             }

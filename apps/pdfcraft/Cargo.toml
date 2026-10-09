@@ -28,6 +28,10 @@ log = { workspace = true }
 # behind a safe API. Same version as PhotoCraft. Pinned exactly: review the diff before bumping.
 fmv-macos-events = "=0.1.0"
 
+[dev-dependencies]
+# Waits for wgpu's adapter, device and error-scope futures in tests (already in the tree through wgpu).
+pollster = "1.0"
+
 [build-dependencies]
 # Icon + VERSIONINFO for pdfcraft.exe; build.rs only uses it when targeting Windows.
 winresource = "0.1"
