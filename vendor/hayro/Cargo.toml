@@ -60,6 +60,10 @@ default-features = false
 [dependencies.kurbo]
 version = "0.13.0"
 
+# PdfCraft patch: report image resampling fallbacks through the application's logger.
+[dependencies.log]
+version = "0.4"
+
 [dependencies.pic-scale]
 version = "0.7.9"
 features = [

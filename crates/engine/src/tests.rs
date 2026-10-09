@@ -2405,3 +2405,14 @@ fn comments_without_appearances_are_drawn_but_not_saved() {
         assert!(reopened.get(r).as_dict().is_some_and(|d| !d.contains(b"AP")), "{r:?} is saved without /AP");
     }
 }
+
+/// Titles a browser writes for a blank page or a pop-up name no document; real titles stay.
+#[test]
+fn placeholder_titles_are_recognised() {
+    for t in ["about:blank", "About:Blank", " about:srcdoc ", "blob:https://bank.example/3f2a", "data:text/html,x", "Untitled", "untitled"] {
+        assert!(is_placeholder_title(t), "{t:?}");
+    }
+    for t in ["Quarterly report", "Untitled report", "About: our company", "Statement", "blank"] {
+        assert!(!is_placeholder_title(t), "{t:?}");
+    }
+}
