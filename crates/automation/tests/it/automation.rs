@@ -7222,6 +7222,8 @@ fn ocr_tools_make_a_scan_searchable() {
     assert_eq!(status["languages"][0]["code"], "en");
     assert_eq!(status["languages"][1]["code"], "zh");
     assert_eq!(status["languages"][1]["available"], pdfcraft_engine::ocr::available_for("zh"));
+    assert_eq!(status["languages"][2]["code"], "la");
+    assert_eq!(status["languages"][2]["available"], pdfcraft_engine::ocr::available_for("la"));
     if status["available"] != true {
         eprintln!("skipped: OCR models not installed");
         return;
@@ -7241,6 +7243,11 @@ fn ocr_tools_make_a_scan_searchable() {
         let mixed = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "language": "zh" }));
         assert!(mixed["pages"][0]["text"].as_str().unwrap().to_lowercase().contains("searchable"), "{mixed}");
         assert!(page_text(&mut a, scan)[0].to_lowercase().contains("searchable"));
+    }
+    if pdfcraft_engine::ocr::available_for("la") {
+        ok(&mut a, "edit_undo", json!({ "doc": scan }));
+        let latin = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "language": "la" }));
+        assert!(latin["pages"][0]["text"].as_str().unwrap().to_lowercase().contains("searchable"), "{latin}");
     }
 }
 

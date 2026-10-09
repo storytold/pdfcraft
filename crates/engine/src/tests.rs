@@ -5412,6 +5412,65 @@ fn chinese_ocr_makes_mixed_scans_searchable() {
     assert_eq!(page_texts(&s, id), [""]);
 }
 
+#[test]
+fn latin_ocr_keeps_german_accents_searchable() {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+    if !ocr::available_for("la") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    // Fixture rendered with the committed Inter face (covers the accented Latin letters).
+    let font = FontRef::try_from_slice(include_bytes!("../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+    let size = 64.0;
+    let scaled = font.as_scaled(PxScale::from(size));
+    let lines = ["Gerne übersenden wir Ihnen unser Angebot für den", "Großformat-Drucker mit Förderband. Mit freundlichen Grüßen"];
+    let (w, h) = (1900, 340);
+    let mut image = image::RgbaImage::from_pixel(w, h, image::Rgba([255; 4]));
+    for (row, line) in lines.iter().enumerate() {
+        let mut x = 40.0;
+        let baseline = 110.0 + 150.0 * row as f32;
+        for ch in line.chars() {
+            let id = scaled.glyph_id(ch);
+            assert_ne!(id.0, 0, "fixture font must cover {ch}");
+            let glyph = id.with_scale_and_position(size, point(x, baseline));
+            if let Some(outline) = font.outline_glyph(glyph) {
+                let bounds = outline.px_bounds();
+                outline.draw(|gx, gy, coverage| {
+                    let (px, py) = (bounds.min.x as i32 + gx as i32, bounds.min.y as i32 + gy as i32);
+                    if px >= 0 && py >= 0 && px < w as i32 && py < h as i32 {
+                        let v = (255.0 * (1.0 - coverage)) as u8;
+                        image.put_pixel(px as u32, py as u32, image::Rgba([v, v, v, 255]));
+                    }
+                });
+            }
+            x += scaled.h_advance(id);
+        }
+    }
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("angebot.png".into(), png.into_inner())]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let before = export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).unwrap();
+    let found = s.recognize_text(id, &[], ocr::OcrSettings { language: "la".into(), ..Default::default() }).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].skipped, None);
+    // The accents the English models drop as "?" (#524): umlauts, ß and the ö of Förderband.
+    let text = found[0].text();
+    for word in ["übersenden", "für", "Großformat", "Förderband", "Grüßen"] {
+        assert!(text.contains(word), "missing {word:?} in {text:?}");
+    }
+    let extracted = page_texts(&s, id);
+    assert!(extracted[0].contains("Förderband"), "search for Förderband must hit: {extracted:?}");
+    assert_eq!(export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).unwrap(), before, "search text changes no pixels");
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = s.open("result.pdf", None, saved, None).unwrap();
+    let reopened_text = page_texts(&s, reopened);
+    assert!(reopened_text[0].contains("Grüßen"), "accents survive save/reopen: {reopened_text:?}");
+    s.undo(id).unwrap();
+    assert_eq!(page_texts(&s, id), [""]);
+}
+
 /// A form whose scripts are custom JavaScript: total = price × qty (calculate, through a
 /// document-level function), shown with a custom format; qty is validated; a button script.
 fn scripted_form() -> Vec<u8> {

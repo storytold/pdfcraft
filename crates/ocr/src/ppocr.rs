@@ -1,5 +1,6 @@
-//! PP-OCRv4 Chinese/English recognition, entirely on the local RTen runtime.
-//! The detector and reading-order analysis are shared with the English recogniser.
+//! PP-OCR recognition (Chinese, accented Latin) on the local RTen runtime: CTC decoding of a
+//! mobile recognition model over line crops. The detector and reading-order analysis are
+//! shared with the English recogniser (ocrs).
 
 use std::io::Read;
 use std::path::Path;
@@ -11,13 +12,16 @@ use crate::OcrError;
 const HEIGHT: usize = 48;
 const MAX_WIDTH: usize = 4096;
 
-pub(crate) struct Chinese {
+pub(crate) struct PpOcr {
     model: rten::Model,
     alphabet: Vec<char>,
 }
 
-impl Chinese {
-    pub fn load(model: &Path, dictionary: &Path) -> Result<Self, OcrError> {
+impl PpOcr {
+    /// Load `model` with its `dictionary`. `classes` is the model's output class count
+    /// (CTC blank + one per dictionary line + the appended space); a mismatch means the
+    /// wrong dictionary is installed, so fail before the model is ever used.
+    pub fn load(model: &Path, dictionary: &Path, classes: usize) -> Result<Self, OcrError> {
         let load = |p: &Path, e: &dyn std::fmt::Display| OcrError::Load(p.display().to_string(), e.to_string());
         let mut bytes = Vec::new();
         std::fs::File::open(dictionary)
@@ -39,8 +43,8 @@ impl Chinese {
             alphabet.push(c);
         }
         alphabet.push(' '); // PP-OCR's use_space_char option.
-        if alphabet.len() != 6625 {
-            return Err(load(dictionary, &"PP-OCRv4 expects 6623 dictionary characters"));
+        if alphabet.len() != classes {
+            return Err(load(dictionary, &format!("the model has {classes} output classes but the dictionary gives {}", alphabet.len())));
         }
         let model = rten::Model::load_file(model).map_err(|e| load(model, &e))?;
         Ok(Self { model, alphabet })
@@ -93,7 +97,7 @@ impl Chinese {
             .map_err(|e| OcrError::Recognize(format!("unexpected recognition output: {e}")))?;
         let shape = output.shape();
         if shape.len() != 3 || shape.first() != Some(&1) || shape.get(2) != Some(&self.alphabet.len()) {
-            return Err(OcrError::Recognize("PP-OCRv4 output has an unexpected shape".into()));
+            return Err(OcrError::Recognize("PP-OCR output has an unexpected shape".into()));
         }
         let values: Vec<f32> = output.iter().copied().collect();
         decode(&values, &self.alphabet)
@@ -137,5 +141,19 @@ mod tests {
         }
         assert_eq!(decode(&scores, &alphabet).unwrap(), "中中文A");
         assert!(decode(&[f32::NAN; 4], &alphabet).is_err());
+    }
+
+    #[test]
+    fn dictionary_must_match_the_models_class_count() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-ppocr-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dict = dir.join("keys.txt");
+        std::fs::write(&dict, "a\nb\n").unwrap(); // blank + a + b + space = 4 classes.
+        // The dictionary is validated before the model is opened, so a missing model is fine here.
+        let Err(err) = PpOcr::load(&dir.join("missing.onnx"), &dict, 5) else { panic!("a 5-class model must reject a 4-class dictionary") };
+        assert!(matches!(&err, OcrError::Load(p, m) if p.ends_with("keys.txt") && m.contains("5 output classes")), "{err:?}");
+        let Err(err) = PpOcr::load(&dir.join("missing.onnx"), &dict, 4) else { panic!("a missing model must fail to load") };
+        assert!(matches!(&err, OcrError::Load(p, _) if p.ends_with("missing.onnx")), "{err:?}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

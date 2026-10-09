@@ -22,7 +22,8 @@ use crate::{DocId, Edit, EditError, Session};
 pub struct OcrSettings {
     /// Resolution pages are rendered at for recognition (Acrobat's "Downsample to" choices).
     pub dpi: f32,
-    /// Language code from [`LANGUAGES`]; `zh` reads Chinese and mixed English text.
+    /// Language code from [`LANGUAGES`]; `zh` reads Chinese with English, `la` reads accented
+    /// European languages (German, French, Czech, Polish, …).
     pub language: String,
     /// Leave pages that already have text alone (Acrobat reports "page contains renderable
     /// text" and skips them). When `false`, such pages are read too (a picture on a page that
