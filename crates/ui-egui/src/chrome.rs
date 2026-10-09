@@ -60,7 +60,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             for i in 0..app.views.len() {
                                 let Some(doc) = app.session.get(app.views[i].id) else { continue };
                                 let (name, dirty) = (doc.display_name(), doc.dirty);
-                                let response = tab(ui, &t, "file-text", &name, dirty, app.active == Some(i), &mut close, i, cap);
+                                // A tab showing the document's title names its file on hover.
+                                let file = (name != doc.name).then_some(doc.name.as_str());
+                                let response = tab(ui, &t, "file-text", &name, file, dirty, app.active == Some(i), &mut close, i, cap);
                                 if changed && app.active == Some(i) && !app.combine_showing() {
                                     response.scroll_to_me(Some(Align::Center));
                                 }
@@ -74,7 +76,8 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             if app.combine_tab.open {
                                 // After the document tabs; its index can't clash with theirs.
                                 let mut close = None;
-                                let response = tab(ui, &t, "files", tl!("Combine files"), false, app.combine_showing(), &mut close, usize::MAX, cap);
+                                let response =
+                                    tab(ui, &t, "files", tl!("Combine files"), None, false, app.combine_showing(), &mut close, usize::MAX, cap);
                                 if changed && app.combine_showing() {
                                     response.scroll_to_me(Some(Align::Center));
                                 }
@@ -173,6 +176,7 @@ fn tab(
     t: &Tokens,
     icon: &str,
     name: &str,
+    file: Option<&str>,
     dirty: bool,
     active: bool,
     close: &mut Option<usize>,
@@ -219,7 +223,10 @@ fn tab(
     if x.clicked() {
         *close = Some(index);
     }
-    let shown = crate::bidi::visual(name);
+    let shown = match file {
+        Some(file) => std::borrow::Cow::Owned(format!("{}\n{}", crate::bidi::visual(name), crate::bidi::visual(file))),
+        None => crate::bidi::visual(name),
+    };
     resp.on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", shown.as_ref())]) } else { shown.into_owned() })
 }
 

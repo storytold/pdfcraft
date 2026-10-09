@@ -332,6 +332,25 @@ fn tab_and_window_show_the_document_title_when_asked() {
 }
 
 #[test]
+fn a_placeholder_title_leaves_the_file_name_on_the_tab_and_window() {
+    // A browser's "Save as PDF" of a blank page or pop-up titles the document "about:blank"
+    // and asks viewers to show the title: the file name says more.
+    use pdfcraft_engine::Edit;
+    let mut h = harness();
+    {
+        let s = h.state_mut();
+        let id = s.views[s.active.unwrap()].id;
+        s.session.apply(id, Edit::SetInfo { key: "Title".into(), value: "about:blank".into() }).unwrap();
+        let mut v = s.session.get(id).unwrap().initial_view();
+        v.display_title = true;
+        s.session.apply(id, Edit::SetInitialView(Box::new(v))).unwrap();
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().window_title, "b.pdf — PdfCraft");
+    assert!(h.query_by_label_contains("about:blank").is_none());
+}
+
+#[test]
 fn an_earlier_revision_opens_from_document_properties() {
     use pdfcraft_engine::Edit;
     let mut h = harness();
