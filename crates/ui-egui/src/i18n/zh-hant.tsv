@@ -1990,3 +1990,4 @@
 	Printer properties	印表機內容
 	Reset to printer defaults	還原印表機預設值
 	This printer offers no settings of its own.	此印表機沒有專屬設定。
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft 正在不使用圖形處理器的情況下繪製，因此可能較慢。更新顯示卡驅動程式可能會有幫助。
