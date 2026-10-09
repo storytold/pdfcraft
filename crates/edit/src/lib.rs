@@ -612,7 +612,7 @@ pub fn marks_present(doc: &Document) -> Vec<MarkKind> {
 }
 
 mod flatten;
-pub use flatten::flatten;
+pub use flatten::{flatten, flatten_fill_sign};
 pub mod images;
 pub use images::{ImageChange, PageImage, change_image, page_images, rect_to_rect, turn_about_centre};
 pub mod text;

@@ -902,8 +902,8 @@ milestone = "M3"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/control.rs::middle_click_autoscroll_latches_has_a_dead_zone_and_scrolls_both_directions", "crates/ui-egui/tests/control.rs::organize_pages_supports_autoscroll_without_selecting_or_reordering_pages", "crates/ui-egui/tests/control.rs::moving_before_middle_button_release_keeps_scrolling_without_starting_page_tools", "crates/ui-egui/tests/control.rs::farther_from_the_click_scrolls_faster_in_the_viewer_and_page_grid", "crates/ui-egui/tests/control.rs::autoscroll_uses_the_initial_click_position_when_input_arrives_in_one_frame", "crates/ui-egui/tests/control.rs::autoscroll_uses_elapsed_frame_time_and_preserves_fractional_motion_in_both_views"]
-notes = "Linux-only middle-button vertical autoscroll in the document and Organize Pages; other targets retain their existing middle-button input behavior. Click to toggle, release keeps scrolling on, and a Chromium-style nonlinear curve increases speed with vertical screen distance from the initial click. A 15-point dead zone pauses immediately. Continuous redraws use elapsed frame time and preserve fractional movement, tested at 30/60/120/144 fps. Cancels on another middle click, Escape, other pointer/wheel input, focus loss, tab changes and dialogs. Driven headlessly through the opt-in UI control channel (ui.click/ui.move/ui.drag). Keyboard-started timed scrolling is not implemented."
+evidence = ["crates/ui-egui/tests/control.rs::middle_click_autoscroll_latches_has_a_dead_zone_and_scrolls_both_directions", "crates/ui-egui/tests/control.rs::organize_pages_supports_autoscroll_without_selecting_or_reordering_pages", "crates/ui-egui/tests/control.rs::moving_before_middle_button_release_keeps_scrolling_without_starting_page_tools", "crates/ui-egui/tests/control.rs::farther_from_the_click_scrolls_faster_in_the_viewer_and_page_grid", "crates/ui-egui/tests/control.rs::autoscroll_uses_the_initial_click_position_when_input_arrives_in_one_frame", "crates/ui-egui/tests/control.rs::autoscroll_uses_elapsed_frame_time_and_preserves_fractional_motion_in_both_views", "crates/ui-egui/tests/control.rs::middle_button_pans_while_held_outside_linux", "crates/ui-egui/tests/comments.rs::a_middle_drag_with_a_drawing_tool_scrolls_instead_of_drawing"]
+notes = "Linux-only middle-button vertical autoscroll in the document and Organize Pages; Windows and macOS pan 1:1 while the middle button is held (Grabbing cursor, no latch). On every target the middle button never reaches the page tools, so it scrolls instead of drawing, selecting, cropping or moving. Click to toggle, release keeps scrolling on, and a Chromium-style nonlinear curve increases speed with vertical screen distance from the initial click. A 15-point dead zone pauses immediately. Continuous redraws use elapsed frame time and preserve fractional movement, tested at 30/60/120/144 fps. Cancels on another middle click, Escape, other pointer/wheel input, focus loss, tab changes and dialogs. Driven headlessly through the opt-in UI control channel (ui.click/ui.move/ui.drag). Keyboard-started timed scrolling is not implemented."
 
 [[feature]]
 id = "view.zoom-in-out"
@@ -1235,11 +1235,11 @@ title = "Page operations from the thumbnails panel (drag reorder, context menu)"
 area = "B"
 tier = "P1"
 milestone = "M4"
-status = "planned"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::dragging_pages_panel_thumbnails_reorders_pages", "crates/ui-egui/tests/viewer.rs::pages_panel_thumbnails_have_a_context_menu"]
+notes = "Drag the selection (or the page grabbed) to reorder, with a drop bar and edge scrolling; right-click offers Extract pages, Cut, Copy and Paste after. Not yet: Rotate, Delete, Insert and Page labels in the menu, dragging pages between documents, or dropping files onto the panel."
 
 [[feature]]
 id = "view.bookmarks-panel"
@@ -2815,11 +2815,11 @@ title = "Thumbnail size slider"
 area = "D"
 tier = "P2"
 milestone = "M4"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["page.organize"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::page_grid_zooms_with_its_buttons_keys_and_pinch", "crates/ui-egui/tests/editing.rs::a_zoomed_page_grid_still_inserts_and_moves_at_the_right_gap", "crates/ui-egui/tests/editing.rs::zoomed_pages_in_view_are_rendered_at_the_size_drawn"]
+notes = "Organize page grid: 50–300% with toolbar buttons (and a percentage that resets to 100%), trackpad pinch or Ctrl/⌘ + wheel about the page under the pointer, and ⌘+ / ⌘− / ⌘0; pages drawn larger than their thumbnails are rendered at the size drawn while they are in view (the thumbnail stands in until then, and after an edit), so text stays sharp however long the document is. Missing: a slider as in Acrobat; the size is per document view and not remembered between sessions; the Pages side panel has no size control."
 
 [[feature]]
 id = "organize.split-every-n"
@@ -4398,7 +4398,7 @@ milestone = "M6"
 status = "partial"
 commands = ["form.fields"]
 tools = ["form_fill", "form_set_props"]
-evidence = ["crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/forms/src/tests.rs::choices_accept_exports_or_display_text", "crates/forms/src/tests.rs::rotated_fields_draw_in_their_quadrant", "crates/forms/src/tests.rs::a_rotated_field_draws_along_the_vertical_edge", "crates/automation/tests/automation.rs::rotating_a_field_through_tools", "crates/ui-egui/tests/prepare.rs::position_tab_rotates_a_field"]
+evidence = ["crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/forms/src/tests.rs::choices_accept_exports_or_display_text", "crates/forms/src/tests.rs::rotated_fields_draw_in_their_quadrant", "crates/engine/tests/form_rotation.rs::a_rotated_field_draws_along_the_vertical_edge", "crates/automation/tests/automation.rs::rotating_a_field_through_tools", "crates/ui-egui/tests/prepare.rs::position_tab_rotates_a_field"]
 notes = "auto-size, comb, multiline, password, quadding, /MK colours and /MK /R rotation (0, 90, 180, 270); approximate Helvetica metrics"
 
 [[feature]]
@@ -5213,9 +5213,9 @@ tier = "P0"
 milestone = "M5"
 status = "shipped"
 commands = ["sign.fill.date"]
-tools = ["fill_sign_add"]
-evidence = ["crates/ui-egui/tests/fill_sign.rs::text_marks_and_date", "crates/automation/tests/automation.rs::fill_and_sign_through_tools"]
-notes = "local date, m/d/yyyy"
+tools = ["fill_sign_add", "fill_sign_date_format"]
+evidence = ["crates/ui-egui/tests/fill_sign.rs::text_marks_and_date", "crates/automation/tests/automation.rs::fill_and_sign_through_tools", "crates/ui-egui/tests/date_format.rs::fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered", "crates/engine/src/dates.rs::presets_write_the_day_in_their_own_order", "crates/engine/src/dates.rs::names_follow_the_date_language", "crates/ui-egui/tests/date_format.rs::month_names_follow_the_date_language_or_else_the_interface_language", "crates/ui-egui/tests/date_format.rs::a_date_the_pdf_cannot_hold_is_refused_with_a_warning_first"]
+notes = "local date in Preferences ▸ Date format (default m/d/yyyy; 12 presets or any pattern in Acrobat date letters with \\ escapes, checked and previewed as typed, remembered; only whole date codes accepted; month and weekday names in the interface languages, Czech months in the genitive after a day, following the interface language unless one is picked; fill_sign_add takes a one-off format and language). Beyond Acrobat: its Fill & Sign has no format setting (only Acrobat Sign accounts do). Missing: Fill & Sign text is Helvetica/WinAnsi, so a date with letters outside Western European (Czech ř, Japanese, Chinese names) is refused with a warning instead of being saved as ?; the OS locale's format isn't offered as a preset; names in languages without an interface translation"
 
 [[feature]]
 id = "form.fill-sign-signature"
@@ -5235,11 +5235,11 @@ title = "Fill & Sign: flatten on save"
 area = "F"
 tier = "P0"
 milestone = "M5"
-status = "partial"
+status = "shipped"
 commands = ["comment.flatten"]
-tools = ["doc_flatten"]
-evidence = ["crates/edit/src/tests.rs::flattening_draws_appearances_into_the_page_and_removes_the_comments", "crates/engine/src/tests.rs::flattening_keeps_the_look_and_drops_the_objects", "crates/automation/tests/automation.rs::flattening_through_tools"]
-notes = "Flatten comments flattens Fill & Sign items; no flatten-on-save option yet"
+tools = ["doc_save", "doc_flatten"]
+evidence = ["crates/edit/src/tests.rs::fill_sign_flatten_bakes_marks_keeps_other_comments_and_does_not_reuse_pcfl0", "crates/engine/src/tests.rs::flattening_fill_and_sign_keeps_other_comments_fields_and_undoes", "crates/engine/src/tests.rs::flattening_fill_and_sign_is_refused_without_permission_to_change", "crates/automation/tests/automation.rs::saving_with_flatten_fill_sign_bakes_marks_and_leaves_other_comments", "crates/ui-egui/tests/fill_sign.rs::saving_flattens_fill_and_sign_only_when_the_preference_is_on"]
+notes = "Preferences ▸ Fill & Sign, and doc_save flatten_fill_sign, bake text, marks and signatures into the page. The option defaults off, so a normal save leaves them editable. Other comments and form fields stay. Flatten comments still flattens every comment."
 
 [[feature]]
 id = "form.autofill-profile"
@@ -7829,9 +7829,9 @@ tier = "P0"
 milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
-tools = ["printers", "doc_print"]
-evidence = ["crates/print/src/tests.rs::spooler_arguments_and_printer_list"]
-notes = "CUPS printers via lpstat; Save as PDF; Windows spooler pending"
+tools = ["printers", "printer_options", "doc_print"]
+evidence = ["crates/print/src/tests.rs::spooler_arguments_and_printer_list", "crates/print/src/tests.rs::printer_options_come_from_the_ppd", "crates/print/src/tests.rs::printer_option_defaults_and_job_arguments", "crates/ui-egui/tests/print.rs::print_dialog_shows_the_printer_driver_options"]
+notes = "CUPS printers via lpstat; Save as PDF; Windows spooler pending. Properties…: on CUPS the driver's own PPD job options (tray, paper type, finishing …, not installable options or what the dialog sets) for this job, sent as lp -o; on Windows the driver's Printing Preferences window (printui), saved as that printer's per-user defaults rather than per job"
 
 [[feature]]
 id = "print.copies-collate"
@@ -9675,7 +9675,7 @@ status = "partial"
 commands = ["app.preferences"]
 tools = ["js_enabled"]
 evidence = ["crates/ui-egui/tests/javascript.rs::document_scripts_and_preferences", "crates/ui-egui/tests/ui.rs::preferences_selects_default_workspace_for_next_open", "crates/ui-egui/tests/control.rs::control_default_workspace_and_session_override"]
-notes = "Preferences dialog with Interface language, Documents and view (persistent default workspace with session override), Identity and JavaScript; other categories still live in their tools, and it isn't generated from a schema yet."
+notes = "Preferences dialog with Interface language, Documents and view (persistent default workspace with session override), Identity, Fill & Sign (flatten on save, off by default) and JavaScript; other categories still live in their tools, and it isn't generated from a schema yet."
 
 [[feature]]
 id = "misc.prefs-general"

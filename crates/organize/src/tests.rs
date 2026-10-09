@@ -782,6 +782,188 @@ fn number_pages_like_acrobat() {
 }
 
 #[test]
+fn page_label_limits_reject_unsupported_edits_before_mutating() {
+    use crate::LabelStyle::*;
+    for (style, prefix, first) in [
+        (LowerRoman, String::new(), 1_025_000),
+        (LowerAlpha, String::new(), 26 * 1024 + 1),
+        (Decimal, "x".repeat(1025), 1),
+        (Decimal, String::new(), u32::MAX),
+    ] {
+        let mut d = doc_a();
+        let before = d.modified_objects();
+        assert!(crate::number_pages(&mut d, 0, 1, style, &prefix, first).is_err());
+        assert_eq!(d.modified_objects(), before, "a refused label edit must not change the tree");
+        assert!(crate::page_label_ranges(&d).is_empty());
+    }
+}
+
+#[test]
+fn page_label_limits_reject_unsupported_ranges_before_mutating() {
+    let mut d = doc_a();
+    let before = d.modified_objects();
+    let ranges = [crate::LabelRange { start: 0, style: crate::LabelStyle::LowerRoman, prefix: String::new(), first: 1_025_000 }];
+    assert!(crate::set_page_label_ranges(&mut d, &ranges).is_err());
+    assert_eq!(d.modified_objects(), before);
+}
+
+#[test]
+fn page_label_limits_reject_cyclic_old_trees_without_rewriting() {
+    let mut d = doc_a();
+    let tree = d.add(Object::Null);
+    let mut dict = Dict::new();
+    dict.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(tree)]));
+    d.set(tree, Object::Dict(dict));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    let before = d.modified_objects();
+    assert!(crate::page_labels(&d).is_err());
+    assert!(crate::page_label_ranges(&d).is_empty(), "compatibility query has documented empty fallback");
+    assert!(crate::number_pages(&mut d, 0, 1, crate::LabelStyle::Decimal, "", 1).is_err());
+    assert_eq!(d.modified_objects(), before);
+    assert_eq!(d.get(d.root().unwrap()).as_dict().unwrap().reference(b"PageLabels"), Some(tree));
+}
+
+#[test]
+fn page_label_limits_reject_oversized_old_arrays_without_rewriting() {
+    let mut d = doc_a();
+    let mut dict = Dict::new();
+    dict.set(b"Kids".to_vec(), Object::Array(vec![Object::Null; pdfcraft_cos::page_labels::MAX_LABEL_TREE_WORK + 1]));
+    let tree = d.add(Object::Dict(dict));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    let before = d.modified_objects();
+    assert!(crate::page_labels(&d).is_err());
+    assert!(crate::number_pages(&mut d, 0, 1, crate::LabelStyle::Decimal, "", 1).is_err());
+    assert_eq!(d.modified_objects(), before);
+}
+
+#[test]
+fn page_label_limits_keep_preview_fallback_and_valid_boundary_edits() {
+    use crate::LabelStyle::*;
+    assert_eq!(LowerRoman.format(u32::MAX), u32::MAX.to_string());
+    assert_eq!(LowerAlpha.format(u32::MAX), u32::MAX.to_string());
+    let mut d = doc_a();
+    crate::number_pages(&mut d, 0, 2, None, &"x".repeat(1024), 1).unwrap();
+    assert!(crate::page_labels(&d).unwrap().iter().all(|s| s.len() == 1024));
+}
+
+#[test]
+fn page_label_limits_preserve_prefix_only_max_first_and_aliases() {
+    let mut d = doc_a();
+    crate::number_pages(&mut d, 0, 2, crate::LabelStyle::None, "prefix", u32::MAX).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap(), ["prefix", "prefix", "prefix"]);
+    crate::number_pages(&mut d, 0, 0, crate::LabelStyle::Decimal, "", 1).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap(), ["1", "prefix", "prefix"]);
+
+    let prefix = d.add(Object::String(PdfString::text("alias")));
+    let prefix_alias = d.add(Object::Ref(prefix));
+    let mut spec = Dict::new();
+    spec.set(b"P".to_vec(), Object::Ref(prefix_alias));
+    spec.set(b"St".to_vec(), Object::Int(i64::MAX)); // unused without /S
+    let spec = d.add(Object::Dict(spec));
+    let spec_alias = d.add(Object::Ref(spec));
+    let nums = d.add(Object::Array(vec![Object::Int(0), Object::Ref(spec_alias)]));
+    let nums_alias = d.add(Object::Ref(nums));
+    let mut tree = Dict::new();
+    tree.set(b"Nums".to_vec(), Object::Ref(nums_alias));
+    let tree = d.add(Object::Dict(tree));
+    let tree_alias = d.add(Object::Ref(tree));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree_alias))).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap(), ["alias", "alias", "alias"]);
+    crate::number_pages(&mut d, 0, 0, crate::LabelStyle::Decimal, "", 1).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap(), ["1", "alias", "alias"]);
+}
+
+#[test]
+fn page_label_limits_refuse_reference_only_cycles_without_rewriting() {
+    let mut d = doc_a();
+    let tree = d.add(Object::Null);
+    d.set(tree, Object::Ref(tree));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    let before = d.modified_objects();
+    assert!(crate::page_labels(&d).is_err());
+    assert!(crate::number_pages(&mut d, 0, 1, crate::LabelStyle::Decimal, "", 1).is_err());
+    assert_eq!(d.modified_objects(), before);
+}
+
+#[test]
+fn page_label_limits_validate_the_same_ranges_that_are_written() {
+    use crate::{LabelRange, LabelStyle};
+    let mut d = doc_a();
+    let duplicates = [
+        LabelRange { start: 0, style: LabelStyle::None, prefix: "ok".into(), first: 1 },
+        LabelRange { start: 0, style: LabelStyle::None, prefix: "x".repeat(1024), first: 1 },
+    ];
+    let before = d.modified_objects();
+    assert!(crate::set_page_label_ranges(&mut d, &duplicates).unwrap_err().to_string().contains("unique"));
+    assert_eq!(d.modified_objects(), before);
+    let unsorted = [
+        LabelRange { start: 1, style: LabelStyle::UpperAlpha, prefix: "".into(), first: 1 },
+        LabelRange { start: 0, style: LabelStyle::LowerRoman, prefix: "".into(), first: 4 },
+    ];
+    crate::set_page_label_ranges(&mut d, &unsorted).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap(), ["iv", "A", "B"]);
+    let catalog = d.get(d.root().unwrap());
+    let tree = d.resolve(catalog.as_dict().unwrap().get(b"PageLabels").unwrap());
+    let nums = tree.as_dict().unwrap().get(b"Nums").unwrap().as_array().unwrap();
+    assert_eq!(nums[0].as_int(), Some(0));
+    assert_eq!(nums[2].as_int(), Some(1));
+}
+
+#[test]
+fn page_label_duplicate_starts_keep_the_later_range() {
+    let mut d = doc_a();
+    let mut a = Dict::new();
+    a.set(b"P".to_vec(), Object::String(PdfString::text("first")));
+    let mut b = Dict::new();
+    b.set(b"P".to_vec(), Object::String(PdfString::text("last")));
+    let mut tree = Dict::new();
+    tree.set(b"Nums".to_vec(), Object::Array(vec![Object::Int(0), Object::Dict(a), Object::Int(0), Object::Dict(b)]));
+    let tree = d.add(Object::Dict(tree));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap()[0], "last");
+    crate::number_pages(&mut d, 0, 0, crate::LabelStyle::Decimal, "", 1).unwrap();
+}
+
+/// Two kids naming objects the file doesn't have both resolve to a fresh `Null`; they are not
+/// the same node, so the tree isn't refused as cyclic.
+#[test]
+fn page_label_missing_kids_are_not_a_cycle() {
+    let mut d = doc_a();
+    let mut leaf = Dict::new();
+    let mut spec = Dict::new();
+    spec.set(b"P".to_vec(), Object::String(PdfString::text("p-")));
+    spec.set(b"S".to_vec(), Object::name("D"));
+    leaf.set(b"Nums".to_vec(), Object::Array(vec![Object::Int(0), Object::Dict(spec)]));
+    let leaf = d.add(Object::Dict(leaf));
+    let mut tree = Dict::new();
+    let missing = |n| Object::Ref(pdfcraft_cos::ObjRef { num: n, generation: 0 });
+    tree.set(b"Kids".to_vec(), Object::Array(vec![missing(9_000), missing(9_001), Object::Ref(leaf)]));
+    let tree = d.add(Object::Dict(tree));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap()[0], "p-1");
+}
+
+/// A range whose labels would be too long shows physical page numbers; other ranges keep
+/// their labels.
+#[test]
+fn page_label_too_long_range_falls_back_alone() {
+    let mut d = doc_a();
+    let mut ok = Dict::new();
+    ok.set(b"P".to_vec(), Object::String(PdfString::text("ok-")));
+    ok.set(b"S".to_vec(), Object::name("D"));
+    let mut huge = Dict::new();
+    huge.set(b"S".to_vec(), Object::name("r"));
+    huge.set(b"St".to_vec(), Object::Int(1_025_000));
+    let mut tree = Dict::new();
+    tree.set(b"Nums".to_vec(), Object::Array(vec![Object::Int(0), Object::Dict(ok), Object::Int(1), Object::Dict(huge)]));
+    let tree = d.add(Object::Dict(tree));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    let labels = crate::page_labels(&d).unwrap();
+    assert_eq!(labels[0], "ok-1");
+    assert_eq!(labels[1], "2");
+}
+
+#[test]
 fn page_boxes_default_inherit_and_set() {
     let mut doc = open(fixture());
     let b = page_boxes(&doc).unwrap();

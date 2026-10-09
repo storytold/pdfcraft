@@ -549,7 +549,9 @@ impl Renderer {
                             self.ctx.height() as f64,
                         ));
 
-                        let encoded = s.encode();
+                        // PdfCraft patch: mesh shadings are sampled only inside `bbox` (and a
+                        // pixel around it: texels at a fractional edge look one pixel further).
+                        let encoded = s.encode_within(Some(bbox.inflate(1.0, 1.0)));
                         let (image, width, height, transform, may_have_transparency) =
                             render_shading_texture(bbox, &encoded);
                         let may_have_transparency =

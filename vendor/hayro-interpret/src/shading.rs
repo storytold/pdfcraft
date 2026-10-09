@@ -545,6 +545,13 @@ impl TensorProductPatch {
     }
 }
 
+/// PdfCraft patch: the most triangles a free-form or lattice mesh, and the most patches a
+/// patch mesh, may hold. Each was read without limit: a patch can be 19 bits, a triangle 216
+/// bytes in memory, so a small stream made gigabytes. Real meshes are far smaller (a 200 × 200
+/// gradient mesh is 40 thousand patches).
+const MAX_MESH_TRIANGLES: usize = 1 << 20;
+const MAX_MESH_PATCHES: usize = 1 << 16;
+
 fn read_free_form_triangles(
     data: &[u8],
     bpf: u8,
@@ -594,6 +601,11 @@ fn read_free_form_triangles(
             continue;
         }
 
+        // PdfCraft patch: see `MAX_MESH_TRIANGLES`.
+        if triangles.len() >= MAX_MESH_TRIANGLES {
+            warn!("free-form mesh has over {MAX_MESH_TRIANGLES} triangles; the rest is not drawn");
+            break;
+        }
         triangles.push(Triangle::new(a.clone()?, b.clone()?, c.clone()?));
     }
 
@@ -787,6 +799,15 @@ fn read_lattice_triangles(
     vertices_per_row: u32,
     decode: &[f32],
 ) -> Option<Vec<Triangle>> {
+    // PdfCraft patch: ISO 32000-2 8.7.4.5.6 requires at least two vertices per row; with none,
+    // the loop below pushed empty rows for ever, and one row of 4294967295 read the whole stream
+    // into memory before any cap (see `MAX_MESH_TRIANGLES`).
+    if !(2..=(MAX_MESH_TRIANGLES / 2) as u32).contains(&vertices_per_row) {
+        warn!("lattice-form mesh with {vertices_per_row} vertices per row");
+
+        return None;
+    }
+
     let mut lattices = vec![];
 
     let ([x_min, x_max, y_min, y_max], decode) = split_decode(decode)?;
@@ -806,6 +827,11 @@ fn read_lattice_triangles(
     };
 
     'outer: loop {
+        // PdfCraft patch: see `MAX_MESH_TRIANGLES` (two triangles per vertex at most).
+        if lattices.len().saturating_mul(vertices_per_row as usize) >= MAX_MESH_TRIANGLES / 2 {
+            warn!("lattice-form mesh has too many vertices; the rest is not drawn");
+            break;
+        }
         let mut single_row = vec![];
 
         for _ in 0..vertices_per_row {
@@ -895,6 +921,11 @@ where
     let mut patches = vec![];
 
     while let Some(flag) = reader.read(bpf) {
+        // PdfCraft patch: see `MAX_MESH_PATCHES`.
+        if patches.len() >= MAX_MESH_PATCHES {
+            warn!("patch mesh has over {MAX_MESH_PATCHES} patches; the rest is not drawn");
+            break;
+        }
         let mut control_points = vec![Point::ZERO; 16]; // Always allocate 16, use subset as needed.
         let mut colors = [smallvec![], smallvec![], smallvec![], smallvec![]];
 

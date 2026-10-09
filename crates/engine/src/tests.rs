@@ -1100,6 +1100,116 @@ fn flattening_keeps_the_look_and_drops_the_objects() {
     assert_eq!(s.get(id).unwrap().form.len(), 2);
 }
 
+fn fill_item(shape: Shape, contents: &str) -> Edit {
+    let style = Style::default_for(&shape);
+    Edit::AddAnnotation(NewAnnotation { page: 0, shape, style, contents: contents.into(), author: "Ada".into() })
+}
+
+fn comment_text(s: &Session, id: DocId) -> Vec<String> {
+    let mut t: Vec<String> = s.get(id).unwrap().info.annotations.iter().map(|a| a.contents.clone().unwrap_or_default()).collect();
+    t.sort();
+    t
+}
+
+#[test]
+fn flattening_fill_and_sign_keeps_other_comments_fields_and_undoes() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, fill_item(Shape::Typewriter { rect: [20.0, 200.0, 120.0, 220.0], font_size: 10.0 }, "Hello")).unwrap();
+    s.apply(id, fill_item(Shape::Mark { rect: [140.0, 200.0, 160.0, 220.0], mark: FillMark::Check }, "")).unwrap();
+    s.apply(id, fill_item(Shape::Signature { strokes: vec![vec![[10.0, 40.0], [40.0, 70.0], [70.0, 40.0]]] }, "")).unwrap();
+    s.apply(id, fill_item(Shape::TypedSignature { rect: [90.0, 40.0, 150.0, 70.0], contours: vec![vec![[0.1, 0.2], [0.5, 0.9], [0.9, 0.2]]] }, ""))
+        .unwrap();
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 8, 8);
+        enc.set_color(png::ColorType::Rgba);
+        let pixel = [40u8, 60, 80, 200];
+        enc.write_header().unwrap().write_image_data(&pixel.repeat(64)).unwrap();
+    }
+    let image = SignatureImage::from_bytes(&png).unwrap();
+    let info = s.get(id).unwrap().info.pages[0].clone();
+    s.apply(id, image.edit(0, &info, [20.0, 120.0], false, "Ada").unwrap()).unwrap();
+    s.apply(id, fill_item(Shape::TextMarkup { kind: Markup::Highlight, quads: vec![[20.0, 280.0, 80.0, 280.0, 20.0, 270.0, 80.0, 270.0]] }, "keep"))
+        .unwrap();
+    s.apply(id, fill_item(Shape::TextBox { rect: [20.0, 150.0, 120.0, 180.0], font_size: 12.0 }, "Note")).unwrap();
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 230.0, 120.0, 250.0], kind: NewField::Text { multiline: false }, name: Some("email".into()) })
+        .unwrap();
+
+    s.apply(id, Edit::FlattenFillSign).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Flatten Fill & Sign"));
+    assert_eq!(comment_text(&s, id), ["Note", "keep"]);
+    assert_eq!(s.get(id).unwrap().form.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["email"]);
+    s.undo(id).unwrap();
+    assert!(comment_text(&s, id).contains(&"Hello".to_string()), "undo restores the typewriter");
+
+    s.apply(id, Edit::FlattenFillSign).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    s.mark_saved(id, saved.clone(), None).unwrap();
+    let mut again = Session::new();
+    let id2 = again.open("saved.pdf", None, saved, None).unwrap();
+    assert_eq!(comment_text(&again, id2), ["Note", "keep"]);
+    assert_eq!(again.get(id2).unwrap().form.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["email"]);
+}
+
+#[test]
+fn flattening_fill_and_sign_does_nothing_when_there_are_none() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, fill_item(Shape::TextMarkup { kind: Markup::Highlight, quads: vec![[20.0, 200.0, 80.0, 200.0, 20.0, 190.0, 80.0, 190.0]] }, "keep"))
+        .unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    s.mark_saved(id, saved, None).unwrap();
+    assert!(!s.get(id).unwrap().dirty);
+    s.apply(id, Edit::FlattenFillSign).unwrap();
+    assert!(!s.get(id).unwrap().dirty, "nothing was baked in, so the document stays saved");
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Add highlight"), "no undo step for a flatten that changed nothing");
+    assert_eq!(comment_text(&s, id), ["keep"]);
+}
+
+#[test]
+fn flattening_fill_and_sign_is_refused_without_permission_to_change() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, fill_item(Shape::Typewriter { rect: [20.0, 200.0, 120.0, 220.0], font_size: 10.0 }, "Hello")).unwrap();
+    let p = Protection { printing: Printing::Low, changes: Changes::CommentFillSign, copy: false, ..protection(None, Some("boss")) };
+    s.apply(id, Edit::Protect(p)).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let mut other = Session::new();
+    let id2 = other.open("locked.pdf", None, saved, None).unwrap();
+    let before = other.get(id2).unwrap().bytes.clone();
+    assert_eq!(other.apply(id2, Edit::FlattenFillSign), Err(EditError::NotPermitted("changes to the document")));
+    assert_eq!(other.get(id2).unwrap().bytes, before);
+    assert!(!other.get(id2).unwrap().dirty);
+    assert!(comment_text(&other, id2).contains(&"Hello".to_string()));
+}
+
+#[test]
+fn flattening_fill_and_sign_on_a_signed_file_stays_incremental() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("fixture.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    let opts = SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), ..SignOptions::default() };
+    let signed = s.sign(id, &digital_id, opts).unwrap();
+    s.mark_signed(id, signed.clone(), None).unwrap();
+    s.apply(id, fill_item(Shape::Typewriter { rect: [20.0, 200.0, 120.0, 220.0], font_size: 10.0 }, "Hello")).unwrap();
+    s.apply(id, Edit::FlattenFillSign).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved.starts_with(signed.as_ref()), "the signature's bytes stay an incremental update");
+    assert!(!comment_text(&s, id).contains(&"Hello".to_string()));
+}
+
+#[test]
+fn flattening_fill_and_sign_reopens_an_encrypted_file() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, fill_item(Shape::Typewriter { rect: [20.0, 200.0, 120.0, 220.0], font_size: 10.0 }, "Hello")).unwrap();
+    s.apply(id, Edit::Protect(protection(Some("secret"), None))).unwrap();
+    s.apply(id, Edit::FlattenFillSign).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let mut again = Session::new();
+    assert!(again.open("p.pdf", None, saved.clone(), None).is_err());
+    let id2 = again.open("p.pdf", None, saved, Some("secret")).unwrap();
+    assert!(!comment_text(&again, id2).contains(&"Hello".to_string()));
+}
+
 #[test]
 fn pages_export_as_png_jpeg_and_tiff() {
     use crate::export::{Exporter, ImageFormat};

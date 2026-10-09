@@ -715,6 +715,59 @@ fn annot_dict(doc: &Document, r: ObjRef) -> Dict {
     doc.get(r).as_dict().cloned().unwrap_or_default()
 }
 
+/// A Fill & Sign item: typed text, a check/cross/dot/line, or a typed, drawn or image signature.
+///
+/// New items carry `/PCFillSign`. Older files are recognised from the dictionaries PdfCraft
+/// already writes (`/IT /FreeTextTypeWriter`, stamp `/Name`, drawn ink whose subject is
+/// "Signature").
+pub fn is_fill_sign(doc: &Document, d: &Dict) -> bool {
+    if matches!(d.get(b"PCFillSign").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))) {
+        return true;
+    }
+    let subtype = d.name(b"Subtype").unwrap_or_default();
+    if subtype == b"FreeText" && d.name(b"IT") == Some(b"FreeTextTypeWriter") {
+        return true;
+    }
+    if subtype == b"Stamp" {
+        if matches!(d.name(b"Name"), Some(b"PCCheck" | b"PCCross" | b"PCDot" | b"PCLine" | b"PCTypedSignature")) {
+            return true;
+        }
+        if matches!(d.name(b"Name"), Some(b"PCCustomSignature" | b"PCCustomInitials"))
+            && matches!(d.get(b"PCPictureImage").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true)))
+        {
+            return true;
+        }
+    }
+    subtype == b"Ink" && text_value(doc, d, b"Subj").as_deref() == Some("Signature")
+}
+
+/// Whether any page has a Fill & Sign annotation that flatten would bake in (not hidden).
+pub fn has_visible_fill_sign(doc: &Document) -> bool {
+    let Ok(pages) = page_refs(doc) else { return false };
+    for page in pages {
+        for entry in annots(doc, page) {
+            let obj = doc.resolve(&entry);
+            let Some(d) = obj.as_dict() else { continue };
+            let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+            if flags & (FLAG_HIDDEN | FLAG_NO_VIEW) != 0 {
+                continue;
+            }
+            if is_fill_sign(doc, d) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn fill_sign_shape(shape: &Shape) -> bool {
+    match shape {
+        Shape::Typewriter { .. } | Shape::Mark { .. } | Shape::Signature { .. } | Shape::TypedSignature { .. } => true,
+        Shape::CustomStamp { name, image: true, .. } => name == "Signature" || name == "Initials",
+        _ => false,
+    }
+}
+
 /// The embedded image of a Fill & Sign image signature or initials (0-based target).
 /// Other stamps have appearances that can't be represented by this image alone.
 pub fn signature_image(doc: &Document, page: usize, index: usize) -> Result<Option<ObjRef>, AnnotError> {
@@ -747,6 +800,7 @@ const FLAG_PRINT: i64 = 4;
 const FLAG_NO_ZOOM: i64 = 8;
 const FLAG_NO_ROTATE: i64 = 16;
 const FLAG_HIDDEN: i64 = 2;
+const FLAG_NO_VIEW: i64 = 32;
 const FLAG_LOCKED: i64 = 128;
 
 /// Size of a note icon (points, unscaled by zoom).
@@ -1139,6 +1193,10 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             rich_text(&mut d);
         }
         _ => {}
+    }
+    if fill_sign_shape(&new.shape) {
+        // Survives a later subject edit, so flatten-on-save still finds the mark.
+        d.set(b"PCFillSign".to_vec(), Object::Bool(true));
     }
     let r = doc.add(Object::Dict(d.clone()));
     set_appearance(doc, r)?;
