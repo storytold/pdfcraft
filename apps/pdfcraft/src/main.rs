@@ -379,11 +379,16 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
 ///   for a discrete GPU, and on hybrid-graphics laptops (NVIDIA Optimus) the discrete one can lose
 ///   or corrupt its memory across suspend and screen lock, leaving the window illegible (issue #8).
 ///   It also saves battery. Machines with one GPU are unaffected.
-/// - On Linux, draw on a GPU that a monitor is plugged into. On a desktop whose monitors all hang
-///   off the discrete GPU, drawing on the integrated one leaves the window black under Wayland
-///   compositors on NVIDIA. When several GPUs drive a display, the one driving a built-in panel
-///   wins (a hybrid laptop, issue #8); without a built-in panel (a desktop with a monitor on each
-///   GPU, issue #445) the discrete one wins, as the integrated one may fail to present there.
+/// - Draw on a GPU that a monitor is plugged into. Drawing on another one means every frame is
+///   handed to the GPU that drives the display, and that path fails: on a desktop whose monitors
+///   all hang off the discrete GPU, the integrated one leaves the window black under Wayland
+///   compositors on NVIDIA, and on Windows an AMD Ryzen integrated GPU takes the display driver
+///   down with it, blacking out every monitor for minutes (issue #378). When several GPUs drive a
+///   display, the one driving the display the user most likely looks at wins: a built-in panel on
+///   Linux (a hybrid laptop, issue #8), the primary display on Windows. Without either (a Linux
+///   desktop with a monitor on each GPU, issue #445) the discrete one wins, as the integrated one
+///   may fail to present there. Where the system doesn't say which GPU drives a display (macOS,
+///   containers, remote sessions) the power preference alone decides.
 /// - On Windows, use Direct3D 12, falling back to OpenGL, and never load Vulkan drivers unless
 ///   `WGPU_BACKEND` asks for them. Creating a Vulkan instance loads every installed Vulkan driver
 ///   into the process, and a faulty one (an Intel driver in issue #37) crashed PdfCraft before
@@ -402,26 +407,28 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
     });
     if std::env::var_os("WGPU_POWER_PREF").is_none() {
         setup.power_preference = eframe::wgpu::PowerPreference::LowPower;
-        #[cfg(target_os = "linux")]
-        {
-            let displays = linux_display_gpus(std::path::Path::new("/sys/class/drm"));
-            // Without sysfs (containers, remote sessions) the power preference alone decides.
-            if !displays.is_empty() {
-                setup.native_adapter_selector = Some(std::sync::Arc::new(move |adapters, surface| {
-                    let usable: Vec<&eframe::wgpu::Adapter> = adapters.iter().filter(|a| surface.is_none_or(|s| a.is_surface_supported(s))).collect();
-                    let infos: Vec<(u32, u32, eframe::wgpu::DeviceType)> = usable
-                        .iter()
-                        .map(|a| {
-                            let info = a.get_info();
-                            (info.vendor, info.device, info.device_type)
-                        })
-                        .collect();
-                    pick_adapter(&infos, &displays)
-                        .and_then(|i| usable.get(i))
-                        .map(|a| (*a).clone())
-                        .ok_or_else(|| "no GPU can draw to this window".to_string())
-                }));
-            }
+        let displays = display_gpus();
+        if !displays.is_empty() {
+            setup.native_adapter_selector = Some(std::sync::Arc::new(move |adapters, surface| {
+                let usable: Vec<&eframe::wgpu::Adapter> = adapters.iter().filter(|a| surface.is_none_or(|s| a.is_surface_supported(s))).collect();
+                let infos: Vec<(u32, u32, eframe::wgpu::DeviceType)> = usable
+                    .iter()
+                    .map(|a| {
+                        let info = a.get_info();
+                        (info.vendor, info.device, info.device_type)
+                    })
+                    .collect();
+                let picked = pick_adapter(&infos, &displays).and_then(|i| usable.get(i)).map(|a| (*a).clone());
+                match &picked {
+                    // Which GPU draws is the first question when a window stays black (#8, #378, #445).
+                    Some(a) => {
+                        let info = a.get_info();
+                        log::info!("drawing on {} ({:?}, {:?})", info.name, info.device_type, info.backend);
+                    }
+                    None => log::warn!("no GPU can draw to this window; {} were considered", usable.len()),
+                }
+                picked.ok_or_else(|| "no GPU can draw to this window".to_string())
+            }));
         }
     }
     if cfg!(target_os = "windows") && std::env::var_os("WGPU_BACKEND").is_none() {
@@ -438,12 +445,79 @@ fn surface_texture_limits(mut required: eframe::wgpu::Limits, supported: &eframe
 
 /// A GPU with a connected monitor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct DisplayGpu {
     /// PCI `(vendor, device)` ids.
     pci: (u32, u32),
-    /// Whether one of its connected connectors is a built-in panel (`eDP`, `LVDS` or `DSI`).
-    internal_panel: bool,
+    /// Whether it drives the display the user most likely looks at: on Linux a built-in panel
+    /// (`eDP`, `LVDS` or `DSI`), on Windows the primary display.
+    primary: bool,
+}
+
+/// The GPUs with a connected monitor, as far as the system says: Linux reads the DRM connectors
+/// in sysfs, Windows asks for the display devices attached to the desktop. Empty elsewhere.
+fn display_gpus() -> Vec<DisplayGpu> {
+    #[cfg(target_os = "linux")]
+    {
+        linux_display_gpus(std::path::Path::new("/sys/class/drm"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows_display_gpus()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        Vec::new()
+    }
+}
+
+/// Records one display of GPU `pci`; a GPU driving several displays is one entry.
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+fn add_display_gpu(gpus: &mut Vec<DisplayGpu>, pci: (u32, u32), primary: bool) {
+    match gpus.iter_mut().find(|g| g.pci == pci) {
+        Some(gpu) => gpu.primary |= primary,
+        None => gpus.push(DisplayGpu { pci, primary }),
+    }
+}
+
+/// The GPUs driving a display attached to the desktop, from `EnumDisplayDevices`. Each entry it
+/// lists is one display device of an adapter (`\\.\DISPLAY1`, "NVIDIA GeForce RTX 3090"), with the
+/// adapter's PCI ids in its device id (`PCI\VEN_10DE&DEV_2204&SUBSYS_40421458&REV_A1`); a GPU with
+/// no monitor lists its devices as not attached. Issue #378: a Ryzen desktop with the monitors on
+/// an NVIDIA card, where the integrated GPU would otherwise be chosen.
+#[cfg(target_os = "windows")]
+fn windows_display_gpus() -> Vec<DisplayGpu> {
+    use winsafe::co::DISPLAY_DEVICE as Flags;
+    let mut gpus: Vec<DisplayGpu> = Vec::new();
+    // A machine has a handful of display devices; the cap only bounds a runaway enumeration.
+    for device in winsafe::EnumDisplayDevices(None, None).take(256) {
+        let device = match device {
+            Ok(d) => d,
+            // The enumeration ends with "no more items" or, from a driver, with any error.
+            Err(e) => {
+                log::debug!("display devices: {e}");
+                break;
+            }
+        };
+        if !device.StateFlags.has(Flags::ATTACHED_TO_DESKTOP) {
+            continue;
+        }
+        let Some(pci) = pci_ids(&device.DeviceID()) else { continue };
+        add_display_gpu(&mut gpus, pci, device.StateFlags.has(Flags::PRIMARY_DEVICE));
+    }
+    gpus
+}
+
+/// The PCI `(vendor, device)` ids in a Windows device id such as
+/// `PCI\VEN_10DE&DEV_2204&SUBSYS_40421458&REV_A1`; `None` for any other kind of device.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn pci_ids(device_id: &str) -> Option<(u32, u32)> {
+    let field = |key: &str| {
+        device_id.split(['\\', '&']).find_map(|part| {
+            let (name, hex) = part.split_at_checked(key.len())?;
+            if name.eq_ignore_ascii_case(key) { u32::from_str_radix(hex, 16).ok() } else { None }
+        })
+    };
+    Some((field("VEN_")?, field("DEV_")?))
 }
 
 /// Whether a DRM connector name (`eDP-1`, `LVDS-1`, `DSI-1`) is a laptop's built-in panel.
@@ -472,31 +546,27 @@ fn linux_display_gpus(drm: &std::path::Path) -> Vec<DisplayGpu> {
         }
         let device = drm.join(card).join("device");
         let (Some(v), Some(d)) = (read_hex(device.join("vendor")), read_hex(device.join("device"))) else { continue };
-        let internal_panel = is_internal_panel(connector);
-        match gpus.iter_mut().find(|g| g.pci == (v, d)) {
-            Some(gpu) => gpu.internal_panel |= internal_panel,
-            None => gpus.push(DisplayGpu { pci: (v, d), internal_panel }),
-        }
+        add_display_gpu(&mut gpus, (v, d), is_internal_panel(connector));
     }
     gpus
 }
 
 /// Index of the adapter to draw with: one that drives a display (by PCI ids) first. Among several
-/// of those, the one driving a built-in panel (a hybrid laptop, #8), or else, with no built-in
-/// panel anywhere (a desktop with a monitor on each GPU, #445), the discrete one. Otherwise the
-/// most frugal kind: integrated, discrete, other, virtual, software.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+/// of those, the one driving the primary display (a hybrid laptop's panel, #8; the primary display
+/// on Windows, #378), or else, with no primary display known (a Linux desktop with a monitor on
+/// each GPU, #445), the discrete one. Otherwise the most frugal kind: integrated, discrete, other,
+/// virtual, software.
 fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[DisplayGpu]) -> Option<usize> {
     use eframe::wgpu::DeviceType;
     let display = |pci: (u32, u32)| displays.iter().find(|g| g.pci == pci);
-    let multi_gpu_desktop = displays.len() > 1 && !displays.iter().any(|g| g.internal_panel);
+    let multi_gpu_desktop = displays.len() > 1 && !displays.iter().any(|g| g.primary);
     adapters
         .iter()
         .enumerate()
         .min_by_key(|(_, (vendor, device, kind))| {
             let shown = display((*vendor, *device));
             let drives_display = shown.is_some();
-            let drives_panel = shown.is_some_and(|g| g.internal_panel);
+            let drives_primary = shown.is_some_and(|g| g.primary);
             let rank = match kind {
                 // On a desktop with monitors on both, the integrated GPU can accept the window and
                 // still fail to present to it (#445).
@@ -507,7 +577,7 @@ fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[D
                 DeviceType::VirtualGpu => 4,
                 DeviceType::Cpu => 5,
             };
-            (!drives_display, !drives_panel, rank)
+            (!drives_display, !drives_primary, rank)
         })
         .map(|(i, _)| i)
 }
@@ -616,6 +686,7 @@ mod tests {
     }
 
     const NVIDIA: (u32, u32) = (0x10de, 0x2684);
+    const NVIDIA_3090: (u32, u32) = (0x10de, 0x2204);
     const AMD_IGPU: (u32, u32) = (0x1002, 0x164e);
 
     fn adapters() -> Vec<(u32, u32, eframe::wgpu::DeviceType)> {
@@ -626,17 +697,53 @@ mod tests {
     const INTEL_IGPU: (u32, u32) = (0x8086, 0xa780);
 
     fn monitor(pci: (u32, u32)) -> super::DisplayGpu {
-        super::DisplayGpu { pci, internal_panel: false }
+        super::DisplayGpu { pci, primary: false }
     }
 
     fn panel(pci: (u32, u32)) -> super::DisplayGpu {
-        super::DisplayGpu { pci, internal_panel: true }
+        super::DisplayGpu { pci, primary: true }
     }
 
     #[test]
     fn pick_adapter_prefers_the_gpu_driving_the_monitors() {
         // A desktop whose monitors are all on the discrete GPU: the integrated one shows black.
         assert_eq!(super::pick_adapter(&adapters(), &[monitor(NVIDIA)]), Some(0));
+        // Issue #378: the same on Windows, where the Ryzen integrated GPU without a monitor crashed
+        // the display driver. Windows also says which display is the primary one.
+        assert_eq!(super::pick_adapter(&adapters(), &[panel(NVIDIA)]), Some(0));
+    }
+
+    #[test]
+    fn pick_adapter_prefers_the_gpu_driving_the_primary_display() {
+        // A Windows desktop with a monitor on each GPU: the window opens on the primary display.
+        assert_eq!(super::pick_adapter(&adapters(), &[monitor(AMD_IGPU), panel(NVIDIA)]), Some(0));
+        assert_eq!(super::pick_adapter(&adapters(), &[panel(AMD_IGPU), monitor(NVIDIA)]), Some(1));
+    }
+
+    #[test]
+    fn pci_ids_come_from_windows_device_ids() {
+        assert_eq!(super::pci_ids("PCI\\VEN_10DE&DEV_2204&SUBSYS_40421458&REV_A1"), Some(NVIDIA_3090));
+        assert_eq!(super::pci_ids("PCI\\VEN_1002&DEV_164E&SUBSYS_88771043&REV_C1"), Some(AMD_IGPU));
+        assert_eq!(super::pci_ids("pci\\ven_1002&dev_164e"), Some(AMD_IGPU));
+        // Remote Desktop and other non-PCI display devices, and malformed ids.
+        assert_eq!(super::pci_ids("ROOT\\BasicDisplay\\0000"), None);
+        assert_eq!(super::pci_ids("PCI\\VEN_10DE&SUBSYS_40421458"), None);
+        assert_eq!(super::pci_ids("PCI\\VEN_10DE&DEV_ZZZZ"), None);
+        assert_eq!(super::pci_ids("VEN_&DEV_"), None);
+        assert_eq!(super::pci_ids(""), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_display_gpus_lists_pci_gpus_with_a_monitor() {
+        // Whatever this machine has: every entry is a PCI GPU, at most one drives the primary
+        // display, and no GPU is listed twice. (A headless CI runner may list none.)
+        let gpus = super::windows_display_gpus();
+        assert!(gpus.iter().filter(|g| g.primary).count() <= 1, "{gpus:?}");
+        for (i, g) in gpus.iter().enumerate() {
+            assert!(g.pci.0 != 0, "{gpus:?}");
+            assert!(!gpus[..i].iter().any(|h| h.pci == g.pci), "{gpus:?}");
+        }
     }
 
     #[test]

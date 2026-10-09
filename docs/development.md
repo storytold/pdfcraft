@@ -39,7 +39,7 @@ limit renderable.
 | `RUST_LOG` | Log levels for standard error and the log file (see [Logs](#logs)) |
 | `RUST_BACKTRACE` | `1` adds a backtrace to the report of an internal error |
 | `XDG_DATA_HOME` | Linux/FreeBSD: base of the settings folder (`pdfcraft/`), the log folder and crash recovery |
-| `WGPU_POWER_PREF` | GPU choice; by default PdfCraft prefers the low-power (integrated) GPU |
+| `WGPU_POWER_PREF` | GPU choice; by default PdfCraft draws on the GPU that drives the primary display (Windows) or the built-in panel (Linux), else the low-power (integrated) GPU. The log says which one was chosen |
 | `WGPU_BACKEND` | Graphics backend; by default Windows uses Direct3D 12, falling back to OpenGL |
 | `CRAFT_FONTS_DIR` | Build time: a [craft-fonts](https://github.com/storytold/craft-fonts) checkout to embed (Japanese fonts) |
 | `PDFCRAFT_SYSTEM_FONTS` | `0` stops the desktop app from using an installed font for characters its embedded fonts lack (`cargo xtask screenshots` sets it) |

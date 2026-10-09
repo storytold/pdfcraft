@@ -28,6 +28,11 @@ log = { workspace = true }
 # behind a safe API. Same version as PhotoCraft. Pinned exactly: review the diff before bumping.
 fmv-macos-events = "=0.1.0"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# Which GPU drives which display (EnumDisplayDevices), so the window is drawn on the GPU that
+# shows it (issue #378). Safe wrappers over Win32; the `user` feature is User32.dll only.
+winsafe = { version = "0.0.29", default-features = false, features = ["user"] }
+
 [build-dependencies]
 # Icon + VERSIONINFO for pdfcraft.exe; build.rs only uses it when targeting Windows.
 winresource = "0.1"
