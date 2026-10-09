@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use pdfcraft_content::{Matrix, Op, Pieces, serialize_ops};
+use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
 use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 use pdfcraft_fonts::pdf::Metrics;
 use pdfcraft_fonts::{CraftFont, GlyphError, japanese_glyph_from};
@@ -295,7 +295,17 @@ impl Carry {
     }
 }
 
-fn interpret(doc: &Document, ops: &[Op], fonts_res: &Dict, cache: &mut HashMap<Vec<u8>, Rc<Metrics>>, carry: &mut Carry) -> Vec<Shown> {
+/// A `Do` met while interpreting: its operator index, XObject name and the state there.
+type Invocation = (usize, Vec<u8>, Ts);
+
+fn interpret(
+    doc: &Document,
+    ops: &[Op],
+    fonts_res: &Dict,
+    cache: &mut HashMap<Vec<u8>, Rc<Metrics>>,
+    carry: &mut Carry,
+    mut invoked: Option<&mut Vec<Invocation>>,
+) -> Vec<Shown> {
     let mut out = Vec::new();
     let mut ts = carry.ts.clone();
     let mut at_bt = (0usize, ts.clone());
@@ -346,6 +356,11 @@ fn interpret(doc: &Document, ops: &[Op], fonts_res: &Dict, cache: &mut HashMap<V
             b"Tz" => ts.scale = op.num(0).unwrap_or(100.0) / 100.0,
             b"TL" => ts.leading = op.num(0).unwrap_or(0.0),
             b"Ts" => ts.rise = op.num(0).unwrap_or(0.0),
+            b"Do" => {
+                if let (Some(list), Some(name)) = (invoked.as_deref_mut(), op.name(0)) {
+                    list.push((i, name.to_vec(), ts.clone()));
+                }
+            }
             b"Td" | b"TD" => {
                 if let Some([x, y]) = op.nums::<2>() {
                     if op.is("TD") {
@@ -463,7 +478,7 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
     // joined, so an operator whose operands end one piece still has them.
     let pieces = Pieces::join(&content_streams(doc, &p.dict).into_iter().map(|(_, d)| d).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
-    let shown = interpret(doc, &ops, &fonts_res, &mut cache, &mut carry);
+    let shown = interpret(doc, &ops, &fonts_res, &mut cache, &mut carry, None);
     let mut last: Option<(usize, usize, f64, f64, f64)> = None; // (piece, bt, baseline, end_x, size)
     for s in shown {
         // A line belongs to the piece its first operator starts in (lines in different pieces
@@ -519,6 +534,173 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
         last = Some((si, s.bt, s.baseline, s.end_x, s.size.max(1.0)));
     }
     // Lines of only spaces aren't editable text.
+    lines.retain(|l| !l.text.trim().is_empty());
+    Ok(lines)
+}
+
+/// The line `s` continues, or a new one: `last` is the previous run of the same stream
+/// (`bt`, baseline, end x, size).
+fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<(usize, f64, f64, f64)>, s: Shown, stream: usize) {
+    let joins = last.is_some_and(|(bt, base, end, size)| {
+        bt == s.bt
+            && lines.last().is_some_and(|l| l.font.as_bytes() == s.font.as_slice())
+            && lines
+                .last()
+                .is_some_and(|l| (s.size - l.size).abs() < 0.01 && s.bold == l.bold && s.italic == l.italic && fill_color(&s.state.fill) == l.color)
+            && (s.baseline - base).abs() < size * 0.3
+            && s.start_x > end - size
+            && s.start_x - end < size * 3.0
+    });
+    if joins && let Some(l) = lines.last_mut() {
+        let gap = s.start_x - last.map_or(s.start_x, |x| x.2);
+        if gap > l.size * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ') {
+            l.text.push(' ');
+        }
+        l.text.push_str(&s.text);
+        l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
+        l.ops.push(s.op);
+        l.decodable &= s.decodable;
+        l.color = fill_color(&s.state.fill);
+    } else {
+        lines.push(TextLine {
+            text: s.text.clone(),
+            rect: s.rect,
+            font: String::from_utf8_lossy(&s.font).into_owned(),
+            base_font: s.base_font.clone(),
+            size: s.size,
+            bold: s.bold,
+            italic: s.italic,
+            color: fill_color(&s.state.fill),
+            decodable: s.decodable,
+            stream,
+            ops: vec![s.op],
+            origin: Origin {
+                tm: s.tm.0,
+                tlm: s.tlm.0,
+                k: (s.tm.then(&s.state.ctm).0[2].powi(2) + s.tm.then(&s.state.ctm).0[3].powi(2)).sqrt(),
+                ctm: s.state.ctm.0,
+                baseline: s.baseline,
+                x: s.start_x,
+                state: TextState::of(&s.state),
+                bt_op: s.bt_op,
+                bt_state: TextState::of(&s.bt_state),
+            },
+        });
+    }
+    *last = Some((s.bt, s.baseline, s.end_x, s.size.max(1.0)));
+}
+
+/// How deep form XObjects nest before reading stops (they may also refer to themselves).
+pub(crate) const MAX_FORM_DEPTH: usize = 12;
+
+/// The most form XObjects one page's walk enters, at any depth. The depth cap alone still lets
+/// a form that draws another form many times fan out exponentially (100 `Do`s on each of 12
+/// levels), which would hang export on a hostile PDF.
+pub(crate) const MAX_FORM_VISITS: usize = 4096;
+
+/// A form XObject a page draws: its object, content, resources and its matrix composed with the
+/// CTM at the `Do`.
+pub(crate) struct FormCall {
+    pub(crate) obj: Option<pdfcraft_cos::ObjRef>,
+    pub(crate) data: Vec<u8>,
+    pub(crate) resources: Dict,
+    pub(crate) ctm: Matrix,
+}
+
+/// The form XObject `name` in `resources`, drawn with `ctm`. `None` for images, missing names
+/// and forms already being read (`path`), nested too deep, or past the page's `visits` budget
+/// ([`MAX_FORM_VISITS`]); each form entered counts one visit.
+pub(crate) fn form_call(
+    doc: &Document,
+    resources: &Dict,
+    name: &[u8],
+    ctm: Matrix,
+    path: &[pdfcraft_cos::ObjRef],
+    visits: &mut usize,
+) -> Option<FormCall> {
+    if path.len() >= MAX_FORM_DEPTH || *visits >= MAX_FORM_VISITS {
+        return None;
+    }
+    let xobjects = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned())?;
+    let o = xobjects.get(name)?;
+    let obj = o.as_ref();
+    if obj.is_some_and(|r| path.contains(&r)) {
+        return None;
+    }
+    let Object::Stream(s) = &*doc.resolve(o) else { return None };
+    if s.dict.name(b"Subtype") != Some(b"Form") {
+        return None;
+    }
+    let m = s.dict.get(b"Matrix").map(|m| doc.resolve(m)).and_then(|m| {
+        let a = m.as_array()?;
+        let v: Vec<f64> = a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
+        <[f64; 6]>::try_from(v).ok().filter(|v| v.iter().all(|x| x.is_finite()))
+    });
+    // A form without its own resources uses the ones it was drawn with (PDF 1.1 files).
+    let own = s.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned());
+    *visits = visits.saturating_add(1);
+    Some(FormCall {
+        obj,
+        data: s.decoded().unwrap_or_default(),
+        resources: own.unwrap_or_else(|| resources.clone()),
+        ctm: m.map_or(ctm, |m| Matrix(m).then(&ctm)),
+    })
+}
+
+/// The lines a page shows as it reads, including text drawn by form XObjects (which
+/// [`text_lines`] leaves out because it can only rewrite the page's own streams). Lines from a
+/// form carry a stream number past the page's streams, one per form drawn.
+fn reading_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError> {
+    struct Walk<'a> {
+        doc: &'a Document,
+        lines: Vec<TextLine>,
+        next_stream: usize,
+        path: Vec<pdfcraft_cos::ObjRef>,
+        visits: usize,
+    }
+    fn walk(w: &mut Walk, ops: &[Op], resources: &Dict, carry: &mut Carry, stream: usize) {
+        let fonts_res = resources.get(b"Font").map(|f| w.doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
+        let mut cache = HashMap::new();
+        let mut invoked = Vec::new();
+        let shown = interpret(w.doc, ops, &fonts_res, &mut cache, carry, Some(&mut invoked));
+        let mut last = None;
+        let mut forms = invoked.into_iter().peekable();
+        for s in shown {
+            while let Some((_, name, ts)) = forms.next_if(|f| f.0 < s.op) {
+                enter(w, resources, &name, ts);
+                // Text after a form starts a new line.
+                last = None;
+            }
+            add_shown(&mut w.lines, &mut last, s, stream);
+        }
+        for (_, name, ts) in forms {
+            enter(w, resources, &name, ts);
+        }
+    }
+    fn enter(w: &mut Walk, resources: &Dict, name: &[u8], ts: Ts) {
+        let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.visits) else { return };
+        let ops = parse(&form.data).ops;
+        // The form starts with the graphics state at its `Do`, its own matrix applied.
+        let mut carry = Carry { ts: Ts { ctm: form.ctm, ..ts }, stack: Vec::new() };
+        let stream = w.next_stream;
+        w.next_stream = w.next_stream.saturating_add(1);
+        if let Some(r) = form.obj {
+            w.path.push(r);
+        }
+        walk(w, &ops, &form.resources, &mut carry, stream);
+        if form.obj.is_some() {
+            w.path.pop();
+        }
+    }
+    let p = page_dict(doc, page)?;
+    let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let streams = content_streams(doc, &p.dict);
+    let mut w = Walk { doc, lines: Vec::new(), next_stream: streams.len(), path: Vec::new(), visits: 0 };
+    let mut carry = Carry::new();
+    for (si, (_, data)) in streams.into_iter().enumerate() {
+        walk(&mut w, &parse(&data).ops, &res, &mut carry, si);
+    }
+    let mut lines = w.lines;
     lines.retain(|l| !l.text.trim().is_empty());
     Ok(lines)
 }
@@ -825,6 +1007,14 @@ fn coincident_ops(lines: &[TextLine], rects: &[[f64; 4]]) -> std::collections::H
 /// The paragraphs on a page (0-based).
 pub fn text_blocks(doc: &Document, page: usize) -> Result<Vec<TextBlock>, EditError> {
     let lines = text_lines(doc, page)?;
+    Ok(group_blocks(&lines))
+}
+
+/// The paragraphs on a page as a reader sees them, including text drawn by form XObjects
+/// (Export to Word, HTML and RTF). Read-only: indexes into this list are not
+/// [`text_blocks`] indexes, so they can't be passed to [`replace_block`] or [`rewrite_block`].
+pub fn reading_blocks(doc: &Document, page: usize) -> Result<Vec<TextBlock>, EditError> {
+    let lines = reading_lines(doc, page)?;
     Ok(group_blocks(&lines))
 }
 

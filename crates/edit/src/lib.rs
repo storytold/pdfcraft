@@ -614,9 +614,9 @@ pub fn marks_present(doc: &Document) -> Vec<MarkKind> {
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
 pub mod images;
-pub use images::{ImageChange, PageImage, change_image, page_images, rect_to_rect, turn_about_centre};
+pub use images::{ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre};
 pub mod text;
-pub use text::{BlockStyle, LineEdit, TextBlock, TextLine, replace_block, replace_line, rewrite_block, text_blocks, text_lines};
+pub use text::{BlockStyle, LineEdit, TextBlock, TextLine, reading_blocks, replace_block, replace_line, rewrite_block, text_blocks, text_lines};
 pub mod added;
 pub use added::{Added, AddedImage, AddedText, Align, Content, Family, add_content, delete_content, first_undrawable, list_added, update_content};
 
