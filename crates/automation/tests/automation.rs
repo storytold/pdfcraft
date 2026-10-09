@@ -1289,6 +1289,20 @@ fn editing_existing_text_through_tools() {
 }
 
 #[test]
+fn paragraph_bold_without_font_keeps_the_source_family() {
+    let dir = workdir("paragraph-bold");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 2, "paragraph": 1, "font": "times" }));
+    let bold = ok(&mut a, "text_edit", json!({ "doc": doc, "page": 2, "paragraph": 1, "bold": true }));
+    assert_eq!(bold["paragraph"]["font"], "Times-Bold");
+    let regular = ok(&mut a, "text_edit", json!({ "doc": doc, "page": 2, "paragraph": 1, "bold": false }));
+    assert_eq!(regular["paragraph"]["font"], "Times-Roman");
+    assert_eq!(regular["paragraph"]["text"], "Page 2");
+    assert!(matches!(a.call("text_edit", &json!({ "doc": doc, "page": 2, "paragraph": 1, "bold": "yes" })), Err(ToolError::InvalidArgs(_))));
+}
+
+#[test]
 fn editing_page_images_through_tools() {
     let dir = workdir("page-images");
     let mut a = auto(&dir);

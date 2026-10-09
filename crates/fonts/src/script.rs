@@ -129,6 +129,12 @@ impl OutlinePen for Flatten {
 /// outline data. [`GlyphError::NoFont`] when the build has no Japanese face.
 pub fn japanese_glyph(ch: char) -> Result<GlyphOutline, GlyphError> {
     let Some(face) = crate::document_japanese_font() else { return Err(GlyphError::NoFont) };
+    japanese_glyph_from(face, ch)
+}
+
+/// The bounded outline and advance from the explicitly selected craft-fonts face.
+/// Uses the same complexity and missing-glyph checks as [`japanese_glyph`].
+pub fn japanese_glyph_from(face: &crate::CraftFont, ch: char) -> Result<GlyphOutline, GlyphError> {
     let Ok(font) = FontRef::new(face.bytes) else { return Err(GlyphError::Missing) };
     let loc = LocationRef::default();
     let metrics = font.metrics(Size::unscaled(), loc);

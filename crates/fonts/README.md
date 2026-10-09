@@ -28,7 +28,18 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
 - `document_japanese_font` / `japanese_glyph`: the face (Shippori Mincho, then BIZ UDMincho) whose
   outlines become the Type 3 fallback font for Japanese text written into PDFs. Without it,
   `japanese_glyph` returns `GlyphError::NoFont` and the editor reports a clear error.
+- `document_japanese_font_for_style` / `japanese_glyph_from`: select and draw a real Japanese
+  fallback face for edited text. Sans sources prefer BIZ UDPGothic Regular/Bold; serif sources
+  keep Mincho. Type 3 paths and advances both come from that selected face. Missing weights
+  fall back to a real Regular face, never synthetic bold; no italic face is supplied. The
+  default `document_japanese_font` / `japanese_glyph` APIs still use regular document Mincho.
 - `SHIPPORI_MINCHO`: Shippori Mincho's bytes, or `None`.
+
+This improves the initial replacement's appearance, not the separate Type 3 font-name reporting
+limitation: without a recorded fallback name, a later edit needing new glyphs cannot recover
+its original family/weight from the saved Type 3 font. The editor's substituted-font notice
+identifies the selected family. The small web input has only Gothic Regular, so it cannot
+preserve bold. No new font assets or changes to that input are needed.
 
 wasm32 builds embed only BIZ UDPGothic Regular and any `Arab` or `Telu` face, to keep the web build small: the web build
 currently has no Chinese face, so Chinese there still shows the replacement glyph.

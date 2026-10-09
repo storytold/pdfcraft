@@ -85,7 +85,28 @@ fn order_cjk<'a>(faces: impl IntoIterator<Item = &'a CraftFont>, prefer_hans: bo
 /// The face for Japanese text written into PDFs (serif document text): Shippori Mincho, then
 /// BIZ UDMincho, then any other regular `Jpan` face. `None` without craft-fonts.
 pub fn document_japanese_font() -> Option<&'static CraftFont> {
-    let jpan = || CRAFT_FONTS.iter().filter(|f| f.covers("Jpan"));
+    document_face(CRAFT_FONTS, true, false)
+}
+
+/// A real Japanese document face matching serif/sans and weight where available.
+/// Sans text prefers BIZ UDPGothic Bold or Regular. Missing weights fall back to Regular;
+/// serif text keeps the document Mincho preference. No synthetic weight or slant is applied.
+/// `None` without craft-fonts. The small web input currently has only Gothic Regular.
+pub fn document_japanese_font_for_style(serif: bool, bold: bool) -> Option<&'static CraftFont> {
+    document_face(CRAFT_FONTS, serif, bold)
+}
+
+fn document_face(faces: &[CraftFont], serif: bool, bold: bool) -> Option<&CraftFont> {
+    let jpan = || faces.iter().filter(|f| f.covers("Jpan"));
+    if !serif {
+        let style = if bold { "Bold" } else { "Regular" };
+        if let Some(face) = jpan()
+            .find(|f| f.family == "BIZ UDPGothic" && f.style == style)
+            .or_else(|| jpan().find(|f| f.family == "BIZ UDPGothic" && f.style == "Regular"))
+        {
+            return Some(face);
+        }
+    }
     ["Shippori Mincho", "BIZ UDMincho"]
         .iter()
         .find_map(|family| jpan().find(|f| f.family == *family && f.style == "Regular"))
@@ -154,6 +175,24 @@ mod tests {
         assert_eq!(zh, ["FakeHans", "BIZ UDPGothic", "Shippori Mincho"]);
         let ja: Vec<&str> = order_cjk([&mincho, &faces[2], &faces[1]], false).iter().map(|f| f.family).collect();
         assert_eq!(ja, ["BIZ UDPGothic", "Shippori Mincho", "FakeHans"]);
+    }
+
+    #[test]
+    fn document_faces_match_style_without_inventing_missing_weights() {
+        let faces = [
+            CraftFont { family: "Shippori Mincho", style: "Regular", scripts: &["Jpan"], bytes: b"serif" },
+            CraftFont { family: "BIZ UDPGothic", style: "Regular", scripts: &["Jpan"], bytes: b"sans" },
+            CraftFont { family: "BIZ UDPGothic", style: "Bold", scripts: &["Jpan"], bytes: b"bold" },
+            CraftFont { family: "BIZ UDPGothic", style: "Bold", scripts: &["Latn"], bytes: b"not-japanese" },
+        ];
+        assert_eq!(document_face(&faces, false, false).unwrap().bytes, b"sans");
+        assert_eq!(document_face(&faces, false, true).unwrap().bytes, b"bold");
+        assert_eq!(document_face(&faces, true, false).unwrap().bytes, b"serif");
+        assert_eq!(document_face(&faces, true, true).unwrap().bytes, b"serif");
+        assert_eq!(document_face(&faces[..2], false, true).unwrap().bytes, b"sans");
+        assert_eq!(document_face(&faces[..1], false, true).unwrap().bytes, b"serif");
+        assert!(document_face(&faces[3..], false, true).is_none());
+        assert!(document_face(&[], false, true).is_none());
     }
 
     #[test]
