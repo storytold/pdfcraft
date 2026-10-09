@@ -2024,3 +2024,16 @@ action wizard	Start	ప్రారంభించు
 	Pin folder to Home…	ఫోల్డర్‌ను హోమ్‌కు పిన్ చేయి…
 	No recent files	ఇటీవలి ఫైళ్లు లేవు
 	Go to page…	పేజీకి వెళ్లు…
+	Date format	తేదీ ఫార్మాట్
+	Fill & Sign dates	నింపడం & సంతకం తేదీలు
+	Pattern	నమూనా
+	Today: {date}	ఈరోజు: {date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy లేదా yy సంవత్సరం · m లేదా mm నెల · mmm లేదా mmmm నెల పేరు · d లేదా dd రోజు · ddd లేదా dddd వారం రోజు. H, h, M, s, t సమయ అక్షరాలు, వాటిని ఒంటరిగా ఉపయోగించలేరు: అక్షరాన్ని యథాతథంగా చూపడానికి దాని ముందు {escape} పెట్టండి.
+	Same as interface ({language})	ఇంటర్‌ఫేస్ లాగానే ({language})
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} ను ఇంకా PDF లో రాయలేము: నింపడం & సంతకం టెక్స్ట్ పశ్చిమ యూరోపియన్ అక్షరాలకు మాత్రమే పరిమితం. dd.mm.yyyy వంటి సంఖ్యా ఫార్మాట్‌ను ఎంచుకోండి.
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	ప్రింటర్ డ్రైవర్ ప్రాధాన్యతలను తెరుస్తుంది. అవి ఈ కంప్యూటర్ నుండి ప్రతి ముద్రణ కోసం సేవ్ అవుతాయి; ఇక్కడ ఎంచుకున్న కాపీలు, రెండు వైపులా, గ్రేస్కేల్ మరియు కాగితం ఇప్పటికీ వర్తిస్తాయి.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	ఈ ముద్రణ కోసం ప్రింటర్ డ్రైవర్ స్వంత సెట్టింగ్‌లు: కాగితపు ట్రే, కాగితం రకం, ఫినిషింగ్ మరియు మరిన్ని.
+	Couldn't open the printer's preferences: {e}	ప్రింటర్ ప్రాధాన్యతలను తెరవడం సాధ్యం కాలేదు: {e}
+	Printer properties	ప్రింటర్ లక్షణాలు
+	Reset to printer defaults	ప్రింటర్ డిఫాల్ట్‌లకు రీసెట్ చేయి
+	This printer offers no settings of its own.	ఈ ప్రింటర్‌కు దాని స్వంత సెట్టింగ్‌లు లేవు.

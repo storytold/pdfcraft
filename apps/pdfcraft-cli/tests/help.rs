@@ -34,6 +34,27 @@ fn no_command_fails_with_usage_on_stderr() {
     assert!(text(&out.stderr).contains("pdfcraft-cli render <file.pdf> --page N"));
 }
 
+/// `mcp` is listed only when the build has it (`--no-default-features` leaves it out).
+#[test]
+fn usage_lists_mcp_only_when_built_with_it() {
+    let out = run(&["--help"]);
+    let stdout = text(&out.stdout);
+    assert_eq!(stdout.contains("pdfcraft-cli mcp"), cfg!(feature = "mcp"), "{stdout}");
+    assert_eq!(stdout.contains("--compact"), cfg!(feature = "mcp"), "{stdout}");
+    // The lines around it are still there.
+    assert!(stdout.contains("pdfcraft-cli run    --script steps.json"), "{stdout}");
+    assert!(stdout.contains("pdfcraft-cli ui     --control FILE"), "{stdout}");
+}
+
+#[cfg(not(feature = "mcp"))]
+#[test]
+fn mcp_without_the_feature_says_it_was_left_out() {
+    let out = run(&["mcp"]);
+    assert!(!out.status.success());
+    let stderr = text(&out.stderr);
+    assert!(stderr.contains("without the `mcp` feature"), "{stderr}");
+}
+
 #[test]
 fn unknown_command_names_it_and_points_to_help() {
     let out = run(&["frobnicate"]);

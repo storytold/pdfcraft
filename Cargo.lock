@@ -3489,6 +3489,7 @@ dependencies = [
  "image",
  "pdfcraft-cos",
  "pdfcraft-engine",
+ "pdfcraft-model",
  "pdfcraft-organize",
  "pdfcraft-platform",
  "pdfcraft-render",
@@ -3642,7 +3643,6 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-fonts",
  "pdfcraft-model",
- "pdfcraft-render",
  "thiserror 2.0.21",
 ]
 
@@ -3750,12 +3750,14 @@ name = "pdfcraft-render"
 version = "0.4.0"
 dependencies = [
  "bytemuck",
+ "flate2",
  "getrandom 0.4.3",
  "hayro",
  "hayro-syntax",
  "kurbo 0.13.1",
  "log",
  "lopdf",
+ "pdfcraft-cos",
  "pdfcraft-fonts",
  "skrifa 0.44.0",
  "thiserror 2.0.21",
@@ -3843,9 +3845,12 @@ name = "pdfcraft-xfa"
 version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
+ "image",
  "pdfcraft-cos",
  "pdfcraft-fonts",
+ "png 0.18.1",
  "roxmltree",
+ "sha2",
  "thiserror 2.0.21",
 ]
 

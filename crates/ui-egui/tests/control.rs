@@ -163,6 +163,50 @@ fn start_autoscroll(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient) ->
     p
 }
 
+/// Measure document movement from rendered geometry without requiring an offscreen grid
+/// cell to remain instantiated. Learn the grid's column count and row pitch before scrolling;
+/// any currently rendered cell then identifies the same content origin. This tests actual
+/// layout displacement, independently of the autoscroll velocity calculation.
+#[cfg(target_os = "linux")]
+struct CanvasPosition {
+    grid: Option<(usize, f32)>,
+}
+
+#[cfg(target_os = "linux")]
+impl CanvasPosition {
+    fn new(h: &Harness<'static, PdfCraftApp>) -> Self {
+        let grid = h.state().views[0].organize.then(|| {
+            let first = h.get_by_label("Page 1").rect().top();
+            let (page, next_row) = Self::grid_cells(h).into_iter().find(|(_, top)| *top > first + 1.0).expect("a second grid row");
+            (page - 1, next_row - first)
+        });
+        Self { grid }
+    }
+
+    fn grid_cells(h: &Harness<'static, PdfCraftApp>) -> Vec<(usize, f32)> {
+        use egui_kittest::kittest::NodeT;
+        let mut cells: Vec<_> = h
+            .query_all_by_label_contains("Page ")
+            .filter_map(|node| {
+                let page = node.accesskit_node().label()?.strip_prefix("Page ")?.parse::<usize>().ok()?;
+                Some((page, node.rect().top()))
+            })
+            .collect();
+        cells.sort_unstable_by_key(|(page, _)| *page);
+        cells
+    }
+
+    fn top(&self, h: &Harness<'static, PdfCraftApp>) -> f32 {
+        match self.grid {
+            Some((columns, row_pitch)) => {
+                let (page, top) = Self::grid_cells(h).into_iter().next().expect("a rendered grid cell");
+                top - ((page - 1) / columns) as f32 * row_pitch
+            }
+            None => h.state().views[0].page_screen_rect(0).expect("the zoomed viewer page remains visible").top(),
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn middle_click_autoscroll_latches_has_a_dead_zone_and_scrolls_both_directions() {
@@ -245,14 +289,12 @@ fn autoscroll_uses_the_initial_click_position_when_input_arrives_in_one_frame() 
 #[cfg(target_os = "linux")]
 #[test]
 fn farther_from_the_click_scrolls_faster_in_the_viewer_and_page_grid() {
-    use egui_kittest::kittest::Queryable;
     for organize in [false, true] {
         let (mut h, c) = harness_pages(40);
         h.state_mut().views[0].organize = organize;
         h.run_steps(3);
-        let top = |h: &Harness<'static, PdfCraftApp>| {
-            if organize { h.get_by_label("Page 1").rect().top() } else { h.state().views[0].page_screen_rect(0).unwrap().top() }
-        };
+        let position = CanvasPosition::new(&h);
+        let top = |h: &Harness<'static, PdfCraftApp>| position.top(h);
         let p = start_autoscroll(&mut h, &c);
         ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + 30.0 }));
         let before_near = top(&h);
@@ -276,7 +318,6 @@ fn farther_from_the_click_scrolls_faster_in_the_viewer_and_page_grid() {
 #[cfg(target_os = "linux")]
 #[test]
 fn autoscroll_uses_elapsed_frame_time_and_preserves_fractional_motion_in_both_views() {
-    use egui_kittest::kittest::Queryable;
     for (organize, scale, zoom) in [(false, 1.0, "100"), (false, 2.0, "100"), (false, 1.0, "400"), (true, 1.0, "100"), (true, 2.0, "100")] {
         for frames in [30, 60, 120, 144] {
             let (mut h, c) = harness_pages(40);
@@ -285,9 +326,8 @@ fn autoscroll_uses_elapsed_frame_time_and_preserves_fractional_motion_in_both_vi
             h.state_mut().views[0].organize = organize;
             h.run_steps(3);
             assert_eq!(h.ctx.pixels_per_point(), scale);
-            let top = |h: &Harness<'static, PdfCraftApp>| {
-                if organize { h.get_by_label("Page 1").rect().top() } else { h.state().views[0].page_screen_rect(0).unwrap().top() }
-            };
+            let position = CanvasPosition::new(&h);
+            let top = |h: &Harness<'static, PdfCraftApp>| position.top(h);
             let step = |h: &mut Harness<'static, PdfCraftApp>| {
                 // Deliberately differ from the harness's predicted frame interval: scrolling
                 // must follow the elapsed time rather than the display's predicted rate.
@@ -421,15 +461,15 @@ fn the_click_that_stops_autoscroll_preserves_the_page_selection() {
 #[cfg(target_os = "linux")]
 #[test]
 fn organize_pages_supports_autoscroll_without_selecting_or_reordering_pages() {
-    use egui_kittest::kittest::Queryable;
     let (mut h, c) = harness_pages(40);
     h.state_mut().execute("page.organize");
     h.run_steps(3);
-    let top = h.get_by_label("Page 1").rect().top();
+    let position = CanvasPosition::new(&h);
+    let top = position.top(&h);
     let p = start_autoscroll(&mut h, &c);
     ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + 80.0 }));
     h.run_steps(8);
-    assert!(h.get_by_label("Page 1").rect().top() < top - 30.0, "the organize grid scrolls");
+    assert!(position.top(&h) < top - 30.0, "the organize grid scrolls");
     assert!(h.state().views[0].selected.is_empty());
     assert!(h.state().views[0].org_drag.is_none());
     ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
@@ -446,7 +486,7 @@ fn organize_pages_supports_autoscroll_without_selecting_or_reordering_pages() {
 
 #[cfg(not(target_os = "linux"))]
 #[test]
-fn middle_button_input_does_not_start_custom_scrolling_outside_linux() {
+fn middle_button_pans_while_held_outside_linux() {
     for organize in [false, true] {
         let (mut h, c) = harness_pages(40);
         h.state_mut().views[0].organize = organize;
@@ -455,8 +495,26 @@ fn middle_button_input_does_not_start_custom_scrolling_outside_linux() {
         ok(&mut h, &c, "ui.click", json!({ "x": p.x, "y": p.y, "button": "middle" }));
         ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + 50.0 }));
         h.run_steps(8);
-        assert!(!h.state().views[0].auto_scrolling(), "custom scrolling must be Linux-only: organize={organize}");
+        assert!(!h.state().views[0].auto_scrolling(), "a click does not latch auto-scroll outside Linux: organize={organize}");
+        assert!(!h.state().views[0].middle_panning(), "a released click leaves nothing to pan: organize={organize}");
     }
+    // A drag pans while the button is held, and the Crop tool never sees it.
+    let (mut h, c) = harness();
+    h.state_mut().set_option("zoom", "400").unwrap();
+    h.run_steps(3);
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(2);
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Crop;
+    let p = h.state().views[0].viewport_rect().center();
+    let top = h.state().views[0].page_screen_rect(1).unwrap().top();
+    ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y - 60.0], "steps": 12, "button": "middle" }));
+    h.run_steps(2);
+    let moved = h.state().views[0].page_screen_rect(1).unwrap().top();
+    assert!((moved - (top - 60.0)).abs() < 1.0, "the page follows the pointer 1:1: {top} -> {moved}");
+    h.run_steps(8);
+    assert_eq!(h.state().views[0].page_screen_rect(1).unwrap().top(), moved, "no drift after release");
+    assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag");
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
 #[test]
