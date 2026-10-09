@@ -52,8 +52,9 @@ cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json window_move_tab doc_index
 cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json window_close --window 1
 ```
 
-Without `--window`, a request goes to the window that has the focus. `inspect`, `click`, `drag`,
-`type` and `key` still work on the main window, and `screenshot` can only capture the main window
+Without `--window`, `state`, `command`, `set` and `open` go to the window that has the focus, and `inspect`,
+`click`, `drag`, `move`, `type` and `key` to the main window. Every window has its own widget tree and input, so
+widget ids and coordinates from `inspect --window 1` are for window 1. `screenshot` can only capture the main window
 (eframe draws the other windows as immediate viewports and ignores screenshot requests for them;
 use the system's screenshot tool, e.g. `screencapture -l <window id>` on macOS). In tests, windows are drawn inside the main one
 (egui's embedded viewports), so `egui_kittest` can click in all of them; see

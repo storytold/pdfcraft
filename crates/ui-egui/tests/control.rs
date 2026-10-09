@@ -968,3 +968,34 @@ fn a_tab_can_be_moved_to_a_new_window_through_the_channel() {
     assert_eq!(list.len(), 2);
     assert_eq!(list[1]["tabs"][0]["name"], "second.pdf");
 }
+
+#[test]
+fn input_requests_take_a_window_and_refuse_one_that_does_not_exist() {
+    let (mut h, c) = harness_pages(3);
+    call(&mut h, &c, "ui.command", json!({ "id": "window.new_view" })).unwrap();
+    h.run_steps(4);
+    let child = call(&mut h, &c, "ui.windows", json!({})).unwrap()["windows"][1]["id"].as_u64().unwrap();
+    // Windows embedded in the main one (as here) share its tree: naming one still works.
+    for window in [json!(0), json!(child)] {
+        let found = call(&mut h, &c, "ui.inspect", json!({ "window": window, "query": "doc.pdf" })).unwrap();
+        assert!(found["count"].as_u64().unwrap_or(0) > 0, "{window}: {found}");
+        call(&mut h, &c, "ui.move", json!({ "x": 700.0, "y": 400.0, "window": window })).unwrap();
+        call(&mut h, &c, "ui.key", json!({ "key": "Escape", "window": window })).unwrap();
+        call(&mut h, &c, "ui.type", json!({ "text": "", "window": window })).unwrap();
+        call(&mut h, &c, "ui.click", json!({ "x": 700.0, "y": 400.0, "window": window })).unwrap();
+        call(&mut h, &c, "ui.drag", json!({ "from": [700.0, 400.0], "to": [710.0, 410.0], "window": window })).unwrap();
+    }
+    for bad in [json!(77), json!(-1), json!(1.5), json!(4_294_967_295_u64), json!("x")] {
+        for (method, params) in [
+            ("ui.inspect", json!({ "window": bad })),
+            ("ui.click", json!({ "x": 1.0, "y": 1.0, "window": bad })),
+            ("ui.drag", json!({ "from": [1.0, 1.0], "to": [2.0, 2.0], "window": bad })),
+            ("ui.move", json!({ "x": 1.0, "y": 1.0, "window": bad })),
+            ("ui.type", json!({ "text": "a", "window": bad })),
+            ("ui.key", json!({ "key": "A", "window": bad })),
+        ] {
+            let r = call(&mut h, &c, method, params);
+            assert!(r.as_ref().is_err_and(|e| e.contains("no window")), "{method} {bad}: {r:?}");
+        }
+    }
+}

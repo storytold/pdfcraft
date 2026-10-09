@@ -34,8 +34,10 @@
 //! Several windows: `ui.state`, `ui.command`, `ui.set`, `ui.open` and `ui.screenshot` take an
 //! optional `window` (a number from `ui.windows`; the window that has the focus when left out; the
 //! main window for `ui.screenshot`, which cannot capture the other windows).
-//! `ui.inspect`, `ui.click`, `ui.drag`, `ui.move`, `ui.type` and `ui.key` still act on the main
-//! window's widget tree. A number that is no window answers `no window N`.
+//! `ui.inspect`, `ui.click`, `ui.drag`, `ui.move`, `ui.type` and `ui.key` take it too (the main
+//! window when left out): each window has its own widget tree and its own input, so ids, labels and
+//! coordinates are the window's. (Windows embedded in the main one, as in tests, share its tree.)
+//! A number that is no window answers `no window N`.
 //! - `ui.windows`: every window with its `id`, `title`, `focused` and `tabs` (`name`, `view_no`, `dirty`).
 //! - `ui.window_new_view {window?}`: show the window's document in a new window.
 //! - `ui.window_move_tab {window?, doc_index, to?}`: move tab `doc_index` to window `to` (a new one without it).
@@ -101,16 +103,33 @@ impl ControlClient {
     }
 }
 
-/// State shared between the plugin (frame hooks) and the app.
+/// What the plugin keeps of one viewport (one window): each window has its own widget tree,
+/// its own input and its own passes.
 #[derive(Default)]
-struct Shared {
+struct ViewShared {
     nodes: HashMap<NodeId, accesskit::Node>,
     root: Option<NodeId>,
     focus: Option<NodeId>,
-    /// Event batches to inject, one batch per frame.
+    /// Event batches to inject, one batch per frame of this window.
     inject: VecDeque<Vec<egui::Event>>,
-    /// Real egui passes so far (counted in `output_hook`, which `logic`-only calls never reach).
+    /// Real egui passes of this window so far (counted in `output_hook`, which `logic`-only
+    /// calls never reach).
     passes: u64,
+}
+
+/// State shared between the plugin (frame hooks) and the app.
+#[derive(Default)]
+struct Shared {
+    views: HashMap<egui::ViewportId, ViewShared>,
+    /// The viewports whose passes are running (a window's pass can run inside the main
+    /// window's), innermost last: `output_hook` is not told which pass it ends.
+    running: Vec<egui::ViewportId>,
+}
+
+impl Shared {
+    fn view(&mut self, id: egui::ViewportId) -> &mut ViewShared {
+        self.views.entry(id).or_default()
+    }
 }
 
 /// The egui plugin half of the control channel.
@@ -125,28 +144,39 @@ impl egui::Plugin for ControlPlugin {
 
     fn input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         let Ok(mut s) = self.shared.lock() else { return };
-        if let Some(batch) = s.inject.pop_front() {
+        let id = input.viewport_id;
+        if s.running.len() >= 16 {
+            s.running.remove(0); // bounded, whatever happens
+        }
+        s.running.push(id);
+        let view = s.view(id);
+        if let Some(batch) = view.inject.pop_front() {
             input.events.extend(batch);
         }
-        if !s.inject.is_empty() {
-            ctx.request_repaint();
+        if !view.inject.is_empty() {
+            ctx.request_repaint_of(id);
         }
     }
 
     fn output_hook(&mut self, _ctx: &egui::Context, output: &mut egui::FullOutput) {
         let Ok(mut s) = self.shared.lock() else { return };
-        s.passes += 1;
+        let id = s.running.pop().unwrap_or(egui::ViewportId::ROOT);
+        let view = s.view(id);
+        view.passes += 1;
         let Some(update) = &output.platform_output.accesskit_update else { return };
-        s.nodes = update.nodes.iter().cloned().collect();
-        s.root = update.tree.as_ref().map(|t| t.root);
-        s.focus = Some(update.focus);
+        view.nodes = update.nodes.iter().cloned().collect();
+        view.root = update.tree.as_ref().map(|t| t.root);
+        view.focus = Some(update.focus);
     }
 }
 
 enum Pending {
     /// Answer after `frames` more frames (the injected input has been handled by then).
     Frames {
-        /// Answer once this many egui passes have run (the injected input has been handled).
+        /// The window the input went to.
+        viewport: egui::ViewportId,
+        /// Answer once this many egui passes of that window have run (the injected input has
+        /// been handled).
         until_pass: u64,
         since: f64,
         reply: Sender<Reply>,
@@ -194,8 +224,11 @@ pub(crate) trait Host {
     fn window_move_tab(&mut self, window: Option<u32>, doc_index: usize, to: Option<u32>) -> Reply;
     fn window_close(&mut self, window: Option<u32>) -> Reply;
     fn window_focus(&mut self, window: Option<u32>) -> Reply;
-    /// The egui viewport of window `window`, if there is such a window.
+    /// The egui viewport of window `window`, if there is such a window (screenshots).
     fn viewport_of(&mut self, window: Option<u32>) -> Result<egui::ViewportId, String>;
+    /// The viewport whose widget tree and input a request for window `window` (`None`: the main
+    /// window) works on.
+    fn input_viewport(&mut self, window: Option<u32>) -> Result<egui::ViewportId, String>;
 }
 
 impl Control {
@@ -207,9 +240,10 @@ impl Control {
                 Handled::Now(r) => {
                     let _ = req.reply.send(r);
                 }
-                Handled::AfterFrames(frames, value) => {
-                    let until_pass = self.passes() + u64::from(frames);
-                    self.pending.push(Pending::Frames { until_pass, since: now_secs(), reply: req.reply, value });
+                Handled::AfterFrames(viewport, frames, value) => {
+                    let until_pass = self.passes(viewport) + u64::from(frames);
+                    ctx.request_repaint_of(viewport);
+                    self.pending.push(Pending::Frames { viewport, until_pass, since: now_secs(), reply: req.reply, value });
                 }
                 Handled::Screenshot(region, viewport) => {
                     let tag = self.next_tag;
@@ -248,17 +282,17 @@ impl Control {
         }
         let ppp = ctx.pixels_per_point();
         let now = now_secs();
-        let passes = self.passes();
         let mut keep = Vec::new();
-        for p in self.pending.drain(..) {
+        let waiting: Vec<Pending> = self.pending.drain(..).collect();
+        for p in waiting {
             match p {
-                Pending::Frames { until_pass, reply, value, .. } if passes >= until_pass => {
+                Pending::Frames { viewport, until_pass, reply, value, .. } if self.passes(viewport) >= until_pass => {
                     let _ = reply.send(Ok(value));
                 }
-                Pending::Frames { since, reply, .. } if now - since > NOT_DRAWN_TIMEOUT => {
+                Pending::Frames { viewport, since, reply, .. } if now - since > NOT_DRAWN_TIMEOUT => {
                     // The agent is told it failed, so it must not happen later either.
                     if let Ok(mut sh) = self.shared.lock() {
-                        sh.inject.clear();
+                        sh.view(viewport).inject.clear();
                     }
                     let _ = reply.send(Err(not_drawn("handling the input")));
                 }
@@ -279,14 +313,14 @@ impl Control {
         self.pending = keep;
     }
 
-    fn passes(&self) -> u64 {
-        self.shared.lock().map(|s| s.passes).unwrap_or(0)
+    fn passes(&self, viewport: egui::ViewportId) -> u64 {
+        self.shared.lock().map(|s| s.views.get(&viewport).map_or(0, |v| v.passes)).unwrap_or(0)
     }
 
-    fn inject(&self, batches: Vec<Vec<egui::Event>>) -> u32 {
+    fn inject(&self, viewport: egui::ViewportId, batches: Vec<Vec<egui::Event>>) -> u32 {
         let n = batches.len() as u32;
         if let Ok(mut s) = self.shared.lock() {
-            s.inject.extend(batches);
+            s.view(viewport).inject.extend(batches);
         }
         // The last batch is handled during the frame it is injected into; answer one frame later.
         n + 1
@@ -328,10 +362,20 @@ impl Control {
                 Ok(Handled::Now(host.set(window?, str_param("key")?, &value)))
             }
             "ui.open" => Ok(Handled::Now(host.open(window?, str_param("path")?))),
-            "ui.inspect" => Ok(Handled::Now(Ok(self.inspect(p)))),
-            "ui.click" => self.click(p),
-            "ui.drag" => self.drag(p),
+            "ui.inspect" => {
+                let vp = host.input_viewport(window?)?;
+                Ok(Handled::Now(Ok(self.inspect(vp, p))))
+            }
+            "ui.click" => {
+                let vp = host.input_viewport(window?)?;
+                self.click(vp, p)
+            }
+            "ui.drag" => {
+                let vp = host.input_viewport(window?)?;
+                self.drag(vp, p)
+            }
             "ui.move" => {
+                let vp = host.input_viewport(window?)?;
                 let point = |key: &str| -> Result<f32, String> {
                     p.get(key)
                         .and_then(Value::as_f64)
@@ -340,19 +384,21 @@ impl Control {
                         .ok_or_else(|| format!("ui.move: {key} must be a finite coordinate in points"))
                 };
                 let pos = egui::pos2(point("x")?, point("y")?);
-                Ok(Handled::AfterFrames(self.inject(vec![vec![egui::Event::PointerMoved(pos)]]), json!({ "moved": [pos.x, pos.y] })))
+                Ok(Handled::AfterFrames(vp, self.inject(vp, vec![vec![egui::Event::PointerMoved(pos)]]), json!({ "moved": [pos.x, pos.y] })))
             }
             "ui.type" => {
+                let vp = host.input_viewport(window?)?;
                 let text = str_param("text")?.to_string();
-                Ok(Handled::AfterFrames(self.inject(vec![vec![egui::Event::Text(text)]]), json!({ "typed": true })))
+                Ok(Handled::AfterFrames(vp, self.inject(vp, vec![vec![egui::Event::Text(text)]]), json!({ "typed": true })))
             }
             "ui.key" => {
+                let vp = host.input_viewport(window?)?;
                 let name = str_param("key")?;
                 let key = egui::Key::from_name(name)
                     .ok_or_else(|| format!("ui.key: unknown key {name:?} (egui key names: A, Enter, Escape, ArrowDown, F5, …)"))?;
                 let modifiers = modifiers(p.get("modifiers"))?;
                 let ev = |pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
-                Ok(Handled::AfterFrames(self.inject(vec![vec![ev(true)], vec![ev(false)]]), json!({ "key": name })))
+                Ok(Handled::AfterFrames(vp, self.inject(vp, vec![vec![ev(true)], vec![ev(false)]]), json!({ "key": name })))
             }
             "ui.screenshot" => {
                 let region = match p.get("region") {
@@ -369,11 +415,12 @@ impl Control {
         r.unwrap_or_else(|e| Handled::Now(Err(e)))
     }
 
-    fn inspect(&self, p: &Value) -> Value {
+    fn inspect(&self, viewport: egui::ViewportId, p: &Value) -> Value {
         let query = p.get("query").and_then(Value::as_str).map(str::to_lowercase);
         let role = p.get("role").and_then(Value::as_str).map(str::to_lowercase);
         let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(500) as usize;
-        let Ok(s) = self.shared.lock() else { return json!({ "widgets": [] }) };
+        let Ok(shared) = self.shared.lock() else { return json!({ "widgets": [] }) };
+        let Some(s) = shared.views.get(&viewport) else { return json!({ "widgets": [], "count": 0, "truncated": false }) };
         let mut out = Vec::new();
         let mut total = 0usize;
         let mut stack: Vec<(NodeId, usize)> = s.root.map(|r| vec![(r, 0)]).unwrap_or_default();
@@ -399,7 +446,7 @@ impl Control {
     }
 
     /// Press at `from`, move to `to` in `steps` frames, release (drawing, selecting text, moving).
-    fn drag(&mut self, p: &Value) -> Result<Handled, String> {
+    fn drag(&mut self, viewport: egui::ViewportId, p: &Value) -> Result<Handled, String> {
         let point = |k: &str| -> Result<egui::Pos2, String> {
             match p.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_f64).collect::<Vec<_>>()).as_deref() {
                 Some([x, y]) => Ok(egui::pos2(*x as f32, *y as f32)),
@@ -416,19 +463,21 @@ impl Control {
             frames.push(vec![egui::Event::PointerMoved(from + (to - from) * (k as f32 / steps as f32))]);
         }
         frames.push(vec![button(to, false)]);
-        let n = self.inject(frames);
-        Ok(Handled::AfterFrames(n, json!({ "dragged": [[from.x, from.y], [to.x, to.y]] })))
+        let n = self.inject(viewport, frames);
+        Ok(Handled::AfterFrames(viewport, n, json!({ "dragged": [[from.x, from.y], [to.x, to.y]] })))
     }
 
-    fn click(&mut self, p: &Value) -> Result<Handled, String> {
+    fn click(&mut self, viewport: egui::ViewportId, p: &Value) -> Result<Handled, String> {
         if let (Some(x), Some(y)) = (p.get("x").and_then(Value::as_f64), p.get("y").and_then(Value::as_f64)) {
             let pos = egui::pos2(x as f32, y as f32);
             let which = pointer_button(p, "ui.click")?;
             let button = |pressed| egui::Event::PointerButton { pos, button: which, pressed, modifiers: egui::Modifiers::NONE };
-            let frames = self.inject(vec![vec![egui::Event::PointerMoved(pos)], vec![button(true)], vec![button(false)]]);
-            return Ok(Handled::AfterFrames(frames, json!({ "clicked": [x, y] })));
+            let frames = self.inject(viewport, vec![vec![egui::Event::PointerMoved(pos)], vec![button(true)], vec![button(false)]]);
+            return Ok(Handled::AfterFrames(viewport, frames, json!({ "clicked": [x, y] })));
         }
-        let s = self.shared.lock().map_err(|_| "control state poisoned")?;
+        let shared = self.shared.lock().map_err(|_| "control state poisoned")?;
+        let empty = ViewShared::default();
+        let s = shared.views.get(&viewport).unwrap_or(&empty);
         let id = match (p.get("id"), p.get("label").and_then(Value::as_str)) {
             (Some(id), _) => {
                 let id: u64 =
@@ -461,15 +510,15 @@ impl Control {
         }
         let label = node.label().map(str::to_owned);
         let action = accesskit::ActionRequest { action: Action::Click, target_tree: accesskit::TreeId::ROOT, target_node: id, data: None };
-        drop(s);
-        let frames = self.inject(vec![vec![egui::Event::AccessKitActionRequest(action)]]);
-        Ok(Handled::AfterFrames(frames, json!({ "clicked": id.0.to_string(), "label": label })))
+        drop(shared);
+        let frames = self.inject(viewport, vec![vec![egui::Event::AccessKitActionRequest(action)]]);
+        Ok(Handled::AfterFrames(viewport, frames, json!({ "clicked": id.0.to_string(), "label": label })))
     }
 }
 
 enum Handled {
     Now(Reply),
-    AfterFrames(u32, Value),
+    AfterFrames(egui::ViewportId, u32, Value),
     Screenshot(Option<egui::Rect>, egui::ViewportId),
 }
 
@@ -772,6 +821,17 @@ impl Host for crate::PdfCraftApp {
         })
     }
 
+    fn input_viewport(&mut self, window: Option<u32>) -> Result<egui::ViewportId, String> {
+        let id = crate::WindowId(window.unwrap_or(0));
+        if !self.has_window(id) {
+            return Err(format!("no window {}", id.0));
+        }
+        // Embedded windows (no windowing system of their own, as in tests) are drawn inside the
+        // main window's pass and share its widget tree and input.
+        let embedded = self.ctx.as_ref().is_some_and(|c| c.embed_viewports());
+        Ok(if embedded { crate::WindowId::ROOT.viewport() } else { id.viewport() })
+    }
+
     fn viewport_of(&mut self, window: Option<u32>) -> Result<egui::ViewportId, String> {
         let id = crate::WindowId(window.unwrap_or(0));
         if !self.has_window(id) {
@@ -873,4 +933,80 @@ fn random_token() -> std::io::Result<String> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).map_err(|e| std::io::Error::other(e.to_string()))?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    fn input(viewport: egui::ViewportId) -> egui::RawInput {
+        let viewports = [egui::ViewportId::ROOT, child()].into_iter().map(|id| (id, egui::ViewportInfo::default())).collect();
+        egui::RawInput { viewport_id: viewport, viewports, ..Default::default() }
+    }
+
+    /// Run a pass of `viewport` (the textures it made are not needed).
+    fn run(ctx: &egui::Context, viewport: egui::ViewportId, ui_fn: impl FnMut(&mut egui::Ui)) {
+        ctx.run_ui(input(viewport), ui_fn).textures_delta.clear();
+    }
+
+    /// One pass of `viewport` showing a button called `label`.
+    fn pass(ctx: &egui::Context, viewport: egui::ViewportId, label: &str) {
+        run(ctx, viewport, |ui| {
+            ui.button(label.to_owned());
+        });
+    }
+
+    fn labels(control: &Control, viewport: egui::ViewportId) -> Vec<String> {
+        let v = control.inspect(viewport, &json!({ "role": "button" }));
+        v["widgets"].as_array().unwrap().iter().filter_map(|w| w["label"].as_str().map(str::to_owned)).collect()
+    }
+
+    fn child() -> egui::ViewportId {
+        egui::ViewportId::from_hash_of("child window")
+    }
+
+    #[test]
+    fn each_window_has_its_own_widget_tree_and_input() {
+        let ctx = egui::Context::default();
+        let (control, _client) = attach(&ctx);
+        // The child's pass runs inside the main window's, as eframe draws immediate viewports.
+        run(&ctx, egui::ViewportId::ROOT, |ui| {
+            ui.button("In main");
+            pass(ui.ctx(), child(), "In child");
+        });
+        assert_eq!(labels(&control, egui::ViewportId::ROOT), ["In main"]);
+        assert_eq!(labels(&control, child()), ["In child"]);
+        // Input for the child reaches the child's next pass only.
+        control.inject(child(), vec![vec![egui::Event::Text("x".into())]]);
+        let mut main_events = 0;
+        let mut child_events = 0;
+        run(&ctx, egui::ViewportId::ROOT, |ui| {
+            main_events = ui.input(|i| i.events.len());
+            run(ui.ctx(), child(), |ui| {
+                child_events = ui.input(|i| i.events.iter().filter(|e| matches!(e, egui::Event::Text(_))).count());
+            });
+        });
+        assert_eq!((main_events, child_events), (0, 1));
+        assert_eq!(control.passes(child()), 2);
+    }
+
+    #[test]
+    fn a_click_by_label_goes_to_the_window_that_has_the_button() {
+        let ctx = egui::Context::default();
+        let (mut control, _client) = attach(&ctx);
+        pass(&ctx, child(), "Only here");
+        let handled = control.click(child(), &json!({ "label": "Only here" })).unwrap();
+        assert!(matches!(handled, Handled::AfterFrames(v, _, _) if v == child()));
+        // The main window has no such button.
+        assert!(control.click(egui::ViewportId::ROOT, &json!({ "label": "Only here" })).is_err());
+    }
+
+    #[test]
+    fn a_window_that_was_never_drawn_has_nothing_to_inspect() {
+        let ctx = egui::Context::default();
+        let (control, _client) = attach(&ctx);
+        let v = control.inspect(child(), &json!({}));
+        assert_eq!(v["count"], 0);
+    }
 }
