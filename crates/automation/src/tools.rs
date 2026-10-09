@@ -898,7 +898,7 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["paths", "folder"],
             )),
-        t("ocr_status", "OCR status", "Whether text recognition is available (its models are installed: run `cargo xtask models` or set PDFCRAFT_MODELS), where it looks for them, and the languages it reads.")
+        t("ocr_status", "OCR status", "Whether text recognition is available (its models are installed: release packages include them; a source build fetches them with `cargo xtask models`; PDFCRAFT_MODELS overrides), where it looks for them, and the languages it reads.")
             .ro()
             .cmd("ocr.recognize")
             .with(schema(json!({}), &[])),

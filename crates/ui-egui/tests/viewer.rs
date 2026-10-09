@@ -682,6 +682,7 @@ fn pages_panel_harness(sizes: &[(u32, u32)]) -> Harness<'static, PdfCraftApp> {
     let bytes = sized_fixture(sizes);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("cheques.pdf", None, bytes).unwrap();
         app.right = Some(pdfcraft_ui_egui::RightPanel::Pages);
         app

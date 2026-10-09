@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Check the compiled MSI's install scope, publisher, shortcuts and native UI, without installing it.
+  Check the compiled MSI's install scope, publisher, shortcuts, native UI and OCR models, without installing it.
 .EXAMPLE
   pwsh packaging/windows/test-msi.ps1 dist/release/pdfcraft-0.2.1-windows-x64.msi
 #>
@@ -131,8 +131,20 @@ foreach ($exit in @(@('InstallComplete', '-1'), @('InstallCancelled', '-2'), @('
 }
 $title = Read-Row 'SELECT `Text` FROM `Control` WHERE `Dialog_` = ''InstallComplete'' AND `Control` = ''Title''' 1
 if ($title[0] -notmatch 'completed successfully') { throw 'Success dialog does not confirm completion' }
+# OCR models (#103): installed into models\ beside pdfcraft.exe, where the app looks for them.
+$modelsDir = Read-Row 'SELECT `Directory_Parent`, `DefaultDir` FROM `Directory` WHERE `Directory` = ''ModelsFolder''' 2
+Assert-Equal $modelsDir[0] 'INSTALLFOLDER' 'OCR models folder parent'
+# DefaultDir is `models`, or `SHORT|models` with a generated 8.3 name.
+if ($modelsDir[1] -notmatch '(^|\|)models$') { throw "OCR models folder name: '$($modelsDir[1])'" }
+$modelFiles = 0
+$view = $Database.OpenView('SELECT `File`.`FileName` FROM `File`, `Component` WHERE `File`.`Component_` = `Component`.`Component` AND `Component`.`Directory_` = ''ModelsFolder''')
+try {
+  [void] $view.Execute()
+  while ($record = $view.Fetch()) { if ($record.StringData(1) -match '\.rten$') { $modelFiles++ } }
+} finally { [void] $view.Close() }
+if ($modelFiles -lt 2) { throw "expected the OCR models (*.rten) in models\, found $modelFiles" }
 $rm = Read-Row 'SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = ''MsiRMFilesInUse''' 1
 Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
-Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut (default on, checkbox), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog'
+Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut (default on, checkbox), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'

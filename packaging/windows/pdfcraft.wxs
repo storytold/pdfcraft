@@ -2,7 +2,7 @@
 <!--
   PdfCraft MSI (WiX Toolset v5: `dotnet tool install -g wix`). Built by package.ps1:
 
-    wix build pdfcraft.wxs installer-ui.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
+    wix build pdfcraft.wxs installer-ui.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d ModelsDir=... -d IconPath=... -o out.msi
 
   Per-machine install into Program Files, a Start Menu shortcut, a desktop shortcut (on by default,
   optional), an App Paths entry, and PdfCraft registered as a PDF handler (offered under "Open with"
@@ -43,13 +43,16 @@
     <UIRef Id="PdfcraftInstallerUI" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="PdfCraft" />
+      <Directory Id="INSTALLFOLDER" Name="PdfCraft">
+        <Directory Id="ModelsFolder" Name="models" />
+      </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
     <StandardDirectory Id="DesktopFolder" />
 
     <Feature Id="Main" Title="PdfCraft" Level="1">
       <ComponentGroupRef Id="PdfcraftFiles" />
+      <ComponentGroupRef Id="PdfcraftModels" />
     </Feature>
   </Package>
 
@@ -133,6 +136,13 @@
       <Component Id="PdfcraftCli">
         <File Id="PdfcraftCliExe" Source="$(var.BinDir)\pdfcraft-cli.exe" KeyPath="yes" />
       </Component>
+    </ComponentGroup>
+
+    <!-- OCR models (#103), with their licences and ATTRIBUTION.txt, in models\ beside pdfcraft.exe
+         where the app looks for them: every file `cargo xtask models` fetched (package.ps1), one
+         component each, so new models ship without naming them here. -->
+    <ComponentGroup Id="PdfcraftModels" Directory="ModelsFolder">
+      <Files Include="$(var.ModelsDir)\*" />
     </ComponentGroup>
   </Fragment>
 </Wix>

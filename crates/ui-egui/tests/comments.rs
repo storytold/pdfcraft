@@ -271,6 +271,15 @@ fn line_ending_properties_change_and_undo() {
     h.state_mut().open_comment_props(0, 0);
     h.run_steps(2);
     h.get_by_label("Line ending");
+    h.query_all_by_value("None").next().expect("start ending").click();
+    h.run_steps(2);
+    for label in ["Open arrow", "Closed arrow", "Butt", "Reverse open arrow", "Reverse closed arrow", "Slash", "Square", "Circle", "Diamond"] {
+        h.get_by_label(label);
+    }
+    assert_eq!(h.query_all_by_label("ROpenArrow").count(), 0);
+    assert_eq!(h.query_all_by_label("OpenArrow").count(), 0);
+    h.get_by_label("None").click();
+    h.run_steps(1);
     {
         let d = h.state_mut().comment_props.as_mut().expect("open");
         assert_eq!(d.edited.endings.as_deref(), Some(&[pdfcraft_engine::LineEnding::None, pdfcraft_engine::LineEnding::None][..]));
