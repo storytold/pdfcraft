@@ -9,6 +9,9 @@
 //!  --organize on  --fields on  --dialog properties|shortcuts|about  --palette <query>  --home on
 //!  --cover on|off  --default-layout continuous|two-up|single  --default-zoom fit-width|fit-page|<percent>`
 //!
+//! `--new-window` opens a window of its own. Without it, on Windows, a launch that only names files
+//! hands them to the PdfCraft already running, where they open as tabs (`single_instance`).
+//!
 //! `--control <file>` enables the UI control channel (off by default): the app listens on a random
 //! loopback port and writes `{"port", "token", "pid"}` to `<file>` (owner-only permissions).
 //! Agents then drive it with `pdfcraft-cli ui --control <file> <method> …`.
@@ -27,6 +30,7 @@ use pdfcraft_ui_egui::PdfCraftApp;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod logging;
+mod single_instance;
 mod updates;
 
 /// Freedesktop app id: the `.desktop` file name and the hicolor icon name.
@@ -136,6 +140,7 @@ fn main() -> eframe::Result {
     let mut options: Vec<(String, String)> = Vec::new();
     let mut control_file: Option<String> = None;
     let mut create_images = false;
+    let mut new_window = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -145,6 +150,7 @@ fn main() -> eframe::Result {
             }
             "--control" => control_file = args.next(),
             "--create-images" => create_images = true,
+            "--new-window" => new_window = true,
             flag if flag.starts_with("--") => {
                 let value = args.next().unwrap_or_default();
                 options.push((flag.trim_start_matches("--").to_string(), value));
@@ -164,6 +170,15 @@ fn main() -> eframe::Result {
             Err(e) => log::warn!("no log file: {e}"),
         }
     }
+    // Windows: a launch that only names files (an Outlook attachment, an Explorer double-click)
+    // hands them to the PdfCraft already running and exits (#282, #317). Any option means the
+    // caller wants this launch's own window.
+    let may_hand_off = !new_window && !files.is_empty() && options.is_empty() && control_file.is_none() && !create_images;
+    let instance = match single_instance::claim(&single_instance::absolute(&files), may_hand_off) {
+        single_instance::Claim::HandedOff => return Ok(()),
+        single_instance::Claim::Primary(server) => Some(server),
+        single_instance::Claim::Alone => None,
+    };
     let choice = renderer_choice(std::env::var("PDFCRAFT_RENDERER").ok().as_deref());
     let launch = Launch { files, options, control_file, create_images, integrated };
     // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
@@ -179,6 +194,7 @@ fn main() -> eframe::Result {
         app_creator(
             launch.clone(),
             Rc::clone(&started),
+            instance.as_ref(),
             #[cfg(target_os = "macos")]
             &apple_events,
         ),
@@ -196,6 +212,7 @@ fn main() -> eframe::Result {
                 app_creator(
                     launch,
                     started,
+                    instance.as_ref(),
                     #[cfg(target_os = "macos")]
                     &apple_events,
                 ),
@@ -269,6 +286,7 @@ struct Launch {
 fn app_creator<'a>(
     launch: Launch,
     started: Rc<Cell<bool>>,
+    instance: Option<&'a single_instance::Server>,
     #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
 ) -> eframe::AppCreator<'a> {
     let Launch { files, options, control_file, create_images, integrated } = launch;
@@ -284,6 +302,9 @@ fn app_creator<'a>(
         #[cfg(target_os = "macos")]
         {
             app.os_events = Some(apple_events.connect(&cc.egui_ctx));
+        }
+        if let Some(server) = instance {
+            app.os_events = Some(server.connect(&cc.egui_ctx));
         }
         if let Some(file) = &control_file {
             let client = app.attach_control(&cc.egui_ctx);

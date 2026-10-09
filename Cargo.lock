@@ -3456,6 +3456,7 @@ dependencies = [
  "pdfcraft-ui-egui",
  "rustls-native-certs",
  "serde_json",
+ "uds_windows",
  "ureq",
  "winresource",
 ]

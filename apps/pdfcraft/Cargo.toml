@@ -28,6 +28,12 @@ log = { workspace = true }
 # behind a safe API. Same version as PhotoCraft. Pinned exactly: review the diff before bumping.
 fmv-macos-events = "=0.1.0"
 
+[target.'cfg(windows)'.dependencies]
+# Single instance (#282): later launches hand their files to the running app over a Unix domain
+# socket. `std` has no Unix sockets on Windows, and calling Winsock directly needs unsafe, which
+# our workspace forbids. Already in the lockfile through zbus; pinned exactly, review before bumping.
+uds_windows = "=1.2.1"
+
 [build-dependencies]
 # Icon + VERSIONINFO for pdfcraft.exe; build.rs only uses it when targeting Windows.
 winresource = "0.1"
