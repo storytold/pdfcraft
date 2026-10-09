@@ -1778,8 +1778,8 @@ milestone = "M3"
 status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = "web build works; IndexedDB/OPFS recent list and download flow are M3.10"
+evidence = ["crates/ui-egui/tests/pickers.rs::a_startup_url_opens_in_front_when_the_user_has_not_started_working", "crates/ui-egui/tests/pickers.rs::a_late_startup_url_preserves_the_current_edit_workspace_and_save_target", "crates/ui-egui/tests/pickers.rs::deliberate_browser_file_opens_still_activate_the_new_tab"]
+notes = "web build works; a late startup ?file= download opens in a background tab after the user starts working, preserving the active document and Save target (#171). IndexedDB/OPFS recent list and download flow are M3.10"
 
 [[feature]]
 id = "view.large-document-performance"
