@@ -9,10 +9,10 @@
 # Clean-room: written from the meaning of the English labels in common Hebrew desktop style
 # (commands are verbal nouns: "שמירה", "פתיחה…"; instructions address the user in the plural
 # imperative); not taken from Adobe Acrobat's Hebrew localisation or any other product's
-# translation. Terminology: comments are "הערות", pages are "עמודים", form fields are "שדות טופס",
+# translation. Terminology: comments are "תגובות", pages are "עמודים", form fields are "שדות טופס",
 # stamps are "חותמות". Product and format names (PdfCraft, PDF, Word, HTML…) stay in Latin
-# letters; the trailing "…" of dialog commands is kept. Covers the menus, Preferences and
-# Fill & Sign so far; other labels show in English.
+# letters; the trailing "…" of dialog commands is kept. Covers the menus, every registered command,
+# All tools, Preferences and Fill & Sign so far; other labels show in English.
 
 	Menu	תפריט
 	File	קובץ
@@ -30,7 +30,7 @@
 	Preferences…	העדפות…
 	Interface language	שפת הממשק
 	Identity	זהות
-	Name on new comments	השם בהערות חדשות
+	Name on new comments	השם בתגובות חדשות
 	Enable Acrobat JavaScript	הפעלת Acrobat JavaScript
 	OK	אישור
 	Cancel	ביטול
@@ -82,7 +82,7 @@
 	Full screen mode	מסך מלא
 	Read mode	מצב קריאה
 	Switch light / dark theme	מעבר בין ערכה בהירה לכהה
-	Comments panel	חלונית הערות
+	Comments panel	חלונית תגובות
 	Form fields panel	חלונית שדות טופס
 	Signatures panel	חלונית חתימות
 	Organize pages	סידור עמודים
@@ -159,3 +159,273 @@
 	Image	תמונה
 	Type text	הקלדת טקסט
 	Couldn't import the signature image: {e}	לא ניתן לייבא את תמונת החתימה: {e}
+
+# All tools, the mode tabs and every registered command
+	All tools	כל הכלים
+	Read	קריאה
+	Convert	המרה
+	E-Sign	חתימה דיגיטלית
+	Find tools and commands	חיפוש כלים ופקודות
+	View more	הצגת עוד
+	View less	הצגת פחות
+	Show less	הצגת פחות
+	Show {n} more	הצגת {n} נוספים
+	Open	פתיחה
+	Export a PDF	ייצוא ל-PDF
+	Export to	ייצוא אל
+	Microsoft Word (.docx)	Microsoft Word (.docx)
+	Spreadsheet (.xlsx)	גיליון אלקטרוני (.xlsx)
+	Presentation (.pptx)	מצגת (.pptx)
+	Image (PNG)	תמונה (PNG)
+	Export all images	ייצוא כל התמונות
+	HTML web page	דף אינטרנט HTML
+	Rich Text Format (.rtf)	טקסט עשיר (.rtf)
+	Text (plain)	טקסט פשוט
+	PostScript / EPS	PostScript / EPS
+	Add text	הוספת טקסט
+	Checkmark	סימן וי
+	Cross	סימן איקס
+	Dot	נקודה
+	Line	קו
+	Date	תאריך
+	Initials	ראשי תיבות
+	Change signature	שינוי החתימה
+	Change initials	שינוי ראשי התיבות
+	Edit a PDF	עריכת PDF
+	Modify page	שינוי עמוד
+	Rotate pages	סיבוב עמודים
+	Insert pages	הוספת עמודים
+	Extract pages	חילוץ עמודים
+	Add content	הוספת תוכן
+	Edit text & images	עריכת טקסט ותמונות
+	Text	טקסט
+	Header and footer	כותרת עליונה ותחתונה
+	Watermark	סימן מים
+	Link	קישור
+	Bates numbering	מספור Bates
+	Background	רקע
+	Attach file	צירוף קובץ
+	Create a PDF	יצירת PDF
+	Create from	יצירה מתוך
+	Single file	קובץ יחיד
+	Multiple files	קבצים מרובים
+	Images	תמונות
+	Clipboard	לוח
+	Blank page	עמוד ריק
+	Combine files	איחוד קבצים
+	Combine	איחוד
+	Add files to combine	הוספת קבצים לאיחוד
+	Page options	אפשרויות עמוד
+	Page grid	רשת עמודים
+	Rotate	סיבוב
+	Delete	מחיקה
+	Extract	חילוץ
+	Insert	הוספה
+	Replace	החלפה
+	Split	פיצול
+	More	עוד
+	Set page boxes	הגדרת תיבות עמוד
+	Page labels	תוויות עמודים
+	Page transitions	מעברי עמודים
+	Add comments	הוספת תגובות
+	Markup	סימון
+	Sticky note	פתק דביק
+	Highlight text	הדגשת טקסט
+	Underline	קו תחתון
+	Strikethrough	קו חוצה
+	Squiggly underline	קו תחתון גלי
+	Text box	תיבת טקסט
+	Drawing	ציור
+	Draw freehand	ציור חופשי
+	Rectangle	מלבן
+	Oval	אליפסה
+	Arrow	חץ
+	Cloud	ענן
+	Review	סקירה
+	Comment list	רשימת תגובות
+	Flatten comments	השטחת תגובות
+	Scan & OCR	סריקה ו-OCR
+	Recognize text	זיהוי טקסט
+	In this file	בקובץ הזה
+	In multiple files	בכמה קבצים
+	Enhance scanned file	שיפור קובץ סרוק
+	Correct recognized text	תיקון טקסט מזוהה
+	Protect a PDF	הגנה על PDF
+	Protect	הגנה
+	Protect with password	הגנה בסיסמה
+	Remove hidden information	הסרת מידע מוסתר
+	Advanced options	אפשרויות מתקדמות
+	Encrypt with certificate	הצפנה באמצעות אישור
+	Security properties	מאפייני אבטחה
+	Redact a PDF	השחרת PDF
+	Redact	השחרה
+	Redact text and images	השחרת טקסט ותמונות
+	Redact pages	השחרת עמודים
+	Find text and redact	חיפוש טקסט והשחרה
+	Set properties	הגדרת מאפיינים
+	Sanitize document	ניקוי המסמך
+	Compress a PDF	דחיסת PDF
+	Optimize	אופטימיזציה
+	Reduce file size	הקטנת גודל הקובץ
+	Advanced optimization	אופטימיזציה מתקדמת
+	Audit space usage	בדיקת ניצול שטח
+	Prepare a form	הכנת טופס
+	Fields	שדות
+	Field list	רשימת שדות
+	Detect form fields	זיהוי שדות טופס
+	Field properties	מאפייני שדה
+	Tab order by rows	סדר מעבר לפי שורות
+	Tab order by columns	סדר מעבר לפי עמודות
+	Flatten form fields	השטחת שדות טופס
+	Import data	ייבוא נתונים
+	Export data	ייצוא נתונים
+	Add form components	הוספת רכיבי טופס
+	Text field	שדה טקסט
+	Checkbox	תיבת סימון
+	Radio button	לחצן בחירה
+	Drop-down list	רשימה נפתחת
+	List box	תיבת רשימה
+	Button	לחצן
+	Image field	שדה תמונה
+	Date field	שדה תאריך
+	Digital signature	חתימה דיגיטלית
+	Use a certificate	שימוש באישור
+	Certificates	אישורים
+	Digitally sign	חתימה דיגיטלית על המסמך
+	Timestamp	חותמת זמן
+	Validate all signatures	אימות כל החתימות
+	Certify (visible signature)	אישור (חתימה גלויה)
+	Certify (invisible signature)	אישור (חתימה בלתי נראית)
+	Use print production	הפקת דפוס
+	Print production	הפקת דפוס
+	Output preview	תצוגה מקדימה של הפלט
+	Preflight	בדיקה מקדימה
+	Convert colors	המרת צבעים
+	Add printer marks	הוספת סימני מדפסת
+	Fix hairlines	תיקון קווים דקים
+	Measure objects	מדידת אובייקטים
+	Measure	מדידה
+	Distance	מרחק
+	Perimeter	היקף
+	Area	שטח
+	Drawing scale	קנה מידה של השרטוט
+	Measurement information	פרטי מדידה
+	Snapping	הצמדה
+	Export measurements	ייצוא מדידות
+	Geospatial location	מיקום גאוגרפי
+	Compare files	השוואת קבצים
+	Compare	השוואה
+	Select files to compare	בחירת קבצים להשוואה
+	Use guided actions	פעולות מודרכות
+	Actions list	רשימת פעולות
+	Action Wizard	אשף פעולות
+	Make accessible	הנגשה
+	Prepare for distribution	הכנה להפצה
+	Optimize scanned documents	אופטימיזציה של מסמכים סרוקים
+	Archive documents	העברת מסמכים לארכיון
+	Prepare for accessibility	הכנה לנגישות
+	Accessibility	נגישות
+	Automatically tag PDF	תיוג PDF אוטומטי
+	Change reading options	שינוי אפשרויות קריאה
+	Check for accessibility	בדיקת נגישות
+	Open accessibility report	פתיחת דוח נגישות
+	Add alternate text	הוספת טקסט חלופי
+	Fix reading order	תיקון סדר הקריאה
+	Apply PDF standards	החלת תקני PDF
+	Standards	תקנים
+	Save as PDF/A	שמירה כ-PDF/A
+	Save as PDF/X	שמירה כ-PDF/X
+	Save as PDF/UA	שמירה כ-PDF/UA
+	Add search index	הוספת אינדקס חיפוש
+	Index	אינדקס
+	Manage embedded index	ניהול אינדקס מוטמע
+	Use JavaScript	שימוש ב-JavaScript
+	JavaScript	JavaScript
+	Console	מסוף
+	Document JavaScripts	סקריפטי JavaScript של המסמך
+	Document actions	פעולות המסמך
+	AI assistant	עוזר AI
+	Bring your own model (off by default)	מודל משלכם (כבוי כברירת מחדל)
+	Summarize	סיכום
+	Ask about this document	שאלה על המסמך
+	Translate	תרגום
+	Measure distance	מדידת מרחק
+	Measure perimeter	מדידת היקף
+	Measure area	מדידת שטח
+	Set measurement scale	הגדרת קנה מידה למדידה
+	Measurement snapping	הצמדה במדידה
+	Export measurements as CSV	ייצוא מדידות כ-CSV
+	Use system setting	לפי הגדרות המערכת
+	Light gray	אפור בהיר
+	Dark gray	אפור כהה
+	Add a sticky note	הוספת פתק דביק
+	Add a text box	הוספת תיבת טקסט
+	Underline text	קו תחתון לטקסט
+	Strikethrough text	קו חוצה לטקסט
+	Squiggly underline text	קו תחתון גלי לטקסט
+	Draw a line	ציור קו
+	Draw an arrow	ציור חץ
+	Draw a rectangle	ציור מלבן
+	Draw an oval	ציור אליפסה
+	Draw a polygon	ציור מצולע
+	Draw connected lines	ציור קווים מחוברים
+	Draw a cloud	ציור ענן
+	Add a callout	הוספת בועת הסבר
+	Insert text	הוספת טקסט במקום הסמן
+	Replace text	החלפת טקסט
+	Attach a file	צירוף קובץ
+	Erase drawings	מחיקת ציורים
+	Import comments…	ייבוא תגובות…
+	Export all comments to data file…	ייצוא כל התגובות לקובץ נתונים…
+	Hide all comments	הסתרת כל התגובות
+	Summarize comments	סיכום תגובות
+	Import form data…	ייבוא נתוני טופס…
+	Export form data…	ייצוא נתוני טופס…
+	PDF/A…	PDF/A…
+	Action Wizard…	אשף פעולות…
+	Prepare for distribution…	הכנה להפצה…
+	Optimize scanned documents…	אופטימיזציה של מסמכים סרוקים…
+	Compare files…	השוואת קבצים…
+	Merge data files into spreadsheet…	מיזוג קובצי נתונים לגיליון אלקטרוני…
+	Tab order: by rows	סדר מעבר: לפי שורות
+	Tab order: by columns	סדר מעבר: לפי עמודות
+	Tab order: by document structure	סדר מעבר: לפי מבנה המסמך
+	Add or edit links	הוספה או עריכה של קישורים
+	Create links from URLs	יצירת קישורים מכתובות URL
+	Remove all links	הסרת כל הקישורים
+	Add Bates numbering…	הוספת מספור Bates…
+	Add image…	הוספת תמונה…
+	Redact pages…	השחרת עמודים…
+	Find text and redact…	חיפוש טקסט והשחרה…
+	Redaction properties…	מאפייני השחרה…
+	Apply redactions…	החלת השחרות…
+	Clear redaction marks	ניקוי סימוני השחרה
+	Remove hidden information…	הסרת מידע מוסתר…
+	Sanitize document…	ניקוי המסמך…
+	Field properties…	מאפייני שדה…
+	Add a text field	הוספת שדה טקסט
+	Add a checkbox	הוספת תיבת סימון
+	Add a radio button	הוספת לחצן בחירה
+	Add a drop-down list	הוספת רשימה נפתחת
+	Add a list box	הוספת תיבת רשימה
+	Add a button	הוספת לחצן
+	Add an image field	הוספת שדה תמונה
+	Add a date field	הוספת שדה תאריך
+	Add a digital signature field	הוספת שדה חתימה דיגיטלית
+	Fill & Sign: remove saved initials	מילוי וחתימה: הסרת ראשי התיבות השמורים
+	JavaScript console…	מסוף JavaScript…
+	Document JavaScripts…	סקריפטי JavaScript של המסמך…
+	Recognize text…	זיהוי טקסט…
+	Recognize text in multiple files…	זיהוי טקסט בכמה קבצים…
+	Check for accessibility…	בדיקת נגישות…
+	Change reading options…	שינוי אפשרויות קריאה…
+	Add alternate text…	הוספת טקסט חלופי…
+	Add header & footer…	הוספת כותרת עליונה ותחתונה…
+	Update header & footer…	עדכון כותרת עליונה ותחתונה…
+	Remove header & footer	הסרת כותרת עליונה ותחתונה
+	Add watermark…	הוספת סימן מים…
+	Update watermark…	עדכון סימן מים…
+	Remove watermark	הסרת סימן מים
+	Add background…	הוספת רקע…
+	Update background…	עדכון רקע…
+	Remove background	הסרת רקע

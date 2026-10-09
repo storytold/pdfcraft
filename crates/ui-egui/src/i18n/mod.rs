@@ -1116,6 +1116,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn hebrew_covers_commands_and_catalogue() {
+        let he = Lang::from_code("he").expect("he registered");
+        for command in pdfcraft_engine::commands::COMMANDS {
+            assert!(has(he, command.label), "missing command: {}", command.label);
+            if let Some(menu) = command.menu {
+                assert!(has(he, menu), "missing menu: {menu}");
+            }
+        }
+        for group in pdfcraft_engine::catalog::TOOL_GROUPS {
+            assert!(has(he, group.label), "missing group: {}", group.label);
+            for section in group.sections {
+                assert!(has(he, section.title), "missing section: {}", section.title);
+                for item in section.items {
+                    assert!(has(he, item.label), "missing item: {}", item.label);
+                }
+            }
+        }
+        for mode in ["All tools", "Read", "Edit", "Convert", "E-Sign", "Find tools and commands", "View more", "View less"] {
+            assert!(has(he, mode), "missing: {mode}");
+        }
+    }
+
     /// New tl!("literal") labels must not silently fall back to English.
     #[test]
     fn french_covers_ui_literals() {
