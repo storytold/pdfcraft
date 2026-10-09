@@ -95,6 +95,7 @@ pub struct WindowState {
     pub(crate) full_screen: bool,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub(crate) close_request: Option<CloseRequest>,
+    pub(crate) close_queue: Option<crate::editing::CloseQueue>,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.
     pub(crate) grid_drop: Option<GridDrop>,
     /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
@@ -194,6 +195,7 @@ impl Default for WindowState {
             password_prompt: None,
             full_screen: false,
             close_request: None,
+            close_queue: None,
             grid_drop: None,
             deferred_commands: Vec::new(),
             window_title: String::new(),
@@ -300,6 +302,7 @@ impl PdfCraftApp {
             password_prompt,
             full_screen,
             close_request,
+            close_queue,
             grid_drop,
             deferred_commands,
             window_title,
@@ -366,6 +369,7 @@ impl PdfCraftApp {
         std::mem::swap(&mut self.password_prompt, password_prompt);
         std::mem::swap(&mut self.full_screen, full_screen);
         std::mem::swap(&mut self.close_request, close_request);
+        std::mem::swap(&mut self.close_queue, close_queue);
         std::mem::swap(&mut self.grid_drop, grid_drop);
         std::mem::swap(&mut self.deferred_commands, deferred_commands);
         std::mem::swap(&mut self.window_title, window_title);

@@ -419,6 +419,9 @@ pub struct PdfCraftApp {
     pub os_events: Option<OsEventsFn>,
     /// [window] A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
+    /// [window] "Close other tabs" and "Close tabs to the right": the documents still to ask about,
+    /// after the one being asked now.
+    pub(crate) close_queue: Option<editing::CloseQueue>,
     /// [global] Save to this path instead of asking (tests and automation).
     pub save_override: Option<String>,
     /// [window] Document Properties ▸ Description fields being edited: (document, Title/Author/Subject/Keywords).
@@ -698,6 +701,7 @@ impl PdfCraftApp {
             password_prompt,
             full_screen,
             close_request,
+            close_queue,
             grid_drop,
             deferred_commands,
             window_title,
@@ -841,6 +845,7 @@ impl PdfCraftApp {
             password_prompt,
             full_screen,
             close_request,
+            close_queue,
             grid_drop,
             deferred_commands,
             window_title,

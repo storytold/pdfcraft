@@ -223,22 +223,21 @@ impl PdfCraftApp {
     }
 
     /// Close the tabs `which` picks (by index): the ones with nothing unsaved at once, and ask
-    /// about the first one that has.
+    /// about each one that has, one after the other (Cancel stops the run).
     fn close_tabs_where(&mut self, which: impl Fn(usize) -> bool) {
-        let mut ask = None;
-        for at in (0..self.views.len()).rev().filter(|at| which(*at)) {
-            let id = self.views[at].id;
-            if self.view_count(id) > 1 || !self.has_unsaved_work(at) {
-                self.request_close_tab(at);
-            } else {
-                ask = Some(id);
+        let ids: std::collections::VecDeque<_> = self.views.iter().enumerate().filter(|(at, _)| which(*at)).map(|(_, v)| v.id).collect();
+        if self.close_request.is_some() {
+            // A question is open already: close what needs no question; leave the rest.
+            for id in ids {
+                if let Some(at) = self.views.iter().position(|v| v.id == id)
+                    && (self.view_count(id) > 1 || !self.has_unsaved_work(at))
+                {
+                    self.request_close_tab(at);
+                }
             }
+            return;
         }
-        if let Some(id) = ask
-            && self.close_request.is_none()
-        {
-            self.close_request = Some(crate::CloseRequest::Tab(id));
-        }
+        self.close_in_turn(ids);
     }
 
     /// Show a file in Finder, Explorer or the file manager. The path goes to the program as an

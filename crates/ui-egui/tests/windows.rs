@@ -784,3 +784,83 @@ fn a_page_deleted_in_one_window_leaves_the_other_window_drawing_without_a_stale_
     });
     assert_windows_ok(h.state());
 }
+
+fn four_docs_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        for name in ["a.pdf", "b.pdf", "c.pdf", "d.pdf"] {
+            app.open_bytes(name, None, include_bytes!("data/form.pdf").to_vec()).unwrap();
+        }
+        // Three of them have unsaved changes; d.pdf (the one that stays) is clean.
+        for i in 0..3 {
+            app.active = Some(i);
+            assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+        }
+        app.active = Some(3);
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+fn close_other_tabs_of_d(h: &mut Harness<'static, PdfCraftApp>) {
+    h.get_by_label("d.pdf").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Close other tabs").click();
+    h.run_steps(3);
+}
+
+fn asked_about(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
+    match h.state().close_request {
+        Some(pdfcraft_ui_egui::CloseRequest::Tab(id)) => h.state().session.get(id).map(|d| d.name.clone()),
+        _ => None,
+    }
+}
+
+#[test]
+fn closing_other_tabs_asks_about_every_unsaved_document_in_turn() {
+    let mut h = four_docs_harness();
+    close_other_tabs_of_d(&mut h);
+    assert_eq!(asked_about(&h).as_deref(), Some("a.pdf"));
+    h.get_by_label("Don't save").click();
+    h.run_steps(3);
+    assert_eq!(asked_about(&h).as_deref(), Some("b.pdf"));
+    h.get_by_label("Don't save").click();
+    h.run_steps(3);
+    assert_eq!(asked_about(&h).as_deref(), Some("c.pdf"));
+    h.get_by_label("Don't save").click();
+    h.run_steps(3);
+    assert!(h.state().close_request.is_none());
+    assert_eq!(h.state().views.len(), 1, "only the tab that was kept is left");
+    assert_windows_ok(h.state());
+}
+
+#[test]
+fn cancelling_one_question_about_other_tabs_ends_the_run() {
+    let mut h = four_docs_harness();
+    close_other_tabs_of_d(&mut h);
+    h.get_by_label("Don't save").click();
+    h.run_steps(3);
+    assert_eq!(asked_about(&h).as_deref(), Some("b.pdf"));
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().close_request.is_none(), "no more questions");
+    assert_eq!(h.state().views.len(), 3, "b, c and the kept tab stay open");
+}
+
+#[test]
+fn a_tab_closed_meanwhile_is_skipped_by_the_run() {
+    let mut h = four_docs_harness();
+    close_other_tabs_of_d(&mut h);
+    // c.pdf is closed some other way while the first question is open.
+    let c = h.state().views[2].id;
+    h.state_mut().close_document_everywhere_for_test(c);
+    h.get_by_label("Don't save").click();
+    h.run_steps(3);
+    assert_eq!(asked_about(&h).as_deref(), Some("b.pdf"));
+    h.get_by_label("Don't save").click();
+    h.run_steps(3);
+    assert!(h.state().close_request.is_none(), "c.pdf was skipped, nothing is left to ask");
+    assert_eq!(h.state().views.len(), 1);
+}

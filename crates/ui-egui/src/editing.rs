@@ -21,6 +21,14 @@ pub enum CloseRequest {
     Window(crate::WindowId),
 }
 
+/// "Close other tabs" and "Close tabs to the right" ask about every document with unsaved
+/// changes, one after the other: the one being asked now, and the ones still to ask about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CloseQueue {
+    pub(crate) current: pdfcraft_engine::DocId,
+    pub(crate) rest: std::collections::VecDeque<pdfcraft_engine::DocId>,
+}
+
 /// Where Save writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveTarget {
@@ -456,6 +464,32 @@ impl PdfCraftApp {
         }
     }
 
+    /// Close the documents in `ids` (left to right): the ones with nothing unsaved at once, and
+    /// ask about each one that has, in turn. Cancelling a question ends the whole run.
+    pub(crate) fn close_in_turn(&mut self, mut ids: std::collections::VecDeque<pdfcraft_engine::DocId>) {
+        self.close_queue = None;
+        while let Some(id) = ids.pop_front() {
+            // Closed meanwhile (by an answer, or from another window).
+            let Some(at) = self.views.iter().position(|v| v.id == id) else { continue };
+            if self.view_count(id) > 1 || !self.has_unsaved_work(at) {
+                self.request_close_tab(at);
+                continue;
+            }
+            self.close_request = Some(CloseRequest::Tab(id));
+            self.close_queue = Some(CloseQueue { current: id, rest: ids });
+            return;
+        }
+    }
+
+    /// The question about `id` was answered (the document closed): ask about the next one.
+    fn advance_close_queue(&mut self, id: pdfcraft_engine::DocId) {
+        if self.close_queue.as_ref().is_some_and(|q| q.current == id)
+            && let Some(q) = self.close_queue.take()
+        {
+            self.close_in_turn(q.rest);
+        }
+    }
+
     /// File ▸ Close all: clean documents close at once; each one with unsaved changes asks.
     pub fn close_all(&mut self) {
         for i in (0..self.views.len()).rev() {
@@ -519,6 +553,12 @@ impl PdfCraftApp {
         }
     }
 
+    /// Close every view of `doc` without asking (tests).
+    #[doc(hidden)]
+    pub fn close_document_everywhere_for_test(&mut self, doc: pdfcraft_engine::DocId) {
+        self.close_document_everywhere(doc);
+    }
+
     /// Close every view of `doc` in every window (the document closes with its last one).
     fn close_document_everywhere(&mut self, doc: pdfcraft_engine::DocId) {
         for window in self.window_ids() {
@@ -536,7 +576,7 @@ impl PdfCraftApp {
         let index = match req {
             CloseRequest::Tab(id) => match self.views.iter().position(|v| v.id == id) {
                 Some(i) => i,
-                None => return, // already closed
+                None => return self.advance_close_queue(id), // already closed
             },
             CloseRequest::Quit => match self.first_dirty() {
                 Some(i) => i,
@@ -564,7 +604,14 @@ impl PdfCraftApp {
             }
         }
         match choice {
-            None => {} // cancelled: nothing closes
+            None => {
+                // Cancelled: nothing closes, and no further tabs are asked about.
+                if let CloseRequest::Tab(id) = req
+                    && self.close_queue.as_ref().is_some_and(|q| q.current == id)
+                {
+                    self.close_queue = None;
+                }
+            }
             Some(false) => self.close_and_continue(ctx, index, req),
             Some(true) => {
                 let Some(id) = self.views.get(index).map(|v| v.id) else { return };
@@ -609,7 +656,7 @@ impl PdfCraftApp {
                 Some(_) => self.close_request = Some(req),
                 None => self.finish_window_close(window),
             },
-            CloseRequest::Tab(_) => {}
+            CloseRequest::Tab(id) => self.advance_close_queue(id),
         }
     }
 
