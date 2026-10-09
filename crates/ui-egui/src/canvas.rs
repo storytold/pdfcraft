@@ -1805,8 +1805,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         }
                     }
                 }
-                // Annotation hover shows the comment, as Acrobat's popups do.
-                let gesturing = view.comments.gesture.is_some();
+                // Annotation hover shows the comment, as Acrobat's popups do; not while drawing
+                // freehand, where it would cover the next stroke (#429).
+                let freehand = matches!(tool, QuickTool::Comment(comments::CommentTool::Ink | comments::CommentTool::Eraser));
+                let gesturing = view.comments.gesture.is_some() || freehand;
                 for a in info.annotations.iter().filter(|a| a.page == i && a.in_reply_to.is_none() && !gesturing) {
                     let sr = xf.user_rect(info, i, a.rect);
                     if sr.contains(p) && hover_text.is_none() {

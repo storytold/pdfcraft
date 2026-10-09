@@ -52,6 +52,14 @@ impl PdfCraftApp {
                     }
                     Edit::InsertBlankPage { at, .. } => view.select_pages(&[at.min(info.pages.len() - 1)]),
                     Edit::DeletePages { .. } => view.select_pages(&[]),
+                    // A stroke drawn with the pen stays unselected, so the selection box and
+                    // author popup don't sit over the next stroke (#429).
+                    Edit::AddAnnotation(a)
+                        if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. })
+                            && self.quick_tool == crate::QuickTool::Comment(crate::comments::CommentTool::Ink) =>
+                    {
+                        view.comments.selected = None;
+                    }
                     Edit::AddAnnotation(a) => {
                         // Select the new comment (appended last among the page's comments).
                         let newest = info.annotations.iter().filter(|x| x.page == a.page && x.in_reply_to.is_none()).map(|x| x.index).max();
