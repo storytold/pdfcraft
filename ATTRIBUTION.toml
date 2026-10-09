@@ -44,6 +44,17 @@ usage = "Czech UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
 sha256 = "2c09a121e493fb123d9f886529f62268119ca580ad5d5300eca61d4a39216827"
 
 [[asset]]
+path = "crates/ui-egui/src/i18n/he.tsv"
+title = "Hebrew interface translation catalog"
+author = "PdfCraft contributors"
+source = "Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Hebrew UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "fa4a2c04f80762a42b41778a06db34728c956b31a3c6c44c961959d8726fb9b1"
+
+[[asset]]
 path = "crates/ui-egui/src/i18n/pt-br.tsv"
 title = "Brazilian Portuguese interface translation catalog"
 author = "PdfCraft contributors"

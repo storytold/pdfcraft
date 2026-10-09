@@ -17,10 +17,22 @@ use unicode_bidi::{BidiInfo, Level};
 /// at the end, the way the window title shows it. Use it for painting only; accessibility
 /// labels and anything stored keep the logical text.
 pub fn visual(text: &str) -> Cow<'_, str> {
+    reorder(text, Level::ltr())
+}
+
+/// [`visual`] for text written in a right-to-left language, such as a label of the Hebrew
+/// interface: the base direction is right to left, so the words of a sentence run from the right
+/// and a trailing "…" or ":" lands at its left end. Text without right-to-left characters comes
+/// back borrowed and unchanged.
+pub fn visual_rtl(text: &str) -> Cow<'_, str> {
+    reorder(text, Level::rtl())
+}
+
+fn reorder(text: &str, base: Level) -> Cow<'_, str> {
     if !text.chars().any(is_rtl_script) {
         return Cow::Borrowed(text);
     }
-    let info = BidiInfo::new(text, Some(Level::ltr()));
+    let info = BidiInfo::new(text, Some(base));
     let mut out = String::with_capacity(text.len());
     for para in &info.paragraphs {
         let (levels, runs) = info.visual_runs(para, para.range.clone());
@@ -122,6 +134,22 @@ mod tests {
     }
 
     #[test]
+    fn right_to_left_base_puts_trailing_punctuation_first() {
+        // "Save as…" and "Open recent files" in Hebrew: the words run from the right, and the
+        // ellipsis that ends the label is drawn at its left end.
+        assert_eq!(visual_rtl("שמירה בשם…"), "…בשם שמירה");
+        assert_eq!(visual_rtl("פתיחת קבצים אחרונים"), "אחרונים קבצים פתיחת");
+        assert_eq!(visual_rtl("קובץ"), "קובץ");
+        // Latin names and placeholders keep their own order, placed in reading order from the right.
+        assert_eq!(visual_rtl("ייצוא ל-Word…"), "…Word-ל ייצוא");
+        assert_eq!(visual_rtl("פתיחת {name}"), "{name} פתיחת");
+        assert_eq!(visual_rtl("גרסה 0.4.0"), "0.4.0 גרסה");
+        for s in ["", "PDF", "Save as…", "{n} pages"] {
+            assert!(matches!(visual_rtl(s), Cow::Borrowed(v) if v == s), "{s:?}");
+        }
+    }
+
+    #[test]
     fn direction_controls_are_not_drawn() {
         assert_eq!(visual("\u{202B}واحد اثنين\u{202C}.pdf"), "اثنين واحد.pdf");
         assert_eq!(visual("\u{200F}واحد\u{061C}"), "واحد");
@@ -142,8 +170,9 @@ mod tests {
             long.as_str(),
         ];
         for s in odd {
-            let v = visual(s);
-            assert!(v.chars().count() <= s.chars().count(), "{:?}", s.chars().take(12).collect::<String>());
+            for v in [visual(s), visual_rtl(s)] {
+                assert!(v.chars().count() <= s.chars().count(), "{:?}", s.chars().take(12).collect::<String>());
+            }
         }
     }
 }

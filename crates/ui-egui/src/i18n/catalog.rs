@@ -155,6 +155,18 @@ impl Catalog {
         (c, errors)
     }
 
+    /// The same catalog with every translation passed through `f` (display order for a
+    /// right-to-left language). Lookup keys are untouched.
+    pub fn map_text(self, f: impl Fn(&str) -> String) -> Catalog {
+        let map = |m: HashMap<String, String>| m.into_iter().map(|(k, v)| (k, f(&v))).collect::<HashMap<_, _>>();
+        Catalog {
+            plain: map(self.plain),
+            contextual: self.contextual.into_iter().map(|(ctx, m)| (ctx, map(m))).collect(),
+            ids: map(self.ids),
+            plurals: self.plurals.into_iter().map(|(k, forms)| (k, forms.iter().map(|v| f(v)).collect())).collect(),
+        }
+    }
+
     pub fn plain(&self, s: &str) -> Option<&str> {
         self.plain.get(s).map(String::as_str)
     }

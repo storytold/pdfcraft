@@ -1,0 +1,161 @@
+# Hebrew (he) catalog. Format: see the header of ja.tsv
+# (context <TAB> source <TAB> translation; @id, @plural and other contexts; escapes \n \t \\).
+# Plural forms (see `plural_he` in i18n/mod.rs): one (1) | two (2) | other (0, 3+).
+#
+# Written in logical order, as Hebrew is typed. The language is registered with `rtl: true`, so
+# the catalog is put in display order when it loads (`bidi::visual_rtl`): egui lays every label
+# out left to right.
+#
+# Clean-room: written from the meaning of the English labels in common Hebrew desktop style
+# (commands are verbal nouns: "שמירה", "פתיחה…"; instructions address the user in the plural
+# imperative); not taken from Adobe Acrobat's Hebrew localisation or any other product's
+# translation. Terminology: comments are "הערות", pages are "עמודים", form fields are "שדות טופס",
+# stamps are "חותמות". Product and format names (PdfCraft, PDF, Word, HTML…) stay in Latin
+# letters; the trailing "…" of dialog commands is kept. Covers the menus, Preferences and
+# Fill & Sign so far; other labels show in English.
+
+	Menu	תפריט
+	File	קובץ
+	Edit	עריכה
+	Pages	עמודים
+	View	תצוגה
+	Help	עזרה
+	Zoom	זום
+	Actual size	גודל אמיתי
+	Zoom to page level	עמוד שלם
+	Fit to width	התאמה לרוחב
+	Display theme	ערכת תצוגה
+	Side panels	חלוניות צד
+	Preferences	העדפות
+	Preferences…	העדפות…
+	Interface language	שפת הממשק
+	Identity	זהות
+	Name on new comments	השם בהערות חדשות
+	Enable Acrobat JavaScript	הפעלת Acrobat JavaScript
+	OK	אישור
+	Cancel	ביטול
+	Apply	החלה
+	Clear	ניקוי
+	Browse…	עיון…
+	Open…	פתיחה…
+	Open Recent	פתיחת קובץ אחרון
+	Pin folder to Home…	הצמדת תיקייה למסך הבית…
+	No recent files	אין קבצים אחרונים
+	New blank PDF	PDF ריק חדש
+	Create PDF from file…	יצירת PDF מקובץ…
+	Create PDF from images…	יצירת PDF מתמונות…
+	Create PDF from multiple files…	יצירת PDF מכמה קבצים…
+	Create PDF from clipboard	יצירת PDF מהלוח
+	Combine files…	איחוד קבצים…
+	Save	שמירה
+	Save as…	שמירה בשם…
+	Close file	סגירת הקובץ
+	Close all	סגירת הכול
+	Revert	חזרה לגרסה השמורה
+	Print…	הדפסה…
+	Document properties…	מאפייני המסמך…
+	Export to image…	ייצוא לתמונה…
+	Reduce file size…	הקטנת גודל הקובץ…
+	Optimize PDF…	אופטימיזציה של PDF…
+	Export to text…	ייצוא לטקסט…
+	Export to Word…	ייצוא ל-Word…
+	Export to HTML…	ייצוא ל-HTML…
+	Export to RTF…	ייצוא ל-RTF…
+	Export all images…	ייצוא כל התמונות…
+	Protect using password…	הגנה באמצעות סיסמה…
+	Remove security	הסרת האבטחה
+	Security properties…	מאפייני אבטחה…
+	Undo	ביטול פעולה
+	Redo	ביצוע מחדש
+	Undo {action}	ביטול: {action}
+	Redo {action}	ביצוע מחדש: {action}
+	Find…	חיפוש…
+	Advanced search…	חיפוש מתקדם…
+	Take a snapshot	צילום מסך
+	Clear form	ניקוי הטופס
+	Copy pages	העתקת עמודים
+	Cut pages	גזירת עמודים
+	Paste pages	הדבקת עמודים
+	Find tools and commands…	חיפוש כלים ופקודות…
+	Fit visible	התאמה לתוכן הגלוי
+	Marquee zoom	זום לאזור נבחר
+	Full screen mode	מסך מלא
+	Read mode	מצב קריאה
+	Switch light / dark theme	מעבר בין ערכה בהירה לכהה
+	Comments panel	חלונית הערות
+	Form fields panel	חלונית שדות טופס
+	Signatures panel	חלונית חתימות
+	Organize pages	סידור עמודים
+	New bookmark	סימנייה חדשה
+	Rotate pages clockwise	סיבוב עמודים עם כיוון השעון
+	Rotate pages counterclockwise	סיבוב עמודים נגד כיוון השעון
+	Delete pages	מחיקת עמודים
+	Insert blank page	הוספת עמוד ריק
+	Rotate pages…	סיבוב עמודים…
+	Duplicate pages	שכפול עמודים
+	Crop pages	חיתוך עמודים
+	Set page boxes…	הגדרת תיבות עמוד…
+	Insert pages from file…	הוספת עמודים מקובץ…
+	Replace pages…	החלפת עמודים…
+	Extract pages…	חילוץ עמודים…
+	Split document…	פיצול המסמך…
+	Number pages…	מספור עמודים…
+	Go to page…	מעבר לעמוד…
+	Keyboard shortcuts	קיצורי מקלדת
+	Join the ArtCraft Discord	הצטרפות לקהילת ArtCraft ב-Discord
+	PdfCraft web page	דף האינטרנט של PdfCraft
+	PdfCraft on GitHub	PdfCraft ב-GitHub
+	ArtCraft website	אתר ArtCraft
+	Check for updates…	בדיקת עדכונים…
+	About PdfCraft	אודות PdfCraft
+	Auto	אוטומטי
+	Continuous scrolling	גלילה רציפה
+	Single page	עמוד בודד
+	Two-page view	תצוגת שני עמודים
+	Show cover page in two-page view	הצגת עמוד שער בתצוגת שני עמודים
+	Page display	תצוגת עמודים
+	Page display: {layout}	תצוגת עמודים: {layout}
+	Default page display	תצוגת עמודים ברירת מחדל
+	Default zoom	זום ברירת מחדל
+	Custom	מותאם אישית
+	Fit to width scrolling	גלילה עם התאמה לרוחב
+	Fit one full page	עמוד שלם אחד
+	Fill & Sign	מילוי וחתימה
+	Fill	מילוי
+	Sign	חתימה
+	Signature	חתימה
+	Signatures	חתימות
+	Stamp	חותמת
+	Stamps	חותמות
+	Stamp palette	לוח חותמות
+	Add a stamp	הוספת חותמת
+	Add stamp	הוספת חותמת
+	Add signature	הוספת חתימה
+	Create custom stamp…	יצירת חותמת מותאמת אישית…
+	Create Custom Stamp	יצירת חותמת מותאמת אישית
+	Delete stamp	מחיקת חותמת
+	Select a file for the stamp	בחירת קובץ לחותמת
+	{file} is too large for a stamp (at most {n} MB)	הקובץ {file} גדול מדי לחותמת (עד {n} MB)
+	Sign Here	חתמו כאן
+	Fill & Sign: add text	מילוי וחתימה: הוספת טקסט
+	Fill & Sign: checkmark	מילוי וחתימה: סימן וי
+	Fill & Sign: cross	מילוי וחתימה: סימן איקס
+	Fill & Sign: dot	מילוי וחתימה: נקודה
+	Fill & Sign: line	מילוי וחתימה: קו
+	Fill & Sign: date	מילוי וחתימה: תאריך
+	Fill & Sign: sign	מילוי וחתימה: חתימה
+	Fill & Sign: initials	מילוי וחתימה: ראשי תיבות
+	Fill & Sign: change signature	מילוי וחתימה: שינוי החתימה
+	Fill & Sign: change initials	מילוי וחתימה: שינוי ראשי התיבות
+	Fill & Sign: remove saved signature	מילוי וחתימה: הסרת החתימה השמורה
+	Fill in {name}	מילוי {name}
+	signature	החתימה
+	initials	ראשי התיבות
+	Change {what}	שינוי {what}
+	Create {what}	יצירת {what}
+	Draw your {what} below.	ציירו את {what} שלכם למטה.
+	Type your {what}.	הקלידו את {what} שלכם.
+	Draw	ציור
+	Image	תמונה
+	Type text	הקלדת טקסט
+	Couldn't import the signature image: {e}	לא ניתן לייבא את תמונת החתימה: {e}
