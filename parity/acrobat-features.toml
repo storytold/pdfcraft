@@ -1194,8 +1194,11 @@ evidence = [
     "crates/ui-egui/tests/windows.rs::new_view_opens_second_window",
     "crates/ui-egui/tests/windows.rs::move_tab_new_moves",
     "crates/ui-egui/tests/windows.rs::root_close_promotes_child",
+    "crates/ui-egui/tests/windows.rs::closing_other_tabs_asks_about_every_unsaved_document_in_turn",
+    "crates/ui-egui/tests/windows.rs::the_combine_tab_of_the_main_window_survives_its_promotion",
+    "crates/ui-egui/tests/control.rs::input_requests_take_a_window_and_refuse_one_that_does_not_exist",
 ]
-notes = "Same document in several windows with shared undo, unsaved state and live updates (a comment redraws one page in the other window); tab context menu; windows come back with the last session; control channel and CLI take --window. Missing: dragging a tab out of the strip or between windows; the web build has one window; the main window's input, widget tree and screenshots are the only ones ui.inspect/click/key/screenshot reach (eframe ignores screenshot requests for extra windows); four windows cost about 5x one in a debug build."
+notes = "Same document in several windows with shared undo, unsaved state and live updates (a comment redraws one page in the other window; two windows changing it in one frame both reach each other); an active search runs again; open editors keep their text and ask once after a change from another window; selections follow moved pages; Close other tabs asks about each unsaved document in turn; tab context menu; windows come back with the last session; control channel and CLI take --window for every ui.* method (each window has its own widget tree and input). Missing: dragging a tab out of the strip or between windows; the web build has one window; ui.screenshot works for the main window only (eframe ignores screenshot requests for extra windows); file-drag pointer for extra windows is macOS-only and checked by hand; four windows cost about 5x one in a debug build (deferred viewports would be plan B); several checks (click/type in a second window, system close button, promotion on screen, Windows/X11/Wayland) were not done by hand."
 
 [[feature]]
 id = "view.split-window"
