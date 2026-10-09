@@ -65,6 +65,25 @@ copy_font_licences() {
   done
 }
 
+# Fetch the OCR models into a package directory (#103): `cargo xtask models DEST` downloads every
+# ATTRIBUTION.toml `kind = "model"` file, verified by SHA-256, with its licence text and an
+# ATTRIBUTION.txt crediting them. DEST must be where pdfcraft_ocr::Models::dirs_beside_exe looks
+# from the installed executable. Nothing here names a model file, so a model added to the manifest
+# later ships without changing the packaging.
+stage_models() {
+  local dest="$1"
+  mkdir -p "$dest"
+  dest="$(cd "$dest" && pwd)"
+  (cd "$ROOT" && cargo xtask models "$dest")
+  rm -f "$dest"/*.part
+  if ! ls "$dest"/*.LICENCE.txt >/dev/null 2>&1 || [ ! -s "$dest/ATTRIBUTION.txt" ]; then
+    echo "error: no OCR models in $dest after cargo xtask models" >&2
+    exit 1
+  fi
+  echo "OCR models in $dest:"
+  ls -l "$dest"
+}
+
 # Portable SHA-256 of a file (prints just the hash).
 sha256() {
   if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi

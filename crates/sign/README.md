@@ -38,7 +38,10 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   validity). `dss::embed` merges revocation evidence into the catalog's `/DSS` with `/VRI`
   entries keyed per signature (uppercase-hex SHA-1 of `/Contents`), deduplicating
   byte-identical blobs — sign → DSS → timestamp makes a B-LTA file, and the change classifier
-  treats the store as a permitted change. `revocation` parses and verifies RFC 5280 CRLs and
+  treats the store as a permitted change: only objects reached through `/Certs`, `/CRLs`,
+  `/OCSPs` and `/VRI` with the shape of their role, and new or only grown since the signature,
+  count (a `/DSS` entry naming a page's contents, or a `/Type /DSS` label, does not).
+  `revocation` parses and verifies RFC 5280 CRLs and
   RFC 6960 OCSP responses (responder identity, OCSP-signing EKU for delegated responders,
   CertID hash matching, validity windows); validation checks embedded evidence against the
   signer's chain and a verified revocation invalidates the signature.
@@ -53,6 +56,22 @@ ECDSA P-256/P-384; the store integration is tested with software-backed keys.
   revisions are diffed against the signed one, and the changes are classified (signing, form
   fill, comments, metadata, page content, document structure) under the DocMDP permissions.
   The verdict follows Acrobat: valid, unknown (intact but the identity isn't trusted) or invalid.
+- **Chains are checked, not just linked.** `x509::build_chain` only takes an issuer whose key
+  verifies the certificate below it *and* that may issue: `basicConstraints` CA:TRUE (an old v1
+  self-signed root without constraints counts), `keyCertSign` when it has a key usage, a
+  `pathLenConstraint` that allows the CAs below it, and, given the signing time, validity then.
+  Certificates embedded in a document are in the pool too, so an ordinary subscriber certificate
+  can never vouch for another one; when an issuer is refused, the signature's details say why.
+- **BER as well as DER.** The CMS is read with `der::Tlv::parse_ber`, as Windows CryptoAPI, Adobe
+  PPKMS, DocuSign, Documenso and `openssl cms -stream` write it: indefinite lengths and an
+  OCTET STRING split into segments. Only the structure is read that way; certificates and signed
+  attributes are still verified over their own exact bytes (signed attributes written with an
+  indefinite length are re-encoded as DER first, as RFC 5652 §5.4 has them signed). Nesting is
+  bounded, and the details say that the signature was BER. High tag numbers are not read.
+- **Later changes are classified narrowly.** Only the catalog's own `/Metadata` stream is the
+  document's XMP, and only objects reached through the `/DSS` keys above are the security store. A
+  `/Type /Metadata` or `/Type /DSS` *label* on any other dictionary or stream (a page's Form
+  XObject, say) makes nothing permitted, at every DocMDP level.
 - **Strict in what it checks, tolerant where signers differ.** RSA PKCS #1 signatures are checked
   against the one encoding the digest should have, built here and compared byte for byte; the
   `DigestInfo` may omit its NULL parameter, as older signers write it (RFC 8017 App. B.1), but a
