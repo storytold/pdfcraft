@@ -7,7 +7,7 @@ use pdfcraft_ui_egui::theme::{ThemeKind, ThemePreference, Tokens};
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1100.0, 800.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app
     });
@@ -85,16 +85,16 @@ fn toolbar_and_view_menu_share_three_state_preferences() {
 #[test]
 fn saved_preferences_restore_with_legacy_light_dark_settings() {
     for (value, preference) in [("light", ThemePreference::Light), ("dark", ThemePreference::Dark), ("system", ThemePreference::System)] {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.set_option("theme", value).unwrap();
         let saved = app.persist();
-        let mut restored = PdfCraftApp::new();
+        let mut restored = PdfCraftApp::new_for_test();
         restored.set_option("language", "en").unwrap();
         restored.restore(&saved);
         assert_eq!(restored.theme_preference, preference);
     }
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::new_for_test();
     app.set_option("language", "en").unwrap();
     app.restore(r#"{"theme":"Dark"}"#);
     assert_eq!(app.theme_preference, ThemePreference::Dark);
@@ -109,7 +109,7 @@ fn saved_preferences_restore_with_legacy_light_dark_settings() {
 
 #[test]
 fn commands_and_options_apply_before_the_first_frame() {
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::new_for_test();
     app.set_option("language", "en").unwrap();
     app.run_command("view.theme.dark");
     assert_eq!(app.theme_preference, ThemePreference::Dark);

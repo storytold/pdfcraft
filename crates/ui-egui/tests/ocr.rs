@@ -18,7 +18,7 @@ fn scan() -> Vec<u8> {
 #[test]
 fn recognize_text_dialog_adds_searchable_text() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("scan.pdf", None, scan()).unwrap();
         app.run_inline = true;
@@ -52,7 +52,7 @@ fn recognize_text_in_multiple_files_writes_searchable_copies() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-ui-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::new_for_test();
     app.set_option("language", "en").unwrap();
     app.run_inline = true;
     app.export_dir_override = Some(dir.to_string_lossy().into_owned());

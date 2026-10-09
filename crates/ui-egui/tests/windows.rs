@@ -6,7 +6,7 @@ use pdfcraft_ui_egui::{PdfCraftApp, WindowId};
 
 fn form_harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app.set_option("left", "closed").unwrap();
@@ -131,7 +131,7 @@ use egui_kittest::kittest::Queryable;
 
 fn two_docs_harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("one.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app.open_bytes("two.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
@@ -295,7 +295,7 @@ fn copy_path_puts_the_path_on_the_clipboard() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
         let file = file.clone();
         move |_cc| {
-            let mut app = PdfCraftApp::new();
+            let mut app = PdfCraftApp::new_for_test();
             app.set_option("language", "en").unwrap();
             app.open_path(&file);
             app
@@ -508,7 +508,7 @@ fn an_open_request_from_the_system_shows_a_file_that_is_open_already() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
         let (file, go) = (file.clone(), go.clone());
         move |_cc| {
-            let mut app = PdfCraftApp::new();
+            let mut app = PdfCraftApp::new_for_test();
             app.set_option("language", "en").unwrap();
             app.open_path(&file);
             app.open_bytes("other.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
@@ -575,7 +575,7 @@ fn the_last_session_remembers_every_window_and_a_shared_file_opens_once() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
         let (a, b) = (a.clone(), b.clone());
         move |_cc| {
-            let mut app = PdfCraftApp::new();
+            let mut app = PdfCraftApp::new_for_test();
             app.set_option("language", "en").unwrap();
             app.reopen_last_session = true;
             app.open_path(&a);
@@ -592,7 +592,7 @@ fn the_last_session_remembers_every_window_and_a_shared_file_opens_once() {
     let value: serde_json::Value = serde_json::from_str(&settings).unwrap();
     assert_eq!(value["last_session"]["windows"].as_array().map(Vec::len), Some(1), "{value}");
 
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::new_for_test();
     app.restore(&settings);
     app.reopen_last_files(&[]);
     assert_eq!(app.views.len(), 2, "the main window's tabs");
@@ -614,7 +614,7 @@ fn a_session_with_a_broken_window_still_restores() {
         "last_session": {"files": [{"path": a}], "windows": [{"files": [{"path": a}], "rect": [f64::NAN, 1e300, -4, 0]}, {"files": [{"path": "/does/not/exist.pdf"}]}]},
     })
     .to_string();
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::new_for_test();
     app.restore(&settings);
     app.reopen_last_files(&[]);
     assert_eq!(app.window_count(), 2, "the window with the missing file is not left empty");
@@ -787,7 +787,7 @@ fn a_page_deleted_in_one_window_leaves_the_other_window_drawing_without_a_stale_
 
 fn four_docs_harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         for name in ["a.pdf", "b.pdf", "c.pdf", "d.pdf"] {
             app.open_bytes(name, None, include_bytes!("data/form.pdf").to_vec()).unwrap();
@@ -871,7 +871,7 @@ fn quitting_with_the_question_answered_in_a_child_window_remembers_every_window(
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
         let (a, b) = (a.clone(), b.clone());
         move |_cc| {
-            let mut app = PdfCraftApp::new();
+            let mut app = PdfCraftApp::new_for_test();
             app.set_option("language", "en").unwrap();
             app.reopen_last_session = true;
             app.open_path(&a);

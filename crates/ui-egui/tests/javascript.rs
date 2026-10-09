@@ -32,7 +32,7 @@ fn form() -> Vec<u8> {
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, form()).unwrap();
         app
@@ -98,7 +98,7 @@ fn document_scripts_and_preferences() {
     h.run_steps(2);
     assert!(!h.state().session.javascript());
     let saved = h.state().persist();
-    let mut fresh = PdfCraftApp::new();
+    let mut fresh = PdfCraftApp::new_for_test();
     fresh.set_option("language", "en").unwrap();
     fresh.restore(&saved);
     assert!(!fresh.session.javascript(), "the preference is remembered");
@@ -109,7 +109,7 @@ fn merge_data_files_into_a_spreadsheet() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-merge-ui-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("report.csv");
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::new_for_test();
     app.set_option("language", "en").unwrap();
     app.save_override = Some(out.to_string_lossy().into_owned());
     app.merge_data_files(vec![("form.pdf".into(), form())]);
@@ -123,7 +123,7 @@ fn merge_data_files_into_a_spreadsheet() {
 fn prepare_a_form_detects_fields_on_a_paper_form() {
     let paper = pdfcraft_engine::Session::new().create_from_text("t", "Name: ____________________\n\nPhone: ____________________").unwrap().to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("paper.pdf", None, paper.clone()).unwrap();
         app

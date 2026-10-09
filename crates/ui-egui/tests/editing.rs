@@ -36,7 +36,7 @@ fn fixture(n: usize) -> Vec<u8> {
 
 fn harness(pages: usize, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, fixture(pages)).expect("fixture opens");
         setup(&mut app);
@@ -415,7 +415,7 @@ impl Drop for TempPdfs {
 /// The app with Preferences ▸ Reopen the files that were open when PdfCraft last closed on.
 fn session_harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.reopen_last_session = true;
         setup(&mut app);
@@ -471,7 +471,7 @@ fn quitting_with_unsaved_changes_still_remembers_every_file() {
         h.run_steps(3);
     }
     assert!(h.state().views.is_empty());
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::new_for_test();
     app.restore(&h.state().persist());
     app.reopen_last_files(&[]);
     assert_eq!(open_paths(&app), files, "both files come back");
@@ -482,21 +482,21 @@ fn quitting_with_unsaved_changes_still_remembers_every_file() {
 fn the_last_session_is_off_by_default_and_skips_missing_and_duplicate_files() {
     let dir = TempPdfs::new("skip");
     let (a, b) = (dir.file("a.pdf", 1), dir.file("b.pdf", 1));
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::new_for_test();
     app.open_path(&a);
     app.open_path(&b);
     let off: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
     assert!(off["last_session"].is_null(), "nothing is kept while the preference is off");
     app.reopen_last_session = true;
     let settings = app.persist();
-    let mut later = PdfCraftApp::new();
+    let mut later = PdfCraftApp::new_for_test();
     later.restore(&settings);
     later.reopen_last_session = false;
     later.reopen_last_files(&[]);
     assert!(later.views.is_empty(), "turned off again: nothing reopens");
     // b.pdf is gone, and a.pdf is about to open from the command line.
     std::fs::remove_file(&b).unwrap();
-    let mut later = PdfCraftApp::new();
+    let mut later = PdfCraftApp::new_for_test();
     later.restore(&settings);
     later.reopen_last_files(&[a]);
     assert!(later.views.is_empty(), "neither opens from the session");
@@ -509,7 +509,7 @@ fn save_prompt_stays_inside_the_screen_for_a_long_filename() {
     let name = "Psychology_ The Science of Mind and Behaviour, -- Nigel Holt, Andy Bremner, Michael \
                 Vliek, Ed Sutherland, -- 5, 2024 -- McGraw-Hill Education (UK) Ltd -- isbn13 97815268.pdf";
     let mut h = Harness::builder().with_size(egui::vec2(1365.0, 719.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes(name, None, fixture(1)).expect("fixture opens");
         app.close_request = Some(CloseRequest::Tab(app.views[0].id));
@@ -544,7 +544,7 @@ fn save_prompt_fits_the_smallest_window_whatever_the_name() {
     for name in names {
         let start: String = name.chars().take(10).collect();
         let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
-            let mut app = PdfCraftApp::new();
+            let mut app = PdfCraftApp::new_for_test();
             app.set_option("language", "en").unwrap();
             app.open_bytes(&name, None, fixture(1)).expect("fixture opens");
             app.close_request = Some(CloseRequest::Tab(app.views[0].id));
@@ -934,7 +934,7 @@ fn columns_resize_and_the_layout_is_kept_in_the_settings() {
     let size_index = pdfcraft_ui_egui::SortKey::Size as usize;
     assert!(widths[size_index] > 120.0, "{widths:?}");
     let saved = h.state().persist();
-    let mut fresh = PdfCraftApp::new();
+    let mut fresh = PdfCraftApp::new_for_test();
     fresh.set_option("language", "en").unwrap();
     fresh.restore(&saved);
     assert_eq!(fresh.combine_columns, h.state().combine_columns);
@@ -1240,7 +1240,7 @@ fn save_pages_writes_what_the_grid_shows() {
     h.get_by_label("Save pages").click();
     h.run_steps(4);
     assert!(!dirty(&h));
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::new_for_test();
     app.set_option("language", "en").unwrap();
     app.open_bytes("saved.pdf", None, std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(texts_of(&app, 0), ["Page 1", "Page 3"]);
@@ -1312,7 +1312,7 @@ fn protected_with(algorithm: pdfcraft_cos::Algorithm, user: &str, owner: &str, p
 #[test]
 fn password_prompt_opens_and_security_tab_reports_the_details() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("secret.pdf", None, protected("pw", "owner", -1)).unwrap();
         app
@@ -1337,7 +1337,7 @@ fn password_prompt_opens_and_security_tab_reports_the_details() {
 #[test]
 fn restricted_documents_show_a_notice_and_block_page_changes() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("locked.pdf", None, protected("", "owner", 0b0100)).unwrap(); // opens without a password
         app.set_option("organize", "on").unwrap();
@@ -1360,7 +1360,7 @@ fn restricted_documents_show_a_notice_and_block_page_changes() {
 
 #[test]
 fn replace_pages_dialog_swaps_page_content() {
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::new_for_test();
     app.set_option("language", "en").unwrap();
     app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
     app.views[0].select_pages(&[1]);
@@ -1486,7 +1486,7 @@ fn source_font_fixture() -> Vec<u8> {
 
 fn open_source_font_fixture() -> Harness<'static, PdfCraftApp> {
     Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("fonts.pdf", None, source_font_fixture()).expect("font fixture opens");
         app
@@ -1587,7 +1587,7 @@ fn double_drawn() -> Vec<u8> {
 #[test]
 fn editing_a_double_drawn_line_replaces_every_copy() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("bold.pdf", None, double_drawn()).expect("opens");
         app
@@ -1620,7 +1620,7 @@ fn editing_existing_images_on_the_page() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("picture.png", None, png.clone()).expect("opens");
         app
@@ -1802,7 +1802,7 @@ fn a_quick_flick_on_either_edge_rewraps_the_paragraph() {
 /// The Pages panel, in a window tall enough to show every thumbnail of a short fixture.
 fn pages_panel(pages: usize) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, fixture(pages)).expect("fixture opens");
         app.set_option("panel", "pages").unwrap();

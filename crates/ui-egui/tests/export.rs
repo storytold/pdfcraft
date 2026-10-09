@@ -19,7 +19,7 @@ fn export_dialogs_write_images_and_text() {
     std::fs::create_dir_all(&dir).unwrap();
     let d = dir.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
         app.export_dir_override = Some(d.to_string_lossy().into_owned());

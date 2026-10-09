@@ -37,7 +37,7 @@ fn checking_fixing_skipping_and_reporting() {
     std::fs::create_dir_all(&dir).unwrap();
     let d = dir.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("notes.pdf", None, FIXTURE.to_vec()).unwrap();
         app.export_dir_override = Some(d.to_string_lossy().into_owned());
@@ -110,7 +110,7 @@ trailer << /Root 1 0 R >>
 #[test]
 fn setting_alternate_text_figure_by_figure() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("figures.pdf", None, FIGURES.to_vec()).unwrap();
         app

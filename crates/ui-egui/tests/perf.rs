@@ -99,7 +99,7 @@ fn scrolling_a_500_page_document_stays_within_the_frame_budget() {
     let bytes = big(500);
     let t0 = std::time::Instant::now();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("big.pdf", None, bytes).expect("opens");
         app
@@ -124,7 +124,7 @@ fn panels_with_hundreds_of_items_stay_within_the_frame_budget() {
     for panel in ["comments", "pages", "fields"] {
         let b = bytes.clone();
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-            let mut app = PdfCraftApp::new();
+            let mut app = PdfCraftApp::new_for_test();
             app.set_option("language", "en").unwrap();
             app.open_bytes("big.pdf", None, b).expect("opens");
             app.set_option("panel", panel).unwrap();
@@ -167,7 +167,7 @@ fn four_windows_cost_a_few_times_one_window() {
     let measure = |windows: usize, distinct_documents: bool| {
         let b = bytes.clone();
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-            let mut app = PdfCraftApp::new();
+            let mut app = PdfCraftApp::new_for_test();
             app.set_option("language", "en").unwrap();
             app.open_bytes("big.pdf", None, b).expect("opens");
             app

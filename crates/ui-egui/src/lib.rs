@@ -686,6 +686,16 @@ impl Default for PdfCraftApp {
 }
 
 impl PdfCraftApp {
+    /// An app whose interface language is English whatever the machine's locale is: tests find
+    /// widgets by their English labels (`tests/language.rs` keeps tests from using
+    /// [`Self::new`] directly).
+    #[doc(hidden)]
+    pub fn new_for_test() -> Self {
+        let mut app = Self::new();
+        app.language = "en".to_owned();
+        app
+    }
+
     pub fn new() -> Self {
         let WindowState {
             views,

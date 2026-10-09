@@ -25,7 +25,7 @@ trailer << /Root 1 0 R >>
 
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
@@ -562,7 +562,7 @@ fn hovering_a_comment_shows_its_author_and_text() {
         "8 0 obj << /Type /Annot /Subtype /Square /Rect [50 50 150 120] /C [1 0 0] /T (Ada) /Contents (Check this figure) >> endobj\ntrailer",
     );
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("hover.pdf", None, pdf.into_bytes()).expect("opens");
         app.set_option("left", "closed").unwrap();
@@ -646,7 +646,7 @@ fn a_closed_comments_panel_stays_closed_when_picking_comment_tools() {
         h.run_steps(2);
         assert_eq!(h.state().right, None, "{tool} reopened the closed Comments panel");
     }
-    let mut again = PdfCraftApp::new();
+    let mut again = PdfCraftApp::new_for_test();
     again.restore(&h.state().persist());
     assert!(again.comments_panel_closed, "the choice survives a restart");
     // Opening it again from the rail lets the tools open it once more.

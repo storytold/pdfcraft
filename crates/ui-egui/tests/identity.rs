@@ -20,7 +20,7 @@ trailer << /Root 1 0 R >>
 #[test]
 fn the_identity_name_signs_new_comments_and_is_remembered() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, PDF.to_vec()).expect("opens");
         app.set_option("author", "Tester").unwrap();
@@ -62,7 +62,7 @@ fn the_identity_name_signs_new_comments_and_is_remembered() {
     }
     assert_eq!(author(&h).as_deref(), Some("Grace Hopper"));
     // It survives a restart; an empty or missing name keeps the default, and a huge one is cut.
-    let mut restored = PdfCraftApp::new();
+    let mut restored = PdfCraftApp::new_for_test();
     restored.set_option("language", "en").unwrap();
     restored.restore(&h.state().persist());
     assert_eq!(restored.comment_prefs.author, "Grace Hopper");

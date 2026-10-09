@@ -30,7 +30,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 fn harness_bytes(fixture: &[u8]) -> Harness<'static, PdfCraftApp> {
     let fixture = fixture.to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::new_for_test();
         app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, fixture.clone()).unwrap();
         app.set_option("left", "closed").unwrap();
@@ -154,7 +154,7 @@ fn signing_draws_a_signature_once_and_places_it() {
     assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
     // The signature is remembered (persisted with the app's settings).
     let saved = h.state().persist();
-    let mut again = PdfCraftApp::new();
+    let mut again = PdfCraftApp::new_for_test();
     again.set_option("language", "en").unwrap();
     again.restore(&saved);
     assert!(again.signature.is_some());
@@ -186,7 +186,7 @@ fn typed_signatures_and_initials() {
     assert_eq!(items(&h).iter().filter(|(t, _)| t == "Stamp").count(), 2);
     // Both are remembered.
     let saved = h.state().persist();
-    let mut again = PdfCraftApp::new();
+    let mut again = PdfCraftApp::new_for_test();
     again.set_option("language", "en").unwrap();
     again.restore(&saved);
     assert_eq!(again.signature, h.state().signature);
@@ -241,7 +241,7 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Initials));
     click(&mut h, 40.0, 100.0);
     assert_eq!(items(&h).len(), 3);
-    let mut again = PdfCraftApp::new();
+    let mut again = PdfCraftApp::new_for_test();
     again.set_option("language", "en").unwrap();
     again.restore(&h.state().persist());
     assert_eq!(again.signature, Some(SavedSig::Typed("Grace Hopper".into())));
@@ -297,7 +297,7 @@ fn saved_signature_cards_remove_and_add_without_changing_the_document() {
     h.run_steps(3);
     assert_eq!(h.state().signature, None);
     assert_eq!(h.state().initials, Some(SavedSig::Typed("AL".into())));
-    let mut again = PdfCraftApp::new();
+    let mut again = PdfCraftApp::new_for_test();
     again.set_option("language", "en").unwrap();
     again.restore(&h.state().persist());
     assert_eq!(again.signature, None, "removal survives restart");
@@ -403,7 +403,7 @@ fn image_signatures_and_initials_can_be_imported_placed_and_remembered() {
     assert_eq!(doc.can_undo(), Some("Add initials"));
     let settings = state.persist();
     assert!(!settings.contains(&path.to_string_lossy().to_string()), "only the image is saved, never its source path");
-    let mut again = PdfCraftApp::new();
+    let mut again = PdfCraftApp::new_for_test();
     again.set_option("language", "en").unwrap();
     again.restore(&settings);
     assert_eq!(again.signature, state.signature);
@@ -870,7 +870,7 @@ fn image_import_cancel_clear_and_errors_preserve_saved_signatures() {
     h.run_steps(3);
     assert!(h.state().signature_draft.image.is_none());
     // Malformed settings are ignored while legacy typed/drawn values still restore.
-    let mut again = PdfCraftApp::new();
+    let mut again = PdfCraftApp::new_for_test();
     again.set_option("language", "en").unwrap();
     again.restore(r#"{"signature_text":"Ada","signature_image":{"Image":"bm90IGFuIGltYWdl"},"initials":{"Image":"%%%"}}"#);
     assert_eq!(again.signature, Some(SavedSig::Typed("Ada".into())));
