@@ -69,6 +69,35 @@ fn ok(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, pa
 }
 
 #[test]
+fn bookmark_titles_can_be_searched_over_control() {
+    let (mut h, c) = harness();
+    for (index, title, page) in [(0, "Background", 0), (1, "Target chapter", 3)] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark { parent: vec![], index, title: title.into(), page });
+    }
+    ok(&mut h, &c, "ui.set", json!({ "key": "panel", "value": "bookmarks" }));
+    h.run_steps(3);
+    let widgets = ok(&mut h, &c, "ui.inspect", json!({ "query": "Search", "role": "TextInput" }));
+    let rect = &widgets["widgets"][0]["rect"];
+    let x = (rect[0].as_f64().unwrap() + rect[2].as_f64().unwrap()) / 2.0;
+    let y = (rect[1].as_f64().unwrap() + rect[3].as_f64().unwrap()) / 2.0;
+    ok(&mut h, &c, "ui.click", json!({ "x": x, "y": y }));
+    ok(&mut h, &c, "ui.type", json!({ "text": "target" }));
+    h.get_by_label("Target chapter");
+    assert!(h.query_by_label("Background").is_none());
+    ok(&mut h, &c, "ui.click", json!({ "label": "Target chapter" }));
+    assert_eq!(h.state().views[0].current, 3);
+    if let Ok(dir) = std::env::var("PDFCRAFT_BOOKMARK_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/control-filtered-bookmarks.png")).unwrap();
+    }
+    ok(&mut h, &c, "ui.click", json!({ "label": "Clear" }));
+    h.get_by_label("Background");
+    h.get_by_label("Target chapter");
+    if let Ok(dir) = std::env::var("PDFCRAFT_BOOKMARK_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/control-cleared-bookmarks.png")).unwrap();
+    }
+}
+
+#[test]
 fn theme_commands_and_options_report_preference_and_effective_colours() {
     let (mut h, c) = harness();
     h.input_mut().system_theme = Some(egui::Theme::Dark);

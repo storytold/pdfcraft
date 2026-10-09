@@ -486,6 +486,37 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     });
                 });
                 ui.add_space(6.0);
+                let search_id = egui::Id::new(("bookmark_search", id.0));
+                let mut bookmark_query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
+                if panel == RightPanel::Bookmarks && !info.outline.is_empty() {
+                    ui.horizontal(|ui| {
+                        let label = ui.label(tl!("Search"));
+                        let previous = bookmark_query.clone();
+                        let response =
+                            ui.add(egui::TextEdit::singleline(&mut bookmark_query).desired_width(ui.available_width() - 32.0)).labelled_by(label.id);
+                        response.widget_info(|| {
+                            let mut info = egui::WidgetInfo::text_edit(ui.is_enabled(), &previous, &bookmark_query, "");
+                            info.label = Some(tl!("Search").to_string());
+                            info
+                        });
+                        if icons::button(ui, "x", 26.0, false, tl!("Clear")).clicked() {
+                            bookmark_query.clear();
+                        }
+                    });
+                    ui.data_mut(|d| d.insert_temp(search_id, bookmark_query.clone()));
+                    ui.add_space(6.0);
+                }
+                let bookmark_query = bookmark_query.trim().to_lowercase();
+                let mut bookmark_matches =
+                    if panel == RightPanel::Bookmarks { outline_matches(&info.outline, &bookmark_query) } else { std::collections::HashSet::new() };
+                // A new bookmark must stay nameable even when its initial title doesn't match.
+                if let Some((path, _)) = &bm_rename {
+                    let mut ancestor = path.clone();
+                    while !ancestor.is_empty() {
+                        bookmark_matches.insert(ancestor.clone());
+                        ancestor.pop();
+                    }
+                }
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match panel {
                     RightPanel::Comments => {
                         if let Some(e) = crate::comments_panel::show(ui, &t, info, view, prefs, comment_allowed, &mut nav) {
@@ -503,7 +534,12 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             editable: bm_editable,
                             current: view.current,
                             expand: bm_expand,
+                            matches: &bookmark_matches,
+                            searching: !bookmark_query.is_empty(),
                         };
+                        if ctx.searching && bookmark_matches.is_empty() && !info.outline.is_empty() {
+                            ui.label(tl!("No matches."));
+                        }
                         for (i, item) in info.outline.iter().enumerate() {
                             outline_item(ui, &t, info, item, &[i], info.outline.len(), &mut ctx);
                         }
@@ -673,6 +709,30 @@ pub enum BmAction {
     Outdent(Vec<usize>),
 }
 
+/// Matching titles plus their ancestors, keeping document paths rather than filtered indexes.
+fn outline_matches(items: &[OutlineItem], query: &str) -> std::collections::HashSet<Vec<usize>> {
+    let mut matches = std::collections::HashSet::new();
+    if query.is_empty() {
+        return matches;
+    }
+    let mut pending: Vec<_> = items.iter().enumerate().map(|(i, item)| (vec![i], item)).collect();
+    while let Some((path, item)) = pending.pop() {
+        if item.title.to_lowercase().contains(query) {
+            let mut ancestor = path.clone();
+            while !ancestor.is_empty() {
+                matches.insert(ancestor.clone());
+                ancestor.pop();
+            }
+        }
+        for (i, child) in item.children.iter().enumerate() {
+            let mut child_path = path.clone();
+            child_path.push(i);
+            pending.push((child_path, child));
+        }
+    }
+    matches
+}
+
 struct OutlineCtx<'a> {
     nav: &'a mut Option<Nav>,
     action: &'a mut Option<BmAction>,
@@ -681,6 +741,8 @@ struct OutlineCtx<'a> {
     current: usize,
     /// Expand all (`Some(usize::MAX)`), collapse all (`Some(0)`) or expand to a depth, this frame.
     expand: Option<usize>,
+    matches: &'a std::collections::HashSet<Vec<usize>>,
+    searching: bool,
 }
 
 /// The destination page label gets its own right-aligned column in a bookmark row; drawing
@@ -709,13 +771,16 @@ fn ellipsized_prefix(text: &str, mut fits: impl FnMut(&str) -> bool) -> String {
 }
 
 fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineItem, path: &[usize], siblings: usize, cx: &mut OutlineCtx<'_>) {
+    if cx.searching && !cx.matches.contains(path) {
+        return;
+    }
     let depth = path.len() - 1;
     let indent = depth as f32 * 16.0;
     let id = ui.id().with(("outline", path));
     if let Some(levels) = cx.expand {
         ui.data_mut(|d| d.insert_temp(id, depth < levels));
     }
-    let mut open = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(item.open || depth == 0);
+    let mut open = cx.searching || ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(item.open || depth == 0);
     let x_text = indent + 20.0;
     if let Some((rpath, text)) = cx.rename.as_mut()
         && rpath.as_slice() == path
@@ -770,7 +835,7 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
         if !item.children.is_empty() {
             let tri = Rect::from_min_size(pos2(x0, rect.top() + 6.0), vec2(16.0, 16.0));
             icons::paint(ui, tri, if open { "chevron-down" } else { "chevron-right" }, 14.0, t.text_muted);
-            if ui.interact(tri, id.with("tri"), Sense::click()).clicked() {
+            if !cx.searching && ui.interact(tri, id.with("tri"), Sense::click()).clicked() {
                 open = !open;
                 ui.data_mut(|d| d.insert_temp(id, open));
             }
