@@ -71,7 +71,7 @@ fn bmp(password: &str) -> Vec<u8> {
 
 /// The PKCS #12 key derivation function (RFC 7292 Appendix B.2).
 fn pkcs12_kdf(alg: DigestAlg, password: &[u8], salt: &[u8], id: u8, iterations: u32, n: usize) -> Vec<u8> {
-    // Callers only pass the SHA-1/SHA-2 digests PKCS #12 files use (`mac_digest` checks).
+    // Callers only pass the SHA-1/SHA-2 digests PKCS #12 files use (`open` restricts the MAC digest).
     let (u, v) = match alg {
         DigestAlg::Sha1 => (20, 64),
         DigestAlg::Sha224 => (28, 64),
