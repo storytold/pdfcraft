@@ -48,6 +48,9 @@ idna = "1.1"
 icu_properties = "2.3"
 unicode-segmentation = "1.13"
 
+[dev-dependencies]
+ab_glyph = "0.2"
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Already in the graph through lopdf; used only for the local UTC offset ("today"). The workspace
 # entry is std-only; this target adds `clock` for `chrono::Local::now`.

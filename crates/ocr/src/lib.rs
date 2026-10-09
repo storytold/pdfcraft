@@ -2,29 +2,34 @@
 //!
 //! Recognition runs the ocrs engine (MIT/Apache-2.0) with its pre-trained models (CC-BY-SA-4.0,
 //! fetched by `cargo xtask models`; see ATTRIBUTION.toml). The caller renders a page to pixels;
-//! [`Ocr::recognize`] finds the words in them, and [`text_layer`] turns words placed in user space
-//! into page content: invisible text (rendering mode 3) over each word, so the page becomes a
-//! searchable image (Acrobat's "Searchable Image (Exact)": the image is left untouched).
+//! [`Ocr::recognize`] finds text in them. The engine writes placed text as an invisible layer
+//! (rendering mode 3), making a searchable image without changing the original image.
+//! [`text_layer`] is the legacy WinAnsi writer; the engine supplies Unicode fonts for Chinese.
 //!
-//! The models read the Latin alphabet (English and other languages written without accents).
+//! English uses ocrs; Chinese and English mixed text uses PP-OCRv4 on the same local runtime.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use rten_imageproc::BoundingRect;
 use std::path::{Path, PathBuf};
+
+mod chinese;
 
 pub use pdfcraft_fonts::helvetica_width;
 
 /// The model files, as named in ATTRIBUTION.toml.
 pub const DETECTION_MODEL: &str = "text-detection.onnx";
 pub const RECOGNITION_MODEL: &str = "text-recognition.onnx";
+pub const CHINESE_MODEL: &str = "chinese-recognition.onnx";
+pub const CHINESE_DICTIONARY: &str = "chinese-keys.txt";
 
 /// The recognition model's alphabet, as it was trained (ocrs-models' `DEFAULT_ALPHABET`): its
 /// output classes follow this order. The ocrs crate's own copy has an `E` where the training had
 /// `€`, which made a scanned "€250" read as "E250".
 pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/// The languages the models read (ISO 639-1); all use the Latin alphabet without accents.
-pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
+/// The languages the models read (ISO 639-1).
+pub const LANGUAGES: &[(&str, &str)] = &[("en", "English"), ("zh", "Chinese (Simplified) and English")];
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
@@ -38,9 +43,12 @@ pub enum OcrError {
     Recognize(String),
     #[error("the image is empty")]
     EmptyImage,
+    #[error("unsupported OCR language {0:?}; choose en or zh")]
+    Language(String),
 }
 
-/// Where the two model files are.
+/// Where a language's detector and recogniser are. Chinese also requires a dictionary beside
+/// the recognition model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Models {
     pub detection: PathBuf,
@@ -51,16 +59,36 @@ impl Models {
     /// A complete model pair in `dir`, preferring current ONNX files over legacy RTEN files.
     /// An incomplete update never mixes formats or hides an intact legacy pair.
     pub fn in_dir(dir: &Path) -> Option<Models> {
-        [(DETECTION_MODEL, RECOGNITION_MODEL), ("text-detection.rten", "text-recognition.rten")].into_iter().find_map(|(detection, recognition)| {
+        Self::in_dir_for(dir, "en")
+    }
+
+    /// English keeps a complete ONNX pair ahead of a complete legacy RTEN pair, and never mixes
+    /// the two. Chinese uses that same detector with its own recognition model and dictionary.
+    pub fn in_dir_for(dir: &Path, language: &str) -> Option<Models> {
+        let english = [(DETECTION_MODEL, RECOGNITION_MODEL), ("text-detection.rten", "text-recognition.rten")].into_iter().find_map(|(detection, recognition)| {
             let m = Models { detection: dir.join(detection), recognition: dir.join(recognition) };
             (m.detection.is_file() && m.recognition.is_file()).then_some(m)
-        })
+        });
+        match language {
+            "en" => english,
+            "zh" if dir.join(CHINESE_DICTIONARY).is_file() && dir.join(CHINESE_MODEL).is_file() => {
+                let detection = english.as_ref().map(|m| m.detection.clone()).or_else(|| {
+                    [DETECTION_MODEL, "text-detection.rten"].into_iter().map(|name| dir.join(name)).find(|path| path.is_file())
+                })?;
+                Some(Models { detection, recognition: dir.join(CHINESE_MODEL) })
+            }
+            _ => None,
+        }
     }
 
     /// Look for the models: `$PDFCRAFT_MODELS`, then where the release packages install them
     /// beside the executable ([`Models::dirs_beside_exe`]), then the source tree's `assets/models/`.
     pub fn find() -> Option<Models> {
-        Self::search_dirs().iter().find_map(|d| Self::in_dir(d))
+        Self::find_for("en")
+    }
+
+    pub fn find_for(language: &str) -> Option<Models> {
+        Self::search_dirs().iter().find_map(|d| Self::in_dir_for(d, language))
     }
 
     /// The directories [`Models::find`] looks in, in order.
@@ -87,7 +115,8 @@ impl Models {
     }
 }
 
-/// A recognised word: its text and its box in image pixels `[left, top, right, bottom]`.
+/// A recognised text segment and its box in image pixels `[left, top, right, bottom]`.
+/// English segments are words; Chinese segments are whole lines (no inserted spaces).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Word {
     pub text: String,
@@ -109,34 +138,57 @@ impl Line {
 /// A loaded recogniser. Loading takes a moment; keep one and reuse it.
 pub struct Ocr {
     engine: ocrs::OcrEngine,
+    chinese: Option<chinese::Chinese>,
 }
 
 impl Ocr {
     pub fn load(models: &Models) -> Result<Ocr, OcrError> {
         let load = |p: &Path| rten::Model::load_file(p).map_err(|e| OcrError::Load(p.display().to_string(), e.to_string()));
+        let chinese = if models.recognition.file_name().is_some_and(|f| f == CHINESE_MODEL) {
+            Some(chinese::Chinese::load(&models.recognition, &models.recognition.with_file_name(CHINESE_DICTIONARY))?)
+        } else {
+            None
+        };
         let params = ocrs::OcrEngineParams {
             detection_model: Some(load(&models.detection)?),
-            recognition_model: Some(load(&models.recognition)?),
+            recognition_model: if chinese.is_none() { Some(load(&models.recognition)?) } else { None },
             alphabet: Some(ALPHABET.into()),
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
-        Ok(Ocr { engine })
+        Ok(Ocr { engine, chinese })
     }
 
     /// Load the models found by [`Models::find`].
     pub fn find() -> Result<Ocr, OcrError> {
-        Self::load(&Models::find().ok_or(OcrError::NoModels)?)
+        Self::find_for("en")
+    }
+
+    pub fn find_for(language: &str) -> Result<Ocr, OcrError> {
+        if !LANGUAGES.iter().any(|l| l.0 == language) {
+            return Err(OcrError::Language(language.into()));
+        }
+        Self::load(&Models::find_for(language).ok_or(OcrError::NoModels)?)
     }
 
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
     pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
-        if width == 0 || height == 0 || pixels.is_empty() {
+        let count = (width as usize)
+            .checked_mul(height as usize)
+            .filter(|n| *n <= 64 * 1024 * 1024)
+            .ok_or_else(|| OcrError::Recognize("image exceeds 64 megapixels".into()))?;
+        if count == 0 || pixels.is_empty() {
             return Err(OcrError::EmptyImage);
         }
+        let channels = pixels.len() / count;
+        if !pixels.len().is_multiple_of(count) || !matches!(channels, 1 | 3 | 4) {
+            return Err(OcrError::Recognize("image must contain exactly 1, 3 or 4 channels per pixel".into()));
+        }
         // ocrs wants 1 or 3 channels.
-        let rgb: std::borrow::Cow<[u8]> = if pixels.len() == (width * height * 4) as usize {
+        let rgb: std::borrow::Cow<[u8]> = if channels == 4 {
             pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
+        } else if channels == 1 && self.chinese.is_some() {
+            pixels.iter().flat_map(|p| [*p; 3]).collect::<Vec<_>>().into()
         } else {
             pixels.into()
         };
@@ -145,6 +197,25 @@ impl Ocr {
         let input = self.engine.prepare_input(source).map_err(|e| err(&e))?;
         let found = self.engine.detect_words(&input).map_err(|e| err(&e))?;
         let lines = self.engine.find_text_lines(&input, &found);
+        if let Some(chinese) = &self.chinese {
+            if lines.len() > 4096 {
+                return Err(OcrError::Recognize("page has more than 4096 text lines".into()));
+            }
+            let mut result = Vec::new();
+            for line in lines {
+                let rect = line
+                    .iter()
+                    .map(|r| r.bounding_rect())
+                    .fold(None, |rect: Option<rten_imageproc::Rect<f32>>, r| Some(rect.map_or(r, |b| b.union(r))));
+                let Some(r) = rect else { continue };
+                let rect = [r.left(), r.top(), r.right(), r.bottom()];
+                let text = chinese.recognize(&rgb, width, height, rect)?;
+                if !text.is_empty() {
+                    result.push(Line { words: vec![Word { text, rect }] });
+                }
+            }
+            return Ok(result);
+        }
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
         use ocrs::TextItem;
         Ok(read

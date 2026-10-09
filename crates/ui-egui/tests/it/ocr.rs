@@ -44,6 +44,34 @@ fn recognize_text_dialog_adds_searchable_text() {
 }
 
 #[test]
+fn chinese_ocr_language_runs_from_the_dialog() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app.run_inline = true;
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("ocr.recognize"));
+    h.run_steps(2);
+    h.get_by_value("English").click();
+    h.run_steps(1);
+    h.get_by_label("Chinese (Simplified) and English").click();
+    h.run_steps(1);
+    assert_eq!(h.state().ocr_draft.language, "zh");
+    if !pdfcraft_engine::ocr::available_for("zh") {
+        eprintln!("skipped: Chinese OCR models not installed");
+        return;
+    }
+    h.get_by_label("Recognize text").click();
+    h.run_steps(3);
+    assert!(h.state().ocr_run.is_none());
+    let app = h.state();
+    let id = app.active_ids().unwrap().1;
+    assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"));
+}
+
+#[test]
 fn recognize_text_in_multiple_files_writes_searchable_copies() {
     if !pdfcraft_engine::ocr::available() {
         eprintln!("skipped: OCR models not installed");
