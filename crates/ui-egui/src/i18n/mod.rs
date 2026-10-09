@@ -1526,6 +1526,10 @@ mod tests {
         assert_eq!(tr(hu, "Rapport de l'utilisateur.pdf"), "Rapport de l'utilisateur.pdf");
         assert_eq!(tr_ctx(hu, "signature pad", "Type"), "Gépelés");
         assert_eq!(tr_ctx(hu, "action wizard", "Start"), "Indítás");
+        assert_eq!(tr(hu, "Windows store  ·  "), "Windows-tároló  ·  ");
+        assert_eq!(tr(hu, "Place saved {what}"), "Mentett {what} elhelyezése");
+        assert_eq!(tr(hu, "Remove saved {what}"), "Mentett {what} eltávolítása");
+        assert_eq!(tr(hu, "Squiggly"), "Hullámos aláhúzás");
         // one (1), other (0, 2+)
         assert_eq!((0..=3).map(|n| (hu.0.plural)(n)).collect::<Vec<_>>(), [1, 0, 1, 1]);
         assert_eq!(trn(hu, 0, "{n} page", "{n} pages"), "0 oldal");
@@ -1640,6 +1644,8 @@ mod tests {
         assert_eq!(tr_ctx(uk, "comment menu", "Edit"), "Редагувати");
         assert_eq!(tr_ctx(uk, "signature pad", "Type"), "Ввести");
         assert_eq!(tr_ctx(uk, "action wizard", "Start"), "Почати");
+        assert_eq!(tr(uk, "Subject"), "Тема");
+        assert_eq!(tr_ctx(uk, "certificate", "Subject"), "Власник сертифіката");
         let mut app = crate::PdfCraftApp::default();
         app.set_option("language", "UK").unwrap();
         assert_eq!(app.language, "uk");

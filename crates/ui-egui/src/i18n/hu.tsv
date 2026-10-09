@@ -2052,8 +2052,8 @@ action wizard	Start	Indítás
 # Labels that reach tl!() through a variable (Fill & Sign buttons, link prompts, notices, history labels, checker and certificate rows)
 	Add {what}	{what} hozzáadása
 	Use {what}	{what} használata
-	Place saved {what}	Mentett elem elhelyezése: {what}
-	Remove saved {what}	Mentett elem eltávolítása: {what}
+	Place saved {what}	Mentett {what} elhelyezése
+	Remove saved {what}	Mentett {what} eltávolítása
 	A link	Egy hivatkozás
 	A button	Egy gomb
 	A script	Egy szkript
@@ -2079,7 +2079,7 @@ action wizard	Start	Indítás
 	Basic constraints	Alapvető korlátozások
 	SHA-1 digest	SHA-1 kivonat
 	SHA-256 digest	SHA-256 kivonat
-	Squiggly	Hullámos
+	Squiggly	Hullámos aláhúzás
 	Home / End	Home / End
 	H / Space (hold)	H / szóköz (nyomva tartva)
 	Rotation:	Elforgatás:
