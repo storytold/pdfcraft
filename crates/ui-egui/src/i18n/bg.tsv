@@ -125,6 +125,8 @@
 	Display theme	Тема на показване
 	Side panels	Странични панели
 	Enable Acrobat JavaScript	Включи Acrobat JavaScript
+	Flatten Fill & Sign when saving	Сплескай „Попълни и подпиши“ при запазване
+	Text, marks and signatures become part of the page. Other comments stay editable.	Текстът, маркировките и подписите стават част от страницата. Другите коментари остават редактируеми.
 	OK	OK
 	Cancel	Отказ
 	Close	Затвори
@@ -2049,3 +2051,19 @@ action wizard	Start	Старт
 	Remove from Recent	Премахни от последно отваряните
 	Remove {name} from Recent	Премахни {name} от последно отваряните
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Стандартните шрифтове не могат да покажат „{c}“ ({code}). Засега като текст могат да се добавят само западноевропейски символи.
+	Larger pages	По-големи страници
+	Smaller pages	По-малки страници
+	Reset page size	Възстанови размера на страниците
+	Date format	Формат на датата
+	Fill & Sign dates	Дати при попълване и подписване
+	Pattern	Шаблон
+	Today: {date}	Днес: {date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy или yy година · m или mm месец · mmm или mmmm име на месеца · d или dd ден · ddd или dddd ден от седмицата. H, h, M, s и t са букви за час и не могат да се използват самостоятелно: поставете {escape} пред буква, за да се покаже както е.
+	Same as interface ({language})	Като интерфейса ({language})
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} все още не може да се запише в PDF: текстът при попълване и подписване поддържа само западноевропейски знаци. Изберете числов формат, например dd.mm.yyyy.
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Отваря предпочитанията на драйвера на принтера. Те се запазват за всеки печат от този компютър; избраните тук копия, двустранен печат, сива скала и хартия продължават да важат.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	Собствените настройки на драйвера на принтера за този печат: тава за хартия, вид хартия, довършителна обработка и други.
+	Couldn't open the printer's preferences: {e}	Предпочитанията на принтера не можаха да се отворят: {e}
+	Printer properties	Свойства на принтера
+	Reset to printer defaults	Възстанови настройките по подразбиране на принтера
+	This printer offers no settings of its own.	Този принтер няма собствени настройки.

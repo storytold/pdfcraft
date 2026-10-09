@@ -16,6 +16,7 @@ pub mod actions;
 pub mod catalog;
 pub mod commands;
 pub mod compare;
+pub mod dates;
 pub mod export;
 pub mod js;
 pub mod links;
@@ -1081,6 +1082,9 @@ pub enum Edit {
         comments: bool,
         fields: bool,
     },
+    /// Bake Fill & Sign text, marks and signatures into the page. Other comments and fields stay.
+    /// A no-op (no undo step) when the document has none.
+    FlattenFillSign,
     /// Protect with passwords and permissions (written by the next save, which is a full rewrite).
     Protect(Protection),
     /// Remove password security (needs the owner password).
@@ -1182,6 +1186,7 @@ impl Edit {
             Edit::Flatten { comments: true, fields: false } => "Flatten comments".into(),
             Edit::Flatten { comments: false, fields: true } => "Flatten form fields".into(),
             Edit::Flatten { .. } => "Flatten".into(),
+            Edit::FlattenFillSign => "Flatten Fill & Sign".into(),
             Edit::Protect(_) => "Protect with password".into(),
             Edit::RemoveProtection => "Remove security".into(),
             Edit::Batch { label, .. } => label.clone(),
@@ -1323,7 +1328,8 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
         | Edit::EditPageImage { .. }
-        | Edit::Flatten { .. } => {
+        | Edit::Flatten { .. }
+        | Edit::FlattenFillSign => {
             if p.modify() {
                 Ok(())
             } else {
@@ -1673,6 +1679,10 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             let n = pdfcraft_model::pages(doc).len();
             pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), *comments, *fields)?;
         }
+        Edit::FlattenFillSign => {
+            let n = pdfcraft_model::pages(doc).len();
+            pdfcraft_edit::flatten_fill_sign(doc, &(0..n).collect::<Vec<_>>())?;
+        }
         Edit::Protect(p) => {
             p.validate()?;
             let seed = cx.entropy();
@@ -1889,6 +1899,10 @@ pub struct Session {
     trust: Arc<TrustStore>,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
     js_off: bool,
+    /// Preferences ▸ Date format, when not the default (see [`dates`]).
+    date_format: Option<String>,
+    /// Preferences ▸ Date format ▸ Language, when not following the interface language.
+    date_language: Option<String>,
 }
 
 /// Lay a dynamic XFA form out (pages and fields) and give its widgets appearances.
@@ -2271,6 +2285,10 @@ impl Session {
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
         if let Some(p) = editor.cos.permissions() {
             check_permission(&edit, &p)?;
+        }
+        // Nothing to bake: leave undo history and the dirty flag alone.
+        if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos) {
+            return Ok(());
         }
         let mut next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {

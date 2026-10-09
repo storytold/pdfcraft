@@ -1227,6 +1227,117 @@ fn files_dropped_outside_the_page_grid_still_open_as_documents() {
     assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 2"]);
 }
 
+fn grid_zoom(h: &Harness<'static, PdfCraftApp>) -> f32 {
+    h.state().views[0].grid_zoom()
+}
+
+#[test]
+fn page_grid_zooms_with_its_buttons_keys_and_pinch() {
+    let mut h = organize(12);
+    let width = |h: &Harness<'static, PdfCraftApp>| h.get_by_label("Page 2").rect().left() - h.get_by_label("Page 1").rect().left();
+    let usual = width(&h);
+    h.get_by_label("Larger pages").click();
+    h.run_steps(3);
+    assert_eq!(grid_zoom(&h), 1.25);
+    assert!(width(&h) > usual + 20.0, "the pages are drawn larger");
+    h.get_by_label("Reset page size").click();
+    h.run_steps(3);
+    assert_eq!((grid_zoom(&h), width(&h)), (1.0, usual));
+    h.get_by_label("Smaller pages").click();
+    h.run_steps(3);
+    assert_eq!(grid_zoom(&h), 0.8);
+    assert!(width(&h) < usual - 20.0);
+    // Keys.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num0);
+    h.run_steps(2);
+    assert_eq!(grid_zoom(&h), 1.0);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Equals);
+    h.run_steps(2);
+    assert_eq!(grid_zoom(&h), 1.25);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Minus);
+    h.run_steps(2);
+    assert_eq!(grid_zoom(&h), 1.0);
+    // Pinch (or Ctrl/⌘ + wheel) over the grid; elsewhere it leaves the grid alone.
+    let page = h.get_by_label("Page 1").rect().center();
+    h.hover_at(page);
+    h.run_steps(1);
+    h.event(egui::Event::Zoom(1.5));
+    h.run_steps(2);
+    assert_eq!(grid_zoom(&h), 1.5);
+    h.hover_at(h.get_by_label("Larger pages").rect().center());
+    h.run_steps(1);
+    h.event(egui::Event::Zoom(1.5));
+    h.run_steps(2);
+    assert_eq!(grid_zoom(&h), 1.5, "the pointer was on the toolbar");
+    // It stops at its limits, where the buttons switch off.
+    for _ in 0..12 {
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Equals);
+        h.run_steps(1);
+    }
+    assert_eq!(grid_zoom(&h), 3.0);
+    h.get_by_label("Larger pages").click();
+    h.run_steps(2);
+    assert_eq!(grid_zoom(&h), 3.0);
+    for _ in 0..20 {
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Minus);
+        h.run_steps(1);
+    }
+    assert_eq!(grid_zoom(&h), 0.5);
+    assert!(!dirty(&h), "zooming is not an edit");
+}
+
+#[test]
+fn zoomed_pages_in_view_are_rendered_at_the_size_drawn() {
+    // A long document: sharpness must not depend on how many pages there are.
+    let mut h = harness(400, |app| {
+        app.set_option("organize", "on").unwrap();
+        app.set_option("grid-zoom", "300").unwrap();
+    });
+    let drawn = 146.0 * 3.0 * h.ctx.pixels_per_point();
+    let sharp = |h: &Harness<'static, PdfCraftApp>, page| h.state().views[0].grid_page_pixels(page);
+    for _ in 0..200 {
+        if sharp(&h, 0).is_some_and(|w| w as f32 >= drawn * 0.9) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        h.run_steps(1);
+    }
+    let width = sharp(&h, 0).expect("the first page has a sharp render");
+    assert!((drawn * 0.9..=drawn * 1.6).contains(&(width as f32)), "{width} for {drawn}");
+    assert!(sharp(&h, 399).is_none(), "pages out of view have none");
+    // Zoomed out again, thumbnails are enough and the sharp renders are dropped.
+    h.state_mut().set_option("grid-zoom", "50").unwrap();
+    h.run_steps(3);
+    assert!(sharp(&h, 0).is_none());
+}
+
+#[test]
+fn a_zoomed_page_grid_still_inserts_and_moves_at_the_right_gap() {
+    let dir = temp_path("zoomed-grid");
+    std::fs::create_dir_all(&dir).unwrap();
+    let note = dir.join("note.txt");
+    std::fs::write(&note, "a note").unwrap();
+    let mut h = harness(3, |app| {
+        app.set_option("organize", "on").unwrap();
+        app.set_option("grid-zoom", "200").unwrap();
+        assert!(
+            app.set_option("grid-zoom", "20").is_err() && app.set_option("grid-zoom", "NaN").is_err() && app.set_option("grid-zoom", "big").is_err()
+        );
+    });
+    assert_eq!(grid_zoom(&h), 2.0);
+    h.state_mut().pick_override = Some(vec![note.to_string_lossy().into_owned()]);
+    h.get_by_label("Insert a file before page 2").click();
+    h.run_steps(4);
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "a note", "Page 2", "Page 3"]);
+    // Files dropped over a gap go there too.
+    let gap = h.get_by_label("Insert a file before page 2").rect().center();
+    h.hover_at(gap + egui::vec2(0.0, 60.0));
+    h.run_steps(2);
+    drop_files(&mut h, vec![Dropped("more.txt", b"more".to_vec())]);
+    h.run_steps(4);
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "more", "a note", "Page 2", "Page 3"]);
+}
+
 #[test]
 fn save_pages_writes_what_the_grid_shows() {
     let path = temp_path("grid-save.pdf");
@@ -1351,6 +1462,10 @@ fn restricted_documents_show_a_notice_and_block_page_changes() {
     h.run_steps(3);
     assert_eq!(texts_of(h.state(), 0).len(), 2, "page changes are blocked");
     assert_eq!(h.query_all_by_label_contains("Insert a file").count(), 0, "nothing to insert into");
+    // Looking closer is not a page change.
+    h.get_by_label("Larger pages").click();
+    h.run_steps(2);
+    assert_eq!(grid_zoom(&h), 1.25);
     assert!(!dirty(&h));
     h.get_by_label("Security settings").click();
     h.run_steps(3);
@@ -1897,4 +2012,41 @@ fn print_shortcut_offers_the_pages_picked_in_the_pages_panel() {
     assert_eq!(h.state().print_draft.selected, [1, 3]);
     h.get_by_label("Selected pages (2)");
     h.get_by_label("Sheet 1 of 2");
+}
+
+#[test]
+fn dragging_pages_panel_thumbnails_reorders_pages() {
+    let mut h = harness(4, |app| app.right = Some(pdfcraft_ui_egui::RightPanel::Pages));
+    let before = page_texts(h.state());
+    // The Pages panel is on the right; the document view may label its pages too.
+    let thumb = |h: &Harness<'static, PdfCraftApp>, label: &str| {
+        h.get_all_by_label(label).map(|n| n.rect()).max_by(|a, b| a.left().total_cmp(&b.left())).expect("the thumbnail")
+    };
+    // Grab page 3 (page 4 is below the window) and drop it above page 1.
+    let (from, to) = (thumb(&h, "Page 3").center(), thumb(&h, "Page 1").center_top() + egui::vec2(0.0, 4.0));
+    drag(&mut h, from, to);
+    h.run_steps(4);
+    let after = page_texts(h.state());
+    assert_eq!(after, vec![before[2].clone(), before[0].clone(), before[1].clone(), before[3].clone()], "{after:?}");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move page"));
+    let view = &h.state().views[0];
+    assert_eq!(view.selected.iter().copied().collect::<Vec<_>>(), vec![0], "the moved page stays selected");
+    assert!(view.panel_drag.is_none());
+}
+
+#[test]
+fn a_thumbnail_drag_that_ends_off_the_panel_or_outlives_the_pages_is_dropped() {
+    let mut h = harness(4, |app| app.right = Some(pdfcraft_ui_egui::RightPanel::Pages));
+    let before = page_texts(h.state());
+    // A drag left over (the panel closed mid-drag, the button released elsewhere) moves nothing.
+    h.state_mut().views[0].panel_drag = Some(vec![2]);
+    h.run_steps(2);
+    assert!(h.state().views[0].panel_drag.is_none());
+    assert_eq!(page_texts(h.state()), before);
+    // A change to the document drops page indexes taken before it.
+    h.state_mut().views[0].panel_drag = Some(vec![3]);
+    let id = h.state().views[0].id;
+    let info = h.state().session.get(id).unwrap().info.clone();
+    h.state_mut().views[0].document_changed(&info);
+    assert!(h.state().views[0].panel_drag.is_none());
 }

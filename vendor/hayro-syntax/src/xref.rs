@@ -10,7 +10,7 @@ use crate::object::dict::keys::{
     AUTHOR, CREATION_DATE, CREATOR, ENCRYPT, FIRST, ID, INDEX, INFO, KEYWORDS, MOD_DATE, N,
     OCPROPERTIES, PAGES, PREV, PRODUCER, ROOT, SIZE, SUBJECT, TITLE, TYPE, VERSION, W, XREF_STM,
 };
-use crate::object::dict::probe_dict;
+use crate::object::dict::{DictCache, probe_dict};
 use crate::object::indirect::IndirectObject;
 use crate::object::{Array, MaybeRef};
 use crate::object::{DateTime, Dict};
@@ -18,7 +18,7 @@ use crate::object::{Object, ObjectLike};
 use crate::pdf::PdfVersion;
 use crate::reader::Reader;
 use crate::reader::{Readable, ReaderContext, ReaderExt};
-use crate::sync::{Arc, FxHashMap, RwLock, RwLockExt};
+use crate::sync::{Arc, FxHashMap, Mutex, RwLock, RwLockExt};
 use crate::trivia::is_white_space_character;
 use crate::util::findr_needle;
 use crate::{PdfData, object};
@@ -274,6 +274,21 @@ const DUMMY_XREF: XRef = XRef(Inner::Dummy);
 pub struct XRef(Inner);
 
 impl XRef {
+    // PdfCraft patch: keep the bounded dictionary-index cache local to this PDF.
+    pub(crate) fn with_dict_cache<T>(&self, f: impl FnOnce(&mut DictCache) -> T) -> Option<T> {
+        let Inner::Some(repr) = &self.0 else {
+            return None;
+        };
+        #[cfg(feature = "std")]
+        let mut cache = repr
+            .dict_cache
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        #[cfg(not(feature = "std"))]
+        let mut cache = repr.dict_cache.try_borrow_mut().ok()?;
+        Some(f(&mut cache))
+    }
+
     fn new(
         data: PdfData,
         xref_map: XrefMap,
@@ -294,6 +309,7 @@ impl XRef {
             metadata: Arc::new(Metadata::default()),
             trailer_data,
             password: password.to_vec(),
+            dict_cache: Arc::new(Mutex::new(DictCache::default())),
         })));
 
         // We read the trailer twice, once to determine the encryption used and then a second
@@ -379,16 +395,6 @@ impl XRef {
         }
 
         Ok(xref)
-    }
-
-    fn is_repaired(&self) -> bool {
-        match &self.0 {
-            Inner::Dummy => false,
-            Inner::Some(r) => {
-                let locked = r.map.get();
-                locked.repaired
-            }
-        }
     }
 
     pub(crate) fn dummy() -> &'static Self {
@@ -479,15 +485,21 @@ impl XRef {
 
     pub(crate) fn repair(&self) {
         let Inner::Some(r) = &self.0 else {
-            unreachable!();
+            return;
         };
 
-        let mut locked = r.map.try_put().unwrap();
-        assert!(!locked.repaired);
-
+        // All callers release read guards before following references/repairing.
+        // Fallback reconstruction uses its own dummy/temporary xref, never this
+        // locked map. Serialize the one repair and let concurrent readers wait.
+        let mut locked = r.map.put();
+        if locked.repaired {
+            return;
+        }
+        // Set first so an unwinding fallback cannot trigger a reparse storm.
+        // Assignment below publishes a complete replacement atomically.
+        locked.repaired = true;
         let (xref_map, _) = fallback_xref_map(r.data.get(), &r.password);
         locked.xref_map = xref_map;
-        locked.repaired = true;
     }
 
     #[inline]
@@ -541,7 +553,7 @@ impl XRef {
             return None;
         };
 
-        let locked = repr.map.try_get().unwrap();
+        let locked = repr.map.get();
 
         let mut r = Reader::new(repr.data.get().as_ref());
 
@@ -550,6 +562,7 @@ impl XRef {
             // shall be treated as a reference to the null object.
             None
         })?;
+        let repaired = locked.repaired;
         drop(locked);
 
         let mut ctx = ctx.clone();
@@ -574,7 +587,7 @@ impl XRef {
                 };
 
                 // The xref table is broken, try to repair if not already repaired.
-                if self.is_repaired() {
+                if repaired {
                     error!(
                         "attempt was made at repairing xref, but object {id:?} still couldn't be read"
                     );
@@ -596,6 +609,16 @@ impl XRef {
                 if obj_stream_id == id {
                     warn!("cycle detected in object stream");
 
+                    return None;
+                }
+
+                // Stream objects cannot themselves be stored in object streams
+                // (PDF 7.5.7). Reject malformed chains before recursively loading
+                // them, including A-in-B/B-in-A and arbitrarily deep chains.
+                if !matches!(
+                    repr.map.get().xref_map.get(&obj_stream_id),
+                    Some(EntryType::Normal(_))
+                ) {
                     return None;
                 }
 
@@ -674,6 +697,7 @@ impl TrailerData {
 
 #[derive(Debug, Clone)]
 struct SomeRepr {
+    dict_cache: Arc<Mutex<DictCache>>,
     data: Arc<Data>,
     map: Arc<RwLock<MapRepr>>,
     metadata: Arc<Metadata>,
@@ -1118,6 +1142,200 @@ fn parse_metadata(info_dict: &Dict<'_>) -> Metadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Contributor-original, MIT OR Apache-2.0. Matches the bounded, uncompressed
+    // synthetic regression used to reproduce the cold-publication race. A second
+    // stream optionally checks that racing registration never aliases two ids.
+    fn object_stream_fixture(second: bool) -> Vec<u8> {
+        let mut out = b"%PDF-1.5\n".to_vec();
+        let mut offsets = alloc::collections::BTreeMap::new();
+        fn object(
+            out: &mut Vec<u8>,
+            offsets: &mut alloc::collections::BTreeMap<u32, usize>,
+            n: u32,
+            body: &[u8],
+        ) {
+            offsets.insert(n, out.len());
+            out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
+            out.extend_from_slice(body);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        object(
+            &mut out,
+            &mut offsets,
+            1,
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+        );
+        object(
+            &mut out,
+            &mut offsets,
+            2,
+            b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        );
+        object(
+            &mut out,
+            &mut offsets,
+            3,
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>",
+        );
+        let mut payload = b"20 0 << /Marker 123 >>".to_vec();
+        payload.resize(payload.len() + 4 * 1024 * 1024, b' ');
+        let mut stream = format!(
+            "<< /Type /ObjStm /N 1 /First 5 /Length {} >>\nstream\n",
+            payload.len()
+        )
+        .into_bytes();
+        stream.extend(payload);
+        stream.extend_from_slice(b"\nendstream");
+        object(&mut out, &mut offsets, 10, &stream);
+        if second {
+            let payload = b"21 0 << /Marker 456 >>";
+            let mut stream = format!(
+                "<< /Type /ObjStm /N 1 /First 5 /Length {} >>\nstream\n",
+                payload.len()
+            )
+            .into_bytes();
+            stream.extend_from_slice(payload);
+            stream.extend_from_slice(b"\nendstream");
+            object(&mut out, &mut offsets, 12, &stream);
+        }
+        let xref = out.len();
+        offsets.insert(11, xref);
+        let size = if second { 22 } else { 21 };
+        let mut rows = Vec::new();
+        for number in 0..size {
+            let (kind, a, b): (u8, u32, u16) = match number {
+                20 => (2, 10, 0),
+                21 => (2, 12, 0),
+                n => offsets
+                    .get(&n)
+                    .map_or((0, 0, 65535), |offset| (1, *offset as u32, 0)),
+            };
+            rows.push(kind);
+            rows.extend_from_slice(&a.to_be_bytes());
+            rows.extend_from_slice(&b.to_be_bytes());
+        }
+        let mut stream = format!(
+            "<< /Type /XRef /Size {size} /Root 1 0 R /W [1 4 2] /Length {} >>\nstream\n",
+            rows.len()
+        )
+        .into_bytes();
+        stream.extend(rows);
+        stream.extend_from_slice(b"\nendstream");
+        object(&mut out, &mut offsets, 11, &stream);
+        out.extend_from_slice(format!("startxref\n{xref}\n%%EOF\n").as_bytes());
+        out
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn concurrent_cold_object_stream_reads_all_succeed() {
+        use std::sync::Barrier;
+        let bytes = Arc::new(object_stream_fixture(true));
+        for _ in 0..10 {
+            let pdf = Arc::new(crate::Pdf::new(bytes.clone()).unwrap());
+            let barrier = Arc::new(Barrier::new(16));
+            let jobs: Vec<_> = (0..16)
+                .map(|_| {
+                    let (pdf, barrier) = (pdf.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        for (id, marker) in [(20, 123), (21, 456), (20, 123)] {
+                            let dict = pdf
+                                .xref()
+                                .get::<Dict<'_>>(ObjectIdentifier::new(id, 0))
+                                .unwrap();
+                            assert_eq!(dict.get::<i32>(b"Marker"), Some(marker));
+                        }
+                    })
+                })
+                .collect();
+            for job in jobs {
+                job.join().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn recursive_object_stream_locations_fail_without_recursing() {
+        let pdf = crate::Pdf::new(object_stream_fixture(true)).unwrap();
+        let Inner::Some(repr) = &pdf.xref().0 else {
+            panic!("real xref")
+        };
+        {
+            let mut map = repr.map.put();
+            map.xref_map
+                .insert(ObjectIdentifier::new(10, 0), EntryType::ObjStream(12, 0));
+            map.xref_map
+                .insert(ObjectIdentifier::new(12, 0), EntryType::ObjStream(10, 0));
+        }
+        for id in [10, 12, 20, 21] {
+            assert!(
+                pdf.xref()
+                    .get::<Dict<'_>>(ObjectIdentifier::new(id, 0))
+                    .is_none()
+            );
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn concurrent_repair_and_read_retries_the_repaired_map() {
+        let pdf = Arc::new(crate::Pdf::new(object_stream_fixture(false)).unwrap());
+        let Inner::Some(repr) = &pdf.xref().0 else {
+            panic!("real xref")
+        };
+        repr.map
+            .put()
+            .xref_map
+            .insert(ObjectIdentifier::new(1, 0), EntryType::Normal(0));
+        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let jobs: Vec<_> = (0..16)
+            .map(|_| {
+                let (pdf, barrier) = (pdf.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for _ in 0..8 {
+                        let root = pdf
+                            .xref()
+                            .get::<Dict<'_>>(ObjectIdentifier::new(1, 0))
+                            .unwrap();
+                        assert!(root.get_ref(PAGES).is_some());
+                        pdf.xref().repair(); // already repaired is an idempotent no-op
+                    }
+                })
+            })
+            .collect();
+        for job in jobs {
+            job.join().unwrap();
+        }
+        assert!(repr.map.get().repaired);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn poisoned_repair_lock_does_not_cascade_or_retry_repair() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        let pdf = crate::Pdf::new(object_stream_fixture(false)).unwrap();
+        let Inner::Some(repr) = &pdf.xref().0 else {
+            panic!("real xref")
+        };
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let mut map = repr.map.put();
+                map.repaired = true; // same state as an unwinding fallback before publication
+                panic!("injected repair failure");
+            }))
+            .is_err()
+        );
+        pdf.xref().repair();
+        assert!(
+            pdf.xref()
+                .get::<Dict<'_>>(ObjectIdentifier::new(1, 0))
+                .is_some()
+        );
+        assert!(repr.map.get().repaired);
+    }
 
     #[test]
     fn circular_prev_chain() {

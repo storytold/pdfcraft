@@ -72,6 +72,16 @@ impl Ord for Name<'_> {
 }
 
 impl<'a> Name<'a> {
+    // PdfCraft patch: (#307) lazy dictionary indexes cannot borrow through a
+    // OnceLock without making the enclosing PDF pages invariant in their lifetime.
+    // Ordinary PDF keys fit inline, so owning these bytes needs no allocation.
+    pub(crate) fn into_owned(self) -> Name<'static> {
+        Name(NameInner::Owned(match self.0 {
+            NameInner::Borrowed(data) => SmallVec::from_slice(data),
+            NameInner::Owned(data) => data,
+        }))
+    }
+
     /// Create a new name from a sequence of bytes.
     #[inline]
     pub fn new(data: &'a [u8]) -> Option<Self> {

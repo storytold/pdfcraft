@@ -44,9 +44,25 @@ impl Type0 {
             .iter::<u32>()
             .collect::<IntVec>();
 
-        let encode = dict
-            .get::<TupleVec>(ENCODE)
-            .unwrap_or(sizes.iter().map(|s| (0.0, (*s - 1) as f32)).collect());
+        let encode = dict.get::<TupleVec>(ENCODE).unwrap_or(
+            sizes
+                .iter()
+                .map(|s| (0.0, s.saturating_sub(1) as f32))
+                .collect(),
+        );
+
+        // PdfCraft patch: see `MAX_SAMPLE_VALUES`.
+        let Some(num_expected_entries) = sizes
+            .iter()
+            .try_fold(1usize, |n, s| n.checked_mul(*s as usize))
+            .filter(|entries| *entries <= MAX_SAMPLE_ENTRIES)
+            .and_then(|entries| entries.checked_mul(range.len()))
+            .filter(|n| *n <= MAX_SAMPLE_VALUES)
+        else {
+            warn!("Type0 function has too many samples");
+
+            return None;
+        };
 
         let decode = dict.get::<TupleVec>(DECODE).unwrap_or(range.clone());
 
@@ -55,14 +71,14 @@ impl Type0 {
             let mut buf = vec![];
             let mut reader = BitReader::new(&decoded);
 
-            while let Some(data) = reader.read(bits_per_sample) {
+            while buf.len() < num_expected_entries
+                && let Some(data) = reader.read(bits_per_sample)
+            {
                 buf.push(data);
             }
 
             buf
         };
-
-        let num_expected_entries = sizes.iter().fold(1, |i1, i2| i1 * *i2 as usize) * range.len();
 
         if data.len() != num_expected_entries {
             warn!("Type0 function didn't have the expected number of sample entries.");
@@ -232,6 +248,15 @@ impl Interpolator {
         }
     }
 }
+
+/// PdfCraft patch: the most sample values a sampled function may have, and the most table
+/// entries (one per point of its `/Size` grid). The samples were read into 4-byte values and
+/// then into a table entry each, so a stream inflating to 256 MiB of 1-bit samples asked for
+/// 8 GB; `/Size` sets how many the table expects. The largest real tables are DeviceN tint
+/// transforms: 33 × 33 × 33 × 33 points with 3 outputs is 1.2 million entries and 3.6 million
+/// values, 17^5 points with 4 outputs 5.7 million values.
+const MAX_SAMPLE_VALUES: usize = 1 << 23;
+const MAX_SAMPLE_ENTRIES: usize = 1 << 21;
 
 fn build_table(data: &[u32], sizes: &[u32], n: usize) -> Option<HashMap<Key, IntVec>> {
     let mut key = Key::new(sizes);

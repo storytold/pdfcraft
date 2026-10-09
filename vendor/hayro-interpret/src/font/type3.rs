@@ -141,7 +141,8 @@ impl<'a> Type3<'a> {
 
         let name = self.glyph_simulator.glyph_to_string(glyph.glyph_id)?;
         let program = self.char_procs.get(&name)?;
-        let decoded = program.decoded().ok()?;
+        // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
+        let decoded = crate::context::decode_content(program)?;
         let iter = TypedIter::new(decoded.as_ref());
 
         let is_shape_glyph = {

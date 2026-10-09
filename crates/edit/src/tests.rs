@@ -1268,3 +1268,66 @@ fn page_text_the_standard_fonts_cant_draw_is_refused() {
         update_content(&mut doc, 0, n, &Content::Text(arabic("ب"))).unwrap();
     }
 }
+
+fn xobject(doc: &Document, page: usize, name: &[u8]) -> Option<pdfcraft_cos::ObjRef> {
+    let p = &pdfcraft_model::pages(doc)[page];
+    let res = doc.resolve(p.dict.get(b"Resources")?);
+    let xo = doc.resolve(res.as_dict()?.get(b"XObject")?);
+    xo.as_dict()?.get(name).and_then(Object::as_ref)
+}
+
+fn annot_at(doc: &Document, page: usize, index: usize) -> pdfcraft_cos::ObjRef {
+    let p = &pdfcraft_model::pages(doc)[page];
+    let list = doc.resolve(p.dict.get(b"Annots").unwrap());
+    list.as_array().unwrap()[index].as_ref().unwrap()
+}
+
+#[test]
+fn fill_sign_flatten_bakes_marks_keeps_other_comments_and_does_not_reuse_pcfl0() {
+    use pdfcraft_annot::{FillMark, Markup, Meta, NewAnnotation, Shape, Style, add_annotation, summaries};
+    let mut doc = fixture();
+    assert_eq!(flatten_fill_sign(&mut doc, &[0]).unwrap(), 0);
+    assert!(!doc.is_modified(), "nothing to flatten leaves the file alone");
+
+    let meta = Meta { date: None, id: "x".into() };
+    let add = |doc: &mut Document, shape: Shape, contents: &str| {
+        let style = Style::default_for(&shape);
+        add_annotation(doc, &NewAnnotation { page: 0, shape, style, contents: contents.into(), author: "a".into() }, &meta).unwrap()
+    };
+    add(&mut doc, Shape::Rectangle { rect: [10.0, 10.0, 80.0, 40.0] }, "box");
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1);
+    let kept = xobject(&doc, 0, b"PCFl0").expect("the first flatten's XObject");
+
+    add(&mut doc, Shape::Typewriter { rect: [20.0, 500.0, 140.0, 520.0], font_size: 10.0 }, "Hello");
+    doc.update_dict(annot_at(&doc, 0, 0), |d| {
+        d.remove(b"PCFillSign");
+    })
+    .unwrap();
+    add(&mut doc, Shape::Mark { rect: [100.0, 100.0, 120.0, 120.0], mark: FillMark::Check }, "");
+    add(&mut doc, Shape::Signature { strokes: vec![vec![[10.0, 50.0], [40.0, 80.0], [70.0, 50.0]]] }, "");
+    doc.update_dict(annot_at(&doc, 0, 2), |d| d.set(b"Subj".to_vec(), pdfcraft_cos::PdfString::text("Pencil"))).unwrap();
+    add(&mut doc, Shape::TypedSignature { rect: [20.0, 40.0, 90.0, 70.0], contours: vec![vec![[0.1, 0.2], [0.5, 0.9], [0.9, 0.2]]] }, "");
+    add(&mut doc, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![[20.0, 400.0, 80.0, 400.0, 20.0, 390.0, 80.0, 390.0]] }, "keep");
+    add(&mut doc, Shape::TextBox { rect: [20.0, 300.0, 140.0, 340.0], font_size: 12.0 }, "Note");
+    add(&mut doc, Shape::Ink { strokes: vec![vec![[200.0, 200.0], [220.0, 220.0], [240.0, 200.0]]] }, "pencil");
+    let old = add(&mut doc, Shape::Signature { strokes: vec![vec![[300.0, 50.0], [330.0, 80.0], [360.0, 50.0]]] }, "");
+    doc.update_dict(annot_at(&doc, 0, old), |d| {
+        d.remove(b"PCFillSign");
+    })
+    .unwrap();
+    let hidden = add(&mut doc, Shape::Typewriter { rect: [20.0, 600.0, 140.0, 620.0], font_size: 10.0 }, "secret");
+    doc.update_dict(annot_at(&doc, 0, hidden), |d| d.set(b"F".to_vec(), Object::Int(2))).unwrap();
+
+    let n = flatten_fill_sign(&mut doc, &[0]).unwrap();
+    assert_eq!(n, 5, "text, check, both signatures and the typed signature; the hidden one stays");
+    assert_eq!(xobject(&doc, 0, b"PCFl0"), Some(kept), "an existing PCFl0 is not replaced");
+    let newest = streams(&doc, 0).last().unwrap().clone();
+    assert!(newest.contains("/PCFl1 Do") && !newest.contains("/PCFl0 Do"), "{newest}");
+
+    let doc = reopen(&doc);
+    let mut left: Vec<String> = summaries(&doc).iter().map(|s| s.contents.clone().unwrap_or_default()).collect();
+    left.sort();
+    assert_eq!(left, ["Note", "keep", "pencil", "secret"]);
+    assert!(summaries(&doc).iter().any(|s| s.intent.as_deref() == Some("FreeTextTypeWriter")), "the hidden typewriter stays");
+    assert_eq!(summaries(&doc).iter().filter(|s| s.intent.as_deref() == Some("FreeTextTypeWriter")).count(), 1);
+}

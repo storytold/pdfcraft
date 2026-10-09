@@ -58,6 +58,8 @@
 	Display theme	Thème d'affichage
 	Side panels	Panneaux latéraux
 	Enable Acrobat JavaScript	Activer Acrobat JavaScript
+	Flatten Fill & Sign when saving	Aplatir Remplir et signer à l'enregistrement
+	Text, marks and signatures become part of the page. Other comments stay editable.	Le texte, les marques et les signatures deviennent partie de la page. Les autres commentaires restent modifiables.
 	OK	OK
 	Join our Discord	Rejoindre notre Discord
 	Close	Fermer
@@ -2040,3 +2042,19 @@
 	No recent files	Aucun fichier récent
 	Go to page…	Aller à la page…
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Les polices standard ne peuvent pas afficher « {c} » ({code}). Pour l'instant, seuls les caractères d'Europe occidentale peuvent être ajoutés comme texte.
+	Larger pages	Pages plus grandes
+	Smaller pages	Pages plus petites
+	Reset page size	Rétablir la taille des pages
+	Date format	Format de date
+	Fill & Sign dates	Dates de Remplir et signer
+	Pattern	Modèle
+	Today: {date}	Aujourd'hui : {date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy ou yy année · m ou mm mois · mmm ou mmmm nom du mois · d ou dd jour · ddd ou dddd jour de la semaine. H, h, M, s et t sont des lettres d'heure et ne peuvent pas être utilisées seules : placez {escape} devant une lettre pour l'afficher telle quelle.
+	Same as interface ({language})	Comme l'interface ({language})
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} ne peut pas encore être écrit dans le PDF : le texte de Remplir et signer est limité aux caractères d'Europe occidentale. Choisissez un format numérique comme dd.mm.yyyy.
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Ouvre les préférences du pilote d'imprimante. Elles sont enregistrées pour toutes les impressions de cet ordinateur ; les copies, le recto verso, les niveaux de gris et le papier choisis ici s'appliquent toujours.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	Les réglages propres au pilote d'imprimante pour cette impression : bac, type de papier, finition, etc.
+	Couldn't open the printer's preferences: {e}	Impossible d'ouvrir les préférences de l'imprimante : {e}
+	Printer properties	Propriétés de l'imprimante
+	Reset to printer defaults	Rétablir les réglages par défaut de l'imprimante
+	This printer offers no settings of its own.	Cette imprimante ne propose aucun réglage propre.
