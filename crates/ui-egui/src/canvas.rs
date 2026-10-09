@@ -203,6 +203,9 @@ pub struct DocView {
     /// Pending keyboard scrolling, in points down (negative: up): ↓ / ↑, and Page Down /
     /// Page Up where the pages scroll.
     pub key_scroll: f32,
+    /// Single-page view, as last drawn: the page shown and whether the view was at its top and
+    /// at its bottom, so ↑ / ↓ turn the page there instead of doing nothing (#273).
+    single_edges: Option<(usize, bool, bool)>,
     /// Briefly outline an annotation after navigating to it from a panel.
     pub flash: Option<(usize, [f32; 4], f64)>,
     /// Compare files: differences shaded on this document's pages (page, user-space box, colour).
@@ -353,6 +356,7 @@ impl DocView {
             forward: Vec::new(),
             goto: None,
             key_scroll: 0.0,
+            single_edges: None,
             flash: None,
             compare_marks: Vec::new(),
             pages: HashMap::new(),
@@ -1166,12 +1170,31 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     if key(Key::ArrowLeft) || (key(Key::PageUp) && (command || !scrolls)) {
         view.step_page(false);
     }
-    // ↓ / ↑ scroll a line, and Page Down / Page Up a screen where the pages scroll.
+    // ↓ / ↑ scroll a line, and Page Down / Page Up a screen where the pages scroll. In
+    // single-page view, ↓ / ↑ turn the page once there is nothing left to scroll that way, as
+    // the wheel does (#273): always on a page that fits.
     if !command {
         let screen = (view.viewport_h - KEY_SCROLL_LINE).max(KEY_SCROLL_LINE);
         let steps = [(Key::ArrowDown, KEY_SCROLL_LINE), (Key::ArrowUp, -KEY_SCROLL_LINE), (Key::PageDown, screen), (Key::PageUp, -screen)];
         for (k, by) in steps {
-            if key(k) && (scrolls || matches!(k, Key::ArrowDown | Key::ArrowUp)) {
+            let arrow = matches!(k, Key::ArrowDown | Key::ArrowUp);
+            if !key(k) || !(scrolls || arrow) {
+                continue;
+            }
+            let forward = k == Key::ArrowDown;
+            // Only an up-to-date view counts: the page drawn is the current one, with no jump pending.
+            let at_end = !scrolls
+                && view.goto.is_none()
+                && view.single_edges.is_some_and(|(page, top, bottom)| page == view.current && if forward { bottom } else { top });
+            if at_end {
+                let before = view.current;
+                view.step_page(forward);
+                if !forward && view.current != before {
+                    // Going back up lands on the bottom of the previous page.
+                    view.goto = Some((view.current, 1.0));
+                }
+                view.single_edges = None;
+            } else {
                 view.key_scroll += by;
             }
         }
@@ -1907,6 +1930,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             canvas_action = comments::context_menu(ui, view, info, prefs, allowed);
         });
         (wanted, visible_now)
+    });
+    view.single_edges = visible_pages.first().copied().filter(|_| view.layout == PageLayout::Single).map(|page| {
+        // At the top once the page's top edge shows where going to a page puts it (a gap
+        // below the window's top). Within a point, as for wheel paging, so layout rounding
+        // can't hide an edge.
+        let max_y = (out.content_size.y - out.inner_rect.height()).max(0.0);
+        (page, out.state.offset.y <= MARGIN - GAP + 1.0, out.state.offset.y >= max_y - 1.0)
     });
 
     view.auto_scroll.paint(ui, avail);

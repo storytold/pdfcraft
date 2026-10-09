@@ -476,6 +476,47 @@ fn arrow_and_page_keys_move_through_a_scrolling_document() {
 }
 
 #[test]
+fn up_and_down_turn_pages_in_single_page_view() {
+    // #273: in single-page view ↓ / ↑ only scrolled, so on a page that fits (or once scrolled to
+    // the end) they did nothing, while the wheel turned the page there.
+    use egui::Key;
+    use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].layout = PageLayout::Single;
+    h.state_mut().views[0].fit = Fit::Page;
+    h.run_steps(4);
+    let press = |h: &mut Harness<'static, PdfCraftApp>, key, times: usize| {
+        for _ in 0..times {
+            h.key_press(key);
+            h.run_steps(2);
+        }
+        h.run_steps(2);
+        h.state().views[0].current
+    };
+    // A page that fits: each press turns one page.
+    assert_eq!(press(&mut h, Key::ArrowDown, 1), 1);
+    assert_eq!(press(&mut h, Key::ArrowDown, 1), 2);
+    assert_eq!(press(&mut h, Key::ArrowUp, 1), 1);
+    assert_eq!(press(&mut h, Key::ArrowUp, 1), 0);
+    assert_eq!(press(&mut h, Key::ArrowUp, 1), 0, "nothing before the first page");
+    // A page taller than the window scrolls first, then turns at its bottom.
+    h.state_mut().views[0].fit = Fit::Width;
+    h.run_steps(4);
+    let mut lines = 0;
+    while press(&mut h, Key::ArrowDown, 1) == 0 {
+        lines += 1;
+        assert!(lines < 500, "↓ never reached page 2");
+    }
+    assert!(lines > 2, "↓ scrolled through page 1 before turning ({lines} lines)");
+    // ↑ at the top of page 2 goes back to the bottom of page 1, then scrolls up it.
+    assert_eq!(press(&mut h, Key::ArrowUp, 1), 0);
+    assert_eq!(press(&mut h, Key::ArrowDown, 1), 1, "back at the bottom of page 1");
+    assert_eq!(press(&mut h, Key::ArrowUp, 2), 0);
+    assert_eq!(press(&mut h, Key::ArrowDown, 1), 0, "scrolled up from the bottom of page 1");
+}
+
+#[test]
 fn v_h_and_space_pick_the_quick_tools() {
     // The toolbar's tooltips promise "Select (V)" and "Hand (H)", but the keys did nothing.
     use egui::{Key, Modifiers};

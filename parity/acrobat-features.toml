@@ -1119,7 +1119,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/control.rs::state_and_view_options", "crates/ui-egui/tests/ui.rs::theme_and_view_options_apply", "crates/ui-egui/tests/viewer.rs::two_page_view_steps_a_spread_at_a_time", "crates/ui-egui/tests/viewer.rs::arrow_and_page_keys_move_through_a_scrolling_document"]
-notes = "in two-page view, next and previous page move a whole spread (with or without a cover page); → / ← turn pages in every layout, ↓ / ↑ scroll a line and Page Down / Page Up a screen (the page in single-page view), as in Acrobat"
+notes = "in two-page view, next and previous page move a whole spread (with or without a cover page); → / ← turn pages in every layout, ↓ / ↑ scroll a line and Page Down / Page Up a screen (the page in single-page view), as in Acrobat; in single-page view ↓ / ↑ turn the page once there is nothing left to scroll that way, like the wheel"
 
 [[feature]]
 id = "view.goto-page-label"
