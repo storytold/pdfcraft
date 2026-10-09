@@ -55,6 +55,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut ocr_now = false;
     let mut compare_now = false;
     let mut images_now = false;
+    let mut scan_act: Option<crate::scan_ui::ScanAction> = None;
     let mut stamp_now = false;
     let mut alt_now = false;
     let t = Tokens::get(ctx);
@@ -81,6 +82,10 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 let (go, cancel) = crate::create_ui::image_import_body(ui, app);
                 images_now = go;
                 close = go || cancel;
+                return;
+            }
+            Dialog::Scanner => {
+                scan_act = Some(crate::scan_ui::body(ui, app, &t));
                 return;
             }
             Dialog::Properties(tab) => {
@@ -1279,6 +1284,28 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     if stamp_now {
         app.save_custom_stamp();
+    }
+    if dialog == Dialog::Scanner {
+        let act = scan_act.take().unwrap_or_default();
+        if act.close || (modal.should_close() && !act.finish) {
+            app.dismiss_scan_dialog();
+        } else {
+            if act.search {
+                app.search_scanners();
+            }
+            if act.add_address {
+                app.add_scanner_address();
+            }
+            if act.stop {
+                app.stop_scan();
+            }
+            if act.scan {
+                app.start_scan();
+            }
+            if act.finish {
+                app.finish_scan();
+            }
+        }
     }
     if images_now {
         app.finish_image_import();

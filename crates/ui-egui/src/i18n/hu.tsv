@@ -2103,3 +2103,40 @@ action wizard	Start	Indítás
 	Printer properties	Nyomtató tulajdonságai
 	Reset to printer defaults	A nyomtató alapértékeinek visszaállítása
 	This printer offers no settings of its own.	Ennek a nyomtatónak nincsenek saját beállításai.
+# Create PDF from Scanner (#312)
+	Create PDF from scanner…	PDF létrehozása lapolvasóról…
+	1 page scanned	1 oldal beolvasva
+	{n} pages scanned	{n} oldal beolvasva
+	Ask to scan more pages	Rákérdezés további oldalak beolvasására
+	Couldn't start scanning	Nem sikerült elindítani a beolvasást
+	Create PDF	PDF létrehozása
+	Create PDF from Scanner	PDF létrehozása lapolvasóról
+	Document feeder	Lapadagoló
+	Document feeder (both sides)	Lapadagoló (kétoldalas)
+	Flatbed	Síkágyas
+	Make searchable (recognize text)	Kereshetővé tétel (szövegfelismerés)
+	Network address	Hálózati cím
+	No scanner found	Nem található lapolvasó
+	No scanners were found. Check that the scanner is on and connected, or enter its network address.	Nem található lapolvasó. Ellenőrizze, hogy a lapolvasó be van-e kapcsolva és csatlakoztatva van-e, vagy adja meg a hálózati címét.
+	Paper size	Papírméret
+	Preset	Előbeállítás
+	Refresh	Frissítés
+	Scan	Beolvasás
+	Scan next page	Következő oldal beolvasása
+	Scanner	Lapolvasó
+	Scanning was stopped	A beolvasás leállt
+	Scanning…	Beolvasás…
+	Searching…	Keresés…
+	Stop	Leállítás
+	That isn't a scanner address	Ez nem lapolvasócím
+	e.g. 192.168.1.20	pl. 192.168.1.20
+	Black & White Document	Fekete-fehér dokumentum
+	Grayscale Document	Szürkeárnyalatos dokumentum
+	Color Document	Színes dokumentum
+	Color Photo	Színes fénykép
+	Black & White	Fekete-fehér
+	Grayscale	Szürkeárnyalatos
+	Letter	Letter
+	Scanner's full area	A lapolvasó teljes területe
+	Network	Hálózat
+	Color	Szín

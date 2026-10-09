@@ -2021,3 +2021,38 @@
 	Printer properties	Propiedades de la impresora
 	Reset to printer defaults	Restablecer los valores predeterminados de la impresora
 	This printer offers no settings of its own.	Esta impresora no ofrece ajustes propios.
+	Create PDF from scanner…	Crear PDF desde un escáner…
+	1 page scanned	1 página escaneada
+	{n} pages scanned	{n} páginas escaneadas
+	Ask to scan more pages	Preguntar si se escanean más páginas
+	Couldn't start scanning	No se pudo iniciar el escaneo
+	Create PDF	Crear PDF
+	Create PDF from Scanner	Crear PDF desde un escáner
+	Document feeder	Alimentador de documentos
+	Document feeder (both sides)	Alimentador de documentos (ambas caras)
+	Flatbed	Cristal
+	Make searchable (recognize text)	Hacer con búsqueda de texto (reconocer texto)
+	Network address	Dirección de red
+	No scanner found	No se encontró ningún escáner
+	No scanners were found. Check that the scanner is on and connected, or enter its network address.	No se encontró ningún escáner. Compruebe que está encendido y conectado, o introduzca su dirección de red.
+	Paper size	Tamaño de papel
+	Preset	Ajuste preestablecido
+	Refresh	Actualizar
+	Scan	Escanear
+	Scan next page	Escanear la página siguiente
+	Scanner	Escáner
+	Scanning was stopped	Se detuvo el escaneo
+	Scanning…	Escaneando…
+	Searching…	Buscando…
+	Stop	Detener
+	That isn't a scanner address	Eso no es una dirección de escáner
+	e.g. 192.168.1.20	p. ej. 192.168.1.20
+	Black & White Document	Documento en blanco y negro
+	Grayscale Document	Documento en escala de grises
+	Color Document	Documento en color
+	Color Photo	Foto en color
+	Black & White	Blanco y negro
+	Grayscale	Escala de grises
+	Letter	Carta
+	Scanner's full area	Área completa del escáner
+	Network	Red

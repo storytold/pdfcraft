@@ -2125,3 +2125,40 @@ calendar date	December	грудня
 	Printer properties	Властивості принтера
 	Reset to printer defaults	Скинути до налаштувань принтера за замовчуванням
 	This printer offers no settings of its own.	Цей принтер не має власних налаштувань.
+# Create PDF from Scanner (#312)
+	Create PDF from scanner…	Створити PDF зі сканера…
+	1 page scanned	Відскановано 1 сторінку
+	{n} pages scanned	Відскановано сторінок: {n}
+	Ask to scan more pages	Пропонувати сканувати ще сторінки
+	Couldn't start scanning	Не вдалося почати сканування
+	Create PDF	Створити PDF
+	Create PDF from Scanner	Створити PDF зі сканера
+	Document feeder	Автоподавач
+	Document feeder (both sides)	Автоподавач (обидві сторони)
+	Flatbed	Планшет
+	Make searchable (recognize text)	Зробити придатним для пошуку (розпізнати текст)
+	Network address	Мережева адреса
+	No scanner found	Сканер не знайдено
+	No scanners were found. Check that the scanner is on and connected, or enter its network address.	Сканери не знайдено. Перевірте, чи сканер увімкнено й під’єднано, або введіть його мережеву адресу.
+	Paper size	Розмір паперу
+	Preset	Набір параметрів
+	Refresh	Оновити
+	Scan	Сканувати
+	Scan next page	Сканувати наступну сторінку
+	Scanner	Сканер
+	Scanning was stopped	Сканування зупинено
+	Scanning…	Сканування…
+	Searching…	Пошук…
+	Stop	Зупинити
+	That isn't a scanner address	Це не адреса сканера
+	e.g. 192.168.1.20	напр., 192.168.1.20
+	Black & White Document	Чорно-білий документ
+	Grayscale Document	Документ у відтінках сірого
+	Color Document	Кольоровий документ
+	Color Photo	Кольорове фото
+	Black & White	Чорно-біле
+	Grayscale	Відтінки сірого
+	Letter	Letter (США)
+	Scanner's full area	Уся площа сканера
+	Network	Мережа
+	Color	Колір

@@ -69,6 +69,45 @@
 	Auto	Automático
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Escolha uma imagem PNG ou JPEG (até 4 MiB). A transparência é preservada.
 	Couldn't import the signature image: {e}	Não foi possível importar a imagem da assinatura: {e}
+	Create PDF from scanner…	Criar PDF a partir de um scanner…
+	1 page scanned	1 página digitalizada
+	{n} pages scanned	{n} páginas digitalizadas
+	Ask to scan more pages	Perguntar se deseja digitalizar mais páginas
+	Color	Cor
+	Couldn't start scanning	Não foi possível iniciar a digitalização
+	Create PDF	Criar PDF
+	Create PDF from Scanner	Criar PDF a partir de um scanner
+	Document feeder	Alimentador de documentos
+	Document feeder (both sides)	Alimentador de documentos (frente e verso)
+	Flatbed	Mesa de vidro
+	Make searchable (recognize text)	Tornar pesquisável (reconhecer texto)
+	Network address	Endereço de rede
+	No scanner found	Nenhum scanner encontrado
+	No scanners were found. Check that the scanner is on and connected, or enter its network address.	Nenhum scanner encontrado. Verifique se ele está ligado e conectado, ou digite o endereço de rede.
+	Paper size	Tamanho do papel
+	Preset	Predefinição
+	Refresh	Atualizar
+	Scan	Digitalizar
+	Scan next page	Digitalizar próxima página
+	Scanning was stopped	A digitalização foi interrompida
+	Scanning…	Digitalizando…
+	Searching…	Procurando…
+	Stop	Parar
+	That isn't a scanner address	Este não é um endereço de scanner
+	e.g. 192.168.1.20	ex.: 192.168.1.20
+	Black & White Document	Documento em preto e branco
+	Grayscale Document	Documento em tons de cinza
+	Color Document	Documento colorido
+	Color Photo	Foto colorida
+	Black & White	Preto e branco
+	Grayscale	Tons de cinza
+	Letter	Carta
+	Legal	Ofício
+	Scanner's full area	Área total do scanner
+	Network	Rede
+	Resolution	Resolução
+	Source	Origem
+	Add	Adicionar
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	O modo portátil está desativado: não é possível gravar em {folder} ({error}). As configurações ficam na sua pasta de usuário.
 	Go to page…	Ir para a página…
 	Reopen the files that were open when PdfCraft last closed	Reabrir os arquivos que estavam abertos quando o PdfCraft foi fechado pela última vez

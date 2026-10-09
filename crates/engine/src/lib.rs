@@ -104,6 +104,7 @@ pub use pdfcraft_preflight as pdfa;
 pub use pdfcraft_print as print;
 pub use pdfcraft_redact::patterns::{PATTERNS as REDACT_PATTERNS, Pattern as RedactPattern, find as find_pattern};
 pub use pdfcraft_redact::sanitize::{HIDDEN, Hidden};
+pub use pdfcraft_scan as scan;
 pub use pdfcraft_sign as sign;
 pub use pdfcraft_sign::{SignOptions, SignatureInfo, Status as SignatureStatus, TrustStore};
 pub use pdfcraft_xfdf::Format as DataFormat;
@@ -2609,6 +2610,15 @@ impl Session {
     /// Create image pages at embedded resolution or a fixed dpi, without resampling.
     pub fn create_from_images_with_resolution(&self, images: &[(String, Vec<u8>)], resolution: ImageResolution) -> Result<Arc<Vec<u8>>, EditError> {
         self.write_new(&pdfcraft_create::from_images_with_resolution(images, resolution)?)
+    }
+
+    /// A new document from scanned pages (Create ▸ PDF from Scanner): one page per scan, each
+    /// the size of the scanned area at the scan's resolution (the pages of one scan share it).
+    /// Pixels are never resampled. `title` becomes the document's title.
+    pub fn create_from_scan(&self, pages: &[pdfcraft_scan::ScannedPage], title: &str) -> Result<Arc<Vec<u8>>, EditError> {
+        let dpi = pages.first().map(|p| p.dpi).ok_or_else(|| EditError::Invalid("the scanner sent no pages".into()))?;
+        let images: Vec<(String, Vec<u8>)> = pages.iter().map(|p| (title.to_string(), p.bytes.clone())).collect();
+        self.create_from_images_with_resolution(&images, ImageResolution::Dpi(dpi))
     }
 
     /// A new document from plain text (US Letter, 11 pt Helvetica).

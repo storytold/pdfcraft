@@ -6639,11 +6639,11 @@ title = "Scan from TWAIN/WIA/ICA/SANE scanners"
 area = "I"
 tier = "P2"
 milestone = "M14"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["create.scanner"]
+tools = ["scanners", "doc_create"]
+evidence = ["crates/scan/src/tests.rs::escl_flatbed_and_duplex_feeder_against_a_fake_scanner", "crates/scan/src/tests.rs::sane_test_device_scans_flatbed_and_feeder", "crates/automation/tests/automation.rs::scanning_through_tools_makes_a_pdf_from_a_network_scanner"]
+notes = "File > Create > PDF from Scanner (issue #312): network scanners over eSCL (AirScan/Mopria, found with mDNS or typed by address), SANE through scanimage on Unix; Windows supports eSCL only; flatbed, document feeder and both sides; one new unsaved PDF, optionally searchable. Only numeric loopback, link-local and private scanner addresses; redirects and cross-origin job locations refused; automation scanning requires user consent. Not yet: WIA, TWAIN, macOS ICA (use an eSCL scanner), scan preview or crop, ADF page-size detection; no real hardware validation."
 
 [[feature]]
 id = "ocr.scan-presets"
@@ -6651,11 +6651,11 @@ title = "Scan presets"
 area = "I"
 tier = "P2"
 milestone = "M14"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["create.scanner"]
+tools = ["doc_create"]
+evidence = ["crates/scan/src/tests.rs::presets_and_names_round_trip", "crates/automation/tests/automation.rs::scanning_through_tools_makes_a_pdf_from_a_network_scanner"]
+notes = "Four built-in presets (Black & White Document, Grayscale Document, Color Document, Color Photo) set the colour mode and resolution. Not yet: saving custom presets."
 
 [[feature]]
 id = "ocr.scan-append"
@@ -6743,7 +6743,7 @@ status = "shipped"
 commands = ["create.clipboard"]
 tools = []
 evidence = ["crates/ui-egui/tests/create.rs::clipboard_images_and_text_become_new_pdfs"]
-notes = "an image (one page at its size) or text; headless tools read files instead"
+notes = "an image (one page at its size) or text; headless tools read files instead. Create from a scanner is ocr.scanner-acquire."
 
 [[feature]]
 id = "create.from-screenshot"

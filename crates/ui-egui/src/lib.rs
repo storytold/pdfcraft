@@ -45,6 +45,7 @@ mod marks_ui;
 mod measure_ui;
 mod ocr_ui;
 mod optimize_ui;
+mod scan_ui;
 mod search_ui;
 mod sign_ui;
 mod stamps_ui;
@@ -216,6 +217,8 @@ struct GridDrop {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dialog {
     CreateImages,
+    /// File ▸ Create ▸ PDF from Scanner.
+    Scanner,
     Properties(PropsTab),
     About,
     Shortcuts,
@@ -484,6 +487,8 @@ pub struct PdfCraftApp {
     pub combine_columns: combine_ui::Columns,
     /// Images waiting for the resolution choice (released on cancel).
     pub image_import: Option<create_ui::ImageImport>,
+    /// Create PDF from Scanner: the scanners found, the choices and the pages so far.
+    pub scan_ui: Option<scan_ui::ScanUi>,
     /// The custom stamp library, and the stamp being created.
     pub custom_stamps: Vec<stamps_ui::CustomStamp>,
     pub stamp_draft: stamps_ui::StampDraft,
@@ -699,6 +704,7 @@ impl PdfCraftApp {
             combine_tab: Default::default(),
             combine_columns: Default::default(),
             image_import: None,
+            scan_ui: None,
             custom_stamps: Vec::new(),
             stamp_draft: Default::default(),
             optimize_draft: OptimizeDraft::default(),
@@ -1757,6 +1763,7 @@ impl eframe::App for PdfCraftApp {
         }
         self.poll_export();
         self.poll_ocr();
+        self.poll_scan();
         self.poll_optimize();
         self.poll_action();
         self.process_file_requests();

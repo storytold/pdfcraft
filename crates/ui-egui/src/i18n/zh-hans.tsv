@@ -2069,3 +2069,38 @@
 	Printer properties	打印机属性
 	Reset to printer defaults	恢复打印机默认设置
 	This printer offers no settings of its own.	此打印机没有专属设置。
+	Create PDF from scanner…	从扫描仪创建 PDF…
+	1 page scanned	已扫描 1 页
+	{n} pages scanned	已扫描 {n} 页
+	Ask to scan more pages	询问是否继续扫描更多页面
+	Color	颜色
+	Couldn't start scanning	无法开始扫描
+	Create PDF	创建 PDF
+	Create PDF from Scanner	从扫描仪创建 PDF
+	Document feeder	文档进纸器
+	Document feeder (both sides)	文档进纸器（双面）
+	Flatbed	平板
+	Make searchable (recognize text)	生成可搜索的 PDF（识别文字）
+	Network address	网络地址
+	No scanner found	未找到扫描仪
+	No scanners were found. Check that the scanner is on and connected, or enter its network address.	未找到扫描仪。请检查扫描仪是否已开机并连接，或输入其网络地址。
+	Paper size	纸张大小
+	Preset	预设
+	Refresh	刷新
+	Scan	扫描
+	Scan next page	扫描下一页
+	Scanner	扫描仪
+	Scanning was stopped	扫描已停止
+	Scanning…	正在扫描…
+	Searching…	正在搜索…
+	Stop	停止
+	That isn't a scanner address	这不是扫描仪地址
+	e.g. 192.168.1.20	例如 192.168.1.20
+	Black & White Document	黑白文档
+	Grayscale Document	灰度文档
+	Color Document	彩色文档
+	Color Photo	彩色照片
+	Black & White	黑白
+	Grayscale	灰度
+	Scanner's full area	扫描仪的整个区域
+	Network	网络

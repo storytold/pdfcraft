@@ -1990,3 +1990,38 @@
 	Printer properties	印表機內容
 	Reset to printer defaults	還原印表機預設值
 	This printer offers no settings of its own.	此印表機沒有專屬設定。
+	Create PDF from scanner…	從掃描器建立 PDF…
+	1 page scanned	已掃描 1 頁
+	{n} pages scanned	已掃描 {n} 頁
+	Ask to scan more pages	詢問是否繼續掃描更多頁面
+	Color	色彩
+	Couldn't start scanning	無法開始掃描
+	Create PDF	建立 PDF
+	Create PDF from Scanner	從掃描器建立 PDF
+	Document feeder	文件進紙器
+	Document feeder (both sides)	文件進紙器（雙面）
+	Flatbed	平台
+	Make searchable (recognize text)	產生可搜尋的 PDF（辨識文字）
+	Network address	網路位址
+	No scanner found	找不到掃描器
+	No scanners were found. Check that the scanner is on and connected, or enter its network address.	找不到掃描器。請檢查掃描器是否已開機並連線，或輸入其網路位址。
+	Paper size	紙張大小
+	Preset	預設
+	Refresh	重新整理
+	Scan	掃描
+	Scan next page	掃描下一頁
+	Scanner	掃描器
+	Scanning was stopped	掃描已停止
+	Scanning…	正在掃描…
+	Searching…	正在搜尋…
+	Stop	停止
+	That isn't a scanner address	這不是掃描器位址
+	e.g. 192.168.1.20	例如 192.168.1.20
+	Black & White Document	黑白文件
+	Grayscale Document	灰階文件
+	Color Document	彩色文件
+	Color Photo	彩色照片
+	Black & White	黑白
+	Grayscale	灰階
+	Scanner's full area	掃描器的整個區域
+	Network	網路

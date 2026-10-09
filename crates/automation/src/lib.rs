@@ -22,6 +22,7 @@ pub mod mcp;
 mod measure;
 mod printing;
 mod redact;
+mod scanning;
 mod signing;
 mod tools;
 
@@ -521,6 +522,7 @@ impl Automation {
             "redact_clear" => self.redact_clear(&a)?,
             "doc_hidden_info" => self.doc_hidden_info(&a)?,
             "printers" => self.printers()?,
+            "scanners" => self.scanners(&a)?,
             "printer_options" => self.printer_options(&a)?,
             "link_list" => self.link_list(&a)?,
             "link_add" => self.link_add(&a)?,
@@ -1023,11 +1025,23 @@ impl Automation {
                 };
                 (format!("{title}.pdf"), self.session.create_from_text(&title, &text).map_err(failed)?)
             }
+            "scanner" => self.scan_to_pdf(a)?,
             other => return Err(ToolError::InvalidArgs(format!("unknown source {other:?}"))),
         };
         let name = a.opt_str("name")?.map(str::to_owned).unwrap_or(name);
         let id = self.session.open_new(name, bytes).map_err(failed)?;
-        Ok(summary(self.session.get(id).ok_or_else(|| failed("the document vanished"))?))
+        let mut ocr_words = None;
+        if a.str("from")? == "scanner" && a.opt_bool("ocr")?.unwrap_or(false) {
+            let settings = pdfcraft_engine::ocr::OcrSettings { language: a.opt_str("language")?.unwrap_or("en").to_string(), ..Default::default() };
+            let found =
+                self.session.recognize_text(id, &[], settings).map_err(|e| failed(format!("scanned, but the text couldn't be recognised: {e}")))?;
+            ocr_words = Some(found.iter().map(|p| p.words.len()).sum::<usize>());
+        }
+        let mut out = summary(self.session.get(id).ok_or_else(|| failed("the document vanished"))?);
+        if let (Some(words), Some(o)) = (ocr_words, out.as_object_mut()) {
+            o.insert("ocr_words".into(), json!(words));
+        }
+        Ok(out)
     }
 
     fn page_set_box(&mut self, a: &Args) -> Result<Value> {

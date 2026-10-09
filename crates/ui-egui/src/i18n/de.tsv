@@ -2105,3 +2105,40 @@ action wizard	Start	Starten
 	Printer properties	Druckereigenschaften
 	Reset to printer defaults	Auf Druckerstandard zurücksetzen
 	This printer offers no settings of its own.	Dieser Drucker bietet keine eigenen Einstellungen.
+# Create PDF from Scanner (#312)
+	Create PDF from scanner…	PDF aus Scanner erstellen…
+	1 page scanned	1 Seite gescannt
+	{n} pages scanned	{n} Seiten gescannt
+	Ask to scan more pages	Nach weiteren Seiten fragen
+	Couldn't start scanning	Scannen konnte nicht gestartet werden
+	Create PDF	PDF erstellen
+	Create PDF from Scanner	PDF aus Scanner erstellen
+	Document feeder	Dokumenteneinzug
+	Document feeder (both sides)	Dokumenteneinzug (beidseitig)
+	Flatbed	Flachbett
+	Make searchable (recognize text)	Durchsuchbar machen (Text erkennen)
+	Network address	Netzwerkadresse
+	No scanner found	Kein Scanner gefunden
+	No scanners were found. Check that the scanner is on and connected, or enter its network address.	Es wurden keine Scanner gefunden. Prüfen Sie, ob der Scanner eingeschaltet und verbunden ist, oder geben Sie seine Netzwerkadresse ein.
+	Paper size	Papierformat
+	Preset	Voreinstellung
+	Refresh	Aktualisieren
+	Scan	Scannen
+	Scan next page	Nächste Seite scannen
+	Scanner	Scanner
+	Scanning was stopped	Das Scannen wurde angehalten
+	Scanning…	Wird gescannt…
+	Searching…	Wird gesucht…
+	Stop	Anhalten
+	That isn't a scanner address	Das ist keine Scanneradresse
+	e.g. 192.168.1.20	z. B. 192.168.1.20
+	Black & White Document	Schwarzweißdokument
+	Grayscale Document	Graustufendokument
+	Color Document	Farbdokument
+	Color Photo	Farbfoto
+	Black & White	Schwarzweiß
+	Grayscale	Graustufen
+	Letter	US-Letter
+	Scanner's full area	Gesamte Scanfläche
+	Network	Netzwerk
+	Color	Farbe

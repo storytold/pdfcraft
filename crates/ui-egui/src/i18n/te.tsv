@@ -2037,3 +2037,41 @@ action wizard	Start	ప్రారంభించు
 	Printer properties	ప్రింటర్ లక్షణాలు
 	Reset to printer defaults	ప్రింటర్ డిఫాల్ట్‌లకు రీసెట్ చేయి
 	This printer offers no settings of its own.	ఈ ప్రింటర్‌కు దాని స్వంత సెట్టింగ్‌లు లేవు.
+	Create PDF from scanner…	స్కానర్ నుండి PDF సృష్టించు…
+	1 page scanned	1 పేజీ స్కాన్ అయింది
+	{n} pages scanned	{n} పేజీలు స్కాన్ అయ్యాయి
+	Ask to scan more pages	మరిన్ని పేజీలు స్కాన్ చేయాలా అని అడుగు
+	Color	రంగు
+	Couldn't start scanning	స్కానింగ్ ప్రారంభించలేకపోయాము
+	Create PDF	PDF సృష్టించు
+	Create PDF from Scanner	స్కానర్ నుండి PDF సృష్టించు
+	Document feeder	పత్రాల ఫీడర్
+	Document feeder (both sides)	పత్రాల ఫీడర్ (రెండు వైపులా)
+	Flatbed	ఫ్లాట్‌బెడ్
+	Make searchable (recognize text)	శోధించగలిగేలా చేయి (వచనాన్ని గుర్తించు)
+	Network address	నెట్‌వర్క్ చిరునామా
+	No scanner found	స్కానర్ కనుగొనబడలేదు
+	No scanners were found. Check that the scanner is on and connected, or enter its network address.	స్కానర్‌లు కనుగొనబడలేదు. స్కానర్ ఆన్‌లో ఉండి కనెక్ట్ అయిందో తనిఖీ చేయండి లేదా దాని నెట్‌వర్క్ చిరునామాను నమోదు చేయండి.
+	Paper size	కాగితం పరిమాణం
+	Preset	ముందస్తు అమరిక
+	Refresh	రిఫ్రెష్ చేయి
+	Scan	స్కాన్ చేయి
+	Scan next page	తదుపరి పేజీని స్కాన్ చేయి
+	Scanning was stopped	స్కానింగ్ ఆపివేయబడింది
+	Scanning…	స్కాన్ చేస్తోంది…
+	Searching…	వెతుకుతోంది…
+	Stop	ఆపు
+	That isn't a scanner address	అది స్కానర్ చిరునామా కాదు
+	e.g. 192.168.1.20	ఉదా. 192.168.1.20
+	Black & White Document	నలుపు తెలుపు పత్రం
+	Grayscale Document	బూడిద ఛాయల పత్రం
+	Color Document	రంగు పత్రం
+	Color Photo	రంగు ఫోటో
+	Black & White	నలుపు తెలుపు
+	Grayscale	బూడిద ఛాయలు
+	Letter	లెటర్
+	Legal	లీగల్
+	Scanner's full area	స్కానర్ పూర్తి ప్రాంతం
+	Network	నెట్‌వర్క్
+	Scanner	స్కానర్
+	Scanning isn't available in the web version	వెబ్ వెర్షన్‌లో స్కానింగ్ అందుబాటులో లేదు

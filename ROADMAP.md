@@ -34,6 +34,8 @@ The unit is **wall-clock hours of agent work** (Claude Opus 5.5 coding continuou
 
 **How the estimate is built:** each milestone's remaining fraction (table below) times its size, re-based on the measured rate. The long poles are M2 (own renderer, ≈ 150–250 h), M7 (editing existing text and images, ≈ 150–250 h), M10 OCR and Office export (≈ 100–150 h), M6 JavaScript engine (≈ 60–100 h), M11 PDF/A/X/UA preflight (≈ 80–140 h) and M12 XFA/compare (≈ 80–140 h). The last 5–10% (odd real-world files, pixel-level polish against Acrobat) costs about as much as a mid-sized milestone.
 
+**2026-10-08 scanner review (#359):** scanner acquisition remains partial; scanner network access is confined to local numeric addresses. Local numeric address restrictions, redirect refusal, same-origin job URLs and explicit automation consent are implemented; Windows is eSCL-only, with WIA deferred. No real scanner hardware validation.
+
 ## Honest assessment (2026-10-05)
 
 Read this before choosing work. The feature table above counts what exists; this section says how solid it is.

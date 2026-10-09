@@ -96,7 +96,7 @@ impl PdfCraftApp {
         Some(self.open_created_bytes(&format!("{}.pdf", stem(name)), created.map_err(|e| e.to_string())))
     }
 
-    fn open_created_bytes(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<(), String> {
+    pub(crate) fn open_created_bytes(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<(), String> {
         let bytes = created?;
         let id = self.session.open_new(name, bytes).map_err(|e| e.to_string())?;
         let info = &self.session.get(id).ok_or("the new document could not be opened")?.info;

@@ -1788,6 +1788,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98de4bbd547a563b716d8dfa9aad1cb19bfab00f4fa09a6a4ed21dbcf44ce9c4"
 
 [[package]]
+name = "flume"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e139bc46ca777eb5efaf62df0ab8cc5fd400866427e56c68b22e414e53bd3be"
+dependencies = [
+ "spin",
+]
+
+[[package]]
 name = "fmv-macos-events"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2471,6 +2480,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0a05c691e1fae256cf7013d99dad472dc52d5543322761f83ec8d47eab40d2b"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "image"
 version = "0.25.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2781,6 +2800,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mdns-sd"
+version = "0.21.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "127d3355da0615643c88c885e29a1ccb29ca4b1ca1f2e44b3caed2e728a796aa"
+dependencies = [
+ "fastrand",
+ "flume",
+ "if-addrs",
+ "mio",
+ "socket-pktinfo",
+ "socket2",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2822,6 +2855,18 @@ checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
 dependencies = [
  "adler2",
  "simd-adler32",
+]
+
+[[package]]
+name = "mio"
+version = "1.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1788edb87fdc09c7e26304471e2f5be8cdefb1b6930d6e3985fc02ff53bf86ee"
+dependencies = [
+ "libc",
+ "log",
+ "wasi",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3493,6 +3538,7 @@ dependencies = [
  "pdfcraft-organize",
  "pdfcraft-platform",
  "pdfcraft-render",
+ "pdfcraft-scan",
  "pdfcraft-xfa",
  "png 0.18.1",
  "serde_json",
@@ -3600,6 +3646,7 @@ dependencies = [
  "pdfcraft-print",
  "pdfcraft-redact",
  "pdfcraft-render",
+ "pdfcraft-scan",
  "pdfcraft-sign",
  "pdfcraft-xfa",
  "pdfcraft-xfdf",
@@ -3764,6 +3811,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-scan"
+version = "0.4.0"
+dependencies = [
+ "mdns-sd",
+ "png 0.18.1",
+ "roxmltree",
+ "thiserror 2.0.21",
+ "ureq",
+ "url",
+]
+
+[[package]]
 name = "pdfcraft-sign"
 version = "0.4.0"
 dependencies = [
@@ -3813,6 +3872,7 @@ dependencies = [
  "pdfcraft-model",
  "pdfcraft-platform",
  "pdfcraft-render",
+ "pdfcraft-scan",
  "pdfcraft-xfa",
  "png 0.18.1",
  "pollster 1.0.1",
@@ -5202,6 +5262,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "socket-pktinfo"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "612942246d0cc239cfd83af1dfd39be47f649208a3524e5e9da651910128e0ac"
+dependencies = [
+ "libc",
+ "socket2",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "socket2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "spin"
+version = "0.9.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
+dependencies = [
+ "lock_api",
 ]
 
 [[package]]

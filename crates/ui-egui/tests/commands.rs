@@ -55,6 +55,7 @@ const PICKERS: &[&str] = &[
     "create.multiple",
     "page.replace",
     "create.clipboard",
+    "create.scanner",
     "a11y.report",
     "ocr.recognize_batch",
     "form.merge_data",

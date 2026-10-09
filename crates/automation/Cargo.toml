@@ -24,6 +24,7 @@ default = ["mcp"]
 mcp = ["dep:base64"]
 
 [dev-dependencies]
+pdfcraft-scan = { workspace = true, features = ["fake-escl"] }
 pdfcraft-cos = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-xfa = { workspace = true }

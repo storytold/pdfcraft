@@ -55,6 +55,7 @@
 	Create PDF from images…	画像から PDF を作成…
 	Create PDF from multiple files…	複数のファイルから PDF を作成…
 	Create PDF from clipboard	クリップボードから PDF を作成
+	Create PDF from scanner…	スキャナーから PDF を作成…
 	Combine files…	ファイルを結合…
 	Save	保存
 	Save as…	別名で保存…
@@ -337,6 +338,7 @@
 	Multiple files	複数のファイル
 	Images	画像
 	Clipboard	クリップボード
+	Scanner	スキャナー
 	Blank page	空白のページ
 	Combine files	ファイルを結合
 	Combine	結合
@@ -1997,3 +1999,38 @@
 	Printer properties	プリンターのプロパティ
 	Reset to printer defaults	プリンターの初期設定に戻す
 	This printer offers no settings of its own.	このプリンターには独自の設定がありません。
+	1 page scanned	1 ページをスキャンしました
+	{n} pages scanned	{n} ページをスキャンしました
+	Ask to scan more pages	さらにスキャンするか確認する
+	Color	カラー
+	Couldn't start scanning	スキャンを開始できませんでした
+	Create PDF	PDF を作成
+	Create PDF from Scanner	スキャナーから PDF を作成
+	Document feeder	ドキュメントフィーダー
+	Document feeder (both sides)	ドキュメントフィーダー（両面）
+	Flatbed	フラットベッド
+	Make searchable (recognize text)	検索可能にする（テキストを認識）
+	Network address	ネットワークアドレス
+	No scanner found	スキャナーが見つかりません
+	No scanners were found. Check that the scanner is on and connected, or enter its network address.	スキャナーが見つかりません。電源が入って接続されているか確認するか、ネットワークアドレスを入力してください。
+	Paper size	用紙サイズ
+	Preset	プリセット
+	Refresh	更新
+	Scan	スキャン
+	Scan next page	次のページをスキャン
+	Scanning was stopped	スキャンを停止しました
+	Scanning…	スキャン中…
+	Searching…	検索中…
+	Stop	停止
+	That isn't a scanner address	スキャナーのアドレスではありません
+	e.g. 192.168.1.20	例: 192.168.1.20
+	Black & White Document	白黒の文書
+	Grayscale Document	グレースケールの文書
+	Color Document	カラーの文書
+	Color Photo	カラー写真
+	Black & White	白黒
+	Grayscale	グレースケール
+	Letter	レター
+	Legal	リーガル
+	Scanner's full area	スキャナーの全領域
+	Network	ネットワーク

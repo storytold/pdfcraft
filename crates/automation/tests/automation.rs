@@ -3322,6 +3322,62 @@ mod combine_argument_tests {
     }
 }
 
+#[test]
+fn scanning_through_tools_makes_a_pdf_from_a_network_scanner() {
+    let fake = pdfcraft_scan::fake::FakeEscl::start(2).unwrap();
+    let dir = workdir("scan");
+    let mut a = auto(&dir);
+    // Flatbed, Letter, grayscale at 150 dpi: one 612 × 792 pt page.
+    for consent in [None, Some(false)] {
+        let mut args = json!({"from": "scanner", "scanner": fake.id()});
+        if let Some(consent) = consent {
+            args["user_confirmed"] = json!(consent);
+        }
+        assert!(matches!(a.call("doc_create", &args), Err(ToolError::InvalidArgs(ref m)) if m.contains("explicit consent")));
+    }
+    assert!(fake.requests().is_empty(), "no network or hardware access before consent");
+    for name in ["scanners", "doc_create"] {
+        assert!(tools().iter().find(|t| t.name == name).unwrap().open_world);
+    }
+    let one = ok(
+        &mut a,
+        "doc_create",
+        json!({ "from": "scanner", "user_confirmed": true, "scanner": fake.id(), "preset": "gray_document", "scan_dpi": 150 }),
+    );
+    assert_eq!((one["pages"].as_u64(), one["dirty"].as_bool()), (Some(1), Some(true)));
+    let info = ok(&mut a, "doc_info", json!({ "doc": one["doc"] }));
+    assert!(
+        (info["pages"][0]["width"].as_f64().unwrap() - 612.0).abs() < 1.0 && (info["pages"][0]["height"].as_f64().unwrap() - 792.0).abs() < 1.0,
+        "{info}"
+    );
+    // Both sides of two sheets in the feeder: four A5 pages.
+    let four = ok(
+        &mut a,
+        "doc_create",
+        json!({ "from": "scanner", "user_confirmed": true, "scanner": fake.id(), "source": "duplex", "paper": "a5", "scan_dpi": 75, "name": "Feeder.pdf" }),
+    );
+    assert_eq!(four["pages"].as_u64(), Some(4));
+    ok(&mut a, "doc_save", json!({ "doc": four["doc"], "path": "feeder.pdf" }));
+    assert!(dir.join("feeder.pdf").exists());
+    // The feeder is now empty, and the error says so.
+    let err = a.call("doc_create", &json!({ "from": "scanner", "user_confirmed": true, "scanner": fake.id(), "source": "feeder" })).unwrap_err();
+    assert!(matches!(&err, ToolError::Failed(m) if m.contains("feeder is empty")), "{err:?}");
+    // Bad arguments say what is allowed.
+    for args in [
+        json!({ "from": "scanner", "user_confirmed": true }),
+        json!({ "from": "scanner", "user_confirmed": true, "scanner": fake.id(), "preset": "sepia" }),
+        json!({ "from": "scanner", "user_confirmed": true, "scanner": fake.id(), "scan_dpi": 5 }),
+        json!({ "from": "scanner", "user_confirmed": true, "scanner": fake.id(), "paper": "tabloid" }),
+        json!({ "from": "scanner", "user_confirmed": true, "scanner": "usb:1" }),
+    ] {
+        assert!(matches!(a.call("doc_create", &args), Err(ToolError::InvalidArgs(_) | ToolError::Failed(_))), "{args}");
+    }
+    // The scanners tool answers (nothing needs to be found).
+    let list = ok(&mut a, "scanners", json!({ "wait": 0 }));
+    assert!(list["scanners"].is_array());
+    assert!(tools().iter().any(|t| t.name == "scanners"));
+}
+
 #[cfg(feature = "mcp")]
 #[test]
 fn conventions_core_tools_preserve_root_and_batch_errors() {

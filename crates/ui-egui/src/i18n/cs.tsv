@@ -116,5 +116,43 @@
 	Reopen the files that were open when PdfCraft last closed	Znovu otevřít soubory, které byly otevřené při posledním zavření aplikace PdfCraft
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Vyberte obrázek PNG nebo JPEG (nejvýše 4 MiB). Průhlednost bude zachována.
 	Couldn't import the signature image: {e}	Obrázek podpisu nelze importovat: {e}
+	Create PDF from scanner…	Vytvořit PDF ze skeneru…
+	1 page scanned	Naskenována 1 stránka
+	{n} pages scanned	Naskenováno stránek: {n}
+	Ask to scan more pages	Zeptat se na skenování dalších stránek
+	Color	Barva
+	Couldn't start scanning	Skenování se nepodařilo spustit
+	Create PDF	Vytvořit PDF
+	Create PDF from Scanner	Vytvořit PDF ze skeneru
+	Document feeder	Podavač dokumentů
+	Document feeder (both sides)	Podavač dokumentů (oboustranně)
+	Flatbed	Sklo skeneru
+	Make searchable (recognize text)	Umožnit vyhledávání (rozpoznat text)
+	Network address	Síťová adresa
+	No scanner found	Nebyl nalezen žádný skener
+	No scanners were found. Check that the scanner is on and connected, or enter its network address.	Nebyl nalezen žádný skener. Zkontrolujte, zda je zapnutý a připojený, nebo zadejte jeho síťovou adresu.
+	Paper size	Velikost papíru
+	Preset	Předvolba
+	Refresh	Obnovit
+	Scan	Skenovat
+	Scan next page	Skenovat další stránku
+	Scanner	Skener
+	Scanning was stopped	Skenování bylo zastaveno
+	Scanning…	Skenování…
+	Searching…	Hledání…
+	Stop	Zastavit
+	That isn't a scanner address	Toto není adresa skeneru
+	e.g. 192.168.1.20	např. 192.168.1.20
+	Black & White Document	Černobílý dokument
+	Grayscale Document	Dokument ve stupních šedi
+	Color Document	Barevný dokument
+	Color Photo	Barevná fotografie
+	Black & White	Černobílá
+	Grayscale	Stupně šedi
+	Scanner's full area	Celá plocha skeneru
+	Network	Síť
+	Resolution	Rozlišení
+	Source	Zdroj
+	Add	Přidat
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Přenosný režim je vypnutý: do složky {folder} nelze zapisovat ({error}). Nastavení se místo toho ukládá do vaší uživatelské složky.
 	Go to page…	Přejít na stránku…

@@ -2058,3 +2058,40 @@
 	Printer properties	Propriétés de l'imprimante
 	Reset to printer defaults	Rétablir les réglages par défaut de l'imprimante
 	This printer offers no settings of its own.	Cette imprimante ne propose aucun réglage propre.
+	Create PDF from scanner…	Créer un PDF à partir d’un scanner…
+	1 page scanned	1 page numérisée
+	{n} pages scanned	{n} pages numérisées
+	Ask to scan more pages	Proposer de numériser d’autres pages
+	Color	Couleur
+	Couldn't start scanning	Impossible de démarrer la numérisation
+	Create PDF	Créer le PDF
+	Create PDF from Scanner	Créer un PDF à partir d’un scanner
+	Document feeder	Chargeur de documents
+	Document feeder (both sides)	Chargeur de documents (recto verso)
+	Flatbed	Vitre
+	Make searchable (recognize text)	Rendre consultable (reconnaître le texte)
+	Network address	Adresse réseau
+	No scanner found	Aucun scanner trouvé
+	No scanners were found. Check that the scanner is on and connected, or enter its network address.	Aucun scanner trouvé. Vérifiez qu’il est allumé et connecté, ou saisissez son adresse réseau.
+	Paper size	Format du papier
+	Preset	Préréglage
+	Refresh	Actualiser
+	Scan	Numériser
+	Scan next page	Numériser la page suivante
+	Scanning was stopped	La numérisation a été arrêtée
+	Scanning…	Numérisation…
+	Searching…	Recherche…
+	Stop	Arrêter
+	That isn't a scanner address	Ce n’est pas une adresse de scanner
+	e.g. 192.168.1.20	p. ex. 192.168.1.20
+	Black & White Document	Document noir et blanc
+	Grayscale Document	Document en niveaux de gris
+	Color Document	Document en couleur
+	Color Photo	Photo en couleur
+	Black & White	Noir et blanc
+	Grayscale	Niveaux de gris
+	Letter	Lettre
+	Legal	Légal
+	Scanner's full area	Zone complète du scanner
+	Network	Réseau
+	Scanner	Numériseur

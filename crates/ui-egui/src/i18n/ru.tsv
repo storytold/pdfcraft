@@ -2019,3 +2019,41 @@
 	Printer properties	Свойства принтера
 	Reset to printer defaults	Вернуть параметры принтера по умолчанию
 	This printer offers no settings of its own.	У этого принтера нет собственных параметров.
+	Create PDF from scanner…	Создать PDF со сканера…
+	1 page scanned	Отсканирована 1 страница
+	{n} pages scanned	Отсканировано страниц: {n}
+	Ask to scan more pages	Предлагать сканировать ещё страницы
+	Color	Цвет
+	Couldn't start scanning	Не удалось начать сканирование
+	Create PDF	Создать PDF
+	Create PDF from Scanner	Создать PDF со сканера
+	Document feeder	Податчик документов
+	Document feeder (both sides)	Податчик документов (обе стороны)
+	Flatbed	Планшет
+	Make searchable (recognize text)	Сделать доступным для поиска (распознать текст)
+	Network address	Сетевой адрес
+	No scanner found	Сканер не найден
+	No scanners were found. Check that the scanner is on and connected, or enter its network address.	Сканеры не найдены. Проверьте, включён и подключён ли сканер, или введите его сетевой адрес.
+	Paper size	Размер бумаги
+	Preset	Предустановка
+	Refresh	Обновить
+	Scan	Сканировать
+	Scan next page	Сканировать следующую страницу
+	Scanning was stopped	Сканирование остановлено
+	Scanning…	Сканирование…
+	Searching…	Поиск…
+	Stop	Остановить
+	That isn't a scanner address	Это не адрес сканера
+	e.g. 192.168.1.20	например, 192.168.1.20
+	Black & White Document	Чёрно-белый документ
+	Grayscale Document	Документ в оттенках серого
+	Color Document	Цветной документ
+	Color Photo	Цветная фотография
+	Black & White	Чёрно-белый
+	Grayscale	Оттенки серого
+	Letter	Letter
+	Legal	Legal
+	Scanner's full area	Вся область сканера
+	Network	Сеть
+	Scanner	Сканер
+	Scanning isn't available in the web version	Сканирование недоступно в веб-версии

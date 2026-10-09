@@ -20,6 +20,7 @@ pdfcraft-xfa = { workspace = true }
 pdfcraft-edit = { workspace = true }
 pdfcraft-redact = { workspace = true }
 pdfcraft-print = { workspace = true }
+pdfcraft-scan = { workspace = true }
 pdfcraft-xfdf = { workspace = true }
 pdfcraft-sign = { workspace = true }
 pdfcraft-optimize = { workspace = true }

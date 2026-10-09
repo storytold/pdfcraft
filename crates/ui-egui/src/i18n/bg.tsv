@@ -2067,3 +2067,40 @@ action wizard	Start	Старт
 	Printer properties	Свойства на принтера
 	Reset to printer defaults	Възстанови настройките по подразбиране на принтера
 	This printer offers no settings of its own.	Този принтер няма собствени настройки.
+# Create PDF from Scanner (#312)
+	Create PDF from scanner…	Създаване на PDF от скенер…
+	1 page scanned	1 сканирана страница
+	{n} pages scanned	{n} сканирани страници
+	Ask to scan more pages	Питане за сканиране на още страници
+	Couldn't start scanning	Сканирането не можа да започне
+	Create PDF	Създаване на PDF
+	Create PDF from Scanner	Създаване на PDF от скенер
+	Document feeder	Подаващо устройство
+	Document feeder (both sides)	Подаващо устройство (двустранно)
+	Flatbed	Плоска повърхност
+	Make searchable (recognize text)	Възможност за търсене (разпознаване на текст)
+	Network address	Мрежов адрес
+	No scanner found	Не е намерен скенер
+	No scanners were found. Check that the scanner is on and connected, or enter its network address.	Не са намерени скенери. Проверете дали скенерът е включен и свързан, или въведете мрежовия му адрес.
+	Paper size	Размер на хартията
+	Preset	Предварителна настройка
+	Refresh	Опресняване
+	Scan	Сканиране
+	Scan next page	Сканиране на следващата страница
+	Scanner	Скенер
+	Scanning was stopped	Сканирането беше спряно
+	Scanning…	Сканиране…
+	Searching…	Търсене…
+	Stop	Спиране
+	That isn't a scanner address	Това не е адрес на скенер
+	e.g. 192.168.1.20	напр. 192.168.1.20
+	Black & White Document	Черно-бял документ
+	Grayscale Document	Документ в нюанси на сивото
+	Color Document	Цветен документ
+	Color Photo	Цветна снимка
+	Black & White	Черно-бяло
+	Grayscale	Нюанси на сивото
+	Letter	Letter
+	Scanner's full area	Цялата площ на скенера
+	Network	Мрежа
+	Color	Цвят

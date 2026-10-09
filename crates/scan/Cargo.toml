@@ -1,0 +1,28 @@
+[package]
+name = "pdfcraft-scan"
+description = "Scanners: find them and scan pages (eSCL network scanners, SANE) for Create PDF from Scanner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# A fake eSCL scanner on loopback, for tests in the crates above (engine, automation, UI).
+fake-escl = ["dep:png"]
+
+[dependencies]
+thiserror = { workspace = true }
+roxmltree = "0.20"
+url = "2.5"
+png = { version = "0.18", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Plain HTTP to scanners on the local network (eSCL); no TLS needed.
+ureq = { version = "3.4", default-features = false }
+# Finds eSCL scanners (`_uscan._tcp`) on the local network.
+mdns-sd = { version = "0.21", default-features = false }
+
+[dev-dependencies]
+png = "0.18"

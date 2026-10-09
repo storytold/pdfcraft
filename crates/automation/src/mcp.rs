@@ -233,7 +233,7 @@ fn meta_tools() -> [Value; 2] {
                 "required": ["name"],
                 "additionalProperties": false,
             },
-            "annotations": { "title": "Run any PdfCraft tool", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false },
+            "annotations": { "title": "Run any PdfCraft tool", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true },
         }),
     ]
 }
@@ -284,7 +284,7 @@ fn search_tools(args: &Value) -> Result<Value, String> {
             all.iter().find(|t| t.name == name).ok_or_else(|| format!("unknown tool {name:?}; call {TOOL_SEARCH} without name to list the tools"))?;
         return Ok(json!({ "tool": {
             "name": t.name, "title": t.title, "category": category_of(t.name), "description": t.description,
-            "read_only": t.read_only, "destructive": t.destructive, "input_schema": t.input_schema,
+            "read_only": t.read_only, "destructive": t.destructive, "open_world": t.open_world, "input_schema": t.input_schema,
         } }));
     }
     let category = category.map(|c| c.trim_end_matches('_').to_lowercase()).filter(|c| !c.is_empty());
@@ -479,7 +479,7 @@ fn tool_json(t: &crate::ToolDef) -> Value {
         "title": t.title,
         "description": t.description,
         "inputSchema": t.input_schema,
-        "annotations": { "title": t.title, "readOnlyHint": t.read_only, "destructiveHint": t.destructive, "idempotentHint": t.read_only || matches!(t.name, "doc_save" | "doc_optimize" | "doc_export_data" | "measure_export" | "doc_export_images" | "doc_export_office" | "doc_export_all_images" | "doc_export_text" | "image_save"), "openWorldHint": false },
+        "annotations": { "title": t.title, "readOnlyHint": t.read_only, "destructiveHint": t.destructive, "idempotentHint": t.read_only || matches!(t.name, "doc_save" | "doc_optimize" | "doc_export_data" | "measure_export" | "doc_export_images" | "doc_export_office" | "doc_export_all_images" | "doc_export_text" | "image_save"), "openWorldHint": t.open_world },
     })
 }
 
@@ -530,6 +530,13 @@ mod tests {
         assert_eq!(first_sentence("Only an abbreviation, e.g. this"), "Only an abbreviation, e.g. this");
         assert_eq!(first_sentence(""), "");
         assert_eq!(first_sentence("Zażółć gęślą, i.e. jaźń. Dalej."), "Zażółć gęślą, i.e. jaźń.");
+    }
+
+    #[test]
+    fn scanner_tools_advertise_open_world_interaction() {
+        for tool in crate::tools().iter().filter(|t| matches!(t.name, "scanners" | "doc_create")) {
+            assert_eq!(super::tool_json(tool)["annotations"]["openWorldHint"], true);
+        }
     }
 
     #[test]

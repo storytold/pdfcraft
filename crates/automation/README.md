@@ -22,6 +22,11 @@ mcp::McpServer::new(a).serve(stdin, stdout)?             // newline-delimited JS
 - Tool names are `snake_case` (`page_rotate`): MCP clients reject dots. `ToolDef::command` links a tool to the registry id it automates (`page.rotate`), and `command_list` reports the link.
 - Pages and positions are **1-based**. Rectangles are PDF points with the origin at the top-left of the displayed page.
 - Unknown arguments are rejected, so typos fail loudly.
+- Scanner discovery and acquisition interact with the local network and hardware, and advertise
+  `openWorldHint: true` (including the compact MCP `tool_call` dispatcher). `doc_create` from
+  `scanner` requires `user_confirmed: true` after explicit user consent. Missing or false consent
+  is rejected before contacting a scanner. See `crates/scan/README.md` for address restrictions
+  and the scanner network boundary.
 - Tools that change a document return its summary (`doc`, `pages`, `dirty`, `undo`, `redo`, …).
 - `comment_image_preview` returns JSON and a PNG: `layer: "background"` (the default) gives the page without the selected image signature/initials; `layer: "image"` gives its embedded image with alpha. The metadata supplies its displayed rectangle, document rotation, `image_rotation` (how far clockwise the image is shown turned: 0 for one placed by PdfCraft, which keeps it upright as displayed) and annotation opacity. Each result can be saved with the CLI's `--out`. Cache the background and transform the image for live movement/resizing; `comment_edit` commits the final geometry in one undo step. Previewing never changes the document.
 - For proportional image signature resizing, use the embedded image layer's width/height ratio rather than a previously stretched annotation rectangle. The GUI preserves this ratio at corners with the opposite corner anchored; edge midpoint handles change only their own axis. `comment_edit` accepts the resulting rectangle.
