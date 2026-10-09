@@ -3,11 +3,9 @@
 //! Dictionaries keep their key order so rewritten objects stay recognisable in diffs and
 //! byte-stable when re-serialized. Streams keep their *encoded* bytes; decoding is on demand.
 
-use std::sync::Arc;
-
 use pdfcraft_filters::{Filter, Params};
 
-use crate::CosError;
+use crate::{Bytes, CosError};
 
 /// An indirect reference: object number and generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -160,7 +158,7 @@ impl FromIterator<(Name, Object)> for Dict {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stream {
     pub dict: Dict,
-    pub raw: Arc<Vec<u8>>,
+    pub raw: Bytes,
 }
 
 /// Upper bound for a single decoded stream (decompression-bomb defence).
@@ -169,14 +167,14 @@ pub const MAX_DECODED: usize = 1 << 30;
 impl Stream {
     /// A new stream from already-encoded bytes (`/Length` is set at write time).
     pub fn from_raw(dict: Dict, raw: Vec<u8>) -> Self {
-        Self { dict, raw: Arc::new(raw) }
+        Self { dict, raw: raw.into() }
     }
 
     /// A new stream holding `data` compressed with Flate.
     pub fn flate(mut dict: Dict, data: &[u8]) -> Self {
         dict.set(b"Filter".to_vec(), Object::Name(b"FlateDecode".to_vec()));
         dict.remove(b"DecodeParms");
-        Self { dict, raw: Arc::new(pdfcraft_filters::encode_flate(data)) }
+        Self { dict, raw: pdfcraft_filters::encode_flate(data).into() }
     }
 
     /// The filter chain declared in the dictionary.
@@ -223,18 +221,28 @@ impl Stream {
     pub fn decoded_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
         let chain = self.filters();
         if chain.is_empty() {
-            return Ok(self.raw.as_ref().clone());
+            return self.raw_within(max);
         }
         pdfcraft_filters::decode_tolerant(&chain, &self.raw, max.min(MAX_DECODED)).map(|(v, _)| v).map_err(|e| CosError::Filter(e.to_string()))
     }
 
-    /// Decoded data; any corruption is an error.
+    /// Decoded data, bounded by [`MAX_DECODED`]; any corruption is an error.
     pub fn decoded_strict(&self) -> Result<Vec<u8>, CosError> {
         let chain = self.filters();
         if chain.is_empty() {
-            return Ok(self.raw.as_ref().clone());
+            return self.raw_within(MAX_DECODED);
         }
         pdfcraft_filters::decode(&chain, &self.raw, MAX_DECODED).map_err(|e| CosError::Filter(e.to_string()))
+    }
+
+    fn raw_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
+        let max = max.min(MAX_DECODED);
+        // An empty decoder chain still produces an owned output buffer: check its limit
+        // before cloning, including streams whose /Crypt filter was applied on load.
+        if self.raw.len() > max {
+            return Err(CosError::Filter(pdfcraft_filters::FilterError::LimitExceeded(max).to_string()));
+        }
+        Ok(self.raw.to_vec())
     }
 }
 
@@ -390,5 +398,56 @@ mod tests {
         let keys: Vec<_> = d.iter().map(|(k, _)| k.clone()).collect();
         assert_eq!(keys, vec![b"B".to_vec(), b"A".to_vec()]);
         assert_eq!(d.int(b"B"), Some(3));
+    }
+
+    #[test]
+    fn raw_streams_refuse_decoding_past_a_caller_limit() {
+        let stream = Stream::from_raw(Dict::new(), b"abc".to_vec());
+        for max in [0, 2] {
+            assert!(matches!(stream.decoded_within(max), Err(CosError::Filter(_))));
+        }
+    }
+
+    #[test]
+    fn empty_filter_arrays_refuse_decoding_past_a_caller_limit() {
+        let mut dict = Dict::new();
+        dict.set(b"Filter".to_vec(), Object::Array(Vec::new()));
+        let stream = Stream::from_raw(dict, b"abc".to_vec());
+        assert!(matches!(stream.decoded_within(2), Err(CosError::Filter(_))));
+    }
+
+    #[test]
+    fn crypt_only_streams_refuse_decoding_past_a_caller_limit() {
+        let mut dict = Dict::new();
+        dict.set(b"Filter".to_vec(), Object::name("Crypt"));
+        let mut parms = Dict::new();
+        parms.set(b"Name".to_vec(), Object::name("Identity"));
+        dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        let stream = Stream::from_raw(dict, b"abc".to_vec());
+        assert!(matches!(stream.decoded_within(2), Err(CosError::Filter(_))));
+    }
+
+    #[test]
+    fn identity_streams_preserve_bytes_within_a_caller_limit() {
+        let mut array = Dict::new();
+        array.set(b"Filter".to_vec(), Object::Array(Vec::new()));
+        let mut crypt = Dict::new();
+        crypt.set(b"Filter".to_vec(), Object::name("Crypt"));
+        for dict in [Dict::new(), array, crypt] {
+            let stream = Stream::from_raw(dict.clone(), b"abc".to_vec());
+            assert_eq!(stream.decoded_within(3).unwrap(), b"abc");
+            assert_eq!(stream.decoded_within(usize::MAX).unwrap(), b"abc");
+            assert_eq!(stream.decoded().unwrap(), b"abc");
+            assert_eq!(stream.decoded_strict().unwrap(), b"abc");
+            assert!(Stream::from_raw(dict, Vec::new()).decoded_within(0).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn filtered_streams_preserve_the_caller_limit() {
+        let stream = Stream::flate(Dict::new(), b"abc");
+        assert!(matches!(stream.decoded_within(2), Err(CosError::Filter(_))));
+        assert_eq!(stream.decoded_within(3).unwrap(), b"abc");
+        assert_eq!(stream.decoded_strict().unwrap(), b"abc");
     }
 }

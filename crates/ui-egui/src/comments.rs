@@ -13,7 +13,7 @@
 //! applied by the app, so each change is one undo step.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
-use pdfcraft_engine::{Edit, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
+use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
 use pdfcraft_render::{Annotation, DocInfo};
 
 use crate::canvas::{DocView, PageXform};
@@ -200,14 +200,14 @@ impl CommentTool {
                 Shape::TextMarkup { kind: self.markup().unwrap_or(Markup::Highlight), quads: Vec::new() }
             }
             Self::Ink => Shape::Ink { strokes: Vec::new() },
-            Self::Line => Shape::Line { from: [0.0; 2], to: [0.0; 2], arrow: false },
-            Self::Arrow => Shape::Line { from: [0.0; 2], to: [0.0; 2], arrow: true },
+            Self::Line => Shape::Line { from: [0.0; 2], to: [0.0; 2], start: LineEnding::None, end: LineEnding::None },
+            Self::Arrow => Shape::Line { from: [0.0; 2], to: [0.0; 2], start: LineEnding::None, end: LineEnding::OpenArrow },
             Self::Rectangle => Shape::Rectangle { rect: [0.0; 4] },
             Self::Oval => Shape::Oval { rect: [0.0; 4] },
             Self::Polygon => Shape::Polygon { vertices: Vec::new(), cloud: false },
             Self::Cloud => Shape::Polygon { vertices: Vec::new(), cloud: true },
-            Self::PolyLine => Shape::PolyLine { vertices: Vec::new() },
-            Self::Callout => Shape::Callout { rect: [0.0; 4], knee: [0.0; 2], point: [0.0; 2], font_size: 10.0 },
+            Self::PolyLine => Shape::PolyLine { vertices: Vec::new(), start: LineEnding::None, end: LineEnding::None },
+            Self::Callout => Shape::Callout { rect: [0.0; 4], knee: [0.0; 2], point: [0.0; 2], font_size: 10.0, ending: LineEnding::OpenArrow },
             Self::Caret => Shape::Caret { rect: [0.0; 4] },
             Self::ReplaceText => Shape::TextMarkup { kind: Markup::StrikeOut, quads: Vec::new() },
             Self::Eraser => Shape::Ink { strokes: Vec::new() },
@@ -808,11 +808,9 @@ fn select_input(
         && let Some(o) = origin
     {
         if let (Some(h), Some(a)) = (handle_at(o), selected) {
-            let aspect_ratio = view.signature_drag.aspect_ratio(cx.page, a.index).and_then(|ratio| {
-                let p = cx.info.pages.get(cx.page)?;
-                let rotation = u32::from(p.rotation) + u32::from(cx.xf.rot);
-                Some(if rotation % 180 == 0 { ratio } else { ratio.recip() })
-            });
+            // On screen, the image is also turned by the view's rotation.
+            let turned = !cx.xf.rot.is_multiple_of(180);
+            let aspect_ratio = view.signature_drag.aspect_ratio(cx.page, a.index).map(|ratio| if turned { ratio.recip() } else { ratio });
             cv.gesture = Some(Gesture::Resize { page: cx.page, index: a.index, handle: h, from: o, aspect_ratio });
             consumed = true;
         } else if let Some(a) = cx.hit(o)
@@ -1010,13 +1008,20 @@ fn drawn_shape(tool: CommentTool, points: &[[f64; 2]]) -> Option<Shape> {
     let big = rect[2] - rect[0] >= 2.0 && rect[3] - rect[1] >= 2.0;
     match tool {
         CommentTool::Ink if points.len() >= 2 => Some(Shape::Ink { strokes: vec![points.to_vec()] }),
-        CommentTool::Line | CommentTool::Arrow if far => Some(Shape::Line { from: first, to: last, arrow: tool == CommentTool::Arrow }),
+        CommentTool::Line | CommentTool::Arrow if far => Some(Shape::Line {
+            from: first,
+            to: last,
+            start: LineEnding::None,
+            end: if tool == CommentTool::Arrow { LineEnding::OpenArrow } else { LineEnding::None },
+        }),
         CommentTool::Rectangle if big => Some(Shape::Rectangle { rect }),
         CommentTool::Oval if big => Some(Shape::Oval { rect }),
         CommentTool::Polygon | CommentTool::Cloud if points.len() >= 3 => {
             Some(Shape::Polygon { vertices: points.to_vec(), cloud: tool == CommentTool::Cloud })
         }
-        CommentTool::PolyLine if points.len() >= 2 => Some(Shape::PolyLine { vertices: points.to_vec() }),
+        CommentTool::PolyLine if points.len() >= 2 => {
+            Some(Shape::PolyLine { vertices: points.to_vec(), start: LineEnding::None, end: LineEnding::None })
+        }
         _ => None,
     }
 }
@@ -1076,7 +1081,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             ui.set_width(260.0);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&prefs.author).font(theme::semibold(13.0)));
-                ui.label(egui::RichText::new(title).font(theme::regular(11.5)).color(t.text_faint));
+                ui.label(egui::RichText::new(tl!(title)).font(theme::regular(11.5)).color(t.text_faint));
             });
             ui.add_space(6.0);
             let hint = match c.kind {
@@ -1146,7 +1151,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 (rect[0] + rect[2]) / 2.0
             };
             let knee = [(point[0] + side) / 2.0, (rect[1] + rect[3]) / 2.0];
-            Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size: 10.0 }, text))
+            Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size: 10.0, ending: LineEnding::OpenArrow }, text))
         }
         ComposerKind::Replace => {
             view.comments.tool_done = true;
@@ -1238,8 +1243,14 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                 });
                 ui.menu_button(tl!("Colour"), |ui| {
                     if let Some(c) = swatch_grid(ui, a.color.map(|c| c.map(f64::from))) {
-                        action =
-                            Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation { page, index, color: Some(c), opacity: None, width: None })));
+                        action = Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation {
+                            page,
+                            index,
+                            color: Some(c),
+                            opacity: None,
+                            width: None,
+                            endings: None,
+                        })));
                         ui.close();
                     }
                 });
@@ -1406,7 +1417,10 @@ mod tests {
         assert_eq!(drawn_shape(CommentTool::Rectangle, &[[0.0, 0.0], [1.0, 1.0]]), None);
         assert_eq!(drawn_shape(CommentTool::Rectangle, &[[10.0, 0.0], [0.0, 10.0]]), Some(Shape::Rectangle { rect: [0.0, 0.0, 10.0, 10.0] }));
         assert_eq!(drawn_shape(CommentTool::Ink, &[[0.0, 0.0]]), None);
-        assert!(matches!(drawn_shape(CommentTool::Arrow, &[[0.0, 0.0], [5.0, 0.0]]), Some(Shape::Line { arrow: true, .. })));
+        assert!(matches!(
+            drawn_shape(CommentTool::Arrow, &[[0.0, 0.0], [5.0, 0.0]]),
+            Some(Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. })
+        ));
     }
 
     #[test]

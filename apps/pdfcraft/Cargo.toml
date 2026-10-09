@@ -14,7 +14,9 @@ workspace = true
 ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"] }
 rustls-native-certs = "0.8"
 pdfcraft-ui-egui = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "persistence", "links"] }
+# wgpu draws; OpenGL (glow) is the fallback when wgpu can't start on an old or unusual GPU or
+# driver (#461, #435, #392), and can be chosen with PDFCRAFT_RENDERER=gl.
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence", "links"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
 # Records from every crate go to standard error and the log file (src/logging.rs).

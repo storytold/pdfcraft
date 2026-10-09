@@ -3477,6 +3477,7 @@ dependencies = [
  "hayro-syntax",
  "pdfcraft-cos",
  "pdfcraft-fonts",
+ "pdfcraft-model",
  "thiserror 2.0.21",
 ]
 
@@ -3486,7 +3487,9 @@ version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "image",
+ "pdfcraft-cos",
  "pdfcraft-engine",
+ "pdfcraft-model",
  "pdfcraft-organize",
  "pdfcraft-platform",
  "pdfcraft-render",
@@ -3567,6 +3570,7 @@ dependencies = [
  "pdfcraft-fonts",
  "pdfcraft-model",
  "thiserror 2.0.21",
+ "unicode-bidi",
 ]
 
 [[package]]
@@ -3625,6 +3629,7 @@ dependencies = [
 name = "pdfcraft-fonts"
 version = "0.4.0"
 dependencies = [
+ "harfrust",
  "pdfcraft-cos",
  "skrifa 0.44.0",
 ]
@@ -3744,13 +3749,17 @@ dependencies = [
 name = "pdfcraft-render"
 version = "0.4.0"
 dependencies = [
+ "bytemuck",
+ "flate2",
  "getrandom 0.4.3",
  "hayro",
  "hayro-syntax",
  "kurbo 0.13.1",
  "log",
  "lopdf",
+ "pdfcraft-cos",
  "pdfcraft-fonts",
+ "skrifa 0.44.0",
  "thiserror 2.0.21",
 ]
 
@@ -3786,6 +3795,7 @@ version = "0.4.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
+ "bytemuck",
  "eframe",
  "egui",
  "egui_extras",
@@ -3835,9 +3845,12 @@ name = "pdfcraft-xfa"
 version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
+ "image",
  "pdfcraft-cos",
  "pdfcraft-fonts",
+ "png 0.18.1",
  "roxmltree",
+ "sha2",
  "thiserror 2.0.21",
 ]
 
@@ -6584,8 +6597,6 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 [[package]]
 name = "winit"
 version = "0.30.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6755fa58a9f8350bd1e472d4c3fcc25f824ec358933bba33306d0b63df5978d"
 dependencies = [
  "ahash",
  "android-activity",

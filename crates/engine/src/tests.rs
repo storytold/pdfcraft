@@ -36,6 +36,70 @@ fn session_with(n: usize) -> (Session, DocId) {
     (s, id)
 }
 
+#[test]
+fn custom_image_stamp_keeps_displayed_orientation_on_rotated_pages() {
+    let colours = [[240, 20, 20, 255], [20, 180, 20, 255], [20, 20, 240, 255], [230, 180, 20, 255]];
+    let image = image::RgbaImage::from_fn(80, 40, |x, y| image::Rgba(colours[usize::from(y >= 20) * 2 + usize::from(x >= 40)]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let bytes = Arc::new(png.into_inner());
+    for degrees in [0, 90, 180, 270] {
+        let (mut session, id) = session_with(1);
+        session.apply(id, Edit::RotatePages { pages: vec![0], degrees }).unwrap();
+        let at = session.get(id).unwrap().info.pages[0].view_to_user(100.0, 100.0).map(f64::from);
+        session
+            .apply(
+                id,
+                Edit::AddCustomStamp {
+                    page: 0,
+                    rect: [at[0], at[1], at[0], at[1]],
+                    name: "Original quadrants".into(),
+                    file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
+                    author: "Test".into(),
+                },
+            )
+            .unwrap();
+        let check = |session: &Session, points: [(u32, u32); 4]| {
+            let doc = session.get(id).unwrap();
+            let mut renderer = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+            let rendered = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+            assert!(rendered.error.is_none(), "{:?}", rendered.error);
+            for ((x, y), colour) in points.into_iter().zip(colours) {
+                let offset = ((y * rendered.width + x) * 4) as usize;
+                assert_eq!(&rendered.rgba[offset..offset + 4], &colour, "page rotation {degrees}; displayed point ({x}, {y})");
+            }
+        };
+        let points = [(80, 90), (120, 90), (80, 110), (120, 110)];
+        check(&session, points);
+        let info = session.get(id).unwrap().info.pages[0].clone();
+        let rect = session.get(id).unwrap().info.annotations[0].rect;
+        let a = info.user_to_view(rect[0], rect[1]);
+        let b = info.user_to_view(rect[2], rect[3]);
+        let bounds = [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])];
+        for (actual, expected) in bounds.into_iter().zip([60.0, 80.0, 140.0, 120.0]) {
+            assert!((actual - expected).abs() < 0.0001, "displayed bounds {bounds:?}");
+        }
+        session.apply(id, Edit::StyleAnnotation { page: 0, index: 0, color: None, opacity: Some(1.0), width: None, endings: None }).unwrap();
+        check(&session, points);
+        let resized = info.view_rect_to_user([40.0, 70.0, 160.0, 130.0]).map(f64::from);
+        session.apply(id, Edit::ResizeAnnotation { page: 0, index: 0, rect: resized }).unwrap();
+        let resized_points = [(70, 85), (130, 85), (70, 115), (130, 115)];
+        check(&session, resized_points);
+        session.undo(id).unwrap();
+        check(&session, points);
+        session.redo(id).unwrap();
+        check(&session, resized_points);
+        let from = info.view_to_user(100.0, 100.0);
+        let to = info.view_to_user(110.0, 115.0);
+        session.apply(id, Edit::MoveAnnotation { page: 0, index: 0, dx: f64::from(to[0] - from[0]), dy: f64::from(to[1] - from[1]) }).unwrap();
+        check(&session, [(80, 100), (140, 100), (80, 130), (140, 130)]);
+        session.undo(id).unwrap();
+        check(&session, resized_points);
+        session.redo(id).unwrap();
+        check(&session, [(80, 100), (140, 100), (80, 130), (140, 130)]);
+    }
+}
+
 fn page_texts(s: &Session, id: DocId) -> Vec<String> {
     let doc = s.get(id).unwrap();
     let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
@@ -1036,6 +1100,116 @@ fn flattening_keeps_the_look_and_drops_the_objects() {
     assert_eq!(s.get(id).unwrap().form.len(), 2);
 }
 
+fn fill_item(shape: Shape, contents: &str) -> Edit {
+    let style = Style::default_for(&shape);
+    Edit::AddAnnotation(NewAnnotation { page: 0, shape, style, contents: contents.into(), author: "Ada".into() })
+}
+
+fn comment_text(s: &Session, id: DocId) -> Vec<String> {
+    let mut t: Vec<String> = s.get(id).unwrap().info.annotations.iter().map(|a| a.contents.clone().unwrap_or_default()).collect();
+    t.sort();
+    t
+}
+
+#[test]
+fn flattening_fill_and_sign_keeps_other_comments_fields_and_undoes() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, fill_item(Shape::Typewriter { rect: [20.0, 200.0, 120.0, 220.0], font_size: 10.0 }, "Hello")).unwrap();
+    s.apply(id, fill_item(Shape::Mark { rect: [140.0, 200.0, 160.0, 220.0], mark: FillMark::Check }, "")).unwrap();
+    s.apply(id, fill_item(Shape::Signature { strokes: vec![vec![[10.0, 40.0], [40.0, 70.0], [70.0, 40.0]]] }, "")).unwrap();
+    s.apply(id, fill_item(Shape::TypedSignature { rect: [90.0, 40.0, 150.0, 70.0], contours: vec![vec![[0.1, 0.2], [0.5, 0.9], [0.9, 0.2]]] }, ""))
+        .unwrap();
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 8, 8);
+        enc.set_color(png::ColorType::Rgba);
+        let pixel = [40u8, 60, 80, 200];
+        enc.write_header().unwrap().write_image_data(&pixel.repeat(64)).unwrap();
+    }
+    let image = SignatureImage::from_bytes(&png).unwrap();
+    let info = s.get(id).unwrap().info.pages[0].clone();
+    s.apply(id, image.edit(0, &info, [20.0, 120.0], false, "Ada").unwrap()).unwrap();
+    s.apply(id, fill_item(Shape::TextMarkup { kind: Markup::Highlight, quads: vec![[20.0, 280.0, 80.0, 280.0, 20.0, 270.0, 80.0, 270.0]] }, "keep"))
+        .unwrap();
+    s.apply(id, fill_item(Shape::TextBox { rect: [20.0, 150.0, 120.0, 180.0], font_size: 12.0 }, "Note")).unwrap();
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 230.0, 120.0, 250.0], kind: NewField::Text { multiline: false }, name: Some("email".into()) })
+        .unwrap();
+
+    s.apply(id, Edit::FlattenFillSign).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Flatten Fill & Sign"));
+    assert_eq!(comment_text(&s, id), ["Note", "keep"]);
+    assert_eq!(s.get(id).unwrap().form.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["email"]);
+    s.undo(id).unwrap();
+    assert!(comment_text(&s, id).contains(&"Hello".to_string()), "undo restores the typewriter");
+
+    s.apply(id, Edit::FlattenFillSign).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    s.mark_saved(id, saved.clone(), None).unwrap();
+    let mut again = Session::new();
+    let id2 = again.open("saved.pdf", None, saved, None).unwrap();
+    assert_eq!(comment_text(&again, id2), ["Note", "keep"]);
+    assert_eq!(again.get(id2).unwrap().form.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["email"]);
+}
+
+#[test]
+fn flattening_fill_and_sign_does_nothing_when_there_are_none() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, fill_item(Shape::TextMarkup { kind: Markup::Highlight, quads: vec![[20.0, 200.0, 80.0, 200.0, 20.0, 190.0, 80.0, 190.0]] }, "keep"))
+        .unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    s.mark_saved(id, saved, None).unwrap();
+    assert!(!s.get(id).unwrap().dirty);
+    s.apply(id, Edit::FlattenFillSign).unwrap();
+    assert!(!s.get(id).unwrap().dirty, "nothing was baked in, so the document stays saved");
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Add highlight"), "no undo step for a flatten that changed nothing");
+    assert_eq!(comment_text(&s, id), ["keep"]);
+}
+
+#[test]
+fn flattening_fill_and_sign_is_refused_without_permission_to_change() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, fill_item(Shape::Typewriter { rect: [20.0, 200.0, 120.0, 220.0], font_size: 10.0 }, "Hello")).unwrap();
+    let p = Protection { printing: Printing::Low, changes: Changes::CommentFillSign, copy: false, ..protection(None, Some("boss")) };
+    s.apply(id, Edit::Protect(p)).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let mut other = Session::new();
+    let id2 = other.open("locked.pdf", None, saved, None).unwrap();
+    let before = other.get(id2).unwrap().bytes.clone();
+    assert_eq!(other.apply(id2, Edit::FlattenFillSign), Err(EditError::NotPermitted("changes to the document")));
+    assert_eq!(other.get(id2).unwrap().bytes, before);
+    assert!(!other.get(id2).unwrap().dirty);
+    assert!(comment_text(&other, id2).contains(&"Hello".to_string()));
+}
+
+#[test]
+fn flattening_fill_and_sign_on_a_signed_file_stays_incremental() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("fixture.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    let opts = SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), ..SignOptions::default() };
+    let signed = s.sign(id, &digital_id, opts).unwrap();
+    s.mark_signed(id, signed.clone(), None).unwrap();
+    s.apply(id, fill_item(Shape::Typewriter { rect: [20.0, 200.0, 120.0, 220.0], font_size: 10.0 }, "Hello")).unwrap();
+    s.apply(id, Edit::FlattenFillSign).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved.starts_with(signed.as_ref()), "the signature's bytes stay an incremental update");
+    assert!(!comment_text(&s, id).contains(&"Hello".to_string()));
+}
+
+#[test]
+fn flattening_fill_and_sign_reopens_an_encrypted_file() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, fill_item(Shape::Typewriter { rect: [20.0, 200.0, 120.0, 220.0], font_size: 10.0 }, "Hello")).unwrap();
+    s.apply(id, Edit::Protect(protection(Some("secret"), None))).unwrap();
+    s.apply(id, Edit::FlattenFillSign).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let mut again = Session::new();
+    assert!(again.open("p.pdf", None, saved.clone(), None).is_err());
+    let id2 = again.open("p.pdf", None, saved, Some("secret")).unwrap();
+    assert!(!comment_text(&again, id2).contains(&"Hello".to_string()));
+}
+
 #[test]
 fn pages_export_as_png_jpeg_and_tiff() {
     use crate::export::{Exporter, ImageFormat};
@@ -1588,6 +1762,39 @@ fn exporting_office_files_keeps_images() {
 }
 
 #[test]
+fn exporting_office_files_keeps_text_colour() {
+    // #526: a dark green heading came out black in Word.
+    let content = "BT /F1 24 Tf 0.05 0.23 0.18 rg 72 700 Td (Annual Report) Tj ET \
+BT /F1 11 Tf 0 g 72 650 Td (Black body text that is long enough to be the body size.) Tj ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>".into(),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new();
+    let id = s.open("c.pdf", None, Arc::new(pdf), None).unwrap();
+    let d = s.get(id).unwrap();
+    let html = String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap();
+    assert!(html.contains("style=\"color:#0D3B2E\">Annual Report"), "{html}");
+    let blocks = &d.export_pages()[0].blocks;
+    assert!(blocks.iter().any(|b| b.text == "Annual Report" && b.color == [0.05, 0.23, 0.18]), "{blocks:?}");
+}
+
+#[test]
 fn guard_turns_a_panic_into_an_error() {
     assert_eq!(guard(|| 7), Ok(7));
     assert_eq!(guard(|| -> u8 { panic!("boom") }), Err("boom".to_string()));
@@ -1755,6 +1962,68 @@ fn xfa_data_no_field_binds_to_survives_an_edit_and_save() {
     let doc = s.get(id).unwrap();
     assert!(doc.info.warnings.iter().any(|w| w.contains("structured content")), "{:?}", doc.info.warnings);
     assert!(doc.xfa_warnings.iter().any(|w| w.contains("structured content")));
+}
+
+#[test]
+fn xfa_choice_lists_signature_and_picture_fields_open_fill_script_and_save() {
+    let data = "<form><page1><country>Japan</country><langs>English\nSpanish</langs></page1></form>";
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::fields_template(data)));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("fields.pdf", None, bytes, None).expect("opens");
+    let field = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).cloned().unwrap_or_else(|| panic!("no field {n}"));
+    use pdfcraft_forms::FieldKind as K;
+    // The forms layer sees a combo box with its options and the data's saved value, a
+    // multi-select list with both picks, an editable combo, a password field and a signature.
+    let country = field(&s, "country");
+    assert_eq!((country.kind, country.value.clone()), (K::Combo, vec!["JP".to_string()]));
+    assert_eq!(country.options, vec![("CA".into(), "Canada".into()), ("FR".into(), "France".into()), ("JP".into(), "Japan".into())]);
+    let langs = field(&s, "langs");
+    assert_eq!(langs.kind, K::List);
+    assert!(langs.has(pdfcraft_forms::flags::MULTI_SELECT));
+    assert_eq!(langs.value, vec!["English".to_string(), "Spanish".to_string()]);
+    assert!(field(&s, "other").has(pdfcraft_forms::flags::EDIT));
+    assert!(field(&s, "pin").has(pdfcraft_forms::flags::PASSWORD));
+    assert_eq!(field(&s, "sign").kind, K::Signature);
+    // Scripts read a choice list's saved value.
+    assert_eq!(field(&s, "summary").value, vec!["Country: JP".to_string()], "{:?}", s.take_js_output(id));
+    // Choosing another item recalculates; the list takes several values; a typed value is kept
+    // in the editable list and refused in the fixed one.
+    s.apply(id, Edit::SetFieldValue { name: "country".into(), value: FieldValue::Choice(vec!["CA".into()]) }).unwrap();
+    assert_eq!(field(&s, "summary").value, vec!["Country: CA".to_string()]);
+    s.apply(id, Edit::SetFieldValue { name: "langs".into(), value: FieldValue::Choice(vec!["French".into(), "Spanish".into()]) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "other".into(), value: FieldValue::Text("typed".into()) }).unwrap();
+    assert!(s.apply(id, Edit::SetFieldValue { name: "country".into(), value: FieldValue::Choice(vec!["Mars".into()]) }).is_err());
+    // Saved: the datasets hold the saved values, several on separate lines; reopened, the
+    // fields and the calculation are what they were.
+    let saved = s.save_bytes(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    let d = pdfcraft_xfa::data_of(&cos).unwrap();
+    assert_eq!(d.text_at(&pdfcraft_xfa::som_to_path("form[0].page1[0].country[0]")), Some("CA"));
+    assert_eq!(d.text_at(&pdfcraft_xfa::som_to_path("form[0].page1[0].langs[0]")), Some("French\nSpanish"));
+    assert_eq!(d.text_at(&pdfcraft_xfa::som_to_path("form[0].page1[0].other[0]")), Some("typed"));
+    let id2 = s.open("again.pdf", None, saved.clone(), None).unwrap();
+    let d2 = s.get(id2).unwrap();
+    let f2 = |n: &str| d2.form.iter().find(|f| f.name == n).unwrap().value.clone();
+    assert_eq!(f2("country"), vec!["CA".to_string()]);
+    assert_eq!(f2("langs"), vec!["French".to_string(), "Spanish".to_string()]);
+    assert_eq!(f2("summary"), vec!["Country: CA".to_string()]);
+    // The PNG of the image field and the GIF of the draw are pictures on the page.
+    assert_eq!(s.get(id).unwrap().page_images(0).len(), 2);
+    // Filled in by another viewer since: saved values, several on separate lines, and shown
+    // text (an older viewer's), are taken on reopen; shown text that means the current value
+    // is not a change.
+    let mut cos = pdfcraft_cos::Document::open(saved).unwrap();
+    pdfcraft_xfa::write_data_value(&mut cos, &pdfcraft_xfa::som_to_path("form[0].page1[0].langs[0]"), "English\nSpanish").unwrap();
+    pdfcraft_xfa::write_data_value(&mut cos, &pdfcraft_xfa::som_to_path("form[0].page1[0].country[0]"), "Canada").unwrap();
+    let edited = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap());
+    let id3 = s.open("elsewhere.pdf", None, edited, None).unwrap();
+    let d3 = s.get(id3).unwrap();
+    let f3 = |n: &str| d3.form.iter().find(|f| f.name == n).unwrap().value.clone();
+    assert_eq!(f3("langs"), vec!["English".to_string(), "Spanish".to_string()]);
+    assert_eq!(f3("country"), vec!["CA".to_string()]);
+    let taken: Vec<&String> = d3.info.warnings.iter().filter(|w| w.contains("another viewer")).collect();
+    assert_eq!(taken.len(), 1, "{:?}", d3.info.warnings);
+    assert!(taken[0].contains("langs") && !taken[0].contains("country"), "{}", taken[0]);
 }
 
 #[test]

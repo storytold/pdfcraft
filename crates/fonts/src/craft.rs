@@ -49,6 +49,12 @@ pub fn ui_arabic_fonts() -> Vec<&'static CraftFont> {
     arabic(CRAFT_FONTS.iter())
 }
 
+/// The face for Arabic text written into PDFs: the first `Arab` face. `None` when built without
+/// craft-fonts or when its revision has no Arabic face.
+pub fn document_arabic_font() -> Option<&'static CraftFont> {
+    ui_arabic_fonts().into_iter().next()
+}
+
 fn arabic<'a>(faces: impl IntoIterator<Item = &'a CraftFont>) -> Vec<&'a CraftFont> {
     faces.into_iter().filter(|f| f.covers("Arab")).collect()
 }
@@ -96,22 +102,36 @@ pub fn document_japanese_font_for_style(serif: bool, bold: bool) -> Option<&'sta
     document_face(CRAFT_FONTS, serif, bold)
 }
 
+/// Every `Jpan` face that can stand in for the document text, the best match for the style first
+/// (the face [`document_japanese_font_for_style`] returns), then the others. Not every face has
+/// every glyph (their coverage of e.g. Cyrillic differs), so a caller can move on to the next one.
+/// Empty without craft-fonts.
+pub fn document_japanese_fonts_for_style(serif: bool, bold: bool) -> Vec<&'static CraftFont> {
+    document_faces(CRAFT_FONTS, serif, bold)
+}
+
 fn document_face(faces: &[CraftFont], serif: bool, bold: bool) -> Option<&CraftFont> {
+    document_faces(faces, serif, bold).into_iter().next()
+}
+
+fn document_faces(faces: &[CraftFont], serif: bool, bold: bool) -> Vec<&CraftFont> {
     let jpan = || faces.iter().filter(|f| f.covers("Jpan"));
+    let mut preferred = Vec::new();
     if !serif {
         let style = if bold { "Bold" } else { "Regular" };
-        if let Some(face) = jpan()
-            .find(|f| f.family == "BIZ UDPGothic" && f.style == style)
-            .or_else(|| jpan().find(|f| f.family == "BIZ UDPGothic" && f.style == "Regular"))
-        {
-            return Some(face);
+        preferred.extend(jpan().find(|f| f.family == "BIZ UDPGothic" && f.style == style));
+        preferred.extend(jpan().find(|f| f.family == "BIZ UDPGothic" && f.style == "Regular"));
+    }
+    for family in ["Shippori Mincho", "BIZ UDMincho"] {
+        preferred.extend(jpan().find(|f| f.family == family && f.style == "Regular"));
+    }
+    let mut out: Vec<&CraftFont> = Vec::new();
+    for face in preferred.into_iter().chain(jpan().filter(|f| f.style == "Regular")).chain(jpan()) {
+        if !out.iter().any(|f| std::ptr::eq(*f, face)) {
+            out.push(face);
         }
     }
-    ["Shippori Mincho", "BIZ UDMincho"]
-        .iter()
-        .find_map(|family| jpan().find(|f| f.family == *family && f.style == "Regular"))
-        .or_else(|| jpan().find(|f| f.style == "Regular"))
-        .or_else(|| jpan().next())
+    out
 }
 
 const fn str_eq(a: &str, b: &str) -> bool {
@@ -191,6 +211,11 @@ mod tests {
         assert_eq!(document_face(&faces, true, true).unwrap().bytes, b"serif");
         assert_eq!(document_face(&faces[..2], false, true).unwrap().bytes, b"sans");
         assert_eq!(document_face(&faces[..1], false, true).unwrap().bytes, b"serif");
+        // Every Japanese face is a candidate, the style's match first and none twice.
+        let order: Vec<&[u8]> = document_faces(&faces, false, true).iter().map(|f| f.bytes).collect();
+        assert_eq!(order, [b"bold".as_slice(), b"sans", b"serif"]);
+        let order: Vec<&[u8]> = document_faces(&faces, true, false).iter().map(|f| f.bytes).collect();
+        assert_eq!(order, [b"serif".as_slice(), b"sans", b"bold"]);
         assert!(document_face(&faces[3..], false, true).is_none());
         assert!(document_face(&[], false, true).is_none());
     }

@@ -127,19 +127,56 @@ pub fn render<'a>(
     interpreter_settings: &InterpreterSettings,
     render_settings: &RenderSettings,
 ) -> Pixmap {
-    let (x_scale, y_scale) = (render_settings.x_scale, render_settings.y_scale);
-    let (width, height) = page.render_dimensions();
-    let (scaled_width, scaled_height) = ((width * x_scale) as f64, (height * y_scale) as f64);
-    let initial_transform = Affine::translate((-render_settings.x_offset as f64, -render_settings.y_offset as f64))
-        * Affine::scale_non_uniform(x_scale as f64, y_scale as f64)
-        * page.initial_transform(true).to_kurbo();
+    let (pix_width, pix_height) = render_size(page, render_settings);
+    let mut pixmap = Pixmap::new(pix_width, pix_height);
+    render_into(
+        page,
+        cache,
+        interpreter_settings,
+        render_settings,
+        pixmap.data_as_u8_slice_mut(),
+    );
+    pixmap
+}
 
-    let (pix_width, pix_height) = (
+/// PdfCraft patch: the size in pixels of what [`render`] produces with these settings.
+pub fn render_size(page: &Page<'_>, render_settings: &RenderSettings) -> (u16, u16) {
+    let (width, height) = page.render_dimensions();
+    let (scaled_width, scaled_height) = (
+        (width * render_settings.x_scale) as f64,
+        (height * render_settings.y_scale) as f64,
+    );
+    (
         render_settings.width.unwrap_or(scaled_width.floor() as u16),
         render_settings
             .height
             .unwrap_or(scaled_height.floor() as u16),
-    );
+    )
+}
+
+/// PdfCraft patch: [`render`] into `buffer`, premultiplied RGBA8 rows of [`render_size`]
+/// pixels, so the caller chooses the allocation (one aligned to whole pixels can then become
+/// texture data without a copy). `buffer.len()` must be width × height × 4; any other length
+/// leaves `buffer` untouched (vello_cpu asserts on the length, and a panic must not be reachable).
+pub fn render_into<'a>(
+    page: &'a Page<'a>,
+    cache: &RenderCache<'a>,
+    interpreter_settings: &InterpreterSettings,
+    render_settings: &RenderSettings,
+    buffer: &mut [u8],
+) {
+    let (x_scale, y_scale) = (render_settings.x_scale, render_settings.y_scale);
+    let initial_transform = Affine::translate((-render_settings.x_offset as f64, -render_settings.y_offset as f64))
+        * Affine::scale_non_uniform(x_scale as f64, y_scale as f64)
+        * page.initial_transform(true).to_kurbo();
+
+    let (pix_width, pix_height) = render_size(page, render_settings);
+    let expected = (pix_width as usize)
+        .checked_mul(pix_height as usize)
+        .and_then(|n| n.checked_mul(4));
+    if expected != Some(buffer.len()) {
+        return;
+    }
     let mut state = Context::new(
         initial_transform,
         Rect::new(0.0, 0.0, pix_width as f64, pix_height as f64),
@@ -174,11 +211,14 @@ pub fn render<'a>(
 
     device.pop_clip_path();
 
-    let mut pixmap = Pixmap::new(pix_width, pix_height);
     let mut resources = vello_cpu::Resources::default();
-    device.ctx.render_to_pixmap(&mut resources, &mut pixmap);
-
-    pixmap
+    device.ctx.render_to_buffer(
+        &mut resources,
+        buffer,
+        pix_width,
+        pix_height,
+        vc_settings.render_mode,
+    );
 }
 
 // Just a convenience method for testing.
