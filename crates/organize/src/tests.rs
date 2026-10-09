@@ -4,6 +4,18 @@ use pdfcraft_cos::{Document, Object, SaveOptions, write_full, write_incremental}
 
 use super::*;
 
+#[test]
+fn page_rotation_resolves_inheritance_overrides_and_missing_pages() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    for page in 0..3 {
+        assert_eq!(page_rotation(&doc, page).unwrap(), 90);
+    }
+    rotate_pages(&mut doc, &[1], -180).unwrap();
+    assert_eq!(page_rotation(&doc, 1).unwrap(), 270);
+    assert_eq!(page_rotation(&doc, 0).unwrap(), 90);
+    assert_eq!(page_rotation(&doc, 3), Err(OrganizeError::NoSuchPage(3)));
+}
+
 /// A 3-page document with a nested page tree. MediaBox and Rotate are inherited from the root,
 /// Resources from an intermediate node; each page's content says which page it is.
 fn fixture() -> Vec<u8> {

@@ -49,6 +49,12 @@ pub fn ui_arabic_fonts() -> Vec<&'static CraftFont> {
     arabic(CRAFT_FONTS.iter())
 }
 
+/// The face for Arabic text written into PDFs: the first `Arab` face. `None` when built without
+/// craft-fonts or when its revision has no Arabic face.
+pub fn document_arabic_font() -> Option<&'static CraftFont> {
+    ui_arabic_fonts().into_iter().next()
+}
+
 fn arabic<'a>(faces: impl IntoIterator<Item = &'a CraftFont>) -> Vec<&'a CraftFont> {
     faces.into_iter().filter(|f| f.covers("Arab")).collect()
 }

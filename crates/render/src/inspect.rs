@@ -1014,6 +1014,65 @@ mod tests {
     }
 
     #[test]
+    fn empty_png_predictor_frames_do_not_allocate_rows() {
+        // usize::MAX cannot be reserved, so the old code safely errors before allocating.
+        // An empty frame needs no rows regardless of the declared width.
+        assert!(lopdf::filters::png::decode_frame(&[], 1, usize::MAX).unwrap().is_empty());
+    }
+
+    fn tiff_predictor_stream(data: Vec<u8>, columns: i64, colors: i64, bits: i64) -> lopdf::Stream {
+        let mut params = lopdf::Dictionary::new();
+        params.set("Predictor", 2i64);
+        params.set("Columns", columns);
+        params.set("Colors", colors);
+        params.set("BitsPerComponent", bits);
+        let mut dict = lopdf::Dictionary::new();
+        dict.set("DecodeParms", params);
+        let mut stream = lopdf::Stream::new(dict, data);
+        stream.compress().unwrap();
+        assert_eq!(stream.dict.get(b"Filter").unwrap().as_name().unwrap(), b"FlateDecode");
+        stream
+    }
+
+    #[test]
+    fn tiff_subbyte_predictor_row_width_overflow_is_refused() {
+        // Each multiplication overflows before any scratch allocation in the old debug build.
+        for bits in [1, 2, 4] {
+            let stream = tiff_predictor_stream(vec![0; 64], i64::MAX, 3, bits);
+            assert!(
+                matches!(stream.decompressed_content_with_limit(64), Err(lopdf::Error::Decompress(lopdf::DecompressError::Predictor(_)))),
+                "{bits}-bit row"
+            );
+        }
+    }
+
+    #[test]
+    fn tiff_subbyte_predictor_scratch_is_bounded_by_available_samples() {
+        // 1/2-bit row widths fit usize on 32- and 64-bit hosts; Colors previously made Vec<u16>
+        // reject the capacity before allocating. A partial row has no preceding pixel.
+        for bits in [1, 2] {
+            let data = vec![0b1010_0110; 64];
+            let stream = tiff_predictor_stream(data.clone(), 1, i64::try_from(isize::MAX).unwrap(), bits);
+            assert_eq!(stream.decompressed_content_with_limit(64).unwrap(), data, "{bits}-bit row");
+        }
+    }
+
+    #[test]
+    fn tiff_subbyte_predictors_keep_components_rows_and_padding() {
+        // Repeated tiny rows compress through the public Stream API. Rows remain independent,
+        // differences wrap at each component depth, and trailing padding bits survive.
+        for (columns, colors, bits, encoded, decoded) in [
+            (16, 1, 1, vec![255, 170, 8, 255], vec![170, 204, 15, 85]),
+            (6, 1, 2, vec![85, 179], vec![108, 147]),
+            (3, 1, 4, vec![25, 16], vec![26, 176]),
+            (2, 2, 4, vec![18, 34], vec![18, 52]),
+        ] {
+            let stream = tiff_predictor_stream(encoded.repeat(32), columns, colors, bits);
+            assert_eq!(stream.decompressed_content_with_limit(128).unwrap(), decoded.repeat(32), "{bits}-bit, {colors} colours");
+        }
+    }
+
+    #[test]
     fn view_and_user_space_round_trip_for_every_rotation() {
         for rotation in [0u16, 90, 180, 270] {
             let (w, h) = if rotation % 180 == 0 { (200.0, 300.0) } else { (300.0, 200.0) };

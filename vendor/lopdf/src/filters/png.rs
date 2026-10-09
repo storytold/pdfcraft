@@ -86,10 +86,15 @@ pub fn decode_row(filter: FilterType, bpp: usize, previous: &[u8], current: &mut
 }
 
 pub fn decode_frame(content: &[u8], bpp: usize, bytes_per_row: usize) -> Result<Vec<u8>> {
+    // PdfCraft patch: an empty frame needs no row buffers, even for an absurd declared width.
+    if content.is_empty() {
+        return Ok(Vec::new());
+    }
+
     // PdfCraft patch: each row is a filter byte plus `bytes_per_row` bytes, so a row longer
     // than the data can never be read (`read_exact` below fails). Refuse it before allocating:
     // a fuzzed `/Columns 4294967295` allocated two 4 GiB rows here.
-    if !content.is_empty() && bytes_per_row >= content.len() {
+    if bytes_per_row >= content.len() {
         return Err(Error::new(ErrorKind::InvalidData, "PNG predictor row is longer than the data"));
     }
     let mut previous = Vec::new();

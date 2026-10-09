@@ -1613,6 +1613,70 @@ trailer << /Root 1 0 R >>
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
     }
 
+    /// From `cargo xtask fuzz`: one changed byte in a symbol dictionary's arithmetic-coded data
+    /// hung the renderer. Two of its loops can stop advancing: an export run of length 0, and a
+    /// height class whose first width is already the end-of-class marker. Past the end of its
+    /// data the decoder can return those for ever. Vendored hayro-jbig2 patch: at most one height
+    /// class per new symbol and `2 × symbols + 1` export runs, each plus `EXTRA_EMPTY_STEPS`.
+    /// These synthetic dictionaries (two new symbols each, a few bytes of arbitrary data) decode
+    /// the same way. In the second every class after the first symbol adds 13 to the height, so it
+    /// only fails when the height overflows `u32`, after 330 million empty classes (about five
+    /// seconds; a delta of 0 would never end). The page draws it as twenty images, so that the
+    /// stall without the patch is well past the timeout on any machine.
+    #[test]
+    fn jbig2_symbol_dictionaries_that_never_advance_terminate() {
+        for (what, data, copies) in
+            [("zero-length export runs", &[0x05, 0x70, 0x05, 0x14, 0x02, 0x1d, 0x56, 0x3f][..], 1), ("empty height classes", &[0x06, 0x99][..], 20)]
+        {
+            // Embedded JBIG2 segments (ISO 14492 §7.2): page information, then a symbol dictionary.
+            let mut jbig2 = Vec::new();
+            let mut segment = |number: u32, kind: u8, data: &[u8]| {
+                jbig2.extend_from_slice(&number.to_be_bytes());
+                jbig2.extend_from_slice(&[kind, 0, 1]);
+                jbig2.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+                jbig2.extend_from_slice(data);
+            };
+            let mut page = Vec::new();
+            page.extend_from_slice(&8u32.to_be_bytes());
+            page.extend_from_slice(&8u32.to_be_bytes());
+            page.extend_from_slice(&[0; 8]); // resolution
+            page.extend_from_slice(&[0, 0, 0]); // flags, striping
+            segment(0, 48, &page);
+            let mut dictionary = vec![0, 0]; // arithmetic coding, template 0, no refinement
+            dictionary.extend_from_slice(&[3, 0xff, 0xfd, 0xff, 2, 0xfe, 0xfe, 0xfe]); // AT pixels
+            dictionary.extend_from_slice(&1u32.to_be_bytes()); // exported symbols
+            dictionary.extend_from_slice(&2u32.to_be_bytes()); // new symbols
+            dictionary.extend_from_slice(data);
+            segment(1, 0, &dictionary);
+            // Each copy is its own image XObject (5, 6, …), all drawn by the page.
+            let images: Vec<usize> = (5..5 + copies).collect();
+            let mut content: String = images.iter().map(|n| format!("q 20 0 0 20 5 5 cm /Im{n} Do Q ")).collect();
+            content.push_str("1 0 0 rg 0 0 4 4 re f");
+            let names: String = images.iter().map(|n| format!("/Im{n} {n} 0 R ")).collect();
+            let mut pdf = format!("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << {names}>> >> >> endobj\n").into_bytes();
+            pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n", content.len()).as_bytes());
+            for n in &images {
+                pdf.extend_from_slice(
+                    format!("{n} 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 8 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n", jbig2.len())
+                        .as_bytes(),
+                );
+                pdf.extend_from_slice(&jbig2);
+                pdf.extend_from_slice(b"\nendstream endobj\n");
+            }
+            pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+            });
+            let page = rx
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .unwrap_or_else(|_| panic!("{what}: a JBIG2 symbol dictionary must not stall the renderer"));
+            assert!(page.error.is_none(), "{what}: {:?}", page.error);
+            assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "{what}: the rest of the page draws");
+        }
+    }
+
     /// From the nightly `cargo xtask fuzz`: an embedded Type 1 font program holding a long run of
     /// integers. read-fonts 0.39 (through skrifa 0.42) looked ahead after every integer by
     /// parsing the next token, which looked ahead again, recursing through the whole run: a long

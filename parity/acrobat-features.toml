@@ -1950,8 +1950,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.text"]
 tools = ["page_add_text", "content_update"]
-evidence = ["crates/ui-egui/tests/content.rs::typing_moving_styling_and_deleting_added_content", "crates/ui-egui/tests/content.rs::clicking_elsewhere_keeps_the_text_and_starts_a_new_box", "crates/automation/tests/automation.rs::adding_content_through_tools", "crates/edit/src/tests.rs::added_text_and_images_are_page_content_that_stays_editable", "crates/engine/src/tests.rs::added_text_and_images_render_and_stay_editable"]
-notes = "page content, editable later (retype, move, restyle); standard fonts, Windows-1252 text. Each click on the page keeps the box being typed and starts a new one; Done and Discard beside the box"
+evidence = ["crates/ui-egui/tests/content.rs::typing_moving_styling_and_deleting_added_content", "crates/ui-egui/tests/content.rs::clicking_elsewhere_keeps_the_text_and_starts_a_new_box", "crates/automation/tests/automation.rs::adding_content_through_tools", "crates/edit/src/tests.rs::added_text_and_images_are_page_content_that_stays_editable", "crates/engine/src/tests.rs::added_text_and_images_render_and_stay_editable", "crates/edit/src/tests.rs::added_arabic_text_is_shaped_in_display_order_and_stays_searchable"]
+notes = "page content, editable later (retype, move, restyle); standard fonts, Windows-1252 text. Arabic text is shaped with the craft-fonts Arab face (Type 3 outlines with ToUnicode) and laid out in bidirectional display order; it is drawn regular whatever the bold/italic setting, Hebrew and other right-to-left scripts are not covered, and typing in the box is still left to right (misc.rtl-ui). Each click on the page keeps the box being typed and starts a new one; Done and Discard beside the box"
 
 [[feature]]
 id = "edit.find-replace"

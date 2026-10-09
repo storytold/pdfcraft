@@ -3568,6 +3568,7 @@ dependencies = [
  "pdfcraft-fonts",
  "pdfcraft-model",
  "thiserror 2.0.21",
+ "unicode-bidi",
 ]
 
 [[package]]
@@ -3626,6 +3627,7 @@ dependencies = [
 name = "pdfcraft-fonts"
 version = "0.4.0"
 dependencies = [
+ "harfrust",
  "pdfcraft-cos",
  "skrifa 0.44.0",
 ]
