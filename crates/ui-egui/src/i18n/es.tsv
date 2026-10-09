@@ -759,7 +759,7 @@
 	{verb} Header and Footer	{verb} encabezado y pie de página
 	{verb} Watermark	{verb} marca de agua
 	{verb} Background	{verb} fondo
-	Margins (in)	Márgenes (pulgadas)
+	Margins	Márgenes
 	Left Header Text	Texto del encabezado izquierdo
 	Center Header Text	Texto del encabezado central
 	Right Header Text	Texto del encabezado derecho
@@ -2004,6 +2004,7 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Elija una imagen PNG o JPEG (hasta 4 MiB). Se conserva la transparencia.
 	Couldn't import the signature image: {e}	No se pudo importar la imagen de la firma: {e}
 	Go to page…	Ir a la página…
+	For page sizes and margins.	Para tamaños de página y márgenes.
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Las fuentes estándar no pueden mostrar «{c}» ({code}). Por ahora solo se pueden añadir como texto caracteres de Europa occidental.
 	Larger pages	Páginas más grandes
 	Smaller pages	Páginas más pequeñas

@@ -447,7 +447,13 @@ pub fn list(doc: &Document) -> Listing {
     out
 }
 /// Last containing viewport wins, using the first point of the measurement (ISO 32000-2 §12.9).
+/// Outside every viewport the page measures true size in inches.
 pub fn scale_at(doc: &Document, page_index: usize, at: Point) -> Result<Scale> {
+    scale_at_or(doc, page_index, at, 1.0 / 72.0, "in")
+}
+/// [`scale_at`], but outside every viewport the page measures true size in `unit`, of which there
+/// are `per_point` in a PDF point (25.4 / 72 for millimetres).
+pub fn scale_at_or(doc: &Document, page_index: usize, at: Point, per_point: f64, unit: &str) -> Result<Scale> {
     check_points(&[at])?;
     let p = page(doc, page_index)?;
     if let Some(o) = p.dict.get(b"VP") {
@@ -471,7 +477,7 @@ pub fn scale_at(doc: &Document, page_index: usize, at: Point) -> Result<Scale> {
         }
     }
     let user_unit = p.dict.get(b"UserUnit").and_then(Object::as_f64).unwrap_or(1.0);
-    Scale::new(user_unit / 72.0, "in", 2)
+    Scale::new(user_unit * per_point, unit, 2)
 }
 /// Add a named rectangular viewport. Existing viewports are preserved in drawing order.
 pub fn set_scale(doc: &mut Document, page_index: usize, bbox: [f64; 4], name: &str, scale: &Scale) -> Result<()> {

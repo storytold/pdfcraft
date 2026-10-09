@@ -458,7 +458,7 @@
 	{verb} Header and Footer	{verb}页眉和页脚
 	{verb} Watermark	{verb}水印
 	{verb} Background	{verb}背景
-	Margins (in)	边距（英寸）
+	Margins	边距
 	Left Header Text	左页眉文本
 	Center Header Text	居中页眉文本
 	Right Header Text	右页眉文本
@@ -2052,6 +2052,7 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	选择 PNG 或 JPEG 图像（最大 4 MiB）。透明度会保留。
 	Couldn't import the signature image: {e}	无法导入签名图像：{e}
 	Go to page…	转到页面…
+	For page sizes and margins.	用于页面尺寸和边距。
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	标准字体无法显示“{c}”（{code}）。目前只能添加西欧字符作为文本。
 	Larger pages	放大页面
 	Smaller pages	缩小页面

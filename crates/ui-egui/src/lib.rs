@@ -81,6 +81,7 @@ mod pickers;
 pub mod prepare;
 mod print_ui;
 mod signature_drag;
+pub mod units;
 pub use print_ui::{Handling as PrintHandling, PrintDraft, Which as PrintWhich};
 mod redact_ui;
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft};
@@ -365,6 +366,8 @@ pub struct PdfCraftApp {
     /// Documents and view). Continuous scrolling at fit width by default, which never snaps
     /// between pages.
     pub view_defaults: canvas::ViewDefaults,
+    /// The unit page sizes and margins are shown in (Preferences ▸ Documents and view).
+    pub units: units::Unit,
     /// The Preferences ▸ Date format box while it's being edited, or while it holds an invalid
     /// pattern (the session keeps the last valid one).
     pub date_format_draft: Option<String>,
@@ -627,6 +630,7 @@ impl PdfCraftApp {
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
             view_defaults: Default::default(),
+            units: Default::default(),
             date_format_draft: None,
             mode_override: None,
             left: LeftPanel::AllTools,
@@ -1232,6 +1236,7 @@ impl PdfCraftApp {
             "default_layout": self.view_defaults.layout.as_str(),
             "default_zoom": self.view_defaults.zoom_name(),
             "highlight_fields": self.view_defaults.highlight_fields,
+            "units": self.units,
             "language": self.language,
             "flatten_fill_sign": self.flatten_fill_sign_on_save,
             "date_format": self.session.date_format(),
@@ -1278,6 +1283,9 @@ impl PdfCraftApp {
         }
         if let Some(layout) = v["default_layout"].as_str().and_then(canvas::PageLayout::try_parse) {
             self.view_defaults.layout = layout;
+        }
+        if let Ok(units) = serde_json::from_value::<units::Unit>(v["units"].clone()) {
+            self.units = units;
         }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;

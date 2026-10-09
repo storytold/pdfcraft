@@ -295,6 +295,13 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             .small()
             .color(t.text_muted),
     );
+    ui.horizontal(|ui| {
+        ui.label(tl!("Units"));
+        for u in crate::units::Unit::ALL {
+            ui.radio_value(&mut app.units, u, u.label());
+        }
+    });
+    ui.label(egui::RichText::new(tl!("For page sizes and margins.")).small().color(t.text_muted));
     // The web build has no file paths to reopen.
     #[cfg(not(target_arch = "wasm32"))]
     ui.checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed"));

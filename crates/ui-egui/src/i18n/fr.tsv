@@ -738,7 +738,7 @@
 	{verb} Header and Footer	{verb} l'en-tête et le pied de page
 	{verb} Watermark	{verb} le filigrane
 	{verb} Background	{verb} l'arrière-plan
-	Margins (in)	Marges (po)
+	Margins	Marges
 	Left Header Text	Texte de l'en-tête gauche
 	Center Header Text	Texte de l'en-tête central
 	Right Header Text	Texte de l'en-tête droit
@@ -2041,6 +2041,7 @@
 	Pinned {folder} to Home	{folder} épinglé à l'Accueil
 	No recent files	Aucun fichier récent
 	Go to page…	Aller à la page…
+	For page sizes and margins.	Pour les tailles de page et les marges.
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Les polices standard ne peuvent pas afficher « {c} » ({code}). Pour l'instant, seuls les caractères d'Europe occidentale peuvent être ajoutés comme texte.
 	Larger pages	Pages plus grandes
 	Smaller pages	Pages plus petites

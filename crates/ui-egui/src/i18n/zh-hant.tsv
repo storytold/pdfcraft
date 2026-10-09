@@ -414,7 +414,7 @@
 	{verb} Header and Footer	{verb}頁首和頁尾
 	{verb} Watermark	{verb}水印
 	{verb} Background	{verb}背景
-	Margins (in)	邊距（英寸）
+	Margins	邊距
 	Left Header Text	左頁首文字
 	Center Header Text	居中頁首文字
 	Right Header Text	右頁首文字
@@ -1972,6 +1972,7 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	選擇 PNG 或 JPEG 圖像（最大 4 MiB）。透明度會保留。
 	Couldn't import the signature image: {e}	無法匯入簽名圖像：{e}
 	Go to page…	轉到頁面…
+	For page sizes and margins.	用於頁面尺寸和邊距。
 	Reopen the files that were open when PdfCraft last closed	重新開啟上次關閉 PdfCraft 時開啟的檔案
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	標準字型無法顯示「{c}」（{code}）。目前只能新增西歐字元作為文字。
 	Larger pages	放大頁面
