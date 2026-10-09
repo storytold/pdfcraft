@@ -1458,6 +1458,29 @@ impl PdfCraftApp {
         self.combine_unlock(&ids, password)
     }
 
+    /// Stage PDFs named on the command line (Windows Explorer ▸ Combine with PdfCraft…)
+    /// into the Combine files list, in the order given. Unreadable files are reported and
+    /// skipped; the list shows even when nothing could be added, so files can be picked there
+    /// instead. Mirrors `create_ui::begin_image_import_paths`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn begin_combine_paths(&mut self, paths: &[String]) -> Result<(), String> {
+        let mut incoming = Vec::new();
+        let mut errors = Vec::new();
+        for p in paths {
+            let path = std::path::Path::new(p);
+            match std::fs::read(path) {
+                Ok(bytes) => {
+                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
+                    let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+                    incoming.push(Incoming { name, bytes: Arc::new(bytes), modified, note: None });
+                }
+                Err(e) => errors.push(format!("Couldn't read {}: {e}", path.display())),
+            }
+        }
+        self.stage_combine_with(incoming);
+        if errors.is_empty() { Ok(()) } else { Err(errors.join("\n")) }
+    }
+
     /// Add every PDF in a folder the user picks (and its subfolders, if `recursive`).
     pub fn combine_add_folder(&mut self, recursive: bool) {
         #[cfg(not(target_arch = "wasm32"))]

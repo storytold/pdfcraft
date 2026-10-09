@@ -47,6 +47,8 @@ mod ocr_ui;
 mod optimize_ui;
 mod search_ui;
 mod sign_ui;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod single_instance;
 mod stamps_ui;
 mod standards_ui;
 mod zoom_snap;
@@ -514,6 +516,10 @@ pub struct PdfCraftApp {
     pub window_title: String,
     /// The UI control channel, when enabled (`--control`; off by default).
     control: Option<control::Control>,
+    /// Single-instance handoff listener (desktop only): later launches forward their files
+    /// here instead of opening another window (#367).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub handoff: Option<single_instance::Handoff>,
     /// A bookmark being renamed in the Bookmarks panel: (path, text so far).
     pub bookmark_rename: Option<(Vec<usize>, String)>,
     /// Number pages dialog settings (1-based pages).
@@ -706,6 +712,8 @@ impl PdfCraftApp {
             fonts_ready: false,
             fonts_hans: false,
             control: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            handoff: None,
             bookmark_rename: None,
             last_opened_url: None,
             pending_link: None,
@@ -1003,6 +1011,24 @@ impl PdfCraftApp {
                 }
             }
             Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+        }
+    }
+
+    /// Stage files a later launch handed over (same modes as the command line).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stage_handoff(&mut self, request: single_instance::HandoffRequest) {
+        if request.create_images {
+            if let Err(e) = self.begin_image_import_paths(&request.files) {
+                self.notify(e);
+            }
+        } else if request.combine {
+            if let Err(e) = self.begin_combine_paths(&request.files) {
+                self.notify(e);
+            }
+        } else {
+            for f in &request.files {
+                self.open_path(f);
+            }
         }
     }
 
@@ -1669,6 +1695,13 @@ impl eframe::App for PdfCraftApp {
         if let Some(mut control) = self.control.take() {
             control.tick(ctx, self);
             self.control = Some(control);
+        }
+        // Later launches handed us their files instead of opening a window (#367).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(handoff) = self.handoff.as_mut() {
+            for request in handoff.poll() {
+                self.stage_handoff(request);
+            }
         }
         self.guard_quit(ctx);
         let now = ctx.input(|i| i.time);

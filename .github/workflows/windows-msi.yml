@@ -1,0 +1,51 @@
+# PR MSI: build the unsigned Windows x64 installer on pull requests that touch it,
+# so shell integration (context menus) and startup flags can be installed and tried
+# without cutting a release. The signed MSI still comes only from release.yml.
+name: Windows MSI (PR)
+
+on:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - apps/pdfcraft/**
+      - crates/ui-egui/**
+      - packaging/windows/**
+      - .github/workflows/windows-msi.yml
+  workflow_dispatch:
+
+concurrency:
+  group: windows-msi-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  msi:
+    name: build unsigned x64 MSI
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-msi-x64
+      - name: Install WiX
+        shell: pwsh
+        run: dotnet tool install --global wix --version 5.0.2
+      - name: Build and package (unsigned)
+        shell: pwsh
+        run: ./packaging/windows/package.ps1 -Arch x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdfcraft-windows-x64-msi
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14

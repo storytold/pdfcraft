@@ -2,6 +2,8 @@
 //!
 //! Usage: `pdfcraft [options] [files…]`
 //! `--create-images [images…]` stages the images in one PDF and asks for the page DPI.
+//! `--combine [pdfs…]` stages the PDFs in the Combine files tab, in order, for rearranging
+//! and combining (Windows Explorer ▸ Combine with PdfCraft…).
 //!
 //! View options (applied after the files open; also the seed of the UI control channel):
 //! `--page N  --zoom 150  --layout continuous|two-up|single  --panel comments|bookmarks|pages|fields|layers|attachments|none
@@ -133,6 +135,7 @@ fn main() -> eframe::Result {
     let mut options: Vec<(String, String)> = Vec::new();
     let mut control_file: Option<String> = None;
     let mut create_images = false;
+    let mut combine = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -142,6 +145,7 @@ fn main() -> eframe::Result {
             }
             "--control" => control_file = args.next(),
             "--create-images" => create_images = true,
+            "--combine" => combine = true,
             flag if flag.starts_with("--") => {
                 let value = args.next().unwrap_or_default();
                 options.push((flag.trim_start_matches("--").to_string(), value));
@@ -177,6 +181,21 @@ fn main() -> eframe::Result {
         }
     }
     let persistence_path = settings_dir().map(|d| d.join("app.ron"));
+    // Single-instance handoff (#367): when another PdfCraft is running and this launch
+    // carries files, it hands them over and exits quietly, so an Explorer multi-select
+    // lands in one window however Explorer invoked it. A `--control` launch always owns
+    // its window (its driver expects this exact process to answer).
+    let handoff_request = pdfcraft_ui_egui::single_instance::HandoffRequest { files: files.clone(), combine, create_images };
+    let handoff = if control_file.is_some() {
+        None
+    } else if let Some(dir) = settings_dir() {
+        match pdfcraft_ui_egui::single_instance::claim(&dir, &handoff_request) {
+            pdfcraft_ui_egui::single_instance::Claim::Forwarded => return Ok(()),
+            pdfcraft_ui_egui::single_instance::Claim::Primary(h) => h,
+        }
+    } else {
+        None
+    };
     let mut native = eframe::NativeOptions { viewport, persistence_path, ..Default::default() };
     configure_gpu(&mut native);
     // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
@@ -196,6 +215,7 @@ fn main() -> eframe::Result {
             app.integrated_titlebar = integrated;
             app.update_source = Some(std::sync::Arc::new(updates::latest_release));
             app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
+            app.handoff = handoff;
             #[cfg(target_os = "macos")]
             {
                 app.os_events = Some(apple_events.connect(&cc.egui_ctx));
@@ -221,6 +241,10 @@ fn main() -> eframe::Result {
             }
             if create_images {
                 if let Err(e) = app.begin_image_import_paths(&files) {
+                    app.notify(e);
+                }
+            } else if combine {
+                if let Err(e) = app.begin_combine_paths(&files) {
                     app.notify(e);
                 }
             } else {

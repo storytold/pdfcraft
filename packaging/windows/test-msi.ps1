@@ -117,6 +117,20 @@ foreach ($ext in @('png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif', 'bmp', 'jp2', 'j2
   Assert-Equal $selection[0] 'Single' "$ext context menu selection"
 }
 
+# PDF context menu stages the selected PDFs in the Combine files tab (#367). Player model:
+# one PdfCraft with every selected file, in order, for rearranging before combining
+# (Document would launch one PdfCraft per file). Owned by the
+# app component so uninstall removes it; no PDF default association is changed.
+$pdfKey = 'Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Combine'
+$pdfMenu = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $pdfKey + ''' AND `Name` IS NULL') 3
+Assert-Equal $pdfMenu[0] 'Combine with PdfCraft…' "pdf context menu label"
+Assert-Equal $pdfMenu[1] 'PdfcraftApp' "pdf context menu component"
+Assert-Equal $pdfMenu[2] '2' "pdf context menu HKLM root"
+$pdfCommand = Read-Row ('SELECT `Value` FROM `Registry` WHERE `Key` = ''' + $pdfKey + '\command''') 1
+Assert-Equal $pdfCommand[0] '"[#PdfcraftExe]" --combine "%1"' "pdf context menu command"
+$pdfSelection = Read-Row ('SELECT `Value` FROM `Registry` WHERE `Key` = ''' + $pdfKey + ''' AND `Name` = ''MultiSelectModel''') 1
+Assert-Equal $pdfSelection[0] 'Player' "pdf context menu selection"
+
 # Negative sequences are Windows Installer's success/user-exit/failure paths. Only full UI
 # shows these dialogs: an unattended /qn or /qb install must never wait for a Finish click.
 foreach ($exit in @(@('InstallComplete', '-1'), @('InstallCancelled', '-2'), @('InstallFailed', '-3'))) {

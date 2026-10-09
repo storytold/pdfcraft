@@ -724,6 +724,27 @@ fn closing_the_combine_tab_forgets_its_list() {
 }
 
 #[test]
+fn combine_paths_from_the_shell_stage_in_order() {
+    // Windows Explorer ▸ Combine with PdfCraft… (`pdfcraft --combine a.pdf b.pdf`, #367).
+    let dir = temp_path("combine-shell");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.pdf");
+    let b = dir.join("b.pdf");
+    std::fs::write(&a, fixture(2)).unwrap();
+    std::fs::write(&b, fixture(1)).unwrap();
+    let paths = vec![a.to_string_lossy().into_owned(), b.to_string_lossy().into_owned(), dir.join("missing.pdf").to_string_lossy().into_owned()];
+    let mut h = harness(1, |_| {});
+    assert!(h.state_mut().begin_combine_paths(&paths).is_err(), "an unreadable file is reported");
+    h.run_steps(3);
+    let app = h.state();
+    assert!(app.combine_showing(), "the staged files open the Combine tab");
+    assert_eq!(app.combine_draft.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["a.pdf", "b.pdf"]);
+    assert_eq!(app.combine_draft.iter().map(|f| f.pages).collect::<Vec<_>>(), [2, 1]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn combine_lists_size_and_warns_before_combining() {
     let mut h = harness(1, |app| {
         app.use_files(

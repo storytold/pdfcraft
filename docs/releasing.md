@@ -40,6 +40,12 @@ Linux, Flatpak, FreeBSD and web jobs build and check everything, the signing job
 environment's branch rule, and the draft-release job (which needs them) is skipped, so nothing is
 published (`gh workflow run release.yml --ref <branch>`).
 
+**Trying an MSI from a pull request:** *Actions ▸ Windows MSI (PR)* builds the unsigned x64 MSI
+for pull requests touching the app, the UI, or `packaging/windows/` (and on manual dispatch), and
+uploads it as the `pdfcraft-windows-x64-msi` artifact for 14 days. Install it to try shell
+integration such as the Explorer context menus; the signed MSI still comes only from the release
+pipeline above.
+
 ## What gets built
 
 | Platform | Artifacts | Built on |
