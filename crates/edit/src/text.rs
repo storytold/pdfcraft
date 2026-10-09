@@ -538,21 +538,38 @@ fn pdf_num(v: f64) -> String {
 fn type3_path(face: &CraftFont, ch: char) -> Result<(Vec<u8>, f64), EditError> {
     let glyph = japanese_glyph_from(face, ch).map_err(|e| match e {
         GlyphError::NoFont => no_japanese_font(),
-        GlyphError::Missing => EditError::Invalid(format!("Japanese fallback font has no glyph for U+{:04X}", ch as u32)),
+        GlyphError::Missing => EditError::Invalid(format!("no fallback font has a glyph for U+{:04X}", ch as u32)),
         GlyphError::TooComplex => EditError::Invalid(format!("Japanese fallback glyph U+{:04X} is too complex", ch as u32)),
     })?;
+    let (dx, width) = proportional(ch, &glyph);
     let scale = 1000.0;
-    let mut out = format!("{} 0 0 0 0 1000 1000 d1\n", pdf_num(glyph.width * scale)).into_bytes();
+    let mut out = format!("{} 0 0 0 0 1000 1000 d1\n", pdf_num(width * scale)).into_bytes();
     for contour in glyph.contours {
         let Some(first) = contour.first() else { continue };
-        out.extend_from_slice(format!("{} {} m\n", pdf_num(first[0] * scale), pdf_num(first[1] * scale)).as_bytes());
+        out.extend_from_slice(format!("{} {} m\n", pdf_num((first[0] + dx) * scale), pdf_num(first[1] * scale)).as_bytes());
         for p in contour.iter().skip(1) {
-            out.extend_from_slice(format!("{} {} l\n", pdf_num(p[0] * scale), pdf_num(p[1] * scale)).as_bytes());
+            out.extend_from_slice(format!("{} {} l\n", pdf_num((p[0] + dx) * scale), pdf_num(p[1] * scale)).as_bytes());
         }
         out.extend_from_slice(b"h\n");
     }
     out.extend_from_slice(b"f\n");
-    Ok((out, glyph.width))
+    Ok((out, width))
+}
+
+/// Side bearing (em) given to a respaced glyph on each side.
+const SIDE_BEARING: f64 = 0.05;
+
+/// Shift and advance for a fallback glyph. Japanese faces draw Cyrillic and Greek full-width
+/// (one em each, as in JIS X 0208) and have no proportional (`palt`) metrics for them, so a
+/// word set that way reads as letter-spaced. Those letters get their ink width plus a side
+/// bearing instead; everything else keeps the face's own advance.
+fn proportional(ch: char, glyph: &pdfcraft_fonts::GlyphOutline) -> (f64, f64) {
+    let respace = matches!(ch, '\u{0370}'..='\u{03FF}' | '\u{0400}'..='\u{052F}' | '\u{1F00}'..='\u{1FFF}');
+    let ink = glyph.bbox[2] - glyph.bbox[0];
+    if !respace || glyph.contours.is_empty() || !(ink > 0.0 && ink < glyph.width) {
+        return (0.0, glyph.width);
+    }
+    (SIDE_BEARING - glyph.bbox[0], ink + 2.0 * SIDE_BEARING)
 }
 
 fn unicode_hex(ch: char) -> String {
@@ -571,7 +588,12 @@ fn no_japanese_font() -> EditError {
 }
 
 fn type3_font(doc: &mut Document, fonts_res: &mut Dict, text: &str, family: crate::added::Family, bold: bool) -> Result<Type3Fallback, EditError> {
-    let face = pdfcraft_fonts::document_japanese_font_for_style(family == crate::added::Family::Times, bold).ok_or_else(no_japanese_font)?;
+    let serif = family == crate::added::Family::Times;
+    // A face with every character (Shippori Mincho has no Cyrillic); else the style's face, which
+    // then names the missing character.
+    let face = pdfcraft_fonts::document_font_for_text(serif, bold, text)
+        .or_else(|| pdfcraft_fonts::document_japanese_font_for_style(serif, bold))
+        .ok_or_else(no_japanese_font)?;
     let family = face.family;
     let mut chars = Vec::new();
     for ch in text.chars() {

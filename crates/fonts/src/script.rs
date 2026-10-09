@@ -171,6 +171,13 @@ pub fn japanese_glyph_from(face: &crate::CraftFont, ch: char) -> Result<GlyphOut
     Ok(GlyphOutline { contours: pen.contours, width, bbox })
 }
 
+/// Whether `face` has a glyph for every character of `text`.
+pub(crate) fn has_glyphs(face: &crate::CraftFont, text: &str) -> bool {
+    let Ok(font) = FontRef::new(face.bytes) else { return false };
+    let map = font.charmap();
+    text.chars().all(|c| map.map(c).is_some())
+}
+
 /// The outlines of `text` in the script font (characters it lacks are skipped).
 /// Over-limit input returns an empty outline instead of a silently truncated signature.
 pub fn script_outline(text: &str) -> ScriptOutline {
