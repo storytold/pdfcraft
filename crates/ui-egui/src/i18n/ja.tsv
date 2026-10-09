@@ -2102,3 +2102,5 @@
 @plural	{n} field|{n} fields	{n} 個のフィールド
 @plural	{n} page|{n} pages	{n} ページ
 signature pad	Type	入力
+	Flatten Fill & Sign when saving	保存時に入力と署名を統合する
+	Text, marks and signatures become part of the page. Other comments stay editable.	テキスト、マーク、署名がページの一部になります。その他のコメントは引き続き編集できます。
