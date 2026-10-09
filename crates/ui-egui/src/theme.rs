@@ -140,14 +140,26 @@ pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
 
 /// The name of the installed face [`installed_font_definitions`] may add after the embedded ones.
 pub const SYSTEM_FALLBACK: &str = "system-fallback";
+/// The name of the installed Hangul face [`installed_font_definitions`] may add after the
+/// embedded ones, before [`SYSTEM_FALLBACK`].
+pub const SYSTEM_HANGUL_FALLBACK: &str = "system-fallback-hangul";
 
-/// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
-/// already installed on this machine as the last fallback of every family. It only draws
-/// characters no embedded face has (an Arabic file name in a build without craft-fonts);
-/// `PDFCRAFT_SYSTEM_FONTS=0` leaves it out.
+/// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, faces
+/// already installed on this machine as the last fallbacks of every family: a Hangul face, then
+/// the broad-coverage face, which stays last. They only draw characters no embedded face has (a
+/// Korean file name, since no craft-fonts face has Hangul, or an Arabic one in a build without
+/// craft-fonts); `PDFCRAFT_SYSTEM_FONTS=0` leaves them out.
 pub fn installed_font_definitions(prefer_hans: bool) -> FontDefinitions {
     #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
     let mut fonts = font_definitions_for(prefer_hans);
+    // Hangul doesn't overlap the scripts of the embedded faces, so its place after them is safe.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(data) = crate::system_fonts::hangul_fallback() {
+        fonts.font_data.insert(SYSTEM_HANGUL_FALLBACK.to_owned(), data);
+        for stack in fonts.families.values_mut() {
+            stack.push(SYSTEM_HANGUL_FALLBACK.to_owned());
+        }
+    }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(data) = crate::system_fonts::fallback() {
         fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
