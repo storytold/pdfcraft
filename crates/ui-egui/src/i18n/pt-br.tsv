@@ -1494,11 +1494,11 @@
 	is available	está disponível
 	is not available yet	ainda não está disponível
 	{label} failed: {e}	{label} falhou: {e}
-	Undid {label}	{label} desfeito
-	Redid {label}	{label} refeita
+	Undid {label}	Desfeito: {label}
+	Redid {label}	Refeito: {label}
 	A document needs at least one page: copy instead	Um documento precisa de pelo menos uma página: copie em vez disso
-	Cut {what}	Recortado {what}
-	Copied {what}	Copiado {what}
+	Cut {what}	Recortado: {what}
+	Copied {what}	Copiado: {what}
 	1 page	1 página
 	{n} pages	{n} páginas
 	Copy or cut pages first	Copie ou recorte as páginas primeiro
@@ -2005,3 +2005,6 @@
 	No contributor data was built into this copy.	Nenhum dado de contribuidores foi embutido nesta cópia.
 	No model credits were built into this copy.	Nenhum crédito de modelos foi embutido nesta cópia.
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} linhas (Δ {delta}), +{bin_added} / −{bin_deleted} recursos binários, {first} – {last}
+signature pad	Type	Digitar
+certificate	Subject	Titular
+action wizard	Start	Iniciar

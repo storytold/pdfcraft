@@ -734,6 +734,9 @@ mod tests {
         let pt = Lang::from_code("pt-br").expect("pt-br registered");
         for command in pdfcraft_engine::commands::COMMANDS {
             assert!(has(pt, command.label), "missing command: {}", command.label);
+            if let Some(menu) = command.menu {
+                assert!(has(pt, menu), "missing menu: {menu}");
+            }
         }
         for group in pdfcraft_engine::catalog::TOOL_GROUPS {
             assert!(has(pt, group.label), "missing group: {}", group.label);
