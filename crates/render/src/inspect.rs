@@ -815,7 +815,11 @@ impl<'a> Inspector<'a> {
                     }
                     continue;
                 }
-                if matches!(subtype.as_str(), "Widget" | "Popup") {
+                // Not comments: form widgets, pop-ups and non-markup annotations such as the
+                // Screen annotation that drives a LaTeX `animate` player (keep in step with
+                // `pdfcraft_annot::is_comment_subtype`).
+                if matches!(subtype.as_str(), "Widget" | "Popup" | "Screen" | "Movie" | "RichMedia" | "3D" | "PrinterMark" | "TrapNet" | "Watermark")
+                {
                     continue;
                 }
                 let rect = rect4(self.resolve(d.get(b"Rect").unwrap_or(&Object::Null)));
