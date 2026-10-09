@@ -55,4 +55,9 @@ currently has no Chinese face, so Chinese there still shows the replacement glyp
 Font files are never
 committed here (`AGENTS.md` §1.4; team members: [craftrules `standards/fonts.md`](https://github.com/storytold/craftrules/blob/main/standards/fonts.md), internal).
 
+`system` (desktop only) reads a face already installed on the machine at runtime, as the last
+fallback for a script no embedded face covers: `han`, a Simplified/Traditional Chinese face. Such
+a face is never embedded, shipped, committed or copied (AGENTS.md §1.4); the page renderer uses it
+for a non-embedded Adobe-GB1/Adobe-CNS1 CID font, for on-screen drawing only.
+
 The full font subsystem (parsing, shaping, subsetting and embedding) arrives with M2.2/M7.
