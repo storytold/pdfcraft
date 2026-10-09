@@ -1793,7 +1793,14 @@ fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
-/// Every comment (not links, form widgets or pop-ups), ordered by page and then top edge.
+/// Whether an annotation subtype is a comment. Links, form widgets, pop-ups and the non-markup
+/// multimedia and print-production annotations (ISO 32000-2 §12.5.6: Screen, Movie, RichMedia,
+/// 3D, PrinterMark, TrapNet, Watermark) are not.
+pub fn is_comment_subtype(subtype: &str) -> bool {
+    !matches!(subtype, "Link" | "Widget" | "Popup" | "Screen" | "Movie" | "RichMedia" | "3D" | "PrinterMark" | "TrapNet" | "Watermark")
+}
+
+/// Every comment (see [`is_comment_subtype`]), ordered by page and then top edge.
 pub fn summaries(doc: &Document) -> Vec<Summary> {
     let mut out = Vec::new();
     let Ok(pages) = page_refs(doc) else { return out };
@@ -1802,7 +1809,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
             let obj = doc.resolve(entry);
             let Some(d) = obj.as_dict() else { continue };
             let Some(subtype) = d.name(b"Subtype").map(|s| String::from_utf8_lossy(s).into_owned()) else { continue };
-            if matches!(subtype.as_str(), "Link" | "Widget" | "Popup") {
+            if !is_comment_subtype(&subtype) {
                 continue;
             }
             let nums = |k: &[u8]| -> Vec<f32> {

@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use pdfcraft_content::{Matrix, Op, contains, num, overlaps, parse, serialize_ops, string};
+use pdfcraft_content::{Matrix, Op, Pieces, contains, num, overlaps, serialize_ops, string};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 use crate::{Report, image};
@@ -210,15 +210,8 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
     // The streams are one content stream in pieces, which may be split between any two tokens
     // (ISO 32000-2 §7.8.2): an operator's operands can end one piece and the operator start the
     // next. Parse them joined, then give each operator back to the piece its keyword is in.
-    let mut joined: Vec<u8> = Vec::new();
-    let mut ends: Vec<usize> = Vec::with_capacity(streams.len());
-    for data in streams {
-        joined.extend_from_slice(data);
-        joined.push(b'\n');
-        ends.push(joined.len());
-    }
-    let piece_of = |at: usize| ends.iter().position(|&e| at < e).unwrap_or(ends.len().saturating_sub(1));
-    let mut parsed = parse(&joined);
+    let joined = Pieces::join(streams);
+    let mut parsed = joined.parse();
     if !scope.hidden_layers.is_empty() {
         let props = res_dict(doc, resources, b"Properties");
         let (kept, removed) = strip_hidden_layers(doc, scope, parsed.ops, &props);
@@ -231,7 +224,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
     let mut pieces: Vec<Vec<Op>> = streams.iter().map(|_| Vec::new()).collect();
     let mut rewrite: Vec<bool> = vec![forced_change; streams.len()];
     for op in parsed.ops {
-        let (first, last) = (piece_of(op.span.start), piece_of(op.span.end.saturating_sub(1)));
+        let (first, last) = joined.pieces_of(&op);
         // An operator split across pieces is written whole into its keyword's piece, so every
         // piece it spans is rewritten.
         if first < last {
