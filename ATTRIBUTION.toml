@@ -77,6 +77,17 @@ usage = "French UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
 sha256 = "956753e05b5a9e1d4c4a63ee57667cc9fa5bb95288c3d46c6b15435b83d6ed8d"
 
 [[asset]]
+path = "crates/ui-egui/src/i18n/de.tsv"
+title = "German interface translation catalog"
+author = "PdfCraft contributors"
+source = "Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "German UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "528694b6adc185422e156b8e247e7c13c0568a6ce4e0c62abfa7ee6d7016df5d"
+
+[[asset]]
 path = "crates/ui-egui/src/i18n/te.tsv"
 title = "Telugu interface translation catalog"
 author = "PdfCraft contributors"
