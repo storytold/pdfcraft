@@ -28,31 +28,59 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     app.active = None;
                     app.combine_tab.focused = false;
                 }
+                // Keep the two 28-point buttons, Discord's text/padding and three gaps outside the scrolling tabs.
+                let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x) + 106.0;
+                let state = (app.active, app.views.len(), app.combine_showing());
+                let changed = ui.data_mut(|data| {
+                    let id = ui.id().with("active_tab");
+                    let changed = data.get_temp::<(Option<usize>, usize, bool)>(id) != Some(state);
+                    data.insert_temp(id, state);
+                    changed
+                });
                 let mut close = None;
-                for i in 0..app.views.len() {
-                    let Some(doc) = app.session.get(app.views[i].id) else { continue };
-                    let (name, dirty) = (doc.display_name(), doc.dirty);
-                    if tab(ui, &t, "file-text", &name, dirty, app.active == Some(i), &mut close, i).clicked() {
-                        app.active = Some(i);
-                    }
-                }
-                if let Some(i) = close {
-                    app.request_close_tab(i);
-                }
-                if app.combine_tab.open {
-                    // After the document tabs; its index can't clash with theirs.
-                    let mut close = None;
-                    if tab(ui, &t, "files", tl!("Combine files"), false, app.combine_showing(), &mut close, usize::MAX).clicked() {
-                        app.open_combine_tab();
-                    }
-                    if close.is_some() {
-                        app.close_combine_tab();
-                    }
-                }
-                ui.add_space(4.0);
-                if widgets::ghost_button(ui, "plus", tl!("Open")).on_hover_text(tl!("Open a PDF (⌘O)")).clicked() {
-                    app.open_dialog();
-                }
+                ui.scope(|ui| {
+                    ui.style_mut().always_scroll_the_only_direction = true;
+                    egui::ScrollArea::horizontal()
+                        .id_salt("document_tabs")
+                        .max_width((ui.available_width() - controls_width).max(0.0))
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.horizontal_centered(|ui| {
+                                for i in 0..app.views.len() {
+                                    let Some(doc) = app.session.get(app.views[i].id) else { continue };
+                                    let (name, dirty) = (doc.display_name(), doc.dirty);
+                                    let response = tab(ui, &t, "file-text", &name, dirty, app.active == Some(i), &mut close, i);
+                                    if changed && app.active == Some(i) && !app.combine_showing() {
+                                        response.scroll_to_me(Some(Align::Center));
+                                    }
+                                    if response.clicked() {
+                                        app.active = Some(i);
+                                    }
+                                }
+                                if let Some(i) = close {
+                                    app.request_close_tab(i);
+                                }
+                                if app.combine_tab.open {
+                                    // After the document tabs; its index can't clash with theirs.
+                                    let mut close = None;
+                                    let response = tab(ui, &t, "files", tl!("Combine files"), false, app.combine_showing(), &mut close, usize::MAX);
+                                    if changed && app.combine_showing() {
+                                        response.scroll_to_me(Some(Align::Center));
+                                    }
+                                    if response.clicked() {
+                                        app.open_combine_tab();
+                                    }
+                                    if close.is_some() {
+                                        app.close_combine_tab();
+                                    }
+                                }
+                                ui.add_space(4.0);
+                                if widgets::ghost_button(ui, "plus", tl!("Open")).on_hover_text(tl!("Open a PDF (⌘O)")).clicked() {
+                                    app.open_dialog();
+                                }
+                            });
+                        });
+                });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let (icon, label) = match app.theme_preference {
                         ThemePreference::System => ("settings", tl!("Use system setting")),

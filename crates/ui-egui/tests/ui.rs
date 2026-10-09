@@ -73,6 +73,89 @@ fn a_tab_with_an_arabic_file_name_keeps_its_logical_accessible_name() {
 }
 
 #[test]
+fn overflowing_tabs_can_be_reached_by_scrolling() {
+    let mut h = harness(|app| {
+        for i in 0..20 {
+            app.open_bytes(&format!("document-{i:02}.pdf"), None, FIXTURE.to_vec()).unwrap();
+        }
+    });
+    let last = h.get_by_label("document-19.pdf").rect();
+    assert!(last.center().x < 1200.0, "newly opened active tab must be visible: {last:?}");
+    h.state_mut().active = Some(0);
+    h.run_steps(4);
+    let first = h.get_by_label("document-00.pdf").rect();
+    assert!(first.center().x < 1200.0, "changing active tab must reveal it");
+    h.event(egui::Event::PointerMoved(first.center()));
+    for _ in 0..8 {
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(-500.0, 0.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(8);
+    }
+    let last = h.get_by_label("document-19.pdf").rect();
+    assert!(last.center().x > 0.0 && last.center().x < 1200.0, "last tab must be reachable: {last:?}");
+    h.get_by_label("document-19.pdf").click();
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(19));
+    assert!(h.get_by_label_contains("Display theme:").rect().center().x < 1400.0);
+    let close = last.right_center() - egui::vec2(16.0, 0.0);
+    h.event(egui::Event::PointerMoved(close));
+    h.event(egui::Event::PointerButton { pos: close, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.step();
+    h.event(egui::Event::PointerButton { pos: close, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(4);
+    assert_eq!(h.state().views.len(), 19);
+    assert!(h.state().active.is_some_and(|i| i < 19));
+    if let Ok(dir) = std::env::var("PDFCRAFT_TAB_SHOTS") {
+        settle(&mut h);
+        h.render().unwrap().save(format!("{dir}/overflow-tabs.png")).unwrap();
+    }
+}
+
+#[test]
+fn narrow_tab_strips_accept_vertical_wheel_scrolling() {
+    for width in [600.0, 900.0] {
+        let mut h = Harness::builder().with_size(egui::vec2(width, 700.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            for i in 0..12 {
+                app.open_bytes(&format!("narrow-{i:02}.pdf"), None, FIXTURE.to_vec()).unwrap();
+            }
+            app
+        });
+        h.run_steps(4);
+        let last = h.get_by_label("narrow-11.pdf").rect();
+        assert!(last.center().x > 28.0 && last.right() < width - 100.0, "active tab: {last:?}");
+        h.state_mut().active = Some(0);
+        h.run_steps(4);
+        let first = h.get_by_label("narrow-00.pdf").rect();
+        assert!(first.center().x > 28.0 && first.right() < width - 100.0);
+        h.event(egui::Event::PointerMoved(first.center()));
+        for _ in 0..8 {
+            h.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -500.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.run_steps(8);
+        }
+        let last = h.get_by_label("narrow-11.pdf").rect();
+        assert!(last.center().x > 28.0 && last.right() < width - 100.0, "scrolled tab: {last:?}");
+        h.get_by_label("narrow-11.pdf").click();
+        h.run_steps(4);
+        assert_eq!(h.state().active, Some(11));
+        assert!(h.get_by_label_contains("Display theme:").rect().right() <= width);
+        if let Ok(dir) = std::env::var("PDFCRAFT_TAB_SHOTS") {
+            settle(&mut h);
+            h.render().unwrap().save(format!("{dir}/tabs-{width}.png")).unwrap();
+        }
+    }
+}
+
+#[test]
 fn garbage_input_is_rejected_without_panicking() {
     let mut app = PdfCraftApp::new();
     assert!(app.open_bytes("junk.pdf", None, b"this is not a pdf".to_vec()).is_err());
