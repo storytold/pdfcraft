@@ -129,6 +129,78 @@ fn fdf_round_trips_values_and_comments() {
     assert_eq!(values(&dst), values(&src));
     assert!(r.comments >= 3, "{r:?}");
     assert!(summaries(&dst).iter().any(|s| s.contents.as_deref() == Some("scribble")));
+    assert_eq!(comment_view(&dst), comment_view(&src), "replies keep their thread");
+}
+
+/// Who each comment replies to, by name, with its review state.
+fn threads(doc: &Document) -> Vec<(Option<String>, Option<String>, Option<String>)> {
+    summaries(doc).into_iter().map(|s| (s.name, s.in_reply_to, s.state)).collect()
+}
+
+/// #333: a note with two replies and an Accepted review status keeps its thread through FDF.
+#[test]
+fn fdf_keeps_replies_and_review_status_on_their_note() {
+    let mut src = blank();
+    let meta = |id: &str| Meta { date: Some("D:20261002120000Z".into()), id: id.into() };
+    let note = Shape::Note { at: [100.0, 100.0], icon: pdfcraft_annot::NoteIcon::Comment };
+    add_annotation(
+        &mut src,
+        &NewAnnotation { page: 1, style: Style::default_for(&note), shape: note, contents: "Literal Note".into(), author: "Alpha".into() },
+        &meta("note"),
+    )
+    .unwrap();
+    let index = summaries(&src).iter().find(|s| s.subtype == "Text").map(|s| s.index).unwrap();
+    add_reply(&mut src, 1, index, "Reply One", "Beta", &meta("one")).unwrap();
+    add_reply(&mut src, 1, index, "Reply Two", "Gamma", &meta("two")).unwrap();
+    pdfcraft_annot::set_review_state(&mut src, 1, index, pdfcraft_annot::ReviewState::Accepted, "Review", &meta("status")).unwrap();
+    let want = threads(&src);
+    assert_eq!(want.iter().filter(|t| t.1.as_deref() == Some("note")).count(), 3, "{want:?}");
+
+    let fdf = export_fdf(&src, true, false, "notes.pdf");
+    // Every cross-reference entry points at its object (other readers trust the table).
+    let tail = std::str::from_utf8(&fdf[fdf.windows(5).position(|w| w == b"xref\n").unwrap()..]).unwrap();
+    let xref: usize = tail.lines().skip_while(|l| *l != "startxref").nth(1).unwrap().parse().unwrap();
+    assert!(fdf[xref..].starts_with(b"xref\n0 6\n"), "{tail}");
+    for (num, line) in tail.lines().skip(3).take(5).enumerate() {
+        let at: usize = line[..10].parse().unwrap();
+        assert!(fdf[at..].starts_with(format!("{} 0 obj\n", num + 1).as_bytes()), "object {}: {line}", num + 1);
+    }
+    let mut dst = blank();
+    assert_eq!(import(&mut dst, &fdf).unwrap().comments, 4);
+    assert_eq!(threads(&dst), want);
+    assert_eq!(comment_view(&dst), comment_view(&src));
+    // Importing again replaces the thread instead of duplicating or detaching it.
+    import(&mut dst, &fdf).unwrap();
+    assert_eq!(threads(&dst), want);
+}
+
+/// FDFs written before #333 (direct comment dictionaries, no /IRT) still import.
+#[test]
+fn fdf_with_direct_comments_still_imports() {
+    let fdf = b"%FDF-1.2\n1 0 obj\n<< /FDF << /Annots [<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /Contents (old) /NM (a) /Page 0 >>] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    let mut dst = blank();
+    assert_eq!(import(&mut dst, fdf).unwrap().comments, 1);
+    assert_eq!(threads(&dst), vec![(Some("a".into()), None, None)]);
+}
+
+/// /IRT pointing at itself, at a missing object, at a non-comment or in a cycle neither panics
+/// nor loops; only a real parent is linked.
+#[test]
+fn hostile_fdf_reply_parents_are_ignored() {
+    let fdf = b"%FDF-1.2\n1 0 obj\n<< /FDF << /Annots [2 0 R 3 0 R 4 0 R 5 0 R 6 0 R] >> >>\nendobj\n\
+2 0 obj\n<< /Subtype /Text /Rect [0 0 9 9] /NM (self) /IRT 2 0 R /Page 0 >>\nendobj\n\
+3 0 obj\n<< /Subtype /Text /Rect [0 0 9 9] /NM (missing) /IRT 99 0 R /Page 0 >>\nendobj\n\
+4 0 obj\n<< /Subtype /Text /Rect [0 0 9 9] /NM (cycle-a) /IRT 5 0 R /Page 0 >>\nendobj\n\
+5 0 obj\n<< /Subtype /Text /Rect [0 0 9 9] /NM (cycle-b) /IRT 4 0 R /Page 0 >>\nendobj\n\
+6 0 obj\n<< /Subtype /Text /Rect [0 0 9 9] /NM (number) /IRT 42 /Page 99 >>\nendobj\n\
+trailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    let mut dst = blank();
+    assert_eq!(import(&mut dst, fdf).unwrap().comments, 4);
+    let t = threads(&dst);
+    let parent = |nm: &str| t.iter().find(|x| x.0.as_deref() == Some(nm)).and_then(|x| x.1.clone());
+    assert_eq!(parent("self"), None);
+    assert_eq!(parent("missing"), None);
+    assert_eq!((parent("cycle-a").as_deref(), parent("cycle-b").as_deref()), (Some("cycle-b"), Some("cycle-a")));
 }
 
 #[test]

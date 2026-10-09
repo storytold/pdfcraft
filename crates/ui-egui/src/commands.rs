@@ -133,6 +133,17 @@ impl PdfCraftApp {
                     self.views[i].open_find();
                 }
             }
+            "view.focus_page_input" => {
+                if let (Some(ctx), Some(view)) = (self.ctx.clone(), active.and_then(|i| self.views.get(i))) {
+                    // The page box in the toolbar (chrome.rs); select its number so typing replaces it.
+                    let id = egui::Id::new("page-input");
+                    ctx.memory_mut(|m| m.request_focus(id));
+                    let mut state = egui::TextEdit::load_state(&ctx, id).unwrap_or_default();
+                    let len = view.page_input.chars().count();
+                    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(len))));
+                    state.store(&ctx, id);
+                }
+            }
             "view.palette" => self.palette_open = !self.palette_open,
             layout if crate::canvas::PageLayout::from_command(layout).is_some() => {
                 if let (Some(i), Some(layout)) = (active, crate::canvas::PageLayout::from_command(layout)) {

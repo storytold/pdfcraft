@@ -176,6 +176,22 @@ fn info(args: &[String]) -> Result<(), CliError> {
 
 fn text(args: &[String]) -> Result<(), CliError> {
     let path = *positional(args).first().ok_or("text: missing file")?;
+    let mut selected_page = None;
+    // Validate every supplied value before reading, retaining the first valid selection.
+    let mut options = args.iter();
+    while let Some(option) = options.next() {
+        if option == "--page" {
+            let page = options
+                .next()
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|page| *page > 0)
+                .ok_or("bad --page: expected a positive page number")?;
+            selected_page.get_or_insert(page - 1);
+        } else if option.starts_with("--") {
+            // Match positional(): an option's operand is not itself another option.
+            options.next();
+        }
+    }
     let password = flag(args, "--password");
     let bytes = read(path)?;
     let mut r = PageRenderer::new(bytes.clone(), RenderConfig { password: password.map(Arc::from), ..Default::default() });
@@ -188,15 +204,15 @@ fn text(args: &[String]) -> Result<(), CliError> {
             return Err("text: the document could not be parsed".into());
         }
     }
-    let pages: Vec<usize> = match flag(args, "--page") {
-        Some(p) => vec![p.parse::<usize>().map_err(|_| "bad --page")?.saturating_sub(1)],
+    let pages: Vec<usize> = match selected_page {
+        Some(page) => vec![page],
         None => (0..r.page_count()).collect(),
     };
     let mut failed: Vec<usize> = Vec::new();
     for (n, p) in pages.iter().enumerate() {
         let out = r.render(RenderRequest { page: *p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
         if let Some(e) = out.error {
-            eprintln!("page {}: {e}", p + 1);
+            let _ = writeln!(std::io::stderr().lock(), "page {}: {e}", p + 1);
             failed.push(p + 1);
             continue;
         }
@@ -263,11 +279,11 @@ fn edit(args: &[String]) -> Result<(), CliError> {
             "--move" => {
                 let (pages, to) = value.split_once(':').ok_or("--move PAGES:TO")?;
                 let to: usize = to.parse().map_err(|_| "bad target")?;
-                edits.push(Edit::MovePages { pages: page_list(pages)?, to: to.saturating_sub(1) });
+                edits.push(Edit::MovePages { pages: page_list(pages)?, to: to.checked_sub(1).ok_or("--move target must be at least 1")? });
             }
             "--insert-blank" => {
                 let at: usize = value.parse().map_err(|_| "bad position")?;
-                edits.push(Edit::InsertBlankPage { at: at.saturating_sub(1), width: 612.0, height: 792.0 });
+                edits.push(Edit::InsertBlankPage { at: at.checked_sub(1).ok_or("--insert-blank must be at least 1")?, width: 612.0, height: 792.0 });
             }
             "--title" => edits.push(Edit::SetInfo { key: "Title".into(), value: value.into() }),
             "--author" => edits.push(Edit::SetInfo { key: "Author".into(), value: value.into() }),
@@ -338,6 +354,7 @@ fn split(args: &[String]) -> Result<(), CliError> {
 fn render(args: &[String]) -> Result<(), CliError> {
     let path = *positional(args).first().ok_or("render: missing file")?;
     let page: usize = flag(args, "--page").unwrap_or("1").parse().map_err(|_| "bad --page")?;
+    let page_index = page.checked_sub(1).ok_or("--page must be at least 1")?;
     let dpi: f32 = flag(args, "--dpi").unwrap_or("96").parse().map_err(|_| "bad --dpi")?;
     let out = flag(args, "--out").ok_or("render: missing --out (.png, .jpg, .tif or .pam)")?;
     // The file is what its name says (#248): a `.png` used to get a netpbm PAM stream.
@@ -349,7 +366,7 @@ fn render(args: &[String]) -> Result<(), CliError> {
         _ => return Err(format!("render: --out {out}: use a .png, .jpg, .tif or .pam name").into()),
     };
     let mut r = PageRenderer::new(read(path)?, RenderConfig { password: flag(args, "--password").map(Arc::from), ..Default::default() });
-    let p = r.render(RenderRequest { page: page.saturating_sub(1), kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0 });
+    let p = r.render(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0 });
     if let Some(e) = p.error {
         return Err(e.into());
     }
@@ -363,7 +380,7 @@ fn render(args: &[String]) -> Result<(), CliError> {
         }
     };
     std::fs::write(out, bytes).map_err(|e| format!("{out}: {e}"))?;
-    eprintln!("rendered page {page} at {dpi} dpi: {}×{} px in {} ms", p.width, p.height, p.millis);
+    let _ = writeln!(std::io::stderr().lock(), "rendered page {page} at {dpi} dpi: {}×{} px in {} ms", p.width, p.height, p.millis);
     Ok(())
 }
 
@@ -582,7 +599,8 @@ fn run(args: &[String]) -> Result<(), CliError> {
 fn mcp(args: &[String]) -> Result<(), CliError> {
     let compact = args.iter().any(|a| a == "--compact");
     let mut server = pdfcraft_automation::mcp::McpServer::new(automation(args)?).with_compact(compact);
-    eprintln!(
+    let _ = writeln!(
+        std::io::stderr().lock(),
         "pdfcraft-cli: MCP server on stdio (protocol {}{}); close stdin to stop",
         pdfcraft_automation::mcp::PROTOCOL_VERSIONS[0],
         if compact { ", compact tool list" } else { "" }

@@ -35,11 +35,13 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
   default `document_japanese_font` / `japanese_glyph` APIs still use regular document Mincho.
 - `SHIPPORI_MINCHO`: Shippori Mincho's bytes, or `None`.
 
-This improves the initial replacement's appearance, not the separate Type 3 font-name reporting
-limitation: without a recorded fallback name, a later edit needing new glyphs cannot recover
-its original family/weight from the saved Type 3 font. The editor's substituted-font notice
-identifies the selected family. The small web input has only Gothic Regular, so it cannot
-preserve bold. No new font assets or changes to that input are needed.
+Generated Japanese Type 3 fonts record the fallback face's family and style in an indirect
+`FontDescriptor`. `pdf::Metrics::base_font` uses its `FontName` when the Type 3 dictionary has
+no `BaseFont`, so text inspection and edit-tool results identify the fallback after save/reopen.
+The descriptor does not change glyph programs or replace the Type 3 `FontBBox` metrics when
+`Ascent`/`Descent` are omitted (PDF Reference 1.7, tables 5.9 and 5.19). The small web input has
+only Gothic Regular, so it cannot preserve bold. No new font assets or changes to that input are
+needed.
 
 wasm32 builds embed only BIZ UDPGothic Regular and any `Arab` or `Telu` face, to keep the web build small: the web build
 currently has no Chinese face, so Chinese there still shows the replacement glyph.
