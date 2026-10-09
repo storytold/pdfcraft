@@ -1,0 +1,2106 @@
+# Ukrainian (uk) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
+#
+#   context  empty                a plain UI string; `source` is the English text in the code
+#            @id                  a command id (e.g. file.saveAs): wins over the English text for
+#                                 that menu item, so one id can read differently from its twin
+#            @plural              `source` is "one|other" (English forms); the translation lists the
+#                                 language's forms separated by "|" (see `plural` in i18n/mod.rs)
+#            anything else        a disambiguating context passed to `tr_ctx`
+#   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
+#   lines starting with # and blank lines are ignored.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Ukrainian computing vocabulary. No proprietary localisation resource, string table or product UI
+# (Acrobat's included) was consulted or copied; add entries the same way.
+# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
+# the trailing "…" of dialog commands is kept.
+
+# Integer plurals (CLDR uk): one (1, 21) | few (2–4, 22–24) | many (0, 5–19); 11–14 take many.
+# Commands use infinitives. Fixed-count templates use count-neutral wording.
+
+	Menu	Меню
+	File	Файл
+	Edit	Редагування
+	Pages	Сторінки
+	View	Перегляд
+	Help	Довідка
+	Preferences	Налаштування
+	Preferences…	Налаштування…
+	Interface language	Мова інтерфейсу
+	Identity	Особисті дані
+	Name on new comments	Ім’я в нових коментарях
+	Open…	Відкрити…
+	Open Recent	Відкрити нещодавні
+	Pin folder to Home…	Закріпити теку на головній…
+	Folders	Теки
+	Pin a folder…	Закріпити теку…
+	Pin a folder to Home	Закріпити теку на головній
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Закріпіть теку, щоб бачити тут її найновіші PDF, наприклад теку, куди сканер або синхронізований хмарний диск зберігає файли.
+	Unpin	Відкріпити
+	Unpin {folder}	Відкріпити {folder}
+	Looking for PDFs…	Пошук PDF…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Ця тека зараз недоступна. Можливо, її переміщено або її диск чи хмарна синхронізація не в мережі.
+	No PDFs in this folder yet	У цій теці ще немає PDF
+	Show less	Показати менше
+	Show {n} more	Показати ще {n}
+	The newest {n} of {total} PDFs	Найновіші {n} PDF із {total}
+	Pinned folders need the desktop app	Для закріплених тек потрібен настільний застосунок
+	Choose a folder on this computer to pin	Виберіть теку на цьому комп’ютері, щоб закріпити її
+	{folder} is already pinned to Home	{folder} уже закріплено на головній
+	You can pin up to {n} folders. Unpin one first.	Можна закріпити не більше {n} тек. Спочатку відкріпіть одну з них.
+	Pinned {folder} to Home	Теку {folder} закріплено на головній
+	No recent files	Немає нещодавніх файлів
+	New blank PDF	Новий порожній PDF
+	Create PDF from file…	Створити PDF із файлу…
+	Create PDF from images…	Створити PDF із зображень…
+	Create PDF from clipboard	Створити PDF із буфера обміну
+	Combine files…	Об’єднати файли…
+	Save	Зберегти
+	Save as…	Зберегти як…
+	Close file	Закрити файл
+	Close all	Закрити все
+	Revert	Повернути збережену версію
+	Print…	Друк…
+	Document properties…	Властивості документа…
+	Undo	Скасувати
+	Redo	Повторити
+	Find…	Знайти…
+	Advanced search…	Розширений пошук…
+	Copy pages	Копіювати сторінки
+	Cut pages	Вирізати сторінки
+	Paste pages	Вставити сторінки
+	Fit visible	За видимою областю
+	Marquee zoom	Масштабувати виділену область
+	Take a snapshot	Зробити знімок
+	Full screen mode	Повноекранний режим
+	Read mode	Режим читання
+	Switch light / dark theme	Перемкнути світлу / темну тему
+	Comments panel	Панель коментарів
+	Form fields panel	Панель полів форми
+	Clear form	Очистити форму
+	Find tools and commands…	Знайти інструменти й команди…
+	Zoom	Масштаб
+	Actual size	Фактичний розмір
+	Zoom to page level	За розміром сторінки
+	Fit to width	За шириною
+	Display theme	Тема оформлення
+	Side panels	Бічні панелі
+	Enable Acrobat JavaScript	Увімкнути Acrobat JavaScript
+	OK	OK
+	Join our Discord	Приєднатися до нашого Discord
+	Close	Закрити
+	Next / previous match	Наступний / попередній збіг
+	Copy selected text	Копіювати виділений текст
+	Double-click	Подвійне клацання
+	Select a word	Виділити слово
+	Clear selection / close find	Зняти виділення / закрити пошук
+	Zoom in / out (also pinch or ⌘-scroll)	Збільшити / зменшити (також жестом зведення або ⌘-прокручуванням)
+	Rotate view	Повернути вигляд
+	First / last page	Перша / остання сторінка
+	Previous / next page	Попередня / наступна сторінка
+	Delete selected pages (Organize)	Видалити вибрані сторінки (Упорядкування)
+	Select all pages (Organize)	Вибрати всі сторінки (Упорядкування)
+	Home	Головна
+	Open	Відкрити
+	Open a PDF (⌘O)	Відкрити PDF (⌘O)
+	Dark gray theme	Темно-сіра тема
+	Light theme	Світла тема
+	All tools	Усі інструменти
+	Read	Читання
+	Convert	Перетворення
+	E-Sign	Електронний підпис
+	Print (⌘P)	Друк (⌘P)
+	Save (M4)	Зберегти (M4)
+	Document properties (⌘D)	Властивості документа (⌘D)
+	Find tools and commands	Знайти інструменти й команди
+	Fit to height	За висотою
+	Zoom in	Збільшити
+	Zoom out	Зменшити
+	Rotate view clockwise	Повернути вигляд за годинниковою стрілкою
+	Rotate view counterclockwise	Повернути вигляд проти годинникової стрілки
+	Page navigation	Навігація сторінками
+	Previous view	Попередній вигляд
+	Next view	Наступний вигляд
+	Page display	Відображення сторінок
+	Continuous scrolling	Безперервне прокручування
+	Two-page view	Дві сторінки
+	Single page	Одна сторінка
+	Show cover page in two-page view	Показувати обкладинку в режимі двох сторінок
+	Use system setting	Використовувати системні налаштування
+	Light gray	Світло-сіра
+	Dark gray	Темно-сіра
+	Comments	Коментарі
+	Bookmarks	Закладки
+	Fields	Поля
+	Layers	Шари
+	Attachments	Вкладення
+	Signatures	Підписи
+	Accessibility Checker	Перевірка доступності
+	Search	Пошук
+	Compare	Порівняння
+	Page thumbnails	Мініатюри сторінок
+	Form fields	Поля форми
+	Zoom out (⌘−)	Зменшити (⌘−)
+	Zoom in (⌘+)	Збільшити (⌘+)
+	Rotate view clockwise (⇧⌘+)	Повернути вигляд за годинниковою стрілкою (⇧⌘+)
+	Toggle fit page / fit width	Перемкнути масштаб за сторінкою / за шириною
+	Next page	Наступна сторінка
+	Previous page	Попередня сторінка
+	Current page — type a page number or label (such as iv) and press Enter	Поточна сторінка — введіть номер або позначку сторінки (наприклад iv) і натисніть Enter
+	Welcome to PdfCraft	Вітаємо в PdfCraft
+	An open-source PDF workbench — local, private, and scriptable.	Відкритий інструментарій для PDF — локальний, приватний і з підтримкою сценаріїв.
+	Join the ArtCraft community	Приєднатися до спільноти ArtCraft
+	Get help, share feedback and follow development on Discord.	Отримуйте допомогу, діліться відгуками й стежте за розробкою в Discord.
+	Recommended tools	Рекомендовані інструменти
+	Use now	Використати зараз
+	Open file	Відкрити файл
+	Recent	Нещодавні
+	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Тут з’являються файли, які ви відкриваєте в PdfCraft. Перетягніть PDF будь-куди, щоб відкрити його.
+	Privacy	Приватність
+	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft працює офлайн. Без телеметрії, облікового запису та хмарної обробки, якщо ви не додасте постачальника.
+	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Сценарії виконуються в ізольованому середовищі без доступу до файлів і мережі. Коли JavaScript вимкнено, стандартні функції форматування, перевірки й обчислення Acrobat усе одно працюють.
+	Back to all tools	Назад до всіх інструментів
+	Close panel	Закрити панель
+	View less	Показати менше
+	View more	Показати більше
+	Available	Доступно
+	Ready	Готово
+	Search tools and commands…	Пошук інструментів і команд…
+	No matching tools	Відповідних інструментів немає
+	Tool	Інструмент
+	Command	Команда
+	Add a sticky note	Додати нотатку
+	Add a text box	Додати текстове поле коментаря
+	Highlight text	Виділити текст кольором
+	Underline text	Підкреслити текст
+	Strikethrough text	Закреслити текст
+	Squiggly underline text	Підкреслити текст хвилястою лінією
+	Draw freehand	Малювати від руки
+	Draw a line	Намалювати лінію
+	Draw an arrow	Намалювати стрілку
+	Draw a rectangle	Намалювати прямокутник
+	Draw an oval	Намалювати овал
+	Draw a polygon	Намалювати багатокутник
+	Draw connected lines	Намалювати ламану лінію
+	Draw a cloud	Намалювати хмару
+	Add a callout	Додати виноску
+	Insert text	Вставити текст
+	Replace text	Замінити текст
+	Attach a file	Вкласти файл
+	Erase drawings	Стерти малюнки
+	Flatten comments	Звести коментарі
+	Import comments…	Імпортувати коментарі…
+	Add a stamp	Додати штамп
+	Export all comments to data file…	Експортувати всі коментарі у файл даних…
+	Hide all comments	Приховати всі коментарі
+	Summarize comments	Створити зведення коментарів
+	Import form data…	Імпортувати дані форми…
+	Export form data…	Експортувати дані форми…
+	PDF/A…	PDF/A…
+	Action Wizard…	Майстер дій…
+	Prepare for distribution…	Підготувати до розповсюдження…
+	Optimize scanned documents…	Оптимізувати відскановані документи…
+	Compare files…	Порівняти файли…
+	Detect form fields	Виявити поля форми
+	Merge data files into spreadsheet…	Об’єднати файли даних в електронну таблицю…
+	Flatten form fields	Звести поля форми
+	Prepare a form	Підготувати форму
+	Tab order: by rows	Порядок табуляції: за рядками
+	Tab order: by columns	Порядок табуляції: за стовпцями
+	Tab order: by document structure	Порядок табуляції: за структурою документа
+	Add text	Додати текст
+	Edit text & images	Редагувати текст і зображення
+	Add or edit links	Додати або редагувати посилання
+	Create links from URLs	Створити посилання з URL
+	Remove all links	Видалити всі посилання
+	Add Bates numbering…	Додати нумерацію Бейтса…
+	Add image…	Додати зображення…
+	Redact text and images	Вилучити текст і зображення
+	Redact pages…	Вилучити вміст сторінок…
+	Find text and redact…	Знайти й вилучити текст…
+	Redaction properties…	Властивості вилучення вмісту…
+	Apply redactions…	Застосувати вилучення вмісту…
+	Clear redaction marks	Очистити позначки вилучення
+	Remove hidden information…	Видалити приховану інформацію…
+	Sanitize document…	Очистити документ від конфіденційних даних…
+	Field properties…	Властивості поля…
+	Add a text field	Додати текстове поле
+	Add a checkbox	Додати прапорець
+	Add a radio button	Додати перемикач
+	Add a drop-down list	Додати розкривний список
+	Add a list box	Додати список
+	Add a button	Додати кнопку
+	Add an image field	Додати поле зображення
+	Add a date field	Додати поле дати
+	Add a digital signature field	Додати поле цифрового підпису
+	Digitally sign	Підписати цифровим підписом
+	Certify (visible signature)	Засвідчити (видимий підпис)
+	Certify (invisible signature)	Засвідчити (невидимий підпис)
+	Validate all signatures	Перевірити всі підписи
+	Signatures panel	Панель підписів
+	Fill & Sign: add text	Заповнення й підпис: додати текст
+	Fill & Sign: checkmark	Заповнення й підпис: позначка
+	Fill & Sign: cross	Заповнення й підпис: хрестик
+	Fill & Sign: dot	Заповнення й підпис: крапка
+	Fill & Sign: line	Заповнення й підпис: лінія
+	Fill & Sign: date	Заповнення й підпис: дата
+	Fill & Sign: sign	Заповнення й підпис: підпис
+	Fill & Sign: initials	Заповнення й підпис: ініціали
+	Export to image…	Експортувати в зображення…
+	Reduce file size…	Зменшити розмір файлу…
+	Optimize PDF…	Оптимізувати PDF…
+	Export to text…	Експортувати в текст…
+	Export to Word…	Експортувати у Word…
+	Export to HTML…	Експортувати в HTML…
+	Export to RTF…	Експортувати в RTF…
+	JavaScript console…	Консоль JavaScript…
+	Document JavaScripts…	Сценарії JavaScript документа…
+	Recognize text…	Розпізнати текст…
+	Recognize text in multiple files…	Розпізнати текст у кількох файлах…
+	Check for accessibility…	Перевірити доступність…
+	Open accessibility report	Відкрити звіт про доступність
+	Change reading options…	Змінити параметри читання…
+	Add alternate text…	Додати альтернативний текст…
+	Export all images…	Експортувати всі зображення…
+	Add header & footer…	Додати колонтитули…
+	Update header & footer…	Оновити колонтитули…
+	Remove header & footer	Видалити колонтитули
+	Add watermark…	Додати водяний знак…
+	Update watermark…	Оновити водяний знак…
+	Remove watermark	Видалити водяний знак
+	Add background…	Додати тло…
+	Update background…	Оновити тло…
+	Remove background	Видалити тло
+	Protect using password…	Захистити паролем…
+	Remove security	Зняти захист
+	Security properties…	Властивості захисту…
+	Organize pages	Упорядкувати сторінки
+	New bookmark	Нова закладка
+	Rotate pages clockwise	Повернути сторінки за годинниковою стрілкою
+	Rotate pages counterclockwise	Повернути сторінки проти годинникової стрілки
+	Delete pages	Видалити сторінки
+	Insert blank page	Вставити порожню сторінку
+	Rotate pages…	Повернути сторінки…
+	Duplicate pages	Дублювати сторінки
+	Crop pages	Обітнути сторінки
+	Set page boxes…	Задати межі сторінок…
+	Insert pages from file…	Вставити сторінки з файлу…
+	Replace pages…	Замінити сторінки…
+	Extract pages…	Видобути сторінки…
+	Split document…	Розділити документ…
+	Number pages…	Пронумерувати сторінки…
+	Keyboard shortcuts	Клавіатурні скорочення
+	Join the ArtCraft Discord	Приєднатися до Discord ArtCraft
+	PdfCraft web page	Вебсторінка PdfCraft
+	PdfCraft on GitHub	PdfCraft на GitHub
+	ArtCraft website	Вебсайт ArtCraft
+	Check for updates…	Перевірити оновлення…
+	About PdfCraft	Про PdfCraft
+	Export a PDF	Експортувати PDF
+	Export to	Експортувати в
+	Microsoft Word (.docx)	Microsoft Word (.docx)
+	Spreadsheet (.xlsx)	Електронна таблиця (.xlsx)
+	Presentation (.pptx)	Презентація (.pptx)
+	Image (PNG)	Зображення (PNG)
+	Export all images	Експортувати всі зображення
+	HTML web page	Вебсторінка HTML
+	Rich Text Format (.rtf)	Форматований текст (.rtf)
+	Text (plain)	Звичайний текст
+	PostScript / EPS	PostScript / EPS
+	Fill & Sign	Заповнення й підпис
+	Fill	Заповнити
+	Checkmark	Позначка
+	Cross	Хрестик
+	Dot	Крапка
+	Line	Лінія
+	Date	Дата
+	Signature	Підпис
+	Initials	Ініціали
+	Edit a PDF	Редагувати PDF
+	Modify page	Змінити сторінку
+	Rotate pages	Повернути сторінки
+	Insert pages	Вставити сторінки
+	Extract pages	Видобути сторінки
+	Add content	Додати вміст
+	Text	Текст
+	Image	Зображення
+	Header and footer	Колонтитули
+	Watermark	Водяний знак
+	Link	Посилання
+	Bates numbering	Нумерація Бейтса
+	Background	Тло
+	Attach file	Вкласти файл
+	Create a PDF	Створити PDF
+	Create from	Створити з
+	Single file	Один файл
+	Multiple files	Кілька файлів
+	Images	Зображення
+	Clipboard	Буфер обміну
+	Blank page	Порожня сторінка
+	Combine files	Об’єднати файли
+	Combine	Об’єднати
+	Add files to combine	Додати файли для об’єднання
+	Page options	Параметри сторінки
+	Page grid	Сітка сторінок
+	Rotate	Повернути
+	Delete	Видалити
+	Extract	Видобути
+	Insert	Вставити
+	Replace	Замінити
+	Split	Розділити
+	More	Більше
+	Set page boxes	Задати межі сторінок
+	Page labels	Позначки сторінок
+	Page transitions	Переходи між сторінками
+	Add comments	Додати коментарі
+	Markup	Розмітка
+	Sticky note	Нотатка
+	Underline	Підкреслення
+	Strikethrough	Закреслення
+	Squiggly underline	Хвилясте підкреслення
+	Text box	Текстове поле коментаря
+	Drawing	Малювання
+	Rectangle	Прямокутник
+	Oval	Овал
+	Arrow	Стрілка
+	Cloud	Хмара
+	Stamp	Штамп
+	Review	Рецензування
+	Comment list	Список коментарів
+	Scan & OCR	Сканування й OCR
+	Recognize text	Розпізнати текст
+	In this file	У цьому файлі
+	In multiple files	У кількох файлах
+	Enhance scanned file	Поліпшити відсканований файл
+	Correct recognized text	Виправити розпізнаний текст
+	Protect a PDF	Захистити PDF
+	Protect	Захистити
+	Protect with password	Захистити паролем
+	Remove hidden information	Видалити приховану інформацію
+	Advanced options	Додаткові параметри
+	Encrypt with certificate	Зашифрувати сертифікатом
+	Security properties	Властивості захисту
+	Redact a PDF	Вилучити вміст PDF
+	Redact	Вилучити вміст
+	Redact pages	Вилучити вміст сторінок
+	Find text and redact	Знайти й вилучити текст
+	Set properties	Задати властивості
+	Sanitize document	Очистити документ від конфіденційних даних
+	Compress a PDF	Стиснути PDF
+	Optimize	Оптимізувати
+	Reduce file size	Зменшити розмір файлу
+	Advanced optimization	Розширена оптимізація
+	Audit space usage	Аналіз використання місця
+	Field list	Список полів
+	Field properties	Властивості поля
+	Tab order by rows	Порядок табуляції за рядками
+	Tab order by columns	Порядок табуляції за стовпцями
+	Import data	Імпортувати дані
+	Export data	Експортувати дані
+	Add form components	Додати компоненти форми
+	Text field	Текстове поле
+	Checkbox	Прапорець
+	Radio button	Перемикач
+	Drop-down list	Розкривний список
+	List box	Список
+	Button	Кнопка
+	Image field	Поле зображення
+	Date field	Поле дати
+	Digital signature	Цифровий підпис
+	Stamps	Штампи
+	Stamp palette	Палітра штампів
+	Use a certificate	Використати сертифікат
+	Certificates	Сертифікати
+	Timestamp	Позначка часу
+	Use print production	Підготувати до друку
+	Print production	Підготовка до друку
+	Output preview	Попередній перегляд виводу
+	Preflight	Переддрукова перевірка
+	Convert colors	Перетворити кольори
+	Add printer marks	Додати друкарські мітки
+	Fix hairlines	Виправити надтонкі лінії
+	Measure objects	Виміряти об’єкти
+	Measure	Виміряти
+	Measuring tool	Інструмент вимірювання
+	Geospatial location	Геопросторове розташування
+	Compare files	Порівняти файли
+	Select files to compare	Вибрати файли для порівняння
+	Use guided actions	Використати покрокові дії
+	Actions list	Список дій
+	Action Wizard	Майстер дій
+	Make accessible	Зробити доступним
+	Prepare for distribution	Підготувати до розповсюдження
+	Optimize scanned documents	Оптимізувати відскановані документи
+	Archive documents	Архівувати документи
+	Prepare for accessibility	Підготувати для доступності
+	Accessibility	Доступність
+	Automatically tag PDF	Автоматично додати теги до PDF
+	Change reading options	Змінити параметри читання
+	Check for accessibility	Перевірити доступність
+	Add alternate text	Додати альтернативний текст
+	Fix reading order	Виправити порядок читання
+	Apply PDF standards	Застосувати стандарти PDF
+	Standards	Стандарти
+	Save as PDF/A	Зберегти як PDF/A
+	Save as PDF/X	Зберегти як PDF/X
+	Save as PDF/UA	Зберегти як PDF/UA
+	Add search index	Додати пошуковий індекс
+	Index	Індекс
+	Manage embedded index	Керувати вбудованим індексом
+	Use JavaScript	Використати JavaScript
+	JavaScript	JavaScript
+	Console	Консоль
+	Document JavaScripts	Сценарії JavaScript документа
+	Document actions	Дії документа
+	AI assistant	ШІ-асистент
+	Bring your own model (off by default)	Додайте власну модель (типово вимкнено)
+	Summarize	Створити зведення
+	Ask about this document	Запитати про цей документ
+	Translate	Перекласти
+	pages	сторінки
+	Planned	Заплановано
+	Planned for milestone	Заплановано на етап
+	open to see what it will include	відкрийте, щоб побачити, що він міститиме
+	Optional: needs an AI provider you configure	Необов’язково: потрібен налаштований вами постачальник ШІ
+	Coming in milestone	З’явиться на етапі
+	Items marked Ready work today.	Елементи з позначкою «Готово» вже працюють.
+	Preview	Попередній перегляд
+	Edit fields	Редагувати поля
+	Try the form as people filling it in will see it	Перевірте форму так, як її бачитимуть користувачі під час заповнення
+	Redact all	Вилучити весь вміст
+	Clear all	Очистити все
+	Rotate page	Повернути сторінку
+	Delete page	Видалити сторінку
+	Move page	Перемістити сторінку
+	Move pages	Перемістити сторінки
+	Duplicate page	Дублювати сторінку
+	Replace page	Замінити сторінку
+	Replace pages	Замінити сторінки
+	Crop page	Обітнути сторінку
+	Cancel	Скасувати
+	Don't save	Не зберігати
+	Apply	Застосувати
+	Run	Виконати
+	Clear	Очистити
+	Sanitize	Очистити конфіденційні дані
+	Mark all	Позначити все
+	Save changes to “{name}” before closing?	Зберегти зміни у «{name}» перед закриттям?
+	Your changes will be lost if you don't save them.	Якщо не зберегти зміни, їх буде втрачено.
+	Password required	Потрібен пароль
+	“{name}” is protected. Enter a password to open it.	«{name}» захищено. Введіть пароль, щоб відкрити файл.
+	Password	Пароль
+	Incorrect password. Try again.	Неправильний пароль. Спробуйте ще раз.
+	Recognize Text	Розпізнати текст
+	Password protection will be applied when you save	Захист паролем буде застосовано під час збереження
+	Saved the print-ready PDF to {path}	Готовий до друку PDF збережено в {path}
+	Could not save: {e}	Не вдалося зберегти: {e}
+	Earlier in tab order	Раніше в порядку табуляції
+	Later in tab order	Пізніше в порядку табуляції
+	From:	Від:
+	To:	До:
+	High Resolution	Висока роздільна здатність
+	Print	Друк
+	Verify to see what the document needs.	Виконайте перевірку, щоб з’ясувати потреби документа.
+	Set Page Boxes	Задати межі сторінок
+	Signature panel	Панель підписів
+	{month} {day}, {y}	{day} {month} {y}
+	The document's security settings don't allow filling in form fields	Налаштування захисту документа не дозволяють заповнювати поля форми
+	{name} is read-only	{name} доступне лише для читання
+	{name} has no action	{name} не має дії
+	Previous month	Попередній місяць
+	Next month	Наступний місяць
+	January	Січень
+	February	Лютий
+	March	Березень
+	April	Квітень
+	May	Травень
+	June	Червень
+	July	Липень
+	August	Серпень
+	September	Вересень
+	October	Жовтень
+	November	Листопад
+	December	Грудень
+	Done	Готово
+	This certificate is in your list of trusted certificates.	Цей сертифікат є у вашому списку довірених сертифікатів.
+	This certificate is trusted through a certificate above it in the chain.	Цей сертифікат є довіреним завдяки сертифікату вище в ланцюжку.
+	This certificate is not trusted. Signatures made with it show an unknown identity.	Цей сертифікат не є довіреним. Підписи, створені ним, мають невідому особу підписувача.
+	Add to Trusted Certificates	Додати до довірених сертифікатів
+	Export…	Експортувати…
+	PDF Optimizer	Оптимізатор PDF
+	Discard Objects	Видалення об’єктів
+	Discard User Data	Видалення даних користувача
+	Clean Up	Очищення
+	Color Images	Кольорові зображення
+	Grayscale Images	Зображення у відтінках сірого
+	Bicubic downsampling to	Бікубічне зниження роздільної здатності до
+	for images above	для зображень із роздільною здатністю понад
+	Compression	Стиснення
+	ZIP	ZIP
+	Retain existing	Зберегти наявне
+	Minimum	Мінімальна
+	Low	Низька
+	High	Висока
+	Maximum	Максимальна
+	Each image is measured where pages draw it; an image is replaced only if the result is smaller.	Кожне зображення вимірюється там, де його відтворюють сторінки; зображення замінюється лише тоді, коли результат менший.
+	Discard all links, actions and JavaScript	Видалити всі посилання, дії та JavaScript
+	Discard alternate images	Видалити альтернативні зображення
+	Discard embedded page thumbnails	Видалити вбудовані мініатюри сторінок
+	Discard document tags	Видалити теги документа
+	Discard embedded print settings	Видалити вбудовані налаштування друку
+	Discard bookmarks	Видалити закладки
+	Discard hidden layer content	Видалити вміст прихованих шарів
+	Discard all comments, forms and multimedia	Видалити всі коментарі, форми й мультимедіа
+	Discard document information and metadata	Видалити відомості про документ і метадані
+	Discard all object data (file attachments)	Видалити всі дані об’єктів (файлові вкладення)
+	Discard private data of other applications	Видалити приватні дані інших застосунків
+	Discard hidden text	Видалити прихований текст
+	Use Flate to encode streams that are not encoded	Кодувати незакодовані потоки за допомогою Flate
+	Remove invalid links and bookmarks	Видалити недійсні посилання й закладки
+	Remove unreferenced named destinations	Видалити іменовані призначення без посилань
+	Compress document structure (object streams)	Стиснути структуру документа (потоки об’єктів)
+	Remove unused objects and merge identical ones	Видалити невикористані об’єкти й об’єднати однакові
+	Audit space usage…	Аналіз використання місця…
+	Space Audit	Аналіз місця
+	Bytes	Байти
+	Content Streams	Потоки вмісту
+	X Object Forms	Форми XObject
+	Structure Info	Відомості про структуру
+	Thumbnails	Мініатюри
+	Named Destinations	Іменовані призначення
+	Color Spaces	Колірні простори
+	Shadings	Градієнтні заливки
+	Patterns (graphics objects)	Візерунки (графічні об’єкти)
+	Extended Graphics States	Розширені графічні стани
+	Embedded Files	Вбудовані файли
+	Document Overhead	Службові дані документа
+	Total	Усього
+	Text Field Properties	Властивості текстового поля
+	Check Box Properties	Властивості прапорця
+	Radio Button Properties	Властивості перемикача
+	Dropdown Properties	Властивості розкривного списку
+	List Box Properties	Властивості списку
+	Button Properties	Властивості кнопки
+	Digital Signature Properties	Властивості цифрового підпису
+	Position	Положення
+	Options	Параметри
+	Validate	Перевірка
+	Calculate	Обчислення
+	Actions	Дії
+	This field is locked. Unlock it to change its properties.	Це поле заблоковано. Розблокуйте його, щоб змінити властивості.
+	Tooltip:	Підказка:
+	Common Properties	Загальні властивості
+	Read Only	Лише для читання
+	Required	Обов’язкове
+	Font Size:	Розмір шрифту:
+	Auto	Автоматично
+	Text Color:	Колір тексту:
+	Borders and Colors	Рамки й кольори
+	Border Color:	Колір рамки:
+	Fill Color:	Колір заливки:
+	No color	Без кольору
+	Beveled	Скошена
+	Left:	Зліва:
+	Bottom:	Знизу:
+	Width:	Ширина:
+	Height:	Висота:
+	Points from the page's bottom-left corner.	Пункти від нижнього лівого кута сторінки.
+	Alignment:	Вирівнювання:
+	Default Value:	Типове значення:
+	Multi-line	Багаторядкове
+	Scroll long text	Прокручувати довгий текст
+	Allow Rich Text Formatting	Дозволити форматування тексту
+	Limit of	Обмеження:
+	characters	символів
+	Field is used for file selection	Поле використовується для вибору файлу
+	Check spelling	Перевіряти правопис
+	Comb of	Комірки для
+	Export Value: {on}	Значення експорту: {on}
+	Check box is checked by default	Прапорець типово встановлено
+	Button is checked by default	Кнопку типово вибрано
+	Buttons with the same name and value are selected in unison	Кнопки з однаковими назвою й значенням вибираються разом
+	Item:	Елемент:
+	Item List	Список елементів
+	Up	Угору
+	Delete {o}	Видалити {o}
+	Add the choices people pick from.	Додайте варіанти, з яких користувачі вибиратимуть.
+	Default:	Типово:
+	(none)	(немає)
+	Sort items	Сортувати елементи
+	Allow user to enter custom text	Дозволити користувачу вводити власний текст
+	Multiple selection	Множинний вибір
+	Commit selected value immediately	Одразу застосовувати вибране значення
+	Number	Число
+	Percentage	Відсоток
+	Time	Час
+	Special	Спеціальний
+	Select format category:	Виберіть категорію формату:
+	The value is shown as typed.	Значення відображається як введено.
+	Decimal places:	Знаків після коми:
+	Separator style:	Стиль роздільників:
+	Currency symbol:	Символ валюти:
+	Before the number	Перед числом
+	Negative number style:	Стиль від’ємних чисел:
+	Format:	Формат:
+	Custom:	Власний:
+	Zip Code	Поштовий індекс
+	Zip Code + 4	Поштовий індекс + 4
+	Phone Number	Номер телефону
+	Social Security Number	Номер соціального страхування
+	Arbitrary Mask	Довільна маска
+	Mask:	Маска:
+	9 digit, A letter, O letter or digit, X any character	9 — цифра, A — літера, O — літера або цифра, X — будь-який символ
+	Example: {sample}	Приклад: {sample}
+	Field value is not validated	Значення поля не перевіряється
+	Field value is in range:	Значення поля в діапазоні:
+	Add an Action	Додати дію
+	Select Trigger:	Виберіть подію:
+	Mouse Up	Відпускання кнопки миші
+	Mouse Down	Натискання кнопки миші
+	Mouse Enter	Наведення вказівника
+	Mouse Exit	Вихід вказівника
+	On Focus	Отримання фокуса
+	On Blur	Втрата фокуса
+	Select Action:	Виберіть дію:
+	Open a web link	Відкрити вебпосилання
+	Reset a form	Скинути форму
+	Execute a menu item	Виконати пункт меню
+	Show a field	Показати поле
+	Hide a field	Приховати поле
+	Submit a form	Надіслати форму
+	Fields to reset (comma-separated; empty: all)	Поля для скидання (через кому; порожньо: усі)
+	Print, NextPage, PrevPage, FirstPage or LastPage	Print, NextPage, PrevPage, FirstPage або LastPage
+	Field names (comma-separated)	Назви полів (через кому)
+	URL to submit to	URL для надсилання
+	Script:	Сценарій:
+	Value:	Значення:
+	No actions	Немає дій
+	Value is not calculated	Значення не обчислюється
+	Value is the	Значення — це
+	sum (+)	сума (+)
+	product (x)	добуток (x)
+	average	середнє
+	minimum	мінімум
+	maximum	максимум
+	of the following fields:	таких полів:
+	Simplified field notation:	Спрощений запис полів:
+	Field names with + - * / and parentheses; put \\ before spaces in names.	Назви полів із + - * / та дужками; перед пробілами в назвах ставте \\.
+	Format text	Форматувати текст
+	Bold	Напівжирний
+	Italic	Курсив
+	Align left	Вирівняти ліворуч
+	Centre	По центру
+	Align right	Вирівняти праворуч
+	Justify	За шириною
+	Standard fonts; text outside Windows-1252 isn't supported yet.	Стандартні шрифти; текст поза Windows-1252 ще не підтримується.
+	Edit image	Редагувати зображення
+	Rotate counterclockwise	Повернути проти годинникової стрілки
+	Rotate clockwise	Повернути за годинниковою стрілкою
+	Flip horizontal	Віддзеркалити горизонтально
+	Flip vertical	Віддзеркалити вертикально
+	Replace image	Замінити зображення
+	Crop (% trimmed from each side)	Обтинання (% з кожного боку)
+	Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.	Клацніть на сторінці, щоб додати текст; кожне клацання створює нове поле, а ✓ завершує. Перетягуйте елементи, щоб перемістити їх, тягніть за кут, щоб змінити розмір, двічі клацніть текст, щоб редагувати його.
+	Choose an image	Вибрати зображення
+	Export to Image	Експортувати в зображення
+	Export to Text	Експортувати в текст
+	Export All Images	Експортувати всі зображення
+	Resolution	Роздільна здатність
+	Format	Формат
+	Quality	Якість
+	One {f} file per page, named after the document.	Один файл {f} на сторінку з назвою документа.
+	Exclude images smaller than	Виключити зображення, менші за
+	No limit	Без обмежень
+	Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.	Кожне зображення один раз, із назвою документа й сторінки. Зображення JPEG зберігаються без змін; решта — як PNG.
+	Plain text in reading order; pages are separated by form feeds.	Звичайний текст у порядку читання; сторінки розділено символами переведення сторінки.
+	Create {what}	Створити {what}
+	initials	ініціали
+	signature	підпис
+	Create Custom Stamp	Створити власний штамп
+	From {file}	Із {file}
+	Category:	Категорія:
+	e.g. My stamps	наприклад Мої штампи
+	Name:	Назва:
+	Custom	Власний
+	Delete stamp	Видалити штамп
+	Create custom stamp…	Створити власний штамп…
+	From a PDF page or an image	Із сторінки PDF або зображення
+	Line spacing	Міжрядковий інтервал
+	Character spacing	Міжсимвольний інтервал
+	Horizontal scale	Горизонтальний масштаб
+	Rotate Clockwise	Повернути за годинниковою стрілкою
+	Rotate Counterclockwise	Повернути проти годинникової стрілки
+	Flip Horizontal	Віддзеркалити горизонтально
+	Flip Vertical	Віддзеркалити вертикально
+	Replace Image…	Замінити зображення…
+	Save Image As…	Зберегти зображення як…
+	Check for updates	Перевірити оновлення
+	No check has run yet.	Перевірку ще не виконано.
+	Checking for a newer version…	Перевірка наявності новішої версії…
+	PdfCraft {v} is available.	Доступна версія PdfCraft {v}.
+	You have version {c}. Download the new version from its release page.	У вас версія {c}. Завантажте нову версію зі сторінки випуску.
+	PdfCraft {c} is up to date.	Ваша версія PdfCraft {c} актуальна.
+	Couldn't check for updates: {e}	Не вдалося перевірити оновлення: {e}
+	You have version {c}. All releases are listed at {page}.	У вас версія {c}. Усі випуски наведено на {page}.
+	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Запитує в GitHub найновіший випуск. Нічого не завантажується й не встановлюється автоматично.
+	Download	Завантажити
+	Later	Пізніше
+	none	немає
+	Declared conformance: {shown}	Заявлена відповідність: {shown}
+	Output intent: {list}	Профіль виводу: {list}
+	Conformance level:	Рівень відповідності:
+	No problems found: the document conforms to {level}.	Проблем не виявлено: документ відповідає {level}.
+	 (page {p})	 (сторінка {p})
+	  · not fixable here	  · тут неможливо виправити
+	Verify	Перевірити
+	Box	Область
+	Units	Одиниці
+	Set to zero	Установити нуль
+	Current page ({n})	Поточна сторінка ({n})
+	Subset	Підмножина
+	Update	Оновити
+	Add	Додати
+	{verb} Header and Footer	{verb}: колонтитули
+	{verb} Watermark	{verb}: водяний знак
+	{verb} Background	{verb}: тло
+	Margins (in)	Поля (дюйми)
+	Left Header Text	Текст ліворуч у верхньому колонтитулі
+	Center Header Text	Текст по центру у верхньому колонтитулі
+	Right Header Text	Текст праворуч у верхньому колонтитулі
+	Left Footer Text	Текст ліворуч у нижньому колонтитулі
+	Center Footer Text	Текст по центру у нижньому колонтитулі
+	Right Footer Text	Текст праворуч у нижньому колонтитулі
+	Insert Page Number	Вставити номер сторінки
+	Insert Date	Вставити дату
+	Start page number	Початковий номер сторінки
+	Source	Джерело
+	Fit to page	За розміром сторінки
+	Rotation	Поворот
+	Appear behind page	Позаду сторінки
+	Appear on top of page	Поверх сторінки
+	From colour	Із кольору
+	Page Range Options	Параметри діапазону сторінок
+	Preview: page {p} of {n}	Попередній перегляд: сторінка {p} із {n}
+	Applies to 1 page	Застосовується до 1 сторінки
+	Applies to {n} pages	Застосовується до {n} сторінок
+	Replaces the existing one on those pages.	Замінює наявний елемент на цих сторінках.
+	PDF or image	PDF або зображення
+	No file chosen	Файл не вибрано
+	Page number	Номер сторінки
+	Scale relative to target page	Масштаб відносно цільової сторінки
+	Link Properties	Властивості посилання
+	Create Link	Створити посилання
+	Link Appearance	Вигляд посилання
+	Link Type:	Тип посилання:
+	Visible Rectangle	Видимий прямокутник
+	Invisible Rectangle	Невидимий прямокутник
+	Highlight Style:	Стиль підсвічування:
+	Invert	Інверсія
+	Outline	Контур
+	Inset	Заглиблення
+	Line Thickness:	Товщина лінії:
+	Thin	Тонка
+	Thick	Товста
+	Line Style:	Стиль лінії:
+	Solid	Суцільна
+	Dashed	Штрихова
+	Color:	Колір:
+	Link Action	Дія посилання
+	Open a web page	Відкрити вебсторінку
+	Go to a page view	Перейти до вигляду сторінки
+	Type the web address.	Введіть вебадресу.
+	This document has no signatures.	Цей документ не має підписів.
+	The Keychain's digital IDs couldn't be listed: {e}	Не вдалося отримати список цифрових посвідчень із В’язки ключів: {e}
+	Signed and saved to {path}	Підписано й збережено в {path}
+	Couldn't open revision {n}: {e}	Не вдалося відкрити редакцію {n}: {e}
+	Couldn't open the signed version: {e}	Не вдалося відкрити підписану версію: {e}
+	Sign with a Digital ID	Підписати цифровим посвідченням
+	Choose the digital ID that you want to use for signing:	Виберіть цифрове посвідчення для підписування:
+	Keychain  ·  	В’язка ключів  ·  
+	Windows store  ·  	Сховище Windows  ·  
+	Issued by: 	Видавець: 
+	, Expires: 	, Дійсний до: 
+	No digital IDs yet.	Ще немає цифрових посвідчень.
+	Configure New Digital ID	Налаштувати нове цифрове посвідчення
+	Continue	Продовжити
+	Configure a Digital ID for Signing	Налаштувати цифрове посвідчення для підписування
+	Use a Digital ID from a file	Використати цифрове посвідчення з файлу
+	Create a new Digital ID (self-signed, saved to a password-protected file)	Створити нове цифрове посвідчення (самопідписане, збережене у файлі, захищеному паролем)
+	Name	Ім’я
+	Organizational Unit	Підрозділ організації
+	Organization Name	Назва організації
+	Email Address	Адреса електронної пошти
+	Country/Region	Країна/регіон
+	Key Algorithm	Алгоритм ключа
+	Confirm Password	Підтвердьте пароль
+	Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.	Дійсне протягом 5 років, для цифрових підписів. Інші зазвичай не довіряють самопідписаним посвідченням.
+	File (.p12, .pfx)	Файл (.p12, .pfx)
+	Digital ID	Цифрове посвідчення
+	Browse…	Огляд…
+	{verb} as "{name}"	{verb} як «{name}»
+	Certify	Засвідчити
+	The signature will be invisible.	Підпис буде невидимим.
+	Distinguished name	Розпізнавальне ім’я
+	Labels	Позначки
+	Permitted actions after certifying	Дозволені дії після засвідчення
+	No changes allowed	Зміни заборонено
+	Annotations, form fill-in, and digital signatures	Коментарі, заповнення форми й цифрові підписи
+	Form fill-in and digital signatures	Заповнення форми й цифрові підписи
+	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	Ключ у В’язці ключів macOS, яка може запитати дозвіл на його використання PdfCraft.
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	Ключ у сховищі сертифікатів Windows, яке може запитати дозвіл на його використання PdfCraft.
+	Digital ID password	Пароль цифрового посвідчення
+	Back	Назад
+	Validate all	Перевірити все
+	Sign this field…	Підписати це поле…
+	Signature is valid:	Підпис дійсний:
+	Signature validity is UNKNOWN:	Дійсність підпису НЕВІДОМА:
+	Signature is INVALID:	Підпис НЕДІЙСНИЙ:
+	Signature Details	Відомості про підпис
+	Reason	Причина
+	Signing time	Час підписування
+	Algorithm	Алгоритм
+	Signer	Підписувач
+	Issued by	Видавець
+	Valid	Дійсний
+	Field	Поле
+	Field: {field} on page {p}	Поле: {field} на сторінці {p}
+	Add to trusted certificates	Додати до довірених сертифікатів
+	View signed version	Переглянути підписану версію
+	Show certificate…	Показати сертифікат…
+	Export certificate…	Експортувати сертифікат…
+	Certificate Viewer	Перегляд сертифіката
+	This dialog shows the details of a certificate and its chain.	Це вікно показує відомості про сертифікат і його ланцюжок.
+	Trust	Довіра
+	Issued to	Кому видано
+	Valid from	Дійсний від
+	Valid to	Дійсний до
+	Intended usage	Призначення
+	Any	Будь-яке
+	Version	Версія
+	Serial number	Серійний номер
+	Issuer	Видавець
+	Validity starts	Початок строку дії
+	Validity ends	Кінець строку дії
+	Public key	Відкритий ключ
+	Key usage	Використання ключа
+	Not present	Відсутнє
+	Self-signed	Самопідписаний
+	Edit Action	Редагувати дію
+	New Action	Нова дія
+	Action name:	Назва дії:
+	Description:	Опис:
+	Steps	Кроки
+	Add the steps this action runs, in order.	Додайте кроки, які ця дія виконуватиме, у потрібному порядку.
+	Add Step	Додати крок
+	An action with this name already exists.	Дія з такою назвою вже існує.
+	New Action…	Нова дія…
+	Edit…	Редагувати…
+	Add watermark	Додати водяний знак
+	Add header	Додати верхній колонтитул
+	Add footer	Додати нижній колонтитул
+	Set document title	Задати заголовок документа
+	Run a JavaScript	Виконати JavaScript
+	Prepare for Distribution	Підготувати до розповсюдження
+	Remove hidden information and flatten comments and form fields, so recipients see only the pages.	Видалити приховану інформацію та звести коментарі й поля форми, щоб одержувачі бачили лише сторінки.
+	Optimize Scanned Documents	Оптимізувати відскановані документи
+	Make scans searchable, then make them smaller.	Додати пошук у сканах, а потім зменшити їхній розмір.
+	Add Page Numbers	Додати номери сторінок
+	Number every page in the footer.	Пронумерувати кожну сторінку в нижньому колонтитулі.
+	Mark as Confidential	Позначити як конфіденційне
+	A diagonal CONFIDENTIAL watermark on every page.	Діагональний водяний знак CONFIDENTIAL на кожній сторінці.
+	Sanitize Documents	Очистити документи від конфіденційних даних
+	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	Видалити приховану інформацію, метадані, сценарії та вбудований вміст і перезаписати файли.
+	Type text	Ввести текст
+	Text to insert	Текст для вставлення
+	Replacement text	Текст заміни
+	Edit text…	Редагувати текст…
+	Add a sticky note here	Додати нотатку тут
+	{kind} Properties	Властивості: {kind}
+	Appearance	Вигляд
+	General	Загальні
+	Review History	Історія рецензування
+	This comment's appearance can't be changed yet.	Вигляд цього коментаря поки неможливо змінити.
+	Icon	Піктограма
+	Thickness	Товщина
+	Modified	Змінено
+	No status has been set.	Статус не задано.
+	Compare Files	Порівняти файли
+	Old file:	Старий файл:
+	Open the older version first	Спочатку відкрийте старішу версію
+	New file:	Новий файл:
+	Text is compared word by word; the differences are shown on the new file.	Текст порівнюється слово за словом; відмінності показано в новому файлі.
+	Compare this file with an older version: Compare files… in All tools.	Порівняйте цей файл зі старішою версією: «Порівняти файли…» в розділі «Усі інструменти».
+	No differences in the text.	Відмінностей у тексті немає.
+	{n} {kind}	{n} {kind}
+	Inserted	Вставлено
+	Deleted	Видалено
+	Replaced	Замінено
+	Visual	Візуальні
+	Mark as comments	Позначити як коментарі
+	Report…	Звіт…
+	{kind} · page {p}	{kind} · сторінка {p}
+	Set Alternate Text	Задати альтернативний текст
+	This document has no tagged figures.	У цьому документі немає рисунків із тегами.
+	 on page {p}	 на сторінці {p}
+	Figure {i} of {n}{page}	Рисунок {i} із {n}{page}
+	No preview	Немає попереднього перегляду
+	Alternate text	Альтернативний текст
+	Describe the figure	Опишіть рисунок
+	Decorative figure	Декоративний рисунок
+	Previous figure	Попередній рисунок
+	Next figure	Наступний рисунок
+	Save & Close	Зберегти й закрити
+	Accessibility Checker Options	Параметри перевірки доступності
+	Report Options	Параметри звіту
+	Create accessibility report	Створити звіт про доступність
+	Page Range	Діапазон сторінок
+	All pages in document	Усі сторінки документа
+	Checking Options ({on} of 32 in all categories)	Параметри перевірки ({on} із 32 в усіх категоріях)
+	Show this dialog when the Checker starts	Показувати це вікно під час запуску перевірки
+	Select All	Вибрати все
+	Clear All	Очистити все
+	Start Checking	Почати перевірку
+	This document hasn't been checked yet.	Цей документ ще не перевірено.
+	No issues found	Проблем не виявлено
+	1 issue	1 проблема
+	{n} issues	Проблем: {n}
+	{label} (1 issue)	{label} (1 проблема)
+	{label} ({n} issues)	{label} (проблем: {n})
+	Check again	Перевірити ще раз
+	Report	Звіт
+	Show the accessibility report	Показати звіт про доступність
+	Collapse	Згорнути
+	Expand	Розгорнути
+	{rule} - {status}	{rule} - {status}
+	Passed	Успішно
+	Failed	Не пройдено
+	Needs manual check	Потрібна ручна перевірка
+	Skipped	Пропущено
+	Fix	Виправити
+	Skip Rule	Пропустити правило
+	Explain	Пояснити
+	Check Again	Перевірити ще раз
+	Show Report	Показати звіт
+	Options…	Параметри…
+	Go to the page	Перейти до сторінки
+	Page Content	Вміст сторінки
+	Forms	Форми
+	Alternate Text	Альтернативний текст
+	Tables	Таблиці
+	Lists	Списки
+	Headings	Заголовки
+	Accessibility permission flag	Прапорець дозволу доступності
+	Accessibility permission flag is set	Прапорець дозволу доступності встановлено
+	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	Налаштування захисту мають дозволяти допоміжним технологіям читати вміст («Увімкнути доступ до тексту для засобів читання з екрана»). Змініть захист документа, щоб дозволити це.
+	Image-only PDF	PDF лише із зображень
+	Document is not image-only PDF	Документ містить не лише зображення
+	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Сторінки, які є лише зображеннями тексту, неможливо прочитати вголос або шукати. Розпізнайте текст (OCR), щоб додати текстовий шар.
+	Document is tagged PDF	Документ є PDF із тегами
+	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	Теги надають документу логічну структуру для допоміжних технологій. Додайте теги до документа («Автоматично додати теги до PDF»).
+	Logical Reading Order	Логічний порядок читання
+	Document structure provides a logical reading order	Структура документа забезпечує логічний порядок читання
+	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	Перевірте, чи теги читаються в тому порядку, у якому читав би зрячий читач. Виправте порядок інструментом порядку читання або на панелі тегів.
+	Primary language	Основна мова
+	Text language is specified	Мову тексту вказано
+	Screen readers choose their voice from the document's language. Set it in Document Properties > Advanced > Language.	Засоби читання з екрана вибирають голос відповідно до мови документа. Задайте її в «Властивості документа > Додаткові > Мова».
+	Document title is showing in title bar	Заголовок документа показано в заголовку вікна
+	The window should show a meaningful title rather than the file name. Set a title and Initial View > Show: Document Title.	Вікно має показувати змістовний заголовок замість назви файлу. Задайте заголовок і «Початковий вигляд > Показувати: Заголовок документа».
+	Bookmarks are present in large documents	У великих документах є закладки
+	Documents of more than 20 pages need bookmarks for navigation. Add bookmarks for the main sections.	Документи з понад 20 сторінками потребують закладок для навігації. Додайте закладки до основних розділів.
+	Color contrast	Колірний контраст
+	Document has appropriate color contrast	Документ має належний колірний контраст
+	Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.	Текст має достатньо контрастувати з тлом для людей зі слабким зором. Перевірте кольори візуально або інструментом перевірки контрасту.
+	Tagged content	Вміст із тегами
+	All page content is tagged	Увесь вміст сторінок має теги
+	Everything on a page must be tagged or marked as an artifact (decoration, headers, footers). Tag the untagged content.	Усе на сторінці має бути позначено тегами або як артефакт (оздоблення, колонтитули). Додайте теги до непозначеного вмісту.
+	Tagged annotations	Коментарі з тегами
+	All annotations are tagged	Усі коментарі мають теги
+	Comments, links and fields must be in the tag tree to be announced. Tag the annotations.	Коментарі, посилання й поля мають бути в дереві тегів, щоб їх озвучували. Додайте теги до коментарів.
+	Tab order	Порядок табуляції
+	Tab order is consistent with structure order	Порядок табуляції відповідає порядку структури
+	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	На сторінках із посиланнями, коментарями чи полями табуляція має відповідати порядку структури. Виправлення задає для кожної сторінки порядок «За структурою документа».
+	Character encoding	Кодування символів
+	Reliable character encoding is provided	Забезпечено надійне кодування символів
+	Fonts must map their characters to Unicode so text can be read and copied. Fix the fonts or recreate the PDF.	Шрифти мають зіставляти символи з Unicode, щоб текст можна було читати й копіювати. Виправте шрифти або створіть PDF заново.
+	Tagged multimedia	Мультимедіа з тегами
+	All multimedia objects are tagged	Усі мультимедійні об’єкти мають теги
+	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	Відео, звук та інтерактивне мультимедіа повинні мати теги для озвучення. Додайте теги до мультимедійних коментарів.
+	Screen flicker	Мерехтіння екрана
+	Page will not cause screen flicker	Сторінка не спричинятиме мерехтіння екрана
+	Animation that flashes can cause seizures. Check scripts and media for flicker.	Мерехтлива анімація може спричиняти напади. Перевірте сценарії та медіа на мерехтіння.
+	Scripts	Сценарії
+	No inaccessible scripts	Немає недоступних сценаріїв
+	Timed responses	Відповіді з обмеженням часу
+	Page does not require timed responses	Сторінка не потребує відповідей з обмеженням часу
+	People may need more time to respond. Check that nothing has a time limit.	Людям може знадобитися більше часу для відповіді. Перевірте відсутність часових обмежень.
+	Navigation links	Навігаційні посилання
+	Navigation links are not repetitive	Навігаційні посилання не повторюються
+	Repeated navigation links should be skippable. Check links that appear on every page.	Повторювані навігаційні посилання має бути можливо пропускати. Перевірте посилання, що є на кожній сторінці.
+	Tagged form fields	Поля форми з тегами
+	All form fields are tagged	Усі поля форми мають теги
+	Form fields must be in the tag tree (Form tags) to be announced. Tag the form fields.	Поля форми мають бути в дереві тегів (теги Form), щоб їх озвучували. Додайте теги до полів форми.
+	Field descriptions	Описи полів
+	All form fields have description	Усі поля форми мають опис
+	Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.	Кожне поле потребує підказки про те, що слід увести. Додайте її в «Властивості поля > Загальні > Підказка».
+	Figures alternate text	Альтернативний текст рисунків
+	Figures require alternate text	Рисунки потребують альтернативного тексту
+	Pictures need alternate text that describes them, or must be marked decorative. Add alternate text to each figure.	Зображення потребують альтернативного тексту з описом або позначки декоративного рисунка. Додайте альтернативний текст до кожного рисунка.
+	Nested alternate text	Вкладений альтернативний текст
+	Alternate text that will never be read	Альтернативний текст, який ніколи не буде прочитано
+	Alternate text inside an element that already has alternate text is never read. Remove the inner alternate text.	Альтернативний текст усередині елемента, який уже має альтернативний текст, ніколи не читається. Видаліть внутрішній альтернативний текст.
+	Associated with content	Пов’язаний із вмістом
+	Alternate text must be associated with some content	Альтернативний текст має бути пов’язаний із вмістом
+	Alternate text on an element without page content is never reached. Remove it or attach the element to content.	Альтернативний текст елемента без вмісту сторінки ніколи не буде прочитано. Видаліть його або пов’яжіть елемент із вмістом.
+	Hides annotation	Приховує коментар
+	Alternate text should not hide annotation	Альтернативний текст не має приховувати коментар
+	Alternate text on an element that contains a link or field hides that annotation from assistive technology. Move the alternate text.	Альтернативний текст елемента, що містить посилання чи поле, приховує цей коментар від допоміжних технологій. Перемістіть альтернативний текст.
+	Other elements alternate text	Альтернативний текст інших елементів
+	Other elements that require alternate text	Інші елементи, які потребують альтернативного тексту
+	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Формули та подібні нетекстові елементи потребують альтернативного тексту. Додайте його до них.
+	Rows	Рядки
+	TR must be a child of Table, THead, TBody, or TFoot	TR має бути дочірнім елементом Table, THead, TBody або TFoot
+	Table cells belong in a row. Fix the table's tags.	Комірки таблиці мають належати рядку. Виправте теги таблиці.
+	Headers	Заголовки
+	Tables should have headers	Таблиці повинні мати заголовки
+	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	Комірки заголовків (TH) пояснюють слухачам, що містить кожен стовпець чи рядок. Позначте комірки заголовків.
+	Regularity	Регулярність
+	Tables must contain the same number of columns in each row and rows in each column	Таблиці мають містити однакову кількість стовпців у кожному рядку й рядків у кожному стовпці
+	Irregular tables confuse cell navigation. Give every row the same number of cells (counting spans).	Нерегулярні таблиці ускладнюють навігацію комірками. Надайте кожному рядку однакову кількість комірок (з урахуванням об’єднання).
+	Summary	Зведення
+	Tables must have a summary	Таблиці повинні містити зведення
+	A summary describes the table's purpose and layout. Add a Summary attribute to each table.	Зведення описує призначення й будову таблиці. Додайте атрибут Summary до кожної таблиці.
+	List items	Елементи списку
+	LI must be a child of L	LI має бути дочірнім елементом L
+	List items belong in a list. Fix the list's tags.	Елементи списку мають належати списку. Виправте теги списку.
+	Lbl and LBody	Lbl і LBody
+	Lbl and LBody must be children of LI	Lbl і LBody мають бути дочірніми елементами LI
+	List labels and bodies belong in a list item. Fix the list's tags.	Позначки й вміст списку мають належати елементу списку. Виправте теги списку.
+	Appropriate nesting	Належна вкладеність
+	Heading levels shouldn't skip (an H1 followed by an H3). Retag the headings.	Рівні заголовків не мають пропускатися (H1, за яким іде H3). Змініть теги заголовків.
+	TH and TD	TH і TD
+	TH and TD must be children of TR	TH і TD мають бути дочірніми елементами TR
+	Mark Page Range	Позначити діапазон сторінок
+	Pages from	Сторінки від
+	Single word or phrase	Окреме слово або фраза
+	Text to find	Текст для пошуку
+	Patterns	Шаблони
+	Phone Numbers	Номери телефонів
+	Email Addresses	Адреси електронної пошти
+	Credit Cards	Кредитні картки
+	Social Security Numbers	Номери соціального страхування
+	Dates	Дати
+	Text in images isn't found; recognise text (OCR) first.	Текст у зображеннях не знаходиться; спочатку розпізнайте текст (OCR).
+	No matches.	Збігів немає.
+	{n} match(es) marked for redaction.	Збігів, позначених для вилучення: {n}.
+	Redaction Tool Properties	Властивості інструмента вилучення вмісту
+	Redacted area fill colour:	Колір заливки вилученої області:
+	Use overlay text	Використовувати накладений текст
+	Custom text:	Власний текст:
+	Font:	Шрифт:
+	Font size:	Розмір шрифту:
+	Auto-size text to fit redaction region	Автоматично добирати розмір тексту до області вилучення
+	Font colour:	Колір шрифту:
+	Repeat overlay text	Повторювати накладений текст
+	Text alignment:	Вирівнювання тексту:
+	Center	По центру
+	Apply redactions	Застосувати вилучення вмісту
+	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Ви збираєтеся застосувати 1 позначку вилучення. Текст, зображення й малюнки під позначками, а також коментарі й поля форми, що їх перекривають, буде видалено назавжди.
+	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Ви збираєтеся застосувати позначки вилучення: {n}. Текст, зображення й малюнки під позначками, а також коментарі й поля форми, що їх перекривають, буде видалено назавжди.
+	Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it.	Після цього збережіть документ: збереження перезаписує весь файл, щоб у ньому не залишилося слідів вилученого вмісту.
+	Select the items to remove from this document.	Виберіть елементи для видалення з цього документа.
+	Metadata	Метадані
+	File attachments	Файлові вкладення
+	Comments and markups	Коментарі й розмітка
+	Hidden text	Прихований текст
+	Hidden layers	Приховані шари
+	Links, actions and JavaScripts	Посилання, дії та сценарії JavaScript
+	Private data of other applications	Приватні дані інших застосунків
+	None found	Нічого не знайдено
+	Form fields are flattened: their values stay visible. Saving rewrites the whole file.	Поля форми зводяться: їхні значення залишаються видимими. Збереження перезаписує весь файл.
+	Remove	Видалити
+	Sanitizing removes hidden information from the document: metadata, file attachments, comments, form fields (flattened), hidden text and layers, bookmarks, links, actions and scripts, and private application data.	Очищення видаляє приховану інформацію з документа: метадані, файлові вкладення, коментарі, поля форми (зводяться), прихований текст і шари, закладки, посилання, дії та сценарії, а також приватні дані застосунків.
+	Save the document afterwards; saving rewrites the whole file so nothing removed stays in it.	Після цього збережіть документ; збереження перезаписує весь файл, щоб у ньому не залишилося видалених даних.
+	Printer:	Принтер:
+	Save as PDF	Зберегти як PDF
+	{name} (default)	{name} (типовий)
+	Copies:	Копії:
+	Collate	Зібрати за копіями
+	Print in grayscale	Друкувати у відтінках сірого
+	Two-sided:	Двобічний друк:
+	Off	Вимкнено
+	Flip on long edge	Перевертати за довгим краєм
+	Flip on short edge	Перевертати за коротким краєм
+	Paper:	Папір:
+	Pages to Print	Сторінки для друку
+	More options:	Додаткові параметри:
+	All pages in range	Усі сторінки діапазону
+	Odd pages only	Лише непарні сторінки
+	Even pages only	Лише парні сторінки
+	Reverse pages	Зворотний порядок сторінок
+	Page Sizing & Handling	Розмір і розміщення сторінок
+	Size	Розмір
+	Poster	Плакат
+	Multiple	Кілька сторінок
+	Booklet	Буклет
+	Fit	Припасувати
+	Shrink oversized pages	Зменшувати завеликі сторінки
+	Custom scale:	Власний масштаб:
+	Tile scale:	Масштаб фрагментів:
+	Overlap:	Перекриття:
+	Cut marks	Мітки різання
+	Pages per sheet:	Сторінок на аркуші:
+	Page order:	Порядок сторінок:
+	Horizontal	Горизонтально
+	Horizontal reversed	Горизонтально у зворотному порядку
+	Vertical	Вертикально
+	Vertical reversed	Вертикально у зворотному порядку
+	Print page border	Друкувати рамку сторінки
+	Auto-rotate pages	Автоматично повертати сторінки
+	Booklet subset:	Частина буклета:
+	Both sides	Обидва боки
+	Front side only	Лише лицьовий бік
+	Back side only	Лише зворотний бік
+	Binding:	Корінець:
+	Left	Ліворуч
+	Right	Праворуч
+	Orientation:	Орієнтація:
+	Auto portrait/landscape	Автоматично: книжкова/альбомна
+	Portrait	Книжкова
+	Landscape	Альбомна
+	Comments & Forms	Коментарі й форми
+	Document	Документ
+	Document and markups	Документ і розмітка
+	Document and stamps	Документ і штампи
+	Form fields only	Лише поля форми
+	Previous sheet	Попередній аркуш
+	Next sheet	Наступний аркуш
+	No sheets	Немає аркушів
+	Sheet {s} of {n}	Аркуш {s} із {n}
+	Removed 1 hidden item. Save to remove them from the file.	Видалено 1 прихований елемент. Збережіть, щоб видалити його з файлу.
+	Removed {n} hidden items. Save to remove them from the file.	Видалено прихованих елементів: {n}. Збережіть, щоб видалити їх із файлу.
+	Document sanitized. Save to finish: saving rewrites the whole file.	Документ очищено. Збережіть для завершення: збереження перезаписує весь файл.
+	Applied 1 redaction mark. Save to remove the content from the file.	Застосовано 1 позначку вилучення. Збережіть, щоб видалити вміст із файлу.
+	Applied {n} redaction marks. Save to remove the content from the file.	Застосовано позначок вилучення: {n}. Збережіть, щоб видалити вміст із файлу.
+	JavaScript Console	Консоль JavaScript
+	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript вимкнено («Налаштування > JavaScript»).
+	Output appears here.	Тут з’являється вивід.
+	Script Name:	Назва сценарію:
+	This document has no document-level scripts.	Цей документ не має сценаріїв рівня документа.
+	No form fields were detected	Полів форми не виявлено
+	Detected 1 form field	Виявлено 1 поле форми
+	Detected {n} form fields	Виявлено полів форми: {n}
+	{field}: {e}	{field}: {e}
+	Current page	Поточна сторінка
+	Selected pages	Вибрані сторінки
+	Document language	Мова документа
+	Output	Вивід
+	Searchable Image (Exact)	Зображення з пошуком (точне)
+	Adds invisible text over each word; the page image is not changed	Додає невидимий текст поверх кожного слова; зображення сторінки не змінюється
+	Downsample to	Знизити роздільну здатність до
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	Розпізнавання тексту не встановлено: бракує моделей (виконайте `cargo xtask models` або задайте PRINTCRAFT_MODELS).
+	Settings	Налаштування
+	Optional	Необов’язково
+	Planned · {m}	Заплановано · {m}
+	Planned for milestone {m} — open to see what it will include	Заплановано на етап {m} — відкрийте, щоб побачити, що він міститиме
+	Coming in milestone {m}. Items marked Ready work today.	З’явиться на етапі {m}. Елементи з позначкою «Готово» вже працюють.
+	1 mark	1 позначка
+	{n} marks	Позначок: {n}
+	Dynamic	Динамічні
+	Sign Here	Підпишіть тут
+	Standard Business	Стандартні ділові
+	Choose a stamp, then click on the page to place it.	Виберіть штамп, а потім клацніть на сторінці, щоб розмістити його.
+	Note	Нотатка
+	Polyline	Ламана лінія
+	Attachment	Вкладення
+	Callout	Виноска
+	Typewriter	Друкований текст
+	Checked	Із позначкою
+	Unchecked	Без позначки
+	Marked	Позначено
+	Locked	Заблоковано
+	Search comments	Пошук коментарів
+	Add a comment	Додати коментар
+	No comments yet.	Ще немає коментарів.
+	Pick a tool in the quick bar, or type above.	Виберіть інструмент на панелі швидкого доступу або введіть текст вище.
+	No comments match.	Відповідних коментарів немає.
+	Unknown author	Невідомий автор
+	No colour	Без кольору
+	Remove checkmark	Зняти позначку
+	Mark with checkmark	Установити позначку
+	Reply	Відповісти
+	Add a reply	Додати відповідь
+	Post	Опублікувати
+	Page {label}	Сторінка {label}
+	{kind} — click to show it on the page	{kind} — клацніть, щоб показати на сторінці
+	Set status	Задати статус
+	Copy text	Копіювати текст
+	Properties…	Властивості…
+	Make Current Properties Default	Зробити поточні властивості типовими
+	More options	Додаткові параметри
+	Sort by	Сортувати за
+	Author	Автор
+	Type	Тип
+	Colour	Колір
+	Show all comments	Показати всі коментарі
+	Create PDF comment summary…	Створити PDF зі зведенням коментарів…
+	Export all to data file…	Експортувати все у файл даних…
+	Filter comments	Фільтрувати коментарі
+	Status	Статус
+	Accepted	Прийнято
+	Rejected	Відхилено
+	Cancelled	Скасовано
+	Completed	Завершено
+	Show all	Показати все
+	Yellow	Жовтий
+	Orange	Помаранчевий
+	Red	Червоний
+	Pink	Рожевий
+	Purple	Фіолетовий
+	Blue	Синій
+	Light blue	Блакитний
+	Green	Зелений
+	Gray	Сірий
+	Black	Чорний
+	Bookmark options	Параметри закладок
+	Expand all bookmarks	Розгорнути всі закладки
+	Expand top-level bookmarks	Розгорнути закладки верхнього рівня
+	Collapse all bookmarks	Згорнути всі закладки
+	New bookmark (⌘B)	Нова закладка (⌘B)
+	This document has no bookmarks.	Цей документ не має закладок.
+	This document has no layers.	Цей документ не має шарів.
+	This document has no attachments.	Цей документ не має вкладень.
+	Hide layer	Приховати шар
+	Show layer	Показати шар
+	Set layer visibility	Задати видимість шару
+	on page {label}	на сторінці {label}
+	Save attachment…	Зберегти вкладення…
+	Open in a new tab	Відкрити в новій вкладці
+	This document has no pages.	Цей документ не має сторінок.
+	Find text	Знайти текст
+	No matches	Збігів немає
+	Searching… {s}/{p}	Пошук… {s}/{p}
+	{c} of {n}{more}	{c} із {n}{more}
+	Previous (⇧⌘G)	Попередній (⇧⌘G)
+	Next (⌘G)	Наступний (⌘G)
+	Find options	Параметри пошуку
+	Whole words only	Лише цілі слова
+	Case-sensitive	З урахуванням регістру
+	Close (Esc)	Закрити (Esc)
+	Align	Вирівняти
+	Top	Зверху
+	Bottom	Знизу
+	Center horizontally	По центру горизонтально
+	Center vertically	По центру вертикально
+	Distribute	Розподілити
+	Horizontally	Горизонтально
+	Vertically	Вертикально
+	Set Fields to Same Size	Задати однаковий розмір полів
+	Height	Висота
+	Width	Ширина
+	Both	Обидва
+	Duplicate…	Дублювати…
+	All pages	Усі сторінки
+	Odd pages	Непарні сторінки
+	Even pages	Парні сторінки
+	Landscape pages	Альбомні сторінки
+	Portrait pages	Книжкові сторінки
+	Move earlier	Перемістити раніше
+	Move later	Перемістити пізніше
+	Back to the document	Назад до документа
+	Protect Using Password	Захистити паролем
+	Requires user to enter a password for:	Вимагати від користувача пароль для:
+	Viewing	Перегляду
+	Editing	Редагування
+	Type Password	Введіть пароль
+	Re-type Password	Повторіть пароль
+	Strength: {s}	Надійність: {s}
+	Strong	Надійний
+	Medium	Середній
+	Weak	Слабкий
+	Advanced Options {chevron}	Додаткові параметри {chevron}
+	Compatibility	Сумісність
+	Acrobat X and later (256-bit AES)	Acrobat X і новіші (256-бітний AES)
+	Acrobat 7.0 and later (128-bit AES)	Acrobat 7.0 і новіші (128-бітний AES)
+	Acrobat 5.0 and later (128-bit RC4)	Acrobat 5.0 і новіші (128-бітний RC4)
+	Acrobat 3.0 and later (40-bit RC4)	Acrobat 3.0 і новіші (40-бітний RC4)
+	Encrypt	Зашифрувати
+	All document contents	Увесь вміст документа
+	All document contents except metadata	Увесь вміст документа, крім метаданих
+	Printing allowed	Дозволений друк
+	Low Resolution (150 dpi)	Низька роздільна здатність (150 dpi)
+	Changes allowed	Дозволені зміни
+	Inserting, deleting, and rotating pages	Вставлення, видалення й поворот сторінок
+	Filling in form fields and signing existing signature fields	Заповнення полів форми й підписування наявних полів підпису
+	Commenting, filling in form fields, and signing existing signature fields	Коментування, заповнення полів форми й підписування наявних полів підпису
+	Any except extracting pages	Будь-які, крім видобування сторінок
+	Enable copying of text, images, and other content	Дозволити копіювання тексту, зображень та іншого вмісту
+	Enable text access for screen reader devices for the visually impaired	Дозволити доступ до тексту засобам читання з екрана для людей із порушеннями зору
+	Type a password.	Введіть пароль.
+	The passwords don't match.	Паролі не збігаються.
+	This compatibility level supports only plain ASCII passwords.	Цей рівень сумісності підтримує лише паролі з простих символів ASCII.
+	Anyone opening the document will need this password. It's applied when you save.	Кожному, хто відкриватиме документ, знадобиться цей пароль. Він застосовується під час збереження.
+	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	Документ відкривається без пароля; цей пароль потрібен для зміни обмежень. Він застосовується під час збереження.
+	Recover unsaved documents?	Відновити незбережені документи?
+	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft завершив роботу некоректно. Зміни цих документів було автоматично збережено:
+	just now	щойно
+	{n} min ago	{n} хв тому
+	{n} h ago	{n} год тому
+	 · password-protected	 · захищено паролем
+	Recover	Відновити
+	Discard	Відкинути
+	Version {v}	Версія {v}
+	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	Відкритий застосунок для PDF, написаний на Rust за принципом незалежної розробки. MIT OR Apache-2.0.
+	Part of	Частина
+	Summarize Options	Параметри зведення
+	Choose a layout:	Виберіть макет:
+	Comments only	Лише коментарі
+	Sort comments by:	Сортувати коментарі за:
+	Create PDF Comment Summary	Створити PDF зі зведенням коментарів
+	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Повернутися до попередньої збереженої версії «{name}»? Після цього зміни, внесені відтоді, неможливо буде повернути.
+	Number pages	Пронумерувати сторінки
+	Style	Стиль
+	None (prefix only)	Немає (лише префікс)
+	Prefix	Префікс
+	Start	Початок
+	Labels: {preview}. Later pages keep their labels.	Позначки: {preview}. Наступні сторінки зберігають свої позначки.
+	Even and Odd Pages	Парні й непарні сторінки
+	Even Pages Only	Лише парні сторінки
+	Odd Pages Only	Лише непарні сторінки
+	Landscape and Portrait Pages	Альбомні й книжкові сторінки
+	Landscape Pages	Альбомні сторінки
+	Portrait Pages	Книжкові сторінки
+	Duplicate Field	Дублювати поле
+	Duplicate "{name}" onto:	Дублювати «{name}» на:
+	1 page selected.	Вибрано 1 сторінку.
+	{n} pages selected.	Вибрано сторінок: {n}.
+	Delete pages after extracting	Видалити сторінки після видобування
+	Extract pages as separate files	Видобути сторінки як окремі файли
+	Rotate Pages	Повернути сторінки
+	Direction:	Напрямок:
+	Clockwise 90 degrees	За годинниковою стрілкою на 90 градусів
+	Counterclockwise 90 degrees	Проти годинникової стрілки на 90 градусів
+	180 degrees	180 градусів
+	Pages:	Сторінки:
+	All	Усі
+	Selection	Вибрані
+	From	Від
+	Rotate:	Повернути:
+	Repairs	Виправлення
+	Repair log	Журнал виправлень
+	Split document	Розділити документ
+	Number of pages	Кількість сторінок
+	Pages per file	Сторінок у файлі
+	File size	Розмір файлу
+	At most	Не більше
+	Top-level bookmarks ({n})	Закладки верхнього рівня ({n})
+	Before each selected page (select pages in Organize)	Перед кожною вибраною сторінкою (виберіть сторінки в «Упорядкуванні»)
+	Creates 1 file from {n} pages.	Створює 1 файл зі сторінок: {n}.
+	Creates {f} files from {n} pages.	Створює файли ({f}) зі сторінок ({n}).
+	Each file holds as many of the {n} pages as fit.	Кожен файл містить стільки сторінок із {n}, скільки вміщується.
+	Replace Pages	Замінити сторінки
+	Original: replace pages	Оригінал: замінити сторінки
+	to	до
+	to {n}	до {n}
+	Replacement: pages of {name}	Заміна: сторінки з {name}
+	of {name}	із {name}
+	Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.	Змінюється лише вміст сторінок: посилання, коментарі, поля форми й закладки на оригінальних сторінках залишаються.
+	The replacement file doesn't have that many pages.	Файл заміни не має такої кількості сторінок.
+	Tagged PDF	PDF із тегами
+	Document Properties	Властивості документа
+	Description	Опис
+	Initial View	Початковий вигляд
+	Security	Захист
+	Fonts	Шрифти
+	Advanced	Додаткові
+	Title	Заголовок
+	Subject	Тема
+	Keywords	Ключові слова
+	Application	Застосунок
+	PDF producer	Засіб створення PDF
+	Layout and Magnification	Макет і масштаб
+	Navigation tab	Вкладка навігації
+	Page Only	Лише сторінка
+	Bookmarks Panel and Page	Панель закладок і сторінка
+	Pages Panel and Page	Панель сторінок і сторінка
+	Attachments Panel and Page	Панель вкладень і сторінка
+	Layers Panel and Page	Панель шарів і сторінка
+	Page layout	Макет сторінок
+	Default	Типово
+	Single Page	Одна сторінка
+	Single Page Continuous	Одна сторінка, безперервно
+	Two-Up (Facing)	Дві сторінки (розворот)
+	Two-Up Continuous (Facing)	Дві сторінки, безперервно (розворот)
+	Two-Up (Cover Page)	Дві сторінки (з обкладинкою)
+	Two-Up Continuous (Cover Page)	Дві сторінки, безперервно (з обкладинкою)
+	Magnification	Масштаб
+	Actual Size	Фактичний розмір
+	Fit Page	За розміром сторінки
+	Fit Width	За шириною
+	Fit Height	За висотою
+	Fit Visible	За видимою областю
+	Open to page	Відкрити на сторінці
+	of {pages}	із {pages}
+	Window Options	Параметри вікна
+	Resize window to initial page	Змінити розмір вікна за початковою сторінкою
+	Center window on screen	Розмістити вікно по центру екрана
+	Open in Full Screen mode	Відкрити в повноекранному режимі
+	Show:	Показувати:
+	File Name	Назва файлу
+	Document Title	Заголовок документа
+	User Interface Options	Параметри інтерфейсу
+	Hide menu bar	Приховати рядок меню
+	Hide toolbars	Приховати панелі інструментів
+	Hide window controls	Приховати елементи керування вікном
+	Security method	Спосіб захисту
+	No security	Без захисту
+	Restrictions	Обмеження
+	None — everything is allowed	Немає — усе дозволено
+	Password security	Захист паролем
+	Encryption	Шифрування
+	Opened with	Відкрито за допомогою
+	— (protection is applied when you save)	— (захист застосовується під час збереження)
+	Owner password (no restrictions apply)	Пароля власника (обмеження не застосовуються)
+	User password	Пароля користувача
+	Change settings…	Змінити налаштування…
+	Printing	Друк
+	Not allowed	Заборонено
+	Allowed	Дозволено
+	High resolution	Висока роздільна здатність
+	Low resolution	Низька роздільна здатність
+	Changing the document	Зміна документа
+	Document assembly	Складання документа
+	Content copying	Копіювання вмісту
+	Content copying for accessibility	Копіювання вмісту для доступності
+	Commenting	Коментування
+	Filling of form fields	Заповнення полів форми
+	No fonts are referenced by the pages.	Сторінки не посилаються на жоден шрифт.
+	PDF version	Версія PDF
+	Location	Розташування
+	Page size	Розмір сторінки
+	Yes	Так
+	No	Ні
+	Revisions	Редакції
+	View revision {n}	Переглянути редакцію {n}
+	Open the file as it was saved then	Відкрити файл у стані на момент того збереження
+	Binding	Корінець
+	Left Edge	Лівий край
+	Right Edge	Правий край
+	Language	Мова
+	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Збережено {place}: {before} → {after} (менше на {pct}%){detail}
+	Couldn't save the image: {e}	Не вдалося зберегти зображення: {e}
+	Adding images arrives on the web with file pickers for images	Додавання зображень з’явиться у вебверсії разом із вибором файлів зображень
+	Replacing images on page {p} arrives on the web with image pickers ({i})	Заміна зображень на сторінці {p} з’явиться у вебверсії разом із вибором зображень ({i})
+	{name}: choosing images arrives on the web with file pickers for images	{name}: вибір зображень з’явиться у вебверсії разом із вибором файлів зображень
+	Replacing images arrives on the web with image file pickers	Заміна зображень з’явиться у вебверсії разом із вибором файлів зображень
+	Couldn't create a PDF: {e}	Не вдалося створити PDF: {e}
+	The clipboard has no image or text	У буфері обміну немає зображення чи тексту
+	On the web, open or drop an image to convert it	У вебверсії відкрийте або перетягніть зображення, щоб перетворити його
+	Couldn't optimize the file: {e}	Не вдалося оптимізувати файл: {e}
+	Couldn't write {path}: {e}	Не вдалося записати {path}: {e}
+	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	Форма запитує надсилання до {u}; PdfCraft не надсилає дані форми. Збережіть документ, щоб зберегти введені дані.
+	{s} actions run in the JavaScript engine (M6)	Дії ({s}) виконуються в рушії JavaScript (M6)
+	{name}: the {other} action isn't supported yet	{name}: дія {other} ще не підтримується
+	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} надсилає форму до {url}; PdfCraft не надсилає дані форми. Збережіть документ, щоб зберегти введені дані.
+	Export stopped: {e}	Експорт зупинено: {e}
+	Exported 1 image	Експортовано 1 зображення
+	Exported {n} images	Експортовано зображень: {n}
+	 ({s} not exported: {first})	 (не експортовано: {s}; перше: {first})
+	Exported the text of 1 page	Експортовано текст 1 сторінки
+	Exported the text of {n} pages	Експортовано текст сторінок: {n}
+	{msg} to {dir}	{msg} до {dir}
+	Exporting… {d} of {t}	Експорт… {d} із {t}
+	Choose a folder for the exported files	Виберіть теку для експортованих файлів
+	New {tool} comments will look like this one	Нові коментарі інструмента «{tool}» матимуть такий вигляд
+	This document can't be checked: it couldn't be read for editing	Цей документ неможливо перевірити: не вдалося прочитати його для редагування
+	The checker found no problems in this document.	Перевірка не виявила проблем у цьому документі.
+	The checker found 1 problem which may prevent the document from being fully accessible.	Перевірка виявила 1 проблему, яка може заважати повній доступності документа.
+	The checker found {n} problems which may prevent the document from being fully accessible.	Перевірка виявила проблеми ({n}), які можуть заважати повній доступності документа.
+	The text is the same	Текст однаковий
+	1 difference found	Знайдено 1 відмінність
+	{n} differences found	Знайдено відмінностей: {n}
+	Added 1 comment	Додано 1 коментар
+	Added {n} comments	Додано коментарів: {n}
+	Choose a folder for the results	Виберіть теку для результатів
+	Files for {name}	Файли для {name}
+	An action is already running	Дія вже виконується
+	Running action… file {d} of {t}	Виконання дії… файл {d} із {t}
+	No unlinked web addresses were found in the text	У тексті не знайдено вебадрес без посилань
+	Created 1 link	Створено 1 посилання
+	Created {n} links	Створено посилань: {n}
+	Text recognition is already running	Розпізнавання тексту вже виконується
+	Recognizing text… file {d} of {t}	Розпізнавання тексту… файл {d} із {t}
+	Recognizing text… page {d} of {t}	Розпізнавання тексту… сторінка {d} із {t}
+	Recognized 1 word	Розпізнано 1 слово
+	Recognized {n} words	Розпізнано слів: {n}
+	{words} on {pages}	{words} на {pages}
+	; 1 page already had text	; 1 сторінка вже мала текст
+	; {n} pages already had text	; сторінки ({n}) вже мали текст
+	Recognized {w} words in 1 file	Розпізнано слів ({w}) в 1 файлі
+	Recognized {w} words in {n} files	Розпізнано слів ({w}) у файлах ({n})
+	; failed: {list}	; невдалі: {list}
+	1 file done	Оброблено 1 файл
+	{n} files done	Оброблено файлів: {n}
+	The selected area has been copied ({w} × {h} pixels)	Вибрану область скопійовано ({w} × {h} пікселів)
+	Couldn't take the snapshot: {e}	Не вдалося зробити знімок: {e}
+	Couldn't recover {name}: {e}	Не вдалося відновити {name}: {e}
+	The document now conforms to {level}; save it to keep the changes	Документ тепер відповідає {level}; збережіть його, щоб зберегти зміни
+	Fixed what could be fixed; 1 problem remains	Усе можливе виправлено; залишилася 1 проблема
+	Fixed what could be fixed; {n} problems remain	Усе можливе виправлено; залишилося проблем: {n}
+	Custom stamps arrive on the web with file pickers for images	Власні штампи з’являться у вебверсії разом із вибором файлів зображень
+	{file} is too large for a stamp (at most {n} MB)	{file} завеликий для штампа (не більше {n} МБ)
+	Sent to {printer}	Надіслано на {printer}
+	Sent to {printer}: {msg}	Надіслано на {printer}: {msg}
+	Choose a folder for the searchable files	Виберіть теку для файлів із пошуком
+	Files are combined from top to bottom. Leave Pages empty to take every page.	Файли об’єднуються згори донизу. Залиште «Сторінки» порожнім, щоб узяти всі сторінки.
+	Unlock…	Розблокувати…
+	Select a password-protected file first	Спочатку виберіть файл, захищений паролем
+	Enter the permissions password to allow combining	Введіть пароль дозволів для об’єднання
+	Enter the password that opens it	Введіть пароль для відкриття файлу
+	Unlock {name}	Розблокувати {name}
+	Unlock {n} files	Розблокувати файли: {n}
+	The same password is tried on each file.	Той самий пароль перевіряється для кожного файлу.
+	Hide password	Приховати пароль
+	Show password	Показати пароль
+	Wrong password	Неправильний пароль
+	The password is only used to read the file; it isn't saved.	Пароль використовується лише для читання файлу; він не зберігається.
+	Unlock	Розблокувати
+	Opened, but its security settings don't allow combining. Enter the permissions password.	Відкрито, але налаштування захисту не дозволяють об’єднання. Введіть пароль дозволів.
+	Unlocked: the combined file won't be password-protected	Розблоковано: об’єднаний файл не буде захищено паролем
+	Unlocked {n} of {m} files	Розблоковано {n} із {m} файлів
+	Drop PDFs or folders here, or choose them.	Перетягніть сюди PDF або теки чи виберіть їх.
+	Add folder…	Додати теку…
+	Add folder and subfolders…	Додати теку й підтеки…
+	More ways to add files	Інші способи додати файли
+	Every PDF in the folder	Усі PDF у теці
+	Every PDF in the folder and the folders inside it	Усі PDF у теці та її підтеках
+	Add folder	Додати теку
+	Add folder and subfolders	Додати теку й підтеки
+	No PDFs found in {folder}	У {folder} не знайдено PDF
+	Added the first {n} PDFs in {folder}	Додано перші {n} PDF із {folder}
+	Click to sort, drag to move the column. Drag its edge to resize it.	Клацніть для сортування, перетягніть для переміщення стовпця. Тягніть за його край для зміни розміру.
+	Reset columns	Скинути стовпці
+	Remove {n} files	Видалити файли: {n}
+	{n} selected	Вибрано: {n}
+	sorted ascending	відсортовано за зростанням
+	sorted descending	відсортовано за спаданням
+	Protected: the combined file won't keep its security settings	Захищено: об’єднаний файл не збереже налаштування захисту
+	Add open documents	Додати відкриті документи
+	All open documents	Усі відкриті документи
+	No documents are open	Немає відкритих документів
+	Select a file first	Спочатку виберіть файл
+	1 file	1 файл
+	{n} files	Файлів: {n}
+	1 file needs attention	1 файл потребує уваги
+	{n} files need attention	Файли потребують уваги: {n}
+	{name} can't be combined: {why}	{name} неможливо об’єднати: {why}
+	Check the pages of {name}: {why}	Перевірте сторінки {name}: {why}
+	Add the PDFs to combine	Додайте PDF для об’єднання
+	File name	Назва файлу
+	Warnings	Попередження
+	Drag to reorder	Перетягніть для зміни порядку
+	{k} of {n}	{k} із {n}
+	? of {n}	? із {n}
+	Added more than once	Додано більше одного разу
+	yesterday	учора
+	{n} days ago	{n} дн. тому
+	No pages selected	Сторінки не вибрано
+	Password-protected	Захищено паролем
+	Its security settings don't allow copying pages	Налаштування захисту не дозволяють копіювати сторінки
+	Can't be read: {e}	Не вдалося прочитати: {e}
+	Includes unsaved changes	Містить незбережені зміни
+	Pages of {name} to combine, e.g. 1-3, 6	Сторінки з {name} для об’єднання, наприклад 1-3, 6
+	Remove {name}	Видалити {name}
+	Add files…	Додати файли…
+	Add at least two files	Додайте щонайменше два файли
+	Couldn't add {name}: {e}	Не вдалося додати {name}: {e}
+	Couldn't combine files: {e}	Не вдалося об’єднати файли: {e}
+	Export comments	Експортувати коментарі
+	Export form data	Експортувати дані форми
+	Comment and form data	Дані коментарів і форми
+	Export	Експортувати
+	Select data files to merge	Виберіть файли даних для об’єднання
+	Form data and PDF forms	Дані форми й форми PDF
+	Save the spreadsheet	Зберегти електронну таблицю
+	Save the accessibility report	Зберегти звіт про доступність
+	Save image	Зберегти зображення
+	Export certificate	Експортувати сертифікат
+	Choose a folder for the extracted pages	Виберіть теку для видобутих сторінок
+	Choose a folder for the split files	Виберіть теку для розділених файлів
+	Couldn't use {name}: {e}	Не вдалося використати {name}: {e}
+	Couldn't extract pages: {e}	Не вдалося видобути сторінки: {e}
+	Couldn't write {name}: {e}	Не вдалося записати {name}: {e}
+	Wrote 1 file to {dir}	Записано 1 файл у {dir}
+	Wrote {n} files to {dir}	Записано файлів ({n}) у {dir}
+	No pages match those choices	Жодна сторінка не відповідає вибраним параметрам
+	Couldn't split: {e}	Не вдалося розділити: {e}
+	Couldn't summarize comments: {e}	Не вдалося створити зведення коментарів: {e}
+	Couldn't open the result: {e}	Не вдалося відкрити результат: {e}
+	Importing data arrives on the web with file pickers for data files	Імпорт даних з’явиться у вебверсії разом із вибором файлів даних
+	Exported to {path}	Експортовано до {path}
+	Merging data files needs the desktop app	Для об’єднання файлів даних потрібен настільний застосунок
+	Merged 1 file into {path}	Об’єднано 1 файл у {path}
+	Merged {n} files into {path}	Об’єднано файлів ({n}) у {path}
+	Combined {n} files	Об’єднано файлів: {n}
+	Extracted 1 page	Видобуто 1 сторінку
+	Extracted {n} pages	Видобуто сторінок: {n}
+	Created a comment summary	Створено зведення коментарів
+	Couldn't open {name}: {e}	Не вдалося відкрити {name}: {e}
+	Couldn't read {name}: {e}	Не вдалося прочитати {name}: {e}
+	Couldn't save: {e}	Не вдалося зберегти: {e}
+	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Завантаження вкладень у вебверсії з’явиться на етапі M3.10 (готово байтів: {n})
+	`{command}` {when}	`{command}` {when}
+	ships in milestone {m}	з’явиться на етапі {m}
+	needs an AI provider (off by default)	потребує постачальника ШІ (типово вимкнено)
+	is available	доступна
+	is not available yet	ще недоступна
+	{label} failed: {e}	Помилка «{label}»: {e}
+	Undid {label}	Скасовано: {label}
+	Redid {label}	Повторено: {label}
+	A document needs at least one page: copy instead	Документ потребує щонайменше однієї сторінки: натомість скопіюйте
+	Cut {what}	Вирізано: {what}
+	Copied {what}	Скопійовано: {what}
+	1 page	1 сторінка
+	{n} pages	Сторінок: {n}
+	Copy or cut pages first	Спочатку скопіюйте або виріжте сторінки
+	Couldn't save {name}: {e}	Не вдалося зберегти {name}: {e}
+	Saved {name}	Збережено {name}
+	Saved, but reopening failed: {e}	Збережено, але не вдалося відкрити повторно: {e}
+	Downloaded {name}	Завантажено {name}
+	Couldn't download {name}: {e}	Не вдалося завантажити {name}: {e}
+	Reverted to the last saved version	Повернуто останню збережену версію
+	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	Не вдалося виконати: внутрішня помилка зупинила дію ({m}). Ваші документи не змінено.
+	Nothing to undo	Немає дій для скасування
+	Nothing to redo	Немає дій для повторення
+	This document has no form fields you can fill in	Цей документ не має полів форми для заповнення
+	This document has no comments to flatten	Цей документ не має коментарів для зведення
+	This document has no form fields to flatten	Цей документ не має полів форми для зведення
+	There are no redaction marks (mark text, areas or pages first)	Немає позначок вилучення (спочатку позначте текст, області чи сторінки)
+	This document has no {kind} to change	У цьому документі немає елемента «{kind}» для зміни
+	header or footer	колонтитул
+	watermark	водяний знак
+	background	тло
+	This document isn't password-protected	Цей документ не захищено паролем
+	Only the document's owner can change its security (open it with the permissions password)	Лише власник документа може змінювати захист (відкрийте з паролем дозволів)
+	The document's security settings don't allow this change	Налаштування захисту документа не дозволяють цю зміну
+	Open a document first	Спочатку відкрийте документ
+	Security will be removed when you save	Захист буде знято під час збереження
+	Click text or an image to edit it	Клацніть текст або зображення для редагування
+	Drag a rectangle to create a link; double-click a link to edit it	Намалюйте прямокутник, щоб створити посилання; двічі клацніть посилання, щоб редагувати його
+	There are no redaction marks to apply	Немає позначок вилучення для застосування
+	Drag to draw the area where the signature should appear.	Намалюйте область, у якій має з’явитися підпис.
+	Couldn't fit the visible content: {e}	Не вдалося припасувати видимий вміст: {e}
+	Drag a rectangle around the area to copy	Намалюйте прямокутник навколо області для копіювання
+	Click on the page to add a {tool}, or drag to set its size	Клацніть на сторінці, щоб додати інструмент «{tool}», або перетягніть, щоб задати розмір
+	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	Намалюйте прямокутник на сторінці, щоб обітнути її; двічі клацніть сторінку, щоб задати її межі
+	Keep tool selected: on	Залишати інструмент вибраним: увімкнено
+	Keep tool selected	Залишати інструмент вибраним
+	Opacity	Непрозорість
+	Line thickness	Товщина лінії
+	What word or phrase would you like to search for?	Яке слово чи фразу ви хочете знайти?
+	Searching… {s} of {p} pages	Пошук… {s} із {p} сторінок
+	 (searching… {s} of {p} pages)	 (пошук… {s} із {p} сторінок)
+	1 instance	1 входження
+	{n} instances	Входжень: {n}
+	Go to this result	Перейти до цього результату
+	Highlight	Виділення кольором
+	Draw	Малювати
+	Polygon	Багатокутник
+	Connected lines	Ламана лінія
+	Eraser	Гумка
+	Sign	Підписати
+	Certified by {by}	Засвідчено: {by}
+	At least one signature is invalid.	Щонайменше один підпис недійсний.
+	Signed and all signatures are valid.	Підписано, і всі підписи дійсні.
+	At least one signature has problems.	Щонайменше один підпис має проблеми.
+	This document is secured. Some changes are restricted by its security settings.	Цей документ захищено. Деякі зміни обмежено налаштуваннями захисту.
+	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Це динамічна форма XFA, яку PdfCraft ще не може відобразити. Ви бачите сторінку-заглушку файлу.
+	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Ця форма також містить дані XFA, які PdfCraft ще не читає. Ви можете заповнювати поля, але Acrobat може показувати натомість значення XFA.
+	This document contains {n} interactive form fields.	Цей документ містить інтерактивні поля форми: {n}.
+	This file was damaged and has been repaired. Saving keeps the repaired version.	Цей файл було пошкоджено й виправлено. Збереження збереже виправлену версію.
+	Dismiss	Приховати
+	Hide field highlights	Приховати підсвічування полів
+	Highlight fields	Підсвітити поля
+	Security settings	Налаштування захисту
+	Details	Відомості
+	Select (V)	Виділення (V)
+	Hand (H)	Рука (H)
+	Delete pages (Delete)	Видалити сторінки (Delete)
+	Insert a blank page after the selection	Вставити порожню сторінку після вибраних
+	Insert pages from a file…	Вставити сторінки з файлу…
+	Extract pages to a new document	Видобути сторінки в новий документ
+	Split into files…	Розділити на файли…
+	Select pages	Вибрати сторінки
+	Cut	Вирізати
+	Copy	Копіювати
+	Paste after	Вставити після
+	Rename	Перейменувати
+	Set to current page ({n})	Задати поточну сторінку ({n})
+	Move up	Перемістити вгору
+	Move down	Перемістити вниз
+	Indent	Збільшити відступ
+	Outdent	Зменшити відступ
+	This document has no form fields.	Цей документ не має полів форми.
+	Tab order: move a field with its arrows.	Порядок табуляції: переміщуйте поле його стрілками.
+	Unplaced	Не розміщено
+	Has JavaScript actions (run in M6)	Має дії JavaScript (виконуються на етапі M6)
+	Page	Сторінка
+	None	Немає
+	Delete selected fields	Видалити вибрані поля
+	Diagnostic details	Діагностичні відомості
+	The operation failed.	Операція завершилася невдало.
+	no such document	такого документа немає
+	nothing to undo	немає дій для скасування
+	nothing to redo	немає дій для повторення
+	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	цей документ підписано: перезапис зробить підписи недійсними (натомість збережіть поступово)
+	the document is protected by a password	документ захищено паролем
+	the password is incorrect	неправильний пароль
+	the document has no page tree	документ не має дерева сторінок
+	a document must keep at least one page	документ має зберігати щонайменше одну сторінку
+	a bookmark cannot be moved inside itself	закладку неможливо перемістити всередину себе
+	the title must not be empty	заголовок не має бути порожнім
+	the document has no form fields	документ не має полів форми
+	there are no redaction marks to apply	немає позначок вилучення для застосування
+	there are no pages to print	немає сторінок для друку
+	the document has no tags	документ не має тегів
+	{0}: {1}	{0}: {1}
+	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	моделі розпізнавання тексту не встановлено (виконайте `cargo xtask models` або задайте PRINTCRAFT_MODELS)
+	the image is empty	зображення порожнє
+	this file isn't XFDF, FDF, XML or text form data	цей файл не містить даних форми XFDF, FDF, XML чи текстових даних
+	nothing in the file matches this document	ніщо у файлі не відповідає цьому документу
+	This page couldn't be displayed.\n{e}	Не вдалося відобразити цю сторінку.\n{e}
+	Go to page {p}	Перейти до сторінки {p}
+	{s} action	Дія: {s}
+	Page {p} of {n}	Сторінка {p} із {n}
+	1 page selected	Вибрано 1 сторінку
+	{n} pages selected	Вибрано сторінок: {n}
+	{name} — unsaved changes	{name} — незбережені зміни
+	{kind} field	Поле: {kind}
+	Select a file for the stamp	Виберіть файл для штампа
+	JavaScript, e.g. getField("total").value	JavaScript, наприклад getField("total").value
+	Font: Helvetica	Шрифт: Helvetica
+	e.g. en-US	наприклад uk-UA
+	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	Відтворення: hayro (початковий рушій) · Інтерфейс: egui · Піктограми: Lucide (ISC) · Шрифти: Inter, JetBrains Mono, Dancing Script (OFL)
+	CheckBox	Прапорець
+	Radio	Перемикач
+	PushButton	Кнопка
+	Combo	Розкривний список
+	List	Список
+	Unknown	Невідомо
+	The document has no XMP metadata	Документ не має метаданих XMP
+	The title in the metadata and the document information differ	Заголовки в метаданих і відомостях про документ відрізняються
+	The document is encrypted	Документ зашифровано
+	Device colour is used, but there is no PDF/A output intent	Використано колір пристрою, але немає профілю виводу PDF/A
+	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	Використано DeviceCMYK: потрібен профіль виводу CMYK (не додається автоматично)
+	The document has additional actions (/AA)	Документ має додаткові дії (/AA)
+	The document has document-level JavaScript	Документ має JavaScript рівня документа
+	The form asks viewers to make appearances (NeedAppearances)	Форма просить засоби перегляду створювати вигляд полів (NeedAppearances)
+	A form field has additional actions	Поле форми має додаткові дії
+	A stream uses LZW compression	Потік використовує стиснення LZW
+	A stream refers to an external file	Потік посилається на зовнішній файл
+	An image asks to be interpolated	Зображення потребує інтерполяції
+	An image has alternates or OPI information	Зображення має альтернативи або відомості OPI
+	PostScript XObjects aren't allowed	Об’єкти PostScript XObject заборонено
+	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	Вбудовані файли самі мають бути файлами PDF/A (для інших використовуйте PDF/A-3)
+	An embedded file has no AFRelationship	Вбудований файл не має AFRelationship
+	Select Icon	Вибрати піктограму
+	Choose images	Виберіть зображення
+	{dpi} pixels/inch	{dpi} пікселів/дюйм
+	Type your {what}.	Введіть {what}.
+	Draw your {what} below.	Намалюйте {what} нижче.
+	Your name	Ваше ім’я
+	Images and text (converted to PDF)	Зображення й текст (перетворені на PDF)
+	Images and text	Зображення й текст
+	Check Box Style:	Стиль прапорця:
+	Button Style:	Стиль кнопки:
+	Check	Позначка
+	Circle	Коло
+	Diamond	Ромб
+	Square	Квадрат
+	Star	Зірка
+	{month} {y}	{month} {y}
+	Change {key}	Змінити: {key}
+	Insert pages from {name}	Вставити сторінки з {name}
+	Fill in {name}	Заповнити {name}
+	Set the image of {name}	Задати зображення для {name}
+	Edit script of {name}	Редагувати сценарій {name}
+	Import {name}	Імпортувати {name}
+	Add bookmark	Додати закладку
+	Rename bookmark	Перейменувати закладку
+	Delete bookmark	Видалити закладку
+	Move bookmark	Перемістити закладку
+	Set bookmark destination	Задати призначення закладки
+	Add stamp	Додати штамп
+	Delete comment	Видалити коментар
+	Edit comment	Редагувати коментар
+	Erase	Стерти
+	Lock comment	Заблокувати коментар
+	Unlock comment	Розблокувати коментар
+	Move comment	Перемістити коментар
+	Resize comment	Змінити розмір коментаря
+	Change comment properties	Змінити властивості коментаря
+	Add field	Додати поле
+	Change field properties	Змінити властивості поля
+	Delete field	Видалити поле
+	Duplicate field	Дублювати поле
+	Set tab order	Задати порядок табуляції
+	Change initial view	Змінити початковий вигляд
+	Set alternate text	Задати альтернативний текст
+	Mark figure as decorative	Позначити рисунок як декоративний
+	Run JavaScript	Виконати JavaScript
+	Delete document JavaScript	Видалити JavaScript документа
+	Edit document JavaScript	Редагувати JavaScript документа
+	Edit text	Редагувати текст
+	Move image	Перемістити зображення
+	Rotate image	Повернути зображення
+	Flip image	Віддзеркалити зображення
+	Delete image	Видалити зображення
+	Add header & footer	Додати колонтитули
+	Update header & footer	Оновити колонтитули
+	Update watermark	Оновити водяний знак
+	Add background	Додати тло
+	Update background	Оновити тло
+	Add image	Додати зображення
+	Edit content	Редагувати вміст
+	Delete content	Видалити вміст
+	Remove redaction marks	Видалити позначки вилучення
+	Add link	Додати посилання
+	Change link properties	Змінити властивості посилання
+	Delete link	Видалити посилання
+	Create link	Створити посилання
+	Flatten	Звести
+	Add sticky note	Додати нотатку
+	Add highlight	Додати виділення кольором
+	Add underline	Додати підкреслення
+	Add strikethrough	Додати закреслення
+	Add squiggly underline	Додати хвилясте підкреслення
+	Add rectangle	Додати прямокутник
+	Add oval	Додати овал
+	Add arrow	Додати стрілку
+	Add line	Додати лінію
+	Add drawing	Додати малюнок
+	Add text box	Додати текстове поле коментаря
+	Add checkmark	Додати позначку
+	Add cross	Додати хрестик
+	Add dot	Додати крапку
+	Add signature	Додати підпис
+	Add redaction mark	Додати позначку вилучення
+	Add cloud	Додати хмару
+	Add polygon	Додати багатокутник
+	Add connected lines	Додати ламану лінію
+	Add callout	Додати виноску
+	Add inserted text	Додати вставлений текст
+	Add file attachment	Додати файлове вкладення
+	Set status Accepted	Задати статус «Прийнято»
+	Set status Rejected	Задати статус «Відхилено»
+	Set status Cancelled	Задати статус «Скасовано»
+	Set status Completed	Задати статус «Завершено»
+	Set status None	Задати статус «Немає»
+	Set status Unmarked	Задати статус «Без позначки»
+	Save as PDF/A-1b	Зберегти як PDF/A-1b
+	Save as PDF/A-2b	Зберегти як PDF/A-2b
+	Save as PDF/A-3b	Зберегти як PDF/A-3b
+	Fill & Sign: change signature	Заповнення й підпис: змінити підпис
+	Fill & Sign: change initials	Заповнення й підпис: змінити ініціали
+	Fill & Sign: remove saved signature	Заповнення й підпис: видалити збережений підпис
+	Fill & Sign: remove saved initials	Заповнення й підпис: видалити збережені ініціали
+	Change signature	Змінити підпис
+	Change initials	Змінити ініціали
+	Measure distance	Виміряти відстань
+	Measure perimeter	Виміряти периметр
+	Measure area	Виміряти площу
+	Set measurement scale	Задати масштаб вимірювання
+	Measurement information	Відомості про вимірювання
+	Measurement snapping	Прив’язування вимірювань
+	Export measurements as CSV	Експортувати вимірювання як CSV
+	Distance	Відстань
+	Perimeter	Периметр
+	Area	Площа
+	Drawing scale	Масштаб креслення
+	Snapping	Прив’язування
+	Export measurements	Експортувати вимірювання
+	Open a PDF to measure it.	Відкрийте PDF для вимірювання.
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	Клацайте вершини. Enter або подвійне клацання завершує периметр чи площу. Клацніть першу точку, щоб замкнути область.
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift обмежує кут до 45 градусів. Backspace видаляє вершину. Escape скасовує.
+	Angle	Кут
+	Click the first point to begin.	Клацніть першу точку, щоб почати.
+	Snap to drawing	Прив’язувати до креслення
+	Endpoints	Кінцеві точки
+	Midpoints	Серединні точки
+	Intersections	Перетини
+	Paths	Контури
+	Sensitivity	Чутливість
+	Unit	Одиниця
+	Decimals	Знаків після коми
+	Calibrate from two points	Калібрувати за двома точками
+	Entire page	Уся сторінка
+	Viewport rectangle in page points (x, y, width, height)	Прямокутник області перегляду в пунктах сторінки (x, y, ширина, висота)
+	Viewport	Область перегляду
+	Apply scale	Застосувати масштаб
+	Saved measurements	Збережені вимірювання
+	Saved measurements.	Вимірювання збережено.
+	Endpoint	Кінцева точка
+	Midpoint	Серединна точка
+	Intersection	Перетин
+	Path	Контур
+	This drawing exceeds the snapping limit; only the first paths are used.	Це креслення перевищує межу прив’язування; використовуються лише перші контури.
+	Some page content couldn't be read; snapping uses the rest.	Частину вмісту сторінки не вдалося прочитати; прив’язування використовує решту.
+	Unsupported measurements	Непідтримувані вимірювання
+	Label	Позначка
+	{n} measurements use an unsupported format and are left out.	Вимірювання ({n}) використовують непідтримуваний формат і пропускаються.
+	This area has too many overlapping paths; intersection snapping is limited.	Ця область має забагато контурів, що перекриваються; прив’язування до перетинів обмежено.
+	This measurement needs at least {n} points.	Для цього вимірювання потрібно щонайменше точок: {n}.
+	Change {what}	Змінити: {what}
+	Cut and stack	Різання й укладання
+	Default workspace mode	Типовий режим робочої області
+	Documents and view	Документи й перегляд
+	Open email app	Відкрити поштовий застосунок
+	Open link	Відкрити посилання
+	Open this web page?	Відкрити цю вебсторінку?
+	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Сценарії виконуються в ізольованому середовищі без доступу до файлів і мережі. Сценарій, що просить відкрити вебсторінку, спочатку потребує вашого дозволу. Коли JavaScript вимкнено, стандартні функції форматування, перевірки й обчислення Acrobat усе одно працюють.
+	Sign yourself	Підписати самостійно
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	Розпізнавання тексту не встановлено: бракує моделей (виконайте `cargo xtask models` або задайте PDFCRAFT_MODELS).
+	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	Використовується під час відкриття PDF. Явно заданий режим запуску або керування має пріоритет для сеансу.
+	Write this email?	Написати цього листа?
+	{who} in this document wants to open this address in your browser:	{who} у цьому документі хоче відкрити цю адресу у вашому браузері:
+	{who} in this document wants to open your email app with this address:	{who} у цьому документі хоче відкрити ваш поштовий застосунок із цією адресою:
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	Ця вебадреса поєднує літери різних абеток — поширений спосіб імітувати назву іншого сайту.
+	This web address uses letters from another alphabet, which can look like familiar ones.	Ця вебадреса використовує літери іншої абетки, які можуть виглядати як знайомі.
+	Create PDF from images	Створити PDF із зображень
+	Selected image files: {count}	Вибрано файлів зображень: {count}
+	Use image resolution	Використовувати роздільну здатність зображення
+	Use each image's embedded DPI; use 72 DPI when it is absent.	Використовувати вбудоване DPI кожного зображення; за його відсутності — 72 DPI.
+	Use 72 DPI (one point per pixel)	Використовувати 72 DPI (один пункт на піксель)
+	Use custom DPI	Використовувати власне DPI
+	DPI sets the printed page size without resampling the image.	DPI задає розмір друкованої сторінки без зміни кількості пікселів зображення.
+	Create	Створити
+	Dynamic XFA form laid out from its template: {pages}, {fields}.	Динамічну форму XFA скомпоновано за її шаблоном: {pages}, {fields}.
+	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Форма XFA: її поля й дані XFA синхронізуються, тому інші засоби перегляду показують введені вами дані.
+	Switch to two-page view first to show the cover page	Спочатку перемкніть на двосторінковий вигляд, щоб показати обкладинку
+	Page display: {layout}	Відображення сторінок: {layout}
+	Fit to width scrolling	Прокручування за шириною
+	Fit one full page	Одна повна сторінка
+	Default page display	Типове відображення сторінок
+	Default zoom	Типовий масштаб
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Використовується, коли PDF не задає макет або масштаб. Безперервне прокручування ніколи не прив’язується до сторінок.
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Виберіть зображення PNG або JPEG (до 4 МіБ). Прозорість зберігається.
+	Couldn't import the signature image: {e}	Не вдалося імпортувати зображення підпису: {e}
+@plural	{n} page|{n} pages	{n} сторінка|{n} сторінки|{n} сторінок
+@plural	{n} field|{n} fields	{n} поле|{n} поля|{n} полів
+	Create PDF from multiple files…	Створити PDF із кількох файлів…
+	Optimizing… removing user data	Оптимізація… видалення даних користувача
+	Optimizing… image {d} of {t}	Оптимізація… зображення {d} із {t}
+	Optimizing… cleaning up	Оптимізація… очищення
+	Optimizing… merging identical objects	Оптимізація… об’єднання однакових об’єктів
+	Optimizing… writing the copy	Оптимізація… запис копії
+	Cancelling…	Скасування…
+	Created a PDF from {n} files	Створено PDF із файлів: {n}
+	PDF, images and text	PDF, зображення й текст
+	Insert a file before page {label}	Вставити файл перед сторінкою {label}
+	Insert a file at the end	Вставити файл у кінці
+	Save pages	Зберегти сторінки
+	Save these pages as one PDF	Зберегти ці сторінки як один PDF
+	No changes to save	Немає змін для збереження
+	Created a PDF from {n} files; left out: {names}	Створено PDF із файлів ({n}); пропущено: {names}
+	Created a PDF from the first {n} files	Створено PDF із перших файлів: {n}
+	Go to page…	Перейти до сторінки…
+	Optimization is already running	Оптимізація вже виконується
+	Optimization cancelled	Оптимізацію скасовано
+	Couldn't optimize the file	Не вдалося оптимізувати файл
+	Files are combined in this order. Leave Pages empty to take every page.	Файли об’єднуються в цьому порядку. Залиште «Сторінки» порожнім, щоб узяти всі сторінки.
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Портативний режим вимкнено: неможливо записати в {folder} ({error}). Налаштування зберігаються у вашій користувацькій теці.
+	Show	Показувати
+	Sort	Сортувати
+	Reverse the order	Зворотний порядок
+	Grab bag	Добірка
+	Table	Таблиця
+	Username	Ім’я користувача
+	Display name	Відображуване ім’я
+	Real name	Справжнє ім’я
+	Name (A–Z)	Ім’я (А–Я)
+	Merged PRs	Злиті PR
+	PRs	PR
+	Commits	Коміти
+	Lines added	Додано рядків
+	+LOC	+LOC
+	Lines deleted	Видалено рядків
+	−LOC	−LOC
+	Line delta	Зміна кількості рядків
+	ΔLOC	ΔLOC
+	Binary assets added	Додано бінарних ресурсів
+	+Bin	+Bin
+	Binary assets removed	Видалено бінарних ресурсів
+	−Bin	−Bin
+	First commit	Перший коміт
+	First	Перший
+	Last commit	Останній коміт
+	Last	Останній
+	No contributor data was built into this copy.	У цю копію не вбудовано даних про учасників.
+	No model credits were built into this copy.	У цю копію не вбудовано відомостей про моделі.
+	{n} contributors · {c} commits	Учасників: {n} · Комітів: {c}
+	Company	Компанія
+	Model	Модель
+	% of all commits	% усіх комітів
+	Lines +/−	Рядків +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: PR: {prs}, комітів: {commits}, +{added} / −{deleted} рядків (Δ {delta}), +{bin_added} / −{bin_deleted} бінарних ресурсів, {first} – {last}
+	None of those files can be made into a PDF; use PDFs, images or .txt files	Жоден із цих файлів неможливо перетворити на PDF; використовуйте PDF, зображення або файли .txt
+	About	Про застосунок
+	Contributors	Учасники
+	Models	Моделі
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	Продовжуйте лише якщо довіряєте цьому документу. Адреса може містити інформацію з документа, наприклад дані, введені у форму.
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	Друкуйте з одного боку. Зберігайте порядок аркушів, розріжте за мітками, а потім складіть стоси зліва направо, згори донизу.
+comment menu	Edit	Редагувати
+	Undo {action}	Скасувати: {action}
+	Redo {action}	Повторити: {action}
+signature pad	Type	Ввести
+action wizard	Start	Почати
+calendar date	January	січня
+calendar date	February	лютого
+calendar date	March	березня
+calendar date	April	квітня
+calendar date	May	травня
+calendar date	June	червня
+calendar date	July	липня
+calendar date	August	серпня
+calendar date	September	вересня
+calendar date	October	жовтня
+calendar date	November	листопада
+calendar date	December	грудня
+	Reopen the files that were open when PdfCraft last closed	Знову відкривати файли, які були відкриті під час останнього закриття PdfCraft
+	Clear Recent Files	Очистити список нещодавніх файлів
+	Remove from Recent	Вилучити з нещодавніх
+	Remove {name} from Recent	Вилучити {name} з нещодавніх
+	Inserted text	Вставлений текст
+
+# Labels that reach tl!() through a variable (Fill & Sign buttons, link prompts, notices, history labels, checker and certificate rows)
+	Add {what}	Додати: {what}
+	Use {what}	Використати: {what}
+	Place saved {what}	Розмістити збережене: {what}
+	Remove saved {what}	Видалити збережене: {what}
+	A link	Посилання
+	A button	Кнопка
+	A script	Сценарій
+	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} у цьому документі намагається відкрити адресу, яку PdfCraft не відкриває: {e}.
+	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} у цьому документі намагається відкрити адресу, яку PdfCraft не відкриває: {e}. З документів відкриваються лише вебпосилання (http, https) та посилання на електронну пошту (mailto).
+	Another file dialog is still open. Finish with it first.	Ще відкрито інше вікно вибору файлу. Спершу завершіть роботу з ним.
+	Couldn't show the file picker. Please try again.	Не вдалося показати вікно вибору файлу. Спробуйте ще раз.
+	The document changed while you were choosing a file, so nothing was changed.	Документ змінився, поки ви вибирали файл, тому нічого не змінено.
+	The document was closed before it could be saved.	Документ було закрито до того, як його вдалося зберегти.
+	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	Сторінки видобуто, але не видалено, бо документ змінився, поки ви вибирали теку.
+	That didn't work: an internal error stopped it ({m}).	Не вдалося: дію зупинила внутрішня помилка ({m}).
+	The Windows store's digital IDs couldn't be listed: {e}	Не вдалося отримати список цифрових посвідчень зі сховища Windows: {e}
+	Align fields	Вирівняти поля
+	Distribute fields	Розподілити поля
+	Match field sizes	Вирівняти розміри полів
+	Mark for redaction	Позначити для вилучення вмісту
+	Mark pages for redaction	Позначити сторінки для вилучення вмісту
+	Change document properties	Змінити властивості документа
+	Mark differences	Позначити відмінності
+	Run form script	Виконати сценарій форми
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	Вміст зі сценаріями має бути доступним із клавіатури та допоміжних технологій. Перевірте сценарії документа.
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Рядки таблиці мають бути безпосередньо в таблиці або в її заголовку, тілі чи підсумку. Виправте теги таблиці.
+	Basic constraints	Основні обмеження
+	SHA-1 digest	Дайджест SHA-1
+	SHA-256 digest	Дайджест SHA-256
+	Squiggly	Хвилясте
+	Home / End	Home / End
+	H / Space (hold)	H / Пробіл (утримувати)

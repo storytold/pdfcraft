@@ -98,7 +98,7 @@ fn incremental_saves_are_allocated_at_their_exact_size() {
     for original in [table, stream, no_newline] {
         let mut doc = Document::open(original.clone()).unwrap();
         let data: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
-        let added = doc.add(Object::Stream(Stream { dict: Dict::new(), raw: Arc::new(data.clone()) }));
+        let added = doc.add(Object::Stream(Stream { dict: Dict::new(), raw: data.clone().into() }));
         let updated = write_incremental(&doc, &SaveOptions::default()).unwrap();
         assert_eq!(updated.capacity(), updated.len());
         assert!(updated.starts_with(&original), "an incremental save only appends");
@@ -109,6 +109,29 @@ fn incremental_saves_are_allocated_at_their_exact_size() {
             other => panic!("{other:?}"),
         }
         assert_eq!(hayro_pages(&updated), 4);
+    }
+}
+
+/// A full save grows its buffer as it writes, so it used to end with up to as much again unused,
+/// kept alive with the document's working bytes. It now ends at its exact size.
+#[test]
+fn full_saves_are_allocated_at_their_exact_size() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    let data: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+    let added = doc.add(Object::Stream(Stream { dict: Dict::new(), raw: Arc::new(data.clone()).into() }));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| d.set(b"Extra".to_vec(), Object::Ref(added))).unwrap();
+    for object_streams in [true, false] {
+        let full = write_full(&doc, &SaveOptions { object_streams, ..SaveOptions::default() }).unwrap();
+        assert_eq!(full.capacity(), full.len(), "object streams: {object_streams}");
+        let back = Document::open(Arc::new(full.clone())).unwrap();
+        assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
+        let extra = back.dict(&Object::Ref(back.root().unwrap())).and_then(|d| d.get(b"Extra").cloned()).unwrap();
+        match &*back.resolve(&extra) {
+            Object::Stream(s) => assert_eq!(*s.raw, data),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(hayro_pages(&full), 4);
     }
 }
 

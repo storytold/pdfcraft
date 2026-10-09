@@ -14,12 +14,14 @@ pdfcraft-engine = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-platform = { workspace = true }
-egui = { workspace = true }
+egui = { workspace = true, features = ["bytemuck"] }
 egui_extras = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "persistence", "links"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+# Hands rendered rasters to egui as its pixels, without copying; already in the tree through egui and wgpu.
+bytemuck = { version = "1", features = ["extern_crate_alloc"] }
 
 rfd = { workspace = true }
 png = "0.18"

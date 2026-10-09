@@ -28,6 +28,9 @@
 	Name on new comments	新しい注釈の作成者名
 	Open…	開く…
 	Open Recent	最近のファイルを開く
+	Clear Recent Files	最近のファイルをクリア
+	Remove from Recent	最近のファイルから外す
+	Remove {name} from Recent	{name} を最近のファイルから外す
 	Pin folder to Home…	フォルダーをホームにピン留め…
 	Folders	フォルダー
 	Pin a folder…	フォルダーをピン留め…

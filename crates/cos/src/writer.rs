@@ -335,6 +335,9 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         write_dict(&trailer, &mut out);
         let _ = write!(out, "\nstartxref\n{xref_at}\n%%EOF\n");
     }
+    // The size isn't known until the end, and the buffer grew by doubling. The result is often
+    // kept as a document's working bytes for as long as it's open: drop the unused capacity.
+    out.shrink_to_fit();
     Ok(out)
 }
 
