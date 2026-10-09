@@ -173,7 +173,19 @@ impl PdfCraftApp {
             return false;
         }
         let target = self.pick_target(target);
-        let then: Then = Box::new(then);
+        // The answer belongs to the window that asked, if it is still there.
+        let window = self.current_window;
+        let then: Then = Box::new(move |app, paths| {
+            let mut run = Some((then, paths));
+            app.with_window(window, |a| {
+                if let Some((then, paths)) = run.take() {
+                    then(a, paths);
+                }
+            });
+            if let Some((then, paths)) = run {
+                then(app, paths);
+            }
+        });
         if let Some(paths) = self.pick_override.clone() {
             self.pickers.deliver(target, paths.into_iter().map(PathBuf::from).collect(), then);
             return true;

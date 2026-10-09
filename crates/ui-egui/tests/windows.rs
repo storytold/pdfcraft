@@ -462,3 +462,101 @@ fn quitting_asks_in_each_window_in_turn() {
     h.run_steps(3);
     assert!(h.state().session.docs().is_empty(), "both closed");
 }
+
+// --- input, OS events and pickers ---
+
+#[derive(Debug)]
+struct DroppedPdf(std::path::PathBuf);
+
+impl egui::DroppedFile for DroppedPdf {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
+}
+
+fn scratch_pdf(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-windows-{}-{name}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{name}.pdf"));
+    std::fs::write(&path, include_bytes!("data/form.pdf")).unwrap();
+    path
+}
+
+#[test]
+fn a_file_dropped_on_the_second_window_opens_there() {
+    let (mut h, child) = root_and_child();
+    let path = scratch_pdf("dropped");
+    let ctx = h.ctx.clone();
+    h.state_mut().with_window(child, |a| a.handle_drops(vec![std::sync::Arc::new(DroppedPdf(path.clone()))], &ctx));
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 1, "the main window is as it was");
+    let names = h.state_mut().with_window(child, |a| a.views.len()).unwrap();
+    assert_eq!(names, 2, "the file is a tab of the window it was dropped on");
+    assert_windows_ok(h.state());
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn an_open_request_from_the_system_shows_a_file_that_is_open_already() {
+    let path = scratch_pdf("already");
+    let file = path.to_string_lossy().into_owned();
+    let go = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
+        let (file, go) = (file.clone(), go.clone());
+        move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_path(&file);
+            app.open_bytes("other.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
+            app.os_events = Some(Box::new(move || {
+                if go.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    vec![pdfcraft_ui_egui::OsEvent::Open(vec![file.clone()])]
+                } else {
+                    Vec::new()
+                }
+            }));
+            app
+        }
+    });
+    h.run_steps(2);
+    h.state_mut().active = Some(1);
+    go.store(true, std::sync::atomic::Ordering::SeqCst);
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 2, "no second copy");
+    assert_eq!(h.state().active, Some(0), "it is shown");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn a_file_open_elsewhere_is_brought_forward_there() {
+    let path = scratch_pdf("elsewhere");
+    let file = path.to_string_lossy().into_owned();
+    let mut h = two_docs_harness();
+    h.state_mut().open_path(&file);
+    h.state_mut().active = Some(2);
+    assert!(h.state_mut().execute("window.move_tab_new"));
+    h.run_steps(4);
+    let child = h.state().window_ids()[1];
+    h.state_mut().open_recent(&file);
+    h.run_steps(2);
+    assert_eq!(h.state().views.len(), 2, "not opened a second time");
+    assert_eq!(h.state_mut().with_window(child, |a| a.views.len()).unwrap(), 1);
+    assert_windows_ok(h.state());
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn a_picked_file_opens_in_the_window_that_asked() {
+    let (mut h, child) = root_and_child();
+    let path = scratch_pdf("picked");
+    h.state_mut().pick_override = Some(vec![path.to_string_lossy().into_owned()]);
+    h.state_mut().with_window(child, |a| a.open_dialog());
+    h.run_steps(4);
+    assert_eq!(h.state().views.len(), 1, "not in the main window");
+    assert_eq!(h.state_mut().with_window(child, |a| a.views.len()).unwrap(), 2, "but in the window that asked");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}

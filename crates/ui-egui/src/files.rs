@@ -59,6 +59,8 @@ impl FilePurpose {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PickTarget {
     doc: DocId,
+    /// The window that asked.
+    window: crate::WindowId,
     generation: Option<u64>,
 }
 
@@ -278,14 +280,14 @@ impl PdfCraftApp {
 
     /// `doc` as it is now, for a pick that will edit it.
     pub(crate) fn pick_target(&self, doc: Option<DocId>) -> Option<PickTarget> {
-        doc.map(|doc| PickTarget { doc, generation: self.session.get(doc).map(|d| d.edit_generation()) })
+        doc.map(|doc| PickTarget { doc, window: self.current_window, generation: self.session.get(doc).map(|d| d.edit_generation()) })
     }
 
     /// Whether a pick for `target` may still be used: the document is still the active one and
     /// unedited. Tells the user when not.
     pub(crate) fn still_pick_target(&mut self, target: Option<PickTarget>) -> bool {
         let Some(t) = target else { return true };
-        let active = self.active_ids().map(|(_, id)| id);
+        let active = self.with_window(t.window, |a| a.active_ids().map(|(_, id)| id)).flatten();
         let generation = self.session.get(t.doc).map(|d| d.edit_generation());
         if active == Some(t.doc) && generation == t.generation {
             return true;

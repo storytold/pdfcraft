@@ -815,6 +815,40 @@ impl PdfCraftApp {
         self.next_view_no = next;
     }
 
+    /// Remember which window started each background job (and forget finished ones), so its
+    /// progress and its result show where the user asked for it.
+    pub(crate) fn note_job_origins(&mut self) {
+        let here = self.current_window;
+        let running = [
+            ("export", self.export_status.is_some()),
+            ("ocr", self.ocr_run.is_some() || self.ocr_batch.is_some()),
+            ("optimize", self.optimize_run.is_some()),
+            ("action", self.action_run.is_some()),
+        ];
+        for (kind, on) in running {
+            if on {
+                self.job_origin.entry(kind).or_insert(here);
+            } else {
+                self.job_origin.remove(kind);
+            }
+        }
+    }
+
+    /// Run `f` (a job's poll) in the window that started the job; in the current one when that
+    /// window is gone.
+    pub(crate) fn poll_in_origin(&mut self, kind: &'static str, f: impl FnOnce(&mut Self)) {
+        let origin = self.job_origin.get(kind).copied().unwrap_or(self.current_window);
+        let mut f = Some(f);
+        self.with_window(origin, |a| {
+            if let Some(f) = f.take() {
+                f(a);
+            }
+        });
+        if let Some(f) = f {
+            f(self);
+        }
+    }
+
     /// Whether `id` is a window of the app.
     pub fn has_window(&self, id: WindowId) -> bool {
         id == WindowId::ROOT || self.windows.iter().any(|w| w.id == id)
@@ -1104,6 +1138,33 @@ mod tests {
         assert_eq!(seen, vec![(WindowId::ROOT, doc, true), (child, doc, true)]);
         // The same from inside the child window.
         app.with_window(child, |a| assert_eq!(a.views_of(doc), vec![(child, 0), (WindowId::ROOT, 0)]));
+    }
+
+    #[test]
+    fn a_job_reports_in_the_window_that_started_it() {
+        let (mut app, child, _) = two_windows();
+        app.job_origin.insert("ocr", child);
+        app.poll_in_origin("ocr", |a| a.notify("done"));
+        assert!(app.toast.is_none(), "not in the main window");
+        assert_eq!(app.with_window(child, |a| a.toast.as_ref().map(|t| t.0.clone())).unwrap().as_deref(), Some("done"));
+        // The window is gone: the current one shows it.
+        app.job_origin.insert("ocr", WindowId(99));
+        app.poll_in_origin("ocr", |a| a.notify("later"));
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("later"));
+    }
+
+    #[test]
+    fn job_origins_follow_the_running_jobs() {
+        let (mut app, child, _) = two_windows();
+        app.run_inline = true;
+        app.with_window(child, |a| {
+            a.export_status = Some(Default::default());
+            a.note_job_origins();
+        });
+        assert_eq!(app.job_origin.get("export"), Some(&child));
+        app.export_status = None;
+        app.note_job_origins();
+        assert!(app.job_origin.is_empty());
     }
 
     #[test]

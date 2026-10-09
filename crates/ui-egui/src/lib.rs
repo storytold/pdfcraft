@@ -622,6 +622,8 @@ pub struct PdfCraftApp {
     pub window_icon: Option<std::sync::Arc<egui::IconData>>,
     /// [global] The main window's last reported outer rectangle.
     pub(crate) root_rect: Option<egui::Rect>,
+    /// [global] The window that started each running background job.
+    job_origin: std::collections::HashMap<&'static str, WindowId>,
     /// [global] The operating system asked to quit (not just to close the main window).
     quit_requested: bool,
     /// [global] Which windows had the keyboard focus last frame.
@@ -818,6 +820,7 @@ impl PdfCraftApp {
             root_rect: None,
             window_had_focus: Default::default(),
             quit_requested: false,
+            job_origin: Default::default(),
             next_view_no: Default::default(),
             views,
             active,
@@ -1136,9 +1139,28 @@ impl PdfCraftApp {
 
     /// Open a file from a recent list: focus the tab already showing it, else open it (File ▸
     /// Open Recent and the Home view's list share this).
+    /// Another window whose tab shows the file at `path`, and the tab's index there.
+    fn other_window_showing(&mut self, path: &str) -> Option<(WindowId, usize)> {
+        let current = self.current_window;
+        for window in self.window_ids().into_iter().filter(|w| *w != current) {
+            let at = self
+                .with_window(window, |a| a.views.iter().position(|v| a.session.get(v.id).and_then(|d| d.path.as_deref()) == Some(path)))
+                .flatten();
+            if let Some(i) = at {
+                return Some((window, i));
+            }
+        }
+        None
+    }
+
     pub fn open_recent(&mut self, path: &str) {
-        if let Some(i) = self.views.iter().position(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()) == Some(path)) {
+        let shows = |a: &Self| a.views.iter().position(|v| a.session.get(v.id).and_then(|d| d.path.as_deref()) == Some(path));
+        if let Some(i) = shows(self) {
             self.active = Some(i);
+        } else if let Some((window, i)) = self.other_window_showing(path) {
+            // Another window shows it: bring that tab forward there.
+            self.with_window(window, |a| a.active = Some(i));
+            self.pending_window_ops.push(WindowOp::Focus(window));
         } else {
             #[cfg(not(target_arch = "wasm32"))]
             self.open_path(path);
@@ -1757,6 +1779,12 @@ impl PdfCraftApp {
             self.combine_tab.focused = false;
         }
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        self.handle_drops(dropped, ctx);
+    }
+
+    /// Files dropped on the window: onto the page grid, into the Combine files list, or opened.
+    #[doc(hidden)]
+    pub fn handle_drops(&mut self, dropped: Vec<egui::DroppedFileHandle>, ctx: &egui::Context) {
         #[cfg(not(target_arch = "wasm32"))]
         let dropped = self.drop_on_grid(dropped, ctx);
         for f in dropped {
@@ -1853,7 +1881,14 @@ impl eframe::App for PdfCraftApp {
         for e in os_events {
             match e {
                 #[cfg(not(target_arch = "wasm32"))]
-                OsEvent::Open(paths) => paths.iter().for_each(|p| self.open_path(p)),
+                OsEvent::Open(paths) => {
+                    // In the window the user is working in; a file that is open already is shown.
+                    let window = self.focused_window;
+                    let open = |a: &mut Self| paths.iter().for_each(|p| a.open_recent(p));
+                    if self.with_window(window, open).is_none() {
+                        paths.iter().for_each(|p| self.open_recent(p));
+                    }
+                }
                 #[cfg(target_arch = "wasm32")]
                 OsEvent::Open(_) => {}
                 // Like closing the window: `guard_root_close` asks about unsaved changes.
@@ -1872,10 +1907,12 @@ impl eframe::App for PdfCraftApp {
         self.autosave_tick(now);
         self.poll_updates();
         self.window_keys(ctx);
-        self.poll_export();
-        self.poll_ocr();
-        self.poll_optimize();
-        self.poll_action();
+        self.note_job_origins();
+        self.poll_in_origin("export", |a| a.poll_export());
+        self.poll_in_origin("ocr", |a| a.poll_ocr());
+        self.poll_in_origin("optimize", |a| a.poll_optimize());
+        self.poll_in_origin("action", |a| a.poll_action());
+        self.note_job_origins();
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
@@ -1908,7 +1945,12 @@ impl PdfCraftApp {
         } else {
             // The main window's input, keys and close are handled in `logic`; do the same here.
             let ctx = ui.ctx().clone();
-            self.window_input(&ctx);
+            // (An embedded window shares the main window's input: the main window takes the drops.)
+            if class == egui::ViewportClass::Immediate {
+                self.window_input(&ctx);
+            } else {
+                self.finish_grid_drop(&ctx);
+            }
             // (An embedded window shares the main window's input, and with it its close request.)
             if class == egui::ViewportClass::Immediate && ctx.input(|i| i.viewport().close_requested()) {
                 self.guard_close_window(&ctx, id);
@@ -1920,6 +1962,7 @@ impl PdfCraftApp {
             }
             ui.push_id(("window", id.0), |ui| self.window_body(ui, class));
         }
+        self.note_job_origins();
         windows::set_drawing(previous);
     }
 
