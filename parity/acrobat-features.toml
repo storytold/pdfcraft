@@ -662,6 +662,18 @@ evidence = ["crates/ui-egui/tests/ui.rs::persistence_round_trips_and_tolerates_g
 notes = "never reads other apps' lists; File ▸ Open Recent lists them (#290), an already-open file focuses its tab instead of reopening it"
 
 [[feature]]
+id = "core.reopen-last-session"
+title = "Reopen the files from the last session at startup"
+area = "A"
+tier = "P2"
+milestone = "M3"
+status = "shipped"
+commands = []
+tools = []
+evidence = ["crates/ui-egui/tests/editing.rs::the_last_session_reopens_its_files_pages_and_active_tab", "crates/ui-egui/tests/editing.rs::quitting_with_unsaved_changes_still_remembers_every_file", "crates/ui-egui/tests/editing.rs::the_last_session_is_off_by_default_and_skips_missing_and_duplicate_files", "crates/ui-egui/src/last_session.rs::malformed_sessions_are_skipped_and_capped"]
+notes = "Desktop, off by default (Preferences ▸ Documents and view, #442): the files open when PdfCraft last closed reopen at the page each showed, with the same tab in front; files named on the command line open after them, in front; files that are gone, and documents the Recovery dialog offers, are skipped. Quitting with unsaved changes still remembers every tab. Not yet: zoom, layout and scroll position within the page (#418); only the first encrypted file asks for its password (later ones stay closed), and a file opened after it dismisses that prompt; a save that fails partway through a quit can leave the remembered list from that quit; never-saved documents and the web build have no paths to reopen."
+
+[[feature]]
 id = "core.usage-rights-preserve"
 title = "Preserve usage-rights (UR3) signatures from Reader-extended files"
 area = "A"

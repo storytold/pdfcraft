@@ -450,6 +450,14 @@ impl PdfCraftApp {
                 }
             },
         };
+        // Quitting closes the unsaved tabs one by one (and brings each forward to save it):
+        // remember what was open, and which tab was active, before the first one goes (#442).
+        if req == CloseRequest::Quit {
+            match choice {
+                Some(_) => self.note_quit_session(),
+                None => self.forget_quit_session(),
+            }
+        }
         match choice {
             None => {} // cancelled: nothing closes
             Some(false) => self.close_and_continue(ctx, index, req),

@@ -72,6 +72,7 @@ pub mod forms_ui;
 mod home;
 mod icon_data;
 pub mod icons;
+pub mod last_session;
 mod pageboxes;
 mod palette;
 mod panels;
@@ -374,6 +375,13 @@ pub struct PdfCraftApp {
     pub palette_query: String,
     pub all_tools_expanded: bool,
     pub recent: Vec<RecentFile>,
+    /// Preferences: reopen the files that were open when PdfCraft last closed (#442).
+    pub reopen_last_session: bool,
+    /// The files open when PdfCraft last closed, read from the settings for
+    /// [`PdfCraftApp::reopen_last_files`].
+    pub last_session: last_session::LastSession,
+    /// Quitting closes unsaved tabs one by one: what was open when the quit began.
+    quit_session: Option<last_session::LastSession>,
     /// Folders pinned to Home, and what they held when last listed.
     pub pinned: folders_ui::PinnedFolders,
     pub toast: Option<(String, f64)>,
@@ -615,6 +623,9 @@ impl PdfCraftApp {
             palette_query: String::new(),
             all_tools_expanded: false,
             recent: Vec::new(),
+            reopen_last_session: false,
+            last_session: Default::default(),
+            quit_session: None,
             pinned: Default::default(),
             toast: None,
             integrated_titlebar: false,
@@ -1170,6 +1181,9 @@ impl PdfCraftApp {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
         serde_json::json!({
             "recent": self.recent,
+            "reopen_last_session": self.reopen_last_session,
+            // Kept only while the preference is on.
+            "last_session": self.reopen_last_session.then(|| self.session_to_save()),
             "pinned_folders": self.pinned.folders,
             "theme": self.theme_preference,
             "default_mode": self.default_mode,
@@ -1204,6 +1218,10 @@ impl PdfCraftApp {
             let r: Vec<RecentFile> = r.into_iter().filter(|f| std::path::Path::new(&f.path).exists()).collect();
             self.recent = r;
         }
+        if let Some(on) = v["reopen_last_session"].as_bool() {
+            self.reopen_last_session = on;
+        }
+        self.last_session = last_session::LastSession::from_json(&v["last_session"]);
         self.pinned.restore(&v["pinned_folders"]);
         if let Ok(preference) = serde_json::from_value::<ThemePreference>(v["theme"].clone()) {
             self.set_theme_preference(preference);

@@ -387,6 +387,119 @@ fn quitting_with_unsaved_changes_asks_for_each_document() {
     assert!(h.state().close_request.is_none());
 }
 
+/// PDFs written to a fresh temp folder, removed when the test ends.
+struct TempPdfs(std::path::PathBuf);
+
+impl TempPdfs {
+    fn new(test: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-session-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    fn file(&self, name: &str, pages: usize) -> String {
+        let path = self.0.join(name);
+        std::fs::write(&path, fixture(pages)).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+}
+
+impl Drop for TempPdfs {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The app with Preferences ▸ Reopen the files that were open when PdfCraft last closed on.
+fn session_harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.reopen_last_session = true;
+        setup(&mut app);
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+fn open_paths(app: &PdfCraftApp) -> Vec<String> {
+    app.views.iter().map(|v| app.session.get(v.id).and_then(|d| d.path.clone()).unwrap_or_default()).collect()
+}
+
+#[test]
+fn the_last_session_reopens_its_files_pages_and_active_tab() {
+    let dir = TempPdfs::new("reopen");
+    let files = [dir.file("a.pdf", 1), dir.file("b.pdf", 5), dir.file("c.pdf", 2)];
+    let opened = files.clone();
+    let mut h = session_harness(move |app| opened.iter().for_each(|f| app.open_path(f)));
+    h.state_mut().views[1].go_to_page(3);
+    h.state_mut().active = Some(1);
+    h.run_steps(4);
+    assert_eq!(h.state().views[1].current, 3, "b.pdf shows page 4");
+    let settings = h.state().persist();
+    let mut h = session_harness(move |app| {
+        app.restore(&settings);
+        app.reopen_last_files(&[]);
+    });
+    h.run_steps(4);
+    let app = h.state();
+    assert_eq!(open_paths(app), files, "the same files, in the same order");
+    assert_eq!(app.active, Some(1), "b.pdf is in front again");
+    assert_eq!(app.views[1].current, 3, "at the page it showed");
+}
+
+#[test]
+fn quitting_with_unsaved_changes_still_remembers_every_file() {
+    let dir = TempPdfs::new("quit");
+    let files = [dir.file("a.pdf", 1), dir.file("b.pdf", 1)];
+    let opened = files.clone();
+    let mut h = session_harness(move |app| opened.iter().for_each(|f| app.open_path(f)));
+    for tab in 0..2 {
+        h.state_mut().active = Some(tab);
+        h.state_mut().views[tab].select_pages(&[0]);
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    }
+    h.state_mut().active = Some(1);
+    h.state_mut().close_request = Some(CloseRequest::Quit);
+    h.run_steps(3);
+    // Each unsaved tab closes as it is answered, before PdfCraft quits.
+    for _ in 0..2 {
+        h.get_by_label("Don't save").click();
+        h.run_steps(3);
+    }
+    assert!(h.state().views.is_empty());
+    let mut app = PdfCraftApp::new();
+    app.restore(&h.state().persist());
+    app.reopen_last_files(&[]);
+    assert_eq!(open_paths(&app), files, "both files come back");
+    assert_eq!(app.active, Some(1), "with b.pdf in front, as when the quit began");
+}
+
+#[test]
+fn the_last_session_is_off_by_default_and_skips_missing_and_duplicate_files() {
+    let dir = TempPdfs::new("skip");
+    let (a, b) = (dir.file("a.pdf", 1), dir.file("b.pdf", 1));
+    let mut app = PdfCraftApp::new();
+    app.open_path(&a);
+    app.open_path(&b);
+    let off: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
+    assert!(off["last_session"].is_null(), "nothing is kept while the preference is off");
+    app.reopen_last_session = true;
+    let settings = app.persist();
+    let mut later = PdfCraftApp::new();
+    later.restore(&settings);
+    later.reopen_last_session = false;
+    later.reopen_last_files(&[]);
+    assert!(later.views.is_empty(), "turned off again: nothing reopens");
+    // b.pdf is gone, and a.pdf is about to open from the command line.
+    std::fs::remove_file(&b).unwrap();
+    let mut later = PdfCraftApp::new();
+    later.restore(&settings);
+    later.reopen_last_files(&[a]);
+    assert!(later.views.is_empty(), "neither opens from the session");
+}
+
 #[test]
 fn save_prompt_stays_inside_the_screen_for_a_long_filename() {
     // Issue #161: an unwrapped title carrying a long filename widened the centered modal past
