@@ -6,6 +6,7 @@ use pdfcraft_ui_egui::PdfCraftApp;
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app.set_option("left", "closed").unwrap();
         // The whole 300×400 pt page on screen.
@@ -148,6 +149,7 @@ fn date_fields_offer_a_calendar() {
 /// The value of `name` in a saved PDF, read back by opening it in a fresh app.
 fn saved_value(path: &std::path::Path, name: &str) -> Vec<String> {
     let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
     app.open_bytes("saved.pdf", None, std::fs::read(path).unwrap()).unwrap();
     app.session.get(app.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone()
 }
@@ -310,6 +312,7 @@ fn a_rejected_value_keeps_the_typing_and_stops_the_save() {
     let out = dir.join("saved.pdf");
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("order.pdf", None, validated_form()).unwrap();
         app.set_option("left", "closed").unwrap();
         app.set_option("zoom", "150").unwrap();
@@ -356,6 +359,7 @@ fn a_value_refused_on_enter_keeps_save_in_the_same_frame_from_running() {
     let out = dir.join("saved.pdf");
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("order.pdf", None, validated_form()).unwrap();
         app.set_option("left", "closed").unwrap();
         app.set_option("zoom", "150").unwrap();

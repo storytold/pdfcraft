@@ -57,6 +57,7 @@ fn buttons_reset_navigate_and_print() {
     let path_str = path.to_string_lossy().into_owned();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("buttons.pdf", Some(path_str), fixture()).unwrap();
         app.set_option("zoom", "150").unwrap();
         app
@@ -124,6 +125,7 @@ fn name_hidden(h: &Harness<'static, PdfCraftApp>) -> bool {
 fn hide_actions_hide_and_show_fields() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("show-hide.pdf", None, show_hide_fixture()).unwrap();
         app.set_option("zoom", "150").unwrap();
         app

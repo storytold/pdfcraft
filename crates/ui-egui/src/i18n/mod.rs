@@ -218,7 +218,9 @@ pub fn lang_from_tag(tag: &str) -> Option<Lang> {
 
 /// The system language (cached). English when it can't be determined.
 pub fn system_lang() -> Lang {
-    // Tests drive the UI by its English labels whatever the developer's locale is.
+    // Tests drive the UI by its English labels whatever the developer's locale is. This covers
+    // the unit tests; the integration tests link the library as it ships, where `cfg!(test)` is
+    // off, so each of their harnesses pins the `language` option to `en` instead.
     if cfg!(test) {
         return Lang::EN;
     }
@@ -450,10 +452,14 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_display_language_query_returns_a_locale_tag() {
-        let tag = windows_ui_language().expect("Windows should report a display language");
-        let tag = tag.trim();
-        assert!(!tag.is_empty());
-        assert!(tag.split('-').all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric())));
+        // One tag per line, as `first_supported` reads them: a machine with several display
+        // languages reports them all, so each line is checked rather than the list as a whole.
+        let list = windows_ui_language().expect("Windows should report a display language");
+        let tags: Vec<&str> = list.lines().map(str::trim).filter(|t| !t.is_empty()).collect();
+        assert!(!tags.is_empty(), "no display language in {list:?}");
+        for tag in tags {
+            assert!(tag.split('-').all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric())), "not a locale tag: {tag:?}");
+        }
     }
 
     #[test]

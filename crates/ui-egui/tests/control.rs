@@ -43,6 +43,7 @@ fn harness_pages(pages: usize) -> (Harness<'static, PdfCraftApp>, ControlClient)
     let s = slot.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
         app.open_bytes("doc.pdf", None, fixture(pages)).unwrap();
         app

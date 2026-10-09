@@ -34,6 +34,7 @@ fn fixture(n: usize) -> Vec<u8> {
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("a.pdf", None, fixture(5)).unwrap();
         app.open_bytes("b.pdf", None, fixture(2)).unwrap();
         app
@@ -213,6 +214,7 @@ trailer << /Root 1 0 R >>
         .to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("damaged.pdf", None, damaged.clone()).unwrap();
         app
     });
@@ -250,6 +252,7 @@ fn initial_view_is_edited_and_honoured_on_open() {
     // Opening the saved file follows it.
     let bytes = s.session.save_bytes(id).unwrap();
     let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
     app.open_bytes("again.pdf", None, bytes.to_vec()).unwrap();
     let view = &app.views[0];
     assert_eq!((view.current, view.cover, app.right), (1, true, Some(pdfcraft_ui_egui::RightPanel::Bookmarks)));
@@ -559,6 +562,7 @@ fn page_down_steps_every_spread_when_several_fit_on_screen() {
         let bytes = sized_fixture(&sizes);
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
             let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
             app.open_bytes("book.pdf", None, bytes).unwrap();
             app
         });

@@ -37,6 +37,7 @@ fn fixture(n: usize) -> Vec<u8> {
 fn harness(pages: usize, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, fixture(pages)).expect("fixture opens");
         setup(&mut app);
         app
@@ -395,6 +396,7 @@ fn save_prompt_stays_inside_the_screen_for_a_long_filename() {
                 Vliek, Ed Sutherland, -- 5, 2024 -- McGraw-Hill Education (UK) Ltd -- isbn13 97815268.pdf";
     let mut h = Harness::builder().with_size(egui::vec2(1365.0, 719.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes(name, None, fixture(1)).expect("fixture opens");
         app.close_request = Some(CloseRequest::Tab(app.views[0].id));
         app
@@ -429,6 +431,7 @@ fn save_prompt_fits_the_smallest_window_whatever_the_name() {
         let start: String = name.chars().take(10).collect();
         let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
             let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
             app.open_bytes(&name, None, fixture(1)).expect("fixture opens");
             app.close_request = Some(CloseRequest::Tab(app.views[0].id));
             app
@@ -818,6 +821,7 @@ fn columns_resize_and_the_layout_is_kept_in_the_settings() {
     assert!(widths[size_index] > 120.0, "{widths:?}");
     let saved = h.state().persist();
     let mut fresh = PdfCraftApp::new();
+    fresh.set_option("language", "en").unwrap();
     fresh.restore(&saved);
     assert_eq!(fresh.combine_columns, h.state().combine_columns);
     // Malformed settings give the default layout.
@@ -1123,6 +1127,7 @@ fn save_pages_writes_what_the_grid_shows() {
     h.run_steps(4);
     assert!(!dirty(&h));
     let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
     app.open_bytes("saved.pdf", None, std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(texts_of(&app, 0), ["Page 1", "Page 3"]);
 }
@@ -1194,6 +1199,7 @@ fn protected_with(algorithm: pdfcraft_cos::Algorithm, user: &str, owner: &str, p
 fn password_prompt_opens_and_security_tab_reports_the_details() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("secret.pdf", None, protected("pw", "owner", -1)).unwrap();
         app
     });
@@ -1218,6 +1224,7 @@ fn password_prompt_opens_and_security_tab_reports_the_details() {
 fn restricted_documents_show_a_notice_and_block_page_changes() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("locked.pdf", None, protected("", "owner", 0b0100)).unwrap(); // opens without a password
         app.set_option("organize", "on").unwrap();
         app
@@ -1240,6 +1247,7 @@ fn restricted_documents_show_a_notice_and_block_page_changes() {
 #[test]
 fn replace_pages_dialog_swaps_page_content() {
     let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
     app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
     app.views[0].select_pages(&[1]);
     app.start_replace("other.pdf".into(), fixture(5));
@@ -1365,6 +1373,7 @@ fn source_font_fixture() -> Vec<u8> {
 fn open_source_font_fixture() -> Harness<'static, PdfCraftApp> {
     Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("fonts.pdf", None, source_font_fixture()).expect("font fixture opens");
         app
     })
@@ -1465,6 +1474,7 @@ fn double_drawn() -> Vec<u8> {
 fn editing_a_double_drawn_line_replaces_every_copy() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("bold.pdf", None, double_drawn()).expect("opens");
         app
     });
@@ -1497,6 +1507,7 @@ fn editing_existing_images_on_the_page() {
     image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("picture.png", None, png.clone()).expect("opens");
         app
     });
@@ -1622,6 +1633,7 @@ fn dragging_a_paragraph_moves_it_and_its_edge_rewraps_it() {
 fn pages_panel(pages: usize) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, fixture(pages)).expect("fixture opens");
         app.set_option("panel", "pages").unwrap();
         app
