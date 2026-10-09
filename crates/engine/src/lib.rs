@@ -154,6 +154,9 @@ fn scope_of(edit: &Edit) -> Scope {
         // A file attachment also changes the Attachments list.
         Edit::AddAnnotation(a) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
         Edit::AddMeasurement(_)
+        | Edit::AddThreeDMeasurement(_)
+        | Edit::UpdateThreeDMeasurement { .. }
+        | Edit::RemoveThreeDMeasurement { .. }
         | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
         | Edit::DeleteAnnotation { .. }
@@ -273,6 +276,41 @@ impl Document {
         let e = self.editor.as_ref().ok_or("the document can't be read")?;
         Ok(measure::list(&e.cos))
     }
+    pub fn measurement_viewports(&self, page: usize) -> Result<Vec<measure::viewports::Viewport>, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        measure::viewports::list(&e.cos, page).map_err(|e| e.to_string())
+    }
+    pub fn three_d_models(&self, page: usize) -> Result<Vec<measure::three_d::ModelInfo>, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        measure::three_d::models(&e.cos, page).map_err(|e| e.to_string())
+    }
+    /// A detached, immutable snapshot for a background 3D loader. Edits can
+    /// proceed while decoding; callers discard results from stale generations.
+    pub fn three_d_loader(
+        &self,
+        page: usize,
+        annotation: usize,
+        view: Option<usize>,
+    ) -> Result<impl FnOnce() -> Result<measure::three_d::ViewState, String> + Send + 'static, String> {
+        let cos = self.editor.as_ref().ok_or("the document can't be read")?.cos.clone();
+        Ok(move || measure::three_d::load_view(&cos, page, annotation, view).map_err(|e| e.to_string()))
+    }
+    pub fn three_d_artwork(&self, page: usize, annotation: usize) -> Result<measure::three_d::Artwork, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        measure::three_d::artwork(&e.cos, page, annotation).map_err(|e| e.to_string())
+    }
+    pub fn three_d_camera(&self, artwork: &measure::three_d::Artwork, view: Option<usize>) -> Result<measure::three_d_camera::Camera, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        let view = match view {
+            Some(index) => Some(artwork.views.get(index).ok_or("3D view does not exist")?),
+            None => None,
+        };
+        measure::three_d_camera::Camera::from_artwork(&e.cos, artwork, view).map_err(|e| e.to_string())
+    }
+    pub fn three_d_measurements(&self, page: usize, annotation: usize, view: Option<usize>) -> Result<measure::three_d::Listing, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        measure::three_d::measurements(&e.cos, page, annotation, view).map_err(|e| e.to_string())
+    }
     pub fn measurement_scale(&self, page: usize, at: measure::Point) -> Result<measure::Scale, String> {
         let e = self.editor.as_ref().ok_or("the document can't be read")?;
         measure::scale_at(&e.cos, page, at).map_err(|e| e.to_string())
@@ -285,9 +323,22 @@ impl Document {
         let e = self.editor.as_ref().ok_or("the document can't be read")?;
         measure::user_to_view(&e.cos, page, point).map_err(|e| e.to_string())
     }
+    /// Rendering and content analysis share viewer layer and comment visibility.
+    pub fn render_config(&self) -> RenderConfig {
+        self.config.clone()
+    }
     pub fn measurement_paths(&self, page: usize) -> Result<measure::snap::Geometry, String> {
-        let e = self.editor.as_ref().ok_or("the document can't be read")?;
-        measure::snap::geometry(&e.cos, page).map_err(|e| e.to_string())
+        let geometry = pdfcraft_render::geometry::extract(self.bytes.clone(), page, &self.config)?;
+        Ok(measure::snap::Geometry {
+            segments: geometry.segments,
+            endpoints: geometry.endpoints,
+            midpoints: geometry.midpoints,
+            truncated: geometry.truncated,
+            unreadable: geometry.unreadable,
+            visibility_limited: geometry.visibility_limited,
+            glyphs: geometry.glyphs,
+            images: geometry.images,
+        })
     }
 
     /// A counter that changes with every edit (for caches of derived data).
@@ -495,6 +546,7 @@ fn use_layer_choices(doc: &mut Document) {
     let overrides: Vec<(i32, i32, bool)> = doc.info.layers.iter().map(|l| (l.id.0 as i32, l.id.1 as i32, l.visible)).collect();
     doc.config.layers = Arc::new(overrides);
     doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+    doc.generation = doc.generation.saturating_add(1);
 }
 
 /// Apply a set-layer-visibility action to `layers`, one change at a time, so a toggle flips the
@@ -755,12 +807,36 @@ pub enum Edit {
     },
     /// Add a calibrated distance, perimeter or area annotation.
     AddMeasurement(measure::NewMeasurement),
+    AddThreeDMeasurement(measure::three_d::NewMeasurement),
+    UpdateThreeDMeasurement {
+        measurement: measure::three_d::NewMeasurement,
+        index: usize,
+    },
+    RemoveThreeDMeasurement {
+        page: usize,
+        annotation: usize,
+        view: Option<usize>,
+        index: usize,
+    },
     /// Store a drawing scale for a rectangular viewport (PDF user space).
     SetMeasurementScale {
         page: usize,
         bbox: [f64; 4],
         name: String,
         scale: measure::Scale,
+    },
+    /// Edit a saved drawing viewport, preserving its precedence.
+    UpdateMeasurementViewport {
+        page: usize,
+        index: usize,
+        bbox: [f64; 4],
+        name: String,
+        scale: measure::Scale,
+    },
+    /// Remove a drawing viewport. Existing annotations retain their scales.
+    RemoveMeasurementViewport {
+        page: usize,
+        index: usize,
     },
     /// Add a comment (sticky note, highlight, shape, drawing, text box…).
     AddAnnotation(NewAnnotation),
@@ -1102,7 +1178,12 @@ impl Edit {
             Edit::SetBookmarkPage { .. } => "Set bookmark destination".into(),
             Edit::NumberPages { .. } => "Number pages".into(),
             Edit::AddMeasurement(m) => format!("Measure {}", m.kind.name()),
+            Edit::AddThreeDMeasurement(_) => "Add 3D measurement".into(),
+            Edit::UpdateThreeDMeasurement { .. } => "Edit 3D measurement".into(),
+            Edit::RemoveThreeDMeasurement { .. } => "Delete 3D measurement".into(),
             Edit::SetMeasurementScale { .. } => "Set measurement scale".into(),
+            Edit::UpdateMeasurementViewport { .. } => "Edit measurement viewport".into(),
+            Edit::RemoveMeasurementViewport { .. } => "Remove measurement viewport".into(),
             Edit::AddAnnotation(a) => format!("Add {}", annotation_noun(&a.shape)),
             Edit::AddCustomStamp { .. } => "Add stamp".into(),
             Edit::DeleteAnnotation { .. } => "Delete comment".into(),
@@ -1241,6 +1322,9 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
             }
         }
         Edit::AddMeasurement(_)
+        | Edit::AddThreeDMeasurement(_)
+        | Edit::UpdateThreeDMeasurement { .. }
+        | Edit::RemoveThreeDMeasurement { .. }
         | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
         | Edit::DeleteAnnotation { .. }
@@ -1255,7 +1339,9 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
         | Edit::SetAnnotationInfo { .. }
-        | Edit::SetMeasurementScale { .. } => {
+        | Edit::SetMeasurementScale { .. }
+        | Edit::UpdateMeasurementViewport { .. }
+        | Edit::RemoveMeasurementViewport { .. } => {
             if p.annotate() {
                 Ok(())
             } else {
@@ -1443,7 +1529,14 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::AddMeasurement(m) => {
             measure::add(doc, m, &cx.meta())?;
         }
+        Edit::AddThreeDMeasurement(m) => {
+            measure::three_d::add(doc, m)?;
+        }
+        Edit::UpdateThreeDMeasurement { measurement, index } => measure::three_d::update(doc, measurement, *index)?,
+        Edit::RemoveThreeDMeasurement { page, annotation, view, index } => measure::three_d::remove(doc, *page, *annotation, *view, *index)?,
         Edit::SetMeasurementScale { page, bbox, name, scale } => measure::set_scale(doc, *page, *bbox, name, scale)?,
+        Edit::UpdateMeasurementViewport { page, index, bbox, name, scale } => measure::viewports::update(doc, *page, *index, *bbox, name, scale)?,
+        Edit::RemoveMeasurementViewport { page, index } => measure::viewports::remove(doc, *page, *index)?,
         Edit::AddAnnotation(a) => {
             pdfcraft_annot::add_annotation(doc, a, &cx.meta())?;
         }

@@ -51,7 +51,7 @@ pub struct RenderConfig {
 }
 
 impl RenderConfig {
-    fn settings(&self) -> InterpreterSettings {
+    pub(crate) fn settings(&self) -> InterpreterSettings {
         let standard = InterpreterSettings::default().font_resolver;
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),

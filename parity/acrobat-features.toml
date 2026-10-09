@@ -4142,8 +4142,8 @@ milestone = "M12"
 status = "partial"
 commands = ["measure.distance"]
 tools = ["measure_distance"]
-evidence = ["crates/automation/tests/automation.rs::measurements_calibrate_draw_save_reopen_and_export", "crates/measure/src/tests.rs::calibrated_lengths_concave_areas_and_axis_scales", "crates/ui-egui/tests/control.rs::measurement_tools_draw_live_calibrate_save_and_export"]
-notes = "Two-point distance annotations with saved numeric captions and rectilinear scales. Partial: only single-unit decimal formats; compound (ft-in) and fractional formats are not supported (listed as unsupported, data kept), no leader lines or caption placement options, geospatial scales unsupported, and interop with Acrobat-authored measurements (reading theirs, Acrobat reading ours) is untested."
+evidence = ["crates/automation/tests/automation.rs::measurements_calibrate_draw_save_reopen_and_export", "crates/automation/tests/automation.rs::measurement_formats_viewport_update_remove_undo_and_reopen", "crates/automation/tests/automation.rs::measurement_geospatial_coordinates_geodesics_undo_and_reopen", "crates/ui-egui/tests/control.rs::measurement_tools_draw_live_calibrate_save_and_export"]
+notes = "Two-point dimensions support decimal, fractional and compound number formats, differing coordinate/distance units and geographic or projected scales. Unknown imported dictionaries are preserved. Leader/caption placement and broader imported geospatial registration coverage remain in progress; Acrobat runtime interoperability is untested."
 
 [[feature]]
 id = "comment.measure-perimeter"
@@ -4178,8 +4178,8 @@ milestone = "M12"
 status = "partial"
 commands = ["measure.scale"]
 tools = ["measure_scale"]
-evidence = ["crates/measure/src/tests.rs::viewport_precedence_first_point_user_unit_and_roundtrip", "crates/measure/src/tests.rs::coordinates_roundtrip_for_crop_rotation_and_user_unit", "crates/automation/tests/automation.rs::measurements_calibrate_draw_save_reopen_and_export", "crates/ui-egui/tests/control.rs::measurement_tools_draw_live_calibrate_save_and_export"]
-notes = "Persistent rectangular viewports with last-containing-viewport precedence, numeric scale and two-point calibration. First vertex selects the scale; prior annotations retain theirs. Partial: single-unit decimal rectilinear scales only; compound (ft-in), fractional and differing distance units can't be authored or imported, no viewport editing/removal UI, and interop with Acrobat's scale ratio dialog and its saved viewports is untested."
+evidence = ["crates/measure/src/tests.rs::viewport_update_remove_preserve_indirection_precedence_and_saved_scale", "crates/automation/tests/automation.rs::measurement_formats_viewport_update_remove_undo_and_reopen", "crates/ui-egui/tests/control.rs::measurement_advanced_formats_edit_and_apply_in_small_light_and_dark_windows", "crates/ui-egui/tests/control.rs::measurement_geospatial_editor_picks_control_points_and_saves_map_distance"]
+notes = "Persistent viewport listing, update/removal, calibration and lossless compound/fractional formats with independent X/Y/distance/area units. Last-containing-viewport precedence and prior annotation scales are preserved. Native advanced-format and geospatial editors share automation edits. Broader imported geospatial layouts and Acrobat interoperability remain unverified."
 
 [[feature]]
 id = "comment.measure-snap"
@@ -4190,8 +4190,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["measure.snap"]
 tools = ["measure_snap"]
-evidence = ["crates/automation/tests/automation.rs::measurement_snap_tool_covers_all_targets", "crates/measure/src/tests.rs::nested_forms_transforms_curves_and_cycles_are_bounded", "crates/measure/src/tests.rs::snap_paths_endpoints_midpoints_and_intersections"]
-notes = "Paths, endpoints, midpoints and intersections of painted vector geometry, including transformed Form XObjects. Cubics flattened to 0.2 user units. Bounded extraction and dense-intersection limits are reported. Raster/text outlines, clipping and optional-content visibility are not interpreted."
+evidence = ["crates/automation/tests/automation.rs::measurement_visible_snapping_layers_glyphs_raster_and_clipping", "crates/render/src/geometry.rs::clips_segments_and_keeps_only_visible_targets", "crates/render/src/geometry.rs::layer_visibility_matches_the_renderer_settings", "crates/ui-egui/tests/control.rs::measurement_snaps_to_visible_glyph_outline_before_first_vertex"]
+notes = "Transformed vectors, nested forms, raster edges and glyph/Type 3 outlines use current clipping and optional-content choices. Bounded decoding, interpreter, clip, image, target and intersection work is reported. Soft-mask and pattern visibility is still reported as limited."
 
 [[feature]]
 id = "comment.measure-info-panel"
@@ -4202,8 +4202,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["measure.info"]
 tools = ["measure_info", "measure_list"]
-evidence = ["crates/automation/tests/automation.rs::measurements_calibrate_draw_save_reopen_and_export", "crates/ui-egui/tests/control.rs::measurement_tools_draw_live_calibrate_save_and_export"]
-notes = "Live value, units, X/Y deltas, angle and selected scale while drawing; saved measurements can be selected from the panel. Rectilinear 2D readings only."
+evidence = ["crates/ui-egui/tests/control.rs::measurement_scale_and_keyboard_work_in_light_dark_and_small_windows", "crates/ui-egui/tests/control.rs::measurement_advanced_formats_edit_and_apply_in_small_light_and_dark_windows", "crates/ui-egui/tests/control.rs::measurement_geospatial_editor_picks_control_points_and_saves_map_distance"]
+notes = "Live values, coordinates, deltas, angle, scale, snap state and bounded extraction diagnostics. Saved measurement navigation is paginated, with undo/redo and disabled export for empty lists. Advanced scale previews and geospatial registration controls follow both themes."
 
 [[feature]]
 id = "comment.measure-export"
@@ -4218,16 +4218,28 @@ evidence = ["crates/automation/tests/automation.rs::measurements_calibrate_draw_
 notes = "Atomic CSV export of page, annotation index, type, numeric value, unit, label, author and scale. Quotes embedded delimiters and prefixes spreadsheet formula triggers."
 
 [[feature]]
+id = "comment.measure-3d"
+title = "Measure 3D model geometry"
+area = "E"
+tier = "P2"
+milestone = "M12"
+status = "partial"
+commands = ["measure.3d"]
+tools = ["three_d_models", "three_d_info", "three_d_render", "three_d_pick", "three_d_measurements", "three_d_measure"]
+evidence = ["crates/measure/src/tests.rs::picked_three_d_constructions_and_markup_use_model_geometry", "crates/automation/tests/automation.rs::three_d_geometry_pick_measure_edit_undo_and_saved_reopen", "crates/ui-egui/tests/control.rs::native_three_d_picking_save_edit_delete_history_and_reopen_in_both_themes"]
+notes = "Actual model-space linear, perpendicular, angular and radial constructions with standard 3D measurement dictionaries, copy-on-write edits, annotation permissions/flags, undo/redo and incremental save/reopen. Native and headless workflows share geometry and camera APIs. Broader model formats/presentation, radial snapping, projected comment associations and text placement remain in progress; Acrobat runtime interoperability is untested."
+
+[[feature]]
 id = "comment.geospatial"
 title = "Geospatial location and measuring"
 area = "E"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["measure.scale", "measure.info"]
+tools = ["measure_scale", "measure_info", "measure_distance", "measure_perimeter", "measure_area"]
+evidence = ["crates/measure/src/geo.rs::geographic_coordinates_ellipsoidal_length_and_area", "crates/measure/src/geo.rs::projected_matrix_has_priority_and_uses_pdf_user_coordinates", "crates/automation/tests/automation.rs::measurement_geospatial_coordinates_geodesics_undo_and_reopen", "crates/ui-egui/tests/control.rs::measurement_geospatial_editor_picks_control_points_and_saves_map_distance"]
+notes = "Geographic/projected registration, ellipsoidal distance/area, coordinate readouts, EPSG/WKT and preferred units, with saved viewport scales and native control-point picking. Broader imported annotation registration/layout cases and Acrobat runtime interoperability remain unverified."
 
 [[feature]]
 id = "comment.shared-review"
@@ -9623,11 +9635,11 @@ title = "View 3D (U3D/PRC) content"
 area = "N"
 tier = "P3"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["measure.3d"]
+tools = ["three_d_models", "three_d_info", "three_d_render", "three_d_pick"]
+evidence = ["crates/automation/tests/automation.rs::three_d_geometry_pick_measure_edit_undo_and_saved_reopen", "crates/ui-egui/tests/control.rs::native_three_d_picking_save_edit_delete_history_and_reopen_in_both_themes"]
+notes = "Native U3D window and headless preview use real meshes, points, lines and instance transforms, saved PDF cameras, projection, clipping and depth. Orbit/pan/zoom and bounded surface/vertex/edge/point/line/silhouette picking are available. PRC, broader U3D modifiers/materials/presentation and embedded camera resources remain in progress."
 
 [[feature]]
 id = "misc.legacy-multimedia"

@@ -103,7 +103,7 @@ impl<'a> SoftMask<'a> {
         // same xobject, the ID will be the same.
         let obj_id = dict.get_ref(G)?.into();
         let group_stream = dict.get::<Stream<'_>>(G)?;
-        let group = FormXObject::new(&group_stream)?;
+        let group = FormXObject::new(&group_stream, context.settings.content_decoder.as_ref())?;
         // PdfCraft patch: the group's /CS is optional (ISO 32000-2 §11.6.5.2; Chrome/Skia omit
         // it). Upstream returned None here, silently dropping the whole soft mask. Fall back to
         // DeviceRGB, the blending space our renderer composites in.

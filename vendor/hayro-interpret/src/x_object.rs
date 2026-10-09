@@ -35,6 +35,7 @@ impl<'a> XObject<'a> {
         warning_sink: &WarningSinkFn,
         cache: &Cache,
         transfer_function: Option<ActiveTransferFunction>,
+        decoder: Option<&crate::ContentDecoderFn>,
     ) -> Option<Self> {
         let dict = stream.dict();
         match dict.get::<Name<'_>>(SUBTYPE)?.deref() {
@@ -46,7 +47,7 @@ impl<'a> XObject<'a> {
                 false,
                 transfer_function,
             )?)),
-            FORM => Some(Self::FormXObject(FormXObject::new(stream)?)),
+            FORM => Some(Self::FormXObject(FormXObject::new(stream, decoder)?)),
             _ => None,
         }
     }
@@ -62,10 +63,10 @@ pub(crate) struct FormXObject<'a> {
 }
 
 impl<'a> FormXObject<'a> {
-    pub(crate) fn new(stream: &Stream<'a>) -> Option<Self> {
+    pub(crate) fn new(stream: &Stream<'a>, decoder: Option<&crate::ContentDecoderFn>) -> Option<Self> {
         let dict = stream.dict();
 
-        let decoded = stream.decoded().ok()?;
+        let decoded = interpret::decode_content(stream, decoder)?;
         let resources = dict.get::<Dict<'_>>(RESOURCES).unwrap_or_default();
 
         let matrix = Affine::new(

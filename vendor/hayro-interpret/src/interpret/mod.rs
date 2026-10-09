@@ -18,7 +18,7 @@ use crate::x_object::{
 use hayro_syntax::content::TypedIter;
 use hayro_syntax::content::ops::TypedInstruction;
 use hayro_syntax::object::dict::keys::{
-    ANNOTS, AP, AS, C, CA, F, MCID, N, OC, QUADPOINTS, RECT, SUBTYPE,
+    ANNOTS, AP, AS, C, CA, CONTENTS, F, MCID, N, OC, QUADPOINTS, RECT, SUBTYPE,
 };
 use hayro_syntax::object::{Array, Dict, Object, Rect, Stream, dict_or_stream};
 use hayro_syntax::page::{Page, Resources};
@@ -42,6 +42,16 @@ pub type CMapResolverFn =
     Arc<dyn Fn(hayro_cmap::CMapName<'_>) -> Option<&'static [u8]> + Send + Sync>;
 /// A callback function for resolving warnings during interpretation.
 pub type WarningSinkFn = Arc<dyn Fn(InterpreterWarning) + Send + Sync>;
+/// PdfCraft patch: an optional bounded decoder shared by all interpreted content streams.
+/// Returning None skips an unreadable or over-budget stream; the caller records diagnostics.
+pub type ContentDecoderFn = Arc<dyn for<'a> Fn(&Stream<'a>) -> Option<Vec<u8>> + Send + Sync>;
+
+pub(crate) fn decode_content<'a>(stream: &Stream<'a>, decoder: Option<&ContentDecoderFn>) -> Option<std::borrow::Cow<'a, [u8]>> {
+    match decoder {
+        Some(decode) => decode(stream).map(std::borrow::Cow::Owned),
+        None => stream.decoded().ok(),
+    }
+}
 
 #[derive(Clone)]
 /// Settings that should be applied during the interpretation process.
@@ -109,6 +119,8 @@ pub struct InterpreterSettings {
     /// PdfCraft patch: viewer overrides for optional content groups (object number, generation,
     /// visible), applied on top of the document's default configuration (Layers panel toggles).
     pub ocg_overrides: Arc<Vec<(i32, i32, bool)>>,
+    /// Bounded content extraction override. Normal rendering retains its existing decoder.
+    pub content_decoder: Option<ContentDecoderFn>,
 }
 
 impl Default for InterpreterSettings {
@@ -129,6 +141,7 @@ impl Default for InterpreterSettings {
             render_annotations: true,
             hide_comments: false,
             ocg_overrides: Arc::new(Vec::new()),
+            content_decoder: None,
         }
     }
 }
@@ -142,6 +155,10 @@ pub enum InterpreterWarning {
     UnsupportedFont,
     /// An image failed to decode.
     ImageDecodeFailure,
+    /// PdfCraft patch: a page has too many content entries for bounded extraction.
+    ContentStreamLimit,
+    /// PdfCraft patch: a content entry cannot be interpreted as a stream.
+    ContentDecodeFailure,
 }
 
 /// interpret the contents of the page and render them into the device.
@@ -151,12 +168,38 @@ pub fn interpret_page<'a>(
     device: &mut impl Device<'a>,
 ) {
     let resources = page.resources();
-    interpret(page.typed_operations(), resources, context, device);
+    if let Some(decode) = context.settings.content_decoder.as_ref() {
+        let mut contents = Vec::new();
+        if let Some(stream) = page.raw().get::<Stream<'_>>(CONTENTS) {
+            if let Some(data) = decode(&stream) { contents = data; }
+        } else if let Some(streams) = page.raw().get::<Array<'_>>(CONTENTS) {
+            // The shared decoder budgets 4096 streams and 16 MiB including separators.
+            // Visit one extra stream so it can report truncation without traversing a huge array.
+            for (index, object) in streams.resolved_entries().take(4097).enumerate() {
+                if index == 4096 {
+                    (context.settings.warning_sink)(InterpreterWarning::ContentStreamLimit);
+                    break;
+                }
+                if let Some(stream) = object.and_then(Object::into_stream) {
+                    if let Some(data) = decode(&stream) {
+                        contents.extend(data);
+                        contents.push(b' ');
+                    }
+                } else {
+                    (context.settings.warning_sink)(InterpreterWarning::ContentDecodeFailure);
+                }
+            }
+        }
+        interpret(TypedIter::new(&contents), resources, context, device);
+    } else {
+        interpret(page.typed_operations(), resources, context, device);
+    }
 
     if context.settings.render_annotations
         && let Some(annot_arr) = page.raw().get::<Array<'_>>(ANNOTS)
     {
         for annot in annot_arr.iter::<Dict<'_>>() {
+            if !device.should_continue() { break; }
             let flags = annot.get::<u32>(F).unwrap_or(0);
 
             // Annotation should be hidden (Hidden = bit 2, NoView = bit 6).
@@ -180,7 +223,7 @@ pub fn interpret_page<'a>(
                     states.get::<Stream<'_>>(state.as_ref())
                 })
             });
-            if let Some(apx) = normal.and_then(|o| FormXObject::new(&o)) {
+            if let Some(apx) = normal.and_then(|o| FormXObject::new(&o, context.settings.content_decoder.as_ref())) {
                 let Some(rect) = annot.get::<Rect>(RECT) else {
                     continue;
                 };
@@ -324,7 +367,8 @@ pub fn interpret<'a>(
 
     context.save_state();
 
-    while let Some(op) = ops.next() {
+    while device.should_continue() {
+        let Some(op) = ops.next() else { break };
         match op {
             TypedInstruction::SaveState(_) => context.save_state(),
             TypedInstruction::StrokeColorDeviceRgb(s) => {
@@ -750,6 +794,7 @@ pub fn interpret<'a>(
                         &context.settings.warning_sink,
                         &cache,
                         transfer_function.clone(),
+                        context.settings.content_decoder.as_ref(),
                     )
                 }) {
                     draw_xobject(&x_object, resources, context, device);

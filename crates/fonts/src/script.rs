@@ -133,9 +133,12 @@ pub fn japanese_glyph(ch: char) -> Result<GlyphOutline, GlyphError> {
 }
 
 /// The bounded outline and advance from the explicitly selected craft-fonts face.
-/// Uses the same complexity and missing-glyph checks as [`japanese_glyph`].
 pub fn japanese_glyph_from(face: &crate::CraftFont, ch: char) -> Result<GlyphOutline, GlyphError> {
-    let Ok(font) = FontRef::new(face.bytes) else { return Err(GlyphError::Missing) };
+    font_glyph(face.bytes, ch)
+}
+
+fn font_glyph(bytes: &[u8], ch: char) -> Result<GlyphOutline, GlyphError> {
+    let Ok(font) = FontRef::new(bytes) else { return Err(GlyphError::Missing) };
     let loc = LocationRef::default();
     let metrics = font.metrics(Size::unscaled(), loc);
     let scale = 1.0 / metrics.units_per_em.max(1) as f64;
@@ -169,6 +172,46 @@ pub fn japanese_glyph_from(face: &crate::CraftFont, ch: char) -> Result<GlyphOut
         }
     }
     Ok(GlyphOutline { contours: pen.contours, width, bbox })
+}
+
+/// A measurement caption from approved embedded faces. Missing characters and over-budget
+/// outlines return an error, so generated PDF appearances never substitute or drop a unit.
+/// Inter is preferred; regular craft-fonts faces cover CJK when present in the build.
+pub fn caption_outline(text: &str) -> Result<ScriptOutline, String> {
+    if text.is_empty() || text.chars().take(4097).count() > 4096 {
+        return Err("measurement captions must contain 1 to 4096 characters".into());
+    }
+    let mut cache = std::collections::BTreeMap::new();
+    let mut outline = ScriptOutline { ascent: 1.0, descent: -0.3, ..ScriptOutline::default() };
+    let mut points = 0usize;
+    for ch in text.chars() {
+        if let std::collections::btree_map::Entry::Vacant(entry) = cache.entry(ch) {
+            let glyph = font_glyph(include_bytes!("../../../assets/fonts/Inter-Regular.ttf"), ch)
+                .or_else(|_| {
+                    crate::CRAFT_FONTS
+                        .iter()
+                        .filter(|face| face.style == "Regular")
+                        .find_map(|face| font_glyph(face.bytes, ch).ok())
+                        .ok_or(GlyphError::Missing)
+                })
+                .map_err(|_| {
+                    format!("this build has no approved caption glyph for U+{:04X}; choose a supported unit or build with craft-fonts", ch as u32)
+                })?;
+            entry.insert(glyph);
+        }
+        let Some(glyph) = cache.get(&ch) else { return Err("measurement caption glyph is unavailable".into()) };
+        for contour in &glyph.contours {
+            points = points.saturating_add(contour.len());
+            if points > 262_144 {
+                return Err("measurement caption exceeds the outline complexity limit; shorten its unit or prefix".into());
+            }
+            outline.contours.push(contour.iter().map(|p| [p[0] + outline.width, p[1]]).collect());
+        }
+        outline.width += glyph.width;
+        outline.ascent = outline.ascent.max(glyph.bbox[3]);
+        outline.descent = outline.descent.min(glyph.bbox[1]);
+    }
+    Ok(outline)
 }
 
 /// The outlines of `text` in the script font (characters it lacks are skipped).
@@ -205,6 +248,20 @@ pub fn script_outline(text: &str) -> ScriptOutline {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn caption_keeps_unicode_and_rejects_missing_or_over_budget_text() {
+        let latin = super::caption_outline("24.0 m²").unwrap();
+        assert!(!latin.contours.is_empty());
+        assert!(latin.width > 2.0);
+        assert!(super::caption_outline("\u{10ffff}").unwrap_err().contains("U+10FFFF"));
+        assert!(super::caption_outline(&"x".repeat(4097)).is_err());
+        if crate::document_japanese_font().is_some() {
+            let cjk = super::caption_outline("24.0 平方米").unwrap();
+            assert!(cjk.width > latin.width);
+            assert!(!cjk.contours.is_empty());
+        }
+    }
+
     #[test]
     fn long_names_keep_every_glyph_with_bounded_outline_work() {
         let text = "Alexandria Catherine Elizabeth Montgomery-Wellington";

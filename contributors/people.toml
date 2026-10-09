@@ -59,3 +59,6 @@ sync_github_name = true
 
 [people.amitabhthakur]
 sync_github_name = true
+[people.excited-raccoon]
+real_name = "Ayan liaqat"
+sync_github_name = false

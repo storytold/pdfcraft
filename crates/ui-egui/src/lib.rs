@@ -49,6 +49,7 @@ mod search_ui;
 mod sign_ui;
 mod stamps_ui;
 mod standards_ui;
+mod three_d_ui;
 mod zoom_snap;
 /// Header & footer / watermark / background dialog types (tests and automation).
 pub mod marks {
@@ -433,6 +434,7 @@ pub struct PdfCraftApp {
     pub action_files_override: Option<Vec<String>>,
     /// Standards ▸ PDF/A: level and last result.
     pub pdfa: standards_ui::PdfaState,
+    pub three_d: Option<three_d_ui::Viewer>,
     /// Compare files: the chosen older document and the last result.
     pub compare_old: Option<DocId>,
     pub compare: Option<compare_ui::CompareState>,
@@ -650,6 +652,7 @@ impl PdfCraftApp {
             action_run: None,
             action_files_override: None,
             pdfa: Default::default(),
+            three_d: None,
             compare_old: None,
             compare: None,
             js_console: Default::default(),
@@ -1487,6 +1490,7 @@ impl PdfCraftApp {
             }
             return;
         }
+        let model_keyboard = three_d_ui::keys(self, ctx);
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
             && view.auto_scroll.escape(ctx)
         {
@@ -1501,13 +1505,16 @@ impl PdfCraftApp {
             // overlay owns the keyboard. Other canvas shortcuts keep their own handling.
             if self.dialog.is_none()
                 && !self.palette_open
+                && !model_keyboard
                 && !ctx.egui_wants_keyboard_input()
                 && ctx.input_mut(|input| input.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, Key::A)))
             {
                 self.views[i].select_all();
             }
-            self.tool_keys(i, ctx);
-            canvas::shortcuts(&mut self.views[i], ctx);
+            if !model_keyboard {
+                self.tool_keys(i, ctx);
+                canvas::shortcuts(&mut self.views[i], ctx);
+            }
         }
     }
 }
@@ -1726,6 +1733,7 @@ impl eframe::App for PdfCraftApp {
             Some(i) => canvas::document_area(self, i, ui),
         });
         self.process_pending_edits();
+        three_d_ui::show(self, &ctx);
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
         self.show_progress(&ctx);

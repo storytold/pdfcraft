@@ -2033,3 +2033,122 @@
 	Pinned {folder} to Home	{folder} épinglé à l'Accueil
 	No recent files	Aucun fichier récent
 	Go to page…	Aller à la page…
+	3D model canvas	Zone du modèle 3D
+	3D models on this page	Modèles 3D sur cette page
+	Add boundary point	Ajouter un point de limite
+	Add control point	Ajouter un point de contrôle
+	Add smaller unit	Ajouter une unité plus petite
+	Advanced unit formats	Formats d’unités avancés
+	Back to measurement	Revenir à la mesure
+	Boundary coordinates run from 0 to 1 across the viewport.	Les coordonnées de limite vont de 0 à 1 dans la zone de visualisation.
+	Boundary point	Point de limite
+	Change drawing scale	Modifier l’échelle du dessin
+	Choose a control point inside the viewport.	Choisissez un point de contrôle dans la zone de visualisation.
+	Choose a visible point on the model.	Choisissez un point visible sur le modèle.
+	Choose advanced unit formats first.	Choisissez d’abord les formats d’unités avancés.
+	Clear points	Effacer les points
+	Control point	Point de contrôle
+	Control points	Points de contrôle
+	Conversion factor	Facteur de conversion
+	Converts PDF user coordinates to easting, northing and elevation.	Convertit les coordonnées utilisateur PDF en coordonnées est, nord et altitude.
+	Datum accuracy	Précision du référentiel géodésique
+	Default view	Vue par défaut
+	Delete measurement	Supprimer la mesure
+	Denominator	Dénominateur
+	Diameter	Diamètre
+	Double-click also finishes a perimeter or area.	Un double-clic termine aussi un périmètre ou une surface.
+	Drag to orbit. Right or middle drag pans. Scroll zooms. Click the model to measure.	Faites glisser pour tourner. Avec le bouton droit ou central, faites glisser pour déplacer la vue. La molette zoome. Cliquez sur le modèle pour mesurer.
+	EPSG code	Code EPSG
+	Edit measurement	Modifier la mesure
+	Enable snapping	Activer l’accrochage
+	Enter known map coordinates for at least three page positions.	Saisissez les coordonnées cartographiques connues d’au moins trois positions sur la page.
+	Feet and inches uses ft as the scale unit.	Le format pieds et pouces utilise ft comme unité d’échelle.
+	Finish measurement	Terminer la mesure
+	Finished measurements appear here and are saved in the PDF.	Les mesures terminées apparaissent ici et sont enregistrées dans le PDF.
+	Fit model	Ajuster le modèle
+	Geographic	Géographique
+	Geospatial map	Carte géospatiale
+	Keep trailing zeros or denominator	Conserver les zéros finaux ou le dénominateur
+	Latitude	Latitude
+	Longitude	Longitude
+	Map accuracy	Précision de la carte
+	Map boundary	Limite de la carte
+	Map coordinate system	Système de coordonnées de la carte
+	Map coordinates	Coordonnées cartographiques
+	Map registration needs control points.	Le calage de la carte nécessite des points de contrôle.
+	Markup text	Texte de l’annotation
+	Measure 3D	Mesurer en 3D
+	Measure 3D model	Mesurer un modèle 3D
+	3D model	Modèle 3D
+	Measurement error	Erreur de mesure
+	Move unit down	Descendre l’unité
+	Move unit up	Monter l’unité
+	New viewport	Nouvelle zone de visualisation
+	Next	Suivant
+	No saved measurements in this view.	Aucune mesure enregistrée dans cette vue.
+	Number format	Format numérique
+	Pick page position	Choisir une position sur la page
+	Precision	Précision
+	Previous	Précédent
+	Projected	Projeté
+	Projected coordinate matrix	Matrice de coordonnées projetées
+	Quantity	Grandeur
+	Real length	Longueur réelle
+	Reference captured. Enter its real length below.	Référence capturée. Saisissez sa longueur réelle ci-dessous.
+	Reference length (page points)	Longueur de référence (points de la page)
+	Reference length must be positive.	La longueur de référence doit être positive.
+	Reference preview	Aperçu de la référence
+	Registration residual	Résidu de calage
+	Remove boundary point	Supprimer le point de limite
+	Remove control point	Supprimer le point de contrôle
+	Remove unit	Supprimer l’unité
+	Remove viewport	Supprimer la zone de visualisation
+	Retry	Réessayer
+	Save measurement	Enregistrer la mesure
+	Saved measurements keep their original scale.	Les mesures enregistrées conservent leur échelle d’origine.
+	Scale description	Description de l’échelle
+	Selected points: {n}	Points sélectionnés : {n}
+	Selected unit	Unité sélectionnée
+	Sensitivity (screen pixels)	Sensibilité (pixels à l’écran)
+	Separate display coordinate system	Système de coordonnées d’affichage distinct
+	Separate vertical units	Unités verticales distinctes
+	Show circle	Afficher le cercle
+	Snap	Accrochage
+	Automatic	Automatique
+	Vertex snapping	Accrochage aux sommets
+	Edge snapping	Accrochage aux arêtes
+	Surfaces	Surfaces
+	Silhouettes	Contours
+	Some soft masks or pattern paints need a visibility check before snapping.	Certains masques de transparence ou motifs nécessitent une vérification de visibilité avant l’accrochage.
+	The display datum transformation is approximate.	La transformation du référentiel d’affichage est approximative.
+	The measurement list reached its safety limit.	La liste des mesures a atteint sa limite de sécurité.
+	The model viewport is too narrow to display.	La zone du modèle est trop étroite pour l’affichage.
+	The selected scale could not be read.	Impossible de lire l’échelle sélectionnée.
+	This document does not allow measurement edits.	Ce document n’autorise pas la modification des mesures.
+	This page has no 3D models.	Cette page ne contient aucun modèle 3D.
+	Unit before value	Unité avant la valeur
+	Unit display format	Format d’affichage de l’unité
+	Units per model unit	Unités par unité du modèle
+	Units run from largest to smallest. Later factors convert the remainder.	Les unités vont de la plus grande à la plus petite. Les facteurs suivants convertissent le reste.
+	Update measurement	Mettre à jour la mesure
+	Updating 3D view…	Mise à jour de la vue 3D…
+	Use WKT definition	Utiliser une définition WKT
+	Use projected coordinate matrix	Utiliser une matrice de coordonnées projetées
+	Vertical to horizontal conversion	Conversion verticale vers horizontale
+	Vertices	Sommets
+	Viewport width and height must be positive.	La largeur et la hauteur de la zone doivent être positives.
+	WKT definition	Définition WKT
+	Perpendicular	Perpendiculaire
+	Radius / diameter	Rayon / diamètre
+	Choose the two endpoints.	Choisissez les deux extrémités.
+	Choose a point, then the two endpoints of a reference line.	Choisissez un point, puis les deux extrémités d’une ligne de référence.
+	Choose an endpoint, the angle vertex, then the other endpoint.	Choisissez une extrémité, le sommet de l’angle, puis l’autre extrémité.
+	Choose three points on the circle.	Choisissez trois points sur le cercle.
+	Cancel caption placement	Annuler le placement du libellé
+	Place caption	Placer le libellé
+	Reset caption	Réinitialiser le libellé
+	Text height (points)	Hauteur du texte (points)
+	Click the preview to place the caption on its measurement plane.	Cliquez dans l’aperçu pour placer le libellé sur son plan de mesure.
+	Extension length (points)	Longueur de prolongement (points)
+	Color	Couleur
+	Flip text up	Inverser le haut du texte

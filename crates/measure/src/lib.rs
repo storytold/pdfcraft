@@ -3,7 +3,15 @@
 //! annotations use the measurement intents of line, polygon and polyline annotations (§12.5.6).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod format;
+pub mod geo;
 pub mod snap;
+pub mod three_d;
+pub mod three_d_camera;
+pub mod three_d_raster;
+pub mod three_d_snap;
+pub mod viewports;
+pub use format::{Fraction, NumberFormat, NumberFormats};
 use pdfcraft_annot::{Meta, NewAnnotation, Shape, Style};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 use serde::Serialize;
@@ -69,6 +77,13 @@ pub struct Scale {
     pub area_unit: String,
     pub precision: u8,
     pub ratio: String,
+    pub formats: Option<NumberFormats>,
+    pub geospatial: Option<geo::GeoScale>,
+    /// Preserve unrecognized entries and original indirect number format arrays.
+    #[serde(skip)]
+    pub source: Option<Dict>,
+    #[serde(skip)]
+    pub source_formats: Option<NumberFormats>,
 }
 impl Default for Scale {
     fn default() -> Self {
@@ -81,6 +96,10 @@ impl Default for Scale {
             area_unit: "in^2".into(),
             precision: 2,
             ratio: "1 in = 1 in".into(),
+            formats: None,
+            geospatial: None,
+            source: None,
+            source_formats: None,
         }
     }
 }
@@ -95,6 +114,10 @@ impl Scale {
             area_unit: format!("{unit}^2"),
             precision,
             ratio: format!("1 pt = {units_per_user_unit} {unit}"),
+            formats: None,
+            geospatial: None,
+            source: None,
+            source_formats: None,
         };
         out.validate()?;
         Ok(out)
@@ -111,6 +134,21 @@ impl Scale {
         Self::new(real_distance / length, unit, precision)
     }
     pub fn validate(&self) -> Result<()> {
+        if let Some(geospatial) = &self.geospatial {
+            geospatial.validate()?;
+            if self.formats.is_some()
+                || self.unit != geospatial.linear_unit()
+                || self.area_unit != geospatial.area_unit()
+                || [self.x, self.y, self.distance_factor, self.area_factor].iter().any(|v| *v != 1.0)
+            {
+                return Err(invalid(
+                    "geospatial scales use their coordinate system and preferred display units; edit the registration instead of rectilinear factors",
+                ));
+            }
+        }
+        if let Some(formats) = &self.formats {
+            formats.validate()?;
+        }
         for f in [self.x, self.y, self.distance_factor, self.area_factor] {
             if !f.is_finite() || !(1e-12..=1e12).contains(&f) {
                 return Err(invalid("scale factors must be finite and between 1e-12 and 1e12"));
@@ -131,8 +169,85 @@ impl Scale {
         }
         Ok(())
     }
+    /// Apply the public numeric scale fields to the format arrays consistently.
+    /// A caller may edit these fields after importing a dictionary.
+    fn effective_formats(&self) -> Option<NumberFormats> {
+        let mut formats = self.formats.clone()?;
+        if let Some(f) = formats.x.first_mut() {
+            f.factor = self.x;
+        }
+        if let Some(f) = formats.distance.first_mut() {
+            f.factor = self.distance_factor;
+            f.unit = self.unit.clone();
+        }
+        if let Some(f) = formats.area.first_mut() {
+            f.factor = self.area_factor;
+            f.unit = self.area_unit.clone();
+        }
+        if let Some(f) = formats.y.as_mut().and_then(|y| y.first_mut()) {
+            f.factor = self.y / formats.cyx.unwrap_or(1.0);
+        } else if self.x != self.y {
+            let mut y = formats.x.clone();
+            if let Some(f) = y.first_mut() {
+                f.factor = self.y;
+            }
+            formats.y = Some(y);
+            formats.cyx = Some(1.0);
+        }
+        Some(formats)
+    }
     pub fn dictionary(&self) -> Result<Dict> {
         self.validate()?;
+        if let Some(geospatial) = &self.geospatial {
+            let mut dictionary = geospatial.dictionary();
+            dictionary.set(b"PCGeoPrecision".to_vec(), i64::from(self.precision));
+            return Ok(dictionary);
+        }
+        if let (Some(source), Some(formats), Some(original)) = (&self.source, &self.formats, &self.source_formats) {
+            let unchanged = formats == original
+                && text(source, b"R") == self.ratio
+                && formats.x.first().is_some_and(|f| f.factor == self.x)
+                && formats.distance.first().is_some_and(|f| f.factor == self.distance_factor && f.unit == self.unit)
+                && formats.area.first().is_some_and(|f| f.factor == self.area_factor && f.unit == self.area_unit)
+                && self.y == formats.y.as_ref().and_then(|f| f.first()).map(|f| f.factor * formats.cyx.unwrap_or(1.0)).unwrap_or(self.x);
+            if unchanged {
+                return Ok(source.clone());
+            }
+        }
+        if self.formats.is_some() {
+            let formats = self.effective_formats().ok_or_else(|| invalid("missing number formats"))?;
+            let mut d = self.source.clone().unwrap_or_default();
+            d.set(b"Type".to_vec(), Object::name("Measure"));
+            d.set(b"Subtype".to_vec(), Object::name("RL"));
+            d.set(b"R".to_vec(), PdfString::text(&self.ratio));
+            for (key, values) in [(b"X".as_slice(), &formats.x), (b"D", &formats.distance), (b"A", &formats.area)] {
+                let unchanged = self.source_formats.as_ref().is_some_and(|original| {
+                    let prior = match key {
+                        b"X" => &original.x,
+                        b"D" => &original.distance,
+                        _ => &original.area,
+                    };
+                    prior == values && d.contains(key)
+                });
+                if !unchanged {
+                    d.set(key.to_vec(), format::dictionary(values)?);
+                }
+            }
+            if let Some(y) = &formats.y {
+                if !self.source_formats.as_ref().is_some_and(|original| original.y.as_ref() == Some(y) && d.contains(b"Y")) {
+                    d.set(b"Y".to_vec(), format::dictionary(y)?);
+                }
+                if let Some(c) = formats.cyx {
+                    d.set(b"CYX".to_vec(), Object::Real(c));
+                } else {
+                    d.remove(b"CYX");
+                }
+            } else {
+                d.remove(b"Y");
+                d.remove(b"CYX");
+            }
+            return Ok(d);
+        }
         let format = |unit: &str, factor: f64| {
             let mut d = Dict::new();
             d.set(b"Type".to_vec(), Object::name("NumberFormat"));
@@ -144,6 +259,7 @@ impl Scale {
             }
             d.set(b"FD".to_vec(), Object::Bool(true));
             d.set(b"SS".to_vec(), PdfString::text(""));
+            d.set(b"RT".to_vec(), PdfString::text(""));
             Object::Array(vec![Object::Dict(d)])
         };
         let mut d = Dict::new();
@@ -159,46 +275,109 @@ impl Scale {
         d.set(b"A".to_vec(), format(&self.area_unit, self.area_factor));
         Ok(d)
     }
-    /// Single-unit decimal scales are editable. Compound/fractional and non-rectilinear
-    /// imports are refused explicitly; their dictionaries and appearance remain untouched.
+    /// Build a scale from the complete ISO number format arrays.
+    pub fn from_formats(formats: NumberFormats, ratio: &str) -> Result<Self> {
+        formats.validate()?;
+        fn first(values: &[NumberFormat]) -> Result<&NumberFormat> {
+            values.first().ok_or_else(|| invalid("empty number format"))
+        }
+        let x = first(&formats.x)?;
+        let distance = first(&formats.distance)?;
+        let area = first(&formats.area)?;
+        let y = match &formats.y {
+            Some(values) => first(values)?.factor * formats.cyx.unwrap_or(1.0),
+            None => x.factor,
+        };
+        let precision =
+            formats.distance.last().map(|f| if f.fraction == Fraction::Decimal { f.denominator.ilog10().min(6) as u8 } else { 0 }).unwrap_or(2);
+        let out = Self {
+            x: x.factor,
+            y,
+            unit: distance.unit.clone(),
+            distance_factor: distance.factor,
+            area_factor: area.factor,
+            area_unit: area.unit.clone(),
+            precision,
+            ratio: ratio.into(),
+            formats: Some(formats),
+            geospatial: None,
+            source: None,
+            source_formats: None,
+        };
+        out.validate()?;
+        Ok(out)
+    }
+    /// Edit the full format arrays without discarding imported vendor data or unchanged references.
+    pub fn with_formats(&self, formats: NumberFormats, ratio: &str) -> Result<Self> {
+        let mut out = Self::from_formats(formats, ratio)?;
+        if self.geospatial.is_none() {
+            out.source = self.source.clone();
+            out.source_formats = self.source_formats.clone();
+        }
+        Ok(out)
+    }
+    pub fn from_geo(geospatial: geo::GeoScale) -> Result<Self> {
+        let mut out = Self::new(1.0, "m", 2)?;
+        out.unit = geospatial.linear_unit().to_string();
+        out.area_unit = geospatial.area_unit().to_string();
+        out.ratio = "Geospatial map".into();
+        out.geospatial = Some(geospatial);
+        out.validate()?;
+        Ok(out)
+    }
+    pub fn read_in_viewport(doc: &Document, object: &Object, bbox: [f64; 4]) -> Result<Self> {
+        let resolved = doc.resolve(object);
+        if let Some(d) = resolved.as_dict().filter(|d| d.name(b"Subtype") == Some(b"GEO")) {
+            let mut out = Self::from_geo(geo::GeoScale::read(doc, d, bbox)?)?;
+            if let Some(value) = d.get(b"PCGeoPrecision") {
+                out.precision = doc
+                    .resolve(value)
+                    .as_int()
+                    .and_then(|n| u8::try_from(n).ok())
+                    .filter(|n| *n <= 6)
+                    .ok_or_else(|| invalid("invalid geospatial precision"))?;
+            }
+            return Ok(out);
+        }
+        Self::read(doc, object)
+    }
+    /// Read compound, decimal, fractional, rounded and truncated rectilinear formats.
+    /// Keep the original dictionary so unknown data and indirect references survive.
     pub fn read(doc: &Document, object: &Object) -> Result<Self> {
         let o = doc.resolve(object);
         let d = o.as_dict().ok_or_else(|| invalid("invalid measure dictionary"))?;
+        if d.name(b"Subtype") == Some(b"GEO") {
+            let bbox = d
+                .get(b"PCGeoBBox")
+                .map(|o| doc.resolve(o))
+                .and_then(|o| o.as_array().filter(|a| a.len() == 4).and_then(|a| a.iter().map(Object::as_f64).collect::<Option<Vec<_>>>()))
+                .and_then(|a| <[f64; 4]>::try_from(a).ok())
+                .ok_or_else(|| invalid("geospatial measure needs its originating viewport bounds"))?;
+            let mut out = Self::from_geo(geo::GeoScale::read(doc, d, bbox)?)?;
+            if let Some(value) = d.get(b"PCGeoPrecision") {
+                out.precision = doc
+                    .resolve(value)
+                    .as_int()
+                    .and_then(|n| u8::try_from(n).ok())
+                    .filter(|n| *n <= 6)
+                    .ok_or_else(|| invalid("invalid geospatial precision"))?;
+            }
+            return Ok(out);
+        }
         if d.name(b"Subtype").is_some_and(|n| n != b"RL") {
             return Err(invalid("only rectilinear measurement scales are supported"));
         }
-        let format = |key: &[u8]| -> Result<(String, f64, u8)> {
-            let a = doc.resolve(d.get(key).ok_or_else(|| invalid("measurement scale lacks a number format"))?);
-            let a = a.as_array().ok_or_else(|| invalid("invalid measurement number format"))?;
-            if a.len() != 1 {
-                return Err(invalid("compound measurement units are not supported yet"));
-            }
-            let o = doc.resolve(a.first().ok_or_else(|| invalid("empty number format"))?);
-            let f = o.as_dict().ok_or_else(|| invalid("invalid number format dictionary"))?;
-            let precision = match f.name(b"F") {
-                Some(b"R") => 0,
-                None | Some(b"D") => {
-                    let denom = f.int(b"D").unwrap_or(100);
-                    (0..=6).find(|p| 10_i64.pow(*p) == denom).ok_or_else(|| invalid("unsupported measurement precision"))?
-                }
-                _ => return Err(invalid("fractional measurement formats are not supported yet")),
-            };
-            Ok((text(f, b"U"), f.get(b"C").and_then(Object::as_f64).ok_or_else(|| invalid("missing conversion factor"))?, precision as u8))
+        let read = |key: &[u8]| format::read_array(doc, d.get(key).ok_or_else(|| invalid("measurement scale lacks a number format"))?);
+        let formats = NumberFormats {
+            x: read(b"X")?,
+            y: if d.contains(b"Y") { Some(read(b"Y")?) } else { None },
+            distance: read(b"D")?,
+            area: read(b"A")?,
+            cyx: d.get(b"CYX").map(|o| doc.resolve(o)).and_then(|o| o.as_f64()),
         };
-        let (unit, x, _) = format(b"X")?;
-        let y = if d.contains(b"Y") {
-            let (_, y, _) = format(b"Y")?;
-            y * d.get(b"CYX").and_then(Object::as_f64).ok_or_else(|| invalid("Y scale requires CYX for lengths and areas"))?
-        } else {
-            x
-        };
-        let (distance_unit, distance_factor, precision) = format(b"D")?;
-        if unit != distance_unit {
-            return Err(invalid("different coordinate and distance units are not supported yet"));
-        }
-        let (area_unit, area_factor, _) = format(b"A")?;
-        let out = Self { x, y, unit, distance_factor, area_factor, area_unit, precision, ratio: text(d, b"R") };
-        out.validate()?;
+        let mut out = Self::from_formats(formats, &text(d, b"R"))?;
+        out.source_formats = out.formats.clone();
+        out.source = Some(d.clone());
         Ok(out)
     }
 }
@@ -220,14 +399,21 @@ pub struct Reading {
     pub label: String,
     pub delta_x: f64,
     pub delta_y: f64,
+    pub delta_x_label: String,
+    pub delta_y_label: String,
     pub angle: f64,
+    pub angle_label: String,
     pub length: f64,
     pub area: f64,
+    pub geospatial: Option<geo::GeoReading>,
 }
 /// Live reading allows incomplete paths; adding a saved annotation validates its vertex count.
 pub fn reading(kind: Kind, points: &[Point], scale: &Scale) -> Result<Reading> {
     check_points(points)?;
     scale.validate()?;
+    if let Some(geospatial) = &scale.geospatial {
+        return geospatial.reading(kind, points, scale.precision);
+    }
     let mut length = 0.0;
     for w in points.windows(2) {
         if let [a, b] = w {
@@ -256,11 +442,41 @@ pub fn reading(kind: Kind, points: &[Point], scale: &Scale) -> Result<Reading> {
     length *= scale.distance_factor;
     let value = if kind == Kind::Area { area } else { length };
     let unit = if kind == Kind::Area { scale.area_unit.clone() } else { scale.unit.clone() };
-    let label = format!("{value:.precision$} {unit}", precision = usize::from(scale.precision));
+    let label = match scale.effective_formats() {
+        Some(formats) => format::label(value, if kind == Kind::Area { &formats.area } else { &formats.distance })?,
+        None => format::label(value, &[NumberFormat::decimal(&unit, 1.0, scale.precision)])?,
+    };
     if !value.is_finite() {
         return Err(invalid("measurement overflows its scale"));
     }
-    Ok(Reading { kind, value, unit, label, delta_x: delta[0], delta_y: delta[1], angle: delta[1].atan2(delta[0]).to_degrees(), length, area })
+    let (delta_x_label, delta_y_label) = match scale.effective_formats() {
+        Some(formats) => (
+            format::label(delta[0], &formats.x)?,
+            match &formats.y {
+                Some(y) => format::label(delta[1] / formats.cyx.unwrap_or(1.0), y)?,
+                None => format::label(delta[1], &formats.x)?,
+            },
+        ),
+        None => (
+            format::label(delta[0], &[NumberFormat::decimal(&scale.unit, 1.0, scale.precision)])?,
+            format::label(delta[1], &[NumberFormat::decimal(&scale.unit, 1.0, scale.precision)])?,
+        ),
+    };
+    Ok(Reading {
+        kind,
+        value,
+        unit,
+        label,
+        delta_x: delta[0],
+        delta_y: delta[1],
+        delta_x_label,
+        delta_y_label,
+        angle: delta[1].atan2(delta[0]).to_degrees(),
+        angle_label: format!("{:.2}°", delta[1].atan2(delta[0]).to_degrees()),
+        length,
+        area,
+        geospatial: None,
+    })
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct NewMeasurement {
@@ -326,6 +542,7 @@ fn annot(doc: &Document, page_index: usize, index: usize) -> Result<(ObjRef, Dic
 pub fn add(doc: &mut Document, new: &NewMeasurement, meta: &Meta) -> Result<usize> {
     validate_geometry(new.kind, &new.points)?;
     let info = reading(new.kind, &new.points, &new.scale)?;
+    let caption = pdfcraft_fonts::caption_outline(&info.label).map_err(|error| invalid(&error))?;
     if info.value <= 0.0 {
         return Err(invalid("measurement must have a positive length or area"));
     }
@@ -352,6 +569,12 @@ pub fn add(doc: &mut Document, new: &NewMeasurement, meta: &Meta) -> Result<usiz
     d.set(b"Subj".to_vec(), PdfString::text(new.kind.name()));
     d.set(b"PCMeasureLabel".to_vec(), PdfString::text(&new.label));
     d.set(b"PCMeasureValue".to_vec(), PdfString::text(&info.label));
+    if new.scale.geospatial.is_some() {
+        let mut data = Dict::new();
+        data.set(b"Type".to_vec(), Object::name("ExData"));
+        data.set(b"Subtype".to_vec(), Object::name("MarkupGeo"));
+        d.set(b"ExData".to_vec(), data);
+    }
     if new.kind == Kind::Distance {
         d.set(b"LE".to_vec(), Object::Array(vec![Object::name("OpenArrow"), Object::name("OpenArrow")]));
         d.set(b"Cap".to_vec(), Object::Bool(true));
@@ -361,9 +584,10 @@ pub fn add(doc: &mut Document, new: &NewMeasurement, meta: &Meta) -> Result<usiz
     if let Some(rect) = d.get(b"Rect").and_then(Object::as_array) {
         let values: Option<Vec<f64>> = rect.iter().map(Object::as_f64).collect();
         if let Some(v) = values.filter(|v| v.len() == 4) {
-            let width = (info.label.len() as f64 * 6.0).max(40.0);
+            let b = caption.bounds();
+            let width = ((b[2] - b[0]) * 11.0 + 12.0).max(40.0);
             let cx = (v[0] + v[2]) * 0.5;
-            d.set(b"Rect".to_vec(), nums([v[0].min(cx - width / 2.0), v[1], v[2].max(cx + width / 2.0), v[3] + 16.0]));
+            d.set(b"Rect".to_vec(), nums([v[0].min(cx - width / 2.0), v[1], v[2].max(cx + width / 2.0), v[3] + 20.0]));
         }
     }
     doc.update_dict(r, |target| *target = d).map_err(|e| invalid(&e.to_string()))?;
@@ -462,26 +686,29 @@ pub fn scale_at(doc: &Document, page_index: usize, at: Point) -> Result<Scale> {
                     && at[1] >= b[1].min(b[3])
                     && at[1] <= b[1].max(b[3])
                 {
-                    return Scale::read(doc, d.get(b"Measure").ok_or_else(|| invalid("viewport has no measurement scale"))?);
+                    return Scale::read_in_viewport(
+                        doc,
+                        d.get(b"Measure").ok_or_else(|| invalid("viewport has no measurement scale"))?,
+                        [b[0], b[1], b[2], b[3]],
+                    );
                 }
             }
         }
     }
     let user_unit = p.dict.get(b"UserUnit").and_then(Object::as_f64).unwrap_or(1.0);
-    Scale::new(user_unit / 72.0, "in", 2)
+    let mut scale = Scale::default();
+    scale.x = user_unit / 72.0;
+    scale.y = scale.x;
+    scale.validate()?;
+    Ok(scale)
 }
 /// Add a named rectangular viewport. Existing viewports are preserved in drawing order.
 pub fn set_scale(doc: &mut Document, page_index: usize, bbox: [f64; 4], name: &str, scale: &Scale) -> Result<()> {
     check_points(&[[bbox[0], bbox[1]], [bbox[2], bbox[3]]])?;
-    if bbox[2] <= bbox[0] || bbox[3] <= bbox[1] || name.len() > 256 {
+    if bbox[2] <= bbox[0] || bbox[3] <= bbox[1] || name.len() > 256 || name.chars().any(char::is_control) {
         return Err(invalid("viewport needs a positive rectangle and a name of at most 256 bytes"));
     }
-    let p = page(doc, page_index)?;
-    let vp = p.dict.get(b"VP");
-    let mut list = match vp {
-        Some(o) => doc.resolve(o).as_array().cloned().ok_or_else(|| invalid("invalid page viewports"))?,
-        None => Vec::new(),
-    };
+    let mut list = viewports::array(doc, page_index)?;
     if list.len() >= 1024 {
         return Err(invalid("page has too many measurement viewports"));
     }
@@ -491,11 +718,7 @@ pub fn set_scale(doc: &mut Document, page_index: usize, bbox: [f64; 4], name: &s
     d.set(b"Name".to_vec(), PdfString::text(name));
     d.set(b"Measure".to_vec(), Object::Dict(scale.dictionary()?));
     list.push(Object::Dict(d));
-    // An indirect /VP array stays indirect (it may be shared); otherwise the page holds it.
-    match vp.and_then(Object::as_ref) {
-        Some(r) => doc.set(r, Object::Array(list)),
-        None => doc.update_dict(p.obj, |d| d.set(b"VP".to_vec(), Object::Array(list))).map_err(|e| invalid(&e.to_string()))?,
-    }
+    viewports::write(doc, page_index, list)?;
     Ok(())
 }
 pub fn csv(measurements: &[Measurement]) -> String {

@@ -13,5 +13,11 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-annot = { workspace = true }
+pdfcraft-fonts = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+
+# Pure Rust projection and ellipsoidal geodesic engines; no native PROJ dependency.
+proj-core = { version = "=0.11.0", default-features = false }
+proj-wkt = "=0.11.0"
+geographiclib-rs = "=0.2.7"

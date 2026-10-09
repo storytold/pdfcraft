@@ -52,3 +52,9 @@ dependencies change (plan/adr/0002, 0006).
 Vendored (vendor/, patched; see vendor/README.md):
 - hayro 0.7.1 — Apache-2.0 OR MIT, Copyright the hayro authors (licence files kept in vendor/hayro).
 - hayro-interpret 0.7.0 — Apache-2.0 OR MIT, Copyright the hayro authors (LICENSE-APACHE, LICENSE-MIT kept in vendor/hayro-interpret).
+
+Geospatial coordinate system registry bundled by proj-core 0.11.0:
+  Roteiro GIS contributors, MIT OR Apache-2.0. The registry is generated from PROJ 9.6.2
+  proj.db. PROJ source and data files are under its MIT style licence. See
+  vendor/licenses/LICENSE-proj-core-MIT.txt and vendor/licenses/LICENSE-PROJ.txt.
+  The bundled provenance records the source database versions and generated data checksum.

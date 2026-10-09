@@ -2108,3 +2108,51 @@ fn comments_without_appearances_are_drawn_but_not_saved() {
         assert!(reopened.get(r).as_dict().is_some_and(|d| !d.contains(b"AP")), "{r:?} is saved without /AP");
     }
 }
+
+#[test]
+fn measurement_viewport_edits_undo_redo_and_reject_permissions() {
+    let mut s = Session::default();
+    let id = s.open("plan.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    let scale = measure::Scale::new(0.1, "m", 2).unwrap();
+    s.apply(id, Edit::SetMeasurementScale { page: 0, bbox: [0.0, 0.0, 100.0, 100.0], name: "Plan".into(), scale: scale.clone() }).unwrap();
+    let before = s.get(id).unwrap().bytes.clone();
+    let edit = Edit::UpdateMeasurementViewport {
+        page: 0,
+        index: 0,
+        bbox: [0.0, 0.0, 150.0, 100.0],
+        name: "Detail".into(),
+        scale: measure::Scale::new(0.2, "m", 2).unwrap(),
+    };
+    let p = pdfcraft_cos::Permissions { bits: 0, owner: false };
+    assert_eq!(check_permission(&edit, &p), Err(EditError::NotPermitted("comments")));
+    assert_eq!(check_permission(&Edit::RemoveMeasurementViewport { page: 0, index: 0 }, &p), Err(EditError::NotPermitted("comments")));
+    let measurement = measure::three_d::Measurement::from_points(
+        measure::three_d::Kind::Linear,
+        &[[0.; 3], [3., 4., 0.]],
+        &measure::three_d::Units::default(),
+        [0., 0., 1.],
+        false,
+    )
+    .unwrap();
+    let new = measure::three_d::NewMeasurement { page: 0, annotation: 0, view: None, measurement, camera: None };
+    for edit in [
+        Edit::AddThreeDMeasurement(new.clone()),
+        Edit::UpdateThreeDMeasurement { measurement: new, index: 0 },
+        Edit::RemoveThreeDMeasurement { page: 0, annotation: 0, view: None, index: 0 },
+    ] {
+        assert_eq!(check_permission(&edit, &p), Err(EditError::NotPermitted("comments")));
+    }
+
+    s.apply(id, edit).unwrap();
+    assert_eq!(s.get(id).unwrap().measurement_viewports(0).unwrap()[0].name, "Detail");
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().bytes, before);
+    s.redo(id).unwrap();
+    s.apply(id, Edit::RemoveMeasurementViewport { page: 0, index: 0 }).unwrap();
+    assert!(s.get(id).unwrap().measurement_viewports(0).unwrap().is_empty());
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().measurement_viewports(0).unwrap()[0].name, "Detail");
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = s.open("saved.pdf", None, saved, None).unwrap();
+    assert_eq!(s.get(reopened).unwrap().measurement_viewports(0).unwrap()[0].scale.as_ref().unwrap().x, 0.2);
+}

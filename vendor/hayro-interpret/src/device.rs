@@ -6,6 +6,10 @@ use kurbo::{Affine, BezPath, Rect, Shape};
 
 /// A trait for a device that can be used to process PDF drawing instructions.
 pub trait Device<'a> {
+    /// PdfCraft patch: let bounded analysis devices stop interpretation between
+    /// instructions and glyphs. Rendering devices continue by default.
+    fn should_continue(&mut self) -> bool { true }
+
     /// Set the properties for future stroking operations.
     /// Set a soft mask to be used for future drawing instructions.
     fn set_soft_mask(&mut self, mask: Option<SoftMask<'a>>);

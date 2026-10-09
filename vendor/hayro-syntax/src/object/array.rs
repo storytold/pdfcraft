@@ -31,6 +31,12 @@ impl<'a> Array<'a> {
         ArrayIter::new(self.data, &self.ctx)
     }
 
+    /// PdfCraft patch: resolve every entry without ending at an invalid reference.
+    /// Callers can bound work by counting entries, including unresolved references.
+    pub fn resolved_entries(&self) -> impl Iterator<Item = Option<Object<'a>>> + '_ {
+        self.raw_iter().map(|object| object.resolve(&self.ctx))
+    }
+
     /// Returns an iterator over the resolved objects of the array.
     #[allow(
         private_bounds,

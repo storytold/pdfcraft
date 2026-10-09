@@ -30,7 +30,7 @@ pub(crate) fn show_text_string<'a>(
 
     let mut cur_idx = 0;
 
-    while cur_idx < bytes.len() {
+    while cur_idx < bytes.len() && device.should_continue() {
         let (code, adv) = font.read_code(bytes, cur_idx);
         cur_idx += adv;
 

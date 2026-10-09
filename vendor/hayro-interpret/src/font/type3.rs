@@ -141,7 +141,7 @@ impl<'a> Type3<'a> {
 
         let name = self.glyph_simulator.glyph_to_string(glyph.glyph_id)?;
         let program = self.char_procs.get(&name)?;
-        let decoded = program.decoded().ok()?;
+        let decoded = interpret::decode_content(program, glyph.settings.content_decoder.as_ref())?;
         let iter = TypedIter::new(decoded.as_ref());
 
         let is_shape_glyph = {
@@ -149,6 +149,7 @@ impl<'a> Type3<'a> {
             let mut is_shape_glyph = true;
 
             while let Some(op) = iter.next() {
+                if !device.should_continue() { return None; }
                 match op {
                     TypedInstruction::ShapeGlyph(_) => {
                         break;
@@ -217,6 +218,9 @@ impl<'a, 'b, T: Device<'a>> Type3ShapeGlyphDevice<'a, 'b, T> {
 
 // Only filling, stroking of paths and stencil masks are allowed.
 impl<'a, T: Device<'a>> Device<'a> for Type3ShapeGlyphDevice<'a, '_, T> {
+    // PdfCraft patch: wrappers must forward the shared extraction work budget.
+    fn should_continue(&mut self) -> bool { self.inner.should_continue() }
+
     fn set_soft_mask(&mut self, m: Option<SoftMask<'a>>) {
         self.inner.set_soft_mask(m);
     }

@@ -612,23 +612,40 @@ pub fn build(d: &Dict) -> Option<Stream> {
     let mut out = c.into_bytes();
     if let Some(value) = d.get(b"PCMeasureValue").and_then(Object::as_string) {
         let value = value.to_text();
-        if value.chars().count() <= 256 && matches!(subtype.as_slice(), b"Line" | b"PolyLine" | b"Polygon") {
-            let size = 10.0;
-            let x = (rect[0] + rect[2] - text_width(&value, size)) * 0.5;
-            let y = rect[3] - 12.0;
-            let col = stroke.unwrap_or([0.0, 0.47, 0.84]);
-            out.extend(format!("{}BT /Helv {} Tf {} {} Td ", rg(col), n(size), n(x), n(y)).bytes());
-            // WinAnsi bytes (e.g. 0xB2 for "²") go into the stream as-is, not through UTF-8.
-            out.extend(literal(&win_ansi(&value)));
-            out.extend_from_slice(b" Tj ET\n");
-            let mut font = Dict::new();
-            font.set(b"Type".to_vec(), Object::name("Font"));
-            font.set(b"Subtype".to_vec(), Object::name("Type1"));
-            font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
-            font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-            let mut fonts = Dict::new();
-            fonts.set(b"Helv".to_vec(), Object::Dict(font));
-            res.set(b"Font".to_vec(), Object::Dict(fonts));
+        if matches!(subtype.as_slice(), b"Line" | b"PolyLine" | b"Polygon") {
+            let caption = pdfcraft_fonts::caption_outline(&value).ok()?;
+            let size = 11.0;
+            let bounds = caption.bounds();
+            let width = (bounds[2] - bounds[0]) * size;
+            let height = (bounds[3] - bounds[1]) * size;
+            let x = (rect[0] + rect[2] - width) * 0.5 - bounds[0] * size;
+            let y = rect[3] - 4.0 - bounds[3] * size;
+            // A solid backing and independent dark ink keep the value readable over drawings,
+            // in every viewer, even when the measurement path is restyled to a pale colour.
+            out.extend(
+                format!(
+                    "q 1 1 1 rg {} {} {} {} re f 0.08 0.1 0.14 rg\n",
+                    n(x + bounds[0] * size - 4.0),
+                    n(y + bounds[1] * size - 3.0),
+                    n(width + 8.0),
+                    n(height + 6.0)
+                )
+                .bytes(),
+            );
+            // Preserve the exact Unicode caption for accessibility/text extraction while
+            // drawing original glyph outlines from fonts already approved for this build.
+            let actual_text = PdfString::text(&value);
+            let hex: String = actual_text.bytes.iter().map(|byte| format!("{byte:02X}")).collect();
+            out.extend(format!("/Span << /ActualText <{hex}> >> BDC\n").bytes());
+            for contour in caption.contours {
+                let Some(first) = contour.first() else { continue };
+                out.extend(format!("{} {} m\n", n(x + first[0] * size), n(y + first[1] * size)).bytes());
+                for p in contour.iter().skip(1) {
+                    out.extend(format!("{} {} l\n", n(x + p[0] * size), n(y + p[1] * size)).bytes());
+                }
+                out.extend_from_slice(b"h\n");
+            }
+            out.extend_from_slice(b"f EMC Q\n");
         }
     }
     Some(form(rect, &out, res))

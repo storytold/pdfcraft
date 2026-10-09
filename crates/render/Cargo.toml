@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 pdfcraft-fonts = { workspace = true }
+pdfcraft-cos = { workspace = true }
 hayro = { workspace = true }
 hayro-syntax = { workspace = true }
 lopdf = { workspace = true }

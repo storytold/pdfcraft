@@ -18,6 +18,10 @@ pub struct Geometry {
     pub truncated: bool,
     /// Content streams that couldn't be decoded and were skipped.
     pub unreadable: usize,
+    /// Soft masks and pattern paints whose visibility needs further evaluation.
+    pub visibility_limited: usize,
+    pub glyphs: usize,
+    pub images: usize,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]

@@ -11,3 +11,9 @@ L3/L4 crates need:
 
 `organize`, `annot` and `forms` still carry their own small walkers; they move here as the model
 grows (ADR-0004).
+
+## Embedded 3D geometry
+
+`three_d::Scene` decodes U3D meshes, point sets and line sets, including raw and compressed geometry, indexed normal/color pools and assembly transforms. Instances retain visibility; model-space accessors resolve actual transformed triangles, lines and points. Surface ray picking honors depth and face visibility.
+
+The decoder bounds block lengths, record allocations, arithmetic/topology work and object graph traversal across the complete scene. Errors never return a partial scene. The normal prediction convention is explicit because published coordinate differences and the observed reference writer's rotations can give different valid results for the same bytes. Contributor-original compressed/raw fixtures are checked against an independent reader's public APIs; no reference implementation algorithms are incorporated.

@@ -1994,3 +1994,122 @@
 	Created a PDF from {n} files; left out: {names}	PDF создан из файлов: {n}; пропущены: {names}
 	Created a PDF from the first {n} files	PDF создан из первых файлов: {n}
 	Go to page…	Перейти на страницу…
+	3D model canvas	Область 3D-модели
+	3D models on this page	3D-модели на этой странице
+	Add boundary point	Добавить точку границы
+	Add control point	Добавить контрольную точку
+	Add smaller unit	Добавить меньшую единицу
+	Advanced unit formats	Расширенные форматы единиц
+	Back to measurement	Вернуться к измерению
+	Boundary coordinates run from 0 to 1 across the viewport.	Координаты границы меняются от 0 до 1 в области просмотра.
+	Boundary point	Точка границы
+	Change drawing scale	Изменить масштаб чертежа
+	Choose a control point inside the viewport.	Выберите контрольную точку внутри области просмотра.
+	Choose a visible point on the model.	Выберите видимую точку на модели.
+	Choose advanced unit formats first.	Сначала выберите расширенные форматы единиц.
+	Clear points	Очистить точки
+	Control point	Контрольная точка
+	Control points	Контрольные точки
+	Conversion factor	Коэффициент пересчёта
+	Converts PDF user coordinates to easting, northing and elevation.	Преобразует пользовательские координаты PDF в восточную и северную координаты и высоту.
+	Datum accuracy	Точность геодезической системы
+	Default view	Вид по умолчанию
+	Delete measurement	Удалить измерение
+	Denominator	Знаменатель
+	Diameter	Диаметр
+	Double-click also finishes a perimeter or area.	Двойной щелчок также завершает измерение периметра или площади.
+	Drag to orbit. Right or middle drag pans. Scroll zooms. Click the model to measure.	Перетаскивайте для вращения. Правая или средняя кнопка перемещает вид. Колесо меняет масштаб. Щёлкните по модели для измерения.
+	EPSG code	Код EPSG
+	Edit measurement	Изменить измерение
+	Enable snapping	Включить привязку
+	Enter known map coordinates for at least three page positions.	Введите известные координаты карты для не менее трёх позиций на странице.
+	Feet and inches uses ft as the scale unit.	Формат футов и дюймов использует ft как единицу масштаба.
+	Finish measurement	Завершить измерение
+	Finished measurements appear here and are saved in the PDF.	Завершённые измерения появляются здесь и сохраняются в PDF.
+	Fit model	Вписать модель
+	Geographic	Географическая
+	Geospatial map	Геопространственная карта
+	Keep trailing zeros or denominator	Сохранять конечные нули или знаменатель
+	Latitude	Широта
+	Longitude	Долгота
+	Map accuracy	Точность карты
+	Map boundary	Граница карты
+	Map coordinate system	Система координат карты
+	Map coordinates	Координаты карты
+	Map registration needs control points.	Для привязки карты нужны контрольные точки.
+	Markup text	Текст разметки
+	Measure 3D	Измерение в 3D
+	Measure 3D model	Измерить 3D-модель
+	3D model	3D-модель
+	Measurement error	Ошибка измерения
+	Move unit down	Переместить единицу вниз
+	Move unit up	Переместить единицу вверх
+	New viewport	Новая область просмотра
+	Next	Далее
+	No saved measurements in this view.	В этом виде нет сохранённых измерений.
+	Number format	Числовой формат
+	Pick page position	Выбрать позицию на странице
+	Precision	Точность
+	Previous	Назад
+	Projected	Проекционная
+	Projected coordinate matrix	Матрица проекционных координат
+	Quantity	Величина
+	Real length	Реальная длина
+	Reference captured. Enter its real length below.	Эталон выбран. Введите его реальную длину ниже.
+	Reference length (page points)	Длина эталона (пункты страницы)
+	Reference length must be positive.	Длина эталона должна быть положительной.
+	Reference preview	Предпросмотр эталона
+	Registration residual	Остаточная ошибка привязки
+	Remove boundary point	Удалить точку границы
+	Remove control point	Удалить контрольную точку
+	Remove unit	Удалить единицу
+	Remove viewport	Удалить область просмотра
+	Retry	Повторить
+	Save measurement	Сохранить измерение
+	Saved measurements keep their original scale.	Сохранённые измерения сохраняют исходный масштаб.
+	Scale description	Описание масштаба
+	Selected points: {n}	Выбрано точек: {n}
+	Selected unit	Выбранная единица
+	Sensitivity (screen pixels)	Чувствительность (пиксели экрана)
+	Separate display coordinate system	Отдельная система координат отображения
+	Separate vertical units	Отдельные вертикальные единицы
+	Show circle	Показать окружность
+	Snap	Привязка
+	Automatic	Автоматически
+	Vertex snapping	Привязка к вершинам
+	Edge snapping	Привязка к рёбрам
+	Surfaces	Поверхности
+	Silhouettes	Силуэты
+	Some soft masks or pattern paints need a visibility check before snapping.	Для некоторых мягких масок или заливок узором требуется проверка видимости перед привязкой.
+	The display datum transformation is approximate.	Преобразование геодезической системы отображения приблизительное.
+	The measurement list reached its safety limit.	Список измерений достиг предельного размера.
+	The model viewport is too narrow to display.	Область модели слишком узкая для отображения.
+	The selected scale could not be read.	Не удалось прочитать выбранный масштаб.
+	This document does not allow measurement edits.	Этот документ не разрешает изменение измерений.
+	This page has no 3D models.	На этой странице нет 3D-моделей.
+	Unit before value	Единица перед значением
+	Unit display format	Формат отображения единицы
+	Units per model unit	Единиц на единицу модели
+	Units run from largest to smallest. Later factors convert the remainder.	Единицы идут от большей к меньшей. Последующие коэффициенты пересчитывают остаток.
+	Update measurement	Обновить измерение
+	Updating 3D view…	Обновление 3D-вида…
+	Use WKT definition	Использовать определение WKT
+	Use projected coordinate matrix	Использовать матрицу проекционных координат
+	Vertical to horizontal conversion	Пересчёт вертикальных единиц в горизонтальные
+	Vertices	Вершины
+	Viewport width and height must be positive.	Ширина и высота области просмотра должны быть положительными.
+	WKT definition	Определение WKT
+	Perpendicular	Перпендикуляр
+	Radius / diameter	Радиус / диаметр
+	Choose the two endpoints.	Выберите две конечные точки.
+	Choose a point, then the two endpoints of a reference line.	Выберите точку, затем два конца опорной линии.
+	Choose an endpoint, the angle vertex, then the other endpoint.	Выберите конец, вершину угла, затем второй конец.
+	Choose three points on the circle.	Выберите три точки на окружности.
+	Cancel caption placement	Отменить размещение подписи
+	Place caption	Разместить подпись
+	Reset caption	Сбросить подпись
+	Text height (points)	Высота текста (пункты)
+	Click the preview to place the caption on its measurement plane.	Щёлкните в предпросмотре, чтобы разместить подпись в плоскости измерения.
+	Extension length (points)	Длина выноски (пункты)
+	Color	Цвет
+	Flip text up	Перевернуть направление текста

@@ -109,6 +109,9 @@ impl<'a> Stream<'a> {
         }
     }
 
+    /// PdfCraft patch: inspect the stored size before any decryption allocation.
+    pub fn stored_len(&self) -> usize { self.data.len() }
+
     /// Return the raw, decrypted data of the stream.
     ///
     /// Stream filters will not be applied.

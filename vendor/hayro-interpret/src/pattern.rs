@@ -248,7 +248,7 @@ impl<'a> TilingPattern<'a> {
             self.nesting_depth,
         );
 
-        let decoded = self.stream.decoded().ok()?;
+        let decoded = interpret::decode_content(&self.stream, self.settings.content_decoder.as_ref())?;
         let resources = Resources::from_parent(
             self.stream.dict().get(RESOURCES).unwrap_or_default(),
             self.parent_resources.clone(),
@@ -302,6 +302,9 @@ impl<'a, 'b, T: Device<'a>> StencilPatternDevice<'a, 'b, T> {
 
 // Only filling, stroking of paths and stencil masks are allowed.
 impl<'a, T: Device<'a>> Device<'a> for StencilPatternDevice<'a, '_, T> {
+    // PdfCraft patch: wrappers must forward the shared extraction work budget.
+    fn should_continue(&mut self) -> bool { self.inner.should_continue() }
+
     fn draw_path(
         &mut self,
         path: &BezPath,

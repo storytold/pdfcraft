@@ -1968,3 +1968,169 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	選擇 PNG 或 JPEG 圖像（最大 4 MiB）。透明度會保留。
 	Couldn't import the signature image: {e}	無法匯入簽名圖像：{e}
 	Go to page…	轉到頁面…
+
+# Measurement workflow and number formats
+	Click two points to measure a distance.	點擊兩點以量測距離。
+	Click each vertex. Enter finishes the perimeter.	依序點擊各頂點，按 Enter 完成周長量測。
+	Click the boundary. Enter or the first point closes the area.	點擊邊界，按 Enter 或點擊起點閉合區域。
+	Click the ends of a known reference length.	點擊已知長度參考線的兩端。
+	Choose a tool to start measuring.	選擇工具開始量測。
+	Double-click also finishes a perimeter or area.	按兩下也可完成周長或面積量測。
+	This document does not allow measurement edits.	此文件不允許編輯量測。
+	Vertices	頂點
+	Finish measurement	完成量測
+	Enable snapping	啟用吸附
+	Sensitivity (screen pixels)	靈敏度（螢幕像素）
+	Saved measurements keep their original scale.	已儲存的量測保留原有比例。
+	Reference captured. Enter its real length below.	已取得參考線，請在下方輸入實際長度。
+	Reference length (page points)	參考長度（頁面點）
+	Real length	實際長度
+	Number format	數值格式
+	Fraction	分數
+	Feet and inches	英呎與英吋
+	Rounded	四捨五入
+	Truncated	截斷
+	Decimal	小數
+	Denominator	分母
+	New viewport	新增檢視區
+	Remove viewport	移除檢視區
+	Measurement error	量測錯誤
+	Finished measurements appear here and are saved in the PDF.	完成的量測顯示於此，並儲存在 PDF 中。
+	The measurement list reached its safety limit.	量測清單已達到安全上限。
+	Reference length must be positive.	參考長度必須為正數。
+	Feet and inches uses ft as the scale unit.	英呎與英吋格式使用 ft 作為比例單位。
+	The selected scale could not be read.	無法讀取所選比例。
+	Back to measurement	返回量測
+	Change drawing scale	變更圖面比例
+	Edit measurement viewport	編輯量測檢視區
+	Remove measurement viewport	移除量測檢視區
+	Previous	上一頁
+	Next	下一頁
+	Some soft masks or pattern paints need a visibility check before snapping.	部分軟遮罩或圖樣填色需要在吸附前檢查可見性。
+	Azimuth	方位角
+	Map coordinates	地圖座標
+	Latitude	緯度
+	Longitude	經度
+	The display datum transformation is approximate.	顯示座標的基準轉換為近似值。
+	Map accuracy	地圖精度
+	Registration residual	配準殘差
+	Datum accuracy	基準精度
+	Geospatial map	地理空間地圖
+	Map coordinate system	地圖座標系
+	Geographic	地理座標
+	Projected	投影座標
+	Use WKT definition	使用 WKT 定義
+	WKT definition	WKT 定義
+	EPSG code	EPSG 代碼
+	Separate display coordinate system	使用獨立的顯示座標系
+	Control points	控制點
+	Control point	控制點
+	Page X	頁面 X
+	Page Y	頁面 Y
+	Pick page position	在頁面上選取位置
+	Easting	東座標
+	Northing	北座標
+	Add control point	新增控制點
+	Remove control point	移除控制點
+	Enter known map coordinates for at least three page positions.	請輸入至少三個頁面位置的已知地圖座標。
+	Distance unit	距離單位
+	Area unit	面積單位
+	Angular unit	角度單位
+	Metres	公尺
+	Kilometres	公里
+	Feet	英呎
+	US survey feet	美國測量英呎
+	Miles	英里
+	Nautical miles	海里
+	Square metres	平方公尺
+	Hectares	公頃
+	Square kilometres	平方公里
+	Square US survey feet	平方美國測量英呎
+	Acres	英畝
+	Square miles	平方英里
+	Degrees	度
+	Grads	百分度
+	Map boundary	地圖邊界
+	Boundary coordinates run from 0 to 1 across the viewport.	邊界座標在檢視區內的範圍為 0 到 1。
+	Boundary point	邊界點
+	Add boundary point	新增邊界點
+	Remove boundary point	移除邊界點
+	Projected coordinate matrix	投影座標矩陣
+	Use projected coordinate matrix	使用投影座標矩陣
+	Converts PDF user coordinates to easting, northing and elevation.	將 PDF 使用者座標轉換為東座標、北座標和高程。
+	Choose a control point inside the viewport.	請選擇檢視區內的控制點。
+	Click the control point on the map.	請按一下地圖上的控制點。
+	Viewport width and height must be positive.	檢視區的寬度和高度必須為正數。
+	Map registration needs control points.	地圖配準需要控制點。
+	Advanced unit formats	進階單位格式
+	Units run from largest to smallest. Later factors convert the remainder.	單位從大到小排列，後續係數換算餘數。
+	Scale description	比例說明
+	Separate vertical units	單獨設定縱向單位
+	Vertical to horizontal conversion	縱向到橫向換算
+	Vertical coordinates	縱向座標
+	Horizontal coordinates	橫向座標
+	Distance units	距離單位
+	Area units	面積單位
+	Thousands separator	千位分隔符
+	Decimal separator	小數分隔符
+	Unit prefix	單位前綴
+	Unit suffix	單位後綴
+	Conversion factor	換算係數
+	Keep trailing zeros or denominator	保留末尾零或分母
+	Unit before value	單位顯示在數值前
+	Add smaller unit	新增較小單位
+	Remove unit	移除單位
+	Move unit up	上移單位
+	Move unit down	下移單位
+	Reference preview	基準預覽
+	Choose advanced unit formats first.	請先設定進階單位格式。
+	Quantity	測量量
+	Selected unit	所選單位
+	Unit display format	單位顯示格式
+
+# Embedded 3D measurement
+	3D models on this page	此頁的3D模型
+	Measure 3D	測量3D
+	Measure 3D model	測量3D模型
+	Default view	預設視圖
+	Fit model	符合模型大小
+	Drag to orbit. Right or middle drag pans. Scroll zooms. Click the model to measure.	拖曳旋轉，右鍵或中鍵拖曳平移，捲動縮放。點擊模型進行測量。
+	3D model canvas	3D模型畫布
+	Updating 3D view…	正在更新3D視圖…
+	Choose a visible point on the model.	請選擇模型上的可見點。
+	Perpendicular	垂直距離
+	Radius / diameter	半徑／直徑
+	Clear points	清除點
+	Choose the two endpoints.	選擇兩個端點。
+	Choose a point, then the two endpoints of a reference line.	先選擇一個點，再選擇參考線的兩個端點。
+	Choose an endpoint, the angle vertex, then the other endpoint.	依次選擇端點、角的頂點、另一個端點。
+	Choose three points on the circle.	選擇圓周上的三個點。
+	Diameter	直徑
+	Show circle	顯示圓
+	Units per model unit	每個模型單位的單位數
+	Markup text	標註文字
+	Selected points: {n}	已選點：{n}
+	Update measurement	更新測量
+	Save measurement	儲存測量
+	Edit measurement	編輯測量
+	Delete measurement	刪除測量
+	No saved measurements in this view.	此視圖中沒有已儲存的測量。
+	The model viewport is too narrow to display.	模型視埠太窄，無法顯示。
+	3D model	3D模型
+	This page has no 3D models.	此頁沒有3D模型。
+	Snap	吸附
+	Automatic	自動
+	Vertex snapping	吸附頂點
+	Edge snapping	吸附邊
+	Surfaces	表面
+	Silhouettes	輪廓
+	Precision	精度
+	Retry	重試
+	Cancel caption placement	取消標題放置
+	Place caption	放置標題
+	Reset caption	重設標題
+	Text height (points)	文字高度（點）
+	Click the preview to place the caption on its measurement plane.	點選預覽，在測量平面上放置標題。
+	Extension length (points)	延長線長度（點）
+	Color	顏色
+	Flip text up	翻轉文字朝上方向

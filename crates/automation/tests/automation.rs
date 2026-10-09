@@ -2923,3 +2923,411 @@ mod combine_argument_tests {
         }
     }
 }
+
+#[test]
+fn measurement_formats_viewport_update_remove_undo_and_reopen() {
+    let dir = workdir("measurement-formats");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let number = |unit: &str, factor: f64, fraction: &str, denominator: u32, suffix: &str| {
+        json!({
+            "unit":unit,"factor":factor,"fraction":fraction,"denominator":denominator,"fixed":false,
+            "thousands":"","decimal":".","prefix":" ","suffix":suffix,"unit_first":false
+        })
+    };
+    let formats = json!({"x":[number("ft",0.1,"decimal",100,"")],
+        "distance":[number("ft",1.0,"round",1," "),number("in",12.0,"fraction",16,"")],
+        "area":[number("ft^2",1.0,"decimal",100,"")]});
+    ok(&mut a, "measure_scale", json!({"doc":doc,"page":1,"formats":formats,"ratio":"1 pt = 0.1 ft","name":"Floor"}));
+    ok(&mut a, "measure_distance", json!({"doc":doc,"page":1,"points":[[10,10],[21.25,10]]}));
+    let saved = ok(&mut a, "measure_list", json!({"doc":doc}));
+    assert_eq!(saved["measurements"][0]["reading"]["label"], "1 ft 1 1/2 in");
+    let viewports = ok(&mut a, "measure_scale", json!({"doc":doc,"page":1}));
+    assert_eq!(viewports["viewports"][0]["index"], 1);
+    assert_eq!(viewports["viewports"][0]["name"], "Floor");
+    ok(&mut a, "measure_scale", json!({"doc":doc,"page":1,"viewport":1,"units_per_point":2.0,"unit":"m","name":"Revised"}));
+    assert_eq!(ok(&mut a, "measure_scale", json!({"doc":doc,"page":1}))["viewports"][0]["name"], "Revised");
+    assert_eq!(ok(&mut a, "measure_list", json!({"doc":doc}))["measurements"], saved["measurements"]);
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "measure_scale", json!({"doc":doc,"page":1}))["viewports"][0]["name"], "Floor");
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    assert!(a.call("measure_scale", &json!({"doc":doc,"page":1,"viewport":0,"remove":true})).is_err());
+    ok(&mut a, "measure_scale", json!({"doc":doc,"page":1,"viewport":1,"remove":true}));
+    assert_eq!(ok(&mut a, "measure_scale", json!({"doc":doc,"page":1}))["viewports"], json!([]));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"formatted.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"formatted.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "measure_list", json!({"doc":reopened}))["measurements"], saved["measurements"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn measurement_visible_snapping_layers_glyphs_raster_and_clipping() {
+    let dir = workdir("measurement-visible-snapping");
+    let content =
+        "/OC /L1 BDC 10 20 m 80 20 l S EMC q 20 50 40 40 re W n 0 70 m 100 70 l S Q q 40 0 0 40 20 20 cm /I Do Q BT /F1 12 Tf 5 5 Td (A) Tj ET";
+    let objs=[
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /BaseState /OFF /Order [5 0 R] >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Properties << /L1 5 0 R >> /XObject << /I 6 0 R >> /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream",content.len()),
+        "<< /Type /OCG /Name (Construction) >>".into(),
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length 9 >>\nstream\n00ff00ff>\nendstream".into(),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, obj) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend(format!("{} 0 obj\n{obj}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for offset in offsets {
+        bytes.extend(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("visible.pdf"), bytes).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"visible.pdf"}))["doc"].as_u64().unwrap();
+    let hidden = ok(&mut a, "measure_snap", json!({"doc":doc,"page":1,"at":[10,80],"tolerance":1}));
+    assert!(hidden["snap"].is_null(), "{hidden}");
+    assert_eq!(hidden["images"], 1);
+    assert_eq!(hidden["glyphs"], 1);
+    let clipped = ok(&mut a, "measure_snap", json!({"doc":doc,"page":1,"at":[20,30],"tolerance":1}));
+    assert_eq!(clipped["snap"]["point"], json!([20.0, 30.0]));
+    let outside = ok(&mut a, "measure_snap", json!({"doc":doc,"page":1,"at":[0,30],"tolerance":1}));
+    assert!(outside["snap"].is_null());
+    let raster = ok(&mut a, "measure_snap", json!({"doc":doc,"page":1,"at":[40,60],"tolerance":1}));
+    assert_eq!(raster["snap"]["point"], json!([40.0, 60.0]));
+    assert_eq!(ok(&mut a, "layer_visibility", json!({"doc":doc}))["layers"][0]["visible"], false);
+    ok(&mut a, "layer_visibility", json!({"doc":doc,"layer":1,"visible":true}));
+    let visible = ok(&mut a, "measure_snap", json!({"doc":doc,"page":1,"at":[10,80],"tolerance":1}));
+    assert_eq!(visible["snap"]["point"], json!([10.0, 80.0]));
+    assert_eq!(ok(&mut a, "doc_list", json!({}))["documents"][0]["dirty"], false);
+    assert!(a.call("layer_visibility", &json!({"doc":doc,"layer":2,"visible":true})).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn measurement_geospatial_coordinates_geodesics_undo_and_reopen() {
+    let dir = workdir("measurement-geospatial");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let registration = json!({"gcs":{"kind":"geographic","epsg":4326},"dcs":null,
+        "controls":[{"local":[0,0],"position":[0,0]},{"local":[1,0],"position":[0,1]},{"local":[1,1],"position":[1,1]},{"local":[0,1],"position":[1,0]}],
+        "bounds":[[0,0],[1,0],[1,1],[0,1]],"units":["KM","SQKM","GRD"],"matrix":null});
+    ok(&mut a, "measure_scale", json!({"doc":doc,"page":1,"rect":[10,10,110,110],"geospatial":registration,"precision":4,"name":"Survey map"}));
+    let coordinate = ok(&mut a, "measure_info", json!({"doc":doc,"page":1,"points":[[60,60]]}));
+    let p = &coordinate["reading"]["geospatial"]["coordinates"][0];
+    assert!((p["latitude"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+    assert!((p["longitude"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+    assert_eq!(p["display_unit"], "grad");
+    let line = ok(&mut a, "measure_info", json!({"doc":doc,"page":1,"points":[[10,110],[110,110]]}));
+    assert!((line["reading"]["value"].as_f64().unwrap() - 111.31949079327357).abs() < 1e-6);
+    assert_eq!(line["reading"]["angle_label"], "100.00 grad");
+    ok(&mut a, "measure_distance", json!({"doc":doc,"page":1,"points":[[10,110],[110,110]],"label":"Equatorial baseline"}));
+    ok(&mut a, "measure_area", json!({"doc":doc,"page":1,"points":[[10,110],[110,110],[110,10],[10,10]]}));
+    let saved = ok(&mut a, "measure_list", json!({"doc":doc}));
+    assert_eq!(saved["count"], 2);
+    assert_eq!(saved["unsupported"], json!([]));
+    assert_eq!(saved["measurements"][0]["reading"]["label"], "111.3195 km");
+    assert!((saved["measurements"][1]["reading"]["value"].as_f64().unwrap() - 12308.778361469452).abs() < 1e-5);
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "measure_list", json!({"doc":doc}))["count"], 1);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "measure_scale", json!({"doc":doc,"page":1,"viewport":1,"remove":true}));
+    assert_eq!(ok(&mut a, "measure_list", json!({"doc":doc}))["measurements"], saved["measurements"]);
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"map.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"map.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "measure_list", json!({"doc":reopened}))["measurements"], saved["measurements"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+mod three_d_workflow_tests {
+    use super::*;
+    fn model_string(bytes: &mut Vec<u8>, value: &str) {
+        bytes.extend((value.len() as u16).to_le_bytes());
+        bytes.extend(value.as_bytes());
+    }
+    fn block_bytes(kind: u32, data: Vec<u8>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend(kind.to_le_bytes());
+        bytes.extend((data.len() as u32).to_le_bytes());
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend(data);
+        while !bytes.len().is_multiple_of(4) {
+            bytes.push(0);
+        }
+        bytes
+    }
+    fn u3d() -> Vec<u8> {
+        let mut d = Vec::new();
+        model_string(&mut d, "part");
+        d.extend(0u32.to_le_bytes());
+        d.extend(1u32.to_le_bytes());
+        for c in [1u32, 3, 0, 0, 0, 0, 1, 0, 0, 0, 3, 3, 0, 0, 0] {
+            d.extend(c.to_le_bytes());
+        }
+        for _ in 0..8 {
+            d.extend(1.0f32.to_le_bytes());
+        }
+        d.extend(0u32.to_le_bytes());
+        let mut payload = block_bytes(0xFFFFFF31, d);
+        let mut n = Vec::new();
+        model_string(&mut n, "visible-part");
+        n.extend(1u32.to_le_bytes());
+        model_string(&mut n, "");
+        for value in [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.] {
+            n.extend((value as f32).to_le_bytes());
+        }
+        model_string(&mut n, "part");
+        n.extend(3u32.to_le_bytes());
+        payload.extend(block_bytes(0xFFFFFF22, n));
+        let declaration_size = payload.len() + 44;
+        let mut b = Vec::new();
+        model_string(&mut b, "part");
+        b.extend(0u32.to_le_bytes());
+        for c in [1u32, 3, 0, 0, 0, 0] {
+            b.extend(c.to_le_bytes());
+        }
+        for p in [[0.0f32, 0.0, 0.0], [3.0, 0.0, 0.0], [0.0, 4.0, 0.0]] {
+            for v in p {
+                b.extend(v.to_le_bytes());
+            }
+        }
+        for v in [0u32, 0, 1, 2] {
+            b.extend(v.to_le_bytes());
+        }
+        payload.extend(block_bytes(0xFFFFFF3B, b));
+        let mut header = Vec::new();
+        header.extend(0u16.to_le_bytes());
+        header.extend(0u16.to_le_bytes());
+        header.extend(12u32.to_le_bytes());
+        header.extend((declaration_size as u32).to_le_bytes());
+        header.extend((payload.len() as u64 + 44).to_le_bytes());
+        header.extend(106u32.to_le_bytes());
+        header.extend(0.001f64.to_le_bytes());
+        let mut bytes = block_bytes(0x00443355, header);
+        bytes.extend(payload);
+        bytes
+    }
+
+    fn model_pdf() -> Vec<u8> {
+        let model = u3d();
+        let mut stream = format!("<< /Type /3D /Subtype /U3D /Length {} >>\nstream\n", model.len()).into_bytes();
+        stream.extend(model);
+        stream.extend(b"\nendstream");
+        let objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Annots [6 0 R] >>".to_vec(),
+            b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+            stream,
+            b"<< /Type /Annot /Subtype /3D /Rect [10 10 190 290] /3DD 5 0 R /Contents (Triangle) >>".to_vec(),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n", index + 1).as_bytes());
+            out.extend(object);
+            out.extend(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for offset in offsets {
+            out.extend(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+        out
+    }
+    #[test]
+    fn three_d_geometry_pick_measure_edit_undo_and_saved_reopen() {
+        let dir = workdir("three-d");
+        std::fs::write(dir.join("model.pdf"), model_pdf()).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({"path":"model.pdf"}))["doc"].as_u64().unwrap();
+        let models = ok(&mut a, "three_d_models", json!({"doc":doc,"page":1}));
+        assert_eq!(models["models"][0]["annotation"], 1);
+        assert_eq!(models["models"][0]["name"], "Triangle");
+        assert_eq!(models["models"][0]["rect_user_space"], json!([10., 10., 190., 290.]));
+        assert!(models["models"][0]["rect_error"].is_null());
+        let info = ok(&mut a, "three_d_info", json!({"doc":doc,"page":1,"annotation":1}));
+        assert_eq!(info["meshes"][0]["positions"], 3);
+        assert_eq!(info["meshes"][0]["triangles"], 1);
+        assert_eq!(info["units"]["factor"], 0.001);
+        let frame = a.call("three_d_render", &json!({"doc":doc,"page":1,"annotation":1,"width":320,"height":240})).unwrap();
+        let Content::Png { data, width, height } = &frame[0] else { panic!("expected a 3D preview") };
+        assert_eq!((*width, *height), (320, 240));
+        let decoder = png::Decoder::new(std::io::Cursor::new(data));
+        let mut reader = decoder.read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        let output = reader.next_frame(&mut pixels).unwrap();
+        assert_eq!((output.width, output.height), (320, 240));
+        assert!(pixels.as_chunks::<4>().0.iter().any(|p| p[..3] != [245, 246, 249]));
+        assert!(a.call("three_d_render", &json!({"doc":doc,"page":1,"annotation":1,"width":2049})).is_err());
+        let hit = ok(&mut a, "three_d_pick", json!({"doc":doc,"page":1,"annotation":1,"origin":[1,1,10],"direction":[0,0,-2]}));
+        assert_eq!(hit["hit"]["point"], json!([1., 1., 0.]));
+        assert_eq!(hit["hit"]["triangle"], 1);
+        let artwork = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().three_d_artwork(0, 0).unwrap();
+        let mut camera = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().three_d_camera(&artwork, None).unwrap();
+        camera.orbit(0.2, -0.1).unwrap();
+        camera.zoom(1.2).unwrap();
+        camera.pan([5., -3.], [320., 240.]).unwrap();
+        let pixel = camera.project([0.5, 0.5, 0.], [320., 240.]).unwrap().unwrap();
+        let screen_hit = ok(
+            &mut a,
+            "three_d_pick",
+            json!({"doc":doc,"page":1,"annotation":1,"pixel":[pixel[0],pixel[1]],"width":320,"height":240,"yaw":0.2,"pitch":-0.1,"zoom":1.2,"pan":[5,-3]}),
+        );
+        for (actual, expected) in screen_hit["hit"]["point"].as_array().unwrap().iter().zip([0.5, 0.5, 0.]) {
+            assert!((actual.as_f64().unwrap() - expected).abs() < 1e-8);
+        }
+        for (snap, point, kind) in [("vertex", [0., 0., 0.], "vertex"), ("edge", [1.5, 0., 0.], "edge")] {
+            let projected = camera.project(point, [320., 240.]).unwrap().unwrap();
+            let picked = ok(
+                &mut a,
+                "three_d_pick",
+                json!({"doc":doc,"page":1,"annotation":1,"pixel":[projected[0]+1.,projected[1]+1.],"width":320,"height":240,"yaw":0.2,"pitch":-0.1,"zoom":1.2,"pan":[5,-3],"snap":snap,"radius":8}),
+            );
+            assert_eq!(picked["hit"]["kind"], kind);
+            assert_eq!(picked["hit"]["triangle"], 1);
+            let p: Vec<f64> = picked["hit"]["point"].as_array().unwrap().iter().map(|n| n.as_f64().unwrap()).collect();
+            assert!(p[1].abs() < 1e-10 && p[2].abs() < 1e-10);
+            if snap == "vertex" {
+                assert!(p[0].abs() < 1e-10);
+            }
+            assert!(picked["hit"]["screen_distance"].as_f64().unwrap() <= 8.);
+        }
+        for bad in [
+            json!({"pixel":[10,10],"snap":"invented"}),
+            json!({"pixel":[10,10],"radius":65}),
+            json!({"pixel":[10,10],"snap":true}),
+            json!({"origin":[0,0,10],"direction":[0,0,-1],"snap":"vertex"}),
+        ] {
+            let mut args = bad;
+            args["doc"] = json!(doc);
+            args["page"] = json!(1);
+            args["annotation"] = json!(1);
+            assert!(a.call("three_d_pick", &args).is_err());
+        }
+        let caption_point = [1., 1., 0.];
+        let caption_screen = camera.project(caption_point, [320., 240.]).unwrap().unwrap();
+        let placed = ok(
+            &mut a,
+            "three_d_measure",
+            json!({"doc":doc,"page":1,"annotation":1,"points":[[0,0,0],[3,0,0]],"kind":"linear","plane":[0,0,1],"text_pixel":[caption_screen[0],caption_screen[1]],"text_size":18,"width":320,"height":240,"yaw":0.2,"pitch":-0.1,"zoom":1.2,"pan":[5,-3]}),
+        );
+        assert_eq!(placed["measurement"]["text_size"], 18.);
+        for (actual, expected) in placed["measurement"]["text_position"].as_array().unwrap().iter().zip(caption_point) {
+            assert!((actual.as_f64().unwrap() - expected).abs() < 1e-10);
+        }
+        assert_eq!(placed["measurement"]["value"], 0.003);
+        for extra in [
+            json!({"text_pixel":[10,10],"text_position":[0,0,0]}),
+            json!({"text_size":0}),
+            json!({"text_y":[0,0,0]}),
+            json!({"text_y":[1,0,0]}),
+            json!({"text_size":257}),
+            json!({"extension_length":20}),
+            json!({"width":0}),
+            json!({"capture_view":"yes"}),
+            json!({"pitch":"bad"}),
+            json!({"text_pixel":[-1,10]}),
+        ] {
+            let mut args = json!({"doc":doc,"page":1,"annotation":1,"points":[[0,0,0],[3,0,0]],"kind":"linear"});
+            for (k, v) in extra.as_object().unwrap() {
+                args[k] = v.clone();
+            }
+            assert!(a.call("three_d_measure", &args).is_err());
+        }
+        for (kind, points, expected) in [
+            ("linear", json!([[0, 0, 0], [3, 4, 0]]), 0.005),
+            ("perpendicular", json!([[2, 5, 0], [0, 0, 0], [4, 0, 0]]), 0.005),
+            ("angular", json!([[4, 0, 0], [0, 0, 0], [0, 3, 0]]), 90.),
+            ("radial", json!([[3, 0, 0], [0, 3, 0], [-3, 0, 0]]), 0.006),
+        ] {
+            let construction = ok(
+                &mut a,
+                "three_d_measure",
+                json!({"doc":doc,"page":1,"annotation":1,"kind":kind,"points":points,"diameter":kind=="radial","show_circle":true}),
+            );
+            assert!((construction["measurement"]["value"].as_f64().unwrap() - expected).abs() < 1e-10);
+        }
+        assert!(a.call("three_d_pick", &json!({"doc":doc,"page":1,"annotation":1,"pixel":[10,10],"origin":[0,0,0]})).is_err());
+        let geometries = [
+            json!({"kind":"linear","a":[0,0,0],"b":[3,4,0]}),
+            json!({"kind":"perpendicular","a":[0,0,0],"b":[3,4,0],"direction":[0,1,0]}),
+            json!({"kind":"angular","a":[1,0,0],"b":[0,1,0],"first_direction":[1,0,0],"second_direction":[0,1,0]}),
+            json!({"kind":"radial","center":[0,0,0],"on_circle":[3,0,0],"diameter":true,"arc":null}),
+        ];
+        for (index, geometry) in geometries.into_iter().enumerate() {
+            let mut args = json!({"doc":doc,"page":1,"annotation":1,"geometry":geometry,"label":format!("Dimension {}",index+1)});
+            let live = ok(&mut a, "three_d_measure", args.clone());
+            assert!(live["edit"].is_null());
+            assert_eq!(
+                ok(&mut a, "three_d_measurements", json!({"doc":doc,"page":1,"annotation":1}))["measurements"].as_array().unwrap().len(),
+                index
+            );
+            args["save"] = json!(true);
+            if index == 3 {
+                args["extension_length"] = json!(24);
+                args["color"] = json!([1., 0., 0.]);
+            }
+            ok(&mut a, "three_d_measure", args);
+        }
+        let list = ok(&mut a, "three_d_measurements", json!({"doc":doc,"page":1,"annotation":1}));
+        assert_eq!(list["measurements"].as_array().unwrap().len(), 4);
+        assert_eq!(list["measurements"][0]["value"], 0.005);
+        assert_eq!(list["measurements"][2]["value"], 90.);
+        assert_eq!(list["measurements"][3]["value"], 0.006);
+        assert_eq!(list["measurements"][3]["extension_length"], 24.);
+        assert_eq!(list["measurements"][3]["color"], json!([1., 0., 0.]));
+        for length in [json!(-1), json!(4097), json!("bad")] {
+            assert!(a.call("three_d_measure", &json!({"doc":doc,"page":1,"annotation":1,"geometry":{"kind":"radial","center":[0,0,0],"on_circle":[3,0,0],"diameter":false,"arc":null},"extension_length":length})).is_err());
+        }
+        ok(&mut a, "edit_undo", json!({"doc":doc}));
+        assert_eq!(ok(&mut a, "three_d_measurements", json!({"doc":doc,"page":1,"annotation":1}))["measurements"].as_array().unwrap().len(), 3);
+        ok(&mut a, "edit_redo", json!({"doc":doc}));
+        ok(
+            &mut a,
+            "three_d_measure",
+            json!({"doc":doc,"page":1,"annotation":1,"geometry":{"kind":"linear","a":[0,0,0],"b":[3,4,0]},"index":1,"save":true,"unit":"mm","units_per_model_unit":1,"precision":2,"text":"verified","text_position":[1.5,2,0],"text_size":18,"text_y":[0,-2,0]}),
+        );
+        let edited = ok(&mut a, "three_d_measurements", json!({"doc":doc,"page":1,"annotation":1}));
+        assert_eq!(edited["measurements"][0]["caption"], "5.00 mm verified");
+        assert_eq!(edited["measurements"][0]["text_position"], json!([1.5, 2., 0.]));
+        assert_eq!(edited["measurements"][0]["text_size"], 18.);
+        assert_eq!(edited["measurements"][0]["text_y"], json!([0., -2., 0.]));
+        ok(&mut a, "doc_save", json!({"doc":doc,"path":"measured3d.pdf"}));
+        let reopened = ok(&mut a, "doc_open", json!({"path":"measured3d.pdf"}))["doc"].as_u64().unwrap();
+        assert_eq!(ok(&mut a, "three_d_measurements", json!({"doc":reopened,"page":1,"annotation":1})), edited);
+        ok(&mut a, "three_d_measure", json!({"doc":reopened,"page":1,"annotation":1,"index":2,"remove":true}));
+        assert_eq!(ok(&mut a, "three_d_measurements", json!({"doc":reopened,"page":1,"annotation":1}))["measurements"].as_array().unwrap().len(), 3);
+        for invalid in [
+            json!({"doc":doc,"page":1,"annotation":0}),
+            json!({"doc":doc,"page":1,"annotation":1,"geometry":{"kind":"linear","a":[0,0,0],"b":[0,0,0]}}),
+            json!({"doc":doc,"page":1,"annotation":1,"index":99,"remove":true}),
+        ] {
+            assert!(a.call("three_d_measure", &invalid).is_err());
+        }
+        assert_eq!(ok(&mut a, "three_d_measurements", json!({"doc":doc,"page":1,"annotation":1})), edited);
+        ok(&mut a, "comment_lock", json!({"doc":doc,"page":1,"index":1,"locked":true}));
+        let locked = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes.clone();
+        assert!(ok(&mut a, "three_d_info", json!({"doc":doc,"page":1,"annotation":1}))["edit_error"].is_string());
+        assert_eq!(ok(&mut a, "three_d_measurements", json!({"doc":doc,"page":1,"annotation":1})), edited);
+        let live = ok(&mut a, "three_d_measure", json!({"doc":doc,"page":1,"annotation":1,"kind":"linear","points":[[0,0,0],[3,4,0]]}));
+        assert_eq!(live["measurement"]["value"], 0.005);
+        for args in [
+            json!({"doc":doc,"page":1,"annotation":1,"kind":"linear","points":[[0,0,0],[3,4,0]],"save":true}),
+            json!({"doc":doc,"page":1,"annotation":1,"kind":"linear","points":[[0,0,0],[3,4,0]],"save":true,"index":1}),
+            json!({"doc":doc,"page":1,"annotation":1,"remove":true,"index":1}),
+        ] {
+            assert!(a.call("three_d_measure", &args).is_err());
+        }
+        assert_eq!(a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes, locked);
+        ok(&mut a, "edit_undo", json!({"doc":doc}));
+        assert!(ok(&mut a, "three_d_info", json!({"doc":doc,"page":1,"annotation":1}))["edit_error"].is_null());
+        assert_eq!(ok(&mut a, "three_d_measurements", json!({"doc":doc,"page":1,"annotation":1})), edited);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

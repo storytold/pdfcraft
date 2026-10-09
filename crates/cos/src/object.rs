@@ -223,6 +223,9 @@ impl Stream {
     pub fn decoded_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
         let chain = self.filters();
         if chain.is_empty() {
+            if self.raw.len() > max.min(MAX_DECODED) {
+                return Err(CosError::Filter(format!("decoded stream exceeds {} bytes", max.min(MAX_DECODED))));
+            }
             return Ok(self.raw.as_ref().clone());
         }
         pdfcraft_filters::decode_tolerant(&chain, &self.raw, max.min(MAX_DECODED)).map(|(v, _)| v).map_err(|e| CosError::Filter(e.to_string()))
@@ -232,6 +235,9 @@ impl Stream {
     pub fn decoded_strict(&self) -> Result<Vec<u8>, CosError> {
         let chain = self.filters();
         if chain.is_empty() {
+            if self.raw.len() > MAX_DECODED {
+                return Err(CosError::Filter(format!("decoded stream exceeds {MAX_DECODED} bytes")));
+            }
             return Ok(self.raw.as_ref().clone());
         }
         pdfcraft_filters::decode(&chain, &self.raw, MAX_DECODED).map_err(|e| CosError::Filter(e.to_string()))
@@ -367,6 +373,17 @@ impl From<Stream> for Object {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unfiltered_stream_respects_decoding_budget() {
+        let stream = Stream::from_raw(Dict::new(), vec![b' '; 20]);
+        assert_eq!(stream.decoded_within(20).unwrap().len(), 20);
+        assert!(stream.decoded_within(19).is_err());
+        assert!(stream.decoded_within(0).is_err());
+        assert_eq!(Stream::from_raw(Dict::new(), Vec::new()).decoded_within(0).unwrap(), Vec::<u8>::new());
+        let compressed = Stream::flate(Dict::new(), &[b' '; 20]);
+        assert!(compressed.decoded_within(19).is_err());
+    }
 
     #[test]
     fn text_strings_round_trip() {

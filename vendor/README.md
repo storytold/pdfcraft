@@ -17,3 +17,7 @@ the fix. Vendoring copyleft code is never allowed (plan/adr/0001).
 Temporary: hayro is the bootstrap renderer and lopdf the bootstrap inspector (ADR-0004); M2.6 replaces them with our own devices and `cos`/`model`.
 
 Text extraction: hayro-interpret exposes `OutlineGlyph::is_vertical` from a Type0 font’s CMap writing mode. PdfCraft follows negative glyph-space y for WMode 1 so upright vertical columns can be searched (#126).
+
+Bounded geometry analysis: hayro-interpret exposes `Device::should_continue` (default true) and checks it between instructions, annotation appearances and text glyphs. `render::geometry::tests::huge_images_and_instruction_work_are_bounded` exercises early termination; existing raster tests cover unchanged rendering.
+
+Bounded content decoding: optional `InterpreterSettings::content_decoder` handles page arrays, forms, appearances, soft-mask groups, Type 3 glyphs and tiling patterns. Geometry analysis shares a 16 MiB decoded/encoded content budget and 4096 stream limit using COS bounded filters. `Stream::stored_len` checks encoded size before decryption or object loading. Device wrappers forward early termination. Evidence: `render::geometry::tests::page_and_nested_content_share_decoding_limits`, `content_array_limit_and_unreadable_streams_are_reported`, and `cos::object::tests::unfiltered_stream_respects_decoding_budget`. Normal rendering keeps its existing decoder.

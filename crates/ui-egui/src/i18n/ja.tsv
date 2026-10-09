@@ -1975,3 +1975,169 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	PNG または JPEG 画像を選択してください（最大 4 MiB）。透明度は保持されます。
 	Couldn't import the signature image: {e}	署名画像を読み込めませんでした: {e}
 	Go to page…	ページへ移動…
+
+# Measurement workflow and number formats
+	Click two points to measure a distance.	2点をクリックして距離を測定します。
+	Click each vertex. Enter finishes the perimeter.	頂点を順にクリックし、Enterで周長を確定します。
+	Click the boundary. Enter or the first point closes the area.	境界をクリックし、Enterまたは始点で領域を閉じます。
+	Click the ends of a known reference length.	長さがわかっている線の両端をクリックします。
+	Choose a tool to start measuring.	ツールを選んで測定を開始します。
+	Double-click also finishes a perimeter or area.	ダブルクリックでも周長や面積を確定できます。
+	This document does not allow measurement edits.	この文書では測定の編集が許可されていません。
+	Vertices	頂点
+	Finish measurement	測定を確定
+	Enable snapping	スナップを有効にする
+	Sensitivity (screen pixels)	感度（画面ピクセル）
+	Saved measurements keep their original scale.	保存済みの測定は元の縮尺を保持します。
+	Reference captured. Enter its real length below.	基準線を取得しました。実際の長さを入力してください。
+	Reference length (page points)	基準線の長さ（ページポイント）
+	Real length	実際の長さ
+	Number format	数値形式
+	Fraction	分数
+	Feet and inches	フィートとインチ
+	Rounded	四捨五入
+	Truncated	切り捨て
+	Decimal	小数
+	Denominator	分母
+	New viewport	新しいビューポート
+	Remove viewport	ビューポートを削除
+	Measurement error	測定エラー
+	Finished measurements appear here and are saved in the PDF.	確定した測定はここに表示され、PDFに保存されます。
+	The measurement list reached its safety limit.	測定一覧が安全上の上限に達しました。
+	Reference length must be positive.	基準線の長さは正の値にしてください。
+	Feet and inches uses ft as the scale unit.	フィートとインチの縮尺単位はftです。
+	The selected scale could not be read.	選択した縮尺を読み取れませんでした。
+	Back to measurement	測定に戻る
+	Change drawing scale	図面の縮尺を変更
+	Edit measurement viewport	測定ビューポートを編集
+	Remove measurement viewport	測定ビューポートを削除
+	Previous	前へ
+	Next	次へ
+	Some soft masks or pattern paints need a visibility check before snapping.	一部のソフトマスクやパターンは、スナップ前に表示状態の確認が必要です。
+	Azimuth	方位角
+	Map coordinates	地図の座標
+	Latitude	緯度
+	Longitude	経度
+	The display datum transformation is approximate.	表示座標の測地系変換は近似です。
+	Map accuracy	地図の精度
+	Registration residual	位置合わせの残差
+	Datum accuracy	測地系の精度
+	Geospatial map	地理空間地図
+	Map coordinate system	地図の座標系
+	Geographic	地理座標
+	Projected	投影座標
+	Use WKT definition	WKT 定義を使用
+	WKT definition	WKT 定義
+	EPSG code	EPSG コード
+	Separate display coordinate system	表示用の座標系を指定
+	Control points	基準点
+	Control point	基準点
+	Page X	ページ X
+	Page Y	ページ Y
+	Pick page position	ページ上の位置を選択
+	Easting	東方向座標
+	Northing	北方向座標
+	Add control point	基準点を追加
+	Remove control point	基準点を削除
+	Enter known map coordinates for at least three page positions.	ページ上の少なくとも 3 点の既知の地図座標を入力してください。
+	Distance unit	距離の単位
+	Area unit	面積の単位
+	Angular unit	角度の単位
+	Metres	メートル
+	Kilometres	キロメートル
+	Feet	フィート
+	US survey feet	米国測量フィート
+	Miles	マイル
+	Nautical miles	海里
+	Square metres	平方メートル
+	Hectares	ヘクタール
+	Square kilometres	平方キロメートル
+	Square US survey feet	平方測量フィート（米国）
+	Acres	エーカー
+	Square miles	平方マイル
+	Degrees	度
+	Grads	グラード
+	Map boundary	地図の境界
+	Boundary coordinates run from 0 to 1 across the viewport.	境界の座標はビューポート内の 0 から 1 の範囲です。
+	Boundary point	境界点
+	Add boundary point	境界点を追加
+	Remove boundary point	境界点を削除
+	Projected coordinate matrix	投影座標行列
+	Use projected coordinate matrix	投影座標行列を使用
+	Converts PDF user coordinates to easting, northing and elevation.	PDF ユーザー座標を東方向座標、北方向座標、高度に変換します。
+	Choose a control point inside the viewport.	ビューポート内の基準点を選択してください。
+	Click the control point on the map.	地図上の基準点をクリックしてください。
+	Viewport width and height must be positive.	ビューポートの幅と高さは正の値にしてください。
+	Map registration needs control points.	地図の位置合わせには基準点が必要です。
+	Advanced unit formats	詳細な単位形式
+	Units run from largest to smallest. Later factors convert the remainder.	単位は大きい順に並べます。後の係数は余りを換算します。
+	Scale description	縮尺の説明
+	Separate vertical units	縦方向の単位を個別に設定
+	Vertical to horizontal conversion	縦方向から横方向への換算
+	Vertical coordinates	縦方向の座標
+	Horizontal coordinates	横方向の座標
+	Distance units	距離の単位
+	Area units	面積の単位
+	Thousands separator	桁区切り記号
+	Decimal separator	小数点記号
+	Unit prefix	単位の前の文字
+	Unit suffix	単位の後の文字
+	Conversion factor	換算係数
+	Keep trailing zeros or denominator	末尾のゼロまたは分母を保持
+	Unit before value	数値の前に単位を表示
+	Add smaller unit	小さい単位を追加
+	Remove unit	単位を削除
+	Move unit up	単位を上に移動
+	Move unit down	単位を下に移動
+	Reference preview	基準のプレビュー
+	Choose advanced unit formats first.	先に詳細な単位形式を設定してください。
+	Quantity	測定する量
+	Selected unit	選択した単位
+	Unit display format	単位の表示形式
+
+# Embedded 3D measurement
+	3D models on this page	このページの3Dモデル
+	Measure 3D	3Dを測定
+	Measure 3D model	3Dモデルを測定
+	Default view	既定のビュー
+	Fit model	モデルを全体表示
+	Drag to orbit. Right or middle drag pans. Scroll zooms. Click the model to measure.	ドラッグで回転、右ボタンまたは中央ボタンのドラッグで移動、スクロールで拡大縮小します。モデルをクリックして測定します。
+	3D model canvas	3Dモデルの表示領域
+	Updating 3D view…	3Dビューを更新中…
+	Choose a visible point on the model.	モデル上の見える点を選択してください。
+	Perpendicular	垂直距離
+	Radius / diameter	半径／直径
+	Clear points	選択点を消去
+	Choose the two endpoints.	2つの端点を選択してください。
+	Choose a point, then the two endpoints of a reference line.	点を選択し、次に基準線の2つの端点を選択してください。
+	Choose an endpoint, the angle vertex, then the other endpoint.	端点、角の頂点、もう一方の端点の順に選択してください。
+	Choose three points on the circle.	円周上の3点を選択してください。
+	Diameter	直径
+	Show circle	円を表示
+	Units per model unit	モデル単位あたりの単位数
+	Markup text	マークアップの文字
+	Selected points: {n}	選択した点：{n}
+	Update measurement	測定を更新
+	Save measurement	測定を保存
+	Edit measurement	測定を編集
+	Delete measurement	測定を削除
+	No saved measurements in this view.	このビューに保存済みの測定はありません。
+	The model viewport is too narrow to display.	モデルの表示領域が狭すぎます。
+	3D model	3Dモデル
+	This page has no 3D models.	このページには3Dモデルがありません。
+	Snap	スナップ
+	Automatic	自動
+	Vertex snapping	頂点にスナップ
+	Edge snapping	辺にスナップ
+	Surfaces	面
+	Silhouettes	輪郭
+	Precision	精度
+	Retry	再試行
+	Cancel caption placement	キャプション配置を取り消す
+	Place caption	キャプションを配置
+	Reset caption	キャプションを戻す
+	Text height (points)	文字の高さ（ポイント）
+	Click the preview to place the caption on its measurement plane.	プレビューをクリックして測定平面上にキャプションを配置します。
+	Extension length (points)	延長線の長さ（ポイント）
+	Color	色
+	Flip text up	テキストの上下を反転

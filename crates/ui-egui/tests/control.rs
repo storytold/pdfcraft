@@ -822,6 +822,9 @@ fn control_default_workspace_and_session_override() {
 fn measurement_tools_draw_live_calibrate_save_and_export() {
     let (mut h, c) = harness_pages(1);
     let doc = h.state().views[0].id;
+    // This test asserts exact input coordinates. Snapping is covered separately,
+    // and now includes the glyph outlines present in this fixture.
+    h.state_mut().views[0].measure.snap_enabled = false;
     h.state_mut().set_option("zoom", "100").unwrap();
     ok(&mut h, &c, "ui.command", json!({"id":"measure.scale"}));
     h.run_steps(3);
@@ -872,4 +875,566 @@ fn measurement_tools_draw_live_calibrate_save_and_export() {
     click(&mut h, &c, 130.0, 50.0);
     assert!((h.state().views[0].measure.drawing_points - 100.0).abs() < 0.01);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn measurement_scale_and_keyboard_work_in_light_dark_and_small_windows() {
+    for theme in ["light", "dark"] {
+        let (mut h, c) = harness_pages(2);
+        h.set_size(egui::vec2(980.0, 740.0));
+        ok(&mut h, &c, "ui.set", json!({"key":"theme","value":theme}));
+        ok(&mut h, &c, "ui.command", json!({"id":"measure.scale"}));
+        h.run_steps(3);
+        h.state_mut().views[0].measure.drawing_points = 10.0;
+        h.state_mut().views[0].measure.real_distance = 1.0;
+        h.state_mut().views[0].measure.unit = "m".into();
+        h.get_by_label("Apply scale").click();
+        h.run_steps(3);
+        assert!(!h.state().views[0].measure.scale_open);
+        let id = h.state().views[0].id;
+        assert!((h.state().session.get(id).unwrap().measurement_scale(0, [20.0, 20.0]).unwrap().x - 0.1).abs() < 1e-10);
+        h.state_mut().views[0].measure.snap_enabled = false;
+        ok(&mut h, &c, "ui.command", json!({"id":"measure.perimeter"}));
+        let click = |h: &mut Harness<'static, PdfCraftApp>, x: f32, y: f32| {
+            let r = h.state().views[0].page_screen_rect(0).unwrap();
+            ok(h, &c, "ui.click", json!({"x":r.left()+x*r.width()/200.0,"y":r.top()+y*r.height()/300.0}));
+            h.run_steps(2);
+        };
+        click(&mut h, 30.0, 60.0);
+        click(&mut h, 90.0, 60.0);
+        assert_eq!(h.state().views[0].measure.points.len(), 2);
+        ok(&mut h, &c, "ui.key", json!({"key":"Backspace"}));
+        h.run_steps(2);
+        assert_eq!(h.state().views[0].measure.points.len(), 1);
+        ok(&mut h, &c, "ui.key", json!({"key":"Escape"}));
+        h.run_steps(2);
+        assert!(h.state().views[0].measure.points.is_empty());
+        click(&mut h, 30.0, 60.0);
+        click(&mut h, 90.0, 60.0);
+        h.state_mut().views[0].current = 1;
+        h.run_steps(3);
+        assert!(h.state().views[0].measure.points.is_empty(), "page navigation cancels unfinished geometry");
+        ok(&mut h, &c, "ui.key", json!({"key":"Enter"}));
+        h.run_steps(2);
+        assert!(h.state().session.get(id).unwrap().measurements().unwrap().measurements.is_empty());
+    }
+}
+
+#[test]
+fn measurement_snaps_to_visible_glyph_outline_before_first_vertex() {
+    let (mut h, c) = harness_pages(1);
+    let id = h.state().views[0].id;
+    let geometry = h.state().session.get(id).unwrap().measurement_paths(0).unwrap();
+    assert!(geometry.glyphs > 0);
+    let target = *geometry.endpoints.first().expect("glyph outline endpoint");
+    ok(&mut h, &c, "ui.command", json!({"id":"measure.distance"}));
+    let doc = h.state().session.get(id).unwrap();
+    let point = doc.measurement_to_view(0, target).unwrap();
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    let x = r.left() + (point[0] as f32 + 0.2) * r.width() / 200.0;
+    let y = r.top() + (point[1] as f32 + 0.2) * r.height() / 300.0;
+    ok(&mut h, &c, "ui.move", json!({"x":x,"y":y}));
+    ok(&mut h, &c, "ui.click", json!({"x":x,"y":y}));
+    h.run_steps(2);
+    let actual = h.state().views[0].measure.points[0];
+    assert!((actual[0] - target[0]).hypot(actual[1] - target[1]) < 1e-6, "{actual:?} expected {target:?}");
+}
+
+#[test]
+fn measurement_geospatial_editor_picks_control_points_and_saves_map_distance() {
+    use pdfcraft_engine::measure::geo::{ControlPoint, CoordinateKind, CoordinateSystem, GeoDefinition};
+    let (mut h, c) = harness_pages(1);
+    h.set_size(egui::vec2(1400.0, 1400.0));
+    h.state_mut().set_option("zoom", "100").unwrap();
+    let id = h.state().views[0].id;
+    h.state_mut().views[0].measure.snap_enabled = false;
+    ok(&mut h, &c, "ui.command", json!({"id":"measure.scale"}));
+    h.run_steps(3);
+    let state = &mut h.state_mut().views[0].measure;
+    state.map_enabled = true;
+    state.name = "Survey map".into();
+    state.map_registration = Some(GeoDefinition {
+        gcs: CoordinateSystem { kind: CoordinateKind::Geographic, epsg: Some(4326), wkt: None },
+        dcs: None,
+        controls: vec![
+            ControlPoint { local: [0.1, 0.1], position: [0.0, 0.0] },
+            ControlPoint { local: [0.9, 0.1], position: [0.0, 1.0] },
+            ControlPoint { local: [0.9, 0.9], position: [1.0, 1.0] },
+            ControlPoint { local: [0.1, 0.9], position: [1.0, 0.0] },
+        ],
+        bounds: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        units: ["M".into(), "SQM".into(), "DEG".into()],
+        matrix: None,
+    });
+    h.run_steps(3);
+    h.get_by_label("Pick page position").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].measure.map_pick, Some(0));
+    let click = |h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, x: f32, y: f32| {
+        let r = h.state().views[0].page_screen_rect(0).unwrap();
+        ok(h, c, "ui.click", json!({"x":r.left()+x*r.width()/200.0,"y":r.top()+y*r.height()/300.0}));
+        h.run_steps(3);
+    };
+    click(&mut h, &c, 20.0, 280.0);
+    assert_eq!(h.state().views[0].measure.map_pick, None);
+    assert!(h.state().views[0].measure.points.is_empty());
+    let local = h.state().views[0].measure.map_registration.as_ref().unwrap().controls[0].local;
+    assert!((local[0] - 0.1).abs() < 1e-5);
+    assert!((local[1] - 20.0 / 300.0).abs() < 1e-5);
+    h.get_by_label("Apply scale").click();
+    h.run_steps(3);
+    assert!(h.state().views[0].measure.error.is_none(), "{:?}", h.state().views[0].measure.error);
+    let scale = h.state().session.get(id).unwrap().measurement_scale(0, [20.0, 20.0]).unwrap();
+    assert!(scale.geospatial.is_some());
+    ok(&mut h, &c, "ui.command", json!({"id":"measure.distance"}));
+    click(&mut h, &c, 20.0, 280.0);
+    click(&mut h, &c, 180.0, 270.0);
+    let saved = h.state().session.get(id).unwrap().measurements().unwrap();
+    assert_eq!(saved.measurements.len(), 1);
+    assert!((saved.measurements[0].reading.value - 111319.49079327357).abs() < 0.2);
+    assert!(saved.measurements[0].reading.geospatial.is_some());
+}
+
+#[test]
+fn measurement_advanced_formats_edit_and_apply_in_small_light_and_dark_windows() {
+    use pdfcraft_engine::measure::{Fraction, Kind, NumberFormat, NumberFormats, reading};
+    for theme in ["light", "dark"] {
+        let (mut h, c) = harness_pages(1);
+        h.set_size(egui::vec2(980.0, 740.0));
+        ok(&mut h, &c, "ui.set", json!({"key":"theme","value":theme}));
+        ok(&mut h, &c, "ui.command", json!({"id":"measure.scale"}));
+        h.state_mut().views[0].measure.format = "custom".into();
+        h.state_mut().views[0].measure.custom_ratio = String::new();
+        h.state_mut().views[0].measure.custom_formats = Some(NumberFormats {
+            x: vec![NumberFormat::decimal("m", 1.0, 3)],
+            y: None,
+            cyx: None,
+            distance: vec![NumberFormat::decimal("ft", 1.0, 2)],
+            area: vec![NumberFormat::decimal("acre", 0.25, 3)],
+        });
+        h.run_steps(3);
+        h.get_by_label("Scale description").scroll_to_me();
+        h.run_steps(3);
+        h.get_by_label("Scale description").click();
+        h.run_steps(2);
+        ok(&mut h, &c, "ui.type", json!({"text":"Workshop drawing"}));
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].measure.custom_ratio, "Workshop drawing");
+        h.get_by_label("Separate vertical units").click();
+        h.run_steps(3);
+        assert!(h.state().views[0].measure.custom_formats.as_ref().unwrap().y.is_some());
+        h.state_mut().views[0].measure.format_axis = 2;
+        h.run_steps(3);
+        h.get_by_label("Add smaller unit").scroll_to_me();
+        h.run_steps(3);
+        h.get_by_label("Add smaller unit").click();
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].measure.custom_formats.as_ref().unwrap().distance.len(), 2);
+        h.get_by_label("Unit display format").scroll_to_me();
+        h.run_steps(3);
+        h.get_by_label("Unit display format").click();
+        h.run_steps(2);
+        h.get_by_label("Fraction").click();
+        h.run_steps(3);
+        {
+            let smaller = &mut h.state_mut().views[0].measure.custom_formats.as_mut().unwrap().distance[1];
+            assert_eq!(smaller.fraction, Fraction::Fraction);
+            smaller.denominator = 16;
+            smaller.fixed = false;
+        }
+        h.run_steps(3);
+        h.get_by_label("Apply scale").scroll_to_me();
+        h.run_steps(3);
+        let button = h.get_by_label("Apply scale").rect();
+        assert!(button.top() >= 0.0 && button.bottom() <= 740.0, "Apply must be reachable after scrolling: {button:?}");
+        h.get_by_label("Apply scale").click();
+        h.run_steps(3);
+        let id = h.state().views[0].id;
+        assert!(!h.state().views[0].measure.scale_open, "{:?}", h.state().views[0].measure.error);
+        let scale = h.state().session.get(id).unwrap().measurement_scale(0, [20.0, 20.0]).unwrap();
+        assert_eq!(scale.ratio, "Workshop drawing");
+        assert_eq!(scale.formats.as_ref().unwrap().distance.len(), 2);
+        assert!(scale.formats.as_ref().unwrap().y.is_some());
+        assert_eq!(reading(Kind::Distance, &[[0.0, 0.0], [1.125, 0.0]], &scale).unwrap().label, "1 ft 1 1/2 in");
+        assert_eq!(reading(Kind::Area, &[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], &scale).unwrap().label, "4.000 acre");
+        ok(&mut h, &c, "ui.command", json!({"id":"edit.undo"}));
+        h.run_steps(3);
+        assert!(h.state().session.get(id).unwrap().measurement_viewports(0).unwrap().is_empty());
+        ok(&mut h, &c, "ui.command", json!({"id":"edit.redo"}));
+        h.run_steps(3);
+        assert_eq!(
+            h.state().session.get(id).unwrap().measurement_scale(0, [20.0, 20.0]).unwrap().dictionary().unwrap().len(),
+            scale.dictionary().unwrap().len()
+        );
+    }
+}
+
+mod native_three_d_measurement_tests {
+    use super::*;
+    fn model_string(bytes: &mut Vec<u8>, value: &str) {
+        bytes.extend((value.len() as u16).to_le_bytes());
+        bytes.extend(value.as_bytes());
+    }
+    fn block_bytes(kind: u32, data: Vec<u8>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend(kind.to_le_bytes());
+        bytes.extend((data.len() as u32).to_le_bytes());
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend(data);
+        while !bytes.len().is_multiple_of(4) {
+            bytes.push(0);
+        }
+        bytes
+    }
+    fn u3d() -> Vec<u8> {
+        let mut d = Vec::new();
+        model_string(&mut d, "part");
+        d.extend(0u32.to_le_bytes());
+        d.extend(1u32.to_le_bytes());
+        for c in [1u32, 3, 0, 0, 0, 0, 1, 0, 0, 0, 3, 3, 0, 0, 0] {
+            d.extend(c.to_le_bytes());
+        }
+        for _ in 0..8 {
+            d.extend(1.0f32.to_le_bytes());
+        }
+        d.extend(0u32.to_le_bytes());
+        let mut payload = block_bytes(0xFFFFFF31, d);
+        let mut n = Vec::new();
+        model_string(&mut n, "visible-part");
+        n.extend(1u32.to_le_bytes());
+        model_string(&mut n, "");
+        for value in [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.] {
+            n.extend((value as f32).to_le_bytes());
+        }
+        model_string(&mut n, "part");
+        n.extend(3u32.to_le_bytes());
+        payload.extend(block_bytes(0xFFFFFF22, n));
+        let declaration_size = payload.len() + 44;
+        let mut b = Vec::new();
+        model_string(&mut b, "part");
+        b.extend(0u32.to_le_bytes());
+        for c in [1u32, 3, 0, 0, 0, 0] {
+            b.extend(c.to_le_bytes());
+        }
+        for p in [[0.0f32, 0.0, 0.0], [3.0, 0.0, 0.0], [0.0, 4.0, 0.0]] {
+            for v in p {
+                b.extend(v.to_le_bytes());
+            }
+        }
+        for v in [0u32, 0, 1, 2] {
+            b.extend(v.to_le_bytes());
+        }
+        payload.extend(block_bytes(0xFFFFFF3B, b));
+        let mut header = Vec::new();
+        header.extend(0u16.to_le_bytes());
+        header.extend(0u16.to_le_bytes());
+        header.extend(12u32.to_le_bytes());
+        header.extend((declaration_size as u32).to_le_bytes());
+        header.extend((payload.len() as u64 + 44).to_le_bytes());
+        header.extend(106u32.to_le_bytes());
+        header.extend(0.001f64.to_le_bytes());
+        let mut bytes = block_bytes(0x00443355, header);
+        bytes.extend(payload);
+        bytes
+    }
+
+    fn model_pdf() -> Vec<u8> {
+        let model = u3d();
+        let mut stream = format!("<< /Type /3D /Subtype /U3D /Length {} >>\nstream\n", model.len()).into_bytes();
+        stream.extend(model);
+        stream.extend(b"\nendstream");
+        let objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Annots [6 0 R] >>".to_vec(),
+            b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+            stream,
+            b"<< /Type /Annot /Subtype /3D /Rect [10 10 190 290] /3DD 5 0 R /Contents (Triangle) >>".to_vec(),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n", index + 1).as_bytes());
+            out.extend(object);
+            out.extend(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for offset in offsets {
+            out.extend(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+        out
+    }
+
+    #[test]
+    fn native_three_d_keys_do_not_edit_or_deselect_the_underlying_page() {
+        let slot: Arc<Mutex<Option<ControlClient>>> = Arc::default();
+        let attach = slot.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1100., 850.)).build_eframe(move |cc| {
+            let mut app = PdfCraftApp::new();
+            app.run_inline = true;
+            *attach.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
+            app.open_bytes("model.pdf", None, model_pdf()).unwrap();
+            app
+        });
+        h.run_steps(4);
+        let client = slot.lock().unwrap().take().unwrap();
+        ok(&mut h, &client, "ui.command", json!({"id":"measure.3d"}));
+        h.run_steps(12);
+        let id = h.state().views[0].id;
+        h.state_mut().views[0].comments.selected = Some((0, 0));
+        h.state_mut().three_d.as_mut().unwrap().points = vec![[0., 0., 0.], [3., 0., 0.]];
+        let before = h.state().session.get(id).unwrap().bytes.clone();
+        ok(&mut h, &client, "ui.key", json!({"key":"Backspace"}));
+        h.run_steps(8);
+        assert_eq!(h.state().session.get(id).unwrap().bytes, before, "a model key must not delete a page annotation");
+        assert_eq!(h.state().three_d.as_ref().unwrap().points.len(), 1);
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+        ok(&mut h, &client, "ui.key", json!({"key":"Escape"}));
+        h.run_steps(4);
+        assert!(h.state().three_d.as_ref().unwrap().points.is_empty());
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+        assert_eq!(h.state().session.get(id).unwrap().bytes, before);
+        // Save and select a model measurement through the actual controls.
+        h.state_mut().three_d.as_mut().unwrap().points = vec![[0., 0., 0.], [3., 0., 0.]];
+        h.run_steps(3);
+        h.get_by_label("Save measurement").scroll_to_me();
+        h.run_steps(3);
+        h.get_by_label("Save measurement").click();
+        h.run_steps(12);
+        assert_eq!(h.state().session.get(id).unwrap().three_d_measurements(0, 0, None).unwrap().measurements.len(), 1);
+        h.get_by_label("Edit measurement").scroll_to_me();
+        h.run_steps(3);
+        h.get_by_label("Edit measurement").click();
+        h.run_steps(3);
+        h.get_by_label("Markup text").scroll_to_me();
+        h.run_steps(3);
+        h.get_by_label("Markup text").click();
+        h.run_steps(2);
+        let saved = h.state().session.get(id).unwrap().bytes.clone();
+        ok(&mut h, &client, "ui.type", json!({"text":"AB"}));
+        ok(&mut h, &client, "ui.key", json!({"key":"Backspace"}));
+        h.run_steps(3);
+        assert_eq!(h.state().three_d.as_ref().unwrap().user_text, "A");
+        assert_eq!(h.state().session.get(id).unwrap().bytes, saved);
+        // Clicking the canvas returns key ownership from the text field.
+        h.get_by_label("3D model canvas").scroll_to_me();
+        h.run_steps(3);
+        h.get_by_label("3D model canvas").click();
+        h.run_steps(3);
+        ok(&mut h, &client, "ui.key", json!({"key":"Delete"}));
+        h.run_steps(12);
+        let document = h.state().session.get(id).unwrap();
+        assert!(document.three_d_measurements(0, 0, None).unwrap().measurements.is_empty());
+        assert_eq!(document.three_d_models(0).unwrap().len(), 1, "Delete must retain the model annotation");
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    }
+
+    #[test]
+    fn native_three_d_picking_save_edit_delete_history_and_reopen_in_both_themes() {
+        for theme in ["light", "dark"] {
+            let slot: Arc<Mutex<Option<ControlClient>>> = Arc::default();
+            let attach = slot.clone();
+            let mut h = Harness::builder().with_size(egui::vec2(1100., 850.)).build_eframe(move |cc| {
+                let mut app = PdfCraftApp::new();
+                app.run_inline = true;
+                *attach.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
+                app.open_bytes("model.pdf", None, model_pdf()).unwrap();
+                app
+            });
+            h.run_steps(4);
+            let client = slot.lock().unwrap().take().unwrap();
+            ok(&mut h, &client, "ui.set", json!({"key":"theme","value":theme}));
+            ok(&mut h, &client, "ui.command", json!({"id":"measure.distance"}));
+            h.run_steps(4);
+            h.get_by_label("Measure 3D · Triangle").click();
+            h.run_steps(10);
+            assert!(h.state().three_d.as_ref().unwrap().error.is_none(), "{:?}", h.state().three_d.as_ref().unwrap().error);
+            let camera = h.state().three_d.as_ref().unwrap().camera.clone().unwrap();
+            h.get_by_label("3D model canvas").scroll_to_me();
+            h.run_steps(5);
+            let rect = h.get_by_label("3D model canvas").rect();
+            for point in [[0.4, 0.5, 0.], [2., 0.5, 0.]] {
+                let projected = camera.project(point, [f64::from(rect.width()), f64::from(rect.height())]).unwrap().unwrap();
+                let position = rect.min + egui::vec2(projected[0] as f32, projected[1] as f32);
+                h.event(egui::Event::PointerMoved(position));
+                h.event(egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                h.event(egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                h.run_steps(4);
+            }
+            assert_eq!(h.state().three_d.as_ref().unwrap().points.len(), 2);
+            let doc = h.state().views[0].id;
+            h.get_by_label("Save measurement").scroll_to_me();
+            h.run_steps(4);
+            h.get_by_label("Save measurement").click();
+            h.run_steps(12);
+            let listing = h.state().session.get(doc).unwrap().three_d_measurements(0, 0, None).unwrap();
+            assert_eq!(listing.measurements.len(), 1);
+            assert!((listing.measurements[0].value - 0.0016).abs() < 1e-7);
+            let frame = camera.caption_frame(&listing.measurements[0], [360., 360.], 12.).unwrap().unwrap();
+            assert!(frame.x[0] * frame.up[1] - frame.x[1] * frame.up[0] < 0., "new text must face the selected camera");
+            h.get_by_label("Edit measurement").scroll_to_me();
+            h.run_steps(3);
+            h.get_by_label("Edit measurement").click();
+            h.run_steps(3);
+            h.get_by_label("Markup text").scroll_to_me();
+            h.run_steps(3);
+            h.get_by_label("Markup text").click();
+            h.run_steps(2);
+            ok(&mut h, &client, "ui.type", json!({"text":"Inspection"}));
+            h.run_steps(3);
+            assert_eq!(h.state().three_d.as_ref().unwrap().user_text, "Inspection");
+            let old_up = h.state().session.get(doc).unwrap().three_d_measurements(0, 0, None).unwrap().measurements[0].text_y;
+            h.get_by_label("Flip text up").scroll_to_me();
+            h.run_steps(3);
+            h.get_by_label("Flip text up").click();
+            h.run_steps(3);
+            assert!(h.state().three_d.as_ref().unwrap().flip_text_up);
+            h.get_by_label("Place caption").scroll_to_me();
+            h.run_steps(3);
+            h.get_by_label("Place caption").click();
+            h.run_steps(3);
+            h.get_by_label("3D model canvas").scroll_to_me();
+            h.run_steps(4);
+            let rect = h.get_by_label("3D model canvas").rect();
+            let before_camera = h.state().three_d.as_ref().unwrap().camera.clone().unwrap();
+            let old = h.state().session.get(doc).unwrap().three_d_measurements(0, 0, None).unwrap().measurements[0].clone();
+            let pixel = [f64::from(rect.width()) * 0.8, f64::from(rect.height()) * 0.25];
+            let expected =
+                before_camera.plane_point(pixel, [f64::from(rect.width()), f64::from(rect.height())], old.text_position, old.plane).unwrap();
+            let position = rect.min + egui::vec2(pixel[0] as f32, pixel[1] as f32);
+            h.event(egui::Event::PointerMoved(position));
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            h.run_steps(4);
+            assert!(!h.state().three_d.as_ref().unwrap().placing_text);
+            let actual = h.state().three_d.as_ref().unwrap().text_position.unwrap();
+            assert!(actual.iter().zip(expected).all(|(a, e)| (a - e).abs() < 1e-5));
+            assert_eq!(h.state().three_d.as_ref().unwrap().camera.as_ref(), Some(&before_camera));
+            h.get_by_label("Update measurement").scroll_to_me();
+            h.run_steps(3);
+            h.get_by_label("Update measurement").click();
+            h.run_steps(12);
+            assert_eq!(h.state().session.get(doc).unwrap().three_d_measurements(0, 0, None).unwrap().measurements[0].user_text, "Inspection");
+            assert_eq!(
+                h.state().session.get(doc).unwrap().three_d_measurements(0, 0, None).unwrap().measurements[0].text_y,
+                old_up.map(|value| -value)
+            );
+            h.get_by_label("Delete measurement").scroll_to_me();
+            h.run_steps(3);
+            h.get_by_label("Delete measurement").click();
+            h.run_steps(12);
+            assert!(h.state().session.get(doc).unwrap().three_d_measurements(0, 0, None).unwrap().measurements.is_empty());
+            ok(&mut h, &client, "ui.command", json!({"id":"edit.undo"}));
+            h.run_steps(12);
+            assert_eq!(h.state().session.get(doc).unwrap().three_d_measurements(0, 0, None).unwrap().measurements.len(), 1);
+            for (label, points, expected) in [
+                ("Perpendicular", [[0.4, 1., 0.], [0.4, 0.4, 0.], [2., 0.4, 0.]], 0.0006),
+                ("Angle", [[2., 0.4, 0.], [0.4, 0.4, 0.], [0.4, 2., 0.]], 90.),
+                ("Radius / diameter", [[0.4, 0.4, 0.], [2., 0.4, 0.], [0.4, 2., 0.]], 1.28_f64.sqrt() * 0.001),
+            ] {
+                h.get_by_label(label).scroll_to_me();
+                h.run_steps(3);
+                h.get_by_label(label).click();
+                h.run_steps(4);
+                h.get_by_label("3D model canvas").scroll_to_me();
+                h.run_steps(5);
+                let rect = h.get_by_label("3D model canvas").rect();
+                let camera = h.state().three_d.as_ref().unwrap().camera.clone().unwrap();
+                for point in points {
+                    let projected = camera.project(point, [f64::from(rect.width()), f64::from(rect.height())]).unwrap().unwrap();
+                    let position = rect.min + egui::vec2(projected[0] as f32, projected[1] as f32);
+                    h.event(egui::Event::PointerMoved(position));
+                    h.event(egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                    h.event(egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                    h.run_steps(4);
+                }
+                assert_eq!(h.state().three_d.as_ref().unwrap().points.len(), 3);
+                h.get_by_label("Save measurement").scroll_to_me();
+                h.run_steps(3);
+                h.get_by_label("Save measurement").click();
+                h.run_steps(12);
+                let list = h.state().session.get(doc).unwrap().three_d_measurements(0, 0, None).unwrap();
+                assert!(
+                    (list.measurements.last().unwrap().value - expected).abs() < 1e-4,
+                    "{label}: {:?}",
+                    h.state().three_d.as_ref().unwrap().error
+                );
+            }
+            ok(&mut h, &client, "ui.command", json!({"id":"measure.3d"}));
+            h.run_steps(12);
+            h.get_by_label("Vertex snapping").scroll_to_me();
+            h.run_steps(3);
+            h.get_by_label("Vertex snapping").click();
+            h.run_steps(3);
+            h.get_by_label("3D model canvas").scroll_to_me();
+            h.run_steps(5);
+            let rect = h.get_by_label("3D model canvas").rect();
+            let camera = h.state().three_d.as_ref().unwrap().camera.clone().unwrap();
+            for point in [[0., 0., 0.], [3., 0., 0.]] {
+                let p = camera.project(point, [f64::from(rect.width()), f64::from(rect.height())]).unwrap().unwrap();
+                let position = rect.min + egui::vec2(p[0] as f32 + 2., p[1] as f32 + 1.);
+                h.event(egui::Event::PointerMoved(position));
+                for pressed in [true, false] {
+                    h.event(egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                h.run_steps(4);
+            }
+            assert_eq!(h.state().three_d.as_ref().unwrap().points, vec![[0., 0., 0.], [3., 0., 0.]]);
+            h.get_by_label("Save measurement").scroll_to_me();
+            h.run_steps(3);
+            h.get_by_label("Save measurement").click();
+            h.run_steps(12);
+            let snapped = h.state().session.get(doc).unwrap().three_d_measurements(0, 0, None).unwrap();
+            assert!((snapped.measurements.last().unwrap().value - 0.003).abs() < 1e-12);
+            h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 0, locked: true });
+            h.run_steps(12);
+            let inspection = ok(&mut h, &client, "ui.inspect", json!({"query":"Save measurement"}));
+            assert_eq!(inspection["widgets"].as_array().unwrap().iter().find(|w| w["label"] == "Save measurement").unwrap()["enabled"], false);
+            assert!(h.state().session.get(doc).unwrap().three_d_artwork(0, 0).unwrap().edit_error.is_some());
+            ok(&mut h, &client, "ui.command", json!({"id":"edit.undo"}));
+            h.run_steps(12);
+            assert!(h.state().session.get(doc).unwrap().three_d_artwork(0, 0).unwrap().edit_error.is_none());
+            let bytes = h.state_mut().session.save_bytes(doc).unwrap();
+            let mut reopened = pdfcraft_engine::Session::new();
+            let id = reopened.open_new("reopened.pdf", bytes).unwrap();
+            let listing = reopened.get(id).unwrap().three_d_measurements(0, 0, None).unwrap();
+            assert_eq!(listing.measurements[0].user_text, "Inspection");
+            assert!(listing.measurements[0].text_position.iter().zip(expected).all(|(a, e)| (a - e).abs() < 1e-5));
+            assert!((listing.measurements[0].value - 0.0016).abs() < 1e-7);
+        }
+    }
 }

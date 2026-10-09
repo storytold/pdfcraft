@@ -12,15 +12,15 @@ Detailed task lists and acceptance tests are in `plan/execution-plan.md` (local-
 
 The unit is **wall-clock hours of agent work** (Claude Opus 5.5 coding continuously; human review time not included).
 
-**Where we are (2026-10-07, measured by `cargo xtask parity` over 806 tracked Acrobat Pro features; 23 more are Adobe-cloud-only and out of scope):**
+**Where we are (2026-10-09, measured by `cargo xtask parity` over 807 tracked Acrobat Pro features; 23 more are Adobe-cloud-only and out of scope):**
 
 | Tier | Features | Shipped | Partial | Shipped % | Weighted % (partial = ½) |
 |---|---|---|---|---|---|
-| P0 (must-have for 1.0) | 251 | 222 | 25 | 88.4% | 93.4% |
-| P1 | 326 | 174 | 38 | 53.4% | 59.2% |
-| P2 | 186 | 14 | 7 | 7.5% | 9.4% |
-| P3 | 43 | 1 | 0 | 2.3% | 2.3% |
-| **All** | **806** | **411** | **70** | **51.0%** | **55.3%** |
+| P0 (must-have for 1.0) | 251 | 224 | 24 | 89.2% | 94.0% |
+| P1 | 326 | 175 | 41 | 53.7% | 60.0% |
+| P2 | 187 | 16 | 11 | 8.6% | 11.5% |
+| P3 | 43 | 1 | 1 | 2.3% | 3.5% |
+| **All** | **807** | **416** | **77** | **51.5%** | **56.3%** |
 
 **Effort-weighted parity: ≈ 30–35%.** Feature counts overstate progress: the remaining features include the hardest ones (our own renderer and font engine, editing existing text and reflow, OCR beyond Latin, XFA, PDF/A/X/UA preflight, Office export, long-term signature validation). Weighting each milestone by its estimated size gives about a third of the total work done. See **[Honest assessment](#honest-assessment-2026-10-05)** for what the numbers don't show.
 
@@ -40,7 +40,7 @@ Read this before choosing work. The feature table above counts what exists; this
 
 | Dimension | State | In one line |
 |---|---|---|
-| Feature count | 51.0% shipped (P0 88%, P1 53%, P2 8%, P3 2%) | A typical viewer, annotator, form-filler or page organizer is mostly covered |
+| Feature count | 51.5% shipped (P0 89%, P1 54%, P2 9%, P3 2%) | A typical viewer, annotator, form-filler or page organizer is mostly covered |
 | Effort | ≈ 30–35% | The remaining work is the hardest: M2 15%, M7 17%, M11 18%, M12 23%, M14 0% |
 | Foundations | Weakest | Rendering is still the bootstrap `hayro`; the inspector is `lopdf`; 18 vendored patches carried |
 | Robustness | Early beta | Each 15-minute fuzz run found new out-of-memory crashes or hangs until 2026-10-05 |
@@ -52,16 +52,16 @@ Read this before choosing work. The feature table above counts what exists; this
 | Area | Shipped | What's strong / what's missing |
 |---|---|---|
 | A Core | 75% | Parser, repair, encryption, incremental saves. Missing: lazy loading (`ByteSource`), own image codecs, PDF 2.0 extras, Arlington validation |
-| F Forms | 71% | Filling, authoring, AF scripts, sandboxed JavaScript, data exchange. Missing: XFA, wider JavaScript object model |
-| E Comments | 71% | Markup types with appearances, XFDF/FDF, summaries, calibrated 2D measuring (single-unit decimal scales). Missing: replace-text proposals, summary layouts, compound/fractional measurement formats |
+| F Forms | 72% | Filling, authoring, AF scripts, sandboxed JavaScript, data exchange. Missing: XFA, wider JavaScript object model |
+| E Comments | 70% | Markup types with appearances, XFDF/FDF, summaries, calibrated 2D measuring with compound/fractional formats, geospatial registration and native model-space 3D measurements. Missing: replace-text proposals, summary layouts, broader 3D model formats and presentation |
 | M Accessibility | 62% | Checker (all 32 rules). Missing: autotag, Tags/Order/Content panels, Reading Order tool, keyboard-only operation |
 | B View | 55% | Shell, find, panels, tiles, web build. **Rendering is borrowed (`hayro`)**, so the 7 rendering P0s are only partial |
-| D Organize | 55% | Pages, combine, split, bookmarks, labels. Missing: replace pages, transitions |
+| D Organize | 57% | Pages, combine, split, bookmarks, labels. Missing: replace pages, transitions |
 | G Protect | 54% | Passwords, permissions, redaction, sanitize. Missing: certificate security, redaction codes |
-| H Sign | 48% | PAdES B-B signing and validation; macOS Keychain and Windows CNG certificate store signing. Missing: timestamps (B-T), LTV (DSS/OCSP/CRL), FieldMDP, smart cards, PKCS #11 |
-| C Edit | 46% | Added text and images stay editable; header/footer/watermark. Missing: robust editing of existing text and images (fonts, subsets, reflow) |
-| L Print | 36% | Acrobat-style sizing, n-up, booklet, CUPS. Missing: Windows and web printing, production options |
-| J Create | 32% | From images, text, clipboard; Word/HTML/RTF export. Missing: Office import, Excel/PowerPoint export |
+| H Sign | 50% | PAdES B-B signing and validation; macOS Keychain and Windows CNG certificate store signing. Missing: timestamps (B-T), LTV (DSS/OCSP/CRL), FieldMDP, smart cards, PKCS #11 |
+| C Edit | 48% | Added text and images stay editable; header/footer/watermark. Missing: robust editing of existing text and images (fonts, subsets, reflow) |
+| L Print | 38% | Acrobat-style sizing, n-up, booklet, CUPS. Missing: Windows and web printing, production options |
+| J Create | 35% | From images, text, clipboard; Word/HTML/RTF export. Missing: Office import, Excel/PowerPoint export |
 | N Misc | 27% | CLI, MCP, UI control channel, Action Wizard. Missing: AI providers, performance budgets |
 | K Optimize | 26% | Reduce File Size, Optimizer. Missing: preflight, PDF/X/UA, transparency/fonts panels |
 | I OCR | 19% | Searchable image for Latin script. Missing: other scripts and accents, editable-text output, deskew |
@@ -101,7 +101,7 @@ Hours are for a single agent (low–high). "Done" is the estimated fraction of t
 | M9 | Signatures (PAdES, validation) | 160–280 | 55% | 70–125 | Done: new `sign` crate (DER, X.509, CMS, PKCS #12 on RustCrypto; aws-lc-rs for RSA private keys); PAdES B-B signing (visible, invisible, existing fields, certification with DocMDP); validation with trust store and changes-after-signing classification; self-signed digital IDs; Signatures panel, message bar, sign dialogs; agent tools. Checked with pdfsig and OpenSSL. Done since: macOS Keychain and Windows Current User Personal store signing (software-backed CNG keys), certificate viewer, signed documents protected from rewrites. Missing: timestamps (B-T), LTV (DSS, OCSP, CRL), FieldMDP, smart cards, PKCS #11 |
 | M10 | OCR, create, export, print | 200–350 | 33% | 130–235 | Done: create from blank/text/PNG/JPEG/TIFF (multi-page)/GIF/BMP; export PNG/JPEG/TIFF and text; Print (Acrobat's sizing, n-up, booklet, poster, comments & forms, preview, CUPS spooler, print-ready PDF). Done since: embedded/72/custom DPI choices for image imports; export all images; OCR (searchable image for pages, ranges and multiple files); single-sided cut-and-stack imposition with cut marks, through Print and doc_print; Create PDF from multiple files (PDFs, images and text, edited as pages in the grid). Missing: OCR languages beyond Latin, editable-text OCR output, Office export/import, Windows/web printing |
 | M11 | Optimize, preflight, PDF/A/X/UA, print production | 200–350 | 18% | 165–290 | Done: new `optimize` crate: Reduce File Size and the PDF Optimizer (images measured where drawn, bicubic downsampling, JPEG/ZIP recompression only when smaller, discard objects and user data, Flate clean-up, resource merging, object streams). Missing: fonts and transparency panels, space audit, preflight, PDF/A/X/UA |
-| M12 | Accessibility, compare, measure, search, XFA | 200–380 | 23% | 155–295 | Done: new `a11y` crate with the Accessibility Checker (all 32 rules, report, Fix/Skip/Explain, options dialog and results panel, agent tools). Done since: 2D distance, perimeter and area measurements with persistent viewport calibration, snapping, live information and CSV export. Missing: autotag, Tags/Order/Content panels, Reading Order tool, alt-text workflow, compare, geospatial/3D measurement, search index, XFA |
+| M12 | Accessibility, compare, measure, search, XFA | 200–380 | 23% | 155–295 | Done: new `a11y` crate with the Accessibility Checker (all 32 rules, report, Fix/Skip/Explain, options dialog and results panel, agent tools). Measurement progress: compound/fractional formats, viewport editing, visible raster/glyph/layer snapping, geospatial registration, standard model-space 3D measurements and native/headless picking. Done since: 2D distance, perimeter and area measurements with persistent viewport calibration, snapping, live information and CSV export. Missing: autotag, Tags/Order/Content panels, Reading Order tool, alt-text workflow, compare, broader geospatial/3D format and presentation coverage, search index, XFA |
 | M13 | Automation (MCP, Action Wizard, CLI) + AI providers | 60–120 | 45% | 33–66 | Done: MCP resources (document info, text, page images); headless tool table (123 tools incl. signing, optimizing, initial view, links, stamps, data exchange, comment review, forms authoring and scripts, redaction, sanitize, print, add content), opt-in MCP server over stdio, CLI `run`/`tools` (closed stdout pipes exit cleanly), UI control channel with drag. Missing: Action Wizard, AI providers |
 | M14 | 1.0 polish: performance, localization, installers | 120–250 | 5% | 115–240 | Done: PhotoCraft's translation system (`i18n/`: TSV catalogs, `tl!`, command-id and plural entries, system-language detection, strict catalog tests); every dialog, panel and notice goes through `tl!`; Japanese, Traditional Chinese, Simplified Chinese, Russian, Spanish and French catalogs have ≈1,800 entries each; Simplified Chinese and French coverage is checked against the UI source; Czech and Brazilian Portuguese for menus. French locales (`fr`, `fr_FR`, `fr_CA`) follow the French catalog. Missing: more catalogs filled in, installers, performance budgets |
 | | **Total (original plan sizing)** | **2,085–3,840** | **≈ 35%** | **≈ 1,350–2,500 at the planned rate; ≈ 600–1,100 at the measured rate** | |
@@ -124,6 +124,11 @@ M0 → M1 → M2 → M3 → M4 must happen in order. After M4, M5–M12 can run 
 - Unmeasured fidelity: without an Acrobat comparison harness, quality gaps surface as user reports.
 
 ## Log
+
+- **2026-10-09 (3D captions and input):** Added native caption placement on the annotation plane, stored text orientation, markup color, text size and radial extension length. Model keys no longer delete a selected page comment; focused text fields retain normal editing. A real desktop check caught back-facing defaults, now covered by camera-facing construction and flip controls. New placement, direction, hostile-input, text-field and delete regressions are included. All eight CI gates pass on a6bc63a with 1,354 workspace tests; real desktop and CLI save/reopen checks pass in both themes. Broader measurement completion continues.
+
+- **2026-10-09 (measure workflow):** Integrated current main while preserving the measurement patch. Added standard 3D measurements, camera navigation, bounded geometry previews and surface/vertex/edge/point/line/silhouette picking. All eight xtask CI gates pass, including 1,343 workspace tests; native tests cover both themes and all four construction modes. Thirty WASM crates also check. Broader model format/presentation work and final publication checks continue. Overall estimate unchanged.
+
 
 - **2026-10-08 (M5.7, signature resize proportions):** Image signature corner handles preserve the embedded image's original aspect ratio and anchor the opposite corner; edge midpoint handles stretch width or height independently. The live preview and committed edit share the constrained geometry, including page/view rotation and reopened PDFs whose rectangles were stretched previously. Synthetic UI tests cover all corners, edge resizing, undo and redo. Milestone and effort estimates unchanged.
 - **2026-10-08 (M5.7, live signature adjustment):** Embedded image signatures resize and move with every pointer frame. Movement hides the frame and handles, which return on release; Escape cancels without committing. A cached background preserves the page beneath the image, and only the completed gesture enters undo history. The read-only engine preview and `comment_image_preview` tool share bounded image decoding and render layers. Synthetic pixel tests cover live geometry, alpha, coloured page content, rotation, cancellation and encrypted save/reopen. Milestone and effort estimates unchanged.

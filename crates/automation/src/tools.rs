@@ -42,6 +42,40 @@ fn point() -> Value {
     json!({ "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x, y] in points from the top-left of the displayed page." })
 }
 
+fn point_3d() -> Value {
+    json!({"type":"array","items":{"type":"number","minimum":-1e12,"maximum":1e12},"minItems":3,"maxItems":3,"description":"[x,y,z] in model world coordinates."})
+}
+fn model_camera_schema(mut schema: Value) -> Value {
+    if let Some(fields) = schema.as_object_mut() {
+        for (name, value) in [
+            ("width", json!({"type":"integer","minimum":1,"maximum":2048})),
+            ("height", json!({"type":"integer","minimum":1,"maximum":2048})),
+            ("yaw", json!({"type":"number","minimum":(-std::f64::consts::TAU),"maximum":std::f64::consts::TAU})),
+            ("pitch", json!({"type":"number","minimum":(-std::f64::consts::TAU),"maximum":std::f64::consts::TAU})),
+            ("pan", json!({"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2})),
+            ("zoom", json!({"type":"number","minimum":0.01,"maximum":100})),
+        ] {
+            fields.insert(name.into(), value);
+        }
+    }
+    model_schema(schema)
+}
+fn model_schema(extra: Value) -> Value {
+    let mut properties = json!({"doc":doc(),"page":{"type":"integer","minimum":1},"annotation":{"type":"integer","minimum":1,"description":"Index from three_d_models."},"view":{"type":"integer","minimum":1,"description":"Optional saved view index; omitted selects the annotation's current default view."}});
+    if let (Some(target), Some(extra)) = (properties.as_object_mut(), extra.as_object()) {
+        target.extend(extra.clone());
+    }
+    schema(properties, &["doc", "page", "annotation"])
+}
+fn geometry_3d() -> Value {
+    let p = point_3d();
+    json!({"oneOf":[
+        {"type":"object","properties":{"kind":{"const":"linear"},"a":p,"b":p},"required":["kind","a","b"]},
+        {"type":"object","properties":{"kind":{"const":"perpendicular"},"a":p,"b":p,"direction":p},"required":["kind","a","b","direction"]},
+        {"type":"object","properties":{"kind":{"const":"angular"},"a":p,"b":p,"first_direction":p,"second_direction":p},"required":["kind","a","b","first_direction","second_direction"]},
+        {"type":"object","properties":{"kind":{"const":"radial"},"center":p,"on_circle":p,"diameter":{"type":"boolean"},"arc":{"type":["array","null"],"items":p,"minItems":2,"maxItems":2}},"required":["kind","center","on_circle","diameter"]}
+    ]})
+}
 fn measure_points() -> Value {
     json!({"type":"array","items":point(),"minItems":1,"maxItems":2048})
 }
@@ -49,6 +83,34 @@ fn measure_schema() -> Value {
     schema(
         json!({"doc":doc(),"page":{"type":"integer","minimum":1},"points":measure_points(),"label":{"type":"string","maxLength":512},"author":{"type":"string","maxLength":512}}),
         &["doc", "page", "points"],
+    )
+}
+
+fn measurement_geospatial() -> Value {
+    let system = json!({"type":"object","properties":{"kind":{"type":"string","enum":["geographic","projected"]},"epsg":{"type":["integer","null"],"minimum":1},"wkt":{"type":["string","null"],"maxLength":16384}},"required":["kind"],"additionalProperties":false});
+    json!({"type":"object","properties":{
+        "gcs":system.clone(),"dcs":{"anyOf":[system,{"type":"null"}]},
+        "controls":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"object","properties":{"local":point(),"position":point()},"required":["local","position"],"additionalProperties":false}},
+        "bounds":{"type":"array","minItems":3,"maxItems":128,"items":point()},
+        "units":{"type":"array","minItems":3,"maxItems":3,"items":{"type":"string"}},
+        "matrix":{"anyOf":[{"type":"array","minItems":12,"maxItems":12,"items":{"type":"number"}},{"type":"null"}]}
+    },"required":["gcs","controls","bounds","units"],"additionalProperties":false})
+}
+fn measurement_formats() -> Value {
+    let array = || {
+        json!({"type":"array","minItems":1,"maxItems":16,"items":schema(json!({
+        "unit":{"type":"string","minLength":1,"maxLength":24},
+        "factor":{"type":"number","minimum":1e-12,"maximum":1e12},
+        "fraction":{"type":"string","enum":["decimal","fraction","round","truncate"]},
+        "denominator":{"type":"integer","minimum":1,"maximum":1000000000},
+        "fixed":{"type":"boolean"},"thousands":{"type":"string","maxLength":24},
+        "decimal":{"type":"string","maxLength":24},"prefix":{"type":"string","maxLength":24},
+        "suffix":{"type":"string","maxLength":24},"unit_first":{"type":"boolean"}
+    }), &["unit","factor","fraction","denominator","fixed","thousands","decimal","prefix","suffix","unit_first"]) })
+    };
+    schema(
+        json!({"x":array(),"y":array(),"distance":array(),"area":array(),"cyx":{"type":"number","minimum":1e-12,"maximum":1e12}}),
+        &["x", "distance", "area"],
     )
 }
 
@@ -126,6 +188,8 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("file.properties")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t("layer_visibility", "View document layers", "List optional-content layers or change a layer's visibility for viewing and measurement snapping. Layer indices start at 1. This is a viewer choice; saving does not change the document's default layer configuration.")
+            .with(schema(json!({"doc":doc(),"layer":{"type":"integer","minimum":1},"visible":{"type":"boolean"}}), &["doc"])),
         t("doc_close", "Close a document", "Close a document. Fails if it has unsaved changes unless discard_changes is true.")
             .cmd("file.close")
             .with(schema(json!({ "doc": doc(), "discard_changes": { "type": "boolean" } }), &["doc"])),
@@ -503,19 +567,25 @@ pub fn tools() -> Vec<ToolDef> {
             .destructive()
             .cmd("edit.remove_links")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t("three_d_models","List 3D models","Inventory embedded 3D annotations without decompressing models. Annotation indices are 1-based; rectangles are PDF user-space coordinates.").ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1}}),&["doc","page"])),
+        t("three_d_info","Read 3D model geometry","Read actual model geometry, assembly transforms, model units and saved PDF camera views. World coordinates preserve the model's units.").ro().with(model_schema(json!({}))),
+        t("three_d_render","Preview a 3D model","Render actual transformed triangles, lines and points with depth and clipping. Optional yaw/pitch are orbit angles in radians; pan is a pixel delta; zoom is a positive magnification factor. Saved PDF camera views determine projection. Returns a PNG geometry preview.").ro().with(model_schema(json!({"width":{"type":"integer","minimum":1,"maximum":2048},"height":{"type":"integer","minimum":1,"maximum":2048},"yaw":{"type":"number","minimum":(-std::f64::consts::TAU),"maximum":std::f64::consts::TAU},"pitch":{"type":"number","minimum":(-std::f64::consts::TAU),"maximum":std::f64::consts::TAU},"pan":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"zoom":{"type":"number","minimum":0.01,"maximum":100}}))),
+        t("three_d_pick","Pick a 3D model","Find the closest visible transformed triangle using either world origin/direction or a screen pixel [x,y]. Screen mode uses the saved PDF view and the same width, height, yaw, pitch, pan and zoom controls as three_d_render; width and height default to 640 by 480. Screen snap selects surface, vertex, edge, silhouette or auto; radius is 0 to 64 pixels (default 8). Point and line primitives are selectable too. Returns the actual world point, kind and primitive, plus barycentric coordinates for surface hits.").ro().with(model_camera_schema(json!({"origin":point_3d(),"direction":point_3d(),"pixel":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"snap":{"type":"string","enum":["surface","vertex","edge","silhouette","auto"]},"radius":{"type":"number","minimum":0,"maximum":64}}))),
+        t("three_d_measurements","List 3D measurements","Read the selected view's standard 3D measurement dictionaries and report unrecognized or invalid entries. Indices are 1-based.").ro().with(model_schema(json!({}))),
+        t("three_d_measure","Measure a 3D model","Supply geometry, or points plus kind. Point order: linear endpoints; perpendicular point and line endpoints; angular endpoint, vertex, endpoint; radial three circle points. capture_view saves the selected camera with optional navigation controls. Calculate model-world distance, perpendicular distance, angle or radius/diameter. Set save=true to add an undoable standard PDF measurement; index edits an existing measurement. remove=true and index deletes one. Unit overrides require both unit and units_per_model_unit. Plane is the annotation-plane normal, default [0,0,1]; choose one perpendicular to the measurement. Text position is in model world coordinates. Alternatively text_pixel places the caption on its annotation plane using the preview camera; it cannot be combined with text_position. text_y chooses the caption up orientation on its plane. text_size is the zoom-invariant height in PDF points. Radial extension_length is in points (default 60, range 0 to 4096).").cmd("measure.3d").with(model_camera_schema(json!({"geometry":geometry_3d(),"points":{"type":"array","items":point_3d(),"minItems":2,"maxItems":3},"kind":{"enum":["linear","perpendicular","angular","radial"]},"diameter":{"type":"boolean"},"show_circle":{"type":"boolean"},"capture_view":{"type":"boolean"},"plane":point_3d(),"text_position":point_3d(),"text_pixel":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"text_y":point_3d(),"text_size":{"type":"number","minimum":1,"maximum":256},"extension_length":{"type":"number","minimum":0,"maximum":4096},"unit":{"type":"string","minLength":1,"maxLength":24},"units_per_model_unit":{"type":"number","exclusiveMinimum":0,"maximum":1e12},"precision":{"type":"integer","minimum":0,"maximum":12},"radians":{"type":"boolean"},"color":color(),"label":{"type":"string","maxLength":512},"text":{"type":"string","maxLength":512},"save":{"type":"boolean"},"index":{"type":"integer","minimum":1},"remove":{"type":"boolean"}}))),
         t("measure_distance", "Measure distance", "Add an undoable two-point distance annotation using the scale of the first point's viewport.")
             .cmd("measure.distance").with(measure_schema()),
         t("measure_perimeter", "Measure perimeter", "Add an undoable connected-line length annotation. To include a closing edge, repeat the first point at the end.")
             .cmd("measure.perimeter").with(measure_schema()),
         t("measure_area", "Measure area", "Add an undoable area annotation from a simple polygon. The last edge closes automatically.")
             .cmd("measure.area").with(measure_schema()),
-        t("measure_info", "Read a measurement", "Calculate a live distance, perimeter or area, deltas, angle and scale without adding an annotation. Incomplete paths are allowed.")
+        t("measure_info", "Read a measurement", "Calculate a live distance, perimeter or area, deltas, angle and scale without adding an annotation. Incomplete paths are allowed. Geospatial viewports return map coordinates and ellipsoidal distance/area on the declared datum. One point reads its map coordinate.")
             .ro().cmd("measure.info").with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"points":measure_points(),"type":{"type":"string","enum":["distance","perimeter","area"]}}), &["doc","page","points"])),
-        t("measure_list", "List measurements", "Saved measurement annotations with calculated values, scale and vertices in display coordinates. Measurements with unsupported imported formats (compound or fractional units, non-rectilinear scales) or invalid geometry are listed under unsupported with a reason.")
+        t("measure_list", "List measurements", "Saved measurement annotations with calculated values, scale and vertices in display coordinates. Measurements with unsupported scales or invalid geometry are listed under unsupported with a reason.")
             .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1}}), &["doc"])),
-        t("measure_scale", "Set or read a measurement scale", "Read the scale at a point, or add a rectangular viewport using units_per_point or two calibration points and their real-world distance. Existing measurements retain their original scales. Undoable.")
-            .cmd("measure.scale").with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"at":point(),"rect":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},"name":{"type":"string"},"unit":{"type":"string"},"precision":{"type":"integer","minimum":0,"maximum":6},"units_per_point":{"type":"number","exclusiveMinimum":0},"points":measure_points(),"distance":{"type":"number","exclusiveMinimum":0}}), &["doc","page"])),
-        t("measure_snap", "Snap a measurement vertex", "Snap a point to vector paths, endpoints, midpoints or intersections. Coordinates and tolerance are in display points. Bounded extraction reports truncated geometry.")
+        t("measure_scale", "Set or read a measurement scale", "Read the scale and viewports, or add/update a viewport with a numeric calibration, complete ISO number format arrays or geospatial registration. Geographic control positions are [latitude,longitude] in degrees; projected positions are [easting,northing] in native units. Local positions and Bounds use the viewport unit square with a bottom-left origin. Set viewport to its 1-based index to update it or pass remove=true to remove it. Formats X/Y conversion factors use physical display points; distance/area factors use the largest X unit. Existing measurements retain their scales. Undoable.")
+            .cmd("measure.scale").with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"at":point(),"rect":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},"name":{"type":"string"},"unit":{"type":"string"},"precision":{"type":"integer","minimum":0,"maximum":6},"units_per_point":{"type":"number","exclusiveMinimum":0},"points":measure_points(),"distance":{"type":"number","exclusiveMinimum":0},"viewport":{"type":"integer","minimum":1},"remove":{"type":"boolean"},"formats":measurement_formats(),"geospatial":measurement_geospatial(),"ratio":{"type":"string"}}), &["doc","page"])),
+        t("measure_snap", "Snap a measurement vertex", "Snap a point to visible vector paths, glyph outlines, raster edges, endpoints, midpoints or intersections. Applies clipping and viewer layer visibility. Coordinates and tolerance are in display points. Reports extraction limits, unreadable content and unevaluated soft-mask/pattern visibility.")
             .ro().cmd("measure.snap").with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"at":point(),"tolerance":{"type":"number","minimum":0,"maximum":10000},"endpoints":{"type":"boolean"},"midpoints":{"type":"boolean"},"intersections":{"type":"boolean"},"paths":{"type":"boolean"}}), &["doc","page","at"])),
         t("measure_export", "Export measurements as CSV", "Atomically write saved measurement values, labels, authors and scale ratios as spreadsheet-safe CSV. Returns how many unsupported measurements were left out.")
             .cmd("measure.export").with(schema(json!({"doc":doc(),"out":path_arg()}), &["doc","out"])),

@@ -1083,6 +1083,9 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
 pub fn set_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    if let Some(value) = d.get(b"PCMeasureValue").and_then(Object::as_string) {
+        pdfcraft_fonts::caption_outline(&value.to_text()).map_err(AnnotError::Invalid)?;
+    }
     let Some(stream) = appearance::build(&d) else { return Err(AnnotError::Unsupported(subtype)) };
     let ap = doc.add(Object::Stream(stream));
     let mut apd = Dict::new();

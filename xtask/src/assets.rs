@@ -107,6 +107,8 @@ pub struct Bundled {
     pub author: String,
     pub source: String,
     pub licence: String,
+    #[serde(default)]
+    pub licence_file: Option<String>,
     pub kind: String,
     pub usage: String,
     pub sha256: String,
@@ -262,6 +264,11 @@ pub fn check(root: &Path, m: &Manifest, repo_files: &[String], lock: &BTreeSet<(
     for b in &m.bundled {
         let what = format!("{}@{} {}", b.krate, b.version, b.path);
         licence_ok(&what, &b.licence, &mut problems);
+        if let Some(file) = &b.licence_file
+            && !root.join(file).is_file()
+        {
+            problems.push(format!("{what}: licence file {file} is missing"));
+        }
         if !lock.contains(&(b.krate.clone(), b.version.clone())) {
             problems.push(format!("{what}: crate version not in Cargo.lock (dependency changed: re-audit its bundled assets)"));
         }
@@ -380,7 +387,7 @@ pub fn render_markdown(m: &Manifest) -> String {
             esc(&b.title),
             note,
             esc(&b.author),
-            b.licence,
+            b.licence_file.as_ref().map(|file| format!("[{}]({file})", b.licence)).unwrap_or_else(|| b.licence.clone()),
             esc(&b.source),
             esc(&b.usage)
         );
@@ -441,6 +448,7 @@ mod tests {
             author: author.into(),
             source: "s".into(),
             licence: "BSD-3-Clause".into(),
+            licence_file: None,
             kind: kind.into(),
             usage: "u".into(),
             sha256: "0".repeat(64),
@@ -477,6 +485,15 @@ mod tests {
         let m = load(&root).unwrap();
         let problems = check(&root, &m, &repo_files(&root).unwrap(), &cargo_lock_versions(&root).unwrap());
         assert!(problems.is_empty(), "{problems:#?}");
+    }
+
+    #[test]
+    fn declared_bundled_licence_must_exist() {
+        let mut b = bundled("test-crate", "data.bin", "Author", "data", false);
+        b.licence_file = Some("vendor/licenses/missing-license.txt".into());
+        let manifest = Manifest { bundled: vec![b], ..Default::default() };
+        let problems = check(&root(), &manifest, &[], &lock(&[("test-crate", "1.0.0")]));
+        assert!(problems.iter().any(|p| p.contains("licence file vendor/licenses/missing-license.txt is missing")), "{problems:?}");
     }
 
     #[test]

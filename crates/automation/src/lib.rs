@@ -22,6 +22,7 @@ mod measure;
 mod printing;
 mod redact;
 mod signing;
+mod three_d;
 mod tools;
 
 use std::collections::HashMap;
@@ -536,7 +537,14 @@ impl Automation {
             "measure_info" => self.measurement_info(&a)?,
             "measure_list" => self.measurement_list(&a)?,
             "measure_scale" => self.measurement_scale(&a)?,
+            "three_d_models" => self.three_d_models(&a)?,
+            "three_d_info" => self.three_d_info(&a)?,
+            "three_d_render" => return self.three_d_render(&a).map(|c| vec![c]),
+            "three_d_pick" => self.three_d_pick(&a)?,
+            "three_d_measurements" => self.three_d_list(&a)?,
+            "three_d_measure" => self.three_d_measure(&a)?,
             "measure_snap" => self.measurement_snap(&a)?,
+            "layer_visibility" => self.layer_visibility(&a)?,
             "measure_export" => self.measurement_export(&a)?,
             "comment_list" => self.comment_list(&a)?,
             "comment_add" => self.comment_add(&a)?,
@@ -1343,7 +1351,7 @@ impl Automation {
     fn renderer(&mut self, id: DocId) -> Result<&mut PageRenderer> {
         let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
         let fresh = || {
-            let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
+            let config = doc.render_config();
             (doc.display.clone(), PageRenderer::new(doc.display.clone(), config))
         };
         let entry = self.renderers.entry(id).or_insert_with(fresh);
