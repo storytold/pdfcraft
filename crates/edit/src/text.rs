@@ -542,7 +542,18 @@ fn type3_path(face: &CraftFont, ch: char) -> Result<(Vec<u8>, f64), EditError> {
         GlyphError::TooComplex => EditError::Invalid(format!("Japanese fallback glyph U+{:04X} is too complex", ch as u32)),
     })?;
     let scale = 1000.0;
-    let mut out = format!("{} 0 0 0 0 1000 1000 d1\n", pdf_num(glyph.width * scale)).into_bytes();
+    // d1 is `wx wy llx lly urx ury` (ISO 32000-2 §9.6.4) with a box enclosing the glyph;
+    // Acrobat draws a bullet in place of a glyph whose d1 is malformed.
+    let b = if glyph.contours.is_empty() { [0.0; 4] } else { glyph.bbox };
+    let mut out = format!(
+        "{} 0 {} {} {} {} d1\n",
+        pdf_num(glyph.width * scale),
+        pdf_num((b[0] * scale).floor()),
+        pdf_num((b[1] * scale).floor()),
+        pdf_num((b[2] * scale).ceil()),
+        pdf_num((b[3] * scale).ceil())
+    )
+    .into_bytes();
     for contour in glyph.contours {
         let Some(first) = contour.first() else { continue };
         out.extend_from_slice(format!("{} {} m\n", pdf_num(first[0] * scale), pdf_num(first[1] * scale)).as_bytes());
