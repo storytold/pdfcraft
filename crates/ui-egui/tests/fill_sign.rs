@@ -13,6 +13,16 @@ const FIXTURE: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
+/// Tests that render pixels (`h.render()`) take this first, so only one wgpu device compiles
+/// shaders at a time: WARP's ARM64 pixel-shader JIT crashes when two do (see `tests/view.rs`).
+/// Declared before the harness, so it is released after the device is dropped.
+static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn gpu() -> std::sync::MutexGuard<'static, ()> {
+    // A test that panicked while holding it leaves nothing to clean up.
+    GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn harness() -> Harness<'static, PdfCraftApp> {
     harness_bytes(FIXTURE)
 }
@@ -361,6 +371,7 @@ fn browse_image(h: &mut Harness<'static, PdfCraftApp>, path: &std::path::Path) {
 
 #[test]
 fn image_signatures_and_initials_can_be_imported_placed_and_remembered() {
+    let _gpu = gpu();
     let path = signature_file("import");
     let mut h = harness();
     for (command, y, initials) in [("sign.fill.signature", 250.0, false), ("sign.fill.initials", 150.0, true)] {
@@ -426,6 +437,7 @@ fn image_signatures_and_initials_can_be_imported_placed_and_remembered() {
 
 #[test]
 fn image_signature_preview_follows_pointer_at_page_size_with_zoom_and_rotation() {
+    let _gpu = gpu();
     // The block above the stroke is at its right end, away from the pointer's own cursor.
     let path = signature_file_with_mark("pointer", 100..110);
     let image = pdfcraft_engine::SignatureImage::read(std::fs::File::open(&path).unwrap()).unwrap();
@@ -495,6 +507,7 @@ fn image_signature_preview_follows_pointer_at_page_size_with_zoom_and_rotation()
 
 #[test]
 fn image_signature_placement_selects_resize_handles_and_requires_reselecting_to_repeat() {
+    let _gpu = gpu();
     let path = signature_file("resize");
     let image = pdfcraft_engine::SignatureImage::read(std::fs::File::open(&path).unwrap()).unwrap();
     let mut h = harness();
@@ -568,6 +581,7 @@ fn has_blue_near(pixels: &image::RgbaImage, p: Pos2) -> bool {
 
 #[test]
 fn image_signature_live_resize_and_move_preserve_background_and_hide_moving_handles() {
+    let _gpu = gpu();
     // Original synthetic page content; a white patch over the old image would fail this test.
     const GREEN_PAGE: &[u8] = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R >> endobj\n4 0 obj << /Length 36 >> stream\n0.8 1 0.7 rg 0 0 300 400 re f\nendstream\nendobj\ntrailer << /Root 1 0 R >>\n%%EOF";
     let mut h = harness_bytes(GREEN_PAGE);
@@ -680,6 +694,7 @@ fn image_signature_live_resize_and_move_preserve_background_and_hide_moving_hand
 
 #[test]
 fn embedded_image_signature_live_gestures_follow_document_and_view_rotation() {
+    let _gpu = gpu();
     let path = signature_file("live-rotations");
     let image = pdfcraft_engine::SignatureImage::read(std::fs::File::open(&path).unwrap()).unwrap();
     for (document_rotation, view_rotation) in [(90, 0), (0, 90), (90, 270)] {
@@ -745,6 +760,7 @@ fn embedded_image_signature_live_gestures_follow_document_and_view_rotation() {
 
 #[test]
 fn image_signature_corners_restore_original_aspect_after_edge_resize_and_reopen() {
+    let _gpu = gpu();
     let path = signature_file("aspect");
     let image = pdfcraft_engine::SignatureImage::read(std::fs::File::open(&path).unwrap()).unwrap();
     let mut h = harness();

@@ -1884,6 +1884,47 @@ fn comments_and_form_data_travel_as_xfdf_fdf_and_text() {
 }
 
 #[test]
+fn natural_image_stamps_through_tools_on_rotated_pages() {
+    for degrees in [0, 90, 180, 270] {
+        let dir = workdir(&format!("natural-stamps-{degrees}"));
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 80, 40);
+            encoder.set_color(png::ColorType::Rgb);
+            encoder.set_depth(png::BitDepth::Eight);
+            let pixels: Vec<u8> = (0..40)
+                .flat_map(|y| {
+                    (0..80).flat_map(move |x| {
+                        [[240, 20, 20], [20, 180, 20], [20, 20, 240], [230, 180, 20]][usize::from(y >= 20) * 2 + usize::from(x >= 40)]
+                    })
+                })
+                .collect();
+            encoder.write_header().unwrap().write_image_data(&pixels).unwrap();
+        }
+        std::fs::write(dir.join("quadrants.png"), bytes).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+        ok(&mut a, "page_rotate", json!({"doc":doc,"pages":[1],"degrees":degrees}));
+        ok(&mut a, "stamp_custom", json!({"doc":doc,"page":1,"path":"quadrants.png","at":[100,100]}));
+        let rendered = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap();
+        let Content::Png { data, .. } = &rendered[0] else { panic!("expected PNG") };
+        let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+        assert_eq!(info.color_type, png::ColorType::Rgba);
+        for ((x, y), colour) in [(80, 90), (120, 90), (80, 110), (120, 110)].into_iter().zip([
+            [240, 20, 20, 255],
+            [20, 180, 20, 255],
+            [20, 20, 240, 255],
+            [230, 180, 20, 255],
+        ]) {
+            let offset = ((y * info.width + x) * 4) as usize;
+            assert_eq!(&pixels[offset..offset + 4], &colour, "page rotation {degrees}");
+        }
+    }
+}
+
+#[test]
 fn stamps_through_tools() {
     let dir = workdir("stamps");
     let mut a = auto(&dir);

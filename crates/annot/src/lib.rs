@@ -1096,12 +1096,51 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     Ok(index)
 }
 
+/// Counterrotate a newly placed image stamp's appearance into displayed-page axes.
+/// The normal appearance's transformed bounding box is fitted to `/Rect` by PDF viewers.
+pub fn orient_image_stamp(doc: &mut Document, page: usize, index: usize, rotation: i64) -> Result<(), AnnotError> {
+    let matrix = match rotation {
+        90 => [0.0, 1.0, -1.0, 0.0, 0.0, 0.0],
+        180 => [-1.0, 0.0, 0.0, -1.0, 0.0, 0.0],
+        270 => [0.0, -1.0, 1.0, 0.0, 0.0, 0.0],
+        _ => return Ok(()),
+    };
+    let (_, r) = annot_ref(doc, page, index)?;
+    let d = annot_dict(doc, r);
+    if d.name(b"Subtype") != Some(b"Stamp") || !matches!(d.get(b"PCPictureImage"), Some(Object::Bool(true))) {
+        return Err(AnnotError::Invalid("only an image stamp can be oriented".into()));
+    }
+    let normal = d
+        .get(b"AP")
+        .map(|ap| doc.resolve(ap))
+        .and_then(|ap| ap.as_dict().and_then(|ap| ap.reference(b"N")))
+        .ok_or_else(|| AnnotError::Invalid("the stamp has no normal appearance".into()))?;
+    let Object::Stream(mut stream) = doc.get(normal).as_ref().clone() else {
+        return Err(AnnotError::Invalid("the stamp's normal appearance is not a stream".into()));
+    };
+    stream.dict.set(b"Matrix".to_vec(), num_array(&matrix));
+    doc.set(normal, Object::Stream(stream));
+    Ok(())
+}
+
 /// (Re)generate `/AP /N` for the annotation `r` from its dictionary.
 /// Regenerate an annotation's normal appearance from its dictionary.
 pub fn set_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
-    let Some(stream) = appearance::build(&d) else { return Err(AnnotError::Unsupported(subtype)) };
+    let Some(mut stream) = appearance::build(&d) else { return Err(AnnotError::Unsupported(subtype)) };
+    // Image stamp restyling must retain the placement's page-axis correction.
+    if matches!(d.get(b"PCPictureImage"), Some(Object::Bool(true))) {
+        let matrix = d.get(b"AP").and_then(|ap| {
+            let ap = doc.resolve(ap);
+            let normal = doc.resolve(ap.as_dict()?.get(b"N")?);
+            let Object::Stream(normal) = normal.as_ref() else { return None };
+            normal.dict.get(b"Matrix").cloned()
+        });
+        if let Some(matrix) = matrix {
+            stream.dict.set(b"Matrix".to_vec(), matrix);
+        }
+    }
     let ap = doc.add(Object::Stream(stream));
     let mut apd = Dict::new();
     apd.set(b"N".to_vec(), Object::Ref(ap));

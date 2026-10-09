@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with SHA-256 hashes, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (252)
+## In this repository (254)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -260,6 +260,8 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `crates/sign/tests/data/openssl-signed.pdf` | One-page PDF signed with OpenSSL CMS (adbe.pkcs7.detached) by the RSA test key | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: hand-written PDF objects; signature made with `openssl cms -sign` over its byte ranges (see crates/sign/tests/data/README.md) | Signature validation tests (crates/sign/tests/pdf.rs): a signature PdfCraft did not make |
 | `assets/icons/clipboard-paste.svg` | Lucide icon "clipboard-paste" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/clipboard-paste.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/fonts/DancingScript.ttf` | Dancing Script (variable) | The Dancing Script Project Authors (Pablo Impallari) | OFL-1.1 | https://github.com/google/fonts/blob/9710da1eacb3be272583c3224dcb70f9da6eadbb/ofl/dancingscript/DancingScript%5Bwght%5D.ttf | Fill & Sign typed signatures and initials: the typed name's glyph outlines, drawn as filled paths (the font file itself is not embedded in PDFs) |
+| `packaging/macos/dmg/background.svg` | PdfCraft macOS DMG window background | @XusBadia | MIT OR Apache-2.0 | Original work for this repository, derived from the PdfCraft app icon (assets/app-icon/pdfcraft.svg, referenced via an SVG image element, not copied) | Finder window of the macOS DMG; rendered to background.tiff by packaging/macos/dmg/generate.py |
+| `packaging/macos/dmg/background.tiff` | PdfCraft macOS DMG window background (rendered) | @XusBadia | MIT OR Apache-2.0 | Rendered from packaging/macos/dmg/background.svg by packaging/macos/dmg/generate.py | 1x + 2x HiDPI 16-colour palette TIFF copied into the macOS DMG by packaging/macos/package.sh; includes the app icon and the free LittleCMS built-in sRGB profile |
 
 ## Compiled in through dependencies (6)
 

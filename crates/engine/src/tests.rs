@@ -36,6 +36,70 @@ fn session_with(n: usize) -> (Session, DocId) {
     (s, id)
 }
 
+#[test]
+fn custom_image_stamp_keeps_displayed_orientation_on_rotated_pages() {
+    let colours = [[240, 20, 20, 255], [20, 180, 20, 255], [20, 20, 240, 255], [230, 180, 20, 255]];
+    let image = image::RgbaImage::from_fn(80, 40, |x, y| image::Rgba(colours[usize::from(y >= 20) * 2 + usize::from(x >= 40)]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let bytes = Arc::new(png.into_inner());
+    for degrees in [0, 90, 180, 270] {
+        let (mut session, id) = session_with(1);
+        session.apply(id, Edit::RotatePages { pages: vec![0], degrees }).unwrap();
+        let at = session.get(id).unwrap().info.pages[0].view_to_user(100.0, 100.0).map(f64::from);
+        session
+            .apply(
+                id,
+                Edit::AddCustomStamp {
+                    page: 0,
+                    rect: [at[0], at[1], at[0], at[1]],
+                    name: "Original quadrants".into(),
+                    file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
+                    author: "Test".into(),
+                },
+            )
+            .unwrap();
+        let check = |session: &Session, points: [(u32, u32); 4]| {
+            let doc = session.get(id).unwrap();
+            let mut renderer = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+            let rendered = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+            assert!(rendered.error.is_none(), "{:?}", rendered.error);
+            for ((x, y), colour) in points.into_iter().zip(colours) {
+                let offset = ((y * rendered.width + x) * 4) as usize;
+                assert_eq!(&rendered.rgba[offset..offset + 4], &colour, "page rotation {degrees}; displayed point ({x}, {y})");
+            }
+        };
+        let points = [(80, 90), (120, 90), (80, 110), (120, 110)];
+        check(&session, points);
+        let info = session.get(id).unwrap().info.pages[0].clone();
+        let rect = session.get(id).unwrap().info.annotations[0].rect;
+        let a = info.user_to_view(rect[0], rect[1]);
+        let b = info.user_to_view(rect[2], rect[3]);
+        let bounds = [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])];
+        for (actual, expected) in bounds.into_iter().zip([60.0, 80.0, 140.0, 120.0]) {
+            assert!((actual - expected).abs() < 0.0001, "displayed bounds {bounds:?}");
+        }
+        session.apply(id, Edit::StyleAnnotation { page: 0, index: 0, color: None, opacity: Some(1.0), width: None }).unwrap();
+        check(&session, points);
+        let resized = info.view_rect_to_user([40.0, 70.0, 160.0, 130.0]).map(f64::from);
+        session.apply(id, Edit::ResizeAnnotation { page: 0, index: 0, rect: resized }).unwrap();
+        let resized_points = [(70, 85), (130, 85), (70, 115), (130, 115)];
+        check(&session, resized_points);
+        session.undo(id).unwrap();
+        check(&session, points);
+        session.redo(id).unwrap();
+        check(&session, resized_points);
+        let from = info.view_to_user(100.0, 100.0);
+        let to = info.view_to_user(110.0, 115.0);
+        session.apply(id, Edit::MoveAnnotation { page: 0, index: 0, dx: f64::from(to[0] - from[0]), dy: f64::from(to[1] - from[1]) }).unwrap();
+        check(&session, [(80, 100), (140, 100), (80, 130), (140, 130)]);
+        session.undo(id).unwrap();
+        check(&session, resized_points);
+        session.redo(id).unwrap();
+        check(&session, [(80, 100), (140, 100), (80, 130), (140, 130)]);
+    }
+}
+
 fn page_texts(s: &Session, id: DocId) -> Vec<String> {
     let doc = s.get(id).unwrap();
     let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
