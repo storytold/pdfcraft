@@ -790,10 +790,58 @@ fn editing_text_keeps_the_tokens_a_stream_shares_with_its_neighbours() {
     assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Target");
     text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
     assert_split_tokens_kept(&reopen(&doc), "Edited");
-    // A paragraph rewrite rebuilds the same piece.
+    // A paragraph rewrite: "Target" and the line after it (split across pieces) are one
+    // paragraph, rewritten whole without stray tokens.
     let mut doc = split_streams_page();
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 1);
     text::replace_block(&mut doc, 0, 0, "Rewrapped").unwrap();
-    assert_split_tokens_kept(&reopen(&doc), "Rewrapped");
+    let (joined, ops) = joined_ops(&reopen(&doc));
+    assert!(joined.contains("Rewrapped") && !joined.contains("Target") && !joined.contains("wards"), "{joined}");
+    assert!(ops.iter().find(|o| o.is("BDC")).is_some_and(|o| o.operands.len() == 2), "{joined}");
+}
+
+/// The operators of the page's pieces joined back into one stream, each checked for operands.
+fn joined_ops(doc: &Document) -> (String, Vec<pdfcraft_content::Op>) {
+    let joined = streams(doc, 0).join("\n");
+    let ops = pdfcraft_content::parse(joined.as_bytes());
+    assert_eq!(ops.skipped, 0, "stray tokens: {joined}");
+    (joined, ops.ops)
+}
+
+#[test]
+fn a_line_whose_operator_starts_the_next_stream_can_be_edited() {
+    // #155: `[(After) -20 (wards)]` ends one piece and its `TJ` starts the next.
+    let doc = split_streams_page();
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Target", "Afterwards"]);
+    assert!(lines[1].rect[1] < lines[0].rect[1] && lines[1].rect[2] > lines[1].rect[0] + 40.0, "{:?}", lines[1].rect);
+
+    // Retyping it replaces the operator whole, in both pieces it spans.
+    let mut doc = split_streams_page();
+    text::replace_line(&mut doc, 0, 1, "Later").unwrap();
+    let doc = reopen(&doc);
+    let (joined, ops) = joined_ops(&doc);
+    assert!(!joined.contains("After") && !joined.contains("wards") && joined.contains("Target"), "{joined}");
+    assert!(ops.iter().filter(|o| o.is("TJ")).count() == 0, "{joined}");
+    assert!(ops.iter().find(|o| o.is("BDC")).is_some_and(|o| o.operands.len() == 2), "{joined}");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Target", "Later"]);
+    // The pieces stay pieces: the first is untouched, the marked content still closes.
+    let pieces = streams(&doc, 0);
+    assert_eq!(pieces.len(), 3);
+    assert_eq!(pieces[0].trim(), "/P << /MCID 0");
+    assert!(pieces[2].contains("EMC") && !pieces[2].contains("TJ"), "{pieces:?}");
+
+    // As a paragraph with the line before it: both lines are rewritten.
+    let mut doc = split_streams_page();
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let last = blocks.iter().position(|b| b.text.contains("Afterwards")).unwrap();
+    text::replace_block(&mut doc, 0, last, "Rewrapped").unwrap();
+    let doc = reopen(&doc);
+    let (joined, ops) = joined_ops(&doc);
+    assert!(!joined.contains("wards") && joined.contains("Rewrapped"), "{joined}");
+    assert!(ops.iter().find(|o| o.is("BDC")).is_some_and(|o| o.operands.len() == 2), "{joined}");
+    assert!(text::text_lines(&doc, 0).unwrap().iter().any(|l| l.text == "Rewrapped"));
 }
 
 #[test]

@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use pdfcraft_content::{Matrix, Op, parse, serialize_ops};
+use pdfcraft_content::{Matrix, Op, Pieces, serialize_ops};
 use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 use pdfcraft_fonts::pdf::Metrics;
 use pdfcraft_fonts::{CraftFont, GlyphError, japanese_glyph_from};
@@ -38,6 +38,8 @@ pub struct TextLine {
     /// Whether new text in this font can only be shown by substituting another font (no
     /// Unicode mapping for the line, so nothing could be reused).
     pub decodable: bool,
+    /// The content stream piece the line starts in, and its operators (indices into the page's
+    /// streams parsed joined).
     stream: usize,
     ops: Vec<usize>,
     /// Where the line starts: text matrix (text space), the state there, and its `BT`.
@@ -167,32 +169,53 @@ fn content_streams(doc: &Document, page: &Dict) -> Vec<(Object, Vec<u8>)> {
         .collect()
 }
 
-/// Rewrite one of a page's content streams: `edit(i)` gives the operators to insert before
-/// operator `i` of `ops` (parsed from `data`) and whether to keep it. Everything else is copied
-/// byte for byte. A page's streams are one stream in pieces, split between any two tokens
-/// (ISO 32000-2 §7.8.2), so a piece can end with operands whose operator starts the next one,
-/// or start by closing a dictionary the previous one opened; those tokens belong to no operator
-/// parsed here and must stay where they are.
-fn splice(data: &[u8], ops: &[Op], mut edit: impl FnMut(usize) -> (Vec<Op>, bool)) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len());
-    let mut at = 0;
+/// Rewrite a page's content (its streams joined, see [`Pieces`]): `edit(i)` gives the operators
+/// to insert before operator `i` of `ops` (parsed from the joined pieces) and whether to keep it.
+/// Everything else is copied byte for byte. A page's streams are one stream in pieces, split
+/// between any two tokens (ISO 32000-2 §7.8.2), so an operator's operands can end one piece and
+/// its keyword start the next; removing or replacing it rewrites every piece it spans. Returns
+/// each piece's new bytes.
+fn splice(pieces: &Pieces, ops: &[Op], mut edit: impl FnMut(usize) -> (Vec<Op>, bool)) -> Vec<Vec<u8>> {
+    let data = pieces.data();
+    let mut edits = Vec::new();
     for (i, op) in ops.iter().enumerate() {
         let (insert, keep) = edit(i);
         if insert.is_empty() && keep {
             continue;
         }
-        let start = op.span.start.clamp(at, data.len());
-        out.extend_from_slice(data.get(at..start).unwrap_or_default());
+        let mut bytes = Vec::new();
         if !insert.is_empty() {
-            if out.last().is_some_and(|b| !b.is_ascii_whitespace()) {
-                out.push(b'\n');
+            if op.span.start.checked_sub(1).and_then(|p| data.get(p)).is_some_and(|b| !b.is_ascii_whitespace()) {
+                bytes.push(b'\n');
             }
-            out.extend_from_slice(&serialize_ops(&insert));
+            bytes.extend_from_slice(&serialize_ops(&insert));
         }
-        at = if keep { start } else { op.span.end.clamp(start, data.len()) };
+        let end = if keep { op.span.start } else { op.span.end };
+        edits.push((op.span.start..end, bytes));
     }
-    out.extend_from_slice(data.get(at..).unwrap_or_default());
-    out
+    pieces.splice(edits)
+}
+
+/// The page's `/Contents` after a [`splice`]: pieces whose bytes changed become new streams
+/// (keeping their dictionaries), the others stay as they were.
+fn rewritten_contents(doc: &mut Document, streams: &[(Object, Vec<u8>)], new: Vec<Vec<u8>>) -> Object {
+    let mut contents: Vec<Object> = Vec::with_capacity(streams.len());
+    for ((obj, old), data) in streams.iter().zip(new) {
+        if *old == data {
+            contents.push(obj.clone());
+            continue;
+        }
+        let mut dict = match &*doc.resolve(obj) {
+            Object::Stream(s) => s.dict.clone(),
+            _ => Dict::new(),
+        };
+        dict.remove(b"Length");
+        contents.push(Object::Ref(doc.add(Object::Stream(Stream::flate(dict, &data)))));
+    }
+    match <[Object; 1]>::try_from(contents) {
+        Ok([one]) => one,
+        Err(many) => Object::Array(many),
+    }
 }
 
 fn page_dict(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
@@ -436,59 +459,64 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
     let mut cache = HashMap::new();
     let mut lines: Vec<TextLine> = Vec::new();
     let mut carry = Carry::new();
-    for (si, (_, data)) in content_streams(doc, &p.dict).into_iter().enumerate() {
-        let ops = parse(&data).ops;
-        let shown = interpret(doc, &ops, &fonts_res, &mut cache, &mut carry);
-        let mut last: Option<(usize, f64, f64, f64)> = None; // (bt, baseline, end_x, size)
-        for s in shown {
-            let joins = last.is_some_and(|(bt, base, end, size)| {
-                bt == s.bt
-                    && lines.last().is_some_and(|l| l.font.as_bytes() == s.font.as_slice())
-                    && lines.last().is_some_and(|l| {
-                        (s.size - l.size).abs() < 0.01 && s.bold == l.bold && s.italic == l.italic && fill_color(&s.state.fill) == l.color
-                    })
-                    && (s.baseline - base).abs() < size * 0.3
-                    && s.start_x > end - size
-                    && s.start_x - end < size * 3.0
-            });
-            if joins && let Some(l) = lines.last_mut() {
-                let gap = s.start_x - last.map_or(s.start_x, |x| x.2);
-                if gap > l.size * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ') {
-                    l.text.push(' ');
-                }
-                l.text.push_str(&s.text);
-                l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
-                l.ops.push(s.op);
-                l.decodable &= s.decodable;
-                l.color = fill_color(&s.state.fill);
-            } else {
-                lines.push(TextLine {
-                    text: s.text.clone(),
-                    rect: s.rect,
-                    font: String::from_utf8_lossy(&s.font).into_owned(),
-                    base_font: s.base_font.clone(),
-                    size: s.size,
-                    bold: s.bold,
-                    italic: s.italic,
-                    color: fill_color(&s.state.fill),
-                    decodable: s.decodable,
-                    stream: si,
-                    ops: vec![s.op],
-                    origin: Origin {
-                        tm: s.tm.0,
-                        tlm: s.tlm.0,
-                        k: (s.tm.then(&s.state.ctm).0[2].powi(2) + s.tm.then(&s.state.ctm).0[3].powi(2)).sqrt(),
-                        ctm: s.state.ctm.0,
-                        baseline: s.baseline,
-                        x: s.start_x,
-                        state: TextState::of(&s.state),
-                        bt_op: s.bt_op,
-                        bt_state: TextState::of(&s.bt_state),
-                    },
-                });
+    // The streams are one stream in pieces (§7.8.2), split between any two tokens: parse them
+    // joined, so an operator whose operands end one piece still has them.
+    let pieces = Pieces::join(&content_streams(doc, &p.dict).into_iter().map(|(_, d)| d).collect::<Vec<_>>());
+    let ops = pieces.parse().ops;
+    let shown = interpret(doc, &ops, &fonts_res, &mut cache, &mut carry);
+    let mut last: Option<(usize, usize, f64, f64, f64)> = None; // (piece, bt, baseline, end_x, size)
+    for s in shown {
+        // A line belongs to the piece its first operator starts in (lines in different pieces
+        // aren't joined or grouped, as before; editing rewrites every piece an edit touches).
+        let si = ops.get(s.op).map_or(0, |op| pieces.pieces_of(op).0);
+        let joins = last.is_some_and(|(piece, bt, base, end, size)| {
+            piece == si
+                && bt == s.bt
+                && lines.last().is_some_and(|l| l.font.as_bytes() == s.font.as_slice())
+                && lines.last().is_some_and(|l| {
+                    (s.size - l.size).abs() < 0.01 && s.bold == l.bold && s.italic == l.italic && fill_color(&s.state.fill) == l.color
+                })
+                && (s.baseline - base).abs() < size * 0.3
+                && s.start_x > end - size
+                && s.start_x - end < size * 3.0
+        });
+        if joins && let Some(l) = lines.last_mut() {
+            let gap = s.start_x - last.map_or(s.start_x, |x| x.3);
+            if gap > l.size * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ') {
+                l.text.push(' ');
             }
-            last = Some((s.bt, s.baseline, s.end_x, s.size.max(1.0)));
+            l.text.push_str(&s.text);
+            l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
+            l.ops.push(s.op);
+            l.decodable &= s.decodable;
+            l.color = fill_color(&s.state.fill);
+        } else {
+            lines.push(TextLine {
+                text: s.text.clone(),
+                rect: s.rect,
+                font: String::from_utf8_lossy(&s.font).into_owned(),
+                base_font: s.base_font.clone(),
+                size: s.size,
+                bold: s.bold,
+                italic: s.italic,
+                color: fill_color(&s.state.fill),
+                decodable: s.decodable,
+                stream: si,
+                ops: vec![s.op],
+                origin: Origin {
+                    tm: s.tm.0,
+                    tlm: s.tlm.0,
+                    k: (s.tm.then(&s.state.ctm).0[2].powi(2) + s.tm.then(&s.state.ctm).0[3].powi(2)).sqrt(),
+                    ctm: s.state.ctm.0,
+                    baseline: s.baseline,
+                    x: s.start_x,
+                    state: TextState::of(&s.state),
+                    bt_op: s.bt_op,
+                    bt_state: TextState::of(&s.bt_state),
+                },
+            });
         }
+        last = Some((si, s.bt, s.baseline, s.end_x, s.size.max(1.0)));
     }
     // Lines of only spaces aren't editable text.
     lines.retain(|l| !l.text.trim().is_empty());
@@ -695,9 +723,9 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let streams = content_streams(doc, &p.dict);
-    let (stream_obj, data) = streams.get(target.stream).cloned().ok_or_else(|| EditError::Invalid("the page's content changed".into()))?;
-    let ops = parse(&data).ops;
-    let first = target.ops[0];
+    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let ops = pieces.parse().ops;
+    let first = target.ops.first().copied().filter(|i| *i < ops.len()).ok_or_else(|| EditError::Invalid("the page's content changed".into()))?;
     // The line's own font, when it can show every character.
     let font = fonts_res.get(target.font.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()).map(|d| Metrics::from_dict(doc, &d));
     let reused = font.as_ref().and_then(|m| m.encode(&text));
@@ -753,22 +781,14 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
     // Rebuild: the line's first operator becomes the replacement, its others go. Copies of the
     // line drawn in the same area go too, so the replacement is all that shows.
     let drops = coincident_ops(&lines, std::slice::from_ref(&target.rect));
-    let new_data = splice(&data, &ops, |i| {
-        if i == first { (std::mem::take(&mut replacement), false) } else { (Vec::new(), !drops.get(&target.stream).is_some_and(|d| d.contains(&i))) }
-    });
-    let mut dict = match &*doc.resolve(&stream_obj) {
-        Object::Stream(s) => s.dict.clone(),
-        _ => Dict::new(),
-    };
-    dict.remove(b"Length");
-    let new = doc.add(Object::Stream(Stream::flate(dict, &new_data)));
-    let contents: Vec<Object> = streams.iter().enumerate().map(|(i, (o, _))| if i == target.stream { Object::Ref(new) } else { o.clone() }).collect();
+    let new_data = splice(&pieces, &ops, |i| if i == first { (std::mem::take(&mut replacement), false) } else { (Vec::new(), !drops.contains(&i)) });
+    let contents = rewritten_contents(doc, &streams, new_data);
     let page_ref = p.obj;
     if substituted.is_some() {
         res.set(b"Font".to_vec(), Object::Dict(fonts_res));
     }
     doc.update_dict(page_ref, |d| {
-        d.set(b"Contents".to_vec(), if contents.len() == 1 { contents[0].clone() } else { Object::Array(contents) });
+        d.set(b"Contents".to_vec(), contents);
         if substituted.is_some() {
             d.set(b"Resources".to_vec(), Object::Dict(res));
         }
@@ -781,13 +801,13 @@ fn font_size_before(ops: &[Op], at: usize) -> Option<f64> {
     ops[..at].iter().rev().find(|o| o.is("Tf")).and_then(|o| o.num(1))
 }
 
-/// The operators of every line drawn in the same area as one of `rects`, grouped by content
-/// stream. Documents sometimes draw a line more than once (fake bold, an invisible text layer),
-/// and a surviving copy would show the old text under the replaced line. Copies overlap a
-/// member's rect by more than half of the smaller rect; neighbouring lines share no area.
-fn coincident_ops(lines: &[TextLine], rects: &[[f64; 4]]) -> std::collections::HashMap<usize, std::collections::HashSet<usize>> {
+/// The operators of every line drawn in the same area as one of `rects`. Documents sometimes
+/// draw a line more than once (fake bold, an invisible text layer), and a surviving copy would
+/// show the old text under the replaced line. Copies overlap a member's rect by more than half of
+/// the smaller rect; neighbouring lines share no area.
+fn coincident_ops(lines: &[TextLine], rects: &[[f64; 4]]) -> std::collections::HashSet<usize> {
     let area = |r: [f64; 4]| ((r[2] - r[0]) * (r[3] - r[1])).max(0.0);
-    let mut drop = std::collections::HashMap::new();
+    let mut drop = std::collections::HashSet::new();
     for l in lines {
         let covered = rects.iter().any(|m| {
             let ix = (m[2].min(l.rect[2]) - m[0].max(l.rect[0])).max(0.0);
@@ -796,7 +816,7 @@ fn coincident_ops(lines: &[TextLine], rects: &[[f64; 4]]) -> std::collections::H
             small > 0.0 && ix * iy / small > 0.5
         });
         if covered {
-            drop.entry(l.stream).or_insert_with(std::collections::HashSet::new).extend(l.ops.iter().copied());
+            drop.extend(l.ops.iter().copied());
         }
     }
     drop
@@ -935,8 +955,8 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let streams = content_streams(doc, &p.dict);
-    let (stream_obj, data) = streams.get(first.stream).cloned().ok_or_else(|| EditError::Invalid("the page's content changed".into()))?;
-    let ops = parse(&data).ops;
+    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let ops = pieces.parse().ops;
     let text = text.unwrap_or(&b.text).split(paragraph_separator).filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" ");
     let o = &first.origin;
     let (font_name, old_size) = o.state.font.clone().ok_or_else(|| EditError::Invalid("the paragraph has no font".into()))?;
@@ -1117,18 +1137,18 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     block_ops.push(Op::new("Q", vec![]));
     // The paragraph's operators go, and so does anything drawn in the same area (a fake-bold
     // second copy, an invisible text layer): the new text is all that may show.
-    let mut drop: std::collections::HashMap<usize, std::collections::HashSet<usize>> =
-        members.iter().flat_map(|l| [(l.stream, l.ops.iter().copied().collect::<std::collections::HashSet<_>>())]).collect();
     let member_rects: Vec<[f64; 4]> = members.iter().map(|l| l.rect).collect();
-    for (stream, ops) in coincident_ops(&lines, &member_rects) {
-        drop.entry(stream).or_default().extend(ops);
-    }
+    let mut drop = coincident_ops(&lines, &member_rects);
+    drop.extend(members.iter().flat_map(|l| l.ops.iter().copied()));
     // Text shown earlier in the same text object stays first: the paragraph then goes where it
     // was, between two halves of the text object, so it keeps its place in reading order.
     let start = first.ops.first().copied().unwrap_or(o.bt_op);
-    let split = ops.get(o.bt_op..start).unwrap_or_default().iter().enumerate().any(|(i, op)| {
-        matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.get(&first.stream).is_some_and(|d| d.contains(&(o.bt_op + i)))
-    });
+    let split = ops
+        .get(o.bt_op..start)
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .any(|(i, op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&(o.bt_op + i)));
     // What the text after the paragraph expects: the state at its BT (or where it was split).
     let after = if split { &o.state } else { &o.bt_state };
     block_ops.extend(after.ops().into_iter().filter(|op| !op.is("Tf") || after.font.is_some()));
@@ -1138,23 +1158,17 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
         block_ops.push(Op::new("Tm", o.tlm.iter().map(|v| n(*v)).collect()));
     }
     let at = if split { start } else { o.bt_op };
-    let new_data = splice(&data, &ops, |i| {
+    let new_data = splice(&pieces, &ops, |i| {
         let insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
-        (insert, drop.get(&first.stream).is_none_or(|d| !d.contains(&i)))
+        (insert, !drop.contains(&i))
     });
-    let mut dict = match &*doc.resolve(&stream_obj) {
-        Object::Stream(s) => s.dict.clone(),
-        _ => Dict::new(),
-    };
-    dict.remove(b"Length");
-    let new = doc.add(Object::Stream(Stream::flate(dict, &new_data)));
-    let contents: Vec<Object> = streams.iter().enumerate().map(|(i, (o, _))| if i == first.stream { Object::Ref(new) } else { o.clone() }).collect();
+    let contents = rewritten_contents(doc, &streams, new_data);
     if new_font {
         res.set(b"Font".to_vec(), Object::Dict(fonts_res));
     }
     let page_ref = p.obj;
     doc.update_dict(page_ref, |d| {
-        d.set(b"Contents".to_vec(), if contents.len() == 1 { contents[0].clone() } else { Object::Array(contents) });
+        d.set(b"Contents".to_vec(), contents);
         if new_font {
             d.set(b"Resources".to_vec(), Object::Dict(res));
         }

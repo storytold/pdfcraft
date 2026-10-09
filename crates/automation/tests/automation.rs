@@ -1288,6 +1288,48 @@ fn editing_existing_text_through_tools() {
     assert_eq!(p["lines"].as_array().map(Vec::len), Some(2), "{p}");
 }
 
+/// One page whose content is one stream in three pieces (#155): a `TJ` array ends the middle
+/// piece and its operator starts the last one.
+fn split_streams_pdf() -> Vec<u8> {
+    let piece = |s: &str| format!("<< /Length {} >>\nstream\n{s}\nendstream", s.len());
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents [4 0 R 5 0 R 6 0 R] /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+        piece("/P << /MCID 0"),
+        piece(">> BDC BT /F1 12 Tf 72 700 Td (Target) Tj 0 -20 Td [(After) -20 (wards)]"),
+        piece("TJ ET EMC"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn a_line_split_across_content_streams_is_listed_and_edited() {
+    let dir = workdir("split-streams");
+    std::fs::write(dir.join("split.pdf"), split_streams_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "split.pdf" }))["doc"].as_u64().unwrap();
+    let lines = ok(&mut a, "text_lines", json!({ "doc": doc, "page": 1 }));
+    let texts: Vec<&str> = lines["lines"].as_array().unwrap().iter().filter_map(|l| l["text"].as_str()).collect();
+    assert_eq!(texts, ["Target", "Afterwards"], "{lines}");
+    let r = ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "line": 2, "text": "Later" }));
+    assert_eq!(r["line"]["text"], "Later");
+    assert_eq!(page_text(&mut a, doc)[0].split_whitespace().collect::<Vec<_>>(), ["Target", "Later"]);
+}
+
 #[test]
 fn paragraph_bold_without_font_keeps_the_source_family() {
     let dir = workdir("paragraph-bold");
