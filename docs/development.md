@@ -36,6 +36,21 @@ at a correspondingly lower scale instead of panicking in `Surface::configure` (v
 stretched over the window: softer, but complete and lined up with the pointer. wgpu's GL backend
 copies it unscaled into a corner of the window instead.
 
+## Renderer fallback
+
+PdfCraft draws with wgpu, and starts again with eframe's own OpenGL renderer (glow) when wgpu fails
+before the app is created: no adapter, no device, or a window surface the device can't configure.
+The last of these was a panic, not an error, because wgpu's default error handler panics and
+eframe configures the surface before any app code runs; a 2015 Intel GPU whose driver timed out in
+`Surface::configure` on wgpu's GL backend closed PdfCraft at launch (#519). Vendored egui-wgpu
+configures a new window's surface inside `winit::catch_errors` and returns a validation,
+out-of-memory or internal error as `WgpuError::ConfigureSurface` (see `vendor/README.md`). Still a
+panic, as upstream: an error in a later reconfigure (resizing, a lost surface); a device lost
+during that first configure (wgpu reports it only to a callback, so the first frame panics, after
+the app has started); and a window shown at zero size, which is first configured on resize. If
+OpenGL can't start either, PdfCraft exits with both errors in the log. The fallback is logged at
+`error`, with the wgpu error. `PDFCRAFT_RENDERER` skips it or chooses OpenGL from the start.
+
 ## Environment variables
 
 | Variable | Effect |
@@ -45,5 +60,6 @@ copies it unscaled into a corner of the window instead.
 | `XDG_DATA_HOME` | Linux/FreeBSD: base of the settings folder (`pdfcraft/`), the log folder and crash recovery |
 | `WGPU_POWER_PREF` | GPU choice; by default PdfCraft prefers the low-power (integrated) GPU |
 | `WGPU_BACKEND` | Graphics backend; by default Windows uses Direct3D 12, falling back to OpenGL |
+| `PDFCRAFT_RENDERER` | `gl` starts with OpenGL (glow) and never loads wgpu; `wgpu` reports a wgpu failure instead of retrying with OpenGL; unset, wgpu is retried with OpenGL when it can't start (see [Renderer fallback](#renderer-fallback)) |
 | `CRAFT_FONTS_DIR` | Build time: a [craft-fonts](https://github.com/storytold/craft-fonts) checkout to embed (Japanese fonts) |
 | `PDFCRAFT_SYSTEM_FONTS` | `0` stops the desktop app from using an installed font for characters its embedded fonts lack (`cargo xtask screenshots` sets it) |

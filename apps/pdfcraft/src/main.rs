@@ -675,6 +675,71 @@ mod tests {
     }
 
     #[test]
+    fn a_gpu_error_while_a_window_is_set_up_is_returned_not_a_panic() {
+        // Issue #519: on a 2015 Intel GPU, wgpu's GL backend couldn't configure the window's
+        // surface (`GpuWaitTimeout`), and wgpu's default error handler panicked before the app was
+        // created, so PdfCraft never got to retry with OpenGL. vendor/egui-wgpu configures a new
+        // window's surface inside `catch_errors`. A real device on PdfCraft's own GPU settings,
+        // and an error wgpu raises before anything reaches the driver: a texture one pixel wider
+        // than the device allows.
+        use eframe::wgpu;
+        let native = super::native_options(false, eframe::Renderer::Wgpu);
+        let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &native.wgpu_options.wgpu_setup else {
+            panic!("default setup creates its own instance")
+        };
+        let instance = pollster::block_on(native.wgpu_options.wgpu_setup.new_instance());
+        let options = wgpu::RequestAdapterOptions { power_preference: setup.power_preference, ..Default::default() };
+        let adapter = pollster::block_on(instance.request_adapter(&options)).expect("a GPU adapter (WARP or llvmpipe on CI)");
+        let (device, _queue) = pollster::block_on(adapter.request_device(&(setup.device_descriptor)(&adapter))).expect("a device");
+        let texture = |width: u32| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("issue-519"),
+                size: wgpu::Extent3d { width, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        };
+        let too_wide = device.limits().max_texture_dimension_2d.saturating_add(1);
+        let caught = pollster::block_on(eframe::egui_wgpu::winit::catch_errors(&device, || texture(too_wide)));
+        assert!(matches!(caught, Err(wgpu::Error::Validation { .. })), "{caught:?}");
+        // The device stays usable, and nothing is left behind to catch later errors by mistake.
+        let fine = pollster::block_on(eframe::egui_wgpu::winit::catch_errors(&device, || texture(16)));
+        assert!(fine.is_ok(), "{fine:?}");
+        assert_eq!(pollster::block_on(eframe::egui_wgpu::winit::catch_errors(&device, || 7)).ok(), Some(7));
+        // Nested: the inner call keeps its own error, and the outer one still catches what follows.
+        let caught = pollster::block_on(eframe::egui_wgpu::winit::catch_errors(&device, || {
+            let inner = pollster::block_on(eframe::egui_wgpu::winit::catch_errors(&device, || texture(too_wide)));
+            assert!(inner.is_err(), "inner: {inner:?}");
+            texture(too_wide)
+        }));
+        assert!(matches!(caught, Err(wgpu::Error::Validation { .. })), "outer: {caught:?}");
+    }
+
+    #[test]
+    fn egui_wgpu_returns_a_surface_it_cannot_configure_as_an_error() {
+        // Issue #519: `catch_errors` is tested above; this keeps it around the first configure of
+        // every new window's surface, and its error reaching eframe as `WgpuError` (eframe then
+        // returns `Error::Wgpu`, which `main` retries with OpenGL). Without it a failed configure
+        // panics before the app is created, and the OpenGL retry never runs.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap();
+        let egui_wgpu = lock.split("[[package]]").find(|p| p.contains("\nname = \"egui-wgpu\"\n")).expect("egui-wgpu is in Cargo.lock");
+        assert!(!egui_wgpu.contains("\nsource = "), "egui-wgpu must resolve to vendor/egui-wgpu, not:{egui_wgpu}");
+        let painter = std::fs::read_to_string(root.join("vendor/egui-wgpu/src/winit.rs")).unwrap().replace("\r\n", "\n");
+        let add_surface = painter.split("async fn add_surface(").nth(1).and_then(|s| s.split("\n    fn ").next()).expect("add_surface");
+        for patch in [
+            "let installed = catch_errors(&device, || {\n            self.install_surface(surface, viewport_id, size.width, size.height, false);\n        })",
+            "return Err(crate::WgpuError::ConfigureSurface(error));",
+        ] {
+            assert!(add_surface.contains(patch), "vendor/egui-wgpu lost its surface configure patch: {patch}");
+        }
+    }
+
+    #[test]
     fn winit_carries_the_windows_11_monitor_scale_fix() {
         // Issue #324: winit 0.30.13 as released nudges a window dragged onto a monitor with another
         // scale factor back onto the one it is leaving, so on Windows 11 it ends up on the wrong

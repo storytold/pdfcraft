@@ -63,6 +63,41 @@ pub fn surface_fit(width: u32, height: u32, max_side: u32) -> (u32, u32, f32) {
     (fit(width), fit(height), scale as f32)
 }
 
+/// PdfCraft patch (#519): runs `f` and returns an error it raises on `device`, instead of
+/// handing it to wgpu's uncaptured-error handler, which panics by default.
+///
+/// eframe configures a window's surface before the app is created, so no app code can install
+/// a handler in time, and a surface the device can't configure closed the app before its window
+/// appeared: wgpu's GL backend on a 2015 Intel driver timed out waiting for the GPU to go idle
+/// (`ConfigureSurfaceError::GpuWaitTimeout`). Returned as an error instead, eframe returns
+/// `Error::Wgpu` and the app can fall back (PdfCraft retries with OpenGL).
+///
+/// Validation, out-of-memory and internal errors are caught, one scope each; each scope keeps
+/// the first error of its kind, and a validation error is returned before an out-of-memory one,
+/// which is returned before an internal one. Not caught: a lost device (wgpu reports that only
+/// to the device-lost callback, so `f` seems to succeed), a panic inside `f`, and errors raised
+/// on other threads (wgpu's error scopes belong to the calling thread).
+pub async fn catch_errors<T>(
+    device: &wgpu::Device,
+    f: impl FnOnce() -> T,
+) -> Result<T, wgpu::Error> {
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let out_of_memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    // Should `f` panic, the guards pop their scopes as they drop, innermost first.
+    let value = f();
+    // Popped innermost first, as wgpu requires; each pop takes effect at once.
+    let internal = internal.pop();
+    let out_of_memory = out_of_memory.pop();
+    let validation = validation.pop();
+    let (validation, out_of_memory, internal) =
+        (validation.await, out_of_memory.await, internal.await);
+    match validation.or(out_of_memory).or(internal) {
+        Some(error) => Err(error),
+        None => Ok(value),
+    }
+}
+
 /// Everything you need to paint egui with [`wgpu`] on [`winit`].
 ///
 /// Alternatively you can use [`crate::Renderer`] directly.
@@ -283,13 +318,31 @@ impl Painter {
         viewport_id: ViewportId,
         size: winit::dpi::PhysicalSize<u32>,
     ) -> Result<(), crate::WgpuError> {
-        if self.render_state.is_none() {
-            let render_state =
+        // PdfCraft patch (#519): the device is kept for `catch_errors` below.
+        let render_state = match self.render_state.take() {
+            Some(render_state) => render_state,
+            None => {
                 RenderState::create(&self.config, &self.instance, Some(&surface), self.options)
-                    .await?;
-            self.render_state = Some(render_state);
+                    .await?
+            }
+        };
+        let device = render_state.device.clone();
+        self.render_state = Some(render_state);
+        // PdfCraft patch (#519): a surface the device can't configure is returned as an error
+        // instead of wgpu's default handler panicking; for the root window at start-up, eframe
+        // returns it as `Error::Wgpu` before the app is created, and the app can fall back.
+        // Nothing is kept for the window. A window whose size is zero here is first configured
+        // later, on resize, outside this.
+        let installed = catch_errors(&device, || {
+            self.install_surface(surface, viewport_id, size.width, size.height, false);
+        })
+        .await;
+        if let Err(error) = installed {
+            self.surfaces.remove(&viewport_id);
+            self.depth_texture_view.remove(&viewport_id);
+            self.msaa_texture_view.remove(&viewport_id);
+            return Err(crate::WgpuError::ConfigureSurface(error));
         }
-        self.install_surface(surface, viewport_id, size.width, size.height, false);
         Ok(())
     }
 
