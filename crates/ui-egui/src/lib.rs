@@ -343,6 +343,8 @@ pub struct PasswordPrompt {
     pub bytes: std::sync::Arc<Vec<u8>>,
     pub input: String,
     pub error: Option<String>,
+    /// A late startup file must stay in the background even after it is unlocked.
+    activate: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -412,6 +414,10 @@ pub struct PdfCraftApp {
     pub full_screen: bool,
     /// Files delivered asynchronously (web drag-and-drop, web file picker).
     pub inbox: Inbox,
+    /// The browser's startup `?file=` download. Unlike a deliberate Open or drop, a late
+    /// arrival opens in the background once the user has started working (#171).
+    pub startup_inbox: Inbox,
+    startup_superseded: bool,
     /// Asynchronous opens that failed (web `?file=` fetches), shown as a notice.
     pub failed_inbox: FailedInbox,
     /// Requests from the operating system, polled every frame (macOS Apple events).
@@ -656,6 +662,8 @@ impl PdfCraftApp {
             password_prompt: None,
             full_screen: false,
             inbox: Default::default(),
+            startup_inbox: Default::default(),
+            startup_superseded: false,
             failed_inbox: Default::default(),
             os_events: None,
             close_request: None,
@@ -766,12 +774,14 @@ impl PdfCraftApp {
     fn apply_initial_view(&mut self, index: usize, v: &pdfcraft_engine::InitialView) {
         use pdfcraft_engine::{InitialLayout as L, Magnification as M, Navigation as N};
         let pages = self.session.get(self.views[index].id).map_or(0, |d| d.info.pages.len());
-        match v.navigation {
-            N::PageOnly => {}
-            N::Bookmarks => self.right = Some(RightPanel::Bookmarks),
-            N::Pages => self.right = Some(RightPanel::Pages),
-            N::Attachments => self.right = Some(RightPanel::Attachments),
-            N::Layers => self.right = Some(RightPanel::Layers),
+        if self.active == Some(index) {
+            match v.navigation {
+                N::PageOnly => {}
+                N::Bookmarks => self.right = Some(RightPanel::Bookmarks),
+                N::Pages => self.right = Some(RightPanel::Pages),
+                N::Attachments => self.right = Some(RightPanel::Attachments),
+                N::Layers => self.right = Some(RightPanel::Layers),
+            }
         }
         let view = &mut self.views[index];
         match v.layout {
@@ -801,21 +811,37 @@ impl PdfCraftApp {
 
     /// Open a document and make it the active tab. Encrypted files raise the password prompt.
     pub fn open_bytes(&mut self, name: &str, path: Option<String>, bytes: Vec<u8>) -> Result<(), String> {
-        // Images and text files become new, unsaved PDFs (Create a PDF).
-        if let Some(r) = self.open_converted(name, &bytes) {
-            return r;
-        }
-        self.try_open(name, path, std::sync::Arc::new(bytes), None)
+        self.startup_superseded = true;
+        self.open_bytes_with_focus(name, path, bytes, true)
     }
 
-    fn try_open(&mut self, name: &str, path: Option<String>, bytes: std::sync::Arc<Vec<u8>>, password: Option<&str>) -> Result<(), String> {
+    fn open_bytes_with_focus(&mut self, name: &str, path: Option<String>, bytes: Vec<u8>, activate: bool) -> Result<(), String> {
+        // Images and text files become new, unsaved PDFs (Create a PDF).
+        let active = self.active;
+        if let Some(r) = self.open_converted(name, &bytes) {
+            if !activate {
+                self.active = active;
+            }
+            return r;
+        }
+        self.try_open(name, path, std::sync::Arc::new(bytes), None, activate)
+    }
+
+    fn try_open(
+        &mut self,
+        name: &str,
+        path: Option<String>,
+        bytes: std::sync::Arc<Vec<u8>>,
+        password: Option<&str>,
+        activate: bool,
+    ) -> Result<(), String> {
         use pdfcraft_render::OpenError;
         let size = bytes.len();
         let id = match self.session.open(name, path.clone(), bytes.clone(), password) {
             Ok(id) => id,
             Err(e @ (OpenError::NeedsPassword | OpenError::WrongPassword)) => {
                 let error = matches!(e, OpenError::WrongPassword).then(|| "Incorrect password. Try again.".to_string());
-                self.password_prompt = Some(PasswordPrompt { name: name.to_string(), path, bytes, input: String::new(), error });
+                self.password_prompt = Some(PasswordPrompt { name: name.to_string(), path, bytes, input: String::new(), error, activate });
                 return Ok(());
             }
             Err(e) => return Err(e.to_string()),
@@ -824,7 +850,7 @@ impl PdfCraftApp {
         let doc = self.session.get(id).ok_or("the document could not be opened")?;
         let pages = doc.info.pages.len();
         // Acrobat opens straight to the Comments panel when a document has comments.
-        if self.right.is_none() {
+        if activate && self.right.is_none() {
             self.right = if !doc.info.annotations.is_empty() {
                 Some(RightPanel::Comments)
             } else if !doc.info.outline.is_empty() {
@@ -835,12 +861,14 @@ impl PdfCraftApp {
         }
         let initial = doc.initial_view();
         self.views.push(DocView::new(id, &doc.info, self.view_defaults));
-        self.active = Some(self.views.len() - 1);
+        if activate {
+            self.active = Some(self.views.len() - 1);
+        }
         self.apply_initial_view(self.views.len() - 1, &initial);
-        if let Some(mode) = self.mode_override {
+        if activate && let Some(mode) = self.mode_override {
             // Explicit mode options do not reset independent --tool / --left choices.
             self.mode = mode;
-        } else if self.mode != self.default_mode {
+        } else if activate && self.mode != self.default_mode {
             // Switch workspace like the mode bar, but a left panel the user (or `--left closed`)
             // closed stays closed, and an unchanged mode keeps the tool panel the user chose.
             let left_open = self.left_open;
@@ -854,8 +882,12 @@ impl PdfCraftApp {
         }
         // What the form's scripts said while it opened (messages, errors) shows now, not with
         // the next edit.
-        let out = self.session.take_js_output(id);
-        self.handle_js(id, out);
+        // Background documents keep their script output until their tab is selected: a print
+        // or save request must never act on the current document instead.
+        if activate {
+            let out = self.session.take_js_output(id);
+            self.handle_js(id, out);
+        }
         Ok(())
     }
 
@@ -930,6 +962,7 @@ impl PdfCraftApp {
     /// Browsers read dropped files asynchronously; the bytes land in `inbox` and open next frame.
     #[cfg(target_arch = "wasm32")]
     fn open_dropped(&mut self, f: egui::DroppedFileHandle, ctx: &egui::Context) {
+        self.startup_superseded = true;
         let inbox = self.inbox.clone();
         let ctx = ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
@@ -990,10 +1023,11 @@ impl PdfCraftApp {
     pub fn submit_password(&mut self, password: Option<String>) {
         let Some(p) = self.password_prompt.take() else { return };
         let Some(pw) = password else { return };
-        match self.try_open(&p.name, p.path, p.bytes, Some(&pw)) {
+        match self.try_open(&p.name, p.path, p.bytes, Some(&pw), p.activate) {
             Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &p.name), ("e", &e.to_string())]),
-            // A recovered encrypted document is open once the prompt is gone.
-            Ok(()) if self.password_prompt.is_none() => {
+            // A recovered encrypted document is open once its foreground prompt is gone.
+            // Unlocking a background startup file must not finish another file's recovery.
+            Ok(()) if p.activate && self.password_prompt.is_none() => {
                 if let Some(meta) = self.pending_recovered.clone() {
                     self.finish_recovery(&meta);
                 }
@@ -1027,6 +1061,7 @@ impl PdfCraftApp {
     }
 
     pub fn open_dialog(&mut self) {
+        self.startup_superseded = true;
         #[cfg(not(target_arch = "wasm32"))]
         self.pick(
             pickers::PickFor::Open,
@@ -1685,6 +1720,8 @@ impl eframe::App for PdfCraftApp {
             }
         }
         self.sync_theme(ctx);
+        // Remember user work even if its tab is subsequently closed or Home is selected.
+        self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.dialog.is_some() || self.password_prompt.is_some();
         // Before taking this frame's drop: the grid must be drawn once with the pointer where
         // the files were let go before the gap is read.
         self.finish_grid_drop(ctx);
@@ -1711,6 +1748,22 @@ impl eframe::App for PdfCraftApp {
                 self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
             }
         }
+        // Don't replace a pending prompt or import. A startup file may need its own password
+        // prompt, so its bytes stay queued until the current interaction finishes.
+        if self.password_prompt.is_none()
+            && self.image_import.is_none()
+            && self.dialog.is_none()
+            && self.close_request.is_none()
+            && self.pending_link.is_none()
+        {
+            let startup = self.startup_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+            for (name, bytes) in startup {
+                let activate = !self.startup_superseded;
+                if let Err(e) = self.open_bytes_with_focus(&name, None, bytes, activate) {
+                    self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);
+                }
+            }
+        }
         let failed: Vec<(String, String)> = self.failed_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
         for (name, e) in failed {
             self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);
@@ -1725,6 +1778,10 @@ impl eframe::App for PdfCraftApp {
                 // Like closing the window: `guard_quit` asks about unsaved changes.
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }
+        }
+        if let Some((_, id)) = self.active_ids() {
+            let out = self.session.take_js_output(id);
+            self.handle_js(id, out);
         }
         if let Some(mut control) = self.control.take() {
             control.tick(ctx, self);

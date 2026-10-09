@@ -1178,6 +1178,195 @@ mod tests {
         }
     }
 
+    /// Public-API regressions run in normal workspace CI; dependency unit tests do not.
+    fn function_limits_calculator_eval(program: &str) -> Option<Vec<f32>> {
+        use hayro::hayro_interpret::Function;
+        use hayro_syntax::object::{FromBytes, Object};
+        let data = format!("<< /FunctionType 4 /Domain [] /Length {} >> stream\n{program}\nendstream", program.len());
+        let object = Object::from_bytes(data.as_bytes()).unwrap();
+        Function::new(&object)?.eval(Default::default()).map(|values| values.to_vec())
+    }
+
+    #[test]
+    fn function_limits_idiv_zero_is_refused() {
+        assert!(function_limits_calculator_eval("{ 1 0 idiv }").is_none());
+    }
+
+    #[test]
+    fn function_limits_idiv_overflow_is_refused() {
+        assert!(function_limits_calculator_eval("{ -2147483648 -1 idiv }").is_none());
+    }
+
+    #[test]
+    fn function_limits_large_logical_shifts_discard_all_bits() {
+        for shift in [32, -32, 2147483647, -2147483648] {
+            assert_eq!(function_limits_calculator_eval(&format!("{{ 7 {shift} bitshift }}")), Some(vec![0.0]));
+        }
+        assert_eq!(function_limits_calculator_eval("{ 1073741824 1 bitshift }"), Some(vec![-2147483648.0]));
+        assert_eq!(function_limits_calculator_eval("{ -2147483648 -1 bitshift }"), Some(vec![1073741824.0]));
+    }
+
+    #[test]
+    fn function_limits_rotation_accepts_the_most_negative_integer() {
+        assert_eq!(function_limits_calculator_eval("{ 1 2 3 3 -2147483648 roll }"), Some(vec![3.0, 1.0, 2.0]));
+    }
+
+    #[test]
+    fn function_limits_large_indices_are_refused() {
+        assert!(function_limits_calculator_eval("{ 1 4294967295 index }").is_none());
+    }
+
+    #[test]
+    fn function_limits_operand_stack_boundary() {
+        assert_eq!(function_limits_calculator_eval(&format!("{{ 1 {} }}", "dup ".repeat(63))).unwrap().len(), 64);
+        assert!(function_limits_calculator_eval(&format!("{{ 1 {} }}", "dup ".repeat(64))).is_none());
+    }
+
+    #[test]
+    fn function_limits_calculator_arithmetic_and_depth() {
+        for (program, expected) in [
+            ("{ -5 2 idiv }", vec![-2.0]),
+            ("{ 7 3 bitshift }", vec![56.0]),
+            ("{ 142 -3 bitshift }", vec![17.0]),
+            ("{ 1 2 3 3 -1 roll }", vec![2.0, 3.0, 1.0]),
+        ] {
+            assert_eq!(function_limits_calculator_eval(program), Some(expected));
+        }
+        let mut program = "{ 0 }".to_owned();
+        for _ in 1..64 {
+            program = format!("{{ true {program} if }}");
+        }
+        assert_eq!(function_limits_calculator_eval(&program), Some(vec![0.0]));
+        assert!(function_limits_calculator_eval(&format!("{{ true {program} if }}")).is_none());
+    }
+
+    #[test]
+    fn function_limits_calculator_work_boundary() {
+        // With no loops, each admitted operator can execute at most once. The exact parse
+        // boundary can be evaluated, while construction rejects the next operator.
+        assert_eq!(function_limits_calculator_eval(&format!("{{ {} }}", "0 pop ".repeat(5000))), Some(vec![]));
+        assert!(function_limits_calculator_eval(&format!("{{ {} 0 }}", "0 pop ".repeat(5000))).is_none());
+    }
+
+    #[test]
+    fn function_limits_calculator_work_counts_unselected_branches() {
+        // 9,996 branch operators + two procedure openings + true + ifelse = 10,000 tokens.
+        let branch = "0 pop ".repeat(2499);
+        assert_eq!(function_limits_calculator_eval(&format!("{{ true {{ {branch} }} {{ {branch} }} ifelse }}")), Some(vec![]));
+        assert!(function_limits_calculator_eval(&format!("{{ true {{ {branch} }} {{ {branch} 0 }} ifelse }}")).is_none());
+    }
+    #[test]
+    fn function_limits_public_construction_work_and_depth() {
+        use hayro::hayro_interpret::Function;
+        use hayro_syntax::object::{FromBytes, Object};
+
+        let mut data = "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>".to_owned();
+        for _ in 1..64 {
+            data = format!("<< /FunctionType 3 /Domain [0 1] /Functions [{data}] /Bounds [] /Encode [0 1] >>");
+        }
+        let object = Object::from_bytes(data.as_bytes()).unwrap();
+        assert_eq!(Function::new(&object).unwrap().eval([0.5].into_iter().collect()).unwrap().as_slice(), &[0.5]);
+        let over = format!("<< /FunctionType 3 /Domain [0 1] /Functions [{data}] /Bounds [] /Encode [0 1] >>");
+        assert!(Function::new(&Object::from_bytes(over.as_bytes()).unwrap()).is_none());
+
+        // One root plus 10,000 leaves is one node past the common budget. This input remains
+        // below a megabyte and does not attempt excessive recursion or an allocation failure.
+        let leaf = "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> ";
+        for children in [9999, 10_000] {
+            let data = format!(
+                "<< /FunctionType 3 /Domain [0 1] /Functions [{}] /Bounds [{}] /Encode [{}] >>",
+                leaf.repeat(children),
+                "0.5 ".repeat(children - 1),
+                "0 1 ".repeat(children)
+            );
+            let object = Object::from_bytes(data.as_bytes()).unwrap();
+            assert_eq!(Function::new(&object).is_some(), children == 9999);
+        }
+    }
+    #[test]
+    fn function_limits_stitching_cycles_are_refused_and_shared_children_work() {
+        use hayro::hayro_interpret::Function;
+        use hayro_syntax::object::{Object, ObjectIdentifier};
+
+        let pdf = |functions: &str| {
+            hayro_syntax::Pdf::new(
+                format!(
+                    "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] >> endobj\n\
+             {functions}\ntrailer << /Root 1 0 R >>\n%%EOF"
+                )
+                .into_bytes(),
+            )
+            .unwrap()
+        };
+        for functions in [
+            "4 0 obj << /FunctionType 3 /Domain [0 1] /Functions [4 0 R] /Bounds [] /Encode [0 1] >> endobj",
+            "4 0 obj << /FunctionType 3 /Domain [0 1] /Functions [5 0 R] /Bounds [] /Encode [0 1] >> endobj\n5 0 obj << /FunctionType 3 /Domain [0 1] /Functions [4 0 R] /Bounds [] /Encode [0 1] >> endobj",
+            "4 0 obj << /FunctionType 3 /Domain [0 1] /Functions [] /Bounds [] /Encode [] >> endobj",
+            "4 0 obj << /FunctionType 3 /Domain [0 1] /Functions [99 0 R] /Bounds [] /Encode [0 1] >> endobj",
+            "4 0 obj << /FunctionType 3 /Domain [0 1] /Functions [5 0 R 99 0 R] /Bounds [0.5] /Encode [0 1 0 1] >> endobj\n5 0 obj << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> endobj",
+        ] {
+            let parsed = pdf(functions);
+            let object = parsed.xref().get::<Object<'_>>(ObjectIdentifier::new(4, 0)).unwrap();
+            assert!(Function::new(&object).is_none(), "accepted invalid children: {functions}");
+        }
+        let parsed = pdf(
+            "4 0 obj << /FunctionType 3 /Domain [0 1] /Functions [5 0 R 5 0 R] /Bounds [0.5] /Encode [0 1 0 1] >> endobj\n5 0 obj << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> endobj",
+        );
+        let object = parsed.xref().get::<Object<'_>>(ObjectIdentifier::new(4, 0)).unwrap();
+        let function = Function::new(&object).unwrap();
+        let output = function.eval([0.75].into_iter().collect()).unwrap();
+        assert!((output[0] - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn function_limits_shared_references_count_toward_construction_work() {
+        use hayro::hayro_interpret::Function;
+        use hayro_syntax::object::{Object, ObjectIdentifier};
+        for children in [9999, 10_000] {
+            let bytes = format!(
+                "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] >> endobj\n\
+                 4 0 obj << /FunctionType 3 /Domain [0 1] /Functions [{}] /Bounds [{}] /Encode [{}] >> endobj\n\
+                 5 0 obj << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+                "5 0 R ".repeat(children),
+                "0.5 ".repeat(children - 1),
+                "0 1 ".repeat(children)
+            )
+            .into_bytes();
+            let parsed = hayro_syntax::Pdf::new(bytes).unwrap();
+            let object = parsed.xref().get::<Object<'_>>(ObjectIdentifier::new(4, 0)).unwrap();
+            assert_eq!(Function::new(&object).is_some(), children == 9999);
+        }
+    }
+    #[test]
+    fn function_limits_invalid_calculator_keeps_the_page_renderable() {
+        use super::*;
+        let program = "{ pop 1 0 idiv }";
+        let content = "/S sh 0 0 1 rg 0 0 20 20 re f";
+        let bytes = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] /Resources << /Shading << /S 4 0 R >> >> /Contents 6 0 R >> endobj\n\
+             4 0 obj << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 20 0] /Function 5 0 R >> endobj\n\
+             5 0 obj << /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1] /Length {} >> stream\n{program}\nendstream endobj\n\
+             6 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            program.len(),
+            content.len()
+        )
+        .into_bytes();
+        let mut renderer = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (20, 20));
+        let (pixels, remainder) = page.rgba.as_chunks::<4>();
+        assert!(remainder.is_empty());
+        assert!(pixels.iter().all(|pixel| *pixel == [0, 0, 255, 255]));
+    }
     #[test]
     fn watchdog_skips_a_stuck_page_and_keeps_rendering() {
         use super::*;
@@ -1303,6 +1492,147 @@ mod tests {
     }
 
     use super::*;
+
+    // Metadata-only: the test budget is 128 pixels and no image buffer is allocated.
+    #[test]
+    fn image_resampling_rejects_anisotropic_target_growth() {
+        assert_eq!(hayro::image_resampling_size(16, 1, 1, 16, 0.5, 32.0, 128), None);
+        assert_eq!(hayro::image_resampling_size(16, 1, 3, 48, 0.5, 32.0, 128), None);
+        assert_eq!(hayro::image_resampling_size(16, 1, 4, 64, 0.5, 32.0, 128), None);
+    }
+
+    #[test]
+    fn image_resampling_bounds_intermediate_before_planning() {
+        // Source and destination are each 128 pixels, but their crossed dimensions are 256.
+        assert_eq!(hayro::image_resampling_size(16, 8, 4, 512, 0.5, 2.0, 128), None);
+    }
+
+    #[test]
+    fn image_resampling_rejects_invalid_sources_and_scales() {
+        assert_eq!(hayro::image_resampling_size(4, 4, 3, 47, 0.5, 0.5, 128), None);
+        assert_eq!(hayro::image_resampling_size(4, 4, 3, 49, 0.5, 0.5, 128), None);
+        for scale in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0, 0.0] {
+            assert_eq!(hayro::image_resampling_size(4, 4, 3, 48, 0.5, scale, 128), None);
+        }
+    }
+
+    #[test]
+    fn image_resampling_keeps_valid_sizes_and_exact_limits() {
+        assert_eq!(hayro::image_resampling_size(16, 8, 1, 128, 0.5, 0.5, 128), Some((8, 4)));
+        assert_eq!(hayro::image_resampling_size(16, 1, 3, 48, 0.5, 8.0, 128), Some((8, 8)));
+        assert_eq!(hayro::image_resampling_size(16, 8, 4, 512, 1.0, 1.0, 128), Some((16, 8)));
+        assert_eq!(hayro::image_resampling_size(0, 8, 1, 0, 1.0, 1.0, 128), None);
+        assert_eq!(hayro::image_resampling_size(16, 9, 1, 144, 1.0, 1.0, 128), None);
+        assert_eq!(hayro::image_resampling_size(65_536, 1, 1, 65_536, 1.0, 1.0, u64::MAX), None);
+        for channels in [1, 3, 4] {
+            assert_eq!(hayro::image_resampling_size(65_536, 1, channels, 65_536 * channels, 1.0 / 4096.0, 1.0, 65_536), Some((16, 1)));
+        }
+        assert_eq!(hayro::image_resampling_size(65_535, 1, 1, 65_535, 1.0, 1.0, 65_535), Some((65_535, 1)));
+        assert_eq!(hayro::image_resampling_size((1 << 20) + 1, 1, 1, (1 << 20) + 1, 1.0 / 4096.0, 1.0, 1 << 28), None);
+    }
+
+    #[test]
+    fn image_resampling_padded_backend_dimensions_stay_checked() {
+        // A Type 3 image's two-pixel frame may reach u16::MAX exactly, never wrap to zero.
+        assert_eq!(hayro::image_resampling_size(65_531 + 4, 1 + 4, 4, 65_535 * 5 * 4, 1.0, 1.0, 65_535 * 5), Some((65_535, 5)));
+        assert_eq!(hayro::image_resampling_size(65_531 + 4, 1 + 4, 4, 65_535 * 5 * 4, 1.0, 1.0, 65_535 * 5 - 1), None);
+        assert_eq!(hayro::image_resampling_size(65_532 + 4, 1 + 4, 4, 65_536 * 5 * 4, 1.0, 1.0, 1 << 28), None);
+    }
+    fn strip_image_pdf(width: u32, body: &str, space: &str, encoded: &str, alpha: Option<&str>) -> Vec<u8> {
+        let (mask_ref, mask_obj) = match alpha {
+            Some(data) => (
+                "/SMask 6 0 R",
+                format!(
+                    "6 0 obj << /Type /XObject /Subtype /Image /Width {width} /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >> stream\n{data}>\nendstream endobj\n",
+                    data.len() + 1
+                ),
+            ),
+            None => ("", String::new()),
+        };
+        format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 4] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{body}endstream endobj\n\
+             5 0 obj << /Type /XObject /Subtype /Image /Width {width} /Height 1 /ColorSpace /{space} /BitsPerComponent 8 {mask_ref} /Filter /ASCIIHexDecode /Length {} >> stream\n{encoded}>\nendstream endobj\n\
+             {mask_obj}trailer << /Root 1 0 R >>\n%%EOF", body.len(), encoded.len() + 1,
+        ).into_bytes()
+    }
+
+    // Safe on the original renderer too: 192 KiB RGB / 64 KiB gray sources shrink to 16 pixels.
+    #[test]
+    fn image_resampling_wide_sources_shrink_before_backend_side_limits() {
+        for (space, encoded, expected) in
+            [("DeviceRGB", "ff0000".repeat(65_536), [255, 0, 0, 255]), ("DeviceGray", "7f".repeat(65_536), [127, 127, 127, 255])]
+        {
+            let pdf = strip_image_pdf(65_536, "q 16 0 0 1 2 2 cm /Im0 Do Q\n", space, &encoded, None);
+            let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+            assert!(page.error.is_none(), "{space}: {:?}", page.error);
+            assert_eq!((page.width, page.height), (20, 4));
+            let pixel = |x: usize| &page.rgba[(20 + x) * 4..][..4];
+            assert_eq!(pixel(1), &[255, 255, 255, 255], "{space}: left placement");
+            assert_eq!(pixel(3), &expected, "{space}: source image was not dropped");
+            assert_eq!(pixel(17), &expected, "{space}: right placement");
+            assert_eq!(pixel(19), &[255, 255, 255, 255], "{space}: right placement");
+        }
+    }
+
+    #[test]
+    fn image_resampling_wide_transparent_sources_still_shrink() {
+        let data = "ff0000".repeat(65_536);
+        let alpha = "7f".repeat(65_536);
+        let pdf = strip_image_pdf(65_536, "q 16 0 0 1 2 2 cm /Im0 Do Q\n", "DeviceRGB", &data, Some(&alpha));
+        let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (20, 4));
+        assert_eq!(&page.rgba[(20 + 3) * 4..][..4], &[255, 128, 128, 255]);
+    }
+
+    #[test]
+    fn image_resampling_mismatched_alpha_mask_keeps_pixels_and_placement() {
+        let data = "ff0000".repeat(16);
+        let alpha = "7f".repeat(8);
+        let pdf = strip_image_pdf(16, "q 16 0 0 1 2 2 cm /Im0 Do Q\n", "DeviceRGB", &data, Some(&alpha));
+        let pdf = String::from_utf8(pdf)
+            .unwrap()
+            .replace("6 0 obj << /Type /XObject /Subtype /Image /Width 16", "6 0 obj << /Type /XObject /Subtype /Image /Width 8");
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (20, 4));
+        let pixel = |x: usize| &page.rgba[(20 + x) * 4..][..4];
+        assert_eq!(pixel(1), &[255, 255, 255, 255]);
+        assert_eq!(pixel(3), &[255, 128, 128, 255]);
+        assert_eq!(pixel(17), &[255, 128, 128, 255]);
+        assert_eq!(pixel(19), &[255, 255, 255, 255]);
+    }
+    // GREEN-only integration: the original renderer would attempt GiB buffers. The source is
+    // only 96 KiB, and the fixed guard rejects the target before the resampling plan/allocation.
+    #[test]
+    fn resampling_fallback_preserves_original_geometry_and_pixels() {
+        let data = "ff0000".repeat(32_767);
+        let body = "q 16383.5 0 0 1000000000 2 2 cm /Im0 Do Q\n";
+        let pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{body}endstream endobj\n\
+             5 0 obj << /Type /XObject /Subtype /Image /Width 32767 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Interpolate true /Filter /ASCIIHexDecode /Length {} >> stream\n{data}>\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            body.len(),
+            data.len() + 1,
+        );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (20, 20));
+        let pixel = |x: usize, y: usize| &page.rgba[(y * 20 + x) * 4..][..4];
+        assert_eq!(pixel(0, 5), &[255, 255, 255, 255]);
+        assert_eq!(pixel(3, 5), &[255, 0, 0, 255]);
+        assert_eq!(pixel(19, 5), &[255, 0, 0, 255]);
+    }
 
     const ONE_PAGE: &[u8] = b"%PDF-1.4
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
