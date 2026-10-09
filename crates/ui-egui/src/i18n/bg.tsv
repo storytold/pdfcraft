@@ -1605,6 +1605,7 @@
 	Couldn't open {name}: {e}	{name} не можа да бъде отворен: {e}
 	Couldn't read {name}: {e}	{name} не можа да бъде прочетен: {e}
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Преносимият режим е изключен: в {folder} не може да се записва ({error}). Вместо това настройките се пазят в потребителската ви папка.
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft рисува без графичен процесор, затова може да е бавен. Обновяването на графичния драйвер може да помогне.
 	Couldn't save: {e}	Записването не бе успешно: {e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Изтеглянето на прикачени файлове в уеб версията ще стане достъпно с M3.10 ({n} байта готови)
 	`{command}` {when}	`{command}` {when}

@@ -1576,6 +1576,7 @@
 	Couldn't open {name}: {e}	{name} konnte nicht geöffnet werden: {e}
 	Couldn't read {name}: {e}	{name} konnte nicht gelesen werden: {e}
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Der portable Modus ist aus: In {folder} kann nicht geschrieben werden ({error}). Die Einstellungen werden stattdessen in deinem Benutzerordner gespeichert.
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft zeichnet ohne Grafikprozessor und kann daher langsam sein. Ein aktualisierter Grafiktreiber kann helfen.
 	Couldn't save: {e}	Speichern fehlgeschlagen: {e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Anhänge herunterladen kommt im Web mit M3.10 ({n} Bytes bereit)
 	`{command}` {when}	`{command}` {when}

@@ -1658,6 +1658,7 @@
 	Couldn't open {name}: {e}	{name} を開けませんでした: {e}
 	Couldn't read {name}: {e}	{name} を読み取れませんでした: {e}
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	ポータブルモードは無効です: {folder} に書き込めません ({error})。設定は代わりにユーザーフォルダーに保存されます。
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft はグラフィックプロセッサーを使わずに描画しているため、動作が遅くなることがあります。グラフィックドライバーを更新すると改善する場合があります。
 	Couldn't save: {e}	保存できませんでした: {e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Web 版の添付ファイルのダウンロードは M3.10 で対応予定です（{n} バイト準備済み）
 	`{command}` {when}	`{command}`: {when}
