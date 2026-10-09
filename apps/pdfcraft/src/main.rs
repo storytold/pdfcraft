@@ -390,6 +390,16 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
 ///   its window appeared. D3D12 is the native, best-supported backend there.
 fn configure_gpu(native: &mut eframe::NativeOptions) {
     let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut native.wgpu_options.wgpu_setup else { return };
+    // egui-wgpu requests only 8192 pixels even when the adapter can render larger surfaces.
+    // A restored 3440-point window at 250% DPI requests 8600 pixels and otherwise panics in
+    // Surface::configure before the app starts. Keep the renderer's other device requirements,
+    // but enable the adapter's actual 2D texture extent (also for smaller/downlevel adapters).
+    let device_descriptor = std::sync::Arc::clone(&setup.device_descriptor);
+    setup.device_descriptor = std::sync::Arc::new(move |adapter| {
+        let mut descriptor = device_descriptor(adapter);
+        descriptor.required_limits = surface_texture_limits(descriptor.required_limits, &adapter.limits());
+        descriptor
+    });
     if std::env::var_os("WGPU_POWER_PREF").is_none() {
         setup.power_preference = eframe::wgpu::PowerPreference::LowPower;
         #[cfg(target_os = "linux")]
@@ -417,6 +427,13 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
     if cfg!(target_os = "windows") && std::env::var_os("WGPU_BACKEND").is_none() {
         setup.instance_descriptor.backends = eframe::wgpu::Backends::DX12 | eframe::wgpu::Backends::GL;
     }
+}
+
+/// Surface textures must fit the device's enabled limits, not just the physical GPU's limits.
+/// Changing only the 2D extent preserves egui-wgpu's backend-specific downlevel requirements.
+fn surface_texture_limits(mut required: eframe::wgpu::Limits, supported: &eframe::wgpu::Limits) -> eframe::wgpu::Limits {
+    required.max_texture_dimension_2d = supported.max_texture_dimension_2d;
+    required
 }
 
 /// A GPU with a connected monitor.
@@ -552,6 +569,32 @@ mod tests {
             let backends = setup.instance_descriptor.backends;
             assert!(backends.contains(eframe::wgpu::Backends::DX12), "{backends:?}");
             assert!(!backends.contains(eframe::wgpu::Backends::VULKAN), "issue #37: {backends:?}");
+        }
+    }
+
+    #[test]
+    fn restored_hidpi_window_fits_the_adapters_surface_limit() {
+        // The Outlook launch crash: 3440 x 1369 saved points at 250% DPI requested this surface.
+        let (width, height) = (8600, 3423);
+        let required = eframe::wgpu::Limits::default();
+        assert!(width > required.max_texture_dimension_2d);
+        let supported = eframe::wgpu::Limits { max_texture_dimension_2d: 16384, ..required.clone() };
+        let enabled = super::surface_texture_limits(required, &supported);
+        assert!(width <= enabled.max_texture_dimension_2d);
+        assert!(height <= enabled.max_texture_dimension_2d);
+    }
+
+    #[test]
+    fn surface_limits_preserve_other_requirements_and_never_overrequest() {
+        for required in [eframe::wgpu::Limits::default(), eframe::wgpu::Limits::downlevel_webgl2_defaults()] {
+            for extent in [4096, 8192, 16384] {
+                let supported = eframe::wgpu::Limits { max_texture_dimension_2d: extent, ..required.clone() };
+                let enabled = super::surface_texture_limits(required.clone(), &supported);
+                let mut expected = required.clone();
+                expected.max_texture_dimension_2d = extent;
+                assert_eq!(enabled, expected);
+                assert_eq!(enabled.max_texture_dimension_2d, supported.max_texture_dimension_2d);
+            }
         }
     }
 

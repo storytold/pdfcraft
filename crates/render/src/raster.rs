@@ -1379,6 +1379,102 @@ trailer << /Root 1 0 R >>
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255]);
     }
 
+    /// Contributor-original JPEG 2000: one unsigned 8-bit pixel per component, one tile,
+    /// no decomposition, reversible wavelet, and one empty packet per component. Empty
+    /// coefficients decode to the midpoint (128) after the unsigned DC level shift.
+    fn jpx_midpoint_pdf(bpc: u8, components: u16) -> Vec<u8> {
+        let mut codestream = vec![0xff, 0x4f, 0xff, 0x51]; // SOC, SIZ.
+        codestream.extend_from_slice(&(38 + 3 * components).to_be_bytes());
+        codestream.extend_from_slice(&0_u16.to_be_bytes()); // Rsiz.
+        for value in [1_u32, 1, 0, 0, 1, 1, 0, 0] {
+            codestream.extend_from_slice(&value.to_be_bytes());
+        }
+        codestream.extend_from_slice(&components.to_be_bytes());
+        for _ in 0..components {
+            codestream.extend_from_slice(&[7, 1, 1]); // Eight bits, no subsampling.
+        }
+        // COD: LRCP, one layer, no transform between components, 64x64 codeblocks,
+        // zero decomposition levels, reversible wavelet. QCD: no quantization.
+        codestream.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 0, 4, 4, 0, 1]);
+        codestream.extend_from_slice(&[0xff, 0x5c, 0, 4, 0x40, 0x40]);
+        codestream.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0]); // SOT, tile zero.
+        codestream.extend_from_slice(&(14 + u32::from(components)).to_be_bytes());
+        codestream.extend_from_slice(&[0, 1, 0xff, 0x93]); // One tile part, SOD.
+        codestream.extend(std::iter::repeat_n(0, usize::from(components)));
+        codestream.extend_from_slice(&[0xff, 0xd9]); // EOC.
+
+        let content = "q 20 0 0 20 5 5 cm /Im1 Do Q 1 0 0 rg 0 0 4 4 re f";
+        let mut pdf = format!(
+            "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent {bpc} /Filter /JPXDecode /Length {} >> stream\n",
+            content.len(),
+            codestream.len()
+        )
+        .into_bytes();
+        pdf.extend_from_slice(&codestream);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+        pdf
+    }
+
+    #[test]
+    fn jpx_stream_bit_depth_boundaries_do_not_panic() {
+        use hayro::hayro_syntax::bit_reader::BitReader;
+        use hayro::hayro_syntax::object::stream::ImageDecodeParams;
+
+        for (bpc, expected) in [(1, 1), (8, 128), (16, 32_896), (31, 1_077_952_576), (32, 2_155_905_152)] {
+            let pdf = Pdf::new(Arc::new(jpx_midpoint_pdf(bpc, 1))).unwrap();
+            let stream = pdf.objects().into_iter().filter_map(|object| object.into_stream()).find(|stream| !stream.filters().is_empty()).unwrap();
+            let decoded = stream.decoded_image(&ImageDecodeParams { bpc: Some(bpc), ..Default::default() }).unwrap();
+            let image = decoded.image_data.unwrap();
+            assert_eq!((image.width, image.height, image.bits_per_component), (1, 1, bpc));
+            assert_eq!(decoded.data.len(), usize::from(bpc).div_ceil(8));
+            assert_eq!(BitReader::new(&decoded.data).read(bpc), Some(expected), "{bpc}-bit midpoint");
+        }
+    }
+
+    #[test]
+    fn jpx_streams_reject_out_of_range_bit_depths() {
+        use hayro::hayro_syntax::object::stream::ImageDecodeParams;
+
+        for bpc in [0, 33, 255] {
+            let pdf = Pdf::new(Arc::new(jpx_midpoint_pdf(bpc, 1))).unwrap();
+            let stream = pdf.objects().into_iter().filter_map(|object| object.into_stream()).find(|stream| !stream.filters().is_empty()).unwrap();
+            assert!(stream.decoded_image(&ImageDecodeParams { bpc: Some(bpc), ..Default::default() }).is_err());
+        }
+    }
+
+    #[test]
+    fn jpx_gray_rgb_and_alpha_keep_eight_bit_samples() {
+        use hayro::hayro_syntax::object::stream::ImageDecodeParams;
+
+        for components in [1, 3, 4] {
+            let pdf = Pdf::new(Arc::new(jpx_midpoint_pdf(8, components))).unwrap();
+            let stream = pdf.objects().into_iter().filter_map(|object| object.into_stream()).find(|stream| !stream.filters().is_empty()).unwrap();
+            let decoded = stream.decoded_image(&ImageDecodeParams::default()).unwrap();
+            let expected_colors = usize::from(components.min(3));
+            assert_eq!(decoded.data.as_ref(), vec![128; expected_colors]);
+            let alpha = decoded.image_data.unwrap().alpha;
+            assert_eq!(alpha, (components == 4).then(|| vec![128]));
+        }
+    }
+
+    #[test]
+    fn jpx_32_bit_image_does_not_prevent_other_page_content_from_rendering() {
+        for bpc in [8, 32] {
+            let mut renderer = PageRenderer::new(Arc::new(jpx_midpoint_pdf(bpc, 1)), RenderConfig::default());
+            let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            assert!(page.error.is_none(), "{bpc} bits: {:?}", page.error);
+            assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "other page content draws");
+            if bpc == 8 {
+                assert_eq!(&page.rgba[((25 * 40 + 15) * 4)..][..4], &[128, 128, 128, 255], "the valid image paints gray");
+            }
+        }
+    }
+
     /// From the nightly `cargo xtask fuzz` (CI caps each child at 4 GiB): a stencil mask claiming
     /// /W 4294967295 and a CCITT image claiming /Columns 4294967295 each allocated 4 GiB while
     /// decoding (locally: 9.6 GB and 4.3 GB). Vendored hayro patches `image_size_ok` and
@@ -1733,6 +1829,415 @@ trailer << /Root 1 0 R >>
             assert!(page.error.is_none(), "{what}: {:?}", page.error);
             assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "{what}: the rest of the page draws");
         }
+    }
+
+    /// Zlib data that inflates to `len` zero bytes.
+    fn zlib_zeros(len: usize) -> Vec<u8> {
+        use std::io::Write;
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        let chunk = vec![0u8; 1 << 20];
+        let mut left = len;
+        while left > 0 {
+            let n = left.min(chunk.len());
+            z.write_all(&chunk[..n]).unwrap();
+            left -= n;
+        }
+        z.finish().unwrap()
+    }
+
+    /// A raw deflate stream that flate2 rejects at once and the fallback inflater expands to at
+    /// least `len` zero bytes: a one-byte stored block whose length check is wrong (flate2 refuses
+    /// it, the fallback carries on), then a fixed-Huffman block of 258-byte copies.
+    fn deflate_for_the_fallback(len: usize) -> Vec<u8> {
+        let mut out = vec![0b000]; // not final, stored; the rest of the byte is padding
+        out.extend_from_slice(&[1, 0, 0, 0, 0]); // LEN 1, NLEN 0 (should be !1), the byte 0
+        let (mut acc, mut bits) = (0u64, 0u32);
+        // Deflate packs bits from the least significant end; Huffman codes go most significant
+        // bit first.
+        let mut put = |value: u32, n: u32, huffman: bool| {
+            for i in 0..n {
+                let bit = if huffman { (value >> (n - 1 - i)) & 1 } else { (value >> i) & 1 };
+                acc |= u64::from(bit) << bits;
+                bits += 1;
+                if bits == 8 {
+                    out.push(acc as u8);
+                    (acc, bits) = (0, 0);
+                }
+            }
+        };
+        put(1, 1, false); // final block
+        put(1, 2, false); // fixed Huffman codes
+        for _ in 0..len / 258 + 1 {
+            put(0b1100_0101, 8, true); // length code 285: 258 bytes
+            put(0, 5, true); // distance code 0: 1 byte back
+        }
+        put(0, 7, true); // end of block
+        put(0, 7, false); // flush
+        out
+    }
+
+    /// LZW codes (MSB first, early change) for `fills` table fills of zero runs: after a clear,
+    /// code 0, then every code is the one being defined (the previous entry plus a zero), so
+    /// entry n holds n - 256 zeros. One fill is about 7 MB of output from 5 KB of codes.
+    fn lzw_zeros(fills: usize) -> Vec<u8> {
+        let width = |size: usize| match size + 1 {
+            2048.. => 12,
+            1024.. => 11,
+            512.. => 10,
+            _ => 9,
+        };
+        let (mut out, mut acc, mut bits) = (Vec::new(), 0u64, 0u32);
+        let mut emit = |code: usize, w: u32| {
+            acc = (acc << w) | code as u64;
+            bits += w;
+            while bits >= 8 {
+                bits -= 8;
+                out.push((acc >> bits) as u8);
+            }
+        };
+        let mut size = 258;
+        for _ in 0..fills {
+            emit(256, width(size)); // clear
+            size = 258;
+            emit(0, width(size));
+            for code in 258..4096 {
+                emit(code, width(size));
+                size = code + 1;
+            }
+        }
+        emit(257, width(size)); // end of data
+        emit(0, 7); // flush the last partial byte
+        out
+    }
+
+    /// Found while triaging `cargo xtask fuzz` on Windows, by hand rather than by the fuzzer
+    /// (random mutations almost never make a high-ratio stream): a 2 MB page whose content
+    /// stream, or whose 8 × 8 image, inflated to 2 GB took the renderer past 3 GB in under a
+    /// second. Flate (through flate2 and through the fallback inflater), LZW and RunLength expand
+    /// without limit. Vendored hayro-syntax patch: each stops at `MAX_DECODED_STREAM`, and an image
+    /// of known size at its own rows.
+    #[test]
+    fn decompression_bombs_stop_at_the_stream_limit() {
+        use hayro::hayro_syntax::object::stream::ImageDecodeParams;
+        use hayro::hayro_syntax::object::{Object, Stream};
+        let limit = hayro::hayro_syntax::MAX_DECODED_STREAM;
+        let big = limit + (32 << 20);
+        let mut run_length = [0x81u8, 0].repeat(big / 128 + 1); // runs of 128 zeros
+        run_length.push(128);
+        let streams: [(&str, Vec<u8>); 4] = [
+            ("/FlateDecode", zlib_zeros(big)),
+            ("/FlateDecode", deflate_for_the_fallback(big)),
+            ("/LZWDecode", lzw_zeros(big / 7_000_000 + 1)),
+            ("/RunLengthDecode", run_length),
+        ];
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] >> endobj\n".to_vec();
+        for (i, (filter, data)) in streams.iter().enumerate() {
+            pdf.extend_from_slice(format!("{} 0 obj << /Filter {filter} /Length {} >> stream\n", i + 4, data.len()).as_bytes());
+            pdf.extend_from_slice(data);
+            pdf.extend_from_slice(b"\nendstream endobj\n");
+        }
+        pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+        let doc = Pdf::new(pdf).expect("parses");
+        let found: Vec<Stream<'_>> = doc.objects().into_iter().filter_map(|o| if let Object::Stream(s) = o { Some(s) } else { None }).collect();
+        assert_eq!(found.len(), 4, "all four bomb streams are found");
+        for stream in &found {
+            let what = format!("{:?}", stream.filters());
+            let decoded = stream.decoded().expect("a bomb still decodes, up to the limit");
+            assert_eq!(decoded.len(), limit, "{what}: stops at MAX_DECODED_STREAM, not at {big} bytes");
+            // An 8 × 8 one-byte grey image has 64 pixel bytes, plus at most a predictor tag byte
+            // for each.
+            let params = ImageDecodeParams { bpc: Some(8), num_components: Some(1), width: 8, height: 8, ..ImageDecodeParams::default() };
+            let image = stream.decoded_image(&params).expect("decodes as an image");
+            assert!(image.data.len() <= 128, "{what}: an 8 × 8 image decodes at most 128 bytes, not {}", image.data.len());
+        }
+    }
+
+    /// Review of the decompression-bomb fix: one stream stopping at `MAX_DECODED_STREAM` isn't
+    /// enough when streams add up. A page's `/Contents` array can name the same bomb many times,
+    /// and a form that paints itself nests fifty deep, each level keeping its content while the
+    /// next runs. Vendored patches: a `/Contents` array shares one `MAX_DECODED_STREAM`
+    /// (hayro-syntax), and page contents, forms, tiling patterns and Type 3 glyphs share a
+    /// per-page budget (hayro-interpret `MAX_PAGE_CONTENT`).
+    #[test]
+    fn page_contents_and_nested_forms_share_one_budget() {
+        let limit = hayro::hayro_syntax::MAX_DECODED_STREAM;
+        let bomb = zlib_zeros(limit + (32 << 20));
+        // Three references to one bomb in /Contents decode no more than one stream's worth.
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents [4 0 R 4 0 R 4 0 R] >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Filter /FlateDecode /Length {} >> stream\n", bomb.len()).as_bytes());
+        pdf.extend_from_slice(&bomb);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let doc = Pdf::new(pdf).expect("parses");
+        let page = doc.pages().first().expect("one page");
+        let contents = page.page_stream().map_or(0, <[u8]>::len);
+        assert!(contents <= limit + 3, "the /Contents array decodes {contents} bytes, over one stream's {limit}");
+
+        // A form that paints itself before 256 MiB of spaces: every level would keep its content.
+        let mut content = b"/Fm0 Do ".to_vec();
+        content.resize(limit, b' ');
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        std::io::Write::write_all(&mut z, &content).unwrap();
+        let form = z.finish().unwrap();
+        drop(content);
+        let page_content = b"/Fm0 Do 1 0 0 rg 0 0 4 4 re f";
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Fm0 5 0 R >> >> >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", page_content.len()).as_bytes());
+        pdf.extend_from_slice(page_content);
+        pdf.extend_from_slice(b"\nendstream endobj\n");
+        pdf.extend_from_slice(
+            format!("5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 40 40] /Resources << /XObject << /Fm0 5 0 R >> >> /Filter /FlateDecode /Length {} >> stream\n", form.len()).as_bytes(),
+        );
+        pdf.extend_from_slice(&form);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("a self-painting form must not stall the renderer");
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
+    }
+
+    /// The page content budget counts what is held at once, not everything decoded: a form
+    /// with 2 MiB of content painted three hundred times (600 MiB in all) draws every time.
+    #[test]
+    fn content_painted_again_and_again_keeps_drawing() {
+        let mut content = b"1 0 0 rg 0 0 4 4 re f ".to_vec();
+        content.resize(2 << 20, b' ');
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        std::io::Write::write_all(&mut z, &content).unwrap();
+        let form = z.finish().unwrap();
+        let mut page_content = "/Fm0 Do ".repeat(299);
+        page_content.push_str("q 1 0 0 1 30 30 cm /Fm0 Do Q");
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Fm0 5 0 R >> >> >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n{page_content}\nendstream endobj\n", page_content.len()).as_bytes());
+        pdf.extend_from_slice(
+            format!("5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 40 40] /Filter /FlateDecode /Length {} >> stream\n", form.len()).as_bytes(),
+        );
+        pdf.extend_from_slice(&form);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        // The last paint is at user (30, 30)–(34, 34): device row 40 - 32 = 8.
+        assert_eq!(&page.rgba[((8 * 40 + 32) * 4)..][..4], &[255, 0, 0, 255], "the 300th paint is drawn");
+    }
+
+    /// Review of the decompression-bomb fix: a Type 0 sampled function read every sample of its
+    /// stream into a 4-byte value, then a table entry each, so 256 MiB of 1-bit samples asked for
+    /// over 8 GB. Vendored hayro-interpret patch: at most `MAX_SAMPLE_VALUES` samples, read no
+    /// further than `/Size` asks.
+    #[test]
+    fn sampled_functions_with_billions_of_samples_are_refused() {
+        let bomb = zlib_zeros(hayro::hayro_syntax::MAX_DECODED_STREAM + (32 << 20));
+        let page_content = b"/Sh0 sh 1 0 0 rg 0 0 4 4 re f";
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Shading << /Sh0 5 0 R >> >> >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", page_content.len()).as_bytes());
+        pdf.extend_from_slice(page_content);
+        pdf.extend_from_slice(
+            b"\nendstream endobj\n5 0 obj << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 40 0] /Function 6 0 R >> endobj\n",
+        );
+        pdf.extend_from_slice(
+            format!("6 0 obj << /FunctionType 0 /Domain [0 1] /Range [0 1] /Size [1073741824] /BitsPerSample 1 /Filter /FlateDecode /Length {} >> stream\n", bomb.len()).as_bytes(),
+        );
+        pdf.extend_from_slice(&bomb);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("a sampled-function bomb must not stall the renderer");
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
+    }
+
+    /// From `cargo xtask fuzz`: a mesh shading whose points lie far off the page (a 147-byte
+    /// Coons patch stream decoded onto ±40000) was sampled pixel by pixel over its whole
+    /// bounding box, up to 65536 × 65536 entries: a synthetic page passed 6 GB in six seconds.
+    /// Vendored hayro-interpret patch: mesh shadings are sampled only where they are drawn,
+    /// within eight visits per pixel of that area plus four per triangle in it.
+    #[test]
+    fn mesh_shadings_far_off_the_page_render() {
+        let render = |shading: Vec<u8>| {
+            let content = b"/Sh0 sh 1 0 0 rg 0 0 4 4 re f";
+            let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Shading << /Sh0 5 0 R >> >> >> endobj\n".to_vec();
+            pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+            pdf.extend_from_slice(content);
+            pdf.extend_from_slice(b"\nendstream endobj\n5 0 obj ");
+            pdf.extend_from_slice(&shading);
+            pdf.extend_from_slice(b" endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+            });
+            let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("a mesh shading must not stall the renderer");
+            assert!(page.error.is_none(), "{:?}", page.error);
+            page
+        };
+        let stream = |dict: &str, data: &[u8]| {
+            let mut s = format!("<< {dict} /Length {} >> stream\n", data.len()).into_bytes();
+            s.extend_from_slice(data);
+            s.extend_from_slice(b"\nendstream");
+            s
+        };
+        // One Coons patch (flag, 12 points, 4 colours) with 8-bit coordinates around its square.
+        let mut coons = vec![0u8];
+        for p in [(0, 0), (0, 85), (0, 170), (0, 255), (85, 255), (170, 255), (255, 255), (255, 170), (255, 85), (255, 0), (170, 0), (85, 0)] {
+            coons.extend_from_slice(&[p.0, p.1]);
+        }
+        coons.extend_from_slice(&[255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0]);
+        // A free-form triangle mesh: three vertices (flag, x, y, colour).
+        let triangles = [0u8, 0, 0, 255, 0, 0, 0, 255, 0, 0, 255, 0, 0, 0, 255, 0, 0, 255];
+        let mesh = "/ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8";
+        let far = "/Decode [-40000 40000 -40000 40000 0 1 0 1 0 1]";
+        for (what, shading) in [
+            ("a Coons patch", stream(&format!("/ShadingType 6 {mesh} {far}"), &coons)),
+            ("a triangle mesh", stream(&format!("/ShadingType 4 {mesh} {far}"), &triangles)),
+        ] {
+            let page = render(shading);
+            assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "{what} far off the page: the rest of the page draws");
+        }
+        // A patch on the page, and the part of the huge one that covers it, are still shaded:
+        // the centre is neither white nor transparent.
+        for (what, decode) in [("on the page", "[0 40 0 40 0 1 0 1 0 1]"), ("covering the page", "[-40000 40000 -40000 40000 0 1 0 1 0 1]")] {
+            let page = render(stream(&format!("/ShadingType 6 {mesh} /Decode {decode}"), &coons));
+            let centre = &page.rgba[((20 * 40 + 20) * 4)..][..4];
+            assert!(centre != [255, 255, 255, 255] && centre[3] == 255, "a patch {what} is shaded: {centre:?}");
+        }
+        // A patch filling a 4 × 4 pt rectangle as a pattern is 722 triangles of a fraction of a
+        // pixel each: far more visits than its 16 pixels give, which the per-triangle allowance
+        // covers. The rectangle's middle is shaded.
+        let content = b"/Pattern cs /P0 scn 10 10 4 4 re f";
+        let shading = stream(&format!("/ShadingType 6 {mesh} /Decode [10 14 10 14 0 1 0 1 0 1]"), &coons);
+        let mut pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Pattern << /P0 << /PatternType 2 /Shading 5 0 R >> >> >> >> endobj
+".to_vec();
+        pdf.extend_from_slice(
+            format!(
+                "4 0 obj << /Length {} >> stream
+",
+                content.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(content);
+        pdf.extend_from_slice(
+            b"
+endstream endobj
+5 0 obj ",
+        );
+        pdf.extend_from_slice(&shading);
+        pdf.extend_from_slice(
+            b" endobj
+trailer << /Root 1 0 R >>
+%%EOF
+",
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        let middle = &page.rgba[((28 * 40 + 12) * 4)..][..4];
+        assert!(middle != [255, 255, 255, 255] && middle[3] == 255, "a small patch is shaded: {middle:?}");
+    }
+
+    /// The other half of the mesh-shading patch: ten thousand triangles that each cover half
+    /// of this 1000 × 1000 canvas walked their bounding boxes ten thousand times over (ten
+    /// billion visits). The visit budget stops that work at eight per pixel plus four per
+    /// triangle.
+    #[test]
+    fn many_overlapping_mesh_triangles_finish() {
+        // Each triangle: three vertices of flag, x, y, red, green, blue; half of the page.
+        let one = [0u8, 0, 0, 255, 0, 0, 0, 255, 0, 0, 255, 0, 0, 0, 255, 0, 0, 255];
+        let triangles = one.repeat(10_000);
+        let content = b"/Sh0 sh";
+        let mut pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Shading << /Sh0 5 0 R >> >> >> endobj
+"
+        .to_vec();
+        pdf.extend_from_slice(
+            format!(
+                "4 0 obj << /Length {} >> stream
+",
+                content.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(content);
+        pdf.extend_from_slice(
+            format!("
+endstream endobj
+5 0 obj << /ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 40 0 40 0 1 0 1 0 1] /Length {} >> stream
+", triangles.len())
+                .as_bytes(),
+        );
+        pdf.extend_from_slice(&triangles);
+        pdf.extend_from_slice(
+            b"
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF
+",
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 25.0, tag: 0 }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("overlapping mesh triangles must not stall the renderer");
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (1000, 1000));
+        // The triangles cover the lower left half: a pixel there is shaded.
+        let p = &page.rgba[((900 * 1000 + 100) * 4)..][..4];
+        assert!(p != [255, 255, 255, 255] && p[3] == 255, "the triangles are drawn: {p:?}");
+    }
+
+    /// Review of the mesh-shading patch: every patch was cut into 722 triangles before anything
+    /// limited them (about 150 KB per patch), and a lattice mesh with `/VerticesPerRow 0` pushed
+    /// empty rows for ever. Vendored hayro-interpret patch: patches are triangulated one at a
+    /// time, meshes hold at most `MAX_MESH_PATCHES` patches and `MAX_MESH_TRIANGLES` triangles,
+    /// and a lattice needs two vertices per row.
+    #[test]
+    fn mesh_shadings_with_many_patches_or_no_rows_finish() {
+        let render = |shading: Vec<u8>| {
+            let content = b"/Sh0 sh 1 0 0 rg 0 0 4 4 re f";
+            let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Shading << /Sh0 5 0 R >> >> >> endobj\n".to_vec();
+            pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+            pdf.extend_from_slice(content);
+            pdf.extend_from_slice(b"\nendstream endobj\n5 0 obj ");
+            pdf.extend_from_slice(&shading);
+            pdf.extend_from_slice(b" endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+            });
+            let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("a mesh shading must not stall the renderer");
+            assert!(page.error.is_none(), "{:?}", page.error);
+            assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
+        };
+        let stream = |dict: &str, data: &[u8]| {
+            let mut s = format!("<< {dict} /Length {} >> stream\n", data.len()).into_bytes();
+            s.extend_from_slice(data);
+            s.extend_from_slice(b"\nendstream");
+            s
+        };
+        let mesh = "/ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8";
+        // Forty thousand Coons patches beside the page: 6 GB of triangles if collected first.
+        let mut coons = vec![0u8];
+        for p in [(0, 0), (0, 85), (0, 170), (0, 255), (85, 255), (170, 255), (255, 255), (255, 170), (255, 85), (255, 0), (170, 0), (85, 0)] {
+            coons.extend_from_slice(&[p.0, p.1]);
+        }
+        coons.extend_from_slice(&[255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0]);
+        render(stream(&format!("/ShadingType 6 {mesh} /BitsPerFlag 8 /Decode [100 140 100 140 0 1 0 1 0 1]"), &coons.repeat(40_000)));
+        // A lattice with no vertices per row.
+        render(stream(&format!("/ShadingType 5 {mesh} /VerticesPerRow 0 /Decode [0 40 0 40 0 1 0 1 0 1]"), &[0u8; 64]));
     }
 
     /// From the nightly `cargo xtask fuzz`: an embedded Type 1 font program holding a long run of
