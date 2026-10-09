@@ -1656,6 +1656,8 @@ mod tests {
         assert_eq!(tr_ctx(uk, "comment menu", "Edit"), "Редагувати");
         assert_eq!(tr_ctx(uk, "signature pad", "Type"), "Ввести");
         assert_eq!(tr_ctx(uk, "action wizard", "Start"), "Почати");
+        assert_eq!(tr(uk, "Subject"), "Тема");
+        assert_eq!(tr_ctx(uk, "certificate", "Subject"), "Власник сертифіката");
         let mut app = crate::PdfCraftApp::default();
         app.set_option("language", "UK").unwrap();
         assert_eq!(app.language, "uk");
