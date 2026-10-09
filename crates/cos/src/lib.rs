@@ -14,6 +14,7 @@
 mod bytes;
 mod document;
 mod object;
+pub mod page_labels;
 mod parser;
 mod security;
 mod writer;

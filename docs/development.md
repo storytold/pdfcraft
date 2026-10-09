@@ -24,6 +24,14 @@ By default PdfCraft's own crates (`pdfcraft*`) log at `info` and everything else
 covers every target starting with it (`pdfcraft*=debug`). The logger is
 `apps/pdfcraft/src/logging.rs`. It never records the control-channel token or document passwords.
 
+## GPU surface limits
+
+The desktop renderer enables the selected adapter's supported 2D texture extent, while keeping
+egui-wgpu's other device requirements. Restored windows on mixed-DPI monitors can exceed its
+default 8192-pixel extent even when the GPU supports a larger surface (#577). The enabled extent
+never exceeds the adapter's capability; this does not make surfaces larger than the hardware
+limit renderable.
+
 ## Environment variables
 
 | Variable | Effect |

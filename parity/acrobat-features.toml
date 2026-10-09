@@ -4398,7 +4398,7 @@ milestone = "M6"
 status = "partial"
 commands = ["form.fields"]
 tools = ["form_fill", "form_set_props"]
-evidence = ["crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/forms/src/tests.rs::choices_accept_exports_or_display_text", "crates/forms/src/tests.rs::rotated_fields_draw_in_their_quadrant", "crates/forms/src/tests.rs::a_rotated_field_draws_along_the_vertical_edge", "crates/automation/tests/automation.rs::rotating_a_field_through_tools", "crates/ui-egui/tests/prepare.rs::position_tab_rotates_a_field"]
+evidence = ["crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/forms/src/tests.rs::choices_accept_exports_or_display_text", "crates/forms/src/tests.rs::rotated_fields_draw_in_their_quadrant", "crates/engine/tests/form_rotation.rs::a_rotated_field_draws_along_the_vertical_edge", "crates/automation/tests/automation.rs::rotating_a_field_through_tools", "crates/ui-egui/tests/prepare.rs::position_tab_rotates_a_field"]
 notes = "auto-size, comb, multiline, password, quadding, /MK colours and /MK /R rotation (0, 90, 180, 270); approximate Helvetica metrics"
 
 [[feature]]

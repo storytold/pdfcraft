@@ -224,8 +224,9 @@ pub struct DocView {
     thumbs: HashMap<usize, TextureHandle>,
     /// Thumbnails that are out of date (still shown until their replacement arrives).
     stale_thumbs: HashSet<usize>,
-    /// Sharp tiles of large pages: (page, tile x, tile y) → (scale tag, texture).
-    tiles: HashMap<(usize, u32, u32), (u64, TextureHandle)>,
+    /// Sharp tiles of large pages: (page, scale tag, tile x, tile y) → texture. Tiles of an
+    /// earlier zoom stay, drawn stretched, until those of the current one cover the page.
+    tiles: HashMap<(usize, u64, u32, u32), TextureHandle>,
     /// Text layers, extracted in the background on demand (selection, find, copy).
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
     pub(crate) text_failed: HashSet<usize>,
@@ -561,7 +562,7 @@ impl DocView {
         if self.thumbs.contains_key(&page) {
             self.stale_thumbs.insert(page);
         }
-        self.tiles.retain(|(p, _, _), _| *p != page);
+        self.tiles.retain(|(p, _, _, _), _| *p != page);
         self.texts.remove(&page);
         self.text_failed.remove(&page);
         self.errors.remove(&page);
@@ -1012,7 +1013,7 @@ impl DocView {
             let page = r.request.page;
             if let Some(t) = r.request.tile {
                 let tex = ctx.load_texture(format!("tile-{:?}-{page}-{}-{}", self.id, t.x, t.y), img, TextureOptions::LINEAR);
-                self.tiles.insert((page, t.x / TILE, t.y / TILE), (r.request.tag, tex));
+                self.tiles.insert((page, r.request.tag, t.x / TILE, t.y / TILE), tex);
                 continue;
             }
             if r.request.tag & GRID_TAG != 0 {
@@ -1106,6 +1107,14 @@ impl DocView {
 fn scale_tag(scale: f32) -> u64 {
     (f64::from(scale) * 65536.0).round() as u64
 }
+
+/// The scale of a raster tagged by [`scale_tag`].
+fn tag_scale(tag: u64) -> f32 {
+    (tag as f64 / 65536.0) as f32
+}
+
+/// Tiles of earlier zooms kept for a page while its current tiles are rendered.
+const OLD_TILES: usize = 64;
 
 /// `r` moved so its corner lies on a whole physical pixel, so that a raster drawn from there
 /// maps texel for texel onto the screen.
@@ -1670,7 +1679,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                             // A backdrop, or a raster at an older scale until the new one arrives.
                             xf.paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
                         }
-                        if p.tag != want_tag {
+                        // Under tiles, a whole-page raster sharper than the backdrop (from before
+                        // the page grew past the tiling size) is a better backdrop: keep it.
+                        let sharper = tiled && p.tag != STALE_TAG && tag_scale(p.tag) >= want_scale;
+                        if p.tag != want_tag && !sharper {
                             wanted.push((i, want_scale, want_tag, None));
                         }
                     }
@@ -1693,6 +1705,21 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     let (v0, v1) = corners.iter().fold((1.0f32, 0.0f32), |(a, b), c| (a.min(c.1), b.max(c.1)));
                     let (vx0, vy0) = ((u0.max(0.0) * dw as f32) as u32, (v0.max(0.0) * dh as f32) as u32);
                     let (vx1, vy1) = (((u1.min(1.0) * dw as f32).ceil() as u32).min(dw), ((v1.min(1.0) * dh as f32).ceil() as u32).min(dh));
+                    // Tiles of earlier zooms first, stretched, the nearest scale last (on top):
+                    // until the current tiles arrive, a zoom shows them rather than the backdrop.
+                    let mut older: Vec<(f32, u32, u32, &TextureHandle)> = view
+                        .tiles
+                        .iter()
+                        .filter(|((p, t, _, _), _)| *p == i && *t != tag)
+                        .map(|((_, t, tx, ty), tex)| (tag_scale(*t), *tx, *ty, tex))
+                        .collect();
+                    older.sort_by(|a, b| (b.0 / scale).ln().abs().total_cmp(&(a.0 / scale).ln().abs()));
+                    for (s, tx, ty, tex) in older {
+                        let (ow, oh) = (device_pixels(pw_pt, s) as f32, device_pixels(ph_pt, s) as f32);
+                        let [w, h] = tex.size();
+                        let (x, y) = ((tx * TILE) as f32, (ty * TILE) as f32);
+                        xf.paint_image(painter, tex.id(), x / ow, y / oh, (x + w as f32) / ow, (y + h as f32) / oh);
+                    }
                     for ty in vy0 / TILE..=(vy1.saturating_sub(1)) / TILE {
                         for tx in vx0 / TILE..=(vx1.saturating_sub(1)) / TILE {
                             let (x, y) = (tx * TILE, ty * TILE);
@@ -1700,8 +1727,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                             if w == 0 || h == 0 {
                                 continue;
                             }
-                            match view.tiles.get(&(i, tx, ty)) {
-                                Some((ttag, tex)) if *ttag == tag => {
+                            match view.tiles.get(&(i, tag, tx, ty)) {
+                                Some(tex) => {
                                     let (fw, fh) = (dw as f32, dh as f32);
                                     xf.texel_aligned([dw as usize, dh as usize], ppp).paint_image(
                                         painter,
@@ -2140,8 +2167,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let cur = view.current;
     // Nearest pages first; for each page, the backdrop before its tiles.
     wanted.sort_by_key(|w| ((w.0 as isize - cur as isize).unsigned_abs(), w.3.is_some()));
-    // Tiles for other zoom levels or far-away pages are useless: free them.
-    view.tiles.retain(|(p, _, _), (t, _)| *t == tag && p.abs_diff(cur) <= 2);
+    // Tiles of far-away pages are useless: free them. Tiles of other zooms stay only while a
+    // current tile of their page is still missing, at most `OLD_TILES` of them, nearest scale first.
+    let missing: HashSet<usize> = wanted.iter().filter(|w| w.3.is_some()).map(|w| w.0).collect();
+    view.tiles.retain(|(p, t, _, _), _| p.abs_diff(cur) <= 2 && (*t == tag || missing.contains(p)));
+    let mut older: Vec<(f32, (usize, u64, u32, u32))> =
+        view.tiles.keys().filter(|k| k.1 != tag).map(|k| ((tag_scale(k.1) / scale).ln().abs(), *k)).collect();
+    if older.len() > OLD_TILES {
+        older.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (_, k) in older.drain(OLD_TILES..) {
+            view.tiles.remove(&k);
+        }
+    }
     let mut queue: Vec<RenderRequest> =
         wanted.iter().map(|&(page, scale, tag, tile)| RenderRequest { page, kind: RequestKind::Pixels, tile, scale, tag }).collect();
     // Text layers: visible pages for selection, every page while a search is active.
