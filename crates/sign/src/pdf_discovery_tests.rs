@@ -350,3 +350,22 @@ fn real_file_discovery_cache_diagnostic() {
     eprintln!("signature-discovery-reopen\tfull_scans={}", scans(&cache));
     assert_eq!(scans(&cache), 2);
 }
+
+/// A store's arrays only "grew" when every old element is still there; huge arrays (a crafted
+/// `/Certs` of 200,000 references) are compared in linear time, and huge arrays of values that
+/// aren't references are not taken as growth at all, rather than compared quadratically.
+#[test]
+fn only_grew_compares_huge_arrays_without_quadratic_work() {
+    let doc = Document::new_empty();
+    let refs = |n: u32| Object::Array((1..=n).map(|i| Object::Ref(ObjRef::new(i, 0))).collect());
+    let start = std::time::Instant::now();
+    assert!(only_grew(&doc, &doc, &refs(200_000), &refs(200_001), 0));
+    assert!(!only_grew(&doc, &doc, &refs(200_001), &refs(200_000), 0));
+    let mut dropped = (1..=200_000).map(|i| Object::Ref(ObjRef::new(i, 0))).collect::<Vec<_>>();
+    dropped[100_000] = Object::Ref(ObjRef::new(999_999, 0));
+    assert!(!only_grew(&doc, &doc, &refs(200_000), &Object::Array(dropped), 0));
+    let ints = |n: i64| Object::Array((0..n).map(Object::Int).collect());
+    assert!(only_grew(&doc, &doc, &ints(100), &ints(101), 0));
+    assert!(!only_grew(&doc, &doc, &ints(20_000), &ints(20_001), 0));
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+}

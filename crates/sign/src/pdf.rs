@@ -971,8 +971,20 @@ fn dss_walk(doc: &Document) -> Vec<(ObjRef, DssRole)> {
 /// Whether `now` only adds to `before`: an array keeps every element, a dictionary keeps every
 /// entry (an entry that is an array or dictionary may itself have grown).
 fn only_grew(doc: &Document, old: &Document, before: &Object, now: &Object, depth: u8) -> bool {
+    /// Arrays of anything but references are compared element by element (quadratic), so only
+    /// up to this size; a store's `/Certs`/`/CRLs`/`/OCSPs` are references, compared as sets.
+    const MAX_COMPARED: usize = 10_000;
     match (before, now) {
-        (Object::Array(b), Object::Array(n)) => b.iter().all(|x| n.contains(x)),
+        (Object::Array(b), Object::Array(n)) => {
+            if b.len() > n.len() {
+                return false;
+            }
+            let refs = |a: &[Object]| a.iter().map(Object::as_ref).collect::<Option<HashSet<ObjRef>>>();
+            match (refs(b), refs(n)) {
+                (Some(b), Some(n)) => b.is_subset(&n),
+                _ => b.len() <= MAX_COMPARED && n.len() <= MAX_COMPARED && b.iter().all(|x| n.contains(x)),
+            }
+        }
         (Object::Dict(b), Object::Dict(n)) => b.iter().all(|(k, v)| match n.get(k) {
             Some(nv) => nv == v || (depth < 4 && only_grew(doc, old, &old.resolve(v), &doc.resolve(nv), depth + 1)),
             None => false,
