@@ -1178,8 +1178,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = ["doc_list"]
-evidence = ["crates/ui-egui/tests/editing.rs::combining_files_opens_a_new_unsaved_tab", "crates/ui-egui/tests/control.rs::state_and_view_options", "crates/ui-egui/tests/viewer.rs::each_document_keeps_its_own_scroll_position"]
-notes = "each tab keeps its own scroll position (#189)"
+evidence = ["crates/ui-egui/tests/editing.rs::combining_files_opens_a_new_unsaved_tab", "crates/ui-egui/tests/control.rs::state_and_view_options", "crates/ui-egui/tests/viewer.rs::each_document_keeps_its_own_scroll_position", "crates/ui-egui/tests/viewer.rs::a_new_document_opens_at_the_top_after_a_relaunch"]
+notes = "each tab keeps its own scroll position (#189), and a newly opened one starts at the top, not where an earlier session left the scroll"
 
 [[feature]]
 id = "view.multiple-windows"

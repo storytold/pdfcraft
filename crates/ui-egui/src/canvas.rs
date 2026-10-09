@@ -237,6 +237,8 @@ pub struct DocView {
     viewport_screen: Rect,
     /// Pending zoom anchor: page, position within it (0..1), and offset from the viewport corner.
     zoom_anchor: Option<(usize, f32, f32, Vec2)>,
+    /// The page view has been shown, so its scroll offset in egui's memory is this document's.
+    shown: bool,
     /// Turns wheel input into page turns in single-page view.
     wheel: crate::wheel_pager::WheelPager,
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
@@ -375,6 +377,7 @@ impl DocView {
             screen_xforms: Vec::new(),
             viewport_screen: Rect::NOTHING,
             zoom_anchor: None,
+            shown: false,
             wheel: Default::default(),
             auto_scroll: Default::default(),
             selected: BTreeSet::new(),
@@ -1303,6 +1306,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     });
     // Each document keeps its own scroll position when switching tabs (#189).
     scroll = scroll.id_salt(("page-view", view.id));
+    // A newly opened document starts at the top. eframe saves egui's memory with the settings
+    // and document ids start again at 1 every launch, so the offset stored under this id can be
+    // where an earlier session left another document.
+    if !std::mem::replace(&mut view.shown, true) {
+        scroll = scroll.scroll_offset(Vec2::ZERO);
+    }
     if let Some((page, fx, fy, rel)) = view.zoom_anchor.take() {
         let r = rects[page.min(rects.len() - 1)];
         let point = pos2(r.left() + fx * r.width(), r.top() - y_shift + fy * r.height());
