@@ -62,6 +62,10 @@ const PICKERS: &[&str] = &[
     "export.html",
     "export.rtf",
     "measure.export",
+    // Need a second window or tab: covered by tests/windows.rs.
+    "window.merge_all",
+    "window.close",
+    "window.move_tab_new",
 ];
 
 #[test]

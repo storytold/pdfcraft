@@ -1976,3 +1976,8 @@
 	Couldn't import the signature image: {e}	署名画像を読み込めませんでした: {e}
 	Go to page…	ページへ移動…
 	Reopen the files that were open when PdfCraft last closed	前回 PdfCraft を閉じたときに開いていたファイルを再度開く
+	Window	ウインドウ
+	New window	新規ウインドウ
+	Move tab to new window	タブを新規ウインドウに移動
+	Merge all windows	すべてのウインドウを統合
+	Close window	ウインドウを閉じる

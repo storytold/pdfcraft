@@ -124,3 +124,121 @@ fn a_comment_note_being_edited_is_saved_when_the_window_is_left() {
     let doc = h.state().session.get(h.state().views[0].id).unwrap();
     assert_eq!(doc.info.annotations.first().and_then(|a| a.contents.as_deref()), Some("Check this"));
 }
+
+// --- child windows ---
+
+use egui_kittest::kittest::Queryable;
+
+fn two_docs_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("one.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
+        app.open_bytes("two.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+#[test]
+fn new_view_opens_second_window() {
+    let mut h = form_harness();
+    let doc = h.state().views[0].id;
+    assert!(h.state_mut().execute("window.new_view"));
+    h.run_steps(4);
+    assert_windows_ok(h.state());
+    assert_eq!(h.state().window_count(), 2);
+    let child = h.state().window_ids()[1];
+    assert_eq!(h.state().view_count(doc), 2);
+    assert_eq!(h.state_mut().with_window(child, |a| a.views.first().map(|v| v.id)).flatten(), Some(doc), "the same document, not a copy");
+    // Each window shows its own number, and has its own zoom.
+    h.get_by_label("form.pdf:1");
+    h.get_by_label("form.pdf:2");
+    h.state_mut().views[0].set_zoom(2.0);
+    h.state_mut().with_window(child, |a| a.views[0].set_zoom(0.5));
+    h.run_steps(2);
+    assert!((h.state().views[0].zoom - 2.0).abs() < 1e-3);
+    assert!((h.state_mut().with_window(child, |a| a.views[0].zoom).unwrap() - 0.5).abs() < 1e-3);
+    assert_windows_ok(h.state());
+}
+
+#[test]
+fn the_new_window_starts_where_the_old_one_is() {
+    let mut h = form_harness();
+    h.state_mut().views[0].set_zoom(1.75);
+    assert!(h.state_mut().execute("window.new_view"));
+    h.run_steps(3);
+    let child = h.state().window_ids()[1];
+    let zoom = h.state_mut().with_window(child, |a| a.views[0].zoom).unwrap();
+    assert!((zoom - 1.75).abs() < 1e-3, "{zoom}");
+}
+
+#[test]
+fn move_tab_new_moves() {
+    let mut h = two_docs_harness();
+    let (one, two) = (h.state().views[0].id, h.state().views[1].id);
+    h.state_mut().active = Some(1);
+    assert!(h.state_mut().execute("window.move_tab_new"));
+    h.run_steps(4);
+    assert_windows_ok(h.state());
+    assert_eq!(h.state().views.len(), 1);
+    assert_eq!(h.state().views[0].id, one);
+    let child = h.state().window_ids()[1];
+    assert_eq!(
+        h.state_mut().with_window(child, |a| a.views.iter().map(|v| v.id).collect::<Vec<_>>()).unwrap(),
+        vec![two],
+        "no reload: the same DocId"
+    );
+    // With one tab left, the command is not available.
+    assert!(!h.state_mut().execute("window.move_tab_new"));
+}
+
+#[test]
+fn merge_all_dedupes_views() {
+    let mut h = two_docs_harness();
+    let one = h.state().views[0].id;
+    h.state_mut().active = Some(0);
+    assert!(h.state_mut().execute("window.new_view"));
+    h.run_steps(3);
+    assert!(h.state_mut().execute("window.new_view"));
+    h.run_steps(3);
+    assert_eq!(h.state().window_count(), 3);
+    assert_eq!(h.state().view_count(one), 3);
+    assert!(h.state_mut().execute("window.merge_all"));
+    h.run_steps(3);
+    assert_windows_ok(h.state());
+    assert_eq!(h.state().window_count(), 1);
+    assert_eq!(h.state().views.len(), 2, "one tab per document");
+    assert_eq!(h.state().view_count(one), 1);
+}
+
+#[test]
+fn last_tab_closed_closes_child() {
+    let mut h = form_harness();
+    assert!(h.state_mut().execute("window.new_view"));
+    h.run_steps(3);
+    let child = h.state().window_ids()[1];
+    h.state_mut().with_window(child, |a| a.request_close_tab(0));
+    h.state_mut().pending_window_ops_for_test();
+    h.run_steps(3);
+    assert_eq!(h.state().window_count(), 1, "the empty window is gone");
+    assert_windows_ok(h.state());
+}
+
+#[test]
+fn the_window_shortcut_opens_a_window() {
+    let mut h = form_harness();
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::ALT, egui::Key::N);
+    h.run_steps(4);
+    assert_eq!(h.state().window_count(), 2);
+    assert_windows_ok(h.state());
+}
+
+#[test]
+fn window_commands_know_when_they_apply() {
+    let mut h = form_harness();
+    assert!(!h.state_mut().execute("window.merge_all"), "one window: nothing to merge");
+    assert!(!h.state_mut().execute("window.close"));
+    assert!(h.state().window_count() == 1);
+}

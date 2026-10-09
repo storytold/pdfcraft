@@ -26,7 +26,10 @@ mod apple_events;
 mod logging;
 mod updates;
 
-/// Freedesktop app id: the `.desktop` file name and the hicolor icon name.
+/// Freedesktop app id: the `.desktop` file name and the hicolor icon name. Windows get it from
+/// `pdfcraft_ui_egui::windows::window_builder`; this copy is what the packaging gate and a test
+/// compare it with.
+#[cfg_attr(not(test), allow(dead_code))]
 const APP_ID: &str = "ai.storyteller.pdfcraft";
 
 /// The app icon (assets/app-icon/README.md). macOS gets the version on Apple's icon grid, with a
@@ -150,21 +153,15 @@ fn main() -> eframe::Result {
         }
     }
     let integrated = cfg!(target_os = "macos");
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_title("PdfCraft")
-        .with_inner_size([1440.0, 920.0])
-        .with_min_inner_size([820.0, 520.0])
-        .with_drag_and_drop(true)
-        // Wayland app id: matches packaging/linux/ai.storyteller.pdfcraft.desktop.
-        .with_app_id(APP_ID);
     // Dock, taskbar, Alt-Tab and launcher icon when running unbundled.
-    match eframe::icon_data::from_png_bytes(APP_ICON_PNG) {
-        Ok(icon) => viewport = viewport.with_icon(icon),
-        Err(e) => log::warn!("app icon: {e}"),
-    }
-    if integrated {
-        viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
-    }
+    let icon = match eframe::icon_data::from_png_bytes(APP_ICON_PNG) {
+        Ok(icon) => Some(std::sync::Arc::new(icon)),
+        Err(e) => {
+            log::warn!("app icon: {e}");
+            None
+        }
+    };
+    let viewport = pdfcraft_ui_egui::windows::window_builder("PdfCraft", integrated, icon.clone());
     migrate_legacy_folders();
     // The log file lives in the settings folder; opened after the arguments (so `--version` leaves
     // no file behind) and after the PrintCraft migration (which a fresh folder would block).
@@ -194,6 +191,7 @@ fn main() -> eframe::Result {
                 app.restore(&json);
             }
             app.integrated_titlebar = integrated;
+            app.window_icon = icon.clone();
             app.update_source = Some(std::sync::Arc::new(updates::latest_release));
             app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
             #[cfg(target_os = "macos")]
@@ -385,6 +383,12 @@ fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[(
 
 #[cfg(test)]
 mod tests {
+    /// Windows other than the first are built in `pdfcraft-ui-egui` with its own copy of the id.
+    #[test]
+    fn child_windows_use_the_app_id() {
+        assert_eq!(super::APP_ID, pdfcraft_ui_egui::windows::APP_ID);
+    }
+
     #[test]
     fn path_from_arg_decodes_file_uris() {
         assert_eq!(super::path_from_arg("file:///home/alice/report.pdf".to_string()), "/home/alice/report.pdf");

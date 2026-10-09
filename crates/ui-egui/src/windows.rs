@@ -40,6 +40,30 @@ pub(crate) fn set_drawing(id: WindowId) {
     DRAWING.with(|d| d.set(id.0));
 }
 
+/// The Wayland app id (matches packaging/linux/ai.storyteller.pdfcraft.desktop).
+pub const APP_ID: &str = "ai.storyteller.pdfcraft";
+
+/// A window's outer settings: size, minimum size, drag and drop, app id and icon, and the title
+/// bar drawn by us on macOS. Used for the main window and for every other one.
+pub fn window_builder(title: &str, integrated_titlebar: bool, icon: Option<std::sync::Arc<egui::IconData>>) -> egui::ViewportBuilder {
+    let mut builder = egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_inner_size([1440.0, 920.0])
+        .with_min_inner_size([820.0, 520.0])
+        .with_drag_and_drop(true)
+        .with_app_id(APP_ID);
+    if let Some(icon) = icon {
+        builder = builder.with_icon(icon);
+    }
+    if integrated_titlebar {
+        builder = builder.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
+    }
+    builder
+}
+
+/// Most views one document can have (the render pool serves this many clients).
+pub const MAX_VIEWS_PER_DOCUMENT: usize = pdfcraft_render::MAX_CLIENTS;
+
 /// Most windows open at once (restored sessions are capped to this).
 pub const MAX_WINDOWS: usize = 32;
 
@@ -450,17 +474,284 @@ impl PdfCraftApp {
         Some(id)
     }
 
+    /// Apply the queued window changes now, in the main window (tests).
+    #[doc(hidden)]
+    pub fn pending_window_ops_for_test(&mut self) {
+        self.apply_window_ops();
+    }
+
     /// Apply the queued changes to the set of windows.
     pub(crate) fn apply_window_ops(&mut self) {
+        if self.current_window != WindowId::ROOT {
+            return; // only from the main window's pass
+        }
         for op in std::mem::take(&mut self.pending_window_ops) {
             match op {
-                WindowOp::Focus(id) => {
-                    if let Some(ctx) = &self.ctx {
-                        ctx.send_viewport_cmd_to(id.viewport(), egui::ViewportCommand::Focus);
+                WindowOp::Focus(id) => self.focus_window(id),
+                WindowOp::NewView { doc, from } => self.new_view_window(doc, from),
+                WindowOp::MoveTab { doc, from, to } => self.move_tab(doc, from, to),
+                WindowOp::Close(id) => self.close_window(id),
+                WindowOp::MergeAll => self.merge_all_windows(),
+                WindowOp::Promote(id) => log::warn!("promoting window {} is not supported yet", id.0),
+            }
+        }
+        self.repair_windows();
+    }
+
+    fn focus_window(&mut self, id: WindowId) {
+        if !self.has_window(id) {
+            return;
+        }
+        self.focused_window = id;
+        if let Some(ctx) = &self.ctx {
+            ctx.send_viewport_cmd_to(id.viewport(), egui::ViewportCommand::Focus);
+        }
+    }
+
+    /// The rectangle window `id` last had on screen.
+    fn rect_of(&self, id: WindowId) -> Option<egui::Rect> {
+        if id == WindowId::ROOT { self.root_rect } else { self.windows.iter().find(|w| w.id == id).and_then(|w| w.last_rect) }
+    }
+
+    /// A window for `view`, laid out like window `from` (same panels and workspace, a little
+    /// below and to the right of it).
+    fn open_window_with(&mut self, view: DocView, from: WindowId) {
+        if self.windows.len() + 1 >= MAX_WINDOWS {
+            self.notify_tr("Too many windows are open");
+            return;
+        }
+        let (mode, left, left_open, right) =
+            self.with_window(from, |a| (a.mode, a.left, a.left_open, a.right)).unwrap_or((self.mode, self.left, self.left_open, self.right));
+        let geometry = self.rect_of(from).map(|r| r.translate(egui::vec2(30.0, 30.0)));
+        let state = WindowState { views: vec![view], active: Some(0), mode, left, left_open, right, ..Default::default() };
+        let id = WindowId(self.next_window_id);
+        self.next_window_id = self.next_window_id.saturating_add(1);
+        self.windows.push(WindowSlot { id, state, geometry, last_rect: None });
+        self.assign_view_numbers();
+        self.focus_window(id);
+    }
+
+    /// A new view of `doc` showing what the one in window `from` shows.
+    fn new_view_window(&mut self, doc: DocId, from: WindowId) {
+        if self.view_count(doc) >= MAX_VIEWS_PER_DOCUMENT {
+            return self.notify_tr("Too many windows for this document");
+        }
+        let Some(d) = self.session.get(doc) else { return };
+        let mut view = DocView::new(doc, &d.info, self.view_defaults);
+        view.seen_generation = d.edit_generation();
+        view.seen_display_generation = d.display_generation();
+        let pages = d.info.pages.len();
+        let shown = self
+            .with_window(from, |a| a.views.iter().find(|v| v.id == doc).map(|v| (v.zoom, v.fit, v.layout, v.rotation, v.cover, v.current)))
+            .flatten();
+        if let Some((zoom, fit, layout, rotation, cover, current)) = shown {
+            view.zoom = zoom;
+            view.fit = fit;
+            view.layout = layout;
+            view.rotation = rotation;
+            view.cover = cover;
+            if current < pages {
+                view.go_to_page(current);
+            }
+        }
+        self.open_window_with(view, from);
+    }
+
+    /// Take the view of `doc` out of window `from` (without closing the document).
+    fn take_view(&mut self, doc: DocId, from: WindowId) -> Option<DocView> {
+        self.with_window(from, |a| {
+            let at = a.views.iter().position(|v| v.id == doc)?;
+            let view = a.views.remove(at);
+            a.active = match a.active {
+                _ if a.views.is_empty() => None,
+                Some(i) if i > at => Some(i - 1),
+                Some(i) if i >= a.views.len() => Some(a.views.len() - 1),
+                other => other,
+            };
+            Some(view)
+        })
+        .flatten()
+    }
+
+    fn move_tab(&mut self, doc: DocId, from: WindowId, to: Option<WindowId>) {
+        if to == Some(from) {
+            return;
+        }
+        if let Some(target) = to
+            && !self.has_window(target)
+        {
+            return;
+        }
+        let Some(view) = self.take_view(doc, from) else { return };
+        match to {
+            None => self.open_window_with(view, from),
+            Some(target) => {
+                let mut leftover = None;
+                self.with_window(target, |a| match a.views.iter().position(|v| v.id == doc) {
+                    // That window shows the document already: show it, and let this view go.
+                    Some(i) => {
+                        a.active = Some(i);
+                        leftover = Some(view);
+                    }
+                    None => {
+                        a.views.push(view);
+                        a.active = Some(a.views.len() - 1);
+                    }
+                });
+                if let Some(mut extra) = leftover
+                    && let Some(d) = self.session.get(doc)
+                {
+                    extra.release_render_client(&d.renderer);
+                }
+                self.focus_window(target);
+            }
+        }
+        // A window left without tabs closes with them.
+        if from != WindowId::ROOT && self.with_window(from, |a| a.views.is_empty() && !a.combine_tab.open).unwrap_or(false) {
+            self.close_window(from);
+        }
+    }
+
+    /// Close window `id` and its tabs. Questions about unsaved work come first (`guard_close_window`).
+    fn close_window(&mut self, id: WindowId) {
+        if id == WindowId::ROOT {
+            log::warn!("the main window cannot be closed this way");
+            return;
+        }
+        if id == self.current_window || !self.has_window(id) {
+            return;
+        }
+        self.with_window(id, |a| {
+            while !a.views.is_empty() {
+                a.close_tab(a.views.len() - 1);
+            }
+        });
+        self.windows.retain(|w| w.id != id);
+        if self.focused_window == id {
+            self.focused_window = WindowId::ROOT;
+        }
+    }
+
+    /// Bring every tab of every other window into the main window; a document the main window
+    /// shows already is not added twice.
+    fn merge_all_windows(&mut self) {
+        let slots = std::mem::take(&mut self.windows);
+        for mut slot in slots {
+            let views = std::mem::take(&mut slot.state.views);
+            for mut view in views {
+                if self.views.iter().any(|v| v.id == view.id) {
+                    if let Some(d) = self.session.get(view.id) {
+                        view.release_render_client(&d.renderer);
+                    }
+                } else {
+                    self.views.push(view);
+                    if self.active.is_none() {
+                        self.active = Some(self.views.len() - 1);
                     }
                 }
-                other => log::warn!("window operation not supported yet: {other:?}"),
             }
+        }
+        self.focused_window = WindowId::ROOT;
+    }
+
+    /// Put the windows back in order if they are not (see `debug_check_windows`): nothing is
+    /// ever closed that holds a document.
+    fn repair_windows(&mut self) {
+        // A document without a view gets one in the main window.
+        let mut shown = std::collections::HashSet::new();
+        self.for_each_state(|_, views| views.iter().for_each(|v| _ = shown.insert(v.id)));
+        let orphans: Vec<DocId> = self.session.docs().iter().map(|d| d.id).filter(|id| !shown.contains(id)).collect();
+        for id in orphans {
+            log::error!("document {id:?} had no view; showing it in the main window");
+            if let Some(d) = self.session.get(id) {
+                let view = DocView::new(id, &d.info, self.view_defaults);
+                self.views.push(view);
+            }
+        }
+        // A view of a document the session no longer has goes; a second view of a document in
+        // one window goes too.
+        let open: std::collections::HashSet<DocId> = self.session.docs().iter().map(|d| d.id).collect();
+        let fix = |views: &mut Vec<DocView>, active: &mut Option<usize>| {
+            let mut seen = std::collections::HashSet::new();
+            let before = views.len();
+            views.retain(|v| open.contains(&v.id) && seen.insert(v.id));
+            if views.len() != before {
+                log::error!("removed {} stray views", before - views.len());
+                *active = if views.is_empty() { None } else { Some(active.unwrap_or(0).min(views.len() - 1)) };
+            }
+        };
+        fix(&mut self.views, &mut self.active);
+        for slot in &mut self.windows {
+            fix(&mut slot.state.views, &mut slot.state.active);
+        }
+        // A window with nothing to show closes.
+        let empty: Vec<WindowId> = self.windows.iter().filter(|w| w.state.views.is_empty() && !w.state.combine_tab.open).map(|w| w.id).collect();
+        self.windows.retain(|w| !empty.contains(&w.id));
+        if !self.has_window(self.focused_window) {
+            self.focused_window = WindowId::ROOT;
+        }
+        for problem in self.debug_check_windows() {
+            log::error!("window check: {problem}");
+        }
+    }
+
+    /// Note where window `id` is and whether it has the focus. Leaving a window takes over what
+    /// is half typed in it, so the other windows see the document as it is.
+    pub(crate) fn track_window(&mut self, id: WindowId, ctx: &egui::Context) {
+        if let Some(rect) = ctx.input(|i| i.viewport().outer_rect).filter(|r| r.is_finite()) {
+            if id == WindowId::ROOT {
+                self.root_rect = Some(rect);
+            } else if let Some(slot) = self.windows.iter_mut().find(|w| w.id == id) {
+                slot.last_rect = Some(rect);
+            }
+        }
+        if self.window_count() < 2 && !self.window_had_focus.is_empty() {
+            self.window_had_focus.clear();
+        }
+        if self.window_count() < 2 {
+            return;
+        }
+        let focused = ctx.input(|i| i.viewport().focused).unwrap_or(false);
+        let had = self.window_had_focus.insert(id, focused).unwrap_or(false);
+        if had && !focused {
+            if let Some(i) = self.active {
+                self.commit_view_inputs(i);
+            }
+        } else if focused && !had {
+            self.focused_window = id;
+            self.prioritise_focused_window();
+        }
+    }
+
+    /// Pages for the focused window are rendered first.
+    fn prioritise_focused_window(&mut self) {
+        let focused = self.focused_window;
+        self.for_each_view(|window, view, session| {
+            if let (Some((pool_id, client)), Some(doc)) = (view.render_client, session.get(view.id))
+                && pool_id == doc.renderer.pool_id()
+            {
+                doc.renderer.set_priority(client, u8::from(window == focused));
+            }
+        });
+    }
+
+    /// Draw the windows besides the main one. Each is an egui viewport of its own, with its
+    /// state loaded for the duration of its pass.
+    pub(crate) fn show_child_windows(&mut self) {
+        let Some(ctx) = self.ctx.clone() else { return };
+        let ids: Vec<WindowId> = self.windows.iter().map(|w| w.id).collect();
+        for id in ids {
+            let Some(slot) = self.windows.iter().find(|w| w.id == id) else { continue };
+            let geometry = slot.geometry;
+            let title = self.with_window(id, |a| a.window_title.clone()).unwrap_or_default();
+            let title = if title.is_empty() { "PdfCraft".to_owned() } else { title };
+            let mut builder = window_builder(&title, self.integrated_titlebar, self.window_icon.clone());
+            if let Some(rect) = geometry.filter(|r| r.is_finite() && r.width() > 100.0 && r.height() > 100.0) {
+                builder = builder.with_position(rect.min).with_inner_size(rect.size());
+            }
+            self.with_window(id, |app| {
+                ctx.show_viewport_immediate(id.viewport(), builder, |ui, class| app.window_pass(id, ui, class));
+            });
         }
     }
 

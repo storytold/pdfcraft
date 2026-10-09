@@ -2000,3 +2000,8 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Elija una imagen PNG o JPEG (hasta 4 MiB). Se conserva la transparencia.
 	Couldn't import the signature image: {e}	No se pudo importar la imagen de la firma: {e}
 	Go to page…	Ir a la página…
+	Window	Ventana
+	New window	Nueva ventana
+	Move tab to new window	Mover la pestaña a una ventana nueva
+	Merge all windows	Combinar todas las ventanas
+	Close window	Cerrar ventana

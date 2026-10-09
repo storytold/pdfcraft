@@ -253,6 +253,8 @@ fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 ui.separator();
             }
             crate::commands::registry_menu(app, ui, "View");
+            #[cfg(not(target_arch = "wasm32"))]
+            ui.menu_button(tl!("Window"), |ui| crate::commands::registry_menu(app, ui, "Window"));
             ui.menu_button(tl!("Display theme"), |ui| theme_menu(app, ui));
             ui.menu_button(tl!("Side panels"), |ui| {
                 for (p, label) in [

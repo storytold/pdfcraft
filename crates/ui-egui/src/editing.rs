@@ -557,9 +557,12 @@ impl PdfCraftApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
-    /// A child window was asked to close. Windows other than the main one are not drawn yet.
-    #[allow(dead_code)] // filled in with the child windows
-    pub(crate) fn guard_close_window(&mut self, _ctx: &egui::Context, _id: crate::WindowId) {}
+    /// A child window was asked to close: close it with its tabs. (Unsaved work is asked about
+    /// before this, see the closing tasks of the multi-window plan.)
+    pub(crate) fn guard_close_window(&mut self, ctx: &egui::Context, id: crate::WindowId) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        self.pending_window_ops.push(crate::WindowOp::Close(id));
+    }
 
     /// Intercept the main window's close while documents have unsaved changes.
     pub(crate) fn guard_root_close(&mut self, ctx: &egui::Context) {

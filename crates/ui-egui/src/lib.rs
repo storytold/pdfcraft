@@ -613,17 +613,17 @@ pub struct PdfCraftApp {
     /// [global] The window whose state the fields above hold right now.
     pub(crate) current_window: WindowId,
     /// [global] The window that last had the keyboard focus.
-    #[allow(dead_code)] // used from the child-window tasks on
     pub(crate) focused_window: WindowId,
     /// [global] The id the next window gets.
-    #[allow(dead_code)] // used from the child-window tasks on
     pub(crate) next_window_id: u32,
     /// [global] Changes to the set of windows, applied after the frame.
-    #[allow(dead_code)] // used from the child-window tasks on
     pub(crate) pending_window_ops: Vec<WindowOp>,
+    /// [global] The icon new windows get (the desktop app sets it).
+    pub window_icon: Option<std::sync::Arc<egui::IconData>>,
     /// [global] The main window's last reported outer rectangle.
-    #[allow(dead_code)] // used from the child-window tasks on
     pub(crate) root_rect: Option<egui::Rect>,
+    /// [global] Which windows had the keyboard focus last frame.
+    window_had_focus: std::collections::HashMap<WindowId, bool>,
     /// [global] The number the next view of each document gets.
     next_view_no: std::collections::HashMap<DocId, u32>,
 }
@@ -812,7 +812,9 @@ impl PdfCraftApp {
             focused_window: WindowId::ROOT,
             next_window_id: 1,
             pending_window_ops: Vec::new(),
+            window_icon: None,
             root_rect: None,
+            window_had_focus: Default::default(),
             next_view_no: Default::default(),
             views,
             active,
@@ -1883,6 +1885,8 @@ impl eframe::App for PdfCraftApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.window_pass(WindowId::ROOT, ui, egui::ViewportClass::Root);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.show_child_windows();
         self.apply_window_ops();
     }
 }
@@ -1892,10 +1896,21 @@ impl PdfCraftApp {
     pub(crate) fn window_pass(&mut self, id: WindowId, ui: &mut egui::Ui, class: egui::ViewportClass) {
         let previous = self.current_window;
         windows::set_drawing(id);
+        self.track_window(id, ui.ctx());
         if id == WindowId::ROOT {
             self.window_body(ui, class);
         } else {
+            // The main window's input, keys and close are handled in `logic`; do the same here.
+            let ctx = ui.ctx().clone();
+            self.window_input(&ctx);
+            if ctx.input(|i| i.viewport().close_requested()) {
+                self.guard_close_window(&ctx, id);
+            }
+            self.window_keys(&ctx);
             // Ids that are not absolute differ per window as well.
+            if class == egui::ViewportClass::EmbeddedWindow {
+                ui.set_min_size(egui::vec2(900.0, 600.0));
+            }
             ui.push_id(("window", id.0), |ui| self.window_body(ui, class));
         }
         windows::set_drawing(previous);
