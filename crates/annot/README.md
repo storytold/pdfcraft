@@ -1,6 +1,6 @@
 # pdfcraft-annot
 
-Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends only on `pdfcraft-cos`.
+Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`, `pdfcraft-fonts` and `pdfcraft-model`.
 
 ## What it does
 

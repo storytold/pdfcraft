@@ -38,6 +38,7 @@ fn fixture() -> Vec<u8> {
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("layers.pdf", None, fixture()).unwrap();
         app.set_option("zoom", "150").unwrap();
         setup(&mut app);

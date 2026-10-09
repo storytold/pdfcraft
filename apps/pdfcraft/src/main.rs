@@ -224,6 +224,9 @@ fn main() -> eframe::Result {
                     app.notify(e);
                 }
             } else {
+                // With the preference on, last session's files come back first; files named on
+                // the command line open after them, in front (#442).
+                app.reopen_last_files(&files);
                 for f in files {
                     app.open_path(&f);
                 }

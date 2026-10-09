@@ -81,6 +81,16 @@ pub fn section_title(ui: &mut egui::Ui, text: &str) {
     ui.add_space(2.0);
 }
 
+/// Paint one line of `text` left-aligned and vertically centred on `pos`, cut with "…" so it is
+/// at most `max_width` wide: a long file name or path stays inside its row (#425).
+pub fn row_text(ui: &egui::Ui, pos: egui::Pos2, text: impl Into<String>, font: egui::FontId, color: Color32, max_width: f32) {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.into(), font, color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(max_width.max(0.0));
+    let galley = ui.painter().layout_job(job);
+    let rect = Align2::LEFT_CENTER.anchor_size(pos, galley.size());
+    ui.painter().galley(rect.min, galley, color);
+}
+
 /// Transient message at the bottom centre.
 pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some((msg, start)) = app.toast.clone() else { return };

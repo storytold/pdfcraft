@@ -17,6 +17,7 @@ use hayro::hayro_interpret::InterpreterSettings;
 use hayro::hayro_interpret::font::{FontData, FontQuery};
 use hayro::hayro_interpret::hayro_cmap::CidFamily;
 use hayro::hayro_syntax::Pdf;
+use hayro::vello_cpu::Pixmap;
 use hayro::vello_cpu::color::palette::css::WHITE;
 use hayro::{RenderCache, RenderSettings, render};
 
@@ -73,7 +74,13 @@ fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
         return None;
     }
     let face = match japanese_face(f.post_script_name.as_deref().unwrap_or_default(), f.is_serif, f.is_bold || f.font_weight >= 600) {
-        JapaneseFace::Mincho => pdfcraft_fonts::document_japanese_font(),
+        // BIZ UDMincho before the document face (Shippori Mincho): it covers half-width katakana
+        // (U+FF61–U+FF9F), which Shippori Mincho lacks, and hayro draws a CID the substitute
+        // can't map by Unicode by glyph index, i.e. as an unrelated glyph (ﬁ, ﬂ, …).
+        JapaneseFace::Mincho => pdfcraft_fonts::ui_japanese_fonts()
+            .into_iter()
+            .find(|c| c.family == "BIZ UDMincho" && c.style == "Regular")
+            .or_else(pdfcraft_fonts::document_japanese_font),
         JapaneseFace::Gothic { bold } => {
             let faces = pdfcraft_fonts::ui_japanese_fonts();
             let style = if bold { "Bold" } else { "Regular" };
@@ -216,13 +223,20 @@ fn render_page<'a>(pdf: &'a Pdf, cache: &RenderCache<'a>, settings: &Interpreter
             }
         };
         let pixmap = render(page, cache, settings, &rs);
-        Ok((pixmap.width() as u32, pixmap.height() as u32, pixmap.data_as_u8_slice().to_vec(), None))
+        Ok((pixmap.width() as u32, pixmap.height() as u32, into_bytes(pixmap), None))
     }));
     match result {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err((e, false)),
         Err(panic) => Err((format!("renderer crashed on page {}: {}", req.page + 1, panic_message(&panic)), true)),
     }
+}
+
+/// The pixmap's premultiplied RGBA bytes, moved out rather than copied (a page raster can be
+/// hundreds of megabytes). Four one-byte channels always recast to bytes in place; the copy is
+/// only there because the cast's signature allows failure.
+fn into_bytes(pixmap: Pixmap) -> Vec<u8> {
+    bytemuck::allocation::try_cast_vec(pixmap.take()).unwrap_or_else(|(_, pixels)| pixels.iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect())
 }
 
 fn finish(req: RenderRequest, start: Stopwatch, r: Result<Output, (String, bool)>) -> RenderedPage {
@@ -292,6 +306,9 @@ struct Shared {
     /// Pages (and request kinds) the watchdog gave up on: answered with an error at once, so a
     /// pathological page cannot trap every worker in turn.
     stuck: Mutex<std::collections::HashSet<(usize, RequestKind)>>,
+    /// Set when the pool is dropped: the workers' renders stop at their next content operator,
+    /// since nobody can receive their answers any more.
+    dropped: Arc<std::sync::atomic::AtomicBool>,
     /// Test hook: make one page slow.
     #[cfg(test)]
     slow_page: Mutex<Option<(usize, std::time::Duration)>>,
@@ -403,7 +420,9 @@ impl RenderPool {
         let mut pool = Self::new(bytes.clone(), 0, config.clone());
         if pool.inline.is_none() {
             // Native `new` always spawns at least one worker; drop to inline explicitly.
-            pool = Self { shared: Arc::default(), wake: Mutex::new(Vec::new()), _workers: Mutex::new(Vec::new()), ..pool };
+            pool.shared = Arc::default();
+            pool.wake = Mutex::new(Vec::new());
+            pool._workers = Mutex::new(Vec::new());
             pool.inline = Some(std::cell::RefCell::new(PageRenderer::new(bytes, config)));
         }
         pool
@@ -489,9 +508,21 @@ impl RenderPool {
     }
 }
 
+impl Drop for RenderPool {
+    fn drop(&mut self) {
+        self.shared.dropped.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// A worker's interpreter settings: the document's, stopping once the pool is dropped.
+#[cfg(not(target_arch = "wasm32"))]
+fn worker_settings(config: &RenderConfig, shared: &Shared) -> InterpreterSettings {
+    InterpreterSettings { cancelled: Some(shared.dropped.clone()), ..config.settings() }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn worker(id: usize, bytes: Arc<Vec<u8>>, config: RenderConfig, shared: Arc<Shared>, wake: Receiver<()>, out: Sender<RenderedPage>) {
-    let settings = config.settings();
+    let settings = worker_settings(&config, &shared);
     // Outer loop: (re)build parser + cache; rebuilt after a renderer panic.
     loop {
         let pdf = parse(&bytes, config.password.as_deref());
@@ -707,6 +738,18 @@ trailer << /Root 1 0 R >>
         let px = |x: u32, y: u32| &page.rgba[((y * page.width + x) * 4) as usize..][..4];
         assert_eq!(px(20, 30), &[0, 0, 255, 255]);
         assert_eq!(px(80, 5), &[255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn rendered_pixels_are_moved_out_of_the_pixmap() {
+        let mut pixmap = Pixmap::new(3, 2);
+        for (i, b) in pixmap.data_as_u8_slice_mut().iter_mut().enumerate() {
+            *b = i as u8;
+        }
+        let (at, expected) = (pixmap.data_as_u8_slice().as_ptr(), pixmap.data_as_u8_slice().to_vec());
+        let bytes = into_bytes(pixmap);
+        assert_eq!(bytes, expected);
+        assert_eq!(bytes.as_ptr(), at, "the pixmap's own buffer, not a copy");
     }
 
     #[test]
@@ -1099,6 +1142,38 @@ trailer << /Root 1 0 R >>
     }
 
     #[test]
+    fn dropping_the_pool_cancels_its_renders() {
+        const TEXT: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 35 >> stream
+BT /F1 12 Tf 20 70 Td (Hello) Tj ET
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+        let pool = RenderPool::new(Arc::new(ONE_PAGE.to_vec()), 1, RenderConfig::default());
+        let settings = worker_settings(&pool.config, &pool.shared);
+        let flag = settings.cancelled.clone().expect("workers can be cancelled");
+        assert!(Arc::ptr_eq(&flag, &pool.shared.dropped));
+        let shapes = Pdf::new(Arc::new(ONE_PAGE.to_vec())).expect("parses");
+        let text = Pdf::new(Arc::new(TEXT.to_vec())).expect("parses");
+        let pages = shapes.pages();
+        let page = pages.first().expect("a page");
+        let rs = RenderSettings { bg_color: WHITE, ..Default::default() };
+        let blue = |s: &InterpreterSettings| {
+            let p = render(page, &RenderCache::new(), s, &rs).sample(20, 30);
+            [p.r, p.g, p.b, p.a] == [0, 0, 255, 255]
+        };
+        let glyphs = |s: &InterpreterSettings| crate::text::extract_page(&text, 0, s).map_or(0, |t| t.glyphs.len());
+        assert!(blue(&settings) && glyphs(&settings) == 5, "a live pool renders and reads everything");
+        drop(pool);
+        assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(!blue(&settings) && glyphs(&settings) == 0, "once the pool is gone, interpretation stops before drawing");
+    }
+
+    #[test]
     fn extracts_text_with_positions() {
         let pdf = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -1332,6 +1407,106 @@ trailer << /Root 1 0 R >>
             assert_eq!(&page.rgba[((y * 40 + x) * 4)..][..4], &[255, 0, 0, 255], "({x}, {y}) under the huge stroke");
         }
         assert_eq!(&page.rgba[((20 * 40 + 2) * 4)..][..4], &[255, 255, 255, 255], "beyond the butt cap");
+    }
+
+    /// Render a 40 × 40 pt page at 1:1 on its own thread, with `/GS1` (from `gs1`) in its
+    /// resources, and fail instead of waiting when the renderer stalls.
+    fn render_with_gs1(content: &str, gs1: &str) -> RenderedPage {
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /ExtGState << /GS1 {gs1} >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len()
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("must not stall the renderer");
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page
+    }
+
+    /// The pixel at device (x, y), y down, of a 40-pixel-wide page.
+    fn px40(page: &RenderedPage, x: usize, y: usize) -> &[u8] {
+        &page.rgba[((y * 40 + x) * 4)..][..4]
+    }
+
+    /// From `cargo xtask fuzz`: an ExtGState `/D [[11] 0]` on a line that starts at x =
+    /// 92234775807 cut it into billions of dashes, and stroke expansion allocated more than
+    /// 5 GB. A tiny dash on an ordinary line does the same (`[0.000001] 0 d` on 20 pt passed
+    /// 10 GB), and so does a long pattern on many short subpaths, because every subpath restarts
+    /// it. Vendored hayro patch: a stroke whose dash pattern could cut it into more than
+    /// `MAX_DASHES_PER_STROKE` pieces is drawn solid.
+    #[test]
+    fn dash_patterns_that_cut_a_stroke_into_billions_of_pieces_render() {
+        let red = [255, 0, 0, 255];
+        // The fuzzed shape. A line that far out isn't drawn even undashed (its coordinates are
+        // beyond the rasterizer's range), so this case only proves the page finishes and the
+        // content after the stroke is drawn.
+        let page = render_with_gs1("1 0 0 RG 4 w /GS1 gs 92234775807 20 m 30 20 l S 0 0 1 rg 0 0 4 4 re f", "<< /D [[11] 0] >>");
+        assert_eq!(px40(&page, 1, 38), &[0, 0, 255, 255], "the square after the stroke is drawn");
+        for (what, content, gs1) in [
+            ("a tiny dash on an ordinary line", "1 0 0 RG 4 w [0.000001] 0 d 10 20 m 30 20 l S", "<< >>"),
+            ("a tiny dash from an ExtGState", "1 0 0 RG 4 w /GS1 gs 10 20 m 30 20 l S", "<< /D [[0.000001] 0] >>"),
+            (
+                "a tiny dash under a shrinking matrix",
+                "1 0 0 RG 0.0000001 0 0 0.0000001 0 0 cm 40000000 w [1] 0 d 100000000 200000000 m 300000000 200000000 l S",
+                "<< >>",
+            ),
+        ] {
+            let page = render_with_gs1(content, gs1);
+            // Device row 20 is user y 20; the stroke covers x 10 to 30.
+            for x in [12, 20, 28] {
+                assert_eq!(px40(&page, x, 20), &red, "{what}: ({x}, 20) is drawn, solid");
+            }
+            assert_eq!(px40(&page, 35, 20), &[255, 255, 255, 255], "{what}: beyond the end of the line");
+        }
+        // A long pattern on many short subpaths: 9,999 tiny dashes, then a long one, restarted on
+        // each of 10,000 subpaths 0.01 pt long, is 100 million pieces from a 300 KB stream.
+        let mut many = String::from("1 0 0 RG 4 w [");
+        many.push_str(&"0.000001 ".repeat(9_999));
+        many.push_str("1000] 0 d ");
+        many.push_str(&"10 20 m 10.01 20 l ".repeat(10_000));
+        many.push_str("S 0 0 1 rg 0 0 4 4 re f");
+        let page = render_with_gs1(&many, "<< >>");
+        assert_eq!(px40(&page, 1, 38), &[0, 0, 255, 255], "a pattern restarted on many subpaths finishes");
+        // A fine pattern below the cap still dashes: 200,000 pieces of 0.0001 pt cover about
+        // half of each pixel, so the line is neither solid red nor missing.
+        let page = render_with_gs1("1 0 0 RG 4 w [0.0001] 0 d 10 20 m 30 20 l S", "<< >>");
+        let p = px40(&page, 20, 20);
+        assert!(p[0] == 255 && (40..=215).contains(&p[1]), "a fine dash below the cap is drawn dashed: {p:?}");
+        // An ordinary dash pattern still dashes: butt-capped 4 pt dashes from x 0.
+        let page = render_with_gs1("1 0 0 RG 4 w [4 4] 0 d 0 20 m 40 20 l S", "<< >>");
+        assert_eq!(px40(&page, 2, 20), &red, "inside the first dash");
+        assert_eq!(px40(&page, 6, 20), &[255, 255, 255, 255], "inside the first gap");
+        assert_eq!(px40(&page, 10, 20), &red, "inside the second dash");
+    }
+
+    /// From `cargo xtask fuzz` triage: a dash array whose entries sum to less than zero made
+    /// kurbo's search for the starting dash loop for ever (`[-1 -1] 0 d` never finished).
+    /// ISO 32000-2 §8.4.3.6 requires nonnegative entries. Vendored hayro patch: a pattern with a
+    /// negative entry, or a period that isn't positive, is drawn solid.
+    #[test]
+    fn invalid_dash_patterns_terminate_and_are_drawn_solid() {
+        for (what, content, gs1) in [
+            ("[-1 -1]", "1 0 0 RG 4 w [-1 -1] 0 d 10 20 m 30 20 l S", "<< >>"),
+            ("[-1] with a phase", "1 0 0 RG 4 w [-1] 5 d 10 20 m 30 20 l S", "<< >>"),
+            ("[-2 -3] from an ExtGState", "1 0 0 RG 4 w /GS1 gs 10 20 m 30 20 l S", "<< /D [[-2 -3] 0] >>"),
+            ("[-1 3], a negative entry in a positive period", "1 0 0 RG 4 w [-1 3] 0 d 10 20 m 30 20 l S", "<< >>"),
+        ] {
+            let page = render_with_gs1(content, gs1);
+            for x in [12, 20, 28] {
+                assert_eq!(px40(&page, x, 20), &[255, 0, 0, 255], "{what}: ({x}, 20) is drawn, solid");
+            }
+        }
     }
 
     /// From the nightly `cargo xtask fuzz`: a Type 3 glyph that shows several glyphs of its own
@@ -1650,6 +1825,29 @@ trailer << /Root 1 0 R >>
             // 日本 at 40 pt covers a few hundred dark pixels; a blank or missing-glyph run doesn't.
             assert!(inked > 300, "{base_font}: 日本 is drawn ({inked} dark pixels)");
         }
+    }
+
+    /// Half-width katakana are common in Japanese documents set in a non-embedded Mincho font
+    /// such as HeiseiMin-W3. The Mincho substitute must have those glyphs: one that lacks them
+    /// (Shippori Mincho) draws each CID by glyph index instead, as unrelated glyphs (ﬁ, ﬂ).
+    #[test]
+    fn mincho_substitute_covers_half_width_katakana() {
+        use hayro::hayro_interpret::font::FallbackFontQuery;
+        use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+        use skrifa::MetadataProvider;
+        let query = FontQuery::Fallback(FallbackFontQuery {
+            post_script_name: Some("HeiseiMin-W3".into()),
+            character_collection: Some(CharacterCollection { family: CidFamily::AdobeJapan1, supplement: 2 }),
+            ..FallbackFontQuery::default()
+        });
+        let Some((data, index)) = super::japanese_fallback(&query) else {
+            eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): no Japanese face to check");
+            return;
+        };
+        let font = skrifa::FontRef::from_index((*data).as_ref(), index).expect("a craft-fonts face parses");
+        let charmap = font.charmap();
+        let missing: Vec<char> = ('\u{FF61}'..='\u{FF9F}').chain(['日', '本']).filter(|&c| charmap.map(c).is_none()).collect();
+        assert!(missing.is_empty(), "the Mincho substitute lacks {missing:?}");
     }
 
     #[test]

@@ -415,6 +415,28 @@ fn japanese_fallback_reports_the_face_after_save_and_reopen() {
 }
 
 #[test]
+fn cyrillic_in_a_serif_line_falls_back_to_a_face_that_has_it() {
+    if without_craft_fonts("cyrillic_in_a_serif_line_falls_back_to_a_face_that_has_it") {
+        return;
+    }
+    let replacement = "Привет, world";
+    let has_all = |f: &pdfcraft_fonts::CraftFont| replacement.chars().all(|ch| pdfcraft_fonts::japanese_glyph_from(f, ch).is_ok());
+    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.covers("Jpan") && has_all(f)) {
+        eprintln!("skipping: no Japanese fallback face has Cyrillic");
+        return;
+    }
+    for paragraph in [false, true] {
+        let mut doc = styled_text_page("Times-Roman");
+        if paragraph {
+            text::replace_block(&mut doc, 0, 0, replacement).unwrap();
+        } else {
+            text::replace_line(&mut doc, 0, 0, replacement).unwrap();
+        }
+        assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].text, replacement);
+    }
+}
+
+#[test]
 fn japanese_paragraph_uses_unicode_type3_fallback() {
     if without_craft_fonts("japanese_paragraph_uses_unicode_type3_fallback") {
         return;

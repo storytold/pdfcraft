@@ -17,6 +17,7 @@ fn run_and_create_actions() {
     let d = dir.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.run_inline = true;
         app.export_dir_override = Some(d.join("out").to_string_lossy().into_owned());
         app.action_files_override = Some(vec![d.join("r.pdf").to_string_lossy().into_owned()]);
@@ -49,6 +50,7 @@ fn run_and_create_actions() {
     h.get_by_label("1. Add watermark: DRAFT");
     let saved = h.state().persist();
     let mut fresh = PdfCraftApp::new();
+    fresh.set_option("language", "en").unwrap();
     fresh.restore(&saved);
     assert_eq!(fresh.custom_actions, h.state().custom_actions);
     h.get_by_label("Start").click();

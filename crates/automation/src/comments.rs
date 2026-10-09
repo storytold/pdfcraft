@@ -109,6 +109,7 @@ impl Automation {
         };
         Ok(vec![
             Content::Json(json!({ "page": page + 1, "index": index + 1, "rect": rect_to_view(info, annotation.rect), "rotation": info.rotation,
+                "image_rotation": (i64::from(info.rotation) - preview.turn).rem_euclid(360),
                 "layer": layer, "opacity": preview.opacity, "dpi": dpi })),
             image,
         ])
@@ -386,7 +387,7 @@ impl Automation {
             let path = self.resolve(path, false)?;
             let file = std::fs::File::open(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
             let image = pdfcraft_engine::SignatureImage::read(file).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
-            let edit = image.edit(page, at, kind == "initials", &author).ok_or_else(|| ToolError::InvalidArgs("at must be finite".into()))?;
+            let edit = image.edit(page, &info, at, kind == "initials", &author).ok_or_else(|| ToolError::InvalidArgs("at must be finite".into()))?;
             return self.apply(a, edit);
         }
         let size = 10.0;

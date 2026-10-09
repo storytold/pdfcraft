@@ -35,6 +35,7 @@ fn fixture(n: usize) -> Vec<u8> {
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
         app
     });
@@ -70,6 +71,7 @@ fn every_registered_command_is_implemented() {
             continue;
         }
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         if spec.id.starts_with("form.") || spec.id == "comment.flatten" {
             app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         } else {
@@ -139,6 +141,7 @@ fn every_registered_command_is_implemented() {
 #[test]
 fn disabled_commands_explain_themselves() {
     let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
     assert!(!app.execute("file.save"));
     assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Open a document first"));
     app.open_bytes("doc.pdf", None, fixture(2)).unwrap();
@@ -206,6 +209,7 @@ fn the_open_recent_menu_lists_files_and_opens_one() {
         let path = path.clone();
         move |_cc| {
             let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
             app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
             app.recent.push(pdfcraft_ui_egui::RecentFile { name: "recent.pdf".into(), path, pages: 2, size: 0 });
             app

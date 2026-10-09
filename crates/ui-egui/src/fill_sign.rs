@@ -5,7 +5,7 @@
 
 use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::{Edit, FillMark, NewAnnotation, Shape, SignatureImage, Style};
-use pdfcraft_render::DocInfo;
+use pdfcraft_render::{DocInfo, PageInfo};
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
@@ -212,10 +212,10 @@ pub fn typed_signature_at(page: usize, at: [f64; 2], text: &str, height: f64, au
 }
 
 /// Place a saved signature or initials.
-pub fn place(page: usize, at: [f64; 2], sig: &SavedSig, initials: bool, author: &str) -> Option<Edit> {
+pub fn place(page: usize, info: &PageInfo, at: [f64; 2], sig: &SavedSig, initials: bool, author: &str) -> Option<Edit> {
     match sig {
         SavedSig::Drawn(strokes) => signature_at(page, at, strokes, author),
-        SavedSig::Image(image) => image.edit(page, at, initials, author),
+        SavedSig::Image(image) => image.edit(page, info, at, initials, author),
         SavedSig::Typed(text) => {
             let [left, bottom, right, top] = pdfcraft_engine::script_outline(text).bounds();
             let height = if initials { 24.0_f64 } else { 32.0_f64 };
@@ -373,6 +373,7 @@ pub(crate) fn page_input(
     if !resp.contains_pointer() || !xf.rect.contains(pointer) {
         return None;
     }
+    let p = info.pages.get(page)?;
     let at = to_user(xf, info, page, pointer);
     let saved = match tool {
         FillTool::Signature => signature,
@@ -380,9 +381,9 @@ pub(crate) fn page_input(
         _ => None,
     };
     if let Some(SavedSig::Image(image)) = saved {
-        if let Some(rect) = image.rect(at, tool == FillTool::Initials) {
+        if let Some(rect) = image.rect(p, at, tool == FillTool::Initials) {
             let tex = image_texture(ui, image, preview);
-            xf.paint_user_image(ui.painter(), tex, info, page, rect, Color32::WHITE);
+            xf.paint_user_image(ui.painter(), tex, p, rect, i64::from(p.rotation), Color32::WHITE);
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         }
     } else {
@@ -401,11 +402,11 @@ pub(crate) fn page_input(
             Some(FillAction::Edit(Box::new(typed(page, [at[0], at[1] + TEXT_SIZE * 0.6], &format!("{m}/{d}/{y}"), author))))
         }
         FillTool::Signature => match signature {
-            Some(s) => place(page, at, s, false, author).map(|e| FillAction::Signature(Box::new(e))),
+            Some(s) => place(page, p, at, s, false, author).map(|e| FillAction::Signature(Box::new(e))),
             None => Some(FillAction::CreateSignature),
         },
         FillTool::Initials => match initials {
-            Some(s) => place(page, at, s, true, author).map(|e| FillAction::Signature(Box::new(e))),
+            Some(s) => place(page, p, at, s, true, author).map(|e| FillAction::Signature(Box::new(e))),
             None => Some(FillAction::CreateInitials),
         },
         mark => {

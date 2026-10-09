@@ -96,10 +96,11 @@ fn level(b: &Block, body: f64) -> u8 {
 
 /// How far two cell left edges may drift (points) and still be the same grid column.
 const COL_TOL: f64 = 4.0;
-/// More grid columns than this isn't a table. It also bounds a table's size: every row is
-/// materialized to all its columns, so a hostile page laid out as a staircase of blocks would
-/// otherwise make (blocks / 2)² cells.
-const MAX_COLS: usize = 64;
+/// More grid columns than this isn't a table. It is Word's limit: a .docx whose table has 64 or
+/// more columns doesn't open. It also bounds a table's size: every row is materialized to all
+/// its columns, so a hostile page laid out as a staircase of blocks would otherwise make
+/// (blocks / 2)² cells.
+const MAX_COLS: usize = 63;
 /// A cell is short: taller blocks are body text (or a multi-column layout), not table cells.
 fn is_cell_like(b: &Block) -> bool {
     (b.rect[3] - b.rect[1]) <= b.size * 5.0 && !b.text.trim().is_empty()
@@ -807,6 +808,28 @@ mod tests {
         let (tables, _) = tables(&blocks);
         assert!(tables.iter().all(|t| t.cols.len() <= MAX_COLS), "{} columns", tables.iter().map(|t| t.cols.len()).max().unwrap_or(0));
         assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn word_opens_tables_up_to_its_column_limit() {
+        // Rows of short numbers on a regular grid, n columns wide.
+        let grid = |n: usize| Page {
+            width: 1500.0,
+            height: 792.0,
+            blocks: (0..3)
+                .flat_map(|row| {
+                    (0..n).map(move |col| {
+                        let (x, y) = (20.0 + col as f64 * 22.0, 700.0 - row as f64 * 14.0);
+                        Block { text: (col + 1).to_string(), rect: [x, y, x + 8.0, y + 8.0], size: 8.0, bold: false, italic: false }
+                    })
+                })
+                .collect(),
+            images: Vec::new(),
+        };
+        let grid_cols = |p: &Page| part(&docx(std::slice::from_ref(p), "Grid"), "word/document.xml").matches("<w:gridCol ").count();
+        assert_eq!(grid_cols(&grid(63)), 63, "63 columns is still a table");
+        // Word refuses to open a document with a 64-column table, so that grid stays text.
+        assert_eq!(grid_cols(&grid(64)), 0);
     }
 
     #[test]
