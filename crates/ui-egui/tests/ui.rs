@@ -172,6 +172,38 @@ fn overflowing_tabs_can_be_reached_by_scrolling() {
 }
 
 #[test]
+fn tabs_shrink_to_fit_before_they_scroll_and_open_stays_in_sight() {
+    // Seven long names are wider than the strip: the tabs shrink instead of running under the
+    // buttons on the right, and Open sits after them.
+    let names: Vec<String> = (0..7).map(|i| format!("Statement {i} for the office records, scanned.pdf")).collect();
+    let opened = names.clone();
+    let mut h = harness(move |app| {
+        for n in &opened {
+            app.open_bytes(n, None, FIXTURE.to_vec()).unwrap();
+        }
+    });
+    let open = h.get_by_label("Open").rect();
+    let discord = h.get_by_label("Discord").rect();
+    assert!(open.right() <= discord.left(), "Open {open:?} must not run under Discord {discord:?}");
+    let mut previous_right = f32::MIN;
+    for n in &names {
+        let tab = h.get_by_label(n).rect();
+        assert!(tab.left() >= previous_right - 0.5, "tabs must not overlap: {n} at {tab:?}");
+        assert!(tab.right() <= open.left() + 0.5, "every tab fits before Open: {n} at {tab:?}, Open at {open:?}");
+        assert!(tab.width() >= 109.0, "{n} is {tab:?}");
+        previous_right = tab.right();
+    }
+    // Twenty tabs can't all fit even at their narrowest: they scroll, and Open stays in sight.
+    for i in 0..13 {
+        h.state_mut().open_bytes(&format!("more-{i:02}.pdf"), None, FIXTURE.to_vec()).unwrap();
+    }
+    h.run_steps(4);
+    let open = h.get_by_label("Open").rect();
+    let discord = h.get_by_label("Discord").rect();
+    assert!(open.left() > 0.0 && open.right() <= discord.left(), "Open {open:?} stays in sight left of Discord {discord:?}");
+}
+
+#[test]
 fn narrow_tab_strips_accept_vertical_wheel_scrolling() {
     for width in [600.0, 900.0] {
         let mut h = Harness::builder().with_size(egui::vec2(width, 700.0)).build_eframe(|_cc| {
