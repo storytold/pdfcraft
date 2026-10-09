@@ -1618,6 +1618,62 @@ fn dragging_a_paragraph_moves_it_and_its_edge_rewraps_it() {
     assert!(h.state().views[0].line_editor.is_none());
 }
 
+/// A quick flick: press at `from`, and the next frame already finds the pointer at `to`.
+fn flick(h: &mut Harness<'static, PdfCraftApp>, from: egui::Pos2, to: egui::Pos2) {
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    h.hover_at(to);
+    h.run_steps(1);
+    h.drop_at(to);
+    h.run_steps(4);
+}
+
+#[test]
+fn a_quick_flick_on_either_edge_rewraps_the_paragraph() {
+    let mut h = harness(1, |_| {});
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let lines = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_lines(0)
+    };
+    let block = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(0)[0].clone()
+    };
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
+    let near = |a: f64, b: f64| (a - b).abs() < 1.5;
+    // Grab edges near the box's top: a rewrapped box reaches the window's bottom, where the
+    // tool's toast sits over the page and takes the press.
+    let grip_y = |b: &pdfcraft_engine::TextBlock| b.rect[3] - 6.0;
+    // Narrow "Page 1" from its right edge to about 45 pt: it rewraps onto two lines.
+    let b = block(&h);
+    let edge = screen(b.rect[2], grip_y(&b)) + egui::vec2(2.0, 0.0);
+    flick(&mut h, edge, edge - egui::vec2((b.rect[2] - b.rect[0] - 45.0) as f32 * k, 0.0));
+    let text: Vec<String> = lines(&h).iter().map(|l| l.text.clone()).collect();
+    assert_eq!(text, ["Page", "1"], "narrowed from the right edge");
+    // Flick the right edge outward, past the box and its handle: back onto one line.
+    let b = block(&h);
+    let edge = screen(b.rect[2], grip_y(&b)) + egui::vec2(2.0, 0.0);
+    flick(&mut h, edge, edge + egui::vec2(80.0 * k, 0.0));
+    let text: Vec<String> = lines(&h).iter().map(|l| l.text.clone()).collect();
+    assert_eq!(text, ["Page 1"], "widened by a fast drag that left the handle at once");
+    // Flick the left edge inward: it rewraps and its left side follows the pointer.
+    let b = block(&h);
+    let edge = screen(b.rect[0], grip_y(&b)) - egui::vec2(2.0, 0.0);
+    let inward = (b.rect[2] - b.rect[0] - 45.0) as f32;
+    flick(&mut h, edge, edge + egui::vec2(inward * k, 0.0));
+    let after = lines(&h);
+    let text: Vec<String> = after.iter().map(|l| l.text.clone()).collect();
+    assert_eq!(text, ["Page", "1"], "narrowed from the left edge");
+    assert!(near(after[0].rect[0], b.rect[0] + inward as f64), "{:?} → {:?}", b.rect, after[0].rect);
+    assert!(h.state().views[0].line_editor.is_none());
+}
+
 /// The Pages panel, in a window tall enough to show every thumbnail of a short fixture.
 fn pages_panel(pages: usize) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1900.0)).build_eframe(move |_cc| {
