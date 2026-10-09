@@ -84,7 +84,9 @@ impl Automation {
         let r = doc.accessibility_check(&o).ok_or_else(|| failed("the document can't be read for checking"))?;
         let path = self.resolve(a.str("path")?, true)?;
         let (y, m, d) = self.session.today();
-        let html = pdfcraft_engine::a11y::report_html(&r, &doc.name, &format!("{y}-{m:02}-{d:02}"));
+        // A script's report is in English, like the rest of what the tools say and answer with.
+        let words = pdfcraft_engine::a11y::in_english;
+        let html = pdfcraft_engine::a11y::report_html(&r, &doc.name, &format!("{y}-{m:02}-{d:02}"), "en", &words);
         write_atomic(&path, html.as_bytes())?;
         let mut out = report_json(&r);
         out["path"] = json!(path.to_string_lossy());

@@ -287,7 +287,10 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &mut A11yState, doc: D
                 egui::Frame::NONE.inner_margin(egui::Margin { left: 46, right: 4, top: 0, bottom: 6 }).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     for f in &r.findings {
-                        let l = ui.add(egui::Label::new(egui::RichText::new(&f.message).small().color(t.text_muted)).sense(egui::Sense::click()));
+                        // The checker hands over the sentence and the document's own words apart, so
+                        // the sentence is said in the panel's language with those words still in it.
+                        let said = f.said(&crate::i18n::words);
+                        let l = ui.add(egui::Label::new(egui::RichText::new(said).small().color(t.text_muted)).sense(egui::Sense::click()));
                         if let Some(p) = f.page
                             && l.on_hover_text(tl!("Go to the page")).clicked()
                         {
@@ -356,7 +359,9 @@ impl PdfCraftApp {
         let Some((_, report)) = self.a11y.report.as_ref().filter(|(d, _)| *d == id) else { return };
         let Some(doc) = self.session.get(id) else { return };
         let (y, m, d) = self.session.today();
-        let html = pdfcraft_engine::a11y::report_html(report, &doc.name, &format!("{y}-{m:02}-{d:02}"));
+        // The saved report reads the way the interface reads, down to its `lang` attribute.
+        let lang = crate::i18n::current();
+        let html = pdfcraft_engine::a11y::report_html(report, &doc.name, &format!("{y}-{m:02}-{d:02}"), lang.code(), &crate::i18n::words);
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         let title = tl!("Save the accessibility report").to_string();
         self.write_files(&[(format!("{stem} Accessibility Report.html"), std::sync::Arc::new(html.into_bytes()))], &title);

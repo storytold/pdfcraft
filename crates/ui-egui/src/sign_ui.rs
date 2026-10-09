@@ -893,7 +893,10 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
                 })
                 .font(theme::semibold(12.0)),
             );
-            for line in &s.details {
+            for detail in &s.details {
+                // Each detail is a whole sentence of ours plus what the signature itself says; said
+                // here in the panel's language, with the signature's own words left as they are.
+                let line = detail.said(&crate::i18n::words);
                 ui.add(egui::Label::new(egui::RichText::new(format!("• {line}")).font(theme::regular(11.5)).color(t.text_muted)).wrap());
             }
             ui.add_space(4.0);

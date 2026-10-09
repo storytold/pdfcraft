@@ -18,7 +18,7 @@ mod report;
 mod structure;
 
 pub use alt::{AltError, Figure, figures, mark_decorative, set_alt};
-pub use report::report_html;
+pub use report::{REPORT_WORDS, report_html};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Category {
@@ -405,12 +405,153 @@ impl Status {
 }
 
 /// One problem: where it is and what is wrong.
+///
+/// The sentence comes in two forms. [`message`](Finding::message) is it, in English, ready to read.
+/// [`pattern`](Finding::pattern) is the same sentence with a named hole where each value went, and
+/// [`values`](Finding::values) is what filled them, so an interface can say it in another language
+/// instead of showing the English one: it translates the pattern and puts the same values back.
+/// `message` is always `pattern` with `values` in it, because [`Finding::worded`] builds it.
+///
+/// Every hole holds the document's own data — an element type, a font name, a count — and goes in
+/// as it stands, with one exception: a hole named `{what}` holds another wording of ours, still with
+/// its own holes in it. An interface translates that wording too and puts it in the frame first, and
+/// then fills every hole in what it has; [`Finding::nested`] builds such a finding.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Finding {
     /// 0-based page, when the problem is on a page.
     pub page: Option<usize>,
     pub message: String,
+    /// The English sentence with a hole, such as `{p}` or `{what}`, where each value went.
+    pub pattern: &'static str,
+    /// What goes in each of `pattern`'s holes, by the hole's name (`"{p}"`, braces included).
+    pub values: Vec<(&'static str, String)>,
 }
+
+impl Finding {
+    /// A finding whose sentence says the same thing however the document is put together.
+    pub fn plain(page: Option<usize>, sentence: &'static str) -> Self {
+        Finding { page, message: sentence.to_owned(), pattern: sentence, values: Vec::new() }
+    }
+
+    /// A finding built from a wording and what goes in its holes. The English `message` is filled
+    /// in here, so it and `pattern` can never drift apart.
+    pub fn worded(page: Option<usize>, pattern: &'static str, values: Vec<(&'static str, String)>) -> Self {
+        Finding { page, message: say(pattern, &values), pattern, values }
+    }
+
+    /// A finding that says where the problem is and, in `{what}`, what is wrong, each worded
+    /// separately so the two read in whichever order the language reads them.
+    ///
+    /// `what` is one of our own wordings and may have holes of its own; they are filled from
+    /// `values` along with the frame's. It goes in before the values do — it is ours, not the
+    /// document's — which is what lets its holes be filled at all.
+    pub fn nested(page: Option<usize>, pattern: &'static str, what: &'static str, mut values: Vec<(&'static str, String)>) -> Self {
+        let message = say(&pattern.replace("{what}", what), &values);
+        values.push(("{what}", what.to_owned()));
+        Finding { page, message, pattern, values }
+    }
+
+    /// This finding as one sentence, said in the language `words` translates into.
+    ///
+    /// The frame is translated, the wording in `{what}` — if the frame has one — is translated and
+    /// goes in, and only then does the document's own data, in a single pass, so nothing the
+    /// document itself says can be read as a hole. With `&|s: &str| s.to_owned()` this is
+    /// [`message`](Finding::message).
+    pub fn said(&self, words: Words) -> String {
+        let mut frame = words(self.pattern);
+        if let Some((_, what)) = self.values.iter().find(|(name, _)| *name == "{what}") {
+            frame = frame.replace("{what}", &words(what));
+        }
+        say(&frame, &self.values)
+    }
+}
+
+/// How an interface says one of our wordings in its own language, holes and all: given the English
+/// in [`WORDINGS`], the same wording in that language. [`in_english`] keeps the English.
+pub type Words<'a> = &'a dyn Fn(&str) -> String;
+
+/// The [`Words`] that translate nothing: the wording as it is written here.
+pub fn in_english(wording: &str) -> String {
+    wording.to_owned()
+}
+
+/// A wording with its holes filled.
+///
+/// A hole is a name in braces, such as `{p}`; what is not in `values` is left as it is written.
+/// Values go in during a single pass over the wording, so a value that itself contains braces is
+/// never read as a hole: the document's own words reach the screen as they stand.
+///
+/// An interface says a [`Finding`] in its own language with this, after translating the pattern
+/// and, if there is one, the wording in `{what}`.
+pub fn say(pattern: &str, values: &[(&str, String)]) -> String {
+    let mut out = String::with_capacity(pattern.len() + 16);
+    let mut rest = pattern;
+    while let Some(open) = rest.find('{') {
+        let (before, from_brace) = rest.split_at(open);
+        out.push_str(before);
+        // `find` counts from the brace, and `}` is one byte, so this is a char boundary; `get`
+        // rather than slicing in case it ever isn't.
+        let Some(close) = from_brace.find('}') else {
+            // A brace with nothing closing it is just text.
+            out.push_str(from_brace);
+            return out;
+        };
+        let Some(hole) = from_brace.get(..=close) else { return out + from_brace };
+        match values.iter().find(|(name, _)| *name == hole) {
+            Some((_, value)) => out.push_str(value),
+            None => out.push_str(hole),
+        }
+        rest = from_brace.get(close + 1..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Every sentence the checker can say: each [`Finding::pattern`] and each wording that goes in a
+/// `{what}` hole, in English, with its holes still in it.
+///
+/// An interface that shows the report in another language translates these, which is the whole
+/// reason they are gathered here; `wordings_are_complete` fails if a rule says something that is
+/// not on the list.
+pub const WORDINGS: &[&str] = &[
+    // Document rules.
+    "The security settings don't allow screen readers to read the text",
+    "No page has text: the document appears to be images of pages",
+    "The document has no tags (structure tree)",
+    "The document isn't marked as tagged (MarkInfo Marked)",
+    "No document language is set",
+    "The document has no title",
+    "The window shows the file name, not the title (Initial View > Show)",
+    "{n} pages and no bookmarks",
+    // Page content and forms.
+    "The document isn't tagged, so none of its content is",
+    "Page {p}: {n} untagged content item",
+    "Page {p}: {n} untagged content items",
+    "Form field on page {p} isn't tagged",
+    "{} annotation on page {p} isn't tagged",
+    "Page {p} doesn't tab in structure order",
+    "Font {} on page {p} doesn't map its characters to Unicode",
+    "Font (unnamed) on page {p} doesn't map its characters to Unicode",
+    "Field \"{}\" on page {p} has no description (tooltip)",
+    // The structure rules: the two frames, then what goes in their `{what}`.
+    "{ty} element: {what}",
+    "{ty} element on page {p}: {what}",
+    "no alternate text",
+    "its alternate text is inside another element's and will never be read",
+    "alternate text on an element with no page content",
+    "alternate text hides an annotation inside it",
+    "not in a Table, THead, TBody or TFoot",
+    "not in a TR",
+    "no header cells (TH)",
+    "rows have between {min} and {max} columns",
+    "no summary",
+    "not in an L (list)",
+    "not in an LI (list item)",
+    "the first heading is an H{n}; headings should not skip levels",
+    "H{n} follows an H{d}; headings should not skip levels",
+    // The summary at the end of a long list.
+    AND_MORE,
+];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuleResult {
@@ -456,6 +597,9 @@ impl Report {
 /// Findings beyond this many per rule are summarised ("… and n more").
 const MAX_FINDINGS: usize = 200;
 
+/// What the summary of the findings beyond [`MAX_FINDINGS`] says.
+const AND_MORE: &str = "… and {n} more";
+
 /// Run the full check.
 pub fn check(doc: &Document, options: &Options) -> Report {
     let pages = pdfcraft_model::pages(doc);
@@ -483,7 +627,7 @@ pub fn check(doc: &Document, options: &Options) -> Report {
         if findings.len() > MAX_FINDINGS {
             let more = findings.len() - MAX_FINDINGS;
             findings.truncate(MAX_FINDINGS);
-            findings.push(Finding { page: None, message: format!("… and {more} more") });
+            findings.push(Finding::worded(None, AND_MORE, vec![("{n}", more.to_string())]));
         }
         let status = if findings.is_empty() { Status::Passed } else { Status::Failed };
         results.push(RuleResult { rule, status, findings });

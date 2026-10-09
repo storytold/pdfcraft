@@ -179,7 +179,7 @@ fn scope_of(edit: &Edit) -> Scope {
 }
 
 /// One undo/redo step: its label, the document state, its passwords, and what it changed.
-type Snapshot = (String, pdfcraft_cos::Document, Keys, Scope);
+type Snapshot = (Label, pdfcraft_cos::Document, Keys, Scope);
 
 /// Editing state of a document (absent when the document cannot be edited yet, e.g. encrypted).
 #[derive(Clone)]
@@ -348,11 +348,21 @@ impl Document {
     }
 
     pub fn can_undo(&self) -> Option<&str> {
-        self.editor.as_ref().and_then(|e| e.undo.last()).map(|(l, ..)| l.as_str())
+        self.undo_label().map(Label::as_str)
     }
 
     pub fn can_redo(&self) -> Option<&str> {
-        self.editor.as_ref().and_then(|e| e.redo.last()).map(|(l, ..)| l.as_str())
+        self.redo_label().map(Label::as_str)
+    }
+
+    /// What Undo would undo, in parts, for an interface that says it in another language.
+    pub fn undo_label(&self) -> Option<&Label> {
+        self.editor.as_ref().and_then(|e| e.undo.last()).map(|(l, ..)| l)
+    }
+
+    /// What Redo would redo, in parts.
+    pub fn redo_label(&self) -> Option<&Label> {
+        self.editor.as_ref().and_then(|e| e.redo.last()).map(|(l, ..)| l)
     }
 
     pub fn editable(&self) -> bool {
@@ -1081,131 +1091,347 @@ pub enum Edit {
     },
 }
 
+/// What an edit is called in the Edit menu and in the history ("Undo Rotate pages"), in two parts:
+/// a whole English wording, and the one value the document itself supplies for the wording's hole
+/// (a file name, a field name). An interface in another language looks the wording up and says the
+/// label with [`said`](Self::said); [`as_str`](Self::as_str) is the English, said the same way, so
+/// the two cannot drift apart.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Label {
+    /// The wording, with one named hole (`{name}`) where `value` goes. Listed in [`EDIT_LABELS`].
+    pub wording: &'static str,
+    /// What the document supplies, when the wording has a hole for it.
+    pub value: Option<String>,
+    text: String,
+}
+
+impl Label {
+    /// A wording with nothing to fill in.
+    pub fn of(wording: &'static str) -> Self {
+        Self { wording, value: None, text: wording.to_string() }
+    }
+
+    /// A wording whose hole the document fills in.
+    pub fn with(wording: &'static str, value: impl Into<String>) -> Self {
+        let mut label = Self { wording, value: Some(value.into()), text: String::new() };
+        label.text = label.said(wording);
+        label
+    }
+
+    /// The label read with this wording: the interface's translation of [`wording`](Self::wording),
+    /// or the English wording itself. What the document supplies goes in as it stands and is not
+    /// read again, so a name with braces in it stays whole.
+    pub fn said(&self, wording: &str) -> String {
+        let Some(value) = &self.value else { return wording.to_owned() };
+        // `{` and `}` are ASCII, so these are char boundaries.
+        match (wording.find('{'), wording.find('}')) {
+            (Some(open), Some(close)) if open < close => {
+                let mut said = String::with_capacity(wording.len() + value.len());
+                said.push_str(&wording[..open]);
+                said.push_str(value);
+                said.push_str(&wording[close + 1..]);
+                said
+            }
+            // A translation that lost its hole is said as it stands rather than losing the value.
+            _ => wording.to_owned(),
+        }
+    }
+
+    /// The label as English reads it.
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+}
+
+impl std::fmt::Display for Label {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+/// Every wording [`Edit::label`] can produce, for an interface to translate. `Edit::Batch` is not
+/// here: its wording is only the hole, because a batch carries its name as text (see
+/// [`BATCH_LABELS`]).
+pub const EDIT_LABELS: &[&str] = &[
+    "Rotate page",
+    "Rotate pages",
+    "Delete page",
+    "Delete pages",
+    "Move page",
+    "Move pages",
+    "Insert blank page",
+    "Duplicate page",
+    "Duplicate pages",
+    "Replace page",
+    "Replace pages",
+    "Crop page",
+    "Crop pages",
+    "Set page boxes",
+    "Change Title",
+    "Change Author",
+    "Change Subject",
+    "Change Keywords",
+    "Change {key}",
+    "Insert pages from {name}",
+    "Add bookmark",
+    "Rename bookmark",
+    "Delete bookmark",
+    "Move bookmark",
+    "Set bookmark destination",
+    "Number pages",
+    "Measure distance",
+    "Measure perimeter",
+    "Measure area",
+    "Set measurement scale",
+    "Add sticky note",
+    "Add highlight",
+    "Add underline",
+    "Add strikethrough",
+    "Add squiggly underline",
+    "Add rectangle",
+    "Add oval",
+    "Add arrow",
+    "Add line",
+    "Add drawing",
+    "Add text box",
+    "Add checkmark",
+    "Add cross",
+    "Add dot",
+    "Add signature",
+    "Add redaction mark",
+    "Add cloud",
+    "Add polygon",
+    "Add connected lines",
+    "Add callout",
+    "Add inserted text",
+    "Add file attachment",
+    "Add stamp",
+    "Delete comment",
+    "Edit comment",
+    "Reply",
+    "Set status None",
+    "Set status Accepted",
+    "Set status Rejected",
+    "Set status Cancelled",
+    "Set status Completed",
+    "Replace text",
+    "Erase",
+    "Mark with checkmark",
+    "Remove checkmark",
+    "Lock comment",
+    "Unlock comment",
+    "Move comment",
+    "Resize comment",
+    "Change comment properties",
+    "Fill in {name}",
+    "Set the image of {name}",
+    "Clear form",
+    "Add field",
+    "Change field properties",
+    "Delete field",
+    "Duplicate field",
+    "Set tab order",
+    "Change initial view",
+    "Set alternate text",
+    "Mark figure as decorative",
+    "Recognize text",
+    "Run JavaScript",
+    "Run form script",
+    "Save as {level}",
+    "Edit script of {name}",
+    "Delete document JavaScript",
+    "Edit document JavaScript",
+    "Edit text",
+    "Move image",
+    "Rotate image",
+    "Flip image",
+    "Replace image",
+    "Delete image",
+    "Add header & footer",
+    "Update header & footer",
+    "Add watermark",
+    "Update watermark",
+    "Add background",
+    "Update background",
+    "Remove header & footer",
+    "Remove watermark",
+    "Remove background",
+    "Add text",
+    "Add image",
+    "Edit content",
+    "Delete content",
+    "Apply redactions",
+    "Remove redaction marks",
+    "Remove hidden information",
+    "Import {name}",
+    "Add link",
+    "Change link properties",
+    "Delete link",
+    "Remove all links",
+    "Create link",
+    "Create links",
+    "Sanitize document",
+    "Flatten comments",
+    "Flatten form fields",
+    "Flatten",
+    "Protect with password",
+    "Remove security",
+];
+
+/// The names of the batches built below L7, which an interface shows in the same places as
+/// [`EDIT_LABELS`] and so translates the same way. A batch built in the interface itself arrives
+/// already worded in the interface's language.
+pub const BATCH_LABELS: &[&str] = &["Set document title", "Mark differences", "Detect form fields", "Run JavaScript", "Recognize text"];
+
 impl Edit {
     /// Label for the Edit menu and history ("Undo Rotate pages").
-    pub fn label(&self) -> String {
+    pub fn label(&self) -> Label {
         match self {
-            Edit::RotatePages { pages, .. } => plural("Rotate page", pages.len()),
-            Edit::DeletePages { pages } => plural("Delete page", pages.len()),
-            Edit::MovePages { pages, .. } => plural("Move page", pages.len()),
-            Edit::InsertBlankPage { .. } => "Insert blank page".into(),
-            Edit::DuplicatePages { pages } => plural("Duplicate page", pages.len()),
-            Edit::ReplacePages { pages, .. } => plural("Replace page", pages.len()),
-            Edit::SetPageBox { pages, which: PageBox::Crop, .. } => plural("Crop page", pages.len()),
-            Edit::SetPageBox { .. } => "Set page boxes".into(),
-            Edit::SetInfo { key, .. } => format!("Change {key}"),
-            Edit::InsertPagesFrom { name, .. } => format!("Insert pages from {name}"),
-            Edit::AddBookmark { .. } => "Add bookmark".into(),
-            Edit::RenameBookmark { .. } => "Rename bookmark".into(),
-            Edit::DeleteBookmark { .. } => "Delete bookmark".into(),
-            Edit::MoveBookmark { .. } => "Move bookmark".into(),
-            Edit::SetBookmarkPage { .. } => "Set bookmark destination".into(),
-            Edit::NumberPages { .. } => "Number pages".into(),
-            Edit::AddMeasurement(m) => format!("Measure {}", m.kind.name()),
-            Edit::SetMeasurementScale { .. } => "Set measurement scale".into(),
-            Edit::AddAnnotation(a) => format!("Add {}", annotation_noun(&a.shape)),
-            Edit::AddCustomStamp { .. } => "Add stamp".into(),
-            Edit::DeleteAnnotation { .. } => "Delete comment".into(),
-            Edit::SetAnnotationContents { .. } => "Edit comment".into(),
-            Edit::ReplyToAnnotation { .. } => "Reply".into(),
-            Edit::SetAnnotationStatus { state, .. } => format!("Set status {}", state.name()),
-            Edit::ReplaceText { .. } => "Replace text".into(),
-            Edit::EraseInk { .. } => "Erase".into(),
-            Edit::MarkAnnotation { marked: true, .. } => "Mark with checkmark".into(),
-            Edit::MarkAnnotation { .. } => "Remove checkmark".into(),
-            Edit::LockAnnotation { locked: true, .. } => "Lock comment".into(),
-            Edit::LockAnnotation { .. } => "Unlock comment".into(),
-            Edit::MoveAnnotation { .. } => "Move comment".into(),
-            Edit::ResizeAnnotation { .. } => "Resize comment".into(),
-            Edit::StyleAnnotation { .. } | Edit::SetAnnotationInfo { .. } => "Change comment properties".into(),
-            Edit::SetFieldValue { name, .. } => format!("Fill in {name}"),
-            Edit::SetFieldImage { name, .. } => format!("Set the image of {name}"),
-            Edit::ResetForm { .. } => "Clear form".into(),
-            Edit::AddField { .. } => "Add field".into(),
-            Edit::SetFieldProps { .. } => "Change field properties".into(),
-            Edit::DeleteField { .. } => "Delete field".into(),
-            Edit::DuplicateField { .. } => "Duplicate field".into(),
-            Edit::SetTabOrder { .. } | Edit::MoveInTabOrder { .. } => "Set tab order".into(),
-            Edit::SetInitialView(_) => "Change initial view".into(),
-            Edit::SetAltText { .. } => "Set alternate text".into(),
-            Edit::MarkDecorative { .. } => "Mark figure as decorative".into(),
-            Edit::AddOcrText { .. } => "Recognize text".into(),
-            Edit::ApplyScriptChanges { .. } => "Run JavaScript".into(),
-            Edit::XfaEvent { .. } => "Run form script".into(),
-            Edit::ConvertPdfA { level } => format!("Save as {}", level.label()),
-            Edit::SetFieldScript { name, .. } => format!("Edit script of {name}"),
-            Edit::SetDocumentScript { script: None, .. } => "Delete document JavaScript".into(),
-            Edit::SetDocumentScript { .. } => "Edit document JavaScript".into(),
-            Edit::EditTextLine { .. } | Edit::EditTextBlock { .. } => "Edit text".into(),
-            Edit::EditPageImage { change, .. } => match change {
-                ImageEdit::Move(_) => "Move image".into(),
-                ImageEdit::Rotate(_) => "Rotate image".into(),
-                ImageEdit::Flip { .. } => "Flip image".into(),
-                ImageEdit::Replace { .. } => "Replace image".into(),
-                ImageEdit::Delete => "Delete image".into(),
+            Edit::RotatePages { pages, .. } => plural("Rotate page", "Rotate pages", pages.len()),
+            Edit::DeletePages { pages } => plural("Delete page", "Delete pages", pages.len()),
+            Edit::MovePages { pages, .. } => plural("Move page", "Move pages", pages.len()),
+            Edit::InsertBlankPage { .. } => Label::of("Insert blank page"),
+            Edit::DuplicatePages { pages } => plural("Duplicate page", "Duplicate pages", pages.len()),
+            Edit::ReplacePages { pages, .. } => plural("Replace page", "Replace pages", pages.len()),
+            Edit::SetPageBox { pages, which: PageBox::Crop, .. } => plural("Crop page", "Crop pages", pages.len()),
+            Edit::SetPageBox { .. } => Label::of("Set page boxes"),
+            // The four `/Info` keys PdfCraft itself offers get a wording of their own, so each can
+            // be said in another language; any other key is the document's and goes in as it stands.
+            Edit::SetInfo { key, .. } => match key.as_str() {
+                "Title" => Label::of("Change Title"),
+                "Author" => Label::of("Change Author"),
+                "Subject" => Label::of("Change Subject"),
+                "Keywords" => Label::of("Change Keywords"),
+                _ => Label::with("Change {key}", key.as_str()),
             },
-            Edit::AddHeaderFooter { replace: false, .. } => "Add header & footer".into(),
-            Edit::AddHeaderFooter { .. } => "Update header & footer".into(),
-            Edit::AddWatermark { replace: false, .. } => "Add watermark".into(),
-            Edit::AddWatermark { .. } => "Update watermark".into(),
-            Edit::AddBackground { replace: false, .. } => "Add background".into(),
-            Edit::AddBackground { .. } => "Update background".into(),
-            Edit::RemoveMarks { kind: MarkKind::HeaderFooter } => "Remove header & footer".into(),
-            Edit::RemoveMarks { kind: MarkKind::Watermark } => "Remove watermark".into(),
-            Edit::RemoveMarks { kind: MarkKind::Background } => "Remove background".into(),
-            Edit::AddText { .. } => "Add text".into(),
-            Edit::AddImage { .. } => "Add image".into(),
-            Edit::UpdateContent { .. } => "Edit content".into(),
-            Edit::DeleteContent { .. } => "Delete content".into(),
-            Edit::ReplaceImage { .. } => "Replace image".into(),
-            Edit::ApplyRedactions { .. } => "Apply redactions".into(),
-            Edit::ClearRedactions => "Remove redaction marks".into(),
-            Edit::RemoveHidden { .. } => "Remove hidden information".into(),
-            Edit::ImportData { name, .. } => format!("Import {name}"),
-            Edit::AddLink { .. } => "Add link".into(),
-            Edit::SetLink { .. } => "Change link properties".into(),
-            Edit::DeleteLink { .. } => "Delete link".into(),
-            Edit::RemoveLinks { .. } => "Remove all links".into(),
-            Edit::AddLinks { links, .. } => plural("Create link", links.len()),
-            Edit::Sanitize => "Sanitize document".into(),
-            Edit::Flatten { comments: true, fields: false } => "Flatten comments".into(),
-            Edit::Flatten { comments: false, fields: true } => "Flatten form fields".into(),
-            Edit::Flatten { .. } => "Flatten".into(),
-            Edit::Protect(_) => "Protect with password".into(),
-            Edit::RemoveProtection => "Remove security".into(),
-            Edit::Batch { label, .. } => label.clone(),
+            Edit::InsertPagesFrom { name, .. } => Label::with("Insert pages from {name}", name.as_str()),
+            Edit::AddBookmark { .. } => Label::of("Add bookmark"),
+            Edit::RenameBookmark { .. } => Label::of("Rename bookmark"),
+            Edit::DeleteBookmark { .. } => Label::of("Delete bookmark"),
+            Edit::MoveBookmark { .. } => Label::of("Move bookmark"),
+            Edit::SetBookmarkPage { .. } => Label::of("Set bookmark destination"),
+            Edit::NumberPages { .. } => Label::of("Number pages"),
+            // What was measured is part of the wording too, for the same reason.
+            Edit::AddMeasurement(m) => Label::of(match m.kind {
+                pdfcraft_measure::Kind::Distance => "Measure distance",
+                pdfcraft_measure::Kind::Perimeter => "Measure perimeter",
+                pdfcraft_measure::Kind::Area => "Measure area",
+            }),
+            Edit::SetMeasurementScale { .. } => Label::of("Set measurement scale"),
+            Edit::AddAnnotation(a) => Label::of(add_annotation(&a.shape)),
+            Edit::AddCustomStamp { .. } => Label::of("Add stamp"),
+            Edit::DeleteAnnotation { .. } => Label::of("Delete comment"),
+            Edit::SetAnnotationContents { .. } => Label::of("Edit comment"),
+            Edit::ReplyToAnnotation { .. } => Label::of("Reply"),
+            // The state's name is part of the wording: a language may need to agree it with the rest.
+            Edit::SetAnnotationStatus { state, .. } => Label::of(match state {
+                ReviewState::None => "Set status None",
+                ReviewState::Accepted => "Set status Accepted",
+                ReviewState::Rejected => "Set status Rejected",
+                ReviewState::Cancelled => "Set status Cancelled",
+                ReviewState::Completed => "Set status Completed",
+            }),
+            Edit::ReplaceText { .. } => Label::of("Replace text"),
+            Edit::EraseInk { .. } => Label::of("Erase"),
+            Edit::MarkAnnotation { marked: true, .. } => Label::of("Mark with checkmark"),
+            Edit::MarkAnnotation { .. } => Label::of("Remove checkmark"),
+            Edit::LockAnnotation { locked: true, .. } => Label::of("Lock comment"),
+            Edit::LockAnnotation { .. } => Label::of("Unlock comment"),
+            Edit::MoveAnnotation { .. } => Label::of("Move comment"),
+            Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
+            Edit::StyleAnnotation { .. } | Edit::SetAnnotationInfo { .. } => Label::of("Change comment properties"),
+            Edit::SetFieldValue { name, .. } => Label::with("Fill in {name}", name.as_str()),
+            Edit::SetFieldImage { name, .. } => Label::with("Set the image of {name}", name.as_str()),
+            Edit::ResetForm { .. } => Label::of("Clear form"),
+            Edit::AddField { .. } => Label::of("Add field"),
+            Edit::SetFieldProps { .. } => Label::of("Change field properties"),
+            Edit::DeleteField { .. } => Label::of("Delete field"),
+            Edit::DuplicateField { .. } => Label::of("Duplicate field"),
+            Edit::SetTabOrder { .. } | Edit::MoveInTabOrder { .. } => Label::of("Set tab order"),
+            Edit::SetInitialView(_) => Label::of("Change initial view"),
+            Edit::SetAltText { .. } => Label::of("Set alternate text"),
+            Edit::MarkDecorative { .. } => Label::of("Mark figure as decorative"),
+            Edit::AddOcrText { .. } => Label::of("Recognize text"),
+            Edit::ApplyScriptChanges { .. } => Label::of("Run JavaScript"),
+            Edit::XfaEvent { .. } => Label::of("Run form script"),
+            // The level is the standard's own name ("PDF/A-2b"), so it goes in as it stands.
+            Edit::ConvertPdfA { level } => Label::with("Save as {level}", level.label()),
+            Edit::SetFieldScript { name, .. } => Label::with("Edit script of {name}", name.as_str()),
+            Edit::SetDocumentScript { script: None, .. } => Label::of("Delete document JavaScript"),
+            Edit::SetDocumentScript { .. } => Label::of("Edit document JavaScript"),
+            Edit::EditTextLine { .. } | Edit::EditTextBlock { .. } => Label::of("Edit text"),
+            Edit::EditPageImage { change, .. } => Label::of(match change {
+                ImageEdit::Move(_) => "Move image",
+                ImageEdit::Rotate(_) => "Rotate image",
+                ImageEdit::Flip { .. } => "Flip image",
+                ImageEdit::Replace { .. } => "Replace image",
+                ImageEdit::Delete => "Delete image",
+            }),
+            Edit::AddHeaderFooter { replace: false, .. } => Label::of("Add header & footer"),
+            Edit::AddHeaderFooter { .. } => Label::of("Update header & footer"),
+            Edit::AddWatermark { replace: false, .. } => Label::of("Add watermark"),
+            Edit::AddWatermark { .. } => Label::of("Update watermark"),
+            Edit::AddBackground { replace: false, .. } => Label::of("Add background"),
+            Edit::AddBackground { .. } => Label::of("Update background"),
+            Edit::RemoveMarks { kind: MarkKind::HeaderFooter } => Label::of("Remove header & footer"),
+            Edit::RemoveMarks { kind: MarkKind::Watermark } => Label::of("Remove watermark"),
+            Edit::RemoveMarks { kind: MarkKind::Background } => Label::of("Remove background"),
+            Edit::AddText { .. } => Label::of("Add text"),
+            Edit::AddImage { .. } => Label::of("Add image"),
+            Edit::UpdateContent { .. } => Label::of("Edit content"),
+            Edit::DeleteContent { .. } => Label::of("Delete content"),
+            Edit::ReplaceImage { .. } => Label::of("Replace image"),
+            Edit::ApplyRedactions { .. } => Label::of("Apply redactions"),
+            Edit::ClearRedactions => Label::of("Remove redaction marks"),
+            Edit::RemoveHidden { .. } => Label::of("Remove hidden information"),
+            Edit::ImportData { name, .. } => Label::with("Import {name}", name.as_str()),
+            Edit::AddLink { .. } => Label::of("Add link"),
+            Edit::SetLink { .. } => Label::of("Change link properties"),
+            Edit::DeleteLink { .. } => Label::of("Delete link"),
+            Edit::RemoveLinks { .. } => Label::of("Remove all links"),
+            Edit::AddLinks { links, .. } => plural("Create link", "Create links", links.len()),
+            Edit::Sanitize => Label::of("Sanitize document"),
+            Edit::Flatten { comments: true, fields: false } => Label::of("Flatten comments"),
+            Edit::Flatten { comments: false, fields: true } => Label::of("Flatten form fields"),
+            Edit::Flatten { .. } => Label::of("Flatten"),
+            Edit::Protect(_) => Label::of("Protect with password"),
+            Edit::RemoveProtection => Label::of("Remove security"),
+            // A batch carries its own name, already worded by whoever built it.
+            // A batch carries its name as text, so the wording is only the hole (see `BATCH_LABELS`).
+            Edit::Batch { label, .. } => Label::with("{batch}", label.as_str()),
         }
     }
 }
 
-/// What the Edit menu calls a new comment ("Undo Add highlight").
-fn annotation_noun(s: &Shape) -> &'static str {
+/// What the Edit menu calls a new comment ("Undo Add highlight"). A whole wording for each kind,
+/// so a language can give the noun the article and the gender its own grammar asks for.
+fn add_annotation(s: &Shape) -> &'static str {
     match s {
-        Shape::Note { .. } => "sticky note",
-        Shape::TextMarkup { kind: Markup::Highlight, .. } => "highlight",
-        Shape::TextMarkup { kind: Markup::Underline, .. } => "underline",
-        Shape::TextMarkup { kind: Markup::StrikeOut, .. } => "strikethrough",
-        Shape::TextMarkup { kind: Markup::Squiggly, .. } => "squiggly underline",
-        Shape::Rectangle { .. } => "rectangle",
-        Shape::Oval { .. } => "oval",
-        Shape::Line { arrow: true, .. } => "arrow",
-        Shape::Line { .. } => "line",
-        Shape::Ink { .. } => "drawing",
-        Shape::TextBox { .. } => "text box",
-        Shape::Typewriter { .. } => "text",
-        Shape::Mark { mark: FillMark::Check, .. } => "checkmark",
-        Shape::Mark { mark: FillMark::Cross, .. } => "cross",
-        Shape::Mark { mark: FillMark::Dot, .. } => "dot",
-        Shape::Mark { mark: FillMark::Line, .. } => "line",
-        Shape::Signature { .. } | Shape::TypedSignature { .. } => "signature",
-        Shape::Redact { .. } => "redaction mark",
-        Shape::Stamp { .. } | Shape::CustomStamp { .. } => "stamp",
-        Shape::Polygon { cloud: true, .. } => "cloud",
-        Shape::Polygon { .. } => "polygon",
-        Shape::PolyLine { .. } => "connected lines",
-        Shape::Callout { .. } => "callout",
-        Shape::Caret { .. } => "inserted text",
-        Shape::Attachment { .. } => "file attachment",
+        Shape::Note { .. } => "Add sticky note",
+        Shape::TextMarkup { kind: Markup::Highlight, .. } => "Add highlight",
+        Shape::TextMarkup { kind: Markup::Underline, .. } => "Add underline",
+        Shape::TextMarkup { kind: Markup::StrikeOut, .. } => "Add strikethrough",
+        Shape::TextMarkup { kind: Markup::Squiggly, .. } => "Add squiggly underline",
+        Shape::Rectangle { .. } => "Add rectangle",
+        Shape::Oval { .. } => "Add oval",
+        Shape::Line { arrow: true, .. } => "Add arrow",
+        Shape::Line { .. } => "Add line",
+        Shape::Ink { .. } => "Add drawing",
+        Shape::TextBox { .. } => "Add text box",
+        Shape::Typewriter { .. } => "Add text",
+        Shape::Mark { mark: FillMark::Check, .. } => "Add checkmark",
+        Shape::Mark { mark: FillMark::Cross, .. } => "Add cross",
+        Shape::Mark { mark: FillMark::Dot, .. } => "Add dot",
+        Shape::Mark { mark: FillMark::Line, .. } => "Add line",
+        Shape::Signature { .. } | Shape::TypedSignature { .. } => "Add signature",
+        Shape::Redact { .. } => "Add redaction mark",
+        Shape::Stamp { .. } | Shape::CustomStamp { .. } => "Add stamp",
+        Shape::Polygon { cloud: true, .. } => "Add cloud",
+        Shape::Polygon { .. } => "Add polygon",
+        Shape::PolyLine { .. } => "Add connected lines",
+        Shape::Callout { .. } => "Add callout",
+        Shape::Caret { .. } => "Add inserted text",
+        Shape::Attachment { .. } => "Add file attachment",
     }
 }
 
@@ -1799,8 +2025,10 @@ pub fn source_page_count(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Option
     pdfcraft_organize::page_count(&doc).ok()
 }
 
-fn plural(s: &str, n: usize) -> String {
-    if n == 1 { s.to_string() } else { format!("{s}s") }
+/// The singular or the plural wording, by count. Both are written out: a language forms its plural
+/// its own way, and `one` and `many` may differ in more than an "s".
+fn plural(one: &'static str, many: &'static str, n: usize) -> Label {
+    Label::of(if n == 1 { one } else { many })
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -2312,7 +2540,7 @@ impl Session {
         // (applying redactions, changing security, sanitizing) would invalidate the signatures.
         let rewrites = |c: &pdfcraft_cos::Document| c.full_save_required() || c.encryption_changed();
         if signed && rewrites(&next) && !rewrites(&editor.cos) {
-            return Err(EditError::SignedRewrite(edit.label()));
+            return Err(EditError::SignedRewrite(edit.label().to_string()));
         }
         let previous = std::mem::replace(&mut editor.cos, next);
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
@@ -2353,7 +2581,7 @@ impl Session {
         Ok(())
     }
 
-    pub fn undo(&mut self, id: DocId) -> Result<String, EditError> {
+    pub fn undo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
         let (label, prev, keys, scope) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
@@ -2367,7 +2595,7 @@ impl Session {
         Ok(label)
     }
 
-    pub fn redo(&mut self, id: DocId) -> Result<String, EditError> {
+    pub fn redo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
         let (label, next, keys, scope) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;

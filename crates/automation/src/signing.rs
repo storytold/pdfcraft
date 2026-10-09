@@ -70,7 +70,8 @@ impl Automation {
             "timestamp_time": s.timestamp_time.map(|t| t.to_string()),
             "modification": modification,
             "changes": changes,
-            "details": s.details,
+            // Scripts read this, so the sentences stay in English, whatever the interface reads in.
+            "details": s.details.iter().map(|d| d.message.clone()).collect::<Vec<_>>(),
         }))
     }
 

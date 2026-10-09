@@ -301,6 +301,17 @@ pub fn tr(lang: Lang, s: &str) -> &str {
     lang.catalog().plain(s).unwrap_or(s)
 }
 
+/// How the layers below say their own sentences in the current language.
+///
+/// The checker, the preflight profiles and the signature panel hand over a whole English wording
+/// — holes and all — and the document's own words apart from it, so this is all they need of us:
+/// `f.said(&i18n::words)` says the sentence here, and `in_english` says it in English. An unknown
+/// wording comes back as it stands, which is the English, so a catalog that is missing one is a
+/// sentence in English rather than a gap.
+pub fn words(wording: &str) -> String {
+    t(wording).to_owned()
+}
+
 /// Like [`tr`], for an English string that needs a disambiguating `context`.
 pub fn tr_ctx<'a>(lang: Lang, context: &str, s: &'a str) -> &'a str {
     lang.catalog().contextual(context, s).unwrap_or_else(|| tr(lang, s))
@@ -357,6 +368,19 @@ pub fn action_label(text: &str) -> String {
         return fmt(t("Change {key}"), &[("key", t(key))]);
     }
     t(text).to_owned()
+}
+
+/// A history label in the current language, out of the engine's own two parts: the wording is
+/// looked up whole and the document's own word goes into its `{}` afterwards, so a file or field
+/// name is never read as part of the wording. This is exact where [`action_label`] has to guess
+/// from the English text, and is what the engine's own labels go through.
+pub fn edit_label(label: &pdfcraft_engine::Label) -> String {
+    // A batch's wording is only the hole: it carries its name as text, which from below L7 is one
+    // of `BATCH_LABELS` and so is looked up too.
+    if let Some(name) = label.value.as_deref().filter(|_| label.wording == "{batch}") {
+        return t(name).to_owned();
+    }
+    label.said(t(label.wording))
 }
 
 /// A command label such as "Undo Insert pages from a.pdf" in the current language. A catalog
@@ -730,6 +754,57 @@ mod tests {
                 for item in section.items {
                     assert!(has(es, item.label), "missing item: {}", item.label);
                 }
+            }
+        }
+    }
+
+    /// Spanish says everything the layers below word for themselves: what the accessibility
+    /// checker finds and what its saved report calls things, what the PDF/A verifier reports, what
+    /// a signature's details say and the changes they name, what can be wrong with the pages to
+    /// print, and what an edit is called in the history.
+    ///
+    /// These lists are the whole point of the engine handing the wording over apart from the
+    /// document's own words: a catalog that covers them says those sentences in its own language.
+    /// A sentence missing here is a sentence in English on a Spanish screen.
+    #[test]
+    fn spanish_covers_what_the_engine_says() {
+        let es = Lang::from_code("es").expect("es registered");
+        let lists: [(&str, &[&str]); 8] = [
+            ("accessibility finding", pdfcraft_engine::a11y::WORDINGS),
+            ("accessibility report", pdfcraft_engine::a11y::REPORT_WORDS),
+            ("PDF/A problem", pdfcraft_engine::pdfa::WORDINGS),
+            ("signature detail", pdfcraft_engine::sign::pdf::WORDINGS),
+            ("change after signing", pdfcraft_engine::sign::pdf::kind::ALL),
+            ("pages to print", pdfcraft_engine::print::WORDINGS),
+            ("edit label", pdfcraft_engine::EDIT_LABELS),
+            ("batch label", pdfcraft_engine::BATCH_LABELS),
+        ];
+        for (what, list) in lists {
+            assert!(!list.is_empty(), "no {what} wordings to cover");
+            for wording in list {
+                assert!(has(es, wording), "missing {what}: {wording}");
+            }
+        }
+    }
+
+    /// Each of those sentences keeps its holes when it is said in Spanish, so the document's own
+    /// words still have somewhere to go: a translation that drops `{p}` or `{}` would read as a
+    /// sentence about nothing in particular.
+    #[test]
+    fn spanish_keeps_the_holes_in_what_the_engine_says() {
+        let es = Lang::from_code("es").expect("es registered");
+        let lists: [&[&str]; 4] = [
+            pdfcraft_engine::a11y::WORDINGS,
+            pdfcraft_engine::pdfa::WORDINGS,
+            pdfcraft_engine::sign::pdf::WORDINGS,
+            pdfcraft_engine::print::WORDINGS,
+        ];
+        for wording in lists.into_iter().flatten() {
+            let said = tr(es, wording);
+            // `{}` is one hole; `{name}` holes are named, and each name must survive by itself.
+            assert_eq!(wording.matches("{}").count(), said.matches("{}").count(), "the Spanish of {wording:?} loses a hole: {said:?}");
+            for hole in wording.split('{').skip(1).filter_map(|rest| rest.split_once('}')).map(|(name, _)| name).filter(|n| !n.is_empty()) {
+                assert!(said.contains(&format!("{{{hole}}}")), "the Spanish of {wording:?} loses {{{hole}}}: {said:?}");
             }
         }
     }
