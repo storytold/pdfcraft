@@ -10,7 +10,8 @@
 //!  --cover on|off  --default-layout continuous|two-up|single  --default-zoom fit-width|fit-page|<percent>`
 //!
 //! `--control <file>` enables the UI control channel (off by default): the app listens on a random
-//! loopback port and writes `{"port", "token", "pid"}` to `<file>` (owner-only permissions).
+//! loopback port and writes `{"port", "token", "pid"}` to `<file>` (owner-only permissions). The
+//! app doesn't start if it can't.
 //! Agents then drive it with `pdfcraft-cli ui --control <file> <method> …`.
 
 // Release builds on Windows are GUI-subsystem programs, so launching the app doesn't open a console
@@ -287,15 +288,14 @@ fn app_creator<'a>(
         }
         if let Some(file) = &control_file {
             let client = app.attach_control(&cc.egui_ctx);
-            match pdfcraft_ui_egui::control::serve(client).and_then(|ep| write_control_file(file, ep.port, &ep.token).map(|()| ep.port)) {
-                // Never the token (AGENTS.md §3): it stays in the owner-only file.
-                Ok(port) => log::info!("UI control channel on 127.0.0.1:{port} (connection details in {file})"),
-                Err(e) => log::error!("--control {file}: {e}"),
-            }
+            open_control_channel(file, pdfcraft_ui_egui::control::serve(client))?;
         }
         // Autosave unsaved changes; offer to recover documents a crashed session left behind.
         if let Some(dir) = pdfcraft_ui_egui::RecoveryStore::default_dir() {
             app.enable_recovery(pdfcraft_ui_egui::RecoveryStore::new(dir));
+        }
+        if let Some(state) = &cc.wgpu_render_state {
+            notify_software_renderer(&mut app, state.adapter.get_info().device_type);
         }
         // A portable marker whose data folder can't be written (#157): say where settings went.
         if let Some(w) = &pdfcraft_ui_egui::portable::current().unwritable {
@@ -323,6 +323,37 @@ fn app_creator<'a>(
         }
         Ok(Box::new(app))
     })
+}
+
+/// Tell the user when wgpu draws on the processor (WARP on Windows, llvmpipe on Linux) rather than
+/// a GPU, which makes everything slower. egui-wgpu only logs it, so the reporter of #519 had to find
+/// it in pdfcraft.log. The OpenGL fallback isn't covered: glow only reports its renderer through
+/// `unsafe` calls.
+fn notify_software_renderer(app: &mut PdfCraftApp, device_type: eframe::wgpu::DeviceType) {
+    if device_type == eframe::wgpu::DeviceType::Cpu {
+        app.notify_tr("PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.");
+    }
+}
+
+/// Publish a started control channel in `file`.
+///
+/// A failure stops the app. `--control` was asked for, so carrying on without it would leave a
+/// script driving nothing, and the file that couldn't be replaced may be another user's, planted
+/// at a shared path such as `/tmp/pc.json` to receive the commands. This runs before any document
+/// opens, so nothing is lost.
+fn open_control_channel(file: &str, endpoint: std::io::Result<pdfcraft_ui_egui::control::Endpoint>) -> Result<(), String> {
+    match endpoint.and_then(|ep| write_control_file(file, ep.port, &ep.token).map(|()| ep.port)) {
+        // Never the token (AGENTS.md §3): it stays in the owner-only file.
+        Ok(port) => {
+            log::info!("UI control channel on 127.0.0.1:{port} (connection details in {file})");
+            Ok(())
+        }
+        Err(e) => {
+            let message = format!("--control {file}: {e}. Use a control file in a folder only you can write, such as ~/.pdfcraft-control.json");
+            log::error!("{message}");
+            Err(message)
+        }
+    }
 }
 
 /// Write the control endpoint so that only the current user can read the token.
@@ -584,6 +615,34 @@ fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[D
 
 #[cfg(test)]
 mod tests {
+    use pdfcraft_ui_egui::control::Endpoint;
+
+    fn endpoint() -> std::io::Result<Endpoint> {
+        Ok(Endpoint { port: 4321, token: "0123456789abcdef".into() })
+    }
+
+    #[test]
+    fn a_control_channel_that_cant_be_published_stops_the_app() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-app-control-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = |name: &str| dir.join(name).to_str().unwrap().to_owned();
+
+        // A folder in the way stands in for a file another user created first: the write fails.
+        std::fs::create_dir(dir.join("taken.json")).unwrap();
+        let err = super::open_control_channel(&path("taken.json"), endpoint()).unwrap_err();
+        assert!(err.contains("--control") && err.contains("taken.json") && err.contains("only you can write"), "{err}");
+        // No listener: nothing to publish.
+        let err = super::open_control_channel(&path("pc.json"), Err(std::io::Error::other("no loopback"))).unwrap_err();
+        assert!(err.contains("no loopback"), "{err}");
+        assert!(!dir.join("pc.json").exists());
+
+        super::open_control_channel(&path("pc.json"), endpoint()).unwrap();
+        let written: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("pc.json")).unwrap()).unwrap();
+        assert_eq!((written["port"].as_u64(), written["token"].as_str()), (Some(4321), Some("0123456789abcdef")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn path_from_arg_decodes_file_uris() {
         assert_eq!(super::path_from_arg("file:///home/alice/report.pdf".to_string()), "/home/alice/report.pdf");
@@ -626,6 +685,21 @@ mod tests {
     }
 
     #[test]
+    fn a_software_renderer_is_shown_to_the_user() {
+        use eframe::wgpu::DeviceType;
+        // Issue #519: WARP or llvmpipe is announced in the app, not just in pdfcraft.log.
+        let mut app = super::PdfCraftApp::new();
+        super::notify_software_renderer(&mut app, DeviceType::Cpu);
+        let notice = app.toast.as_ref().map(|(m, _)| m.as_str()).unwrap_or_default();
+        assert!(notice.contains("without a graphics processor"), "{notice:?}");
+        for gpu in [DeviceType::IntegratedGpu, DeviceType::DiscreteGpu, DeviceType::VirtualGpu, DeviceType::Other] {
+            let mut app = super::PdfCraftApp::new();
+            super::notify_software_renderer(&mut app, gpu);
+            assert!(app.toast.is_none(), "{gpu:?}: {:?}", app.toast);
+        }
+    }
+
+    #[test]
     fn gpu_backends_avoid_vulkan_on_windows_and_prefer_low_power() {
         let mut native = eframe::NativeOptions::default();
         super::configure_gpu(&mut native);
@@ -665,6 +739,154 @@ mod tests {
                 assert_eq!(enabled, expected);
                 assert_eq!(enabled.max_texture_dimension_2d, supported.max_texture_dimension_2d);
             }
+        }
+    }
+
+    #[test]
+    fn a_window_larger_than_the_gpu_limit_gets_a_surface_within_it() {
+        use eframe::egui_wgpu::winit::surface_fit;
+        // Issue #577: 3440 x 1369 points restored at 250% asked an 8192-pixel device for this.
+        let (width, height, scale) = surface_fit(8600, 3423, 8192);
+        assert_eq!((width, height), (8192, 3260));
+        // Both sides shrink alike and egui draws at that factor: the whole window is drawn.
+        assert!((8600.0 * scale - 8192.0).abs() < 0.01, "{scale}");
+        assert!((3423.0 * scale - height as f32).abs() < 1.0, "{scale}");
+        // Within the limit nothing changes, up to and including the limit itself.
+        assert_eq!(surface_fit(8600, 3423, 16384), (8600, 3423, 1.0));
+        assert_eq!(surface_fit(8192, 8192, 8192), (8192, 8192, 1.0));
+        assert_eq!(surface_fit(0, 0, 8192), (0, 0, 1.0));
+        // One side over the limit: the window as it would be stretched across monitors.
+        assert_eq!(surface_fit(8193, 600, 8192).0, 8192);
+        assert_eq!(surface_fit(600, 8193, 8192).1, 8192);
+    }
+
+    #[test]
+    fn surface_fit_never_empties_or_overflows_a_surface() {
+        use eframe::egui_wgpu::winit::surface_fit;
+        for (w, h, max) in [
+            (1, u32::MAX, 8192),
+            (u32::MAX, 1, 2048),
+            (u32::MAX, u32::MAX, 16384),
+            (0, u32::MAX, 8192),
+            (u32::MAX, 0, 8192),
+            (5, 7, 0),
+            (40_000, 3, 1),
+        ] {
+            let (fw, fh, scale) = surface_fit(w, h, max);
+            assert!(fw <= max.max(1) && fh <= max.max(1), "{w} x {h} in {max}: {fw} x {fh}");
+            // A side that wasn't zero stays non-zero (`Surface::configure` rejects an empty one),
+            // and a zero side stays zero (egui-wgpu skips configuring it).
+            assert_eq!((fw == 0, fh == 0), (w == 0, h == 0), "{w} x {h} in {max}: {fw} x {fh}");
+            assert!(scale.is_finite() && scale > 0.0 && scale <= 1.0, "{w} x {h} in {max}: {scale}");
+        }
+        // The longer side lands exactly on the limit (rounding never leaves it a pixel short),
+        // and the shorter side keeps the window's proportions to within a pixel.
+        for max in [2048, 8192, 16384] {
+            for long in (max + 1..=max * 5).step_by(997).chain([max * 2, max * 4, u32::MAX]) {
+                for short in [1, 3, 600, max / 3, max - 1, max, long - 1, long] {
+                    let (fw, fh, scale) = surface_fit(long, short, max);
+                    assert_eq!(fw, max, "{long} x {short} in {max}");
+                    let expected = f64::from(short) * f64::from(max) / f64::from(long);
+                    assert!((f64::from(fh) - expected).abs() <= 1.0, "{long} x {short} in {max}: {fh}");
+                    assert_eq!(surface_fit(short, long, max), (fh, fw, scale), "transposed");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn egui_wgpu_carries_the_surface_size_fit() {
+        // Issue #577: egui-wgpu 0.36.2 configures a window's surface at the window's size, and
+        // `Surface::configure` panics when that's beyond the device's `max_texture_dimension_2d`
+        // (emilk/egui#8361). vendor/egui-wgpu fits it within the limit. A dependency bump that
+        // resolves egui-wgpu from crates.io again, or a re-vendored copy without the patch, would
+        // bring the crash back: re-apply the patch, or drop the copy once an egui release has a
+        // fix (vendor/README.md).
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap();
+        let egui_wgpu = lock.split("[[package]]").find(|p| p.contains("\nname = \"egui-wgpu\"\n")).expect("egui-wgpu is in Cargo.lock");
+        assert!(!egui_wgpu.contains("\nsource = "), "egui-wgpu must resolve to vendor/egui-wgpu, not:{egui_wgpu}");
+        // `surface_fit` is tested above; these keep it in the paths that size a surface.
+        let painter = std::fs::read_to_string(root.join("vendor/egui-wgpu/src/winit.rs")).unwrap().replace("\r\n", "\n");
+        for patch in [
+            "let (width, height, render_scale) = surface_fit(window_width, window_height, max_side);",
+            "let (fit_width, fit_height, _) = surface_fit(width, height, self.max_surface_side());",
+            "pixels_per_point: pixels_per_point * surface_state.render_scale,",
+            "old_state.window_width,\n            old_state.window_height,",
+        ] {
+            assert!(painter.contains(patch), "vendor/egui-wgpu lost its surface size patch: {patch}");
+        }
+    }
+
+    #[test]
+    fn a_gpu_error_while_a_window_is_set_up_is_returned_not_a_panic() {
+        // Issue #519: on a 2015 Intel GPU, wgpu's GL backend couldn't configure the window's
+        // surface (`GpuWaitTimeout`), and wgpu's default error handler panicked before the app was
+        // created, so PdfCraft never got to retry with OpenGL. vendor/egui-wgpu configures a new
+        // window's surface inside `catch_errors`. A real device on PdfCraft's own GPU settings,
+        // and an error wgpu raises before anything reaches the driver: a texture one pixel wider
+        // than the device allows.
+        use eframe::wgpu;
+        let native = super::native_options(false, eframe::Renderer::Wgpu);
+        let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &native.wgpu_options.wgpu_setup else {
+            panic!("default setup creates its own instance")
+        };
+        let instance = pollster::block_on(native.wgpu_options.wgpu_setup.new_instance());
+        let options = wgpu::RequestAdapterOptions { power_preference: setup.power_preference, ..Default::default() };
+        // CI runners have a software adapter (WARP, llvmpipe); a machine without any skips.
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&options)) else {
+            eprintln!("skipping: no GPU adapter on this machine");
+            return;
+        };
+        let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&(setup.device_descriptor)(&adapter))) else {
+            eprintln!("skipping: the adapter gives no device");
+            return;
+        };
+        let texture = |width: u32| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("issue-519"),
+                size: wgpu::Extent3d { width, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        };
+        let too_wide = device.limits().max_texture_dimension_2d.saturating_add(1);
+        let caught = pollster::block_on(eframe::egui_wgpu::winit::catch_errors(&device, || texture(too_wide)));
+        assert!(matches!(caught, Err(wgpu::Error::Validation { .. })), "{caught:?}");
+        // The device stays usable, and nothing is left behind to catch later errors by mistake.
+        let fine = pollster::block_on(eframe::egui_wgpu::winit::catch_errors(&device, || texture(16)));
+        assert!(fine.is_ok(), "{fine:?}");
+        assert_eq!(pollster::block_on(eframe::egui_wgpu::winit::catch_errors(&device, || 7)).ok(), Some(7));
+        // Nested: the inner call keeps its own error, and the outer one still catches what follows.
+        let caught = pollster::block_on(eframe::egui_wgpu::winit::catch_errors(&device, || {
+            let inner = pollster::block_on(eframe::egui_wgpu::winit::catch_errors(&device, || texture(too_wide)));
+            assert!(inner.is_err(), "inner: {inner:?}");
+            texture(too_wide)
+        }));
+        assert!(matches!(caught, Err(wgpu::Error::Validation { .. })), "outer: {caught:?}");
+    }
+
+    #[test]
+    fn egui_wgpu_returns_a_surface_it_cannot_configure_as_an_error() {
+        // Issue #519: `catch_errors` is tested above; this keeps it around the first configure of
+        // every new window's surface, and its error reaching eframe as `WgpuError` (eframe then
+        // returns `Error::Wgpu`, which `main` retries with OpenGL). Without it a failed configure
+        // panics before the app is created, and the OpenGL retry never runs.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap();
+        let egui_wgpu = lock.split("[[package]]").find(|p| p.contains("\nname = \"egui-wgpu\"\n")).expect("egui-wgpu is in Cargo.lock");
+        assert!(!egui_wgpu.contains("\nsource = "), "egui-wgpu must resolve to vendor/egui-wgpu, not:{egui_wgpu}");
+        let painter = std::fs::read_to_string(root.join("vendor/egui-wgpu/src/winit.rs")).unwrap().replace("\r\n", "\n");
+        let add_surface = painter.split("async fn add_surface(").nth(1).and_then(|s| s.split("\n    fn ").next()).expect("add_surface");
+        for patch in [
+            "let installed = catch_errors(&device, || {\n            self.install_surface(surface, viewport_id, size.width, size.height, false);\n        })",
+            "return Err(crate::WgpuError::ConfigureSurface(error));",
+        ] {
+            assert!(add_surface.contains(patch), "vendor/egui-wgpu lost its surface configure patch: {patch}");
         }
     }
 

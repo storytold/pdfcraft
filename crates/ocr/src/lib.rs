@@ -23,7 +23,9 @@ pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
-    #[error("the text recognition models are not installed (run `cargo xtask models`, or set PDFCRAFT_MODELS)")]
+    /// Shown to end users (release packages ship the models; a source build fetches them with
+    /// `cargo xtask models`). The UI catalogs key this exact text.
+    #[error("the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)")]
     NoModels,
     #[error("loading {0}: {1}")]
     Load(String, String),
@@ -47,8 +49,8 @@ impl Models {
         (m.detection.is_file() && m.recognition.is_file()).then_some(m)
     }
 
-    /// Look for the models: `$PDFCRAFT_MODELS`, then `models/` beside the executable (and
-    /// `Resources/models` in a macOS bundle), then the source tree's `assets/models/`.
+    /// Look for the models: `$PDFCRAFT_MODELS`, then where the release packages install them
+    /// beside the executable ([`Models::dirs_beside_exe`]), then the source tree's `assets/models/`.
     pub fn find() -> Option<Models> {
         Self::search_dirs().iter().find_map(|d| Self::in_dir(d))
     }
@@ -60,11 +62,20 @@ impl Models {
             dirs.push(PathBuf::from(d));
         }
         if let Some(exe) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
-            dirs.push(exe.join("models"));
-            dirs.push(exe.join("../Resources/models"));
+            dirs.extend(Self::dirs_beside_exe(&exe));
         }
         dirs.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/models"));
         dirs
+    }
+
+    /// Where the release packages put the models, relative to the directory holding the
+    /// executable (packaging/*):
+    /// - `models/` beside it: the Windows MSI and portable zip;
+    /// - `../Resources/models`: the macOS app bundle (`Contents/MacOS` → `Contents/Resources`);
+    /// - `../share/pdfcraft/models`: the FHS-style trees (`bin/` → `share/`) of the Linux
+    ///   deb/rpm/tar.gz/AppImage/Flatpak and the FreeBSD tarball, wherever they are installed.
+    pub fn dirs_beside_exe(exe_dir: &Path) -> Vec<PathBuf> {
+        vec![exe_dir.join("models"), exe_dir.join("../Resources/models"), exe_dir.join("../share/pdfcraft/models")]
     }
 }
 
@@ -234,6 +245,43 @@ mod tests {
         let w = PlacedWord::place(&Word { text: "Up".into(), rect: [0.0, 0.0, 50.0, 10.0] }, to_user);
         assert_eq!(w.across, [0.0, 50.0]);
         assert_eq!(w.up, [-10.0, 0.0]);
+    }
+
+    /// #103: every release package's layout puts the models where the installed app looks.
+    /// Mirrors packaging/{windows/package.ps1,macos/package.sh,linux/package.sh,freebsd/package.sh}.
+    #[test]
+    fn finds_the_models_in_every_release_package_layout() {
+        let base = std::env::temp_dir().join(format!("pdfcraft-ocr-layouts-{}", std::process::id()));
+        let layouts = [
+            ("windows", "PdfCraft", "PdfCraft/models"),
+            ("macos", "PdfCraft.app/Contents/MacOS", "PdfCraft.app/Contents/Resources/models"),
+            ("linux-deb-rpm", "usr/bin", "usr/share/pdfcraft/models"),
+            ("linux-tar", "pdfcraft-1.0.0-linux-x86_64/bin", "pdfcraft-1.0.0-linux-x86_64/share/pdfcraft/models"),
+            ("appimage", "PdfCraft.AppDir/usr/bin", "PdfCraft.AppDir/usr/share/pdfcraft/models"),
+            ("flatpak", "app/bin", "app/share/pdfcraft/models"),
+            ("freebsd", "usr/local/bin", "usr/local/share/pdfcraft/models"),
+        ];
+        for (name, exe_dir, models_dir) in layouts {
+            let root = base.join(name);
+            let (exe_dir, models_dir) = (root.join(exe_dir), root.join(models_dir));
+            std::fs::create_dir_all(&exe_dir).unwrap();
+            std::fs::create_dir_all(&models_dir).unwrap();
+            let found = || Models::dirs_beside_exe(&exe_dir).iter().find_map(|d| Models::in_dir(d));
+            assert_eq!(found(), None, "{name}: no models yet");
+            for file in [DETECTION_MODEL, RECOGNITION_MODEL] {
+                std::fs::write(models_dir.join(file), b"model").unwrap();
+            }
+            let models = found().unwrap_or_else(|| panic!("{name}: models in {} not found", models_dir.display()));
+            assert_eq!(models.detection.canonicalize().unwrap(), models_dir.join(DETECTION_MODEL).canonicalize().unwrap(), "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The message tells end users what to do; release builds have no cargo.
+    #[test]
+    fn missing_models_message_is_for_end_users() {
+        let message = OcrError::NoModels.to_string();
+        assert!(!message.contains("cargo") && message.contains("PDFCRAFT_MODELS"), "{message}");
     }
 
     /// End to end on rendered text, when the models are installed (`cargo xtask models`).
