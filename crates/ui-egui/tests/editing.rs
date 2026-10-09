@@ -1538,7 +1538,7 @@ fn editing_existing_images_on_the_page() {
 }
 
 #[test]
-fn the_format_panel_restyles_the_paragraph_being_edited() {
+fn the_format_bar_restyles_the_paragraph_being_edited() {
     let mut h = harness(1, |_| {});
     assert!(h.state_mut().execute("edit.edit_text"));
     h.run_steps(2);
@@ -1551,9 +1551,8 @@ fn the_format_panel_restyles_the_paragraph_being_edited() {
     h.drop_at(at);
     h.run_steps(3);
     assert!(h.state().views[0].line_editor.is_some());
-    // The Format text panel shows the paragraph's look; making it bold applies at once.
-    h.get_by_label("FORMAT TEXT");
-    h.get_by_label("B").click();
+    // The format bar shows the paragraph's look; making it bold applies at once.
+    h.get_by_label("Bold").click();
     h.run_steps(4);
     let s = h.state();
     let doc = s.session.get(s.views[0].id).unwrap();

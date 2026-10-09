@@ -1,5 +1,5 @@
 //! Edit a PDF ▸ Add content in the real shell (egui_kittest): type text onto a page, move it,
-//! restyle it from the panel, add an image, delete with the keyboard.
+//! restyle it from the format bar, add an image, delete with the keyboard.
 
 use egui::Pos2;
 use egui_kittest::Harness;
@@ -115,8 +115,8 @@ fn typing_moving_styling_and_deleting_added_content() {
     assert_eq!(h.state().quick_tool, QuickTool::Select);
     h.run_steps(2);
     assert_eq!(h.state().views[0].content.selected, Some((0, 0)), "the new text is selected");
-    // Bold from the Format panel: one undoable change.
-    h.get_by_label("B").click();
+    // Bold from the format bar: one undoable change.
+    h.get_by_label("Bold").click();
     h.run_steps(3);
 
     let pdfcraft_engine::AddedContent::Text(t) = &added(&h)[0].content else { panic!() };

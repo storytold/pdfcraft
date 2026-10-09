@@ -19,7 +19,7 @@ pub struct LineEditor {
     pub block: usize,
     pub text: String,
     original: String,
-    rect: Rect,
+    pub(crate) rect: Rect,
     /// The original PDF rectangle, in user space. It is converted again each frame so the editor
     /// stays attached while the page is zoomed, scrolled, or rotated.
     source_rect: [f32; 4],
@@ -53,14 +53,11 @@ impl Default for Extras {
     }
 }
 
-/// Underline, line spacing, character spacing and horizontal scale for the paragraph being
-/// edited (under Format text). Returns `true` when something changed.
+/// Line spacing, character spacing and horizontal scale for the paragraph being edited (the
+/// format bar's More options). Returns `true` when something changed.
 pub(crate) fn extras_panel(ui: &mut egui::Ui, e: &mut Extras) -> bool {
     let before = *e;
     ui.horizontal(|ui| {
-        if crate::icons::button(ui, "underline", 26.0, e.underline, tl!("Underline")).clicked() {
-            e.underline = !e.underline;
-        }
         let zero = tl!("Line spacing").to_string();
         let label = |v: f64| if v == 0.0 { zero.clone() } else { format!("{v:.2}×") };
         egui::ComboBox::from_id_salt("line-spacing").selected_text(label(e.line_spacing)).width(110.0).show_ui(ui, |ui| {
@@ -81,6 +78,11 @@ pub(crate) fn extras_panel(ui: &mut egui::Ui, e: &mut Extras) -> bool {
 }
 
 impl LineEditor {
+    /// Give the keyboard back to the paragraph (after the format bar took it).
+    pub(crate) fn refocus(&mut self) {
+        self.focus = true;
+    }
+
     /// How far the box may grow to the right, when the paragraph is a single line (a multi-line
     /// paragraph rewraps to its own width and the box doesn't grow).
     pub fn growth(&self) -> Option<f32> {
@@ -153,7 +155,7 @@ fn editor_font(look: &pdfcraft_engine::AddedText, size: f32) -> FontId {
     FontId::new(size, family)
 }
 
-fn color32(color: [f64; 3]) -> Color32 {
+pub(crate) fn color32(color: [f64; 3]) -> Color32 {
     Color32::from_rgb(
         (color[0].clamp(0.0, 1.0) * 255.0).round() as u8,
         (color[1].clamp(0.0, 1.0) * 255.0).round() as u8,
@@ -438,8 +440,8 @@ pub(crate) fn page_input(
 
 /// The inline editor; returns the edit once the text is applied.
 pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -> Option<Edit> {
-    // Clicks outside the document (the Format text panel) keep the paragraph open.
-    let outside = ctx.input(|i| i.pointer.latest_pos()).is_some_and(|p| !view.viewport_rect().contains(p));
+    // Clicks outside the document (the panels) or on the format bar keep the paragraph open.
+    let keeps_open = ctx.input(|i| i.pointer.latest_pos()).is_some_and(|p| !view.viewport_rect().contains(p) || crate::format_bar::holds(ctx, p));
     let page = view.line_editor.as_ref()?.page;
     let xf = view.page_xform(page)?;
     let viewport_right = view.viewport_rect().right();
@@ -486,7 +488,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 let apply = ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
                 if esc {
                     done = Some(false);
-                } else if apply || (r.lost_focus() && !outside) {
+                } else if apply || (r.lost_focus() && !keeps_open) {
                     done = Some(true);
                 }
             });

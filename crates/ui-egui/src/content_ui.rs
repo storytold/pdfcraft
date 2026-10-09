@@ -1,15 +1,14 @@
 //! Edit a PDF ▸ Add content: the Text tool (click on the page and type), Image (pick a file;
 //! it lands in the middle of the page), and editing what was added: select, move, resize
-//! (images keep their proportions), double-click text to retype it, format it from the panel,
-//! Delete to remove it. Each change is one undoable engine edit.
+//! (images keep their proportions), double-click text to retype it, format it from the format
+//! bar (`format_bar`), Delete to remove it. Each change is one undoable engine edit.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use pdfcraft_engine::{Added, AddedContent, AddedText, Edit, FontFamily, TextAlign};
+use pdfcraft_engine::{Added, AddedContent, AddedText, Edit};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
-use crate::widgets;
 
 const SELECT_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
@@ -49,7 +48,7 @@ pub fn default_style() -> AddedText {
 }
 
 /// Display-space rect → screen.
-fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
+pub(crate) fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
     let ph = info.pages[page].height as f64;
     xf.view_rect([r[0] as f32, (ph - r[3]) as f32, r[2] as f32, (ph - r[1]) as f32])
 }
@@ -310,8 +309,9 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                 })
                 .response
                 .rect;
-            // Pressing a button takes the focus from the text: that is not a click away.
-            let on_buttons = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| buttons.contains(p));
+            // Pressing a button (or the format bar) takes the focus from the text: that is not a
+            // click away.
+            let on_buttons = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| buttons.contains(p) || crate::format_bar::holds(ui.ctx(), p));
             cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
             commit = done || resp.lost_focus() && !on_buttons;
         });
@@ -344,63 +344,6 @@ fn finish(cv: &mut ContentView, d: TextDraft, added: &[Added]) -> Option<Edit> {
             (old.text != text).then(|| Edit::UpdateContent { page: d.page, index: i, content: AddedContent::Text(AddedText { text, ..old.clone() }) })
         }
     }
-}
-
-/// Format text (shown in the Edit panel while a text item is selected, or for new text).
-/// Returns the changed style; for a selected item the caller turns it into an update.
-pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> Option<AddedText> {
-    let mut s = style.clone();
-    widgets::section_title(ui, tl!("Format text"));
-    ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("font-family").selected_text(s.family.label()).width(110.0).show_ui(ui, |ui| {
-            for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
-                ui.selectable_value(&mut s.family, f, f.label());
-            }
-        });
-        // A list rather than a drag value: every change is an undo step.
-        egui::ComboBox::from_id_salt("font-size").selected_text(format!("{} pt", s.size)).width(70.0).show_ui(ui, |ui| {
-            for size in [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0] {
-                ui.selectable_value(&mut s.size, size, format!("{size} pt"));
-            }
-        });
-    });
-    ui.horizontal(|ui| {
-        if ui.selectable_label(s.bold, egui::RichText::new("B").strong()).on_hover_text(tl!("Bold")).clicked() {
-            s.bold = !s.bold;
-        }
-        if ui.selectable_label(s.italic, egui::RichText::new("I").italics()).on_hover_text(tl!("Italic")).clicked() {
-            s.italic = !s.italic;
-        }
-        ui.separator();
-        for (a, icon, tip) in [
-            (TextAlign::Left, "align-left", tl!("Align left")),
-            (TextAlign::Center, "align-center", tl!("Centre")),
-            (TextAlign::Right, "align-right", tl!("Align right")),
-            (TextAlign::Justify, "align-justify", tl!("Justify")),
-        ] {
-            if crate::icons::button(ui, icon, 26.0, s.align == a, tip).clicked() {
-                s.align = a;
-            }
-        }
-    });
-    let c = s.color;
-    if let Some(picked) = crate::comments::swatch_grid(ui, Some(c)) {
-        s.color = picked;
-    }
-    ui.label(egui::RichText::new(tl!("Standard fonts; text outside Windows-1252 isn't supported yet.")).small().color(t.text_faint));
-    (s != *style).then_some(s)
-}
-
-/// How to use the tools, under the Add content list.
-pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens) {
-    ui.label(
-        egui::RichText::new(
-            tl!("Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it."),
-        )
-            .small()
-            .color(t.text_faint),
-    );
-    ui.add_space(4.0);
 }
 
 impl crate::PdfCraftApp {
@@ -504,64 +447,4 @@ impl crate::PdfCraftApp {
             self.left_open = true;
         }
     }
-}
-
-/// What the image tools ask for.
-pub(crate) enum ImageAction {
-    Update(pdfcraft_engine::AddedContent),
-    Replace,
-}
-
-/// Edit image: rotate, flip, crop, replace (shown while an added image is selected).
-pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
-    let mut out = None;
-    widgets::section_title(ui, tl!("Edit image"));
-    ui.horizontal(|ui| {
-        let mut i = img.clone();
-        let r = i.rect;
-        let turn = |i: &mut pdfcraft_engine::AddedImage, k: u8| {
-            i.rotation = (i.rotation + k) % 4;
-            // The box turns with the picture, around its centre.
-            let (cx, cy, w, h) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0, r[2] - r[0], r[3] - r[1]);
-            i.rect = [cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0];
-        };
-        if crate::icons::button(ui, "rotate-ccw", 28.0, false, tl!("Rotate counterclockwise")).clicked() {
-            turn(&mut i, 1);
-            out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
-        }
-        if crate::icons::button(ui, "rotate-cw", 28.0, false, tl!("Rotate clockwise")).clicked() {
-            turn(&mut i, 3);
-            out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
-        }
-        if crate::icons::button(ui, "flip-horizontal-2", 28.0, false, tl!("Flip horizontal")).clicked() {
-            i.flip_h = !i.flip_h;
-            out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
-        }
-        if crate::icons::button(ui, "flip-vertical-2", 28.0, false, tl!("Flip vertical")).clicked() {
-            i.flip_v = !i.flip_v;
-            out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
-        }
-        if crate::icons::button(ui, "replace", 28.0, false, tl!("Replace image")).clicked() {
-            out = Some(ImageAction::Replace);
-        }
-    });
-    ui.label(egui::RichText::new(tl!("Crop (% trimmed from each side)")).small().color(t.text_muted));
-    let mut crop = img.crop.map(|v| (v * 100.0).round());
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        for (k, label) in ["L", "B", "R", "T"].into_iter().enumerate() {
-            ui.label(label);
-            // Applied when the drag ends, so a drag is one undo step.
-            let r = ui.add(egui::DragValue::new(&mut crop[k]).range(0.0..=45.0).speed(0.5).suffix("%"));
-            changed |= r.drag_stopped() || (r.changed() && !r.dragged());
-        }
-    });
-    if changed {
-        let mut i = img.clone();
-        i.crop = crop.map(|v| v / 100.0);
-        if i.crop != img.crop {
-            out = Some(ImageAction::Update(AddedContent::Image(i)));
-        }
-    }
-    out
 }

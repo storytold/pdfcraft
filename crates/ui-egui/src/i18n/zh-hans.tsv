@@ -2044,3 +2044,5 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	选择 PNG 或 JPEG 图像（最大 4 MiB）。透明度会保留。
 	Couldn't import the signature image: {e}	无法导入签名图像：{e}
 	Go to page…	转到页面…
+	Move the format bar	移动格式栏
+	Drag to move; double-click to put it back	拖动以移动；双击以放回原处
