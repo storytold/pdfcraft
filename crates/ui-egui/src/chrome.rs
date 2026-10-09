@@ -240,7 +240,7 @@ fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     (RightPanel::Compare, tl!("Compare")),
                 ] {
                     if ui.radio(app.right == Some(p), tl!(label)).clicked() {
-                        app.right = Some(p);
+                        app.choose_right_panel(Some(p));
                     }
                 }
             });
@@ -278,7 +278,7 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     ui.painter().circle_filled(c, 3.0, t.accent);
                 }
                 if r.clicked() {
-                    app.right = if selected { None } else { Some(panel) };
+                    app.choose_right_panel(if selected { None } else { Some(panel) });
                 }
             };
             rail_button(ui, RightPanel::Comments, "message-square-text", "Comments", has_comments);

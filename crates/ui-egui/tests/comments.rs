@@ -598,3 +598,43 @@ fn the_opacity_set_for_a_tool_goes_into_its_new_comments() {
     h.run_steps(2);
     h.get_by_label("Opacity");
 }
+
+/// #225: comment tools open the Comments panel until the user closes it; then it stays closed,
+/// across restarts, until they open it again.
+#[test]
+fn a_closed_comments_panel_stays_closed_when_picking_comment_tools() {
+    use pdfcraft_ui_egui::RightPanel;
+    let mut h = harness(|_| {});
+    assert_eq!(h.state().right, None);
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(2);
+    assert_eq!(h.state().right, Some(RightPanel::Comments), "Acrobat opens Comments with the tools");
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    assert_eq!(h.state().right, None);
+    for tool in ["select", "comment.underline", "comment.note", "comment.highlight"] {
+        if tool == "select" {
+            h.state_mut().quick_tool = QuickTool::Select;
+        } else {
+            assert!(h.state_mut().execute(tool));
+        }
+        h.run_steps(2);
+        assert_eq!(h.state().right, None, "{tool} reopened the closed Comments panel");
+    }
+    let mut again = PdfCraftApp::new();
+    again.restore(&h.state().persist());
+    assert!(again.comments_panel_closed, "the choice survives a restart");
+    // Opening it again from the rail lets the tools open it once more.
+    h.get_by_label("Comments").click();
+    h.run_steps(2);
+    assert_eq!(h.state().right, Some(RightPanel::Comments));
+    assert!(!h.state().comments_panel_closed);
+    // What the rail and View menu call; "Bookmarks" labels two controls on screen.
+    h.state_mut().choose_right_panel(Some(RightPanel::Bookmarks));
+    h.state_mut().choose_right_panel(None);
+    h.run_steps(2);
+    assert!(!h.state().comments_panel_closed, "switching to and closing another panel isn't closing Comments");
+    assert!(h.state_mut().execute("comment.strikeout"));
+    h.run_steps(2);
+    assert_eq!(h.state().right, Some(RightPanel::Comments));
+}

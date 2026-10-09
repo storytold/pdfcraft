@@ -584,7 +584,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             });
     }
     if close {
-        app.right = None;
+        app.choose_right_panel(None);
     }
     if let Some(e) = panel_edit {
         app.apply_edit(e);

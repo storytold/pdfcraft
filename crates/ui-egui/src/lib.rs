@@ -356,6 +356,9 @@ pub struct PdfCraftApp {
     pub left: LeftPanel,
     pub left_open: bool,
     pub right: Option<RightPanel>,
+    /// The user closed the Comments panel, so picking a comment tool leaves it closed until they
+    /// open it again (#225). Remembered across restarts.
+    pub comments_panel_closed: bool,
     pub quick_tool: QuickTool,
     /// The tool to go back to when Space, held for a temporary Hand, is released.
     space_hand: Option<QuickTool>,
@@ -602,6 +605,7 @@ impl PdfCraftApp {
             left: LeftPanel::AllTools,
             left_open: true,
             right: None,
+            comments_panel_closed: false,
             quick_tool: QuickTool::Select,
             space_hand: None,
             comment_prefs: Default::default(),
@@ -1165,6 +1169,17 @@ impl PdfCraftApp {
         };
     }
 
+    /// Opens a right panel, or closes it with `None`, because the user chose to. Closing Comments
+    /// keeps comment tools from reopening it; opening it again lets them (#225).
+    pub fn choose_right_panel(&mut self, panel: Option<RightPanel>) {
+        if panel == Some(RightPanel::Comments) {
+            self.comments_panel_closed = false;
+        } else if panel.is_none() && self.right == Some(RightPanel::Comments) {
+            self.comments_panel_closed = true;
+        }
+        self.right = panel;
+    }
+
     /// Serialize the user's persistent state (recent files, theme). Local only.
     pub fn persist(&self) -> String {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
@@ -1190,6 +1205,7 @@ impl PdfCraftApp {
             "javascript": self.session.javascript(),
             "actions": actions_ui::encode(&self.custom_actions),
             "combine_columns": self.combine_columns.to_json(),
+            "comments_panel_closed": self.comments_panel_closed,
         })
         .to_string()
     }
@@ -1216,6 +1232,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
+        }
+        if let Some(closed) = v["comments_panel_closed"].as_bool() {
+            self.comments_panel_closed = closed;
         }
         if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
             self.view_defaults = defaults;

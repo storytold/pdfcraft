@@ -2001,7 +2001,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let field_props = field_props.then(|| view.prepare.selected.clone()).flatten();
     match canvas_action {
         Some(comments::CanvasAction::Edit(e)) => view.pending_edit = Some(*e),
-        Some(comments::CanvasAction::OpenComments) => app.right = Some(RightPanel::Comments),
+        // `choose_right_panel` would borrow all of `app` while `view` is held; same effect.
+        Some(comments::CanvasAction::OpenComments) => {
+            app.right = Some(RightPanel::Comments);
+            app.comments_panel_closed = false;
+        }
         Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
         None => {}
     }
