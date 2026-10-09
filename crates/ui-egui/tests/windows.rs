@@ -560,3 +560,64 @@ fn a_picked_file_opens_in_the_window_that_asked() {
     assert_eq!(h.state_mut().with_window(child, |a| a.views.len()).unwrap(), 2, "but in the window that asked");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
+
+// --- the last session ---
+
+fn two_files(dir: &str) -> (String, String) {
+    let a = scratch_pdf(&format!("{dir}-a"));
+    let b = scratch_pdf(&format!("{dir}-b"));
+    (a.to_string_lossy().into_owned(), b.to_string_lossy().into_owned())
+}
+
+#[test]
+fn the_last_session_remembers_every_window_and_a_shared_file_opens_once() {
+    let (a, b) = two_files("session");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
+        let (a, b) = (a.clone(), b.clone());
+        move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.reopen_last_session = true;
+            app.open_path(&a);
+            app.open_path(&b);
+            app
+        }
+    });
+    h.run_steps(3);
+    // The second window shows a.pdf again (a second view) and b.pdf.
+    h.state_mut().active = Some(0);
+    assert!(h.state_mut().execute("window.new_view"));
+    h.run_steps(3);
+    let settings = h.state().persist();
+    let value: serde_json::Value = serde_json::from_str(&settings).unwrap();
+    assert_eq!(value["last_session"]["windows"].as_array().map(Vec::len), Some(1), "{value}");
+
+    let mut app = PdfCraftApp::new();
+    app.restore(&settings);
+    app.reopen_last_files(&[]);
+    assert_eq!(app.views.len(), 2, "the main window's tabs");
+    assert_eq!(app.window_count(), 2);
+    assert_eq!(app.session.docs().len(), 2, "each file is open once");
+    let doc_a = app.views[0].id;
+    assert_eq!(app.view_count(doc_a), 2, "a.pdf has a view in each window");
+    assert!(app.debug_check_windows().is_empty(), "{:?}", app.debug_check_windows());
+    for f in [a, b] {
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&f).parent().unwrap());
+    }
+}
+
+#[test]
+fn a_session_with_a_broken_window_still_restores() {
+    let (a, _b) = two_files("broken");
+    let settings = serde_json::json!({
+        "reopen_last_session": true,
+        "last_session": {"files": [{"path": a}], "windows": [{"files": [{"path": a}], "rect": [f64::NAN, 1e300, -4, 0]}, {"files": [{"path": "/does/not/exist.pdf"}]}]},
+    })
+    .to_string();
+    let mut app = PdfCraftApp::new();
+    app.restore(&settings);
+    app.reopen_last_files(&[]);
+    assert_eq!(app.window_count(), 2, "the window with the missing file is not left empty");
+    assert!(app.debug_check_windows().is_empty());
+    let _ = std::fs::remove_dir_all(std::path::Path::new(&a).parent().unwrap());
+}
