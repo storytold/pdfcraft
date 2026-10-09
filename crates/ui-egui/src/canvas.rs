@@ -2878,7 +2878,8 @@ fn notices(
             tl!("XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.").to_string(),
             true,
         ))
-    } else if !info.fields.is_empty() {
+    } else if info.fields.iter().any(|f| f.kind != pdfcraft_render::FieldKind::PushButton) {
+        // Push buttons alone (LaTeX `animate` frames, navigation buttons) leave nothing to fill in.
         Some((
             "text-cursor-input",
             crate::i18n::fmt(tl!("This document contains {n} interactive form fields."), &[("n", &info.fields.len().to_string())]),
