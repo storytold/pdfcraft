@@ -40,6 +40,29 @@ fn open(b: &[u8]) -> Document {
     Document::open(Arc::new(b.to_vec())).unwrap()
 }
 
+#[test]
+fn standalone_timestamp_scan_survives_cache_batches_and_object_streams() {
+    let mut doc = open(&fixture());
+    let filler: Vec<_> = (0..300).map(|i| Object::Ref(doc.add(Object::Int(i)))).collect();
+    let mut stamp = pdfcraft_cos::Dict::new();
+    stamp.set(b"Type".to_vec(), Object::name("Sig"));
+    stamp.set(b"SubFilter".to_vec(), Object::name("ETSI.RFC3161"));
+    stamp.set(b"ByteRange".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(1), Object::Int(2), Object::Int(1)]));
+    stamp.set(b"Contents".to_vec(), Object::String(PdfString::literal("invalid-token")));
+    let stamp = doc.add(Object::Dict(stamp));
+    doc.update_dict(doc.root().unwrap(), |catalog| {
+        catalog.set(b"UninspectedObjects".to_vec(), Object::Array(filler));
+        catalog.set(b"UninspectedTimestamp".to_vec(), Object::Ref(stamp));
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    let doc = open(&bytes);
+    assert!(doc.object_numbers().len() > 300);
+    let listed = signatures(&doc, &bytes, &TrustStore::default());
+    assert!(listed.iter().any(|s| s.doc_timestamp && s.status != Status::Valid));
+    assert!(listed.iter().any(|s| s.field == "Approval" && !s.signed));
+}
+
 fn opts() -> SignOptions {
     SignOptions {
         page: 0,
@@ -268,6 +291,50 @@ fn a_document_timestamp_covers_the_file_and_validates() {
     assert!(allowed.contains(&"signature".to_string()), "{allowed:?}");
     let stamp = all.iter().find(|s| s.doc_timestamp).unwrap();
     assert_eq!(stamp.status, Status::Valid, "{:?}", stamp.details);
+}
+
+#[test]
+fn cached_discovery_still_validates_current_timestamp_bytes_ranges_and_trust() {
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let mut source = open(&fixture());
+    source
+        .update_dict(source.root().unwrap(), |d| {
+            d.remove(b"AcroForm");
+        })
+        .unwrap();
+    let bytes = pdfcraft_sign::timestamp_document(&source, &tsa, "D:20261006120000Z").unwrap();
+    let doc = open(&bytes);
+    let cache = pdfcraft_sign::DigestCache::default();
+    let trusted = TrustStore { certs: vec![tsa.id.certificate.clone()] };
+    let check = |doc: &Document, bytes: &[u8], trust: &TrustStore| {
+        let listed = pdfcraft_sign::pdf::list_cached(doc, bytes, trust, &cache);
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].doc_timestamp);
+        listed.into_iter().next().unwrap()
+    };
+    assert_eq!(check(&doc, &bytes, &TrustStore::default()).status, Status::Unknown);
+    assert_eq!(check(&doc, &bytes, &trusted).status, Status::Valid);
+    assert_eq!(check(&doc, &bytes, &TrustStore::default()).status, Status::Unknown);
+    let mut tampered = bytes.clone();
+    let at = tampered.windows(13).position(|w| w == b"Contract text").unwrap();
+    tampered[at] = b'K';
+    assert_eq!(check(&doc, &tampered, &trusted).status, Status::Invalid);
+    assert_eq!(check(&doc, &[], &trusted).status, Status::Invalid);
+    let stamp = doc.scan_objects().find(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"SubFilter") == Some(b"ETSI.RFC3161"))).unwrap().0;
+    let mut edited = doc.clone();
+    edited.update_dict(stamp, |d| d.set(b"ByteRange".to_vec(), Object::Array(vec![Object::Int(-1)]))).unwrap();
+    assert_eq!(check(&edited, &bytes, &trusted).status, Status::Invalid);
+    assert_eq!(check(&doc, &bytes, &trusted).status, Status::Valid);
+    // Even a malformed token in the same byte ranges must be read again after discovery.
+    let br = doc.get(stamp).as_dict().unwrap().get(b"ByteRange").unwrap().as_array().unwrap().clone();
+    let gap_start = br[1].as_int().unwrap() as usize;
+    tampered = bytes.clone();
+    tampered[gap_start + 1] = b'F';
+    tampered[gap_start + 2] = b'F';
+    assert_eq!(check(&doc, &tampered, &trusted).status, Status::Invalid);
 }
 
 #[test]

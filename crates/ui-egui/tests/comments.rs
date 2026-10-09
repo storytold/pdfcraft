@@ -594,6 +594,52 @@ fn attaching_a_file_as_a_comment() {
     assert_eq!(s.quick_tool, QuickTool::Select);
 }
 
+/// Drag with the middle button (the mouse wheel) in small steps.
+fn middle_drag(h: &mut Harness<'static, PdfCraftApp>, from: Pos2, to: Pos2) {
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Middle, pressed, modifiers: egui::Modifiers::NONE };
+    h.event(egui::Event::PointerMoved(from));
+    h.run_steps(1);
+    h.event(button(from, true));
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
+        h.run_steps(1);
+    }
+    h.event(button(to, false));
+    h.run_steps(3);
+}
+
+#[test]
+fn a_middle_drag_with_a_drawing_tool_scrolls_instead_of_drawing() {
+    // egui's drag responses accept any button, so the drawing tools used to draw with the wheel.
+    let mut h = harness(|app| {
+        app.set_option("zoom", "400").unwrap();
+        app.set_option("quick", "ink").unwrap();
+    });
+    let from = at(&h, 150.0, 100.0);
+    let top = h.state().views[0].page_screen_rect(0).expect("page 1 on screen").top();
+    middle_drag(&mut h, from, from - egui::vec2(0.0, 120.0));
+    assert!(comments(&h).is_empty(), "{:?}", comments(&h));
+    let s = h.state();
+    assert!(!s.session.get(s.views[0].id).unwrap().dirty, "scrolling never edits the PDF");
+    assert!(!s.views[0].middle_panning(), "releasing the wheel ends the pan");
+    let moved = s.views[0].page_screen_rect(0).expect("page 1 on screen").top();
+    if cfg!(target_os = "linux") {
+        // Linux latches auto-scroll instead of panning with the drag.
+        assert!(s.views[0].auto_scrolling());
+    } else {
+        assert!((moved - (top - 120.0)).abs() < 1.0, "the page follows the pointer: {top} -> {moved}");
+    }
+    // The tool still draws with the primary button afterwards.
+    if cfg!(target_os = "linux") {
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+    }
+    drag_pt(&mut h, (60.0, 120.0), (200.0, 80.0));
+    let kinds: Vec<String> = comments(&h).into_iter().map(|a| a.subtype).collect();
+    assert_eq!(kinds, ["Ink"]);
+}
+
 #[test]
 fn erasing_part_of_a_drawing() {
     let mut h = harness(|app| app.set_option("quick", "ink").unwrap());

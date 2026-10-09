@@ -208,6 +208,100 @@ pub fn serialize_ops(ops: &[Op]) -> Vec<u8> {
     out
 }
 
+/// A page's content streams joined into the one stream they are. Writers may split it between
+/// any two tokens (ISO 32000-2 §7.8.2), so an operator's operands can end one piece and its
+/// keyword start the next: parse the pieces joined ([`Pieces::parse`]) and map positions back
+/// with [`Pieces::piece_of`]. A newline separates the pieces so tokens never run together.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Pieces {
+    data: Vec<u8>,
+    /// Where each piece ends in `data`, after its separator.
+    ends: Vec<usize>,
+}
+
+impl Pieces {
+    pub fn join<D: AsRef<[u8]>>(pieces: &[D]) -> Self {
+        let mut data = Vec::new();
+        let mut ends = Vec::with_capacity(pieces.len());
+        for p in pieces {
+            data.extend_from_slice(p.as_ref());
+            data.push(b'\n');
+            ends.push(data.len());
+        }
+        Pieces { data, ends }
+    }
+
+    /// The joined bytes (the spans of [`Pieces::parse`]'s operators index into them).
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// How many pieces there are.
+    pub fn len(&self) -> usize {
+        self.ends.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ends.is_empty()
+    }
+
+    /// Parse the pieces as one stream.
+    pub fn parse(&self) -> Parsed {
+        parse(&self.data)
+    }
+
+    /// The piece holding joined position `at` (the last piece for positions past the end).
+    pub fn piece_of(&self, at: usize) -> usize {
+        self.ends.iter().position(|&e| at < e).unwrap_or(self.ends.len().saturating_sub(1))
+    }
+
+    /// The pieces an operator spans: (the one its first token is in, the one its keyword is in).
+    pub fn pieces_of(&self, op: &Op) -> (usize, usize) {
+        (self.piece_of(op.span.start), self.piece_of(op.span.end.saturating_sub(1)))
+    }
+
+    /// The joined range of piece `i`, without its separator.
+    fn range(&self, i: usize) -> std::ops::Range<usize> {
+        let start = match i.checked_sub(1) {
+            None => 0,
+            Some(p) => self.ends.get(p).copied().unwrap_or(self.data.len()),
+        };
+        let end = self.ends.get(i).map_or(self.data.len(), |e| e.saturating_sub(1)).max(start);
+        start..end
+    }
+
+    /// Rebuild every piece after replacing joined byte ranges: `edits` are (range, bytes) in
+    /// ascending, non-overlapping order. A replacement goes into the piece its range starts in,
+    /// and the rest of a range that runs on into later pieces is removed from them, so an
+    /// operator split across pieces is replaced or removed whole. Everything else is copied byte
+    /// for byte. Returns every piece's new bytes (unchanged pieces come back equal).
+    pub fn splice(&self, edits: impl IntoIterator<Item = (std::ops::Range<usize>, Vec<u8>)>) -> Vec<Vec<u8>> {
+        let mut out: Vec<Vec<u8>> = (0..self.len()).map(|i| Vec::with_capacity(self.range(i).len())).collect();
+        let copy = |out: &mut Vec<Vec<u8>>, from: usize, to: usize| {
+            for (i, piece) in out.iter_mut().enumerate() {
+                let r = self.range(i);
+                let (a, b) = (from.max(r.start), to.min(r.end));
+                if a < b {
+                    piece.extend_from_slice(self.data.get(a..b).unwrap_or_default());
+                }
+            }
+        };
+        let mut at = 0;
+        for (range, bytes) in edits {
+            let start = range.start.clamp(at, self.data.len());
+            copy(&mut out, at, start);
+            if !bytes.is_empty()
+                && let Some(piece) = out.get_mut(self.piece_of(start))
+            {
+                piece.extend_from_slice(&bytes);
+            }
+            at = range.end.clamp(start, self.data.len());
+        }
+        copy(&mut out, at, self.data.len());
+        out
+    }
+}
+
 /// A number operand, written as an integer when it is one.
 pub fn num(v: f64) -> Object {
     if v.fract() == 0.0 && v.abs() < 1e15 { Object::Int(v as i64) } else { Object::Real((v * 10_000.0).round() / 10_000.0) }

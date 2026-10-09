@@ -60,7 +60,7 @@ fn list(doc: &Document, page: usize) -> Vec<Dict> {
 }
 
 fn ap_content(doc: &Document, d: &Dict) -> String {
-    let n = d.get(b"AP").and_then(|a| a.as_dict()).and_then(|a| a.reference(b"N")).expect("has /AP /N");
+    let n = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N"))).expect("has /AP /N");
     let obj = doc.get(n);
     let Object::Stream(s) = &*obj else { panic!("AP is not a stream") };
     String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
@@ -851,4 +851,82 @@ fn every_line_ending_is_drawn() {
 
     assert!(appearance::build(&line_dict([f64::NAN, 0.0, 10.0, 0.0], "OpenArrow")).is_none(), "a non-finite endpoint is rejected");
     assert!(appearance::build(&line_dict([0.0, 0.0, 10.0, 0.0], "Foo")).is_none(), "an unknown ending is not replaced");
+}
+
+#[test]
+fn redraw_keeps_shared_annotation_appearances_and_drops_stale_alternates() {
+    let alternates: [(&[u8], &[u8]); 2] = [(b"R", b"0 0 20 10 re f\n"), (b"D", b"1 1 18 8 re S\n")];
+    for indirect in [false, true] {
+        let mut doc = fixture();
+        let first = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 110.0, 60.0] }), &meta("first")).unwrap();
+        let other = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [120.0, 10.0, 220.0, 60.0] }), &meta("other")).unwrap();
+        let (_, first_ref) = annot_ref(&mut doc, 0, first).unwrap();
+        let (_, other_ref) = annot_ref(&mut doc, 0, other).unwrap();
+        let mut entries = annot_dict(&doc, first_ref).get(b"AP").unwrap().as_dict().unwrap().clone();
+        for (key, bytes) in alternates {
+            let mut d = Dict::new();
+            d.set(b"Type".to_vec(), Object::name("XObject"));
+            d.set(b"Subtype".to_vec(), Object::name("Form"));
+            d.set(b"BBox".to_vec(), num_array(&[0.0, 0.0, 20.0, 10.0]));
+            let r = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(d, bytes.to_vec())));
+            entries.set(key.to_vec(), Object::Ref(r));
+        }
+        entries.set(b"VendorState".to_vec(), Object::name("Retained"));
+        let shared = if indirect { Object::Ref(doc.add(Object::Dict(entries))) } else { Object::Dict(entries) };
+        for r in [first_ref, other_ref] {
+            doc.update_dict(r, |d| d.set(b"AP".to_vec(), shared.clone())).unwrap();
+        }
+        let mut doc = reopen(&doc);
+        let other_dict = list(&doc, 0)[other].clone();
+        let source = other_dict.get(b"AP").unwrap();
+        let before = doc.resolve(source);
+        set_style(&mut doc, 0, first, Some([1.0, 0.0, 0.0]), None, None, None, &meta("")).unwrap();
+        assert_eq!(doc.resolve(source), before, "a shared AP must not change");
+        for full in [false, true] {
+            let bytes = if full {
+                pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap()
+            } else {
+                assert!(!doc.revisions().is_empty(), "incremental save needs an existing revision");
+                assert!(!doc.encryption_changed() && !doc.full_save_required(), "this edit must not require a full rewrite");
+                let original = doc.bytes();
+                let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+                assert!(bytes.len() > original.len(), "incremental save appends the changed appearance");
+                assert!(bytes.starts_with(original.as_slice()), "incremental save preserves the complete original prefix");
+                bytes
+            };
+            hayro_syntax::Pdf::new(bytes.clone()).unwrap();
+            let doc = Document::open(Arc::new(bytes)).unwrap();
+            let all = list(&doc, 0);
+            let first_ap = doc.resolve(all[first].get(b"AP").unwrap());
+            let other_ap = doc.resolve(all[other].get(b"AP").unwrap());
+            let first_ap = first_ap.as_dict().unwrap();
+            let other_ap = other_ap.as_dict().unwrap();
+            assert_ne!(first_ap.get(b"N"), other_ap.get(b"N"));
+            // The restyled annotation keeps unknown entries, but not down/rollover looks in its
+            // old colour.
+            assert_eq!(first_ap.len(), 2);
+            assert_eq!(other_ap.len(), 4);
+            for (key, bytes) in alternates {
+                assert!(first_ap.get(key).is_none(), "stale /{}", String::from_utf8_lossy(key));
+                let object = doc.resolve(other_ap.get(key).unwrap());
+                let Object::Stream(stream) = &*object else { panic!("alternate appearance") };
+                assert_eq!(stream.decoded().unwrap(), bytes);
+            }
+            assert_eq!(first_ap.name(b"VendorState"), Some(&b"Retained"[..]));
+            assert_eq!(other_ap.name(b"VendorState"), Some(&b"Retained"[..]));
+            assert!(ap_content(&doc, &all[first]).contains("1 0 0 RG"));
+            assert!(ap_content(&doc, &all[other]).contains("0 0.4 1 RG"));
+        }
+    }
+}
+
+#[test]
+fn non_markup_annotations_are_not_comments() {
+    // #169: a LaTeX `animate` player's Screen annotation showed up in the Comments list.
+    for s in ["Link", "Widget", "Popup", "Screen", "Movie", "RichMedia", "3D", "PrinterMark", "TrapNet", "Watermark"] {
+        assert!(!is_comment_subtype(s), "{s}");
+    }
+    for s in ["Text", "FreeText", "Highlight", "Ink", "Stamp", "FileAttachment", "Redact", "Sound"] {
+        assert!(is_comment_subtype(s), "{s}");
+    }
 }

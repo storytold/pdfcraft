@@ -4,13 +4,14 @@
 //!   as the file's last one (table or stream) and a trailer with `/Prev`. The original bytes are
 //!   never modified, which keeps digital signatures over earlier revisions valid.
 //! * `write_full` writes only objects reachable from the trailer, renumbered densely, with a
-//!   classic cross-reference table — the "Save As" / garbage-collecting path.
+//!   cross-reference table or stream — the "Save As" / garbage-collecting path.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::Write;
 
 use crate::CosError;
-use crate::document::Document;
+use crate::document::{Document, ObjectReader};
 use crate::object::{Dict, ObjRef, Object, PdfString, Stream};
 
 /// Serialize one object. Deterministic: same object → same bytes.
@@ -122,10 +123,10 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
 
 /// The object as written: encrypted with its (output) number when the document is encrypted,
 /// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
-fn prepared(doc: &Document, source_num: u32, num: u32, generation: u16, o: &Object) -> Object {
+fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &'a Object) -> Cow<'a, Object> {
     match doc.output_security() {
-        (Some(h), encrypt_num) if Some(source_num) != encrypt_num => crate::security::transform(h, o, num, generation, false),
-        _ => o.clone(),
+        (Some(h), encrypt_num) if Some(source_num) != encrypt_num => Cow::Owned(crate::security::transform(h, o, num, generation, false)),
+        _ => Cow::Borrowed(o),
     }
 }
 
@@ -155,6 +156,9 @@ impl Default for SaveOptions {
 
 /// Objects per object stream (Acrobat and qpdf use 100–200).
 const OBJSTM_SIZE: usize = 100;
+/// Keep a batch's serialized body small as well as limiting its object count. One object
+/// may exceed this target; it is emitted in its own object stream without retaining a batch.
+const OBJSTM_BYTES: usize = 8 * 1024 * 1024;
 
 /// Where an object lives, for the cross-reference section.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -173,6 +177,9 @@ enum Row {
 /// incrementally — other readers would follow the broken chain — so it is rewritten in full,
 /// which also repairs the file (what users expect after "the file was damaged and repaired").
 pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
+    if doc.stream_limited() {
+        return Err(CosError::ReadOnlyLimit);
+    }
     // Reconstructed files have no chain to append to; added or removed encryption must
     // rewrite every object; redaction must not leave the old revision behind. All need a full save.
     if doc.revisions().is_empty() || doc.encryption_changed() || doc.full_save_required() {
@@ -188,7 +195,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     let base = (original.len() + usize::from(newline)) as u64;
     let mut out = Vec::new();
     let mut offsets: BTreeMap<u32, (u64, u16, bool)> = BTreeMap::new(); // num → (offset, gen, in use)
-    for (num, generation, obj) in doc.overlay_entries().collect::<Vec<_>>() {
+    for (num, generation, obj) in doc.overlay_entries() {
         match obj {
             Some(o) => {
                 offsets.insert(num, (base + out.len() as u64, generation, true));
@@ -229,14 +236,20 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     Ok(file)
 }
 
-/// Write only reachable objects, renumbered from 1, with a classic cross-reference table.
+/// Write only reachable objects, renumbered from 1, with a table or cross-reference stream.
 pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
-    let mut doc = doc.clone();
-    stamp_mod_date(&mut doc, opts);
-    let trailer_in = doc.trailer().clone();
+    if doc.stream_limited() {
+        return Err(CosError::ReadOnlyLimit);
+    }
+    // A full traversal must not fill the editor's shared caches (which undo snapshots also
+    // own). Parsed objects and decoded object streams are temporary working data here.
+    let mut reader = doc.object_reader();
+    stamp_mod_date(&mut reader.document, opts);
+    let trailer_in = reader.document.trailer().clone();
     // Breadth-first walk from the trailer, assigning new numbers in visit order.
     let mut map: HashMap<ObjRef, u32> = HashMap::new();
-    let mut order: Vec<ObjRef> = Vec::new();
+    // Record the type while traversing so classifying packed objects needs no second parse.
+    let mut order: Vec<(ObjRef, bool)> = Vec::new();
     let mut queue: VecDeque<ObjRef> = VecDeque::new();
     let visit_refs = |o: &Object, queue: &mut VecDeque<ObjRef>| collect_refs(o, &mut |r| queue.push_back(r));
     for key in [&b"Root"[..], b"Info", b"Encrypt"] {
@@ -248,15 +261,15 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         if map.contains_key(&r) {
             continue;
         }
-        let o = doc.get(r);
+        let o = reader.get(r);
         if matches!(*o, Object::Null) {
             continue; // dangling reference: written as null by renumbering below
         }
-        map.insert(r, (order.len() + 1) as u32);
-        order.push(r);
+        map.insert(r, output_number(order.len())?);
+        order.push((r, matches!(*o, Object::Stream(_))));
         visit_refs(&o, &mut queue);
     }
-    let version = doc.version().chars().take(3).collect::<String>();
+    let version = reader.document.version().chars().take(3).collect::<String>();
     let version = if opts.object_streams && version.as_str() < "1.5" { "1.5".to_string() } else { version };
     let mut out = Vec::new();
     let _ = writeln!(out, "%PDF-{version}");
@@ -268,46 +281,45 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     let mut pending: Vec<ObjRef> = trailer_in.reference(b"Encrypt").into_iter().collect();
     while let Some(r) = pending.pop() {
         if encryption_objects.insert(r) {
-            collect_refs(&doc.get(r), &mut |x| pending.push(x));
+            collect_refs(&reader.get(r), &mut |x| pending.push(x));
         }
     }
     let mut rows: BTreeMap<u32, Row> = BTreeMap::new();
-    let mut packed: Vec<(u32, Object)> = Vec::new(); // objects bound for object streams
-    for (i, r) in order.iter().enumerate() {
-        let num = (i + 1) as u32;
-        let o = renumber(&doc.get(*r), &map);
-        let in_stream = opts.object_streams && !matches!(o, Object::Stream(_)) && !encryption_objects.contains(r);
+    // Keep only references, not renamed copies of the entire object graph. Standalone
+    // objects still precede object streams, preserving the established output order.
+    let mut packed: Vec<(u32, ObjRef)> = Vec::new();
+    for (i, (r, is_stream)) in order.iter().enumerate() {
+        let num = output_number(i)?;
+        let in_stream = opts.object_streams && !is_stream && !encryption_objects.contains(r);
         if in_stream {
-            packed.push((num, o));
+            packed.push((num, *r));
         } else {
+            let o = renumber(&*reread(&mut reader, *r, *is_stream)?, &map);
             rows.insert(num, Row::InFile(out.len() as u64, 0));
-            write_indirect(num, 0, &prepared(&doc, r.num, num, 0, &o), &mut out);
+            write_indirect(num, 0, &prepared(&reader.document, r.num, num, 0, &o), &mut out);
         }
     }
     // Object streams take the numbers after the last object. Their contents are not encrypted
     // individually: the whole stream is (§7.5.7, §7.6.2).
-    let mut next = order.len() as u32 + 1;
-    for chunk in packed.chunks(OBJSTM_SIZE) {
-        let stm_num = next;
-        next += 1;
-        let mut header = Vec::new();
-        let mut body = Vec::new();
-        for (index, (num, o)) in chunk.iter().enumerate() {
-            let _ = write!(header, "{} {} ", num, body.len());
-            serialize(o, &mut body);
-            body.push(b'\n');
-            rows.insert(*num, Row::InStream(stm_num, index as u32));
+    let mut next = output_number(order.len())?;
+    let mut batch = ObjectStreamBatch::default();
+    for (num, reference) in packed {
+        let mut encoded = Vec::new();
+        serialize(&renumber(&*reread(&mut reader, reference, false)?, &map), &mut encoded);
+        if batch.count > 0 && batch.body.len().saturating_add(encoded.len()).saturating_add(1) > OBJSTM_BYTES {
+            batch.flush(&reader.document, &mut next, &mut rows, &mut out)?;
         }
-        let first = header.len();
-        header.extend_from_slice(&body);
-        let mut d = Dict::new();
-        d.set(b"Type".to_vec(), Object::name("ObjStm"));
-        d.set(b"N".to_vec(), Object::Int(chunk.len() as i64));
-        d.set(b"First".to_vec(), Object::Int(first as i64));
-        let stm = Object::Stream(Stream::flate(d, &header));
-        rows.insert(stm_num, Row::InFile(out.len() as u64, 0));
-        write_indirect(stm_num, 0, &prepared(&doc, u32::MAX, stm_num, 0, &stm), &mut out);
+        let _ = write!(batch.header, "{} {} ", num, batch.body.len());
+        batch.body.extend_from_slice(&encoded);
+        batch.body.push(b'\n');
+        drop(encoded);
+        rows.insert(num, Row::InStream(next, batch.count as u32));
+        batch.count += 1;
+        if batch.count == OBJSTM_SIZE || batch.body.len() >= OBJSTM_BYTES {
+            batch.flush(&reader.document, &mut next, &mut rows, &mut out)?;
+        }
     }
+    batch.flush(&reader.document, &mut next, &mut rows, &mut out)?;
     let mut trailer = Dict::new();
     for key in [&b"Root"[..], b"Info", b"Encrypt"] {
         if let Some(r) = trailer_in.reference(key).and_then(|r| map.get(&r)) {
@@ -320,8 +332,8 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     if let Some(id) = trailer_in.get(b"ID") {
         trailer.set(b"ID".to_vec(), id.clone());
     }
-    if doc.output_security().0.is_none() {
-        ensure_id(&mut trailer, opts, doc.bytes());
+    if reader.document.output_security().0.is_none() {
+        ensure_id(&mut trailer, opts, reader.document.bytes());
     }
     if opts.object_streams {
         write_xref_stream(&mut out, 0, &mut trailer, rows, next);
@@ -339,6 +351,52 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     // kept as a document's working bytes for as long as it's open: drop the unused capacity.
     out.shrink_to_fit();
     Ok(out)
+}
+
+/// Object `r` read again for writing. The traversal read it once and only kept its number, so
+/// a second read that fails, finds nothing or finds a different kind of object must fail the
+/// save rather than write `null` in its place.
+fn reread(reader: &mut ObjectReader, r: ObjRef, is_stream: bool) -> Result<std::sync::Arc<Object>, CosError> {
+    let o = reader.try_get(r)?;
+    if matches!(*o, Object::Null) || matches!(*o, Object::Stream(_)) != is_stream {
+        return Err(CosError::Syntax { offset: 0, detail: format!("object {} read differently while saving; nothing was written", r.num) });
+    }
+    Ok(o)
+}
+
+#[derive(Default)]
+struct ObjectStreamBatch {
+    header: Vec<u8>,
+    body: Vec<u8>,
+    count: usize,
+}
+
+impl ObjectStreamBatch {
+    fn flush(&mut self, doc: &Document, next: &mut u32, rows: &mut BTreeMap<u32, Row>, out: &mut Vec<u8>) -> Result<(), CosError> {
+        if self.count == 0 {
+            return Ok(());
+        }
+        let following = next.checked_add(1).ok_or_else(|| CosError::Syntax { offset: 0, detail: "too many objects to save".into() })?;
+        // Release capacity after each batch too: an unusually large object must not leave
+        // a large scratch buffer alive for the rest of the save.
+        let Self { mut header, body, count } = std::mem::take(self);
+        let first = header.len();
+        header.extend_from_slice(&body);
+        drop(body);
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("ObjStm"));
+        d.set(b"N".to_vec(), Object::Int(count as i64));
+        d.set(b"First".to_vec(), Object::Int(first as i64));
+        let stm = Object::Stream(Stream::flate(d, &header));
+        rows.insert(*next, Row::InFile(out.len() as u64, 0));
+        write_indirect(*next, 0, &prepared(doc, u32::MAX, *next, 0, &stm), out);
+        *next = following;
+        Ok(())
+    }
+}
+
+fn output_number(index: usize) -> Result<u32, CosError> {
+    u32::try_from(index).ok().and_then(|n| n.checked_add(1)).ok_or_else(|| CosError::Syntax { offset: 0, detail: "too many objects to save".into() })
 }
 
 fn collect_refs(o: &Object, f: &mut impl FnMut(ObjRef)) {
@@ -401,27 +459,33 @@ fn write_xref_stream(out: &mut Vec<u8>, base: u64, trailer: &mut Dict, mut rows:
     let (w2, w3) = rows.values().map(fields).fold((1, 1), |(a, b), (_, x, y)| (width(x).max(a), width(y).max(b)));
     let cols = 1 + w2 + w3;
     let mut index = Vec::new();
-    let nums: Vec<u32> = rows.keys().copied().collect();
-    let mut i = 0;
-    while i < nums.len() {
-        let mut j = i;
-        while j + 1 < nums.len() && nums[j + 1] == nums[j] + 1 {
-            j += 1;
+    let mut numbers = rows.keys().copied().peekable();
+    while let Some(start) = numbers.next() {
+        let mut last = start;
+        let mut count = 1i64;
+        while numbers.peek().copied().is_some_and(|next| last.checked_add(1) == Some(next)) {
+            if let Some(next) = numbers.next() {
+                last = next;
+                count += 1;
+            }
         }
-        index.push(Object::Int(nums[i] as i64));
-        index.push(Object::Int((j - i + 1) as i64));
-        i = j + 1;
+        index.push(Object::Int(i64::from(start)));
+        index.push(Object::Int(count));
     }
-    let mut data = Vec::with_capacity(rows.len() * (cols + 1));
-    let mut prev = vec![0u8; cols];
+    let mut data = Vec::with_capacity(rows.len().saturating_mul(cols + 1));
+    // Type is one byte, and each remaining field is at most one u64. Reuse the
+    // predictor row on the stack instead of allocating a Vec for every xref entry.
+    let mut prev = [0u8; 17];
     for r in rows.values() {
         let (t, a, b) = fields(r);
-        let mut row = vec![t as u8];
-        row.extend_from_slice(&a.to_be_bytes()[8 - w2..]);
-        row.extend_from_slice(&b.to_be_bytes()[8 - w3..]);
+        let a = a.to_be_bytes();
+        let b = b.to_be_bytes();
+        let fields = std::iter::once(t as u8).chain(a.into_iter().skip(8 - w2)).chain(b.into_iter().skip(8 - w3));
         data.push(2); // PNG "Up"
-        data.extend(row.iter().zip(&prev).map(|(c, p)| c.wrapping_sub(*p)));
-        prev = row;
+        for (value, previous) in fields.zip(&mut prev) {
+            data.push(value.wrapping_sub(*previous));
+            *previous = value;
+        }
     }
     let mut d = trailer.clone();
     d.set(b"Type".to_vec(), Object::name("XRef"));
@@ -501,6 +565,55 @@ mod tests {
         let mut out = Vec::new();
         serialize(o, &mut out);
         Lexer::new(&out, 0).object().expect("parses")
+    }
+
+    #[test]
+    fn a_second_read_that_differs_fails_the_save_instead_of_writing_null() {
+        let mut doc = Document::new_empty();
+        let dict = doc.add(Object::Dict(Dict::new()));
+        let mut reader = doc.object_reader();
+        assert!(reread(&mut reader, dict, false).is_ok());
+        assert!(reread(&mut reader, dict, true).is_err(), "a dictionary where a stream was traversed");
+        assert!(reread(&mut reader, ObjRef::new(9999, 0), false).is_err(), "nothing where an object was traversed");
+    }
+
+    #[test]
+    fn xref_predictor_rows_preserve_variable_width_fields_and_sparse_runs() {
+        for offset in [0, 255, 256, 65535, 65536, u32::MAX as u64, u32::MAX as u64 + 1, u64::MAX] {
+            for index in [0, 255, 256, u32::MAX] {
+                for incremental in [false, true] {
+                    let mut trailer = Dict::new();
+                    if incremental {
+                        trailer.set(b"Prev".to_vec(), Object::Int(17));
+                    }
+                    let rows = BTreeMap::from([(1, Row::InFile(offset, 32768)), (2, Row::Free(65535)), (4, Row::InStream(65536, index))]);
+                    let mut bytes = Vec::new();
+                    write_xref_stream(&mut bytes, 0, &mut trailer, rows, 5);
+                    let (_, object) = crate::parser::parse_indirect(&bytes, 0, &|_| None).unwrap();
+                    let Object::Stream(stream) = object else { panic!("xref stream") };
+                    let widths: Vec<_> = stream.dict.get(b"W").unwrap().as_array().unwrap().iter().map(|o| o.as_int().unwrap() as usize).collect();
+                    assert_eq!(widths[0], 1);
+                    assert!((3..=8).contains(&widths[1]));
+                    assert!((2..=4).contains(&widths[2]));
+                    let runs: Vec<_> = stream.dict.get(b"Index").unwrap().as_array().unwrap().iter().map(|o| o.as_int().unwrap()).collect();
+                    assert_eq!(runs, if incremental { vec![1, 2, 4, 2] } else { vec![0, 3, 4, 2] });
+                    let mut expected = vec![(1, offset, 32768), (0, 0, 65535), (2, 65536, u64::from(index)), (1, 0, 0)];
+                    if !incremental {
+                        expected.insert(0, (0, 0, 65535));
+                    }
+                    let decoded = stream.decoded().unwrap();
+                    let columns: usize = widths.iter().sum();
+                    assert_eq!(decoded.len(), columns * expected.len());
+                    for (row, (kind, first, second)) in decoded.chunks_exact(columns).zip(expected) {
+                        let values: Vec<_> = [0..1, 1..1 + widths[1], 1 + widths[1]..columns]
+                            .into_iter()
+                            .map(|range| row[range].iter().fold(0u64, |value, byte| value * 256 + u64::from(*byte)))
+                            .collect();
+                        assert_eq!(values, vec![kind, first, second]);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -574,7 +574,8 @@ pub fn redraw_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
                 d
             }
         };
-        doc.update_dict(w.obj, |d| d.set(b"AP".to_vec(), Object::Dict(ap)))?;
+        let existing = crate::merged_appearance(doc, w.obj, &ap);
+        doc.update_dict(w.obj, |d| d.set(b"AP".to_vec(), Object::Dict(existing)))?;
     }
     Ok(())
 }
@@ -616,8 +617,8 @@ fn button_appearance(doc: &Document, w: &Widget) -> Stream {
     let (width, height) = (place.layout_w, place.layout_h);
     let wobj = doc.get(w.obj);
     let mk = wobj.as_dict().and_then(|d| d.get(b"MK")).map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned()).unwrap_or_default();
-    let caption = mk.get(b"CA").and_then(|c| c.as_string()).map(|s| s.to_text()).unwrap_or_default();
-    let icon_only = mk.int(b"TP") == Some(1);
+    let caption = mk.get(b"CA").map(|c| doc.resolve(c)).and_then(|c| c.as_string().map(|s| s.to_text())).unwrap_or_default();
+    let icon_only = mk.get(b"TP").and_then(|t| doc.resolve(t).as_int()) == Some(1);
     let mut content = std::mem::take(&mut c).into_bytes();
     let mut xobjects = Dict::new();
     if let Some(icon) = mk.get(b"I").and_then(Object::as_ref)

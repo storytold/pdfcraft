@@ -952,6 +952,49 @@ fn set_states(doc: &mut Document, f: &Field, on: Option<&str>) -> Result<(), For
     Ok(())
 }
 
+/// Copy an existing appearance dictionary before replacing its normal appearance.
+fn appearance_dict(doc: &Document, widget: ObjRef) -> Dict {
+    doc.get(widget).as_dict().and_then(|d| d.get(b"AP").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned()).unwrap_or_default()
+}
+
+/// `widget`'s appearance dictionary (a copy, so a shared one is left alone) with the freshly
+/// drawn entries of `fresh` (its `/N`). Other entries are kept, but the old down and rollover
+/// appearances (`/D`, `/R`) would show the old value, caption or colour on press or hover, so
+/// they go — except, for check boxes and radio buttons (whose `/N` is a dictionary of states),
+/// the states the new `/N` still draws under the same names.
+pub(crate) fn merged_appearance(doc: &Document, widget: ObjRef, fresh: &Dict) -> Dict {
+    let mut apd = appearance_dict(doc, widget);
+    // Only a dictionary of states counts (`as_dict` would also see a stream's own dictionary).
+    let states_of = |o: &Object| match &*doc.resolve(o) {
+        Object::Dict(d) => Some(d.clone()),
+        _ => None,
+    };
+    let states: Option<Vec<Vec<u8>>> = fresh.get(b"N").and_then(states_of).map(|d| d.iter().map(|(k, _)| k.clone()).collect());
+    for key in [&b"D"[..], &b"R"[..]] {
+        if fresh.contains(key) {
+            continue;
+        }
+        let kept = states.as_ref().and_then(|names| {
+            let old = apd.get(key).and_then(states_of)?;
+            let mut d = Dict::new();
+            for (k, v) in old.iter().filter(|(k, _)| names.contains(k)) {
+                d.set(k.clone(), v.clone());
+            }
+            (!d.is_empty()).then_some(d)
+        });
+        match kept {
+            Some(d) => apd.set(key.to_vec(), Object::Dict(d)),
+            None => {
+                apd.remove(key);
+            }
+        }
+    }
+    for (k, v) in fresh.iter() {
+        apd.set(k.clone(), v.clone());
+    }
+    apd
+}
+
 /// Regenerate the normal appearance of every widget of a text or choice field.
 fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Scripts) -> Result<(), FormError> {
     let shown = match values {
@@ -964,8 +1007,9 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
             None => appearance::field_appearance(doc, f, w, values),
         };
         let ap = doc.add(Object::Stream(stream));
-        let mut apd = Dict::new();
-        apd.set(b"N".to_vec(), Object::Ref(ap));
+        let mut fresh = Dict::new();
+        fresh.set(b"N".to_vec(), Object::Ref(ap));
+        let apd = merged_appearance(doc, w.obj, &fresh);
         doc.update_dict(w.obj, |d| {
             d.set(b"AP".to_vec(), Object::Dict(apd));
             d.remove(b"AS");
