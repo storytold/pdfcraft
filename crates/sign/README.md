@@ -53,6 +53,26 @@ ECDSA P-256/P-384; the store integration is tested with software-backed keys.
   revisions are diffed against the signed one, and the changes are classified (signing, form
   fill, comments, metadata, page content, document structure) under the DocMDP permissions.
   The verdict follows Acrobat: valid, unknown (intact but the identity isn't trusted) or invalid.
+- **Strict in what it checks, tolerant where signers differ.** RSA PKCS #1 signatures are checked
+  against the one encoding the digest should have, built here and compared byte for byte; the
+  `DigestInfo` may omit its NULL parameter, as older signers write it (RFC 8017 App. B.1), but a
+  signature over the bare digest, which doesn't say which hash it uses, is refused. A signature
+  value must be below the modulus (RFC 8017 §5.2.2). RSA-PSS uses the salt length it declares.
+  ECDSA is read as DER, non-minimal DER or raw `r ‖ s`. `adbe.x509.rsa_sha1` is validated. What the
+  check tolerated is listed in the signature's details: a DigestInfo without its NULL, an RSA value
+  that isn't modulus-length, ECDSA that isn't canonical DER, a SignerInfo whose digest algorithm
+  differs from the one the signature algorithm names. What PdfCraft can't check (an unknown
+  algorithm or curve) is *unknown*, never *invalid*.
+- **Weak algorithms still validate, and say so.** SHA-1 and RIPEMD-160 signatures are common in
+  documents signed years ago, so they validate (new signatures never use SHA-1), but the signature's
+  details say that the algorithm is weak and shouldn't be relied on.
+- **Validation algorithms:** digests SHA-1, SHA-224/256/384/512, SHA-512/224, SHA-512/256,
+  SHA3-224/256/384/512 and RIPEMD-160. RSA PKCS #1 v1.5 and RSASSA-PSS (the hash, MGF1 hash and
+  salt length the signature declares), ECDSA on P-256, P-384, P-521, brainpoolP256r1, P384r1 and
+  P512r1 (also BSI "plain" ECDSA), and Ed25519 (RFC 8419, over the signed attributes).
+  Signing: RSA, P-256, P-384 with SHA-256/384/512. The RSA padding checks and brainpoolP512r1 are
+  written here (`rsa_pad`, `ec512`) on `crypto-bigint`, because the typed APIs of the `rsa` crate
+  and RustCrypto don't cover them.
 
 Oracles: poppler's `pdfsig` reports our signatures valid; OpenSSL reads our `.p12` files and
 verifies our CMS; `tests/data/openssl-signed.pdf` is a signature OpenSSL made, which we validate.

@@ -512,12 +512,18 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
     info.signed_len = covered;
     // The signed revision's number: its cross-reference sections (1 for a reconstructed file).
     info.revision = cache.revision(bytes, covered).map_or(1, |d| d.revisions().len().max(1));
+    // What can't be checked is unknown, not invalid: only data that is wrong or fails its check
+    // is "invalid".
+    let unsupported = |info: &mut SignatureInfo, why: &str| {
+        info.status = Status::Unknown;
+        info.details.push(format!("PdfCraft can't check this signature yet: {why}."));
+    };
     if info.sub_filter.as_deref() == Some("adbe.x509.rsa_sha1") {
-        info.details.push("This signature uses the legacy adbe.x509.rsa_sha1 format, which PdfCraft does not validate yet.".into());
-        return;
+        return validate_x509_rsa_sha1(doc, bytes, trust, v, info, cache, (l0, o1, covered), &contents);
     }
     let sd = match SignedData::parse(&contents) {
         Ok(sd) => sd,
+        Err(SignError::Unsupported(e)) => return unsupported(info, &e),
         Err(e) => return invalid(info, &format!("The signature could not be read ({e}).")),
     };
     let s = &sd.signer;
@@ -569,12 +575,42 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
     };
     info.algorithm = Some(format!("{} with {}", cert.public_key.describe(), s.scheme_digest.unwrap_or(s.digest).name()));
     info.signer = Some(cert.display_name());
-    if !sd.verify_signature(&cert, &content_digest) {
-        info.certificate = Some(cert);
-        return invalid(info, "The signature value does not match the signer's certificate: the signature is corrupt.");
+    let mut notes = Vec::new();
+    match sd.verify_signature_noting(&cert, &content_digest, &mut notes) {
+        Ok(true) => info.details.extend(notes.into_iter().map(String::from)),
+        Ok(false) => {
+            info.certificate = Some(cert);
+            return invalid(info, "The signature value does not match the signer's certificate: the signature is corrupt.");
+        }
+        Err(SignError::Unsupported(e)) => {
+            info.certificate = Some(cert);
+            return unsupported(info, &e);
+        }
+        Err(e) => {
+            info.certificate = Some(cert);
+            return invalid(info, &format!("The signature could not be checked ({e})."));
+        }
     }
-    info.signing_time = s.signing_time.or_else(|| info.date.as_deref().and_then(Time::from_pdf));
-    let mut pool = sd.certificates.clone();
+    finish_validation(doc, bytes, trust, info, cache, covered, cert, &sd.certificates, s.signing_time, unverified_time);
+}
+
+/// The verdict once the signature value has been checked: chain and trust, the signing time
+/// against the certificate's validity, and what later revisions changed.
+#[allow(clippy::too_many_arguments)]
+fn finish_validation(
+    doc: &Document,
+    bytes: &[u8],
+    trust: &TrustStore,
+    info: &mut SignatureInfo,
+    cache: &DigestCache,
+    covered: usize,
+    cert: Certificate,
+    embedded: &[Certificate],
+    cms_time: Option<Time>,
+    unverified_time: Option<Time>,
+) {
+    info.signing_time = cms_time.or_else(|| info.date.as_deref().and_then(Time::from_pdf));
+    let mut pool = embedded.to_vec();
     pool.extend(trust.certs.iter().cloned());
     let chain: Vec<Certificate> = build_chain(&cert, &pool).into_iter().cloned().collect();
     let trusted = chain.iter().any(|c| trust.trusts(c));
@@ -818,6 +854,60 @@ pub(crate) fn signature_contents(doc: &Document) -> Vec<Vec<u8>> {
         }
     }
     out
+}
+
+/// `adbe.x509.rsa_sha1` (ISO 32000-2 §12.8.3.2, deprecated): `/Contents` is the PKCS #1
+/// signature as a DER OCTET STRING over the SHA-1 digest of the byte ranges, and `/Cert` holds the
+/// signer's certificate (then any others) as DER byte strings.
+#[allow(clippy::too_many_arguments)]
+fn validate_x509_rsa_sha1(
+    doc: &Document,
+    bytes: &[u8],
+    trust: &TrustStore,
+    v: &Dict,
+    info: &mut SignatureInfo,
+    cache: &DigestCache,
+    (l0, o1, covered): (usize, usize, usize),
+    contents: &[u8],
+) {
+    let fail = |info: &mut SignatureInfo, why: &str| {
+        info.status = Status::Invalid;
+        info.details.push(why.to_string());
+    };
+    let certs: Vec<Certificate> = match v.get(b"Cert").map(|c| doc.resolve(c)).as_deref() {
+        Some(Object::Array(a)) => a.iter().filter_map(|c| doc.resolve(c).as_string().map(|s| s.bytes.clone())).collect::<Vec<_>>(),
+        Some(Object::String(s)) => vec![s.bytes.clone()],
+        _ => Vec::new(),
+    }
+    .iter()
+    .filter_map(|raw| Certificate::parse(raw).ok())
+    .collect();
+    let Some(cert) = certs.first().cloned() else { return fail(info, "The signer's certificate is not in the signature.") };
+    let signature = match crate::der::Tlv::parse_ber(contents).and_then(|(t, _)| t.octets("signature").map(|o| o.into_owned())) {
+        Ok(sig) => sig,
+        Err(e) => return fail(info, &format!("The signature could not be read ({e}).")),
+    };
+    info.digest = Some(DigestAlg::Sha1);
+    info.algorithm = Some(format!("{} with SHA-1", cert.public_key.describe()));
+    info.signer = Some(cert.display_name());
+    let digest = cache.digest(DigestAlg::Sha1, bytes, l0, o1, covered);
+    let mut notes = Vec::new();
+    match cert.public_key.verify_noting(crate::keys::Scheme::RsaPkcs1, DigestAlg::Sha1, &digest, &signature, &mut notes) {
+        Ok(true) => info.details.extend(notes.into_iter().map(String::from)),
+        Ok(false) => {
+            info.certificate = Some(cert);
+            return fail(info, "The document has been altered or corrupted since the signature was applied.");
+        }
+        Err(e) => {
+            info.certificate = Some(cert);
+            info.status = Status::Unknown;
+            info.details.push(format!("PdfCraft can't check this signature yet: {e}."));
+            return;
+        }
+    }
+    info.details.push("The signature uses the legacy adbe.x509.rsa_sha1 format.".into());
+    info.details.extend(DigestAlg::Sha1.weakness().map(String::from));
+    finish_validation(doc, bytes, trust, info, cache, covered, cert, &certs, None, None);
 }
 
 /// What later revisions changed, classified as Acrobat reports it, under DocMDP `p` (or none:

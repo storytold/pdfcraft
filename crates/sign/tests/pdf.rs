@@ -776,3 +776,29 @@ fn signing_with_windows_store_identities() {
         assert!(out.status.success(), "test certificate remains: {thumbprint}");
     }
 }
+
+#[test]
+fn validates_the_legacy_adbe_x509_rsa_sha1_format() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    // tests/data/x509-rsa-sha1.pdf: made with OpenSSL (README.md) as Acrobat 4-era signers wrote it.
+    let pdf = data("x509-rsa-sha1.pdf");
+    let s = signatures(&open(&pdf), &pdf, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.sub_filter.as_deref(), Some("adbe.x509.rsa_sha1"));
+    assert_eq!(s.status, Status::Unknown, "intact, identity not trusted: {:?}", s.details);
+    assert_eq!(s.signer.as_deref(), Some("Test Signer RSA"));
+    assert_eq!(s.algorithm.as_deref(), Some("RSA 2048-bit with SHA-1"));
+    assert_eq!(s.modification, Modification::None);
+    // SHA-1 still validates, but the panel says it is weak.
+    let weak = "This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.";
+    assert_eq!(s.details.iter().filter(|d| *d == weak).count(), 1, "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.contains("legacy adbe.x509.rsa_sha1 format")), "{:?}", s.details);
+    let trusted = TrustStore { certs: vec![id.certificate.clone()] };
+    let s = signatures(&open(&pdf), &pdf, &trusted).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    // One changed byte inside the signed range.
+    let mut bad = pdf.clone();
+    let i = bad.windows(8).position(|w| w == b"(Legacy)").unwrap() + 1;
+    bad[i] = b'l';
+    let s = signatures(&open(&bad), &bad, &trusted).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+}

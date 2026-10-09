@@ -112,14 +112,51 @@ impl SignedData {
 
     /// Check the signature value with `cert`'s key. `content_digest` is the digest of the
     /// signed content (the document byte ranges) when there are no signed attributes.
-    pub fn verify_signature(&self, cert: &Certificate, content_digest: &[u8]) -> bool {
+    /// `Err(Unsupported)`: the signer's key algorithm can't be checked here.
+    pub fn verify_signature(&self, cert: &Certificate, content_digest: &[u8]) -> Result<bool, SignError> {
+        self.verify_signature_noting(cert, content_digest, &mut Vec::new())
+    }
+
+    /// [`SignedData::verify_signature`], noting in `notes` each encoding irregularity or
+    /// disagreement it tolerated. Only meaningful when it returns `Ok(true)`.
+    pub fn verify_signature_noting(&self, cert: &Certificate, content_digest: &[u8], notes: &mut Vec<&'static str>) -> Result<bool, SignError> {
         let s = &self.signer;
-        let alg = s.scheme_digest.unwrap_or(s.digest);
-        let digest = match &s.signed_attrs {
-            Some(attrs) => alg.digest(&[attrs]),
-            None => content_digest.to_vec(),
-        };
-        cert.public_key.verify(s.scheme, alg, &digest, &s.signature).unwrap_or(false)
+        // EdDSA signs the message itself: with signed attributes, their DER encoding.
+        if s.scheme == Scheme::Ed25519 {
+            let Some(attrs) = &s.signed_attrs else {
+                return Err(SignError::Unsupported("Ed25519 signature without signed attributes".into()));
+            };
+            return cert.public_key.verify_message(s.scheme, attrs, &s.signature);
+        }
+        // The signature algorithm names the digest it used; a bare `rsaEncryption` / `ecPublicKey`
+        // uses the SignerInfo's digestAlgorithm. Some signers disagree, so try both.
+        let named = s.scheme_digest.unwrap_or(s.digest);
+        let mut algs = vec![named];
+        if !algs.contains(&s.digest) {
+            algs.push(s.digest);
+        }
+        for alg in algs {
+            let digest = match &s.signed_attrs {
+                Some(attrs) => alg.digest(&[attrs]),
+                None => content_digest.to_vec(),
+            };
+            // Notes from an attempt that doesn't verify say nothing about the signature.
+            let mut attempt = Vec::new();
+            if cert.public_key.verify_noting(s.scheme, alg, &digest, &s.signature, &mut attempt)? {
+                notes.extend(attempt);
+                // The hash of the content and the hash the signature is made with.
+                for weak in [s.digest, alg].into_iter().filter_map(DigestAlg::weakness) {
+                    if !notes.contains(&weak) {
+                        notes.push(weak);
+                    }
+                }
+                if alg != named {
+                    notes.push("The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.");
+                }
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 

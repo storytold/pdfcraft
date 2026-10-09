@@ -285,8 +285,11 @@ impl Certificate {
     /// Whether `key` verifies this certificate's signature.
     pub fn signed_by(&self, key: &PublicKey) -> bool {
         let Ok(alg) = Tlv::parse_all(&self.sig_alg) else { return false };
-        let Ok((scheme, Some(digest))) = keys::signature_algorithm(&alg) else { return false };
-        key.verify(scheme, digest, &digest.digest(&[&self.tbs]), &self.signature).unwrap_or(false)
+        match keys::signature_algorithm(&alg) {
+            Ok((scheme @ keys::Scheme::Ed25519, _)) => key.verify_message(scheme, &self.tbs, &self.signature).unwrap_or(false),
+            Ok((scheme, Some(digest))) => key.verify(scheme, digest, &digest.digest(&[&self.tbs]), &self.signature).unwrap_or(false),
+            _ => false,
+        }
     }
 
     /// Valid at `t`.
