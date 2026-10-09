@@ -840,10 +840,10 @@ area = "B"
 tier = "P0"
 milestone = "M3"
 status = "shipped"
-commands = ["view.layout.two_up"]
+commands = ["view.layout.two_up", "view.layout.two_page"]
 tools = []
-evidence = ["crates/ui-egui/tests/view.rs::two_up_layout_places_pages_side_by_side", "crates/ui-egui/tests/viewer.rs::two_page_view_steps_a_spread_at_a_time"]
-notes = "next/previous page step a spread at a time"
+evidence = ["crates/ui-egui/tests/view.rs::two_up_layout_places_pages_side_by_side", "crates/ui-egui/tests/viewer.rs::two_page_view_steps_a_spread_at_a_time", "crates/ui-egui/tests/view.rs::two_pages_at_a_time_shows_one_spread", "crates/ui-egui/tests/view.rs::wheel_turns_a_spread_in_two_pages_at_a_time", "crates/ui-egui/src/canvas.rs::two_pages_at_a_time_turns_a_spread_per_notch"]
+notes = "next/previous page step a spread at a time. Two pages at a time (view.layout.two_page, also what /TwoPageLeft and /TwoPageRight open in) shows one spread and turns it with the wheel and Page Down, like Acrobat's Two Page View without scrolling; Two-page view (view.layout.two_up) scrolls the spreads"
 
 [[feature]]
 id = "view.layout-two-up-scrolling"
