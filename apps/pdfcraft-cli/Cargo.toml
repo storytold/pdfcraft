@@ -20,6 +20,10 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-automation = { workspace = true }
 base64 = "0.22"
 
+[build-dependencies]
+# VERSIONINFO for pdfcraft-cli.exe; build.rs only uses it when targeting Windows.
+winresource = "0.1"
+
 [features]
 default = ["mcp"]
 # The opt-in MCP server (`pdfcraft-cli mcp`). Build with --no-default-features to leave it out.

@@ -3506,6 +3506,7 @@ dependencies = [
  "pdfcraft-engine",
  "pdfcraft-render",
  "serde_json",
+ "winresource",
 ]
 
 [[package]]
