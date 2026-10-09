@@ -58,6 +58,8 @@ getrandom = "0.4"
 getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
+# The Chinese OCR fixture renders its own scan from the permitted craft-fonts face.
+ab_glyph = "0.2"
 pdfcraft-testkit = { workspace = true }
 # JBIG2 fixtures (`encode_jbig2_generic`).
 pdfcraft-filters = { workspace = true }

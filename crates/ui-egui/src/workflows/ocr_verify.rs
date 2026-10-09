@@ -1283,7 +1283,7 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
                 ui.selectable_value(&mut d.language, (*code).to_string(), *name);
             }
         });
-        engine_combo(ui, &mut d.engine, &mut d.strategy);
+        engine_combo(ui, &mut d.engine, &mut d.strategy, &d.language);
         strategy_combo(ui, &mut d.strategy);
         output_combo(ui, &mut d.output_mode);
         for (flag, label, why) in [
@@ -1382,11 +1382,11 @@ fn strategy_label(strategy: MergeStrategy) -> &'static str {
 /// says why (a tooltip names the missing models or program). The choice feeds the next run.
 /// Choosing Automatic while the strategy is "Primary only" (which would never run the second
 /// engine) moves the strategy to Automatic's own default, Confidence weighted.
-fn engine_combo(ui: &mut egui::Ui, engine: &mut EngineChoice, strategy: &mut MergeStrategy) {
+fn engine_combo(ui: &mut egui::Ui, engine: &mut EngineChoice, strategy: &mut MergeStrategy, language: &str) {
     ocr_ui::keep_asking_while_probing(ui.ctx());
     craft_ui::ComboBox::from_id_salt("ocr-verify-engine").width(120.0).selected_text(engine_label(*engine)).show_ui(ui, |ui| {
         for (choice, label) in [(EngineChoice::Auto, tl!("Automatic")), (EngineChoice::Ocrs, "ocrs"), (EngineChoice::Tesseract, "Tesseract")] {
-            let why = pdfcraft_engine::ocr::engine_unavailable_reason(choice);
+            let why = pdfcraft_engine::ocr::engine_unavailable_reason_for(choice, language);
             let resp = ui.add_enabled(why.is_none(), egui::Button::selectable(*engine == choice, label));
             let clicked = resp.clicked();
             match why {

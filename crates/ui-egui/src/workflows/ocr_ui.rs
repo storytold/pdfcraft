@@ -351,7 +351,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         });
     });
     keep_asking_while_probing(ui.ctx());
-    if let Some(why) = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine) {
+    if let Some(why) = pdfcraft_engine::ocr::engine_unavailable_reason_for(d.engine, &d.language) {
         // Said in the interface's language: the built-in engine's missing models get the
         // notice users know; Tesseract's reasons are catalog keys of their own.
         let text = match d.engine {
@@ -364,7 +364,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     }
     ui.add_space(6.0);
     let (mut go, mut cancel) = (false, false);
-    let can_run = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine).is_none();
+    let can_run = pdfcraft_engine::ocr::engine_unavailable_reason_for(d.engine, &d.language).is_none();
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.add_enabled_ui(can_run, |ui| widgets::pill_button(ui, tl!("Recognize text"), true)).inner.clicked() {
@@ -412,7 +412,7 @@ impl PdfCraftApp {
         let Some(scan) = self.scan_to_read() else { return };
         // the engine this run will use, not always the built-in one
         let mut settings = self.ocr_draft.settings();
-        if pdfcraft_engine::ocr::engine_unavailable_reason(settings.engine).is_some() {
+        if pdfcraft_engine::ocr::engine_unavailable_reason_for(settings.engine, &settings.language).is_some() {
             self.views[scan.view].auto_ocr_skipped.insert(scan.page, scan.generation);
             return;
         }

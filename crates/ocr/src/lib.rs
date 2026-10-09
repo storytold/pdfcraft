@@ -15,11 +15,13 @@
 //! display fonts. WinAnsi-only invisible text keeps the standard Helvetica layout here.
 //!
 //! The ocrs models read the Latin alphabet (English and other languages written without
-//! accents); Tesseract (the `tesseract` module, off the web build) reads whatever its installed
-//! language packs cover.
+//! accents); with the PP-OCRv4 model installed the same engine also reads Simplified Chinese and
+//! mixed English text. Tesseract (the `tesseract` module, off the web build) reads whatever its
+//! installed language packs cover.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod chinese;
 pub mod confidence;
 pub mod merge;
 mod ocrs;
@@ -27,6 +29,7 @@ pub mod preprocess;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tesseract;
 
+pub use chinese::{CHINESE_DICTIONARY, CHINESE_MODEL};
 pub use confidence::{ConfidenceBand, band_for, is_suspect, low_confidence};
 pub use merge::{MergeStrategy, StrategyOutcome, mean_confidence, recognize_with_strategy, rover_merge};
 pub use ocrs::{ALPHABET, DETECTION_MODEL, LANGUAGES, Models, Ocr, OcrsRecognizer, RECOGNITION_MODEL};
