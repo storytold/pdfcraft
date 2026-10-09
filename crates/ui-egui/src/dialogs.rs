@@ -1337,7 +1337,8 @@ fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(req) = app.close_request else { return };
     let index = match req {
         CloseRequest::Tab(id) => app.views.iter().position(|v| v.id == id),
-        CloseRequest::Quit | CloseRequest::All => app.first_dirty(),
+        CloseRequest::Quit => app.first_dirty(),
+        CloseRequest::All | CloseRequest::Window(_) => app.first_dirty_exclusive(),
     };
     let Some(name) = index.and_then(|i| app.views.get(i)).and_then(|v| app.session.get(v.id)).map(|d| d.name.clone()) else {
         // Nothing left to ask about (tab already gone or no dirty documents).

@@ -622,6 +622,8 @@ pub struct PdfCraftApp {
     pub window_icon: Option<std::sync::Arc<egui::IconData>>,
     /// [global] The main window's last reported outer rectangle.
     pub(crate) root_rect: Option<egui::Rect>,
+    /// [global] The operating system asked to quit (not just to close the main window).
+    quit_requested: bool,
     /// [global] Which windows had the keyboard focus last frame.
     window_had_focus: std::collections::HashMap<WindowId, bool>,
     /// [global] The number the next view of each document gets.
@@ -815,6 +817,7 @@ impl PdfCraftApp {
             window_icon: None,
             root_rect: None,
             window_had_focus: Default::default(),
+            quit_requested: false,
             next_view_no: Default::default(),
             views,
             active,
@@ -1854,7 +1857,10 @@ impl eframe::App for PdfCraftApp {
                 #[cfg(target_arch = "wasm32")]
                 OsEvent::Open(_) => {}
                 // Like closing the window: `guard_root_close` asks about unsaved changes.
-                OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                OsEvent::Quit => {
+                    self.quit_requested = true;
+                    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+                }
             }
         }
         if let Some(mut control) = self.control.take() {
@@ -1903,7 +1909,8 @@ impl PdfCraftApp {
             // The main window's input, keys and close are handled in `logic`; do the same here.
             let ctx = ui.ctx().clone();
             self.window_input(&ctx);
-            if ctx.input(|i| i.viewport().close_requested()) {
+            // (An embedded window shares the main window's input, and with it its close request.)
+            if class == egui::ViewportClass::Immediate && ctx.input(|i| i.viewport().close_requested()) {
                 self.guard_close_window(&ctx, id);
             }
             self.window_keys(&ctx);

@@ -326,3 +326,139 @@ fn a_tab_without_a_file_offers_no_path_entries() {
     assert!(h.query_by_label("Merge all windows").is_none(), "one window: nothing to merge");
     h.get_by_label("Close");
 }
+
+// --- closing windows, quitting, promoting ---
+
+fn rotate_in(h: &mut Harness<'static, PdfCraftApp>, window: WindowId) {
+    assert!(h.state_mut().with_window(window, |a| a.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 })).unwrap());
+}
+
+fn root_close_requested(h: &mut Harness<'static, PdfCraftApp>) {
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+}
+
+/// The close request was delivered: stop sending it.
+fn close_delivered(h: &mut Harness<'static, PdfCraftApp>) {
+    if let Some(root) = h.input_mut().viewports.get_mut(&egui::ViewportId::ROOT) {
+        root.events.clear();
+    }
+}
+
+fn cancelled_close(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.output()
+        .viewport_output
+        .get(&egui::ViewportId::ROOT)
+        .is_some_and(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::CancelClose)))
+}
+
+/// Root shows one.pdf; a second window shows two.pdf.
+fn root_and_child() -> (Harness<'static, PdfCraftApp>, WindowId) {
+    let mut h = two_docs_harness();
+    h.state_mut().active = Some(1);
+    assert!(h.state_mut().execute("window.move_tab_new"));
+    h.run_steps(4);
+    let child = h.state().window_ids()[1];
+    (h, child)
+}
+
+#[test]
+fn closing_a_child_asks_about_what_only_it_shows() {
+    let (mut h, child) = root_and_child();
+    rotate_in(&mut h, child);
+    let ctx = h.ctx.clone();
+    h.state_mut().test_close_window(child, &ctx);
+    assert!(h.state_mut().with_window(child, |a| a.close_request.is_some()).unwrap(), "the question is in the child");
+    assert!(h.state().close_request.is_none(), "and not in the main window");
+    h.run_steps(3);
+    // Cancel: the window stays.
+    h.state_mut().with_window(child, |a| a.resolve_close(&ctx, None));
+    h.run_steps(3);
+    assert_eq!(h.state().window_count(), 2);
+    assert_windows_ok(h.state());
+    // Don't save: window and document go.
+    h.state_mut().test_close_window(child, &ctx);
+    h.state_mut().with_window(child, |a| a.resolve_close(&ctx, Some(false)));
+    h.run_steps(4);
+    assert_eq!(h.state().window_count(), 1);
+    assert_eq!(h.state().session.docs().len(), 1, "the document closed with its last view");
+    assert_windows_ok(h.state());
+}
+
+#[test]
+fn closing_a_child_whose_document_is_open_elsewhere_asks_nothing() {
+    let mut h = form_harness();
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    assert!(h.state_mut().execute("window.new_view"));
+    h.run_steps(3);
+    let child = h.state().window_ids()[1];
+    let ctx = h.ctx.clone();
+    h.state_mut().test_close_window(child, &ctx);
+    assert!(h.state_mut().with_window(child, |a| a.close_request.is_none()).unwrap());
+    h.run_steps(3);
+    assert_eq!(h.state().window_count(), 1);
+    assert_eq!(h.state().session.docs().len(), 1);
+    assert!(h.state().session.docs()[0].dirty, "still open, still unsaved");
+}
+
+#[test]
+fn root_close_promotes_child() {
+    let (mut h, child) = root_and_child();
+    let two = h.state_mut().with_window(child, |a| a.views[0].id).unwrap();
+    let ctx = h.ctx.clone();
+    let _ = ctx;
+    root_close_requested(&mut h);
+    h.run_steps(1);
+    close_delivered(&mut h);
+    assert!(cancelled_close(&h), "the app stays open");
+    h.run_steps(4);
+    assert_eq!(h.state().window_count(), 1, "no child windows left");
+    assert_eq!(h.state().views.len(), 1);
+    assert_eq!(h.state().views[0].id, two, "the main window shows the tabs of the one that took over");
+    assert_eq!(h.state().session.docs().len(), 1, "the old window's document closed, nothing was asked");
+    assert_windows_ok(h.state());
+}
+
+#[test]
+fn closing_the_main_window_asks_about_documents_only_it_shows() {
+    let (mut h, child) = root_and_child();
+    rotate_in(&mut h, WindowId::ROOT);
+    root_close_requested(&mut h);
+    h.run_steps(1);
+    close_delivered(&mut h);
+    assert!(cancelled_close(&h));
+    assert!(matches!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Window(w)) if w == WindowId::ROOT));
+    let ctx = h.ctx.clone();
+    h.state_mut().resolve_close(&ctx, None);
+    h.run_steps(3);
+    assert_eq!(h.state().window_count(), 2, "cancelled");
+    root_close_requested(&mut h);
+    h.run_steps(1);
+    close_delivered(&mut h);
+    h.state_mut().resolve_close(&ctx, Some(false));
+    h.run_steps(4);
+    assert_eq!(h.state().window_count(), 1);
+    let _ = child;
+    assert_windows_ok(h.state());
+}
+
+#[test]
+fn quitting_asks_in_each_window_in_turn() {
+    let (mut h, child) = root_and_child();
+    rotate_in(&mut h, WindowId::ROOT);
+    rotate_in(&mut h, child);
+    let ctx = h.ctx.clone();
+    h.state_mut().request_quit(&ctx);
+    root_close_requested(&mut h);
+    h.run_steps(1);
+    close_delivered(&mut h);
+    assert!(cancelled_close(&h));
+    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Quit), "the main window's document first");
+    assert!(h.state_mut().with_window(child, |a| a.close_request.is_none()).unwrap());
+    h.state_mut().resolve_close(&ctx, Some(false));
+    h.run_steps(3);
+    assert!(h.state().close_request.is_none());
+    assert_eq!(h.state_mut().with_window(child, |a| a.close_request).unwrap(), Some(pdfcraft_ui_egui::CloseRequest::Quit), "then the other window's");
+    h.state_mut().with_window(child, |a| a.resolve_close(&ctx, Some(false)));
+    h.run_steps(3);
+    assert!(h.state().session.docs().is_empty(), "both closed");
+}

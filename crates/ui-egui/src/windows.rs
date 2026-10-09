@@ -474,6 +474,19 @@ impl PdfCraftApp {
         Some(id)
     }
 
+    /// The window `id` was asked to close, as by its close button (tests).
+    #[doc(hidden)]
+    pub fn test_close_window(&mut self, id: WindowId, ctx: &egui::Context) {
+        self.with_window(id, |a| a.guard_close_window(ctx, id));
+    }
+
+    /// Ask to quit as the operating system does (tests, automation).
+    #[doc(hidden)]
+    pub fn request_quit(&mut self, ctx: &egui::Context) {
+        self.quit_requested = true;
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+    }
+
     /// Apply the queued window changes now, in the main window (tests).
     #[doc(hidden)]
     pub fn pending_window_ops_for_test(&mut self) {
@@ -492,10 +505,37 @@ impl PdfCraftApp {
                 WindowOp::MoveTab { doc, from, to } => self.move_tab(doc, from, to),
                 WindowOp::Close(id) => self.close_window(id),
                 WindowOp::MergeAll => self.merge_all_windows(),
-                WindowOp::Promote(id) => log::warn!("promoting window {} is not supported yet", id.0),
+                WindowOp::Promote(id) => self.promote_window(id),
             }
         }
         self.repair_windows();
+    }
+
+    /// The main window was closed while others are open: the window `id` takes its place (the
+    /// main window's own tabs close; documents another window shows stay open) and the main
+    /// window takes over its size and position.
+    fn promote_window(&mut self, id: WindowId) {
+        if id == WindowId::ROOT || self.current_window != WindowId::ROOT {
+            return;
+        }
+        let Some(at) = self.windows.iter().position(|w| w.id == id) else { return };
+        while !self.views.is_empty() {
+            self.close_tab(self.views.len() - 1);
+        }
+        let slot = self.windows.remove(at);
+        let rect = slot.last_rect.or(slot.geometry);
+        let mut state = slot.state;
+        self.swap_window(&mut state);
+        self.window_had_focus.remove(&id);
+        self.focused_window = WindowId::ROOT;
+        if let (Some(ctx), Some(rect)) = (self.ctx.clone(), rect.filter(|r| r.is_finite() && r.width() > 100.0 && r.height() > 100.0)) {
+            // Wayland does not let a window place itself: only its size carries over.
+            let wayland = cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some();
+            if !wayland {
+                ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::OuterPosition(rect.min));
+            }
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::InnerSize(rect.size()));
+        }
     }
 
     fn focus_window(&mut self, id: WindowId) {

@@ -16,6 +16,9 @@ pub enum CloseRequest {
     Quit,
     /// File ▸ Close all: like Quit, but the application stays open.
     All,
+    /// Close this window: ask about the documents whose last view is in it, then close it (and,
+    /// for the main window, hand its place to the next window).
+    Window(crate::WindowId),
 }
 
 /// Where Save writes.
@@ -456,11 +459,12 @@ impl PdfCraftApp {
     /// File ▸ Close all: clean documents close at once; each one with unsaved changes asks.
     pub fn close_all(&mut self) {
         for i in (0..self.views.len()).rev() {
-            if !self.has_unsaved_work(i) {
+            // A document another window shows too loses nothing when this view goes.
+            if !self.has_unsaved_work(i) || self.views.get(i).is_some_and(|v| self.view_count(v.id) > 1) {
                 self.close_tab(i);
             }
         }
-        if self.first_dirty().is_some() {
+        if self.first_dirty_exclusive().is_some() {
             self.close_request = Some(CloseRequest::All);
         }
     }
@@ -492,6 +496,40 @@ impl PdfCraftApp {
         (0..self.views.len()).find(|&i| self.has_unsaved_work(i))
     }
 
+    /// The first tab with unsaved changes whose document no other window shows: the ones that
+    /// closing this window would lose.
+    pub fn first_dirty_exclusive(&self) -> Option<usize> {
+        (0..self.views.len()).find(|&i| self.has_unsaved_work(i) && self.views.get(i).is_some_and(|v| self.view_count(v.id) == 1))
+    }
+
+    /// A window with unsaved work in it (the main window first), for quitting.
+    fn window_with_unsaved_work(&mut self) -> Option<crate::WindowId> {
+        self.window_ids().into_iter().find(|w| self.with_window(*w, |a| a.first_dirty().is_some()).unwrap_or(false))
+    }
+
+    /// Ask about the next document with unsaved work, in the window that shows it, or quit when
+    /// nothing is left.
+    fn continue_quit(&mut self, ctx: &egui::Context) {
+        match self.window_with_unsaved_work() {
+            Some(window) => {
+                self.with_window(window, |a| a.close_request = Some(CloseRequest::Quit));
+                self.pending_window_ops.push(crate::WindowOp::Focus(window));
+            }
+            None => self.quit(ctx),
+        }
+    }
+
+    /// Close every view of `doc` in every window (the document closes with its last one).
+    fn close_document_everywhere(&mut self, doc: pdfcraft_engine::DocId) {
+        for window in self.window_ids() {
+            self.with_window(window, |a| {
+                while let Some(i) = a.views.iter().position(|v| v.id == doc) {
+                    a.close_tab(i);
+                }
+            });
+        }
+    }
+
     /// Answer the save prompt: `Some(true)` save, `Some(false)` discard, `None` cancel.
     pub fn resolve_close(&mut self, ctx: &egui::Context, choice: Option<bool>) {
         let Some(req) = self.close_request.take() else { return };
@@ -500,22 +538,29 @@ impl PdfCraftApp {
                 Some(i) => i,
                 None => return, // already closed
             },
-            CloseRequest::Quit | CloseRequest::All => match self.first_dirty() {
+            CloseRequest::Quit => match self.first_dirty() {
                 Some(i) => i,
-                None => {
-                    if req == CloseRequest::Quit {
-                        self.quit(ctx);
-                    }
-                    return;
-                }
+                None => return self.continue_quit(ctx),
+            },
+            CloseRequest::All => match self.first_dirty_exclusive() {
+                Some(i) => i,
+                None => return,
+            },
+            CloseRequest::Window(window) => match self.first_dirty_exclusive() {
+                Some(i) => i,
+                None => return self.finish_window_close(window),
             },
         };
         // Quitting closes the unsaved tabs one by one (and brings each forward to save it):
         // remember what was open, and which tab was active, before the first one goes (#442).
         if req == CloseRequest::Quit {
             match choice {
-                Some(_) => self.note_quit_session(),
-                None => self.forget_quit_session(),
+                Some(_) => {
+                    self.with_window(crate::WindowId::ROOT, |a| a.note_quit_session());
+                }
+                None => {
+                    self.with_window(crate::WindowId::ROOT, |a| a.forget_quit_session());
+                }
             }
         }
         match choice {
@@ -541,38 +586,89 @@ impl PdfCraftApp {
 
     /// Close tab `index` for a close request, then ask about the next dirty document, or quit.
     fn close_and_continue(&mut self, ctx: &egui::Context, index: usize, req: CloseRequest) {
-        self.close_tab(index);
+        match (req, self.views.get(index).map(|v| v.id)) {
+            // Quitting loses the document everywhere, so it is asked about once.
+            (CloseRequest::Quit, Some(id)) => self.close_document_everywhere(id),
+            _ => self.close_tab(index),
+        }
         // A newer prompt wins: the user may have started another close while a save was pending.
-        if (req == CloseRequest::Quit || req == CloseRequest::All) && self.close_request.is_none() {
-            match self.first_dirty() {
+        if self.close_request.is_some() {
+            return;
+        }
+        match req {
+            CloseRequest::Quit => match self.first_dirty() {
                 Some(_) => self.close_request = Some(req),
-                None if req == CloseRequest::Quit => self.quit(ctx),
-                None => {}
+                None => self.continue_quit(ctx),
+            },
+            CloseRequest::All => {
+                if self.first_dirty_exclusive().is_some() {
+                    self.close_request = Some(req);
+                }
             }
+            CloseRequest::Window(window) => match self.first_dirty_exclusive() {
+                Some(_) => self.close_request = Some(req),
+                None => self.finish_window_close(window),
+            },
+            CloseRequest::Tab(_) => {}
         }
     }
 
     fn quit(&mut self, ctx: &egui::Context) {
         self.allow_quit = true;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        // The main window's close ends the app, whichever window the answer came in.
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
     }
 
-    /// A child window was asked to close: close it with its tabs. (Unsaved work is asked about
-    /// before this, see the closing tasks of the multi-window plan.)
+    /// Everything the closing window held is answered: close it.
+    fn finish_window_close(&mut self, window: crate::WindowId) {
+        if window == crate::WindowId::ROOT {
+            if let Some(next) = self.windows.first().map(|w| w.id) {
+                self.pending_window_ops.push(crate::WindowOp::Promote(next));
+            }
+        } else {
+            self.pending_window_ops.push(crate::WindowOp::Close(window));
+        }
+    }
+
+    /// A child window was asked to close: ask about the documents only it shows, then close it.
     pub(crate) fn guard_close_window(&mut self, ctx: &egui::Context, id: crate::WindowId) {
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        self.pending_window_ops.push(crate::WindowOp::Close(id));
+        // What is half typed counts as unsaved work.
+        if self.first_dirty_exclusive().is_some() {
+            self.close_request = Some(CloseRequest::Window(id));
+        } else {
+            self.pending_window_ops.push(crate::WindowOp::Close(id));
+        }
     }
 
-    /// Intercept the main window's close while documents have unsaved changes.
+    /// Intercept the main window's close. With other windows open it hands the main window's
+    /// place on (after asking about what only it shows); the app quits when the last window
+    /// goes, or when the user quits, and then asks about unsaved documents in every window.
     pub(crate) fn guard_root_close(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
-        // `first_dirty` counts text typed into a field as an unsaved change.
-        if !self.allow_quit && self.first_dirty().is_some() {
+        if self.allow_quit {
+            self.shutdown_recovery();
+            return;
+        }
+        if !self.windows.is_empty() && !self.quit_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.close_request = Some(CloseRequest::Quit);
+            if self.first_dirty_exclusive().is_some() {
+                self.close_request = Some(CloseRequest::Window(crate::WindowId::ROOT));
+            } else {
+                self.finish_window_close(crate::WindowId::ROOT);
+            }
+            return;
+        }
+        // `first_dirty` counts text typed into a field as an unsaved change.
+        if let Some(window) = self.window_with_unsaved_work() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.quit_requested = false;
+            self.with_window(window, |a| a.close_request = Some(CloseRequest::Quit));
+            if window != crate::WindowId::ROOT {
+                self.pending_window_ops.push(crate::WindowOp::Focus(window));
+            }
         } else {
             // A clean quit: nothing is left to recover.
             self.shutdown_recovery();
