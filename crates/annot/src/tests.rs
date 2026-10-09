@@ -919,3 +919,14 @@ fn redraw_keeps_shared_annotation_appearances_and_drops_stale_alternates() {
         }
     }
 }
+
+#[test]
+fn non_markup_annotations_are_not_comments() {
+    // #169: a LaTeX `animate` player's Screen annotation showed up in the Comments list.
+    for s in ["Link", "Widget", "Popup", "Screen", "Movie", "RichMedia", "3D", "PrinterMark", "TrapNet", "Watermark"] {
+        assert!(!is_comment_subtype(s), "{s}");
+    }
+    for s in ["Text", "FreeText", "Highlight", "Ink", "Stamp", "FileAttachment", "Redact", "Sound"] {
+        assert!(is_comment_subtype(s), "{s}");
+    }
+}

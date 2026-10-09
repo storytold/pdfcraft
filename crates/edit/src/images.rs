@@ -142,6 +142,80 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
     Ok(out)
 }
 
+/// The images page `page` (0-based) shows, in drawing order, including those drawn inside form
+/// XObjects (Export to Word, HTML and RTF). Read-only: indexes into this list are not
+/// [`page_images`] indexes, so they can't be passed to [`change_image`].
+pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditError> {
+    /// The CTM and `q` stack carry from one page stream to the next (§7.8.2); a form starts
+    /// its own.
+    /// The forms being read (cycle guard) and how many were entered (the page's budget).
+    struct Forms {
+        path: Vec<ObjRef>,
+        visits: usize,
+    }
+    struct State {
+        ctm: Matrix,
+        stack: Vec<Matrix>,
+    }
+    fn walk(doc: &Document, data: &[u8], resources: &Dict, st: &mut State, stream: usize, forms: &mut Forms, out: &mut Vec<PageImage>) {
+        let xo = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+        let (ctm, stack) = (&mut st.ctm, &mut st.stack);
+        for (i, op) in parse(data).ops.iter().enumerate() {
+            match op.op.as_slice() {
+                b"q" => stack.push(*ctm),
+                b"Q" => *ctm = stack.pop().unwrap_or(*ctm),
+                b"cm" => {
+                    if let Some(m) = op.nums::<6>() {
+                        *ctm = Matrix(m).then(ctm);
+                    }
+                }
+                b"Do" => {
+                    let Some(name) = op.name(0) else { continue };
+                    if let Some(form) = crate::text::form_call(doc, resources, name, *ctm, &forms.path, &mut forms.visits) {
+                        if let Some(r) = form.obj {
+                            forms.path.push(r);
+                        }
+                        let mut inner = State { ctm: form.ctm, stack: Vec::new() };
+                        walk(doc, &form.data, &form.resources, &mut inner, stream, forms, out);
+                        if form.obj.is_some() {
+                            forms.path.pop();
+                        }
+                        continue;
+                    }
+                    let Some(r) = xo.get(name).and_then(Object::as_ref) else { continue };
+                    let obj = doc.get(r);
+                    let Object::Stream(s) = &*obj else { continue };
+                    if s.dict.name(b"Subtype") != Some(b"Image") {
+                        continue;
+                    }
+                    out.push(PageImage {
+                        rect: ctm.bbox([0.0, 0.0, 1.0, 1.0]),
+                        matrix: ctm.0,
+                        name: String::from_utf8_lossy(name).into_owned(),
+                        object: Some(r),
+                        is_form: false,
+                        width: s.dict.int(b"Width").unwrap_or(0).max(0) as u32,
+                        height: s.dict.int(b"Height").unwrap_or(0).max(0) as u32,
+                        stream,
+                        op: i,
+                        draw_matrix: ctm.0,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+    let p = page_of(doc, page)?;
+    let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let mut out = Vec::new();
+    let mut st = State { ctm: Matrix::IDENTITY, stack: Vec::new() };
+    let mut forms = Forms { path: Vec::new(), visits: 0 };
+    for (si, (_, data)) in streams(doc, &p.dict).into_iter().enumerate() {
+        walk(doc, &data, &res, &mut st, si, &mut forms, &mut out);
+    }
+    Ok(out)
+}
+
 /// What to do with an image.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ImageChange {

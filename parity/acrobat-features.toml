@@ -1806,8 +1806,8 @@ milestone = "M7"
 status = "partial"
 commands = ["edit.edit_text"]
 tools = ["text_lines", "text_paragraphs", "text_edit"]
-evidence = ["crates/edit/src/tests.rs::paragraphs_are_found_and_rewrapped", "crates/edit/src/tests.rs::text_lines_are_found_and_replaced_in_place", "crates/ui-egui/tests/editing.rs::editing_existing_text_in_place", "crates/automation/tests/automation.rs::editing_existing_text_through_tools"]
-notes = "click a paragraph box and retype it in place (font reused or Helvetica substituted, colour and spacing kept, rewrapped); drag a box to move it or its right-edge handle to rewrap it (edit.text-move-resize); per-character formatting changes are next"
+evidence = ["crates/edit/src/tests.rs::paragraphs_are_found_and_rewrapped", "crates/edit/src/tests.rs::text_lines_are_found_and_replaced_in_place", "crates/ui-egui/tests/editing.rs::editing_existing_text_in_place", "crates/automation/tests/automation.rs::editing_existing_text_through_tools", "crates/edit/src/tests.rs::a_line_whose_operator_starts_the_next_stream_can_be_edited", "crates/automation/tests/automation.rs::a_line_split_across_content_streams_is_listed_and_edited"]
+notes = "click a paragraph box and retype it in place (font reused or Helvetica substituted, colour and spacing kept, rewrapped); a page's /Contents pieces are parsed joined, so a line whose operands and operator sit in different pieces is listed and edited (lines and paragraphs still don't join across pieces; Edit image still parses each piece alone); drag a box to move it or its right-edge handle to rewrap it (edit.text-move-resize); per-character formatting changes are next"
 
 [[feature]]
 id = "edit.text-reflow"
