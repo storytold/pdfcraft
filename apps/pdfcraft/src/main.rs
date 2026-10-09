@@ -297,6 +297,9 @@ fn app_creator<'a>(
         if let Some(dir) = pdfcraft_ui_egui::RecoveryStore::default_dir() {
             app.enable_recovery(pdfcraft_ui_egui::RecoveryStore::new(dir));
         }
+        if let Some(state) = &cc.wgpu_render_state {
+            notify_software_renderer(&mut app, state.adapter.get_info().device_type);
+        }
         // A portable marker whose data folder can't be written (#157): say where settings went.
         if let Some(w) = &pdfcraft_ui_egui::portable::current().unwritable {
             app.notify_fmt(
@@ -323,6 +326,16 @@ fn app_creator<'a>(
         }
         Ok(Box::new(app))
     })
+}
+
+/// Tell the user when wgpu draws on the processor (WARP on Windows, llvmpipe on Linux) rather than
+/// a GPU, which makes everything slower. egui-wgpu only logs it, so the reporter of #519 had to find
+/// it in pdfcraft.log. The OpenGL fallback isn't covered: glow only reports its renderer through
+/// `unsafe` calls.
+fn notify_software_renderer(app: &mut PdfCraftApp, device_type: eframe::wgpu::DeviceType) {
+    if device_type == eframe::wgpu::DeviceType::Cpu {
+        app.notify_tr("PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.");
+    }
 }
 
 /// Write the control endpoint so that only the current user can read the token.
@@ -553,6 +566,21 @@ mod tests {
         // Each run states its renderer rather than relying on eframe's default.
         assert_eq!(native_options(false, eframe::Renderer::Wgpu).renderer, eframe::Renderer::Wgpu);
         assert_eq!(native_options(false, eframe::Renderer::Glow).renderer, eframe::Renderer::Glow);
+    }
+
+    #[test]
+    fn a_software_renderer_is_shown_to_the_user() {
+        use eframe::wgpu::DeviceType;
+        // Issue #519: WARP or llvmpipe is announced in the app, not just in pdfcraft.log.
+        let mut app = super::PdfCraftApp::new();
+        super::notify_software_renderer(&mut app, DeviceType::Cpu);
+        let notice = app.toast.as_ref().map(|(m, _)| m.as_str()).unwrap_or_default();
+        assert!(notice.contains("without a graphics processor"), "{notice:?}");
+        for gpu in [DeviceType::IntegratedGpu, DeviceType::DiscreteGpu, DeviceType::VirtualGpu, DeviceType::Other] {
+            let mut app = super::PdfCraftApp::new();
+            super::notify_software_renderer(&mut app, gpu);
+            assert!(app.toast.is_none(), "{gpu:?}: {:?}", app.toast);
+        }
     }
 
     #[test]

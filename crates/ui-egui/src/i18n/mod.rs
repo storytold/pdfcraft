@@ -637,6 +637,22 @@ mod tests {
         assert_eq!(fmt("unchanged", &[]), "unchanged");
     }
 
+    /// #103: the missing-OCR-models messages are translated under their current English text
+    /// (catalogs once keyed an older `PRINTCRAFT_MODELS` wording, which never matched).
+    #[test]
+    fn missing_ocr_models_messages_are_translated() {
+        let error = pdfcraft_engine::ocr::OcrError::NoModels.to_string();
+        let notice = "Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.";
+        assert!(include_str!("../ocr_ui.rs").contains(notice), "keep in step with ocr_ui.rs");
+        for code in ["bg", "de", "es", "fr", "hu", "ja", "ru", "te", "uk", "zh-hans", "zh-hant"] {
+            let lang = Lang::from_code(code).expect("registered");
+            assert!(has(lang, notice) && has(lang, &error), "{code}");
+        }
+        for lang in &LANGUAGES {
+            assert!(!lang.source.contains("PRINTCRAFT"), "{}", lang.code);
+        }
+    }
+
     /// Japanese translates every registered command and every All tools group, section and item.
     #[test]
     fn japanese_covers_commands_and_catalogue() {
@@ -652,6 +668,55 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Every `tl!("…")` literal in the UI source (test modules aside), unescaped.
+    fn ui_literals() -> std::collections::BTreeSet<String> {
+        let mut stack = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut literals = std::collections::BTreeSet::new();
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).expect("UI source directory") {
+                let path = entry.expect("UI source entry").path();
+                if path.is_dir() {
+                    if path.file_name().is_some_and(|name| name != "i18n") {
+                        stack.push(path);
+                    }
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let source = std::fs::read_to_string(path).expect("UI source file").replace("\r\n", "\n");
+                    let mut rest = source.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+                    while let Some((_, after)) = rest.split_once("tl!(\"") {
+                        let mut escaped = false;
+                        let end = after
+                            .char_indices()
+                            .find_map(|(i, c)| {
+                                if c == '"' && !escaped {
+                                    return Some(i);
+                                }
+                                escaped = c == '\\' && !escaped;
+                                None
+                            })
+                            .expect("closed tl! literal");
+                        let (raw, tail) = after.split_at(end);
+                        if tail.starts_with("\")") {
+                            let label: String = serde_json::from_str(&format!("\"{raw}\"")).expect("UI literal escapes");
+                            literals.insert(label);
+                        }
+                        rest = tail.strip_prefix('"').expect("closing quote");
+                    }
+                }
+            }
+        }
+        literals
+    }
+
+    /// Japanese translates every `tl!("…")` literal in the UI source, so a new string can't ship in
+    /// English by accident (the same check French, German, Russian and Simplified Chinese have).
+    #[test]
+    fn japanese_covers_ui_literals() {
+        let literals = ui_literals();
+        assert!(literals.len() > 900, "source scan found only {} literals", literals.len());
+        let missing: Vec<_> = literals.iter().filter(|label| !has(JA(), label)).collect();
+        assert!(missing.is_empty(), "untranslated Japanese UI literals: {missing:#?}");
     }
 
     /// With craft-fonts, every Japanese translation has glyphs: with all interface faces (desktop)
@@ -1526,6 +1591,10 @@ mod tests {
         assert_eq!(tr(hu, "Rapport de l'utilisateur.pdf"), "Rapport de l'utilisateur.pdf");
         assert_eq!(tr_ctx(hu, "signature pad", "Type"), "Gépelés");
         assert_eq!(tr_ctx(hu, "action wizard", "Start"), "Indítás");
+        assert_eq!(tr(hu, "Windows store  ·  "), "Windows-tároló  ·  ");
+        assert_eq!(tr(hu, "Place saved {what}"), "Mentett {what} elhelyezése");
+        assert_eq!(tr(hu, "Remove saved {what}"), "Mentett {what} eltávolítása");
+        assert_eq!(tr(hu, "Squiggly"), "Hullámos aláhúzás");
         // one (1), other (0, 2+)
         assert_eq!((0..=3).map(|n| (hu.0.plural)(n)).collect::<Vec<_>>(), [1, 0, 1, 1]);
         assert_eq!(trn(hu, 0, "{n} page", "{n} pages"), "0 oldal");
@@ -1640,6 +1709,8 @@ mod tests {
         assert_eq!(tr_ctx(uk, "comment menu", "Edit"), "Редагувати");
         assert_eq!(tr_ctx(uk, "signature pad", "Type"), "Ввести");
         assert_eq!(tr_ctx(uk, "action wizard", "Start"), "Почати");
+        assert_eq!(tr(uk, "Subject"), "Тема");
+        assert_eq!(tr_ctx(uk, "certificate", "Subject"), "Власник сертифіката");
         let mut app = crate::PdfCraftApp::default();
         app.set_option("language", "UK").unwrap();
         assert_eq!(app.language, "uk");
