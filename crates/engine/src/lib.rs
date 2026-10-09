@@ -22,6 +22,7 @@ pub mod links;
 pub mod ocr;
 pub mod optimizer;
 pub mod signature_image;
+mod upright_image;
 pub mod xfa;
 
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
@@ -1505,7 +1506,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             ran.map_err(EditError::Invalid)?;
         }
         Edit::SetFieldImage { name, image } => {
-            let (img, _) = pdfcraft_create::image_xobject(doc, name, image)?;
+            let (img, _) = embed_image(doc, name, image)?;
             let px = match &*doc.get(img) {
                 pdfcraft_cos::Object::Stream(s) => (s.dict.int(b"Width").unwrap_or(1) as u32, s.dict.int(b"Height").unwrap_or(1) as u32),
                 _ => (1, 1),
@@ -1562,7 +1563,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                 ImageEdit::Flip { horizontal } => {
                     pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(img.rect, 0, *horizontal, !*horizontal))
                 }
-                ImageEdit::Replace { name, bytes } => pdfcraft_edit::ImageChange::Replace(pdfcraft_create::image_xobject(doc, name, bytes)?.0),
+                ImageEdit::Replace { name, bytes } => pdfcraft_edit::ImageChange::Replace(embed_image(doc, name, bytes)?.0),
                 ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
             };
             pdfcraft_edit::change_image(doc, *page, *index, &c)?;
@@ -1602,7 +1603,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             pdfcraft_edit::add_content(doc, *page, &AddedContent::Text(text.clone()))?;
         }
         Edit::AddImage { page, rect, name, bytes } => {
-            let (image, natural) = pdfcraft_create::image_xobject(doc, name, bytes)?;
+            let (image, natural) = embed_image(doc, name, bytes)?;
             let rect = match rect {
                 Some(r) => *r,
                 None => {
@@ -1622,7 +1623,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             let Some(AddedContent::Image(old)) = item.map(|a| a.content) else {
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("that item is not an image".into())));
             };
-            let (image, _) = pdfcraft_create::image_xobject(doc, name, bytes)?;
+            let (image, _) = embed_image(doc, name, bytes)?;
             pdfcraft_edit::update_content(doc, *page, *index, &AddedContent::Image(pdfcraft_edit::AddedImage { image, ..old }))?;
         }
         Edit::ApplyRedactions { pages } => {
@@ -2977,6 +2978,15 @@ pub struct MarkFile {
     pub page: usize,
 }
 
+/// Embed an image that is placed on a page, turned the way its EXIF Orientation says.
+fn embed_image(
+    doc: &mut pdfcraft_cos::Document,
+    name: &str,
+    bytes: &[u8],
+) -> Result<(pdfcraft_cos::ObjRef, (f64, f64)), pdfcraft_create::CreateError> {
+    pdfcraft_create::image_xobject(doc, name, &upright_image::upright(bytes))
+}
+
 /// Bring a mark's picture into `doc`: a PDF page as a form XObject, or an image.
 fn mark_source(doc: &mut pdfcraft_cos::Document, f: &MarkFile) -> Result<pdfcraft_edit::MarkSource, EditError> {
     let head = &f.bytes[..f.bytes.len().min(1024)];
@@ -2985,7 +2995,7 @@ fn mark_source(doc: &mut pdfcraft_cos::Document, f: &MarkFile) -> Result<pdfcraf
         let (xobject, size) = pdfcraft_organize::page_as_form(doc, &src, f.page)?;
         Ok(pdfcraft_edit::MarkSource { xobject, size, image: false })
     } else {
-        let (xobject, size) = pdfcraft_create::image_xobject(doc, &f.name, &f.bytes)?;
+        let (xobject, size) = embed_image(doc, &f.name, &f.bytes)?;
         Ok(pdfcraft_edit::MarkSource { xobject, size, image: true })
     }
 }

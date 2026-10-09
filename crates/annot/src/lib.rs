@@ -677,6 +677,16 @@ pub fn signature_image(doc: &Document, page: usize, index: usize) -> Result<Opti
     .flatten())
 }
 
+/// The page `/Rotate` the picture of the image signature at `(page, index)` is drawn turned back
+/// by, so it reads upright on a page shown that way: 0 for one added to an unturned page, or by
+/// another app. The picture appears turned by the page's current rotation less this.
+pub fn picture_rotation(doc: &Document, page: usize, index: usize) -> Result<i64, AnnotError> {
+    let p = page_ref(doc, page)?;
+    let list = annots(doc, p);
+    let entry = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    Ok(doc.resolve(entry).as_dict().map_or(0, appearance::picture_turn))
+}
+
 // ── building ────────────────────────────────────────────────────────────────────────────────
 
 /// Annotation flags (§12.5.3).
@@ -968,6 +978,14 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             d.set(b"PCPicture".to_vec(), Object::Ref(*picture));
             d.set(b"PCPictureImage".to_vec(), Object::Bool(*image));
             d.set(b"PCPictureSize".to_vec(), num_array(&[size.0, size.1]));
+            // An image signature's rectangle is in user space; on a turned page its appearance is
+            // turned back (see `appearance::build`), so it reads upright as displayed.
+            if *image && matches!(clean.as_str(), "Signature" | "Initials") {
+                let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
+                if turn != 0 {
+                    d.set(b"PCPictureRotate".to_vec(), Object::Int(turn));
+                }
+            }
         }
         Shape::Ink { strokes } | Shape::Signature { strokes } => {
             d.set(b"C".to_vec(), rgb(style.color));

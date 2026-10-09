@@ -304,30 +304,35 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
         Err(p) => return Err(OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p)))),
     }
     let options = load_options(password);
-    let structure = catch_unwind(AssertUnwindSafe(|| match Document::load_mem_with_options(&bytes, options) {
-        Ok(doc) => {
-            let mut tmp = DocInfo::default();
-            std::mem::swap(&mut tmp.pages, &mut info.pages);
-            Inspector::new(&doc).fill(&mut tmp);
-            Ok(tmp)
-        }
-        Err(e) => Err(e.to_string()),
+    inspect_structure(&mut info, |tmp| {
+        let doc = Document::load_mem_with_options(&bytes, options).map_err(|e| e.to_string())?;
+        Inspector::new(&doc).fill(tmp);
+        Ok(())
+    });
+    if info.pages.is_empty() {
+        return Err(OpenError::Invalid("the document has no pages".into()));
+    }
+    Ok(info)
+}
+
+// Commit auxiliary metadata only after inspection succeeds; renderer geometry is the fallback.
+fn inspect_structure(info: &mut DocInfo, fill: impl FnOnce(&mut DocInfo) -> Result<(), String>) {
+    let structure = catch_unwind(AssertUnwindSafe(|| {
+        let mut tmp = DocInfo { pages: info.pages.clone(), ..Default::default() };
+        fill(&mut tmp)?;
+        Ok::<_, String>(tmp)
     }));
     match structure {
         Ok(Ok(mut filled)) => {
             filled.file_size = info.file_size;
             filled.pdf_version = std::mem::take(&mut info.pdf_version);
-            info = filled;
+            *info = filled;
         }
         Ok(Err(e)) => info.warnings.push(format!("Some document structure (bookmarks, comments, fields) could not be read: {e}")),
         Err(p) => {
             info.warnings.push(format!("Document structure inspection crashed and was skipped: {}", crate::raster::panic_message(&p)));
         }
     }
-    if info.pages.is_empty() {
-        return Err(OpenError::Invalid("the document has no pages".into()));
-    }
-    Ok(info)
 }
 
 struct Inspector<'a> {
@@ -955,7 +960,8 @@ fn alpha(n: usize) -> String {
 /// A PDF date (`D:20261001123000Z`) as "2026-10-01 12:30"; other strings unchanged.
 pub fn pretty_date(s: &str) -> String {
     let d = s.trim_start_matches("D:");
-    if d.len() >= 12 && d[..12].bytes().all(|b| b.is_ascii_digit()) {
+    if let Some(d) = d.get(..12).filter(|d| d.bytes().all(|b| b.is_ascii_digit())) {
+        // Twelve ASCII digits make every slice below a UTF-8 character boundary.
         format!("{}-{}-{} {}:{}", &d[0..4], &d[4..6], &d[6..8], &d[8..10], &d[10..12])
     } else {
         s.to_string()
@@ -1104,6 +1110,94 @@ trailer << /Root 1 0 R >>
                 LinkTarget::SetLayers { changes: vec![(Off, (5, 0))], preserve_rb: true },
             ]
         );
+    }
+
+    #[test]
+    fn structure_failure_preserves_renderer_pages() {
+        for crash in [true, false] {
+            let mut info = DocInfo {
+                file_size: 321,
+                pdf_version: "1.7".into(),
+                pages: vec![PageInfo { width: 300.0, height: 200.0, label: "1".into(), crop: [10.0, 20.0, 210.0, 320.0], rotation: 90 }],
+                ..Default::default()
+            };
+            inspect_structure(&mut info, |tmp| {
+                tmp.pages.clear();
+                tmp.title = Some("partially inspected".into());
+                if crash {
+                    panic!("synthetic structure inspection failure");
+                }
+                Err("synthetic structure inspection failure".into())
+            });
+
+            assert_eq!(info.pages.len(), 1);
+            let page = &info.pages[0];
+            assert_eq!((page.width, page.height, page.label.as_str(), page.crop, page.rotation), (300.0, 200.0, "1", [10.0, 20.0, 210.0, 320.0], 90));
+            assert_eq!(info.file_size, 321);
+            assert_eq!(info.pdf_version, "1.7");
+            assert!(info.title.is_none());
+            assert_eq!(info.warnings.len(), 1);
+            assert!(info.warnings[0].contains("synthetic structure inspection failure"));
+            assert_eq!(info.warnings[0].contains("crashed"), crash);
+        }
+    }
+
+    #[test]
+    fn invalid_dates_with_unicode_are_unchanged() {
+        for input in ["", "D:", "D:20260930104", "D:202609x01045", "yesterday"] {
+            assert_eq!(pretty_date(input), input);
+        }
+        // Cover every position before the 12-byte prefix, including characters that
+        // straddle its end. None of these strings is an ASCII PDF date.
+        for character in ['é', '€', '😀'] {
+            for prefix_len in 0..12 {
+                let input = format!("D:{}{character}123456789012", "1".repeat(prefix_len));
+                assert_eq!(pretty_date(&input), input, "{character} after {prefix_len} digits");
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_annotation_date_does_not_prevent_opening() {
+        use lopdf::dictionary;
+
+        let date = "D:12345678901éX";
+        let mut encoded_date = vec![0xFE, 0xFF];
+        encoded_date.extend(date.encode_utf16().flat_map(u16::to_be_bytes));
+        let mut doc = Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let annot_id = doc.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Text",
+            "Rect" => vec![10.into(), 10.into(), 30.into(), 30.into()],
+            "M" => Object::String(encoded_date, lopdf::StringFormat::Hexadecimal),
+        });
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 200.into(), 300.into()],
+            "Annots" => vec![annot_id.into()],
+        });
+        doc.objects.insert(
+            pages_id,
+            dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }
+            .into(),
+        );
+        let catalog_id = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog_id);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).expect("write synthetic fixture");
+
+        let info = inspect(Arc::new(bytes), None).expect("opens despite a non-date /M string");
+        assert_eq!(info.pages.len(), 1);
+        assert_eq!((info.pages[0].width, info.pages[0].height), (200.0, 300.0));
+        assert_eq!(info.annotations.len(), 1);
+        assert_eq!(info.annotations[0].modified.as_deref(), Some(date));
+        assert!(info.warnings.is_empty(), "{:?}", info.warnings);
     }
 
     #[test]

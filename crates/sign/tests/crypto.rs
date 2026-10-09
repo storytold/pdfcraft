@@ -1,6 +1,6 @@
 //! The cryptographic core against files made by OpenSSL 3 (tests/data/README.md).
 
-use pdfcraft_sign::der::Time;
+use pdfcraft_sign::der::{Time, Tlv};
 use pdfcraft_sign::keys::DigestAlg;
 use pdfcraft_sign::{Certificate, Name, PublicKey, SignError, cms, pkcs12};
 
@@ -56,6 +56,74 @@ fn opens_every_openssl_flavour_of_pkcs12() {
     assert!(chain.certificate.signed_by(&chain.chain[0].public_key), "the leaf is issued by the root");
     assert!(!chain.certificate.is_self_signed());
     assert_eq!(chain.certificate.key_usage.map(|u| u & 0b11), Some(0b11), "digitalSignature + nonRepudiation");
+}
+
+/// One element with BER's indefinite length: contents, then the end-of-contents octets.
+fn indefinite(tag: u8, body: &[u8]) -> Vec<u8> {
+    let mut v = vec![tag, 0x80];
+    v.extend_from_slice(body);
+    v.extend([0, 0]);
+    v
+}
+
+/// An OCTET STRING split into segments, BER's constructed form.
+fn segmented(bytes: &[u8]) -> Vec<u8> {
+    let parts: Vec<u8> = bytes.chunks(64).flat_map(der::octets).collect();
+    indefinite(0x24, &parts)
+}
+
+/// A `.p12` in the shape Windows writes one: the PFX, its ContentInfo and the `[0]` holding the
+/// AuthenticatedSafe all in the indefinite form, and the AuthenticatedSafe split into segments.
+/// Nothing changes meaning, and the MAC still covers the same octets, so whatever a reader makes
+/// of it, it is making it of the form and not of the contents.
+///
+/// With `deep`, every ContentInfo inside is rewritten the same way, as a real Windows file has it.
+/// That re-encodes the AuthenticatedSafe, which is what the MAC covers, so the MacData is dropped
+/// — RFC 7292 §4 makes it optional — and a wrong password is then caught by the decryption.
+fn as_windows_writes_it(der: &[u8], deep: bool) -> Vec<u8> {
+    let pfx = Tlv::parse_all(der).unwrap().children().unwrap();
+    let auth = pfx[1].children().unwrap();
+    let mut content = auth[1].inner().unwrap().value.to_vec();
+    if deep {
+        let mut inner = Vec::new();
+        for ci in Tlv::parse_all(&content).unwrap().children().unwrap() {
+            let p = ci.children().unwrap();
+            let body = p[1].inner().unwrap();
+            // A Data content is an OCTET STRING, so it gets segmented; an EncryptedData is a
+            // SEQUENCE and stays as it is inside its indefinite wrappers.
+            let wrapped = if body.tag == 0x04 { segmented(body.value) } else { body.raw.to_vec() };
+            let zero = indefinite(0xA0, &wrapped);
+            inner.extend(indefinite(0x30, &[p[0].raw, zero.as_slice()].concat()));
+        }
+        content = indefinite(0x30, &inner);
+    }
+    let zero = indefinite(0xA0, &segmented(&content));
+    let mut body = pfx[0].raw.to_vec();
+    body.extend(indefinite(0x30, &[auth[0].raw, zero.as_slice()].concat()));
+    if !deep {
+        for extra in &pfx[2..] {
+            body.extend_from_slice(extra.raw);
+        }
+    }
+    indefinite(0x30, &body)
+}
+
+#[test]
+fn opens_pkcs12_as_windows_writes_it() {
+    for file in ["rsa-aes.p12", "rsa-legacy.p12", "chain.p12"] {
+        let der = data(file);
+        let want = pkcs12::open(&der, "test").unwrap();
+        for deep in [false, true] {
+            let ber = as_windows_writes_it(&der, deep);
+            assert_ne!(ber, der, "{file} ({deep})");
+            let got = pkcs12::open(&ber, "test").unwrap_or_else(|e| panic!("{file} in BER (deep: {deep}): {e}"));
+            assert_eq!(got.certificate.raw, want.certificate.raw, "{file} ({deep})");
+            assert_eq!(got.key.public_key(), want.key.public_key(), "{file} ({deep})");
+            assert_eq!(got.chain.len(), want.chain.len(), "{file} ({deep})");
+            assert_eq!(got.friendly_name, want.friendly_name, "{file} ({deep})");
+            assert!(matches!(pkcs12::open(&ber, "nope"), Err(SignError::WrongPassword)), "{file} ({deep})");
+        }
+    }
 }
 
 #[test]
