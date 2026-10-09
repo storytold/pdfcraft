@@ -79,21 +79,26 @@ fn zoo() -> Vec<Value> {
     ]
 }
 
-/// Paths that must never resolve inside the root.
-fn escapes() -> Vec<String> {
-    vec![
+/// Paths that must never resolve inside the root. Absolute ones point into the test's own temp
+/// `base` (the root's parent), never at real system files or network shares, so a confinement
+/// bug can only touch what the test made.
+fn escapes(base: &std::path::Path) -> Vec<String> {
+    let mut out: Vec<String> = vec![
         "../outside.pdf".into(),
         "../../outside.pdf".into(),
         "../".repeat(40) + "outside.pdf",
         "sub/../../outside.pdf".into(),
         "./././../outside.pdf".into(),
-        "/etc/passwd".into(),
-        "/tmp/outside.pdf".into(),
-        r"C:\Windows\System32\drivers\etc\hosts".into(),
-        r"\\server\share\outside.pdf".into(),
-        r"..\..\outside.pdf".into(),
+        base.join("outside.pdf").to_string_lossy().into_owned(),
+        base.join("new-outside.pdf").to_string_lossy().into_owned(),
+        base.join("sub").join("new-outside.pdf").to_string_lossy().into_owned(),
         "link-out/outside.pdf".into(), // through a planted symbolic link, when the system allows one
-    ]
+    ];
+    // Backslashes separate only on Windows; elsewhere this is an ordinary file name in the root.
+    if cfg!(windows) {
+        out.push(r"..\..\outside.pdf".into());
+    }
+    out
 }
 
 /// The properties of `def` whose values are paths, by name and whether they are a list.
@@ -102,7 +107,10 @@ fn path_props(def: &pdfcraft_automation::ToolDef) -> Vec<(String, bool)> {
     props
         .iter()
         .filter(|(name, spec)| {
-            let is_pathish = matches!(name.as_str(), "path" | "paths" | "folder" | "out_dir" | "file");
+            // `out` (an output file) and `image` (a picture to place) are paths when they are
+            // strings; `image` is an image number elsewhere, which the integer check skips.
+            let is_pathish = matches!(name.as_str(), "path" | "paths" | "folder" | "out_dir" | "file" | "out" | "image")
+                || spec["description"].as_str().is_some_and(|d| d.starts_with("A file path"));
             // `file_page` is a page number inside a file, not a path.
             is_pathish && spec["type"] != "integer"
         })
@@ -239,7 +247,7 @@ fn no_tool_escapes_the_root() {
 
     for def in tools() {
         for (prop, is_list) in path_props(&def) {
-            for escape in escapes() {
+            for escape in escapes(&base) {
                 let mut obj = plausible_with(&def, Some(doc));
                 obj.insert(prop.clone(), if is_list { json!([escape]) } else { json!(escape) });
                 let args = Value::Object(obj);
