@@ -26,6 +26,7 @@ trailer << /Root 1 0 R >>
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("author", "Tester").unwrap();
@@ -113,6 +114,29 @@ fn dragging_over_text_with_the_highlighter_highlights_it() {
     // The Comments panel opened with the tool and lists it.
     h.get_by_label_contains("Comments");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Add highlight"));
+}
+
+#[test]
+fn a_new_highlight_opens_its_note_for_typing() {
+    let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
+    assert_eq!(h.state().views[0].comments.editing, None);
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
+    };
+    drag(&mut h, a, b);
+    assert_eq!(comments(&h).len(), 1);
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 0, String::new())), "the Comments panel edits the new highlight");
+    // An area highlight opens its note too, replacing the empty one.
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    assert_eq!(comments(&h).len(), 2);
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 1, String::new())));
+    // A note being typed is kept: the next highlight is only selected.
+    h.state_mut().views[0].comments.editing = Some((0, 1, "typed".into()));
+    drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
+    assert_eq!(comments(&h).len(), 3);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 2)));
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 1, "typed".into())));
 }
 
 #[test]
@@ -539,6 +563,7 @@ fn hovering_a_comment_shows_its_author_and_text() {
     );
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("hover.pdf", None, pdf.into_bytes()).expect("opens");
         app.set_option("left", "closed").unwrap();
         // No Comments panel: the comment's text should only appear in the hover popup.
@@ -597,4 +622,44 @@ fn the_opacity_set_for_a_tool_goes_into_its_new_comments() {
     h.state_mut().set_option("quick", "strikeout").unwrap();
     h.run_steps(2);
     h.get_by_label("Opacity");
+}
+
+/// #225: comment tools open the Comments panel until the user closes it; then it stays closed,
+/// across restarts, until they open it again.
+#[test]
+fn a_closed_comments_panel_stays_closed_when_picking_comment_tools() {
+    use pdfcraft_ui_egui::RightPanel;
+    let mut h = harness(|_| {});
+    assert_eq!(h.state().right, None);
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(2);
+    assert_eq!(h.state().right, Some(RightPanel::Comments), "Acrobat opens Comments with the tools");
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    assert_eq!(h.state().right, None);
+    for tool in ["select", "comment.underline", "comment.note", "comment.highlight"] {
+        if tool == "select" {
+            h.state_mut().quick_tool = QuickTool::Select;
+        } else {
+            assert!(h.state_mut().execute(tool));
+        }
+        h.run_steps(2);
+        assert_eq!(h.state().right, None, "{tool} reopened the closed Comments panel");
+    }
+    let mut again = PdfCraftApp::new();
+    again.restore(&h.state().persist());
+    assert!(again.comments_panel_closed, "the choice survives a restart");
+    // Opening it again from the rail lets the tools open it once more.
+    h.get_by_label("Comments").click();
+    h.run_steps(2);
+    assert_eq!(h.state().right, Some(RightPanel::Comments));
+    assert!(!h.state().comments_panel_closed);
+    // What the rail and View menu call; "Bookmarks" labels two controls on screen.
+    h.state_mut().choose_right_panel(Some(RightPanel::Bookmarks));
+    h.state_mut().choose_right_panel(None);
+    h.run_steps(2);
+    assert!(!h.state().comments_panel_closed, "switching to and closing another panel isn't closing Comments");
+    assert!(h.state_mut().execute("comment.strikeout"));
+    h.run_steps(2);
+    assert_eq!(h.state().right, Some(RightPanel::Comments));
 }

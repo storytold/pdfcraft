@@ -662,6 +662,18 @@ evidence = ["crates/ui-egui/tests/ui.rs::persistence_round_trips_and_tolerates_g
 notes = "never reads other apps' lists; File ▸ Open Recent lists them (#290), an already-open file focuses its tab instead of reopening it"
 
 [[feature]]
+id = "core.reopen-last-session"
+title = "Reopen the files from the last session at startup"
+area = "A"
+tier = "P2"
+milestone = "M3"
+status = "shipped"
+commands = []
+tools = []
+evidence = ["crates/ui-egui/tests/editing.rs::the_last_session_reopens_its_files_pages_and_active_tab", "crates/ui-egui/tests/editing.rs::quitting_with_unsaved_changes_still_remembers_every_file", "crates/ui-egui/tests/editing.rs::the_last_session_is_off_by_default_and_skips_missing_and_duplicate_files", "crates/ui-egui/src/last_session.rs::malformed_sessions_are_skipped_and_capped"]
+notes = "Desktop, off by default (Preferences ▸ Documents and view, #442): the files open when PdfCraft last closed reopen at the page each showed, with the same tab in front; files named on the command line open after them, in front; files that are gone, and documents the Recovery dialog offers, are skipped. Quitting with unsaved changes still remembers every tab. Not yet: zoom, layout and scroll position within the page (#418); only the first encrypted file asks for its password (later ones stay closed), and a file opened after it dismisses that prompt; a save that fails partway through a quit can leave the remembered list from that quit; never-saved documents and the web build have no paths to reopen."
+
+[[feature]]
 id = "core.usage-rights-preserve"
 title = "Preserve usage-rights (UR3) signatures from Reader-extended files"
 area = "A"
@@ -746,8 +758,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster.rs::huge_cid_width_ranges_terminate", "crates/render/src/raster.rs::non_embedded_japanese_cid_fonts_draw_with_a_craft_fonts_face"]
-notes = "CID-to-Unicode tables are M2.4; a non-embedded Adobe-Japan1 font is drawn in a craft-fonts Japanese face (Mincho or Gothic by name) when built with craft-fonts; non-embedded GB1, CNS1 and Korea1 fonts still draw nothing (no allowed face)"
+evidence = ["crates/render/src/raster.rs::huge_cid_width_ranges_terminate", "crates/render/src/raster.rs::non_embedded_japanese_cid_fonts_draw_with_a_craft_fonts_face", "crates/render/src/raster.rs::mincho_substitute_covers_half_width_katakana"]
+notes = "CID-to-Unicode tables are M2.4; a non-embedded Adobe-Japan1 font is drawn in a craft-fonts Japanese face (Mincho or Gothic by name; BIZ UDMincho for Mincho, which covers half-width katakana) when built with craft-fonts; non-embedded GB1, CNS1 and Korea1 fonts still draw nothing (no allowed face)"
 
 [[feature]]
 id = "view.render-image-codecs"
@@ -3494,8 +3506,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.highlight"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/engine/src/tests.rs::highlight_multiplies_over_text"]
-notes = "drag over text, or pick the tool with text selected; agents can highlight by text search"
+evidence = ["crates/ui-egui/tests/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/ui-egui/tests/comments.rs::a_new_highlight_opens_its_note_for_typing", "crates/engine/src/tests.rs::highlight_multiplies_over_text"]
+notes = "drag over text, or pick the tool with text selected; a new highlight opens its note for typing in the Comments panel; agents can highlight by text search"
 
 [[feature]]
 id = "comment.underline"
@@ -5786,8 +5798,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.digital"]
 tools = ["sign_document"]
-evidence = ["crates/sign/tests/crypto.rs::opens_every_openssl_flavour_of_pkcs12", "crates/sign/tests/pdf.rs::signing_then_validating_with_and_without_trust", "crates/ui-egui/tests/signing.rs::certifying_without_a_visible_signature", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools"]
-notes = "PBES2 (AES, 3DES) and legacy SHA-1 3DES/RC2 files; RSA, P-256, P-384"
+evidence = ["crates/sign/tests/crypto.rs::opens_every_openssl_flavour_of_pkcs12", "crates/sign/tests/crypto.rs::opens_pkcs12_as_windows_writes_it", "crates/sign/tests/pdf.rs::signing_then_validating_with_and_without_trust", "crates/ui-egui/tests/signing.rs::certifying_without_a_visible_signature", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools"]
+notes = "PBES2 (AES, 3DES) and legacy SHA-1 3DES/RC2 files; RSA, P-256, P-384; both the DER OpenSSL writes and the BER Windows writes (indefinite lengths, segmented AuthenticatedSafe)"
 
 [[feature]]
 id = "sign.macos-keychain"

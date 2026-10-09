@@ -45,6 +45,7 @@ fn harness(docs: &[usize]) -> Harness<'static, PdfCraftApp> {
     let docs = docs.to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         for (i, n) in docs.iter().enumerate() {
             app.open_bytes(&format!("doc{i}.pdf"), None, fixture(*n)).unwrap();
         }

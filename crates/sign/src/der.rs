@@ -1,7 +1,14 @@
-//! A small DER reader and writer (ITU-T X.690): just what X.509, CMS and PKCS#12 need.
+//! A small BER/DER reader and writer (ITU-T X.690): just what X.509, CMS and PKCS#12 need.
 //!
 //! [`Tlv`] borrows from the input and keeps its full encoding (`raw`), so signed structures can
 //! be verified over the exact bytes that were signed.
+//!
+//! Reading is strict DER by default, which is what everything signed must use. [`Tlv::parse_ber`]
+//! also accepts the two BER constructions a reader meets in practice — the indefinite length form
+//! and strings split into segments — which PKCS #12 needs: Windows writes `.p12` files that way.
+//! Writing is always DER.
+
+use std::borrow::Cow;
 
 use crate::SignError;
 
@@ -11,6 +18,8 @@ pub mod tag {
     pub const INTEGER: u8 = 0x02;
     pub const BIT_STRING: u8 = 0x03;
     pub const OCTET_STRING: u8 = 0x04;
+    /// An OCTET STRING split into segments (BER only, X.690 §8.21); see [`super::Tlv::octets`].
+    pub const OCTET_STRING_SEGMENTS: u8 = 0x24;
     pub const NULL: u8 = 0x05;
     pub const OID: u8 = 0x06;
     pub const UTF8_STRING: u8 = 0x0C;
@@ -36,56 +45,107 @@ fn bad(what: &str) -> SignError {
     SignError::Malformed(what.to_string())
 }
 
-/// One DER element.
+/// Which encoding rules a reader accepts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Form {
+    /// DER: every length definite, every string primitive. Anything whose bytes are signed is read
+    /// this way, so that what is verified is exactly what was written.
+    Der,
+    /// BER as well: the indefinite length form (X.690 §8.1.3.6) and strings split into segments
+    /// (§8.21).
+    Ber,
+}
+
+/// One BER/DER element.
+#[derive(Clone, Copy, Debug, Eq)]
 pub struct Tlv<'a> {
     pub tag: u8,
-    /// The contents octets.
+    /// The contents octets (without the end-of-contents octets of an indefinite length).
     pub value: &'a [u8],
-    /// The whole encoding (identifier, length and contents).
+    /// The whole encoding (identifier, length, contents and any end-of-contents octets).
     pub raw: &'a [u8],
+    /// The rules this element was read with. Its children are read the same way.
+    form: Form,
+}
+
+/// Two elements are equal when they encode the same thing; the rules they were read with are not
+/// part of that.
+impl PartialEq for Tlv<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.tag == other.tag && self.value == other.value && self.raw == other.raw
+    }
 }
 
 impl<'a> Tlv<'a> {
-    /// Parse one element at the start of `input`; returns it and the rest.
+    /// Parse one DER element at the start of `input`; returns it and the rest.
     pub fn parse(input: &'a [u8]) -> Result<(Tlv<'a>, &'a [u8]), SignError> {
+        Tlv::read(input, Form::Der, 0)
+    }
+
+    /// Parse one BER element at the start of `input`; returns it and the rest.
+    pub fn parse_ber(input: &'a [u8]) -> Result<(Tlv<'a>, &'a [u8]), SignError> {
+        Tlv::read(input, Form::Ber, 0)
+    }
+
+    fn read(input: &'a [u8], form: Form, depth: usize) -> Result<(Tlv<'a>, &'a [u8]), SignError> {
         let (&tag, rest) = input.split_first().ok_or_else(|| bad("truncated DER"))?;
         if tag & 0x1F == 0x1F {
             return Err(bad("multi-byte DER tags are not supported"));
         }
         let (&first, rest) = rest.split_first().ok_or_else(|| bad("truncated DER length"))?;
-        let (len, rest) = if first < 0x80 {
-            (first as usize, rest)
+        // `trailer` is the two end-of-contents octets, which belong to the element but not to its
+        // contents.
+        let (len, rest, trailer) = if first < 0x80 {
+            (first as usize, rest, 0)
+        } else if first == 0x80 {
+            if form == Form::Der {
+                return Err(bad("indefinite lengths are not allowed in DER"));
+            }
+            if tag & 0x20 == 0 {
+                return Err(bad("an indefinite length needs a constructed element"));
+            }
+            (contents_len(rest, form, depth)?, rest, 2)
         } else {
             let n = (first & 0x7F) as usize;
-            if n == 0 || n > 4 || rest.len() < n {
+            if n > 4 || rest.len() < n {
                 return Err(bad("unsupported DER length"));
             }
             let len = rest[..n].iter().fold(0usize, |acc, b| (acc << 8) | *b as usize);
-            (len, &rest[n..])
+            (len, &rest[n..], 0)
         };
-        if rest.len() < len {
+        let end = len.checked_add(trailer).ok_or_else(|| bad("DER length overflows"))?;
+        if rest.len() < end {
             return Err(bad("DER element runs past the end"));
         }
+        // `end <= rest.len()`, so neither sum below can overflow.
         let header = input.len() - rest.len();
-        Ok((Tlv { tag, value: &rest[..len], raw: &input[..header + len] }, &rest[len..]))
+        Ok((Tlv { tag, value: &rest[..len], raw: &input[..header + end], form }, &rest[end..]))
     }
 
-    /// Parse `input` as exactly one element.
+    /// Parse `input` as exactly one DER element.
     pub fn parse_all(input: &'a [u8]) -> Result<Tlv<'a>, SignError> {
-        let (t, rest) = Tlv::parse(input)?;
+        Tlv::only(input, Form::Der)
+    }
+
+    /// Parse `input` as exactly one BER element.
+    pub fn parse_all_ber(input: &'a [u8]) -> Result<Tlv<'a>, SignError> {
+        Tlv::only(input, Form::Ber)
+    }
+
+    fn only(input: &'a [u8], form: Form) -> Result<Tlv<'a>, SignError> {
+        let (t, rest) = Tlv::read(input, form, 0)?;
         if !rest.is_empty() {
             return Err(bad("trailing bytes after DER element"));
         }
         Ok(t)
     }
 
-    /// The children of a constructed element.
+    /// The children of a constructed element, read with the same rules as their parent.
     pub fn children(&self) -> Result<Vec<Tlv<'a>>, SignError> {
         let mut out = Vec::new();
         let mut rest = self.value;
         while !rest.is_empty() {
-            let (t, r) = Tlv::parse(rest)?;
+            let (t, r) = Tlv::read(rest, self.form, 0)?;
             out.push(t);
             rest = r;
         }
@@ -99,7 +159,34 @@ impl<'a> Tlv<'a> {
 
     /// The element inside an EXPLICIT tag.
     pub fn inner(&self) -> Result<Tlv<'a>, SignError> {
-        Tlv::parse_all(self.value)
+        Tlv::only(self.value, self.form)
+    }
+
+    /// An OCTET STRING's contents, joining the segments of BER's constructed form (X.690 §8.21).
+    /// Borrowed in the ordinary case, so the common path copies nothing.
+    pub fn octets(&self, what: &str) -> Result<Cow<'a, [u8]>, SignError> {
+        self.join(what, 0)
+    }
+
+    fn join(&self, what: &str, depth: usize) -> Result<Cow<'a, [u8]>, SignError> {
+        /// Deep enough for anything real: a writer that segments at all segments once.
+        const MAX_DEPTH: usize = 16;
+        match self.tag {
+            tag::OCTET_STRING => Ok(Cow::Borrowed(self.value)),
+            tag::OCTET_STRING_SEGMENTS if self.form == Form::Ber => {
+                if depth >= MAX_DEPTH {
+                    return Err(bad(&format!("{what}: OCTET STRING segments nested too deeply")));
+                }
+                // The join is never larger than the segments it is made of, so this is bounded by
+                // the input.
+                let mut out: Vec<u8> = Vec::with_capacity(self.value.len());
+                for s in self.children()? {
+                    out.extend_from_slice(&s.join(what, depth + 1)?);
+                }
+                Ok(Cow::Owned(out))
+            }
+            found => Err(bad(&format!("{what}: expected an OCTET STRING, found tag {found:#04x}"))),
+        }
     }
 
     /// An OID in dotted form.
@@ -169,6 +256,26 @@ impl<'a> Tlv<'a> {
             second: if s.len() >= rest + 10 { num(rest + 8..rest + 10)? } else { 0 },
         };
         Ok(t)
+    }
+}
+
+/// How many contents octets an indefinite-length element has: everything up to the matching
+/// end-of-contents octets, which have to be there (X.690 §8.1.5). The contents are elements, so
+/// finding the end means reading them, and one of those may be indefinite too — hence the depth
+/// limit. Every step consumes at least two octets, so the walk always ends.
+fn contents_len(input: &[u8], form: Form, depth: usize) -> Result<usize, SignError> {
+    /// Far deeper than any real file nests, and shallow enough never to exhaust the stack.
+    const MAX_DEPTH: usize = 48;
+    if depth >= MAX_DEPTH {
+        return Err(bad("BER elements nested too deeply"));
+    }
+    let mut rest = input;
+    loop {
+        match rest {
+            [] => return Err(bad("an indefinite length with no end-of-contents")),
+            [0, 0, ..] => return Ok(input.len() - rest.len()),
+            _ => rest = Tlv::read(rest, form, depth + 1)?.1,
+        }
     }
 }
 
@@ -437,6 +544,36 @@ mod tests {
         let s = set_of(&[&int(2), &int(1)]);
         assert_eq!(s, vec![0x31, 6, 2, 1, 1, 2, 1, 2]);
         assert!(Tlv::parse(&[0x30, 5, 1]).is_err());
+    }
+
+    #[test]
+    fn reads_ber_indefinite_lengths_and_segmented_strings() {
+        // SEQUENCE { INTEGER 3, OCTET STRING { "hi", "!" } }, every wrapper in the indefinite form:
+        // the shape Windows gives a .p12 file.
+        let ber: &[u8] = &[0x30, 0x80, 0x02, 0x01, 0x03, 0x24, 0x80, 0x04, 0x02, b'h', b'i', 0x04, 0x01, b'!', 0, 0, 0, 0];
+        let e = Tlv::parse_all(ber).unwrap_err().to_string();
+        assert!(e.contains("indefinite lengths are not allowed in DER"), "{e}");
+
+        let t = Tlv::parse_all_ber(ber).unwrap();
+        assert_eq!(t.tag, tag::SEQUENCE);
+        assert_eq!(t.raw, ber, "the end-of-contents octets belong to the element");
+        assert_eq!(t.value, &ber[2..ber.len() - 2], "but not to its contents");
+        let c = t.children().unwrap();
+        assert_eq!(c[0].u64().unwrap(), 3);
+        assert_eq!(c[1].octets("segments").unwrap().as_ref(), b"hi!", "the segments are joined");
+        assert!(c[0].octets("not a string").is_err());
+
+        // Definite lengths read the same either way, and a segmented string stays a DER error.
+        assert_eq!(Tlv::parse_all_ber(&int(65537)).unwrap().u64().unwrap(), 65537);
+        assert_eq!(Tlv::parse_all_ber(&octets(b"hi!")).unwrap().octets("plain").unwrap().as_ref(), b"hi!");
+        assert!(Tlv::parse_all(&[0x24, 2, 0x04, 0]).unwrap().octets("segments").is_err());
+
+        // Malformed: no end-of-contents, and an indefinite length on a primitive element.
+        assert!(Tlv::parse_all_ber(&ber[..ber.len() - 2]).is_err());
+        assert!(Tlv::parse_all_ber(&[0x04, 0x80, 0, 0]).is_err());
+        // Nesting is bounded, so a file made of nothing but wrappers fails instead of crashing.
+        let deep = [[0x30u8, 0x80].repeat(400), [0u8, 0].repeat(400)].concat();
+        assert!(Tlv::parse_all_ber(&deep).is_err());
     }
 
     #[test]
