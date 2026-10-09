@@ -133,6 +133,8 @@ pub struct Certificate {
     pub ocsp_urls: Vec<String>,
     /// CRL distribution point URLs (2.5.29.31).
     pub crl_urls: Vec<String>,
+    /// The `version` field: 0 for v1, 1 for v2, 2 for v3.
+    pub version: u64,
 }
 
 /// The certificate extensions `Certificate::parse` reads, gathered tolerantly: an
@@ -156,15 +158,21 @@ impl Extensions {
     fn read(&mut self, oid: &str, value: &Tlv<'_>) {
         match oid {
             "2.5.29.19" => {
-                let Ok(bc) = Tlv::parse_all(value.value) else { return };
+                // Present at all, even when it doesn't parse: a malformed basicConstraints must
+                // not make a certificate look like an old v1 root (which may issue). Unparsed,
+                // it stays "not a CA".
                 self.has_basic_constraints = true;
+                let Ok(bc) = Tlv::parse_all(value.value) else { return };
                 let fields = bc.children().unwrap_or_default();
                 self.is_ca = fields.first().is_some_and(|b| b.tag == tag::BOOLEAN && b.value != [0]);
-                // pathLenConstraint is the INTEGER after the optional cA BOOLEAN.
-                self.path_len =
-                    fields.iter().find(|t| t.tag == tag::INTEGER).and_then(|t| t.u64().ok()).map(|n| u32::try_from(n).unwrap_or(u32::MAX));
+                // pathLenConstraint is the INTEGER after the optional cA BOOLEAN. One that is
+                // present but unreadable (negative, too long) allows no CA below, not any number.
+                self.path_len = fields.iter().find(|t| t.tag == tag::INTEGER).map(|t| t.u64().map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX)));
             }
             "2.5.29.15" => {
+                // A keyUsage that is present restricts the key even when it doesn't parse: an
+                // unreadable one allows no usage at all, never every usage.
+                self.key_usage = Some(0);
                 let Ok(bits) = Tlv::parse_all(value.value) else { return };
                 let Some((_, b)) = bits.value.split_first() else { return };
                 // Bit 0 is the most significant bit of the first byte.
@@ -243,8 +251,11 @@ impl Certificate {
         let parts = cert.children()?;
         let [tbs, sig_alg, sig] = parts.as_slice() else { return Err(SignError::Malformed("Certificate".into())) };
         let mut f = tbs.children()?.into_iter().peekable();
+        // version [0] EXPLICIT INTEGER DEFAULT v1 (0); v3 is 2. Unreadable counts as v3, the
+        // stricter reading (no v1-root exception in `may_issue`).
+        let mut version = 0u64;
         if f.peek().is_some_and(|t| t.tag == tag::ctx(0)) {
-            f.next();
+            version = f.next().and_then(|v| v.inner().ok()).and_then(|v| v.u64().ok()).unwrap_or(2);
         }
         let serial = f.next().ok_or_else(|| SignError::Malformed("serial".into()))?.expect(tag::INTEGER, "serial")?.value.to_vec();
         let _inner_alg = f.next();
@@ -298,6 +309,7 @@ impl Certificate {
             extended_key_usage,
             ocsp_urls,
             crl_urls,
+            version,
         })
     }
 
@@ -315,11 +327,13 @@ impl Certificate {
 
     /// Whether this certificate may issue certificates (RFC 5280 §4.2.1.9, §4.2.1.3): it is a
     /// CA by its basic constraints, and if it has a key usage, that includes `keyCertSign`. A
-    /// self-signed certificate with no basic constraints at all (an old v1 root) counts as a CA.
+    /// self-signed v1 or v2 certificate (an old root, which predates extensions) with no basic
+    /// constraints counts as a CA; a v3 certificate must say it is one.
     pub fn may_issue(&self) -> bool {
         /// keyUsage bit 5.
         const KEY_CERT_SIGN: u16 = 1 << 5;
-        (self.is_ca || (!self.has_basic_constraints && self.is_self_signed())) && self.key_usage.is_none_or(|u| u & KEY_CERT_SIGN != 0)
+        let old_root = self.version < 2 && !self.has_basic_constraints && self.is_self_signed();
+        (self.is_ca || old_root) && self.key_usage.is_none_or(|u| u & KEY_CERT_SIGN != 0)
     }
 
     /// Valid at `t`.
@@ -430,6 +444,8 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
     (chain, refused)
 }
 
+/// Certificates from a file: DER, or PEM with one or more `CERTIFICATE` blocks (`.cer`, `.crt`,
+/// `.pem`, Acrobat's `.fdf`-free exports).
 pub fn load_certificates(bytes: &[u8]) -> Result<Vec<Certificate>, SignError> {
     if bytes.first() == Some(&0x30) {
         return Ok(vec![Certificate::parse(bytes)?]);

@@ -53,15 +53,19 @@ fn issue(cn: &str, issuer: Option<&Party>, valid: (u32, u32), extensions: &[Vec<
     let alg = signer.preferred_digest();
     let sig_alg = signer.signature_algorithm(alg);
     let exts: Vec<&[u8]> = extensions.iter().map(Vec::as_slice).collect();
-    let mut fields: Vec<Vec<u8>> = vec![
-        der::explicit(0, &der::int(2)),
+    let mut fields: Vec<Vec<u8>> = Vec::new();
+    // v3 when there are extensions; with none, a v1 certificate (no version field), as old roots.
+    if !exts.is_empty() {
+        fields.push(der::explicit(0, &der::int(2)));
+    }
+    fields.extend([
         der::uint(&[1 + cn.len() as u8]),
         sig_alg.clone(),
         issuer_name.raw.clone(),
         der::seq(&[&time(valid.0).encode(), &time(valid.1).encode()]),
         name.raw.clone(),
         key.public_key().spki(),
-    ];
+    ]);
     if !exts.is_empty() {
         fields.push(der::explicit(3, &der::seq(&exts)));
     }
@@ -205,4 +209,33 @@ fn a_signature_chaining_through_an_ordinary_certificate_is_not_trusted() {
     let (status, details) = verdict(forged, vec![subscriber.cert.clone()], &r.cert);
     assert_eq!(status, Status::Unknown, "{details:?}");
     assert!(details.iter().any(|d| d.contains("not a CA")), "{details:?}");
+}
+
+#[test]
+fn a_v3_self_signed_certificate_without_constraints_is_not_a_root_that_issues() {
+    // A self-signed v3 ID with no basicConstraints and no key usage (only a key identifier): it
+    // may sign documents, but it may not vouch for anyone else.
+    let id = issue("Self Signed V3 ID", None, FOREVER, &[ext("2.5.29.14", &der::octets(&[1, 2, 3, 4]))]);
+    assert!(id.cert.is_self_signed() && !id.cert.has_basic_constraints && id.cert.version == 2);
+    assert!(!id.cert.may_issue());
+    let l = end_entity("Leaf", &id);
+    assert_eq!(names(&build_chain(&l.cert, &[id.cert.clone()], None)), ["Leaf"]);
+}
+
+#[test]
+fn unreadable_constraint_extensions_fail_closed() {
+    // keyUsage present but not a BIT STRING: no usage at all, so no keyCertSign.
+    let bad_usage = ext("2.5.29.15", &[0xff, 0x00]);
+    let c = issue("Bad Usage CA", Some(&root()), FOREVER, &[basic_constraints(true, None), bad_usage]);
+    assert_eq!(c.cert.key_usage, Some(0));
+    assert!(!c.cert.may_issue());
+    // pathLenConstraint present but negative: no CA may follow, not any number.
+    let negative = ext("2.5.29.19", &der::seq(&[&der::boolean(true), &der::tlv(tag::INTEGER, &[0xff])]));
+    let c = issue("Negative PathLen CA", Some(&root()), FOREVER, &[negative]);
+    assert!(c.cert.is_ca);
+    assert_eq!(c.cert.path_len, Some(0));
+    // basicConstraints present but unparsable: present, not a CA, so not an "old v1 root".
+    let garbage = ext("2.5.29.19", &[0x30, 0x05, 0x01]);
+    let c = issue("Garbled Constraints", None, FOREVER, &[garbage]);
+    assert!(c.cert.has_basic_constraints && !c.cert.is_ca && !c.cert.may_issue());
 }
