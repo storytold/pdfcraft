@@ -4,40 +4,75 @@
 [`execution-plan.md`](execution-plan.md), the relevant part of
 [`architecture.md`](architecture.md), and the README of the crate you are touching.
 
-- **Current phase:** D 3.1 (foundation gaps) and F 4.1 (font engine, dictionary level), with H
-  (fidelity harness) alongside.
-- **Next unchecked task:** **D1 — pin the pdf.js corpus**. It is a supply-chain hole in the gate
-  that every corpus claim rests on, and foundation outranks features.
-- **Then:** D2, D3, then F1 (exact standard-14 metrics), F2, F3, then H1 (`pdfcraft-testkit`).
+- **Current phase:** D 3.1 (foundation gaps) is done bar review; F 4.1 (font engine, dictionary
+  level) is active, with H (fidelity harness) next.
+- **Done and merged:** D2 and D3 (#351, tool-argument fuzzing and the root-confinement proof),
+  D5 in part (#332, `cos` and `engine` READMEs).
+- **Done, awaiting review:** D1 (#339, corpus pin), F1 (#357, exact standard-14 metrics), and this
+  plan itself (#223).
+- **Next unchecked task:** **F2 — encoding and code-to-Unicode completeness** (§4.1). It needs no
+  new decisions and no new dependencies, and it is read from the font dictionary alone.
+- **Then:** F3 (deterministic fallback), then H1 (`pdfcraft-testkit`), then D4 (the 96 toolless
+  features) and the remaining 11 crate READMEs.
 - **Last verified green:** see the baseline below; re-measure before quoting.
 
-## Verified baseline (2026-10-08, `main` at `d801407`, v0.4.0, Windows 10)
+## Verified baseline (2026-10-09, `main` at `efb3439`, Windows 10)
 
-Measured, not quoted. **Re-measure before quoting:** `main` moved 47 commits in the 24 hours
+Measured, not quoted. **Re-measure before quoting:** `main` moved 123 commits in the 24 hours
 before this reading, so a table more than a day old is already wrong.
 
 | Check | Result |
 |---|---|
-| `cargo xtask parity` | 806 counted features: **413 shipped, 73 partial — 51.2% (55.8% weighted)** |
-| Toolless shipped features | **94** (AGENTS.md §3 violation; tracked as D4) |
-| Crates | 29 library crates; **13 have no README** (D5) |
-| Open PRs / issues | 13 open PRs / ~65 open issues |
+| `cargo xtask parity` | 807 counted features: **420 shipped, 73 partial — 52.0% (56.6% weighted)** |
+| Toolless shipped features | **96** (AGENTS.md §3 violation; tracked as D4) |
+| Crates | 30 library crates; **11 have no README** (D5) |
+| Open PRs / issues | **61 open PRs** (37 of them `CONFLICTING`) / 173 open issues |
 
-Parity by tier: P0 88.8% shipped, P1 53.4%, P2 8.1%, P3 2.3%. Effort-weighted ≈ 30–35%.
+Parity by tier: P0 89.6% shipped, P1 54.0%, P2 9.6%, P3 2.3%. Effort-weighted ≈ 30–35%.
+
+Weakest areas by weighted score, which is where the headline 56.6% is actually earned or lost:
+I Scan and OCR 23.1%, N Compare/automation/AI 30.0%, K Optimize and standards 34.5%,
+J Create and export 39.7%, L Print production 39.7%.
 
 Not re-measured at this commit: `cargo test --workspace`, clippy, the corpus sweep
-(`xtask check`), the nightly fuzz job. `xtask layers`, `xtask assets` and `xtask parity` were run.
+(`xtask check`), the nightly fuzz job. `xtask parity` and `xtask assets` were run.
+
+> **Compute note.** `cargo test --workspace` locked up the development machine's CPU. Scope every
+> build and test to the crates you touched — `cargo test -p <crate> -j 2`, under a `timeout` — and
+> leave the workspace sweep to CI, which is what it is for.
 
 ### The repository moves fast, and PRs rot
 
-Between 2026-10-07 and 2026-10-08, 47 commits landed on `main` — mostly community PRs — and
-**every one of the six PRs that were open the day before went from mergeable to `CONFLICTING`.**
-Two operational consequences, which matter more here than on a slower project:
+This is the single most important operational fact about this repository, and it now has two
+independent readings a day apart:
+
+| Reading | Commits to `main` in the prior 24h | Fate of PRs open the day before |
+|---|---|---|
+| 2026-10-08 | 47 | **all six** went mergeable → `CONFLICTING` |
+| 2026-10-09 | **123** | 37 of 61 open PRs are `CONFLICTING` (61%) |
+
+The five PRs this project opened on 2026-10-08 are a controlled sample of the same effect: two
+merged within a day (#332, #351), two stayed green and untouched (#223, #339), and one went
+`CONFLICTING` (#357, font metrics). The one that rotted was the one touching code a popular area
+was actively changing; the two that survived touched documentation and build tooling. **Conflict
+risk tracks how contested the files are, not how large the PR is.**
+
+Three operational consequences, which matter more here than on a slower project:
 
 - **Review small PRs quickly or they die of rebase.** A PR that sits a day needs its author to do
   work again. Latency is a cost paid by contributors, not by us.
 - **Ask the author to rebase; do not rebase for them, and never rewrite their branch.** Their
-  commits are theirs. See `execution-plan.md` §1.4.
+  commits are theirs. See `execution-plan.md` §1.4. Our own branches are ours to rebase, and
+  should be rebased the same day `main` moves under them.
+- **Prefer uncontested files when there is a choice of equally valuable work.** Tooling, tests,
+  docs and the reserved-but-unwritten crates carry near-zero conflict risk; `ui-egui`,
+  `crates/fonts` and the i18n catalogues are where several contributors collide at once.
+
+> **Rebasing is a review step, not a mechanical one.** The #357 rebase surfaced a real bug that
+> had nothing to do with the conflict: resolving the overlap meant re-reading the merged
+> `Family::width`, which was writing items out as `/Times-Italic` while measuring them with
+> Times-Roman widths. Read every hunk you resolve, and the auto-merged hunks in the same files
+> too — `git` resolved `fonts/src/pdf.rs` silently after 395 lines had changed under it.
 
 ## Recent landings worth knowing
 
@@ -59,19 +94,26 @@ doing — the foundation items below — rather than racing it on features.
 
 ## Blockers
 
-1. **Tooling gates rest on unpinned input.** `xtask corpus` clones `mozilla/pdf.js` at HEAD with
-   no commit pin and no sha256, and corpus tests skip silently when it is absent — so the corpus
-   sweep measures a moving target. AGENTS.md §2 requires pinned, verified fixtures. Tracked as D1.
-2. **Tool arguments are never fuzzed.** `xtask fuzz` mutates files only, though AGENTS.md §3 and
-   §4 treat tool arguments as untrusted and they are the MCP attack surface. Tracked as D2.
+1. ~~**Tooling gates rest on unpinned input.**~~ `xtask corpus` cloned `mozilla/pdf.js` at HEAD
+   with no commit pin and no sha256, and corpus tests skipped silently when it was absent — so the
+   corpus sweep measured a moving target, against AGENTS.md §2. **Fixed in D1 (#339),** awaiting
+   review: the commit and a manifest sha256 are pinned, the checkout is forced to LF so the hash
+   matches on Windows and Linux alike, and the corpus test now refuses a directory with no stamp
+   instead of passing quietly.
+2. ~~**Tool arguments are never fuzzed.**~~ `xtask fuzz` mutated files only, though AGENTS.md §3
+   and §4 treat tool arguments as untrusted and they are the MCP attack surface. **Fixed in D2/D3
+   (#351, merged):** 19,299 hostile calls across 132 tools, plus 451 path-escape attempts that
+   each have to be *refused* by a tool holding a real open document. The first version of that
+   confinement test passed with path resolution entirely disabled, which is why it asserts refusal
+   rather than comparing a file listing — a worthwhile warning about what a green test proves.
 3. **No font engine.** `crates/fonts` reads font dictionaries but never a font *program*; glyph
    outlines exist nowhere outside `hayro`. This blocks M2 (renderer) and M7 (editing existing
    text) — together roughly a third of the remaining effort. Phase F clears it: tranche 4.1 is
    active now, tranche 4.2 follows the harness.
 4. **Fidelity is unmeasured.** No side-by-side harness exists. `shipped` means "has at least one
-   cited test", and many shipped features rest on exactly one. Treat 51.2% as a coverage map, not
+   cited test", and many shipped features rest on exactly one. Treat 52.0% as a coverage map, not
    a quality claim. Phase H exists to fix the measurement.
-5. **94 shipped features have no automation tool**, contradicting AGENTS.md §3. Tracked as D4;
+5. **96 shipped features have no automation tool**, contradicting AGENTS.md §3. Tracked as D4;
    `cargo xtask parity` lists them by name.
 6. **The original `plan/` is not present on this machine.** It is gitignored and local-only, so
    the Acrobat observation notes (`plan/acrobat/`) and the ADRs are unavailable here. UI-fidelity
@@ -126,7 +168,9 @@ already permitted and already present:
       committed). H1–H5 do not block on this; H3's goldens pin *our* output against regressions,
       which is a different question from matching Acrobat.
 - [ ] **Who owns community PRs.** PhotoCraft runs a separate integration session for incoming PRs,
-      merges and `main` breakage. PdfCraft has none, so the six open PRs are currently unowned.
+      merges and `main` breakage. PdfCraft has none, so **61 open PRs — 37 of them already
+      conflicting — are currently unowned.** At this volume this is the largest single source of
+      wasted contributor effort in the project, and it is growing faster than any feature gap.
       Either a session takes that lane or the feature session covers it under §1.4.
 
 ## Conventions reminder

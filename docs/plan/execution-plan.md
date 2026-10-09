@@ -243,31 +243,41 @@ need it (online timestamp fetching, live OCSP/CRL). The non-network half shipped
 These are holes in the tooling that every other gate rests on, which is why they outrank feature
 work under "foundation and architecture before features".
 
-- [ ] **D1. Pin the pdf.js corpus.** `xtask corpus` (`xtask/src/gates.rs`) shallow-clones
+- [x] **D1. Pin the pdf.js corpus.** `xtask corpus` (`xtask/src/gates.rs`) shallow-clones
       `mozilla/pdf.js` at HEAD with **no commit pin and no sha256**, and corpus tests silently skip
       when it is absent. AGENTS.md §2 requires fixtures "fetched pinned by commit and
       sha256-verified". As written, the corpus sweep measures a moving target and a compromised
       upstream would go unnoticed. *Accept:* a pinned commit and a verified manifest; corpus tests
       fail rather than skip when the corpus is present but wrong; `xtask check` reports the pin.
-- [ ] **D2. Fuzz tool arguments, not just files.** `xtask fuzz` mutates PDFs only. Nothing feeds
+      **Done — #339** (awaiting review): `xtask/src/corpus.rs` pins the commit and a manifest
+      sha256, forces `core.autocrlf=false`/`core.eol=lf` so the hash agrees across platforms, and
+      the corpus test refuses an unstamped directory instead of passing quietly.
+- [x] **D2. Fuzz tool arguments, not just files.** `xtask fuzz` mutates PDFs only. Nothing feeds
       hostile *arguments* to the automation tools, although AGENTS.md §3 and §4 treat them as
       untrusted and they are the MCP attack surface. *Accept:* a generator that calls every tool in
       the table with malformed, extreme and type-confused arguments; every finding becomes a
       synthetic regression test; it runs in the nightly job.
-- [ ] **D3. Audit nested tool dispatch for confinement bypass.** `--root` confinement must hold on
+      **Done — #351** (merged): `crates/automation/tests/hostile_args.rs`, 19,299 calls over 132
+      tools.
+- [x] **D3. Audit nested tool dispatch for confinement bypass.** `--root` confinement must hold on
       paths reached *indirectly* — an allowed tool that internally dispatches another must not skip
       the check. Whether PdfCraft has this hole is **unverified**; audit before claiming either
       way. *Accept:* a test that an allowed tool cannot reach a file outside `--root` through any
       internal dispatch, or a written finding that no such path exists.
+      **Done — #351** (merged): mechanised rather than written up, as 451 escape attempts that each
+      have to be *refused* by a tool holding a real open document. Note for anyone extending it:
+      the first version passed with path resolution switched off entirely, because the tools
+      failed on a nonexistent document id before reaching the path, and a file-listing diff cannot
+      detect a *read*. Assert refusal, not absence of damage.
 
 ### 3.2 Standing debt
 
 Pick these up when they block, or between larger tasks.
 
-- [ ] **D4. Tools for toolless features.** `cargo xtask parity` reports **94 shipped features with
+- [ ] **D4. Tools for toolless features.** `cargo xtask parity` reports **96 shipped features with
       no automation tool**. That contradicts AGENTS.md §3. *Accept:* the parity note shrinks, each
       new tool has an end-to-end test in `crates/automation/tests/automation.rs`.
-- [ ] **D5. Crate READMEs.** 13 crates have none (`compare`, `cos`, `crypt`, `edit`, `engine`,
+- [ ] **D5. Crate READMEs.** *(part done: `cos` and `engine` landed in #332; 11 remain.)* 13 crates had none (`compare`, `cos`, `crypt`, `edit`, `engine`,
       `export`, `geom`, `js`, `ocr`, `organize`, `preflight`, `render`, `ui-egui`), yet the session
       protocol says to read them. `cos` and `engine` first. *Accept:* each README states the layer,
       an API sketch, and what is deliberately not done.
@@ -304,7 +314,7 @@ metrics; `rustybuzz` (MIT) for shaping. Both are on the `deny.toml` allowlist.
 No font-program parsing, no renderer, no new dependency. Each of these improves code that ships
 today, which is why they come before the harness rather than after it.
 
-- [ ] **F1. Exact standard-14 metrics.** Replace `pdfcraft_fonts::helvetica_width` — a 15-line
+- [x] **F1. Exact standard-14 metrics.** Replace `pdfcraft_fonts::helvetica_width` — a 15-line
       character-class guess where Times is Helvetica x 0.9, bold is x 1.05 and Courier is a flat
       0.6 — with the real Annex D tables for all 14 faces, plus their encodings. **Seven shipping
       crates use that guess right now:** `annot` (text-box line breaking), `forms` (field
@@ -313,6 +323,20 @@ today, which is why they come before the harness rather than after it.
       `xfa`. This is the highest value-per-hour task in the phase. *Accept:* every standard-14
       width matches the specification table; the call sites move over; a golden appearance stream
       per crate pins the new layout.
+      **Done — #357** (awaiting review), with one acceptance criterion deliberately not met.
+      `crates/fonts/src/std14.rs` carries all fourteen faces; `helvetica_width` delegates, so the
+      seven crates above gained exact Helvetica with no call-site change, and the four sites that
+      faked a face by scaling now select the real one. Widths are checked against values typed in
+      from the specification by hand, so the table is verified against the spec rather than against
+      its own generator.
+      *Not done: the golden appearance streams.* Those crates assert structure and relationships
+      rather than glyph positions, so no existing test needed changing — which also means nothing
+      currently pins the new layout. Goldens need a fixture harness to be worth having; they belong
+      to **H3**, and F1 should be read as unpinned until then.
+      Two findings worth carrying forward: `.rs` is not an asset extension, so a generated table of
+      Adobe-derived data was invisible to `xtask assets` until #357 taught the gate about
+      first-party closed-list entries; and `Family::width` was measuring italic items with upright
+      metrics while writing them out as `/Times-Italic`, which the rebase caught, not the tests.
 - [ ] **F2. Encoding and code-to-Unicode completeness.** The symbolic TrueType rules ((3,0) and
       (1,0) cmaps, the 0xF000 offset), `/Differences` with glyph names, and embedded CMap
       codespace and CID ranges — all readable from the dictionary alone. Improves text extraction,
