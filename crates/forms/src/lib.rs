@@ -144,6 +144,35 @@ impl Field {
         self.widgets.iter().any(|w| w.locked)
     }
 
+    /// Check boxes and radio groups with `/Opt` (PDF 1.4): one export value per widget, in widget
+    /// order. Their on states are then often just positions (`/0`, `/1` …), as pdf-lib writes them.
+    fn button_exports(&self) -> Option<&[(String, String)]> {
+        (matches!(self.kind, FieldKind::CheckBox | FieldKind::Radio) && !self.options.is_empty() && self.options.len() == self.widgets.len())
+            .then_some(self.options.as_slice())
+    }
+
+    /// The export value of widget `i` of a check box or radio group: its `/Opt` entry when the
+    /// field has one per widget, otherwise the widget's on-state name.
+    pub fn export_of(&self, i: usize) -> Option<&str> {
+        let on = self.widgets.get(i)?.on_state.as_deref()?;
+        Some(self.button_exports().and_then(|o| o.get(i)).map_or(on, |(e, _)| e.as_str()))
+    }
+
+    /// The on-state name that selects `choice` in a check box or radio group, where `choice` is an
+    /// on-state name or an export value from `/Opt`.
+    pub fn state_for(&self, choice: &str) -> Option<&str> {
+        self.widgets.iter().filter_map(|w| w.on_state.as_deref()).find(|s| *s == choice).or_else(|| {
+            let i = (0..self.widgets.len()).find(|&i| self.export_of(i) == Some(choice))?;
+            self.widgets.get(i)?.on_state.as_deref()
+        })
+    }
+
+    /// The export value for an on-state name such as the field's value; the name itself when the
+    /// field has no `/Opt`.
+    pub fn export_for_state<'a>(&'a self, state: &'a str) -> &'a str {
+        self.widgets.iter().position(|w| w.on_state.as_deref() == Some(state)).and_then(|i| self.export_of(i)).unwrap_or(state)
+    }
+
     /// The value as one string: text, the state name, or the selected display texts.
     pub fn display_value(&self) -> String {
         match self.kind {
@@ -780,7 +809,7 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
                 // The on-state name or a yes/no word also work (agents, FDF-style data).
                 FieldValue::Text(t) | FieldValue::Radio(Some(t)) => {
                     let t = t.trim();
-                    if t == state || ["yes", "true", "on", "1", "x", "checked"].contains(&t.to_lowercase().as_str()) {
+                    if t == state || f.state_for(t).is_some() || ["yes", "true", "on", "1", "x", "checked"].contains(&t.to_lowercase().as_str()) {
                         true
                     } else if t.is_empty() || ["no", "false", "off", "0", "unchecked"].contains(&t.to_lowercase().as_str()) {
                         false
@@ -801,10 +830,12 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
                 FieldValue::Check(false) => None,
                 _ => return invalid(format!("{:?} is a radio group: choose one of its options", f.name)),
             };
+            // An export value from /Opt selects its widget's on state.
+            let choice = choice.map(|c| f.state_for(&c).map(str::to_owned).unwrap_or(c));
             if let Some(c) = &choice
                 && !f.widgets.iter().any(|w| w.on_state.as_deref() == Some(c.as_str()))
             {
-                let opts: Vec<&str> = f.widgets.iter().filter_map(|w| w.on_state.as_deref()).collect();
+                let opts: Vec<&str> = (0..f.widgets.len()).filter_map(|i| f.export_of(i)).collect();
                 return invalid(format!("{:?} has no option {c:?} (options: {})", f.name, opts.join(", ")));
             }
             if choice.is_none() && f.has(flags::NO_TOGGLE_TO_OFF) && !f.value.is_empty() {

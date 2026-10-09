@@ -36,6 +36,11 @@ fn fixture() -> Document {
         "<< /Type /Annot /Subtype /Widget /FT /Btn /T (go) /Ff 65536 /Rect [300 450 380 470] /P 3 0 R >>".into(), // 25
         "<< /Type /Annot /Subtype /Widget /FT /Btn /T (bare) /Rect [400 700 415 715] /P 3 0 R /Foo (kept) >>".into(), // 26 check box without AP
     ];
+    document(&objs)
+}
+
+/// A PDF of the given objects (numbered from 1).
+fn document(objs: &[String]) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -88,6 +93,40 @@ fn the_field_tree_is_read_with_inheritance() {
     assert_eq!(field(&all, "toppings").kind, FieldKind::List);
     assert_eq!(field(&all, "go").kind, FieldKind::PushButton);
     assert_eq!(field(&all, "address.city").quadding, 1);
+}
+
+/// pdf-lib and other writers give radio groups and check boxes an `/Opt` array and name the on
+/// states by position (`/0`, `/1`): the export values select them, as in Acrobat.
+#[test]
+fn opt_export_values_select_button_states() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),                                                // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),                                 // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>".into(),                                       // 3
+        "<< /Fields [5 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),                                                 // 4
+        "<< /FT /Btn /T (ship) /Ff 49152 /Opt [(Post) (Pick-up)] /V /Off /Kids [6 0 R 7 0 R] >>".into(),            // 5 radio
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [100 700 115 715] /P 3 0 R /AP << /N << /0 9 0 R /Off 10 0 R >> >> >>".into(), // 6
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [200 700 215 715] /P 3 0 R /AP << /N << /1 9 0 R /Off 10 0 R >> >> >>".into(), // 7
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (terms) /Opt [(Accepted)] /V /Off /AS /Off /Rect [100 650 115 665] /P 3 0 R /AP << /N << /0 9 0 R /Off 10 0 R >> >> >>".into(), // 8 check box
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                                                              // 9
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                                                              // 10
+    ];
+    let mut doc = document(&objs);
+    let all = fields(&doc);
+    let ship = field(&all, "ship");
+    assert_eq!((0..2).map(|i| ship.export_of(i)).collect::<Vec<_>>(), [Some("Post"), Some("Pick-up")]);
+    assert_eq!((ship.state_for("Pick-up"), ship.state_for("1"), ship.state_for("Courier")), (Some("1"), Some("1"), None));
+    set_value(&mut doc, "ship", &FieldValue::Radio(Some("Pick-up".into()))).unwrap();
+    set_value(&mut doc, "terms", &FieldValue::Text("Accepted".into())).unwrap();
+    let mut doc = reopen(&doc);
+    let all = fields(&doc);
+    let ship = field(&all, "ship");
+    assert_eq!(ship.value, ["1"]);
+    assert_eq!(ship.export_for_state("1"), "Pick-up");
+    assert_eq!(ship.widgets.iter().map(|w| w.state.as_deref()).collect::<Vec<_>>(), [Some("Off"), Some("1")]);
+    assert_eq!(field(&all, "terms").value, ["0"]);
+    let err = set_value(&mut doc, "ship", &FieldValue::Radio(Some("Courier".into()))).unwrap_err();
+    assert!(err.to_string().contains("options: Post, Pick-up"), "{err}");
 }
 
 #[test]

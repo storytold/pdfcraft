@@ -1652,6 +1652,39 @@ fn exporting_office_files_keeps_images() {
 }
 
 #[test]
+fn exporting_office_files_keeps_text_colour() {
+    // #526: a dark green heading came out black in Word.
+    let content = "BT /F1 24 Tf 0.05 0.23 0.18 rg 72 700 Td (Annual Report) Tj ET \
+BT /F1 11 Tf 0 g 72 650 Td (Black body text that is long enough to be the body size.) Tj ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>".into(),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new();
+    let id = s.open("c.pdf", None, Arc::new(pdf), None).unwrap();
+    let d = s.get(id).unwrap();
+    let html = String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap();
+    assert!(html.contains("style=\"color:#0D3B2E\">Annual Report"), "{html}");
+    let blocks = &d.export_pages()[0].blocks;
+    assert!(blocks.iter().any(|b| b.text == "Annual Report" && b.color == [0.05, 0.23, 0.18]), "{blocks:?}");
+}
+
+#[test]
 fn guard_turns_a_panic_into_an_error() {
     assert_eq!(guard(|| 7), Ok(7));
     assert_eq!(guard(|| -> u8 { panic!("boom") }), Err("boom".to_string()));

@@ -574,6 +574,34 @@ fn japanese_paragraph_uses_unicode_type3_fallback() {
     assert_eq!(text::text_blocks(&reopened, 0).unwrap()[0].text, replacement);
 }
 
+/// Every Type 3 fallback glyph starts with a well-formed `d1`: six operands, the second 0, and a
+/// box that encloses every point of the glyph. Acrobat shows a bullet for a glyph whose `d1`
+/// has the wrong operand count.
+#[test]
+fn type3_fallback_glyphs_declare_a_well_formed_d1() {
+    if without_craft_fonts("type3_fallback_glyphs_declare_a_well_formed_d1") {
+        return;
+    }
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, "見本商会 御中").unwrap();
+    let glyphs = fallback_paths(&reopen(&doc));
+    assert!(!glyphs.is_empty());
+    for glyph in glyphs {
+        let text = String::from_utf8(glyph).unwrap();
+        let mut lines = text.lines();
+        let d1: Vec<&str> = lines.next().unwrap().split_whitespace().collect();
+        assert_eq!(d1.len(), 7, "six operands and d1: {d1:?}");
+        assert_eq!(d1[6], "d1");
+        let n: Vec<f64> = d1[..6].iter().map(|v| v.parse().unwrap()).collect();
+        assert_eq!(n[1], 0.0, "wy");
+        assert!(n[2] <= n[4] && n[3] <= n[5], "box: {n:?}");
+        for line in lines.filter(|l| l.ends_with(" m") || l.ends_with(" l")) {
+            let p: Vec<f64> = line.split_whitespace().take(2).map(|v| v.parse().unwrap()).collect();
+            assert!(p[0] >= n[2] && p[0] <= n[4] && p[1] >= n[3] && p[1] <= n[5], "{line} outside {n:?}");
+        }
+    }
+}
+
 #[test]
 fn japanese_paragraph_keeps_ideographic_spaces() {
     if without_craft_fonts("japanese_paragraph_keeps_ideographic_spaces") {
@@ -716,6 +744,22 @@ fn editing_text_keeps_the_tokens_a_stream_shares_with_its_neighbours() {
     let mut doc = split_streams_page();
     text::replace_block(&mut doc, 0, 0, "Rewrapped").unwrap();
     assert_split_tokens_kept(&reopen(&doc), "Rewrapped");
+}
+
+#[test]
+fn win_ansi_high_glyphs_use_helvetica_not_the_fallback_font() {
+    // š ž Š Ž Œ Ÿ ƒ † ‰ (WinAnsi 0x80–0x9F) are standard-font glyphs (#347): no Type3 fallback.
+    let text = "Šumava žaba œuvre Ÿ ƒ † ‰ €";
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    let r = text::replace_line(&mut doc, 0, 0, text).unwrap();
+    assert_eq!(r.substituted.as_deref(), Some("Helvetica"));
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!((lines[0].text.as_str(), lines[0].base_font.as_str()), (text, "Helvetica"));
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    let r = text::replace_block(&mut doc, 0, 0, text).unwrap();
+    assert!(r.substituted.as_deref().is_none_or(|s| !s.contains("Type3")), "{:?}", r.substituted);
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" "), text);
 }
 
 #[test]

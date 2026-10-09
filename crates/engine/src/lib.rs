@@ -69,17 +69,25 @@ pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, script_outline};
 
 /// Fill & Sign: `text` in the script font as a typed signature, its left edge at `at` (user
 /// space, vertically centred) and `height` points tall. `None` for text with no outlines.
-pub fn typed_signature_shape(at: [f64; 2], text: &str, height: f64) -> Option<Shape> {
+///
+/// Left, centred and upright are as displayed on a page turned by `rotation` (its `/Rotate`):
+/// the box runs along the displayed axes, like an image signature's
+/// ([`SignatureImage::rect`]), and the outlines are turned back so the name reads across.
+pub fn typed_signature_shape(at: [f64; 2], text: &str, height: f64, rotation: i64) -> Option<Shape> {
     let o = script_outline(text);
     let [left, bottom, right, top] = o.bounds();
     let span = (top - bottom).max(0.1);
     let width = right - left;
-    if o.contours.is_empty() || o.width <= 0.0 {
+    if o.contours.is_empty() || o.width <= 0.0 || !(width > 0.0 && height > 0.0) {
         return None;
     }
     let k = height / span;
-    let rect = [at[0], at[1] - height / 2.0, at[0] + width * k, at[1] + height / 2.0];
-    let contours = o.contours.iter().map(|c| c.iter().map(|p| [(p[0] - left) / width, (p[1] - bottom) / span]).collect()).collect();
+    let rect = signature_image::upright_box(rotation, at, width * k, height)?;
+    // Displayed right and up as user-space unit vectors: a point at (nx, ny) of the displayed box
+    // is at this fraction of the user-space box. Exact for an unturned page.
+    let [a, b, c, d, ..] = pdfcraft_model::view_matrix_for(rotation, [0.0; 4]);
+    let to_user = |nx: f64, ny: f64| [a * nx + c * ny + (-a).max(0.0) + (-c).max(0.0), b * nx + d * ny + (-b).max(0.0) + (-d).max(0.0)];
+    let contours = o.contours.iter().map(|c| c.iter().map(|p| to_user((p[0] - left) / width, (p[1] - bottom) / span)).collect()).collect();
     Some(Shape::TypedSignature { rect, contours })
 }
 /// Comment geometry helpers (text-box line breaking) for frontends.

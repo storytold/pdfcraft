@@ -40,7 +40,7 @@
 	Advanced search…	Erweiterte Suche…
 	Copy pages	Seiten kopieren
 	Cut pages	Seiten ausschneiden
-	Paste pages	Seiten einfügen
+	Paste pages	Kopierte Seiten einfügen
 	Fit visible	Sichtbaren Inhalt einpassen
 	Marquee zoom	Auswahlrahmen-Zoom
 	Take a snapshot	Schnappschuss erstellen
@@ -49,7 +49,7 @@
 	Switch light / dark theme	Helles / dunkles Design umschalten
 	Comments panel	Kommentarbereich
 	Form fields panel	Formularfeldbereich
-	Clear form	Formular leeren
+	Clear form	Formular zurücksetzen
 	Find tools and commands…	Werkzeuge und Befehle suchen…
 	Zoom	Zoom
 	Actual size	Originalgröße
@@ -142,7 +142,7 @@
 	Tool	Werkzeug
 	Command	Befehl
 	Add a sticky note	Notiz hinzufügen
-	Add a text box	Textfeld hinzufügen
+	Add a text box	Textbox hinzufügen
 	Highlight text	Text hervorheben
 	Underline text	Text unterstreichen
 	Strikethrough text	Text durchstreichen
@@ -330,7 +330,7 @@
 	Underline	Unterstreichen
 	Strikethrough	Durchstreichen
 	Squiggly underline	Schlangenlinie
-	Text box	Textfeld
+	Text box	Textbox
 	Drawing	Zeichnen
 	Rectangle	Rechteck
 	Oval	Ellipse
@@ -550,7 +550,7 @@
 	Text Field Properties	Textfeld-Eigenschaften
 	Check Box Properties	Kontrollkästchen-Eigenschaften
 	Radio Button Properties	Optionsfeld-Eigenschaften
-	Dropdown Properties	Dropdown-Liste-Eigenschaften
+	Dropdown Properties	Dropdown-Listen-Eigenschaften
 	List Box Properties	Listenfeld-Eigenschaften
 	Button Properties	Schaltflächen-Eigenschaften
 	Digital Signature Properties	Eigenschaften der digitalen Signatur
@@ -589,8 +589,8 @@
 	Comb of	Kammfeld mit
 	Export Value: {on}	Exportwert: {on}
 	Check box is checked by default	Kontrollkästchen ist standardmäßig aktiviert
-	Button is checked by default	Schaltfläche ist standardmäßig aktiviert
-	Buttons with the same name and value are selected in unison	Schaltflächen mit gleichem Namen und Wert werden gemeinsam ausgewählt
+	Button is checked by default	Optionsfeld ist standardmäßig ausgewählt
+	Buttons with the same name and value are selected in unison	Optionsfelder mit gleichem Namen und Wert werden gemeinsam ausgewählt
 	Item:	Eintrag:
 	Item List	Eintragsliste
 	Up	Nach oben
@@ -629,8 +629,8 @@
 	Select Trigger:	Auslöser auswählen:
 	Mouse Up	Maustaste loslassen
 	Mouse Down	Maustaste drücken
-	Mouse Enter	Maus hinein
-	Mouse Exit	Maus heraus
+	Mouse Enter	Mauszeiger ins Feld bewegen
+	Mouse Exit	Mauszeiger aus dem Feld bewegen
 	On Focus	Fokus erhalten
 	On Blur	Fokus verlieren
 	Select Action:	Aktion auswählen:
@@ -755,7 +755,7 @@
 	Preview: page {p} of {n}	Vorschau: Seite {p} von {n}
 	Applies to 1 page	Gilt für 1 Seite
 	Applies to {n} pages	Gilt für {n} Seiten
-	Replaces the existing one on those pages.	Ersetzt das vorhandene auf diesen Seiten.
+	Replaces the existing one on those pages.	Ersetzt das Vorhandene auf diesen Seiten.
 	PDF or image	PDF oder Bild
 	No file chosen	Keine Datei ausgewählt
 	Page number	Seitenzahl
@@ -788,10 +788,10 @@
 	Couldn't open the signed version: {e}	Die signierte Version konnte nicht geöffnet werden: {e}
 	Sign with a Digital ID	Mit digitaler ID signieren
 	Choose the digital ID that you want to use for signing:	Wähle die digitale ID aus, mit der du signieren möchtest:
-	Keychain  ·  	Schlüsselbund  ·
-	Windows store  ·  	Windows-Zertifikatspeicher  ·
-	Issued by: 	Ausgestellt von:
-	, Expires: 	, läuft ab:
+	Keychain  ·  	Schlüsselbund  ·  
+	Windows store  ·  	Windows-Zertifikatspeicher  ·  
+	Issued by: 	Ausgestellt von: 
+	, Expires: 	, läuft ab: 
 	No digital IDs yet.	Noch keine digitalen IDs.
 	Configure New Digital ID	Neue digitale ID einrichten
 	Continue	Weiter
@@ -879,7 +879,7 @@
 	Add Page Numbers	Seitenzahlen hinzufügen
 	Number every page in the footer.	Jede Seite in der Fußzeile nummerieren.
 	Mark as Confidential	Als vertraulich kennzeichnen
-	A diagonal CONFIDENTIAL watermark on every page.	Ein diagonales Wasserzeichen „VERTRAULICH“ auf jeder Seite.
+	A diagonal CONFIDENTIAL watermark on every page.	Ein diagonales Wasserzeichen „CONFIDENTIAL“ auf jeder Seite.
 	Sanitize Documents	Dokumente bereinigen
 	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	Ausgeblendete Informationen, Metadaten, Skripte und eingebettete Inhalte entfernen und die Dateien neu schreiben.
 	Type text	Text eingeben
@@ -963,7 +963,7 @@
 	Headings	Überschriften
 	Accessibility permission flag	Berechtigung für Barrierefreiheit
 	Accessibility permission flag is set	Berechtigung für Barrierefreiheit ist gesetzt
-	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	Die Sicherheitseinstellungen müssen Hilfstechnologien das Lesen des Inhalts erlauben („Textzugriff für Screenreader aktivieren“). Ändere die Sicherheit des Dokuments, um dies zu erlauben.
+	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	Die Sicherheitseinstellungen müssen Hilfstechnologien das Lesen des Inhalts erlauben („Textzugriff für Screenreader für Sehbehinderte erlauben“). Ändere die Sicherheit des Dokuments, um dies zu erlauben.
 	Image-only PDF	Reines Bild-PDF
 	Document is not image-only PDF	Dokument ist kein reines Bild-PDF
 	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Seiten, die nur aus Bildern von Text bestehen, können weder vorgelesen noch durchsucht werden. Führe Text erkennen (OCR) aus, um eine Textebene hinzuzufügen.
@@ -1059,7 +1059,7 @@
 	Phone Numbers	Telefonnummern
 	Email Addresses	E-Mail-Adressen
 	Credit Cards	Kreditkarten
-	Social Security Numbers	Sozialversicherungsnummern
+	Social Security Numbers	US-Sozialversicherungsnummern
 	Dates	Datumsangaben
 	Text in images isn't found; recognise text (OCR) first.	Text in Bildern wird nicht gefunden; führe zuerst Text erkennen (OCR) aus.
 	No matches.	Keine Treffer.
@@ -1203,7 +1203,7 @@
 	Add a reply	Antwort hinzufügen
 	Post	Senden
 	Page {label}	Seite {label}
-	{kind} — click to show it on the page	{kind} – klicken, um es auf der Seite anzuzeigen
+	{kind} — click to show it on the page	{kind} – zum Anzeigen auf der Seite klicken
 	Set status	Status festlegen
 	Copy text	Text kopieren
 	Properties…	Eigenschaften…
@@ -1736,7 +1736,7 @@
 	Images and text (converted to PDF)	Bilder und Text (in PDF konvertiert)
 	Images and text	Bilder und Text
 	Check Box Style:	Stil des Kontrollkästchens:
-	Button Style:	Stil der Schaltfläche:
+	Button Style:	Stil des Optionsfelds:
 	Check	Häkchen
 	Circle	Kreis
 	Diamond	Raute
@@ -1803,7 +1803,7 @@
 	Add arrow	Pfeil hinzufügen
 	Add line	Linie hinzufügen
 	Add drawing	Zeichnung hinzufügen
-	Add text box	Textfeld hinzufügen
+	Add text box	Textbox hinzufügen
 	Add checkmark	Häkchen hinzufügen
 	Add cross	Kreuz hinzufügen
 	Add dot	Punkt hinzufügen
@@ -1847,7 +1847,7 @@
 	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	Klicke Eckpunkte an. Enter oder Doppelklick schließt einen Umfang oder eine Fläche ab. Klicke auf den ersten Punkt, um eine Fläche zu schließen.
 	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift beschränkt auf 45 Grad. Rücktaste entfernt einen Eckpunkt. Escape bricht ab.
 	Angle	Winkel
-	Click the first point to begin.	Klicke auf den ersten Punkt, um zu beginnen.
+	Click the first point to begin.	Klicke, um den ersten Punkt zu setzen.
 	Snap to drawing	An Zeichnung einrasten
 	Endpoints	Endpunkte
 	Midpoints	Mittelpunkte
@@ -2045,3 +2045,40 @@ comment menu	Edit	Bearbeiten
 signature pad	Type	Tippen
 action wizard	Start	Starten
 	Reopen the files that were open when PdfCraft last closed	Beim Start die Dateien wieder öffnen, die beim letzten Beenden von PdfCraft geöffnet waren
+
+# Labels that reach tl!() through a variable (Fill & Sign buttons, link prompts, notices, history labels, checker and certificate rows)
+	Add {what}	{what} hinzufügen
+	Use {what}	{what} verwenden
+	Place saved {what}	Gespeicherte {what} platzieren
+	Remove saved {what}	Gespeicherte {what} entfernen
+	A link	Ein Link
+	A button	Eine Schaltfläche
+	A script	Ein Skript
+	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} in diesem Dokument wollte eine Adresse öffnen, die PdfCraft nicht öffnet: {e}.
+	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} in diesem Dokument wollte eine Adresse öffnen, die PdfCraft nicht öffnet: {e}. Aus Dokumenten heraus öffnet PdfCraft nur Web-Links (http, https) und E-Mail-Links (mailto).
+	Another file dialog is still open. Finish with it first.	Ein anderer Dateidialog ist noch geöffnet. Schließe ihn zuerst.
+	Couldn't show the file picker. Please try again.	Die Dateiauswahl konnte nicht angezeigt werden. Versuch es noch einmal.
+	The document changed while you were choosing a file, so nothing was changed.	Das Dokument hat sich geändert, während du eine Datei ausgewählt hast; deshalb wurde nichts geändert.
+	The document was closed before it could be saved.	Das Dokument wurde geschlossen, bevor es gespeichert werden konnte.
+	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	Die Seiten wurden extrahiert, aber nicht gelöscht, weil sich das Dokument geändert hat, während du einen Ordner ausgewählt hast.
+	That didn't work: an internal error stopped it ({m}).	Das hat nicht geklappt: Ein interner Fehler ist aufgetreten ({m}).
+	The Windows store's digital IDs couldn't be listed: {e}	Die digitalen IDs im Windows-Zertifikatspeicher konnten nicht aufgelistet werden: {e}
+	Align fields	Felder ausrichten
+	Distribute fields	Felder verteilen
+	Match field sizes	Feldgrößen angleichen
+	Mark for redaction	Zum Schwärzen markieren
+	Mark pages for redaction	Seiten zum Schwärzen markieren
+	Change document properties	Dokumenteigenschaften ändern
+	Mark differences	Unterschiede markieren
+	Run form script	Formularskript ausführen
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	Skriptgesteuerte Inhalte müssen mit Tastatur und Hilfstechnologien bedienbar sein. Prüfe die Skripte des Dokuments.
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Tabellenzeilen gehören direkt in eine Tabelle oder in deren Kopf-, Haupt- oder Fußbereich. Korrigiere die Tags der Tabelle.
+	Basic constraints	Basiseinschränkungen
+	SHA-1 digest	SHA-1-Fingerabdruck
+	SHA-256 digest	SHA-256-Fingerabdruck
+	Squiggly	Schlangenlinie
+	Home / End	Pos1 / Ende
+	H / Space (hold)	H / Leertaste (halten)
+	Clear Recent Files	Liste „Zuletzt geöffnet“ leeren
+	Remove from Recent	Aus „Zuletzt geöffnet“ entfernen
+	Remove {name} from Recent	{name} aus „Zuletzt geöffnet“ entfernen

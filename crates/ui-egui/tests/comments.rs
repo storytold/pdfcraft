@@ -172,6 +172,30 @@ fn shapes_and_ink_are_drawn_by_dragging() {
 }
 
 #[test]
+fn pen_strokes_stay_unselected_so_writing_continues() {
+    let mut h = harness(|app| app.set_option("quick", "ink").unwrap());
+    // No Comments panel: the author's name should only show in a hover popup.
+    h.state_mut().set_option("panel", "none").unwrap();
+    h.run_steps(2);
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 60.0));
+    assert_eq!(h.state().views[0].comments.selected, None, "the first stroke isn't selected");
+    // The pointer still rests on the stroke: no author popup covers it.
+    h.hover_at(at(&h, 140.0, 60.0));
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("Tester").is_none(), "no author popup while drawing");
+    drag_pt(&mut h, (60.0, 100.0), (160.0, 60.0));
+    let c = comments(&h);
+    let kinds: Vec<&str> = c.iter().map(|a| a.subtype.as_str()).collect();
+    assert_eq!(kinds, ["Ink", "Ink"], "{c:?}");
+    assert_eq!(h.state().views[0].comments.selected, None, "nothing is selected after drawing");
+    assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::Ink), "the pen stays on");
+    // Other drawn shapes are still selected when made.
+    h.state_mut().set_option("quick", "square").unwrap();
+    drag_pt(&mut h, (180.0, 100.0), (260.0, 40.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 2)));
+}
+
+#[test]
 fn sticky_note_composer_posts_and_returns_to_select() {
     let mut h = harness(|app| app.set_option("quick", "note").unwrap());
     click_pt(&mut h, (250.0, 180.0));

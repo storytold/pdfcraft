@@ -306,9 +306,10 @@ struct Shared {
     /// Pages (and request kinds) the watchdog gave up on: answered with an error at once, so a
     /// pathological page cannot trap every worker in turn.
     stuck: Mutex<std::collections::HashSet<(usize, RequestKind)>>,
-    /// Set when the pool is dropped: the workers' renders stop at their next content operator,
-    /// since nobody can receive their answers any more.
-    dropped: Arc<std::sync::atomic::AtomicBool>,
+    /// Per worker id: set to stop that worker's render at its next content operator once nobody
+    /// can receive its answer (the pool was dropped, or the watchdog gave up on the render).
+    /// Lock `busy` first when holding both.
+    stop: Mutex<Vec<Arc<std::sync::atomic::AtomicBool>>>,
     /// Test hook: make one page slow.
     #[cfg(test)]
     slow_page: Mutex<Option<(usize, std::time::Duration)>>,
@@ -342,9 +343,11 @@ fn take_next(shared: &Shared) -> Option<RenderRequest> {
 ///
 /// **Watchdog:** a render running longer than `stuck_after` (default [`STUCK_AFTER`]) is reported
 /// as an error for that page, the page is not attempted again, and a replacement worker takes
-/// the stuck one's place (threads cannot be killed; the stuck one exits when its render
-/// finally returns, and its late result is dropped). At most `threads` replacements are started
-/// per pool, so a document full of pathological pages cannot spawn threads without bound.
+/// the stuck one's place (threads cannot be killed: the stuck one is told to stop at its next
+/// content operator, exits when its render returns, and its late result is dropped; a single
+/// long operator, such as decoding a huge image, still runs to its end). At most `threads`
+/// replacements are started per pool, so a document full of pathological pages cannot spawn
+/// threads without bound.
 pub struct RenderPool {
     shared: Arc<Shared>,
     wake: Mutex<Vec<Sender<()>>>,
@@ -394,14 +397,16 @@ impl RenderPool {
         return false;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let id = {
+            let (id, stop) = {
                 let mut busy = lock(&self.shared.busy);
                 busy.push(None);
-                busy.len() - 1
+                let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                lock(&self.shared.stop).push(stop.clone());
+                (busy.len() - 1, stop)
             };
             let (wtx, wrx) = channel::<()>();
             let (shared, out, bytes, config) = (self.shared.clone(), self.results_tx.clone(), self.bytes.clone(), self.config.clone());
-            match std::thread::Builder::new().name(format!("pdfcraft-render-{id}")).spawn(move || worker(id, bytes, config, shared, wrx, out)) {
+            match std::thread::Builder::new().name(format!("pdfcraft-render-{id}")).spawn(move || worker(id, bytes, config, shared, wrx, out, stop)) {
                 Ok(h) => {
                     lock(&self.wake).push(wtx);
                     lock(&self._workers).push(h);
@@ -473,11 +478,15 @@ impl RenderPool {
             let mut gave_up = Vec::new();
             {
                 let mut busy = lock(&self.shared.busy);
-                for slot in busy.iter_mut() {
+                let stop = lock(&self.shared.stop);
+                for (id, slot) in busy.iter_mut().enumerate() {
                     if let Some((req, since)) = *slot
                         && since.elapsed() > self.stuck_after
                     {
                         *slot = None; // the worker sees this and exits when it returns
+                        if let Some(s) = stop.get(id) {
+                            s.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
                         gave_up.push(req);
                     }
                 }
@@ -510,19 +519,29 @@ impl RenderPool {
 
 impl Drop for RenderPool {
     fn drop(&mut self) {
-        self.shared.dropped.store(true, std::sync::atomic::Ordering::Relaxed);
+        for s in lock(&self.shared.stop).iter() {
+            s.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 }
 
-/// A worker's interpreter settings: the document's, stopping once the pool is dropped.
+/// A worker's interpreter settings: the document's, stopping once `stop` is set.
 #[cfg(not(target_arch = "wasm32"))]
-fn worker_settings(config: &RenderConfig, shared: &Shared) -> InterpreterSettings {
-    InterpreterSettings { cancelled: Some(shared.dropped.clone()), ..config.settings() }
+fn worker_settings(config: &RenderConfig, stop: &Arc<std::sync::atomic::AtomicBool>) -> InterpreterSettings {
+    InterpreterSettings { cancelled: Some(stop.clone()), ..config.settings() }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn worker(id: usize, bytes: Arc<Vec<u8>>, config: RenderConfig, shared: Arc<Shared>, wake: Receiver<()>, out: Sender<RenderedPage>) {
-    let settings = worker_settings(&config, &shared);
+fn worker(
+    id: usize,
+    bytes: Arc<Vec<u8>>,
+    config: RenderConfig,
+    shared: Arc<Shared>,
+    wake: Receiver<()>,
+    out: Sender<RenderedPage>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) {
+    let settings = worker_settings(&config, &stop);
     // Outer loop: (re)build parser + cache; rebuilt after a renderer panic.
     loop {
         let pdf = parse(&bytes, config.password.as_deref());
@@ -1154,9 +1173,9 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
         let pool = RenderPool::new(Arc::new(ONE_PAGE.to_vec()), 1, RenderConfig::default());
-        let settings = worker_settings(&pool.config, &pool.shared);
-        let flag = settings.cancelled.clone().expect("workers can be cancelled");
-        assert!(Arc::ptr_eq(&flag, &pool.shared.dropped));
+        let flag = lock(&pool.shared.stop).first().cloned().expect("one worker");
+        let settings = worker_settings(&pool.config, &flag);
+        assert!(settings.cancelled.as_ref().is_some_and(|c| Arc::ptr_eq(c, &flag)));
         let shapes = Pdf::new(Arc::new(ONE_PAGE.to_vec())).expect("parses");
         let text = Pdf::new(Arc::new(TEXT.to_vec())).expect("parses");
         let pages = shapes.pages();
@@ -1171,6 +1190,26 @@ trailer << /Root 1 0 R >>
         drop(pool);
         assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
         assert!(!blue(&settings) && glyphs(&settings) == 0, "once the pool is gone, interpretation stops before drawing");
+    }
+
+    #[test]
+    fn the_watchdog_stops_the_render_it_gives_up_on() {
+        let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
+        pool.set_stuck_after(std::time::Duration::from_millis(100));
+        *lock(&pool.shared.slow_page) = Some((0, std::time::Duration::from_millis(1500)));
+        pool.set_queue(vec![RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0 }]);
+        let t = std::time::Instant::now();
+        let first = loop {
+            if let Some(p) = pool.try_recv() {
+                break p;
+            }
+            assert!(t.elapsed() < std::time::Duration::from_secs(8), "no answer");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert!(first.error.as_deref().is_some_and(|e| e.contains("took longer")), "{:?}", first.error);
+        // The abandoned worker is told to stop at its next operator; its replacement isn't.
+        let stop: Vec<bool> = lock(&pool.shared.stop).iter().map(|s| s.load(std::sync::atomic::Ordering::Relaxed)).collect();
+        assert_eq!(stop, vec![true, false]);
     }
 
     #[test]

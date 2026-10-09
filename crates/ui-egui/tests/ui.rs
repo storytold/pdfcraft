@@ -68,6 +68,31 @@ fn long_recent_names_and_paths_are_cut_before_the_page_count() {
 }
 
 #[test]
+fn home_removes_one_recent_file_or_clears_them_all() {
+    // Tall enough that the Recent list is on screen without scrolling.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        for name in ["first.pdf", "second.pdf", "third.pdf"] {
+            app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0 });
+        }
+        app
+    });
+    h.run_steps(4);
+    assert!(h.query_by_label("Remove second.pdf from Recent").is_none(), "the remove button shows only over its row");
+    h.get_by_label("second.pdf").hover();
+    h.run_steps(2);
+    h.get_by_label("Remove second.pdf from Recent").click();
+    h.run_steps(2);
+    let names: Vec<String> = h.state().recent.iter().map(|r| r.name.clone()).collect();
+    assert_eq!(names, ["first.pdf", "third.pdf"], "only that file left the list");
+    h.get_by_label("Clear Recent Files").click();
+    h.run_steps(2);
+    assert!(h.state().recent.is_empty(), "Clear empties the list");
+    h.get_by_label_contains("Files you open in PdfCraft appear here");
+    assert!(h.query_by_label("Clear Recent Files").is_none(), "and goes away with nothing left to clear");
+}
+
+#[test]
 fn every_catalog_tool_is_listed_after_view_more() {
     let mut h = harness(|_| {});
     h.get_by_label("View more").click();

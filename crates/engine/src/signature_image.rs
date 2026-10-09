@@ -68,6 +68,25 @@ impl Document {
     }
 }
 
+/// The user-space box `width` x `height` points as displayed on a page turned by `rotation` (its
+/// `/Rotate`), with its left edge at `at` (a user-space point) and vertically centred on it. On a
+/// quarter-turned page it is `height` wide and `width` tall in user space. `None` for a non-finite
+/// point.
+pub fn upright_box(rotation: i64, at: [f64; 2], width: f64, height: f64) -> Option<[f64; 4]> {
+    if !at.iter().chain(&[width, height]).all(|v| v.is_finite()) {
+        return None;
+    }
+    // Right and up as displayed, as user-space vectors: the page's view matrix without its offset.
+    let [a, b, c, d, ..] = pdfcraft_model::view_matrix_for(rotation, [0.0; 4]);
+    let (right, up) = ([a * width, b * width], [c * height / 2.0, d * height / 2.0]);
+    Some([
+        at[0] + right[0].min(0.0) - up[0].abs(),
+        at[1] + right[1].min(0.0) - up[1].abs(),
+        at[0] + right[0].max(0.0) + up[0].abs(),
+        at[1] + right[1].max(0.0) + up[1].abs(),
+    ])
+}
+
 /// Saved signatures live in settings, so both source and normalized PNG are bounded.
 pub const MAX_SIGNATURE_IMAGE_BYTES: usize = 4 << 20;
 const MAX_PIXELS: u64 = 4 << 20;
@@ -154,16 +173,7 @@ impl SignatureImage {
         }
         let [w, h] = self.size;
         let scale = (150.0 / w as f64).min(if initials { 24.0 } else { 32.0 } / h as f64);
-        let (width, height) = (w as f64 * scale, h as f64 * scale);
-        // Right and up as displayed, as user-space vectors: the page's view matrix without its offset.
-        let [a, b, c, d, ..] = pdfcraft_model::view_matrix_for(i64::from(page.rotation), [0.0; 4]);
-        let (right, up) = ([a * width, b * width], [c * height / 2.0, d * height / 2.0]);
-        Some([
-            at[0] + right[0].min(0.0) - up[0].abs(),
-            at[1] + right[1].min(0.0) - up[1].abs(),
-            at[0] + right[0].max(0.0) + up[0].abs(),
-            at[1] + right[1].max(0.0) + up[1].abs(),
-        ])
+        upright_box(i64::from(page.rotation), at, w as f64 * scale, h as f64 * scale)
     }
 
     pub fn edit(&self, page: usize, info: &PageInfo, at: [f64; 2], initials: bool, author: &str) -> Option<Edit> {
