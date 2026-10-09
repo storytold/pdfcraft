@@ -2090,17 +2090,19 @@ calendar date	December	грудня
 	The Windows store's digital IDs couldn't be listed: {e}	Не вдалося отримати список цифрових посвідчень зі сховища Windows: {e}
 	Align fields	Вирівняти поля
 	Distribute fields	Розподілити поля
-	Match field sizes	Вирівняти розміри полів
+	Match field sizes	Задати однакові розміри полів
 	Mark for redaction	Позначити для вилучення вмісту
 	Mark pages for redaction	Позначити сторінки для вилучення вмісту
 	Change document properties	Змінити властивості документа
 	Mark differences	Позначити відмінності
 	Run form script	Виконати сценарій форми
-	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	Вміст зі сценаріями має бути доступним із клавіатури та допоміжних технологій. Перевірте сценарії документа.
-	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Рядки таблиці мають бути безпосередньо в таблиці або в її заголовку, тілі чи підсумку. Виправте теги таблиці.
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	Вміст зі сценаріями має бути доступним для керування за допомогою клавіатури й допоміжних технологій. Перевірте сценарії документа.
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Рядки таблиці мають належати безпосередньо таблиці або її заголовній, основній чи нижній частині. Виправте теги таблиці.
 	Basic constraints	Основні обмеження
-	SHA-1 digest	Дайджест SHA-1
-	SHA-256 digest	Дайджест SHA-256
+	Certificate authority	Центр сертифікації
+	End entity	Кінцевий суб’єкт
+	SHA-1 digest	Відбиток SHA-1
+	SHA-256 digest	Відбиток SHA-256
 	Squiggly	Хвилясте
 	Home / End	Home / End
 	H / Space (hold)	H / Пробіл (утримувати)
@@ -2125,3 +2127,4 @@ calendar date	December	грудня
 	Printer properties	Властивості принтера
 	Reset to printer defaults	Скинути до налаштувань принтера за замовчуванням
 	This printer offers no settings of its own.	Цей принтер не має власних налаштувань.
+certificate	Subject	Власник сертифіката
