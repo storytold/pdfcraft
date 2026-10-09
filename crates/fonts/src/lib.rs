@@ -10,12 +10,17 @@ mod craft;
 mod encodings;
 pub mod pdf;
 mod script;
+/// Faces installed on this machine, read at runtime (AGENTS.md §1.4). Desktop only.
+#[cfg(not(target_arch = "wasm32"))]
+mod system;
 pub use arabic::{ShapedCluster, arabic_glyph, arabic_has, shape_arabic};
 pub use craft::{
     CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_arabic_font, document_japanese_font, document_japanese_font_for_style,
     document_japanese_fonts_for_style, ui_arabic_fonts, ui_chinese_fonts, ui_cjk_fonts, ui_japanese_fonts, ui_telugu_fonts,
 };
 pub use script::{GlyphError, GlyphOutline, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_outline};
+#[cfg(not(target_arch = "wasm32"))]
+pub use system::{SystemFace, han};
 
 /// Approximate advance of `s` in Helvetica (or Arial) at `size` points.
 pub fn helvetica_width(s: &str, size: f64) -> f64 {
