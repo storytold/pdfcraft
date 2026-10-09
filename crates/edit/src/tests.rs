@@ -1381,3 +1381,27 @@ fn fill_sign_flatten_bakes_marks_keeps_other_comments_and_does_not_reuse_pcfl0()
     assert!(summaries(&doc).iter().any(|s| s.intent.as_deref() == Some("FreeTextTypeWriter")), "the hidden typewriter stays");
     assert_eq!(summaries(&doc).iter().filter(|s| s.intent.as_deref() == Some("FreeTextTypeWriter")).count(), 1);
 }
+
+/// An added item is written out as a specific standard-14 face (`/Times-Italic`, `/Helvetica-Bold`
+/// …), so it has to be *measured* with that same face. Measuring the upright face while writing
+/// the italic one mis-sizes every box: Times-Italic `A` is 611 against Times-Roman's 722.
+#[test]
+fn an_items_measured_face_is_the_face_it_is_written_as() {
+    for family in [Family::Helvetica, Family::Times, Family::Courier] {
+        for bold in [false, true] {
+            for italic in [false, true] {
+                let written = family.base_font(bold, italic);
+                let measured = family.std14(bold, italic);
+                assert_eq!(written, measured.base_font(), "{family:?} bold={bold} italic={italic}");
+                // ... and the public measure reaches that face, rather than an upright stand-in.
+                assert_eq!(family.width("Anna", 12.0, bold, italic), measured.text_width("Anna", 12.0), "{family:?} bold={bold} italic={italic}");
+            }
+        }
+    }
+    // The faces really do differ, so the assertions above are not all comparing the same number.
+    let times = |italic| Family::Times.width("Anna", 12.0, false, italic);
+    assert_ne!(times(false), times(true), "Times-Italic is not Times-Roman");
+    // Courier is monospaced in every style: equal widths here are correct, not a collapsed face.
+    let courier = |italic| Family::Courier.width("Anna", 12.0, false, italic);
+    assert_eq!(courier(false), courier(true));
+}

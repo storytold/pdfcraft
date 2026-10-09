@@ -1,9 +1,15 @@
 //! What content editing and redaction need from a PDF font: how to split a string into character
 //! codes, each code's advance width, the glyph height (ascent, descent), and what each code means
 //! (Unicode) — and back, which text the font can show. Widths come from the font dictionary
-//! (`/Widths`, `/W`, `/DW`, `/MissingWidth`); the standard 14 fonts without widths use
-//! approximations. Meanings come from `/ToUnicode`, else the encoding (`/Encoding` base and
-//! `/Differences` glyph names, ISO 32000-2 Annex D).
+//! (`/Widths`, `/W`, `/DW`, `/MissingWidth`); a standard-14 font with no `/Widths` uses the exact
+//! published metrics ([`crate::Std14`]).
+//!
+//! Meanings come from `/ToUnicode`, else the encoding (`/Encoding` base and `/Differences` glyph
+//! names, ISO 32000-2 Annex D). A code may deliberately have **no** meaning: where the font's own
+//! built-in encoding governs and we hold no table for it — Symbol, ZapfDingbats, MacExpert — this
+//! module reports nothing rather than the Latin letter at that code. Callers must treat a missing
+//! meaning as "unknown", never as "absent": `redact` matches on this map, and a wrong character
+//! there is worse than no character.
 
 use std::collections::HashMap;
 
@@ -19,14 +25,6 @@ enum Codes {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum Std14 {
-    Helvetica,
-    Times,
-    Courier,
-    Symbolic,
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub struct Metrics {
     codes: Codes,
     /// Simple fonts: `/FirstChar` and `/Widths`.
@@ -38,7 +36,8 @@ pub struct Metrics {
     /// Code → CID for embedded non-identity CMaps (`cidrange` / `cidchar`).
     cid_map: Vec<(u32, u32, u32)>,
     default: f64,
-    std14: Option<Std14>,
+    /// The standard-14 face to measure with when the dictionary carries no `/Widths`.
+    std14: Option<crate::Std14>,
     /// Glyph units → text space (0.001, or `/FontMatrix[0]` for Type 3).
     pub scale: f64,
     /// Glyph box in text space per unit of font size.
@@ -276,7 +275,7 @@ impl Metrics {
             cid_ranges: Vec::new(),
             cid_map: Vec::new(),
             default: 500.0,
-            std14: Some(Std14::Helvetica),
+            std14: Some(crate::Std14::Helvetica),
             scale: 0.001,
             ascent: 0.9,
             descent: -0.25,
@@ -384,16 +383,10 @@ impl Metrics {
                     }
                 }
             } else if m.widths.is_empty() {
-                let base = String::from_utf8_lossy(font.name(b"BaseFont").unwrap_or(b"")).to_ascii_lowercase();
-                m.std14 = Some(if base.contains("courier") {
-                    Std14::Courier
-                } else if base.contains("times") {
-                    Std14::Times
-                } else if base.contains("symbol") || base.contains("dingbats") {
-                    Std14::Symbolic
-                } else {
-                    Std14::Helvetica
-                });
+                let base = String::from_utf8_lossy(font.name(b"BaseFont").unwrap_or(b"")).into_owned();
+                // The real face, bold and italic included: the published metrics differ by style,
+                // so Times-Bold is not Times-Roman and neither is Helvetica scaled.
+                m.std14 = crate::Std14::from_base_font(&base).or(Some(crate::Std14::Helvetica));
             }
         }
         if let Some(d) = descriptor {
@@ -455,14 +448,13 @@ impl Metrics {
         if let Some(w) = code.checked_sub(self.first).and_then(|i| self.widths.get(i as usize)) {
             return w * self.scale;
         }
-        match &self.std14 {
-            Some(Std14::Courier) => 0.6,
-            Some(Std14::Symbolic) => 0.75,
-            Some(f) => {
-                let c = char::from_u32(code).filter(|c| !c.is_control()).unwrap_or('n');
-                let w = crate::helvetica_width(&c.to_string(), 1.0);
-                if *f == Std14::Times { w * 0.92 } else { w }
-            }
+        match self.std14 {
+            // A font with no /Widths is one of the standard 14; use its published metrics.
+            // Codes the font's encoding leaves undefined fall back to /MissingWidth.
+            Some(f) => match u8::try_from(code).map(|c| f.width(c)).unwrap_or(0.0) {
+                0.0 => self.default * self.scale,
+                w => w / 1000.0,
+            },
             None => self.default * self.scale,
         }
     }
@@ -585,13 +577,49 @@ fn parse_to_unicode(data: &[u8], out: &mut HashMap<u32, String>) {
     }
 }
 
-/// A glyph name's Unicode (Annex D names, `uniXXXX`, `uXXXX[XX]`, single letters).
-pub fn glyph_unicode(name: &str) -> Option<char> {
-    if let Ok(i) = crate::encodings::NAMES.binary_search_by(|(n, _)| (*n).cmp(name)) {
-        return char::from_u32(crate::encodings::NAMES[i].1);
+/// A glyph name's text, by the Adobe Glyph List *algorithm* — the published naming rules, not
+/// the AGL data table, which this crate does not hold.
+///
+/// A name is cut at its first `.`, because a suffix marks a variant of the same character rather
+/// than a different one (`a.sc` is small-capital `a`, `one.oldstyle` is still `1`). What remains
+/// is split on `_` into components, so a ligature name yields several characters (`f_i` is "fi").
+/// Each component is read as an Annex D name, as `uniXXXX` with one or more four-hex-digit values,
+/// or as `uXXXX` through `uXXXXXX`.
+///
+/// Returns `None` rather than a partial answer: a name is either fully understood or not, and half
+/// a ligature would be worse than admitting we cannot read it.
+pub fn glyph_text(name: &str) -> Option<String> {
+    let stem = name.split('.').next().filter(|s| !s.is_empty())?;
+    let mut out = String::new();
+    for part in stem.split('_') {
+        out.push_str(&glyph_component(part)?);
     }
-    let hex = name.strip_prefix("uni").filter(|h| h.len() == 4).or_else(|| name.strip_prefix('u').filter(|h| (4..=6).contains(&h.len())))?;
-    u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+    Some(out).filter(|s| !s.is_empty())
+}
+
+/// One `_`-separated component of a glyph name.
+fn glyph_component(part: &str) -> Option<String> {
+    if let Ok(i) = crate::encodings::NAMES.binary_search_by(|(n, _)| (*n).cmp(part)) {
+        return char::from_u32(crate::encodings::NAMES[i].1).map(String::from);
+    }
+    // `from_str_radix` accepts a leading `+`, which is not a glyph name, so the digits are checked.
+    let hexish = |h: &str| !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit());
+    if let Some(hex) = part.strip_prefix("uni").filter(|h| h.len() >= 4 && h.len() % 4 == 0 && hexish(h)) {
+        let mut s = String::new();
+        for i in (0..hex.len()).step_by(4) {
+            // A lone surrogate half is not a character; such a name is not usable text.
+            s.push(char::from_u32(u32::from_str_radix(hex.get(i..i.saturating_add(4))?, 16).ok()?)?);
+        }
+        return Some(s);
+    }
+    let hex = part.strip_prefix('u').filter(|h| (4..=6).contains(&h.len()) && hexish(h))?;
+    u32::from_str_radix(hex, 16).ok().and_then(char::from_u32).map(String::from)
+}
+
+/// [`glyph_text`] for names that stand for exactly one character.
+pub fn glyph_unicode(name: &str) -> Option<char> {
+    let mut chars = glyph_text(name)?.chars().collect::<Vec<_>>().into_iter();
+    chars.next().filter(|_| chars.len() == 0)
 }
 
 /// Code → Unicode for a font: its ToUnicode CMap, else (simple fonts) its encoding.
@@ -604,12 +632,33 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> HashMap<u32, Str
             Some(Object::Dict(d)) => d.name(b"BaseEncoding").map(<[u8]>::to_vec),
             _ => None,
         };
-        let table: &[u32; 256] = match base_name.as_deref() {
-            Some(b"WinAnsiEncoding") => &crate::encodings::WIN_ANSI,
-            Some(b"MacRomanEncoding") => &crate::encodings::MAC_ROMAN,
-            _ => &crate::encodings::STANDARD,
+        // Symbol and ZapfDingbats carry their own built-in encodings, which are not Latin
+        // (ISO 32000-2 9.6.6.1): Symbol code 0x61 is `alpha`, not `a`. We do not hold those two
+        // tables, so with no base encoding named they get no implicit mapping at all. Reporting
+        // nothing is honest; reporting Latin letters silently corrupts text extraction, find,
+        // copy and — because `redact` matches on this map — redaction.
+        //
+        // Deliberately keyed on the *name*, not on the `/FontDescriptor` symbolic flag. A great
+        // many ordinary Latin TrueType subsets set that flag and still rely on a Latin encoding,
+        // so suppressing on the flag would lose real text on a large share of real documents.
+        // An explicitly named base encoding is a deliberate statement and is always honoured,
+        // even on Symbol.
+        let symbolic_builtin = matches!(
+            font.name(b"BaseFont").map(|b| crate::Std14::from_base_font(&String::from_utf8_lossy(b))),
+            Some(Some(crate::Std14::Symbol | crate::Std14::ZapfDingbats))
+        );
+        let table: Option<&[u32; 256]> = match base_name.as_deref() {
+            Some(b"WinAnsiEncoding") => Some(&crate::encodings::WIN_ANSI),
+            Some(b"MacRomanEncoding") => Some(&crate::encodings::MAC_ROMAN),
+            Some(b"StandardEncoding") => Some(&crate::encodings::STANDARD),
+            // MacExpert is small caps, oldstyle figures and fractions, not Latin at these codes,
+            // and we hold no table for it either.
+            Some(b"MacExpertEncoding") => None,
+            _ if symbolic_builtin => None,
+            // Standard is the default for a simple font that names no base encoding.
+            _ => Some(&crate::encodings::STANDARD),
         };
-        for (code, u) in table.iter().enumerate() {
+        for (code, u) in table.into_iter().flatten().enumerate() {
             if let Some(c) = char::from_u32(*u).filter(|_| *u != 0) {
                 out.insert(code as u32, c.to_string());
             }
@@ -623,8 +672,10 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> HashMap<u32, Str
                     // Out-of-range codes map nothing a simple font can show.
                     Object::Int(n) => code = u32::try_from((*n).max(0)).unwrap_or(u32::MAX),
                     Object::Name(n) => {
-                        match glyph_unicode(&String::from_utf8_lossy(n)) {
-                            Some(c) => out.insert(code, c.to_string()),
+                        // A name we cannot read removes any inherited meaning for that code,
+                        // rather than leaving the base encoding's letter standing in for it.
+                        match glyph_text(&String::from_utf8_lossy(n)) {
+                            Some(t) => out.insert(code, t),
                             None => out.remove(&code),
                         };
                         code = code.saturating_add(1);
@@ -843,5 +894,139 @@ mod tests {
             many.extend(format!("<{k:08X}> <{k:08X}> 1 ").bytes());
         }
         assert_eq!(parse_cmap(&many).1.len(), MAX_CMAP_RANGES);
+    }
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use pdfcraft_cos::{Dict, Document, Object};
+
+    use super::*;
+
+    /// A simple Type 1 font, optionally symbolic-flagged and optionally with an `/Encoding`.
+    fn simple(base: &str, flags: Option<i64>, enc: Option<Object>) -> (Document, Dict) {
+        let doc = Document::new_empty();
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Font"));
+        d.set(b"Subtype".to_vec(), Object::name("Type1"));
+        d.set(b"BaseFont".to_vec(), Object::name(base));
+        if let Some(f) = flags {
+            let mut desc = Dict::new();
+            desc.set(b"Flags".to_vec(), Object::Int(f));
+            d.set(b"FontDescriptor".to_vec(), Object::Dict(desc));
+        }
+        if let Some(e) = enc {
+            d.set(b"Encoding".to_vec(), e);
+        }
+        (doc, d)
+    }
+
+    fn differences(items: Vec<Object>) -> Object {
+        let mut enc = Dict::new();
+        enc.set(b"Differences".to_vec(), Object::Array(items));
+        Object::Dict(enc)
+    }
+
+    #[test]
+    fn glyph_names_follow_the_naming_algorithm() {
+        // Annex D names and the two hex forms, as before.
+        assert_eq!(glyph_text("quotedblleft").as_deref(), Some("\u{201c}"));
+        assert_eq!(glyph_text("uni20AC").as_deref(), Some("\u{20ac}"));
+        assert_eq!(glyph_text("u1F600").as_deref(), Some("\u{1f600}"));
+        // A suffix marks a variant of the same character, so the stem still reads.
+        assert_eq!(glyph_text("a.sc").as_deref(), Some("a"));
+        assert_eq!(glyph_text("one.oldstyle").as_deref(), Some("1"));
+        assert_eq!(glyph_text("A.alt017").as_deref(), Some("A"));
+        // `_` joins components, so a ligature name is more than one character.
+        assert_eq!(glyph_text("f_i").as_deref(), Some("fi"));
+        assert_eq!(glyph_text("f_f_l").as_deref(), Some("ffl"));
+        assert_eq!(glyph_text("a_uni0301").as_deref(), Some("a\u{301}"));
+        // `uniXXXX` carries several values, so one name can be a whole cluster.
+        assert_eq!(glyph_text("uni00660069").as_deref(), Some("fi"));
+        assert_eq!(glyph_text("uni004100300041").as_deref(), Some("A0A"));
+        // Both forms combine with a suffix.
+        assert_eq!(glyph_text("uni00660069.alt").as_deref(), Some("fi"));
+
+        // Not names: unknown, empty, a half-read ligature, bad hex, and the `+` that
+        // `from_str_radix` would otherwise accept.
+        assert_eq!(glyph_text("nonsense"), None);
+        assert_eq!(glyph_text(""), None);
+        assert_eq!(glyph_text(".notdef"), None);
+        assert_eq!(glyph_text("f_nonsense"), None, "half a ligature is not an answer");
+        assert_eq!(glyph_text("uni00"), None, "not a whole four-digit value");
+        assert_eq!(glyph_text("uni0041004"), None);
+        assert_eq!(glyph_text("uni+041"), None, "a sign is not a hex digit");
+        assert_eq!(glyph_text("u+0041"), None);
+        assert_eq!(glyph_text("uniD800"), None, "a lone surrogate half is not a character");
+        // Glyph-index names carry no meaning, and must not be guessed at.
+        assert_eq!(glyph_text("g3"), None);
+        assert_eq!(glyph_text("index42"), None);
+
+        // `glyph_unicode` is the single-character view of the same algorithm.
+        assert_eq!(glyph_unicode("uni20AC"), Some('\u{20ac}'));
+        assert_eq!(glyph_unicode("a.sc"), Some('a'));
+        assert_eq!(glyph_unicode("f_i"), None, "a ligature is not one character");
+    }
+
+    #[test]
+    fn a_ligature_or_unreadable_name_in_differences_is_handled() {
+        // A ligature name maps one code to two characters, so text extraction reads "fi".
+        let (doc, d) = simple("Custom", None, Some(differences(vec![Object::Int(65), Object::name("f_i")])));
+        let m = Metrics::from_dict(&doc, &d);
+        assert_eq!(m.decode(b"A"), "fi");
+
+        // An unreadable name must *remove* the base encoding's letter rather than leave it
+        // standing in: code 65 is no longer "A", because the font says it is something else.
+        let (doc, d) = simple("Custom", None, Some(differences(vec![Object::Int(65), Object::name("g7")])));
+        let m = Metrics::from_dict(&doc, &d);
+        assert_eq!(m.text_of(65), None);
+        assert_eq!(m.text_of(66), Some("B"), "neighbouring codes keep their meaning");
+    }
+
+    #[test]
+    fn symbol_and_dingbats_are_not_read_as_latin() {
+        // Symbol's built-in encoding puts `alpha` at 0x61. We hold no table for it, so the honest
+        // answer is none at all -- never "a", which would corrupt find, copy and redaction.
+        for base in ["Symbol", "ZapfDingbats", "ABCDEF+Symbol"] {
+            let (doc, d) = simple(base, Some(4), None);
+            let m = Metrics::from_dict(&doc, &d);
+            assert_eq!(m.text_of(0x61), None, "{base} must not claim 'a'");
+            assert_eq!(m.decode(b"abg"), "", "{base}");
+        }
+
+        // MacExpert is small caps and oldstyle figures at these codes, and we hold no table.
+        let (doc, d) = simple("Times-Roman", None, Some(Object::name("MacExpertEncoding")));
+        let m = Metrics::from_dict(&doc, &d);
+        assert_eq!(m.text_of(0x61), None);
+
+        // /Differences still applies on top of a built-in encoding we cannot read.
+        let (doc, d) = simple("Symbol", Some(4), Some(differences(vec![Object::Int(0x61), Object::name("uni03B1")])));
+        let m = Metrics::from_dict(&doc, &d);
+        assert_eq!(m.text_of(0x61), Some("\u{3b1}"), "the font told us this one");
+        assert_eq!(m.text_of(0x62), None, "and nothing about this one");
+    }
+
+    #[test]
+    fn a_named_base_encoding_is_always_honoured() {
+        // Naming an encoding is a deliberate statement, so it wins even on Symbol.
+        for name in ["WinAnsiEncoding", "MacRomanEncoding", "StandardEncoding"] {
+            let mut enc = Dict::new();
+            enc.set(b"BaseEncoding".to_vec(), Object::name(name));
+            let (doc, d) = simple("Symbol", Some(4), Some(Object::Dict(enc)));
+            let m = Metrics::from_dict(&doc, &d);
+            assert_eq!(m.text_of(0x61), Some("a"), "{name} was asked for by name");
+        }
+    }
+
+    /// Pins a deliberate restraint, so it is not "fixed" into a regression: a great many ordinary
+    /// Latin TrueType subsets set the `/FontDescriptor` symbolic flag and still rely on a Latin
+    /// encoding. Suppressing the implicit table on the flag would lose real text on a large share
+    /// of real documents, so only Symbol and ZapfDingbats -- named, and unambiguous -- suppress it.
+    #[test]
+    fn the_symbolic_flag_alone_does_not_suppress_the_latin_default() {
+        let (doc, d) = simple("SomeSubsetFont", Some(4), None);
+        let m = Metrics::from_dict(&doc, &d);
+        assert_eq!(m.text_of(0x61), Some("a"));
+        assert_eq!(m.decode(b"abc"), "abc");
     }
 }
