@@ -656,10 +656,10 @@ area = "A"
 tier = "P1"
 milestone = "M3"
 status = "shipped"
-commands = ["file.open_recent"]
+commands = ["file.open_recent", "file.clear_recent"]
 tools = []
-evidence = ["crates/ui-egui/tests/ui.rs::persistence_round_trips_and_tolerates_garbage", "crates/ui-egui/tests/commands.rs::the_open_recent_menu_lists_files_and_opens_one", "crates/ui-egui/tests/commands.rs::the_open_recent_menu_is_disabled_while_the_list_is_empty"]
-notes = "never reads other apps' lists; File ▸ Open Recent lists them (#290), an already-open file focuses its tab instead of reopening it"
+evidence = ["crates/ui-egui/tests/ui.rs::persistence_round_trips_and_tolerates_garbage", "crates/ui-egui/tests/commands.rs::the_open_recent_menu_lists_files_and_opens_one", "crates/ui-egui/tests/commands.rs::the_open_recent_menu_is_disabled_while_the_list_is_empty", "crates/ui-egui/tests/recent.rs::clear_on_home_empties_the_list_and_keeps_pinned_folders", "crates/ui-egui/tests/recent.rs::remove_from_recent_removes_only_that_row", "crates/ui-egui/tests/recent.rs::open_recent_submenu_clears_the_shared_list"]
+notes = "never reads other apps' lists; File ▸ Open Recent lists them (#290), an already-open file focuses its tab instead of reopening it. Clear recent files (Home, the Open Recent submenu, the palette) and Remove from recent (a Home row's context menu) forget entries without touching the files or pinned folders (#430); clearing has no undo"
 
 [[feature]]
 id = "core.reopen-last-session"

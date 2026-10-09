@@ -2011,6 +2011,8 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Wähle ein PNG- oder JPEG-Bild (bis 4 MiB). Transparenz bleibt erhalten.
 	Couldn't import the signature image: {e}	Das Unterschriftsbild konnte nicht importiert werden: {e}
 	Open Recent	Zuletzt geöffnet
+	Clear recent files	Zuletzt geöffnete Dateien löschen
+	Remove from recent	Aus zuletzt geöffneten entfernen
 	Pin folder to Home…	Ordner an Start anheften…
 	Folders	Ordner
 	Pin a folder…	Ordner anheften…

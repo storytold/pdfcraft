@@ -85,6 +85,13 @@ impl PdfCraftApp {
                 Some(p) => self.open_recent(&p),
                 None => self.notify_tr("No recent files"),
             },
+            "file.clear_recent" => {
+                if self.recent.is_empty() {
+                    self.notify_tr("No recent files");
+                } else {
+                    self.clear_recent();
+                }
+            }
             "file.pin_folder" => self.pin_folder_dialog(),
             "page.combine" => self.open_combine_tab(),
             "file.save" => {
@@ -577,6 +584,7 @@ pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str
                 continue;
             }
             let mut open: Option<String> = None;
+            let mut clear = false;
             ui.menu_button(label, |ui| {
                 for r in &app.recent {
                     if ui.button(&r.name).on_hover_text(&r.path).clicked() {
@@ -584,9 +592,19 @@ pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str
                         ui.close();
                     }
                 }
+                ui.separator();
+                // Clears the list only (Home shares it); files and pinned folders stay (#430).
+                if ui.button(tl!("Clear recent files")).clicked() {
+                    clear = true;
+                    ui.close();
+                }
             });
             if let Some(p) = open {
                 app.open_recent(&p);
+                ui.close();
+            }
+            if clear {
+                app.execute("file.clear_recent");
                 ui.close();
             }
             continue;

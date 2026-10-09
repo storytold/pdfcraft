@@ -993,6 +993,17 @@ impl PdfCraftApp {
         }
     }
 
+    /// Forget every recent file (File ▸ Open Recent and Home share the list). The files
+    /// themselves and pinned folders are untouched; the next save persists the empty list.
+    pub fn clear_recent(&mut self) {
+        self.recent.clear();
+    }
+
+    /// Forget one recent file, keeping the rest in order.
+    pub fn remove_recent(&mut self, path: &str) {
+        self.recent.retain(|r| r.path != path);
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_path(&mut self, path: &str) {
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());

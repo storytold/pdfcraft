@@ -104,12 +104,24 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
 
             ui.add_space(26.0);
-            ui.label(egui::RichText::new(tl!("Recent")).font(theme::semibold(17.0)));
+            let mut clear = false;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(tl!("Recent")).font(theme::semibold(17.0)));
+                if !app.recent.is_empty() {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        clear = widgets::ghost_button(ui, "trash-2", tl!("Clear recent files")).clicked();
+                    });
+                }
+            });
+            if clear {
+                app.execute("file.clear_recent");
+            }
             ui.add_space(8.0);
             if app.recent.is_empty() {
                 ui.label(egui::RichText::new(tl!("Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.")).color(t.text_muted));
             }
             let mut open = None;
+            let mut remove = None;
             for r in &app.recent {
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &r.name));
@@ -134,9 +146,19 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let width = detail.left() - 16.0 - (rect.left() + 46.0);
                 widgets::row_text(ui, rect.min + vec2(46.0, 15.0), crate::bidi::visual(&r.name), theme::medium(13.5), t.text, width);
                 widgets::row_text(ui, rect.min + vec2(46.0, 32.0), crate::bidi::visual(&r.path), theme::regular(11.0), t.text_faint, width);
-                if resp.on_hover_text(&r.path).clicked() {
+                let resp = resp.on_hover_text(&r.path);
+                resp.context_menu(|ui| {
+                    if ui.button(tl!("Remove from recent")).clicked() {
+                        remove = Some(r.path.clone());
+                        ui.close();
+                    }
+                });
+                if resp.clicked() {
                     open = Some(r.path.clone());
                 }
+            }
+            if let Some(p) = remove {
+                app.remove_recent(&p);
             }
             if let Some(p) = open {
                 app.open_recent(&p);
