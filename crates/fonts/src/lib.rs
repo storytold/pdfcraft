@@ -134,10 +134,12 @@ pub enum UnicodeCMap {
 }
 
 impl UnicodeCMap {
-    /// The encoding of the predefined CMap `name`, if it is a Unicode one.
+    /// The encoding of the predefined CMap `name`, if it is a horizontal Unicode one. Vertical
+    /// (`-V`) CMaps are refused: field appearances are laid out horizontally, so their glyphs
+    /// would be drawn stacked down the field instead of across it.
     pub fn from_name(name: &[u8]) -> Option<Self> {
         let name = std::str::from_utf8(name).ok()?;
-        if !name.starts_with("Uni") || !(name.ends_with("-H") || name.ends_with("-V")) {
+        if !name.starts_with("Uni") || !name.ends_with("-H") {
             return None;
         }
         name.split('-').find_map(|part| match part {
@@ -227,7 +229,7 @@ mod tests {
     #[test]
     fn unicode_cmaps_encode_cjk_text() {
         assert_eq!(UnicodeCMap::from_name(b"UniJIS-UTF16-H"), Some(UnicodeCMap::Utf16));
-        assert_eq!(UnicodeCMap::from_name(b"UniGB-UCS2-V"), Some(UnicodeCMap::Ucs2));
+        assert_eq!(UnicodeCMap::from_name(b"UniGB-UCS2-V"), None);
         assert_eq!(UnicodeCMap::from_name(b"UniJIS-UCS2-HW-H"), Some(UnicodeCMap::Ucs2));
         assert_eq!(UnicodeCMap::from_name(b"UniKS-UTF8-H"), Some(UnicodeCMap::Utf8));
         assert_eq!(UnicodeCMap::from_name(b"UniJIS2004-UTF32-H"), Some(UnicodeCMap::Utf32));
