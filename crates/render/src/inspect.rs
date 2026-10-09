@@ -520,7 +520,7 @@ impl<'a> Inspector<'a> {
     fn text(&self, d: &Dictionary, key: &[u8]) -> Option<String> {
         let o = self.resolve(d.get(key).ok()?);
         let s = match o {
-            Object::String(..) => lopdf::decode_text_string(o).ok()?,
+            Object::String(bytes, _) => text_string(bytes),
             Object::Name(n) => String::from_utf8_lossy(n).into_owned(),
             _ => return None,
         };
@@ -605,7 +605,10 @@ impl<'a> Inspector<'a> {
         if let Ok(Object::Array(pairs)) = node.get(b"Names").map(|o| self.resolve(o)) {
             for pair in pairs.chunks(2) {
                 if let [k, v] = pair {
-                    let key = lopdf::decode_text_string(self.resolve(k)).unwrap_or_default();
+                    let key = match self.resolve(k) {
+                        Object::String(bytes, _) => text_string(bytes),
+                        _ => String::new(),
+                    };
                     out.push((key, v));
                 }
             }
@@ -812,7 +815,11 @@ impl<'a> Inspector<'a> {
                     }
                     continue;
                 }
-                if matches!(subtype.as_str(), "Widget" | "Popup") {
+                // Not comments: form widgets, pop-ups and non-markup annotations such as the
+                // Screen annotation that drives a LaTeX `animate` player (keep in step with
+                // `pdfcraft_annot::is_comment_subtype`).
+                if matches!(subtype.as_str(), "Widget" | "Popup" | "Screen" | "Movie" | "RichMedia" | "3D" | "PrinterMark" | "TrapNet" | "Watermark")
+                {
                     continue;
                 }
                 let rect = rect4(self.resolve(d.get(b"Rect").unwrap_or(&Object::Null)));
@@ -965,8 +972,16 @@ impl<'a> Inspector<'a> {
         };
         let value = match d.get(b"V").map(|v| self.resolve(v)) {
             Ok(Object::Name(n)) => Some(String::from_utf8_lossy(n).into_owned()),
-            Ok(v @ Object::String(..)) => lopdf::decode_text_string(v).ok(),
-            Ok(Object::Array(a)) => Some(a.iter().filter_map(|x| lopdf::decode_text_string(self.resolve(x)).ok()).collect::<Vec<_>>().join(", ")),
+            Ok(Object::String(bytes, _)) => Some(text_string(bytes)),
+            Ok(Object::Array(a)) => Some(
+                a.iter()
+                    .filter_map(|x| match self.resolve(x) {
+                        Object::String(bytes, _) => Some(text_string(bytes)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
             Ok(Object::Dictionary(_)) if kind == FieldKind::Signature => Some("signed".into()),
             _ => None,
         };
@@ -1110,6 +1125,12 @@ impl<'a> Inspector<'a> {
         let display = d.and_then(|d| self.text(d, b"UF").or_else(|| self.text(d, b"F"))).unwrap_or(name);
         Attachment { name: display, description: d.and_then(|d| self.text(d, b"Desc")), size, source }
     }
+}
+
+/// A text string's value, decoded by the same rules as the engine's object model
+/// ([`pdfcraft_cos::PdfString::to_text`]) so the panels and outline editing agree.
+fn text_string(bytes: &[u8]) -> String {
+    pdfcraft_cos::PdfString::literal(bytes).to_text()
 }
 
 fn rect4(o: &Object) -> [f32; 4] {
@@ -1649,6 +1670,29 @@ trailer << /Root 1 0 R >>
                 LinkTarget::Page(1, Fit),
             ]
         );
+    }
+
+    #[test]
+    fn outline_titles_decode_every_text_string_encoding() {
+        // Issue #142: CJK bookmark titles showed as mojibake or with a stray BOM.
+        let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 10 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+10 0 obj << /Type /Outlines /First 11 0 R /Last 16 0 R /Count 6 >> endobj
+11 0 obj << /Title <FEFF7B2C4E007AE0> /Parent 10 0 R /Next 12 0 R /Dest [3 0 R /Fit] >> endobj
+12 0 obj << /Title <EFBBBFE79BAEE5BD95> /Parent 10 0 R /Next 13 0 R /Dest [3 0 R /Fit] >> endobj
+13 0 obj << /Title <EFBBBF41FF42> /Parent 10 0 R /Next 14 0 R /Dest [3 0 R /Fit] >> endobj
+14 0 obj << /Title <E6A682E8BFB0> /Parent 10 0 R /Next 15 0 R /Dest [3 0 R /Fit] >> endobj
+15 0 obj << /Title <436166E9> /Parent 10 0 R /Next 16 0 R /Dest [3 0 R /Fit] >> endobj
+16 0 obj << /Title <FEFFFEFF0041> /Parent 10 0 R /Dest [3 0 R /Fit] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+        let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
+        let titles: Vec<_> = info.outline.iter().map(|o| o.title.as_str()).collect();
+        // UTF-16BE, UTF-8 with BOM, invalid UTF-8 after a BOM (lossy, not dropped), BOM-less
+        // raw UTF-8, PDFDocEncoding Latin-1, and a doubled BOM.
+        assert_eq!(titles, ["第一章", "目录", "A\u{FFFD}B", "概述", "Café", "A"]);
     }
 
     #[test]
