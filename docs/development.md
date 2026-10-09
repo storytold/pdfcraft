@@ -29,8 +29,12 @@ covers every target starting with it (`pdfcraft*=debug`). The logger is
 The desktop renderer enables the selected adapter's supported 2D texture extent, while keeping
 egui-wgpu's other device requirements. Restored windows on mixed-DPI monitors can exceed its
 default 8192-pixel extent even when the GPU supports a larger surface (#577). The enabled extent
-never exceeds the adapter's capability; this does not make surfaces larger than the hardware
-limit renderable.
+never exceeds the adapter's capability. A window larger than even that (restored at another
+monitor's scale, or stretched across monitors) gets a surface fitted within the limit and is drawn
+at a correspondingly lower scale instead of panicking in `Surface::configure` (vendored egui-wgpu,
+`surface_fit`; see `vendor/README.md`). On DX12, PdfCraft's Windows default, the surface is
+stretched over the window: softer, but complete and lined up with the pointer. wgpu's GL backend
+copies it unscaled into a corner of the window instead.
 
 ## Environment variables
 

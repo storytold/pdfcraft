@@ -599,6 +599,82 @@ mod tests {
     }
 
     #[test]
+    fn a_window_larger_than_the_gpu_limit_gets_a_surface_within_it() {
+        use eframe::egui_wgpu::winit::surface_fit;
+        // Issue #577: 3440 x 1369 points restored at 250% asked an 8192-pixel device for this.
+        let (width, height, scale) = surface_fit(8600, 3423, 8192);
+        assert_eq!((width, height), (8192, 3260));
+        // Both sides shrink alike and egui draws at that factor: the whole window is drawn.
+        assert!((8600.0 * scale - 8192.0).abs() < 0.01, "{scale}");
+        assert!((3423.0 * scale - height as f32).abs() < 1.0, "{scale}");
+        // Within the limit nothing changes, up to and including the limit itself.
+        assert_eq!(surface_fit(8600, 3423, 16384), (8600, 3423, 1.0));
+        assert_eq!(surface_fit(8192, 8192, 8192), (8192, 8192, 1.0));
+        assert_eq!(surface_fit(0, 0, 8192), (0, 0, 1.0));
+        // One side over the limit: the window as it would be stretched across monitors.
+        assert_eq!(surface_fit(8193, 600, 8192).0, 8192);
+        assert_eq!(surface_fit(600, 8193, 8192).1, 8192);
+    }
+
+    #[test]
+    fn surface_fit_never_empties_or_overflows_a_surface() {
+        use eframe::egui_wgpu::winit::surface_fit;
+        for (w, h, max) in [
+            (1, u32::MAX, 8192),
+            (u32::MAX, 1, 2048),
+            (u32::MAX, u32::MAX, 16384),
+            (0, u32::MAX, 8192),
+            (u32::MAX, 0, 8192),
+            (5, 7, 0),
+            (40_000, 3, 1),
+        ] {
+            let (fw, fh, scale) = surface_fit(w, h, max);
+            assert!(fw <= max.max(1) && fh <= max.max(1), "{w} x {h} in {max}: {fw} x {fh}");
+            // A side that wasn't zero stays non-zero (`Surface::configure` rejects an empty one),
+            // and a zero side stays zero (egui-wgpu skips configuring it).
+            assert_eq!((fw == 0, fh == 0), (w == 0, h == 0), "{w} x {h} in {max}: {fw} x {fh}");
+            assert!(scale.is_finite() && scale > 0.0 && scale <= 1.0, "{w} x {h} in {max}: {scale}");
+        }
+        // The longer side lands exactly on the limit (rounding never leaves it a pixel short),
+        // and the shorter side keeps the window's proportions to within a pixel.
+        for max in [2048, 8192, 16384] {
+            for long in (max + 1..=max * 5).step_by(997).chain([max * 2, max * 4, u32::MAX]) {
+                for short in [1, 3, 600, max / 3, max - 1, max, long - 1, long] {
+                    let (fw, fh, scale) = surface_fit(long, short, max);
+                    assert_eq!(fw, max, "{long} x {short} in {max}");
+                    let expected = f64::from(short) * f64::from(max) / f64::from(long);
+                    assert!((f64::from(fh) - expected).abs() <= 1.0, "{long} x {short} in {max}: {fh}");
+                    assert_eq!(surface_fit(short, long, max), (fh, fw, scale), "transposed");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn egui_wgpu_carries_the_surface_size_fit() {
+        // Issue #577: egui-wgpu 0.36.2 configures a window's surface at the window's size, and
+        // `Surface::configure` panics when that's beyond the device's `max_texture_dimension_2d`
+        // (emilk/egui#8361). vendor/egui-wgpu fits it within the limit. A dependency bump that
+        // resolves egui-wgpu from crates.io again, or a re-vendored copy without the patch, would
+        // bring the crash back: re-apply the patch, or drop the copy once an egui release has a
+        // fix (vendor/README.md).
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap();
+        let egui_wgpu = lock.split("[[package]]").find(|p| p.contains("\nname = \"egui-wgpu\"\n")).expect("egui-wgpu is in Cargo.lock");
+        assert!(!egui_wgpu.contains("\nsource = "), "egui-wgpu must resolve to vendor/egui-wgpu, not:{egui_wgpu}");
+        // `surface_fit` is tested above; these keep it in the paths that size a surface.
+        let painter = std::fs::read_to_string(root.join("vendor/egui-wgpu/src/winit.rs")).unwrap().replace("\r\n", "\n");
+        for patch in [
+            "let (width, height, render_scale) = surface_fit(window_width, window_height, max_side);",
+            "let (fit_width, fit_height, _) = surface_fit(width, height, self.max_surface_side());",
+            "pixels_per_point: pixels_per_point * surface_state.render_scale,",
+            "old_state.window_width,\n            old_state.window_height,",
+        ] {
+            assert!(painter.contains(patch), "vendor/egui-wgpu lost its surface size patch: {patch}");
+        }
+    }
+
+    #[test]
     fn winit_carries_the_windows_11_monitor_scale_fix() {
         // Issue #324: winit 0.30.13 as released nudges a window dragged onto a monitor with another
         // scale factor back onto the one it is leaving, so on Windows 11 it ends up on the wrong
