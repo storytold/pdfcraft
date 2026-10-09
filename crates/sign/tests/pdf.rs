@@ -777,6 +777,20 @@ fn signing_with_windows_store_identities() {
     }
 }
 
+/// A legacy adbe.x509.rsa_sha1 signature whose certificate carries an RSA key the verifier
+/// rejects (public exponent 1) is Invalid, not "can't check yet".
+#[test]
+fn a_legacy_x509_signature_with_a_malformed_rsa_key_is_invalid() {
+    let pdf = data("x509-rsa-sha1.pdf");
+    let at = pdf.windows(10).position(|w| w == b"0203010001").expect("the certificate's exponent 65537");
+    let mut bad = pdf.clone();
+    bad[at..at + 10].copy_from_slice(b"0203000001");
+    let s = signatures(&open(&bad), &bad, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.sub_filter.as_deref(), Some("adbe.x509.rsa_sha1"));
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+    assert!(!s.details.iter().any(|d| d.contains("can't check this signature yet")), "{:?}", s.details);
+}
+
 #[test]
 fn validates_the_legacy_adbe_x509_rsa_sha1_format() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();

@@ -898,11 +898,17 @@ fn validate_x509_rsa_sha1(
             info.certificate = Some(cert);
             return fail(info, "The document has been altered or corrupted since the signature was applied.");
         }
-        Err(e) => {
+        // Only what PdfCraft doesn't support yet is "can't check"; a key or value that is
+        // malformed is a signature that doesn't verify (as on the CMS path).
+        Err(SignError::Unsupported(e)) => {
             info.certificate = Some(cert);
             info.status = Status::Unknown;
             info.details.push(format!("PdfCraft can't check this signature yet: {e}."));
             return;
+        }
+        Err(e) => {
+            info.certificate = Some(cert);
+            return fail(info, &format!("The signature could not be verified ({e})."));
         }
     }
     info.details.push("The signature uses the legacy adbe.x509.rsa_sha1 format.".into());
