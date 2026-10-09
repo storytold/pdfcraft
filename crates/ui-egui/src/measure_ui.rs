@@ -325,7 +325,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     }
     ui.horizontal(|ui| {
         ui.label(tl!("Label"));
-        ui.add(egui::TextEdit::singleline(&mut state.label).desired_width(130.0).char_limit(128));
+        ui.add(egui::TextEdit::singleline(&mut state.label).layouter(&mut crate::bidi::field_layouter).desired_width(130.0).char_limit(128));
     });
     ui.separator();
     ui.checkbox(&mut state.snap_enabled, tl!("Snap to drawing"));
@@ -366,7 +366,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     }
     ui.horizontal(|ui| {
         ui.label(tl!("Viewport"));
-        ui.add(egui::TextEdit::singleline(&mut state.name).desired_width(130.0).char_limit(128));
+        ui.add(egui::TextEdit::singleline(&mut state.name).layouter(&mut crate::bidi::field_layouter).desired_width(130.0).char_limit(128));
     });
     let apply = ui.add_enabled(doc.allows_annotation(), egui::Button::new(tl!("Apply scale"))).clicked();
     if let Some(error) = &state.error {

@@ -171,6 +171,15 @@ pub fn japanese_glyph_from(face: &crate::CraftFont, ch: char) -> Result<GlyphOut
     Ok(GlyphOutline { contours: pen.contours, width, bbox })
 }
 
+/// The first character of `text` (other than white space) that the script font can't draw, so
+/// a typed signature in another script (Hebrew, Arabic, Japanese …) is refused with a reason
+/// instead of being saved with letters silently missing. `None` when every character is drawn.
+pub fn script_missing(text: &str) -> Option<char> {
+    let font = FontRef::new(FONT).ok()?;
+    let charmap = font.charmap();
+    text.chars().take(MAX_SIGNATURE_CHARS + 1).find(|c| !c.is_whitespace() && charmap.map(*c).is_none())
+}
+
 /// The outlines of `text` in the script font (characters it lacks are skipped).
 /// Over-limit input returns an empty outline instead of a silently truncated signature.
 pub fn script_outline(text: &str) -> ScriptOutline {
@@ -215,6 +224,15 @@ mod tests {
         assert!(max_x > o.width - 0.5, "ink reaches the last letter: {max_x} / {}", o.width);
         assert!(!super::script_outline(&"W".repeat(super::MAX_SIGNATURE_CHARS)).contours.is_empty());
         assert!(super::script_outline(&"W".repeat(super::MAX_SIGNATURE_CHARS + 1)).contours.is_empty());
+    }
+
+    #[test]
+    fn characters_the_script_font_lacks_are_reported() {
+        assert_eq!(super::script_missing("Ada Lovelace-King"), None);
+        assert_eq!(super::script_missing("  "), None);
+        assert_eq!(super::script_missing("נטלי זכריה"), Some('נ'));
+        assert_eq!(super::script_missing("Natalie זכריה"), Some('ז'));
+        assert_eq!(super::script_missing("日本"), Some('日'));
     }
 
     #[test]

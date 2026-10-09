@@ -1085,8 +1085,14 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 ComposerKind::Replace => tl!("Replacement text"),
                 _ => tl!("Add a comment"),
             };
-            let edit =
-                ui.add(egui::TextEdit::multiline(&mut c.text).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY).id_salt("composer-text"));
+            let edit = ui.add(
+                egui::TextEdit::multiline(&mut c.text)
+                    .layouter(&mut crate::bidi::multiline_field_layouter)
+                    .hint_text(hint)
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY)
+                    .id_salt("composer-text"),
+            );
             if c.focus {
                 edit.request_focus();
                 c.focus = false;

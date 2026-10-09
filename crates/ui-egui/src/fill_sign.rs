@@ -92,6 +92,7 @@ impl SigDraft {
         } else {
             !self.text.trim().is_empty()
                 && self.text.chars().take(pdfcraft_engine::MAX_SIGNATURE_CHARS + 1).count() <= pdfcraft_engine::MAX_SIGNATURE_CHARS
+                && pdfcraft_engine::script_missing(&self.text).is_none()
         }
     }
 
@@ -441,8 +442,10 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     egui::Area::new(egui::Id::new(("fill-text", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         let Some(t) = view.fill_text.as_mut() else { return };
         let width = ((t.text.len().max(8) as f32) * TEXT_SIZE as f32 * 0.6 * zoom).clamp(60.0, 600.0);
+        let mut layouter = crate::bidi::styled_layouter(egui::FontId::proportional((TEXT_SIZE as f32 * zoom).max(8.0)), Some(Color32::BLACK), false);
         let r = ui.add(
             egui::TextEdit::singleline(&mut t.text)
+                .layouter(&mut layouter)
                 .font(egui::FontId::proportional((TEXT_SIZE as f32 * zoom).max(8.0)))
                 .desired_width(width)
                 .background_color(Color32::from_rgba_unmultiplied(255, 255, 255, 230))
@@ -515,7 +518,8 @@ pub(crate) fn signature_pad(
             egui::TextEdit::singleline(&mut d.text)
                 .char_limit(pdfcraft_engine::MAX_SIGNATURE_CHARS)
                 .desired_width(460.0)
-                .hint_text(tl!(if d.initials { "Initials" } else { "Your name" })),
+                .hint_text(tl!(if d.initials { "Initials" } else { "Your name" }))
+                .layouter(&mut crate::bidi::field_layouter),
         )
         .labelled_by(l.id);
         let (rect, _) = ui.allocate_exact_size(vec2(460.0, 150.0), Sense::hover());
@@ -527,7 +531,9 @@ pub(crate) fn signature_pad(
             let img = script_preview(&d.text, 920, 300);
             *preview = Some((key, ui.ctx().load_texture("typed-signature", img, egui::TextureOptions::LINEAR)));
         }
-        if let Some((_, tex)) = preview {
+        // The script font is Latin: a name in another script draws nothing, and Apply stays off
+        // (`SigDraft::ready`) rather than saving a signature that can't be placed.
+        if let Some((_, tex)) = preview.as_ref().filter(|_| pdfcraft_engine::script_missing(&d.text).is_none()) {
             painter.image(tex.id(), rect.shrink(4.0), egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
         let (apply, cancel) = pad_buttons(ui, d);

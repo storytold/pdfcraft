@@ -277,10 +277,15 @@ fn edit_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.add_space(8.0);
     egui::Grid::new("action-edit").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
         ui.label(tl!("Action name:"));
-        ui.add(egui::TextEdit::singleline(&mut a.name).desired_width(320.0).id_salt("action-name"));
+        ui.add(egui::TextEdit::singleline(&mut a.name).layouter(&mut crate::bidi::field_layouter).desired_width(320.0).id_salt("action-name"));
         ui.end_row();
         ui.label(tl!("Description:"));
-        ui.add(egui::TextEdit::singleline(&mut a.description).desired_width(320.0).id_salt("action-description"));
+        ui.add(
+            egui::TextEdit::singleline(&mut a.description)
+                .layouter(&mut crate::bidi::field_layouter)
+                .desired_width(320.0)
+                .id_salt("action-description"),
+        );
         ui.end_row();
     });
     ui.add_space(6.0);

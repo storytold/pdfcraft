@@ -546,7 +546,7 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 (tl!("Email Address"), &mut n.email),
             ] {
                 let l = ui.label(label);
-                ui.add(egui::TextEdit::singleline(value).desired_width(260.0)).labelled_by(l.id);
+                ui.add(egui::TextEdit::singleline(value).layouter(&mut crate::bidi::field_layouter).desired_width(260.0)).labelled_by(l.id);
                 ui.end_row();
             }
             let l = ui.label(tl!("Country/Region"));
@@ -717,10 +717,14 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             ui.end_row();
         }
         let l = ui.label(tl!("Reason"));
-        ui.add(egui::TextEdit::singleline(&mut d.reason).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
+        ui.add(egui::TextEdit::singleline(&mut d.reason).layouter(&mut crate::bidi::field_layouter).hint_text(tl!("Optional")).desired_width(260.0))
+            .labelled_by(l.id);
         ui.end_row();
         let l = ui.label(tl!("Location"));
-        ui.add(egui::TextEdit::singleline(&mut d.location).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
+        ui.add(
+            egui::TextEdit::singleline(&mut d.location).layouter(&mut crate::bidi::field_layouter).hint_text(tl!("Optional")).desired_width(260.0),
+        )
+        .labelled_by(l.id);
         ui.end_row();
         if in_os_key_store {
             ui.label("");

@@ -44,6 +44,9 @@ pub struct LangInfo {
     /// Plural form index for a count (English: 0 = one, 1 = other; Japanese: always 0). A catalog's
     /// `@plural` entries list one form per index.
     pub plural: fn(u64) -> usize,
+    /// Written right to left (Hebrew). The catalog's text is kept in display order (see
+    /// [`crate::bidi::visual_rtl`]), because egui lays every label out left to right.
+    pub rtl: bool,
     catalog: OnceLock<Catalog>,
 }
 
@@ -74,6 +77,15 @@ fn plural_fr(n: u64) -> usize {
     usize::from(n > 1)
 }
 
+/// Hebrew: 1 → one, 2 → two, everything else (0, 3+) → other.
+fn plural_he(n: u64) -> usize {
+    match n {
+        1 => 0,
+        2 => 1,
+        _ => 2,
+    }
+}
+
 /// Russian: 1 (but not 11) is `one`, 2–4 (but not 12–14) `few`, everything else `many`.
 fn plural_russian(n: u64) -> usize {
     match n % 100 {
@@ -87,25 +99,40 @@ fn plural_russian(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 10] = [
-    LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, catalog: OnceLock::new() },
-    LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, catalog: OnceLock::new() },
+pub static LANGUAGES: [LangInfo; 11] = [
+    LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
-    LangInfo { code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), plural: plural_none, catalog: OnceLock::new() },
+    LangInfo {
+        code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new()
+    },
     // Traditional Chinese in the vocabulary used in Taiwan; `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant-*`
     // locales all resolve here (see `candidates`).
-    LangInfo { code: "zh-hant", name: "繁體中文", source: include_str!("zh-hant.tsv"), plural: plural_none, catalog: OnceLock::new() },
-    LangInfo { code: "cs", name: "Čeština", source: include_str!("cs.tsv"), plural: plural_cs, catalog: OnceLock::new() },
+    LangInfo {
+        code: "zh-hant", name: "繁體中文", source: include_str!("zh-hant.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new()
+    },
+    LangInfo { code: "cs", name: "Čeština", source: include_str!("cs.tsv"), plural: plural_cs, rtl: false, catalog: OnceLock::new() },
     // Brazilian Portuguese; `pt`, `pt-BR` and `pt-PT` locales all resolve here (see `candidates`).
-    LangInfo { code: "pt-br", name: "Português (Brasil)", source: include_str!("pt-br.tsv"), plural: plural_pt, catalog: OnceLock::new() },
+    LangInfo {
+        code: "pt-br",
+        name: "Português (Brasil)",
+        source: include_str!("pt-br.tsv"),
+        plural: plural_pt,
+        rtl: false,
+        catalog: OnceLock::new(),
+    },
     // Spanish (European vocabulary); every `es-*` locale (`es-ES`, `es-MX`, `es-419` ...) resolves here.
-    LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
+    LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
     // French; every `fr-*` locale (`fr-FR`, `fr-CA`, `fr-BE` ...) resolves here.
-    LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv"), plural: plural_fr, catalog: OnceLock::new() },
+    LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv"), plural: plural_fr, rtl: false, catalog: OnceLock::new() },
     // Russian; every `ru-*` locale (`ru-RU`, `ru-BY`, `ru-KZ` ...) resolves here.
-    LangInfo { code: "ru", name: "Русский", source: include_str!("ru.tsv"), plural: plural_russian, catalog: OnceLock::new() },
+    LangInfo { code: "ru", name: "Русский", source: include_str!("ru.tsv"), plural: plural_russian, rtl: false, catalog: OnceLock::new() },
     // Telugu; every `te-*` locale (`te-IN`) resolves here.
-    LangInfo { code: "te", name: "తెలుగు", source: include_str!("te.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
+    LangInfo {
+        code: "te", name: "తెలుగు", source: include_str!("te.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new()
+    },
+    // Hebrew; every `he-*` locale (`he-IL`), and the legacy `iw` code, resolves here (see `candidates`).
+    LangInfo { code: "he", name: "עברית", source: include_str!("he.tsv"), plural: plural_he, rtl: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -120,7 +147,7 @@ impl LangInfo {
             for error in errors {
                 log::warn!("{} interface catalog: {error}; that entry shows in English", self.code);
             }
-            catalog
+            if self.rtl { catalog.map_text(|text| crate::bidi::visual_rtl(text).into_owned()) } else { catalog }
         })
     }
 }
@@ -170,6 +197,11 @@ impl Lang {
         self.0.name
     }
 
+    /// Is the language written right to left?
+    pub fn rtl(self) -> bool {
+        self.0.rtl
+    }
+
     fn catalog(self) -> &'static Catalog {
         self.0.catalog()
     }
@@ -198,6 +230,10 @@ fn candidates(tag: &str) -> Vec<String> {
         // Chinese by region when no script is given.
         let script = if parts.iter().any(|p| matches!(*p, "tw" | "hk" | "mo")) { "zh-hant" } else { "zh-hans" };
         out.insert(out.len().saturating_sub(1), script.to_string());
+    }
+    if primary == "iw" {
+        // The code Java and older Android systems still report for Hebrew.
+        out.push("he".to_string());
     }
     if primary == "pt" && !out.iter().any(|c| c == "pt-br") {
         // The only Portuguese catalog is Brazilian; other regions use it rather than English.
@@ -542,10 +578,34 @@ mod tests {
 
     #[test]
     fn broken_catalog_falls_back_to_english() {
-        static BROKEN: LangInfo =
-            LangInfo { code: "broken", name: "Broken test catalog", source: "malformed\n\\", plural: plural_none, catalog: OnceLock::new() };
+        static BROKEN: LangInfo = LangInfo {
+            code: "broken",
+            name: "Broken test catalog",
+            source: "malformed\n\\",
+            plural: plural_none,
+            rtl: false,
+            catalog: OnceLock::new(),
+        };
         assert_eq!(tr(Lang(&BROKEN), "File"), "File");
         assert_eq!(trn(Lang(&BROKEN), 2, "{n} page", "{n} pages"), "2 pages");
+    }
+
+    #[test]
+    fn right_to_left_catalogs_load_in_display_order() {
+        let he = Lang::from_code("he").expect("he registered");
+        assert!(he.rtl() && !JA().rtl() && !Lang::EN.rtl());
+        // Written in logical order in he.tsv, looked up in display order: the trailing ellipsis
+        // of "Save as…" is drawn at the left end, the first word at the right.
+        assert_eq!(tr(he, "Save as…"), "…בשם שמירה");
+        assert_eq!(tr(he, "File"), "קובץ");
+        assert_eq!(tr_id(he, "file.saveAs", "Save as…"), "…בשם שמירה");
+        // Placeholders survive and are filled after reordering.
+        assert_eq!(fmt(tr(he, "Page display: {layout}"), &[("layout", "A")]), "A :עמודים תצוגת");
+        // Hebrew locales (and the legacy `iw` code) choose the Hebrew catalog.
+        for tag in ["he", "he_IL.UTF-8", "he-IL", "iw", "iw_IL"] {
+            assert_eq!(lang_from_tag(tag), Some(he), "{tag}");
+        }
+        assert_eq!((0..=4).map(he.0.plural).collect::<Vec<_>>(), [2, 0, 1, 2, 2]);
     }
 
     #[test]
@@ -555,6 +615,7 @@ mod tests {
             name: "Test catalog",
             source: "\tLight\tPlain light\nweight\tLight\tThin\n@id\tfile.open\tOpen dialog…\n@plural\t{n} page|{n} pages\tOne page: {n}|Many pages: {n}\n",
             plural: plural_one_other,
+            rtl: false,
             catalog: OnceLock::new(),
         };
         let l = Lang(&TEST);
@@ -1052,6 +1113,29 @@ mod tests {
                     assert!(has(fr, item.label), "missing item: {}", item.label);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn hebrew_covers_commands_and_catalogue() {
+        let he = Lang::from_code("he").expect("he registered");
+        for command in pdfcraft_engine::commands::COMMANDS {
+            assert!(has(he, command.label), "missing command: {}", command.label);
+            if let Some(menu) = command.menu {
+                assert!(has(he, menu), "missing menu: {menu}");
+            }
+        }
+        for group in pdfcraft_engine::catalog::TOOL_GROUPS {
+            assert!(has(he, group.label), "missing group: {}", group.label);
+            for section in group.sections {
+                assert!(has(he, section.title), "missing section: {}", section.title);
+                for item in section.items {
+                    assert!(has(he, item.label), "missing item: {}", item.label);
+                }
+            }
+        }
+        for mode in ["All tools", "Read", "Edit", "Convert", "E-Sign", "Find tools and commands", "View more", "View less"] {
+            assert!(has(he, mode), "missing: {mode}");
         }
     }
 

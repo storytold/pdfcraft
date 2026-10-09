@@ -837,11 +837,14 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
             FieldTab::General => {
                 egui::Grid::new("field-general").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
                     let l = ui.label(tl!("Name:"));
-                    let r = ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(340.0)).labelled_by(l.id);
+                    let r = ui
+                        .add(egui::TextEdit::singleline(&mut d.name).layouter(&mut crate::bidi::field_layouter).desired_width(340.0))
+                        .labelled_by(l.id);
                     enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.end_row();
                     let l = ui.label(tl!("Tooltip:"));
-                    ui.add(egui::TextEdit::singleline(&mut d.tooltip).desired_width(340.0)).labelled_by(l.id);
+                    ui.add(egui::TextEdit::singleline(&mut d.tooltip).layouter(&mut crate::bidi::field_layouter).desired_width(340.0))
+                        .labelled_by(l.id);
                     ui.end_row();
                 });
                 ui.add_space(12.0);
@@ -948,7 +951,8 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                             });
                         ui.end_row();
                         let l = ui.label(tl!("Default Value:"));
-                        ui.add(egui::TextEdit::singleline(&mut d.default).desired_width(260.0)).labelled_by(l.id);
+                        ui.add(egui::TextEdit::singleline(&mut d.default).layouter(&mut crate::bidi::field_layouter).desired_width(260.0))
+                            .labelled_by(l.id);
                         ui.end_row();
                     });
                     ui.add_space(6.0);
@@ -1008,7 +1012,9 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                 _ => {
                     ui.horizontal(|ui| {
                         let l = ui.label(tl!("Item:"));
-                        let r = ui.add(egui::TextEdit::singleline(&mut d.new_option).desired_width(240.0)).labelled_by(l.id);
+                        let r = ui
+                            .add(egui::TextEdit::singleline(&mut d.new_option).layouter(&mut crate::bidi::field_layouter).desired_width(240.0))
+                            .labelled_by(l.id);
                         let typed = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         if (widgets::pill_button(ui, tl!("Add"), false).clicked() || typed) && !d.new_option.trim().is_empty() {
                             d.options.push(d.new_option.trim().to_string());

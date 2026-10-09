@@ -119,6 +119,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                                         let l = ui.label(egui::RichText::new(tl!(k)).color(t.text_muted));
                                         ui.add(
                                             egui::TextEdit::singleline(v)
+                                                .layouter(&mut crate::bidi::field_layouter)
                                                 .desired_width(420.0)
                                                 .background_color(t.field)
                                                 .margin(egui::Margin::symmetric(6, 4))
@@ -955,8 +956,15 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     });
                     ui.end_row();
                     let l = ui.label(tl!("Prefix"));
-                    boxed(ui, &mut |ui| ui.add(egui::TextEdit::singleline(&mut d.prefix).desired_width(160.0).frame(egui::Frame::NONE)))
-                        .labelled_by(l.id);
+                    boxed(ui, &mut |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut d.prefix)
+                                .layouter(&mut crate::bidi::field_layouter)
+                                .desired_width(160.0)
+                                .frame(egui::Frame::NONE),
+                        )
+                    })
+                    .labelled_by(l.id);
                     ui.end_row();
                     ui.label(tl!("Start"));
                     ui.add(egui::DragValue::new(&mut d.start).range(1..=99_999));
