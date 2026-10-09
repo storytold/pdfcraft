@@ -85,7 +85,7 @@ impl PdfCraftApp {
             style.width = w;
         }
         self.comment_prefs.set_style(tool, style);
-        self.notify_fmt("New {tool} comments will look like this one", &[("tool", &tl!(tool.label()).to_lowercase())]);
+        self.notify_fmt("New {tool} comments will look like this one", &[("tool", &crate::i18n::in_sentence(tl!(tool.label())))]);
     }
 
     /// Open Comment Properties for the comment at `(page, index)` of the active document.

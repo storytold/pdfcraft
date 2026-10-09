@@ -49,7 +49,7 @@ impl PrintStandard {
                 let id = d.and_then(|d| d.get(b"OutputConditionIdentifier")).and_then(|v| doc.resolve(v).as_string().map(|s| s.bytes.clone()));
                 let profile = d.and_then(|d| d.get(b"DestOutputProfile")).map(|p| doc.resolve(p)).and_then(|p| match &*p {
                     // Undecodable: compare the bytes as stored.
-                    Object::Stream(s) => Some(s.decoded_within(MAX_DECODED).unwrap_or_else(|_| s.raw.as_ref().clone())),
+                    Object::Stream(s) => Some(s.decoded_within(MAX_DECODED).unwrap_or_else(|_| s.raw.to_vec())),
                     _ => None,
                 });
                 (kind, id.unwrap_or_default(), profile.unwrap_or_default())

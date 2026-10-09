@@ -62,6 +62,9 @@
 	Name on new comments	新注释的作者姓名
 	Open…	打开…
 	Open Recent	打开最近的文件
+	Clear Recent Files	清除最近的文件
+	Remove from Recent	从最近的文件中移除
+	Remove {name} from Recent	从最近的文件中移除{name}
 	Pin folder to Home…	将文件夹固定到主页…
 	Folders	文件夹
 	Pin a folder…	固定文件夹…

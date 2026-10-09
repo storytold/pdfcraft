@@ -108,7 +108,7 @@ fn walk(o: &Object, strings: &dyn Fn(&PdfString) -> PdfString, h: &SecurityHandl
                 _ => StreamKind::Normal,
             };
             let raw = if decrypt { h.decrypt_stream(num, generation, &s.raw, kind) } else { h.encrypt_stream(num, generation, &s.raw, kind) };
-            Object::Stream(Stream { dict, raw: std::sync::Arc::new(raw) })
+            Object::Stream(Stream { dict, raw: raw.into() })
         }
         other => other.clone(),
     }

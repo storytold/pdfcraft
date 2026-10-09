@@ -3,11 +3,9 @@
 //! Dictionaries keep their key order so rewritten objects stay recognisable in diffs and
 //! byte-stable when re-serialized. Streams keep their *encoded* bytes; decoding is on demand.
 
-use std::sync::Arc;
-
 use pdfcraft_filters::{Filter, Params};
 
-use crate::CosError;
+use crate::{Bytes, CosError};
 
 /// An indirect reference: object number and generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -160,7 +158,7 @@ impl FromIterator<(Name, Object)> for Dict {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stream {
     pub dict: Dict,
-    pub raw: Arc<Vec<u8>>,
+    pub raw: Bytes,
 }
 
 /// Upper bound for a single decoded stream (decompression-bomb defence).
@@ -169,14 +167,14 @@ pub const MAX_DECODED: usize = 1 << 30;
 impl Stream {
     /// A new stream from already-encoded bytes (`/Length` is set at write time).
     pub fn from_raw(dict: Dict, raw: Vec<u8>) -> Self {
-        Self { dict, raw: Arc::new(raw) }
+        Self { dict, raw: raw.into() }
     }
 
     /// A new stream holding `data` compressed with Flate.
     pub fn flate(mut dict: Dict, data: &[u8]) -> Self {
         dict.set(b"Filter".to_vec(), Object::Name(b"FlateDecode".to_vec()));
         dict.remove(b"DecodeParms");
-        Self { dict, raw: Arc::new(pdfcraft_filters::encode_flate(data)) }
+        Self { dict, raw: pdfcraft_filters::encode_flate(data).into() }
     }
 
     /// The filter chain declared in the dictionary.
@@ -244,7 +242,7 @@ impl Stream {
         if self.raw.len() > max {
             return Err(CosError::Filter(pdfcraft_filters::FilterError::LimitExceeded(max).to_string()));
         }
-        Ok(self.raw.as_ref().clone())
+        Ok(self.raw.to_vec())
     }
 }
 

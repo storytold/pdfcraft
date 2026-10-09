@@ -189,6 +189,7 @@ impl Automation {
                     "value": match f.kind {
                         FormFieldKind::CheckBox => json!(!f.value.is_empty()),
                         FormFieldKind::List if f.has(field_flags::MULTI_SELECT) => json!(f.value),
+                        FormFieldKind::Radio => json!(f.value.first().map(|v| f.export_for_state(v))),
                         _ => json!(f.value.first()),
                     },
                     "page": w.and_then(|w| w.page).map(|p| p + 1),
@@ -225,7 +226,7 @@ impl Automation {
                 }
                 match f.kind {
                     FormFieldKind::Radio => {
-                        o.insert("options".into(), json!(f.widgets.iter().filter_map(|w| w.on_state.clone()).collect::<Vec<_>>()));
+                        o.insert("options".into(), json!((0..f.widgets.len()).filter_map(|i| f.export_of(i)).collect::<Vec<_>>()));
                     }
                     FormFieldKind::Combo | FormFieldKind::List => {
                         o.insert("options".into(), f.options.iter().map(|(e, d)| json!({ "value": e, "label": d })).collect());

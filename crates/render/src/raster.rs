@@ -17,9 +17,10 @@ use hayro::hayro_interpret::InterpreterSettings;
 use hayro::hayro_interpret::font::{FontData, FontQuery};
 use hayro::hayro_interpret::hayro_cmap::CidFamily;
 use hayro::hayro_syntax::Pdf;
-use hayro::vello_cpu::Pixmap;
 use hayro::vello_cpu::color::palette::css::WHITE;
-use hayro::{RenderCache, RenderSettings, render};
+use hayro::{RenderCache, RenderSettings, render_into, render_size};
+
+use crate::Pixels;
 
 /// Monotonic-ish timer that is safe on wasm32 (where `std::time::Instant` panics).
 #[derive(Clone, Copy)]
@@ -152,7 +153,7 @@ pub struct RenderedPage {
     pub width: u32,
     pub height: u32,
     /// Premultiplied RGBA8, row-major. Empty when `error` is set.
-    pub rgba: Vec<u8>,
+    pub rgba: Pixels,
     /// Why the page could not be rendered (renderer panic, empty page box, …).
     pub error: Option<String>,
     /// For `RequestKind::Text`.
@@ -182,12 +183,12 @@ pub fn device_pixels(pt: f32, scale: f32) -> u32 {
 
 /// Render one page with a caller-owned parser and cache. Panics inside the renderer are caught
 /// and reported as `Err((message, panicked))`.
-type Output = (u32, u32, Vec<u8>, Option<Arc<crate::text::PageText>>);
+type Output = (u32, u32, Pixels, Option<Arc<crate::text::PageText>>);
 
 fn render_page<'a>(pdf: &'a Pdf, cache: &RenderCache<'a>, settings: &InterpreterSettings, req: RenderRequest) -> Result<Output, (String, bool)> {
     if req.kind == RequestKind::Text {
         return match catch_unwind(AssertUnwindSafe(|| crate::text::extract_page(pdf, req.page, settings))) {
-            Ok(Some(t)) => Ok((0, 0, Vec::new(), Some(Arc::new(t)))),
+            Ok(Some(t)) => Ok((0, 0, Pixels::default(), Some(Arc::new(t)))),
             Ok(None) => Err((format!("page {} does not exist", req.page + 1), false)),
             Err(panic) => Err((format!("text extraction crashed on page {}: {}", req.page + 1, panic_message(&panic)), true)),
         };
@@ -222,8 +223,11 @@ fn render_page<'a>(pdf: &'a Pdf, cache: &RenderCache<'a>, settings: &Interpreter
                 RenderSettings { x_scale: scale, y_scale: scale, width: Some(side(w)), height: Some(side(h)), bg_color: WHITE, ..Default::default() }
             }
         };
-        let pixmap = render(page, cache, settings, &rs);
-        Ok((pixmap.width() as u32, pixmap.height() as u32, into_bytes(pixmap), None))
+        // Rendered straight into a buffer of whole pixels, which the GUI takes over as is.
+        let (w, h) = render_size(page, &rs);
+        let mut pixels = Pixels::zeroed(w.into(), h.into()).ok_or_else(|| format!("page {} is too large to render", req.page + 1))?;
+        render_into(page, cache, settings, &rs, pixels.bytes_mut());
+        Ok((w.into(), h.into(), pixels, None))
     }));
     match result {
         Ok(Ok(v)) => Ok(v),
@@ -232,18 +236,11 @@ fn render_page<'a>(pdf: &'a Pdf, cache: &RenderCache<'a>, settings: &Interpreter
     }
 }
 
-/// The pixmap's premultiplied RGBA bytes, moved out rather than copied (a page raster can be
-/// hundreds of megabytes). Four one-byte channels always recast to bytes in place; the copy is
-/// only there because the cast's signature allows failure.
-fn into_bytes(pixmap: Pixmap) -> Vec<u8> {
-    bytemuck::allocation::try_cast_vec(pixmap.take()).unwrap_or_else(|(_, pixels)| pixels.iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect())
-}
-
 fn finish(req: RenderRequest, start: Stopwatch, r: Result<Output, (String, bool)>) -> RenderedPage {
     let millis = start.millis();
     match r {
         Ok((width, height, rgba, text)) => RenderedPage { request: req, width, height, rgba, error: None, text, millis },
-        Err((e, _)) => RenderedPage { request: req, width: 0, height: 0, rgba: Vec::new(), error: Some(e), text: None, millis },
+        Err((e, _)) => RenderedPage { request: req, width: 0, height: 0, rgba: Pixels::default(), error: Some(e), text: None, millis },
     }
 }
 
@@ -306,9 +303,10 @@ struct Shared {
     /// Pages (and request kinds) the watchdog gave up on: answered with an error at once, so a
     /// pathological page cannot trap every worker in turn.
     stuck: Mutex<std::collections::HashSet<(usize, RequestKind)>>,
-    /// Set when the pool is dropped: the workers' renders stop at their next content operator,
-    /// since nobody can receive their answers any more.
-    dropped: Arc<std::sync::atomic::AtomicBool>,
+    /// Per worker id: set to stop that worker's render at its next content operator once nobody
+    /// can receive its answer (the pool was dropped, or the watchdog gave up on the render).
+    /// Lock `busy` first when holding both.
+    stop: Mutex<Vec<Arc<std::sync::atomic::AtomicBool>>>,
     /// Test hook: make one page slow.
     #[cfg(test)]
     slow_page: Mutex<Option<(usize, std::time::Duration)>>,
@@ -342,9 +340,11 @@ fn take_next(shared: &Shared) -> Option<RenderRequest> {
 ///
 /// **Watchdog:** a render running longer than `stuck_after` (default [`STUCK_AFTER`]) is reported
 /// as an error for that page, the page is not attempted again, and a replacement worker takes
-/// the stuck one's place (threads cannot be killed; the stuck one exits when its render
-/// finally returns, and its late result is dropped). At most `threads` replacements are started
-/// per pool, so a document full of pathological pages cannot spawn threads without bound.
+/// the stuck one's place (threads cannot be killed: the stuck one is told to stop at its next
+/// content operator, exits when its render returns, and its late result is dropped; a single
+/// long operator, such as decoding a huge image, still runs to its end). At most `threads`
+/// replacements are started per pool, so a document full of pathological pages cannot spawn
+/// threads without bound.
 pub struct RenderPool {
     shared: Arc<Shared>,
     wake: Mutex<Vec<Sender<()>>>,
@@ -394,14 +394,16 @@ impl RenderPool {
         return false;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let id = {
+            let (id, stop) = {
                 let mut busy = lock(&self.shared.busy);
                 busy.push(None);
-                busy.len() - 1
+                let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                lock(&self.shared.stop).push(stop.clone());
+                (busy.len() - 1, stop)
             };
             let (wtx, wrx) = channel::<()>();
             let (shared, out, bytes, config) = (self.shared.clone(), self.results_tx.clone(), self.bytes.clone(), self.config.clone());
-            match std::thread::Builder::new().name(format!("pdfcraft-render-{id}")).spawn(move || worker(id, bytes, config, shared, wrx, out)) {
+            match std::thread::Builder::new().name(format!("pdfcraft-render-{id}")).spawn(move || worker(id, bytes, config, shared, wrx, out, stop)) {
                 Ok(h) => {
                     lock(&self.wake).push(wtx);
                     lock(&self._workers).push(h);
@@ -473,11 +475,15 @@ impl RenderPool {
             let mut gave_up = Vec::new();
             {
                 let mut busy = lock(&self.shared.busy);
-                for slot in busy.iter_mut() {
+                let stop = lock(&self.shared.stop);
+                for (id, slot) in busy.iter_mut().enumerate() {
                     if let Some((req, since)) = *slot
                         && since.elapsed() > self.stuck_after
                     {
                         *slot = None; // the worker sees this and exits when it returns
+                        if let Some(s) = stop.get(id) {
+                            s.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
                         gave_up.push(req);
                     }
                 }
@@ -494,7 +500,7 @@ impl RenderPool {
                     request: req,
                     width: 0,
                     height: 0,
-                    rgba: Vec::new(),
+                    rgba: Pixels::default(),
                     error: Some(error),
                     text: None,
                     millis: 0,
@@ -510,19 +516,29 @@ impl RenderPool {
 
 impl Drop for RenderPool {
     fn drop(&mut self) {
-        self.shared.dropped.store(true, std::sync::atomic::Ordering::Relaxed);
+        for s in lock(&self.shared.stop).iter() {
+            s.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 }
 
-/// A worker's interpreter settings: the document's, stopping once the pool is dropped.
+/// A worker's interpreter settings: the document's, stopping once `stop` is set.
 #[cfg(not(target_arch = "wasm32"))]
-fn worker_settings(config: &RenderConfig, shared: &Shared) -> InterpreterSettings {
-    InterpreterSettings { cancelled: Some(shared.dropped.clone()), ..config.settings() }
+fn worker_settings(config: &RenderConfig, stop: &Arc<std::sync::atomic::AtomicBool>) -> InterpreterSettings {
+    InterpreterSettings { cancelled: Some(stop.clone()), ..config.settings() }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn worker(id: usize, bytes: Arc<Vec<u8>>, config: RenderConfig, shared: Arc<Shared>, wake: Receiver<()>, out: Sender<RenderedPage>) {
-    let settings = worker_settings(&config, &shared);
+fn worker(
+    id: usize,
+    bytes: Arc<Vec<u8>>,
+    config: RenderConfig,
+    shared: Arc<Shared>,
+    wake: Receiver<()>,
+    out: Sender<RenderedPage>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) {
+    let settings = worker_settings(&config, &stop);
     // Outer loop: (re)build parser + cache; rebuilt after a renderer panic.
     loop {
         let pdf = parse(&bytes, config.password.as_deref());
@@ -537,7 +553,7 @@ fn worker(id: usize, bytes: Arc<Vec<u8>>, config: RenderConfig, shared: Arc<Shar
             };
             if lock(&shared.stuck).contains(&(req.page, req.kind)) {
                 let error = format!("page {} was skipped earlier because it took too long to render", req.page + 1);
-                let page = RenderedPage { request: req, width: 0, height: 0, rgba: Vec::new(), error: Some(error), text: None, millis: 0 };
+                let page = RenderedPage { request: req, width: 0, height: 0, rgba: Pixels::default(), error: Some(error), text: None, millis: 0 };
                 if out.send(page).is_err() {
                     return;
                 }
@@ -741,15 +757,37 @@ trailer << /Root 1 0 R >>
     }
 
     #[test]
-    fn rendered_pixels_are_moved_out_of_the_pixmap() {
-        let mut pixmap = Pixmap::new(3, 2);
-        for (i, b) in pixmap.data_as_u8_slice_mut().iter_mut().enumerate() {
-            *b = i as u8;
+    fn pixels_are_a_plain_renders_bytes_in_a_buffer_a_gui_can_take_over() {
+        let mut r = PageRenderer::new(Arc::new(ONE_PAGE.to_vec()), RenderConfig::default());
+        let out = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0 });
+        assert!(out.error.is_none(), "{:?}", out.error);
+        // The same bytes as hayro's own render to a pixmap, with the same settings.
+        let pdf = Pdf::new(Arc::new(ONE_PAGE.to_vec())).expect("parses");
+        let pages = pdf.pages();
+        let page = pages.first().expect("a page");
+        let rs = RenderSettings { x_scale: 2.0, y_scale: 2.0, width: Some(200), height: Some(100), bg_color: WHITE, ..Default::default() };
+        let plain = hayro::render(page, &RenderCache::new(), &RenderConfig::default().settings(), &rs);
+        assert_eq!((out.width, out.height), (200, 100));
+        assert_eq!(&*out.rgba, plain.data_as_u8_slice());
+        // Whole pixels, aligned, handed over without a copy.
+        let at = out.rgba.as_ptr();
+        assert_eq!(at as usize % 4, 0);
+        let words = out.rgba.into_words();
+        assert_eq!(words.as_ptr().cast::<u8>(), at);
+    }
+
+    #[test]
+    fn render_into_a_buffer_of_the_wrong_length_leaves_it_untouched() {
+        let pdf = Pdf::new(Arc::new(ONE_PAGE.to_vec())).expect("parses");
+        let pages = pdf.pages();
+        let page = pages.first().expect("a page");
+        let rs = RenderSettings { width: Some(10), height: Some(10), bg_color: WHITE, ..Default::default() };
+        let settings = RenderConfig::default().settings();
+        for len in [0, 399, 401, 4000] {
+            let mut buf = vec![7u8; len];
+            render_into(page, &RenderCache::new(), &settings, &rs, &mut buf);
+            assert!(buf.iter().all(|&b| b == 7), "a {len}-byte buffer was written");
         }
-        let (at, expected) = (pixmap.data_as_u8_slice().as_ptr(), pixmap.data_as_u8_slice().to_vec());
-        let bytes = into_bytes(pixmap);
-        assert_eq!(bytes, expected);
-        assert_eq!(bytes.as_ptr(), at, "the pixmap's own buffer, not a copy");
     }
 
     #[test]
@@ -1154,16 +1192,16 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
         let pool = RenderPool::new(Arc::new(ONE_PAGE.to_vec()), 1, RenderConfig::default());
-        let settings = worker_settings(&pool.config, &pool.shared);
-        let flag = settings.cancelled.clone().expect("workers can be cancelled");
-        assert!(Arc::ptr_eq(&flag, &pool.shared.dropped));
+        let flag = lock(&pool.shared.stop).first().cloned().expect("one worker");
+        let settings = worker_settings(&pool.config, &flag);
+        assert!(settings.cancelled.as_ref().is_some_and(|c| Arc::ptr_eq(c, &flag)));
         let shapes = Pdf::new(Arc::new(ONE_PAGE.to_vec())).expect("parses");
         let text = Pdf::new(Arc::new(TEXT.to_vec())).expect("parses");
         let pages = shapes.pages();
         let page = pages.first().expect("a page");
         let rs = RenderSettings { bg_color: WHITE, ..Default::default() };
         let blue = |s: &InterpreterSettings| {
-            let p = render(page, &RenderCache::new(), s, &rs).sample(20, 30);
+            let p = hayro::render(page, &RenderCache::new(), s, &rs).sample(20, 30);
             [p.r, p.g, p.b, p.a] == [0, 0, 255, 255]
         };
         let glyphs = |s: &InterpreterSettings| crate::text::extract_page(&text, 0, s).map_or(0, |t| t.glyphs.len());
@@ -1171,6 +1209,26 @@ trailer << /Root 1 0 R >>
         drop(pool);
         assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
         assert!(!blue(&settings) && glyphs(&settings) == 0, "once the pool is gone, interpretation stops before drawing");
+    }
+
+    #[test]
+    fn the_watchdog_stops_the_render_it_gives_up_on() {
+        let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
+        pool.set_stuck_after(std::time::Duration::from_millis(100));
+        *lock(&pool.shared.slow_page) = Some((0, std::time::Duration::from_millis(1500)));
+        pool.set_queue(vec![RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0 }]);
+        let t = std::time::Instant::now();
+        let first = loop {
+            if let Some(p) = pool.try_recv() {
+                break p;
+            }
+            assert!(t.elapsed() < std::time::Duration::from_secs(8), "no answer");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert!(first.error.as_deref().is_some_and(|e| e.contains("took longer")), "{:?}", first.error);
+        // The abandoned worker is told to stop at its next operator; its replacement isn't.
+        let stop: Vec<bool> = lock(&pool.shared.stop).iter().map(|s| s.load(std::sync::atomic::Ordering::Relaxed)).collect();
+        assert_eq!(stop, vec![true, false]);
     }
 
     #[test]

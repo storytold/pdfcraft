@@ -406,12 +406,12 @@ impl Automation {
                 let t = format!("{m}/{d}/{yy}");
                 (text_at(&t), t)
             }
-            // A typed signature or initials in the script font, left edge at `at`.
+            // A typed signature or initials in the script font, left edge at `at`, upright as displayed.
             kind @ ("signature" | "initials") => {
                 let t = a.str("text")?;
                 let h = if kind == "initials" { 24.0 } else { 32.0 };
-                let shape =
-                    pdfcraft_engine::typed_signature_shape(at, t, h).ok_or_else(|| ToolError::InvalidArgs("text has nothing to draw".into()))?;
+                let shape = pdfcraft_engine::typed_signature_shape(at, t, h, i64::from(info.rotation))
+                    .ok_or_else(|| ToolError::InvalidArgs("text has nothing to draw".into()))?;
                 (shape, String::new())
             }
             kind => {

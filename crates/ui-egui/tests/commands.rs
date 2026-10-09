@@ -243,6 +243,49 @@ fn the_open_recent_menu_is_disabled_while_the_list_is_empty() {
     );
 }
 
+fn recent_file(name: &str) -> pdfcraft_ui_egui::RecentFile {
+    pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0 }
+}
+
+#[test]
+fn clear_recent_files_at_the_foot_of_open_recent_empties_the_list() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
+        app.recent.extend([recent_file("first.pdf"), recent_file("second.pdf")]);
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label("Menu").click();
+    h.run_steps(2);
+    h.get_by_label("File ⏵").hover();
+    h.run_steps(3);
+    h.get_by_label("Open Recent ⏵").hover();
+    h.run_steps(3);
+    h.get_by_label("Clear Recent Files").click();
+    h.run_steps(3);
+    assert!(h.state().recent.is_empty(), "the list is empty");
+    h.get_by_label("Menu").click();
+    h.run_steps(2);
+    h.get_by_label("File ⏵").hover();
+    h.run_steps(3);
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Open Recent") && n.is_disabled()).is_some(), "and Open Recent is disabled");
+}
+
+#[test]
+fn clear_recent_files_runs_from_the_palette_and_is_saved() {
+    let mut app = PdfCraftApp::new();
+    app.recent.extend([recent_file("first.pdf"), recent_file("second.pdf")]);
+    assert!(app.execute("file.clear_recent"));
+    assert!(app.recent.is_empty());
+    let mut restarted = PdfCraftApp::new();
+    restarted.recent.push(recent_file("stale.pdf"));
+    restarted.restore(&app.persist());
+    assert!(restarted.recent.is_empty(), "the empty list is what's saved");
+    app.execute("file.clear_recent");
+    assert!(app.toast.as_ref().is_some_and(|(m, _)| m.contains("No recent files")), "nothing to clear is said, not silent");
+}
+
 #[test]
 fn the_shortcuts_dialog_lists_the_real_bindings() {
     let mut h = harness();

@@ -2017,6 +2017,9 @@ action wizard	Start	ప్రారంభించు
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	PNG లేదా JPEG చిత్రాన్ని ఎంచుకోండి (గరిష్ఠంగా 4 MiB). పారదర్శకత అలాగే ఉంటుంది.
 	Couldn't import the signature image: {e}	సంతకం చిత్రాన్ని దిగుమతి చేయడం సాధ్యం కాలేదు: {e}
 	Open Recent	ఇటీవలివి తెరువు
+	Clear Recent Files	ఇటీవలి ఫైళ్లను క్లియర్ చేయి
+	Remove from Recent	ఇటీవలి ఫైళ్ల నుండి తీసివేయి
+	Remove {name} from Recent	{name}ను ఇటీవలి ఫైళ్ల నుండి తీసివేయి
 	Pin folder to Home…	ఫోల్డర్‌ను హోమ్‌కు పిన్ చేయి…
 	No recent files	ఇటీవలి ఫైళ్లు లేవు
 	Go to page…	పేజీకి వెళ్లు…
