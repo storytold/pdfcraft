@@ -2105,3 +2105,7 @@ action wizard	Start	Старт
 	The field {name} no longer exists.	Полето {name} вече не съществува.
 	A selected field has no widget on any page, so the fields can't be edited together.	Едно от избраните полета няма елемент на нито една страница, затова полетата не могат да се редактират заедно.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} с {dpi} dpi, най-голямата резолюция, с която могат да бъдат изобразени)
+	Reload documents when their files change on disk	Презареждай документите, когато файловете им се променят на диска
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Този файл е променен на диска. Презаредете го, за да видите новата версия; незаписаните ви промени ще бъдат загубени.
+	Reload	Презареди
+	Couldn't reload {name}: {e}	Неуспешно презареждане на {name}: {e}
