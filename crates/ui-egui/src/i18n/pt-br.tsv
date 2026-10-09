@@ -1040,11 +1040,11 @@
 	Add an image field	Adicionar um campo de imagem
 	Add image…	Adicionar imagem…
 	Add or edit links	Adicionar ou editar links
-	Apply redactions…	Aplicar tarjas pretas…
+	Apply redactions…	Aplicar ocultações…
 	Attach a file	Anexar um arquivo
 	Change reading options…	Alterar opções de leitura…
 	Check for accessibility	Verificar acessibilidade
-	Clear redaction marks	Limpar marcações de tarja preta
+	Clear redaction marks	Limpar marcas de ocultação
 	Compare files…	Comparar arquivos…
 	Create links from URLs	Criar links a partir de URLs
 	Detect form fields	Detectar campos de formulário
@@ -1067,7 +1067,7 @@
 	Fill & Sign: initials	Preencher e assinar: rubrica
 	Fill & Sign: line	Preencher e assinar: linha
 	Fill & Sign: sign	Preencher e assinar: assinar
-	Find text and redact…	Localizar texto e aplicar tarja preta…
+	Find text and redact…	Localizar texto e ocultar…
 	Hide all comments	Ocultar todos os comentários
 	Import comments…	Importar comentários…
 	Import form data…	Importar dados de formulário…
@@ -1076,15 +1076,15 @@
 	Optimize scanned documents…	Otimizar documentos digitalizados…
 	Prepare for distribution…	Preparar para distribuição…
 	Recognize text in multiple files…	Reconhecer texto em vários arquivos…
-	Redact pages…	Aplicar tarja preta em páginas…
-	Redaction properties…	Propriedades da tarja preta…
+	Redact pages…	Ocultar páginas…
+	Redaction properties…	Propriedades da ocultação…
 	Remove all links	Remover todos os links
 	Remove background	Remover plano de fundo
 	Remove header & footer	Remover cabeçalho e rodapé
 	Remove hidden information…	Remover informações ocultas…
 	Remove watermark	Remover marca-d'água
 	Replace text	Substituir texto
-	Sanitize document…	Limpar documento…
+	Sanitize document…	Sanitizar documento…
 	Squiggly underline text	Sublinhado ondulado no texto
 	Strikethrough text	Texto tachado
 	Summarize comments	Resumir comentários
@@ -1514,7 +1514,7 @@
 	This document has no form fields you can fill in	Este documento não tem campos de formulário preenchíveis
 	This document has no comments to flatten	Este documento não tem comentários para nivelar
 	This document has no form fields to flatten	Este documento não tem campos de formulário para nivelar
-	There are no redaction marks (mark text, areas or pages first)	Não há marcações de tarja preta (marque o texto, áreas ou páginas primeiro)
+	There are no redaction marks (mark text, areas or pages first)	Não há marcas de ocultação (marque o texto, áreas ou páginas primeiro)
 	This document has no {kind} to change	Este documento não tem {kind} para alterar
 	header or footer	cabeçalho ou rodapé
 	watermark	marca-d'água
@@ -1526,12 +1526,12 @@
 	Security will be removed when you save	A segurança será removida ao salvar
 	Click text or an image to edit it	Clique no texto ou em uma imagem para editá-lo
 	Drag a rectangle to create a link; double-click a link to edit it	Arraste um retângulo para criar um link; clique duas vezes em um link para editá-lo
-	There are no redaction marks to apply	Não há marcações de tarja preta para aplicar
+	There are no redaction marks to apply	Não há marcas de ocultação para aplicar
 	Drag to draw the area where the signature should appear.	Arraste para desenhar a área onde a assinatura deve aparecer.
 	Couldn't fit the visible content: {e}	Não foi possível ajustar o conteúdo visível: {e}
 	Drag a rectangle around the area to copy	Arraste um retângulo ao redor da área para copiar
 	Click on the page to add a {tool}, or drag to set its size	Clique na página para adicionar {tool} ou arraste para definir seu tamanho
-	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	Arraste um retângulo em uma página para recortá-la; dê um clique duplo em uma página para Definir caixas de página
+	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	Arraste um retângulo em uma página para recortá-la; dê um clique duplo em uma página para Definir limites da página
 	Keep tool selected: on	Manter ferramenta selecionada: ativado
 	Keep tool selected	Manter ferramenta selecionada
 	Opacity	Opacidade
@@ -1619,7 +1619,7 @@
 	Rotate pages…	Girar páginas…
 	Duplicate pages	Duplicar páginas
 	Crop pages	Recortar páginas
-	Set page boxes…	Definir caixas de página…
+	Set page boxes…	Definir limites da página…
 	Insert pages from file…	Inserir páginas de arquivo…
 	Replace pages…	Substituir páginas…
 	Extract pages…	Extrair páginas…
@@ -1724,7 +1724,7 @@
 	Add oval	Adicionar elipse
 	Add polygon	Adicionar polígono
 	Add rectangle	Adicionar retângulo
-	Add redaction mark	Adicionar marcação de tarja preta
+	Add redaction mark	Adicionar marca de ocultação
 	Add signature	Adicionar assinatura
 	Add squiggly underline	Adicionar sublinhado ondulado
 	Add stamp	Adicionar carimbo
@@ -1810,7 +1810,7 @@
 	Presentation (.pptx)	Apresentação (.pptx)
 	PushButton	Botão de pressão
 	Radio	Botão de opção
-	Remove redaction marks	Remover marcações de tarja preta
+	Remove redaction marks	Remover marcas de ocultação
 	Rename bookmark	Renomear marcador
 	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	Renderização: hayro (bootstrap) · Interface: egui · Ícones: Lucide (ISC) · Fontes: Inter, JetBrains Mono, Dancing Script (OFL)
 	Replace page	Substituir página
@@ -1885,7 +1885,7 @@
 	nothing to redo	nada para refazer
 	nothing to undo	nada para desfazer
 	pages	páginas
-	there are no redaction marks to apply	não há marcações de tarja preta para aplicar
+	there are no redaction marks to apply	não há marcas de ocultação para aplicar
 	Create PDF from images	Criar PDF a partir de imagens
 	Selected image files: {count}	Arquivos de imagem selecionados: {count}
 	Use image resolution	Usar resolução da imagem
@@ -1967,7 +1967,7 @@
 	{name} can't be combined: {why}	{name} não pode ser combinado: {why}
 	Selected pages	Páginas selecionadas
 	No pages selected	Nenhuma página selecionada
-	Created a PDF from {n} files; left out: {names}	Criado um PDF de {n} arquivos; deixados de fora: {names}
+	Created a PDF from {n} files; left out: {names}	Criado um PDF de {n} arquivos; deixando de fora: {names}
 	Created a PDF from the first {n} files	Criado um PDF dos primeiros {n} arquivos
 	Created a PDF from {n} files	Criado um PDF de {n} arquivos
 	Folders	Pastas
@@ -1995,7 +1995,7 @@
 	This web address uses letters from another alphabet, which can look like familiar ones.	Este endereço da web usa letras de outro alfabeto, que podem parecer familiares.
 	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	Continue apenas se você confiar neste documento. Um endereço pode carregar informações do documento, como o que você digitou no formulário dele.
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	As fontes padrão não conseguem desenhar “{c}” ({code}). Por enquanto, apenas caracteres da Europa Ocidental podem ser adicionados como texto.
-	Line ending	Terminação da linha
+	Line ending	Fim de linha
 	Show	Mostrar
 	Sort	Classificar
 	Reverse the order	Inverter a ordem
