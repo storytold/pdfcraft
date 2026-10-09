@@ -521,6 +521,7 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
         Err(e) => return invalid(info, &format!("The signature could not be read ({e}).")),
     };
     let s = &sd.signer;
+    info.details.extend(sd.quirks.iter().map(|q| q.to_string()));
     info.digest = Some(s.digest);
     info.timestamp = s.timestamp;
     let mut unverified_time = None;
@@ -844,6 +845,7 @@ fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Mod
     // The signed revision's document-level XMP stream.
     let old_metadata = old.root().and_then(|root| old.get(root).as_dict().and_then(|c| c.get(b"Metadata").and_then(Object::as_ref)));
     let (mut allowed, mut disallowed): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
+    let dss = dss_parts(doc, &old);
     // Stored at the same place in both (and not edited since): the same bytes, unchanged.
     let same_place = |num: u32| -> bool {
         use pdfcraft_cos::XrefEntry;
@@ -869,18 +871,18 @@ fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Mod
             continue;
         }
         let kind = match &*new {
+            // The Document Security Store's own arrays and dictionaries, when they only grew.
+            _ if dss.contains(&num) => "document security store",
             Object::Dict(d) => change_kind(doc, &old, d, before.as_deref().and_then(Object::as_dict)),
             Object::Stream(s) => {
                 if old_content.contains(&r) {
                     "page content"
                 } else if s.dict.name(b"Type") == Some(b"XRef") || s.dict.name(b"Type") == Some(b"ObjStm") || before.is_none() {
                     continue;
-                } else if s.dict.name(b"Type") == Some(b"Metadata")
-                    && (Some(r) == old_metadata || matches!(before.as_deref(), Some(Object::Stream(b)) if b.dict.name(b"Type") == Some(b"Metadata")))
-                {
-                    // Only the signed catalog's XMP stream, or a stream that was already
-                    // metadata when signed: a later /Type /Metadata label on anything else
-                    // (a page's Form XObject) does not make rewriting it a metadata change.
+                } else if s.dict.name(b"Type") == Some(b"Metadata") && Some(r) == old_metadata {
+                    // Only the signed catalog's XMP stream. A /Type /Metadata label on anything
+                    // else, even one it already had when signed (a page's Form XObject: the
+                    // renderer ignores /Type), does not make rewriting it a metadata change.
                     "metadata"
                 } else {
                     "other changes"
@@ -904,6 +906,115 @@ fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Mod
     }
     let own = |v: Vec<&str>| v.into_iter().map(str::to_string).collect::<Vec<_>>();
     if disallowed.is_empty() { Modification::Allowed(own(allowed)) } else { Modification::Disallowed(own(disallowed)) }
+}
+
+/// Where an object sits in the Document Security Store (ISO 32000-2 §12.8.4.3).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DssRole {
+    /// The `/DSS` dictionary.
+    Dss,
+    /// A `/Certs`, `/CRLs`, `/OCSPs` (or a VRI entry's `/Cert`, `/CRL`, `/OCSP`) array.
+    DataArray,
+    /// A certificate, CRL, OCSP response or timestamp token stream.
+    Data,
+    /// The `/VRI` dictionary.
+    VriMap,
+    /// One entry of `/VRI`.
+    VriEntry,
+}
+
+/// The indirect objects the catalog's `/DSS` reaches by the keys the standard defines, and the
+/// role each plays there. Any other key is not followed: `/DSS << /X 5 0 R >>` does not make
+/// object 5 part of the store.
+fn dss_walk(doc: &Document) -> Vec<(ObjRef, DssRole)> {
+    const LIMIT: usize = 100_000;
+    let mut out = Vec::new();
+    let Some(dss) = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|c| c.get(b"DSS").cloned())) else { return out };
+    // The roles nest at most four deep (DSS, VRI, entry, array, data), so no seen-set is needed.
+    let mut stack = vec![(dss, DssRole::Dss)];
+    let mut steps = 0usize;
+    while let Some((o, role)) = stack.pop() {
+        steps += 1;
+        if steps > LIMIT {
+            break;
+        }
+        if let Object::Ref(r) = &o {
+            out.push((*r, role));
+        }
+        match (role, &*doc.resolve(&o)) {
+            (DssRole::Dss, Object::Dict(d)) => {
+                for (k, v) in d.iter() {
+                    match k.as_slice() {
+                        b"Certs" | b"CRLs" | b"OCSPs" => stack.push((v.clone(), DssRole::DataArray)),
+                        b"VRI" => stack.push((v.clone(), DssRole::VriMap)),
+                        _ => {}
+                    }
+                }
+            }
+            (DssRole::DataArray, Object::Array(a)) => stack.extend(a.iter().map(|v| (v.clone(), DssRole::Data))),
+            (DssRole::VriMap, Object::Dict(d)) => stack.extend(d.iter().map(|(_, v)| (v.clone(), DssRole::VriEntry))),
+            (DssRole::VriEntry, Object::Dict(d)) => {
+                for (k, v) in d.iter() {
+                    match k.as_slice() {
+                        b"Cert" | b"CRL" | b"OCSP" => stack.push((v.clone(), DssRole::DataArray)),
+                        b"TS" => stack.push((v.clone(), DssRole::Data)),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Whether `now` only adds to `before`: an array keeps every element, a dictionary keeps every
+/// entry (an entry that is an array or dictionary may itself have grown).
+fn only_grew(doc: &Document, old: &Document, before: &Object, now: &Object, depth: u8) -> bool {
+    match (before, now) {
+        (Object::Array(b), Object::Array(n)) => b.iter().all(|x| n.contains(x)),
+        (Object::Dict(b), Object::Dict(n)) => b.iter().all(|(k, v)| match n.get(k) {
+            Some(nv) => nv == v || (depth < 4 && only_grew(doc, old, &old.resolve(v), &doc.resolve(nv), depth + 1)),
+            None => false,
+        }),
+        _ => before == now,
+    }
+}
+
+/// The objects of the Document Security Store that count as validation data added after
+/// signing: its dictionary, `/Certs`/`/CRLs`/`/OCSPs` arrays, `/VRI` and its entries, when
+/// - they are reached by the standard's keys and have the shape of their role, and
+/// - they are new, or were already part of the signed store and have only grown.
+///
+/// An existing object is never made "document security store" by pointing the store at it: the
+/// page's `/Contents` array, or a dictionary labelled `/Type /DSS`, keep being judged as what they
+/// are. The data streams need no entry here: new objects are not changes, and rewriting an
+/// existing one is judged on its own.
+fn dss_parts(doc: &Document, old: &Document) -> HashSet<u32> {
+    let signed: HashSet<u32> = dss_walk(old).into_iter().map(|(r, _)| r.num).collect();
+    let is_stream = |o: &Object| matches!(&*doc.resolve(o), Object::Stream(_));
+    let mut parts = HashSet::new();
+    for (r, role) in dss_walk(doc) {
+        let now = doc.get(r);
+        let shaped = match (role, &*now) {
+            (DssRole::Dss, Object::Dict(d)) => d.iter().all(|(k, _)| matches!(k.as_slice(), b"Type" | b"Certs" | b"CRLs" | b"OCSPs" | b"VRI")),
+            (DssRole::DataArray, Object::Array(a)) => a.iter().all(|e| matches!(e, Object::Ref(_)) && is_stream(e)),
+            (DssRole::VriMap, Object::Dict(d)) => d.iter().all(|(_, v)| matches!(&*doc.resolve(v), Object::Dict(_))),
+            (DssRole::VriEntry, Object::Dict(d)) => {
+                d.iter().all(|(k, _)| matches!(k.as_slice(), b"Type" | b"Cert" | b"CRL" | b"OCSP" | b"TU" | b"TS"))
+            }
+            _ => false,
+        };
+        let before = old.try_get(r.num).ok().filter(|o| !matches!(**o, Object::Null));
+        let history = match before {
+            None => true,
+            Some(b) => signed.contains(&r.num) && only_grew(doc, old, &b, &now, 0),
+        };
+        if shaped && history {
+            parts.insert(r.num);
+        }
+    }
+    parts
 }
 
 /// What adding `added` annotations amounts to: signing (signature widgets only), form fill
@@ -964,7 +1075,6 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
     };
     match ty {
         Some(b"Sig" | b"DocTimeStamp" | b"SigRef" | b"TransformParams") => return "signature",
-        Some(b"DSS") => return "document security store",
         Some(b"Catalog") => {
             let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"NeedsRendering"];
             return match before {
@@ -995,7 +1105,6 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
             };
         }
         Some(b"Pages") => return if before.is_some() { "pages added or removed" } else { "document structure" },
-        Some(b"Metadata") => return "metadata",
         _ => {}
     }
     match d.name(b"Subtype") {

@@ -5942,8 +5942,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.validate"]
 tools = ["sign_list"]
-evidence = ["crates/sign/tests/pdf.rs::validates_a_signature_made_by_openssl"]
-notes = "validated; new signatures use CAdES"
+evidence = ["crates/sign/tests/pdf.rs::validates_a_signature_made_by_openssl", "crates/sign/tests/pdf.rs::validates_signatures_written_with_ber_indefinite_lengths", "crates/sign/tests/ber.rs::deeply_nested_segmented_content_is_an_error_not_a_stack_overflow", "crates/sign/tests/ber.rs::indefinite_length_nesting_bombs_are_refused"]
+notes = "validated, including BER-encoded CMS (indefinite lengths and segmented strings, as DocuSign, Documenso, Adobe PPKMS and Windows write it; the BER is reported in the details); new signatures use CAdES. Not read: BER high tag numbers. Still missing: multiple SignerInfos, counter-signatures, CMS with the signer's cert referenced but absent"
 
 [[feature]]
 id = "sign.cades-pades-bb"
@@ -6218,8 +6218,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.panel"]
 tools = ["sign_list"]
-evidence = ["crates/sign/tests/pdf.rs::later_changes_are_classified_under_the_signature_permissions", "crates/sign/tests/pdf.rs::signing_an_existing_field_and_counter_signing", "crates/engine/src/tests.rs::signing_saving_trusting_and_commenting_afterwards"]
-notes = "revision diff classified as signing, form fill, comments, metadata, page content or structure"
+evidence = ["crates/sign/tests/pdf.rs::later_changes_are_classified_under_the_signature_permissions", "crates/sign/tests/pdf.rs::signing_an_existing_field_and_counter_signing", "crates/engine/src/tests.rs::signing_saving_trusting_and_commenting_afterwards", "crates/sign/tests/pdf.rs::validation_data_and_xmp_added_after_signing_are_not_tampering", "crates/sign/tests/pdf.rs::a_dss_entry_does_not_make_the_object_it_names_part_of_the_store", "crates/sign/tests/pdf.rs::an_existing_dictionary_is_not_a_store_part_because_the_store_names_it", "crates/sign/tests/pdf.rs::an_existing_array_stays_what_it_is_when_the_store_points_at_it", "crates/sign/tests/pdf.rs::a_signed_store_may_grow_but_not_lose_or_swap_entries", "crates/sign/tests/pdf.rs::a_dictionary_labelled_metadata_is_not_a_metadata_change", "crates/sign/tests/pdf.rs::a_stream_already_labelled_metadata_when_signed_is_not_metadata_unless_the_catalog_names_it", "crates/sign/tests/pdf.rs::the_catalogs_own_xmp_stream_may_still_be_rewritten_after_signing"]
+notes = "revision diff classified as signing, form fill, comments, metadata, page content or structure. Later revisions that add DSS data (new /Certs, /CRLs, /OCSPs, /VRI objects, or ones of the signed store that only grew) or rewrite the catalog's XMP are permitted changes; a /DSS entry that names other objects, or a /Type /DSS or /Type /Metadata label on an existing dictionary or stream, does not excuse changing them (negative tests at every DocMDP level)"
 
 [[feature]]
 id = "sign.view-signed-version"
