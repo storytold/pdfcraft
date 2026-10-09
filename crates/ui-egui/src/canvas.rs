@@ -227,6 +227,11 @@ pub struct DocView {
     last_queue: Vec<RenderRequest>,
     /// This view's own queue and inbox in its document's render pool (registered on first use).
     pub(crate) render_client: Option<(u64, pdfcraft_render::ClientId)>,
+    /// The document's edit generation this view has caught up with (see `sync_views`).
+    pub(crate) seen_generation: u64,
+    pub(crate) seen_display_generation: u64,
+    /// This view took a change into account itself since the last sync.
+    pub(crate) change_handled: bool,
     viewport_w: f32,
     viewport_h: f32,
     page_count: usize,
@@ -370,6 +375,9 @@ impl DocView {
             clicks: 0,
             last_queue: Vec::new(),
             render_client: None,
+            seen_generation: 0,
+            seen_display_generation: 0,
+            change_handled: false,
             viewport_w: 800.0,
             viewport_h: 600.0,
             page_count: info.pages.len(),
@@ -413,6 +421,21 @@ impl DocView {
     /// The document's content or page list changed (an edit, undo or redo): drop caches and
     /// adopt the new page geometry, keeping the reader's place where possible.
     pub fn document_changed(&mut self, info: &DocInfo) {
+        self.document_changed_with(info, None);
+    }
+
+    /// [`Self::document_changed`], knowing where the pages went when the page list was rebuilt
+    /// (by another view of the document): the reader's place, the selection and the history
+    /// follow the pages instead of staying at the same numbers.
+    pub fn document_changed_with(&mut self, info: &DocInfo, map: Option<&pdfcraft_engine::PageMap>) {
+        if let Some(map) = map {
+            let follow = |p: usize| map.nearest(p);
+            self.current = follow(self.current).unwrap_or(0);
+            self.selected = self.selected.iter().filter_map(|p| map.old_to_new.get(*p).copied().flatten()).collect();
+            self.select_anchor = self.select_anchor.and_then(|a| map.old_to_new.get(a).copied().flatten());
+            self.back = self.back.iter().filter_map(|p| follow(*p)).collect();
+            self.forward = self.forward.iter().filter_map(|p| follow(*p)).collect();
+        }
         self.invalidate_content();
         self.page_count = info.pages.len();
         self.page_heights = info.pages.iter().map(|p| p.height).collect();
@@ -480,6 +503,7 @@ impl DocView {
     /// was toggled). Out-of-date rasters stay on screen until their replacements arrive, so the
     /// view never flashes blank.
     pub fn invalidate_content(&mut self) {
+        self.change_handled = true;
         for p in self.pages.values_mut() {
             p.tag = STALE_TAG;
         }
@@ -500,6 +524,7 @@ impl DocView {
     /// Only `page` changed (a comment was added, edited or removed): re-render that page and
     /// re-read its text, keep everything else.
     pub fn page_changed(&mut self, page: usize) {
+        self.change_handled = true;
         if let Some(p) = self.pages.get_mut(&page) {
             p.tag = STALE_TAG;
         }
@@ -518,6 +543,21 @@ impl DocView {
             f.matches.retain(|(p, _)| *p != page);
             f.current = None;
         }
+    }
+
+    /// Pages whose picture is out of date and will be drawn again (tests).
+    #[doc(hidden)]
+    pub fn stale_pages(&self) -> Vec<usize> {
+        let mut pages: Vec<usize> = self.pages.iter().filter(|(_, p)| p.tag == STALE_TAG).map(|(i, _)| *i).collect();
+        pages.sort_unstable();
+        pages
+    }
+
+    /// Pretend page `page` has been drawn (tests).
+    #[doc(hidden)]
+    pub fn test_set_page_texture(&mut self, ctx: &egui::Context, page: usize) {
+        let tex = ctx.load_texture("test-page", egui::ColorImage::filled([2, 2], Color32::WHITE), Default::default());
+        self.pages.insert(page, PageTex { tag: 1, tex });
     }
 
     /// Pages drawn last frame and their screen rectangles.

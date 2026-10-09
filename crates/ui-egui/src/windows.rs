@@ -409,6 +409,44 @@ impl PdfCraftApp {
         true
     }
 
+    /// Bring every view up to date with what happened to its document: edits made through
+    /// another view (or window) re-render only what they changed.
+    pub(crate) fn sync_views(&mut self) {
+        use pdfcraft_engine::Change;
+        self.for_each_view(|_, view, session| {
+            let Some(doc) = session.get(view.id) else { return };
+            // A view that applied the change itself has caught up already.
+            if !std::mem::take(&mut view.change_handled) {
+                match doc.changes_since(view.seen_generation) {
+                    None => {}
+                    Some(Change::Pages(pages)) => pages.into_iter().for_each(|p| view.page_changed(p)),
+                    Some(Change::Remap(map)) => view.document_changed_with(&doc.info, Some(&map)),
+                    Some(Change::All) => view.document_changed(&doc.info),
+                }
+                if view.seen_display_generation != doc.display_generation() {
+                    view.invalidate_content();
+                }
+            }
+            view.change_handled = false;
+            view.seen_generation = doc.edit_generation();
+            view.seen_display_generation = doc.display_generation();
+        });
+    }
+
+    /// Add a view of `doc` in a parked window of its own (tests).
+    #[doc(hidden)]
+    pub fn test_add_parked_view(&mut self, doc: DocId) -> Option<WindowId> {
+        let d = self.session.get(doc)?;
+        let mut view = DocView::new(doc, &d.info, self.view_defaults);
+        view.seen_generation = d.edit_generation();
+        view.seen_display_generation = d.display_generation();
+        let state = WindowState { views: vec![view], active: Some(0), ..Default::default() };
+        let id = WindowId(self.next_window_id);
+        self.next_window_id += 1;
+        self.windows.push(WindowSlot { id, state, geometry: None, last_rect: None });
+        Some(id)
+    }
+
     /// Apply the queued changes to the set of windows.
     pub(crate) fn apply_window_ops(&mut self) {
         for op in std::mem::take(&mut self.pending_window_ops) {
@@ -587,11 +625,17 @@ mod tests {
 
     /// A one-page PDF.
     pub(crate) fn tiny_pdf() -> Vec<u8> {
-        let objs = [
+        pages_pdf(1)
+    }
+
+    /// An `n`-page PDF.
+    pub(crate) fn pages_pdf(n: usize) -> Vec<u8> {
+        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 3 + i)).collect();
+        let mut objs = vec![
             "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
-            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_owned(),
-            "<< /Type /Page /Parent 2 0 R >>".to_owned(),
+            format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")),
         ];
+        objs.extend((0..n).map(|_| "<< /Type /Page /Parent 2 0 R >>".to_owned()));
         let mut out = b"%PDF-1.7\n".to_vec();
         let mut offsets = Vec::new();
         for (i, o) in objs.iter().enumerate() {
@@ -728,5 +772,75 @@ mod tests {
         app.views.clear();
         let problems = app.debug_check_windows();
         assert!(problems.iter().any(|p| p.contains("without a view")), "{problems:?}");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod sync_tests {
+    use super::tests::pages_pdf;
+    use super::*;
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+
+    /// A four-page document shown in the main window and in a parked one; both have pictures of
+    /// every page.
+    fn two_views() -> (PdfCraftApp, WindowId, DocId, egui::Context) {
+        let ctx = egui::Context::default();
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("a.pdf", None, pages_pdf(4)).unwrap();
+        let doc = app.views[0].id;
+        let other = app.test_add_parked_view(doc).unwrap();
+        for page in 0..4 {
+            app.views[0].test_set_page_texture(&ctx, page);
+            app.with_window(other, |a| a.views[0].test_set_page_texture(&ctx, page));
+        }
+        (app, other, doc, ctx)
+    }
+
+    fn comment(page: usize) -> Edit {
+        Edit::AddAnnotation(NewAnnotation {
+            page,
+            shape: Shape::Rectangle { rect: [10.0, 10.0, 60.0, 60.0] },
+            style: Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: None },
+            contents: "x".into(),
+            author: "t".into(),
+        })
+    }
+
+    #[test]
+    fn a_comment_in_one_view_renders_only_that_page_in_the_other() {
+        let (mut app, other, _, _ctx) = two_views();
+        assert!(app.apply_edit(comment(2)));
+        app.sync_views();
+        assert!(app.views[0].stale_pages() == [2], "the acting view handled it itself: {:?}", app.views[0].stale_pages());
+        assert_eq!(app.with_window(other, |a| a.views[0].stale_pages()).unwrap(), vec![2], "the other view re-renders just that page");
+        // Nothing left to catch up on.
+        app.with_window(other, |a| a.views[0].test_set_page_texture(&_ctx, 2));
+        app.sync_views();
+        assert_eq!(app.with_window(other, |a| a.views[0].stale_pages()).unwrap(), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn deleting_a_page_moves_the_other_views_place() {
+        let (mut app, other, doc, _ctx) = two_views();
+        app.with_window(other, |a| a.views[0].go_to_page(3));
+        app.active = Some(0);
+        app.views[0].select_pages(&[1]);
+        assert!(app.apply_edit(Edit::DeletePages { pages: vec![1] }));
+        app.sync_views();
+        let (current, pages) = app.with_window(other, |a| (a.views[0].current, a.session.get(doc).map(|d| d.info.pages.len()))).unwrap();
+        assert_eq!((current, pages), (2, Some(3)), "it showed the fourth page and still does");
+        assert!(app.debug_check_windows().is_empty());
+    }
+
+    #[test]
+    fn undo_in_one_view_refreshes_the_other() {
+        let (mut app, other, doc, _ctx) = two_views();
+        assert!(app.apply_edit(comment(0)));
+        app.sync_views();
+        app.with_window(other, |a| a.views[0].test_set_page_texture(&_ctx, 0));
+        app.session.undo(doc).unwrap();
+        app.sync_views();
+        assert_eq!(app.with_window(other, |a| a.views[0].stale_pages()).unwrap(), vec![0, 1, 2, 3]);
     }
 }

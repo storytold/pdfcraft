@@ -2172,3 +2172,117 @@ fn comments_without_appearances_are_drawn_but_not_saved() {
         assert!(reopened.get(r).as_dict().is_some_and(|d| !d.contains(b"AP")), "{r:?} is saved without /AP");
     }
 }
+
+// --- the change feed (several views of one document) ---
+
+#[test]
+fn generation_only_moves_in_bump() {
+    let source = include_str!("lib.rs");
+    let moves = source.lines().filter(|l| l.contains("generation += 1")).count();
+    assert_eq!(moves, 2, "`generation += 1` (the document's) and `display_generation += 1` (layers) are the only ones");
+    let in_bump = source.split("fn bump(").nth(1).and_then(|b| b.split("fn changes_since").next()).unwrap_or_default();
+    assert!(in_bump.contains("self.generation += 1"));
+}
+
+#[test]
+fn a_comment_changes_one_page() {
+    let (mut s, id) = session_with(4);
+    let before = s.get(id).unwrap().edit_generation();
+    assert_eq!(s.get(id).unwrap().changes_since(before), None);
+    s.apply(id, rect_comment(1, [10.0, 10.0, 50.0, 50.0])).unwrap();
+    assert_eq!(s.get(id).unwrap().changes_since(before), Some(Change::Pages([1].into())));
+    s.apply(id, rect_comment(3, [10.0, 10.0, 50.0, 50.0])).unwrap();
+    assert_eq!(s.get(id).unwrap().changes_since(before), Some(Change::Pages([1, 3].into())));
+    let up_to_date = s.get(id).unwrap().edit_generation();
+    assert_eq!(s.get(id).unwrap().changes_since(up_to_date), None);
+}
+
+#[test]
+fn deleting_pages_remaps_the_rest() {
+    let (mut s, id) = session_with(5);
+    let before = s.get(id).unwrap().edit_generation();
+    s.apply(id, Edit::DeletePages { pages: vec![1, 2] }).unwrap();
+    let Some(Change::Remap(map)) = s.get(id).unwrap().changes_since(before) else { panic!("expected a remap") };
+    assert_eq!(map.old_to_new, vec![Some(0), None, None, Some(1), Some(2)]);
+    assert_eq!(map.new_len, 3);
+    assert_eq!(map.nearest(1), Some(1), "a deleted page lands on the next one that stayed");
+    assert_eq!(map.nearest(2), Some(1));
+    let last_gone = PageMap { old_to_new: vec![Some(0), None], new_len: 1 };
+    assert_eq!(last_gone.nearest(1), Some(0), "or the last one before it");
+}
+
+#[test]
+fn moving_pages_remaps_and_two_remaps_chain() {
+    let (mut s, id) = session_with(4);
+    let before = s.get(id).unwrap().edit_generation();
+    s.apply(id, Edit::MovePages { pages: vec![0], to: 3 }).unwrap();
+    let Some(Change::Remap(map)) = s.get(id).unwrap().changes_since(before) else { panic!("expected a remap") };
+    assert_eq!(page_texts(&s, id), ["Page 2", "Page 3", "Page 4", "Page 1"]);
+    assert_eq!(map.old_to_new, vec![Some(3), Some(0), Some(1), Some(2)]);
+    s.apply(id, Edit::DeletePages { pages: vec![0] }).unwrap();
+    let Some(Change::Remap(both)) = s.get(id).unwrap().changes_since(before) else { panic!("expected a remap") };
+    // Old page 1 (index 0) moved last, old page 2 (index 1) was then deleted.
+    assert_eq!(both.old_to_new, vec![Some(2), None, Some(0), Some(1)]);
+    assert_eq!(both.new_len, 3);
+}
+
+#[test]
+fn other_edits_undo_and_redo_change_everything() {
+    let (mut s, id) = session_with(2);
+    let before = s.get(id).unwrap().edit_generation();
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    assert_eq!(s.get(id).unwrap().changes_since(before), Some(Change::All));
+    let mid = s.get(id).unwrap().edit_generation();
+    s.apply(id, rect_comment(0, [1.0, 1.0, 9.0, 9.0])).unwrap();
+    assert_eq!(s.get(id).unwrap().changes_since(mid), Some(Change::Pages([0].into())));
+    assert_eq!(s.get(id).unwrap().changes_since(before), Some(Change::All), "a mix is everything");
+    let now = s.get(id).unwrap().edit_generation();
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().changes_since(now), Some(Change::All));
+    let now = s.get(id).unwrap().edit_generation();
+    s.redo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().changes_since(now), Some(Change::All));
+}
+
+#[test]
+fn a_long_history_falls_back_to_everything() {
+    let (mut s, id) = session_with(1);
+    let start = s.get(id).unwrap().edit_generation();
+    for i in 0..300 {
+        s.apply(id, Edit::SetInfo { key: "Title".into(), value: format!("t{i}") }).unwrap();
+    }
+    assert_eq!(s.get(id).unwrap().changes_since(start), Some(Change::All));
+    let now = s.get(id).unwrap().edit_generation();
+    assert_eq!(s.get(id).unwrap().changes_since(now), None);
+    assert_eq!(s.get(id).unwrap().changes_since(now + 10), None);
+}
+
+#[test]
+fn layers_change_the_display_generation_not_the_file() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /OFF [] >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Properties << /R 5 0 R >> >> >>".into(),
+        "<< /Length 40 >>\nstream\n/OC /R BDC 1 0 0 rg 0 0 50 100 re f EMC\nendstream".into(),
+        "<< /Type /OCG /Name (Red) >>".into(),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new();
+    let id = s.open("layers.pdf", None, Arc::new(pdf), None).unwrap();
+    let (generation, display) = (s.get(id).unwrap().edit_generation(), s.get(id).unwrap().display_generation());
+    assert!(s.set_layer_visible(id, 0, false));
+    assert_eq!(s.get(id).unwrap().display_generation(), display + 1);
+    assert_eq!(s.get(id).unwrap().edit_generation(), generation);
+    assert_eq!(s.get(id).unwrap().changes_since(generation), None);
+}

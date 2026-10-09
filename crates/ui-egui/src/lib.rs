@@ -1864,7 +1864,9 @@ impl eframe::App for PdfCraftApp {
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
-        // Pull finished renders into textures for every open document.
+        // Views of a document that another view changed catch up, then finished renders become
+        // textures for every open document.
+        self.sync_views();
         self.for_each_view(|_, view, session| {
             if let Some(doc) = session.get(view.id) {
                 view.receive(ctx, &doc.renderer);
