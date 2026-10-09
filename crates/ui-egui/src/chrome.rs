@@ -48,7 +48,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             ui.horizontal_centered(|ui| {
                                 for i in 0..app.views.len() {
                                     let Some(doc) = app.session.get(app.views[i].id) else { continue };
-                                    let (name, dirty) = (doc.display_name(), doc.dirty);
+                                    let (name, dirty) = (app.display_label(&app.views[i]).unwrap_or_else(|| doc.display_name()), doc.dirty);
                                     let response = tab(ui, &t, "file-text", &name, dirty, app.active == Some(i), &mut close, i);
                                     if changed && app.active == Some(i) && !app.combine_showing() {
                                         response.scroll_to_me(Some(Align::Center));

@@ -227,6 +227,9 @@ pub struct DocView {
     last_queue: Vec<RenderRequest>,
     /// This view's own queue and inbox in its document's render pool (registered on first use).
     pub(crate) render_client: Option<(u64, pdfcraft_render::ClientId)>,
+    /// Which view of its document this is (1, 2, ...; 0 until numbered). Numbers are not reused,
+    /// so closing view 1 leaves view 2 where it was.
+    pub view_no: u32,
     /// The document's edit generation this view has caught up with (see `sync_views`).
     pub(crate) seen_generation: u64,
     pub(crate) seen_display_generation: u64,
@@ -375,6 +378,7 @@ impl DocView {
             clicks: 0,
             last_queue: Vec::new(),
             render_client: None,
+            view_no: 0,
             seen_generation: 0,
             seen_display_generation: 0,
             change_handled: false,
@@ -543,6 +547,12 @@ impl DocView {
             f.matches.retain(|(p, _)| *p != page);
             f.current = None;
         }
+    }
+
+    /// The document generation this view has caught up with (tests).
+    #[doc(hidden)]
+    pub fn seen_edit_generation(&self) -> u64 {
+        self.seen_generation
     }
 
     /// Pages whose picture is out of date and will be drawn again (tests).

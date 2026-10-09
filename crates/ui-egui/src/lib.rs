@@ -624,6 +624,8 @@ pub struct PdfCraftApp {
     /// [global] The main window's last reported outer rectangle.
     #[allow(dead_code)] // used from the child-window tasks on
     pub(crate) root_rect: Option<egui::Rect>,
+    /// [global] The number the next view of each document gets.
+    next_view_no: std::collections::HashMap<DocId, u32>,
 }
 
 /// Where in a document a request to open an address came from.
@@ -811,6 +813,7 @@ impl PdfCraftApp {
             next_window_id: 1,
             pending_window_ops: Vec::new(),
             root_rect: None,
+            next_view_no: Default::default(),
             views,
             active,
             mode,
@@ -1191,8 +1194,12 @@ impl PdfCraftApp {
         if let Some(doc) = self.session.get(id) {
             view.release_render_client(&doc.renderer);
         }
-        self.forget_recovery(id);
-        self.session.close(id);
+        // The document stays open while another window still shows it.
+        if self.view_count(id) == 0 {
+            self.forget_recovery(id);
+            self.session.close(id);
+            self.next_view_no.remove(&id);
+        }
         self.active = match self.active {
             _ if self.views.is_empty() => None,
             Some(a) if a > index => Some(a - 1),
@@ -1905,8 +1912,8 @@ impl PdfCraftApp {
         // The window shows the active document's name (or title, if it asks for that).
         let title = self
             .active
-            .and_then(|i| self.session.get(self.views[i].id))
-            .map(|d| d.display_name())
+            .and_then(|i| self.views.get(i))
+            .and_then(|v| self.display_label(v))
             .or_else(|| self.combine_showing().then(|| tl!("Combine files").to_owned()))
             .map_or_else(|| "PdfCraft".to_owned(), |name| format!("{name} — PdfCraft"));
         if title != self.window_title {

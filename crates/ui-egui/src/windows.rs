@@ -413,6 +413,7 @@ impl PdfCraftApp {
     /// another view (or window) re-render only what they changed.
     pub(crate) fn sync_views(&mut self) {
         use pdfcraft_engine::Change;
+        self.assign_view_numbers();
         self.for_each_view(|_, view, session| {
             let Some(doc) = session.get(view.id) else { return };
             // A view that applied the change itself has caught up already.
@@ -440,10 +441,12 @@ impl PdfCraftApp {
         let mut view = DocView::new(doc, &d.info, self.view_defaults);
         view.seen_generation = d.edit_generation();
         view.seen_display_generation = d.display_generation();
+        view.view_no = 0;
         let state = WindowState { views: vec![view], active: Some(0), ..Default::default() };
         let id = WindowId(self.next_window_id);
         self.next_window_id += 1;
         self.windows.push(WindowSlot { id, state, geometry: None, last_rect: None });
+        self.assign_view_numbers();
         Some(id)
     }
 
@@ -459,6 +462,26 @@ impl PdfCraftApp {
                 other => log::warn!("window operation not supported yet: {other:?}"),
             }
         }
+    }
+
+    /// What a view is called in its tab and window title: the document's name, and `:n` once
+    /// the document is shown more than once.
+    pub fn display_label(&self, view: &DocView) -> Option<String> {
+        let name = self.session.get(view.id)?.display_name();
+        Some(if self.view_count(view.id) > 1 { format!("{name}:{}", view.view_no) } else { name })
+    }
+
+    /// Number the views that have none yet.
+    pub(crate) fn assign_view_numbers(&mut self) {
+        let mut next = std::mem::take(&mut self.next_view_no);
+        self.for_each_view(|_, view, _| {
+            if view.view_no == 0 {
+                let n = next.entry(view.id).or_insert(0);
+                *n = n.saturating_add(1);
+                view.view_no = *n;
+            }
+        });
+        self.next_view_no = next;
     }
 
     /// Whether `id` is a window of the app.
@@ -515,7 +538,7 @@ impl PdfCraftApp {
     }
 
     /// Visit the views of every window: the loaded one and the parked ones.
-    fn for_each_state(&self, mut f: impl FnMut(WindowId, &[DocView])) {
+    pub(crate) fn for_each_state(&self, mut f: impl FnMut(WindowId, &[DocView])) {
         f(self.current_window, &self.views);
         if self.current_window != WindowId::ROOT {
             f(WindowId::ROOT, &self.root_state.views);

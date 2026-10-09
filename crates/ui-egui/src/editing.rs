@@ -270,10 +270,48 @@ impl PdfCraftApp {
     }
 
     /// Whether tab `index` has work that isn't saved: edits, or form typing not committed yet.
-    pub(crate) fn has_unsaved_work(&self, index: usize) -> bool {
+    ///
+    /// The document counts as a whole: text typed into a field in another window is unsaved
+    /// work of this tab too.
+    pub fn has_unsaved_work(&self, index: usize) -> bool {
         let Some(v) = self.views.get(index) else { return false };
         let Some(doc) = self.session.get(v.id) else { return false };
-        doc.dirty || v.pending_edit.is_some() || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
+        let typing = |v: &crate::DocView| {
+            v.pending_edit.is_some() || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
+        };
+        let mut elsewhere = false;
+        self.for_each_state(|window, views| {
+            let others = views.iter().filter(|o| o.id == v.id && !(window == self.current_window && std::ptr::eq(*o, v)));
+            elsewhere |= others.into_iter().any(typing);
+        });
+        doc.dirty || typing(v) || elsewhere
+    }
+
+    /// Take over what is half typed or half dragged in view `index` (a field's text, a comment's
+    /// note), as when the user leaves the field; open drags are dropped as by Escape. Used when
+    /// the window loses the focus, so another window sees the document as it is.
+    pub fn commit_view_inputs(&mut self, index: usize) {
+        if index >= self.views.len() {
+            return;
+        }
+        let was_active = self.active;
+        self.active = Some(index);
+        if self.commit_form_typing()
+            && let Some((page, comment, text)) = self.views.get_mut(index).and_then(|v| v.comments.editing.take())
+        {
+            let id = self.views[index].id;
+            if !text.trim().is_empty() && self.session.get(id).is_some() {
+                self.apply_edit(Edit::SetAnnotationContents { page, index: comment, text });
+            }
+        }
+        if let Some(v) = self.views.get_mut(index) {
+            v.org_drag = None;
+            v.marquee = None;
+            v.block_drag = None;
+            v.redact_drag = Default::default();
+            v.crop_drag = Default::default();
+        }
+        self.active = was_active;
     }
 
     /// Save the active document. Returns `true` if it was written.
@@ -397,6 +435,14 @@ impl PdfCraftApp {
 
     /// Close a tab, asking first if it has unsaved changes.
     pub fn request_close_tab(&mut self, index: usize) {
+        // Another window shows the document too: closing this view loses nothing.
+        if let Some(id) = self.views.get(index).map(|v| v.id)
+            && self.view_count(id) > 1
+        {
+            self.commit_view_inputs(index);
+            self.close_tab(index);
+            return;
+        }
         // Text typed into a field counts as an unsaved change.
         if self.has_unsaved_work(index)
             && let Some(id) = self.views.get(index).map(|v| v.id)
