@@ -2132,6 +2132,62 @@ fn image_signatures_stay_upright_on_rotated_pages() {
     check(&mut a, reopened);
 }
 
+/// Issue #299: a typed signature and initials read across, as displayed, on every `/Rotate`,
+/// anchored at the displayed point, and look the same as on an unturned page.
+#[test]
+fn typed_signatures_stay_upright_on_rotated_pages() {
+    let dir = workdir("typed-upright");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 200, "height": 300, "pages": 4 }))["doc"].as_u64().unwrap();
+    for (page, degrees) in [(2, 90), (3, 180), (4, 270)] {
+        ok(&mut a, "page_rotate", json!({ "doc": doc, "pages": [page], "degrees": degrees }));
+    }
+    for page in 1..=4 {
+        ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": page, "type": "signature", "at": [30, 60], "text": "Ada Lovelace" }));
+        ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": page, "type": "initials", "at": [30, 140], "text": "AL" }));
+    }
+    let check = |a: &mut Automation, doc: u64| {
+        let mut upright = Vec::new();
+        for page in 1..=4 {
+            let output = a.call("page_render", &json!({ "doc": doc, "page": page, "dpi": 72 })).unwrap();
+            let Content::Png { data, .. } = &output[0] else { panic!() };
+            let pixels = image::load_from_memory(data).unwrap().to_rgba8();
+            assert_eq!(pixels.dimensions(), if page % 2 == 1 { (200, 300) } else { (300, 200) }, "page {page}");
+            let dark: Vec<bool> = pixels.pixels().map(|p| p.0[..3].iter().all(|v| *v < 128)).collect();
+            for y in [60, 140] {
+                let mut b = [u32::MAX, u32::MAX, 0, 0];
+                for (x, py, p) in pixels.enumerate_pixels() {
+                    if py.abs_diff(y) < 40 && p.0[..3].iter().all(|v| *v < 128) {
+                        b = [b[0].min(x), b[1].min(py), b[2].max(x), b[3].max(py)];
+                    }
+                }
+                assert!(b[0] <= b[2], "page {page}: no ink near y = {y}");
+                assert!(b[2] - b[0] > b[3] - b[1], "page {page}: the name reads across: {b:?}");
+                assert!(b[0].abs_diff(30) <= 2 && b[1] < y && b[3] > y, "page {page}: anchored at (30, {y}): {b:?}");
+            }
+            if page == 1 {
+                upright = dark;
+                continue;
+            }
+            // Same pixels as the unturned page where both pages are (pages 2 and 4 are wider).
+            let width = pixels.width();
+            let (mut differ, mut ink) = (0, 0);
+            for y in 0..200 {
+                for x in 0..200 {
+                    let (want, got) = (upright[(y * 200 + x) as usize], dark[(y * width + x) as usize]);
+                    ink += usize::from(want);
+                    differ += usize::from(want != got);
+                }
+            }
+            assert!(differ * 10 < ink, "page {page}: {differ} of {ink} ink pixels differ from the unturned page");
+        }
+    };
+    check(&mut a, doc);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "placed.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "placed.pdf" }))["doc"].as_u64().unwrap();
+    check(&mut a, reopened);
+}
+
 #[test]
 fn comment_checkmarks_locks_hiding_and_summaries_through_tools() {
     let dir = workdir("comment-polish");
