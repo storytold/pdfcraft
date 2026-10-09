@@ -741,7 +741,7 @@ comment menu	Edit	సవరించు
 	{verb} Header and Footer	హెడర్ మరియు ఫుటర్‌ను {verb}
 	{verb} Watermark	వాటర్‌మార్క్‌ను {verb}
 	{verb} Background	నేపథ్యాన్ని {verb}
-	Margins (in)	మార్జిన్‌లు (in)
+	Margins	మార్జిన్‌లు
 	Left Header Text	ఎడమ హెడర్ టెక్స్ట్
 	Center Header Text	మధ్య హెడర్ టెక్స్ట్
 	Right Header Text	కుడి హెడర్ టెక్స్ట్
@@ -2019,3 +2019,4 @@ action wizard	Start	ప్రారంభించు
 	Pin folder to Home…	ఫోల్డర్‌ను హోమ్‌కు పిన్ చేయి…
 	No recent files	ఇటీవలి ఫైళ్లు లేవు
 	Go to page…	పేజీకి వెళ్లు…
+	For page sizes and margins.	పేజీ పరిమాణాలు మరియు మార్జిన్‌ల కోసం.

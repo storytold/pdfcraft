@@ -295,6 +295,13 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             .small()
             .color(t.text_muted),
     );
+    ui.horizontal(|ui| {
+        ui.label(tl!("Units"));
+        for u in crate::units::Unit::ALL {
+            ui.radio_value(&mut app.units, u, u.label());
+        }
+    });
+    ui.label(egui::RichText::new(tl!("For page sizes and margins.")).small().color(t.text_muted));
     ui.add_space(8.0);
     // Identity: the author of new comments (Acrobat: Preferences ▸ Identity).
     ui.label(egui::RichText::new(tl!("Identity")).font(theme::semibold(13.0)));

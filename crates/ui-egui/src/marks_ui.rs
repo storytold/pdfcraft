@@ -144,6 +144,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     let Some(doc) = app.session.get(id) else { return (false, true) };
     let count = doc.info.pages.len();
     let page = doc.info.pages.get(current).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
+    let units = app.units;
     let d = &mut app.marks_draft;
     let mut browse = false;
     let verb = if d.replace { tl!("Update") } else { tl!("Add") };
@@ -163,12 +164,15 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 ui.checkbox(&mut d.hf.underline, tl!("Underline"));
                 color_button(ui, &mut d.hf.color);
                 ui.add_space(16.0);
-                ui.label(tl!("Margins (in)"));
+                ui.label(format!("{} ({})", tl!("Margins"), units.label()));
+                let per = units.per_point();
                 for (label, k) in [(tl!("Top"), 0), (tl!("Bottom"), 1), (tl!("Left"), 2), (tl!("Right"), 3)] {
                     ui.label(label);
-                    let mut v = d.hf.margins[k] / 72.0;
-                    if ui.add(egui::DragValue::new(&mut v).range(0.0..=10.0).speed(0.05).max_decimals(2)).changed() {
-                        d.hf.margins[k] = v * 72.0;
+                    let mut v = d.hf.margins[k] * per;
+                    // Up to 10 inches, whatever the unit.
+                    let max = 720.0 * per;
+                    if ui.add(egui::DragValue::new(&mut v).range(0.0..=max).speed(units.speed()).max_decimals(units.decimals())).changed() {
+                        d.hf.margins[k] = v / per;
                     }
                 }
             });

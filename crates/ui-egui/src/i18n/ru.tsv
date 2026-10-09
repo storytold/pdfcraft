@@ -753,7 +753,7 @@
 	{verb} Header and Footer	{verb} колонтитулы
 	{verb} Watermark	{verb} водяной знак
 	{verb} Background	{verb} фон
-	Margins (in)	Поля (дюймы)
+	Margins	Поля
 	Left Header Text	Текст левого колонтитула
 	Center Header Text	Текст центрального колонтитула
 	Right Header Text	Текст правого колонтитула
@@ -1994,3 +1994,4 @@
 	Created a PDF from {n} files; left out: {names}	PDF создан из файлов: {n}; пропущены: {names}
 	Created a PDF from the first {n} files	PDF создан из первых файлов: {n}
 	Go to page…	Перейти на страницу…
+	For page sizes and margins.	Для размеров страниц и полей.

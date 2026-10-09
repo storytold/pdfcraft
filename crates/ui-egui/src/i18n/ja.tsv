@@ -761,7 +761,7 @@
 	{verb} Header and Footer	ヘッダーとフッターを{verb}
 	{verb} Watermark	透かしを{verb}
 	{verb} Background	背景を{verb}
-	Margins (in)	余白（インチ）
+	Margins	余白
 	Left Header Text	左ヘッダーのテキスト
 	Center Header Text	中央ヘッダーのテキスト
 	Right Header Text	右ヘッダーのテキスト
@@ -1975,3 +1975,4 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	PNG または JPEG 画像を選択してください（最大 4 MiB）。透明度は保持されます。
 	Couldn't import the signature image: {e}	署名画像を読み込めませんでした: {e}
 	Go to page…	ページへ移動…
+	For page sizes and margins.	ページサイズと余白に使います。

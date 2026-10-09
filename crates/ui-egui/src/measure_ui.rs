@@ -98,7 +98,15 @@ impl MeasureView {
         self.scale = None;
     }
 }
-pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, doc: &Document, view: &mut DocView, cx: &crate::comments::PageCx<'_>, tool: Tool) {
+pub(crate) fn page_input(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    doc: &Document,
+    view: &mut DocView,
+    cx: &crate::comments::PageCx<'_>,
+    tool: Tool,
+    units: crate::units::Unit,
+) {
     let page = cx.page;
     let xf = cx.xf;
     let author = &cx.prefs.author;
@@ -167,7 +175,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, doc: &Document, v
                 state.page = Some(page);
             }
             if state.points.is_empty() {
-                match doc.measurement_scale(page, point) {
+                match doc.measurement_scale_or(page, point, units.per_point(), units.label()) {
                     Ok(scale) => {
                         state.scale = Some(scale);
                         state.error = None;
@@ -291,6 +299,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
         }
     });
     let Some(doc) = app.session.get(id) else { return };
+    let units = app.units;
     let page = app.views[index].current;
     let info = doc.info.pages.get(page).cloned();
     let state = &mut app.views[index].measure;
@@ -300,7 +309,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     if state.seeded_page != Some(page) {
         state.seeded_page = Some(page);
         if let (Ok(a), Ok(b)) = (doc.measurement_to_user(page, [0.0, 0.0]), doc.measurement_to_user(page, [72.0, 0.0]))
-            && let Ok(scale) = doc.measurement_scale(page, a)
+            && let Ok(scale) = doc.measurement_scale_or(page, a, units.per_point(), units.label())
             && let Ok(reading) = measure::reading(Kind::Distance, &[a, b], &scale)
         {
             state.drawing_points = 72.0;

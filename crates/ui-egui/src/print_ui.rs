@@ -29,6 +29,8 @@ pub enum Handling {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrintDraft {
     pub printers: Vec<spool::Printer>,
+    /// The unit the sheet size is shown in (Preferences).
+    pub units: crate::units::Unit,
     /// `None` = Save as PDF.
     pub printer: Option<String>,
     pub copies: u32,
@@ -65,6 +67,7 @@ impl Default for PrintDraft {
     fn default() -> Self {
         PrintDraft {
             printers: Vec::new(),
+            units: Default::default(),
             printer: None,
             copies: 1,
             collate: true,
@@ -158,7 +161,7 @@ impl PdfCraftApp {
             (true, Which::Selected) => Which::All,
             (true, other) => other,
         };
-        self.print_draft = PrintDraft { printers, printer: default, current_page: current, sheet: 0, selected, which, ..keep };
+        self.print_draft = PrintDraft { printers, units: self.units, printer: default, current_page: current, sheet: 0, selected, which, ..keep };
         self.dialog = Some(crate::Dialog::Print);
     }
 
@@ -547,8 +550,7 @@ pub(crate) fn body(
                 }
             });
             if let Some(s) = sheets.first() {
-                let (w, h) = (s.size.0 / 72.0, s.size.1 / 72.0);
-                ui.label(egui::RichText::new(format!("{w:.2} × {h:.2} in")).small().color(t.text_muted));
+                ui.label(egui::RichText::new(d.units.size(s.size.0, s.size.1)).small().color(t.text_muted));
             }
         });
     });

@@ -80,6 +80,7 @@ mod pickers;
 pub mod prepare;
 mod print_ui;
 mod signature_drag;
+pub mod units;
 pub use print_ui::{Handling as PrintHandling, PrintDraft, Which as PrintWhich};
 mod redact_ui;
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft};
@@ -351,6 +352,8 @@ pub struct PdfCraftApp {
     /// Documents and view). Continuous scrolling at fit width by default, which never snaps
     /// between pages.
     pub view_defaults: canvas::ViewDefaults,
+    /// The unit page sizes and margins are shown in (Preferences ▸ Documents and view).
+    pub units: units::Unit,
     /// Explicit CLI/control mode lasts for this session and is never persisted.
     mode_override: Option<Mode>,
     pub left: LeftPanel,
@@ -598,6 +601,7 @@ impl PdfCraftApp {
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
             view_defaults: Default::default(),
+            units: Default::default(),
             mode_override: None,
             left: LeftPanel::AllTools,
             left_open: true,
@@ -1176,6 +1180,7 @@ impl PdfCraftApp {
             "default_layout": self.view_defaults.layout.as_str(),
             "default_zoom": self.view_defaults.zoom_name(),
             "highlight_fields": self.view_defaults.highlight_fields,
+            "units": self.units,
             "language": self.language,
             "author": self.comment_prefs.author,
             // Drawn signatures keep their original form (older settings read the same).
@@ -1213,6 +1218,9 @@ impl PdfCraftApp {
         }
         if let Some(layout) = v["default_layout"].as_str().and_then(canvas::PageLayout::try_parse) {
             self.view_defaults.layout = layout;
+        }
+        if let Ok(units) = serde_json::from_value::<units::Unit>(v["units"].clone()) {
+            self.units = units;
         }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;

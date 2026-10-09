@@ -277,6 +277,12 @@ impl Document {
         let e = self.editor.as_ref().ok_or("the document can't be read")?;
         measure::scale_at(&e.cos, page, at).map_err(|e| e.to_string())
     }
+    /// [`Self::measurement_scale`], measuring true size in `unit` (`per_point` of them in a
+    /// point) where the page sets no scale.
+    pub fn measurement_scale_or(&self, page: usize, at: measure::Point, per_point: f64, unit: &str) -> Result<measure::Scale, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        measure::scale_at_or(&e.cos, page, at, per_point, unit).map_err(|e| e.to_string())
+    }
     pub fn measurement_to_user(&self, page: usize, point: measure::Point) -> Result<measure::Point, String> {
         let e = self.editor.as_ref().ok_or("the document can't be read")?;
         measure::view_to_user(&e.cos, page, point).map_err(|e| e.to_string())

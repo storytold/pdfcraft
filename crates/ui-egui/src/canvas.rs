@@ -1330,6 +1330,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         | QuickTool::Snapshot => false,
     };
     let prefs = &app.comment_prefs;
+    let units = app.units;
     let allowed = doc.allows_annotation();
     let comments_hidden = doc.comments_hidden();
     let form = doc.form.clone();
@@ -1517,7 +1518,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             // Comments: tools, selection, moving and resizing come before text selection.
             let pcx = comments::PageCx { page: i, xf: &xf, info, tool, prefs, allowed, hidden: comments_hidden };
             if let QuickTool::Measure(measure_tool) = tool {
-                crate::measure_ui::page_input(ui, &resp, doc, view, &pcx, measure_tool);
+                crate::measure_ui::page_input(ui, &resp, doc, view, &pcx, measure_tool, units);
             }
 
             // Form fields take clicks first with the Select tool (as Acrobat fills fields in
