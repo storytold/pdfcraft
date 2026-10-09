@@ -9374,7 +9374,7 @@ milestone = "M13"
 status = "shipped"
 commands = []
 tools = ["doc_info", "text_extract", "page_render"]
-evidence = ["crates/automation/tests/automation.rs::mcp_resources_expose_open_documents", "crates/automation/src/mcp.rs::resource_uris_parse", "crates/automation/tests/automation.rs::conventions_resources_and_modern_results"]
+evidence = ["crates/automation/tests/automation.rs::mcp_resources_expose_open_documents", "crates/automation/src/mcp.rs::resource_uris_parse", "crates/automation/tests/automation.rs::conventions_resources"]
 notes = "resources/list, resources/templates/list and resources/read: pdfcraft://doc/{doc}/info (JSON), /text, /page/{page}/text, /page/{page}/image?dpi= (PNG)"
 
 [[feature]]
