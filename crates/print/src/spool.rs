@@ -1,8 +1,11 @@
 //! The system print spooler. On macOS and Linux this is CUPS: printers come from `lpstat`, jobs
 //! are piped to `lp` with the job options (copies, collation, duplex, colour). Other platforms
-//! report that printing isn't available yet; the print-ready PDF can still be saved.
+//! report that printing is unavailable; Windows uses native PDF printing.
 
 use crate::PrintError;
+
+#[cfg(windows)]
+mod windows;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Printer {
@@ -80,26 +83,40 @@ pub fn lpstat_command() -> std::process::Command {
 
 /// The printers the system knows (empty when there are none or no spooler).
 pub fn printers() -> Vec<Printer> {
+    try_printers().unwrap_or_default()
+}
+
+/// Discover printers, preserving errors for the UI and automation.
+pub fn try_printers() -> Result<Vec<Printer>, PrintError> {
+    #[cfg(windows)]
+    {
+        windows::printers()
+    }
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
         match lpstat_command().output() {
-            Ok(o) => parse_lpstat(&String::from_utf8_lossy(&o.stdout)),
-            Err(_) => Vec::new(),
+            Ok(o) => Ok(parse_lpstat(&String::from_utf8_lossy(&o.stdout))),
+            // Preserve CUPS discovery's existing no-spooler behavior.
+            Err(_) => Ok(Vec::new()),
         }
     }
-    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    #[cfg(not(any(windows, all(unix, not(target_arch = "wasm32")))))]
     {
-        Vec::new()
+        Ok(Vec::new())
     }
 }
 
 /// Send a print-ready PDF to the spooler. Returns the spooler's message (the job id).
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, PrintError> {
+    #[cfg(windows)]
+    {
+        windows::submit(pdf, job)
+    }
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
         submit_via(std::process::Command::new("lp"), pdf, job)
     }
-    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    #[cfg(not(any(windows, all(unix, not(target_arch = "wasm32")))))]
     {
         let _ = (pdf, job);
         Err(PrintError::Spool("printing to a printer isn't available on this platform yet; save the print-ready PDF instead".into()))

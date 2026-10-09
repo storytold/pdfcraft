@@ -13,7 +13,7 @@
 //!   with stamps, or form fields only; annotations print only with their Print flag).
 //!
 //! The sheets are written as a new, unencrypted, garbage-collected PDF; [`spool`] hands it to
-//! the system's print spooler (CUPS on macOS and Linux).
+//! the system's print spooler (CUPS on Unix; native Windows PDF printing on Windows).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -161,14 +161,36 @@ impl Default for Settings {
 }
 
 /// Common paper sizes (points, portrait).
-pub const PAPERS: [(&str, (f64, f64)); 6] = [
+pub const PAPERS: [(&str, (f64, f64)); 18] = [
     ("US Letter", (612.0, 792.0)),
     ("US Legal", (612.0, 1008.0)),
     ("Tabloid", (792.0, 1224.0)),
     ("A3", (841.89, 1190.55)),
     ("A4", (595.28, 841.89)),
     ("A5", (419.53, 595.28)),
+    ("ARCH A (9 x 12 in)", (648.0, 864.0)),
+    ("ARCH B (12 x 18 in)", (864.0, 1296.0)),
+    ("ARCH C (18 x 24 in)", (1296.0, 1728.0)),
+    ("ARCH D (24 x 36 in)", (1728.0, 2592.0)),
+    ("ARCH E1 (30 x 42 in)", (2160.0, 3024.0)),
+    ("ARCH E (36 x 48 in)", (2592.0, 3456.0)),
+    ("ANSI C (17 x 22 in)", (1224.0, 1584.0)),
+    ("ANSI D (22 x 34 in)", (1584.0, 2448.0)),
+    ("ANSI E (34 x 44 in)", (2448.0, 3168.0)),
+    ("A2", (1190.55, 1683.78)),
+    ("A1", (1683.78, 2383.94)),
+    ("A0", (2383.94, 3370.39)),
 ];
+
+/// Match a displayed PDF page to a standard sheet, independent of orientation.
+/// Half a point allows rounded metric PDF dimensions without confusing distinct sizes.
+pub fn matching_paper(size: (f64, f64)) -> Option<usize> {
+    if !size.0.is_finite() || !size.1.is_finite() {
+        return None;
+    }
+    let size = (size.0.min(size.1), size.0.max(size.1));
+    PAPERS.iter().position(|(_, p)| (p.0 - size.0).abs() <= 0.5 && (p.1 - size.1).abs() <= 0.5)
+}
 
 /// The unprintable margin assumed around the sheet for Fit, Multiple and Booklet.
 pub const MARGIN: f64 = 18.0;

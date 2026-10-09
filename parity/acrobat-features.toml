@@ -7830,8 +7830,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["printers", "doc_print"]
-evidence = ["crates/print/src/tests.rs::spooler_arguments_and_printer_list"]
-notes = "CUPS printers via lpstat; Save as PDF; Windows spooler pending"
+evidence = ["crates/print/src/tests.rs::spooler_arguments_and_printer_list", "crates/automation/tests/automation.rs::windows_printers_are_reachable_through_tools"]
+notes = "CUPS printers via lpstat; native Windows discovery and PDF submission; Save as PDF. Windows uses one sheet size and orientation per job. Physical output and driver colour/duplex behavior remain unverified."
 
 [[feature]]
 id = "print.copies-collate"
@@ -8019,11 +8019,11 @@ title = "Page setup"
 area = "L"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["print.dialog"]
+tools = ["doc_print"]
+evidence = ["crates/ui-egui/tests/print.rs::architectural_page_can_be_matched_at_100_percent", "crates/print/src/tests.rs::architectural_sheets_preserve_full_scale"]
+notes = "ARCH, ANSI and ISO presets; matching a source page to a standard sheet at 100%; visible scale. Validated Windows driver media prevents silent size/orientation substitution. Native driver-properties UI and arbitrary custom sizes remain missing."
 
 [[feature]]
 id = "print.print-ready-pdf"

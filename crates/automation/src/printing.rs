@@ -12,7 +12,7 @@ fn bad(m: impl Into<String>) -> ToolError {
 
 impl Automation {
     pub(crate) fn printers(&self) -> Result<Value> {
-        let list: Vec<Value> = spool::printers().into_iter().map(|p| json!({ "name": p.name, "default": p.default })).collect();
+        let list: Vec<Value> = spool::try_printers().map_err(failed)?.into_iter().map(|p| json!({ "name": p.name, "default": p.default })).collect();
         Ok(json!({ "count": list.len(), "printers": list }))
     }
 
@@ -93,9 +93,13 @@ impl Automation {
             None => PAPERS[0].1,
             Some(p) => PAPERS
                 .iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case(p) || n.replace("US ", "").eq_ignore_ascii_case(p))
+                .find(|(n, _)| {
+                    n.eq_ignore_ascii_case(p)
+                        || n.replace("US ", "").eq_ignore_ascii_case(p)
+                        || n.split(" (").next().is_some_and(|name| name.eq_ignore_ascii_case(p))
+                })
                 .map(|x| x.1)
-                .ok_or_else(|| bad(format!("unknown paper {p:?} (Letter, Legal, Tabloid, A3, A4, A5)")))?,
+                .ok_or_else(|| bad(format!("unknown paper {p:?} (Letter, Legal, Tabloid, ARCH A/B/C/D/E1/E, ANSI C/D/E, A0/A1/A2/A3/A4/A5)")))?,
         };
         let settings = print::Settings { pages, paper, orientation, layout, content };
         let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();

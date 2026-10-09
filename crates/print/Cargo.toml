@@ -13,3 +13,9 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+winprint = { version = "=0.2.1", default-features = false }
+winreg = "0.56"
+tempfile = "3"
+roxmltree = "0.20"

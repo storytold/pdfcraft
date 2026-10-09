@@ -146,7 +146,13 @@ impl PrintDraft {
 impl PdfCraftApp {
     pub fn open_print(&mut self) {
         let Some((i, _)) = self.active_ids() else { return };
-        let printers = spool::printers();
+        let printers = match spool::try_printers() {
+            Ok(printers) => printers,
+            Err(e) => {
+                self.notify(format!("Couldn't list printers: {e}"));
+                Vec::new()
+            }
+        };
         let default = printers.iter().find(|p| p.default).or(printers.first()).map(|p| p.name.clone());
         let current = self.views[i].current;
         let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
@@ -166,6 +172,11 @@ impl PdfCraftApp {
     /// a preset path returns `true` once the save picker is showing; the file is written on a
     /// later frame, when the user has chosen where.
     pub fn print_now(&mut self) -> bool {
+        #[cfg(windows)]
+        if self.pending_print.is_some() {
+            self.notify("A print job is still being submitted. Wait before starting another.".to_string());
+            return false;
+        }
         // What's typed in a form field is part of what's printed (#166).
         if !self.commit_form_typing() {
             return false;
@@ -189,6 +200,33 @@ impl PdfCraftApp {
             }
         };
         match self.print_draft.printer.clone() {
+            #[cfg(windows)]
+            Some(printer) => {
+                let job = self.print_draft.job(&name);
+                let (send, receive) = std::sync::mpsc::channel();
+                let ctx = self.ctx.clone();
+                let started = std::thread::Builder::new().name("pdfcraft-spool".into()).spawn(move || {
+                    let result = std::panic::catch_unwind(|| spool::submit(&bytes, &job))
+                        .map_err(|_| "The print worker failed. Check the queue before retrying.".to_string())
+                        .and_then(|r| r.map_err(|e| e.to_string()));
+                    let _ = send.send(result.map(|message| format!("Sent to {printer}: {message}")));
+                    if let Some(ctx) = ctx {
+                        ctx.request_repaint();
+                    }
+                });
+                match started {
+                    Ok(_) => {
+                        self.pending_print = Some(receive);
+                        self.notify("Submitting print job…".to_string());
+                        true
+                    }
+                    Err(e) => {
+                        self.notify(format!("Couldn't start printing: {e}"));
+                        false
+                    }
+                }
+            }
+            #[cfg(not(windows))]
             Some(printer) => match spool::submit(&bytes, &self.print_draft.job(&name)) {
                 Ok(msg) => {
                     self.notify(if msg.is_empty() {
@@ -249,6 +287,22 @@ impl PdfCraftApp {
                 self.notify_fmt("Couldn't download {name}: {e}", &[("name", &file), ("e", &e)]);
                 false
             }
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn poll_print(&mut self) {
+        let Some(receive) = &self.pending_print else { return };
+        match receive.try_recv() {
+            Ok(result) => {
+                self.pending_print = None;
+                self.notify(result.unwrap_or_else(|e| format!("Printing failed: {e}")));
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.pending_print = None;
+                self.notify("The print worker stopped unexpectedly. Check the queue before retrying.".to_string());
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
     }
 }
@@ -314,13 +368,29 @@ pub(crate) fn body(
                 );
                 ui.end_row();
                 ui.label(tl!("Paper:"));
-                egui::ComboBox::from_id_salt("paper").selected_text(PAPERS[d.paper].0).width(160.0).show_ui(ui, |ui| {
+                let paper_name = PAPERS.get(d.paper).map_or("US Letter", |p| p.0);
+                egui::ComboBox::from_id_salt("paper").selected_text(paper_name).width(260.0).show_ui(ui, |ui| {
                     for (i, (name, _)) in PAPERS.iter().enumerate() {
                         ui.selectable_value(&mut d.paper, i, *name);
                     }
                 });
                 ui.end_row();
             });
+            if let Some(&source) = sizes.get(d.current_page) {
+                ui.horizontal(|ui| {
+                    ui.label(format!("PDF page: {:.2} × {:.2} in", source.0 / 72.0, source.1 / 72.0));
+                    let matched = print::matching_paper(source);
+                    if ui.add_enabled(matched.is_some(), egui::Button::new("Match page at 100%")).clicked() {
+                        if let Some(paper) = matched {
+                            d.paper = paper;
+                            d.handling = Handling::Size;
+                            d.size = SizeMode::Actual;
+                            d.orientation = Orientation::Auto;
+                            d.sheet = 0;
+                        }
+                    }
+                });
+            }
             ui.add_space(6.0);
             widgets::section_title(ui, tl!("Pages to Print"));
             ui.horizontal(|ui| {
@@ -546,9 +616,18 @@ pub(crate) fn body(
                     d.sheet += 1;
                 }
             });
-            if let Some(s) = sheets.first() {
+            if let Some(s) = sheets.get(d.sheet) {
                 let (w, h) = (s.size.0 / 72.0, s.size.1 / 72.0);
                 ui.label(egui::RichText::new(format!("{w:.2} × {h:.2} in")).small().color(t.text_muted));
+                if d.handling == Handling::Size {
+                    if let Some(p) = s.placed.first() {
+                        let scale = p.matrix.0[0].hypot(p.matrix.0[1]) * 100.0;
+                        ui.label(format!("Print scale: {scale:.2}%"));
+                        if (scale - 100.0).abs() > 0.01 {
+                            ui.label(egui::RichText::new("Drawing scale changes. Use Actual size for full-scale plans.").small().color(t.text_muted));
+                        }
+                    }
+                }
             }
         });
     });

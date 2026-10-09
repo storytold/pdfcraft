@@ -1789,6 +1789,22 @@ fn printing_through_tools() {
     assert!(matches!(a.call("doc_print", &json!({ "doc": doc, "pages": "99", "path": "x.pdf" })), Err(ToolError::InvalidArgs(_))));
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_printers_are_reachable_through_tools() {
+    let dir = workdir("windows-printers");
+    let mut a = auto(&dir);
+    let result = ok(&mut a, "printers", json!({}));
+    let expected = pdfcraft_engine::print::spool::try_printers().unwrap();
+    assert_eq!(result["count"].as_u64(), Some(expected.len() as u64));
+    for p in expected {
+        assert!(result["printers"].as_array().unwrap().iter().any(|item| item["name"] == p.name && item["default"] == p.default));
+    }
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let result = a.call("doc_print", &json!({ "doc": doc, "pages": "1", "printer": "PdfCraft non-existent validation queue" }));
+    assert!(matches!(result, Err(ToolError::Failed(message)) if message.contains("was not found")));
+}
+
 #[test]
 fn adding_content_through_tools() {
     let dir = workdir("content");

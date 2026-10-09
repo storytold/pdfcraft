@@ -56,6 +56,64 @@ fn close(a: f64, b: f64) -> bool {
 }
 
 #[test]
+fn architectural_sheets_preserve_full_scale() {
+    let index = matching_paper((2592.0, 1728.0)).unwrap();
+    assert_eq!(PAPERS[index].0, "ARCH D (24 x 36 in)");
+    assert_eq!(matching_paper((1728.0, 2592.0)), Some(index));
+    assert_eq!(matching_paper((f64::NAN, 2592.0)), None);
+    let s = Settings { pages: vec![0], paper: PAPERS[index].1, layout: Layout::Size(SizeMode::Actual), ..Settings::default() };
+    let sheets = layout(&[(2592.0, 1728.0)], &s).unwrap();
+    assert_eq!(sheets[0].size, (2592.0, 1728.0));
+    assert_eq!(sheets[0].placed[0].matrix.0, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let fit = layout(&[(2592.0, 1728.0)], &Settings { layout: Layout::Size(SizeMode::Fit), ..s }).unwrap();
+    assert!(fit[0].placed[0].matrix.0[0] < 1.0, "Fit adds margins and must not masquerade as full scale");
+}
+
+#[cfg(windows)]
+fn assert_virtual_validation_queue() {
+    let key = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SYSTEM\CurrentControlSet\Control\Print\Printers\PdfCraft Validation")
+        .unwrap();
+    let driver: String = key.get_value("Printer Driver").unwrap();
+    let port: String = key.get_value("Port").unwrap();
+    assert_eq!(driver, "Microsoft Print To PDF", "integration tests must not use physical printers");
+    assert!(std::path::Path::new(&port).is_absolute() && port.ends_with(".pdf"), "requires a PDF output-file port");
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires the disposable PdfCraft Validation PDF queue; never uses a physical printer"]
+fn windows_virtual_printer_end_to_end() {
+    assert_virtual_validation_queue();
+    let printer = "PdfCraft Validation";
+    assert!(spool::try_printers().unwrap().iter().any(|p| p.name == printer));
+    let pdf = impose(&fixture(2), &settings(vec![0, 1], Layout::Size(SizeMode::Fit))).unwrap();
+    let result = spool::submit(&pdf, &Job { printer: Some(printer.into()), title: "Windows validation".into(), ..Job::default() }).unwrap();
+    assert!(result.contains("Windows"));
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires the disposable PdfCraft Validation PDF queue; never uses a physical printer"]
+fn windows_virtual_printer_tabloid_landscape_copies() {
+    assert_virtual_validation_queue();
+    let settings = Settings { pages: vec![0, 1], paper: (792.0, 1224.0), orientation: Orientation::Landscape, ..Settings::default() };
+    let pdf = impose(&fixture(2), &settings).unwrap();
+    spool::submit(
+        &pdf,
+        &Job {
+            printer: Some("PdfCraft Validation".into()),
+            copies: 2,
+            collate: true,
+            grayscale: true,
+            title: "Landscape tabloid validation".into(),
+            ..Job::default()
+        },
+    )
+    .unwrap();
+}
+
+#[test]
 fn page_selection() {
     let labels: Vec<String> = ["i", "ii", "1", "2", "A-1"].iter().map(|s| s.to_string()).collect();
     assert_eq!(select_pages(5, None, &labels, Subset::All, false).unwrap(), [0, 1, 2, 3, 4]);

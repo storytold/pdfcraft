@@ -152,3 +152,43 @@ fn a_failed_save_as_pdf_keeps_the_dialog_open() {
     let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
     assert!(toast.contains("Could not save"), "the user is told why: {toast:?}");
 }
+
+#[test]
+fn architectural_page_can_be_matched_at_100_percent() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_blank(2592.0, 1728.0, 1).unwrap();
+        app.open_bytes("architectural.pdf", None, bytes.as_ref().clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_label("PDF page: 36.00 × 24.00 in");
+    h.get_by_label("Match page at 100%").click();
+    h.run_steps(3);
+    h.get_by_value("ARCH D (24 x 36 in)");
+    h.get_by_label("Print scale: 100.00%");
+    h.get_by_label("36.00 × 24.00 in");
+    let settings = h.state().print_draft.settings(1, &[]).unwrap();
+    assert_eq!(settings.paper, (1728.0, 2592.0));
+    assert_eq!(settings.layout, pdfcraft_engine::print::Layout::Size(pdfcraft_engine::print::SizeMode::Actual));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_print_dialog_exposes_installed_queues() {
+    let expected = pdfcraft_engine::print::spool::try_printers().unwrap();
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.printers, expected);
+    if let Some(selected) = h.state().print_draft.printer.clone() {
+        h.get_by_value(&selected).click();
+        h.run_steps(2);
+        for printer in expected {
+            let label = if printer.default { format!("{} (default)", printer.name) } else { printer.name };
+            h.get_by_label(&label);
+        }
+    }
+}
