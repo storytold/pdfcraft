@@ -213,13 +213,16 @@ impl Stream {
 
     /// Decoded data, tolerating truncated or corrupt encodings the way viewers do (the data
     /// decoded before the damage is returned). Streams with image codecs fail with
-    /// `CosError::Filter` (keep them encoded). Use `decoded_strict` to detect damage.
+    /// `CosError::Filter` (keep them encoded). Use `decoded_strict` to detect damage. Output
+    /// beyond [`MAX_DECODED`] is an error, not truncated data. Callers that must not miss content
+    /// or must bound the work (redaction) use [`Stream::decoded_within`] or
+    /// [`Stream::decoded_strict_within`] with a tighter limit.
     pub fn decoded(&self) -> Result<Vec<u8>, CosError> {
         self.decoded_within(MAX_DECODED)
     }
 
-    /// Like [`Stream::decoded`], for a stream whose decoded size has a tighter bound than
-    /// [`MAX_DECODED`]: decoding past `max` bytes is an error.
+    /// Like [`Stream::decoded`] with an explicit bound (at most [`MAX_DECODED`]): decoding past
+    /// `max` bytes is an error. Use a tight bound for streams whose size is known.
     pub fn decoded_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
         let chain = self.filters();
         if chain.is_empty() {
@@ -228,13 +231,20 @@ impl Stream {
         pdfcraft_filters::decode_tolerant(&chain, &self.raw, max.min(MAX_DECODED)).map(|(v, _)| v).map_err(|e| CosError::Filter(e.to_string()))
     }
 
-    /// Decoded data; any corruption is an error.
+    /// Decoded data; any corruption is an error. Output beyond [`MAX_DECODED`] is an error too.
     pub fn decoded_strict(&self) -> Result<Vec<u8>, CosError> {
+        self.decoded_strict_within(MAX_DECODED)
+    }
+
+    /// [`Stream::decoded_strict`] with an explicit bound (at most [`MAX_DECODED`]): damage, or
+    /// output past `max` bytes, is an error. No partial data is ever returned, so nothing after a
+    /// corrupt spot can go unexamined.
+    pub fn decoded_strict_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
         let chain = self.filters();
         if chain.is_empty() {
             return Ok(self.raw.as_ref().clone());
         }
-        pdfcraft_filters::decode(&chain, &self.raw, MAX_DECODED).map_err(|e| CosError::Filter(e.to_string()))
+        pdfcraft_filters::decode(&chain, &self.raw, max.min(MAX_DECODED)).map_err(|e| CosError::Filter(e.to_string()))
     }
 }
 
