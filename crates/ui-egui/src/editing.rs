@@ -382,7 +382,9 @@ impl PdfCraftApp {
         {
             let destination = match (target, path, &self.save_override) {
                 (_, _, Some(p)) => p.clone(),
-                (SaveTarget::InPlace, Some(p), _) => p,
+                // An email attachment's temporary copy is no place to keep work: ask, as for a new
+                // document (`is_mail_temp_copy`).
+                (SaveTarget::InPlace, Some(p), _) if !is_mail_temp_copy(&p) => p,
                 _ => {
                     let name = if name.to_ascii_lowercase().ends_with(".pdf") { name } else { format!("{name}.pdf") };
                     let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
@@ -621,6 +623,22 @@ fn comment_page(edit: &Edit) -> Option<usize> {
     }
 }
 
+/// Whether `path` is the temporary copy an email client opened an attachment from, so that Save
+/// asks where to keep the document instead of writing to it.
+///
+/// Outlook opens an attachment from its own cache: `INetCache\Content.Outlook\<random>\` for
+/// classic Outlook (`Temporary Internet Files\Content.Outlook\` on older Windows), and the
+/// `Microsoft.OutlookForWindows` package folder for the new Outlook. Saving there either fails,
+/// because Outlook can still hold the file, or appears to work while the edits stay out of the
+/// email and are deleted with the cache. Matched on either separator and in any case, so it can
+/// be tested on every platform.
+pub(crate) fn is_mail_temp_copy(path: &str) -> bool {
+    let p = path.replace('\\', "/").to_ascii_lowercase();
+    p.contains("/inetcache/content.outlook/")
+        || p.contains("/temporary internet files/content.outlook/")
+        || p.contains("/microsoft.outlookforwindows")
+}
+
 /// Write via a temporary file in the same directory and rename over the target, so a crash or
 /// full disk never leaves a half-written PDF where the original was.
 pub fn write_atomically(path: &str, bytes: &[u8]) -> std::io::Result<()> {
@@ -730,7 +748,7 @@ fn bookmark_at<'a>(items: &'a [pdfcraft_render::OutlineItem], path: &[usize]) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{write_atomically, write_atomically_with};
+    use super::{SaveTarget, is_mail_temp_copy, write_atomically, write_atomically_with};
     use pdfcraft_platform::staging::{STAGING_ATTEMPTS, staging_suffixes};
     use std::path::{Path, PathBuf};
 
@@ -885,6 +903,81 @@ mod tests {
         #[allow(clippy::permissions_set_readonly_false)]
         perms.set_readonly(false);
         std::fs::set_permissions(&target, perms).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn outlook_attachment_copies_are_recognised_on_either_separator_and_in_any_case() {
+        for p in [
+            r"C:\Users\me\AppData\Local\Microsoft\Windows\INetCache\Content.Outlook\AB12CD34\Quote.pdf",
+            r"c:\users\me\appdata\local\microsoft\windows\inetcache\content.outlook\ab12cd34\quote (2).pdf",
+            r"C:\Users\me\AppData\Local\Microsoft\Windows\Temporary Internet Files\Content.Outlook\AB12CD34\Quote.pdf",
+            r"C:\Users\me\AppData\Local\Packages\Microsoft.OutlookForWindows_8wekyb3d8bbwe\LocalCache\Quote.pdf",
+            "C:/Users/me/AppData/Local/Microsoft/Windows/INetCache/Content.Outlook/AB12CD34/Quote.pdf",
+        ] {
+            assert!(is_mail_temp_copy(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn ordinary_paths_are_not_mail_copies() {
+        for p in [
+            r"C:\Users\me\Documents\Quote.pdf",
+            r"C:\Users\me\OneDrive - Contoso\Content.Outlook notes\Quote.pdf",
+            r"C:\Users\me\AppData\Local\Microsoft\Windows\INetCache\IE\Quote.pdf",
+            "/home/me/Documents/Quote.pdf",
+            "Quote.pdf",
+        ] {
+            assert!(!is_mail_temp_copy(p), "{p}");
+        }
+    }
+
+    /// A one-page document with a proper xref table.
+    fn one_page_pdf() -> Vec<u8> {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    #[test]
+    fn save_asks_where_to_keep_an_email_attachment_and_leaves_the_temporary_copy_alone() {
+        let dir = staging_dir("mail-temp");
+        let cache = dir.join("INetCache").join("Content.Outlook").join("AB12CD34");
+        std::fs::create_dir_all(&cache).unwrap();
+        let attachment = cache.join("Quote.pdf");
+        let original = one_page_pdf();
+        std::fs::write(&attachment, &original).unwrap();
+        let kept = dir.join("Quote.pdf");
+
+        let mut app = crate::PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("Quote.pdf", Some(attachment.to_string_lossy().into_owned()), original.clone()).unwrap();
+        assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+        app.pick_override = Some(vec![kept.to_string_lossy().into_owned()]);
+
+        assert!(!app.save_active(SaveTarget::InPlace), "Save asks instead of writing the temporary copy");
+        app.process_picked();
+        assert_eq!(std::fs::read(&attachment).unwrap(), original, "the attachment's copy is untouched");
+        assert!(std::fs::read(&kept).unwrap().starts_with(b"%PDF"), "the document went where the user chose");
+
+        // The chosen file is the document's file now: the next Save writes it without asking.
+        app.pick_override = None;
+        assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+        assert!(app.save_active(SaveTarget::InPlace));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
