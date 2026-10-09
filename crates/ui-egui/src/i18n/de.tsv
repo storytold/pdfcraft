@@ -50,7 +50,7 @@
 	Comments panel	Kommentarbereich
 	Form fields panel	Formularfeldbereich
 	Clear form	Formular zurücksetzen
-	Find tools and commands…	Werkzeuge und Befehle suchen…
+	Find tools and commands…	Tools und Befehle suchen…
 	Zoom	Zoom
 	Actual size	Originalgröße
 	Zoom to page level	Ganze Seite
@@ -58,6 +58,8 @@
 	Display theme	Design
 	Side panels	Seitenleisten
 	Enable Acrobat JavaScript	Acrobat-JavaScript aktivieren
+	Flatten Fill & Sign when saving	Ausfüllen und unterschreiben beim Speichern reduzieren
+	Text, marks and signatures become part of the page. Other comments stay editable.	Text, Markierungen und Unterschriften werden Teil der Seite. Andere Kommentare bleiben bearbeitbar.
 	OK	OK
 	Join our Discord	Unserem Discord beitreten
 	Close	Schließen
@@ -84,7 +86,7 @@
 	Print (⌘P)	Drucken (⌘P)
 	Save (M4)	Speichern (M4)
 	Document properties (⌘D)	Dokumenteigenschaften (⌘D)
-	Find tools and commands	Werkzeuge und Befehle suchen
+	Find tools and commands	Tools und Befehle suchen
 	Fit to height	Seitenhöhe
 	Zoom in	Vergrößern
 	Zoom out	Verkleinern
@@ -94,7 +96,7 @@
 	Previous view	Vorherige Ansicht
 	Next view	Nächste Ansicht
 	Page display	Seitenanzeige
-	Continuous scrolling	Fortlaufend blättern
+	Continuous scrolling	Fortlaufendes Scrollen
 	Two-page view	Doppelseitenansicht
 	Single page	Einzelseite
 	Show cover page in two-page view	Deckblatt in Doppelseitenansicht anzeigen
@@ -137,7 +139,7 @@
 	View more	Mehr anzeigen
 	Available	Verfügbar
 	Ready	Bereit
-	Search tools and commands…	Werkzeuge und Befehle suchen…
+	Search tools and commands…	Tools und Befehle suchen…
 	No matching tools	Keine passenden Werkzeuge
 	Tool	Werkzeug
 	Command	Befehl
@@ -155,7 +157,7 @@
 	Draw a polygon	Polygon zeichnen
 	Draw connected lines	Verbundene Linien zeichnen
 	Draw a cloud	Wolke zeichnen
-	Add a callout	Legende hinzufügen
+	Add a callout	Text mit Hinweislinie hinzufügen
 	Insert text	Text einfügen
 	Replace text	Text ersetzen
 	Attach a file	Datei anhängen
@@ -324,7 +326,7 @@
 	Set page boxes	Seitenrahmen festlegen
 	Page labels	Seitenbeschriftungen
 	Page transitions	Seitenübergänge
-	Add comments	Kommentare hinzufügen
+	Add comments	Kommentieren
 	Markup	Markierungen
 	Sticky note	Notiz
 	Underline	Unterstreichen
@@ -576,6 +578,7 @@
 	Bottom:	Unten:
 	Width:	Breite:
 	Height:	Höhe:
+	Rotation:	Drehung:
 	Points from the page's bottom-left corner.	Punkte ab der unteren linken Ecke der Seite.
 	Alignment:	Ausrichtung:
 	Default Value:	Standardwert:
@@ -840,7 +843,7 @@
 	View signed version	Signierte Version anzeigen
 	Show certificate…	Zertifikat anzeigen…
 	Export certificate…	Zertifikat exportieren…
-	Certificate Viewer	Zertifikatanzeige
+	Certificate Viewer	Zertifikatsanzeige
 	This dialog shows the details of a certificate and its chain.	Dieser Dialog zeigt die Details eines Zertifikats und seiner Kette.
 	Trust	Vertrauen
 	Issued to	Ausgestellt für
@@ -884,6 +887,7 @@
 	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	Ausgeblendete Informationen, Metadaten, Skripte und eingebettete Inhalte entfernen und die Dateien neu schreiben.
 	Type text	Text eingeben
 	Text to insert	Einzufügender Text
+	Inserted text	Eingefügter Text
 	Replacement text	Ersatztext
 	Edit text…	Text bearbeiten…
 	Add a sticky note here	Hier eine Notiz hinzufügen
@@ -894,6 +898,7 @@
 	This comment's appearance can't be changed yet.	Die Darstellung dieses Kommentars kann noch nicht geändert werden.
 	Icon	Symbol
 	Thickness	Stärke
+	Line ending	Linienende
 	Modified	Geändert
 	No status has been set.	Es wurde kein Status festgelegt.
 	Compare Files	Dateien vergleichen
@@ -924,7 +929,7 @@
 	Save & Close	Speichern und schließen
 	Accessibility Checker Options	Optionen der Barrierefreiheitsprüfung
 	Report Options	Berichtsoptionen
-	Create accessibility report	Bericht zur Barrierefreiheit erstellen
+	Create accessibility report	Barrierefreiheitsbericht erstellen
 	Page Range	Seitenbereich
 	All pages in document	Alle Seiten im Dokument
 	Checking Options ({on} of 32 in all categories)	Prüfoptionen ({on} von 32 in allen Kategorien)
@@ -940,7 +945,7 @@
 	{label} ({n} issues)	{label} ({n} Probleme)
 	Check again	Erneut prüfen
 	Report	Bericht
-	Show the accessibility report	Bericht zur Barrierefreiheit anzeigen
+	Show the accessibility report	Barrierefreiheitsbericht anzeigen
 	Collapse	Einklappen
 	Expand	Ausklappen
 	{rule} - {status}	{rule} – {status}
@@ -1002,8 +1007,8 @@
 	Animation that flashes can cause seizures. Check scripts and media for flicker.	Blinkende Animationen können Anfälle auslösen. Prüfe Skripte und Medien auf Flackern.
 	Scripts	Skripte
 	No inaccessible scripts	Keine nicht barrierefreien Skripte
-	Timed responses	Zeitgesteuerte Antworten
-	Page does not require timed responses	Seite erfordert keine zeitgesteuerten Antworten
+	Timed responses	Zeitbegrenzte Antworten
+	Page does not require timed responses	Die Seite erfordert keine zeitbegrenzten Antworten
 	People may need more time to respond. Check that nothing has a time limit.	Manche Menschen brauchen mehr Zeit zum Reagieren. Prüfe, dass nichts ein Zeitlimit hat.
 	Navigation links	Navigationslinks
 	Navigation links are not repetitive	Navigationslinks wiederholen sich nicht
@@ -1179,12 +1184,12 @@
 	{n} marks	{n} Markierungen
 	Dynamic	Dynamisch
 	Sign Here	Hier unterschreiben
-	Standard Business	Standard-Geschäftsstempel
+	Standard Business	Geschäftlich
 	Choose a stamp, then click on the page to place it.	Wähle einen Stempel und klicke dann auf die Seite, um ihn zu platzieren.
 	Note	Notiz
 	Polyline	Polylinie
 	Attachment	Anhang
-	Callout	Legende
+	Callout	Text mit Hinweislinie
 	Typewriter	Schreibmaschine
 	Checked	Abgehakt
 	Unchecked	Nicht abgehakt
@@ -1207,7 +1212,7 @@
 	Set status	Status festlegen
 	Copy text	Text kopieren
 	Properties…	Eigenschaften…
-	Make Current Properties Default	Aktuelle Eigenschaften als Standard festlegen
+	Make Current Properties Default	Als Standard festlegen
 	More options	Weitere Optionen
 	Sort by	Sortieren nach
 	Author	Verfasser
@@ -1326,7 +1331,7 @@
 	Choose a layout:	Layout wählen:
 	Comments only	Nur Kommentare
 	Sort comments by:	Kommentare sortieren nach:
-	Create PDF Comment Summary	PDF-Kommentarzusammenfassung erstellen
+	Create PDF Comment Summary	Kommentarübersicht erstellen
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Zur zuletzt gespeicherten Version von „{name}“ zurückkehren? Seitdem vorgenommene Änderungen lassen sich danach nicht wiederherstellen.
 	Number pages	Seiten nummerieren
 	Style	Stil
@@ -1812,7 +1817,7 @@
 	Add cloud	Wolke hinzufügen
 	Add polygon	Polygon hinzufügen
 	Add connected lines	Verbundene Linien hinzufügen
-	Add callout	Legende hinzufügen
+	Add callout	Text mit Hinweislinie hinzufügen
 	Add inserted text	Eingefügten Text hinzufügen
 	Add file attachment	Dateianhang hinzufügen
 	Set status Accepted	Status „Angenommen“ festlegen
@@ -2043,6 +2048,7 @@ comment menu	Edit	Bearbeiten
 	Undo {action}	{action} rückgängig machen
 	Redo {action}	{action} wiederholen
 signature pad	Type	Tippen
+certificate	Subject	Zertifikatsinhaber
 action wizard	Start	Starten
 	Reopen the files that were open when PdfCraft last closed	Beim Start die Dateien wieder öffnen, die beim letzten Beenden von PdfCraft geöffnet waren
 
@@ -2082,3 +2088,20 @@ action wizard	Start	Starten
 	Clear Recent Files	Liste „Zuletzt geöffnet“ leeren
 	Remove from Recent	Aus „Zuletzt geöffnet“ entfernen
 	Remove {name} from Recent	{name} aus „Zuletzt geöffnet“ entfernen
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Die Standardschriften können „{c}“ ({code}) nicht darstellen. Derzeit lassen sich nur westeuropäische Zeichen als Text hinzufügen.
+	Larger pages	Größere Seiten
+	Smaller pages	Kleinere Seiten
+	Reset page size	Seitengröße zurücksetzen
+	Date format	Datumsformat
+	Fill & Sign dates	Datumsangaben beim Ausfüllen und Unterschreiben
+	Pattern	Muster
+	Today: {date}	Heute: {date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy oder yy Jahr · m oder mm Monat · mmm oder mmmm Monatsname · d oder dd Tag · ddd oder dddd Wochentag. H, h, M, s und t sind Zeitbuchstaben und können nicht allein verwendet werden: Setze {escape} vor einen Buchstaben, um ihn unverändert anzuzeigen.
+	Same as interface ({language})	Wie die Oberfläche ({language})
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} kann noch nicht in das PDF geschrieben werden: Text beim Ausfüllen und Unterschreiben ist auf westeuropäische Zeichen beschränkt. Wähle ein numerisches Format wie dd.mm.yyyy.
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Öffnet die Einstellungen des Druckertreibers. Sie gelten für jeden Druck von diesem Computer; die hier gewählten Kopien, Duplex, Graustufen und das Papier gelten weiterhin.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	Die eigenen Einstellungen des Druckertreibers für diesen Druck: Papierfach, Papiersorte, Endverarbeitung und mehr.
+	Couldn't open the printer's preferences: {e}	Die Druckereinstellungen konnten nicht geöffnet werden: {e}
+	Printer properties	Druckereigenschaften
+	Reset to printer defaults	Auf Druckerstandard zurücksetzen
+	This printer offers no settings of its own.	Dieser Drucker bietet keine eigenen Einstellungen.

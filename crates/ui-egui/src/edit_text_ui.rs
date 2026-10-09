@@ -353,11 +353,12 @@ pub(crate) fn image_input(
                     ui.close();
                 }
             }
-            if ui.button(tl!("Replace Image…")).clicked() {
+            let raster = images.get(hit).is_some_and(|image| !image.is_form);
+            if ui.add_enabled(raster, egui::Button::new(tl!("Replace Image…"))).clicked() {
                 *action = Some(ImageAction::Replace(page, hit));
                 ui.close();
             }
-            if ui.button(tl!("Save Image As…")).clicked() {
+            if ui.add_enabled(raster, egui::Button::new(tl!("Save Image As…"))).clicked() {
                 *action = Some(ImageAction::Save(page, hit));
                 ui.close();
             }

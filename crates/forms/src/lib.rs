@@ -101,6 +101,8 @@ pub struct Widget {
     pub locked: bool,
     /// The widget's Hidden or NoView flag (`/F` bit 2 or 6): it isn't shown and takes no input.
     pub hidden: bool,
+    /// `/MK /R` as 0, 90, 180 or 270 degrees counterclockwise. Anything else is stored as 0.
+    pub rotation: i64,
 }
 
 /// A terminal form field.
@@ -204,9 +206,47 @@ pub enum FieldValue {
 fn text_of(o: &Object) -> Option<String> {
     match o {
         Object::String(s) => Some(s.to_text()),
-        Object::Name(n) => Some(String::from_utf8_lossy(n).into_owned()),
+        Object::Name(n) => Some(name_text(n)),
         _ => None,
     }
+}
+
+/// A name object's bytes as text that [`name_bytes`] turns back into the same bytes. UTF-8 names
+/// read as themselves; other bytes (Shift-JIS check box states such as 「はい」 in Japanese
+/// forms) and `#` are written `#XX`, as in PDF name syntax.
+pub fn name_text(bytes: &[u8]) -> String {
+    let escape = |b: u8| format!("#{b:02X}");
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.replace('#', "#23"),
+        Err(_) => bytes.iter().map(|&b| if (0x21..=0x7e).contains(&b) && b != b'#' { char::from(b).to_string() } else { escape(b) }).collect(),
+    }
+}
+
+/// The bytes of the name written as `text` by [`name_text`] (`#XX` is the byte XX).
+pub fn name_bytes(text: &str) -> Vec<u8> {
+    let b = text.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while let Some(&c) = b.get(i) {
+        let hex = |j: usize| b.get(j).and_then(|h| char::from(*h).to_digit(16));
+        match (c, hex(i + 1), hex(i + 2)) {
+            // Both digits are below 16, so the byte fits.
+            (b'#', Some(hi), Some(lo)) => {
+                out.push(u8::try_from(hi * 16 + lo).unwrap_or(b'#'));
+                i += 3;
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// A name object from text written by [`name_text`].
+fn name_obj(text: &str) -> Object {
+    Object::Name(name_bytes(text))
 }
 
 /// At most this many `/State` entries of a set-layer-visibility action are read.
@@ -654,16 +694,17 @@ fn walk(
                 .map(|ap| doc.resolve(ap))
                 .and_then(|ap| ap.as_dict().and_then(|a| a.get(b"N").cloned()))
                 .and_then(|n| doc.resolve(&n).as_dict().cloned())
-                .and_then(|n| n.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).find(|k| k != "Off"));
+                .and_then(|n| n.iter().map(|(k, _)| name_text(k)).find(|k| k != "Off"));
             Some(Widget {
                 obj: w,
                 page: page_of.get(&w).copied(),
                 rect: [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])],
                 on_state: on_state.filter(|_| matches!(kind, FieldKind::CheckBox | FieldKind::Radio)),
-                state: wd.name(b"AS").map(|s| String::from_utf8_lossy(s).into_owned()),
+                state: wd.name(b"AS").map(name_text),
                 tab: usize::MAX,
                 locked: annot_flags & 128 != 0,
                 hidden: annot_flags & (2 | 32) != 0,
+                rotation: appearance::mk_rotation(doc, wd),
             })
         })
         .collect();
@@ -893,7 +934,7 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
 /// Check boxes and radio buttons: `/V` on the field, `/AS` on each widget.
 fn set_states(doc: &mut Document, f: &Field, on: Option<&str>) -> Result<(), FormError> {
     let v = on.unwrap_or("Off");
-    doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), Object::name(v)))?;
+    doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), name_obj(v)))?;
     for w in &f.widgets {
         let state = match (on, w.on_state.as_deref()) {
             (Some(c), Some(s)) if c == s => s,
@@ -906,9 +947,52 @@ fn set_states(doc: &mut Document, f: &Field, on: Option<&str>) -> Result<(), For
             let ap = appearance::check_box_states(doc, w, f.kind, &on_name);
             doc.update_dict(w.obj, |d| d.set(b"AP".to_vec(), Object::Dict(ap)))?;
         }
-        doc.update_dict(w.obj, |d| d.set(b"AS".to_vec(), Object::name(state)))?;
+        doc.update_dict(w.obj, |d| d.set(b"AS".to_vec(), name_obj(state)))?;
     }
     Ok(())
+}
+
+/// Copy an existing appearance dictionary before replacing its normal appearance.
+fn appearance_dict(doc: &Document, widget: ObjRef) -> Dict {
+    doc.get(widget).as_dict().and_then(|d| d.get(b"AP").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned()).unwrap_or_default()
+}
+
+/// `widget`'s appearance dictionary (a copy, so a shared one is left alone) with the freshly
+/// drawn entries of `fresh` (its `/N`). Other entries are kept, but the old down and rollover
+/// appearances (`/D`, `/R`) would show the old value, caption or colour on press or hover, so
+/// they go — except, for check boxes and radio buttons (whose `/N` is a dictionary of states),
+/// the states the new `/N` still draws under the same names.
+pub(crate) fn merged_appearance(doc: &Document, widget: ObjRef, fresh: &Dict) -> Dict {
+    let mut apd = appearance_dict(doc, widget);
+    // Only a dictionary of states counts (`as_dict` would also see a stream's own dictionary).
+    let states_of = |o: &Object| match &*doc.resolve(o) {
+        Object::Dict(d) => Some(d.clone()),
+        _ => None,
+    };
+    let states: Option<Vec<Vec<u8>>> = fresh.get(b"N").and_then(states_of).map(|d| d.iter().map(|(k, _)| k.clone()).collect());
+    for key in [&b"D"[..], &b"R"[..]] {
+        if fresh.contains(key) {
+            continue;
+        }
+        let kept = states.as_ref().and_then(|names| {
+            let old = apd.get(key).and_then(states_of)?;
+            let mut d = Dict::new();
+            for (k, v) in old.iter().filter(|(k, _)| names.contains(k)) {
+                d.set(k.clone(), v.clone());
+            }
+            (!d.is_empty()).then_some(d)
+        });
+        match kept {
+            Some(d) => apd.set(key.to_vec(), Object::Dict(d)),
+            None => {
+                apd.remove(key);
+            }
+        }
+    }
+    for (k, v) in fresh.iter() {
+        apd.set(k.clone(), v.clone());
+    }
+    apd
 }
 
 /// Regenerate the normal appearance of every widget of a text or choice field.
@@ -923,8 +1007,9 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
             None => appearance::field_appearance(doc, f, w, values),
         };
         let ap = doc.add(Object::Stream(stream));
-        let mut apd = Dict::new();
-        apd.set(b"N".to_vec(), Object::Ref(ap));
+        let mut fresh = Dict::new();
+        fresh.set(b"N".to_vec(), Object::Ref(ap));
+        let apd = merged_appearance(doc, w.obj, &fresh);
         doc.update_dict(w.obj, |d| {
             d.set(b"AP".to_vec(), Object::Dict(apd));
             d.remove(b"AS");

@@ -267,21 +267,88 @@ impl PdfCraftApp {
     /// brought forward first, so the commit and any field scripts act on that document.
     pub(crate) fn commit_typing_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
         let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        // Added text the standard fonts can't draw can't be saved: show it rather than drop it.
+        // Its page is brought into view, so the text, the warning and Discard are on screen.
+        let blocked = self.views.get_mut(i).and_then(|v| {
+            let c = v.content.blocked()?;
+            v.content.hold_blocked();
+            if let Some(page) = v.content.draft.as_ref().map(|d| d.page) {
+                v.go_to_page(page);
+            }
+            Some(c)
+        });
+        if let Some(c) = blocked {
+            self.active = Some(i);
+            self.notify(crate::content_ui::undrawable_message(c));
+            return false;
+        }
+        let typing = self
+            .views
+            .get(i)
+            .is_some_and(|v| v.pending_edit.is_some() || v.forms.focus.is_some() || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty()));
         if self.active != Some(i) {
-            let typing = self.views.get(i).is_some_and(|v| v.pending_edit.is_some() || v.forms.focus.is_some());
             if !typing {
                 return true;
             }
             self.active = Some(i);
         }
-        self.commit_form_typing()
+        self.commit_form_typing() && self.commit_open_fill_text(id)
+    }
+
+    /// The Fill & Sign type box commits on click-away. Save does that first, so the text is in
+    /// the file (and can be flattened) instead of being left on the screen.
+    fn commit_open_fill_text(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        let Some(tb) = self.views[i].fill_text.clone() else { return true };
+        let text = tb.text.trim().to_string();
+        if text.is_empty() {
+            if let Some(view) = self.views.get_mut(i) {
+                view.fill_text = None;
+            }
+            return true;
+        }
+        let author = self.comment_prefs.author.clone();
+        let edit = crate::fill_sign::typed(tb.page, tb.at, &text, &author);
+        if self.apply_edit(edit) {
+            if let Some(view) = self.views.get_mut(i) {
+                view.fill_text = None;
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// When the preference is on, bake Fill & Sign marks before the bytes are written.
+    /// Returns false when the document is not allowed to change (nothing is written).
+    fn flatten_fill_sign_for_save(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        if !self.flatten_fill_sign_on_save {
+            return true;
+        }
+        let before = self.session.get(id).map(|d| d.edit_generation());
+        if let Err(e) = self.session.apply(id, Edit::FlattenFillSign) {
+            self.notify_error(e);
+            return false;
+        }
+        let after = self.session.get(id).map(|d| d.edit_generation());
+        if before != after
+            && let Some(doc) = self.session.get(id)
+            && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+        {
+            view.document_changed(&doc.info);
+        }
+        true
     }
 
     /// Whether tab `index` has work that isn't saved: edits, or form typing not committed yet.
     pub(crate) fn has_unsaved_work(&self, index: usize) -> bool {
         let Some(v) = self.views.get(index) else { return false };
         let Some(doc) = self.session.get(v.id) else { return false };
-        doc.dirty || v.pending_edit.is_some() || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
+        doc.dirty
+            || v.pending_edit.is_some()
+            || v.content.blocked().is_some()
+            || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
+            || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
     }
 
     /// Save the active document. Returns `true` if it was written.
@@ -337,6 +404,9 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (target, path);
+            if !self.flatten_fill_sign_for_save(id) {
+                return false;
+            }
             let bytes = match self.session.save_bytes(id) {
                 Ok(b) => b,
                 Err(e) => {
@@ -367,7 +437,7 @@ impl PdfCraftApp {
     fn save_doc_to(&mut self, id: pdfcraft_engine::DocId, dest: &str) -> bool {
         // Save As answers on a later frame: commit what was typed meanwhile, too (#166), even
         // if another tab is active by then.
-        if !self.commit_typing_in(id) {
+        if !self.commit_typing_in(id) || !self.flatten_fill_sign_for_save(id) {
             return false;
         }
         let Some(name) = self.session.get(id).map(|d| d.name.clone()) else {

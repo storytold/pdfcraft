@@ -86,8 +86,21 @@ fn plural_russian(n: u64) -> usize {
     }
 }
 
+/// Ukrainian (CLDR `uk`, integer counts): one (1, 21), few (2–4, 22–24), many (0, 5–19).
+/// Counts ending in 11–14 always take many, regardless of the last digit.
+fn plural_ukrainian(n: u64) -> usize {
+    match n % 100 {
+        11..=14 => 2,
+        _ => match n % 10 {
+            1 => 0,
+            2..=4 => 1,
+            _ => 2,
+        },
+    }
+}
+
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 13] = [
+pub static LANGUAGES: [LangInfo; 14] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -112,6 +125,8 @@ pub static LANGUAGES: [LangInfo; 13] = [
     LangInfo { code: "te", name: "తెలుగు", source: include_str!("te.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
     // Hungarian; every `hu-*` locale (`hu-HU`) resolves here.
     LangInfo { code: "hu", name: "Magyar", source: include_str!("hu.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
+    // Ukrainian; every `uk-*` locale (`uk-UA`, `uk_UA.UTF-8`) resolves here.
+    LangInfo { code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_ukrainian, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -237,7 +252,7 @@ pub fn system_lang() -> Lang {
 #[cfg(not(target_arch = "wasm32"))]
 fn detect_system_lang() -> Lang {
     for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
-        if let Some(l) = std::env::var(var).ok().filter(|v| !v.is_empty()).and_then(|v| lang_from_tag(&v)) {
+        if let Some(l) = std::env::var(var).ok().and_then(|v| language_override(&v)) {
             return l;
         }
     }
@@ -255,6 +270,17 @@ fn detect_system_lang() -> Lang {
         return l;
     }
     Lang::EN
+}
+
+/// A named locale can override the display language. On Windows, the neutral
+/// C/POSIX locale inherited from a launcher says nothing about the user's UI language.
+#[cfg(not(target_arch = "wasm32"))]
+fn language_override(tag: &str) -> Option<Lang> {
+    let tag = tag.trim();
+    if cfg!(target_os = "windows") && matches!(candidates(tag).first().map(String::as_str), Some("c" | "posix")) {
+        return None;
+    }
+    lang_from_tag(tag)
 }
 
 /// The Windows display languages in preference order, one tag per line, queried once when Auto
@@ -290,6 +316,12 @@ pub fn set_current(lang: Lang) {
 }
 
 /// The language the UI is drawn in.
+/// `label` as it reads inside a sentence ("add a text box"): lowercased, except in languages
+/// that capitalise nouns (German), where lowercasing would misspell it.
+pub fn in_sentence(label: &str) -> std::borrow::Cow<'_, str> {
+    if current().code() == "de" { std::borrow::Cow::Borrowed(label) } else { std::borrow::Cow::Owned(label.to_lowercase()) }
+}
+
 pub fn current() -> Lang {
     CURRENT.get()
 }
@@ -453,6 +485,20 @@ mod tests {
         assert_eq!(first_supported("en-US\r\n"), Some(Lang::EN));
         assert_eq!(first_supported("fr-FR\r\n"), Lang::from_code("fr"));
         assert_eq!(first_supported("\r\n"), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn neutral_locale_does_not_override_display_language() {
+        let fr = Lang::from_code("fr").unwrap();
+        for tag in ["C", "C.UTF-8", "POSIX", "posix.UTF-8", "", "  C.UTF-8  ", "unsupported"] {
+            assert_eq!(language_override(tag), None, "{tag}");
+            assert_eq!(language_override(tag).or_else(|| first_supported("unsupported-XY\nfr-FR\nen-US")), Some(fr));
+        }
+        assert_eq!(["C.UTF-8", "POSIX", "fr_FR.UTF-8"].into_iter().find_map(language_override), Some(fr));
+        assert_eq!(language_override("fr_FR.UTF-8"), Some(fr));
+        assert_eq!(language_override("en_US.UTF-8"), Some(Lang::EN));
+        assert_eq!(language_override("ja_JP.UTF-8"), Some(JA()));
     }
 
     #[cfg(target_os = "windows")]
@@ -1217,6 +1263,24 @@ mod tests {
     }
 
     #[test]
+    fn tool_names_inside_sentences_are_lowercased_except_in_german() {
+        set_current(Lang::EN);
+        assert_eq!(in_sentence("Text Box"), "text box");
+        set_current(Lang::from_code("de").expect("de registered"));
+        assert_eq!(in_sentence("Textfeld"), "Textfeld");
+        set_current(Lang::EN);
+    }
+
+    #[test]
+    fn german_certificate_subject_has_a_distinct_context() {
+        let de = Lang::from_code("de").expect("de registered");
+        assert_eq!(tr(de, "Subject"), "Thema");
+        assert_eq!(tr_ctx(de, "certificate", "Subject"), "Zertifikatsinhaber");
+        assert_eq!(tr_ctx(de, "certificate", "Issuer"), tr(de, "Issuer"));
+        assert_eq!(tr_ctx(Lang::EN, "certificate", "Subject"), "Subject");
+    }
+
+    #[test]
     fn german_history_and_diagnostics_preserve_user_values() {
         let de = Lang::from_code("de").expect("de registered");
         set_current(de);
@@ -1558,6 +1622,212 @@ mod tests {
         set_current(Lang::EN);
     }
 
+    #[test]
+    fn ukrainian_is_registered_and_persists() {
+        let uk = Lang::from_code("uk").expect("uk registered");
+        assert_eq!(uk.name(), "Українська");
+        assert_eq!(normalize_pref("UK"), Some("uk"));
+        for tag in ["uk", "uk-UA", "uk_UA.UTF-8", "UK-ua", "uk_UA@variant"] {
+            assert_eq!(lang_from_tag(tag), Some(uk), "{tag}");
+        }
+        assert_eq!(first_supported("uk-UA\r\nen-US"), Some(uk));
+        assert_eq!(first_supported("(\n    \"uk-UA\",\n    \"en-US\"\n)\n"), Some(uk));
+        assert_eq!(tr(uk, "File"), "Файл");
+        assert_eq!(tr(uk, "Save as…"), "Зберегти як…");
+        assert_eq!(tr(uk, "Bookmarks"), "Закладки");
+        assert_eq!(tr(uk, "Layers"), "Шари");
+        assert_eq!(tr(uk, "Звіт {n}.pdf"), "Звіт {n}.pdf");
+        assert_eq!(tr_ctx(uk, "comment menu", "Edit"), "Редагувати");
+        assert_eq!(tr_ctx(uk, "signature pad", "Type"), "Ввести");
+        assert_eq!(tr_ctx(uk, "action wizard", "Start"), "Почати");
+        let mut app = crate::PdfCraftApp::default();
+        app.set_option("language", "UK").unwrap();
+        assert_eq!(app.language, "uk");
+        let mut restored = crate::PdfCraftApp::default();
+        restored.restore(&app.persist());
+        assert_eq!(restored.language, "uk");
+        assert!(restored.set_option("language", "xx").is_err());
+        assert_eq!(restored.language, "uk");
+    }
+
+    #[test]
+    fn ukrainian_integer_plurals_cover_teens_and_large_counts() {
+        let uk = Lang::from_code("uk").expect("uk registered");
+        for (counts, page, field) in [
+            (vec![1, 21, 31, 101, 121, 1001], "сторінка", "поле"),
+            (vec![2, 3, 4, 22, 23, 24, 102, 104, 122, 1002], "сторінки", "поля"),
+            (vec![0, 5, 10, 11, 12, 13, 14, 19, 20, 25, 100, 110, 111, 112, 114, 1000, u64::MAX], "сторінок", "полів"),
+        ] {
+            for n in counts {
+                assert_eq!(trn(uk, n, "{n} page", "{n} pages"), format!("{n} {page}"));
+                assert_eq!(trn(uk, n, "{n} field", "{n} fields"), format!("{n} {field}"));
+            }
+        }
+    }
+
+    #[test]
+    fn ukrainian_calendar_uses_month_case_for_dates() {
+        let uk = Lang::from_code("uk").expect("uk registered");
+        for (source, standalone, date) in [
+            ("January", "Січень", "січня"),
+            ("February", "Лютий", "лютого"),
+            ("March", "Березень", "березня"),
+            ("April", "Квітень", "квітня"),
+            ("May", "Травень", "травня"),
+            ("June", "Червень", "червня"),
+            ("July", "Липень", "липня"),
+            ("August", "Серпень", "серпня"),
+            ("September", "Вересень", "вересня"),
+            ("October", "Жовтень", "жовтня"),
+            ("November", "Листопад", "листопада"),
+            ("December", "Грудень", "грудня"),
+        ] {
+            assert_eq!(tr(uk, source), standalone);
+            let month = tr_ctx(uk, "calendar date", source);
+            assert_eq!(month, date);
+            assert_eq!(fmt(tr(uk, "{month} {day}, {y}"), &[("month", month), ("day", "9"), ("y", "2026")]), format!("9 {date} 2026"));
+            // Catalogs without this context retain their existing month translation.
+            assert_eq!(tr_ctx(Lang::EN, "calendar date", source), source);
+            assert_eq!(tr_ctx(JA(), "calendar date", source), tr(JA(), source));
+        }
+    }
+
+    /// Preserve only product/format names, abbreviations and templates with no English words.
+    #[test]
+    fn ukrainian_catalog_does_not_leave_english_ui_text() {
+        let uk = Lang::from_code("uk").expect("uk registered");
+        let (entries, errors) = parse_entries(uk.0.source, uk.0.plural_forms());
+        assert!(errors.is_empty(), "{errors:?}");
+        let keep = [
+            "OK",
+            "PDF/A…",
+            "Microsoft Word (.docx)",
+            "PostScript / EPS",
+            // Key-cap names, printed in English on Ukrainian keyboards.
+            "Home / End",
+            "JavaScript",
+            "ZIP",
+            "{n} {kind}",
+            "{rule} - {status}",
+            "{field}: {e}",
+            "`{command}` {when}",
+            "{0}: {1}",
+            "{month} {y}",
+            "+LOC",
+            "−LOC",
+            "ΔLOC",
+            "+Bin",
+            "−Bin",
+        ];
+        let unchanged: Vec<_> = entries.iter().filter(|e| e.source == e.translation && !keep.contains(&e.source.as_str())).collect();
+        assert!(unchanged.is_empty(), "untranslated Ukrainian catalog entries: {unchanged:#?}");
+    }
+
+    /// Ukrainian translates every registered command and every All tools label.
+    #[test]
+    fn ukrainian_covers_commands_and_catalogue() {
+        let uk = Lang::from_code("uk").expect("uk registered");
+        for command in pdfcraft_engine::commands::COMMANDS {
+            assert!(has(uk, command.label), "missing command: {}", command.label);
+            if let Some(menu) = command.menu {
+                assert!(has(uk, menu), "missing menu: {menu}");
+            }
+        }
+        for group in pdfcraft_engine::catalog::TOOL_GROUPS {
+            assert!(has(uk, group.label), "missing group: {}", group.label);
+            for section in group.sections {
+                assert!(has(uk, section.title), "missing section: {}", section.title);
+                for item in section.items {
+                    assert!(has(uk, item.label), "missing item: {}", item.label);
+                }
+            }
+        }
+    }
+
+    /// Check direct lookups and multiline literals as well as ordinary tl!("literal") calls,
+    /// following the complete-catalog check for Simplified Chinese.
+    #[test]
+    fn ukrainian_covers_ui_literals() {
+        let uk = Lang::from_code("uk").expect("uk registered");
+        let mut stack = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut literals = std::collections::BTreeSet::new();
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).expect("UI source directory") {
+                let path = entry.expect("UI source entry").path();
+                if path.is_dir() {
+                    if path.file_name().is_some_and(|name| name != "i18n") {
+                        stack.push(path);
+                    }
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let source = std::fs::read_to_string(path).expect("UI source file").replace("\r\n", "\n").replace("crate::i18n::t(", "tl!(");
+                    let mut rest = source.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+                    while let Some((_, after)) = rest.split_once("tl!(") {
+                        let after = after.trim_start();
+                        let Some(after) = after.strip_prefix('"') else {
+                            rest = after;
+                            continue;
+                        };
+                        let mut escaped = false;
+                        let end = after
+                            .char_indices()
+                            .find_map(|(i, c)| {
+                                if c == '"' && !escaped {
+                                    return Some(i);
+                                }
+                                escaped = c == '\\' && !escaped;
+                                None
+                            })
+                            .expect("closed tl! literal");
+                        let (raw, tail) = after.split_at(end);
+                        let closing = tail.strip_prefix('"').expect("closing quote").trim_start();
+                        let closing = closing.strip_prefix(',').unwrap_or(closing).trim_start();
+                        if closing.starts_with(')') {
+                            let label: String = serde_json::from_str(&format!("\"{raw}\"")).expect("UI literal escapes");
+                            literals.insert(label);
+                        }
+                        rest = tail.strip_prefix('"').expect("closing quote");
+                    }
+                }
+            }
+        }
+        assert!(literals.len() > 900, "source scan found only {} literals", literals.len());
+        let missing: Vec<_> = literals.iter().filter(|label| !has(uk, label)).collect();
+        assert!(missing.is_empty(), "untranslated Ukrainian UI literals: {missing:#?}");
+    }
+
+    #[test]
+    fn ukrainian_history_and_diagnostics_preserve_user_values() {
+        let uk = Lang::from_code("uk").expect("uk registered");
+        set_current(uk);
+        assert_eq!(command_label("Undo Insert pages from Звіт {n}.pdf"), "Скасувати: Вставити сторінки з Звіт {n}.pdf");
+        assert_eq!(command_label("Redo Fill in Контакт {key}"), "Повторити: Заповнити Контакт {key}");
+        assert_eq!(action_label("Change Title"), "Змінити: Заголовок");
+        assert_eq!(action_label("Custom action {n}"), "Custom action {n}");
+        assert_eq!(fmt(t("This page couldn't be displayed.\n{e}"), &[("e", "OS error {n}")]), "Не вдалося відобразити цю сторінку.\nOS error {n}");
+        assert_eq!(fmt(t("{n} pages selected"), &[("n", "3")]), "Вибрано сторінок: 3");
+        assert_eq!(fmt(t("{n} contributors · {c} commits"), &[("n", "2"), ("c", "1,234")]), "Учасників: 2 · Комітів: 1,234");
+        assert_eq!(tr(uk, "CheckBox"), "Прапорець");
+        let contributor = crate::credits::Contributor {
+            login: "reader{n}",
+            display_name: Some("Save"),
+            real_name: None,
+            prs: 2,
+            commits: 3,
+            lines_added: 10,
+            lines_deleted: 4,
+            binary_added: 1,
+            binary_deleted: 0,
+            first_commit: "2026-10-01T00:00:00Z",
+            last_commit: "2026-10-09T00:00:00Z",
+        };
+        assert_eq!(
+            contributor.summary(),
+            "@reader{n}: PR: 2, комітів: 3, +10 / −4 рядків (Δ +6), +1 / −0 бінарних ресурсів, 2026-10-01 – 2026-10-09"
+        );
+        assert_eq!(contributor.name(crate::credits::NameMode::DisplayName), "Save");
+        set_current(Lang::EN);
+    }
+
     /// Every bundled catalog is well-formed and consistent with its sources.
     #[test]
     fn bundled_catalogs_are_consistent() {
@@ -1574,5 +1844,13 @@ mod tests {
                 assert_eq!(e.translation.ends_with('…'), command.label.ends_with('…'), "{}: ellipsis mismatch: {}", l.code, e.source);
             }
         }
+    }
+
+    /// Preferences ▸ Date format ▸ Language offers exactly the interface languages, in order.
+    #[test]
+    fn date_languages_are_the_interface_languages() {
+        let interface: Vec<(&str, &str)> = Lang::all().map(|l| (l.code(), l.name())).collect();
+        let dates: Vec<(&str, &str)> = pdfcraft_engine::dates::DATE_LANGUAGES.iter().map(|l| (l.code, l.name)).collect();
+        assert_eq!(dates, interface);
     }
 }

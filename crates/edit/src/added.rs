@@ -239,6 +239,34 @@ fn is_arabic(c: char) -> bool {
     matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x0870..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFC)
 }
 
+/// The first character of `t` that would be drawn as `?`: outside WinAnsiEncoding and not drawn
+/// with the craft-fonts Arabic face (#125), or Arabic that the face can't draw (or that has no
+/// face to draw it). Page-content tools refuse such text; the Add-text editor keeps it open.
+pub fn first_undrawable(t: &AddedText) -> Option<char> {
+    // Arabic that nothing can draw: there's no face, or the face lacks it.
+    if let Some(c) = t.text.chars().find(|c| shaped_arabic(*c) && !pdfcraft_fonts::arabic_has(*c)) {
+        return Some(c);
+    }
+    if pdfcraft_fonts::document_arabic_font().is_none() || !t.text.chars().any(is_arabic) {
+        // Drawn line by line in the item's standard font (`\n` splits lines). Without the face
+        // that is also how `draw` redraws an existing item, so it's checked that way.
+        return t.text.split('\n').find_map(pdfcraft_fonts::first_non_win_ansi);
+    }
+    // What `arabic_layout` leaves to the standard font, exactly as `draw_arabic` splits it.
+    wrapped(t).into_iter().find_map(|(line, rtl)| {
+        let (pieces, _) = arabic_layout(t, &line, rtl).ok()?;
+        pieces.iter().find_map(|p| match p {
+            Piece::Latin(s) => pdfcraft_fonts::first_non_win_ansi(s),
+            Piece::Arabic(_) => None,
+        })
+    })
+}
+
+/// An Arabic character the face shapes and draws (U+061C, a direction mark, is dropped).
+fn shaped_arabic(c: char) -> bool {
+    is_arabic(c) && !is_bidi_control(c)
+}
+
 /// Direction marks, embeddings, overrides and isolates: they steer the order and are not drawn.
 fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
@@ -705,6 +733,17 @@ fn validate(c: &Content) -> Result<(), EditError> {
             }
             if (r[2] - r[0]).abs() < 1.0 {
                 return Err(EditError::Invalid("the text box is too narrow".into()));
+            }
+            // Without the Arabic face, `draw` decides for the Arabic letters themselves (#403): a new
+            // item is refused with what's missing, and one that already holds Arabic stays movable.
+            // Everything else in it is drawn in the standard font, so it still has to fit.
+            let undrawable = if t.text.chars().any(shaped_arabic) && pdfcraft_fonts::document_arabic_font().is_none() {
+                t.text.split('\n').find_map(|line| line.chars().find(|c| !shaped_arabic(*c) && !pdfcraft_fonts::win_ansi_encodable(*c)))
+            } else {
+                first_undrawable(t)
+            };
+            if let Some(c) = undrawable {
+                return Err(crate::undrawable(c));
             }
         }
         Content::Image(_) => {

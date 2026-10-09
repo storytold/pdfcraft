@@ -26,8 +26,26 @@ use std::time::{Duration, Instant};
 use pdfcraft_engine::export::ImageFormat;
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, inspect};
 
+/// The `mcp` lines of [`USAGE`]: only a build with the `mcp` feature has the command.
+#[cfg(feature = "mcp")]
+macro_rules! mcp_usage {
+    () => {
+        "\
+pdfcraft-cli mcp    [--root DIR] [--compact]              MCP server on stdin/stdout (opt-in)
+                                                           --compact lists a core set of tools plus tool_search and tool_call
+"
+    };
+}
+#[cfg(not(feature = "mcp"))]
+macro_rules! mcp_usage {
+    () => {
+        ""
+    };
+}
+
 /// The full usage, printed by `--help` (also after a command, e.g. `render --help`).
-const USAGE: &str = "\
+const USAGE: &str = concat!(
+    "\
 pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
 pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
 pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
@@ -40,11 +58,13 @@ pdfcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.jso
 pdfcraft-cli tools                                       automation tools and their JSON Schemas
 pdfcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
 pdfcraft-cli run    --script steps.json [--root DIR]      [{\"tool\": \"doc_open\", \"args\": {…}}, …]
-pdfcraft-cli mcp    [--root DIR] [--compact]              MCP server on stdin/stdout (opt-in)
-                                                           --compact lists a core set of tools plus tool_search and tool_call
+",
+    mcp_usage!(),
+    "\
 pdfcraft-cli ui     --control FILE <method> [key=value …] [--out shot.png]
                                                            drive a running app started with --control FILE
-help and feedback: https://discord.gg/artcraft";
+help and feedback: https://discord.gg/artcraft"
+);
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -70,6 +90,8 @@ fn main() -> ExitCode {
         Some("ui") => ui(&args[1..]),
         #[cfg(feature = "mcp")]
         Some("mcp") => mcp(&args[1..]),
+        #[cfg(not(feature = "mcp"))]
+        Some("mcp") => Err("mcp: this build leaves out the MCP server (built without the `mcp` feature)".into()),
         Some("--version") => version(),
         Some(other) => Err(format!("unknown command '{other}'; see pdfcraft-cli --help").into()),
     };

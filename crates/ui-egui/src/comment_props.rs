@@ -3,7 +3,7 @@
 //! subject, modified) and Review History (status changes), with Acrobat's Locked box.
 
 use egui::{Align, Layout};
-use pdfcraft_engine::{CommentProps, Edit, NoteIcon};
+use pdfcraft_engine::{CommentProps, Edit, LineEnding, NoteIcon};
 
 use crate::comments::swatch_grid;
 use crate::theme::{self, Tokens};
@@ -85,7 +85,7 @@ impl PdfCraftApp {
             style.width = w;
         }
         self.comment_prefs.set_style(tool, style);
-        self.notify_fmt("New {tool} comments will look like this one", &[("tool", &tl!(tool.label()).to_lowercase())]);
+        self.notify_fmt("New {tool} comments will look like this one", &[("tool", &crate::i18n::in_sentence(tl!(tool.label())))]);
     }
 
     /// Open Comment Properties for the comment at `(page, index)` of the active document.
@@ -108,8 +108,9 @@ pub fn edits(d: &PropsDraft) -> Vec<Edit> {
     let color = (e.color != o.color).then_some(e.color).flatten();
     let opacity = ((e.opacity - o.opacity).abs() > 1e-6).then_some(e.opacity);
     let width = (e.width != o.width).then_some(e.width).flatten();
-    if e.restylable && (color.is_some() || opacity.is_some() || width.is_some()) {
-        out.push(Edit::StyleAnnotation { page: d.page, index: d.index, color, opacity, width });
+    let endings = (e.endings != o.endings).then(|| e.endings.clone()).flatten();
+    if e.restylable && (color.is_some() || opacity.is_some() || width.is_some() || endings.is_some()) {
+        out.push(Edit::StyleAnnotation { page: d.page, index: d.index, color, opacity, width, endings });
     }
     let author = (e.author != o.author).then(|| e.author.clone());
     let subject = (e.subject != o.subject).then(|| e.subject.clone());
@@ -186,6 +187,19 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     if let Some(w) = e.width.as_mut() {
                         ui.label(tl!("Thickness"));
                         ui.add(egui::Slider::new(w, 0.5..=12.0).step_by(0.5).suffix(" pt"));
+                        ui.end_row();
+                    }
+                    if let Some(ends) = e.endings.as_mut() {
+                        ui.label(tl!("Line ending"));
+                        ui.horizontal(|ui| {
+                            for (i, ending) in ends.iter_mut().enumerate() {
+                                egui::ComboBox::from_id_salt(("line-ending", i)).selected_text(ending.name()).width(130.0).show_ui(ui, |ui| {
+                                    for style in LineEnding::ALL {
+                                        ui.selectable_value(ending, style, style.name());
+                                    }
+                                });
+                            }
+                        });
                         ui.end_row();
                     }
                 });

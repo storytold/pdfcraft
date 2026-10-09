@@ -466,7 +466,10 @@ impl PdfCraftApp {
                 if let Some(i) = active {
                     self.views[i].forms.focus = None;
                 }
-                self.notify_fmt("Click on the page to add a {tool}, or drag to set its size", &[("tool", &tl!(tool.label()).to_lowercase())]);
+                self.notify_fmt(
+                    "Click on the page to add a {tool}, or drag to set its size",
+                    &[("tool", &crate::i18n::in_sentence(tl!(tool.label())))],
+                );
             }
             "sign.fill.signature.remove" => self.signature = None,
             "sign.fill.initials.remove" => self.initials = None,
