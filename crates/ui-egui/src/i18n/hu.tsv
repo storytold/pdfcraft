@@ -2085,3 +2085,21 @@ action wizard	Start	Indítás
 	Rotation:	Elforgatás:
 	Line ending	Vonalvég
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	A szabványos betűtípusok nem tudják megjeleníteni ezt: „{c}” ({code}). Egyelőre csak nyugat-európai karakterek adhatók hozzá szövegként.
+	Larger pages	Nagyobb oldalak
+	Smaller pages	Kisebb oldalak
+	Reset page size	Oldalméret visszaállítása
+	Flatten Fill & Sign when saving	Kitöltés és aláírás beégetése mentéskor
+	Text, marks and signatures become part of the page. Other comments stay editable.	A szöveg, a jelek és az aláírások az oldal részévé válnak. A többi megjegyzés szerkeszthető marad.
+	Date format	Dátumformátum
+	Fill & Sign dates	Kitöltés és aláírás dátumai
+	Pattern	Minta
+	Today: {date}	Ma: {date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy vagy yy év · m vagy mm hónap · mmm vagy mmmm a hónap neve · d vagy dd nap · ddd vagy dddd a hét napja. A H, h, M, s és t időbetűk, önmagukban nem használhatók: tegyél {escape} jelet a betű elé, hogy változatlanul jelenjen meg.
+	Same as interface ({language})	Mint a felület ({language})
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} még nem írható a PDF-be: a kitöltés és aláírás szövege csak nyugat-európai karaktereket támogat. Válassz számokból álló formátumot, például dd.mm.yyyy.
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Megnyitja a nyomtató-illesztőprogram beállításait. Ezek a számítógépről indított minden nyomtatásra érvényesek; az itt választott példányszám, kétoldalas nyomtatás, szürkeárnyalat és papír továbbra is érvényes.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	A nyomtató-illesztőprogram saját beállításai ehhez a nyomtatáshoz: papírtálca, papírtípus, utófeldolgozás és egyebek.
+	Couldn't open the printer's preferences: {e}	Nem sikerült megnyitni a nyomtató beállításait: {e}
+	Printer properties	Nyomtató tulajdonságai
+	Reset to printer defaults	A nyomtató alapértékeinek visszaállítása
+	This printer offers no settings of its own.	Ennek a nyomtatónak nincsenek saját beállításai.

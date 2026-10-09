@@ -2107,3 +2107,21 @@ calendar date	December	грудня
 	Rotation:	Поворот:
 	Line ending	Закінчення лінії
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Стандартні шрифти не можуть відобразити «{c}» ({code}). Поки що як текст можна додавати лише західноєвропейські символи.
+	Larger pages	Більші сторінки
+	Smaller pages	Менші сторінки
+	Reset page size	Скинути розмір сторінок
+	Flatten Fill & Sign when saving	Звести «Заповнення й підпис» під час збереження
+	Text, marks and signatures become part of the page. Other comments stay editable.	Текст, позначки й підписи стають частиною сторінки. Інші коментарі залишаються редагованими.
+	Date format	Формат дати
+	Fill & Sign dates	Дати заповнення й підпису
+	Pattern	Шаблон
+	Today: {date}	Сьогодні: {date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy або yy рік · m або mm місяць · mmm або mmmm назва місяця · d або dd день · ddd або dddd день тижня. H, h, M, s і t — літери часу, їх не можна використовувати окремо: поставте {escape} перед літерою, щоб показати її як є.
+	Same as interface ({language})	Як в інтерфейсі ({language})
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} поки не можна записати в PDF: текст заповнення й підпису підтримує лише західноєвропейські символи. Виберіть числовий формат, наприклад dd.mm.yyyy.
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Відкриває налаштування драйвера принтера. Вони зберігаються для кожного друку з цього комп’ютера; вибрані тут кількість копій, двосторонній друк, відтінки сірого й папір і далі діють.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	Власні налаштування драйвера принтера для цього друку: лоток, тип паперу, післядрукова обробка тощо.
+	Couldn't open the printer's preferences: {e}	Не вдалося відкрити налаштування принтера: {e}
+	Printer properties	Властивості принтера
+	Reset to printer defaults	Скинути до налаштувань принтера за замовчуванням
+	This printer offers no settings of its own.	Цей принтер не має власних налаштувань.

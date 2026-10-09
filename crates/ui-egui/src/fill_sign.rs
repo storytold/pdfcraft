@@ -1,7 +1,7 @@
 //! Fill & Sign (Acrobat's Fill & Sign tool, execution plan M5.7): type text onto the page, place
-//! ✓ ✕ ● ─ marks and today's date, and sign with a drawn signature. Everything is an annotation
-//! (typewriter text, PdfCraft-drawn stamps, ink), so it can be moved, deleted and undone like
-//! any comment.
+//! ✓ ✕ ● ─ marks and today's date (in Preferences ▸ Date format), and sign with a drawn
+//! signature. Everything is an annotation (typewriter text, PdfCraft-drawn stamps, ink), so it
+//! can be moved, deleted and undone like any comment.
 
 use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::{Edit, FillMark, NewAnnotation, Shape, SignatureImage, Style};
@@ -379,7 +379,7 @@ pub(crate) fn page_input(
     initials: Option<&SavedSig>,
     preview: &mut Option<(SavedSig, egui::TextureHandle)>,
     author: &str,
-    today: (i64, u32, u32),
+    date_text: &Result<String, String>,
 ) -> Option<FillAction> {
     let pointer = ui.input(|i| i.pointer.hover_pos())?;
     if !resp.contains_pointer() || !xf.rect.contains(pointer) {
@@ -409,10 +409,10 @@ pub(crate) fn page_input(
             view.fill_text = Some(TypeBox { page, at: [at[0], at[1] + TEXT_SIZE * 0.6], text: String::new(), focus: true });
             None
         }
-        FillTool::Date => {
-            let (y, m, d) = today;
-            Some(FillAction::Edit(Box::new(typed(page, [at[0], at[1] + TEXT_SIZE * 0.6], &format!("{m}/{d}/{y}"), author))))
-        }
+        FillTool::Date => Some(match date_text {
+            Ok(text) => FillAction::Edit(Box::new(typed(page, [at[0], at[1] + TEXT_SIZE * 0.6], text, author))),
+            Err(why) => FillAction::Refused(why.clone()),
+        }),
         FillTool::Signature => match signature {
             Some(s) => place(page, p, at, s, false, author).map(|e| FillAction::Signature(Box::new(e))),
             None => Some(FillAction::CreateSignature),
@@ -440,6 +440,8 @@ pub enum FillAction {
     CreateSignature,
     /// No initials yet.
     CreateInitials,
+    /// Nothing placed, and why (today's date can't be written into the PDF yet).
+    Refused(String),
 }
 
 /// The in-place editor for typed text. Returns the edit once committed.

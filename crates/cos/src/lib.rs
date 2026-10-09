@@ -16,12 +16,13 @@
 mod bytes;
 mod document;
 mod object;
+pub mod page_labels;
 mod parser;
 mod security;
 mod writer;
 
 pub use bytes::Bytes;
-pub use document::{Document, Revision, XrefEntry};
+pub use document::{Document, Revision, SourceIdentity, XrefEntry};
 pub use object::{Dict, MAX_DECODED, Name, ObjRef, Object, PdfString, Stream};
 pub use parser::{Lexer, parse_indirect};
 pub use pdfcraft_crypt::{Algorithm, Auth, Method as CryptMethod, NewEncryption, Permissions, SecurityHandler};
@@ -47,4 +48,6 @@ pub enum CosError {
     Security(String),
     #[error("internal lock poisoned")]
     Poisoned,
+    #[error("this document was opened read-only with a decode limit and cannot be saved")]
+    ReadOnlyLimit,
 }
