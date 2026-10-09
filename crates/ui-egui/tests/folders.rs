@@ -195,6 +195,32 @@ fn show_more_reveals_the_older_pdfs() {
 }
 
 #[test]
+fn a_long_pdf_name_is_cut_before_its_date_and_size() {
+    let dir = TempFolder::new("long");
+    // Short enough for Windows' 260-character paths under the temp folder.
+    let name = format!("{}.pdf", "Signed contract with a long name ".repeat(4));
+    dir.file(&name, FIXTURE, Duration::from_secs(10));
+    let folder = dir.path();
+    let mut h = harness(move |app| {
+        app.pin_folder(&folder);
+    });
+    h.run_steps(2);
+    let text: Vec<(String, bool, egui::Rect)> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Text(t) => Some((t.galley.text().to_owned(), t.galley.elided, t.visual_bounding_rect())),
+            _ => None,
+        })
+        .collect();
+    let (_, cut, rect) = text.iter().find(|(s, ..)| *s == name).expect("the PDF is listed");
+    let detail = text.iter().find(|(s, _, r)| s.contains('·') && r.y_range().contains(rect.center().y)).expect("its row shows the date and size").2;
+    assert!(*cut, "the name is cut short");
+    assert!(rect.right() < detail.left(), "the name ends before the date and size");
+}
+
+#[test]
 fn pinning_is_limited_and_never_duplicates() {
     let mut app = PdfCraftApp::new();
     assert!(!app.pin_folder("relative/scans"), "a relative path is refused");

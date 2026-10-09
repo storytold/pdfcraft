@@ -36,6 +36,36 @@ fn home_shows_welcome_and_tools() {
     h.get_by_label("Open file");
 }
 
+/// Every piece of text painted on the last frame: its whole text, whether it was cut with "…",
+/// and where it was drawn.
+fn painted_text(h: &Harness<'static, PdfCraftApp>) -> Vec<(String, bool, egui::Rect)> {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Text(t) => Some((t.galley.text().to_owned(), t.galley.elided, t.visual_bounding_rect())),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn long_recent_names_and_paths_are_cut_before_the_page_count() {
+    let name = format!("{}.pdf", "Quarterly report final version ".repeat(10));
+    let path = format!("/{}/{name}", "A folder with a long name".repeat(8));
+    let h = harness({
+        let (name, path) = (name.clone(), path.clone());
+        move |app| app.recent.push(pdfcraft_ui_egui::RecentFile { name, path, pages: 7, size: 2048 })
+    });
+    let text = painted_text(&h);
+    let detail = text.iter().find(|(s, ..)| s.starts_with("7 pages")).expect("the row shows its page count").2;
+    for whole in [&name, &path] {
+        let (_, cut, rect) = text.iter().find(|(s, ..)| s == whole).expect("the row shows the name and the path");
+        assert!(*cut, "{whole:?} is cut short");
+        assert!(rect.right() < detail.left(), "{whole:?} ends before the page count");
+    }
+}
+
 #[test]
 fn every_catalog_tool_is_listed_after_view_more() {
     let mut h = harness(|_| {});
