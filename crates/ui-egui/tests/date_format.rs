@@ -30,6 +30,7 @@ fn retype(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
 fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, PDF.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("dialog", "preferences").unwrap();
@@ -99,6 +100,7 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
 fn month_names_follow_the_date_language_or_else_the_interface_language() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.set_option("date-format", "d mmmm yyyy").unwrap();
         app.set_option("language", "cs").unwrap();
         app.set_option("dialog", "preferences").unwrap();
@@ -130,6 +132,7 @@ fn month_names_follow_the_date_language_or_else_the_interface_language() {
 fn a_date_the_pdf_cannot_hold_is_refused_with_a_warning_first() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, PDF.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         // Japanese weekday names: Fill & Sign text can't hold them yet.

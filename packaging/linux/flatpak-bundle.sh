@@ -66,7 +66,7 @@ if [ "$TEST" = 1 ]; then
   flatpak install --user -y --noninteractive --reinstall "$OUT"
   flatpak info --user "$APP_ID"
   flatpak run --command=pdfcraft-cli "$APP_ID" --version
-  flatpak run --command=sh "$APP_ID" -c 'ls /app/share/applications /app/share/metainfo /app/share/mime/packages /app/share/icons/hicolor/scalable/apps'
+  flatpak run --command=sh "$APP_ID" -c 'ls /app/share/applications /app/share/metainfo /app/share/mime/packages /app/share/icons/hicolor/scalable/apps /app/share/pdfcraft/models'
   # Informational: printing runs lp/lpstat, which the freedesktop runtime doesn't ship (see the
   # manifest's finish-args). Says so if a runtime update ever adds them.
   flatpak run --command=sh "$APP_ID" -c 'command -v lp lpstat' || echo "note: no lp/lpstat in the runtime, so printing is unavailable in the Flatpak"

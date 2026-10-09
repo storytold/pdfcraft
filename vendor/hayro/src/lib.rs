@@ -61,7 +61,7 @@ use vello_cpu::{Level, Pixmap, RenderMode};
 
 mod renderer;
 /// PdfCraft patch: exported for its regression test.
-pub use renderer::tiling_cell_scale;
+pub use renderer::{image_resampling_size, tiling_cell_scale};
 
 /// A cache used by the renderer.
 ///

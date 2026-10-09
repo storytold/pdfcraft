@@ -140,6 +140,12 @@ impl<'a> Tlv<'a> {
         Ok(t)
     }
 
+    /// Whether this element is written with the indefinite length form (BER, never DER). Tags are
+    /// single-octet here, so the length octet is the second.
+    pub fn is_indefinite(&self) -> bool {
+        self.raw.get(1) == Some(&0x80)
+    }
+
     /// The children of a constructed element, read with the same rules as their parent.
     pub fn children(&self) -> Result<Vec<Tlv<'a>>, SignError> {
         let mut out = Vec::new();
