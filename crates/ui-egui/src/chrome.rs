@@ -32,9 +32,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x) + 106.0;
                 // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
                 let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
-                let tabs_width = (ui.available_width() - controls_width - open_width).max(0.0);
+                let mut tabs_width = (ui.available_width() - controls_width - open_width).max(0.0);
                 // Tabs shrink to share the strip (names end in "…") and scroll only once they reach
-                // their narrowest.
+                // their narrowest; then arrows either side say so and step through them.
                 let mut natural: Vec<f32> = Vec::with_capacity(app.views.len() + 1);
                 for v in &app.views {
                     if let Some(doc) = app.session.get(v.id) {
@@ -44,7 +44,19 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 if app.combine_tab.open {
                     natural.push(tab_natural_width(ui, &t, tl!("Combine files")));
                 }
-                let cap = tab_cap(&natural, tabs_width, ui.spacing().item_spacing.x, TAB_MIN_WIDTH);
+                let gap = ui.spacing().item_spacing.x;
+                let overflow = tabs_overflow(&natural, tabs_width, gap, TAB_MIN_WIDTH);
+                if overflow {
+                    tabs_width = (tabs_width - 2.0 * (TAB_ARROW + gap)).max(0.0);
+                }
+                let cap = tab_cap(&natural, tabs_width, gap, TAB_MIN_WIDTH);
+                // Where the tabs were scrolled to last frame, and how far they can go.
+                let scroll_id = ui.id().with("tab_scroll");
+                let (offset, max_offset) = ui.data(|d| d.get_temp::<(f32, f32)>(scroll_id)).unwrap_or((0.0, 0.0));
+                let mut scroll_to = None;
+                if overflow && arrow(ui, "chevron-left", offset > 0.5, tl!("Scroll tabs left")) {
+                    scroll_to = Some((offset - (TAB_MIN_WIDTH + gap)).max(0.0));
+                }
                 let state = (app.active, app.views.len(), app.combine_showing());
                 let changed = ui.data_mut(|data| {
                     let id = ui.id().with("active_tab");
@@ -55,7 +67,11 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let mut close = None;
                 ui.scope(|ui| {
                     ui.style_mut().always_scroll_the_only_direction = true;
-                    egui::ScrollArea::horizontal().id_salt("document_tabs").max_width(tabs_width).auto_shrink([true, true]).show(ui, |ui| {
+                    let mut area = egui::ScrollArea::horizontal().id_salt("document_tabs").max_width(tabs_width).auto_shrink([true, true]);
+                    if let Some(x) = ui.data_mut(|d| d.remove_temp::<f32>(scroll_id.with("to"))) {
+                        area = area.horizontal_scroll_offset(x);
+                    }
+                    let out = area.show(ui, |ui| {
                         ui.horizontal_centered(|ui| {
                             for i in 0..app.views.len() {
                                 let Some(doc) = app.session.get(app.views[i].id) else { continue };
@@ -90,7 +106,16 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             }
                         });
                     });
+                    let max = (out.content_size.x - out.inner_rect.width()).max(0.0);
+                    ui.data_mut(|d| d.insert_temp(scroll_id, (out.state.offset.x, max)));
                 });
+                if overflow && arrow(ui, "chevron-right", offset < max_offset - 0.5, tl!("Scroll tabs right")) {
+                    scroll_to = Some((offset + TAB_MIN_WIDTH + gap).min(max_offset));
+                }
+                if let Some(x) = scroll_to {
+                    ui.data_mut(|d| d.insert_temp(scroll_id.with("to"), x));
+                    ui.ctx().request_repaint();
+                }
                 ui.add_space(4.0);
                 if widgets::ghost_button(ui, "plus", tl!("Open")).on_hover_text(tl!("Open a PDF (⌘O)")).clicked() {
                     app.open_dialog();
@@ -132,8 +157,21 @@ fn theme_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
 /// A tab's chrome around its name: the icon on the left, the close button on the right.
 const TAB_CHROME: f32 = 64.0;
-/// The narrowest a tab shrinks to before the strip scrolls: room for a few characters.
-const TAB_MIN_WIDTH: f32 = 110.0;
+/// The narrowest a tab shrinks to before the strip scrolls: room for most of a name.
+const TAB_MIN_WIDTH: f32 = 180.0;
+/// The arrows either side of tabs that don't fit.
+const TAB_ARROW: f32 = 24.0;
+
+/// Whether tabs of `natural` widths, `gap` apart, are wider than `budget` even at `min` each.
+fn tabs_overflow(natural: &[f32], budget: f32, gap: f32, min: f32) -> bool {
+    let narrowest: f32 = natural.iter().map(|w| w.min(min)).sum();
+    narrowest + gap * natural.len().saturating_sub(1) as f32 > budget
+}
+
+/// A scroll arrow beside the tabs; dimmed (and inert) at its end. True when clicked.
+fn arrow(ui: &mut egui::Ui, icon: &str, enabled: bool, tip: &str) -> bool {
+    ui.add_enabled_ui(enabled, |ui| icons::button(ui, icon, TAB_ARROW, false, tip)).inner.clicked()
+}
 
 /// A tab name, at most 28 characters (longer names end in "…").
 fn tab_name(name: &str) -> String {
@@ -537,6 +575,16 @@ mod tab_widths {
         let used: f32 = natural.iter().map(|w| w.min(cap)).sum::<f32>() + 2.0 * 4.0;
         assert!((used - 500.0).abs() < 0.01, "{cap} uses {used}");
         assert!((cap - 186.0).abs() < 0.01, "{cap}");
+    }
+
+    /// Arrows appear only when the tabs can't fit even at their narrowest.
+    #[test]
+    fn arrows_only_when_the_narrowest_tabs_overflow() {
+        use super::tabs_overflow;
+        assert!(!tabs_overflow(&[250.0; 3], 600.0, 4.0, 180.0), "three shrunk tabs fit");
+        assert!(tabs_overflow(&[250.0; 4], 600.0, 4.0, 180.0), "four don't, even at 180");
+        assert!(!tabs_overflow(&[100.0; 5], 600.0, 4.0, 180.0), "narrow tabs fit as they are");
+        assert!(!tabs_overflow(&[], 0.0, 4.0, 180.0));
     }
 
     /// Tabs never get narrower than the minimum: past it, the strip scrolls instead.
