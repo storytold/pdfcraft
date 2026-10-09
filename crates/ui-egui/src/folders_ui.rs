@@ -364,11 +364,12 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 18.0,
                 egui::Color32::from_rgb(0xE0, 0x3E, 0x3E),
             );
-            ui.painter().text(rect.min + vec2(62.0, 19.0), Align2::LEFT_CENTER, crate::bidi::visual(&f.name), theme::medium(13.0), t.text);
             let size = crate::panels::human_size(usize::try_from(f.size).unwrap_or(usize::MAX));
             let when = f.modified.map(crate::combine_ui::ago).unwrap_or_default();
             let detail = if when.is_empty() { size } else { format!("{when}  ·  {size}") };
-            ui.painter().text(rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, detail, theme::regular(12.0), t.text_muted);
+            let detail = ui.painter().text(rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, detail, theme::regular(12.0), t.text_muted);
+            let width = detail.left() - 16.0 - (rect.left() + 62.0);
+            widgets::row_text(ui, rect.min + vec2(62.0, 19.0), crate::bidi::visual(&f.name), theme::medium(13.0), t.text, width);
             if resp.on_hover_text(&f.path).clicked() {
                 open = Some(f.path.clone());
             }

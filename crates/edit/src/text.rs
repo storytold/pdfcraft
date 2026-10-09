@@ -499,7 +499,7 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
 type Encoder = Box<dyn Fn(&str) -> Option<Vec<u8>>>;
 
 fn is_win_ansi_char(c: char) -> bool {
-    matches!(c, '\u{20}'..='\u{7e}' | '\u{a0}'..='\u{ff}' | '€' | '‚' | '„' | '…' | '‘' | '’' | '“' | '”' | '•' | '–' | '—' | '™' | '\t')
+    c == '\t' || pdfcraft_fonts::win_ansi_byte(c).is_some()
 }
 
 fn needs_type3(text: &str) -> bool {
@@ -538,21 +538,49 @@ fn pdf_num(v: f64) -> String {
 fn type3_path(face: &CraftFont, ch: char) -> Result<(Vec<u8>, f64), EditError> {
     let glyph = japanese_glyph_from(face, ch).map_err(|e| match e {
         GlyphError::NoFont => no_japanese_font(),
-        GlyphError::Missing => EditError::Invalid(format!("Japanese fallback font has no glyph for U+{:04X}", ch as u32)),
+        GlyphError::Missing => EditError::Invalid(format!("no fallback font has a glyph for U+{:04X}", ch as u32)),
         GlyphError::TooComplex => EditError::Invalid(format!("Japanese fallback glyph U+{:04X} is too complex", ch as u32)),
     })?;
+    let (dx, width) = proportional(ch, &glyph);
     let scale = 1000.0;
-    let mut out = format!("{} 0 0 0 0 1000 1000 d1\n", pdf_num(glyph.width * scale)).into_bytes();
+    // d1 is `wx wy llx lly urx ury` (ISO 32000-2 §9.6.4) with a box enclosing the glyph;
+    // Acrobat draws a bullet in place of a glyph whose d1 is malformed.
+    let b = if glyph.contours.is_empty() { [0.0; 4] } else { glyph.bbox };
+    let mut out = format!(
+        "{} 0 {} {} {} {} d1\n",
+        pdf_num(width * scale),
+        pdf_num(((b[0] + dx) * scale).floor()),
+        pdf_num((b[1] * scale).floor()),
+        pdf_num(((b[2] + dx) * scale).ceil()),
+        pdf_num((b[3] * scale).ceil())
+    )
+    .into_bytes();
     for contour in glyph.contours {
         let Some(first) = contour.first() else { continue };
-        out.extend_from_slice(format!("{} {} m\n", pdf_num(first[0] * scale), pdf_num(first[1] * scale)).as_bytes());
+        out.extend_from_slice(format!("{} {} m\n", pdf_num((first[0] + dx) * scale), pdf_num(first[1] * scale)).as_bytes());
         for p in contour.iter().skip(1) {
-            out.extend_from_slice(format!("{} {} l\n", pdf_num(p[0] * scale), pdf_num(p[1] * scale)).as_bytes());
+            out.extend_from_slice(format!("{} {} l\n", pdf_num((p[0] + dx) * scale), pdf_num(p[1] * scale)).as_bytes());
         }
         out.extend_from_slice(b"h\n");
     }
     out.extend_from_slice(b"f\n");
-    Ok((out, glyph.width))
+    Ok((out, width))
+}
+
+/// Side bearing (em) given to a respaced glyph on each side.
+const SIDE_BEARING: f64 = 0.05;
+
+/// Shift and advance for a fallback glyph. Japanese faces draw Cyrillic and Greek full-width
+/// (one em each, as in JIS X 0208) and have no proportional (`palt`) metrics for them, so a
+/// word set that way reads as letter-spaced. Those letters get their ink width plus a side
+/// bearing instead; everything else keeps the face's own advance.
+fn proportional(ch: char, glyph: &pdfcraft_fonts::GlyphOutline) -> (f64, f64) {
+    let respace = matches!(ch, '\u{0370}'..='\u{03FF}' | '\u{0400}'..='\u{052F}' | '\u{1F00}'..='\u{1FFF}');
+    let ink = glyph.bbox[2] - glyph.bbox[0];
+    if !respace || glyph.contours.is_empty() || !(ink > 0.0 && ink < glyph.width) {
+        return (0.0, glyph.width);
+    }
+    (SIDE_BEARING - glyph.bbox[0], ink + 2.0 * SIDE_BEARING)
 }
 
 fn unicode_hex(ch: char) -> String {
@@ -570,9 +598,13 @@ fn no_japanese_font() -> EditError {
     )
 }
 
+/// The first of `faces` (best match first) that has a glyph for every one of `chars`, else the first.
+fn fallback_face<'a>(faces: &[&'a CraftFont], chars: &[char], has_glyph: impl Fn(&CraftFont, char) -> bool) -> Option<&'a CraftFont> {
+    faces.iter().copied().find(|face| chars.iter().all(|ch| has_glyph(face, *ch))).or_else(|| faces.first().copied())
+}
+
 fn type3_font(doc: &mut Document, fonts_res: &mut Dict, text: &str, family: crate::added::Family, bold: bool) -> Result<Type3Fallback, EditError> {
-    let face = pdfcraft_fonts::document_japanese_font_for_style(family == crate::added::Family::Times, bold).ok_or_else(no_japanese_font)?;
-    let family = face.family;
+    let faces = pdfcraft_fonts::document_japanese_fonts_for_style(family == crate::added::Family::Times, bold);
     let mut chars = Vec::new();
     for ch in text.chars() {
         if !chars.contains(&ch) {
@@ -585,6 +617,10 @@ fn type3_font(doc: &mut Document, fonts_res: &mut Dict, text: &str, family: crat
     if chars.is_empty() {
         return Err(EditError::Invalid("replacement text is empty".into()));
     }
+    // The faces differ in coverage (e.g. of Cyrillic), so use the best face that has every
+    // character. When none has them all, the best face reports the character it lacks.
+    let face = fallback_face(&faces, &chars, |face, ch| japanese_glyph_from(face, ch).is_ok()).ok_or_else(no_japanese_font)?;
+    let family = face.family;
     let mut codes = Vec::with_capacity(chars.len());
     let mut charprocs = Dict::new();
     let mut widths = Vec::with_capacity(chars.len());
@@ -1137,5 +1173,21 @@ mod tests {
         assert_eq!(wrap("A\u{a0}B C", 3.0, width), ["A B", "C"]);
         assert_eq!(wrap("A\u{2028}B C", 3.0, width), ["A B", "C"]);
         assert_eq!(wrap(" \tA  B\r\nC ", 3.0, width), ["A B", "C"]);
+    }
+
+    #[test]
+    fn fallback_face_moves_on_when_the_best_face_lacks_a_character() {
+        static JPAN: &[&str] = &["Jpan"];
+        let mincho = CraftFont { family: "Mincho", style: "Regular", scripts: JPAN, bytes: b"" };
+        let gothic = CraftFont { family: "Gothic", style: "Regular", scripts: JPAN, bytes: b"" };
+        let faces = [&mincho, &gothic];
+        // Only the Gothic face has the Cyrillic letter.
+        let has = |face: &CraftFont, ch: char| ch.is_ascii() || face.family == "Gothic";
+        assert_eq!(fallback_face(&faces, &['a', 'ф'], has).map(|f| f.family), Some("Gothic"));
+        // Characters the best face has keep it.
+        assert_eq!(fallback_face(&faces, &['a', 'b'], has).map(|f| f.family), Some("Mincho"));
+        // No face has them all: the best face stays, and names the missing glyph.
+        assert_eq!(fallback_face(&faces, &['a', 'ф'], |_, ch| ch.is_ascii()).map(|f| f.family), Some("Mincho"));
+        assert!(fallback_face(&[], &['a'], has).is_none());
     }
 }

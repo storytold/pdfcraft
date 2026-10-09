@@ -1,7 +1,7 @@
 //! Edit a PDF ▸ Edit text & images: boxes around the paragraphs and images already on the page.
 //! Click a paragraph to edit it in place (⌘Enter or clicking away applies and rewraps it to the
-//! box, Esc cancels); drag it to move it, or drag the handle on its right edge to rewrap it to a
-//! new width. Click an image to select it: drag to move, drag a corner to resize (keeping
+//! box, Esc cancels); drag it to move it, or drag the handle on its left or right edge to rewrap
+//! it to a new width. Click an image to select it: drag to move, drag a corner to resize (keeping
 //! its proportions), right-click for rotate, flip, replace, save and delete; Delete removes it.
 
 use egui::{Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Stroke};
@@ -170,19 +170,56 @@ pub struct ImageSelection {
     drag: Option<(Pos2, Option<Pos2>)>,
 }
 
-/// A paragraph box being dragged: moved, or (from the handle on its right edge) resized.
+/// What a drag on a paragraph box takes hold of.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Grip {
+    Move,
+    /// An edge (screen left or right), dragged to rewrap the paragraph.
+    Left,
+    Right,
+}
+
+/// A paragraph box being dragged: moved, or (from a handle on its left or right edge) resized.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BlockDrag {
     page: usize,
     block: usize,
     /// Where the drag started (screen).
     start: Pos2,
-    resize: bool,
+    grip: Grip,
 }
 
-/// The resize handle on a paragraph box's right edge (screen).
-fn width_handle(b: Rect) -> Rect {
-    Rect::from_center_size(Pos2::new(b.right(), b.center().y), egui::vec2(7.0, 14.0))
+/// How far an edge grip reaches either side of a box's edge (screen pixels).
+const EDGE_REACH: f32 = 6.0;
+
+/// The rewrap handles drawn on a paragraph box's left and right edges (screen).
+fn width_handles(b: Rect) -> [Rect; 2] {
+    let h = (b.height() * 0.5).clamp(14.0, 28.0);
+    [b.left(), b.right()].map(|x| Rect::from_center_size(Pos2::new(x, b.center().y), egui::vec2(7.0, h)))
+}
+
+/// The edge of `b` that `p` grabs: anywhere along its height, within reach of the line. A narrow
+/// box keeps its middle for moving.
+fn edge_at(b: Rect, p: Pos2) -> Option<Grip> {
+    if p.y < b.top() - EDGE_REACH || p.y > b.bottom() + EDGE_REACH {
+        return None;
+    }
+    let inside = EDGE_REACH.min(b.width() / 4.0);
+    let (dl, dr) = (p.x - b.left(), b.right() - p.x);
+    match (dl >= -EDGE_REACH && dl <= inside, dr >= -EDGE_REACH && dr <= inside) {
+        (true, true) if dl <= dr => Some(Grip::Left),
+        (_, true) => Some(Grip::Right),
+        (true, false) => Some(Grip::Left),
+        _ => None,
+    }
+}
+
+/// The topmost box under `p` and what it grabs there; edges only on an upright page.
+fn grab_at(boxes: &[Rect], p: Pos2, upright: bool) -> Option<(usize, Grip)> {
+    boxes.iter().enumerate().rev().find_map(|(i, b)| match upright.then(|| edge_at(*b, p)).flatten() {
+        Some(g) => Some((i, g)),
+        None => b.contains(p).then_some((i, Grip::Move)),
+    })
 }
 
 /// What a right-click on a selected image asks for.
@@ -360,25 +397,38 @@ pub(crate) fn page_input(
     // The width handle needs the page upright (or upside down): on a quarter-turned page the
     // screen's horizontal is the paragraph's vertical.
     let upright = info.pages.get(page).is_some_and(|p| p.rotation % 180 == 0);
-    // A drag in progress: the box follows the pointer (or its right edge does); releasing applies it.
+    let draw_handles = |b: Rect| {
+        for h in width_handles(b) {
+            painter.rect(h, CornerRadius::same(2), Color32::WHITE, Stroke::new(1.0, ACCENT), egui::StrokeKind::Middle);
+        }
+    };
+    // A drag in progress: the box follows the pointer (or the grabbed edge does); releasing applies it.
     if let Some(d) = view.block_drag.filter(|d| d.page == page)
         && let (Some(b), Some(l)) = (boxes.get(d.block).copied(), lines.get(d.block))
     {
         let p = ui.input(|i| i.pointer.interact_pos()).unwrap_or(d.start);
-        let preview = if d.resize {
-            Rect::from_min_max(b.min, Pos2::new((b.right() + p.x - d.start.x).max(b.left() + 12.0), b.max.y))
-        } else {
-            b.translate(p - d.start)
+        let dx = p.x - d.start.x;
+        let preview = match d.grip {
+            Grip::Move => b.translate(p - d.start),
+            Grip::Left => Rect::from_min_max(Pos2::new((b.left() + dx).min(b.right() - 12.0), b.min.y), b.max),
+            Grip::Right => Rect::from_min_max(b.min, Pos2::new((b.right() + dx).max(b.left() + 12.0), b.max.y)),
         };
         painter.rect_stroke(preview, CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
-        ui.ctx().set_cursor_icon(if d.resize { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::Grabbing });
+        let resizing = d.grip != Grip::Move;
+        if resizing {
+            draw_handles(preview);
+        }
+        ui.ctx().set_cursor_icon(if resizing { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::Grabbing });
         if resp.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
             view.block_drag = None;
             let (from, to) = (user_box(xf, info, page, b), user_box(xf, info, page, preview));
-            let style = if d.resize {
-                // The new width in user space: the box's change, added to the paragraph's own.
+            let style = if resizing {
+                // The new width in user space: the box's change, added to the paragraph's own. A
+                // moved left side (in user space; on an upside-down page that's the screen's right
+                // edge) moves the paragraph with it.
                 let width = (l.rect[2] - l.rect[0]) + (to[2] - to[0]) - (from[2] - from[0]);
-                pdfcraft_engine::BlockStyle { width: Some(width), ..Default::default() }
+                let shift = to[0] - from[0];
+                pdfcraft_engine::BlockStyle { width: Some(width), offset: (shift != 0.0).then_some([shift, 0.0]), ..Default::default() }
             } else {
                 pdfcraft_engine::BlockStyle { offset: Some([to[0] - from[0], to[1] - from[1]]), ..Default::default() }
             };
@@ -388,26 +438,28 @@ pub(crate) fn page_input(
         }
         return true;
     }
-    let Some(p) = ui.input(|i| i.pointer.hover_pos()).filter(|p| xf.rect.contains(*p)) else { return false };
-    let Some(hit) = boxes.iter().rposition(|b| b.contains(p) || (upright && width_handle(*b).contains(p))) else { return false };
-    if active != Some(hit) {
-        painter.rect_stroke(boxes[hit], CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
-    }
-    let on_handle = upright && active.is_none() && width_handle(boxes[hit]).contains(p);
-    if upright && active.is_none() {
-        painter.rect(width_handle(boxes[hit]), CornerRadius::same(2), Color32::WHITE, Stroke::new(1.0, ACCENT), egui::StrokeKind::Middle);
-    }
-    ui.ctx().set_cursor_icon(if on_handle { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::Text });
-    // Dragging a box (not while a paragraph is open for typing) moves it; from the handle, resizes it.
+    // Dragging a box (not while a paragraph is open for typing) moves it; from an edge, resizes it.
+    // What it grabs comes from where the button went down, not where the pointer is now: egui
+    // only calls it a drag once the pointer has moved a few pixels (or been held a moment), and a
+    // quick flick has left the edge by then.
     if resp.drag_started()
         && active.is_none()
         && let Some(o) = ui.input(|i| i.pointer.press_origin())
-        && let Some(block) = boxes.iter().rposition(|b| b.contains(o) || (upright && width_handle(*b).contains(o)))
+        && let Some((block, grip)) = grab_at(&boxes, o, upright)
     {
-        let resize = upright && width_handle(boxes[block]).contains(o);
-        view.block_drag = Some(BlockDrag { page, block, start: o, resize });
+        view.block_drag = Some(BlockDrag { page, block, start: o, grip });
         return true;
     }
+    let Some(p) = ui.input(|i| i.pointer.hover_pos()).filter(|p| xf.rect.contains(*p)) else { return false };
+    let Some((hit, grip)) = grab_at(&boxes, p, upright) else { return false };
+    if active != Some(hit) {
+        painter.rect_stroke(boxes[hit], CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+    }
+    let on_edge = active.is_none() && grip != Grip::Move;
+    if upright && active.is_none() {
+        draw_handles(boxes[hit]);
+    }
+    ui.ctx().set_cursor_icon(if on_edge { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::Text });
     if resp.clicked() {
         let l = &lines[hit];
         // Screen pixels per point, from the box's width.

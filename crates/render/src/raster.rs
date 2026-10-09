@@ -18,7 +18,9 @@ use hayro::hayro_interpret::font::{FontData, FontQuery};
 use hayro::hayro_interpret::hayro_cmap::CidFamily;
 use hayro::hayro_syntax::Pdf;
 use hayro::vello_cpu::color::palette::css::WHITE;
-use hayro::{RenderCache, RenderSettings, render};
+use hayro::{RenderCache, RenderSettings, render_into, render_size};
+
+use crate::Pixels;
 
 /// Monotonic-ish timer that is safe on wasm32 (where `std::time::Instant` panics).
 #[derive(Clone, Copy)]
@@ -73,7 +75,13 @@ fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
         return None;
     }
     let face = match japanese_face(f.post_script_name.as_deref().unwrap_or_default(), f.is_serif, f.is_bold || f.font_weight >= 600) {
-        JapaneseFace::Mincho => pdfcraft_fonts::document_japanese_font(),
+        // BIZ UDMincho before the document face (Shippori Mincho): it covers half-width katakana
+        // (U+FF61–U+FF9F), which Shippori Mincho lacks, and hayro draws a CID the substitute
+        // can't map by Unicode by glyph index, i.e. as an unrelated glyph (ﬁ, ﬂ, …).
+        JapaneseFace::Mincho => pdfcraft_fonts::ui_japanese_fonts()
+            .into_iter()
+            .find(|c| c.family == "BIZ UDMincho" && c.style == "Regular")
+            .or_else(pdfcraft_fonts::document_japanese_font),
         JapaneseFace::Gothic { bold } => {
             let faces = pdfcraft_fonts::ui_japanese_fonts();
             let style = if bold { "Bold" } else { "Regular" };
@@ -145,7 +153,7 @@ pub struct RenderedPage {
     pub width: u32,
     pub height: u32,
     /// Premultiplied RGBA8, row-major. Empty when `error` is set.
-    pub rgba: Vec<u8>,
+    pub rgba: Pixels,
     /// Why the page could not be rendered (renderer panic, empty page box, …).
     pub error: Option<String>,
     /// For `RequestKind::Text`.
@@ -175,12 +183,12 @@ pub fn device_pixels(pt: f32, scale: f32) -> u32 {
 
 /// Render one page with a caller-owned parser and cache. Panics inside the renderer are caught
 /// and reported as `Err((message, panicked))`.
-type Output = (u32, u32, Vec<u8>, Option<Arc<crate::text::PageText>>);
+type Output = (u32, u32, Pixels, Option<Arc<crate::text::PageText>>);
 
 fn render_page<'a>(pdf: &'a Pdf, cache: &RenderCache<'a>, settings: &InterpreterSettings, req: RenderRequest) -> Result<Output, (String, bool)> {
     if req.kind == RequestKind::Text {
         return match catch_unwind(AssertUnwindSafe(|| crate::text::extract_page(pdf, req.page, settings))) {
-            Ok(Some(t)) => Ok((0, 0, Vec::new(), Some(Arc::new(t)))),
+            Ok(Some(t)) => Ok((0, 0, Pixels::default(), Some(Arc::new(t)))),
             Ok(None) => Err((format!("page {} does not exist", req.page + 1), false)),
             Err(panic) => Err((format!("text extraction crashed on page {}: {}", req.page + 1, panic_message(&panic)), true)),
         };
@@ -215,8 +223,11 @@ fn render_page<'a>(pdf: &'a Pdf, cache: &RenderCache<'a>, settings: &Interpreter
                 RenderSettings { x_scale: scale, y_scale: scale, width: Some(side(w)), height: Some(side(h)), bg_color: WHITE, ..Default::default() }
             }
         };
-        let pixmap = render(page, cache, settings, &rs);
-        Ok((pixmap.width() as u32, pixmap.height() as u32, pixmap.data_as_u8_slice().to_vec(), None))
+        // Rendered straight into a buffer of whole pixels, which the GUI takes over as is.
+        let (w, h) = render_size(page, &rs);
+        let mut pixels = Pixels::zeroed(w.into(), h.into()).ok_or_else(|| format!("page {} is too large to render", req.page + 1))?;
+        render_into(page, cache, settings, &rs, pixels.bytes_mut());
+        Ok((w.into(), h.into(), pixels, None))
     }));
     match result {
         Ok(Ok(v)) => Ok(v),
@@ -229,7 +240,7 @@ fn finish(req: RenderRequest, start: Stopwatch, r: Result<Output, (String, bool)
     let millis = start.millis();
     match r {
         Ok((width, height, rgba, text)) => RenderedPage { request: req, width, height, rgba, error: None, text, millis },
-        Err((e, _)) => RenderedPage { request: req, width: 0, height: 0, rgba: Vec::new(), error: Some(e), text: None, millis },
+        Err((e, _)) => RenderedPage { request: req, width: 0, height: 0, rgba: Pixels::default(), error: Some(e), text: None, millis },
     }
 }
 
@@ -292,6 +303,10 @@ struct Shared {
     /// Pages (and request kinds) the watchdog gave up on: answered with an error at once, so a
     /// pathological page cannot trap every worker in turn.
     stuck: Mutex<std::collections::HashSet<(usize, RequestKind)>>,
+    /// Per worker id: set to stop that worker's render at its next content operator once nobody
+    /// can receive its answer (the pool was dropped, or the watchdog gave up on the render).
+    /// Lock `busy` first when holding both.
+    stop: Mutex<Vec<Arc<std::sync::atomic::AtomicBool>>>,
     /// Test hook: make one page slow.
     #[cfg(test)]
     slow_page: Mutex<Option<(usize, std::time::Duration)>>,
@@ -325,9 +340,11 @@ fn take_next(shared: &Shared) -> Option<RenderRequest> {
 ///
 /// **Watchdog:** a render running longer than `stuck_after` (default [`STUCK_AFTER`]) is reported
 /// as an error for that page, the page is not attempted again, and a replacement worker takes
-/// the stuck one's place (threads cannot be killed; the stuck one exits when its render
-/// finally returns, and its late result is dropped). At most `threads` replacements are started
-/// per pool, so a document full of pathological pages cannot spawn threads without bound.
+/// the stuck one's place (threads cannot be killed: the stuck one is told to stop at its next
+/// content operator, exits when its render returns, and its late result is dropped; a single
+/// long operator, such as decoding a huge image, still runs to its end). At most `threads`
+/// replacements are started per pool, so a document full of pathological pages cannot spawn
+/// threads without bound.
 pub struct RenderPool {
     shared: Arc<Shared>,
     wake: Mutex<Vec<Sender<()>>>,
@@ -377,14 +394,16 @@ impl RenderPool {
         return false;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let id = {
+            let (id, stop) = {
                 let mut busy = lock(&self.shared.busy);
                 busy.push(None);
-                busy.len() - 1
+                let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                lock(&self.shared.stop).push(stop.clone());
+                (busy.len() - 1, stop)
             };
             let (wtx, wrx) = channel::<()>();
             let (shared, out, bytes, config) = (self.shared.clone(), self.results_tx.clone(), self.bytes.clone(), self.config.clone());
-            match std::thread::Builder::new().name(format!("pdfcraft-render-{id}")).spawn(move || worker(id, bytes, config, shared, wrx, out)) {
+            match std::thread::Builder::new().name(format!("pdfcraft-render-{id}")).spawn(move || worker(id, bytes, config, shared, wrx, out, stop)) {
                 Ok(h) => {
                     lock(&self.wake).push(wtx);
                     lock(&self._workers).push(h);
@@ -403,7 +422,9 @@ impl RenderPool {
         let mut pool = Self::new(bytes.clone(), 0, config.clone());
         if pool.inline.is_none() {
             // Native `new` always spawns at least one worker; drop to inline explicitly.
-            pool = Self { shared: Arc::default(), wake: Mutex::new(Vec::new()), _workers: Mutex::new(Vec::new()), ..pool };
+            pool.shared = Arc::default();
+            pool.wake = Mutex::new(Vec::new());
+            pool._workers = Mutex::new(Vec::new());
             pool.inline = Some(std::cell::RefCell::new(PageRenderer::new(bytes, config)));
         }
         pool
@@ -454,11 +475,15 @@ impl RenderPool {
             let mut gave_up = Vec::new();
             {
                 let mut busy = lock(&self.shared.busy);
-                for slot in busy.iter_mut() {
+                let stop = lock(&self.shared.stop);
+                for (id, slot) in busy.iter_mut().enumerate() {
                     if let Some((req, since)) = *slot
                         && since.elapsed() > self.stuck_after
                     {
                         *slot = None; // the worker sees this and exits when it returns
+                        if let Some(s) = stop.get(id) {
+                            s.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
                         gave_up.push(req);
                     }
                 }
@@ -475,7 +500,7 @@ impl RenderPool {
                     request: req,
                     width: 0,
                     height: 0,
-                    rgba: Vec::new(),
+                    rgba: Pixels::default(),
                     error: Some(error),
                     text: None,
                     millis: 0,
@@ -489,9 +514,31 @@ impl RenderPool {
     }
 }
 
+impl Drop for RenderPool {
+    fn drop(&mut self) {
+        for s in lock(&self.shared.stop).iter() {
+            s.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// A worker's interpreter settings: the document's, stopping once `stop` is set.
 #[cfg(not(target_arch = "wasm32"))]
-fn worker(id: usize, bytes: Arc<Vec<u8>>, config: RenderConfig, shared: Arc<Shared>, wake: Receiver<()>, out: Sender<RenderedPage>) {
-    let settings = config.settings();
+fn worker_settings(config: &RenderConfig, stop: &Arc<std::sync::atomic::AtomicBool>) -> InterpreterSettings {
+    InterpreterSettings { cancelled: Some(stop.clone()), ..config.settings() }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn worker(
+    id: usize,
+    bytes: Arc<Vec<u8>>,
+    config: RenderConfig,
+    shared: Arc<Shared>,
+    wake: Receiver<()>,
+    out: Sender<RenderedPage>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) {
+    let settings = worker_settings(&config, &stop);
     // Outer loop: (re)build parser + cache; rebuilt after a renderer panic.
     loop {
         let pdf = parse(&bytes, config.password.as_deref());
@@ -506,7 +553,7 @@ fn worker(id: usize, bytes: Arc<Vec<u8>>, config: RenderConfig, shared: Arc<Shar
             };
             if lock(&shared.stuck).contains(&(req.page, req.kind)) {
                 let error = format!("page {} was skipped earlier because it took too long to render", req.page + 1);
-                let page = RenderedPage { request: req, width: 0, height: 0, rgba: Vec::new(), error: Some(error), text: None, millis: 0 };
+                let page = RenderedPage { request: req, width: 0, height: 0, rgba: Pixels::default(), error: Some(error), text: None, millis: 0 };
                 if out.send(page).is_err() {
                     return;
                 }
@@ -707,6 +754,40 @@ trailer << /Root 1 0 R >>
         let px = |x: u32, y: u32| &page.rgba[((y * page.width + x) * 4) as usize..][..4];
         assert_eq!(px(20, 30), &[0, 0, 255, 255]);
         assert_eq!(px(80, 5), &[255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn pixels_are_a_plain_renders_bytes_in_a_buffer_a_gui_can_take_over() {
+        let mut r = PageRenderer::new(Arc::new(ONE_PAGE.to_vec()), RenderConfig::default());
+        let out = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0 });
+        assert!(out.error.is_none(), "{:?}", out.error);
+        // The same bytes as hayro's own render to a pixmap, with the same settings.
+        let pdf = Pdf::new(Arc::new(ONE_PAGE.to_vec())).expect("parses");
+        let pages = pdf.pages();
+        let page = pages.first().expect("a page");
+        let rs = RenderSettings { x_scale: 2.0, y_scale: 2.0, width: Some(200), height: Some(100), bg_color: WHITE, ..Default::default() };
+        let plain = hayro::render(page, &RenderCache::new(), &RenderConfig::default().settings(), &rs);
+        assert_eq!((out.width, out.height), (200, 100));
+        assert_eq!(&*out.rgba, plain.data_as_u8_slice());
+        // Whole pixels, aligned, handed over without a copy.
+        let at = out.rgba.as_ptr();
+        assert_eq!(at as usize % 4, 0);
+        let words = out.rgba.into_words();
+        assert_eq!(words.as_ptr().cast::<u8>(), at);
+    }
+
+    #[test]
+    fn render_into_a_buffer_of_the_wrong_length_leaves_it_untouched() {
+        let pdf = Pdf::new(Arc::new(ONE_PAGE.to_vec())).expect("parses");
+        let pages = pdf.pages();
+        let page = pages.first().expect("a page");
+        let rs = RenderSettings { width: Some(10), height: Some(10), bg_color: WHITE, ..Default::default() };
+        let settings = RenderConfig::default().settings();
+        for len in [0, 399, 401, 4000] {
+            let mut buf = vec![7u8; len];
+            render_into(page, &RenderCache::new(), &settings, &rs, &mut buf);
+            assert!(buf.iter().all(|&b| b == 7), "a {len}-byte buffer was written");
+        }
     }
 
     #[test]
@@ -1099,6 +1180,58 @@ trailer << /Root 1 0 R >>
     }
 
     #[test]
+    fn dropping_the_pool_cancels_its_renders() {
+        const TEXT: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 35 >> stream
+BT /F1 12 Tf 20 70 Td (Hello) Tj ET
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+        let pool = RenderPool::new(Arc::new(ONE_PAGE.to_vec()), 1, RenderConfig::default());
+        let flag = lock(&pool.shared.stop).first().cloned().expect("one worker");
+        let settings = worker_settings(&pool.config, &flag);
+        assert!(settings.cancelled.as_ref().is_some_and(|c| Arc::ptr_eq(c, &flag)));
+        let shapes = Pdf::new(Arc::new(ONE_PAGE.to_vec())).expect("parses");
+        let text = Pdf::new(Arc::new(TEXT.to_vec())).expect("parses");
+        let pages = shapes.pages();
+        let page = pages.first().expect("a page");
+        let rs = RenderSettings { bg_color: WHITE, ..Default::default() };
+        let blue = |s: &InterpreterSettings| {
+            let p = hayro::render(page, &RenderCache::new(), s, &rs).sample(20, 30);
+            [p.r, p.g, p.b, p.a] == [0, 0, 255, 255]
+        };
+        let glyphs = |s: &InterpreterSettings| crate::text::extract_page(&text, 0, s).map_or(0, |t| t.glyphs.len());
+        assert!(blue(&settings) && glyphs(&settings) == 5, "a live pool renders and reads everything");
+        drop(pool);
+        assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(!blue(&settings) && glyphs(&settings) == 0, "once the pool is gone, interpretation stops before drawing");
+    }
+
+    #[test]
+    fn the_watchdog_stops_the_render_it_gives_up_on() {
+        let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
+        pool.set_stuck_after(std::time::Duration::from_millis(100));
+        *lock(&pool.shared.slow_page) = Some((0, std::time::Duration::from_millis(1500)));
+        pool.set_queue(vec![RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0 }]);
+        let t = std::time::Instant::now();
+        let first = loop {
+            if let Some(p) = pool.try_recv() {
+                break p;
+            }
+            assert!(t.elapsed() < std::time::Duration::from_secs(8), "no answer");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert!(first.error.as_deref().is_some_and(|e| e.contains("took longer")), "{:?}", first.error);
+        // The abandoned worker is told to stop at its next operator; its replacement isn't.
+        let stop: Vec<bool> = lock(&pool.shared.stop).iter().map(|s| s.load(std::sync::atomic::Ordering::Relaxed)).collect();
+        assert_eq!(stop, vec![true, false]);
+    }
+
+    #[test]
     fn extracts_text_with_positions() {
         let pdf = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -1334,6 +1467,106 @@ trailer << /Root 1 0 R >>
         assert_eq!(&page.rgba[((20 * 40 + 2) * 4)..][..4], &[255, 255, 255, 255], "beyond the butt cap");
     }
 
+    /// Render a 40 × 40 pt page at 1:1 on its own thread, with `/GS1` (from `gs1`) in its
+    /// resources, and fail instead of waiting when the renderer stalls.
+    fn render_with_gs1(content: &str, gs1: &str) -> RenderedPage {
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /ExtGState << /GS1 {gs1} >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len()
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("must not stall the renderer");
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page
+    }
+
+    /// The pixel at device (x, y), y down, of a 40-pixel-wide page.
+    fn px40(page: &RenderedPage, x: usize, y: usize) -> &[u8] {
+        &page.rgba[((y * 40 + x) * 4)..][..4]
+    }
+
+    /// From `cargo xtask fuzz`: an ExtGState `/D [[11] 0]` on a line that starts at x =
+    /// 92234775807 cut it into billions of dashes, and stroke expansion allocated more than
+    /// 5 GB. A tiny dash on an ordinary line does the same (`[0.000001] 0 d` on 20 pt passed
+    /// 10 GB), and so does a long pattern on many short subpaths, because every subpath restarts
+    /// it. Vendored hayro patch: a stroke whose dash pattern could cut it into more than
+    /// `MAX_DASHES_PER_STROKE` pieces is drawn solid.
+    #[test]
+    fn dash_patterns_that_cut_a_stroke_into_billions_of_pieces_render() {
+        let red = [255, 0, 0, 255];
+        // The fuzzed shape. A line that far out isn't drawn even undashed (its coordinates are
+        // beyond the rasterizer's range), so this case only proves the page finishes and the
+        // content after the stroke is drawn.
+        let page = render_with_gs1("1 0 0 RG 4 w /GS1 gs 92234775807 20 m 30 20 l S 0 0 1 rg 0 0 4 4 re f", "<< /D [[11] 0] >>");
+        assert_eq!(px40(&page, 1, 38), &[0, 0, 255, 255], "the square after the stroke is drawn");
+        for (what, content, gs1) in [
+            ("a tiny dash on an ordinary line", "1 0 0 RG 4 w [0.000001] 0 d 10 20 m 30 20 l S", "<< >>"),
+            ("a tiny dash from an ExtGState", "1 0 0 RG 4 w /GS1 gs 10 20 m 30 20 l S", "<< /D [[0.000001] 0] >>"),
+            (
+                "a tiny dash under a shrinking matrix",
+                "1 0 0 RG 0.0000001 0 0 0.0000001 0 0 cm 40000000 w [1] 0 d 100000000 200000000 m 300000000 200000000 l S",
+                "<< >>",
+            ),
+        ] {
+            let page = render_with_gs1(content, gs1);
+            // Device row 20 is user y 20; the stroke covers x 10 to 30.
+            for x in [12, 20, 28] {
+                assert_eq!(px40(&page, x, 20), &red, "{what}: ({x}, 20) is drawn, solid");
+            }
+            assert_eq!(px40(&page, 35, 20), &[255, 255, 255, 255], "{what}: beyond the end of the line");
+        }
+        // A long pattern on many short subpaths: 9,999 tiny dashes, then a long one, restarted on
+        // each of 10,000 subpaths 0.01 pt long, is 100 million pieces from a 300 KB stream.
+        let mut many = String::from("1 0 0 RG 4 w [");
+        many.push_str(&"0.000001 ".repeat(9_999));
+        many.push_str("1000] 0 d ");
+        many.push_str(&"10 20 m 10.01 20 l ".repeat(10_000));
+        many.push_str("S 0 0 1 rg 0 0 4 4 re f");
+        let page = render_with_gs1(&many, "<< >>");
+        assert_eq!(px40(&page, 1, 38), &[0, 0, 255, 255], "a pattern restarted on many subpaths finishes");
+        // A fine pattern below the cap still dashes: 200,000 pieces of 0.0001 pt cover about
+        // half of each pixel, so the line is neither solid red nor missing.
+        let page = render_with_gs1("1 0 0 RG 4 w [0.0001] 0 d 10 20 m 30 20 l S", "<< >>");
+        let p = px40(&page, 20, 20);
+        assert!(p[0] == 255 && (40..=215).contains(&p[1]), "a fine dash below the cap is drawn dashed: {p:?}");
+        // An ordinary dash pattern still dashes: butt-capped 4 pt dashes from x 0.
+        let page = render_with_gs1("1 0 0 RG 4 w [4 4] 0 d 0 20 m 40 20 l S", "<< >>");
+        assert_eq!(px40(&page, 2, 20), &red, "inside the first dash");
+        assert_eq!(px40(&page, 6, 20), &[255, 255, 255, 255], "inside the first gap");
+        assert_eq!(px40(&page, 10, 20), &red, "inside the second dash");
+    }
+
+    /// From `cargo xtask fuzz` triage: a dash array whose entries sum to less than zero made
+    /// kurbo's search for the starting dash loop for ever (`[-1 -1] 0 d` never finished).
+    /// ISO 32000-2 §8.4.3.6 requires nonnegative entries. Vendored hayro patch: a pattern with a
+    /// negative entry, or a period that isn't positive, is drawn solid.
+    #[test]
+    fn invalid_dash_patterns_terminate_and_are_drawn_solid() {
+        for (what, content, gs1) in [
+            ("[-1 -1]", "1 0 0 RG 4 w [-1 -1] 0 d 10 20 m 30 20 l S", "<< >>"),
+            ("[-1] with a phase", "1 0 0 RG 4 w [-1] 5 d 10 20 m 30 20 l S", "<< >>"),
+            ("[-2 -3] from an ExtGState", "1 0 0 RG 4 w /GS1 gs 10 20 m 30 20 l S", "<< /D [[-2 -3] 0] >>"),
+            ("[-1 3], a negative entry in a positive period", "1 0 0 RG 4 w [-1 3] 0 d 10 20 m 30 20 l S", "<< >>"),
+        ] {
+            let page = render_with_gs1(content, gs1);
+            for x in [12, 20, 28] {
+                assert_eq!(px40(&page, x, 20), &[255, 0, 0, 255], "{what}: ({x}, 20) is drawn, solid");
+            }
+        }
+    }
+
     /// From the nightly `cargo xtask fuzz`: a Type 3 glyph that shows several glyphs of its own
     /// font. The nesting cap bounds the depth but not the breadth: eight glyphs per glyph, sixteen
     /// deep, is 8^16 paints. Vendored hayro-interpret patch: nested paints (forms, Type 3 glyphs,
@@ -1436,6 +1669,70 @@ trailer << /Root 1 0 R >>
         let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("a huge JBIG2 region must not stall the renderer");
         assert!(page.error.is_none(), "{:?}", page.error);
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
+    }
+
+    /// From `cargo xtask fuzz`: one changed byte in a symbol dictionary's arithmetic-coded data
+    /// hung the renderer. Two of its loops can stop advancing: an export run of length 0, and a
+    /// height class whose first width is already the end-of-class marker. Past the end of its
+    /// data the decoder can return those for ever. Vendored hayro-jbig2 patch: at most one height
+    /// class per new symbol and `2 × symbols + 1` export runs, each plus `EXTRA_EMPTY_STEPS`.
+    /// These synthetic dictionaries (two new symbols each, a few bytes of arbitrary data) decode
+    /// the same way. In the second every class after the first symbol adds 13 to the height, so it
+    /// only fails when the height overflows `u32`, after 330 million empty classes (about five
+    /// seconds; a delta of 0 would never end). The page draws it as twenty images, so that the
+    /// stall without the patch is well past the timeout on any machine.
+    #[test]
+    fn jbig2_symbol_dictionaries_that_never_advance_terminate() {
+        for (what, data, copies) in
+            [("zero-length export runs", &[0x05, 0x70, 0x05, 0x14, 0x02, 0x1d, 0x56, 0x3f][..], 1), ("empty height classes", &[0x06, 0x99][..], 20)]
+        {
+            // Embedded JBIG2 segments (ISO 14492 §7.2): page information, then a symbol dictionary.
+            let mut jbig2 = Vec::new();
+            let mut segment = |number: u32, kind: u8, data: &[u8]| {
+                jbig2.extend_from_slice(&number.to_be_bytes());
+                jbig2.extend_from_slice(&[kind, 0, 1]);
+                jbig2.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+                jbig2.extend_from_slice(data);
+            };
+            let mut page = Vec::new();
+            page.extend_from_slice(&8u32.to_be_bytes());
+            page.extend_from_slice(&8u32.to_be_bytes());
+            page.extend_from_slice(&[0; 8]); // resolution
+            page.extend_from_slice(&[0, 0, 0]); // flags, striping
+            segment(0, 48, &page);
+            let mut dictionary = vec![0, 0]; // arithmetic coding, template 0, no refinement
+            dictionary.extend_from_slice(&[3, 0xff, 0xfd, 0xff, 2, 0xfe, 0xfe, 0xfe]); // AT pixels
+            dictionary.extend_from_slice(&1u32.to_be_bytes()); // exported symbols
+            dictionary.extend_from_slice(&2u32.to_be_bytes()); // new symbols
+            dictionary.extend_from_slice(data);
+            segment(1, 0, &dictionary);
+            // Each copy is its own image XObject (5, 6, …), all drawn by the page.
+            let images: Vec<usize> = (5..5 + copies).collect();
+            let mut content: String = images.iter().map(|n| format!("q 20 0 0 20 5 5 cm /Im{n} Do Q ")).collect();
+            content.push_str("1 0 0 rg 0 0 4 4 re f");
+            let names: String = images.iter().map(|n| format!("/Im{n} {n} 0 R ")).collect();
+            let mut pdf = format!("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << {names}>> >> >> endobj\n").into_bytes();
+            pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n", content.len()).as_bytes());
+            for n in &images {
+                pdf.extend_from_slice(
+                    format!("{n} 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 8 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n", jbig2.len())
+                        .as_bytes(),
+                );
+                pdf.extend_from_slice(&jbig2);
+                pdf.extend_from_slice(b"\nendstream endobj\n");
+            }
+            pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+                let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }));
+            });
+            let page = rx
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .unwrap_or_else(|_| panic!("{what}: a JBIG2 symbol dictionary must not stall the renderer"));
+            assert!(page.error.is_none(), "{what}: {:?}", page.error);
+            assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "{what}: the rest of the page draws");
+        }
     }
 
     /// From the nightly `cargo xtask fuzz`: an embedded Type 1 font program holding a long run of
@@ -1650,6 +1947,29 @@ trailer << /Root 1 0 R >>
             // 日本 at 40 pt covers a few hundred dark pixels; a blank or missing-glyph run doesn't.
             assert!(inked > 300, "{base_font}: 日本 is drawn ({inked} dark pixels)");
         }
+    }
+
+    /// Half-width katakana are common in Japanese documents set in a non-embedded Mincho font
+    /// such as HeiseiMin-W3. The Mincho substitute must have those glyphs: one that lacks them
+    /// (Shippori Mincho) draws each CID by glyph index instead, as unrelated glyphs (ﬁ, ﬂ).
+    #[test]
+    fn mincho_substitute_covers_half_width_katakana() {
+        use hayro::hayro_interpret::font::FallbackFontQuery;
+        use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+        use skrifa::MetadataProvider;
+        let query = FontQuery::Fallback(FallbackFontQuery {
+            post_script_name: Some("HeiseiMin-W3".into()),
+            character_collection: Some(CharacterCollection { family: CidFamily::AdobeJapan1, supplement: 2 }),
+            ..FallbackFontQuery::default()
+        });
+        let Some((data, index)) = super::japanese_fallback(&query) else {
+            eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): no Japanese face to check");
+            return;
+        };
+        let font = skrifa::FontRef::from_index((*data).as_ref(), index).expect("a craft-fonts face parses");
+        let charmap = font.charmap();
+        let missing: Vec<char> = ('\u{FF61}'..='\u{FF9F}').chain(['日', '本']).filter(|&c| charmap.map(c).is_none()).collect();
+        assert!(missing.is_empty(), "the Mincho substitute lacks {missing:?}");
     }
 
     #[test]

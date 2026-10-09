@@ -36,6 +36,11 @@ fn fixture() -> Document {
         "<< /Type /Annot /Subtype /Widget /FT /Btn /T (go) /Ff 65536 /Rect [300 450 380 470] /P 3 0 R >>".into(), // 25
         "<< /Type /Annot /Subtype /Widget /FT /Btn /T (bare) /Rect [400 700 415 715] /P 3 0 R /Foo (kept) >>".into(), // 26 check box without AP
     ];
+    document(&objs)
+}
+
+/// A PDF of the given objects (numbered from 1).
+fn document(objs: &[String]) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -90,6 +95,40 @@ fn the_field_tree_is_read_with_inheritance() {
     assert_eq!(field(&all, "address.city").quadding, 1);
 }
 
+/// pdf-lib and other writers give radio groups and check boxes an `/Opt` array and name the on
+/// states by position (`/0`, `/1`): the export values select them, as in Acrobat.
+#[test]
+fn opt_export_values_select_button_states() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),                                                // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),                                 // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>".into(),                                       // 3
+        "<< /Fields [5 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),                                                 // 4
+        "<< /FT /Btn /T (ship) /Ff 49152 /Opt [(Post) (Pick-up)] /V /Off /Kids [6 0 R 7 0 R] >>".into(),            // 5 radio
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [100 700 115 715] /P 3 0 R /AP << /N << /0 9 0 R /Off 10 0 R >> >> >>".into(), // 6
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [200 700 215 715] /P 3 0 R /AP << /N << /1 9 0 R /Off 10 0 R >> >> >>".into(), // 7
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (terms) /Opt [(Accepted)] /V /Off /AS /Off /Rect [100 650 115 665] /P 3 0 R /AP << /N << /0 9 0 R /Off 10 0 R >> >> >>".into(), // 8 check box
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                                                              // 9
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                                                              // 10
+    ];
+    let mut doc = document(&objs);
+    let all = fields(&doc);
+    let ship = field(&all, "ship");
+    assert_eq!((0..2).map(|i| ship.export_of(i)).collect::<Vec<_>>(), [Some("Post"), Some("Pick-up")]);
+    assert_eq!((ship.state_for("Pick-up"), ship.state_for("1"), ship.state_for("Courier")), (Some("1"), Some("1"), None));
+    set_value(&mut doc, "ship", &FieldValue::Radio(Some("Pick-up".into()))).unwrap();
+    set_value(&mut doc, "terms", &FieldValue::Text("Accepted".into())).unwrap();
+    let mut doc = reopen(&doc);
+    let all = fields(&doc);
+    let ship = field(&all, "ship");
+    assert_eq!(ship.value, ["1"]);
+    assert_eq!(ship.export_for_state("1"), "Pick-up");
+    assert_eq!(ship.widgets.iter().map(|w| w.state.as_deref()).collect::<Vec<_>>(), [Some("Off"), Some("1")]);
+    assert_eq!(field(&all, "terms").value, ["0"]);
+    let err = set_value(&mut doc, "ship", &FieldValue::Radio(Some("Courier".into()))).unwrap_err();
+    assert!(err.to_string().contains("options: Post, Pick-up"), "{err}");
+}
+
 #[test]
 fn text_fields_get_new_appearances() {
     let mut doc = fixture();
@@ -121,6 +160,55 @@ fn text_fields_get_new_appearances() {
 }
 
 #[test]
+fn japanese_choices_use_the_unicode_cid_font() {
+    // A choice field whose /DA names a non-embedded CID font with a predefined Unicode CMap
+    // (UniJIS-UTF16-H). Selecting 令 must draw it in that font, not "?" in Helvetica.
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [8 0 R 9 0 R 10 0 R] >>".into(),
+        "<< /Fields [8 0 R 9 0 R 10 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R /HeiseiMin-W3 6 0 R /Emb 7 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Font /Subtype /Type0 /BaseFont /HeiseiMin-W3 /Encoding /UniJIS-UTF16-H /DescendantFonts [<< /Type /Font /Subtype /CIDFontType0 /BaseFont /HeiseiMin-W3 /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 6 >> >>] >>".into(),
+        "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+Subset /Encoding /Identity-H /DescendantFonts [] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (era) /Ff 131072 /DA (/HeiseiMin-W3 10 Tf 0 g) /Q 1 /Opt [<FEFF3000> <FEFF660E> <FEFF4EE4>] /V <FEFF3000> /Rect [50 700 80 715] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (address) /Ff 4096 /DA (/HeiseiMin-W3 10 Tf 0 g) /Rect [50 600 100 680] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (subset) /DA (/Emb 10 Tf 0 g) /Rect [50 500 100 520] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    assert_eq!(field(&fields(&doc), "era").options.get(2), Some(&("令".to_string(), "令".to_string())));
+    set_value(&mut doc, "era", &FieldValue::Text("令".into())).unwrap();
+    set_value(&mut doc, "address", &FieldValue::Text("日本語のテキスト入力欄です".into())).unwrap();
+    set_value(&mut doc, "subset", &FieldValue::Text("令和".into())).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    assert_eq!(field(&all, "era").value, ["令"]);
+    let raw = |name: &str| {
+        let w = &field(&all, name).widgets[0];
+        let n = doc.get(w.obj).as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        let fonts = doc.resolve(s.dict.get(b"Resources").unwrap()).as_dict().unwrap().get(b"Font").map(|f| doc.resolve(f)).unwrap();
+        let fonts: Vec<String> = fonts.as_dict().unwrap().iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect();
+        (s.decoded().unwrap(), fonts)
+    };
+    let utf16 = |t: &str| t.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>();
+    let (era, era_fonts) = raw("era");
+    assert!(era.windows(4).any(|x| x == b"(N\xe4)"), "令 as UTF-16BE: {}", String::from_utf8_lossy(&era));
+    assert!(String::from_utf8_lossy(&era).contains("/HeiseiMin-W3 10 Tf"));
+    assert!(!era.windows(3).any(|x| x == b"(?)"), "no WinAnsi fallback");
+    assert_eq!(era_fonts, ["HeiseiMin-W3"]);
+    // Multiline Japanese wraps by character at about one em each (50 pt wide, 10 pt type).
+    let (addr, _) = raw("address");
+    let addr_text = String::from_utf8_lossy(&addr);
+    assert!(addr_text.matches(" Tj").count() >= 4, "{addr_text}");
+    assert!(addr.windows(4).any(|x| x == utf16("日本").as_slice()));
+    // An Identity-H subset can't be addressed by Unicode: Helvetica, as before.
+    let (sub, sub_fonts) = raw("subset");
+    assert!(String::from_utf8_lossy(&sub).contains("/Helv "), "{}", String::from_utf8_lossy(&sub));
+    assert_eq!(sub_fonts, ["Helv"]);
+}
+
+#[test]
 fn check_boxes_and_radios_switch_states() {
     let mut doc = fixture();
     set_value(&mut doc, "agree", &FieldValue::Check(true)).unwrap();
@@ -144,6 +232,46 @@ fn check_boxes_and_radios_switch_states() {
     assert!(matches!(set_value(&mut doc, "size", &FieldValue::Radio(None)), Err(FormError::Invalid(_))));
     set_value(&mut doc, "agree", &FieldValue::Check(false)).unwrap();
     assert!(field(&fields(&doc), "agree").value.is_empty());
+}
+
+#[test]
+fn check_boxes_keep_non_utf8_state_names() {
+    // Japanese forms often name a check box's on state 「はい」 in Shift-JIS: ticking it has to
+    // write those exact bytes to /AS and /V, or no appearance matches and no mark shows.
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),
+        "<< /Fields [5 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /AS /Off /Rect [50 700 56 706] /P 3 0 R /AP << /N << /Off 6 0 R /#82#CD#82#A2 7 0 R >> >> >>".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    let sjis_hai: &[u8] = b"\x82\xcd\x82\xa2";
+    let mut doc = document(&objs);
+    let all = fields(&doc);
+    assert_eq!(field(&all, "agree").widgets[0].on_state.as_deref(), Some("#82#CD#82#A2"));
+    set_value(&mut doc, "agree", &FieldValue::Check(true)).unwrap();
+    let doc = reopen(&doc);
+    let f = field(&fields(&doc), "agree").clone();
+    let wd = doc.get(f.widgets[0].obj).as_dict().cloned().unwrap();
+    assert_eq!(wd.name(b"AS"), Some(sjis_hai));
+    assert_eq!(doc.get(f.obj).as_dict().unwrap().name(b"V"), Some(sjis_hai));
+    assert_eq!(f.value, ["#82#CD#82#A2"]);
+    let mut doc = doc;
+    set_value(&mut doc, "agree", &FieldValue::Check(false)).unwrap();
+    assert_eq!(doc.get(f.widgets[0].obj).as_dict().unwrap().name(b"AS"), Some(&b"Off"[..]));
+}
+
+#[test]
+fn name_text_round_trips() {
+    for bytes in [&b"Yes"[..], b"\x82\xcd\x82\xa2", "はい".as_bytes(), b"A#1", b"a b", b"", b"\xff#\x00"] {
+        assert_eq!(name_bytes(&name_text(bytes)), bytes, "{bytes:?}");
+    }
+    assert_eq!(name_text("はい".as_bytes()), "はい");
+    assert_eq!(name_text(b"A#1"), "A#231");
+    // Malformed escapes stay as they are.
+    assert_eq!(name_bytes("#G1#4"), b"#G1#4");
 }
 
 #[test]
@@ -826,4 +954,144 @@ fn page_shapes_reads_boxes_and_rules() {
     let sh = crate::detect::page_shapes(&doc, 0);
     assert_eq!(sh.boxes, [[20.0, 20.0, 32.0, 32.0]]);
     assert_eq!(sh.rules, [[40.0, 100.0, 240.0, 100.0], [60.0, 600.5, 260.0, 600.5]]);
+}
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() < 0.05
+}
+
+fn nums(o: &Object) -> Vec<f64> {
+    o.as_array().unwrap().iter().filter_map(Object::as_f64).collect()
+}
+
+/// Normal appearance `/BBox` and `/Matrix` (absent when the widget is not rotated).
+fn appearance_box(doc: &Document, w: &Widget) -> (Vec<f64>, Option<Vec<f64>>) {
+    let n = doc.get(w.obj).as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    let Object::Stream(s) = &*doc.get(n) else { panic!("appearance") };
+    (nums(s.dict.get(b"BBox").unwrap()), s.dict.get(b"Matrix").map(nums))
+}
+
+#[test]
+fn rotated_fields_draw_in_their_quadrant() {
+    let mut doc = fixture();
+    // No /R: the appearance is the widget rectangle and carries no /Matrix.
+    set_value(&mut doc, "name", &FieldValue::Text("Ada".into())).unwrap();
+    let (bbox, matrix) = appearance_box(&doc, &field(&fields(&doc), "name").widgets[0]);
+    assert!(close(bbox[2], 200.0) && close(bbox[3], 20.0), "{bbox:?}");
+    assert!(matrix.is_none(), "{matrix:?}");
+
+    let set_r = |doc: &mut Document, degrees: i64| {
+        let obj = field(&fields(doc), "name").widgets[0].obj;
+        doc.update_dict(obj, |d| {
+            let mut mk = d.get(b"MK").and_then(|m| m.as_dict().cloned()).unwrap_or_default();
+            mk.set(b"R".to_vec(), Object::Int(degrees));
+            d.set(b"MK".to_vec(), Object::Dict(mk));
+        })
+        .unwrap();
+        set_value(doc, "name", &FieldValue::Text("Ada".into())).unwrap();
+    };
+    // 90 and 270 lay the text out in the swapped box. 180 keeps the box and turns it over.
+    set_r(&mut doc, 90);
+    let (bbox, matrix) = appearance_box(&doc, &field(&fields(&doc), "name").widgets[0]);
+    assert!(close(bbox[2], 20.0) && close(bbox[3], 200.0), "{bbox:?}");
+    let m = matrix.unwrap();
+    assert!(close(m[0], 0.0) && close(m[1], 1.0) && close(m[2], -1.0) && close(m[4], 200.0), "{m:?}");
+    set_r(&mut doc, 180);
+    let (bbox, matrix) = appearance_box(&doc, &field(&fields(&doc), "name").widgets[0]);
+    assert!(close(bbox[2], 200.0) && close(bbox[3], 20.0), "{bbox:?}");
+    let m = matrix.unwrap();
+    assert!(close(m[0], -1.0) && close(m[3], -1.0) && close(m[4], 200.0) && close(m[5], 20.0), "{m:?}");
+    set_r(&mut doc, 270);
+    let (bbox, matrix) = appearance_box(&doc, &field(&fields(&doc), "name").widgets[0]);
+    assert!(close(bbox[2], 20.0) && close(bbox[3], 200.0), "{bbox:?}");
+    let m = matrix.unwrap();
+    assert!(close(m[1], -1.0) && close(m[2], 1.0) && close(m[5], 20.0), "{m:?}");
+    // A non-quadrant /R is drawn upright.
+    set_r(&mut doc, 45);
+    let (bbox, matrix) = appearance_box(&doc, &field(&fields(&doc), "name").widgets[0]);
+    assert!(matrix.is_none() && close(bbox[2], 200.0) && close(bbox[3], 20.0), "{bbox:?} {matrix:?}");
+    assert_eq!(field(&fields(&doc), "name").widgets[0].rotation, 0);
+
+    let before = field(&fields(&doc), "name").widgets[0].rect;
+    assert!(set_props(&mut doc, "name", &FieldProps { rotation: Some((0, 45)), ..FieldProps::default() }).is_err());
+    assert!(field(&fields(&doc), "name").widgets[0].rect.iter().zip(before).all(|(a, b)| close(*a, b)));
+    set_props(&mut doc, "name", &FieldProps { rotation: Some((0, 90)), ..FieldProps::default() }).unwrap();
+    let turned = field(&fields(&doc), "name").widgets[0].clone();
+    assert_eq!(turned.rotation, 90);
+    let r = turned.rect;
+    // [50 700 250 720] around its center becomes 20 wide and 200 tall.
+    assert!(close(r[0], 140.0) && close(r[1], 610.0) && close(r[2], 160.0) && close(r[3], 810.0), "{r:?}");
+    let widget = doc.get(turned.obj);
+    let mk = widget.as_dict().unwrap().get(b"MK").unwrap().as_dict().cloned().unwrap();
+    assert!(mk.contains(b"BG") && mk.contains(b"BC") && mk.int(b"R") == Some(90));
+    let (_, matrix) = appearance_box(&doc, &turned);
+    assert!(matrix.is_some());
+    // 270 stays on the vertical axis, so the rectangle is not swapped again.
+    set_props(&mut doc, "name", &FieldProps { rotation: Some((0, 270)), ..FieldProps::default() }).unwrap();
+    let r270 = field(&fields(&doc), "name").widgets[0].rect;
+    assert!(r270.iter().zip(r).all(|(a, b)| close(*a, b)), "{r270:?}");
+
+    // A check box and a push button use the same matrix.
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [20.0, 40.0, 40.0, 60.0], &NewField::CheckBox, Some("agree")).unwrap();
+    add_field(&mut doc, 0, [20.0, 80.0, 120.0, 110.0], &NewField::Button { caption: "Go".into() }, Some("go")).unwrap();
+    set_props(&mut doc, "agree", &FieldProps { rotation: Some((0, 90)), ..FieldProps::default() }).unwrap();
+    set_props(&mut doc, "go", &FieldProps { rotation: Some((0, 90)), ..FieldProps::default() }).unwrap();
+    let agree = field(&fields(&doc), "agree").widgets[0].clone();
+    let widget = doc.get(agree.obj);
+    let n = widget.as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().get(b"N").cloned().unwrap();
+    let states = doc.resolve(&n);
+    let yes = states.as_dict().unwrap().reference(b"Yes").unwrap();
+    let Object::Stream(s) = &*doc.get(yes) else { panic!("check") };
+    assert!(s.dict.contains(b"Matrix"), "the check mark is rotated");
+    let go = field(&fields(&doc), "go").widgets[0].clone();
+    let (text, matrix) = (ap(&doc, &go), appearance_box(&doc, &go).1);
+    assert!(text.contains("(Go) Tj") && matrix.is_some(), "{text}");
+}
+
+#[test]
+fn a_rotation_refused_as_too_small_changes_nothing_else() {
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, Some("thin")).unwrap();
+    // 200 x 3: turned a quarter it would be 3 wide, too small to use.
+    let obj = field(&fields(&doc), "thin").widgets[0].obj;
+    doc.update_dict(obj, |d| d.set(b"Rect".to_vec(), Object::Array([50.0, 700.0, 250.0, 703.0].iter().map(|v| Object::Real(*v)).collect()))).unwrap();
+    let props = FieldProps { tooltip: Some("changed".into()), rotation: Some((0, 90)), ..FieldProps::default() };
+    assert!(set_props(&mut doc, "thin", &props).is_err());
+    let f = field(&fields(&doc), "thin").clone();
+    assert_eq!(f.tooltip, None, "the tooltip was written before the rotation was refused");
+    assert_eq!(f.widgets[0].rotation, 0);
+}
+
+#[test]
+fn a_rotated_field_draws_along_the_vertical_edge() {
+    use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind};
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [10.0, 40.0, 90.0, 60.0], &NewField::Text { multiline: false }, Some("wide")).unwrap();
+    set_value(&mut doc, "wide", &FieldValue::Text("MMMMMM".into())).unwrap();
+    set_props(&mut doc, "wide", &FieldProps { font_size: Some(12.0), ..FieldProps::default() }).unwrap();
+    let span = |doc: &Document| -> (u32, u32) {
+        let bytes = write_incremental(doc, &SaveOptions::default()).unwrap();
+        let mut r = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0 });
+        assert!(p.error.is_none(), "{:?}", p.error);
+        let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+        let mut ink = false;
+        for y in 0..p.height {
+            for x in 0..p.width {
+                let i = ((y * p.width + x) * 4) as usize;
+                if p.rgba[i] < 200 {
+                    ink = true;
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
+            }
+        }
+        assert!(ink, "the field drew no text");
+        (x1 - x0, y1 - y0)
+    };
+    let (wide, tall) = span(&doc);
+    assert!(wide > tall, "upright text is a horizontal run: {wide}x{tall}");
+    set_props(&mut doc, "wide", &FieldProps { rotation: Some((0, 90)), ..FieldProps::default() }).unwrap();
+    let (wide, tall) = span(&doc);
+    assert!(tall > wide, "rotated text is a vertical run: {wide}x{tall}");
 }

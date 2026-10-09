@@ -10,6 +10,7 @@
 
 	Menu	Menu
 	File	Arquivo
+	Rotation:	Rotação:
 	Edit	Editar
 	Pages	Páginas
 	View	Exibir
@@ -21,6 +22,10 @@
 	Name on new comments	Nome nos novos comentários
 	Open…	Abrir…
 	Open Recent	Abrir recentes
+	Clear Recent Files	Limpar arquivos recentes
+	Remove from Recent	Remover dos recentes
+	Remove {name} from Recent	Remover {name} dos recentes
+	Clear	Limpar
 	Pin folder to Home…	Fixar pasta no Início…
 	No recent files	Nenhum arquivo recente
 	New blank PDF	Novo PDF em branco
@@ -66,3 +71,4 @@
 	Couldn't import the signature image: {e}	Não foi possível importar a imagem da assinatura: {e}
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	O modo portátil está desativado: não é possível gravar em {folder} ({error}). As configurações ficam na sua pasta de usuário.
 	Go to page…	Ir para a página…
+	Reopen the files that were open when PdfCraft last closed	Reabrir os arquivos que estavam abertos quando o PdfCraft foi fechado pela última vez

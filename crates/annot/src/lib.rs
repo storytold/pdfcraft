@@ -274,6 +274,55 @@ impl StampKind {
     }
 }
 
+/// A line ending (`/LE`): the ten styles in ISO 32000-2 Table 217.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineEnding {
+    None,
+    Square,
+    Circle,
+    Diamond,
+    OpenArrow,
+    ClosedArrow,
+    Butt,
+    ROpenArrow,
+    RClosedArrow,
+    Slash,
+}
+
+impl LineEnding {
+    pub const ALL: [Self; 10] = [
+        Self::None,
+        Self::Square,
+        Self::Circle,
+        Self::Diamond,
+        Self::OpenArrow,
+        Self::ClosedArrow,
+        Self::Butt,
+        Self::ROpenArrow,
+        Self::RClosedArrow,
+        Self::Slash,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Square => "Square",
+            Self::Circle => "Circle",
+            Self::Diamond => "Diamond",
+            Self::OpenArrow => "OpenArrow",
+            Self::ClosedArrow => "ClosedArrow",
+            Self::Butt => "Butt",
+            Self::ROpenArrow => "ROpenArrow",
+            Self::RClosedArrow => "RClosedArrow",
+            Self::Slash => "Slash",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|ending| ending.name() == name)
+    }
+}
+
 /// Geometry of a new comment, in PDF user space of its page.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
@@ -294,11 +343,12 @@ pub enum Shape {
     Oval {
         rect: [f64; 4],
     },
-    /// A line, with an open arrowhead at `to` when `arrow` is set.
+    /// A line. An open arrow at `to` is `start: None`, `end: OpenArrow` (the Arrow tool).
     Line {
         from: [f64; 2],
         to: [f64; 2],
-        arrow: bool,
+        start: LineEnding,
+        end: LineEnding,
     },
     /// Freehand strokes (Draw tool).
     Ink {
@@ -357,9 +407,11 @@ pub enum Shape {
         vertices: Vec<[f64; 2]>,
         cloud: bool,
     },
-    /// Connected lines (Polygonal Line tool).
+    /// Connected lines (Polygonal Line tool). `start` is the first vertex, `end` the last.
     PolyLine {
         vertices: Vec<[f64; 2]>,
+        start: LineEnding,
+        end: LineEnding,
     },
     /// A text callout: a text box at `rect` with a leader line from `point` (arrowhead) via
     /// `knee` to the box (FreeText, `/IT /FreeTextCallout`, `/CL`).
@@ -368,6 +420,7 @@ pub enum Shape {
         knee: [f64; 2],
         point: [f64; 2],
         font_size: f64,
+        ending: LineEnding,
     },
     /// Insert text: a caret in `rect` (its point at the top centre).
     Caret {
@@ -662,6 +715,59 @@ fn annot_dict(doc: &Document, r: ObjRef) -> Dict {
     doc.get(r).as_dict().cloned().unwrap_or_default()
 }
 
+/// A Fill & Sign item: typed text, a check/cross/dot/line, or a typed, drawn or image signature.
+///
+/// New items carry `/PCFillSign`. Older files are recognised from the dictionaries PdfCraft
+/// already writes (`/IT /FreeTextTypeWriter`, stamp `/Name`, drawn ink whose subject is
+/// "Signature").
+pub fn is_fill_sign(doc: &Document, d: &Dict) -> bool {
+    if matches!(d.get(b"PCFillSign").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))) {
+        return true;
+    }
+    let subtype = d.name(b"Subtype").unwrap_or_default();
+    if subtype == b"FreeText" && d.name(b"IT") == Some(b"FreeTextTypeWriter") {
+        return true;
+    }
+    if subtype == b"Stamp" {
+        if matches!(d.name(b"Name"), Some(b"PCCheck" | b"PCCross" | b"PCDot" | b"PCLine" | b"PCTypedSignature")) {
+            return true;
+        }
+        if matches!(d.name(b"Name"), Some(b"PCCustomSignature" | b"PCCustomInitials"))
+            && matches!(d.get(b"PCPictureImage").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true)))
+        {
+            return true;
+        }
+    }
+    subtype == b"Ink" && text_value(doc, d, b"Subj").as_deref() == Some("Signature")
+}
+
+/// Whether any page has a Fill & Sign annotation that flatten would bake in (not hidden).
+pub fn has_visible_fill_sign(doc: &Document) -> bool {
+    let Ok(pages) = page_refs(doc) else { return false };
+    for page in pages {
+        for entry in annots(doc, page) {
+            let obj = doc.resolve(&entry);
+            let Some(d) = obj.as_dict() else { continue };
+            let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+            if flags & (FLAG_HIDDEN | FLAG_NO_VIEW) != 0 {
+                continue;
+            }
+            if is_fill_sign(doc, d) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn fill_sign_shape(shape: &Shape) -> bool {
+    match shape {
+        Shape::Typewriter { .. } | Shape::Mark { .. } | Shape::Signature { .. } | Shape::TypedSignature { .. } => true,
+        Shape::CustomStamp { name, image: true, .. } => name == "Signature" || name == "Initials",
+        _ => false,
+    }
+}
+
 /// The embedded image of a Fill & Sign image signature or initials (0-based target).
 /// Other stamps have appearances that can't be represented by this image alone.
 pub fn signature_image(doc: &Document, page: usize, index: usize) -> Result<Option<ObjRef>, AnnotError> {
@@ -677,6 +783,16 @@ pub fn signature_image(doc: &Document, page: usize, index: usize) -> Result<Opti
     .flatten())
 }
 
+/// The page `/Rotate` the picture of the image signature at `(page, index)` is drawn turned back
+/// by, so it reads upright on a page shown that way: 0 for one added to an unturned page, or by
+/// another app. The picture appears turned by the page's current rotation less this.
+pub fn picture_rotation(doc: &Document, page: usize, index: usize) -> Result<i64, AnnotError> {
+    let p = page_ref(doc, page)?;
+    let list = annots(doc, p);
+    let entry = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    Ok(doc.resolve(entry).as_dict().map_or(0, appearance::picture_turn))
+}
+
 // ── building ────────────────────────────────────────────────────────────────────────────────
 
 /// Annotation flags (§12.5.3).
@@ -684,6 +800,7 @@ const FLAG_PRINT: i64 = 4;
 const FLAG_NO_ZOOM: i64 = 8;
 const FLAG_NO_ROTATE: i64 = 16;
 const FLAG_HIDDEN: i64 = 2;
+const FLAG_NO_VIEW: i64 = 32;
 const FLAG_LOCKED: i64 = 128;
 
 /// Size of a note icon (points, unscaled by zoom).
@@ -714,6 +831,14 @@ fn bounds(points: impl Iterator<Item = [f64; 2]>) -> Option<[f64; 4]> {
 
 fn grow(r: [f64; 4], by: f64) -> [f64; 4] {
     [r[0] - by, r[1] - by, r[2] + by, r[3] + by]
+}
+
+fn ending_draws(ending: LineEnding) -> bool {
+    ending != LineEnding::None
+}
+
+fn ending_pair(start: LineEnding, end: LineEnding) -> Object {
+    Object::Array(vec![Object::name(start.name()), Object::name(end.name())])
 }
 
 /// Validate and compute `/Rect` for a new comment.
@@ -755,11 +880,11 @@ fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotError> {
             }
             r
         }
-        Shape::Line { from, to, arrow } => {
+        Shape::Line { from, to, start, end } => {
             if !finite(from) || !finite(to) || (from[0] - to[0]).hypot(from[1] - to[1]) < 1.0 {
                 return Err(bad("line (too short)"));
             }
-            let pad = half + if *arrow { appearance::arrow_size(style.width) } else { 0.0 };
+            let pad = half + if ending_draws(*start) || ending_draws(*end) { appearance::arrow_size(style.width) } else { 0.0 };
             grow(bounds([*from, *to].into_iter()).unwrap_or_default(), pad + 1.0)
         }
         Shape::Ink { strokes } | Shape::Signature { strokes } => {
@@ -780,10 +905,11 @@ fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotError> {
             let b = b.ok_or_else(|| bad("polygon (it needs three points)"))?;
             grow(b, half + 1.0 + if *cloud { 1.5 * appearance::cloud_radius(style.width) } else { 0.0 })
         }
-        Shape::PolyLine { vertices } => {
+        Shape::PolyLine { vertices, start, end } => {
             let b = bounds(vertices.iter().copied())
                 .filter(|b| vertices.len() >= 2 && vertices.iter().all(|p| finite(p)) && (b[2] - b[0]).max(b[3] - b[1]) >= 1.0);
-            grow(b.ok_or_else(|| bad("connected lines (they need two points)"))?, half + 1.0)
+            let extra = if ending_draws(*start) || ending_draws(*end) { appearance::arrow_size(style.width) } else { 0.0 };
+            grow(b.ok_or_else(|| bad("connected lines (they need two points)"))?, half + 1.0 + extra)
         }
         Shape::Callout { rect, knee, point, .. } => {
             let r = normalize(*rect);
@@ -836,7 +962,7 @@ fn subject(shape: &Shape) -> &'static str {
         Shape::TextMarkup { kind: Markup::Squiggly, .. } => "Squiggly",
         Shape::Rectangle { .. } => "Rectangle",
         Shape::Oval { .. } => "Oval",
-        Shape::Line { arrow: true, .. } => "Arrow",
+        Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. } => "Arrow",
         Shape::Line { .. } => "Line",
         Shape::Ink { .. } => "Pencil",
         Shape::TextBox { .. } => "Text Box",
@@ -933,11 +1059,11 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             }
             border(&mut d);
         }
-        Shape::Line { from, to, arrow } => {
+        Shape::Line { from, to, start, end } => {
             d.set(b"C".to_vec(), rgb(style.color));
             d.set(b"L".to_vec(), num_array(&[from[0], from[1], to[0], to[1]]));
-            if *arrow {
-                d.set(b"LE".to_vec(), Object::Array(vec![Object::name("None"), Object::name("OpenArrow")]));
+            if ending_draws(*start) || ending_draws(*end) {
+                d.set(b"LE".to_vec(), ending_pair(*start, *end));
             }
             border(&mut d);
         }
@@ -968,6 +1094,14 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             d.set(b"PCPicture".to_vec(), Object::Ref(*picture));
             d.set(b"PCPictureImage".to_vec(), Object::Bool(*image));
             d.set(b"PCPictureSize".to_vec(), num_array(&[size.0, size.1]));
+            // An image signature's rectangle is in user space; on a turned page its appearance is
+            // turned back (see `appearance::build`), so it reads upright as displayed.
+            if *image && matches!(clean.as_str(), "Signature" | "Initials") {
+                let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
+                if turn != 0 {
+                    d.set(b"PCPictureRotate".to_vec(), Object::Int(turn));
+                }
+            }
         }
         Shape::Ink { strokes } | Shape::Signature { strokes } => {
             d.set(b"C".to_vec(), rgb(style.color));
@@ -990,9 +1124,12 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             }
             border(&mut d);
         }
-        Shape::PolyLine { vertices } => {
+        Shape::PolyLine { vertices, start, end } => {
             d.set(b"C".to_vec(), rgb(style.color));
             d.set(b"Vertices".to_vec(), num_array(&vertices.concat()));
+            if ending_draws(*start) || ending_draws(*end) {
+                d.set(b"LE".to_vec(), ending_pair(*start, *end));
+            }
             border(&mut d);
         }
         Shape::Caret { .. } => {
@@ -1029,12 +1166,12 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 d.set(b"Contents".to_vec(), PdfString::text(file.trim()));
             }
         }
-        Shape::Callout { rect: tb, knee, point, .. } => {
+        Shape::Callout { rect: tb, knee, point, ending, .. } => {
             let tb = normalize(*tb);
             let attach = callout_attach(tb, *knee);
             d.set(b"IT".to_vec(), Object::name("FreeTextCallout"));
             d.set(b"CL".to_vec(), num_array(&[point[0], point[1], knee[0], knee[1], attach[0], attach[1]]));
-            d.set(b"LE".to_vec(), Object::name("OpenArrow"));
+            d.set(b"LE".to_vec(), Object::name(ending.name()));
             // The text box inside /Rect (§12.5.6.6 /RD).
             d.set(b"RD".to_vec(), num_array(&[tb[0] - rect[0], tb[1] - rect[1], rect[2] - tb[2], rect[3] - tb[3]]));
         }
@@ -1057,6 +1194,10 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
         }
         _ => {}
     }
+    if fill_sign_shape(&new.shape) {
+        // Survives a later subject edit, so flatten-on-save still finds the mark.
+        d.set(b"PCFillSign".to_vec(), Object::Bool(true));
+    }
     let r = doc.add(Object::Dict(d.clone()));
     set_appearance(doc, r)?;
     let mut list = annots(doc, page);
@@ -1078,12 +1219,51 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     Ok(index)
 }
 
+/// Counterrotate a newly placed image stamp's appearance into displayed-page axes.
+/// The normal appearance's transformed bounding box is fitted to `/Rect` by PDF viewers.
+pub fn orient_image_stamp(doc: &mut Document, page: usize, index: usize, rotation: i64) -> Result<(), AnnotError> {
+    let matrix = match rotation {
+        90 => [0.0, 1.0, -1.0, 0.0, 0.0, 0.0],
+        180 => [-1.0, 0.0, 0.0, -1.0, 0.0, 0.0],
+        270 => [0.0, -1.0, 1.0, 0.0, 0.0, 0.0],
+        _ => return Ok(()),
+    };
+    let (_, r) = annot_ref(doc, page, index)?;
+    let d = annot_dict(doc, r);
+    if d.name(b"Subtype") != Some(b"Stamp") || !matches!(d.get(b"PCPictureImage"), Some(Object::Bool(true))) {
+        return Err(AnnotError::Invalid("only an image stamp can be oriented".into()));
+    }
+    let normal = d
+        .get(b"AP")
+        .map(|ap| doc.resolve(ap))
+        .and_then(|ap| ap.as_dict().and_then(|ap| ap.reference(b"N")))
+        .ok_or_else(|| AnnotError::Invalid("the stamp has no normal appearance".into()))?;
+    let Object::Stream(mut stream) = doc.get(normal).as_ref().clone() else {
+        return Err(AnnotError::Invalid("the stamp's normal appearance is not a stream".into()));
+    };
+    stream.dict.set(b"Matrix".to_vec(), num_array(&matrix));
+    doc.set(normal, Object::Stream(stream));
+    Ok(())
+}
+
 /// (Re)generate `/AP /N` for the annotation `r` from its dictionary.
 /// Regenerate an annotation's normal appearance from its dictionary.
 pub fn set_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
-    let Some(stream) = appearance::build(&d) else { return Err(AnnotError::Unsupported(subtype)) };
+    let Some(mut stream) = appearance::build(&d) else { return Err(AnnotError::Unsupported(subtype)) };
+    // Image stamp restyling must retain the placement's page-axis correction.
+    if matches!(d.get(b"PCPictureImage"), Some(Object::Bool(true))) {
+        let matrix = d.get(b"AP").and_then(|ap| {
+            let ap = doc.resolve(ap);
+            let normal = doc.resolve(ap.as_dict()?.get(b"N")?);
+            let Object::Stream(normal) = normal.as_ref() else { return None };
+            normal.dict.get(b"Matrix").cloned()
+        });
+        if let Some(matrix) = matrix {
+            stream.dict.set(b"Matrix".to_vec(), matrix);
+        }
+    }
     let ap = doc.add(Object::Stream(stream));
     let mut apd = Dict::new();
     apd.set(b"N".to_vec(), Object::Ref(ap));
@@ -1469,7 +1649,8 @@ fn border_width_of(d: &Dict) -> f64 {
     d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0).max(0.0)
 }
 
-/// Change a comment's colour, opacity and/or line width, and redraw it.
+/// Change a comment's colour, opacity, line width and/or line endings, and redraw it.
+#[allow(clippy::too_many_arguments)]
 pub fn set_style(
     doc: &mut Document,
     page: usize,
@@ -1477,6 +1658,7 @@ pub fn set_style(
     color: Option<Rgb>,
     opacity: Option<f64>,
     width: Option<f64>,
+    endings: Option<&[LineEnding]>,
     meta: &Meta,
 ) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
@@ -1485,10 +1667,17 @@ pub fn set_style(
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     // Check before changing anything: a stale appearance would contradict the new style.
     if appearance::build(&d).is_none() {
-        return Err(AnnotError::Unsupported(subtype));
+        return Err(AnnotError::Unsupported(subtype.clone()));
     }
     if color.is_some_and(|c| !finite(&c)) || opacity.is_some_and(|o| !o.is_finite()) || width.is_some_and(|w| !w.is_finite()) {
         return Err(AnnotError::Invalid("invalid style".into()));
+    }
+    if let Some(ends) = endings {
+        let callout = subtype == "FreeText" && d.contains(b"CL");
+        let pair = matches!(subtype.as_str(), "Line" | "PolyLine");
+        if (callout && ends.len() != 1) || (pair && ends.len() != 2) || (!callout && !pair) {
+            return Err(AnnotError::Invalid("this comment has no line endings to change".into()));
+        }
     }
     let free_text = subtype == "FreeText";
     doc.update_dict(r, |d| {
@@ -1516,9 +1705,53 @@ pub fn set_style(
             d.set(b"BS".to_vec(), Object::Dict(bs));
             d.remove(b"Border");
         }
+        if let Some(ends) = endings {
+            if ends.len() == 1 {
+                if let Some(ending) = ends.first() {
+                    d.set(b"LE".to_vec(), Object::name(ending.name()));
+                }
+            } else if let (Some(start), Some(end)) = (ends.first(), ends.get(1)) {
+                d.set(b"LE".to_vec(), ending_pair(*start, *end));
+            }
+        }
+        ensure_ending_room(d);
         touch(d, meta);
     })?;
     set_appearance(doc, r)
+}
+
+/// Grow a line or polyline's rectangle so a non-`None` ending is not clipped. Idempotent.
+fn ensure_ending_room(d: &mut Dict) {
+    let subtype = d.name(b"Subtype").unwrap_or_default();
+    if !matches!(subtype, b"Line" | b"PolyLine") {
+        return;
+    }
+    if !line_endings_of(d).is_some_and(|ends| ends.iter().any(|e| ending_draws(*e))) {
+        return;
+    }
+    let key: &[u8] = if subtype == b"Line" { b"L" } else { b"Vertices" };
+    let Some(pts) = pair_points(d, key) else { return };
+    let Some(bounds) = bounds(pts.iter().copied()) else { return };
+    let w = border_width_of(d);
+    let need = grow(bounds, w / 2.0 + appearance::arrow_size(w) + 1.0);
+    let vals: Vec<f64> = d.get(b"Rect").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
+    let Some(rect) = four(&vals) else { return };
+    let union = [rect[0].min(need[0]), rect[1].min(need[1]), rect[2].max(need[2]), rect[3].max(need[3])];
+    if union != rect {
+        d.set(b"Rect".to_vec(), num_array(&union));
+    }
+}
+
+fn four(v: &[f64]) -> Option<[f64; 4]> {
+    Some([*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?])
+}
+
+fn pair_points(d: &Dict, key: &[u8]) -> Option<Vec<[f64; 2]>> {
+    let v: Vec<f64> = d.get(key)?.as_array()?.iter().filter_map(|o| o.as_f64()).collect();
+    if v.len() < 4 || !v.len().is_multiple_of(2) || v.iter().any(|x| !x.is_finite()) {
+        return None;
+    }
+    Some(v.as_chunks::<2>().0.to_vec())
 }
 
 // ── reading ─────────────────────────────────────────────────────────────────────────────────
@@ -1666,6 +1899,8 @@ pub struct Props {
     pub restylable: bool,
     /// The Locked flag.
     pub locked: bool,
+    /// `/LE`: two names for a line or polyline (`None` when unset), one for a callout.
+    pub endings: Option<Vec<LineEnding>>,
 }
 
 /// The current properties of the comment at `(page, index)`.
@@ -1690,7 +1925,21 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         restylable: appearance::build(d).is_some(),
         locked: d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0) & FLAG_LOCKED != 0,
         subtype,
+        endings: line_endings_of(d),
     })
+}
+
+/// `/LE` for a line, polyline or callout. Unknown names yield `None` so the control stays hidden.
+fn line_endings_of(d: &Dict) -> Option<Vec<LineEnding>> {
+    let parse = |name: &[u8]| std::str::from_utf8(name).ok().and_then(LineEnding::parse);
+    match d.name(b"Subtype")? {
+        b"Line" | b"PolyLine" => match d.get(b"LE") {
+            None => Some(vec![LineEnding::None, LineEnding::None]),
+            Some(o) => o.as_array().filter(|a| a.len() == 2)?.iter().map(|e| parse(e.as_name()?)).collect(),
+        },
+        b"FreeText" if d.contains(b"CL") => Some(vec![parse(d.name(b"LE").unwrap_or(b"None"))?]),
+        _ => None,
+    }
 }
 
 /// Replace Text (Acrobat's proposal): strike out `quads` and add a caret at the end of the

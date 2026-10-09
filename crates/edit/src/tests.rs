@@ -227,6 +227,142 @@ fn added_text_and_images_are_page_content_that_stays_editable() {
     assert!(marks_present(&doc).is_empty());
 }
 
+#[test]
+fn added_arabic_text_is_shaped_in_display_order_and_stays_searchable() {
+    let mut doc = fixture();
+    let text =
+        AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "مرحبا World".into(), size: 14.0, align: Align::Right, ..AddedText::default() };
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        eprintln!("skipping the Arabic drawing checks: built without a craft-fonts Arab face (set CRAFT_FONTS_DIR)");
+        let err = add_content(&mut doc, 0, &Content::Text(text)).unwrap_err();
+        assert!(matches!(&err, EditError::Invalid(m) if m.contains("CRAFT_FONTS_DIR")), "{err:?}");
+        assert!(!doc.is_modified(), "nothing is written when the font is missing");
+        return;
+    }
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    // A second Arabic item on the same page keeps its own fonts.
+    add_content(&mut doc, 0, &Content::Text(AddedText { text: "شكرا".into(), rect: [72.0, 500.0, 400.0, 520.0], ..text.clone() })).unwrap();
+    let doc = reopen(&doc);
+    let added = list_added(&doc);
+    let Content::Text(t) = &added[0].content else { panic!() };
+    assert_eq!(t.text, "مرحبا World", "the logical text is kept for editing");
+    let s = streams(&doc, 0);
+    let item = s.iter().find(|s| s.contains("(World) Tj")).unwrap();
+    // A right-to-left paragraph: "World" is drawn left of the Arabic word.
+    let x_before = |s: &str, at: usize| -> f64 {
+        let tm = s[..at].rfind("1 0 0 1 ").unwrap() + 8;
+        s[tm..].split(' ').next().unwrap().parse().unwrap()
+    };
+    let latin_x = x_before(item, item.find("(World) Tj").unwrap());
+    let arabic_at = item.find("/PCAr").unwrap();
+    let arabic_x = x_before(item, item[arabic_at..].find(" Tj").unwrap() + arabic_at);
+    assert!(latin_x < arabic_x, "{item}");
+    // The Arabic glyphs come from Type 3 fonts whose ToUnicode maps give back each letter.
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().unwrap().clone();
+    let arabic: Vec<_> = fonts.iter().filter(|(k, _)| k.starts_with(b"PCAr")).map(|(_, v)| doc.resolve(v).as_dict().unwrap().clone()).collect();
+    assert_eq!(arabic.len(), 2, "one font per item");
+    let mut mapped = String::new();
+    for f in &arabic {
+        assert_eq!(f.name(b"Subtype"), Some(&b"Type3"[..]));
+        mapped += &String::from_utf8_lossy(&stream_bytes(&doc, f.get(b"ToUnicode").unwrap()).unwrap());
+    }
+    for letter in ["0645", "0631", "062D", "0628", "0627", "0634", "0643"] {
+        assert!(mapped.contains(&format!("<{letter}>")), "{letter} in {mapped}");
+    }
+}
+
+/// The `PCAr` font names in page `page`'s resources.
+fn arabic_font_names(doc: &Document, page: usize) -> Vec<String> {
+    let p = &pdfcraft_model::pages(doc)[page];
+    let Some(res) = p.dict.get(b"Resources").map(|r| doc.resolve(r)) else { return vec![] };
+    let Some(fonts) = res.as_dict().and_then(|r| r.get(b"Font")).map(|f| doc.resolve(f)) else { return vec![] };
+    fonts.as_dict().unwrap().iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).filter(|k| k.starts_with("PCAr")).collect()
+}
+
+#[test]
+fn arabic_items_keep_their_own_fonts_through_saves_updates_and_deletes() {
+    let mut doc = fixture();
+    let text = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "مرحبا".into(), size: 14.0, ..AddedText::default() };
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        // An item that already holds Arabic (stored by an older version, drawn as "?") can still
+        // be moved and retyped without the face.
+        add_content(&mut doc, 0, &Content::Text(AddedText { text: "x".into(), ..text.clone() })).unwrap();
+        update_content(&mut doc, 0, 0, &Content::Text(text)).unwrap();
+        assert!(streams(&doc, 0).join("").contains("(?????) Tj"));
+        return;
+    }
+    // A full save renumbers objects but keeps resource names, so a font named after its object
+    // number may meet a name already on the page: here, every name it could take.
+    let mut taken = Dict::new();
+    for num in 1..2_000 {
+        taken.set(format!("PCAr{num}").into_bytes(), Object::name("Taken"));
+    }
+    let mut res = Dict::new();
+    res.set(b"Font".to_vec(), Object::Dict(taken));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| d.set(b"Resources".to_vec(), Object::Dict(res))).unwrap();
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    add_content(&mut doc, 0, &Content::Text(AddedText { text: "شكرا".into(), rect: [72.0, 500.0, 400.0, 520.0], ..text.clone() })).unwrap();
+    let names = arabic_font_names(&doc, 0);
+    assert_eq!(names.len(), 1_999 + 2, "nothing replaced");
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let fonts = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().unwrap().get(b"Font").cloned().unwrap();
+    let fonts = doc.resolve(&fonts).as_dict().unwrap().clone();
+    assert_eq!(fonts.iter().filter(|(_, v)| v.as_name() == Some(&b"Taken"[..])).count(), 1_999);
+    let first = own(&doc, 0);
+    assert!(first.len() == 1 && first[0].contains('_'), "a free name, not a taken one: {first:?}");
+    // Updating an item swaps its fonts; deleting it removes them.
+    update_content(&mut doc, 0, 0, &Content::Text(AddedText { text: "أهلا".into(), ..text })).unwrap();
+    let names = arabic_font_names(&doc, 0);
+    assert!(names.len() == 2_001 && !names.contains(&first[0]), "the replaced item's font is gone");
+    delete_content(&mut doc, 0, 0).unwrap();
+    delete_content(&mut doc, 0, 0).unwrap();
+    assert_eq!(arabic_font_names(&doc, 0).len(), 1_999, "only the page's own names are left");
+    reopen(&doc);
+}
+
+/// The `PCAr` fonts the stream of added item `index` on page 0 shows text with.
+fn own(doc: &Document, index: usize) -> Vec<String> {
+    let s = String::from_utf8_lossy(&stream_bytes(doc, &Object::Ref(list_added(doc)[index].obj)).unwrap()).into_owned();
+    let mut names: Vec<String> =
+        s.split_whitespace().filter_map(|w| w.strip_prefix('/')).filter(|w| w.starts_with("PCAr")).map(String::from).collect();
+    names.dedup();
+    names
+}
+
+#[test]
+fn odd_arabic_text_never_panics() {
+    let mut doc = fixture();
+    let long = "بسم الله ".repeat(2_000);
+    for s in ["\u{202E}ب\u{064B}\u{064B} (]", "\u{064B}", "ا\u{200F}\u{2067}b\u{2069}", "ا\n\nب\tc", "ﷺ ١٢٣ 456", long.as_str()] {
+        let r = add_content(&mut doc, 0, &Content::Text(AddedText { rect: [0.0, 800.0, 300.0, 780.0], text: s.into(), ..AddedText::default() }));
+        assert_eq!(r.is_ok(), pdfcraft_fonts::document_arabic_font().is_some(), "{:?}: {r:?}", s.chars().take(12).collect::<String>());
+    }
+    // U+2029 and U+0085 (paragraph and line separators) have no WinAnsi code, so the standard font
+    // would draw them as `?`: refused, by name, rather than written (#125). Laying it out still
+    // mustn't panic.
+    let r = add_content(
+        &mut doc,
+        0,
+        &Content::Text(AddedText { rect: [0.0, 800.0, 300.0, 780.0], text: "ا\u{2029}ب\rc\u{85}د\n".into(), ..AddedText::default() }),
+    );
+    assert!(r.is_err(), "{r:?}");
+    if pdfcraft_fonts::document_arabic_font().is_some() {
+        assert!(matches!(&r, Err(EditError::Invalid(m)) if m.contains("U+2029") || m.contains("U+0085")), "{r:?}");
+    }
+    // A character the face lacks is an error that names it, not a box or a crash.
+    if pdfcraft_fonts::document_arabic_font().is_some() && !pdfcraft_fonts::arabic_has('\u{FDFD}') {
+        let r = add_content(
+            &mut doc,
+            0,
+            &Content::Text(AddedText { rect: [0.0, 800.0, 300.0, 780.0], text: "ب \u{FDFD}".into(), ..AddedText::default() }),
+        );
+        assert!(matches!(&r, Err(EditError::Invalid(m)) if m.contains('\u{FDFD}')), "{r:?}");
+    }
+}
+
 /// One page with Helvetica (WinAnsi) and a subset font that has only the glyphs it uses.
 fn text_page(content: &str) -> Document {
     let objs: Vec<String> = vec![
@@ -415,6 +551,28 @@ fn japanese_fallback_reports_the_face_after_save_and_reopen() {
 }
 
 #[test]
+fn cyrillic_in_a_serif_line_falls_back_to_a_face_that_has_it() {
+    if without_craft_fonts("cyrillic_in_a_serif_line_falls_back_to_a_face_that_has_it") {
+        return;
+    }
+    let replacement = "Привет, world";
+    let has_all = |f: &pdfcraft_fonts::CraftFont| replacement.chars().all(|ch| pdfcraft_fonts::japanese_glyph_from(f, ch).is_ok());
+    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.covers("Jpan") && has_all(f)) {
+        eprintln!("skipping: no Japanese fallback face has Cyrillic");
+        return;
+    }
+    for paragraph in [false, true] {
+        let mut doc = styled_text_page("Times-Roman");
+        if paragraph {
+            text::replace_block(&mut doc, 0, 0, replacement).unwrap();
+        } else {
+            text::replace_line(&mut doc, 0, 0, replacement).unwrap();
+        }
+        assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].text, replacement);
+    }
+}
+
+#[test]
 fn japanese_paragraph_uses_unicode_type3_fallback() {
     if without_craft_fonts("japanese_paragraph_uses_unicode_type3_fallback") {
         return;
@@ -424,6 +582,74 @@ fn japanese_paragraph_uses_unicode_type3_fallback() {
     text::replace_block(&mut doc, 0, 0, replacement).unwrap();
     let reopened = reopen(&doc);
     assert_eq!(text::text_blocks(&reopened, 0).unwrap()[0].text, replacement);
+}
+
+/// Every Type 3 fallback glyph starts with a well-formed `d1`: six operands, the second 0, and a
+/// box that encloses every point of the glyph. Acrobat shows a bullet for a glyph whose `d1`
+/// has the wrong operand count.
+#[test]
+fn type3_fallback_glyphs_declare_a_well_formed_d1() {
+    if without_craft_fonts("type3_fallback_glyphs_declare_a_well_formed_d1") {
+        return;
+    }
+    // Cyrillic is respaced (shifted by its side bearing), and its box must move with it.
+    let mut glyphs = Vec::new();
+    for replacement in ["見本商会 御中", "София 2027"] {
+        let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+        text::replace_line(&mut doc, 0, 0, replacement).unwrap();
+        glyphs.extend(fallback_paths(&reopen(&doc)));
+    }
+    assert!(!glyphs.is_empty());
+    for glyph in glyphs {
+        let text = String::from_utf8(glyph).unwrap();
+        let mut lines = text.lines();
+        let d1: Vec<&str> = lines.next().unwrap().split_whitespace().collect();
+        assert_eq!(d1.len(), 7, "six operands and d1: {d1:?}");
+        assert_eq!(d1[6], "d1");
+        let n: Vec<f64> = d1[..6].iter().map(|v| v.parse().unwrap()).collect();
+        assert_eq!(n[1], 0.0, "wy");
+        assert!(n[2] <= n[4] && n[3] <= n[5], "box: {n:?}");
+        for line in lines.filter(|l| l.ends_with(" m") || l.ends_with(" l")) {
+            let p: Vec<f64> = line.split_whitespace().take(2).map(|v| v.parse().unwrap()).collect();
+            assert!(p[0] >= n[2] && p[0] <= n[4] && p[1] >= n[3] && p[1] <= n[5], "{line} outside {n:?}");
+        }
+    }
+}
+
+/// Shippori Mincho, the serif fallback, has no Cyrillic: Bulgarian replacement text in a serif
+/// line takes a fallback face that has every letter instead of failing on the first one.
+#[test]
+fn cyrillic_replacement_in_a_serif_line_uses_a_face_with_the_letters() {
+    if without_craft_fonts("cyrillic_replacement_in_a_serif_line_uses_a_face_with_the_letters") {
+        return;
+    }
+    let replacement = "София 2027";
+    for paragraph in [false, true] {
+        let mut doc = styled_text_page("ABCDEF+Garamond");
+        if paragraph {
+            text::replace_block(&mut doc, 0, 0, replacement).unwrap();
+        } else {
+            text::replace_line(&mut doc, 0, 0, replacement).unwrap();
+        }
+        let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+        assert_eq!(lines[0].text, replacement);
+        // Letters are spaced by their shape, not one em each (the faces' full-width Cyrillic).
+        let widths = fallback_widths(&doc);
+        assert!(widths.iter().all(|w| *w > 300.0 && *w < 900.0), "{widths:?}");
+        assert!(widths.windows(2).any(|w| w[0] != w[1]), "proportional: {widths:?}");
+    }
+}
+
+/// The `/Widths` of the page's Type 3 fallback font, for its Cyrillic letters.
+fn fallback_widths(doc: &Document) -> Vec<f64> {
+    let p = pdfcraft_model::pages(doc).swap_remove(0);
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let font = doc.resolve(fonts.as_dict().unwrap().get(b"PCJp").unwrap());
+    let font = font.as_dict().unwrap();
+    let widths = doc.resolve(font.get(b"Widths").unwrap()).as_array().unwrap().iter().filter_map(|w| w.as_f64()).collect::<Vec<_>>();
+    // "София 2027": the first five codes are the letters.
+    widths[..5].to_vec()
 }
 
 #[test]
@@ -568,6 +794,22 @@ fn editing_text_keeps_the_tokens_a_stream_shares_with_its_neighbours() {
     let mut doc = split_streams_page();
     text::replace_block(&mut doc, 0, 0, "Rewrapped").unwrap();
     assert_split_tokens_kept(&reopen(&doc), "Rewrapped");
+}
+
+#[test]
+fn win_ansi_high_glyphs_use_helvetica_not_the_fallback_font() {
+    // š ž Š Ž Œ Ÿ ƒ † ‰ (WinAnsi 0x80–0x9F) are standard-font glyphs (#347): no Type3 fallback.
+    let text = "Šumava žaba œuvre Ÿ ƒ † ‰ €";
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    let r = text::replace_line(&mut doc, 0, 0, text).unwrap();
+    assert_eq!(r.substituted.as_deref(), Some("Helvetica"));
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!((lines[0].text.as_str(), lines[0].base_font.as_str()), (text, "Helvetica"));
+    let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
+    let r = text::replace_block(&mut doc, 0, 0, text).unwrap();
+    assert!(r.substituted.as_deref().is_none_or(|s| !s.contains("Type3")), "{:?}", r.substituted);
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" "), text);
 }
 
 #[test]
@@ -961,4 +1203,131 @@ fn the_graphics_state_carries_over_between_content_streams() {
     let doc = split_page("q 0.5 0 0 0.5 0 0 cm", "Q BT /F1 10 Tf 100 100 Td (Footpath) Tj ET");
     let l = &text::text_lines(&doc, 0).unwrap()[0];
     assert!(close(l.rect[0], 100.0) && close(l.size, 10.0), "{l:?}");
+}
+
+/// #125: page-content tools refuse text the standard fonts can't draw instead of writing `?`,
+/// and leave the document untouched.
+#[test]
+fn page_text_the_standard_fonts_cant_draw_is_refused() {
+    let mut doc = fixture();
+    let before: Vec<Vec<String>> = (0..3).map(|p| streams(&reopen(&doc), p)).collect();
+    let text = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "日本語のテキスト".into(), ..AddedText::default() };
+    let err = add_content(&mut doc, 0, &Content::Text(text)).unwrap_err().to_string();
+    assert!(err.contains("\"日\" (U+65E5)"), "{err}");
+    let hf = HeaderFooter {
+        text: ["Ελληνικά".into(), String::new(), String::new(), String::new(), String::new(), String::new()],
+        ..HeaderFooter::default()
+    };
+    assert!(add_header_footer(&mut doc, &[0, 1], &hf, true, &cx()).unwrap_err().to_string().contains("U+0395"));
+    let wm = Watermark { text: "机密".into(), ..Watermark::default() };
+    assert!(add_watermark(&mut doc, &[0], &wm, true).unwrap_err().to_string().contains("U+673A"));
+    let after: Vec<Vec<String>> = (0..3).map(|p| streams(&reopen(&doc), p)).collect();
+    assert_eq!(before, after, "a refused edit changes nothing");
+    // Western European text, including what only WinAnsi (not Latin-1) has, still works.
+    let text = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Café — 5€ ™".into(), ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    // Retyping existing text is refused the same way, and the whole document is left as it was.
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let retyped = AddedText { text: "Café 中".into(), ..text.clone() };
+    assert!(update_content(&mut doc, 0, 0, &Content::Text(retyped)).unwrap_err().to_string().contains("U+4E2D"));
+    assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), saved, "a refused update changes nothing");
+    // A carriage return is checked where it would be drawn: added text splits on LF only, so
+    // CRLF would leave a `?`; headers and watermarks split CRLF into lines, but not a lone CR.
+    let crlf = AddedText { text: "A\r\nB".into(), ..text };
+    assert!(add_content(&mut doc, 0, &Content::Text(crlf)).unwrap_err().to_string().contains("U+000D"));
+    let hf = |t: &str| HeaderFooter {
+        text: [t.into(), String::new(), String::new(), String::new(), String::new(), String::new()],
+        ..HeaderFooter::default()
+    };
+    add_header_footer(&mut doc, &[0], &hf("Left\r\n<<Bates Number#6#1#ACME-#>>"), true, &cx()).unwrap();
+    assert!(add_header_footer(&mut doc, &[0], &hf("A\rB"), true, &cx()).unwrap_err().to_string().contains("U+000D"));
+    // Arabic is shaped with the craft-fonts Arabic face (#403): drawable when that face is built
+    // in, refused (never written as `?`) when it isn't. Text left to the standard font still counts.
+    let arabic = |text: &str| AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: text.into(), ..AddedText::default() };
+    // U+061C is in the Arabic block but is a direction mark that's dropped, not shaped: it never
+    // makes text drawable, nor (with the face) undrawable.
+    assert!(add_content(&mut doc, 0, &Content::Text(arabic("\u{061C}中"))).is_err());
+    if pdfcraft_fonts::arabic_has('م') {
+        add_content(&mut doc, 0, &Content::Text(arabic("مرحبا Hello"))).unwrap();
+        add_content(&mut doc, 0, &Content::Text(arabic("\u{061C}Hello"))).unwrap();
+        for text in ["مرحبا 中", "\u{061C}中"] {
+            let err = add_content(&mut doc, 0, &Content::Text(arabic(text))).unwrap_err().to_string();
+            assert!(err.contains("U+4E2D"), "{text:?}: {err}");
+        }
+    } else {
+        // #403's own refusal says what's missing; the Add-text editor still keeps the draft.
+        let err = add_content(&mut doc, 0, &Content::Text(arabic("مرحبا Hello"))).unwrap_err().to_string();
+        assert!(err.contains("CRAFT_FONTS_DIR"), "{err}");
+        assert_eq!(first_undrawable(&arabic("مرحبا Hello")), Some('م'));
+        // An existing item may still take Arabic (#403 keeps it movable), but nothing else that
+        // the standard font would write as `?`.
+        let n = list_added(&doc).iter().filter(|a| a.page == 0).count();
+        add_content(&mut doc, 0, &Content::Text(arabic("x"))).unwrap();
+        let err = update_content(&mut doc, 0, n, &Content::Text(arabic("ب中"))).unwrap_err().to_string();
+        assert!(err.contains("U+4E2D"), "{err}");
+        update_content(&mut doc, 0, n, &Content::Text(arabic("ب"))).unwrap();
+    }
+}
+
+fn xobject(doc: &Document, page: usize, name: &[u8]) -> Option<pdfcraft_cos::ObjRef> {
+    let p = &pdfcraft_model::pages(doc)[page];
+    let res = doc.resolve(p.dict.get(b"Resources")?);
+    let xo = doc.resolve(res.as_dict()?.get(b"XObject")?);
+    xo.as_dict()?.get(name).and_then(Object::as_ref)
+}
+
+fn annot_at(doc: &Document, page: usize, index: usize) -> pdfcraft_cos::ObjRef {
+    let p = &pdfcraft_model::pages(doc)[page];
+    let list = doc.resolve(p.dict.get(b"Annots").unwrap());
+    list.as_array().unwrap()[index].as_ref().unwrap()
+}
+
+#[test]
+fn fill_sign_flatten_bakes_marks_keeps_other_comments_and_does_not_reuse_pcfl0() {
+    use pdfcraft_annot::{FillMark, Markup, Meta, NewAnnotation, Shape, Style, add_annotation, summaries};
+    let mut doc = fixture();
+    assert_eq!(flatten_fill_sign(&mut doc, &[0]).unwrap(), 0);
+    assert!(!doc.is_modified(), "nothing to flatten leaves the file alone");
+
+    let meta = Meta { date: None, id: "x".into() };
+    let add = |doc: &mut Document, shape: Shape, contents: &str| {
+        let style = Style::default_for(&shape);
+        add_annotation(doc, &NewAnnotation { page: 0, shape, style, contents: contents.into(), author: "a".into() }, &meta).unwrap()
+    };
+    add(&mut doc, Shape::Rectangle { rect: [10.0, 10.0, 80.0, 40.0] }, "box");
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1);
+    let kept = xobject(&doc, 0, b"PCFl0").expect("the first flatten's XObject");
+
+    add(&mut doc, Shape::Typewriter { rect: [20.0, 500.0, 140.0, 520.0], font_size: 10.0 }, "Hello");
+    doc.update_dict(annot_at(&doc, 0, 0), |d| {
+        d.remove(b"PCFillSign");
+    })
+    .unwrap();
+    add(&mut doc, Shape::Mark { rect: [100.0, 100.0, 120.0, 120.0], mark: FillMark::Check }, "");
+    add(&mut doc, Shape::Signature { strokes: vec![vec![[10.0, 50.0], [40.0, 80.0], [70.0, 50.0]]] }, "");
+    doc.update_dict(annot_at(&doc, 0, 2), |d| d.set(b"Subj".to_vec(), pdfcraft_cos::PdfString::text("Pencil"))).unwrap();
+    add(&mut doc, Shape::TypedSignature { rect: [20.0, 40.0, 90.0, 70.0], contours: vec![vec![[0.1, 0.2], [0.5, 0.9], [0.9, 0.2]]] }, "");
+    add(&mut doc, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![[20.0, 400.0, 80.0, 400.0, 20.0, 390.0, 80.0, 390.0]] }, "keep");
+    add(&mut doc, Shape::TextBox { rect: [20.0, 300.0, 140.0, 340.0], font_size: 12.0 }, "Note");
+    add(&mut doc, Shape::Ink { strokes: vec![vec![[200.0, 200.0], [220.0, 220.0], [240.0, 200.0]]] }, "pencil");
+    let old = add(&mut doc, Shape::Signature { strokes: vec![vec![[300.0, 50.0], [330.0, 80.0], [360.0, 50.0]]] }, "");
+    doc.update_dict(annot_at(&doc, 0, old), |d| {
+        d.remove(b"PCFillSign");
+    })
+    .unwrap();
+    let hidden = add(&mut doc, Shape::Typewriter { rect: [20.0, 600.0, 140.0, 620.0], font_size: 10.0 }, "secret");
+    doc.update_dict(annot_at(&doc, 0, hidden), |d| d.set(b"F".to_vec(), Object::Int(2))).unwrap();
+
+    let n = flatten_fill_sign(&mut doc, &[0]).unwrap();
+    assert_eq!(n, 5, "text, check, both signatures and the typed signature; the hidden one stays");
+    assert_eq!(xobject(&doc, 0, b"PCFl0"), Some(kept), "an existing PCFl0 is not replaced");
+    let newest = streams(&doc, 0).last().unwrap().clone();
+    assert!(newest.contains("/PCFl1 Do") && !newest.contains("/PCFl0 Do"), "{newest}");
+
+    let doc = reopen(&doc);
+    let mut left: Vec<String> = summaries(&doc).iter().map(|s| s.contents.clone().unwrap_or_default()).collect();
+    left.sort();
+    assert_eq!(left, ["Note", "keep", "pencil", "secret"]);
+    assert!(summaries(&doc).iter().any(|s| s.intent.as_deref() == Some("FreeTextTypeWriter")), "the hidden typewriter stays");
+    assert_eq!(summaries(&doc).iter().filter(|s| s.intent.as_deref() == Some("FreeTextTypeWriter")).count(), 1);
 }

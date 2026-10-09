@@ -16,12 +16,14 @@ pub mod actions;
 pub mod catalog;
 pub mod commands;
 pub mod compare;
+pub mod dates;
 pub mod export;
 pub mod js;
 pub mod links;
 pub mod ocr;
 pub mod optimizer;
 pub mod signature_image;
+mod upright_image;
 pub mod xfa;
 
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
@@ -43,7 +45,7 @@ pub use pdfcraft_forms::{
 };
 
 pub use pdfcraft_a11y as a11y;
-pub use pdfcraft_edit::{BlockStyle, PageImage, TextBlock, TextLine};
+pub use pdfcraft_edit::{BlockStyle, PageImage, TextBlock, TextLine, first_undrawable};
 pub use pdfcraft_measure as measure;
 pub use pdfcraft_xfa::Report as XfaLayout;
 
@@ -68,25 +70,33 @@ pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, script_outline};
 
 /// Fill & Sign: `text` in the script font as a typed signature, its left edge at `at` (user
 /// space, vertically centred) and `height` points tall. `None` for text with no outlines.
-pub fn typed_signature_shape(at: [f64; 2], text: &str, height: f64) -> Option<Shape> {
+///
+/// Left, centred and upright are as displayed on a page turned by `rotation` (its `/Rotate`):
+/// the box runs along the displayed axes, like an image signature's
+/// ([`SignatureImage::rect`]), and the outlines are turned back so the name reads across.
+pub fn typed_signature_shape(at: [f64; 2], text: &str, height: f64, rotation: i64) -> Option<Shape> {
     let o = script_outline(text);
     let [left, bottom, right, top] = o.bounds();
     let span = (top - bottom).max(0.1);
     let width = right - left;
-    if o.contours.is_empty() || o.width <= 0.0 {
+    if o.contours.is_empty() || o.width <= 0.0 || !(width > 0.0 && height > 0.0) {
         return None;
     }
     let k = height / span;
-    let rect = [at[0], at[1] - height / 2.0, at[0] + width * k, at[1] + height / 2.0];
-    let contours = o.contours.iter().map(|c| c.iter().map(|p| [(p[0] - left) / width, (p[1] - bottom) / span]).collect()).collect();
+    let rect = signature_image::upright_box(rotation, at, width * k, height)?;
+    // Displayed right and up as user-space unit vectors: a point at (nx, ny) of the displayed box
+    // is at this fraction of the user-space box. Exact for an unturned page.
+    let [a, b, c, d, ..] = pdfcraft_model::view_matrix_for(rotation, [0.0; 4]);
+    let to_user = |nx: f64, ny: f64| [a * nx + c * ny + (-a).max(0.0) + (-c).max(0.0), b * nx + d * ny + (-b).max(0.0) + (-d).max(0.0)];
+    let contours = o.contours.iter().map(|c| c.iter().map(|p| to_user((p[0] - left) / width, (p[1] - bottom) / span)).collect()).collect();
     Some(Shape::TypedSignature { rect, contours })
 }
 /// Comment geometry helpers (text-box line breaking) for frontends.
 pub use pdfcraft_annot::appearance as annot_text;
 pub use pdfcraft_annot::links::{Highlight as LinkHighlight, LinkAction, LinkItem, LinkStyle};
 pub use pdfcraft_annot::{
-    AttachIcon, FillMark, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, Props as CommentProps, ReviewState, Rgb, Shape,
-    StampGroup, StampKind, Style, rect_quad,
+    AttachIcon, FillMark, LineEnding, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, Props as CommentProps, ReviewState, Rgb,
+    Shape, StampGroup, StampKind, Style, rect_quad,
 };
 pub use pdfcraft_forms::detect;
 pub use pdfcraft_optimize as optimize;
@@ -843,6 +853,8 @@ pub enum Edit {
         color: Option<Rgb>,
         opacity: Option<f64>,
         width: Option<f64>,
+        /// Line or polyline: two endings. Callout: one. `None` leaves `/LE` unchanged.
+        endings: Option<Vec<pdfcraft_annot::LineEnding>>,
     },
     /// Comment properties ▸ General / note icon.
     SetAnnotationInfo {
@@ -1070,6 +1082,9 @@ pub enum Edit {
         comments: bool,
         fields: bool,
     },
+    /// Bake Fill & Sign text, marks and signatures into the page. Other comments and fields stay.
+    /// A no-op (no undo step) when the document has none.
+    FlattenFillSign,
     /// Protect with passwords and permissions (written by the next save, which is a full rewrite).
     Protect(Protection),
     /// Remove password security (needs the owner password).
@@ -1171,6 +1186,7 @@ impl Edit {
             Edit::Flatten { comments: true, fields: false } => "Flatten comments".into(),
             Edit::Flatten { comments: false, fields: true } => "Flatten form fields".into(),
             Edit::Flatten { .. } => "Flatten".into(),
+            Edit::FlattenFillSign => "Flatten Fill & Sign".into(),
             Edit::Protect(_) => "Protect with password".into(),
             Edit::RemoveProtection => "Remove security".into(),
             Edit::Batch { label, .. } => label.clone(),
@@ -1188,7 +1204,7 @@ fn annotation_noun(s: &Shape) -> &'static str {
         Shape::TextMarkup { kind: Markup::Squiggly, .. } => "squiggly underline",
         Shape::Rectangle { .. } => "rectangle",
         Shape::Oval { .. } => "oval",
-        Shape::Line { arrow: true, .. } => "arrow",
+        Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. } => "arrow",
         Shape::Line { .. } => "line",
         Shape::Ink { .. } => "drawing",
         Shape::TextBox { .. } => "text box",
@@ -1312,7 +1328,8 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
         | Edit::EditPageImage { .. }
-        | Edit::Flatten { .. } => {
+        | Edit::Flatten { .. }
+        | Edit::FlattenFillSign => {
             if p.modify() {
                 Ok(())
             } else {
@@ -1450,9 +1467,11 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::AddCustomStamp { page, rect, name, file, author } => {
             let src = mark_source(doc, file)?;
             let (sw, sh) = (src.size.0.max(1.0), src.size.1.max(1.0));
-            let rect = if rect[2] == rect[0] && rect[3] == rect[1] {
+            let natural = rect[2] == rect[0] && rect[3] == rect[1];
+            let rotation = if natural && src.image { pdfcraft_organize::page_rotation(doc, *page)? } else { 0 };
+            let rect = if natural {
                 let k = (200.0 / sw.max(sh)).min(1.0);
-                let (w, h) = (sw * k, sh * k);
+                let (w, h) = if matches!(rotation, 90 | 270) { (sh * k, sw * k) } else { (sw * k, sh * k) };
                 [rect[0] - w / 2.0, rect[1] - h / 2.0, rect[0] + w / 2.0, rect[1] + h / 2.0]
             } else {
                 *rect
@@ -1460,7 +1479,8 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             let shape = Shape::CustomStamp { rect, name: name.clone(), picture: src.xobject, image: src.image, size: (sw, sh) };
             let style = pdfcraft_annot::Style::default_for(&shape);
             let new = NewAnnotation { page: *page, shape, style, contents: name.clone(), author: author.clone() };
-            pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;
+            let index = pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;
+            pdfcraft_annot::orient_image_stamp(doc, *page, index, rotation)?;
         }
         Edit::DeleteAnnotation { page, index } => pdfcraft_annot::delete_annotation(doc, *page, *index)?,
         Edit::SetAnnotationContents { page, index, text } => pdfcraft_annot::set_contents(doc, *page, *index, text, &cx.meta())?,
@@ -1482,8 +1502,8 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::LockAnnotation { page, index, locked } => pdfcraft_annot::set_locked(doc, *page, *index, *locked)?,
         Edit::MoveAnnotation { page, index, dx, dy } => pdfcraft_annot::move_annotation(doc, *page, *index, *dx, *dy, &cx.meta())?,
         Edit::ResizeAnnotation { page, index, rect } => pdfcraft_annot::set_rect(doc, *page, *index, *rect, &cx.meta())?,
-        Edit::StyleAnnotation { page, index, color, opacity, width } => {
-            pdfcraft_annot::set_style(doc, *page, *index, *color, *opacity, *width, &cx.meta())?;
+        Edit::StyleAnnotation { page, index, color, opacity, width, endings } => {
+            pdfcraft_annot::set_style(doc, *page, *index, *color, *opacity, *width, endings.as_deref(), &cx.meta())?;
         }
         Edit::SetAnnotationInfo { page, index, author, subject, icon } => {
             pdfcraft_annot::set_info(doc, *page, *index, author.as_deref(), subject.as_deref(), *icon, &cx.meta())?;
@@ -1505,7 +1525,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             ran.map_err(EditError::Invalid)?;
         }
         Edit::SetFieldImage { name, image } => {
-            let (img, _) = pdfcraft_create::image_xobject(doc, name, image)?;
+            let (img, _) = embed_image(doc, name, image)?;
             let px = match &*doc.get(img) {
                 pdfcraft_cos::Object::Stream(s) => (s.dict.int(b"Width").unwrap_or(1) as u32, s.dict.int(b"Height").unwrap_or(1) as u32),
                 _ => (1, 1),
@@ -1562,7 +1582,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                 ImageEdit::Flip { horizontal } => {
                     pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(img.rect, 0, *horizontal, !*horizontal))
                 }
-                ImageEdit::Replace { name, bytes } => pdfcraft_edit::ImageChange::Replace(pdfcraft_create::image_xobject(doc, name, bytes)?.0),
+                ImageEdit::Replace { name, bytes } => pdfcraft_edit::ImageChange::Replace(embed_image(doc, name, bytes)?.0),
                 ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
             };
             pdfcraft_edit::change_image(doc, *page, *index, &c)?;
@@ -1602,7 +1622,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             pdfcraft_edit::add_content(doc, *page, &AddedContent::Text(text.clone()))?;
         }
         Edit::AddImage { page, rect, name, bytes } => {
-            let (image, natural) = pdfcraft_create::image_xobject(doc, name, bytes)?;
+            let (image, natural) = embed_image(doc, name, bytes)?;
             let rect = match rect {
                 Some(r) => *r,
                 None => {
@@ -1622,7 +1642,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             let Some(AddedContent::Image(old)) = item.map(|a| a.content) else {
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("that item is not an image".into())));
             };
-            let (image, _) = pdfcraft_create::image_xobject(doc, name, bytes)?;
+            let (image, _) = embed_image(doc, name, bytes)?;
             pdfcraft_edit::update_content(doc, *page, *index, &AddedContent::Image(pdfcraft_edit::AddedImage { image, ..old }))?;
         }
         Edit::ApplyRedactions { pages } => {
@@ -1658,6 +1678,10 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::Flatten { comments, fields } => {
             let n = pdfcraft_model::pages(doc).len();
             pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), *comments, *fields)?;
+        }
+        Edit::FlattenFillSign => {
+            let n = pdfcraft_model::pages(doc).len();
+            pdfcraft_edit::flatten_fill_sign(doc, &(0..n).collect::<Vec<_>>())?;
         }
         Edit::Protect(p) => {
             p.validate()?;
@@ -1875,6 +1899,10 @@ pub struct Session {
     trust: Arc<TrustStore>,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
     js_off: bool,
+    /// Preferences ▸ Date format, when not the default (see [`dates`]).
+    date_format: Option<String>,
+    /// Preferences ▸ Date format ▸ Language, when not following the interface language.
+    date_language: Option<String>,
 }
 
 /// Lay a dynamic XFA form out (pages and fields) and give its widgets appearances.
@@ -2257,6 +2285,10 @@ impl Session {
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
         if let Some(p) = editor.cos.permissions() {
             check_permission(&edit, &p)?;
+        }
+        // Nothing to bake: leave undo history and the dirty flag alone.
+        if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos) {
+            return Ok(());
         }
         let mut next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {
@@ -2977,6 +3009,15 @@ pub struct MarkFile {
     pub page: usize,
 }
 
+/// Embed an image that is placed on a page, turned the way its EXIF Orientation says.
+fn embed_image(
+    doc: &mut pdfcraft_cos::Document,
+    name: &str,
+    bytes: &[u8],
+) -> Result<(pdfcraft_cos::ObjRef, (f64, f64)), pdfcraft_create::CreateError> {
+    pdfcraft_create::image_xobject(doc, name, &upright_image::upright(bytes))
+}
+
 /// Bring a mark's picture into `doc`: a PDF page as a form XObject, or an image.
 fn mark_source(doc: &mut pdfcraft_cos::Document, f: &MarkFile) -> Result<pdfcraft_edit::MarkSource, EditError> {
     let head = &f.bytes[..f.bytes.len().min(1024)];
@@ -2985,7 +3026,7 @@ fn mark_source(doc: &mut pdfcraft_cos::Document, f: &MarkFile) -> Result<pdfcraf
         let (xobject, size) = pdfcraft_organize::page_as_form(doc, &src, f.page)?;
         Ok(pdfcraft_edit::MarkSource { xobject, size, image: false })
     } else {
-        let (xobject, size) = pdfcraft_create::image_xobject(doc, &f.name, &f.bytes)?;
+        let (xobject, size) = embed_image(doc, &f.name, &f.bytes)?;
         Ok(pdfcraft_edit::MarkSource { xobject, size, image: true })
     }
 }

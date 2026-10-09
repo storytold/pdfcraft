@@ -9,6 +9,7 @@ use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app.set_option("zoom", "150").unwrap();
         app
@@ -168,6 +169,39 @@ fn appearance_tab_restyles_the_field() {
     let s = h.state();
     let l = s.session.get(s.views[0].id).unwrap().field_look("city").unwrap();
     assert_eq!((l.style, l.font, l.fill), (BorderStyle::Dashed, FieldFont::Courier, Some([1.0, 1.0, 0.8])));
+}
+
+#[test]
+fn position_tab_rotates_a_field() {
+    let mut h = harness();
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    let widget = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "city").unwrap();
+        f.widgets[0].clone()
+    };
+    let before = widget(&h);
+    assert_eq!(before.rotation, 0);
+    assert!(h.state().field_props.as_ref().unwrap().props().is_none(), "an unchanged draft is not an edit");
+    h.get_by_label("Position").click();
+    h.run_steps(2);
+    h.get_by_label("Rotation:");
+    h.state_mut().field_props.as_mut().unwrap().rotation = 90;
+    assert!(h.state().field_props.as_ref().unwrap().props().is_some());
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let turned = widget(&h);
+    assert_eq!(turned.rotation, 90);
+    let [x0, y0, x1, y1] = before.rect;
+    let (cx, cy, w, ht) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, x1 - x0, y1 - y0);
+    let expect = [cx - ht / 2.0, cy - w / 2.0, cx + ht / 2.0, cy + w / 2.0];
+    assert!(turned.rect.iter().zip(expect).all(|(a, b)| (a - b).abs() < 0.05), "{:?} vs {expect:?}", turned.rect);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    let back = widget(&h);
+    assert_eq!(back.rotation, 0);
+    assert!(back.rect.iter().zip(before.rect).all(|(a, b)| (a - b).abs() < 0.05), "{:?} vs {:?}", back.rect, before.rect);
 }
 
 #[test]

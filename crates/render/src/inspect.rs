@@ -112,6 +112,27 @@ impl PageInfo {
         [a * self.width, b * self.height]
     }
 
+    /// A destination's user-space point (each coordinate possibly unspecified) → the same point
+    /// as a fraction of the displayed page `[x, y]` (0..1 from its top-left corner, y down),
+    /// after `/Rotate` and a further clockwise `view_rotation` (0, 90, 180 or 270). On a page
+    /// turned a quarter, the user `x` decides the displayed `y` and vice versa, so each output
+    /// is `None` when the input it comes from is (or is not finite). Points off the page are
+    /// clamped to its edge.
+    pub fn dest_fraction(&self, x: Option<f32>, y: Option<f32>, view_rotation: u16) -> [Option<f32>; 2] {
+        let [cx0, cy0, cx1, cy1] = self.crop;
+        let frac = |v: f32| if v.is_finite() { Some(v.clamp(0.0, 1.0)) } else { None };
+        // Unrotated fractions across (u, from the crop's left) and down (v, from its top).
+        let u = x.and_then(|x| frac((x - cx0) / (cx1 - cx0).max(1e-3)));
+        let v = y.and_then(|y| frac((cy1 - y) / (cy1 - cy0).max(1e-3)));
+        let flip = |f: Option<f32>| f.map(|f| 1.0 - f);
+        match (u32::from(self.rotation) + u32::from(view_rotation)) % 360 {
+            90 => [flip(v), u],
+            180 => [flip(u), flip(v)],
+            270 => [v, flip(u)],
+            _ => [u, v],
+        }
+    }
+
     /// A view-space rectangle → the normalized user-space rectangle covering the same area of the
     /// page (`[x0, y0, x1, y1]`, `x0 <= x1`, `y0 <= y1`). Under `/Rotate` the corners swap roles,
     /// so a view rectangle's top-left is not in general the user rectangle's `[x0, y1]`.
@@ -143,7 +164,8 @@ pub struct Link {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LinkTarget {
-    Page(usize),
+    /// A destination in this document: the 0-based page and where on it the view goes.
+    Page(usize, DestView),
     Uri(String),
     /// A set-layer-visibility action (`SetOCGState`, ISO 32000-2 §12.6.4.13): each change in
     /// order, naming the layer by its optional content group. With `preserve_rb`, a layer turned
@@ -163,10 +185,55 @@ pub enum LayerOp {
     Toggle,
 }
 
+/// Where an explicit destination (ISO 32000-2 §12.3.2.2, Table 149) places its page in the
+/// window. Coordinates are PDF user space; `None` is a `null` (or unusable) operand, which keeps
+/// that part of the view as it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum DestView {
+    /// The top of the page at the current zoom: a destination with no position, or one whose
+    /// type is missing or unknown.
+    #[default]
+    Top,
+    /// `/XYZ left top zoom`: the point (left, top) at the window's upper-left corner, at `zoom`
+    /// (1.0 = 100%; 0 or null keeps the current zoom).
+    Xyz { left: Option<f32>, top: Option<f32>, zoom: Option<f32> },
+    /// `/Fit`, and `/FitB` (fit the page's content box; read as the whole page).
+    Fit,
+    /// `/FitH top`, and `/FitBH`: fit the width, with `top` at the window's top edge.
+    FitH { top: Option<f32> },
+    /// `/FitV left`, and `/FitBV`: fit the height, with `left` at the window's left edge.
+    FitV { left: Option<f32> },
+    /// `/FitR left bottom right top`: fit the rectangle `[x0, y0, x1, y1]` (normalized).
+    FitR { rect: [f32; 4] },
+}
+
+impl DestView {
+    /// The view an explicit destination array asks for, from its elements after the page
+    /// (`/XYZ left top zoom`, `/FitH top`, …). Hostile input never fails: a missing or unknown
+    /// type, or a `/FitR` without four usable numbers, is [`DestView::Top`]; a non-numeric,
+    /// non-finite or missing operand is `None`; a zoom that is not positive is `None`.
+    pub fn from_operands(kind: Option<&[u8]>, operands: &[Option<f32>]) -> Self {
+        let n = |i: usize| operands.get(i).copied().flatten().filter(|v| v.is_finite());
+        match kind {
+            Some(b"XYZ") => Self::Xyz { left: n(0), top: n(1), zoom: n(2).filter(|z| *z > 0.0) },
+            Some(b"Fit" | b"FitB") => Self::Fit,
+            Some(b"FitH" | b"FitBH") => Self::FitH { top: n(0) },
+            Some(b"FitV" | b"FitBV") => Self::FitV { left: n(0) },
+            Some(b"FitR") => match (n(0), n(1), n(2), n(3)) {
+                (Some(x0), Some(y0), Some(x1), Some(y1)) => Self::FitR { rect: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)] },
+                _ => Self::Top,
+            },
+            _ => Self::Top,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct OutlineItem {
     pub title: String,
     pub page: Option<usize>,
+    /// Where on `page` the bookmark goes ([`DestView::Top`] for a bookmark without a page).
+    pub view: DestView,
     pub children: Vec<OutlineItem>,
     pub open: bool,
 }
@@ -304,30 +371,35 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
         Err(p) => return Err(OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p)))),
     }
     let options = load_options(password);
-    let structure = catch_unwind(AssertUnwindSafe(|| match Document::load_mem_with_options(&bytes, options) {
-        Ok(doc) => {
-            let mut tmp = DocInfo::default();
-            std::mem::swap(&mut tmp.pages, &mut info.pages);
-            Inspector::new(&doc).fill(&mut tmp);
-            Ok(tmp)
-        }
-        Err(e) => Err(e.to_string()),
+    inspect_structure(&mut info, |tmp| {
+        let doc = Document::load_mem_with_options(&bytes, options).map_err(|e| e.to_string())?;
+        Inspector::new(&doc).fill(tmp);
+        Ok(())
+    });
+    if info.pages.is_empty() {
+        return Err(OpenError::Invalid("the document has no pages".into()));
+    }
+    Ok(info)
+}
+
+// Commit auxiliary metadata only after inspection succeeds; renderer geometry is the fallback.
+fn inspect_structure(info: &mut DocInfo, fill: impl FnOnce(&mut DocInfo) -> Result<(), String>) {
+    let structure = catch_unwind(AssertUnwindSafe(|| {
+        let mut tmp = DocInfo { pages: info.pages.clone(), ..Default::default() };
+        fill(&mut tmp)?;
+        Ok::<_, String>(tmp)
     }));
     match structure {
         Ok(Ok(mut filled)) => {
             filled.file_size = info.file_size;
             filled.pdf_version = std::mem::take(&mut info.pdf_version);
-            info = filled;
+            *info = filled;
         }
         Ok(Err(e)) => info.warnings.push(format!("Some document structure (bookmarks, comments, fields) could not be read: {e}")),
         Err(p) => {
             info.warnings.push(format!("Document structure inspection crashed and was skipped: {}", crate::raster::panic_message(&p)));
         }
     }
-    if info.pages.is_empty() {
-        return Err(OpenError::Invalid("the document has no pages".into()));
-    }
-    Ok(info)
 }
 
 struct Inspector<'a> {
@@ -444,14 +516,21 @@ impl<'a> Inspector<'a> {
 
     // ── destinations ────────────────────────────────────────────────────────────────────────
 
-    fn dest_page(&self, dest: &Object, depth: u32) -> Option<usize> {
+    /// The page and view of a destination: an explicit array (`[page /XYZ left top zoom]`, …),
+    /// a dictionary with `/D`, or a named destination that resolves to one.
+    fn dest(&self, dest: &Object, depth: u32) -> Option<(usize, DestView)> {
         if depth > 8 {
             return None;
         }
         match self.resolve(dest) {
-            Object::Array(a) => a.first().and_then(|p| self.page_of(p)),
-            Object::Dictionary(d) => d.get(b"D").ok().and_then(|d| self.dest_page(d, depth + 1)),
-            Object::String(key, _) | Object::Name(key) => self.named_dest(key).and_then(|d| self.dest_page(d, depth + 1)),
+            Object::Array(a) => {
+                let page = a.first().and_then(|p| self.page_of(p))?;
+                let kind = a.get(1).map(|k| self.resolve(k)).and_then(|k| k.as_name().ok());
+                let operands: Vec<Option<f32>> = a.iter().skip(2).take(4).map(|o| self.resolve(o).as_float().ok()).collect();
+                Some((page, DestView::from_operands(kind, &operands)))
+            }
+            Object::Dictionary(d) => d.get(b"D").ok().and_then(|d| self.dest(d, depth + 1)),
+            Object::String(key, _) | Object::Name(key) => self.named_dest(key).and_then(|d| self.dest(d, depth + 1)),
             _ => None,
         }
     }
@@ -526,17 +605,18 @@ impl<'a> Inspector<'a> {
                 break; // cycle
             }
             let Some(d) = self.dict(o) else { break };
-            let page = d
+            let dest = d
                 .get(b"Dest")
                 .ok()
-                .and_then(|dest| self.dest_page(dest, 0))
-                .or_else(|| d.get(b"A").ok().and_then(|a| self.dict(a)).and_then(|a| a.get(b"D").ok()).and_then(|dest| self.dest_page(dest, 0)));
+                .and_then(|dest| self.dest(dest, 0))
+                .or_else(|| d.get(b"A").ok().and_then(|a| self.dict(a)).and_then(|a| a.get(b"D").ok()).and_then(|dest| self.dest(dest, 0)));
+            let (page, view) = dest.map_or((None, DestView::Top), |(p, v)| (Some(p), v));
             let children = match (d.get(b"First").ok(), depth < 32) {
                 (Some(f), true) => self.outline_siblings(f, seen, depth + 1),
                 _ => Vec::new(),
             };
             let open = d.get(b"Count").ok().and_then(|c| c.as_i64().ok()).is_some_and(|c| c > 0);
-            items.push(OutlineItem { title: self.text(d, b"Title").unwrap_or_default(), page, children, open });
+            items.push(OutlineItem { title: self.text(d, b"Title").unwrap_or_default(), page, view, children, open });
             cur = d.get(b"Next").ok();
             if items.len() > 100_000 {
                 break;
@@ -667,11 +747,15 @@ impl<'a> Inspector<'a> {
     fn link(&self, page: usize, d: &Dictionary) -> Option<Link> {
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
         let target = if let Ok(dest) = d.get(b"Dest") {
-            LinkTarget::Page(self.dest_page(dest, 0)?)
+            let (page, view) = self.dest(dest, 0)?;
+            LinkTarget::Page(page, view)
         } else {
             let a = d.get(b"A").ok().and_then(|a| self.dict(a))?;
             match self.name(a, b"S").as_deref() {
-                Some("GoTo") => LinkTarget::Page(self.dest_page(a.get(b"D").ok()?, 0)?),
+                Some("GoTo") => {
+                    let (page, view) = self.dest(a.get(b"D").ok()?, 0)?;
+                    LinkTarget::Page(page, view)
+                }
                 Some("URI") => {
                     LinkTarget::Uri(a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok()).map(|b| String::from_utf8_lossy(b).into_owned())?)
                 }
@@ -955,7 +1039,8 @@ fn alpha(n: usize) -> String {
 /// A PDF date (`D:20261001123000Z`) as "2026-10-01 12:30"; other strings unchanged.
 pub fn pretty_date(s: &str) -> String {
     let d = s.trim_start_matches("D:");
-    if d.len() >= 12 && d[..12].bytes().all(|b| b.is_ascii_digit()) {
+    if let Some(d) = d.get(..12).filter(|d| d.bytes().all(|b| b.is_ascii_digit())) {
+        // Twelve ASCII digits make every slice below a UTF-8 character boundary.
         format!("{}-{}-{} {}:{}", &d[0..4], &d[4..6], &d[6..8], &d[8..10], &d[10..12])
     } else {
         s.to_string()
@@ -1005,6 +1090,65 @@ mod tests {
         assert!(e.to_string().contains("longer than the data"), "{e}");
         // A real frame still decodes: two 3-byte rows, the second Up-filtered.
         assert_eq!(lopdf::filters::png::decode_frame(&[0, 1, 2, 3, 2, 1, 1, 1], 1, 3).unwrap(), [1, 2, 3, 2, 3, 4]);
+    }
+
+    #[test]
+    fn empty_png_predictor_frames_do_not_allocate_rows() {
+        // usize::MAX cannot be reserved, so the old code safely errors before allocating.
+        // An empty frame needs no rows regardless of the declared width.
+        assert!(lopdf::filters::png::decode_frame(&[], 1, usize::MAX).unwrap().is_empty());
+    }
+
+    fn tiff_predictor_stream(data: Vec<u8>, columns: i64, colors: i64, bits: i64) -> lopdf::Stream {
+        let mut params = lopdf::Dictionary::new();
+        params.set("Predictor", 2i64);
+        params.set("Columns", columns);
+        params.set("Colors", colors);
+        params.set("BitsPerComponent", bits);
+        let mut dict = lopdf::Dictionary::new();
+        dict.set("DecodeParms", params);
+        let mut stream = lopdf::Stream::new(dict, data);
+        stream.compress().unwrap();
+        assert_eq!(stream.dict.get(b"Filter").unwrap().as_name().unwrap(), b"FlateDecode");
+        stream
+    }
+
+    #[test]
+    fn tiff_subbyte_predictor_row_width_overflow_is_refused() {
+        // Each multiplication overflows before any scratch allocation in the old debug build.
+        for bits in [1, 2, 4] {
+            let stream = tiff_predictor_stream(vec![0; 64], i64::MAX, 3, bits);
+            assert!(
+                matches!(stream.decompressed_content_with_limit(64), Err(lopdf::Error::Decompress(lopdf::DecompressError::Predictor(_)))),
+                "{bits}-bit row"
+            );
+        }
+    }
+
+    #[test]
+    fn tiff_subbyte_predictor_scratch_is_bounded_by_available_samples() {
+        // 1/2-bit row widths fit usize on 32- and 64-bit hosts; Colors previously made Vec<u16>
+        // reject the capacity before allocating. A partial row has no preceding pixel.
+        for bits in [1, 2] {
+            let data = vec![0b1010_0110; 64];
+            let stream = tiff_predictor_stream(data.clone(), 1, i64::try_from(isize::MAX).unwrap(), bits);
+            assert_eq!(stream.decompressed_content_with_limit(64).unwrap(), data, "{bits}-bit row");
+        }
+    }
+
+    #[test]
+    fn tiff_subbyte_predictors_keep_components_rows_and_padding() {
+        // Repeated tiny rows compress through the public Stream API. Rows remain independent,
+        // differences wrap at each component depth, and trailing padding bits survive.
+        for (columns, colors, bits, encoded, decoded) in [
+            (16, 1, 1, vec![255, 170, 8, 255], vec![170, 204, 15, 85]),
+            (6, 1, 2, vec![85, 179], vec![108, 147]),
+            (3, 1, 4, vec![25, 16], vec![26, 176]),
+            (2, 2, 4, vec![18, 34], vec![18, 52]),
+        ] {
+            let stream = tiff_predictor_stream(encoded.repeat(32), columns, colors, bits);
+            assert_eq!(stream.decompressed_content_with_limit(128).unwrap(), decoded.repeat(32), "{bits}-bit, {colors} colours");
+        }
     }
 
     #[test]
@@ -1104,6 +1248,208 @@ trailer << /Root 1 0 R >>
                 LinkTarget::SetLayers { changes: vec![(Off, (5, 0))], preserve_rb: true },
             ]
         );
+    }
+
+    #[test]
+    fn destination_operands_become_views() {
+        use DestView::*;
+        let v = |kind: &[u8], ops: &[Option<f32>]| DestView::from_operands(Some(kind), ops);
+        // ISO 32000-2 Table 149, each type.
+        assert_eq!(v(b"XYZ", &[Some(0.0), Some(420.0), Some(0.0)]), Xyz { left: Some(0.0), top: Some(420.0), zoom: None });
+        assert_eq!(v(b"XYZ", &[Some(72.0), Some(500.0), Some(1.5)]), Xyz { left: Some(72.0), top: Some(500.0), zoom: Some(1.5) });
+        assert_eq!(v(b"Fit", &[]), Fit);
+        assert_eq!(v(b"FitB", &[]), Fit);
+        assert_eq!(v(b"FitH", &[Some(250.0)]), FitH { top: Some(250.0) });
+        assert_eq!(v(b"FitBH", &[None]), FitH { top: None });
+        assert_eq!(v(b"FitV", &[Some(120.0)]), FitV { left: Some(120.0) });
+        assert_eq!(v(b"FitBV", &[Some(5.0)]), FitV { left: Some(5.0) });
+        // FitR's corners are normalized.
+        assert_eq!(v(b"FitR", &[Some(110.0), Some(220.0), Some(10.0), Some(20.0)]), FitR { rect: [10.0, 20.0, 110.0, 220.0] });
+        // Missing operands are null; so are non-finite ones, and a zoom that isn't positive.
+        assert_eq!(v(b"XYZ", &[]), Xyz { left: None, top: None, zoom: None });
+        assert_eq!(v(b"XYZ", &[Some(f32::NAN), Some(f32::INFINITY), Some(f32::NEG_INFINITY)]), Xyz { left: None, top: None, zoom: None });
+        assert_eq!(v(b"XYZ", &[None, Some(-5.0), Some(-1.0)]), Xyz { left: None, top: Some(-5.0), zoom: None });
+        assert_eq!(v(b"XYZ", &[None, None, Some(f32::NAN)]), Xyz { left: None, top: None, zoom: None });
+        assert_eq!(v(b"FitH", &[Some(f32::NAN)]), FitH { top: None });
+        // A FitR without four usable numbers, an unknown type or no type: the top of the page.
+        assert_eq!(v(b"FitR", &[Some(1.0), Some(2.0)]), Top);
+        assert_eq!(v(b"FitR", &[Some(1.0), Some(2.0), Some(f32::INFINITY), Some(4.0)]), Top);
+        assert_eq!(v(b"Zoom", &[Some(3.0)]), Top);
+        assert_eq!(v(b"xyz", &[Some(3.0)]), Top);
+        assert_eq!(DestView::from_operands(None, &[Some(1.0)]), Top);
+    }
+
+    /// Two 300×400 pages. Bookmarks and links on page 1 go to page 2 in every destination form,
+    /// named (`/Names /Dests` and the PDF 1.1 `/Dests`) and malformed.
+    const DESTS: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 10 0 R /Names << /Dests 40 0 R >> /Dests << /old << /D [4 0 R /FitV 120] >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [30 0 R 31 0 R 32 0 R 33 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+10 0 obj << /Type /Outlines /First 11 0 R /Last 20 0 R /Count 10 >> endobj
+11 0 obj << /Title (xyz) /Parent 10 0 R /Next 12 0 R /Dest [4 0 R /XYZ 0 420 0] >> endobj
+12 0 obj << /Title (fith) /Parent 10 0 R /Next 13 0 R /Dest [4 0 R /FitH 250] >> endobj
+13 0 obj << /Title (named) /Parent 10 0 R /Next 14 0 R /Dest (sec) >> endobj
+14 0 obj << /Title (old named) /Parent 10 0 R /Next 15 0 R /Dest /old >> endobj
+15 0 obj << /Title (action) /Parent 10 0 R /Next 16 0 R /A << /S /GoTo /D [4 0 R /FitR 110 220 10 20] >> >> endobj
+16 0 obj << /Title (wrong types) /Parent 10 0 R /Next 17 0 R /Dest [4 0 R /XYZ (left) /Top true] >> endobj
+17 0 obj << /Title (short) /Parent 10 0 R /Next 18 0 R /Dest [4 0 R /FitR 1 2] >> endobj
+18 0 obj << /Title (no type) /Parent 10 0 R /Next 19 0 R /Dest [4 0 R] >> endobj
+19 0 obj << /Title (huge) /Parent 10 0 R /Next 20 0 R /Dest [4 0 R /XYZ 1000000000000 -5 -1] >> endobj
+20 0 obj << /Title (no page) /Parent 10 0 R /Dest [/XYZ 0 420 0] >> endobj
+30 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest [4 0 R /XYZ 72 500 1.5] >> endobj
+31 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A << /S /GoTo /D (sec) >> >> endobj
+32 0 obj << /Type /Annot /Subtype /Link /Rect [0 40 10 50] /Dest [4 0 R /FitBH 100] >> endobj
+33 0 obj << /Type /Annot /Subtype /Link /Rect [0 60 10 70] /Dest [4 0 R /Fit] >> endobj
+40 0 obj << /Names [(sec) << /D [4 0 R /XYZ null 300 2] >>] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+    #[test]
+    fn bookmarks_and_links_keep_their_destination_view() {
+        use DestView::*;
+        let info = inspect(Arc::new(DESTS.to_vec()), None).expect("opens");
+        let outline: Vec<_> = info.outline.iter().map(|o| (o.title.as_str(), o.page, o.view)).collect();
+        assert_eq!(
+            outline,
+            [
+                ("xyz", Some(1), Xyz { left: Some(0.0), top: Some(420.0), zoom: None }),
+                ("fith", Some(1), FitH { top: Some(250.0) }),
+                ("named", Some(1), Xyz { left: None, top: Some(300.0), zoom: Some(2.0) }),
+                ("old named", Some(1), FitV { left: Some(120.0) }),
+                ("action", Some(1), FitR { rect: [10.0, 20.0, 110.0, 220.0] }),
+                // Hostile operands fall back without failing the bookmark.
+                ("wrong types", Some(1), Xyz { left: None, top: None, zoom: None }),
+                ("short", Some(1), Top),
+                ("no type", Some(1), Top),
+                ("huge", Some(1), Xyz { left: Some(1e12), top: Some(-5.0), zoom: None }),
+                ("no page", None, Top),
+            ]
+        );
+        let links: Vec<_> = info.links.iter().map(|l| l.target.clone()).collect();
+        assert_eq!(
+            links,
+            [
+                LinkTarget::Page(1, Xyz { left: Some(72.0), top: Some(500.0), zoom: Some(1.5) }),
+                LinkTarget::Page(1, Xyz { left: None, top: Some(300.0), zoom: Some(2.0) }),
+                LinkTarget::Page(1, FitH { top: Some(100.0) }),
+                LinkTarget::Page(1, Fit),
+            ]
+        );
+    }
+
+    #[test]
+    fn destination_points_map_to_the_displayed_page() {
+        // A crop box away from the origin: x 100..400, y 50..450.
+        let mut p = PageInfo { width: 300.0, height: 400.0, label: "1".into(), crop: [100.0, 50.0, 400.0, 450.0], rotation: 0 };
+        assert_eq!(p.dest_fraction(Some(100.0), Some(450.0), 0), [Some(0.0), Some(0.0)]);
+        assert_eq!(p.dest_fraction(Some(250.0), Some(350.0), 0), [Some(0.5), Some(0.25)]);
+        // Unspecified stays unspecified; off-page and huge values are clamped to the page.
+        assert_eq!(p.dest_fraction(None, Some(350.0), 0), [None, Some(0.25)]);
+        assert_eq!(p.dest_fraction(Some(-1e30), Some(1e30), 0), [Some(0.0), Some(0.0)]);
+        assert_eq!(p.dest_fraction(Some(f32::INFINITY), Some(f32::NAN), 0), [None, None]);
+        // /Rotate 90 (clockwise): user y runs left to right across the displayed page, user x
+        // top to bottom. A view rotation adds to it.
+        p.rotation = 90;
+        assert_eq!(p.dest_fraction(Some(250.0), Some(350.0), 0), [Some(0.75), Some(0.5)]);
+        assert_eq!(p.dest_fraction(None, Some(350.0), 0), [Some(0.75), None]);
+        assert_eq!(p.dest_fraction(Some(250.0), Some(350.0), 90), [Some(0.5), Some(0.75)]);
+        p.rotation = 180;
+        assert_eq!(p.dest_fraction(Some(250.0), Some(350.0), 0), [Some(0.5), Some(0.75)]);
+        p.rotation = 270;
+        assert_eq!(p.dest_fraction(Some(250.0), Some(350.0), 0), [Some(0.25), Some(0.5)]);
+        assert_eq!(p.dest_fraction(Some(250.0), Some(350.0), 90), [Some(0.5), Some(0.25)]);
+        // A degenerate crop box never divides by zero.
+        let flat = PageInfo { crop: [0.0, 0.0, 0.0, 0.0], rotation: 0, ..p };
+        assert!(flat.dest_fraction(Some(5.0), Some(-5.0), 0).iter().all(|f| f.is_some_and(|f| (0.0..=1.0).contains(&f))));
+    }
+
+    #[test]
+    fn structure_failure_preserves_renderer_pages() {
+        for crash in [true, false] {
+            let mut info = DocInfo {
+                file_size: 321,
+                pdf_version: "1.7".into(),
+                pages: vec![PageInfo { width: 300.0, height: 200.0, label: "1".into(), crop: [10.0, 20.0, 210.0, 320.0], rotation: 90 }],
+                ..Default::default()
+            };
+            inspect_structure(&mut info, |tmp| {
+                tmp.pages.clear();
+                tmp.title = Some("partially inspected".into());
+                if crash {
+                    panic!("synthetic structure inspection failure");
+                }
+                Err("synthetic structure inspection failure".into())
+            });
+
+            assert_eq!(info.pages.len(), 1);
+            let page = &info.pages[0];
+            assert_eq!((page.width, page.height, page.label.as_str(), page.crop, page.rotation), (300.0, 200.0, "1", [10.0, 20.0, 210.0, 320.0], 90));
+            assert_eq!(info.file_size, 321);
+            assert_eq!(info.pdf_version, "1.7");
+            assert!(info.title.is_none());
+            assert_eq!(info.warnings.len(), 1);
+            assert!(info.warnings[0].contains("synthetic structure inspection failure"));
+            assert_eq!(info.warnings[0].contains("crashed"), crash);
+        }
+    }
+
+    #[test]
+    fn invalid_dates_with_unicode_are_unchanged() {
+        for input in ["", "D:", "D:20260930104", "D:202609x01045", "yesterday"] {
+            assert_eq!(pretty_date(input), input);
+        }
+        // Cover every position before the 12-byte prefix, including characters that
+        // straddle its end. None of these strings is an ASCII PDF date.
+        for character in ['é', '€', '😀'] {
+            for prefix_len in 0..12 {
+                let input = format!("D:{}{character}123456789012", "1".repeat(prefix_len));
+                assert_eq!(pretty_date(&input), input, "{character} after {prefix_len} digits");
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_annotation_date_does_not_prevent_opening() {
+        use lopdf::dictionary;
+
+        let date = "D:12345678901éX";
+        let mut encoded_date = vec![0xFE, 0xFF];
+        encoded_date.extend(date.encode_utf16().flat_map(u16::to_be_bytes));
+        let mut doc = Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let annot_id = doc.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Text",
+            "Rect" => vec![10.into(), 10.into(), 30.into(), 30.into()],
+            "M" => Object::String(encoded_date, lopdf::StringFormat::Hexadecimal),
+        });
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 200.into(), 300.into()],
+            "Annots" => vec![annot_id.into()],
+        });
+        doc.objects.insert(
+            pages_id,
+            dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![page_id.into()],
+                "Count" => 1,
+            }
+            .into(),
+        );
+        let catalog_id = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog_id);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).expect("write synthetic fixture");
+
+        let info = inspect(Arc::new(bytes), None).expect("opens despite a non-date /M string");
+        assert_eq!(info.pages.len(), 1);
+        assert_eq!((info.pages[0].width, info.pages[0].height), (200.0, 300.0));
+        assert_eq!(info.annotations.len(), 1);
+        assert_eq!(info.annotations[0].modified.as_deref(), Some(date));
+        assert!(info.warnings.is_empty(), "{:?}", info.warnings);
     }
 
     #[test]

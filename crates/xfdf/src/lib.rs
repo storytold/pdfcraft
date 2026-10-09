@@ -152,7 +152,7 @@ fn nums_of(doc: &Document, o: Option<&Object>) -> Vec<f64> {
 fn text_of(doc: &Document, d: &Dict, k: &[u8]) -> Option<String> {
     d.get(k).and_then(|o| match &*doc.resolve(o) {
         Object::String(s) => Some(s.to_text()),
-        Object::Name(n) => Some(String::from_utf8_lossy(n).into_owned()),
+        Object::Name(n) => Some(pdfcraft_forms::name_text(n)),
         _ => None,
     })
 }
@@ -370,7 +370,7 @@ pub fn export_fdf(doc: &Document, comments: bool, fields: bool, file: &str) -> V
             match f.kind {
                 FieldKind::CheckBox | FieldKind::Radio => {
                     let v = f.value.first().cloned().unwrap_or_else(|| "Off".into());
-                    pdfcraft_cos::serialize(&Object::Name(v.into_bytes()), &mut body);
+                    pdfcraft_cos::serialize(&Object::Name(pdfcraft_forms::name_bytes(&v)), &mut body);
                 }
                 FieldKind::List if f.value.len() > 1 => {
                     pdfcraft_cos::serialize(&Object::Array(f.value.iter().map(|v| Object::String(PdfString::text(v))).collect()), &mut body);
@@ -759,7 +759,7 @@ fn walk_fdf(fdf: &Document, list: &[Object], prefix: &str, out: &mut Vec<(String
         if let Some(v) = d.get(b"V").map(|v| fdf.resolve(v)) {
             let vals: Vec<String> = match &*v {
                 Object::String(s) => vec![s.to_text()],
-                Object::Name(n) => vec![String::from_utf8_lossy(n).into_owned()],
+                Object::Name(n) => vec![pdfcraft_forms::name_text(n)],
                 Object::Array(a) => a.iter().filter_map(|x| fdf.resolve(x).as_string().map(|s| s.to_text())).collect(),
                 _ => Vec::new(),
             };

@@ -91,6 +91,10 @@ pub struct FieldProps {
     pub actions: Option<Vec<(crate::Trigger, crate::FieldAction)>>,
     /// Options tab: the mark of a check box or radio button (every widget).
     pub check_style: Option<CheckStyle>,
+    /// Position tab: rotate one widget (`/MK /R`) to 0, 90, 180 or 270 degrees counterclockwise.
+    /// Changing between horizontal and vertical swaps that widget's width and height around its
+    /// center, unless [`Self::rect`] is also set.
+    pub rotation: Option<(usize, i64)>,
 }
 
 fn invalid<T>(m: impl Into<String>) -> Result<T, FormError> {
@@ -524,6 +528,7 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
                 tab: usize::MAX,
                 locked: false,
                 hidden: false,
+                rotation: 0,
             };
             let ap = appearance::check_box_states(doc, &w, FieldKind::Radio, export);
             doc.update_dict(widget, |d| d.set(b"AP".to_vec(), Object::Dict(ap)))?;
@@ -574,10 +579,12 @@ pub fn redraw_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
     Ok(())
 }
 
-fn frame_only(doc: &Document, w: &Widget) -> (String, f64, f64) {
-    let (width, height) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
+fn frame_only(doc: &Document, w: &Widget) -> (String, crate::appearance::Placement) {
+    let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
     let wobj = doc.get(w.obj);
     let wd = wobj.as_dict().cloned().unwrap_or_default();
+    let place = crate::appearance::placement(crate::appearance::mk_rotation(doc, &wd), page_w, page_h);
+    let (width, height) = (place.layout_w, place.layout_h);
     let mk = wd.get(b"MK").and_then(|m| m.as_dict()).cloned().unwrap_or_default();
     let col = |k: &[u8]| -> Option<String> {
         let v: Vec<f64> = mk.get(k)?.as_array()?.iter().filter_map(|x| x.as_f64()).collect();
@@ -590,14 +597,14 @@ fn frame_only(doc: &Document, w: &Widget) -> (String, f64, f64) {
     if let Some(bc) = col(b"BC") {
         c.push_str(&format!("{bc} RG 1 w 0.5 0.5 {:.3} {:.3} re S\n", width - 1.0, height - 1.0));
     }
-    (c, width, height)
+    (c, place)
 }
 
-fn form_stream(width: f64, height: f64, content: Vec<u8>, resources: Dict) -> Stream {
+fn form_stream(place: crate::appearance::Placement, content: Vec<u8>, resources: Dict) -> Stream {
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("XObject"));
     d.set(b"Subtype".to_vec(), Object::name("Form"));
-    d.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, width, height].iter().map(|v| Object::Real(*v)).collect()));
+    crate::appearance::set_form_box(&mut d, place);
     d.set(b"Resources".to_vec(), Object::Dict(resources));
     Stream::flate(d, &content)
 }
@@ -605,7 +612,8 @@ fn form_stream(width: f64, height: f64, content: Vec<u8>, resources: Dict) -> St
 /// A push button: background, border, its icon (`/MK /I`, scaled to fit and centred) and its
 /// centred caption (unless the layout is icon only, `/TP 1`).
 fn button_appearance(doc: &Document, w: &Widget) -> Stream {
-    let (mut c, width, height) = frame_only(doc, w);
+    let (mut c, place) = frame_only(doc, w);
+    let (width, height) = (place.layout_w, place.layout_h);
     let wobj = doc.get(w.obj);
     let mk = wobj.as_dict().and_then(|d| d.get(b"MK")).map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned()).unwrap_or_default();
     let caption = mk.get(b"CA").and_then(|c| c.as_string()).map(|s| s.to_text()).unwrap_or_default();
@@ -646,7 +654,7 @@ fn button_appearance(doc: &Document, w: &Widget) -> Stream {
     if !xobjects.is_empty() {
         res.set(b"XObject".to_vec(), Object::Dict(xobjects));
     }
-    form_stream(width, height, content, res)
+    form_stream(place, content, res)
 }
 
 /// Give a push button (an image field) the picture `image` (an image XObject of `px` pixels):
@@ -662,7 +670,8 @@ pub fn set_button_icon(doc: &mut Document, name: &str, image: ObjRef, px: (u32, 
     xo.set(b"Im0".to_vec(), Object::Ref(image));
     let mut res = Dict::new();
     res.set(b"XObject".to_vec(), Object::Dict(xo));
-    let icon = doc.add(Object::Stream(form_stream(w, h, format!("q {w} 0 0 {h} 0 0 cm /Im0 Do Q").into_bytes(), res)));
+    let icon =
+        doc.add(Object::Stream(form_stream(crate::appearance::placement(0, w, h), format!("q {w} 0 0 {h} 0 0 cm /Im0 Do Q").into_bytes(), res)));
     for wd in &f.widgets {
         let mut mk =
             doc.get(wd.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m))).and_then(|m| m.as_dict().cloned()).unwrap_or_default();
@@ -676,14 +685,43 @@ pub fn set_button_icon(doc: &mut Document, name: &str, image: ObjRef, px: (u32, 
 }
 
 fn empty_box(doc: &Document, w: &Widget) -> Stream {
-    let (c, width, height) = frame_only(doc, w);
-    form_stream(width, height, c.into_bytes(), Dict::new())
+    let (c, place) = frame_only(doc, w);
+    form_stream(place, c.into_bytes(), Dict::new())
+}
+
+/// Swap width and height, keeping the center. `None` when that is not a usable widget.
+fn swapped_around_center(r: [f64; 4]) -> Option<[f64; 4]> {
+    if !r.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
+    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let (nw, nh) = (y1 - y0, x1 - x0);
+    let out = [cx - nw / 2.0, cy - nh / 2.0, cx + nw / 2.0, cy + nh / 2.0];
+    (out.iter().all(|v| v.is_finite()) && out[2] - out[0] >= 4.0 && out[3] - out[1] >= 4.0).then_some(out)
 }
 
 /// Change a field's properties (General and Options tabs) and redraw it.
 pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<String, FormError> {
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
+    // Validated before anything is written, so a refused rotation leaves the document unchanged.
+    // `Some(Some(rect))`: the widget's axis changes and it gets the swapped rectangle.
+    let mut rotated_rect: Option<Option<[f64; 4]>> = None;
+    if let Some((wi, rot)) = props.rotation {
+        if !matches!(rot, 0 | 90 | 180 | 270) {
+            return invalid("rotation must be 0, 90, 180 or 270 degrees");
+        }
+        let Some(w) = f.widgets.get(wi) else {
+            return invalid(format!("{name} has no widget {}", wi.saturating_add(1)));
+        };
+        let axis_change = (w.rotation % 180 == 0) != (rot % 180 == 0);
+        rotated_rect = Some(None);
+        if axis_change && props.rect.is_none() {
+            let Some(rect) = swapped_around_center(w.rect) else { return invalid("the field is too small") };
+            rotated_rect = Some(Some(rect));
+        }
+    }
     // A locked field only takes unlocking (Acrobat greys its properties out).
     if f.locked() && props.locked != Some(false) && *props != (FieldProps { locked: props.locked, ..FieldProps::default() }) {
         return invalid(format!("{name} is locked: unlock it first"));
@@ -809,7 +847,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         }
         match &props.default_value {
             // Buttons name their default state; text and choices hold a string.
-            Some(Some(v)) if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) => d.set(b"DV".to_vec(), Object::name(v)),
+            Some(Some(v)) if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) => d.set(b"DV".to_vec(), Object::Name(crate::name_bytes(v))),
             Some(Some(v)) => d.set(b"DV".to_vec(), PdfString::text(v)),
             Some(None) => {
                 d.remove(b"DV");
@@ -942,6 +980,26 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
                 })?;
             }
         }
+    }
+    if let (Some((wi, rot)), Some(swapped)) = (props.rotation, rotated_rect)
+        && let Some(w) = f.widgets.get(wi)
+    {
+        if let Some(rect) = swapped {
+            doc.update_dict(w.obj, |d| d.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|v| Object::Real(*v)).collect())))?;
+        }
+        let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
+        if rot == 0 {
+            mk.remove(b"R");
+        } else {
+            mk.set(b"R".to_vec(), Object::Int(rot));
+        }
+        doc.update_dict(w.obj, |d| {
+            if mk.is_empty() {
+                d.remove(b"MK");
+            } else {
+                d.set(b"MK".to_vec(), Object::Dict(mk));
+            }
+        })?;
     }
     redraw_field(doc, &new_name)?;
     if props.calculate.is_some() {

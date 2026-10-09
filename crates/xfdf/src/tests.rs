@@ -132,6 +132,49 @@ fn fdf_round_trips_values_and_comments() {
     assert_eq!(comment_view(&dst), comment_view(&src), "replies keep their thread");
 }
 
+/// One page with a check box whose on state is the Shift-JIS name 「はい」 (`/#82#CD#82#A2`).
+fn shift_jis_check_box() -> Document {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>",
+        "<< /Fields [5 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /Off /AS /Off /Rect [50 700 64 714] /P 3 0 R /AP << /N << /Off 6 0 R /#82#CD#82#A2 6 0 R >> >> >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+#[test]
+fn non_utf8_check_box_states_round_trip() {
+    let sjis_hai: &[u8] = b"\x82\xcd\x82\xa2";
+    let mut src = shift_jis_check_box();
+    set_value(&mut src, "agree", &FieldValue::Check(true)).unwrap();
+    // FDF writes the state's own bytes, not its #XX text.
+    let fdf = export_fdf(&src, false, true, "form.pdf");
+    let name: &[u8] = b"/#82#CD#82#A2";
+    assert!(fdf.windows(name.len()).any(|w| w == name), "{}", String::from_utf8_lossy(&fdf));
+    for data in [fdf, export_xfdf(&src, false, true, "form.pdf").into_bytes()] {
+        let mut dst = shift_jis_check_box();
+        assert_eq!(import(&mut dst, &data).unwrap().fields, 1);
+        assert_eq!(values(&dst), values(&src));
+        let w = fields(&dst).into_iter().next().unwrap().widgets[0].obj;
+        assert_eq!(dst.get(w).as_dict().unwrap().name(b"AS"), Some(sjis_hai));
+    }
+}
+
 /// Who each comment replies to, by name, with its review state.
 fn threads(doc: &Document) -> Vec<(Option<String>, Option<String>, Option<String>)> {
     summaries(doc).into_iter().map(|s| (s.name, s.in_reply_to, s.state)).collect()

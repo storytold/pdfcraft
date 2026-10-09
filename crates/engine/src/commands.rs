@@ -150,6 +150,8 @@ const HELP: Option<&str> = Some("Help");
 pub const COMMANDS: &[CommandSpec] = &[
     c("file.open", "Open…", FILE, Some(Shortcut::cmd("O")), Nothing, "folder-open"),
     c("file.open_recent", "Open Recent", FILE, None, Nothing, "clock"),
+    // Shown at the foot of File ▸ Open Recent and on Home, not as its own File menu item.
+    c("file.clear_recent", "Clear Recent Files", None, None, Nothing, "trash-2"),
     c("file.pin_folder", "Pin folder to Home…", FILE, None, Nothing, "folder-plus"),
     c("create.blank", "New blank PDF", FILE, None, Nothing, "file-plus-2"),
     c("measure.distance", "Measure distance", None, None, Annotate, "ruler"),

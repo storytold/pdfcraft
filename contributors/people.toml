@@ -59,3 +59,8 @@ sync_github_name = true
 
 [people.amitabhthakur]
 sync_github_name = true
+
+[people.chent11]
+real_name = "Tao Chen"
+display_name = "Tao Chen"
+sync_github_name = false

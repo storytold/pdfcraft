@@ -666,6 +666,8 @@ pub struct FieldDraft {
     pub font_size: f64,
     /// Left, bottom, width, height in points.
     pub position: [f64; 4],
+    /// `/MK /R`: 0, 90, 180 or 270 degrees counterclockwise.
+    pub rotation: i64,
     pub look: Option<FieldLook>,
     /// Check boxes and radio buttons: the mark when on (Options tab).
     pub check_style: Option<pdfcraft_engine::CheckStyle>,
@@ -709,6 +711,7 @@ impl FieldDraft {
             on_state: f.widgets.get(widget).and_then(|w| w.on_state.clone()).unwrap_or_default(),
             font_size: da_size(&f.da),
             position: [r[0], r[1], r[2] - r[0], r[3] - r[1]],
+            rotation: f.widgets.get(widget).map(|w| w.rotation).unwrap_or(0),
             look: None,
             check_style: None,
             format: f.actions.format.clone(),
@@ -764,6 +767,7 @@ impl FieldDraft {
                 let [x, y, w, h] = self.position;
                 (self.widget, [x, y, x + w.max(4.0), y + h.max(4.0)])
             }),
+            rotation: (self.rotation != o.rotation).then_some((self.widget, self.rotation)),
             look: (self.look != o.look).then_some(self.look).flatten(),
             check_style: (self.check_style != o.check_style).then_some(self.check_style).flatten(),
             format: (self.format != o.format).then(|| self.format.clone()),
@@ -929,6 +933,25 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                     }
                 });
                 ui.label(egui::RichText::new(tl!("Points from the page's bottom-left corner.")).small().color(t.text_faint));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let l = ui.label(tl!("Rotation:"));
+                    let before = d.rotation;
+                    egui::ComboBox::from_id_salt("field-rotation")
+                        .selected_text(format!("{}°", d.rotation))
+                        .show_ui(ui, |ui| {
+                            for r in [0, 90, 180, 270] {
+                                if ui.selectable_value(&mut d.rotation, r, format!("{r}°")).changed() && (before % 180 == 0) != (r % 180 == 0) {
+                                    // Keep the same center. set_props skips its own swap when the rect changed too.
+                                    let [x, y, w, h] = d.position;
+                                    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+                                    d.position = [cx - h / 2.0, cy - w / 2.0, h, w];
+                                }
+                            }
+                        })
+                        .response
+                        .labelled_by(l.id);
+                });
             }
             FieldTab::Format => format_tab(ui, d, t),
             FieldTab::Validate => validate_tab(ui, d),

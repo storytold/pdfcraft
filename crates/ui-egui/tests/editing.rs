@@ -37,6 +37,7 @@ fn fixture(n: usize) -> Vec<u8> {
 fn harness(pages: usize, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, fixture(pages)).expect("fixture opens");
         setup(&mut app);
         app
@@ -387,6 +388,119 @@ fn quitting_with_unsaved_changes_asks_for_each_document() {
     assert!(h.state().close_request.is_none());
 }
 
+/// PDFs written to a fresh temp folder, removed when the test ends.
+struct TempPdfs(std::path::PathBuf);
+
+impl TempPdfs {
+    fn new(test: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-session-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    fn file(&self, name: &str, pages: usize) -> String {
+        let path = self.0.join(name);
+        std::fs::write(&path, fixture(pages)).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+}
+
+impl Drop for TempPdfs {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The app with Preferences ▸ Reopen the files that were open when PdfCraft last closed on.
+fn session_harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.reopen_last_session = true;
+        setup(&mut app);
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+fn open_paths(app: &PdfCraftApp) -> Vec<String> {
+    app.views.iter().map(|v| app.session.get(v.id).and_then(|d| d.path.clone()).unwrap_or_default()).collect()
+}
+
+#[test]
+fn the_last_session_reopens_its_files_pages_and_active_tab() {
+    let dir = TempPdfs::new("reopen");
+    let files = [dir.file("a.pdf", 1), dir.file("b.pdf", 5), dir.file("c.pdf", 2)];
+    let opened = files.clone();
+    let mut h = session_harness(move |app| opened.iter().for_each(|f| app.open_path(f)));
+    h.state_mut().views[1].go_to_page(3);
+    h.state_mut().active = Some(1);
+    h.run_steps(4);
+    assert_eq!(h.state().views[1].current, 3, "b.pdf shows page 4");
+    let settings = h.state().persist();
+    let mut h = session_harness(move |app| {
+        app.restore(&settings);
+        app.reopen_last_files(&[]);
+    });
+    h.run_steps(4);
+    let app = h.state();
+    assert_eq!(open_paths(app), files, "the same files, in the same order");
+    assert_eq!(app.active, Some(1), "b.pdf is in front again");
+    assert_eq!(app.views[1].current, 3, "at the page it showed");
+}
+
+#[test]
+fn quitting_with_unsaved_changes_still_remembers_every_file() {
+    let dir = TempPdfs::new("quit");
+    let files = [dir.file("a.pdf", 1), dir.file("b.pdf", 1)];
+    let opened = files.clone();
+    let mut h = session_harness(move |app| opened.iter().for_each(|f| app.open_path(f)));
+    for tab in 0..2 {
+        h.state_mut().active = Some(tab);
+        h.state_mut().views[tab].select_pages(&[0]);
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    }
+    h.state_mut().active = Some(1);
+    h.state_mut().close_request = Some(CloseRequest::Quit);
+    h.run_steps(3);
+    // Each unsaved tab closes as it is answered, before PdfCraft quits.
+    for _ in 0..2 {
+        h.get_by_label("Don't save").click();
+        h.run_steps(3);
+    }
+    assert!(h.state().views.is_empty());
+    let mut app = PdfCraftApp::new();
+    app.restore(&h.state().persist());
+    app.reopen_last_files(&[]);
+    assert_eq!(open_paths(&app), files, "both files come back");
+    assert_eq!(app.active, Some(1), "with b.pdf in front, as when the quit began");
+}
+
+#[test]
+fn the_last_session_is_off_by_default_and_skips_missing_and_duplicate_files() {
+    let dir = TempPdfs::new("skip");
+    let (a, b) = (dir.file("a.pdf", 1), dir.file("b.pdf", 1));
+    let mut app = PdfCraftApp::new();
+    app.open_path(&a);
+    app.open_path(&b);
+    let off: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
+    assert!(off["last_session"].is_null(), "nothing is kept while the preference is off");
+    app.reopen_last_session = true;
+    let settings = app.persist();
+    let mut later = PdfCraftApp::new();
+    later.restore(&settings);
+    later.reopen_last_session = false;
+    later.reopen_last_files(&[]);
+    assert!(later.views.is_empty(), "turned off again: nothing reopens");
+    // b.pdf is gone, and a.pdf is about to open from the command line.
+    std::fs::remove_file(&b).unwrap();
+    let mut later = PdfCraftApp::new();
+    later.restore(&settings);
+    later.reopen_last_files(&[a]);
+    assert!(later.views.is_empty(), "neither opens from the session");
+}
+
 #[test]
 fn save_prompt_stays_inside_the_screen_for_a_long_filename() {
     // Issue #161: an unwrapped title carrying a long filename widened the centered modal past
@@ -395,6 +509,7 @@ fn save_prompt_stays_inside_the_screen_for_a_long_filename() {
                 Vliek, Ed Sutherland, -- 5, 2024 -- McGraw-Hill Education (UK) Ltd -- isbn13 97815268.pdf";
     let mut h = Harness::builder().with_size(egui::vec2(1365.0, 719.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes(name, None, fixture(1)).expect("fixture opens");
         app.close_request = Some(CloseRequest::Tab(app.views[0].id));
         app
@@ -429,6 +544,7 @@ fn save_prompt_fits_the_smallest_window_whatever_the_name() {
         let start: String = name.chars().take(10).collect();
         let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
             let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
             app.open_bytes(&name, None, fixture(1)).expect("fixture opens");
             app.close_request = Some(CloseRequest::Tab(app.views[0].id));
             app
@@ -818,6 +934,7 @@ fn columns_resize_and_the_layout_is_kept_in_the_settings() {
     assert!(widths[size_index] > 120.0, "{widths:?}");
     let saved = h.state().persist();
     let mut fresh = PdfCraftApp::new();
+    fresh.set_option("language", "en").unwrap();
     fresh.restore(&saved);
     assert_eq!(fresh.combine_columns, h.state().combine_columns);
     // Malformed settings give the default layout.
@@ -1110,6 +1227,117 @@ fn files_dropped_outside_the_page_grid_still_open_as_documents() {
     assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 2"]);
 }
 
+fn grid_zoom(h: &Harness<'static, PdfCraftApp>) -> f32 {
+    h.state().views[0].grid_zoom()
+}
+
+#[test]
+fn page_grid_zooms_with_its_buttons_keys_and_pinch() {
+    let mut h = organize(12);
+    let width = |h: &Harness<'static, PdfCraftApp>| h.get_by_label("Page 2").rect().left() - h.get_by_label("Page 1").rect().left();
+    let usual = width(&h);
+    h.get_by_label("Larger pages").click();
+    h.run_steps(3);
+    assert_eq!(grid_zoom(&h), 1.25);
+    assert!(width(&h) > usual + 20.0, "the pages are drawn larger");
+    h.get_by_label("Reset page size").click();
+    h.run_steps(3);
+    assert_eq!((grid_zoom(&h), width(&h)), (1.0, usual));
+    h.get_by_label("Smaller pages").click();
+    h.run_steps(3);
+    assert_eq!(grid_zoom(&h), 0.8);
+    assert!(width(&h) < usual - 20.0);
+    // Keys.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num0);
+    h.run_steps(2);
+    assert_eq!(grid_zoom(&h), 1.0);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Equals);
+    h.run_steps(2);
+    assert_eq!(grid_zoom(&h), 1.25);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Minus);
+    h.run_steps(2);
+    assert_eq!(grid_zoom(&h), 1.0);
+    // Pinch (or Ctrl/⌘ + wheel) over the grid; elsewhere it leaves the grid alone.
+    let page = h.get_by_label("Page 1").rect().center();
+    h.hover_at(page);
+    h.run_steps(1);
+    h.event(egui::Event::Zoom(1.5));
+    h.run_steps(2);
+    assert_eq!(grid_zoom(&h), 1.5);
+    h.hover_at(h.get_by_label("Larger pages").rect().center());
+    h.run_steps(1);
+    h.event(egui::Event::Zoom(1.5));
+    h.run_steps(2);
+    assert_eq!(grid_zoom(&h), 1.5, "the pointer was on the toolbar");
+    // It stops at its limits, where the buttons switch off.
+    for _ in 0..12 {
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Equals);
+        h.run_steps(1);
+    }
+    assert_eq!(grid_zoom(&h), 3.0);
+    h.get_by_label("Larger pages").click();
+    h.run_steps(2);
+    assert_eq!(grid_zoom(&h), 3.0);
+    for _ in 0..20 {
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Minus);
+        h.run_steps(1);
+    }
+    assert_eq!(grid_zoom(&h), 0.5);
+    assert!(!dirty(&h), "zooming is not an edit");
+}
+
+#[test]
+fn zoomed_pages_in_view_are_rendered_at_the_size_drawn() {
+    // A long document: sharpness must not depend on how many pages there are.
+    let mut h = harness(400, |app| {
+        app.set_option("organize", "on").unwrap();
+        app.set_option("grid-zoom", "300").unwrap();
+    });
+    let drawn = 146.0 * 3.0 * h.ctx.pixels_per_point();
+    let sharp = |h: &Harness<'static, PdfCraftApp>, page| h.state().views[0].grid_page_pixels(page);
+    for _ in 0..200 {
+        if sharp(&h, 0).is_some_and(|w| w as f32 >= drawn * 0.9) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        h.run_steps(1);
+    }
+    let width = sharp(&h, 0).expect("the first page has a sharp render");
+    assert!((drawn * 0.9..=drawn * 1.6).contains(&(width as f32)), "{width} for {drawn}");
+    assert!(sharp(&h, 399).is_none(), "pages out of view have none");
+    // Zoomed out again, thumbnails are enough and the sharp renders are dropped.
+    h.state_mut().set_option("grid-zoom", "50").unwrap();
+    h.run_steps(3);
+    assert!(sharp(&h, 0).is_none());
+}
+
+#[test]
+fn a_zoomed_page_grid_still_inserts_and_moves_at_the_right_gap() {
+    let dir = temp_path("zoomed-grid");
+    std::fs::create_dir_all(&dir).unwrap();
+    let note = dir.join("note.txt");
+    std::fs::write(&note, "a note").unwrap();
+    let mut h = harness(3, |app| {
+        app.set_option("organize", "on").unwrap();
+        app.set_option("grid-zoom", "200").unwrap();
+        assert!(
+            app.set_option("grid-zoom", "20").is_err() && app.set_option("grid-zoom", "NaN").is_err() && app.set_option("grid-zoom", "big").is_err()
+        );
+    });
+    assert_eq!(grid_zoom(&h), 2.0);
+    h.state_mut().pick_override = Some(vec![note.to_string_lossy().into_owned()]);
+    h.get_by_label("Insert a file before page 2").click();
+    h.run_steps(4);
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "a note", "Page 2", "Page 3"]);
+    // Files dropped over a gap go there too.
+    let gap = h.get_by_label("Insert a file before page 2").rect().center();
+    h.hover_at(gap + egui::vec2(0.0, 60.0));
+    h.run_steps(2);
+    drop_files(&mut h, vec![Dropped("more.txt", b"more".to_vec())]);
+    h.run_steps(4);
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "more", "a note", "Page 2", "Page 3"]);
+}
+
 #[test]
 fn save_pages_writes_what_the_grid_shows() {
     let path = temp_path("grid-save.pdf");
@@ -1123,6 +1351,7 @@ fn save_pages_writes_what_the_grid_shows() {
     h.run_steps(4);
     assert!(!dirty(&h));
     let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
     app.open_bytes("saved.pdf", None, std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(texts_of(&app, 0), ["Page 1", "Page 3"]);
 }
@@ -1194,6 +1423,7 @@ fn protected_with(algorithm: pdfcraft_cos::Algorithm, user: &str, owner: &str, p
 fn password_prompt_opens_and_security_tab_reports_the_details() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("secret.pdf", None, protected("pw", "owner", -1)).unwrap();
         app
     });
@@ -1218,6 +1448,7 @@ fn password_prompt_opens_and_security_tab_reports_the_details() {
 fn restricted_documents_show_a_notice_and_block_page_changes() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("locked.pdf", None, protected("", "owner", 0b0100)).unwrap(); // opens without a password
         app.set_option("organize", "on").unwrap();
         app
@@ -1231,6 +1462,10 @@ fn restricted_documents_show_a_notice_and_block_page_changes() {
     h.run_steps(3);
     assert_eq!(texts_of(h.state(), 0).len(), 2, "page changes are blocked");
     assert_eq!(h.query_all_by_label_contains("Insert a file").count(), 0, "nothing to insert into");
+    // Looking closer is not a page change.
+    h.get_by_label("Larger pages").click();
+    h.run_steps(2);
+    assert_eq!(grid_zoom(&h), 1.25);
     assert!(!dirty(&h));
     h.get_by_label("Security settings").click();
     h.run_steps(3);
@@ -1240,6 +1475,7 @@ fn restricted_documents_show_a_notice_and_block_page_changes() {
 #[test]
 fn replace_pages_dialog_swaps_page_content() {
     let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
     app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
     app.views[0].select_pages(&[1]);
     app.start_replace("other.pdf".into(), fixture(5));
@@ -1365,6 +1601,7 @@ fn source_font_fixture() -> Vec<u8> {
 fn open_source_font_fixture() -> Harness<'static, PdfCraftApp> {
     Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("fonts.pdf", None, source_font_fixture()).expect("font fixture opens");
         app
     })
@@ -1465,6 +1702,7 @@ fn double_drawn() -> Vec<u8> {
 fn editing_a_double_drawn_line_replaces_every_copy() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("bold.pdf", None, double_drawn()).expect("opens");
         app
     });
@@ -1497,6 +1735,7 @@ fn editing_existing_images_on_the_page() {
     image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("picture.png", None, png.clone()).expect("opens");
         app
     });
@@ -1618,10 +1857,67 @@ fn dragging_a_paragraph_moves_it_and_its_edge_rewraps_it() {
     assert!(h.state().views[0].line_editor.is_none());
 }
 
+/// A quick flick: press at `from`, and the next frame already finds the pointer at `to`.
+fn flick(h: &mut Harness<'static, PdfCraftApp>, from: egui::Pos2, to: egui::Pos2) {
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    h.hover_at(to);
+    h.run_steps(1);
+    h.drop_at(to);
+    h.run_steps(4);
+}
+
+#[test]
+fn a_quick_flick_on_either_edge_rewraps_the_paragraph() {
+    let mut h = harness(1, |_| {});
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let lines = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_lines(0)
+    };
+    let block = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(0)[0].clone()
+    };
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
+    let near = |a: f64, b: f64| (a - b).abs() < 1.5;
+    // Grab edges near the box's top: a rewrapped box reaches the window's bottom, where the
+    // tool's toast sits over the page and takes the press.
+    let grip_y = |b: &pdfcraft_engine::TextBlock| b.rect[3] - 6.0;
+    // Narrow "Page 1" from its right edge to about 45 pt: it rewraps onto two lines.
+    let b = block(&h);
+    let edge = screen(b.rect[2], grip_y(&b)) + egui::vec2(2.0, 0.0);
+    flick(&mut h, edge, edge - egui::vec2((b.rect[2] - b.rect[0] - 45.0) as f32 * k, 0.0));
+    let text: Vec<String> = lines(&h).iter().map(|l| l.text.clone()).collect();
+    assert_eq!(text, ["Page", "1"], "narrowed from the right edge");
+    // Flick the right edge outward, past the box and its handle: back onto one line.
+    let b = block(&h);
+    let edge = screen(b.rect[2], grip_y(&b)) + egui::vec2(2.0, 0.0);
+    flick(&mut h, edge, edge + egui::vec2(80.0 * k, 0.0));
+    let text: Vec<String> = lines(&h).iter().map(|l| l.text.clone()).collect();
+    assert_eq!(text, ["Page 1"], "widened by a fast drag that left the handle at once");
+    // Flick the left edge inward: it rewraps and its left side follows the pointer.
+    let b = block(&h);
+    let edge = screen(b.rect[0], grip_y(&b)) - egui::vec2(2.0, 0.0);
+    let inward = (b.rect[2] - b.rect[0] - 45.0) as f32;
+    flick(&mut h, edge, edge + egui::vec2(inward * k, 0.0));
+    let after = lines(&h);
+    let text: Vec<String> = after.iter().map(|l| l.text.clone()).collect();
+    assert_eq!(text, ["Page", "1"], "narrowed from the left edge");
+    assert!(near(after[0].rect[0], b.rect[0] + inward as f64), "{:?} → {:?}", b.rect, after[0].rect);
+    assert!(h.state().views[0].line_editor.is_none());
+}
+
 /// The Pages panel, in a window tall enough to show every thumbnail of a short fixture.
 fn pages_panel(pages: usize) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, fixture(pages)).expect("fixture opens");
         app.set_option("panel", "pages").unwrap();
         app
@@ -1716,4 +2012,41 @@ fn print_shortcut_offers_the_pages_picked_in_the_pages_panel() {
     assert_eq!(h.state().print_draft.selected, [1, 3]);
     h.get_by_label("Selected pages (2)");
     h.get_by_label("Sheet 1 of 2");
+}
+
+#[test]
+fn dragging_pages_panel_thumbnails_reorders_pages() {
+    let mut h = harness(4, |app| app.right = Some(pdfcraft_ui_egui::RightPanel::Pages));
+    let before = page_texts(h.state());
+    // The Pages panel is on the right; the document view may label its pages too.
+    let thumb = |h: &Harness<'static, PdfCraftApp>, label: &str| {
+        h.get_all_by_label(label).map(|n| n.rect()).max_by(|a, b| a.left().total_cmp(&b.left())).expect("the thumbnail")
+    };
+    // Grab page 3 (page 4 is below the window) and drop it above page 1.
+    let (from, to) = (thumb(&h, "Page 3").center(), thumb(&h, "Page 1").center_top() + egui::vec2(0.0, 4.0));
+    drag(&mut h, from, to);
+    h.run_steps(4);
+    let after = page_texts(h.state());
+    assert_eq!(after, vec![before[2].clone(), before[0].clone(), before[1].clone(), before[3].clone()], "{after:?}");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move page"));
+    let view = &h.state().views[0];
+    assert_eq!(view.selected.iter().copied().collect::<Vec<_>>(), vec![0], "the moved page stays selected");
+    assert!(view.panel_drag.is_none());
+}
+
+#[test]
+fn a_thumbnail_drag_that_ends_off_the_panel_or_outlives_the_pages_is_dropped() {
+    let mut h = harness(4, |app| app.right = Some(pdfcraft_ui_egui::RightPanel::Pages));
+    let before = page_texts(h.state());
+    // A drag left over (the panel closed mid-drag, the button released elsewhere) moves nothing.
+    h.state_mut().views[0].panel_drag = Some(vec![2]);
+    h.run_steps(2);
+    assert!(h.state().views[0].panel_drag.is_none());
+    assert_eq!(page_texts(h.state()), before);
+    // A change to the document drops page indexes taken before it.
+    h.state_mut().views[0].panel_drag = Some(vec![3]);
+    let id = h.state().views[0].id;
+    let info = h.state().session.get(id).unwrap().info.clone();
+    h.state_mut().views[0].document_changed(&info);
+    assert!(h.state().views[0].panel_drag.is_none());
 }

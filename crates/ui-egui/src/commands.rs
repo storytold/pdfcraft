@@ -85,6 +85,8 @@ impl PdfCraftApp {
                 Some(p) => self.open_recent(&p),
                 None => self.notify_tr("No recent files"),
             },
+            "file.clear_recent" if self.recent.is_empty() => self.notify_tr("No recent files"),
+            "file.clear_recent" => self.recent.clear(),
             "file.pin_folder" => self.pin_folder_dialog(),
             "page.combine" => self.open_combine_tab(),
             "file.save" => {
@@ -180,13 +182,13 @@ impl PdfCraftApp {
             "view.theme.system" => self.set_theme_preference(ThemePreference::System),
             "view.theme.light" => self.set_theme_preference(ThemePreference::Light),
             "view.theme.dark" => self.set_theme_preference(ThemePreference::Dark),
-            "comment.list" => self.right = Some(RightPanel::Comments),
+            "comment.list" => self.choose_right_panel(Some(RightPanel::Comments)),
             tool if crate::comments::CommentTool::from_command(tool).is_some() => {
                 let Some(tool) = crate::comments::CommentTool::from_command(tool) else { return false };
                 self.comment_prefs.group_tool[tool.group()] = tool;
                 self.quick_tool = crate::QuickTool::Comment(tool);
-                // Acrobat opens the Comments panel with the commenting tools.
-                if self.right.is_none() {
+                // Acrobat opens the Comments panel with the commenting tools, unless the user closed it.
+                if self.right.is_none() && !self.comments_panel_closed {
                     self.right = Some(RightPanel::Comments);
                 }
                 // A text selection made before picking a markup tool is marked right away.
@@ -464,7 +466,10 @@ impl PdfCraftApp {
                 if let Some(i) = active {
                     self.views[i].forms.focus = None;
                 }
-                self.notify_fmt("Click on the page to add a {tool}, or drag to set its size", &[("tool", &tl!(tool.label()).to_lowercase())]);
+                self.notify_fmt(
+                    "Click on the page to add a {tool}, or drag to set its size",
+                    &[("tool", &crate::i18n::in_sentence(tl!(tool.label())))],
+                );
             }
             "sign.fill.signature.remove" => self.signature = None,
             "sign.fill.initials.remove" => self.initials = None,
@@ -570,13 +575,15 @@ pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str
         let label = commands::current_label(spec, &app.session, app.active_ids().map(|(_, id)| id));
         let label = crate::i18n::menu_label(spec.id, &label);
         // Open Recent is a submenu of the live recent list, not one action: disabled while the
-        // list is empty, otherwise each entry opens its file (or focuses the tab showing it).
+        // list is empty, otherwise each entry opens its file (or focuses the tab showing it), and
+        // Clear Recent Files at the foot empties the list (#430).
         if spec.id == "file.open_recent" {
             if app.recent.is_empty() {
                 ui.add_enabled(false, egui::Button::new(label));
                 continue;
             }
             let mut open: Option<String> = None;
+            let mut clear = false;
             ui.menu_button(label, |ui| {
                 for r in &app.recent {
                     if ui.button(&r.name).on_hover_text(&r.path).clicked() {
@@ -584,9 +591,18 @@ pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str
                         ui.close();
                     }
                 }
+                ui.separator();
+                if ui.button(tl!("Clear Recent Files")).clicked() {
+                    clear = true;
+                    ui.close();
+                }
             });
             if let Some(p) = open {
                 app.open_recent(&p);
+                ui.close();
+            }
+            if clear {
+                app.execute("file.clear_recent");
                 ui.close();
             }
             continue;

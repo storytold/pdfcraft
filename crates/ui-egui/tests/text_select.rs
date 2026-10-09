@@ -29,6 +29,7 @@ trailer << /Root 1 0 R >>
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> (Harness<'static, PdfCraftApp>, Pos2) {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("lines.pdf", None, two_lines()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("author", "Tester").unwrap();
@@ -83,4 +84,58 @@ fn quick_clicks_with_the_highlighter_mark_only_the_word() {
     let marks: Vec<(&str, usize)> = doc.info.annotations.iter().map(|a| (a.subtype.as_str(), a.quads.len())).collect();
     assert_eq!(marks, [("Highlight", 1)], "one highlight, on the double-clicked word");
     assert!(app.views[0].selected_text().is_none());
+}
+
+/// Press at `from`, move to `to` and release there.
+fn drag(h: &mut Harness<'static, PdfCraftApp>, from: Pos2, to: Pos2) {
+    h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+}
+
+/// Click at `pos` with Shift held.
+fn shift_click(h: &mut Harness<'static, PdfCraftApp>, pos: Pos2) {
+    h.event(Event::ModifiersChanged(Modifiers::SHIFT));
+    h.hover_at(pos);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::SHIFT });
+    }
+    h.run_steps(1);
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(1);
+}
+
+/// Issue #527: ⇧-click extends the text selection to the click, keeping its anchor.
+#[test]
+fn shift_click_extends_the_selection_from_its_anchor() {
+    let (mut h, _) = harness(|_| {});
+    let glyph = |h: &Harness<'static, PdfCraftApp>, g: usize| h.state().views[0].glyph_screen_pos(0, g).expect("glyph on screen");
+    // Drag over "quick" (glyphs 4..=8).
+    let (q, k) = (glyph(&h, 4), glyph(&h, 8));
+    drag(&mut h, q, k);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
+    h.run_steps(60);
+    // ⇧-click on the "n" of "brown": the selection runs from the anchor to it.
+    let n = glyph(&h, 14);
+    shift_click(&mut h, n);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick brown"));
+    h.run_steps(60);
+    // ⇧-click before the anchor: the anchor stays, the selection now runs back to the click.
+    let t = glyph(&h, 0);
+    shift_click(&mut h, t);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("The q"));
+    h.run_steps(60);
+    // A plain click still clears it.
+    click(&mut h, n);
+    assert_eq!(h.state().views[0].selected_text(), None);
+    h.run_steps(60);
+    // ⇧-click with nothing selected selects nothing.
+    shift_click(&mut h, n);
+    assert_eq!(h.state().views[0].selected_text(), None);
 }
