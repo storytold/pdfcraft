@@ -767,7 +767,7 @@ pub fn recalculate(doc: &mut Document) -> Result<usize, FormError> {
 
 /// [`recalculate`], running custom Calculate (and Format) scripts through `scripts`.
 pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result<usize, FormError> {
-    let all = fields(doc);
+    let mut all = fields(doc);
     let calculated = |f: &Field| f.actions.calculate != af::Calculate::None || f.actions.scripts.calculate.is_some();
     if !all.iter().any(calculated) {
         return Ok(0);
@@ -786,17 +786,36 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
     }
     let mut changed = 0;
     for name in order {
-        let now = fields(doc);
-        let Some(f) = now.iter().find(|f| f.name == name) else { continue };
+        let Some(f) = all.iter().find(|f| f.name == name).cloned() else { continue };
         let lookup = |n: &str| -> Vec<String> {
             let prefix = format!("{n}.");
-            now.iter().filter(|x| x.name == n || x.name.starts_with(&prefix)).flat_map(|x| x.value.first().cloned()).collect()
+            all.iter().filter(|x| x.name == n || x.name.starts_with(&prefix)).flat_map(|x| x.value.first().cloned()).collect()
         };
         let current = f.value.first().cloned().unwrap_or_default();
         let v = if let Some(js) = &f.actions.scripts.calculate {
-            let f = f.clone();
-            let r = scripts.run(FieldEvent::Calculate, js, &f, &current, &now);
+            let r = scripts.run(FieldEvent::Calculate, js, &f, &current, &all);
             scripting::apply_changes(doc, &r.changes, &f.name)?;
+            for c in &r.changes {
+                if let Some(target) = all.iter_mut().find(|x| x.name == c.name) {
+                    if let Some(val) = &c.value {
+                        target.value = val.clone();
+                    }
+                    if let Some(ro) = c.read_only {
+                        if ro {
+                            target.flags |= flags::READ_ONLY;
+                        } else {
+                            target.flags &= !flags::READ_ONLY;
+                        }
+                    }
+                    if let Some(req) = c.required {
+                        if req {
+                            target.flags |= flags::REQUIRED;
+                        } else {
+                            target.flags &= !flags::REQUIRED;
+                        }
+                    }
+                }
+            }
             if !r.rc {
                 continue;
             }
@@ -805,12 +824,12 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
             let Some(v) = af::calculate(&f.actions.calculate, &lookup) else { continue };
             v
         };
-        let now = fields(doc);
-        let Some(f) = now.iter().find(|f| f.name == name) else { continue };
         if current != v && matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
-            let f = f.clone();
             doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), PdfString::text(&v)))?;
             redraw(doc, &f, std::slice::from_ref(&v), scripts)?;
+            if let Some(target) = all.iter_mut().find(|x| x.name == name) {
+                target.value = vec![v];
+            }
             changed += 1;
         }
     }

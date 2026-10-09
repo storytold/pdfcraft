@@ -475,3 +475,16 @@ mod revert_tests {
         assert!(output.text.unwrap().plain_text().contains("Saved original"), "saved AP still draws the original value");
     }
 }
+
+#[test]
+fn switching_fields_keeps_committed_text_visible_immediately() {
+    let mut h = harness();
+    click_field(&mut h, "name", 0);
+    h.event(egui::Event::Text("Gandalf".into()));
+    h.run_steps(2);
+    click_field(&mut h, "city", 0);
+    assert_eq!(value(&h, "name"), ["Gandalf"]);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.name.as_str()), Some("city"));
+    let v = &h.state().views[0];
+    assert!(v.forms.unbaked.contains(&("name".to_string(), 0)) || !v.render_pending());
+}

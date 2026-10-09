@@ -100,8 +100,11 @@ pub(crate) fn formatted(doc: &Document, f: &Field, value: &str, scripts: &mut dy
 /// read-only, required and visibility as flags). `except` is the event's own field, whose value
 /// the event sets.
 pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except: &str) -> Result<(), FormError> {
+    if changes.is_empty() {
+        return Ok(());
+    }
+    let all = fields(doc);
     for c in changes {
-        let all = fields(doc);
         let Some(f) = all.iter().find(|f| f.name == c.name) else { continue };
         if let Some(v) = &c.value
             && c.name != except

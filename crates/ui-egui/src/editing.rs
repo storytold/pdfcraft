@@ -38,10 +38,34 @@ impl PdfCraftApp {
                 let info = &doc.info;
                 let view = &mut self.views[i];
                 view.signature_drag.committed(&edit, doc.edit_generation());
-                match comment_page(&edit) {
+                if let Some(page) = comment_page(&edit) {
                     // Comment edits change one page: keep every other raster.
-                    Some(page) => view.page_changed(page),
-                    None => view.document_changed(info),
+                    view.page_changed(page);
+                } else if let Some(pages) = form_edit_pages(&edit, &doc.form) {
+                    // Form field edits: only invalidate pages with the edited or calculated widgets.
+                    for page in &pages {
+                        view.page_changed(*page);
+                    }
+                    if let Edit::SetFieldValue { name, .. } = &edit
+                        && let Some(f) = doc.form.iter().find(|f| f.name == *name)
+                    {
+                        for w in &f.widgets {
+                            if let Some(p) = w.page {
+                                view.forms.unbaked.insert((name.clone(), p));
+                            }
+                        }
+                    }
+                    for f in doc.form.iter() {
+                        if f.actions.calculate != pdfcraft_engine::form_scripts::Calculate::None || f.actions.scripts.calculate.is_some() {
+                            for w in &f.widgets {
+                                if let Some(p) = w.page {
+                                    view.forms.unbaked.insert((f.name.clone(), p));
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    view.document_changed(info);
                 }
                 // Keep the pages the user acted on selected, where they now are.
                 match edit {
@@ -511,6 +535,7 @@ impl PdfCraftApp {
                     // Otherwise a later Save could write a rejected draft back into the file.
                     view.forms.focus = None;
                     view.forms.committed = None;
+                    view.forms.unbaked.clear();
                     view.pending_edit = None;
                 }
                 self.notify_tr("Reverted to the last saved version");
@@ -617,6 +642,33 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::ResizeAnnotation { page, .. }
         | Edit::StyleAnnotation { page, .. }
         | Edit::SetAnnotationInfo { page, .. } => Some(*page),
+        _ => None,
+    }
+}
+
+/// The pages affected by a form field edit (the edited field and any calculated fields).
+fn form_edit_pages(edit: &Edit, form: &[pdfcraft_engine::FormField]) -> Option<Vec<usize>> {
+    match edit {
+        Edit::SetFieldValue { name, .. } => {
+            let mut pages = std::collections::BTreeSet::new();
+            if let Some(f) = form.iter().find(|f| f.name == *name) {
+                for w in &f.widgets {
+                    if let Some(p) = w.page {
+                        pages.insert(p);
+                    }
+                }
+            }
+            for f in form {
+                if f.actions.calculate != pdfcraft_engine::form_scripts::Calculate::None || f.actions.scripts.calculate.is_some() {
+                    for w in &f.widgets {
+                        if let Some(p) = w.page {
+                            pages.insert(p);
+                        }
+                    }
+                }
+            }
+            if pages.is_empty() { None } else { Some(pages.into_iter().collect()) }
+        }
         _ => None,
     }
 }

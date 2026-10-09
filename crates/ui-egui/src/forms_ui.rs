@@ -4,8 +4,10 @@
 //! cancels, Tab moves to the next field). Check boxes and radio buttons toggle on click. Combo
 //! and list boxes open a list of their options. Every change is one undoable engine edit.
 
+use std::collections::HashSet;
+
 use egui::{Color32, CornerRadius, Rect, Stroke, vec2};
-use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, field_flags};
+use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, FormWidget, field_flags};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
@@ -37,6 +39,9 @@ pub struct FormView {
     /// The draft whose edit is queued (`DocView::pending_edit`): if the field refuses the value,
     /// the editor reopens with it rather than losing the typing.
     pub(crate) committed: Option<Focus>,
+    /// Fields modified by the user whose appearance stream has not been rasterized by the render worker yet.
+    /// Tracked as (field_name, page_index) so committed edits stay immediately visible without flicker.
+    pub unbaked: HashSet<(String, usize)>,
     /// A message for the app to show (e.g. "buttons run JavaScript").
     pub notice: Option<FormNotice>,
     /// A push button was clicked: (its field name, what it does).
@@ -124,6 +129,11 @@ pub(crate) fn page_input(
         FormFieldKind::CheckBox => {
             view.forms.focus = None;
             view.pending_edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Check(f.value.is_empty()) });
+            for w in &f.widgets {
+                if let Some(p) = w.page {
+                    view.forms.unbaked.insert((f.name.clone(), p));
+                }
+            }
         }
         FormFieldKind::Radio => {
             view.forms.focus = None;
@@ -132,6 +142,11 @@ pub(crate) fn page_input(
             let value = if f.value.first() == on.as_ref() && !f.has(field_flags::NO_TOGGLE_TO_OFF) { None } else { on };
             if value.as_ref() != f.value.first() {
                 view.pending_edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Radio(value) });
+                for w in &f.widgets {
+                    if let Some(p) = w.page {
+                        view.forms.unbaked.insert((f.name.clone(), p));
+                    }
+                }
             }
         }
         FormFieldKind::Text | FormFieldKind::Combo | FormFieldKind::List => {
@@ -160,6 +175,13 @@ pub(crate) fn draft_edit(focus: &Focus, form: &[FormField]) -> Option<Edit> {
 pub(crate) fn commit(view: &mut DocView, form: &[FormField]) {
     let Some(focus) = view.forms.focus.take() else { return };
     if let Some(edit) = draft_edit(&focus, form) {
+        if let Some(f) = form.iter().find(|f| f.name == focus.name) {
+            for w in &f.widgets {
+                if let Some(p) = w.page {
+                    view.forms.unbaked.insert((focus.name.clone(), p));
+                }
+            }
+        }
         view.pending_edit = Some(edit);
         view.forms.committed = Some(focus);
     }
@@ -262,10 +284,94 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
             let focused = view.forms.focus.as_ref().is_some_and(|x| x.name == f.name && x.widget == wi);
             if focused {
                 painter.rect_stroke(r.expand(1.0), CornerRadius::same(2), Stroke::new(2.0, FOCUS_BLUE), egui::StrokeKind::Outside);
-            } else if fillable(f) && pointer.is_some_and(|p| r.contains(p)) {
-                painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, FOCUS_BLUE.gamma_multiply(0.8)), egui::StrokeKind::Outside);
+            } else {
+                if view.forms.unbaked.contains(&(f.name.clone(), page)) {
+                    paint_unbaked_widget(painter, xf, f, w, r, view.forms.committed.as_ref(), view.pending_edit.as_ref());
+                }
+                if fillable(f) && pointer.is_some_and(|p| r.contains(p)) {
+                    painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, FOCUS_BLUE.gamma_multiply(0.8)), egui::StrokeKind::Outside);
+                }
             }
         }
+    }
+}
+
+fn paint_unbaked_widget(
+    painter: &egui::Painter,
+    xf: &PageXform,
+    f: &FormField,
+    w: &FormWidget,
+    r: Rect,
+    committed: Option<&Focus>,
+    pending: Option<&Edit>,
+) {
+    match f.kind {
+        FormFieldKind::Text | FormFieldKind::Combo | FormFieldKind::List => {
+            let text = if let Some(c) = committed.filter(|c| c.name == f.name) {
+                c.text.as_str()
+            } else if let Some(Edit::SetFieldValue { name: _, value: FieldValue::Text(t) }) = pending.filter(|e| match e {
+                Edit::SetFieldValue { name, .. } => *name == f.name,
+                _ => false,
+            }) {
+                t.as_str()
+            } else {
+                f.value.first().map(String::as_str).unwrap_or("")
+            };
+            painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
+            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
+            if !text.is_empty() {
+                let zoom = xf.rect.width() / xf.pw.max(1.0);
+                let da = f.da.split_whitespace().collect::<Vec<_>>();
+                let size = da
+                    .iter()
+                    .position(|x| *x == "Tf")
+                    .and_then(|i| da.get(i.wrapping_sub(1)))
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .filter(|s| *s > 0.0);
+                let font_size = (size.unwrap_or(((w.rect[3] - w.rect[1]) as f32 * 0.6).clamp(6.0, 12.0)) * zoom).clamp(6.0, 64.0);
+                let display_text = if f.has(field_flags::PASSWORD) { "•".repeat(text.chars().count()) } else { text.to_string() };
+                let p = painter.with_clip_rect(r);
+                let (align, pos) = match f.quadding {
+                    1 => (egui::Align2::CENTER_TOP, egui::pos2(r.center().x, r.min.y + 1.0)),
+                    2 => (egui::Align2::RIGHT_TOP, egui::pos2(r.max.x - 3.0, r.min.y + 1.0)),
+                    _ => (egui::Align2::LEFT_TOP, egui::pos2(r.min.x + 3.0, r.min.y + 1.0)),
+                };
+                p.text(pos, align, display_text, egui::FontId::proportional(font_size), Color32::BLACK);
+            }
+        }
+        FormFieldKind::CheckBox => {
+            painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
+            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
+            let checked = if let Some(Edit::SetFieldValue { name: _, value: FieldValue::Check(on) }) = pending.filter(|e| match e {
+                Edit::SetFieldValue { name, .. } => *name == f.name,
+                _ => false,
+            }) {
+                *on
+            } else {
+                f.value.first().is_some_and(|v| v != "Off" && !v.is_empty())
+            };
+            if checked {
+                let sz = (r.height() * 0.75).clamp(8.0, 32.0);
+                painter.text(r.center(), egui::Align2::CENTER_CENTER, "✔", egui::FontId::proportional(sz), Color32::BLACK);
+            }
+        }
+        FormFieldKind::Radio => {
+            painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
+            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
+            let selected = if let Some(Edit::SetFieldValue { name: _, value: FieldValue::Radio(on) }) = pending.filter(|e| match e {
+                Edit::SetFieldValue { name, .. } => *name == f.name,
+                _ => false,
+            }) {
+                on.as_deref() == w.on_state.as_deref()
+            } else {
+                f.value.first().map(String::as_str) == w.on_state.as_deref()
+            };
+            if selected {
+                let radius = (r.height().min(r.width()) * 0.25).clamp(2.0, 16.0);
+                painter.circle_filled(r.center(), radius, Color32::BLACK);
+            }
+        }
+        _ => {}
     }
 }
 
