@@ -36,6 +36,11 @@ fn fixture() -> Document {
         "<< /Type /Annot /Subtype /Widget /FT /Btn /T (go) /Ff 65536 /Rect [300 450 380 470] /P 3 0 R >>".into(), // 25
         "<< /Type /Annot /Subtype /Widget /FT /Btn /T (bare) /Rect [400 700 415 715] /P 3 0 R /Foo (kept) >>".into(), // 26 check box without AP
     ];
+    pdf(&objs)
+}
+
+/// A classic-xref PDF whose objects 1, 2, … are `objs`, with object 1 as the catalog.
+fn pdf(objs: &[String]) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -118,6 +123,55 @@ fn text_fields_get_new_appearances() {
     let Object::Stream(s) = &*doc.get(n) else { panic!() };
     let raw = s.decoded().unwrap();
     assert!(raw.windows(8).any(|x| x == b"(Z\xfcrich)"));
+}
+
+#[test]
+fn japanese_choices_use_the_unicode_cid_font() {
+    // A choice field whose /DA names a non-embedded CID font with a predefined Unicode CMap
+    // (UniJIS-UTF16-H). Selecting 令 must draw it in that font, not "?" in Helvetica.
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [8 0 R 9 0 R 10 0 R] >>".into(),
+        "<< /Fields [8 0 R 9 0 R 10 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R /HeiseiMin-W3 6 0 R /Emb 7 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Font /Subtype /Type0 /BaseFont /HeiseiMin-W3 /Encoding /UniJIS-UTF16-H /DescendantFonts [<< /Type /Font /Subtype /CIDFontType0 /BaseFont /HeiseiMin-W3 /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 6 >> >>] >>".into(),
+        "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+Subset /Encoding /Identity-H /DescendantFonts [] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (era) /Ff 131072 /DA (/HeiseiMin-W3 10 Tf 0 g) /Q 1 /Opt [<FEFF3000> <FEFF660E> <FEFF4EE4>] /V <FEFF3000> /Rect [50 700 80 715] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (address) /Ff 4096 /DA (/HeiseiMin-W3 10 Tf 0 g) /Rect [50 600 100 680] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (subset) /DA (/Emb 10 Tf 0 g) /Rect [50 500 100 520] /P 3 0 R >>".into(),
+    ];
+    let mut doc = pdf(&objs);
+    assert_eq!(field(&fields(&doc), "era").options.get(2), Some(&("令".to_string(), "令".to_string())));
+    set_value(&mut doc, "era", &FieldValue::Text("令".into())).unwrap();
+    set_value(&mut doc, "address", &FieldValue::Text("日本語のテキスト入力欄です".into())).unwrap();
+    set_value(&mut doc, "subset", &FieldValue::Text("令和".into())).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    assert_eq!(field(&all, "era").value, ["令"]);
+    let raw = |name: &str| {
+        let w = &field(&all, name).widgets[0];
+        let n = doc.get(w.obj).as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        let fonts = doc.resolve(s.dict.get(b"Resources").unwrap()).as_dict().unwrap().get(b"Font").map(|f| doc.resolve(f)).unwrap();
+        let fonts: Vec<String> = fonts.as_dict().unwrap().iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect();
+        (s.decoded().unwrap(), fonts)
+    };
+    let utf16 = |t: &str| t.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>();
+    let (era, era_fonts) = raw("era");
+    assert!(era.windows(4).any(|x| x == b"(N\xe4)"), "令 as UTF-16BE: {}", String::from_utf8_lossy(&era));
+    assert!(String::from_utf8_lossy(&era).contains("/HeiseiMin-W3 10 Tf"));
+    assert!(!era.windows(3).any(|x| x == b"(?)"), "no WinAnsi fallback");
+    assert_eq!(era_fonts, ["HeiseiMin-W3"]);
+    // Multiline Japanese wraps by character at about one em each (50 pt wide, 10 pt type).
+    let (addr, _) = raw("address");
+    let addr_text = String::from_utf8_lossy(&addr);
+    assert!(addr_text.matches(" Tj").count() >= 4, "{addr_text}");
+    assert!(addr.windows(4).any(|x| x == utf16("日本").as_slice()));
+    // An Identity-H subset can't be addressed by Unicode: Helvetica, as before.
+    let (sub, sub_fonts) = raw("subset");
+    assert!(String::from_utf8_lossy(&sub).contains("/Helv "), "{}", String::from_utf8_lossy(&sub));
+    assert_eq!(sub_fonts, ["Helv"]);
 }
 
 #[test]

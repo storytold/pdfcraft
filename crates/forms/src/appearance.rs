@@ -5,12 +5,14 @@
 //! marked-content block as viewers expect. Supported: single-line, multiline (wrapped), comb,
 //! password, quadding, auto font size (`0 Tf`), combo boxes and list boxes (selection shown).
 //!
-//! The `/DA` font is used when the form's `/DR` defines it as a simple font; text is encoded in
-//! WinAnsi. Otherwise (composite fonts, missing resources) Helvetica is used, so text is always
-//! visible. Widths use the approximate Helvetica metrics of `pdfcraft-fonts`.
+//! The `/DA` font is used when the form's `/DR` defines it as a simple font (text encoded in
+//! WinAnsi) or as a composite font with a predefined Unicode CMap such as `UniJIS-UTF16-H`, as
+//! Japanese forms use (text encoded in that CMap). Otherwise (other composite fonts, missing
+//! resources) Helvetica is used, so text is always visible. Widths use the approximate metrics
+//! of `pdfcraft-fonts` (Helvetica, or one em per full-width character in composite fonts).
 
 use pdfcraft_cos::{Dict, Document, Object, Stream};
-use pdfcraft_fonts::{helvetica_width, literal, win_ansi, wrap};
+use pdfcraft_fonts::{UnicodeCMap, cjk_width, helvetica_width, literal, win_ansi, wrap_with};
 
 use crate::{Field, FieldKind, Widget, acroform, flags};
 
@@ -53,8 +55,32 @@ pub fn parse_da(da: &str) -> Da {
     out
 }
 
-/// The font resource for `name` from the form's `/DR`, if it is a simple font we can encode for.
-fn dr_font(doc: &Document, name: &str) -> Option<Object> {
+/// How a field font's text is encoded and measured.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FontText {
+    WinAnsi,
+    /// A composite font with a predefined Unicode CMap.
+    Unicode(UnicodeCMap),
+}
+
+impl FontText {
+    fn encode(self, s: &str) -> Vec<u8> {
+        match self {
+            Self::WinAnsi => win_ansi(s),
+            Self::Unicode(cmap) => cmap.encode(s),
+        }
+    }
+
+    fn width(self, s: &str, size: f64) -> f64 {
+        match self {
+            Self::WinAnsi => helvetica_width(s, size),
+            Self::Unicode(_) => cjk_width(s, size),
+        }
+    }
+}
+
+/// The font resource for `name` from the form's `/DR`, if it is a font we can encode for.
+fn dr_font(doc: &Document, name: &str) -> Option<(Object, FontText)> {
     let af = acroform(doc)?;
     let dr = doc.resolve(af.get(b"DR")?);
     let fonts = doc.resolve(dr.as_dict()?.get(b"Font")?);
@@ -63,13 +89,17 @@ fn dr_font(doc: &Document, name: &str) -> Option<Object> {
     let fd = font.as_dict()?;
     match fd.name(b"Subtype") {
         Some(b"Type1" | b"TrueType" | b"MMType1") => {}
+        // Japanese, Chinese and Korean forms: a CID font addressed by Unicode (a non-embedded
+        // `/HeiseiMin-W3` with `/UniJIS-UCS2-H`, say). Embedded CMap streams and Identity-H need
+        // the font's own mapping, so those still fall back to Helvetica.
+        Some(b"Type0") => return Some((entry, FontText::Unicode(UnicodeCMap::from_name(fd.name(b"Encoding")?)?))),
         _ => return None,
     }
     // Symbolic fonts (ZapfDingbats, Symbol) can't show WinAnsi text.
     if matches!(fd.name(b"BaseFont"), Some(b"ZapfDingbats" | b"Symbol")) {
         return None;
     }
-    Some(entry)
+    Some((entry, FontText::WinAnsi))
 }
 
 fn helvetica() -> Object {
@@ -194,10 +224,11 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     let wd = wobj.as_dict().cloned().unwrap_or_default();
     let (width, height) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
-    let (font_name, font_obj) = match dr_font(doc, &da.font) {
-        Some(o) => (da.font.clone(), o),
-        None => ("Helv".to_string(), helvetica()),
+    let (font_name, font_obj, enc) = match dr_font(doc, &da.font) {
+        Some((o, enc)) => (da.font.clone(), o, enc),
+        None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
     };
+    let width_of = |text: &str, size: f64| enc.width(text, size);
     let (mut c, bw) = frame(doc, &wd, width, height);
     let pad = 2.0 + bw;
     let inner_w = (width - 2.0 * pad).max(1.0);
@@ -205,11 +236,11 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     let mut body: Vec<u8> = Vec::new();
     let show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str| {
         body.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
-        body.extend(literal(&win_ansi(text)));
+        body.extend(literal(&enc.encode(text)));
         body.extend_from_slice(b" Tj\n");
     };
     let x_for = |text: &str, size: f64| -> f64 {
-        let tw = helvetica_width(text, size);
+        let tw = width_of(text, size);
         match q {
             1 => pad + (inner_w - tw) / 2.0,
             2 => width - pad - tw,
@@ -249,12 +280,12 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
                 if size == 0.0 {
                     // Auto size: the largest size (≤ 12) whose wrapped lines fit the height.
                     size = 12.0;
-                    while size > 4.0 && wrap(&text, size, inner_w).len() as f64 * size * 1.15 > height - 2.0 * pad {
+                    while size > 4.0 && wrap_with(&text, size, inner_w, width_of).len() as f64 * size * 1.15 > height - 2.0 * pad {
                         size -= 0.5;
                     }
                 }
                 let mut y = height - pad - size * 0.85;
-                for line in wrap(&text, size, inner_w) {
+                for line in wrap_with(&text, size, inner_w, width_of) {
                     if y < -size {
                         break;
                     }
@@ -264,7 +295,7 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
             } else {
                 if size == 0.0 {
                     size = ((height - 2.0 * pad) / 1.15).clamp(4.0, 12.0);
-                    let tw = helvetica_width(&text, size);
+                    let tw = width_of(&text, size);
                     if tw > inner_w && !comb {
                         size = (size * inner_w / tw).max(4.0);
                     }
@@ -276,7 +307,7 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
                     let cell = width / cells as f64;
                     for (i, ch) in text.chars().take(cells).enumerate() {
                         let s = ch.to_string();
-                        show(&mut body, cell * i as f64 + (cell - helvetica_width(&s, size)) / 2.0, y, &s);
+                        show(&mut body, cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, &s);
                     }
                 } else {
                     show(&mut body, x_for(&text, size), y, &text);
