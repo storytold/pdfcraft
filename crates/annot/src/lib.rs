@@ -1094,6 +1094,30 @@ pub fn set_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
     Ok(())
 }
 
+/// A copy of `doc` in which every annotation without a normal appearance (`/AP /N`) has the one
+/// [`appearance::build`] draws from its dictionary, for displaying the document (`None` when no
+/// annotation needs one). Many files carry comments without appearances (FreeText, Ink, notes,
+/// stamps, …) that viewers draw from the dictionary. `doc` is not changed: saving writes the file
+/// as it was. Links, form fields and pop-ups keep their own handling.
+pub fn with_missing_appearances(doc: &Document) -> Option<Document> {
+    let mut copy: Option<Document> = None;
+    for page in page_refs(doc).ok()? {
+        for r in annots(doc, page).iter().filter_map(Object::as_ref) {
+            let d = annot_dict(doc, r);
+            if matches!(d.name(b"Subtype"), None | Some(b"Link" | b"Widget" | b"Popup")) {
+                continue;
+            }
+            let has_normal = d.get(b"AP").is_some_and(|ap| doc.resolve(ap).as_dict().is_some_and(|ap| ap.contains(b"N")));
+            if has_normal || appearance::build(&d).is_none() {
+                continue;
+            }
+            // Fails only when `r` isn't a dictionary, which `build` above has just ruled out.
+            set_appearance(copy.get_or_insert_with(|| doc.clone()), r).ok();
+        }
+    }
+    copy
+}
+
 /// Format a number for content streams and DA strings.
 pub(crate) fn n(v: f64) -> String {
     let s = format!("{:.3}", if v.abs() < 5e-4 { 0.0 } else { v });

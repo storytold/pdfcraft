@@ -222,6 +222,8 @@ pub struct DocView {
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
     selection: Option<Selection>,
+    /// Clicks in the current run on the text layer: two select a word, three the line, four the page.
+    clicks: u32,
     last_queue: Vec<RenderRequest>,
     viewport_w: f32,
     viewport_h: f32,
@@ -363,6 +365,7 @@ impl DocView {
             text_failed: HashSet::new(),
             find: None,
             selection: None,
+            clicks: 0,
             last_queue: Vec::new(),
             viewport_w: 800.0,
             viewport_h: 600.0,
@@ -1701,20 +1704,28 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     {
                         sel.head = h;
                     }
-                    if resp.double_clicked() && over_text {
-                        if let Some(a) = text.nearest(vx, vy) {
-                            // Expand to the word: stop at inferred spaces, explicit spaces and line ends.
-                            let is_break = |k: usize| text.glyphs[k].text.trim().is_empty();
-                            let mut s0 = a;
-                            while s0 > 0 && !text.space_before[s0] && text.line_of[s0 - 1] == text.line_of[s0] && !is_break(s0 - 1) {
-                                s0 -= 1;
-                            }
-                            let mut e = a;
-                            while e + 1 < text.glyphs.len() && !text.space_before[e + 1] && text.line_of[e + 1] == text.line_of[e] && !is_break(e + 1)
-                            {
-                                e += 1;
-                            }
-                            view.selection = Some(Selection { page: i, anchor: s0, head: e });
+                    // Quick clicks widen the selection: two a word, three the line, four the page.
+                    // egui counts up to three, so four come from the run kept here. The markup and
+                    // Redact tools mark a double-clicked word at once, so they stop at the word.
+                    let clicks = if resp.triple_clicked() {
+                        view.clicks.max(2).saturating_add(1)
+                    } else if resp.double_clicked() {
+                        2
+                    } else {
+                        u32::from(resp.clicked())
+                    };
+                    if clicks > 0 {
+                        view.clicks = clicks;
+                    }
+                    let clicks = if clicks > 2 && tool != QuickTool::Select { 1 } else { clicks };
+                    if clicks >= 2 && over_text {
+                        let span = text.nearest(vx, vy).and_then(|a| match clicks {
+                            2 => text.word_at(a),
+                            3 => text.line_at(a),
+                            _ => text.glyphs.len().checked_sub(1).map(|last| (0, last)),
+                        });
+                        if let Some((first, last)) = span {
+                            view.selection = Some(Selection { page: i, anchor: first, head: last });
                         }
                     } else if resp.clicked() && !over_link {
                         view.selection = None;

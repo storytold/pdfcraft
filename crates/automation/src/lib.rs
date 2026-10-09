@@ -1343,10 +1343,10 @@ impl Automation {
         let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
         let fresh = || {
             let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
-            (doc.bytes.clone(), PageRenderer::new(doc.bytes.clone(), config))
+            (doc.display.clone(), PageRenderer::new(doc.display.clone(), config))
         };
         let entry = self.renderers.entry(id).or_insert_with(fresh);
-        if !Arc::ptr_eq(&entry.0, &doc.bytes) {
+        if !Arc::ptr_eq(&entry.0, &doc.display) {
             *entry = fresh();
         }
         Ok(&mut entry.1)

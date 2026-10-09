@@ -78,6 +78,37 @@ fn migrate_legacy_folders() {
     }
 }
 
+/// Desktop launchers (GNOME Files, KDE Dolphin…) only recognise an app as the default handler for a
+/// mime type if its `Exec` takes URIs (`%u`/`%U`), not just paths (`%F`); the packaged `.desktop`
+/// file uses `%U` accordingly (packaging/linux/ai.storyteller.pdfcraft.desktop). Decode a local
+/// `file://` argument (`file:///path` or `file://localhost/path`) to a plain path here so the rest
+/// of the app, which only ever opens paths, is unaffected. Other schemes (`http://`, `mailto:`…),
+/// URIs naming another host, and plain paths pass through untouched.
+fn path_from_arg(arg: String) -> String {
+    let Some(rest) = arg.strip_prefix("file://") else { return arg };
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !rest.starts_with('/') {
+        return arg;
+    }
+    // `file:///C:/x.pdf` on Windows names `C:/x.pdf`. `rest` starts with the one-byte '/', so
+    // byte 1 is a char boundary.
+    let rest = if cfg!(windows) && rest.as_bytes().get(2) == Some(&b':') { &rest[1..] } else { rest };
+    let mut out = Vec::with_capacity(rest.len());
+    let mut bytes = rest.bytes();
+    while let Some(b) = bytes.next() {
+        if b == b'%' {
+            let hex = bytes.clone().take(2).collect::<Vec<u8>>();
+            if let Some(byte) = std::str::from_utf8(&hex).ok().filter(|h| h.len() == 2).and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(byte);
+                bytes.nth(1);
+                continue;
+            }
+        }
+        out.push(b);
+    }
+    String::from_utf8(out).unwrap_or(arg)
+}
+
 fn main() -> eframe::Result {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -115,7 +146,7 @@ fn main() -> eframe::Result {
                 let value = args.next().unwrap_or_default();
                 options.push((flag.trim_start_matches("--").to_string(), value));
             }
-            _ => files.push(a),
+            _ => files.push(path_from_arg(a)),
         }
     }
     let integrated = cfg!(target_os = "macos");
@@ -351,6 +382,27 @@ fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn path_from_arg_decodes_file_uris() {
+        assert_eq!(super::path_from_arg("file:///home/alice/report.pdf".to_string()), "/home/alice/report.pdf");
+        assert_eq!(super::path_from_arg("file:///home/alice/my%20report.pdf".to_string()), "/home/alice/my report.pdf");
+        assert_eq!(super::path_from_arg("file://localhost/tmp/a%C3%A9.pdf".to_string()), "/tmp/aé.pdf");
+        // Malformed or truncated escapes are kept as written; bytes that aren't UTF-8 keep the URI.
+        assert_eq!(super::path_from_arg("file:///tmp/100%.pdf".to_string()), "/tmp/100%.pdf");
+        assert_eq!(super::path_from_arg("file:///tmp/a%2".to_string()), "/tmp/a%2");
+        assert_eq!(super::path_from_arg("file:///tmp/%zz%".to_string()), "/tmp/%zz%");
+        assert_eq!(super::path_from_arg("file:///tmp/%FF.pdf".to_string()), "file:///tmp/%FF.pdf");
+    }
+
+    #[test]
+    fn path_from_arg_leaves_plain_paths_and_other_schemes_alone() {
+        assert_eq!(super::path_from_arg("report.pdf".to_string()), "report.pdf");
+        assert_eq!(super::path_from_arg("/home/alice/report.pdf".to_string()), "/home/alice/report.pdf");
+        assert_eq!(super::path_from_arg("https://example.com/report.pdf".to_string()), "https://example.com/report.pdf");
+        assert_eq!(super::path_from_arg("file://server/share/a.pdf".to_string()), "file://server/share/a.pdf");
+        assert_eq!(super::path_from_arg("file://".to_string()), "file://");
+    }
+
     #[test]
     fn gpu_backends_avoid_vulkan_on_windows_and_prefer_low_power() {
         let mut native = eframe::NativeOptions::default();

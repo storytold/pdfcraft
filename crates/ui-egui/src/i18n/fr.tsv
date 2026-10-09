@@ -2013,4 +2013,22 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Choisissez une image PNG ou JPEG (jusqu’à 4 Mio). La transparence est conservée.
 	Couldn't import the signature image: {e}	Impossible d’importer l’image de la signature : {e}
 	Open Recent	Ouvrir un fichier récent
+	Pin folder to Home…	Épingler un dossier à l'Accueil…
+	Folders	Dossiers
+	Pin a folder…	Épingler un dossier…
+	Pin a folder to Home	Épingler un dossier à l'Accueil
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Épinglez un dossier pour afficher ici ses PDF les plus récents, par exemple celui où votre scanner ou un stockage cloud synchronisé les enregistre.
+	Unpin	Désépingler
+	Unpin {folder}	Désépingler {folder}
+	Looking for PDFs…	Recherche de PDF…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Ce dossier n'est pas disponible pour le moment. Il a peut-être été déplacé, ou son disque ou sa synchronisation cloud est hors ligne.
+	No PDFs in this folder yet	Aucun PDF dans ce dossier pour l'instant
+	Show less	Afficher moins
+	Show {n} more	Afficher {n} de plus
+	The newest {n} of {total} PDFs	Les {n} PDF les plus récents sur {total}
+	Pinned folders need the desktop app	Les dossiers épinglés nécessitent l'application de bureau
+	Choose a folder on this computer to pin	Choisissez un dossier de cet ordinateur à épingler
+	{folder} is already pinned to Home	{folder} est déjà épinglé à l'Accueil
+	You can pin up to {n} folders. Unpin one first.	Vous pouvez épingler jusqu'à {n} dossiers. Désépinglez-en un d'abord.
+	Pinned {folder} to Home	{folder} épinglé à l'Accueil
 	No recent files	Aucun fichier récent
