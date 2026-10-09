@@ -23,3 +23,30 @@ pub(crate) fn in_window(ctx: &egui::Context) -> Option<egui::Pos2> {
 pub(crate) fn in_window(_ctx: &egui::Context) -> Option<egui::Pos2> {
     None
 }
+
+thread_local! {
+    /// Where the pointer is while files are dragged over a window of its own. The root window
+    /// gets this as an event from `raw_input_hook`; eframe does not call that hook for the
+    /// other windows, so their pass sets it here for the page grid to read.
+    static HINT: std::cell::Cell<Option<egui::Pos2>> = const { std::cell::Cell::new(None) };
+}
+
+/// Set (or clear) the pointer position the page grid should use during this window's pass.
+pub(crate) fn set_hint(pos: Option<egui::Pos2>) {
+    HINT.with(|h| h.set(pos));
+}
+
+/// The position set for this pass, if any.
+pub(crate) fn hint() -> Option<egui::Pos2> {
+    HINT.with(std::cell::Cell::get)
+}
+
+/// For a window of its own: while files hover over it or are dropped on it, ask the system where
+/// the pointer is (egui is not told, see [`in_window`]) and remember it for this pass.
+pub(crate) fn note_for_pass(ctx: &egui::Context) {
+    let files = ctx.input(|i| !i.raw.hovered_files.is_empty() || !i.raw.dropped_files.is_empty());
+    set_hint(if files { in_window(ctx) } else { None });
+    if files {
+        ctx.request_repaint();
+    }
+}

@@ -104,6 +104,12 @@ use pdfcraft_engine::{DocId, Session};
 
 pub use canvas::DocView;
 pub use editing::{CloseRequest, SaveTarget};
+
+/// Set the pointer position the page grid uses for files dragged over a window (tests).
+#[doc(hidden)]
+pub fn test_set_drop_pointer(pos: Option<egui::Pos2>) {
+    drag_pointer::set_hint(pos);
+}
 pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
 pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore};
 use theme::{ThemeKind, ThemePreference};
@@ -1952,6 +1958,8 @@ impl PdfCraftApp {
             let ctx = ui.ctx().clone();
             // (An embedded window shares the main window's input: the main window takes the drops.)
             if class == egui::ViewportClass::Immediate {
+                // eframe's pointer hook only runs for the main window: ask for this window's.
+                drag_pointer::note_for_pass(&ctx);
                 self.window_input(&ctx);
             } else {
                 self.finish_grid_drop(&ctx);
@@ -1967,6 +1975,7 @@ impl PdfCraftApp {
             }
             ui.push_id(("window", id.0), |ui| self.window_body(ui, class));
         }
+        drag_pointer::set_hint(None);
         self.note_job_origins();
         windows::set_drawing(previous);
     }

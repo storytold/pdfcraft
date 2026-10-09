@@ -946,3 +946,17 @@ fn promoting_a_window_with_its_own_combine_list_adds_the_old_files_to_it() {
     assert_eq!(ids.len(), 2, "every row keeps a row id of its own");
     assert_windows_ok(h.state());
 }
+
+#[test]
+fn files_dragged_over_a_window_of_its_own_use_the_pointer_the_system_reported() {
+    let mut h = form_harness();
+    h.state_mut().set_option("organize", "on").unwrap();
+    h.run_steps(4);
+    assert!(h.state().views[0].grid_gap.is_none(), "the pointer is not over the grid");
+    // The pass was told where the pointer is (as for a child window during a file drag).
+    pdfcraft_ui_egui::test_set_drop_pointer(Some(egui::pos2(900.0, 300.0)));
+    h.step(); // one pass: the hint only lasts for the pass it was set for
+    let gap = h.state().views[0].grid_gap;
+    pdfcraft_ui_egui::test_set_drop_pointer(None);
+    assert!(gap.is_some(), "the gap under that position is the drop target");
+}
