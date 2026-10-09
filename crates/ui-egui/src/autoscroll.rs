@@ -1,4 +1,4 @@
-//! Linux middle-button scrolling for the document viewport.
+//! Transient button-drag pan for Windows, and Linux's existing auto-scroll.
 
 use egui::{Context, CursorIcon, Event, Key, PointerButton, Pos2, Stroke, Vec2, vec2};
 
@@ -9,6 +9,112 @@ const SPEED_EXPONENT: f32 = 2.2;
 const SPEED_MULTIPLIER: f32 = 0.04;
 // Bound hostile coordinates before exponentiation, far beyond ordinary screen distances.
 const MAX_DISPLACEMENT: f32 = 1_000_000.0;
+
+/// Button capture only; offsets, clipping and bounds belong to the canvas ScrollArea.
+#[derive(Default)]
+pub(crate) struct DragPan {
+    last: Option<Pos2>,
+    button: Option<PointerButton>,
+    // Releasing Space ends movement, but the held click must never reach editing tools.
+    await_primary_release: bool,
+    block_input: bool,
+}
+
+impl DragPan {
+    pub(crate) fn active(&self) -> bool {
+        self.last.is_some()
+    }
+
+    pub(crate) fn cancel(&mut self) {
+        self.last = None;
+        self.button = None;
+        self.await_primary_release = false;
+        self.block_input = false;
+    }
+
+    pub(crate) fn blocks_input(&self) -> bool {
+        self.block_input
+    }
+
+    pub(crate) fn middle_active(&self) -> bool {
+        self.active() && self.button == Some(PointerButton::Middle)
+    }
+
+    pub(crate) fn update(&mut self, ui: &egui::Ui, viewport: egui::Rect, space: bool) -> Vec2 {
+        let ctx = ui.ctx();
+        let enabled = ui.is_enabled() && ctx.input(|i| i.focused);
+        let events = ctx.input(|i| i.events.clone());
+        let viewport = viewport.intersect(ui.clip_rect());
+        self.advance_with_space(&events, enabled, space, |pos| viewport.contains(pos) && ctx.layer_id_at(pos) == Some(ui.layer_id()))
+    }
+
+    #[cfg(test)]
+    fn advance(&mut self, events: &[Event], enabled: bool, can_start: impl Fn(Pos2) -> bool) -> Vec2 {
+        self.advance_with_space(events, enabled, false, can_start)
+    }
+
+    fn advance_with_space(&mut self, events: &[Event], enabled: bool, space: bool, can_start: impl Fn(Pos2) -> bool) -> Vec2 {
+        self.block_input = self.active() || self.await_primary_release;
+        if !enabled {
+            self.cancel();
+            return Vec2::ZERO;
+        }
+        if !space && self.button == Some(PointerButton::Primary) {
+            self.last = None;
+            self.button = None;
+            self.await_primary_release = true;
+        }
+        let mut delta = Vec2::ZERO;
+        for event in events {
+            match event {
+                Event::PointerButton { pos, button, pressed: true, .. } => {
+                    let supported = *button == PointerButton::Middle || (space && *button == PointerButton::Primary);
+                    if supported && !self.active() && !self.await_primary_release && pos.is_finite() && can_start(*pos) {
+                        self.last = Some(*pos);
+                        self.button = Some(*button);
+                        self.block_input = true;
+                    }
+                }
+                Event::PointerMoved(pos) => {
+                    if let Some(last) = self.last {
+                        if pos.is_finite() {
+                            delta += *pos - last;
+                            self.last = Some(*pos);
+                        } else {
+                            self.last = None;
+                        }
+                    }
+                }
+                Event::PointerButton { button: PointerButton::Primary, pressed: false, .. } if self.await_primary_release => {
+                    self.await_primary_release = false;
+                    self.block_input = true;
+                }
+                Event::PointerButton { pos, button, pressed: false, .. } if self.button == Some(*button) => {
+                    if let Some(last) = self.last.take() {
+                        if pos.is_finite() {
+                            delta += *pos - last;
+                        }
+                        // Own the release too: egui's generic drag responses accept any button.
+                        self.block_input = true;
+                    }
+                    self.button = None;
+                }
+                Event::Key { key: Key::Space, pressed: false, .. } if self.button == Some(PointerButton::Primary) => {
+                    self.last = None;
+                    self.button = None;
+                    self.await_primary_release = true;
+                }
+                Event::PointerGone | Event::WindowFocused(false) | Event::Key { key: Key::Escape, pressed: true, .. } => {
+                    self.last = None;
+                    self.button = None;
+                    self.await_primary_release = false;
+                }
+                _ => {}
+            }
+        }
+        if delta.is_finite() { delta } else { Vec2::ZERO }
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct AutoScroll {
@@ -153,6 +259,101 @@ fn scroll_delta(displacement: f32, dt: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn middle(pos: Pos2, pressed: bool) -> Event {
+        Event::PointerButton { pos, button: PointerButton::Middle, pressed, modifiers: egui::Modifiers::NONE }
+    }
+
+    fn primary(pos: Pos2, pressed: bool) -> Event {
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE }
+    }
+
+    #[test]
+    fn space_drag_uses_shared_motion_and_owns_the_click_until_release() {
+        let mut pan = DragPan::default();
+        let p = egui::pos2(100.0, 100.0);
+        pan.advance_with_space(&[primary(p, true)], true, true, |_| true);
+        assert!(pan.active());
+        assert!(!pan.middle_active());
+        assert_eq!(pan.advance_with_space(&[Event::PointerMoved(p + vec2(-30.0, 25.0))], true, true, |_| false), vec2(-30.0, 25.0));
+        assert_eq!(pan.advance_with_space(&[Event::PointerMoved(p)], true, false, |_| true), Vec2::ZERO);
+        assert!(!pan.active());
+        assert!(pan.blocks_input());
+        pan.advance_with_space(&[], true, false, |_| true);
+        assert!(pan.blocks_input(), "a held left click cannot become an editing drag after Space is released");
+        pan.advance_with_space(&[primary(p, false)], true, false, |_| true);
+        assert!(pan.blocks_input());
+        pan.advance_with_space(&[], true, false, |_| true);
+        assert!(!pan.blocks_input());
+    }
+
+    #[test]
+    fn space_drag_requires_a_fresh_inside_press_and_stops_on_mouse_release() {
+        let mut pan = DragPan::default();
+        let p = egui::pos2(100.0, 100.0);
+        for (space, inside) in [(false, true), (true, false)] {
+            pan.advance_with_space(&[primary(p, true)], true, space, |_| inside);
+            pan.advance_with_space(&[Event::PointerMoved(p)], true, true, |_| true);
+            assert!(!pan.active());
+        }
+        pan.advance_with_space(&[primary(p, true)], true, true, |_| true);
+        let end = p + vec2(25.0, -10.0);
+        assert_eq!(pan.advance_with_space(&[Event::PointerMoved(end), primary(end, false), Event::PointerMoved(p)], true, true, |_| true), end - p);
+        assert!(!pan.active());
+        for event in [Event::PointerGone, Event::WindowFocused(false)] {
+            pan.advance_with_space(&[primary(p, true)], true, true, |_| true);
+            pan.advance_with_space(&[event], true, true, |_| true);
+            assert!(!pan.active());
+        }
+    }
+
+    #[test]
+    fn drag_pan_tracks_both_axes_one_to_one_and_stops_on_release() {
+        let mut pan = DragPan::default();
+        let p = egui::pos2(100.0, 100.0);
+        assert_eq!(pan.advance(&[middle(p, true)], true, |_| true), Vec2::ZERO);
+        for movement in [vec2(40.0, 0.0), vec2(0.0, -30.0), vec2(-25.0, 20.0)] {
+            let next = pan.last.unwrap() + movement;
+            assert_eq!(pan.advance(&[Event::PointerMoved(next)], true, |_| false), movement);
+            assert!(pan.active());
+        }
+        let end = pan.last.unwrap();
+        assert_eq!(pan.advance(&[middle(end, false), Event::PointerMoved(end + vec2(50.0, 50.0))], true, |_| true), Vec2::ZERO);
+        assert!(!pan.active());
+        assert!(pan.blocks_input(), "the release must not activate editing tools");
+        assert_eq!(pan.advance(&[], true, |_| true), Vec2::ZERO);
+        assert!(!pan.blocks_input());
+    }
+
+    #[test]
+    fn drag_pan_handles_press_move_release_in_one_frame_without_latching() {
+        let mut pan = DragPan::default();
+        let p = egui::pos2(100.0, 100.0);
+        let end = p + vec2(-30.0, -50.0);
+        assert_eq!(pan.advance(&[middle(p, true), Event::PointerMoved(end), middle(end, false)], true, |_| true), end - p);
+        assert!(!pan.active());
+        assert!(pan.blocks_input());
+        pan.advance(&[middle(p, true), middle(p, false)], true, |_| true);
+        assert!(!pan.active(), "clicking alone must never auto-scroll");
+    }
+
+    #[test]
+    fn drag_pan_cannot_start_outside_viewport_or_resume_after_cancellation() {
+        let mut pan = DragPan::default();
+        let p = egui::pos2(100.0, 100.0);
+        pan.advance(&[middle(p, true)], true, |_| false);
+        assert_eq!(pan.advance(&[Event::PointerMoved(p + vec2(10.0, 20.0))], true, |_| true), Vec2::ZERO);
+        assert!(!pan.active(), "entering the viewport while held must not start a pan");
+        for event in [Event::PointerGone, Event::WindowFocused(false)] {
+            pan.advance(&[middle(p, true)], true, |_| true);
+            pan.advance(&[event], true, |_| true);
+            assert!(!pan.active());
+        }
+        pan.advance(&[middle(p, true)], true, |_| true);
+        pan.advance(&[], false, |_| true);
+        assert!(!pan.active());
+        assert_eq!(pan.advance(&[Event::PointerMoved(p)], true, |_| true), Vec2::ZERO);
+    }
 
     #[test]
     fn unsupported_platform_leaves_middle_button_and_escape_input_untouched() {

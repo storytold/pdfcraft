@@ -1376,6 +1376,7 @@ impl eframe::App for PdfCraftApp {
         for (index, view) in self.views.iter_mut().enumerate() {
             if blocked || self.active != Some(index) {
                 view.auto_scroll.cancel();
+                view.drag_pan.cancel();
             }
         }
         self.process_pending_edits();

@@ -10,9 +10,13 @@ use pdfcraft_ui_egui::control::{ControlClient, Reply};
 use serde_json::{Value, json};
 
 fn fixture(n: usize) -> Vec<u8> {
+    fixture_size(n, 200, 300)
+}
+
+fn fixture_size(n: usize, width: usize, height: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
-    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")));
+    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 {width} {height}] >>", kids.join(" ")));
     objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
     for i in 0..n {
         objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i));
@@ -39,14 +43,21 @@ fn harness() -> (Harness<'static, PdfCraftApp>, ControlClient) {
 }
 
 fn harness_pages(pages: usize) -> (Harness<'static, PdfCraftApp>, ControlClient) {
+    harness_document(fixture(pages))
+}
+
+fn harness_document(bytes: Vec<u8>) -> (Harness<'static, PdfCraftApp>, ControlClient) {
     let slot: Arc<Mutex<Option<ControlClient>>> = Arc::default();
     let s = slot.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         let mut app = PdfCraftApp::new();
         *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
-        app.open_bytes("doc.pdf", None, fixture(pages)).unwrap();
+        app.open_bytes("doc.pdf", None, bytes).unwrap();
         app
     });
+    // Match a desktop renderer's texture capacity. RawInput's 2048 default is below
+    // the viewer's existing 4096 whole-page/tiling threshold for large PDF fixtures.
+    h.input_mut().max_texture_side = Some(8192);
     h.run_steps(4);
     let client = slot.lock().unwrap().take().unwrap();
     (h, client)
@@ -427,6 +438,170 @@ fn middle_button_input_does_not_start_custom_scrolling_outside_linux() {
         h.run_steps(8);
         assert!(!h.state().views[0].auto_scrolling(), "custom scrolling must be Linux-only: organize={organize}");
     }
+}
+
+fn navigation_frame(h: &mut Harness<'static, PdfCraftApp>, events: Vec<egui::Event>) {
+    h.input_mut().events.extend(events);
+    h.step();
+}
+
+#[cfg(target_os = "windows")]
+fn middle_event(pos: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton { pos, button: egui::PointerButton::Middle, pressed, modifiers: egui::Modifiers::NONE }
+}
+
+fn navigation_wheel(h: &mut Harness<'static, PdfCraftApp>, pos: egui::Pos2, delta: f32, ctrl: bool) {
+    let modifiers = egui::Modifiers { ctrl, command: ctrl, ..egui::Modifiers::NONE };
+    navigation_frame(
+        h,
+        vec![
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::PointerMoved(pos),
+            egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, delta), modifiers, phase: egui::TouchPhase::Move },
+        ],
+    );
+    h.run_steps(20);
+    navigation_frame(h, vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
+}
+
+#[test]
+fn ctrl_wheel_anchors_visible_page_and_plain_wheel_only_scrolls() {
+    for percent in [100, 200, 400] {
+        for fraction in [0.1, 0.5, 0.9] {
+            let (mut h, c) = harness_pages(20);
+            ok(&mut h, &c, "ui.set", json!({"key":"zoom", "value":percent.to_string()}));
+            h.run_steps(4);
+            let viewport = h.state().views[0].viewport_rect();
+            let before = h.state().views[0].page_screen_rect(0).unwrap();
+            let visible = before.intersect(viewport).shrink(15.0);
+            let p = egui::pos2(visible.left() + fraction * visible.width(), visible.top() + fraction * visible.height());
+            let normalised = (p - before.min) / before.size();
+            let old_zoom = h.state().views[0].zoom;
+            navigation_wheel(&mut h, p, 20.0, true);
+            let enlarged = h.state().views[0].page_screen_rect(0).unwrap();
+            let anchored = enlarged.min + normalised * enlarged.size();
+            assert!(h.state().views[0].zoom > old_zoom);
+            assert!((anchored.y - p.y).abs() < 2.0, "percent={percent}, fraction={fraction}");
+            if before.width() > viewport.width() {
+                assert!((anchored.x - p.x).abs() < 2.0);
+            }
+            navigation_wheel(&mut h, p, -20.0, true);
+            assert!((h.state().views[0].zoom - old_zoom).abs() < 0.01);
+            let zoom = h.state().views[0].zoom;
+            let top = h.state().views[0].page_screen_rect(0).unwrap().top();
+            navigation_wheel(&mut h, p, -80.0, false);
+            assert_eq!(h.state().views[0].zoom, zoom);
+            assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < top - 20.0);
+        }
+    }
+}
+
+#[test]
+fn wheel_zoom_is_scoped_to_the_viewport_and_respects_existing_limits() {
+    let (mut h, c) = harness();
+    let outside = egui::pos2(5.0, 5.0);
+    let zoom = h.state().views[0].zoom;
+    navigation_wheel(&mut h, outside, 40.0, true);
+    assert_eq!(h.state().views[0].zoom, zoom);
+    for (percent, delta, expected) in [(6400, 80.0, 64.0), (8, -80.0, 0.08)] {
+        ok(&mut h, &c, "ui.set", json!({"key":"zoom", "value":percent.to_string()}));
+        h.run_steps(4);
+        let p = h.state().views[0].viewport_rect().center();
+        navigation_wheel(&mut h, p, delta, true);
+        assert_eq!(h.state().views[0].zoom, expected);
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn middle_pan_is_one_to_one_in_all_reader_layouts_and_has_no_release_drift() {
+    use pdfcraft_ui_egui::canvas::PageLayout;
+    for layout in [PageLayout::Continuous, PageLayout::Single, PageLayout::TwoUp] {
+        let (mut h, c) = harness_pages(20);
+        h.state_mut().views[0].layout = layout;
+        ok(&mut h, &c, "ui.set", json!({"key":"zoom", "value":"400"}));
+        h.run_steps(4);
+        let mut p = h.state().views[0].viewport_rect().center();
+        navigation_frame(&mut h, vec![egui::Event::PointerMoved(p), middle_event(p, true)]);
+        assert!(h.state().views[0].middle_panning());
+        // The 200pt fixture at 400% has only a small horizontal overflow. Stay inside it
+        // for the 1:1 assertions; a separate test checks clamping at all document edges.
+        for delta in [egui::vec2(-40.0, 0.0), egui::vec2(0.0, -35.0), egui::vec2(-15.0, -25.0)] {
+            let before = h.state().views[0].page_screen_rect(0).unwrap();
+            p += delta;
+            navigation_frame(&mut h, vec![egui::Event::PointerMoved(p)]);
+            let after = h.state().views[0].page_screen_rect(0).unwrap();
+            assert!(
+                (after.min - before.min - delta).length() < 2.0,
+                "layout={layout:?}, delta={delta:?}, before={before:?}, after={after:?}, viewport={:?}",
+                h.state().views[0].viewport_rect()
+            );
+        }
+        navigation_frame(&mut h, vec![middle_event(p, false)]);
+        assert!(!h.state().views[0].middle_panning());
+        let before = h.state().views[0].page_screen_rect(0).unwrap();
+        navigation_frame(&mut h, vec![egui::Event::PointerMoved(p + egui::vec2(40.0, 40.0))]);
+        h.run_steps(8);
+        assert_eq!(h.state().views[0].page_screen_rect(0).unwrap(), before);
+        assert!(h.state().views[0].selected_text().is_none());
+        assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn middle_pan_does_not_start_outside_viewer_or_under_modal_and_clamps_at_edges() {
+    let (mut h, c) = harness_pages(20);
+    ok(&mut h, &c, "ui.set", json!({"key":"zoom", "value":"400"}));
+    h.run_steps(4);
+    let outside = egui::pos2(5.0, 5.0);
+    let p = h.state().views[0].viewport_rect().center();
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(outside), middle_event(outside, true)]);
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p)]);
+    assert!(!h.state().views[0].middle_panning());
+    navigation_frame(&mut h, vec![middle_event(p, false)]);
+    let before = h.state().views[0].page_screen_rect(0).unwrap();
+    navigation_frame(&mut h, vec![middle_event(p, true)]);
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p + egui::vec2(10000.0, 10000.0))]);
+    let after = h.state().views[0].page_screen_rect(0).unwrap();
+    assert!(after.left() >= before.left() && after.top() >= before.top());
+    let viewport = h.state().views[0].viewport_rect();
+    assert!(after.left() <= viewport.left() + 72.0 && after.top() <= viewport.top() + 30.0, "cannot pan past top/left gutters");
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p + egui::vec2(20000.0, 20000.0))]);
+    assert_eq!(h.state().views[0].page_screen_rect(0).unwrap(), after, "the boundary must not oscillate");
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p - egui::vec2(100000.0, 100000.0))]);
+    let last_page = h.state().views[0].page_screen_rect(19).unwrap();
+    assert!(last_page.intersects(viewport), "panning crosses pages and stops at the document's end");
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p - egui::vec2(200000.0, 200000.0))]);
+    assert_eq!(h.state().views[0].page_screen_rect(19).unwrap(), last_page);
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::About);
+    h.run_steps(2);
+    assert!(!h.state().views[0].middle_panning());
+    navigation_frame(&mut h, vec![middle_event(p, false), middle_event(p, true)]);
+    assert!(!h.state().views[0].middle_panning());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn middle_pan_cancels_on_tab_switch_and_focus_loss_without_resuming() {
+    let (mut h, _) = harness();
+    let p = h.state().views[0].viewport_rect().center();
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p), middle_event(p, true)]);
+    assert!(h.state().views[0].middle_panning());
+    h.state_mut().open_bytes("other.pdf", None, fixture(2)).unwrap();
+    h.run_steps(2);
+    assert!(!h.state().views[0].middle_panning());
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    assert!(!h.state().views[0].middle_panning());
+    navigation_frame(&mut h, vec![middle_event(p, false), middle_event(p, true)]);
+    assert!(h.state().views[0].middle_panning());
+    h.input_mut().focused = false;
+    h.step();
+    assert!(!h.state().views[0].middle_panning());
+    h.input_mut().focused = true;
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p + egui::vec2(20.0, 20.0))]);
+    assert!(!h.state().views[0].middle_panning());
 }
 
 #[test]
@@ -823,4 +998,153 @@ fn measurement_tools_draw_live_calibrate_save_and_export() {
     click(&mut h, &c, 130.0, 50.0);
     assert!((h.state().views[0].measure.drawing_points - 100.0).abs() < 0.01);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(target_os = "windows")]
+fn space_event(pressed: bool) -> egui::Event {
+    egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE }
+}
+
+#[cfg(target_os = "windows")]
+fn primary_event(pos: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn space_pan_is_one_to_one_at_all_zooms_and_layouts_and_preserves_the_tool() {
+    use pdfcraft_ui_egui::canvas::PageLayout;
+    for layout in [PageLayout::Continuous, PageLayout::Single, PageLayout::TwoUp] {
+        for zoom in [100, 200, 400] {
+            let (mut h, c) = harness_document(fixture_size(3, 1000, 1100));
+            h.state_mut().views[0].layout = layout;
+            ok(&mut h, &c, "ui.set", json!({"key":"zoom", "value":zoom.to_string()}));
+            h.run_steps(4);
+            let tool = h.state().quick_tool;
+            let mut p = h.state().views[0].viewport_rect().center();
+            navigation_frame(&mut h, vec![egui::Event::PointerMoved(p), space_event(true)]);
+            assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grab);
+            navigation_frame(&mut h, vec![primary_event(p, true)]);
+            assert!(h.state().views[0].drag_panning());
+            assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grabbing);
+            for delta in [egui::vec2(-30.0, 0.0), egui::vec2(0.0, -30.0), egui::vec2(-20.0, -20.0)] {
+                let before = h.state().views[0].page_screen_rect(0).unwrap();
+                p += delta;
+                navigation_frame(&mut h, vec![egui::Event::PointerMoved(p)]);
+                let after = h.state().views[0].page_screen_rect(0).unwrap();
+                assert!((after.min - before.min - delta).length() < 1.0, "{layout:?} {zoom}%: {before:?} -> {after:?}");
+            }
+            navigation_frame(&mut h, vec![primary_event(p, false)]);
+            assert!(!h.state().views[0].drag_panning());
+            assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grab);
+            let before = h.state().views[0].page_screen_rect(0).unwrap();
+            navigation_frame(&mut h, vec![egui::Event::PointerMoved(p + egui::vec2(20.0, 20.0)), space_event(false)]);
+            h.run_steps(5);
+            assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grabbing);
+            assert_eq!(h.state().views[0].page_screen_rect(0).unwrap(), before);
+            assert_eq!(h.state().quick_tool, tool);
+            assert!(h.state().views[0].selected_text().is_none());
+            assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn space_release_stops_drag_and_does_not_turn_into_an_editing_click() {
+    let (mut h, c) = harness_document(fixture_size(3, 1000, 1100));
+    ok(&mut h, &c, "ui.set", json!({"key":"zoom", "value":"200"}));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let p = h.state().views[0].viewport_rect().center();
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p), space_event(true), primary_event(p, true)]);
+    assert!(h.state().views[0].drag_panning());
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p - egui::vec2(20.0, 20.0))]);
+    navigation_frame(&mut h, vec![space_event(false)]);
+    assert!(!h.state().views[0].drag_panning());
+    let before = h.state().views[0].page_screen_rect(0).unwrap();
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p), primary_event(p, false)]);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].page_screen_rect(0).unwrap(), before);
+    assert!(h.state().views[0].content.draft.is_none());
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::AddText);
+    // Ordinary primary clicks still open the text editor, and Space can be typed there.
+    navigation_frame(&mut h, vec![primary_event(p, true)]);
+    navigation_frame(&mut h, vec![primary_event(p, false)]);
+    h.run_steps(2);
+    assert!(h.state().views[0].content.draft.is_some());
+    navigation_frame(&mut h, vec![space_event(true), egui::Event::Text("a b".into()), primary_event(p, true)]);
+    assert!(!h.state().views[0].drag_panning());
+    assert_eq!(h.state().views[0].content.draft.as_ref().unwrap().text, "a b");
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn space_pan_rejects_outside_presses_and_cancels_on_document_change_and_focus_loss() {
+    let (mut h, _) = harness();
+    let outside = egui::pos2(5.0, 5.0);
+    let p = h.state().views[0].viewport_rect().center();
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(outside), space_event(true), primary_event(outside, true)]);
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p)]);
+    assert!(!h.state().views[0].drag_panning());
+    navigation_frame(&mut h, vec![primary_event(p, false), primary_event(p, true)]);
+    assert!(h.state().views[0].drag_panning());
+    h.state_mut().open_bytes("other.pdf", None, fixture(2)).unwrap();
+    h.run_steps(2);
+    assert!(!h.state().views[0].drag_panning());
+    assert!(!h.state().views[1].drag_panning());
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    assert!(!h.state().views[0].drag_panning());
+    navigation_frame(&mut h, vec![primary_event(p, false), primary_event(p, true)]);
+    assert!(h.state().views[0].drag_panning());
+    h.input_mut().focused = false;
+    h.step();
+    assert!(!h.state().views[0].drag_panning());
+    h.input_mut().focused = true;
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p + egui::vec2(20.0, 20.0))]);
+    assert!(!h.state().views[0].drag_panning());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn space_pan_clamps_without_oscillation_and_middle_pan_still_works_afterwards() {
+    let (mut h, c) = harness_document(fixture_size(5, 1000, 1100));
+    ok(&mut h, &c, "ui.set", json!({"key":"zoom", "value":"200"}));
+    h.run_steps(3);
+    let p = h.state().views[0].viewport_rect().center();
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p), space_event(true), primary_event(p, true)]);
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p - egui::vec2(100000.0, 100000.0))]);
+    let last = h.state().views[0].page_screen_rect(4).unwrap();
+    assert!(last.intersects(h.state().views[0].viewport_rect()));
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p - egui::vec2(200000.0, 200000.0))]);
+    assert_eq!(h.state().views[0].page_screen_rect(4).unwrap(), last);
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p + egui::vec2(100000.0, 100000.0))]);
+    let first = h.state().views[0].page_screen_rect(0).unwrap();
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p + egui::vec2(200000.0, 200000.0))]);
+    assert_eq!(h.state().views[0].page_screen_rect(0).unwrap(), first);
+    navigation_frame(&mut h, vec![primary_event(p, false), space_event(false)]);
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p), middle_event(p, true)]);
+    assert!(h.state().views[0].middle_panning());
+    navigation_frame(&mut h, vec![egui::Event::PointerMoved(p - egui::vec2(30.0, 30.0))]);
+    assert!((h.state().views[0].page_screen_rect(0).unwrap().min - first.min + egui::vec2(30.0, 30.0)).length() < 1.0);
+    navigation_frame(&mut h, vec![middle_event(p, false)]);
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::About);
+    h.run_steps(2);
+    navigation_frame(&mut h, vec![space_event(true), primary_event(p, true)]);
+    assert!(!h.state().views[0].drag_panning());
+}
+
+#[test]
+fn initial_zoom_option_is_applied_before_the_first_viewport_layout() {
+    for percent in [50, 100, 200, 400] {
+        let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.open_bytes("initial-zoom.pdf", None, fixture(3)).unwrap();
+            app.set_option("zoom", &percent.to_string()).unwrap();
+            assert_eq!(app.views[0].zoom, percent as f32 / 100.0, "initial options must work before the viewport exists");
+            app
+        });
+        assert_eq!(h.state().views[0].zoom, percent as f32 / 100.0);
+    }
 }
