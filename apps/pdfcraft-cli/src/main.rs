@@ -624,6 +624,8 @@ fn ui(args: &[String]) -> Result<(), CliError> {
     let file = flag(args, "--control").ok_or("ui: missing --control FILE (start the app with `pdfcraft --control FILE`)")?;
     let info = read_control_file(file)?;
     let port = info["port"].as_u64().ok_or(format!("{file}: no port"))?;
+    // Refused rather than truncated, which would quietly reach some other port.
+    let port = u16::try_from(port).map_err(|_| format!("{file}: {port} is not a port number"))?;
     let token = info["token"].as_str().ok_or(format!("{file}: no token"))?;
     let pos = positional(args);
     let method = *pos.first().ok_or("ui: missing method (state, inspect, click, drag, type, key, command, commands, set, open, screenshot)")?;
@@ -633,8 +635,8 @@ fn ui(args: &[String]) -> Result<(), CliError> {
         let (k, v) = kv.split_once('=').ok_or(format!("ui: expected key=value, got {kv:?}"))?;
         params.insert(k.to_string(), serde_json::from_str(v).unwrap_or_else(|_| serde_json::Value::String(v.to_string())));
     }
-    let stream = std::net::TcpStream::connect(("127.0.0.1", port as u16))
-        .map_err(|e| format!("can't reach the app on port {port}: {e} (is it still running?)"))?;
+    let stream =
+        std::net::TcpStream::connect(("127.0.0.1", port)).map_err(|e| format!("can't reach the app on port {port}: {e} (is it still running?)"))?;
     stream.set_read_timeout(Some(Duration::from_secs(40))).map_err(|e| e.to_string())?;
     let mut write = stream.try_clone().map_err(|e| e.to_string())?;
     let mut lines = BufReader::new(stream).lines();

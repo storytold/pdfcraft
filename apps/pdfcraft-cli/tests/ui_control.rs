@@ -142,6 +142,18 @@ fn an_oversized_control_file_is_refused() {
     assert_refused(&o, &spy.received(), "too large");
 }
 
+#[test]
+fn a_port_beyond_65535_is_refused_not_wrapped() {
+    let dir = scratch("port");
+    let spy = spy();
+    let control = dir.join("pc.json");
+    // 65536 more than the spy's port: truncated to 16 bits, it would reach the spy.
+    let json = serde_json::json!({ "port": u64::from(spy.port) + 65536, "token": TOKEN, "pid": 1 }).to_string();
+    write_private(&control, &json);
+    let o = ui(&control, "state");
+    assert_refused(&o, &spy.received(), "not a port number");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_control_file_other_users_can_read_or_write_is_refused() {
