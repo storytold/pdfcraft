@@ -416,6 +416,7 @@ impl PdfCraftApp {
 
     /// Swap the app fields with the state stored for `id`; false when there is no such window.
     fn swap_stored(&mut self, id: WindowId) -> bool {
+        self.stamp_handled();
         let mut state = if id == WindowId::ROOT {
             std::mem::take(&mut self.root_state)
         } else {
@@ -436,26 +437,64 @@ impl PdfCraftApp {
     /// Bring every view up to date with what happened to its document: edits made through
     /// another view (or window) re-render only what they changed.
     pub(crate) fn sync_views(&mut self) {
-        use pdfcraft_engine::Change;
         self.assign_view_numbers();
         self.for_each_view(|_, view, session| {
-            let Some(doc) = session.get(view.id) else { return };
-            // A view that applied the change itself has caught up already.
-            if !std::mem::take(&mut view.change_handled) {
-                match doc.changes_since(view.seen_generation) {
-                    None => {}
-                    Some(Change::Pages(pages)) => pages.into_iter().for_each(|p| view.page_changed(p)),
-                    Some(Change::Remap(map)) => view.document_changed_with(&doc.info, Some(&map)),
-                    Some(Change::All) => view.document_changed(&doc.info),
-                }
-                if view.seen_display_generation != doc.display_generation() {
-                    view.invalidate_content();
-                }
+            if let Some(doc) = session.get(view.id) {
+                Self::catch_up(view, doc);
             }
-            view.change_handled = false;
-            view.seen_generation = doc.edit_generation();
-            view.seen_display_generation = doc.display_generation();
         });
+    }
+
+    /// Bring the loaded window's views up to date (before it acts, so what it changes next is
+    /// told apart from what happened elsewhere).
+    pub(crate) fn sync_loaded_views(&mut self) {
+        let session = &self.session;
+        for view in self.views.iter_mut() {
+            if let Some(doc) = session.get(view.id) {
+                Self::catch_up(view, doc);
+            }
+        }
+    }
+
+    fn catch_up(view: &mut DocView, doc: &pdfcraft_engine::Document) {
+        use pdfcraft_engine::Change;
+        Self::stamp_view(view, doc);
+        // What the view did itself counts as seen; anything newer (another window's edit in
+        // the same frame) still reaches it.
+        let from = view.seen_generation.max(view.handled_generation);
+        match doc.changes_since(from) {
+            None => {}
+            Some(Change::Pages(pages)) => pages.into_iter().for_each(|p| view.page_changed(p)),
+            Some(Change::Remap(map)) => view.document_changed_with(&doc.info, Some(&map)),
+            Some(Change::All) => view.document_changed(&doc.info),
+        }
+        if view.seen_display_generation.max(view.handled_display_generation) != doc.display_generation() {
+            view.invalidate_content();
+        }
+        view.change_handled = false;
+        view.seen_generation = doc.edit_generation();
+        view.seen_display_generation = doc.display_generation();
+    }
+
+    /// A view that took a change into account itself has caught up with the document as it is
+    /// now: remember that generation.
+    fn stamp_view(view: &mut DocView, doc: &pdfcraft_engine::Document) {
+        if std::mem::take(&mut view.change_handled) {
+            view.handled_generation = view.handled_generation.max(doc.edit_generation());
+            view.handled_display_generation = doc.display_generation();
+        }
+    }
+
+    /// Stamp the generation on the loaded window's views that handled a change themselves. Runs
+    /// before the window is parked, so a change another window makes next is not mistaken for
+    /// one this window already handled.
+    pub(crate) fn stamp_handled(&mut self) {
+        let session = &self.session;
+        for view in self.views.iter_mut() {
+            if let Some(doc) = session.get(view.id) {
+                Self::stamp_view(view, doc);
+            }
+        }
     }
 
     /// Add a view of `doc` in a parked window of its own (tests).
@@ -894,6 +933,7 @@ impl PdfCraftApp {
         self.current_window = id;
         set_drawing(id);
         let mut guard = WindowGuard { app: self, previous, loaded: id };
+        guard.sync_loaded_views();
         Some(f(&mut guard))
     }
 
@@ -1266,5 +1306,18 @@ mod sync_tests {
         app.session.undo(doc).unwrap();
         app.sync_views();
         assert_eq!(app.with_window(other, |a| a.views[0].stale_pages()).unwrap(), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn two_windows_changing_one_document_in_one_frame_reach_each_other() {
+        let (mut app, other, _, _ctx) = two_views();
+        // Window A comments on page 0, window B on page 2, before anything syncs.
+        assert!(app.apply_edit(comment(0)));
+        assert!(app.with_window(other, |a| a.apply_edit(comment(2))).unwrap());
+        app.sync_views();
+        let a_stale = app.views[0].stale_pages();
+        let b_stale = app.with_window(other, |a| a.views[0].stale_pages()).unwrap();
+        assert_eq!(a_stale, vec![0, 2], "A must learn about B's edit");
+        assert_eq!(b_stale, vec![0, 2], "B must learn about A's edit");
     }
 }

@@ -233,8 +233,13 @@ pub struct DocView {
     /// The document's edit generation this view has caught up with (see `sync_views`).
     pub(crate) seen_generation: u64,
     pub(crate) seen_display_generation: u64,
-    /// This view took a change into account itself since the last sync.
+    /// This view took a change into account itself and has not been stamped yet (see
+    /// `PdfCraftApp::stamp_handled`).
     pub(crate) change_handled: bool,
+    /// The document generations this view itself accounted for (stamped when it handled a
+    /// change). A later change from another window is newer than these and still reaches it.
+    pub(crate) handled_generation: u64,
+    pub(crate) handled_display_generation: u64,
     viewport_w: f32,
     viewport_h: f32,
     page_count: usize,
@@ -382,6 +387,8 @@ impl DocView {
             seen_generation: 0,
             seen_display_generation: 0,
             change_handled: false,
+            handled_generation: 0,
+            handled_display_generation: 0,
             viewport_w: 800.0,
             viewport_h: 600.0,
             page_count: info.pages.len(),
