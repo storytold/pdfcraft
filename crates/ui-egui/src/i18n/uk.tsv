@@ -1197,7 +1197,7 @@
 	Searchable Image (Exact)	Зображення з пошуком (точне)
 	Adds invisible text over each word; the page image is not changed	Додає невидимий текст поверх кожного слова; зображення сторінки не змінюється
 	Downsample to	Знизити роздільну здатність до
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	Розпізнавання тексту не встановлено: бракує моделей (виконайте `cargo xtask models` або задайте PRINTCRAFT_MODELS).
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Розпізнавання тексту не встановлено: бракує файлів моделей. Перевстановіть PdfCraft або задайте в PDFCRAFT_MODELS теку, у якій вони лежать.
 	Settings	Налаштування
 	Optional	Необов’язково
 	Planned · {m}	Заплановано · {m}
@@ -1763,7 +1763,7 @@
 	there are no pages to print	немає сторінок для друку
 	the document has no tags	документ не має тегів
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	моделі розпізнавання тексту не встановлено (виконайте `cargo xtask models` або задайте PRINTCRAFT_MODELS)
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	моделі розпізнавання тексту не встановлено (перевстановіть PdfCraft або задайте в PDFCRAFT_MODELS теку, у якій вони лежать)
 	the image is empty	зображення порожнє
 	this file isn't XFDF, FDF, XML or text form data	цей файл не містить даних форми XFDF, FDF, XML чи текстових даних
 	nothing in the file matches this document	ніщо у файлі не відповідає цьому документу
@@ -1958,7 +1958,6 @@
 	Open this web page?	Відкрити цю вебсторінку?
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Сценарії виконуються в ізольованому середовищі без доступу до файлів і мережі. Сценарій, що просить відкрити вебсторінку, спочатку потребує вашого дозволу. Коли JavaScript вимкнено, стандартні функції форматування, перевірки й обчислення Acrobat усе одно працюють.
 	Sign yourself	Підписати самостійно
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	Розпізнавання тексту не встановлено: бракує моделей (виконайте `cargo xtask models` або задайте PDFCRAFT_MODELS).
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	Використовується під час відкриття PDF. Явно заданий режим запуску або керування має пріоритет для сеансу.
 	Write this email?	Написати цього листа?
 	{who} in this document wants to open this address in your browser:	{who} у цьому документі хоче відкрити цю адресу у вашому браузері:
@@ -2090,17 +2089,19 @@ calendar date	December	грудня
 	The Windows store's digital IDs couldn't be listed: {e}	Не вдалося отримати список цифрових посвідчень зі сховища Windows: {e}
 	Align fields	Вирівняти поля
 	Distribute fields	Розподілити поля
-	Match field sizes	Вирівняти розміри полів
+	Match field sizes	Задати однакові розміри полів
 	Mark for redaction	Позначити для вилучення вмісту
 	Mark pages for redaction	Позначити сторінки для вилучення вмісту
 	Change document properties	Змінити властивості документа
 	Mark differences	Позначити відмінності
 	Run form script	Виконати сценарій форми
-	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	Вміст зі сценаріями має бути доступним із клавіатури та допоміжних технологій. Перевірте сценарії документа.
-	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Рядки таблиці мають бути безпосередньо в таблиці або в її заголовку, тілі чи підсумку. Виправте теги таблиці.
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	Вміст зі сценаріями має бути доступним для керування за допомогою клавіатури й допоміжних технологій. Перевірте сценарії документа.
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Рядки таблиці мають належати безпосередньо таблиці або її заголовній, основній чи нижній частині. Виправте теги таблиці.
 	Basic constraints	Основні обмеження
-	SHA-1 digest	Дайджест SHA-1
-	SHA-256 digest	Дайджест SHA-256
+	Certificate authority	Центр сертифікації
+	End entity	Кінцевий суб’єкт
+	SHA-1 digest	Відбиток SHA-1
+	SHA-256 digest	Відбиток SHA-256
 	Squiggly	Хвилясте
 	Home / End	Home / End
 	H / Space (hold)	H / Пробіл (утримувати)
@@ -2125,3 +2126,4 @@ calendar date	December	грудня
 	Printer properties	Властивості принтера
 	Reset to printer defaults	Скинути до налаштувань принтера за замовчуванням
 	This printer offers no settings of its own.	Цей принтер не має власних налаштувань.
+certificate	Subject	Власник сертифіката
