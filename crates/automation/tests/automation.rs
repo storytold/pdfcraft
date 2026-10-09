@@ -1749,6 +1749,17 @@ fn printing_through_tools() {
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
     assert!(ok(&mut a, "printers", json!({}))["printers"].is_array());
+    let none = ok(&mut a, "printer_options", json!({ "printer": "No_Such_Queue_PdfCraft" }));
+    assert_eq!((none["count"].as_u64(), none["options"].as_array().map(Vec::len)), (Some(0), Some(0)));
+    assert!(matches!(a.call("printer_options", &json!({})), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(
+        a.call("doc_print", &json!({ "doc": doc, "printer": "default", "options": ["InputSlot"] })),
+        Err(ToolError::InvalidArgs(m)) if m.contains("printer_options")
+    ));
+    assert!(matches!(
+        a.call("doc_print", &json!({ "doc": doc, "printer": "default", "options": { "InputSlot": 2 } })),
+        Err(ToolError::InvalidArgs(m)) if m.contains("options.InputSlot")
+    ));
     let n = ok(&mut a, "doc_info", json!({ "doc": doc }))["document"]["pages"].as_u64().unwrap();
     let r = ok(&mut a, "doc_print", json!({ "doc": doc, "layout": "multiple", "per_sheet": 4, "path": "sheets.pdf" }));
     assert_eq!(r["sheets"].as_u64(), Some(n.div_ceil(4)));

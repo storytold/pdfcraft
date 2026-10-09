@@ -1999,3 +1999,9 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Elija una imagen PNG o JPEG (hasta 4 MiB). Se conserva la transparencia.
 	Couldn't import the signature image: {e}	No se pudo importar la imagen de la firma: {e}
 	Go to page…	Ir a la página…
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Abre las preferencias del controlador de la impresora. Se guardan para todas las impresiones de este equipo; las copias, la impresión a doble cara, la escala de grises y el papel elegidos aquí se siguen aplicando.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	Los ajustes propios del controlador de la impresora para esta impresión: bandeja, tipo de papel, acabado y más.
+	Couldn't open the printer's preferences: {e}	No se pudieron abrir las preferencias de la impresora: {e}
+	Printer properties	Propiedades de la impresora
+	Reset to printer defaults	Restablecer los valores predeterminados de la impresora
+	This printer offers no settings of its own.	Esta impresora no ofrece ajustes propios.

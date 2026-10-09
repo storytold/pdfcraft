@@ -2033,3 +2033,9 @@
 	Pinned {folder} to Home	{folder} épinglé à l'Accueil
 	No recent files	Aucun fichier récent
 	Go to page…	Aller à la page…
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Ouvre les préférences du pilote d'imprimante. Elles sont enregistrées pour toutes les impressions de cet ordinateur ; les copies, le recto verso, les niveaux de gris et le papier choisis ici s'appliquent toujours.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	Les réglages propres au pilote d'imprimante pour cette impression : bac, type de papier, finition, etc.
+	Couldn't open the printer's preferences: {e}	Impossible d'ouvrir les préférences de l'imprimante : {e}
+	Printer properties	Propriétés de l'imprimante
+	Reset to printer defaults	Rétablir les réglages par défaut de l'imprimante
+	This printer offers no settings of its own.	Cette imprimante ne propose aucun réglage propre.

@@ -2044,3 +2044,9 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	选择 PNG 或 JPEG 图像（最大 4 MiB）。透明度会保留。
 	Couldn't import the signature image: {e}	无法导入签名图像：{e}
 	Go to page…	转到页面…
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	打开打印机驱动程序的首选项。这些设置会保存并用于此电脑上的所有打印；此处选择的份数、双面、灰度和纸张仍然适用。
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	此次打印的打印机驱动程序专属设置：纸盒、纸张类型、装订整理等。
+	Couldn't open the printer's preferences: {e}	无法打开打印机首选项：{e}
+	Printer properties	打印机属性
+	Reset to printer defaults	恢复打印机默认设置
+	This printer offers no settings of its own.	此打印机没有专属设置。

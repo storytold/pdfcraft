@@ -2019,3 +2019,9 @@ action wizard	Start	ప్రారంభించు
 	Pin folder to Home…	ఫోల్డర్‌ను హోమ్‌కు పిన్ చేయి…
 	No recent files	ఇటీవలి ఫైళ్లు లేవు
 	Go to page…	పేజీకి వెళ్లు…
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	ప్రింటర్ డ్రైవర్ ప్రాధాన్యతలను తెరుస్తుంది. అవి ఈ కంప్యూటర్ నుండి ప్రతి ముద్రణ కోసం సేవ్ అవుతాయి; ఇక్కడ ఎంచుకున్న కాపీలు, రెండు వైపులా, గ్రేస్కేల్ మరియు కాగితం ఇప్పటికీ వర్తిస్తాయి.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	ఈ ముద్రణ కోసం ప్రింటర్ డ్రైవర్ స్వంత సెట్టింగ్‌లు: కాగితపు ట్రే, కాగితం రకం, ఫినిషింగ్ మరియు మరిన్ని.
+	Couldn't open the printer's preferences: {e}	ప్రింటర్ ప్రాధాన్యతలను తెరవడం సాధ్యం కాలేదు: {e}
+	Printer properties	ప్రింటర్ లక్షణాలు
+	Reset to printer defaults	ప్రింటర్ డిఫాల్ట్‌లకు రీసెట్ చేయి
+	This printer offers no settings of its own.	ఈ ప్రింటర్‌కు దాని స్వంత సెట్టింగ్‌లు లేవు.

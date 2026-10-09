@@ -7817,9 +7817,9 @@ tier = "P0"
 milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
-tools = ["printers", "doc_print"]
-evidence = ["crates/print/src/tests.rs::spooler_arguments_and_printer_list"]
-notes = "CUPS printers via lpstat; Save as PDF; Windows spooler pending"
+tools = ["printers", "printer_options", "doc_print"]
+evidence = ["crates/print/src/tests.rs::spooler_arguments_and_printer_list", "crates/print/src/tests.rs::printer_options_come_from_the_ppd", "crates/print/src/tests.rs::printer_option_defaults_and_job_arguments", "crates/ui-egui/tests/print.rs::print_dialog_shows_the_printer_driver_options"]
+notes = "CUPS printers via lpstat; Save as PDF; Windows spooler pending. Properties…: on CUPS the driver's own PPD job options (tray, paper type, finishing …, not installable options or what the dialog sets) for this job, sent as lp -o; on Windows the driver's Printing Preferences window (printui), saved as that printer's per-user defaults rather than per job"
 
 [[feature]]
 id = "print.copies-collate"

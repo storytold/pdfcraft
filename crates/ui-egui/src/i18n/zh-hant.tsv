@@ -1968,3 +1968,9 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	選擇 PNG 或 JPEG 圖像（最大 4 MiB）。透明度會保留。
 	Couldn't import the signature image: {e}	無法匯入簽名圖像：{e}
 	Go to page…	轉到頁面…
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	開啟印表機驅動程式的喜好設定。這些設定會儲存並用於此電腦的所有列印；此處選擇的份數、雙面、灰階和紙張仍然適用。
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	此次列印的印表機驅動程式專屬設定：紙匣、紙張類型、裝訂整理等。
+	Couldn't open the printer's preferences: {e}	無法開啟印表機喜好設定：{e}
+	Printer properties	印表機內容
+	Reset to printer defaults	還原印表機預設值
+	This printer offers no settings of its own.	此印表機沒有專屬設定。

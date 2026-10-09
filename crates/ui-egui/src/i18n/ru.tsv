@@ -1994,3 +1994,9 @@
 	Created a PDF from {n} files; left out: {names}	PDF создан из файлов: {n}; пропущены: {names}
 	Created a PDF from the first {n} files	PDF создан из первых файлов: {n}
 	Go to page…	Перейти на страницу…
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Открывает настройки драйвера принтера. Они сохраняются для всей печати с этого компьютера; выбранные здесь копии, двусторонняя печать, оттенки серого и бумага по-прежнему применяются.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	Собственные параметры драйвера принтера для этой печати: лоток, тип бумаги, финишная обработка и другое.
+	Couldn't open the printer's preferences: {e}	Не удалось открыть настройки принтера: {e}
+	Printer properties	Свойства принтера
+	Reset to printer defaults	Вернуть параметры принтера по умолчанию
+	This printer offers no settings of its own.	У этого принтера нет собственных параметров.

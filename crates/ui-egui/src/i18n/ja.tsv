@@ -1975,3 +1975,9 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	PNG または JPEG 画像を選択してください（最大 4 MiB）。透明度は保持されます。
 	Couldn't import the signature image: {e}	署名画像を読み込めませんでした: {e}
 	Go to page…	ページへ移動…
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	プリンタードライバーの基本設定を開きます。設定はこのコンピューターからのすべての印刷に保存されます。ここで選んだ部数、両面、グレースケール、用紙は引き続き適用されます。
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	この印刷に使うプリンタードライバー独自の設定：給紙トレイ、用紙の種類、後処理など。
+	Couldn't open the printer's preferences: {e}	プリンターの基本設定を開けませんでした: {e}
+	Printer properties	プリンターのプロパティ
+	Reset to printer defaults	プリンターの初期設定に戻す
+	This printer offers no settings of its own.	このプリンターには独自の設定がありません。
