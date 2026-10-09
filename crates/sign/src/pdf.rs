@@ -789,10 +789,15 @@ fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut Sig
         // ordinary signature from an unknown signer.
         let mut pool = crate::timestamp::token_certs(&contents);
         pool.extend(trust.certs.iter().cloned());
-        let trusted_tsa = token.signer_certificate().map(|c| build_chain(&c, &pool).iter().any(|x| trust.trusts(x))).unwrap_or(false);
-        if trusted_tsa {
+        // A trusted authority whose certificate was not valid at the time it stamped proves
+        // nothing either (its detail is already recorded above): never upgrade that to Valid.
+        let in_validity = token.signer_certificate().is_some_and(|c| c.valid_at(token.gen_time));
+        let trusted_tsa = token.signer_certificate().is_some_and(|c| build_chain(&c, &pool).iter().any(|x| trust.trusts(x)));
+        if trusted_tsa && in_validity {
             info.status = Status::Valid;
             info.details.push("The timestamp token is valid and its authority is trusted.".into());
+        } else if trusted_tsa {
+            info.status = Status::Unknown;
         } else {
             info.status = Status::Unknown;
             info.details.push("The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.".into());

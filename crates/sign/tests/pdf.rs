@@ -846,6 +846,24 @@ fn a_document_timestamp_held_by_a_signature_field_is_checked_as_a_timestamp() {
     assert!(s.details.iter().any(|d| d.contains("since the timestamp was applied")), "{:?}", s.details);
 }
 
+/// A trusted timestamp authority whose certificate was not yet valid when it stamped proves
+/// nothing: the field timestamp stays Unknown, never Valid.
+#[test]
+fn a_field_timestamp_from_a_trusted_tsa_outside_its_validity_is_not_valid() {
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        // Before the TSA certificate's validity (it starts in October 2026).
+        time: Time { year: 2020, month: 1, day: 1, hour: 0, minute: 0, second: 0 },
+    };
+    let stamped = fixture_timestamped_in_a_field(&tsa);
+    let trust = TrustStore { certs: vec![tsa.id.certificate.clone()] };
+    let s = signatures(&open(&stamped), &stamped, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert!(s.doc_timestamp);
+    assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.contains("was not valid at the time of timestamping")), "{:?}", s.details);
+    assert!(!s.details.iter().any(|d| d.contains("its authority is trusted")), "{:?}", s.details);
+}
+
 #[test]
 fn a_standalone_timestamp_typed_sig_by_an_older_writer_is_still_a_timestamp() {
     let tsa = TestTsa {
