@@ -1898,3 +1898,110 @@
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formulário XFA: seus campos e seus dados XFA são mantidos sincronizados, para que outros leitores exibam o que você preencher.
 @plural	{n} page|{n} pages	{n} página|{n} páginas
 @plural	{n} field|{n} fields	{n} campo|{n} campos
+	Fit to width scrolling	Ajustar à largura com rolagem
+	Fit one full page	Ajustar uma página inteira
+	Default page display	Exibição de página padrão
+	Default zoom	Zoom padrão
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Usado quando um PDF não pede um layout ou zoom. A rolagem contínua nunca salta entre páginas.
+	Page display: {layout}	Exibição de página: {layout}
+	Switch to two-page view first to show the cover page	Mude para a exibição de duas páginas primeiro para mostrar a página de capa
+	Save pages	Salvar páginas
+	Save these pages as one PDF	Salvar estas páginas como um PDF
+	No changes to save	Não há alterações para salvar
+	Insert a file before page {label}	Inserir um arquivo antes da página {label}
+	Insert a file at the end	Inserir um arquivo no final
+	Set layer visibility	Definir visibilidade das camadas
+	File name	Nome do arquivo
+	Warnings	Avisos
+	{k} of {n}	{k} de {n}
+	? of {n}	? de {n}
+	yesterday	ontem
+	{n} days ago	há {n} dias
+	{n} selected	{n} selecionados
+	Remove {n} files	Remover {n} arquivos
+	Select a file first	Selecione um arquivo primeiro
+	1 file	1 arquivo
+	{n} files	{n} arquivos
+	1 file needs attention	1 arquivo precisa de atenção
+	{n} files need attention	{n} arquivos precisam de atenção
+	Add open documents	Adicionar documentos abertos
+	All open documents	Todos os documentos abertos
+	No documents are open	Nenhum documento está aberto
+	Add the PDFs to combine	Adicionar os PDFs para combinar
+	Drop PDFs or folders here, or choose them.	Solte PDFs ou pastas aqui, ou escolha-os.
+	Add folder…	Adicionar pasta…
+	More ways to add files	Mais formas de adicionar arquivos
+	Add folder	Adicionar pasta
+	Every PDF in the folder	Todo PDF da pasta
+	Add folder and subfolders…	Adicionar pasta e subpastas…
+	Every PDF in the folder and the folders inside it	Todo PDF da pasta e das pastas dentro dela
+	Add folder and subfolders	Adicionar pasta e subpastas
+	PDF, images and text	PDF, imagens e texto
+	Files are combined from top to bottom. Leave Pages empty to take every page.	Os arquivos são combinados de cima para baixo. Deixe Páginas em branco para incluir todas as páginas.
+	Drag to reorder	Arraste para reordenar
+	Added more than once	Adicionado mais de uma vez
+	Includes unsaved changes	Inclui alterações não salvas
+	Click to sort, drag to move the column. Drag its edge to resize it.	Clique para classificar, arraste para mover a coluna. Arraste a borda dela para redimensioná-la.
+	sorted ascending	classificado em ordem crescente
+	sorted descending	classificado em ordem decrescente
+	Reset columns	Redefinir colunas
+	Show password	Mostrar senha
+	Hide password	Ocultar senha
+	Unlock…	Desbloquear…
+	Select a password-protected file first	Selecione primeiro um arquivo protegido por senha
+	Password-protected	Protegido por senha
+	Opened, but its security settings don't allow combining. Enter the permissions password.	Aberto, mas as configurações de segurança dele não permitem combinar. Digite a senha de permissões.
+	Its security settings don't allow copying pages	As configurações de segurança dele não permitem copiar páginas
+	Can't be read: {e}	Não é possível ler: {e}
+	Unlocked: the combined file won't be password-protected	Desbloqueado: o arquivo combinado não será protegido por senha
+	Protected: the combined file won't keep its security settings	Protegido: o arquivo combinado não manterá as configurações de segurança
+	Unlock {name}	Desbloquear {name}
+	Unlock {n} files	Desbloquear {n} arquivos
+	Enter the permissions password to allow combining	Digite a senha de permissões para permitir a combinação
+	Enter the password that opens it	Digite a senha que o abre
+	The same password is tried on each file.	A mesma senha é tentada em cada arquivo.
+	The password is only used to read the file; it isn't saved.	A senha é usada apenas para ler o arquivo; ela não é salva.
+	Unlock	Desbloquear
+	Wrong password	Senha incorreta
+	Check the pages of {name}: {why}	Verifique as páginas de {name}: {why}
+	{name} can't be combined: {why}	{name} não pode ser combinado: {why}
+	Selected pages	Páginas selecionadas
+	No pages selected	Nenhuma página selecionada
+	Created a PDF from {n} files; left out: {names}	Criado um PDF de {n} arquivos; deixados de fora: {names}
+	Created a PDF from the first {n} files	Criado um PDF dos primeiros {n} arquivos
+	Created a PDF from {n} files	Criado um PDF de {n} arquivos
+	Folders	Pastas
+	Pin a folder…	Fixar uma pasta…
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Fixe uma pasta para listar aqui os PDFs mais recentes dela, como onde o seu scanner ou uma unidade de nuvem sincronizada os salva.
+	Unpin	Desafixar
+	Unpin {folder}	Desafixar {folder}
+	Pin a folder to Home	Fixar uma pasta no Início
+	Looking for PDFs…	Procurando PDFs…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Esta pasta não está disponível no momento. Ela pode ter sido movida, ou a unidade ou a sincronização de nuvem dela está desconectada.
+	No PDFs in this folder yet	Ainda não há PDFs nesta pasta
+	Show less	Mostrar menos
+	Show {n} more	Mostrar mais {n}
+	The newest {n} of {total} PDFs	Os {n} PDFs mais recentes de {total}
+	Cancelling…	Cancelando…
+	Optimizing… removing user data	Otimizando… removendo dados do usuário
+	Optimizing… image {d} of {t}	Otimizando… imagem {d} de {t}
+	Optimizing… cleaning up	Otimizando… limpando
+	Optimizing… merging identical objects	Otimizando… mesclando objetos idênticos
+	Optimizing… writing the copy	Otimizando… gravando a cópia
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	Imprima somente na frente. Mantenha as folhas em ordem, corte nas marcas e empilhe as pilhas da esquerda para a direita, de cima para baixo.
+	Windows store  ·  	Repositório do Windows  ·  
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	A chave está no repositório de certificados do Windows, que pode solicitar permissão para o PdfCraft usá-la.
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	Este endereço da web mistura letras de alfabetos diferentes, uma forma comum de imitar o nome de outro site.
+	This web address uses letters from another alphabet, which can look like familiar ones.	Este endereço da web usa letras de outro alfabeto, que podem parecer familiares.
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	Continue apenas se você confiar neste documento. Um endereço pode carregar informações do documento, como o que você digitou no formulário dele.
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	As fontes padrão não conseguem desenhar “{c}” ({code}). Por enquanto, apenas caracteres da Europa Ocidental podem ser adicionados como texto.
+	Line ending	Terminação da linha
+	Show	Mostrar
+	Sort	Classificar
+	Reverse the order	Inverter a ordem
+	Grab bag	Miscelânea
+	Table	Tabela
+	{n} contributors · {c} commits	{n} contribuidores · {c} commits
+	No contributor data was built into this copy.	Nenhum dado de contribuidores foi embutido nesta cópia.
+	No model credits were built into this copy.	Nenhum crédito de modelos foi embutido nesta cópia.
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} linhas (Δ {delta}), +{bin_added} / −{bin_deleted} recursos binários, {first} – {last}
