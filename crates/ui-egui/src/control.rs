@@ -32,7 +32,8 @@
 //! - `ui.screenshot {region?}`: PNG of the window (base64), optionally cropped to a rect.
 //!
 //! Several windows: `ui.state`, `ui.command`, `ui.set`, `ui.open` and `ui.screenshot` take an
-//! optional `window` (a number from `ui.windows`; the window that has the focus when left out).
+//! optional `window` (a number from `ui.windows`; the window that has the focus when left out; the
+//! main window for `ui.screenshot`, which cannot capture the other windows).
 //! `ui.inspect`, `ui.click`, `ui.drag`, `ui.move`, `ui.type` and `ui.key` still act on the main
 //! window's widget tree. A number that is no window answers `no window N`.
 //! - `ui.windows`: every window with its `id`, `title`, `focused` and `tabs` (`name`, `view_no`, `dirty`).
@@ -772,8 +773,19 @@ impl Host for crate::PdfCraftApp {
     }
 
     fn viewport_of(&mut self, window: Option<u32>) -> Result<egui::ViewportId, String> {
-        let id = window.map_or(self.focused_window, crate::WindowId);
-        if self.has_window(id) { Ok(id.viewport()) } else { Err(format!("no window {}", id.0)) }
+        let id = crate::WindowId(window.unwrap_or(0));
+        if !self.has_window(id) {
+            return Err(format!("no window {}", id.0));
+        }
+        if id != crate::WindowId::ROOT {
+            // eframe paints windows beyond the main one as immediate viewports and ignores a
+            // screenshot request for them.
+            return Err(format!(
+                "no screenshot of window {}: only the main window (0) can be captured; use the system's screenshot tool for the others",
+                id.0
+            ));
+        }
+        Ok(id.viewport())
     }
 }
 

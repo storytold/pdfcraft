@@ -621,3 +621,138 @@ fn a_session_with_a_broken_window_still_restores() {
     assert!(app.debug_check_windows().is_empty());
     let _ = std::fs::remove_dir_all(std::path::Path::new(&a).parent().unwrap());
 }
+
+// --- never crash ---
+
+#[test]
+fn window_operations_on_unknown_windows_and_documents_do_nothing() {
+    use pdfcraft_ui_egui::WindowOp;
+    let mut h = two_docs_harness();
+    let doc = h.state().views[0].id;
+    let ghost_doc = pdfcraft_engine::DocId(987_654);
+    for op in [
+        WindowOp::NewView { doc: ghost_doc, from: WindowId::ROOT },
+        WindowOp::NewView { doc, from: WindowId(77) },
+        WindowOp::MoveTab { doc: ghost_doc, from: WindowId::ROOT, to: None },
+        WindowOp::MoveTab { doc, from: WindowId(77), to: None },
+        WindowOp::MoveTab { doc, from: WindowId::ROOT, to: Some(WindowId(77)) },
+        WindowOp::MoveTab { doc, from: WindowId::ROOT, to: Some(WindowId::ROOT) },
+        WindowOp::Close(WindowId(77)),
+        WindowOp::Close(WindowId::ROOT),
+        WindowOp::Promote(WindowId(77)),
+        WindowOp::Promote(WindowId::ROOT),
+        WindowOp::Focus(WindowId(u32::MAX)),
+    ] {
+        h.state_mut().queue_window_op(op);
+    }
+    h.run_steps(3);
+    assert_eq!(h.state().window_count(), 1);
+    assert_eq!(h.state().views.len(), 2);
+    assert_windows_ok(h.state());
+}
+
+#[test]
+fn closing_a_window_and_moving_a_tab_into_it_in_one_frame() {
+    use pdfcraft_ui_egui::WindowOp;
+    let (mut h, child) = root_and_child();
+    let one = h.state().views[0].id;
+    h.state_mut().queue_window_op(WindowOp::Close(child));
+    h.state_mut().queue_window_op(WindowOp::MoveTab { doc: one, from: WindowId::ROOT, to: Some(child) });
+    h.state_mut().queue_window_op(WindowOp::MoveTab { doc: one, from: WindowId::ROOT, to: None });
+    h.run_steps(4);
+    assert_windows_ok(h.state());
+    assert!(h.state().session.docs().iter().all(|d| h.state().view_count(d.id) >= 1), "no document lost its views");
+}
+
+#[test]
+fn many_new_windows_stop_with_a_notice() {
+    let mut h = form_harness();
+    let doc = h.state().views[0].id;
+    for _ in 0..70 {
+        h.state_mut().execute("window.new_view");
+        h.run_steps(1);
+    }
+    h.run_steps(3);
+    assert!(h.state().window_count() <= pdfcraft_ui_egui::windows::MAX_WINDOWS);
+    assert!(h.state().view_count(doc) <= pdfcraft_ui_egui::windows::MAX_VIEWS_PER_DOCUMENT);
+    assert!(h.state().toast.is_some(), "the user is told why no more windows open");
+    assert_windows_ok(h.state());
+}
+
+/// A small, fixed pseudo-random generator, so a failure repeats.
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self, n: usize) -> usize {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((self.0 >> 33) as usize) % n.max(1)
+    }
+}
+
+#[test]
+fn random_window_operations_keep_the_windows_consistent() {
+    use pdfcraft_ui_egui::WindowOp;
+    for seed in 1..=6u64 {
+        let mut rng = Lcg(seed);
+        let mut h = two_docs_harness();
+        h.state_mut().open_bytes("three.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
+        let ctx = h.ctx.clone();
+        for step in 0..120 {
+            let windows = h.state().window_ids();
+            let window = windows[rng.next(windows.len())];
+            let docs: Vec<_> = h.state().session.docs().iter().map(|d| d.id).collect();
+            let doc = docs.get(rng.next(docs.len())).copied();
+            match rng.next(11) {
+                0 | 1 => {
+                    if let Some(doc) = doc {
+                        h.state_mut().queue_window_op(WindowOp::NewView { doc, from: window });
+                    }
+                }
+                2 => {
+                    if let Some(doc) = doc {
+                        h.state_mut().queue_window_op(WindowOp::MoveTab { doc, from: window, to: None });
+                    }
+                }
+                3 => {
+                    let to = windows[rng.next(windows.len())];
+                    if let Some(doc) = doc {
+                        h.state_mut().queue_window_op(WindowOp::MoveTab { doc, from: window, to: Some(to) });
+                    }
+                }
+                4 => h.state_mut().queue_window_op(WindowOp::Close(window)),
+                5 => h.state_mut().queue_window_op(WindowOp::MergeAll),
+                6 => {
+                    h.state_mut().with_window(window, |a| {
+                        let n = a.views.len();
+                        if n > 0 {
+                            a.request_close_tab(0);
+                        }
+                    });
+                }
+                7 => {
+                    h.state_mut().with_window(window, |a| {
+                        a.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+                    });
+                }
+                8 => {
+                    h.state_mut().with_window(window, |a| a.undo());
+                }
+                9 => {
+                    h.state_mut().test_close_window(window, &ctx);
+                }
+                _ => {
+                    h.state_mut().with_window(window, |a| {
+                        a.close_request = None;
+                    });
+                }
+            }
+            h.run_steps(1 + rng.next(2));
+            let problems = h.state().debug_check_windows();
+            // A window that lost its last tab is closed with the next frame's repair.
+            h.run_steps(1);
+            let problems_after = h.state().debug_check_windows();
+            assert!(problems_after.is_empty(), "seed {seed} step {step}: {problems:?} then {problems_after:?}");
+            assert!(h.state().window_count() <= pdfcraft_ui_egui::windows::MAX_WINDOWS);
+        }
+    }
+}

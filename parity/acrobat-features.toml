@@ -1187,11 +1187,15 @@ title = "Multiple windows; drag a tab out into a window"
 area = "B"
 tier = "P1"
 milestone = "M14"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["window.new_view", "window.move_tab_new", "window.merge_all", "window.close"]
 tools = []
-evidence = []
-notes = ""
+evidence = [
+    "crates/ui-egui/tests/windows.rs::new_view_opens_second_window",
+    "crates/ui-egui/tests/windows.rs::move_tab_new_moves",
+    "crates/ui-egui/tests/windows.rs::root_close_promotes_child",
+]
+notes = "Same document in several windows with shared undo, unsaved state and live updates (a comment redraws one page in the other window); tab context menu; windows come back with the last session; control channel and CLI take --window. Missing: dragging a tab out of the strip or between windows; the web build has one window; the main window's input, widget tree and screenshots are the only ones ui.inspect/click/key/screenshot reach (eframe ignores screenshot requests for extra windows); four windows cost about 5x one in a debug build."
 
 [[feature]]
 id = "view.split-window"

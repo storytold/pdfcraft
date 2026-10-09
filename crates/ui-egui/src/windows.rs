@@ -487,6 +487,12 @@ impl PdfCraftApp {
         ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
     }
 
+    /// Queue a change to the windows, to be applied after this frame (tests).
+    #[doc(hidden)]
+    pub fn queue_window_op(&mut self, op: WindowOp) {
+        self.pending_window_ops.push(op);
+    }
+
     /// Apply the queued window changes now, in the main window (tests).
     #[doc(hidden)]
     pub fn pending_window_ops_for_test(&mut self) {
@@ -573,6 +579,9 @@ impl PdfCraftApp {
 
     /// A new view of `doc` showing what the one in window `from` shows.
     fn new_view_window(&mut self, doc: DocId, from: WindowId) {
+        if !self.has_window(from) {
+            return;
+        }
         if self.view_count(doc) >= MAX_VIEWS_PER_DOCUMENT {
             return self.notify_tr("Too many windows for this document");
         }

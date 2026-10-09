@@ -48,12 +48,13 @@ cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json command id=window.new_vie
 cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json windows
 cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json state --window 1
 cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json set key=zoom value=200 --window 1
-cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json screenshot --window 1 --out /tmp/w1.png
 cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json window_move_tab doc_index=0
 cargo run -p pdfcraft-cli -- ui --control /tmp/pc.json window_close --window 1
 ```
 
 Without `--window`, a request goes to the window that has the focus. `inspect`, `click`, `drag`,
-`type` and `key` still work on the main window. In tests, windows are drawn inside the main one
+`type` and `key` still work on the main window, and `screenshot` can only capture the main window
+(eframe draws the other windows as immediate viewports and ignores screenshot requests for them;
+use the system's screenshot tool, e.g. `screencapture -l <window id>` on macOS). In tests, windows are drawn inside the main one
 (egui's embedded viewports), so `egui_kittest` can click in all of them; see
 `crates/ui-egui/tests/windows.rs`.

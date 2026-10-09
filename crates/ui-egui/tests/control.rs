@@ -949,6 +949,10 @@ fn a_window_that_does_not_exist_is_an_error_not_a_crash() {
     assert!(r.is_err(), "the main window is not closed this way");
     let r = call(&mut h, &c, "ui.screenshot", json!({ "window": 3 }));
     assert!(r.is_err_and(|e| e.contains("no window")));
+    call(&mut h, &c, "ui.command", json!({ "id": "window.new_view" })).unwrap();
+    h.run_steps(3);
+    let r = call(&mut h, &c, "ui.screenshot", json!({ "window": 1 }));
+    assert!(r.is_err_and(|e| e.contains("only the main window")), "other windows cannot be captured");
 }
 
 #[test]
