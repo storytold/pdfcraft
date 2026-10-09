@@ -1186,7 +1186,11 @@ impl PdfCraftApp {
         if index >= self.views.len() {
             return;
         }
-        let id = self.views.remove(index).id;
+        let mut view = self.views.remove(index);
+        let id = view.id;
+        if let Some(doc) = self.session.get(id) {
+            view.release_render_client(&doc.renderer);
+        }
         self.forget_recovery(id);
         self.session.close(id);
         self.active = match self.active {

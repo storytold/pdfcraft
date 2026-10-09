@@ -146,7 +146,7 @@ pub struct RenderRequest {
     pub tag: u64,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RenderedPage {
     pub request: RenderRequest,
     pub width: u32,
@@ -290,16 +290,57 @@ pub(crate) fn panic_message(p: &Box<dyn std::any::Any + Send>) -> String {
 /// How long one page may render before the pool gives up on it (the watchdog).
 pub const STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(20);
 
+/// Who asked for a render. Every view of a document registers its own client, so two windows
+/// showing one document keep separate queues and each receives exactly the pages it asked for.
+/// `ClientId(0)` is the default client that [`RenderPool::set_queue`] and
+/// [`RenderPool::try_recv`] use.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ClientId(pub u32);
+
+/// Most clients (besides the default one) a pool serves.
+pub const MAX_CLIENTS: usize = 64;
+/// Most requests one client can have queued; the rest of a longer queue is ignored.
+pub const MAX_QUEUE_PER_CLIENT: usize = 4096;
+
+/// One client's pending requests.
+struct ClientQueue {
+    id: ClientId,
+    priority: u8,
+    /// Most urgent last (workers pop from the end).
+    reqs: Vec<RenderRequest>,
+}
+
+/// A request a worker took: whose it is, and who else asked for the same page meanwhile.
+struct Taken {
+    client: ClientId,
+    req: RenderRequest,
+    /// Other clients waiting for the same answer: (client, their tag).
+    also: Vec<(ClientId, u64)>,
+}
+
+/// Which clients exist.
+#[derive(Default)]
+struct Registry {
+    next: u32,
+    live: std::collections::HashSet<ClientId>,
+}
+
 /// State shared by the pool and its workers.
 #[derive(Default)]
 struct Shared {
-    /// Pending requests, most urgent last (workers pop from the end).
-    queue: Mutex<Vec<RenderRequest>>,
-    /// Requests a worker has taken whose answer `try_recv` has not handed out yet. Callers keep
-    /// listing the requests they're still waiting for in each new queue, so a queued request
-    /// equal to one of these is dropped instead of being rendered a second time. Lock `queue`
-    /// first when holding both.
-    taken: Mutex<Vec<RenderRequest>>,
+    /// Pending requests per client.
+    queue: Mutex<Vec<ClientQueue>>,
+    /// Round-robin position among clients of the same priority.
+    next_rr: std::sync::atomic::AtomicUsize,
+    registry: Mutex<Registry>,
+    /// Finished answers waiting for their client to collect them.
+    inboxes: Mutex<std::collections::HashMap<ClientId, std::collections::VecDeque<RenderedPage>>>,
+    /// Requests a worker has taken whose answer `try_recv_for` has not handed out yet. Callers
+    /// keep listing the requests they're still waiting for in each new queue, so a queued request
+    /// equal to one of these is dropped instead of being rendered a second time; one that
+    /// another client asked for joins the entry and is answered from the same render. Lock
+    /// `queue` first when holding both.
+    taken: Mutex<Vec<Taken>>,
     /// Per worker id: the request it is rendering and since when.
     #[cfg(not(target_arch = "wasm32"))]
     busy: Mutex<Vec<Option<(RenderRequest, std::time::Instant)>>>,
@@ -309,6 +350,9 @@ struct Shared {
     /// Set when the pool is dropped: the workers' renders stop at their next content operator,
     /// since nobody can receive their answers any more.
     dropped: Arc<std::sync::atomic::AtomicBool>,
+    /// Test hook: how many renders ran.
+    #[cfg(test)]
+    renders: std::sync::atomic::AtomicUsize,
     /// Test hook: make one page slow.
     #[cfg(test)]
     slow_page: Mutex<Option<(usize, std::time::Duration)>>,
@@ -324,15 +368,40 @@ fn same(a: &RenderRequest, b: &RenderRequest) -> bool {
     (a.page, a.kind, a.tile, a.scale.to_bits(), a.tag) == (b.page, b.kind, b.tile, b.scale.to_bits(), b.tag)
 }
 
-/// Pop the most urgent queued request that isn't already taken, and mark it taken.
+/// [`same`], whatever the callers' tags.
+fn same_ignoring_tag(a: &RenderRequest, b: &RenderRequest) -> bool {
+    (a.page, a.kind, a.tile, a.scale.to_bits()) == (b.page, b.kind, b.tile, b.scale.to_bits())
+}
+
+/// Pop the most urgent queued request that isn't already taken, and mark it taken. Clients with
+/// a higher priority go first; equal ones take turns.
 #[cfg(not(target_arch = "wasm32"))]
-fn take_next(shared: &Shared) -> Option<RenderRequest> {
+fn take_next(shared: &Shared) -> Option<(ClientId, RenderRequest)> {
     let mut queue = lock(&shared.queue);
     let mut taken = lock(&shared.taken);
-    while let Some(req) = queue.pop() {
-        if !taken.iter().any(|t| same(t, &req)) {
-            taken.push(req);
-            return Some(req);
+    let mut priorities: Vec<u8> = queue.iter().filter(|q| !q.reqs.is_empty()).map(|q| q.priority).collect();
+    priorities.sort_unstable_by(|a, b| b.cmp(a));
+    priorities.dedup();
+    let turn = shared.next_rr.load(std::sync::atomic::Ordering::Relaxed);
+    for priority in priorities {
+        let group: Vec<usize> = (0..queue.len()).filter(|&i| queue.get(i).is_some_and(|q| q.priority == priority)).collect();
+        for k in 0..group.len() {
+            let Some(&i) = group.get((turn + k) % group.len()) else { continue };
+            let Some(q) = queue.get_mut(i) else { continue };
+            while let Some(req) = q.reqs.pop() {
+                if taken.iter().any(|t| t.client == q.id && same(&t.req, &req)) {
+                    continue;
+                }
+                if let Some(t) = taken.iter_mut().find(|t| t.client != q.id && same_ignoring_tag(&t.req, &req)) {
+                    if !t.also.contains(&(q.id, req.tag)) {
+                        t.also.push((q.id, req.tag));
+                    }
+                    continue;
+                }
+                taken.push(Taken { client: q.id, req, also: Vec::new() });
+                shared.next_rr.store(turn.wrapping_add(1), std::sync::atomic::Ordering::Relaxed);
+                return Some((q.id, req));
+            }
         }
     }
     None
@@ -346,15 +415,17 @@ fn take_next(shared: &Shared) -> Option<RenderRequest> {
 /// finally returns, and its late result is dropped). At most `threads` replacements are started
 /// per pool, so a document full of pathological pages cannot spawn threads without bound.
 pub struct RenderPool {
+    /// Tells this pool from the one that replaces it (a document gets a new pool after edits).
+    pool_id: u64,
     shared: Arc<Shared>,
     wake: Mutex<Vec<Sender<()>>>,
-    results: Receiver<RenderedPage>,
-    results_tx: Sender<RenderedPage>,
+    results: Receiver<(ClientId, RenderedPage)>,
+    results_tx: Sender<(ClientId, RenderedPage)>,
     bytes: Arc<Vec<u8>>,
     config: RenderConfig,
     _workers: Mutex<Vec<JoinHandle<()>>>,
-    /// Errors produced by the watchdog, handed out by `try_recv`.
-    abandoned: Mutex<Vec<RenderedPage>>,
+    /// Errors produced by the watchdog, handed out by `try_recv_for`.
+    abandoned: Mutex<Vec<(ClientId, RenderedPage)>>,
     stuck_after: std::time::Duration,
     replacements_left: Mutex<usize>,
     /// Used when threads are unavailable (wasm32 without atomics, or spawn failure): requests are
@@ -366,7 +437,9 @@ impl RenderPool {
     pub fn new(bytes: Arc<Vec<u8>>, threads: usize, config: RenderConfig) -> Self {
         let (results_tx, results) = channel();
         let threads = if cfg!(target_arch = "wasm32") { 0 } else { threads.max(1) };
+        static NEXT_POOL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let mut pool = Self {
+            pool_id: NEXT_POOL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             shared: Arc::default(),
             wake: Mutex::new(Vec::new()),
             results,
@@ -438,32 +511,137 @@ impl RenderPool {
         self.stuck_after = limit;
     }
 
-    /// Replace the pending queue (most urgent first). In-flight renders are not interrupted, and a
-    /// request equal to one already taken (rendering, or answered but not yet received through
-    /// `try_recv`) is skipped rather than rendered twice.
-    pub fn set_queue(&self, mut requests: Vec<RenderRequest>) {
+    /// A number that is different for every pool ever made.
+    pub fn pool_id(&self) -> u64 {
+        self.pool_id
+    }
+
+    /// A new client, with a queue and an inbox of its own. `None` when the pool serves
+    /// [`MAX_CLIENTS`] already; the caller then uses the default client.
+    pub fn register_client(&self) -> Option<ClientId> {
+        let mut registry = lock(&self.shared.registry);
+        if registry.live.len() >= MAX_CLIENTS {
+            return None;
+        }
+        registry.next = registry.next.checked_add(1)?;
+        let id = ClientId(registry.next);
+        registry.live.insert(id);
+        Some(id)
+    }
+
+    /// Drop a client's wishes and the answers it has not collected. Unknown ids do nothing.
+    pub fn unregister_client(&self, client: ClientId) {
+        if !lock(&self.shared.registry).live.remove(&client) {
+            return;
+        }
+        lock(&self.shared.queue).retain(|q| q.id != client);
+        for t in lock(&self.shared.taken).iter_mut() {
+            t.also.retain(|(c, _)| *c != client);
+        }
+        lock(&self.shared.inboxes).remove(&client);
+    }
+
+    fn knows(&self, client: ClientId) -> bool {
+        client == ClientId(0) || lock(&self.shared.registry).live.contains(&client)
+    }
+
+    /// Higher priority clients are served first (0 normal, 1 the focused window).
+    pub fn set_priority(&self, client: ClientId, priority: u8) {
+        if !self.knows(client) {
+            return;
+        }
+        let mut queue = lock(&self.shared.queue);
+        match queue.iter_mut().find(|q| q.id == client) {
+            Some(q) => q.priority = priority,
+            None => queue.push(ClientQueue { id: client, priority, reqs: Vec::new() }),
+        }
+    }
+
+    /// Replace this client's pending queue (most urgent first; at most [`MAX_QUEUE_PER_CLIENT`]
+    /// are kept). In-flight renders are not interrupted, and a request equal to one already taken
+    /// (rendering, or answered but not yet received) is skipped rather than rendered twice.
+    pub fn set_queue_for(&self, client: ClientId, mut requests: Vec<RenderRequest>) {
+        if !self.knows(client) {
+            return;
+        }
+        requests.truncate(MAX_QUEUE_PER_CLIENT);
         requests.reverse(); // workers pop from the end
-        *lock(&self.shared.queue) = requests;
+        {
+            let mut queue = lock(&self.shared.queue);
+            match queue.iter_mut().find(|q| q.id == client) {
+                Some(q) => q.reqs = requests,
+                None => queue.push(ClientQueue { id: client, priority: 0, reqs: requests }),
+            }
+        }
         for w in lock(&self.wake).iter() {
             let _ = w.send(());
         }
     }
 
-    pub fn try_recv(&self) -> Option<RenderedPage> {
+    /// [`Self::set_queue_for`] the default client.
+    pub fn set_queue(&self, requests: Vec<RenderRequest>) {
+        self.set_queue_for(ClientId(0), requests);
+    }
+
+    /// The next finished page for this client.
+    pub fn try_recv_for(&self, client: ClientId) -> Option<RenderedPage> {
+        if !self.knows(client) {
+            return None;
+        }
         if let Some(r) = &self.inline {
-            let next = lock(&self.shared.queue).pop();
+            let next = lock(&self.shared.queue).iter_mut().find(|q| q.id == client).and_then(|q| q.reqs.pop());
             return next.map(|req| r.borrow_mut().render(req));
         }
         self.watchdog();
-        let page = lock(&self.abandoned).pop().or_else(|| self.results.try_recv().ok())?;
+        loop {
+            let next = lock(&self.abandoned).pop().or_else(|| self.results.try_recv().ok());
+            let Some((owner, page)) = next else { break };
+            self.deliver(owner, page);
+        }
+        lock(&self.shared.inboxes).get_mut(&client)?.pop_front()
+    }
+
+    /// [`Self::try_recv_for`] the default client.
+    pub fn try_recv(&self) -> Option<RenderedPage> {
+        self.try_recv_for(ClientId(0))
+    }
+
+    /// Hand a finished page to the client that asked and to those that asked for the same page.
+    fn deliver(&self, owner: ClientId, page: RenderedPage) {
         // Copies of the request queued while it rendered are answered too.
         let mut queue = lock(&self.shared.queue);
-        queue.retain(|q| !same(q, &page.request));
         let mut taken = lock(&self.shared.taken);
-        if let Some(i) = taken.iter().position(|t| same(t, &page.request)) {
-            taken.swap_remove(i);
+        let followers = match taken.iter().position(|t| t.client == owner && same(&t.req, &page.request)) {
+            Some(i) => taken.swap_remove(i).also,
+            None => Vec::new(),
+        };
+        for q in queue.iter_mut() {
+            if q.id == owner {
+                q.reqs.retain(|r| !same(r, &page.request));
+            } else if followers.iter().any(|(c, _)| *c == q.id) {
+                q.reqs.retain(|r| !same_ignoring_tag(r, &page.request));
+            }
         }
-        Some(page)
+        drop(taken);
+        drop(queue);
+        let mut inboxes = lock(&self.shared.inboxes);
+        let live = lock(&self.shared.registry);
+        let mut put = |client: ClientId, page: RenderedPage| {
+            if client != ClientId(0) && !live.contains_client(client) {
+                return;
+            }
+            let inbox = inboxes.entry(client).or_default();
+            inbox.push_back(page);
+            while inbox.len() > 2 * MAX_QUEUE_PER_CLIENT {
+                inbox.pop_front();
+            }
+        };
+        for (client, tag) in followers {
+            let mut copy = page.clone();
+            copy.request.tag = tag;
+            put(client, copy);
+        }
+        put(owner, page);
     }
 
     /// Give up on renders that exceeded `stuck_after` (see the type docs).
@@ -483,6 +661,7 @@ impl RenderPool {
                 }
             }
             for req in gave_up {
+                let owner = lock(&self.shared.taken).iter().find(|t| same(&t.req, &req)).map_or(ClientId(0), |t| t.client);
                 lock(&self.shared.stuck).insert((req.page, req.kind));
                 let what = if req.kind == RequestKind::Text { "text extraction for page" } else { "page" };
                 let error = format!(
@@ -490,21 +669,20 @@ impl RenderPool {
                     req.page + 1,
                     self.stuck_after.as_secs_f32().max(1.0)
                 );
-                lock(&self.abandoned).push(RenderedPage {
-                    request: req,
-                    width: 0,
-                    height: 0,
-                    rgba: Vec::new(),
-                    error: Some(error),
-                    text: None,
-                    millis: 0,
-                });
+                lock(&self.abandoned)
+                    .push((owner, RenderedPage { request: req, width: 0, height: 0, rgba: Vec::new(), error: Some(error), text: None, millis: 0 }));
                 let mut left = lock(&self.replacements_left);
                 if *left > 0 && self.spawn_worker() {
                     *left -= 1;
                 }
             }
         }
+    }
+}
+
+impl Registry {
+    fn contains_client(&self, client: ClientId) -> bool {
+        self.live.contains(&client)
     }
 }
 
@@ -521,7 +699,7 @@ fn worker_settings(config: &RenderConfig, shared: &Shared) -> InterpreterSetting
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn worker(id: usize, bytes: Arc<Vec<u8>>, config: RenderConfig, shared: Arc<Shared>, wake: Receiver<()>, out: Sender<RenderedPage>) {
+fn worker(id: usize, bytes: Arc<Vec<u8>>, config: RenderConfig, shared: Arc<Shared>, wake: Receiver<()>, out: Sender<(ClientId, RenderedPage)>) {
     let settings = worker_settings(&config, &shared);
     // Outer loop: (re)build parser + cache; rebuilt after a renderer panic.
     loop {
@@ -529,7 +707,7 @@ fn worker(id: usize, bytes: Arc<Vec<u8>>, config: RenderConfig, shared: Arc<Shar
         let cache = RenderCache::new();
         loop {
             let next = take_next(&shared);
-            let Some(req) = next else {
+            let Some((client, req)) = next else {
                 if wake.recv().is_err() {
                     return; // pool dropped
                 }
@@ -538,7 +716,7 @@ fn worker(id: usize, bytes: Arc<Vec<u8>>, config: RenderConfig, shared: Arc<Shar
             if lock(&shared.stuck).contains(&(req.page, req.kind)) {
                 let error = format!("page {} was skipped earlier because it took too long to render", req.page + 1);
                 let page = RenderedPage { request: req, width: 0, height: 0, rgba: Vec::new(), error: Some(error), text: None, millis: 0 };
-                if out.send(page).is_err() {
+                if out.send((client, page)).is_err() {
                     return;
                 }
                 continue;
@@ -557,6 +735,8 @@ fn worker(id: usize, bytes: Arc<Vec<u8>>, config: RenderConfig, shared: Arc<Shar
                     std::thread::sleep(delay);
                 }
             }
+            #[cfg(test)]
+            shared.renders.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let r = match &pdf {
                 Some(pdf) => render_page(pdf, &cache, &settings, req),
                 None => Err(("the document could not be parsed".into(), false)),
@@ -568,7 +748,7 @@ fn worker(id: usize, bytes: Arc<Vec<u8>>, config: RenderConfig, shared: Arc<Shar
                 return;
             }
             let panicked = matches!(r, Err((_, true)));
-            if out.send(finish(req, start, r)).is_err() {
+            if out.send((client, finish(req, start, r))).is_err() {
                 return;
             }
             if panicked {
@@ -686,6 +866,234 @@ mod tests {
             got[p.request.page] += 1;
         }
         assert_eq!(got, vec![1; pages]);
+    }
+
+    trait WithScale {
+        fn with_scale(self, scale: f32) -> Self;
+    }
+    impl WithScale for RenderRequest {
+        fn with_scale(self, scale: f32) -> Self {
+            Self { scale, ..self }
+        }
+    }
+
+    fn page_req(page: usize, tag: u64) -> RenderRequest {
+        RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag }
+    }
+
+    /// Pages a client receives until `count` arrived (or 10 s passed).
+    fn collect(pool: &RenderPool, client: ClientId, count: usize) -> Vec<RenderedPage> {
+        let mut got = Vec::new();
+        let t = std::time::Instant::now();
+        while got.len() < count && t.elapsed() < std::time::Duration::from_secs(10) {
+            match pool.try_recv_for(client) {
+                Some(p) => got.push(p),
+                None => std::thread::sleep(std::time::Duration::from_millis(2)),
+            }
+        }
+        got
+    }
+
+    /// A document of `n` small pages.
+    fn pages_pdf(n: usize) -> Arc<Vec<u8>> {
+        let mut pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 100 100] >> endobj\n",
+            (0..n).map(|i| format!("{} 0 R", 4 + i)).collect::<Vec<_>>().join(" ")
+        );
+        pdf += "3 0 obj << /Length 25 >> stream\n0 0 1 rg 10 10 30 20 re f\nendstream endobj\n";
+        for i in 0..n {
+            pdf += &format!("{} 0 obj << /Type /Page /Parent 2 0 R /Contents 3 0 R >> endobj\n", 4 + i);
+        }
+        pdf += "trailer << /Root 1 0 R >>\n%%EOF";
+        Arc::new(pdf.into_bytes())
+    }
+
+    #[test]
+    fn two_clients_each_get_all_their_pages() {
+        let pool = RenderPool::new(pages_pdf(6), 2, RenderConfig::default());
+        let (a, b) = (pool.register_client().unwrap(), pool.register_client().unwrap());
+        pool.set_queue_for(a, (0..4).map(|p| page_req(p, 1)).collect());
+        pool.set_queue_for(b, (2..6).map(|p| page_req(p, 2)).collect());
+        let mut got_a: Vec<_> = collect(&pool, a, 4).iter().map(|p| (p.request.page, p.request.tag)).collect();
+        let mut got_b: Vec<_> = collect(&pool, b, 4).iter().map(|p| (p.request.page, p.request.tag)).collect();
+        got_a.sort();
+        got_b.sort();
+        assert_eq!(got_a, vec![(0, 1), (1, 1), (2, 1), (3, 1)]);
+        assert_eq!(got_b, vec![(2, 2), (3, 2), (4, 2), (5, 2)]);
+        assert!(pool.try_recv_for(a).is_none() && pool.try_recv_for(b).is_none());
+        assert!(lock(&pool.shared.taken).is_empty());
+    }
+
+    #[test]
+    fn same_request_renders_once() {
+        let pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 2, RenderConfig::default());
+        *lock(&pool.shared.slow_page) = Some((0, std::time::Duration::from_millis(600)));
+        let (a, b) = (pool.register_client().unwrap(), pool.register_client().unwrap());
+        pool.set_queue_for(a, vec![page_req(0, 11)]);
+        let t = std::time::Instant::now();
+        while !lock(&pool.shared.busy).iter().flatten().any(|(r, _)| r.page == 0) {
+            assert!(t.elapsed() < std::time::Duration::from_secs(8), "never started");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        // B asks for the same page while A's render runs; it keeps asking every frame.
+        for _ in 0..3 {
+            pool.set_queue_for(b, vec![page_req(0, 22)]);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let from_a = collect(&pool, a, 1);
+        let from_b = collect(&pool, b, 1);
+        assert_eq!((from_a.len(), from_b.len()), (1, 1));
+        assert_eq!((from_a[0].request.tag, from_b[0].request.tag), (11, 22), "each gets its own tag");
+        assert_eq!(from_a[0].rgba, from_b[0].rgba);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(pool.try_recv_for(b).is_none() && pool.try_recv_for(a).is_none(), "no second copy");
+        assert_eq!(pool.shared.renders.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn unregister_drops_only_that_client() {
+        let pool = RenderPool::new(pages_pdf(4), 1, RenderConfig::default());
+        let (a, b) = (pool.register_client().unwrap(), pool.register_client().unwrap());
+        pool.set_queue_for(a, vec![page_req(0, 1), page_req(1, 1)]);
+        pool.set_queue_for(b, vec![page_req(2, 2), page_req(3, 2)]);
+        pool.unregister_client(a);
+        let got_b = collect(&pool, b, 2);
+        assert_eq!(got_b.len(), 2);
+        assert!(pool.try_recv_for(a).is_none());
+        pool.set_queue_for(a, vec![page_req(0, 1)]);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(pool.try_recv_for(a).is_none(), "an unregistered client gets nothing");
+    }
+
+    #[test]
+    fn priority_client_first() {
+        let pool = RenderPool::new(pages_pdf(40), 1, RenderConfig::default());
+        let (low, high) = (pool.register_client().unwrap(), pool.register_client().unwrap());
+        pool.set_priority(high, 1);
+        // Nothing runs until both queues exist: hold the single worker busy with a slow page.
+        *lock(&pool.shared.slow_page) = Some((39, std::time::Duration::from_millis(300)));
+        pool.set_queue_for(low, vec![page_req(39, 0)]);
+        let t = std::time::Instant::now();
+        while !lock(&pool.shared.busy).iter().flatten().any(|(r, _)| r.page == 39) {
+            assert!(t.elapsed() < std::time::Duration::from_secs(8));
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        pool.set_queue_for(low, (0..10).map(|p| page_req(p, 1)).collect());
+        pool.set_queue_for(high, (10..20).map(|p| page_req(p, 2)).collect());
+        // A third client only pumps the results into the inboxes, so nothing is popped.
+        let pump = pool.register_client().unwrap();
+        let counts = |pool: &RenderPool| {
+            let _ = pool.try_recv_for(pump);
+            let inboxes = lock(&pool.shared.inboxes);
+            let n = |c: ClientId| inboxes.get(&c).map_or(0, |i| i.len());
+            (n(low), n(high))
+        };
+        let t = std::time::Instant::now();
+        while counts(&pool).1 < 3 && t.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let (low_done, high_done) = counts(&pool);
+        assert!(high_done >= 3, "high: {high_done}");
+        // The slow page 39 was the low client's own and may have finished; nothing else of it did.
+        assert!(high_done == 10 || low_done <= 1, "low: {low_done} while high had {high_done} (the focused window goes first)");
+    }
+
+    #[test]
+    fn round_robin_no_starvation() {
+        let pool = RenderPool::new(pages_pdf(50), 1, RenderConfig::default());
+        let (a, b) = (pool.register_client().unwrap(), pool.register_client().unwrap());
+        *lock(&pool.shared.slow_page) = Some((49, std::time::Duration::from_millis(200)));
+        pool.set_queue_for(a, vec![page_req(49, 0)]);
+        let t = std::time::Instant::now();
+        while !lock(&pool.shared.busy).iter().flatten().any(|(r, _)| r.page == 49) {
+            assert!(t.elapsed() < std::time::Duration::from_secs(8));
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        pool.set_queue_for(a, (0..40).map(|p| page_req(p, 1)).collect());
+        pool.set_queue_for(b, (0..40).map(|p| page_req(p, 2).with_scale(0.25)).collect());
+        let (mut na, mut nb, mut total) = (0, 0, 0);
+        let t = std::time::Instant::now();
+        while total < 10 && t.elapsed() < std::time::Duration::from_secs(10) {
+            for (c, n) in [(a, &mut na), (b, &mut nb)] {
+                if let Some(p) = pool.try_recv_for(c)
+                    && p.request.tag != 0
+                {
+                    *n += 1;
+                    total += 1;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(na >= 4 && nb >= 4, "a: {na}, b: {nb}");
+    }
+
+    #[test]
+    fn watchdog_still_reports_stuck_pages_per_client() {
+        let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
+        pool.set_stuck_after(std::time::Duration::from_millis(500));
+        *lock(&pool.shared.slow_page) = Some((0, std::time::Duration::from_secs(2)));
+        let (a, b) = (pool.register_client().unwrap(), pool.register_client().unwrap());
+        pool.set_queue_for(b, vec![page_req(0, 5)]);
+        let got = collect(&pool, b, 1);
+        assert!(got.first().is_some_and(|p| p.error.as_deref().is_some_and(|e| e.contains("took longer"))), "{got:?}");
+        assert!(pool.try_recv_for(a).is_none(), "the other client hears nothing");
+        std::thread::sleep(std::time::Duration::from_millis(2200));
+    }
+
+    #[test]
+    fn inline_mode_two_clients() {
+        let pool = RenderPool::new_inline(Arc::new(ONE_PAGE_TWICE.to_vec()), RenderConfig::default());
+        let (a, b) = (pool.register_client().unwrap(), pool.register_client().unwrap());
+        pool.set_queue_for(a, vec![page_req(0, 1)]);
+        pool.set_queue_for(b, vec![page_req(1, 2)]);
+        assert_eq!(pool.try_recv_for(b).map(|p| (p.request.page, p.request.tag)), Some((1, 2)));
+        assert!(pool.try_recv_for(b).is_none());
+        assert_eq!(pool.try_recv_for(a).map(|p| (p.request.page, p.request.tag)), Some((0, 1)));
+    }
+
+    #[test]
+    fn unknown_client_is_noop() {
+        let pool = RenderPool::new(Arc::new(ONE_PAGE.to_vec()), 1, RenderConfig::default());
+        let ghost = ClientId(999);
+        pool.set_queue_for(ghost, vec![page_req(0, 1)]);
+        pool.set_priority(ghost, 3);
+        pool.unregister_client(ghost);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(pool.try_recv_for(ghost).is_none());
+        assert!(pool.try_recv().is_none(), "nothing leaked into the default client");
+    }
+
+    #[test]
+    fn client_cap() {
+        let pool = RenderPool::new_inline(Arc::new(ONE_PAGE.to_vec()), RenderConfig::default());
+        let ids: Vec<_> = (0..MAX_CLIENTS).map(|_| pool.register_client()).collect();
+        assert!(ids.iter().all(Option::is_some));
+        assert!(pool.register_client().is_none(), "the 65th client");
+        pool.unregister_client(ids[0].unwrap());
+        assert!(pool.register_client().is_some(), "a freed slot can be used again");
+    }
+
+    #[test]
+    fn long_queues_are_capped() {
+        let pool = RenderPool::new_inline(Arc::new(ONE_PAGE.to_vec()), RenderConfig::default());
+        let a = pool.register_client().unwrap();
+        pool.set_queue_for(a, (0..MAX_QUEUE_PER_CLIENT + 10).map(|p| page_req(0, p as u64)).collect());
+        assert_eq!(lock(&pool.shared.queue).iter().find(|q| q.id == a).map(|q| q.reqs.len()), Some(MAX_QUEUE_PER_CLIENT));
+    }
+
+    #[test]
+    fn legacy_set_queue_try_recv_unchanged() {
+        let pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
+        pool.set_queue(vec![page_req(1, 3), page_req(0, 4)]);
+        let mut got = Vec::new();
+        let t = std::time::Instant::now();
+        while got.len() < 2 && t.elapsed() < std::time::Duration::from_secs(8) {
+            match pool.try_recv() {
+                Some(p) => got.push((p.request.page, p.request.tag)),
+                None => std::thread::sleep(std::time::Duration::from_millis(2)),
+            }
+        }
+        assert_eq!(got, vec![(1, 3), (0, 4)], "most urgent first");
     }
 
     #[test]

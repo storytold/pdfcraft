@@ -225,6 +225,8 @@ pub struct DocView {
     /// Clicks in the current run on the text layer: two select a word, three the line, four the page.
     clicks: u32,
     last_queue: Vec<RenderRequest>,
+    /// This view's own queue and inbox in its document's render pool (registered on first use).
+    pub(crate) render_client: Option<(u64, pdfcraft_render::ClientId)>,
     viewport_w: f32,
     viewport_h: f32,
     page_count: usize,
@@ -367,6 +369,7 @@ impl DocView {
             selection: None,
             clicks: 0,
             last_queue: Vec::new(),
+            render_client: None,
             viewport_w: 800.0,
             viewport_h: 600.0,
             page_count: info.pages.len(),
@@ -843,14 +846,42 @@ impl DocView {
         }
     }
 
+    /// This view's client in `pool`; the default client when the pool has no room for another.
+    pub(crate) fn client(&mut self, pool: &RenderPool) -> pdfcraft_render::ClientId {
+        match self.render_client {
+            Some((pool_id, client)) if pool_id == pool.pool_id() => client,
+            // A document gets a new pool after edits: ask it for a client of its own.
+            _ => {
+                let client = pool.register_client().unwrap_or_default();
+                self.render_client = Some((pool.pool_id(), client));
+                client
+            }
+        }
+    }
+
+    fn set_render_queue(&mut self, pool: &RenderPool, queue: Vec<RenderRequest>) {
+        let client = self.client(pool);
+        pool.set_queue_for(client, queue);
+    }
+
+    /// Give back the view's place in its pool (the view is going away).
+    pub(crate) fn release_render_client(&mut self, pool: &RenderPool) {
+        if let Some((pool_id, client)) = self.render_client.take()
+            && pool_id == pool.pool_id()
+        {
+            pool.unregister_client(client);
+        }
+    }
+
     /// Pull finished renders into textures.
     pub fn receive(&mut self, ctx: &egui::Context, pool: &RenderPool) {
         let mut got = false;
         // Inline (single-threaded, e.g. web) rendering happens inside try_recv: one page per frame.
         let budget = if pool.is_inline() { 1 } else { usize::MAX };
+        let client = self.client(pool);
         let mut n = 0;
         while n < budget
-            && let Some(r) = pool.try_recv()
+            && let Some(r) = pool.try_recv_for(client)
         {
             n += 1;
             got = true;
@@ -1943,7 +1974,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
     }
     if queue != view.last_queue {
-        doc.renderer.set_queue(queue.clone());
+        view.set_render_queue(&doc.renderer, queue.clone());
         view.last_queue = queue;
     }
     if !view.last_queue.is_empty() {
@@ -2891,7 +2922,7 @@ fn organize_grid(
         .map(|page| RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: s, tag: THUMB_TAG })
         .collect();
     if queue != view.last_queue {
-        pool.set_queue(queue.clone());
+        pool.set_queue_for(view.client(pool), queue.clone());
         view.last_queue = queue;
     }
     if let Some(p) = open_page {
