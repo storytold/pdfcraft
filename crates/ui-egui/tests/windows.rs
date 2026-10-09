@@ -864,3 +864,85 @@ fn a_tab_closed_meanwhile_is_skipped_by_the_run() {
     assert!(h.state().close_request.is_none(), "c.pdf was skipped, nothing is left to ask");
     assert_eq!(h.state().views.len(), 1);
 }
+
+#[test]
+fn quitting_with_the_question_answered_in_a_child_window_remembers_every_window() {
+    let (a, b) = two_files("quit-in-child");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
+        let (a, b) = (a.clone(), b.clone());
+        move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.reopen_last_session = true;
+            app.open_path(&a);
+            app.open_path(&b);
+            app
+        }
+    });
+    h.run_steps(3);
+    h.state_mut().active = Some(1);
+    assert!(h.state_mut().execute("window.move_tab_new"));
+    h.run_steps(3);
+    let child = h.state().window_ids()[1];
+    // Only the child's document has unsaved changes.
+    rotate_in(&mut h, child);
+    let ctx = h.ctx.clone();
+    h.state_mut().request_quit(&ctx);
+    root_close_requested(&mut h);
+    h.run_steps(1);
+    close_delivered(&mut h);
+    assert!(h.state_mut().with_window(child, |a| a.close_request).unwrap() == Some(pdfcraft_ui_egui::CloseRequest::Quit), "asked in the child");
+    h.state_mut().with_window(child, |a| a.resolve_close(&ctx, Some(false)));
+    h.run_steps(3);
+    let value: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    let paths = |v: &serde_json::Value| v.as_array().map(|f| f.iter().filter_map(|f| f["path"].as_str().map(str::to_owned)).collect::<Vec<_>>());
+    let main_files = paths(&value["last_session"]["files"]).unwrap_or_default();
+    let child_files = paths(&value["last_session"]["windows"][0]["files"]).unwrap_or_default();
+    assert!(main_files.iter().any(|p| p.ends_with("quit-in-child-a.pdf")), "{value}");
+    assert!(child_files.iter().any(|p| p.ends_with("quit-in-child-b.pdf")), "the child's file is remembered too: {value}");
+    for f in [a, b] {
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&f).parent().unwrap());
+    }
+}
+
+fn combine_names(app: &PdfCraftApp) -> Vec<String> {
+    app.combine_draft.iter().map(|f| f.name.clone()).collect()
+}
+
+fn fixture_pdf() -> Vec<u8> {
+    include_bytes!("data/form.pdf").to_vec()
+}
+
+#[test]
+fn the_combine_tab_of_the_main_window_survives_its_promotion() {
+    let (mut h, _child) = root_and_child();
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("x.pdf".into(), fixture_pdf()), ("y.pdf".into(), fixture_pdf())]);
+    h.run_steps(2);
+    assert!(h.state().combine_tab.open);
+    root_close_requested(&mut h);
+    h.run_steps(1);
+    close_delivered(&mut h);
+    h.run_steps(4);
+    assert_eq!(h.state().window_count(), 1);
+    assert!(h.state().combine_tab.open, "the tab came along");
+    assert_eq!(combine_names(h.state()), ["x.pdf", "y.pdf"]);
+    assert_windows_ok(h.state());
+}
+
+#[test]
+fn promoting_a_window_with_its_own_combine_list_adds_the_old_files_to_it() {
+    let (mut h, child) = root_and_child();
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("x.pdf".into(), fixture_pdf())]);
+    h.state_mut().with_window(child, |a| a.use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("z.pdf".into(), fixture_pdf())]));
+    h.run_steps(2);
+    root_close_requested(&mut h);
+    h.run_steps(1);
+    close_delivered(&mut h);
+    h.run_steps(4);
+    assert_eq!(h.state().window_count(), 1);
+    assert_eq!(combine_names(h.state()), ["z.pdf", "x.pdf"]);
+    let mut ids: Vec<u64> = h.state().combine_draft.iter().map(|f| f.id).collect();
+    ids.dedup();
+    assert_eq!(ids.len(), 2, "every row keeps a row id of its own");
+    assert_windows_ok(h.state());
+}

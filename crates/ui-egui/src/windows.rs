@@ -584,6 +584,7 @@ impl PdfCraftApp {
         let rect = slot.last_rect.or(slot.geometry);
         let mut state = slot.state;
         self.swap_window(&mut state);
+        self.carry_over_combine(&mut state);
         self.window_had_focus.remove(&id);
         self.focused_window = WindowId::ROOT;
         if let (Some(ctx), Some(rect)) = (self.ctx.clone(), rect.filter(|r| r.is_finite() && r.width() > 100.0 && r.height() > 100.0)) {
@@ -593,6 +594,26 @@ impl PdfCraftApp {
                 ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::OuterPosition(rect.min));
             }
             ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::InnerSize(rect.size()));
+        }
+    }
+
+    /// The Combine files list of the old main window (`old`, swapped out by the promotion) is
+    /// work the user has not finished: it moves to the window that took over. When that one has
+    /// a list of its own, the old files are added to the end of it.
+    fn carry_over_combine(&mut self, old: &mut WindowState) {
+        if !old.combine_tab.open && old.combine_draft.is_empty() {
+            return;
+        }
+        if !self.combine_tab.open && self.combine_draft.is_empty() {
+            std::mem::swap(&mut self.combine_tab, &mut old.combine_tab);
+            std::mem::swap(&mut self.combine_draft, &mut old.combine_draft);
+            return;
+        }
+        self.combine_tab.open = true;
+        for mut f in old.combine_draft.drain(..) {
+            f.id = self.combine_tab.next_id;
+            self.combine_tab.next_id = self.combine_tab.next_id.wrapping_add(1);
+            self.combine_draft.push(f);
         }
     }
 

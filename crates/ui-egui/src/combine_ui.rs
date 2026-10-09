@@ -144,7 +144,7 @@ pub struct CombineTab {
     redo: Vec<Snapshot>,
     /// The list as it was when a Pages field took the keyboard, recorded on its first change.
     range_edit: Option<Snapshot>,
-    next_id: u64,
+    pub(crate) next_id: u64,
     /// Bumped to make the table take its column widths afresh (columns moved or reset, or the
     /// window resized while the widths follow it).
     layout: u64,
