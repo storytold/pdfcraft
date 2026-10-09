@@ -1193,7 +1193,7 @@
 	Searchable Image (Exact)	Imagen con búsqueda (exacta)
 	Adds invisible text over each word; the page image is not changed	Añade texto invisible sobre cada palabra; la imagen de la página no cambia
 	Downsample to	Reducir resolución a
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	El reconocimiento de texto no está instalado: faltan sus modelos (ejecuta `cargo xtask models` o define PRINTCRAFT_MODELS).
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	El reconocimiento de texto no está instalado: faltan sus archivos de modelo. Reinstala PdfCraft o define PDFCRAFT_MODELS con la carpeta que los contiene.
 	Settings	Ajustes
 	Optional	Opcional
 	Planned · {m}	Previsto · {m}
@@ -1769,7 +1769,7 @@
 	there are no pages to print	no hay páginas que imprimir
 	the document has no tags	el documento no tiene etiquetas
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	los modelos de reconocimiento de texto no están instalados (ejecuta `cargo xtask models` o define PRINTCRAFT_MODELS)
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	los modelos de reconocimiento de texto no están instalados (reinstala PdfCraft o define PDFCRAFT_MODELS con la carpeta que los contiene)
 	the image is empty	la imagen está vacía
 	this file isn't XFDF, FDF, XML or text form data	este archivo no contiene datos de formulario XFDF, FDF, XML ni de texto
 	nothing in the file matches this document	nada en el archivo coincide con este documento
@@ -1964,7 +1964,6 @@
 	Open this web page?	¿Abrir esta página web?
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Los scripts se ejecutan en un entorno aislado, sin acceso a archivos ni a la red. Un script que pida abrir una página web necesita antes tu permiso. Con JavaScript desactivado, las funciones estándar de formato, validación y cálculo de Acrobat siguen funcionando.
 	Sign yourself	Firmar tú mismo
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	El reconocimiento de texto no está instalado: faltan sus modelos (ejecuta `cargo xtask models` o define PDFCRAFT_MODELS).
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	Se usa al abrir archivos PDF. Un modo de inicio o de control explícito tiene prioridad durante la sesión.
 	Write this email?	¿Escribir este correo?
 	{who} in this document wants to open this address in your browser:	{who} de este documento quiere abrir esta dirección en tu navegador:

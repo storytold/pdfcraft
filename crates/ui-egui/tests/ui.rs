@@ -72,6 +72,7 @@ fn home_removes_one_recent_file_or_clears_them_all() {
     // Tall enough that the Recent list is on screen without scrolling.
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         for name in ["first.pdf", "second.pdf", "third.pdf"] {
             app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0 });
         }
@@ -176,6 +177,7 @@ fn narrow_tab_strips_accept_vertical_wheel_scrolling() {
     for width in [600.0, 900.0] {
         let mut h = Harness::builder().with_size(egui::vec2(width, 700.0)).build_eframe(|_cc| {
             let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
             for i in 0..12 {
                 app.open_bytes(&format!("narrow-{i:02}.pdf"), None, FIXTURE.to_vec()).unwrap();
             }

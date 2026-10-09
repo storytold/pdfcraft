@@ -21,7 +21,7 @@ use crate::cms::SignedData;
 use crate::der::Time;
 use crate::keys::DigestAlg;
 use crate::pkcs12::DigitalId;
-use crate::x509::{Certificate, build_chain};
+use crate::x509::{Certificate, build_chain, build_chain_noted};
 
 #[cfg(test)]
 #[path = "pdf_discovery_tests.rs"]
@@ -56,7 +56,7 @@ struct TimestampCandidates {
 const DISCOVERY_CACHE_LIMIT: usize = 4096;
 
 fn is_document_timestamp(object: &Object) -> bool {
-    object.as_dict().is_some_and(|d| d.name(b"Type") == Some(b"Sig") && d.name(b"SubFilter") == Some(b"ETSI.RFC3161") && d.contains(b"ByteRange"))
+    object.as_dict().is_some_and(|d| is_doc_timestamp(d) && d.contains(b"ByteRange"))
 }
 
 /// Only dictionary/null edits have a local effect on candidate membership. Changes to an
@@ -473,7 +473,23 @@ fn unhex(s: &[u8]) -> Option<Vec<u8>> {
     digits.chunks(2).map(|p| Some(val(p[0])? << 4 | p.get(1).map_or(Some(0), |c| val(*c))?)).collect()
 }
 
+/// A document timestamp dictionary: `/SubFilter /ETSI.RFC3161`, typed `/DocTimeStamp`
+/// (ISO 32000-2 §12.8.5) or, as older writers have it, `/Sig`.
+fn is_doc_timestamp(d: &Dict) -> bool {
+    d.name(b"SubFilter") == Some(b"ETSI.RFC3161") && matches!(d.name(b"Type"), Some(b"DocTimeStamp" | b"Sig"))
+}
+
 fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, info: &mut SignatureInfo, cache: &DigestCache) {
+    // A document timestamp can also be the value of a signature field (Documenso writes
+    // `Timestamp_1` that way). Its `/Contents` is a bare RFC 3161 token, not a signature over the
+    // document, so it must not be read as one.
+    if is_doc_timestamp(v) {
+        info.sub_filter = Some("ETSI.RFC3161".to_string());
+        info.doc_timestamp = true;
+        info.timestamp = true;
+        validate_doc_timestamp(doc, bytes, v, info, cache, trust);
+        return;
+    }
     info.date = text(doc, v, b"M");
     info.reason = text(doc, v, b"Reason");
     info.location = text(doc, v, b"Location");
@@ -537,8 +553,9 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
                     // own claimed time, as without a timestamp.
                     let mut pool = crate::timestamp::token_certs(raw);
                     pool.extend(trust.certs.iter().cloned());
-                    let trusted_tsa =
-                        t.signer_certificate().is_some_and(|c| c.valid_at(t.gen_time) && build_chain(&c, &pool).iter().any(|x| trust.trusts(x)));
+                    let trusted_tsa = t
+                        .signer_certificate()
+                        .is_some_and(|c| c.valid_at(t.gen_time) && build_chain(&c, &pool, Some(t.gen_time)).iter().any(|x| trust.trusts(x)));
                     if trusted_tsa {
                         info.timestamp_time = Some(t.gen_time);
                     } else {
@@ -577,13 +594,20 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
     info.signing_time = s.signing_time.or_else(|| info.date.as_deref().and_then(Time::from_pdf));
     let mut pool = sd.certificates.clone();
     pool.extend(trust.certs.iter().cloned());
-    let chain: Vec<Certificate> = build_chain(&cert, &pool).into_iter().cloned().collect();
+    // The time the chain is judged at: trusted timestamp, else the signer's claimed time.
+    let at = info.timestamp_time.or(info.signing_time);
+    let (chain, refused) = build_chain_noted(&cert, &pool, at);
+    let chain: Vec<Certificate> = chain.into_iter().cloned().collect();
     let trusted = chain.iter().any(|c| trust.trusts(c));
     info.chain = chain;
     info.certificate = Some(cert.clone());
+    if let Some(why) = refused
+        && !trusted
+    {
+        info.details.push(why);
+    }
     // Revocation evidence embedded in the document security store, if any. A verified
     // revocation is final: later blocks must not soften the verdict.
-    let at = info.timestamp_time.or(info.signing_time);
     let signer = info.chain.first().cloned();
     let revoked = check_dss_revocation(doc, signer.as_ref(), &at, info);
     // Changes after signing.
@@ -774,10 +798,15 @@ fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut Sig
         // ordinary signature from an unknown signer.
         let mut pool = crate::timestamp::token_certs(&contents);
         pool.extend(trust.certs.iter().cloned());
-        let trusted_tsa = token.signer_certificate().map(|c| build_chain(&c, &pool).iter().any(|x| trust.trusts(x))).unwrap_or(false);
-        if trusted_tsa {
+        // A trusted authority whose certificate was not valid at the time it stamped proves
+        // nothing either (its detail is already recorded above): never upgrade that to Valid.
+        let in_validity = token.signer_certificate().is_some_and(|c| c.valid_at(token.gen_time));
+        let trusted_tsa = token.signer_certificate().is_some_and(|c| build_chain(&c, &pool, Some(token.gen_time)).iter().any(|x| trust.trusts(x)));
+        if trusted_tsa && in_validity {
             info.status = Status::Valid;
             info.details.push("The timestamp token is valid and its authority is trusted.".into());
+        } else if trusted_tsa {
+            info.status = Status::Unknown;
         } else {
             info.status = Status::Unknown;
             info.details.push("The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.".into());
@@ -814,7 +843,7 @@ pub(crate) fn signature_contents(doc: &Document) -> Vec<Vec<u8>> {
     }
     for (r, o) in doc.scan_objects() {
         let Some(d) = o.as_dict() else { continue };
-        if d.name(b"Type") == Some(b"Sig") && d.name(b"SubFilter") == Some(b"ETSI.RFC3161") {
+        if is_doc_timestamp(d) {
             add(d, Some(r));
         }
     }
@@ -1392,7 +1421,7 @@ pub fn timestamp_document(doc: &Document, tsa: &dyn crate::timestamp::TimestampA
     }
     let mut doc = doc.clone();
     let mut v = Dict::new();
-    v.set(b"Type".to_vec(), Object::name("Sig"));
+    v.set(b"Type".to_vec(), Object::name("DocTimeStamp"));
     v.set(b"Filter".to_vec(), Object::name("Adobe.PPKLite"));
     v.set(b"SubFilter".to_vec(), Object::name("ETSI.RFC3161"));
     v.set(b"ByteRange".to_vec(), Object::Array([0].iter().chain(BR_MARK.iter()).map(|n| Object::Int(*n)).collect()));

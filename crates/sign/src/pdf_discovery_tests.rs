@@ -113,7 +113,9 @@ fn field_membership_is_refreshed_even_when_discovery_is_cached() {
     let listed = list_cached(&doc, doc.bytes(), &TrustStore::default(), &cache);
     assert_eq!(listed.len(), 1, "field values must not be duplicated as standalone timestamps");
     assert_eq!(listed[0].field, "Approval");
-    assert!(!listed[0].doc_timestamp);
+    // A field whose value is a document timestamp (Documenso writes `Timestamp_1` so) is still
+    // checked as a timestamp: its /Contents is a bare RFC 3161 token, not a signature.
+    assert!(listed[0].doc_timestamp);
     doc.update_dict(doc.root().unwrap(), |d| {
         d.remove(b"AcroForm");
     })

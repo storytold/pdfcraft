@@ -251,6 +251,7 @@ fn recent_file(name: &str) -> pdfcraft_ui_egui::RecentFile {
 fn clear_recent_files_at_the_foot_of_open_recent_empties_the_list() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
         app.recent.extend([recent_file("first.pdf"), recent_file("second.pdf")]);
         app

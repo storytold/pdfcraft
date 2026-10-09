@@ -1154,3 +1154,108 @@ fn signing_with_windows_store_identities() {
         assert!(out.status.success(), "test certificate remains: {thumbprint}");
     }
 }
+
+/// Documenso-style: an AcroForm signature field `Timestamp_1` whose `/V` is the document
+/// timestamp dictionary (`/Type /DocTimeStamp`, `/SubFilter /ETSI.RFC3161`).
+fn fixture_timestamped_in_a_field(tsa: &TestTsa) -> Vec<u8> {
+    let mut value_num = 0;
+    let base = edit_after(&fixture(), |doc| {
+        let field = doc.add(Object::Null);
+        // `timestamp_document` adds its dictionary next.
+        value_num = field.num + 1;
+        let at = |num| Object::Ref(pdfcraft_cos::ObjRef { num, generation: 0 });
+        let mut widget = pdfcraft_cos::Dict::new();
+        for (k, v) in [
+            ("Type", Object::name("Annot")),
+            ("Subtype", Object::name("Widget")),
+            ("FT", Object::name("Sig")),
+            ("T", Object::String(PdfString::text("Timestamp_1"))),
+            ("Rect", Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(0), Object::Int(0)])),
+            ("P", at(3)),
+            ("F", Object::Int(132)),
+            ("V", at(value_num)),
+        ] {
+            widget.set(k.as_bytes().to_vec(), v);
+        }
+        doc.set(field, Object::Dict(widget));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            if let Some(Object::Dict(form)) = c.get_mut(b"AcroForm")
+                && let Some(Object::Array(fields)) = form.get_mut(b"Fields")
+            {
+                fields.push(Object::Ref(field));
+            }
+        })
+        .unwrap();
+    });
+    let stamped = pdfcraft_sign::timestamp_document(&open(&base), tsa, "D:20261006120000Z").unwrap();
+    let held = open(&stamped).get(pdfcraft_cos::ObjRef { num: value_num, generation: 0 });
+    assert_eq!(held.as_dict().and_then(|d| d.name(b"Type")), Some(&b"DocTimeStamp"[..]), "the field holds the timestamp");
+    stamped
+}
+
+#[test]
+fn a_document_timestamp_held_by_a_signature_field_is_checked_as_a_timestamp() {
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let stamped = fixture_timestamped_in_a_field(&tsa);
+    let trust = TrustStore { certs: vec![tsa.id.certificate.clone()] };
+    let all = signatures(&open(&stamped), &stamped, &trust);
+    let stamps: Vec<_> = all.iter().filter(|s| s.signed).collect();
+    assert_eq!(stamps.len(), 1, "listed once, not as field and as standalone: {:?}", all.iter().map(|s| &s.field).collect::<Vec<_>>());
+    let s = stamps[0];
+    assert_eq!(s.field, "Timestamp_1");
+    assert!(s.doc_timestamp && s.timestamp);
+    assert_eq!(s.sub_filter.as_deref(), Some("ETSI.RFC3161"));
+    assert_eq!(s.timestamp_time, Some(tsa.time));
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    // Without trusting the TSA the stamp is intact but unknown, never "altered".
+    let s = signatures(&open(&stamped), &stamped, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
+    assert!(!s.details.iter().any(|d| d.contains("altered or corrupted")), "{:?}", s.details);
+    // A changed byte in what it covers is still caught, and reported as the timestamp's.
+    let mut tampered = stamped.clone();
+    let i = tampered.windows(13).position(|w| w == b"Contract text").unwrap();
+    tampered[i] = b'K';
+    let s = signatures(&open(&tampered), &tampered, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Invalid);
+    assert!(s.details.iter().any(|d| d.contains("since the timestamp was applied")), "{:?}", s.details);
+}
+
+/// A trusted timestamp authority whose certificate was not yet valid when it stamped proves
+/// nothing: the field timestamp stays Unknown, never Valid.
+#[test]
+fn a_field_timestamp_from_a_trusted_tsa_outside_its_validity_is_not_valid() {
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        // Before the TSA certificate's validity (it starts in October 2026).
+        time: Time { year: 2020, month: 1, day: 1, hour: 0, minute: 0, second: 0 },
+    };
+    let stamped = fixture_timestamped_in_a_field(&tsa);
+    let trust = TrustStore { certs: vec![tsa.id.certificate.clone()] };
+    let s = signatures(&open(&stamped), &stamped, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert!(s.doc_timestamp);
+    assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.contains("was not valid at the time of timestamping")), "{:?}", s.details);
+    assert!(!s.details.iter().any(|d| d.contains("its authority is trusted")), "{:?}", s.details);
+}
+
+#[test]
+fn a_standalone_timestamp_typed_sig_by_an_older_writer_is_still_a_timestamp() {
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let stamped = pdfcraft_sign::timestamp_document(&open(&fixture()), &tsa, "D:20261006120000Z").unwrap();
+    let s = signatures(&open(&stamped), &stamped, &TrustStore::default()).into_iter().find(|s| s.doc_timestamp).unwrap();
+    assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
+    // The same bytes with `/Type /Sig` in place of `/Type /DocTimeStamp` (padded to the same
+    // length): the imprint no longer matches, but it is still found as a timestamp.
+    let mut old = stamped.clone();
+    let at = old.windows(19).position(|w| w == b"/Type /DocTimeStamp").unwrap();
+    old[at..at + 19].copy_from_slice(b"/Type /Sig         ");
+    let s = signatures(&open(&old), &old, &TrustStore::default()).into_iter().find(|s| s.doc_timestamp).expect("found as a timestamp");
+    assert_eq!(s.status, Status::Invalid);
+}
