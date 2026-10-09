@@ -111,6 +111,30 @@ fn a_control_file_of_your_own_still_works() {
     assert!(received.contains(TOKEN) && received.contains("ui.state"), "{received}");
 }
 
+/// Checking the owner must not depend on anything but the control file: not on being able to
+/// write the temp folder (a sandbox, a read-only container, an odd `TMPDIR`).
+#[cfg(unix)]
+#[test]
+fn a_control_file_of_your_own_works_without_a_writable_temp_folder() {
+    let dir = scratch("no-tmp");
+    let spy = spy();
+    let control = dir.join("pc.json");
+    write_private(&control, &control_json(spy.port));
+    let missing = dir.join("no-such-temp-folder");
+    let o = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli"))
+        .env("TMPDIR", &missing)
+        .arg("ui")
+        .arg("--control")
+        .arg(&control)
+        .arg("state")
+        .output()
+        .unwrap();
+    let received = spy.received();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(received.contains(TOKEN) && received.contains("ui.state"), "{received}");
+    assert!(!missing.exists(), "the CLI created the temp folder");
+}
+
 #[test]
 fn a_symlinked_control_file_is_refused_before_connecting() {
     let dir = scratch("symlink");

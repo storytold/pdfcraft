@@ -692,7 +692,7 @@ fn read_control_file(file: &str) -> Result<serde_json::Value, String> {
         if (opened.dev(), opened.ino()) != (at_path.dev(), at_path.ino()) {
             return Err(format!("{file}: was replaced while being opened. {CONTROL_FILE_ADVICE}"));
         }
-        if let Some(problem) = control_file_problem(opened.uid(), opened.mode(), current_uid()?) {
+        if let Some(problem) = control_file_problem(opened.uid(), opened.mode(), current_uid()) {
             return Err(format!("{file}: {problem}. {CONTROL_FILE_ADVICE}"));
         }
     }
@@ -714,31 +714,12 @@ fn control_file_problem(owner: u32, mode: u32, me: u32) -> Option<String> {
     (permissions & 0o077 != 0).then(|| format!("other users have access to it (mode {permissions:o}; the app writes it with mode 600)"))
 }
 
-/// The effective user id, which owns the files this process creates. std has no `geteuid`, this
-/// crate forbids `unsafe`, and no crate in its dependencies offers a safe one, so create a file,
-/// read its owner from the open handle and remove it.
+/// The effective user id: the owner of the files this process creates, and so of a control file
+/// the app wrote for this user. std has no `geteuid` and this crate forbids `unsafe`; rustix's is
+/// safe and can't fail.
 #[cfg(unix)]
-fn current_uid() -> Result<u32, String> {
-    use std::hash::{BuildHasher as _, Hasher as _};
-    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-    let dir = std::env::temp_dir();
-    let failed = |e: &dyn std::fmt::Display| format!("can't tell which user you are (needed to check the control file): {}: {e}", dir.display());
-    for _ in 0..8 {
-        // Each `RandomState` is keyed differently, so a name taken by someone else isn't retried.
-        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-        h.write_u32(std::process::id());
-        let path = dir.join(format!(".pdfcraft-cli-uid-{:016x}", h.finish()));
-        match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path) {
-            Ok(f) => {
-                let owner = f.metadata().map(|m| m.uid());
-                let _ = std::fs::remove_file(&path);
-                return owner.map_err(|e| failed(&e));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(failed(&e)),
-        }
-    }
-    Err(failed(&"no free file name"))
+fn current_uid() -> u32 {
+    rustix::process::geteuid().as_raw()
 }
 
 #[cfg(test)]
