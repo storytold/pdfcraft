@@ -7831,7 +7831,7 @@ status = "shipped"
 commands = ["print.dialog"]
 tools = ["printers", "doc_print"]
 evidence = ["crates/print/src/tests.rs::spooler_arguments_and_printer_list"]
-notes = "CUPS printers via lpstat; Save as PDF; Windows spooler pending"
+notes = "CUPS printers via lpstat; Windows printers via WMI, printed as 200 dpi rasters through PrintDocument (printer list, job framing and options tested; the PowerShell job itself only on a real Windows machine); Save as PDF"
 
 [[feature]]
 id = "print.copies-collate"

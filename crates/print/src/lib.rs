@@ -13,7 +13,7 @@
 //!   with stamps, or form fields only; annotations print only with their Print flag).
 //!
 //! The sheets are written as a new, unencrypted, garbage-collected PDF; [`spool`] hands it to
-//! the system's print spooler (CUPS on macOS and Linux).
+//! the system's print spooler (CUPS on macOS and Linux, `PrintDocument` on Windows).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

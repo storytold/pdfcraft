@@ -359,3 +359,56 @@ fn the_spoolers_reply_drops_the_file_count_of_a_job_sent_on_stdin() {
     );
     assert_eq!(spool::job_message(b""), "");
 }
+
+#[test]
+fn windows_printer_list_and_job_environment() {
+    let out = "True\tOffice Laser\r\nFalse\tMicrosoft Print to PDF\r\nFalse\t\r\nnoise without a tab\r\n";
+    assert_eq!(
+        spool::parse_win_printers(out),
+        [spool::Printer { name: "Office Laser".into(), default: true }, spool::Printer { name: "Microsoft Print to PDF".into(), default: false }]
+    );
+    assert!(spool::parse_win_printers("").is_empty());
+    let job =
+        Job { printer: Some("Office Laser".into()), copies: 0, collate: false, duplex: Duplex::ShortEdge, grayscale: true, title: "memo.pdf".into() };
+    let env = spool::win_job_env(&job);
+    let get = |k: &str| env.iter().find(|(n, _)| *n == k).map(|(_, v)| v.as_str());
+    assert_eq!(get("PDFCRAFT_PRINTER"), Some("Office Laser"));
+    assert_eq!(get("PDFCRAFT_COPIES"), Some("1"), "clamped like lp's -n");
+    assert_eq!((get("PDFCRAFT_COLLATE"), get("PDFCRAFT_DUPLEX"), get("PDFCRAFT_GRAY")), (Some("0"), Some("short"), Some("1")));
+    assert_eq!(get("PDFCRAFT_TITLE"), Some("memo.pdf"));
+    assert_eq!(get("PDFCRAFT_PRINTER").map(str::is_empty), Some(false));
+    assert_eq!(spool::win_job_env(&Job::default()).iter().find(|(n, _)| *n == "PDFCRAFT_PRINTER").map(|(_, v)| v.as_str()), Some(""));
+}
+
+#[test]
+fn powershell_encoded_command_is_utf16le_base64() {
+    assert_eq!(spool::encode_command("A"), "QQA=");
+    assert_eq!(spool::encode_command("Hi"), "SABpAA==");
+    assert_eq!(spool::encode_command("é€"), "6QCsIA==");
+    assert_eq!(spool::encode_command(""), "");
+}
+
+#[test]
+fn windows_print_stream_carries_every_sheet_as_bgra() {
+    let doc = fixture(3);
+    let pdf = impose(&doc, &settings(vec![0, 1, 2], Layout::Size(SizeMode::Fit))).unwrap();
+    let mut out = Vec::new();
+    assert_eq!(spool::write_frames(&pdf, &mut out).unwrap(), 3);
+    let int = |at: usize| i32::from_le_bytes(out[at..at + 4].try_into().unwrap());
+    assert_eq!(int(0), 3);
+    let mut at = 4;
+    let mut sizes = Vec::new();
+    for _ in 0..3 {
+        let (w, h, wh, hh) = (int(at), int(at + 4), int(at + 8), int(at + 12));
+        sizes.push((wh, hh));
+        assert_eq!((wh, hh), ((w + 1) / 2, (h + 1) / 2), "200 dpi pixels to 1/100 inch");
+        let px = &out[at + 16..at + 16 + (w * h * 4) as usize];
+        assert!(px.as_chunks::<4>().0.iter().all(|p| p[3] == 255), "opaque");
+        assert!(px.as_chunks::<4>().0.iter().any(|p| p[0] < 128), "the page text is drawn");
+        at += 16 + px.len();
+    }
+    assert_eq!(at, out.len(), "nothing left over");
+    // Letter is 612 × 792 pt = 850 × 1100 hundredths of an inch; the landscape page turns the sheet.
+    assert_eq!(sizes, [(850, 1100), (850, 1100), (1100, 850)]);
+    assert!(spool::write_frames(b"not a pdf", &mut Vec::new()).is_err());
+}

@@ -12,4 +12,5 @@ workspace = true
 pdfcraft-cos = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-model = { workspace = true }
+pdfcraft-render = { workspace = true }
 thiserror = { workspace = true }

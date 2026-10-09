@@ -60,7 +60,7 @@ Read this before choosing work. The feature table above counts what exists; this
 | G Protect | 54% | Passwords, permissions, redaction, sanitize. Missing: certificate security, redaction codes |
 | H Sign | 48% | PAdES B-B signing and validation; macOS Keychain and Windows CNG certificate store signing. Missing: timestamps (B-T), LTV (DSS/OCSP/CRL), FieldMDP, smart cards, PKCS #11 |
 | C Edit | 46% | Added text and images stay editable; header/footer/watermark. Missing: robust editing of existing text and images (fonts, subsets, reflow) |
-| L Print | 36% | Acrobat-style sizing, n-up, booklet, CUPS. Missing: Windows and web printing, production options |
+| L Print | 36% | Acrobat-style sizing, n-up, booklet, CUPS, Windows spooler (printed as rasters). Missing: web printing, production options |
 | J Create | 32% | From images, text, clipboard; Word/HTML/RTF export. Missing: Office import, Excel/PowerPoint export |
 | N Misc | 27% | CLI, MCP, UI control channel, Action Wizard. Missing: AI providers, performance budgets |
 | K Optimize | 26% | Reduce File Size, Optimizer. Missing: preflight, PDF/X/UA, transparency/fonts panels |
