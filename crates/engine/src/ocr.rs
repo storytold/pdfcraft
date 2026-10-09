@@ -5,7 +5,11 @@
 //! captures what it needs, [`OcrJob::run`] works anywhere (the UI runs it on a worker thread) and
 //! [`Session::apply_ocr`] applies the result as one undoable step.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+
+mod layer;
+pub(crate) use layer::add_text;
 
 use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
 
@@ -18,7 +22,7 @@ use crate::{DocId, Edit, EditError, Session};
 pub struct OcrSettings {
     /// Resolution pages are rendered at for recognition (Acrobat's "Downsample to" choices).
     pub dpi: f32,
-    /// Language code from [`LANGUAGES`] (the models read the Latin alphabet, whatever this says).
+    /// Language code from [`LANGUAGES`]; `zh` reads Chinese and mixed English text.
     pub language: String,
     /// Leave pages that already have text alone (Acrobat reports "page contains renderable
     /// text" and skips them).
@@ -48,19 +52,27 @@ impl OcrPage {
 
 /// The recogniser, loaded once (it takes a moment) and shared.
 pub fn engine() -> Result<Arc<Ocr>, String> {
-    static OCR: Mutex<Option<Arc<Ocr>>> = Mutex::new(None);
+    engine_for("en")
+}
+
+pub fn engine_for(language: &str) -> Result<Arc<Ocr>, String> {
+    static OCR: Mutex<BTreeMap<String, Arc<Ocr>>> = Mutex::new(BTreeMap::new());
     let mut slot = OCR.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(o) = slot.as_ref() {
+    if let Some(o) = slot.get(language) {
         return Ok(o.clone());
     }
-    let o = Arc::new(Ocr::find().map_err(|e| e.to_string())?);
-    *slot = Some(o.clone());
+    let o = Arc::new(Ocr::find_for(language).map_err(|e| e.to_string())?);
+    slot.insert(language.into(), o.clone());
     Ok(o)
 }
 
 /// Whether the recognition models are installed.
 pub fn available() -> bool {
-    Models::find().is_some()
+    available_for("en")
+}
+
+pub fn available_for(language: &str) -> bool {
+    Models::find_for(language).is_some()
 }
 
 /// Everything recognition needs from a document, detached from the session.
@@ -167,7 +179,7 @@ impl Session {
         if let Some(why) = self.get(id).and_then(|d| d.read_only_reason.clone()) {
             return Err(why);
         }
-        let ocr = engine()?;
+        let ocr = engine_for(&job.settings.language)?;
         let found = job.run(&ocr, |_, _| true);
         self.apply_ocr(id, &found).map_err(|e| e.to_string())?;
         Ok(found)

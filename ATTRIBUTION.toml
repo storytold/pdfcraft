@@ -19,7 +19,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Simplified Chinese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "50ec1133889f3a3948a3901a9fa40b3499f3c549b605e55848138483946d74da"
+sha256 = "06d9fbc81f062db785298bd9f188746a69d4eb6874a09563f32bea10cd85a17f"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/zh-hant.tsv"
@@ -30,7 +30,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Traditional Chinese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "3746a7d87fb98c9f3aeb41c63ce50371c42dfebca64b67ccbb599abb36a93ba8"
+sha256 = "e57b87fdc4d24ba9d6d92335e70eea610ad60985994e419bb375e645d8a043a2"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/cs.tsv"
@@ -3130,6 +3130,32 @@ licence_sha256 = "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1c
 kind = "model"
 usage = "Scan & OCR: reads the words it finds (cargo xtask models)"
 sha256 = "e484866d4cce403175bd8d00b128feb08ab42e208de30e42cd9889d8f1735a6e"
+
+[[fetched]]
+file = "chinese-recognition.onnx"
+url = "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv4/rec/ch_PP-OCRv4_rec_mobile.onnx"
+title = "PP-OCRv4 mobile Chinese/English recognition model (ONNX)"
+author = "PaddlePaddle Authors; RapidAI contributors (ONNX conversion)"
+source = "https://github.com/RapidAI/RapidOCR/tree/v3.9.2; PaddleOCR PP-OCRv4 recognition model, converted to ONNX by RapidAI"
+licence = "Apache-2.0"
+licence_url = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v2.7.3/LICENSE"
+licence_sha256 = "ff6311c56c1b22c9209c96cc8afc16da91c24ee55a15e14ebc46fe1960dbd856"
+kind = "model"
+usage = "Offline Chinese and mixed English Scan & OCR (cargo xtask models)"
+sha256 = "48fc40f24f6d2a207a2b1091d3437eb3cc3eb6b676dc3ef9c37384005483683b"
+
+[[fetched]]
+file = "chinese-keys.txt"
+url = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v2.7.3/ppocr/utils/ppocr_keys_v1.txt"
+title = "PaddleOCR Chinese character dictionary"
+author = "PaddlePaddle Authors"
+source = "https://github.com/PaddlePaddle/PaddleOCR/blob/v2.7.3/ppocr/utils/ppocr_keys_v1.txt"
+licence = "Apache-2.0"
+licence_url = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v2.7.3/LICENSE"
+licence_sha256 = "ff6311c56c1b22c9209c96cc8afc16da91c24ee55a15e14ebc46fe1960dbd856"
+kind = "model"
+usage = "Offline Chinese and mixed English Scan & OCR (cargo xtask models)"
+sha256 = "28b2362ad4ab2dc38769aa72feb535e3a9ddb3fd2a7585a05920e6393b1dc7f7"
 
 [[build_input]]
 name = "craft-fonts"
