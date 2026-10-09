@@ -219,7 +219,7 @@ fn a_v3_self_signed_certificate_without_constraints_is_not_a_root_that_issues() 
     assert!(id.cert.is_self_signed() && !id.cert.has_basic_constraints && id.cert.version == 2);
     assert!(!id.cert.may_issue());
     let l = end_entity("Leaf", &id);
-    assert_eq!(names(&build_chain(&l.cert, &[id.cert.clone()], None)), ["Leaf"]);
+    assert_eq!(names(&build_chain(&l.cert, std::slice::from_ref(&id.cert), None)), ["Leaf"]);
 }
 
 #[test]
