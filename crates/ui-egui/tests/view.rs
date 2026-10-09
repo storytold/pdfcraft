@@ -146,6 +146,50 @@ fn single_page_layout_shows_one_page_at_a_time() {
 }
 
 #[test]
+fn two_pages_at_a_time_shows_one_spread() {
+    let mut h = harness(&[("layout", "two-page"), ("zoom", "50")]);
+    h.run_steps(4);
+    let (a, b) = (rect(&h, 0).expect("page 1"), rect(&h, 1).expect("page 2"));
+    assert!((a.min.y - b.min.y).abs() < 1.0 && b.min.x > a.max.x, "pages 1 and 2 side by side: {a:?} {b:?}");
+    assert!(rect(&h, 2).is_none(), "page 3 waits for the next spread");
+    h.key_press(Key::PageDown);
+    h.run_steps(4);
+    assert!(rect(&h, 0).is_none() && rect(&h, 1).is_none() && rect(&h, 2).is_some(), "Page Down turns the spread");
+    h.key_press(Key::PageDown);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 2, "nothing past the last spread");
+    // With a cover page, page 1 is alone and pages 2 and 3 come next.
+    h.state_mut().set_option("cover", "on").unwrap();
+    h.key_press(Key::Home);
+    h.run_steps(4);
+    assert!(rect(&h, 0).is_some() && rect(&h, 1).is_none());
+    h.key_press(Key::ArrowRight);
+    h.run_steps(4);
+    assert!(rect(&h, 0).is_none() && rect(&h, 1).is_some() && rect(&h, 2).is_some());
+}
+
+#[test]
+fn wheel_turns_a_spread_in_two_pages_at_a_time() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "two-page"), ("zoom", "50")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+    h.run_steps(30);
+    assert_eq!(h.state().views[0].current, 2, "one notch turns a spread");
+    assert!(rect(&h, 2).is_some() && rect(&h, 0).is_none());
+    h.event(wheel(MouseWheelUnit::Line, 1.0, TouchPhase::Move));
+    h.run_steps(30);
+    assert_eq!(h.state().views[0].current, 0, "and one back");
+    // Zoomed in far enough to pan, the wheel pans instead.
+    h.state_mut().set_option("zoom", "300").unwrap();
+    h.run_steps(4);
+    h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+    h.run_steps(30);
+    assert_eq!(h.state().views[0].current, 0, "zoomed-in wheel pans, it does not turn the spread");
+}
+
+#[test]
 fn single_page_wheel_pans_instead_when_zoomed_in() {
     // The zoomed-in guard: with room to pan, the wheel pans and must not turn pages.
     let mut h = harness(&[("layout", "single"), ("zoom", "200")]);
@@ -207,6 +251,10 @@ fn page_display_commands_switch_layouts() {
     assert!(h.state().views[0].cover, "the cover toggle flips");
     assert!(h.state_mut().execute("view.layout.cover"));
     assert!(!h.state().views[0].cover, "toggling twice restores");
+    h.state_mut().execute("view.layout.two_page");
+    assert_eq!(h.state().views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::TwoPage);
+    assert!(h.state_mut().execute("view.layout.cover"), "two pages at a time has a cover page too");
+    assert!(h.state().views[0].cover);
     h.state_mut().execute("view.layout.continuous");
     h.run_steps(3);
     assert_eq!(h.state().views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::Continuous);

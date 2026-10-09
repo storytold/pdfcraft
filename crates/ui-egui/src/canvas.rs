@@ -45,20 +45,34 @@ pub enum PageLayout {
     Continuous,
     TwoUp,
     Single,
+    /// Two pages side by side, a spread at a time: the wheel and Page Down turn spreads.
+    TwoPage,
 }
 
 impl PageLayout {
     /// Every page display, in the order the View menu, the rail's Page display button and
     /// Preferences list them.
-    pub const ORDER: [Self; 3] = [Self::Continuous, Self::Single, Self::TwoUp];
+    pub const ORDER: [Self; 4] = [Self::Continuous, Self::Single, Self::TwoUp, Self::TwoPage];
 
-    /// The name settings and view options use: `continuous`, `single` or `two-up`.
+    /// The name settings and view options use: `continuous`, `single`, `two-up` or `two-page`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Continuous => "continuous",
             Self::Single => "single",
             Self::TwoUp => "two-up",
+            Self::TwoPage => "two-page",
         }
+    }
+
+    /// Whether this layout shows one page or one spread at a time, turned by the wheel and
+    /// Page Down / Page Up instead of scrolled.
+    pub fn paged(self) -> bool {
+        matches!(self, Self::Single | Self::TwoPage)
+    }
+
+    /// Whether pages sit two to a row (and the cover page setting applies).
+    pub fn two_pages(self) -> bool {
+        matches!(self, Self::TwoUp | Self::TwoPage)
     }
 
     /// The layout an [`as_str`](Self::as_str) name stands for, in any case. `None` for
@@ -73,6 +87,7 @@ impl PageLayout {
             Self::Continuous => "arrow-up-down",
             Self::Single => "file-text",
             Self::TwoUp => "columns-2",
+            Self::TwoPage => "book-open",
         }
     }
 
@@ -82,6 +97,7 @@ impl PageLayout {
             Self::Continuous => "view.layout.continuous",
             Self::Single => "view.layout.single",
             Self::TwoUp => "view.layout.two_up",
+            Self::TwoPage => "view.layout.two_page",
         }
     }
 
@@ -96,6 +112,7 @@ impl PageLayout {
             Self::Continuous => "Continuous scrolling",
             Self::Single => "Single page",
             Self::TwoUp => "Two-page view",
+            Self::TwoPage => "Two pages at a time",
         }
     }
 }
@@ -193,7 +210,7 @@ pub struct DocView {
     pub highlight_fields: bool,
     pub page_input: String,
     pub notice_dismissed: bool,
-    /// Two-page view: show the first page alone, as a cover (View ▸ Page display).
+    /// Two-page layouts: show the first page alone, as a cover (View ▸ Page display).
     pub cover: bool,
     /// Previous view / Next view: pages visited before (and after, once going back).
     pub back: Vec<usize>,
@@ -668,24 +685,43 @@ impl DocView {
         self.page_input = (page + 1).to_string();
     }
 
-    /// Next page (`true`) or previous page. In two-page view this moves a whole spread: the other
-    /// page of the spread is already on screen, so stepping to it wouldn't move the view (#70).
+    /// The first page of the spread that holds `page` in the two-page layouts. Spreads are
+    /// [0, 1], [2, 3], … or, with a cover page, [0], [1, 2], [3, 4], ….
+    fn spread_start(&self, page: usize) -> usize {
+        if self.cover { page.saturating_sub((page + 1) % 2) } else { page - page % 2 }
+    }
+
+    /// The pages of the spread that holds `page`: two, or one for the cover and for a last page
+    /// left over.
+    pub fn spread(&self, page: usize) -> std::ops::Range<usize> {
+        let first = self.spread_start(page);
+        let len = if self.cover && first == 0 { 1 } else { 2 };
+        first..first.saturating_add(len).min(self.page_count).max(first.saturating_add(1))
+    }
+
+    /// Next page (`true`) or previous page. In the two-page layouts this moves a whole spread:
+    /// the other page of the spread is already on screen, so stepping to it wouldn't move the
+    /// view (#70).
     pub fn step_page(&mut self, forward: bool) {
         let c = self.current;
-        let target = match self.layout {
-            PageLayout::TwoUp => {
-                // Spreads are [0, 1], [2, 3], … or, with a cover page, [0], [1, 2], [3, 4], ….
-                let first = if self.cover { c.saturating_sub((c + 1) % 2) } else { c - c % 2 };
-                match (forward, self.cover && c == 0) {
-                    (true, true) => 1,
-                    (true, false) => first.saturating_add(2),
-                    (false, _) if self.cover && first <= 1 => 0,
-                    (false, _) => first.saturating_sub(2),
-                }
+        let target = if self.layout.two_pages() {
+            let first = self.spread_start(c);
+            match (forward, self.cover && c == 0) {
+                (true, true) => 1,
+                (true, false) => first.saturating_add(2),
+                (false, _) if self.cover && first <= 1 => 0,
+                (false, _) => first.saturating_sub(2),
             }
-            PageLayout::Continuous | PageLayout::Single if forward => c + 1,
-            PageLayout::Continuous | PageLayout::Single => c.saturating_sub(1),
+        } else if forward {
+            c + 1
+        } else {
+            c.saturating_sub(1)
         };
+        // Two pages at a time shows a spread, not a page: past the last spread, stay put rather
+        // than move to its second page.
+        if self.layout == PageLayout::TwoPage && target >= self.page_count {
+            return;
+        }
         self.go_to_page(target);
     }
 
@@ -757,7 +793,7 @@ impl DocView {
         self.goto = Some((self.current, 0.0));
     }
 
-    /// Set the cover page in two-page view. A no-op unless something changed.
+    /// Set the cover page in the two-page layouts. A no-op unless something changed.
     pub fn set_cover(&mut self, cover: bool) {
         if self.cover != cover {
             self.cover = cover;
@@ -765,16 +801,17 @@ impl DocView {
         }
     }
 
-    /// Whether the cover page setting applies: only two-page view has a cover page.
+    /// Whether the cover page setting applies: only the two-page layouts have a cover page.
     pub fn cover_applies(&self) -> bool {
-        self.layout == PageLayout::TwoUp
+        self.layout.two_pages()
     }
 
-    /// One wheel event in single-page view (the rules are in `wheel_pager`): `dy` is its
-    /// vertical delta (negative scrolls down) and `now` is egui time. With `can_turn` false
-    /// the gesture is followed but the page stays. Returns whether the page turned.
+    /// One wheel event in a paged layout, single page or two pages at a time (the rules are in
+    /// `wheel_pager`): `dy` is its vertical delta (negative scrolls down) and `now` is egui
+    /// time. With `can_turn` false the gesture is followed but the page stays. Returns whether
+    /// the page turned.
     pub fn single_page_wheel(&mut self, unit: egui::MouseWheelUnit, dy: f32, phase: egui::TouchPhase, now: f64, can_turn: bool) -> bool {
-        if self.layout != PageLayout::Single {
+        if !self.layout.paged() {
             return false;
         }
         let Some(forward) = self.wheel.feed(unit, dy, phase, now, can_turn) else { return false };
@@ -898,14 +935,22 @@ impl DocView {
     fn fit_zoom(&mut self, info: &DocInfo) {
         let largest = |side: fn((f32, f32)) -> f32| info.pages.iter().map(|p| side(self.display_size(p))).fold(1.0, f32::max);
         let max_w = largest(|s| s.0);
-        // Single-page view fits the page it shows. The scrolling views fit their largest page,
-        // so the zoom holds still while pages of other sizes scroll past.
+        // The paged views fit the page or spread they show. The scrolling views fit their largest
+        // page, so the zoom holds still while pages of other sizes scroll past.
         let (w, h) = match self.layout {
             PageLayout::Single => info.pages.get(self.current).map_or_else(|| (max_w, largest(|s| s.1)), |p| self.display_size(p)),
+            PageLayout::TwoPage => {
+                let sizes: Vec<(f32, f32)> = self.spread(self.current).filter_map(|i| info.pages.get(i)).map(|p| self.display_size(p)).collect();
+                if sizes.is_empty() {
+                    (max_w, largest(|s| s.1))
+                } else {
+                    (sizes.iter().map(|s| s.0).fold(1.0, f32::max), sizes.iter().map(|s| s.1).fold(1.0, f32::max))
+                }
+            }
             PageLayout::Continuous | PageLayout::TwoUp => (max_w, largest(|s| s.1)),
         };
         let avail_w = (self.viewport_w - 2.0 * SIDE).max(100.0);
-        let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
+        let per_row = if self.layout.two_pages() { 2.0 } else { 1.0 };
         match self.fit {
             Fit::Width => self.zoom = (avail_w - GAP * (per_row - 1.0)) / (max_w * PT * per_row),
             Fit::Page => {
@@ -933,7 +978,7 @@ impl DocView {
                     y += size.y + GAP;
                 }
             }
-            PageLayout::TwoUp => {
+            PageLayout::TwoUp | PageLayout::TwoPage => {
                 // With a cover page, the first page sits alone on the right.
                 let rows: Vec<&[pdfcraft_render::PageInfo]> = if self.cover && !info.pages.is_empty() {
                     std::iter::once(&info.pages[..1]).chain(info.pages[1..].chunks(2)).collect()
@@ -1152,7 +1197,7 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     // As in Acrobat: → / ← go to the next / previous page in every layout (#185), and so do
     // ⌘Page Down / ⌘Page Up, or plain Page Down / Page Up in single-page view.
     let command = ctx.input(|i| i.modifiers.command);
-    let scrolls = view.layout != PageLayout::Single;
+    let scrolls = !view.layout.paged();
     if key(Key::ArrowRight) || (key(Key::PageDown) && (command || !scrolls)) {
         view.step_page(true);
     }
@@ -1169,6 +1214,17 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
             }
         }
     }
+}
+
+/// The top and bottom (content coordinates) of what a paged layout shows: the current page, or
+/// the spread that holds it. `None` without pages.
+fn shown_band(view: &DocView, rects: &[Rect]) -> Option<(f32, f32)> {
+    let current = view.current.min(rects.len().checked_sub(1)?);
+    let pages = if view.layout == PageLayout::TwoPage { view.spread(current) } else { current..current + 1 };
+    let shown: Vec<Rect> = pages.filter_map(|i| rects.get(i).copied()).collect();
+    let top = shown.iter().map(|r| r.top()).reduce(f32::min)?;
+    let bottom = shown.iter().map(|r| r.bottom()).reduce(f32::max)?;
+    Some((top, bottom))
 }
 
 /// How far ↓ / ↑ scroll: a mouse-wheel line on the desktop. Page Down / Page Up keep this much
@@ -1240,20 +1296,19 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Vec2::ZERO
     };
 
-    let max_w = info.pages.iter().map(|p| view.display_size(p).0).fold(0.0, f32::max)
-        * view.zoom
-        * PT
-        * if view.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
+    let max_w =
+        info.pages.iter().map(|p| view.display_size(p).0).fold(0.0, f32::max) * view.zoom * PT * if view.layout.two_pages() { 2.0 } else { 1.0 };
     let content_w = (max_w + 2.0 * SIDE).max(avail.width());
     let rects = view.layout(info, content_w);
     let middle_gesture = view.auto_scroll.blocks_input();
-    // Single page: when the whole page fits, the wheel would do nothing, so it turns pages
-    // instead; zoomed in far enough to pan, it pans. Touch drags are untouched: with nothing
-    // to pan, touch users turn pages with the rail buttons, the page box and the arrow keys.
-    // Runs before `visible_pages` so the frame that turns the page draws it.
-    if view.layout == PageLayout::Single {
+    // Single page and two pages at a time: when the whole page (or spread) fits, the wheel
+    // would do nothing, so it turns pages instead; zoomed in far enough to pan, it pans. Touch
+    // drags are untouched: with nothing to pan, touch users turn pages with the rail buttons,
+    // the page box and the arrow keys. Runs before `visible_pages` so the frame that turns the
+    // page draws it.
+    if view.layout.paged() {
         // Within a point, so layout rounding can't stop a fitting page from turning.
-        let fits = rects.get(view.current.min(rects.len().saturating_sub(1))).is_some_and(|r| r.height() + 2.0 * MARGIN <= avail.height() + 1.0);
+        let fits = shown_band(view, &rects).is_some_and(|(top, bottom)| bottom - top + 2.0 * MARGIN <= avail.height() + 1.0);
         let can_turn = fits && !middle_gesture && unobstructed && ui.rect_contains_pointer(avail);
         // Every wheel event goes to the pager, so it follows each trackpad touch to its end
         // even while the page can't turn.
@@ -1274,13 +1329,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     let visible_pages: Vec<usize> = match view.layout {
         PageLayout::Single => vec![view.current.min(rects.len() - 1)],
+        PageLayout::TwoPage => view.spread(view.current.min(rects.len() - 1)).filter(|&i| i < rects.len()).collect(),
         _ => (0..rects.len()).collect(),
     };
-    let (y_shift, content_h) = match view.layout {
-        PageLayout::Single => {
-            let r = rects[visible_pages[0]];
-            (r.top() - MARGIN, r.height() + 2.0 * MARGIN)
-        }
+    let (y_shift, content_h) = match shown_band(view, &rects) {
+        Some((top, bottom)) if view.layout.paged() => (top - MARGIN, bottom - top + 2.0 * MARGIN),
         _ => (0.0, rects.last().map(|r| r.bottom() + MARGIN).unwrap_or(0.0)),
     };
 
@@ -1842,7 +1895,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         if current_overlap >= best_overlap - TIE {
             current = view.current;
         }
-        if view.layout != PageLayout::Single {
+        if !view.layout.paged() {
             view.current = current;
             if !ui.memory(|m| m.has_focus(egui::Id::new("page-input"))) {
                 view.page_input = (current + 1).to_string();
@@ -2919,12 +2972,48 @@ mod tests {
     }
 
     #[test]
-    fn wheel_is_single_page_only() {
+    fn wheel_is_for_paged_layouts_only() {
         for layout in [PageLayout::Continuous, PageLayout::TwoUp] {
             let mut v = view(3, layout);
             assert!(!notch(&mut v, -1.0, 1.0), "{layout:?} ignores the wheel");
             assert_eq!(v.current, 0);
         }
+    }
+
+    #[test]
+    fn two_pages_at_a_time_turns_a_spread_per_notch() {
+        let mut v = view(5, PageLayout::TwoPage);
+        assert_eq!(v.spread(0), 0..2);
+        assert!(notch(&mut v, -1.0, 1.0) && notch(&mut v, -1.0, 1.05));
+        assert_eq!((v.current, v.spread(v.current)), (4, 4..5), "the last page is a spread of its own");
+        assert!(!notch(&mut v, -1.0, 1.1), "nothing turns past the last spread");
+        assert!(notch(&mut v, 1.0, 1.2));
+        assert_eq!(v.current, 2);
+        // A cover page sits alone: [0], [1, 2], [3, 4].
+        v.set_cover(true);
+        v.go_to_page(0);
+        assert_eq!(v.spread(0), 0..1);
+        assert!(notch(&mut v, -1.0, 1.3));
+        assert_eq!((v.current, v.spread(v.current)), (1, 1..3));
+        assert!(notch(&mut v, -1.0, 1.35));
+        assert_eq!((v.current, v.spread(v.current)), (3, 3..5));
+        assert!(!notch(&mut v, -1.0, 1.4), "nothing turns past the last spread");
+        assert!(notch(&mut v, 1.0, 1.5) && notch(&mut v, 1.0, 1.55));
+        assert_eq!(v.current, 0);
+    }
+
+    #[test]
+    fn two_pages_at_a_time_fits_the_shown_spread() {
+        let page =
+            |width: f32, height: f32| pdfcraft_render::PageInfo { width, height, label: String::new(), crop: [0.0, 0.0, width, height], rotation: 0 };
+        let info = DocInfo { pages: vec![page(300.0, 400.0), page(300.0, 400.0), page(600.0, 800.0)], ..Default::default() };
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults { layout: PageLayout::TwoPage, fit: Fit::Page, ..Default::default() });
+        (v.viewport_w, v.viewport_h) = (1400.0, 900.0);
+        v.fit_zoom(&info);
+        let small = v.zoom;
+        v.current = 2;
+        v.fit_zoom(&info);
+        assert!(v.zoom < small, "the spread of the bigger page refits: {} vs {small}", v.zoom);
     }
 
     #[test]

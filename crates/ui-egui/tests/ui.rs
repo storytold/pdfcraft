@@ -357,6 +357,13 @@ fn newly_opened_pdfs_use_the_default_workspace() {
     assert_eq!(app.mode, Mode::Read);
     assert_eq!(app.views.last().unwrap().layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp);
     assert_eq!(app.right, Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
+    // TwoPageLeft / TwoPageRight show two pages at a time instead of scrolling them.
+    for (name, cover) in [("TwoPageLeft", false), ("TwoPageRight", true)] {
+        let pdf = String::from_utf8(FIXTURE.to_vec()).unwrap().replace("/Outlines 6 0 R", &format!("/Outlines 6 0 R /PageLayout /{name}"));
+        app.open_bytes(&format!("{name}.pdf"), None, pdf.into_bytes()).unwrap();
+        let view = app.views.last().unwrap();
+        assert_eq!((view.layout, view.cover), (pdfcraft_ui_egui::canvas::PageLayout::TwoPage, cover), "{name}");
+    }
 }
 
 #[test]
