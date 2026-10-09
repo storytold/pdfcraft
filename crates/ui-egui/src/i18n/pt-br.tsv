@@ -820,7 +820,7 @@
 	Applied 1 redaction mark. Save to remove the content from the file.	1 marca de ocultação aplicada. Salve para remover o conteúdo do arquivo.
 	Applied {n} redaction marks. Save to remove the content from the file.	{n} marcas de ocultação aplicadas. Salve para remover o conteúdo do arquivo.
 	JavaScript Console	Console JavaScript
-	JavaScript is turned off (Preferences ▸ JavaScript).	O JavaScript está desativado (Preferências ▸ JavaScript).
+	JavaScript is turned off (Preferences ▸ JavaScript).	O JavaScript está desativado (Preferências > JavaScript).
 	Output appears here.	A saída aparece aqui.
 	Document JavaScripts	JavaScripts do documento
 	Script Name:	Nome do script:
