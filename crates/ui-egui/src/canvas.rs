@@ -562,6 +562,24 @@ impl DocView {
         self.seen_generation
     }
 
+    /// Pretend the text of `page` has arrived (one glyph per character) and search it (tests).
+    #[doc(hidden)]
+    pub fn test_deliver_text(&mut self, page: usize, text: &str) {
+        let glyphs = text
+            .chars()
+            .enumerate()
+            .map(|(i, c)| pdfcraft_render::TextGlyph { text: c.to_string(), rect: [i as f32 * 6.0, 0.0, i as f32 * 6.0 + 5.0, 10.0] })
+            .collect();
+        self.texts.insert(page, Arc::new(pdfcraft_render::text::layout(glyphs)));
+        self.refresh_find_page(page);
+    }
+
+    /// The pages the search found something on (tests).
+    #[doc(hidden)]
+    pub fn find_match_pages(&self) -> Vec<usize> {
+        self.find.as_ref().map(|f| f.matches.iter().map(|(p, _)| *p).collect()).unwrap_or_default()
+    }
+
     /// Pages whose picture is out of date and will be drawn again (tests).
     #[doc(hidden)]
     pub fn stale_pages(&self) -> Vec<usize> {

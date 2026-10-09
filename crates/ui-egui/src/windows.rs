@@ -471,6 +471,11 @@ impl PdfCraftApp {
         if view.seen_display_generation.max(view.handled_display_generation) != doc.display_generation() {
             view.invalidate_content();
         }
+        // An active search runs again once the texts of the new page list arrive; the query
+        // stays, only the old hits (which point at old pages) go.
+        if view.seen_generation.max(view.handled_generation) != doc.edit_generation() {
+            view.rerun_find();
+        }
         view.change_handled = false;
         view.seen_generation = doc.edit_generation();
         view.seen_display_generation = doc.display_generation();
@@ -1319,5 +1324,30 @@ mod sync_tests {
         let b_stale = app.with_window(other, |a| a.views[0].stale_pages()).unwrap();
         assert_eq!(a_stale, vec![0, 2], "A must learn about B's edit");
         assert_eq!(b_stale, vec![0, 2], "B must learn about A's edit");
+    }
+
+    #[test]
+    fn a_search_in_one_view_survives_a_page_deleted_in_another() {
+        let (mut app, other, _doc, _ctx) = two_views();
+        app.with_window(other, |a| {
+            a.views[0].open_find();
+            if let Some(f) = a.views[0].find.as_mut() {
+                f.query = "needle".into();
+            }
+            a.views[0].rerun_find();
+            a.views[0].test_deliver_text(3, "a needle here");
+            assert_eq!(a.views[0].find_match_pages(), vec![3]);
+        });
+        app.views[0].select_pages(&[1]);
+        assert!(app.apply_edit(Edit::DeletePages { pages: vec![1] }));
+        app.sync_views();
+        app.with_window(other, |a| {
+            let v = &mut a.views[0];
+            assert!(v.find_match_pages().is_empty(), "old hits are gone until the texts are read again");
+            assert_eq!(v.find.as_ref().map(|f| f.case_query.as_str()), Some("needle"), "the query stays");
+            // The text of the old page 3 (now page 2) arrives again.
+            v.test_deliver_text(2, "a needle here");
+            assert_eq!(v.find_match_pages(), vec![2], "hit on the page's new number");
+        });
     }
 }
