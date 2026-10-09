@@ -1728,6 +1728,57 @@ impl PdfCraftApp {
     }
 }
 
+impl PdfCraftApp {
+    /// The window-bound start of a frame: a grid drop that is waiting, the Combine files tab and
+    /// the files dropped on this window. Runs for the main window in `logic`, for the others at
+    /// the start of their pass.
+    pub(crate) fn window_input(&mut self, ctx: &egui::Context) {
+        // Before taking this frame's drop: the grid must be drawn once with the pointer where
+        // the files were let go before the gap is read.
+        self.finish_grid_drop(ctx);
+        // Showing a document hides the Combine files tab.
+        if self.active.is_some() {
+            self.combine_tab.focused = false;
+        }
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        let dropped = self.drop_on_grid(dropped, ctx);
+        for f in dropped {
+            // Files dropped on the Combine files tab join its list instead of opening.
+            if self.combine_showing() {
+                self.drop_into_combine(f, ctx);
+            } else {
+                self.open_dropped(f, ctx);
+            }
+        }
+    }
+
+    /// Shortcuts, keys and queued edits of the window being drawn (see [`Self::window_input`]).
+    pub(crate) fn window_keys(&mut self, ctx: &egui::Context) {
+        // Shortcuts deferred last frame: the text field has taken that frame's typing since.
+        let deferred = std::mem::take(&mut self.deferred_commands);
+        self.shortcuts(ctx);
+        // Scrolling is transient: never resume after changing tabs, opening a modal/palette,
+        // or returning to a window that lost focus.
+        let blocked = self.dialog.is_some() || self.close_request.is_some() || self.palette_open || !ctx.input(|i| i.focused);
+        for (index, view) in self.views.iter_mut().enumerate() {
+            if blocked || self.active != Some(index) {
+                view.auto_scroll.cancel();
+            }
+        }
+        // A field that refused its value this frame keeps the shortcut from saving or printing
+        // behind the user's back; so does a save prompt opened since.
+        if self.process_pending_edits() && self.close_request.is_none() {
+            for (id, doc) in deferred {
+                // Only in the document the shortcut was pressed in.
+                if self.active_ids().map(|(_, active)| active) == doc {
+                    self.execute(id);
+                }
+            }
+        }
+    }
+}
+
 impl eframe::App for PdfCraftApp {
     /// While files are dragged over the window the system sends no pointer moves, so egui
     /// would keep the place the pointer entered at: tell it where the pointer really is, so the
@@ -1769,26 +1820,9 @@ impl eframe::App for PdfCraftApp {
             }
         }
         self.sync_theme(ctx);
-        // Before taking this frame's drop: the grid must be drawn once with the pointer where
-        // the files were let go before the gap is read.
-        self.finish_grid_drop(ctx);
-        // Showing a document hides the Combine files tab.
-        if self.active.is_some() {
-            self.combine_tab.focused = false;
-        }
         #[cfg(target_arch = "wasm32")]
         self.process_signature_images();
-        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
-        #[cfg(not(target_arch = "wasm32"))]
-        let dropped = self.drop_on_grid(dropped, ctx);
-        for f in dropped {
-            // Files dropped on the Combine files tab join its list instead of opening.
-            if self.combine_showing() {
-                self.drop_into_combine(f, ctx);
-            } else {
-                self.open_dropped(f, ctx);
-            }
-        }
+        self.window_input(ctx);
         let arrived: Vec<(String, Vec<u8>)> = self.inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
         for (name, bytes) in arrived {
             if let Err(e) = self.open_bytes(&name, None, bytes) {
@@ -1806,7 +1840,7 @@ impl eframe::App for PdfCraftApp {
                 OsEvent::Open(paths) => paths.iter().for_each(|p| self.open_path(p)),
                 #[cfg(target_arch = "wasm32")]
                 OsEvent::Open(_) => {}
-                // Like closing the window: `guard_quit` asks about unsaved changes.
+                // Like closing the window: `guard_root_close` asks about unsaved changes.
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }
         }
@@ -1814,31 +1848,11 @@ impl eframe::App for PdfCraftApp {
             control.tick(ctx, self);
             self.control = Some(control);
         }
-        self.guard_quit(ctx);
+        self.guard_root_close(ctx);
         let now = ctx.input(|i| i.time);
         self.autosave_tick(now);
         self.poll_updates();
-        // Shortcuts deferred last frame: the text field has taken that frame's typing since.
-        let deferred = std::mem::take(&mut self.deferred_commands);
-        self.shortcuts(ctx);
-        // Scrolling is transient: never resume after changing tabs, opening a modal/palette,
-        // or returning to a window that lost focus.
-        let blocked = self.dialog.is_some() || self.close_request.is_some() || self.palette_open || !ctx.input(|i| i.focused);
-        for (index, view) in self.views.iter_mut().enumerate() {
-            if blocked || self.active != Some(index) {
-                view.auto_scroll.cancel();
-            }
-        }
-        // A field that refused its value this frame keeps the shortcut from saving or printing
-        // behind the user's back; so does a save prompt opened since.
-        if self.process_pending_edits() && self.close_request.is_none() {
-            for (id, doc) in deferred {
-                // Only in the document the shortcut was pressed in.
-                if self.active_ids().map(|(_, active)| active) == doc {
-                    self.execute(id);
-                }
-            }
-        }
+        self.window_keys(ctx);
         self.poll_export();
         self.poll_ocr();
         self.poll_optimize();
@@ -1855,6 +1869,14 @@ impl eframe::App for PdfCraftApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.window_pass(WindowId::ROOT, ui, egui::ViewportClass::Root);
+        self.apply_window_ops();
+    }
+}
+
+impl PdfCraftApp {
+    /// Draw one window: the whole interface of the window loaded into the app fields.
+    pub(crate) fn window_pass(&mut self, _id: WindowId, ui: &mut egui::Ui, _class: egui::ViewportClass) {
         let ctx = ui.ctx().clone();
         i18n::set_current(i18n::Lang::from_pref(&self.language));
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.

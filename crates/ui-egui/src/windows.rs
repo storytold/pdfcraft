@@ -388,6 +388,20 @@ impl PdfCraftApp {
         true
     }
 
+    /// Apply the queued changes to the set of windows.
+    pub(crate) fn apply_window_ops(&mut self) {
+        for op in std::mem::take(&mut self.pending_window_ops) {
+            match op {
+                WindowOp::Focus(id) => {
+                    if let Some(ctx) = &self.ctx {
+                        ctx.send_viewport_cmd_to(id.viewport(), egui::ViewportCommand::Focus);
+                    }
+                }
+                other => log::warn!("window operation not supported yet: {other:?}"),
+            }
+        }
+    }
+
     /// Whether `id` is a window of the app.
     pub fn has_window(&self, id: WindowId) -> bool {
         id == WindowId::ROOT || self.windows.iter().any(|w| w.id == id)

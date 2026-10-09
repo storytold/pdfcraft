@@ -511,8 +511,12 @@ impl PdfCraftApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
-    /// Intercept window close while documents have unsaved changes.
-    pub(crate) fn guard_quit(&mut self, ctx: &egui::Context) {
+    /// A child window was asked to close. Windows other than the main one are not drawn yet.
+    #[allow(dead_code)] // filled in with the child windows
+    pub(crate) fn guard_close_window(&mut self, _ctx: &egui::Context, _id: crate::WindowId) {}
+
+    /// Intercept the main window's close while documents have unsaved changes.
+    pub(crate) fn guard_root_close(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
