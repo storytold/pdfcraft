@@ -175,9 +175,47 @@ pub enum FieldValue {
 fn text_of(o: &Object) -> Option<String> {
     match o {
         Object::String(s) => Some(s.to_text()),
-        Object::Name(n) => Some(String::from_utf8_lossy(n).into_owned()),
+        Object::Name(n) => Some(name_text(n)),
         _ => None,
     }
+}
+
+/// A name object's bytes as text that [`name_bytes`] turns back into the same bytes. UTF-8 names
+/// read as themselves; other bytes (Shift-JIS check box states such as 「はい」 in Japanese
+/// forms) and `#` are written `#XX`, as in PDF name syntax.
+pub fn name_text(bytes: &[u8]) -> String {
+    let escape = |b: u8| format!("#{b:02X}");
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.replace('#', "#23"),
+        Err(_) => bytes.iter().map(|&b| if (0x21..=0x7e).contains(&b) && b != b'#' { char::from(b).to_string() } else { escape(b) }).collect(),
+    }
+}
+
+/// The bytes of the name written as `text` by [`name_text`] (`#XX` is the byte XX).
+pub fn name_bytes(text: &str) -> Vec<u8> {
+    let b = text.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while let Some(&c) = b.get(i) {
+        let hex = |j: usize| b.get(j).and_then(|h| char::from(*h).to_digit(16));
+        match (c, hex(i + 1), hex(i + 2)) {
+            // Both digits are below 16, so the byte fits.
+            (b'#', Some(hi), Some(lo)) => {
+                out.push(u8::try_from(hi * 16 + lo).unwrap_or(b'#'));
+                i += 3;
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// A name object from text written by [`name_text`].
+fn name_obj(text: &str) -> Object {
+    Object::Name(name_bytes(text))
 }
 
 /// At most this many `/State` entries of a set-layer-visibility action are read.
@@ -625,13 +663,13 @@ fn walk(
                 .map(|ap| doc.resolve(ap))
                 .and_then(|ap| ap.as_dict().and_then(|a| a.get(b"N").cloned()))
                 .and_then(|n| doc.resolve(&n).as_dict().cloned())
-                .and_then(|n| n.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).find(|k| k != "Off"));
+                .and_then(|n| n.iter().map(|(k, _)| name_text(k)).find(|k| k != "Off"));
             Some(Widget {
                 obj: w,
                 page: page_of.get(&w).copied(),
                 rect: [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])],
                 on_state: on_state.filter(|_| matches!(kind, FieldKind::CheckBox | FieldKind::Radio)),
-                state: wd.name(b"AS").map(|s| String::from_utf8_lossy(s).into_owned()),
+                state: wd.name(b"AS").map(name_text),
                 tab: usize::MAX,
                 locked: annot_flags & 128 != 0,
                 hidden: annot_flags & (2 | 32) != 0,
@@ -862,7 +900,7 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
 /// Check boxes and radio buttons: `/V` on the field, `/AS` on each widget.
 fn set_states(doc: &mut Document, f: &Field, on: Option<&str>) -> Result<(), FormError> {
     let v = on.unwrap_or("Off");
-    doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), Object::name(v)))?;
+    doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), name_obj(v)))?;
     for w in &f.widgets {
         let state = match (on, w.on_state.as_deref()) {
             (Some(c), Some(s)) if c == s => s,
@@ -875,7 +913,7 @@ fn set_states(doc: &mut Document, f: &Field, on: Option<&str>) -> Result<(), For
             let ap = appearance::check_box_states(doc, w, f.kind, &on_name);
             doc.update_dict(w.obj, |d| d.set(b"AP".to_vec(), Object::Dict(ap)))?;
         }
-        doc.update_dict(w.obj, |d| d.set(b"AS".to_vec(), Object::name(state)))?;
+        doc.update_dict(w.obj, |d| d.set(b"AS".to_vec(), name_obj(state)))?;
     }
     Ok(())
 }

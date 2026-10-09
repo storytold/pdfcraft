@@ -36,6 +36,11 @@ fn fixture() -> Document {
         "<< /Type /Annot /Subtype /Widget /FT /Btn /T (go) /Ff 65536 /Rect [300 450 380 470] /P 3 0 R >>".into(), // 25
         "<< /Type /Annot /Subtype /Widget /FT /Btn /T (bare) /Rect [400 700 415 715] /P 3 0 R /Foo (kept) >>".into(), // 26 check box without AP
     ];
+    pdf(&objs)
+}
+
+/// A classic-xref PDF whose objects 1, 2, … are `objs`, with object 1 as the catalog.
+fn pdf(objs: &[String]) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -144,6 +149,46 @@ fn check_boxes_and_radios_switch_states() {
     assert!(matches!(set_value(&mut doc, "size", &FieldValue::Radio(None)), Err(FormError::Invalid(_))));
     set_value(&mut doc, "agree", &FieldValue::Check(false)).unwrap();
     assert!(field(&fields(&doc), "agree").value.is_empty());
+}
+
+#[test]
+fn check_boxes_keep_non_utf8_state_names() {
+    // Japanese forms often name a check box's on state 「はい」 in Shift-JIS: ticking it has to
+    // write those exact bytes to /AS and /V, or no appearance matches and no mark shows.
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),
+        "<< /Fields [5 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /AS /Off /Rect [50 700 56 706] /P 3 0 R /AP << /N << /Off 6 0 R /#82#CD#82#A2 7 0 R >> >> >>".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    let sjis_hai: &[u8] = b"\x82\xcd\x82\xa2";
+    let mut doc = pdf(&objs);
+    let all = fields(&doc);
+    assert_eq!(field(&all, "agree").widgets[0].on_state.as_deref(), Some("#82#CD#82#A2"));
+    set_value(&mut doc, "agree", &FieldValue::Check(true)).unwrap();
+    let doc = reopen(&doc);
+    let f = field(&fields(&doc), "agree").clone();
+    let wd = doc.get(f.widgets[0].obj).as_dict().cloned().unwrap();
+    assert_eq!(wd.name(b"AS"), Some(sjis_hai));
+    assert_eq!(doc.get(f.obj).as_dict().unwrap().name(b"V"), Some(sjis_hai));
+    assert_eq!(f.value, ["#82#CD#82#A2"]);
+    let mut doc = doc;
+    set_value(&mut doc, "agree", &FieldValue::Check(false)).unwrap();
+    assert_eq!(doc.get(f.widgets[0].obj).as_dict().unwrap().name(b"AS"), Some(&b"Off"[..]));
+}
+
+#[test]
+fn name_text_round_trips() {
+    for bytes in [&b"Yes"[..], b"\x82\xcd\x82\xa2", "はい".as_bytes(), b"A#1", b"a b", b"", b"\xff#\x00"] {
+        assert_eq!(name_bytes(&name_text(bytes)), bytes, "{bytes:?}");
+    }
+    assert_eq!(name_text("はい".as_bytes()), "はい");
+    assert_eq!(name_text(b"A#1"), "A#231");
+    // Malformed escapes stay as they are.
+    assert_eq!(name_bytes("#G1#4"), b"#G1#4");
 }
 
 #[test]

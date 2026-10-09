@@ -331,7 +331,7 @@ pub fn check_box_states(doc: &mut Document, w: &Widget, kind: FieldKind, on_name
     let s = width.min(height);
     let mark = check_mark(style, width / 2.0, height / 2.0, s);
     let mut nd = Dict::new();
-    nd.set(on_name.as_bytes().to_vec(), form(format!("{frame_c}{mark}")));
+    nd.set(crate::name_bytes(on_name), form(format!("{frame_c}{mark}")));
     nd.set(b"Off".to_vec(), form(frame_c));
     let mut ap = Dict::new();
     ap.set(b"N".to_vec(), Object::Dict(nd));

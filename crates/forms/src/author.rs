@@ -809,7 +809,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         }
         match &props.default_value {
             // Buttons name their default state; text and choices hold a string.
-            Some(Some(v)) if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) => d.set(b"DV".to_vec(), Object::name(v)),
+            Some(Some(v)) if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) => d.set(b"DV".to_vec(), Object::Name(crate::name_bytes(v))),
             Some(Some(v)) => d.set(b"DV".to_vec(), PdfString::text(v)),
             Some(None) => {
                 d.remove(b"DV");
