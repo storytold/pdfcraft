@@ -68,6 +68,7 @@ mod editing;
 mod files;
 pub mod fill_sign;
 pub mod folders_ui;
+mod format_bar;
 pub mod forms_ui;
 mod home;
 mod icon_data;
@@ -1725,6 +1726,7 @@ impl eframe::App for PdfCraftApp {
             None => home::show(self, ui),
             Some(i) => canvas::document_area(self, i, ui),
         });
+        format_bar::show(self, &ctx);
         self.process_pending_edits();
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);

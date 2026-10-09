@@ -151,10 +151,8 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
         });
         ui.add_space(6.0);
     }
-    // Edit a PDF shows Format text at the top while text is selected or being added.
-    if g.id == "edit" {
-        format_section(app, ui, t);
-    }
+    // The row whose tool is picked, or which owns what the format bar is formatting.
+    let active = crate::format_bar::active_command(app);
     let mut run = None;
     // Redact a PDF has Acrobat's footer: Clear all / Redact all.
     let footer = g.id == "redact";
@@ -168,9 +166,14 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                     continue;
                 }
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!(item.label)));
+                let on = active == Some(item.command);
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, tl!(item.label)));
                 let ready = item.availability == Availability::Ready;
-                if resp.hovered() {
+                if on {
+                    ui.painter().rect_filled(rect, CornerRadius::same(6), t.accent_soft);
+                    let bar = Rect::from_min_size(rect.min + vec2(0.0, 7.0), vec2(3.0, rect.height() - 14.0));
+                    ui.painter().rect_filled(bar, CornerRadius::same(2), t.accent);
+                } else if resp.hovered() {
                     ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
                 }
                 let fg = if ready { t.text } else { t.text_muted };
@@ -181,7 +184,8 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                     17.0,
                     if ready { hue(g) } else { t.text_faint },
                 );
-                ui.painter().text(rect.left_center() + vec2(34.0, 0.0), Align2::LEFT_CENTER, tl!(item.label), theme::regular(13.0), fg);
+                let font = if on { theme::semibold(13.0) } else { theme::regular(13.0) };
+                ui.painter().text(rect.left_center() + vec2(34.0, 0.0), Align2::LEFT_CENTER, tl!(item.label), font, fg);
                 let (chip, fill, cfg) = match item.availability {
                     Availability::Ready => (tl!("Ready"), Color32::from_rgb(0xDD, 0xF3, 0xE4), Color32::from_rgb(0x1E, 0x7B, 0x43)),
                     Availability::Planned(m) => (m, t.pressed, t.text_muted),
@@ -294,84 +298,6 @@ fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
         crate::stamps_ui::palette_section(app, ui, t);
     });
-}
-
-/// Edit a PDF ▸ Format text: for the selected added text (one undoable change), or the style
-/// new text gets.
-fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    // Editing a paragraph of existing text: its formatting, applied as it changes.
-    if let Some((i, _)) = app.active_ids()
-        && let Some(ed) = app.views[i].line_editor.clone()
-    {
-        let mut ed = ed;
-        let mut changed = false;
-        if let Some(look) = crate::content_ui::format_panel(ui, t, &ed.look) {
-            ed.look = look;
-            changed = true;
-        }
-        changed |= crate::edit_text_ui::extras_panel(ui, &mut ed.extras);
-        if changed {
-            let edit = pdfcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };
-            if app.apply_edit(edit) {
-                ed.applied();
-                if let Some(doc) = app.session.get(app.views[i].id)
-                    && let Some(block) = doc.text_blocks(ed.page).get(ed.block)
-                {
-                    ed.refresh_source(block);
-                }
-            }
-            app.views[i].line_editor = Some(ed);
-        }
-        ui.add_space(6.0);
-        ui.separator();
-        return;
-    }
-    let image = app.active_ids().and_then(|(i, id)| {
-        let (page, index) = app.views[i].content.selected?;
-        let doc = app.session.get(id)?;
-        match &doc.added.iter().filter(|a| a.page == page).nth(index)?.content {
-            pdfcraft_engine::AddedContent::Image(img) => Some((page, index, img.clone())),
-            _ => None,
-        }
-    });
-    if let Some((page, index, img)) = image {
-        match crate::content_ui::image_panel(ui, t, &img) {
-            Some(crate::content_ui::ImageAction::Update(content)) => {
-                app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content });
-            }
-            Some(crate::content_ui::ImageAction::Replace) => app.replace_image_dialog(page, index),
-            None => {}
-        }
-        ui.add_space(6.0);
-        ui.separator();
-        return;
-    }
-    let selected = app.active_ids().and_then(|(i, id)| {
-        let (page, index) = app.views[i].content.selected?;
-        let doc = app.session.get(id)?;
-        let a = doc.added.iter().filter(|a| a.page == page).nth(index)?;
-        match &a.content {
-            pdfcraft_engine::AddedContent::Text(text) => Some((page, index, text.clone())),
-            _ => None,
-        }
-    });
-    match selected {
-        Some((page, index, text)) => {
-            if let Some(style) = crate::content_ui::format_panel(ui, t, &text) {
-                app.text_style = pdfcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], ..style.clone() };
-                app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content: pdfcraft_engine::AddedContent::Text(style) });
-            }
-        }
-        None if app.quick_tool == crate::QuickTool::AddText => {
-            crate::content_ui::hint(ui, t);
-            if let Some(style) = crate::content_ui::format_panel(ui, t, &app.text_style) {
-                app.text_style = style;
-            }
-        }
-        None => return,
-    }
-    ui.add_space(6.0);
-    ui.separator();
 }
 
 // ───────────────────────────────────────────────────────────────────────────── right panels
