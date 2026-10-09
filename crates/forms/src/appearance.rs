@@ -10,6 +10,10 @@
 //! Japanese forms use (text encoded in that CMap). Otherwise (other composite fonts, missing
 //! resources) Helvetica is used, so text is always visible. Widths use the approximate metrics
 //! of `pdfcraft-fonts` (Helvetica, or one em per full-width character in composite fonts).
+//!
+//! `/MK /R` (0, 90, 180, 270, counterclockwise) lays the content out in the upright box and sets
+//! the appearance `/Matrix` so that box lands on the widget rectangle. Any other value is 0, and
+//! rotation 0 leaves `/Matrix` off.
 
 use pdfcraft_cos::{Dict, Document, Object, Stream};
 use pdfcraft_fonts::{UnicodeCMap, cjk_width, helvetica_width, literal, win_ansi, wrap_with};
@@ -26,6 +30,57 @@ fn n(v: f64) -> String {
 /// Format a number for content streams (up to three decimals).
 pub fn fmt(v: f64) -> String {
     n(v)
+}
+
+/// `/MK /R` as a quadrant, or 0 when it is missing or not a multiple of 90.
+pub(crate) fn mk_rotation(doc: &Document, wd: &Dict) -> i64 {
+    let Some(raw) = wd.get(b"MK") else { return 0 };
+    let mk_obj = doc.resolve(raw);
+    let Some(mk) = mk_obj.as_dict() else { return 0 };
+    let Some(r_obj) = mk.get(b"R") else { return 0 };
+    let resolved = doc.resolve(r_obj);
+    let Some(r) = degrees(&resolved) else { return 0 };
+    match r.rem_euclid(360) {
+        q @ (0 | 90 | 180 | 270) => q,
+        _ => 0,
+    }
+}
+
+fn degrees(o: &Object) -> Option<i64> {
+    if let Some(i) = o.as_int() {
+        return Some(i);
+    }
+    let v = o.as_f64()?;
+    (v.is_finite() && v.abs() <= 1.0e6).then_some(v.round() as i64)
+}
+
+/// Where an appearance is drawn: the upright layout box, and the `/Matrix` that turns it onto
+/// the widget rectangle. Rotation 0 has no matrix.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Placement {
+    pub layout_w: f64,
+    pub layout_h: f64,
+    pub matrix: Option<[f64; 6]>,
+}
+
+pub(crate) fn placement(rotation: i64, page_w: f64, page_h: f64) -> Placement {
+    let (layout_w, layout_h, matrix) = match rotation {
+        // (x, y) -> (page_w - y, x): text that ran to the right runs upward.
+        90 => (page_h, page_w, Some([0.0, 1.0, -1.0, 0.0, page_w, 0.0])),
+        180 => (page_w, page_h, Some([-1.0, 0.0, 0.0, -1.0, page_w, page_h])),
+        // (x, y) -> (y, page_h - x): text that ran to the right runs downward.
+        270 => (page_h, page_w, Some([0.0, -1.0, 1.0, 0.0, 0.0, page_h])),
+        _ => (page_w, page_h, None),
+    };
+    Placement { layout_w, layout_h, matrix }
+}
+
+pub(crate) fn set_form_box(d: &mut Dict, place: Placement) {
+    let box_ = [0.0, 0.0, place.layout_w, place.layout_h];
+    d.set(b"BBox".to_vec(), Object::Array(box_.iter().map(|v| Object::Real(*v)).collect()));
+    if let Some(m) = place.matrix {
+        d.set(b"Matrix".to_vec(), Object::Array(m.iter().map(|v| Object::Real(*v)).collect()));
+    }
 }
 
 /// A parsed default appearance string: font resource name, size (0 = auto) and colour operator.
@@ -222,7 +277,9 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     };
     let wobj = doc.get(w.obj);
     let wd = wobj.as_dict().cloned().unwrap_or_default();
-    let (width, height) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
+    let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
+    let place = placement(mk_rotation(doc, &wd), page_w, page_h);
+    let (width, height) = (place.layout_w, place.layout_h);
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
     let (font_name, font_obj, enc) = match dr_font(doc, &da.font) {
         Some((o, enc)) => (da.font.clone(), o, enc),
@@ -338,7 +395,7 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("XObject"));
     d.set(b"Subtype".to_vec(), Object::name("Form"));
-    d.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, width, height].iter().map(|v| Object::Real(*v)).collect()));
+    set_form_box(&mut d, place);
     d.set(b"Resources".to_vec(), Object::Dict(res));
     Stream::flate(d, &content)
 }
@@ -349,14 +406,16 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
 pub fn check_box_states(doc: &mut Document, w: &Widget, kind: FieldKind, on_name: &str) -> Dict {
     let wobj = doc.get(w.obj);
     let wd = wobj.as_dict().cloned().unwrap_or_default();
-    let (width, height) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
+    let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
+    let place = placement(mk_rotation(doc, &wd), page_w, page_h);
+    let (width, height) = (place.layout_w, place.layout_h);
     let (frame_c, _) = frame(doc, &wd, width, height);
     let style = crate::author::CheckStyle::of_widget(doc, &wd, kind);
     let mut form = |content: String| -> Object {
         let mut d = Dict::new();
         d.set(b"Type".to_vec(), Object::name("XObject"));
         d.set(b"Subtype".to_vec(), Object::name("Form"));
-        d.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, width, height].iter().map(|v| Object::Real(*v)).collect()));
+        set_form_box(&mut d, place);
         Object::Ref(doc.add(Object::Stream(Stream::flate(d, content.as_bytes()))))
     };
     let s = width.min(height);

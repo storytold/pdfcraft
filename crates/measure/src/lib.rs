@@ -336,9 +336,12 @@ pub fn add(doc: &mut Document, new: &NewMeasurement, meta: &Meta) -> Result<usiz
         Kind::Distance => Shape::Line {
             from: new.points.first().copied().ok_or_else(|| invalid("missing start"))?,
             to: new.points.last().copied().ok_or_else(|| invalid("missing end"))?,
-            arrow: true,
+            start: pdfcraft_annot::LineEnding::None,
+            end: pdfcraft_annot::LineEnding::OpenArrow,
         },
-        Kind::Perimeter => Shape::PolyLine { vertices: new.points.clone() },
+        Kind::Perimeter => {
+            Shape::PolyLine { vertices: new.points.clone(), start: pdfcraft_annot::LineEnding::None, end: pdfcraft_annot::LineEnding::None }
+        }
         Kind::Area => Shape::Polygon { vertices: new.points.clone(), cloud: false },
     };
     let index = pdfcraft_annot::add_annotation(

@@ -190,8 +190,15 @@ fn spooler_arguments_and_printer_list() {
         [spool::Printer { name: "Office_Laser".into(), default: true }, spool::Printer { name: "Label_Writer".into(), default: false }]
     );
     assert!(parse_lpstat("lpstat: No destinations added.\nno system default destination\n").is_empty());
-    let job =
-        Job { printer: Some("Office_Laser".into()), copies: 3, collate: false, duplex: Duplex::LongEdge, grayscale: true, title: "memo.pdf".into() };
+    let job = Job {
+        printer: Some("Office_Laser".into()),
+        copies: 3,
+        collate: false,
+        duplex: Duplex::LongEdge,
+        grayscale: true,
+        title: "memo.pdf".into(),
+        options: Vec::new(),
+    };
     assert_eq!(
         lp_args(&job).join(" "),
         "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false"
@@ -358,4 +365,83 @@ fn the_spoolers_reply_drops_the_file_count_of_a_job_sent_on_stdin() {
         "request id is Office_Laser-13 (1 file(s))"
     );
     assert_eq!(spool::job_message(b""), "");
+}
+
+/// A PPD shaped like a Fiery's: installable options, multi-line PostScript in the choices, Latin-1
+/// labels, options the Print dialog sets itself.
+const FIERY_PPD: &[u8] = b"*PPD-Adobe: \"4.3\"\n\
+*LanguageEncoding: ISOLatin1\n\
+*OpenGroup: InstallableOptions/Installable Options\n\
+*OpenUI *EFFinisher/Finisher option: PickOne\n\
+*DefaultEFFinisher: False\n\
+*EFFinisher False/Not installed: \"\"\n\
+*EFFinisher SingleStapler/Single stapler: \"\"\n\
+*CloseUI: *EFFinisher\n\
+*CloseGroup: InstallableOptions\n\
+*OpenGroup: FPPaperSource/Media\n\
+*OpenUI *InputSlot/Paper tray: PickOne\n\
+*OrderDependency: 20.0 AnySetup *InputSlot\n\
+*DefaultInputSlot: AutoSelect\n\
+*InputSlot AutoSelect/Auto tray select: \"\n\
+userdict /XJXEFIsetpageproperties known\n\
+{ << /XJXsettrayselV2 [ 7 ] >> XJXEFIsetpageproperties } if\"\n\
+*End\n\
+*InputSlot ManualFeed/Bypass tray: \"\n\
+{ pop 2 XJXsettrayselV2 } if\"\n\
+*End\n\
+*InputSlot Tray2/Tray 2: \"\"\n\
+*fr.InputSlot Tray2/Bac 2: \"\"\n\
+*CloseUI: *InputSlot\n\
+*OpenUI *EFMediaType/Paper type: PickOne\n\
+*DefaultEFMediaType: Plain\n\
+*EFMediaType Plain/Plain: \"\"\n\
+*EFMediaType Heavy1/Thick 1 (106\xad163 g/m\xb2): \"\"\n\
+*CloseUI: *EFMediaType\n\
+*CloseGroup: FPPaperSource\n\
+*OpenUI *PageSize/Page size: PickOne\n\
+*DefaultPageSize: A4\n\
+*PageSize A4/A4: \"\"\n\
+*CloseUI: *PageSize\n\
+*OpenUI *EFRaster/Print queue action: PickOne\n\
+*DefaultEFRaster: Bogus\n\
+*EFRaster False/Print: \"\"\n\
+*EFRaster Hold: \"\"\n\
+*CloseUI: *EFRaster\n";
+
+#[test]
+fn printer_options_come_from_the_ppd() {
+    let options = spool::parse_ppd(&spool::ppd_text(FIERY_PPD));
+    let keys: Vec<&str> = options.iter().map(|o| o.key.as_str()).collect();
+    assert_eq!(keys, ["InputSlot", "EFMediaType", "EFRaster"], "no installable options, no PageSize");
+    let tray = &options[0];
+    assert_eq!((tray.label.as_str(), tray.group.as_str(), tray.default.as_str()), ("Paper tray", "Media", "AutoSelect"));
+    assert_eq!(
+        tray.choices,
+        [("AutoSelect".into(), "Auto tray select".into()), ("ManualFeed".into(), "Bypass tray".into()), ("Tray2".into(), "Tray 2".into())],
+        "PostScript lines and translations (*fr.InputSlot) are not choices"
+    );
+    assert_eq!(options[1].choices[1].1, "Thick 1 (106\u{ad}163 g/m²)", "Latin-1 labels");
+    // A default that isn't one of the choices falls back to the first; a choice without a label shows its keyword.
+    assert_eq!((options[2].default.as_str(), options[2].choices[1].1.as_str()), ("False", "Hold"));
+    assert!(spool::parse_ppd("*OpenUI *Broken\n*Broken A/B\n").is_empty(), "unclosed or malformed blocks are skipped");
+}
+
+#[test]
+fn printer_option_defaults_and_job_arguments() {
+    let current =
+        spool::parse_lpoptions("InputSlot/Paper tray: AutoSelect *Tray2 ManualFeed\nEFRaster/Print queue action: *False Hold\nbroken line\n");
+    assert_eq!(current, [("InputSlot".to_string(), "Tray2".to_string()), ("EFRaster".to_string(), "False".to_string())]);
+    let job = Job {
+        options: vec![
+            ("InputSlot".into(), "Tray2".into()),
+            ("EFMediaType".into(), "Heavy1".into()),
+            ("Duplex".into(), "DuplexTumble".into()),
+            ("Bad Key".into(), "x".into()),
+            ("EFRaster".into(), "a=b".into()),
+        ],
+        ..Job::default()
+    };
+    let args = lp_args(&job).join(" ");
+    assert!(args.ends_with("-o fit-to-page=false -o InputSlot=Tray2 -o EFMediaType=Heavy1"), "{args}");
+    assert!(spool::printer_options("../../etc/passwd").is_empty(), "not a queue name");
 }

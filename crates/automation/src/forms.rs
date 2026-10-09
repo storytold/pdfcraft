@@ -194,6 +194,7 @@ impl Automation {
                     },
                     "page": w.and_then(|w| w.page).map(|p| p + 1),
                     "rect": rect,
+                    "rotation": w.map(|w| w.rotation).unwrap_or(0),
                     "read_only": f.read_only(),
                     "required": f.has(field_flags::REQUIRED),
                 });
@@ -393,6 +394,11 @@ impl Automation {
                     }
                     out
                 }
+            },
+            rotation: match a.opt_int("rotation")? {
+                None => None,
+                Some(r @ (0 | 90 | 180 | 270)) => Some((0, r)),
+                Some(r) => return Err(ToolError::InvalidArgs(format!("rotation must be 0, 90, 180 or 270, not {r}"))),
             },
             actions: None,
             check_style: match a.opt_str("check_style")? {
