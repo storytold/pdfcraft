@@ -100,7 +100,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
 
     let screen = ctx.content_rect();
     let mut chosen: Option<(Option<&'static str>, Option<&'static str>)> = None;
-    egui::Area::new(egui::Id::new("palette"))
+    egui::Area::new(crate::windows::wid("palette"))
         .order(egui::Order::Foreground)
         .pivot(Align2::CENTER_TOP)
         .fixed_pos(egui::pos2(screen.center().x, screen.top() + 96.0))

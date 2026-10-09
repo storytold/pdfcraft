@@ -532,7 +532,7 @@ fn unlock_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     };
     let batch = files.len() > 1;
     let (mut submit, mut cancel) = (false, false);
-    let area = egui::Area::new(egui::Id::new("combine-unlock")).order(egui::Order::Foreground).fixed_pos(prompt.at).show(ctx, |ui| {
+    let area = egui::Area::new(crate::windows::wid("combine-unlock")).order(egui::Order::Foreground).fixed_pos(prompt.at).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(14)).show(ui, |ui| {
             ui.set_width(340.0);
             ui.horizontal(|ui| {
@@ -853,7 +853,7 @@ fn table_body(
     let order = app.combine_columns.order;
     // The heading being dragged follows the pointer.
     if let (Some(dragged), Some(pos)) = (egui::DragAndDrop::payload::<HeadingDrag>(ui.ctx()), ui.ctx().pointer_latest_pos()) {
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("combine-heading-drag")));
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, crate::windows::wid("combine-heading-drag")));
         let galley = painter.layout_no_wrap(dragged.0.label().to_owned(), theme::medium(12.5), t.text);
         let r = Rect::from_min_size(pos + vec2(10.0, 8.0), galley.size() + vec2(16.0, 8.0));
         painter.rect(r, CornerRadius::same(4), t.card, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
@@ -1010,7 +1010,7 @@ fn table_body(
                         let r = response.rect;
                         let y = if from > i { r.top() } else { r.bottom() };
                         if from != i {
-                            response.ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("combine-drop-line"))).hline(
+                            response.ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, crate::windows::wid("combine-drop-line"))).hline(
                                 r.x_range(),
                                 y,
                                 Stroke::new(2.0, t.accent),

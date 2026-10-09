@@ -1876,7 +1876,19 @@ impl eframe::App for PdfCraftApp {
 
 impl PdfCraftApp {
     /// Draw one window: the whole interface of the window loaded into the app fields.
-    pub(crate) fn window_pass(&mut self, _id: WindowId, ui: &mut egui::Ui, _class: egui::ViewportClass) {
+    pub(crate) fn window_pass(&mut self, id: WindowId, ui: &mut egui::Ui, class: egui::ViewportClass) {
+        let previous = self.current_window;
+        windows::set_drawing(id);
+        if id == WindowId::ROOT {
+            self.window_body(ui, class);
+        } else {
+            // Ids that are not absolute differ per window as well.
+            ui.push_id(("window", id.0), |ui| self.window_body(ui, class));
+        }
+        windows::set_drawing(previous);
+    }
+
+    fn window_body(&mut self, ui: &mut egui::Ui, _class: egui::ViewportClass) {
         let ctx = ui.ctx().clone();
         i18n::set_current(i18n::Lang::from_pref(&self.language));
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.

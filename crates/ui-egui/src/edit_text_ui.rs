@@ -506,7 +506,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     let font = editor_font(&ed.look, ed.size);
     let text_color = color32(ed.look.color);
     let mut done = None;
-    egui::Area::new(egui::Id::new("edit-text-line")).order(egui::Order::Foreground).fixed_pos(Pos2::new(ed.rect.left(), ed.rect.top())).show(
+    egui::Area::new(crate::windows::wid("edit-text-line")).order(egui::Order::Foreground).fixed_pos(Pos2::new(ed.rect.left(), ed.rect.top())).show(
         ctx,
         |ui| {
             // The box follows the text as you type: as wide as the longest drafted line needs
@@ -523,7 +523,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 let rows = ed.text.lines().count().max(1);
                 let r = ui.add(
                     egui::TextEdit::multiline(&mut ed.text)
-                        .id(egui::Id::new("edit-text-line-input"))
+                        .id(crate::windows::wid("edit-text-line-input"))
                         .font(font.clone())
                         .text_color(text_color)
                         .frame(egui::Frame::NONE)

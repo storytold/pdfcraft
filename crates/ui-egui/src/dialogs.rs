@@ -60,7 +60,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut close = false;
     let mut next = dialog;
-    let modal = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
+    let modal = egui::Modal::new(crate::windows::wid("dialog")).show(ctx, |ui| {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
@@ -1042,7 +1042,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
             }
             Dialog::About => {
                 // Tabs About · Contributors · Models (craftrules standards/contributors.md).
-                let tab_id = egui::Id::new("about_tab");
+                let tab_id = crate::windows::wid("about_tab");
                 let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
                 ui.horizontal(|ui| {
                     for (i, label) in ["About", "Contributors", "Models"].into_iter().enumerate() {
@@ -1349,7 +1349,7 @@ fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // the prompt taller than the window (#236); 80 characters wrap to a few lines.
     let shown = shorten_middle(&name, 80);
     let mut choice: Option<Option<bool>> = None;
-    let modal = egui::Modal::new(egui::Id::new("save_prompt")).show(ctx, |ui| {
+    let modal = egui::Modal::new(crate::windows::wid("save_prompt")).show(ctx, |ui| {
         ui.set_width(420.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("save", 22.0, t.accent));
@@ -1410,7 +1410,7 @@ fn link_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let email = pending.url.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("mailto:"));
     let (title, open) = if email { (tl!("Write this email?"), tl!("Open email app")) } else { (tl!("Open this web page?"), tl!("Open link")) };
     let mut choice: Option<bool> = None;
-    let modal = egui::Modal::new(egui::Id::new("link_prompt")).show(ctx, |ui| {
+    let modal = egui::Modal::new(crate::windows::wid("link_prompt")).show(ctx, |ui| {
         ui.set_width(460.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("external-link", 22.0, t.accent));
@@ -1476,7 +1476,7 @@ fn password(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut submit = false;
     let mut cancel = false;
-    let modal = egui::Modal::new(egui::Id::new("password")).show(ctx, |ui| {
+    let modal = egui::Modal::new(crate::windows::wid("password")).show(ctx, |ui| {
         ui.set_width(400.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("lock", 22.0, t.accent));

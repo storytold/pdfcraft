@@ -16,7 +16,7 @@ fn hue(g: &ToolGroup) -> Color32 {
 
 pub fn left_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    egui::Panel::left("tool_panel")
+    egui::Panel::left(crate::windows::wid("tool_panel"))
         .resizable(false)
         .exact_size(272.0)
         .frame(
@@ -411,7 +411,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         let comment_allowed = doc.allows_annotation();
         // A dialog or the palette owns the keyboard: the panel leaves Escape to it.
         let modal = app.dialog.is_some() || app.palette_open;
-        egui::Panel::right("right_panel")
+        egui::Panel::right(crate::windows::wid("right_panel"))
             .resizable(true)
             .default_size(330.0)
             .size_range(260.0..=520.0)
@@ -486,7 +486,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     });
                 });
                 ui.add_space(6.0);
-                let search_id = egui::Id::new(("bookmark_search", id.0));
+                let search_id = crate::windows::wid(("bookmark_search", id.0));
                 let mut bookmark_query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
                 if panel == RightPanel::Bookmarks && !info.outline.is_empty() {
                     ui.horizontal(|ui| {

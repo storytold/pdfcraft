@@ -19,6 +19,27 @@ impl WindowId {
     }
 }
 
+thread_local! {
+    /// The window being drawn, for [`wid`].
+    static DRAWING: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// An egui id that belongs to the window being drawn. Ids given to panels, areas and modals are
+/// absolute and shared by all windows (their state is kept by id), so two windows would share a
+/// panel width, a scroll position or the focus of a text field. The main window keeps the plain
+/// ids, so its saved layout is unchanged.
+pub(crate) fn wid(name: impl std::hash::Hash + std::fmt::Debug) -> egui::Id {
+    match DRAWING.with(std::cell::Cell::get) {
+        0 => egui::Id::new(name),
+        window => egui::Id::new(("window", window)).with(name),
+    }
+}
+
+/// Make `id` the window [`wid`] builds ids for.
+pub(crate) fn set_drawing(id: WindowId) {
+    DRAWING.with(|d| d.set(id.0));
+}
+
 /// Most windows open at once (restored sessions are capped to this).
 pub const MAX_WINDOWS: usize = 32;
 
@@ -436,6 +457,7 @@ impl PdfCraftApp {
         self.swap_stored(previous);
         self.swap_stored(id);
         self.current_window = id;
+        set_drawing(id);
         let mut guard = WindowGuard { app: self, previous, loaded: id };
         Some(f(&mut guard))
     }
@@ -554,6 +576,7 @@ impl Drop for WindowGuard<'_> {
         self.app.swap_stored(self.loaded);
         self.app.swap_stored(self.previous);
         self.app.current_window = self.previous;
+        set_drawing(self.previous);
     }
 }
 

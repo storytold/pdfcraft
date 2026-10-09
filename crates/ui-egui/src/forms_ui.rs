@@ -178,7 +178,7 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
     });
     let current = parse_date(&fx.text, fmt);
     let mut picked = None;
-    let area = egui::Area::new(egui::Id::new(("date-picker", view.id.0)))
+    let area = egui::Area::new(crate::windows::wid(("date-picker", view.id.0)))
         .order(egui::Order::Foreground)
         .fixed_pos(field.left_bottom() + vec2(0.0, 2.0))
         .show(ctx, |ui| {
@@ -288,7 +288,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
                 da.iter().position(|x| *x == "Tf").and_then(|i| da.get(i.wrapping_sub(1))).and_then(|s| s.parse::<f32>().ok()).filter(|s| *s > 0.0);
             let multiline = f.has(field_flags::MULTILINE);
             let font = (size.unwrap_or(((w.rect[3] - w.rect[1]) as f32 * 0.6).clamp(6.0, 12.0)) * zoom).clamp(6.0, 64.0);
-            egui::Area::new(egui::Id::new(("form-editor", view.id.0))).order(egui::Order::Foreground).fixed_pos(rect.min).show(ctx, |ui| {
+            egui::Area::new(crate::windows::wid(("form-editor", view.id.0))).order(egui::Order::Foreground).fixed_pos(rect.min).show(ctx, |ui| {
                 ui.set_min_size(rect.size());
                 let Some(fx) = view.forms.focus.as_mut() else { return };
                 let mut te = if multiline { egui::TextEdit::multiline(&mut fx.text) } else { egui::TextEdit::singleline(&mut fx.text) };
@@ -299,7 +299,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
                     .text_color(Color32::BLACK)
                     .margin(egui::Margin::symmetric(3, 1))
                     .password(f.has(field_flags::PASSWORD))
-                    .id(egui::Id::new(("form-field", view.id.0, &f.name, focus.widget)));
+                    .id(crate::windows::wid(("form-field", view.id.0, &f.name, focus.widget)));
                 if let Some(max) = f.max_len {
                     te = te.char_limit(max);
                 }
@@ -345,7 +345,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
         }
         FormFieldKind::Combo | FormFieldKind::List => {
             let multi = f.kind == FormFieldKind::List && f.has(field_flags::MULTI_SELECT);
-            let resp = egui::Area::new(egui::Id::new(("form-choices", view.id.0)))
+            let resp = egui::Area::new(crate::windows::wid(("form-choices", view.id.0)))
                 .order(egui::Order::Foreground)
                 .fixed_pos(rect.left_bottom() + vec2(0.0, 2.0))
                 .show(ctx, |ui| {

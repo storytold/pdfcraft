@@ -136,7 +136,7 @@ impl PdfCraftApp {
             "view.focus_page_input" => {
                 if let (Some(ctx), Some(view)) = (self.ctx.clone(), active.and_then(|i| self.views.get(i))) {
                     // The page box in the toolbar (chrome.rs); select its number so typing replaces it.
-                    let id = egui::Id::new("page-input");
+                    let id = crate::windows::wid("page-input");
                     ctx.memory_mut(|m| m.request_focus(id));
                     let mut state = egui::TextEdit::load_state(&ctx, id).unwrap_or_default();
                     let len = view.page_input.chars().count();

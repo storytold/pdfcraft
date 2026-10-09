@@ -9,7 +9,7 @@ use crate::{Dialog, Mode, PdfCraftApp, PropsTab, RightPanel, icons, widgets};
 pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let left = if cfg!(target_os = "macos") && app.integrated_titlebar { 80 } else { 8 };
-    egui::Panel::top("tab_strip")
+    egui::Panel::top(crate::windows::wid("tab_strip"))
         .exact_size(38.0)
         .frame(egui::Frame::NONE.fill(t.titlebar).inner_margin(egui::Margin { left, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
@@ -156,7 +156,7 @@ fn tab(ui: &mut egui::Ui, t: &Tokens, icon: &str, name: &str, dirty: bool, activ
 
 pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    egui::Panel::top("mode_bar")
+    egui::Panel::top(crate::windows::wid("mode_bar"))
         .exact_size(48.0)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)).stroke(Stroke::new(1.0, t.divider)))
         .show(ui, |ui| {
@@ -292,7 +292,7 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     );
     let page_count = doc.info.pages.len();
     let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-    egui::Panel::right("rail")
+    egui::Panel::right(crate::windows::wid("rail"))
         .resizable(false)
         .exact_size(48.0)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(6, 8)).stroke(Stroke::new(1.0, t.divider)))
@@ -359,7 +359,7 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 ui.label(egui::RichText::new(page_count.to_string()).font(theme::regular(11.0)).color(t.text_muted));
                 let edit = egui::TextEdit::singleline(&mut view.page_input)
-                    .id(egui::Id::new("page-input"))
+                    .id(crate::windows::wid("page-input"))
                     .desired_width(34.0)
                     .horizontal_align(Align::Center)
                     .font(theme::medium(12.0))

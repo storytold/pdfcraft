@@ -439,7 +439,7 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     let zoom = xf.rect.width() / xf.pw.max(1.0);
     let mut commit = false;
     let mut cancel = false;
-    egui::Area::new(egui::Id::new(("fill-text", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+    egui::Area::new(crate::windows::wid(("fill-text", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         let Some(t) = view.fill_text.as_mut() else { return };
         let width = ((t.text.len().max(8) as f32) * TEXT_SIZE as f32 * 0.6 * zoom).clamp(60.0, 600.0);
         let r = ui.add(
