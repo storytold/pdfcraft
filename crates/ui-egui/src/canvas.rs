@@ -1758,7 +1758,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                             view.selection = Some(Selection { page: i, anchor: first, head: last });
                         }
                     } else if resp.clicked() && !over_link {
-                        view.selection = None;
+                        // ⇧-click extends a selection on this page to the click, keeping its
+                        // anchor (#527). Otherwise (no shift, or no selection on this page; a
+                        // selection cannot yet span pages) a click clears the selection.
+                        let shift = ui.input(|inp| inp.modifiers.shift);
+                        match (view.selection.as_mut().filter(|s| shift && s.page == i), text.nearest(vx, vy)) {
+                            (Some(sel), Some(h)) => sel.head = h,
+                            _ => view.selection = None,
+                        }
                     }
                 }
             }
