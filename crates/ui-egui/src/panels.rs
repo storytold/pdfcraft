@@ -378,6 +378,8 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
 
 pub(crate) enum Nav {
     Page(usize),
+    /// A bookmark's destination: its page and where on it.
+    Dest(usize, pdfcraft_render::DestView),
     Flash(usize, [f32; 4]),
 }
 
@@ -673,6 +675,10 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     match nav {
         Some(Nav::Page(p)) => app.views[index].go_to_page(p),
+        Some(Nav::Dest(p, dest)) => match app.session.get(id) {
+            Some(doc) => app.views[index].go_to_dest(p, dest, &doc.info),
+            None => app.views[index].go_to_page(p),
+        },
         Some(Nav::Flash(p, r)) => {
             let v = &mut app.views[index];
             v.go_to_page(p);
@@ -850,7 +856,7 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
         if resp.clicked()
             && let Some(p) = item.page
         {
-            *cx.nav = Some(Nav::Page(p));
+            *cx.nav = Some(Nav::Dest(p, item.view));
         }
         if resp.double_clicked() && cx.editable {
             *cx.action = Some(BmAction::StartRename(path.to_vec()));

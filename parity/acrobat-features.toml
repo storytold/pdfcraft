@@ -1154,8 +1154,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/view.rs::clicking_a_link_goes_to_its_destination"]
-notes = "GoTo and URI links; other action types (JavaScript, Launch, named actions) arrive with M6"
+evidence = ["crates/ui-egui/tests/view.rs::clicking_a_link_goes_to_its_destination", "crates/ui-egui/tests/view.rs::link_destinations_scroll_to_their_position", "crates/render/src/inspect.rs::bookmarks_and_links_keep_their_destination_view"]
+notes = "GoTo and URI links; other action types (JavaScript, Launch, named actions) arrive with M6. Destinations keep their position and zoom (/XYZ, /Fit, /FitH, /FitV, /FitR, named); the /FitB* content box is read as the whole page"
 
 [[feature]]
 id = "view.annotation-hover"
@@ -1250,8 +1250,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/control.rs::state_and_view_options"]
-notes = ""
+evidence = ["crates/ui-egui/tests/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/control.rs::state_and_view_options", "crates/ui-egui/tests/view.rs::bookmark_destinations_scroll_to_their_position"]
+notes = "A bookmark goes to its destination's position and zoom, not just its page"
 
 [[feature]]
 id = "view.highlight-current-bookmark"
