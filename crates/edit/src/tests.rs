@@ -394,7 +394,8 @@ fn japanese_fallback_reports_the_face_after_save_and_reopen() {
     if without_craft_fonts("japanese_fallback_reports_the_face_after_save_and_reopen") {
         return;
     }
-    let face = pdfcraft_fonts::document_japanese_font().unwrap();
+    // F2 is (a subset of) Arial: a regular sans face, so the fallback is the regular Gothic.
+    let face = pdfcraft_fonts::document_japanese_font_for_style(false, false).unwrap();
     let expected = format!("{}-{}", face.family, face.style).replace(' ', "");
     for paragraph in [false, true] {
         let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
