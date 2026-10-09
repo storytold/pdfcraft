@@ -4,8 +4,10 @@
 //! never panics on malformed input (every index is bounds-checked). Depth is limited to defend
 //! against pathological nesting.
 
-use crate::CosError;
+use std::sync::Arc;
+
 use crate::object::{Dict, ObjRef, Object, PdfString, Stream};
+use crate::{Bytes, CosError};
 
 const MAX_DEPTH: usize = 128;
 
@@ -356,6 +358,25 @@ fn hexval(b: u8) -> Option<u8> {
 /// Parse an indirect object at `offset`: `N G obj <object> [stream…endstream] endobj`.
 /// `resolve_length` resolves an indirect `/Length`. Returns the object and its (num, gen).
 pub fn parse_indirect(data: &[u8], offset: usize, resolve_length: &dyn Fn(ObjRef) -> Option<i64>) -> Result<(ObjRef, Object), CosError> {
+    parse_indirect_in(data, None, offset, resolve_length)
+}
+
+/// [`parse_indirect`] for a document's own bytes: stream data points into `data` instead of
+/// being copied out of it.
+pub(crate) fn parse_indirect_shared(
+    data: &Arc<Vec<u8>>,
+    offset: usize,
+    resolve_length: &dyn Fn(ObjRef) -> Option<i64>,
+) -> Result<(ObjRef, Object), CosError> {
+    parse_indirect_in(data, Some(data), offset, resolve_length)
+}
+
+fn parse_indirect_in(
+    data: &[u8],
+    shared: Option<&Arc<Vec<u8>>>,
+    offset: usize,
+    resolve_length: &dyn Fn(ObjRef) -> Option<i64>,
+) -> Result<(ObjRef, Object), CosError> {
     let mut lx = Lexer::new(data, offset);
     lx.skip_ws();
     let num_tok = lx.token();
@@ -407,10 +428,15 @@ pub fn parse_indirect(data: &[u8], offset: usize, resolve_length: &dyn Fn(ObjRef
             // Wrong or missing /Length: search for "endstream" (§7.3.8.1 recovery).
             _ => find_endstream(data, start).ok_or_else(|| CosError::Syntax { offset: start, detail: "stream without endstream".into() })? - start,
         };
-        let raw = data[start..start + len].to_vec();
+        let range = start..start + len;
+        let raw = match shared {
+            Some(buf) => Bytes::view(buf, range),
+            None => data.get(range).map(|r| Bytes::from(r.to_vec())),
+        }
+        .ok_or_else(|| CosError::Syntax { offset: start, detail: "stream data past the end of the file".into() })?;
         let mut dict = dict.clone();
         dict.set(b"Length".to_vec(), Object::Int(raw.len() as i64));
-        return Ok((id, Object::Stream(Stream::from_raw(dict, raw))));
+        return Ok((id, Object::Stream(Stream { dict, raw })));
     }
     Ok((id, obj))
 }
@@ -506,7 +532,7 @@ mod tests {
         let (id, o) = parse_indirect(data, 0, &|_| None).unwrap();
         assert_eq!(id, ObjRef::new(7, 0));
         let Object::Stream(s) = o else { panic!("stream expected") };
-        assert_eq!(s.raw.as_slice(), b"HELLO");
+        assert_eq!(&s.raw[..], b"HELLO");
         assert_eq!(s.dict.int(b"Length"), Some(5));
     }
 
@@ -515,7 +541,7 @@ mod tests {
         let data = b"7 0 obj\n<< /Length 8 0 R >>\nstream\r\nAB\r\nendstream\nendobj\n";
         let (_, o) = parse_indirect(data, 0, &|r| (r.num == 8).then_some(2)).unwrap();
         let Object::Stream(s) = o else { panic!() };
-        assert_eq!(s.raw.as_slice(), b"AB");
+        assert_eq!(&s.raw[..], b"AB");
     }
 
     #[test]

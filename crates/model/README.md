@@ -8,6 +8,8 @@ L3/L4 crates need:
 - `Page::crop`, `Page::rotation` and `Page::view_matrix`: the displayed page's geometry, and the
   matrix from "display space" (origin at the bottom-left of the page as shown, after `/Rotate`)
   to user space, so content can be placed the way the reader sees the page.
+  `view_matrix_for(rotation, rect)` is the same matrix for any rectangle, e.g. to draw a
+  comment's picture upright inside its user-space `/Rect` on a turned page.
 
 `organize`, `annot` and `forms` still carry their own small walkers; they move here as the model
 grows (ADR-0004).

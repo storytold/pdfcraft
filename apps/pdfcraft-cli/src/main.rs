@@ -1,23 +1,6 @@
 //! pdfcraft-cli — headless PdfCraft.
 //!
-//! ```text
-//! pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
-//! pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
-//! pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
-//! pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
-//!                       [--insert-blank 1] [--title T] [--author A] [--full]
-//! pdfcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
-//! pdfcraft-cli extract <in.pdf> --pages 1,3,5 --out out.pdf
-//! pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
-//! pdfcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
-//! pdfcraft-cli tools                                       automation tools and their JSON Schemas
-//! pdfcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
-//! pdfcraft-cli run    --script steps.json [--root DIR]      [{"tool": "doc_open", "args": {…}}, …]
-//! pdfcraft-cli mcp    [--root DIR] [--compact]              MCP server on stdin/stdout (opt-in)
-//!                                                            --compact lists a core set of tools plus tool_search and tool_call
-//! pdfcraft-cli ui     --control FILE <method> [key=value …] [--out shot.png]
-//!                                                            drive a running app started with --control FILE
-//! ```
+//! Usage: `pdfcraft-cli --help`, which prints `USAGE` below.
 //!
 //! `run` and `mcp` drive the same tool table (`pdfcraft-automation`). In `run`, values parse as
 //! JSON when they can (`pages=[1,3]`, `degrees=90`) and are strings otherwise. A script runs its
@@ -43,28 +26,53 @@ use std::time::{Duration, Instant};
 use pdfcraft_engine::export::ImageFormat;
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, inspect};
 
+/// The full usage, printed by `--help` (also after a command, e.g. `render --help`).
+const USAGE: &str = "\
+pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
+pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
+pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
+pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
+                      [--insert-blank 1] [--title T] [--author A] [--full]
+pdfcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
+pdfcraft-cli extract <in.pdf> --pages 1,3,5 --out out.pdf
+pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
+pdfcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
+pdfcraft-cli tools                                       automation tools and their JSON Schemas
+pdfcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
+pdfcraft-cli run    --script steps.json [--root DIR]      [{\"tool\": \"doc_open\", \"args\": {…}}, …]
+pdfcraft-cli mcp    [--root DIR] [--compact]              MCP server on stdin/stdout (opt-in)
+                                                           --compact lists a core set of tools plus tool_search and tool_call
+pdfcraft-cli ui     --control FILE <method> [key=value …] [--out shot.png]
+                                                           drive a running app started with --control FILE
+help and feedback: https://discord.gg/artcraft";
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let result =
-        match args.first().map(String::as_str) {
-            Some("info") => info(&args[1..]),
-            Some("render") => render(&args[1..]),
-            Some("text") => text(&args[1..]),
-            Some("edit") => edit(&args[1..]),
-            Some("combine") => combine(&args[1..]),
-            Some("extract") => extract(&args[1..]),
-            Some("split") => split(&args[1..]),
-            Some("check") => check(&args[1..]),
-            Some("check-one") => check_one(&args[1..]),
-            Some("tools") => tools(),
-            Some("run") => run(&args[1..]),
-            Some("ui") => ui(&args[1..]),
-            #[cfg(feature = "mcp")]
-            Some("mcp") => mcp(&args[1..]),
-            Some("--version") => version(),
-            _ => Err("usage: pdfcraft-cli <info|render|text|edit|combine|extract|split|check|tools|run|mcp|ui> …  (see source header for options)\nhelp and feedback: https://discord.gg/artcraft"
-                .into()),
-        };
+    // `<command> --help` too; only right after the command, so a later `-h` (a value) still reaches it.
+    let command = match args.get(1).map(String::as_str) {
+        Some("--help" | "-h") => Some("--help"),
+        _ => args.first().map(String::as_str),
+    };
+    let result = match command {
+        Some("--help" | "-h" | "help") => stdout_line(format_args!("{USAGE}")),
+        None => Err(format!("usage:\n{USAGE}").into()),
+        Some("info") => info(&args[1..]),
+        Some("render") => render(&args[1..]),
+        Some("text") => text(&args[1..]),
+        Some("edit") => edit(&args[1..]),
+        Some("combine") => combine(&args[1..]),
+        Some("extract") => extract(&args[1..]),
+        Some("split") => split(&args[1..]),
+        Some("check") => check(&args[1..]),
+        Some("check-one") => check_one(&args[1..]),
+        Some("tools") => tools(),
+        Some("run") => run(&args[1..]),
+        Some("ui") => ui(&args[1..]),
+        #[cfg(feature = "mcp")]
+        Some("mcp") => mcp(&args[1..]),
+        Some("--version") => version(),
+        Some(other) => Err(format!("unknown command '{other}'; see pdfcraft-cli --help").into()),
+    };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(CliError::Stdout(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,

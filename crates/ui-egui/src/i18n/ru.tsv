@@ -21,6 +21,9 @@
 	Name on new comments	Имя в новых комментариях
 	Open…	Открыть…
 	Open Recent	Открыть недавние
+	Clear Recent Files	Очистить недавние файлы
+	Remove from Recent	Убрать из недавних
+	Remove {name} from Recent	Убрать {name} из недавних
 	Pin folder to Home…	Закрепить папку на главной…
 	Folders	Папки
 	Pin a folder…	Закрепить папку…
@@ -1972,6 +1975,7 @@
 	Default page display	Отображение страниц по умолчанию
 	Default zoom	Масштаб по умолчанию
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Используется, когда PDF не запрашивает макет или масштаб. Непрерывная прокрутка никогда не привязывается между страницами.
+	Reopen the files that were open when PdfCraft last closed	Повторно открывать файлы, которые были открыты при последнем закрытии PdfCraft
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Выберите изображение PNG или JPEG (до 4 МиБ). Прозрачность сохраняется.
 	Couldn't import the signature image: {e}	Не удалось импортировать изображение подписи: {e}
 

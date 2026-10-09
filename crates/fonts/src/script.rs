@@ -2,7 +2,7 @@
 
 use skrifa::instance::{LocationRef, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
-use skrifa::{FontRef, MetadataProvider};
+use skrifa::{FontRef, GlyphId, MetadataProvider};
 
 static FONT: &[u8] = include_bytes!("../../../assets/fonts/DancingScript.ttf");
 
@@ -145,6 +145,13 @@ pub fn japanese_glyph_from(face: &crate::CraftFont, ch: char) -> Result<GlyphOut
     if !width.is_finite() || width <= 0.0 || width > 2.0 {
         return Err(GlyphError::Missing);
     }
+    bounded_outline(&font, gid, width)
+}
+
+/// Glyph `gid` of `font` in em units with advance `width`, bounded like [`japanese_glyph`].
+pub(crate) fn bounded_outline(font: &FontRef, gid: GlyphId, width: f64) -> Result<GlyphOutline, GlyphError> {
+    let loc = LocationRef::default();
+    let scale = 1.0 / font.metrics(Size::unscaled(), loc).units_per_em.max(1) as f64;
     let Some(glyph) = font.outline_glyphs().get(gid) else { return Err(GlyphError::Missing) };
     let mut pen = Flatten::new(scale);
     let _ = glyph.draw(DrawSettings::unhinted(Size::unscaled(), loc), &mut pen);
@@ -169,13 +176,6 @@ pub fn japanese_glyph_from(face: &crate::CraftFont, ch: char) -> Result<GlyphOut
         }
     }
     Ok(GlyphOutline { contours: pen.contours, width, bbox })
-}
-
-/// Whether `face` has a glyph for every character of `text`.
-pub(crate) fn has_glyphs(face: &crate::CraftFont, text: &str) -> bool {
-    let Ok(font) = FontRef::new(face.bytes) else { return false };
-    let map = font.charmap();
-    text.chars().all(|c| map.map(c).is_some())
 }
 
 /// The outlines of `text` in the script font (characters it lacks are skipped).

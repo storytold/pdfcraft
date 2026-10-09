@@ -22,6 +22,7 @@ pub mod links;
 pub mod ocr;
 pub mod optimizer;
 pub mod signature_image;
+mod upright_image;
 pub mod xfa;
 
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
@@ -68,17 +69,25 @@ pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, script_outline};
 
 /// Fill & Sign: `text` in the script font as a typed signature, its left edge at `at` (user
 /// space, vertically centred) and `height` points tall. `None` for text with no outlines.
-pub fn typed_signature_shape(at: [f64; 2], text: &str, height: f64) -> Option<Shape> {
+///
+/// Left, centred and upright are as displayed on a page turned by `rotation` (its `/Rotate`):
+/// the box runs along the displayed axes, like an image signature's
+/// ([`SignatureImage::rect`]), and the outlines are turned back so the name reads across.
+pub fn typed_signature_shape(at: [f64; 2], text: &str, height: f64, rotation: i64) -> Option<Shape> {
     let o = script_outline(text);
     let [left, bottom, right, top] = o.bounds();
     let span = (top - bottom).max(0.1);
     let width = right - left;
-    if o.contours.is_empty() || o.width <= 0.0 {
+    if o.contours.is_empty() || o.width <= 0.0 || !(width > 0.0 && height > 0.0) {
         return None;
     }
     let k = height / span;
-    let rect = [at[0], at[1] - height / 2.0, at[0] + width * k, at[1] + height / 2.0];
-    let contours = o.contours.iter().map(|c| c.iter().map(|p| [(p[0] - left) / width, (p[1] - bottom) / span]).collect()).collect();
+    let rect = signature_image::upright_box(rotation, at, width * k, height)?;
+    // Displayed right and up as user-space unit vectors: a point at (nx, ny) of the displayed box
+    // is at this fraction of the user-space box. Exact for an unturned page.
+    let [a, b, c, d, ..] = pdfcraft_model::view_matrix_for(rotation, [0.0; 4]);
+    let to_user = |nx: f64, ny: f64| [a * nx + c * ny + (-a).max(0.0) + (-c).max(0.0), b * nx + d * ny + (-b).max(0.0) + (-d).max(0.0)];
+    let contours = o.contours.iter().map(|c| c.iter().map(|p| to_user((p[0] - left) / width, (p[1] - bottom) / span)).collect()).collect();
     Some(Shape::TypedSignature { rect, contours })
 }
 /// Comment geometry helpers (text-box line breaking) for frontends.
@@ -1450,9 +1459,11 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::AddCustomStamp { page, rect, name, file, author } => {
             let src = mark_source(doc, file)?;
             let (sw, sh) = (src.size.0.max(1.0), src.size.1.max(1.0));
-            let rect = if rect[2] == rect[0] && rect[3] == rect[1] {
+            let natural = rect[2] == rect[0] && rect[3] == rect[1];
+            let rotation = if natural && src.image { pdfcraft_organize::page_rotation(doc, *page)? } else { 0 };
+            let rect = if natural {
                 let k = (200.0 / sw.max(sh)).min(1.0);
-                let (w, h) = (sw * k, sh * k);
+                let (w, h) = if matches!(rotation, 90 | 270) { (sh * k, sw * k) } else { (sw * k, sh * k) };
                 [rect[0] - w / 2.0, rect[1] - h / 2.0, rect[0] + w / 2.0, rect[1] + h / 2.0]
             } else {
                 *rect
@@ -1460,7 +1471,8 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             let shape = Shape::CustomStamp { rect, name: name.clone(), picture: src.xobject, image: src.image, size: (sw, sh) };
             let style = pdfcraft_annot::Style::default_for(&shape);
             let new = NewAnnotation { page: *page, shape, style, contents: name.clone(), author: author.clone() };
-            pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;
+            let index = pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;
+            pdfcraft_annot::orient_image_stamp(doc, *page, index, rotation)?;
         }
         Edit::DeleteAnnotation { page, index } => pdfcraft_annot::delete_annotation(doc, *page, *index)?,
         Edit::SetAnnotationContents { page, index, text } => pdfcraft_annot::set_contents(doc, *page, *index, text, &cx.meta())?,
@@ -1505,7 +1517,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             ran.map_err(EditError::Invalid)?;
         }
         Edit::SetFieldImage { name, image } => {
-            let (img, _) = pdfcraft_create::image_xobject(doc, name, image)?;
+            let (img, _) = embed_image(doc, name, image)?;
             let px = match &*doc.get(img) {
                 pdfcraft_cos::Object::Stream(s) => (s.dict.int(b"Width").unwrap_or(1) as u32, s.dict.int(b"Height").unwrap_or(1) as u32),
                 _ => (1, 1),
@@ -1562,7 +1574,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                 ImageEdit::Flip { horizontal } => {
                     pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(img.rect, 0, *horizontal, !*horizontal))
                 }
-                ImageEdit::Replace { name, bytes } => pdfcraft_edit::ImageChange::Replace(pdfcraft_create::image_xobject(doc, name, bytes)?.0),
+                ImageEdit::Replace { name, bytes } => pdfcraft_edit::ImageChange::Replace(embed_image(doc, name, bytes)?.0),
                 ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
             };
             pdfcraft_edit::change_image(doc, *page, *index, &c)?;
@@ -1602,7 +1614,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             pdfcraft_edit::add_content(doc, *page, &AddedContent::Text(text.clone()))?;
         }
         Edit::AddImage { page, rect, name, bytes } => {
-            let (image, natural) = pdfcraft_create::image_xobject(doc, name, bytes)?;
+            let (image, natural) = embed_image(doc, name, bytes)?;
             let rect = match rect {
                 Some(r) => *r,
                 None => {
@@ -1622,7 +1634,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             let Some(AddedContent::Image(old)) = item.map(|a| a.content) else {
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("that item is not an image".into())));
             };
-            let (image, _) = pdfcraft_create::image_xobject(doc, name, bytes)?;
+            let (image, _) = embed_image(doc, name, bytes)?;
             pdfcraft_edit::update_content(doc, *page, *index, &AddedContent::Image(pdfcraft_edit::AddedImage { image, ..old }))?;
         }
         Edit::ApplyRedactions { pages } => {
@@ -2977,6 +2989,15 @@ pub struct MarkFile {
     pub page: usize,
 }
 
+/// Embed an image that is placed on a page, turned the way its EXIF Orientation says.
+fn embed_image(
+    doc: &mut pdfcraft_cos::Document,
+    name: &str,
+    bytes: &[u8],
+) -> Result<(pdfcraft_cos::ObjRef, (f64, f64)), pdfcraft_create::CreateError> {
+    pdfcraft_create::image_xobject(doc, name, &upright_image::upright(bytes))
+}
+
 /// Bring a mark's picture into `doc`: a PDF page as a form XObject, or an image.
 fn mark_source(doc: &mut pdfcraft_cos::Document, f: &MarkFile) -> Result<pdfcraft_edit::MarkSource, EditError> {
     let head = &f.bytes[..f.bytes.len().min(1024)];
@@ -2985,7 +3006,7 @@ fn mark_source(doc: &mut pdfcraft_cos::Document, f: &MarkFile) -> Result<pdfcraf
         let (xobject, size) = pdfcraft_organize::page_as_form(doc, &src, f.page)?;
         Ok(pdfcraft_edit::MarkSource { xobject, size, image: false })
     } else {
-        let (xobject, size) = pdfcraft_create::image_xobject(doc, &f.name, &f.bytes)?;
+        let (xobject, size) = embed_image(doc, &f.name, &f.bytes)?;
         Ok(pdfcraft_edit::MarkSource { xobject, size, image: true })
     }
 }

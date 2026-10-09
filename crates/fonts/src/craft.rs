@@ -49,6 +49,12 @@ pub fn ui_arabic_fonts() -> Vec<&'static CraftFont> {
     arabic(CRAFT_FONTS.iter())
 }
 
+/// The face for Arabic text written into PDFs: the first `Arab` face. `None` when built without
+/// craft-fonts or when its revision has no Arabic face.
+pub fn document_arabic_font() -> Option<&'static CraftFont> {
+    ui_arabic_fonts().into_iter().next()
+}
+
 fn arabic<'a>(faces: impl IntoIterator<Item = &'a CraftFont>) -> Vec<&'a CraftFont> {
     faces.into_iter().filter(|f| f.covers("Arab")).collect()
 }
@@ -96,41 +102,36 @@ pub fn document_japanese_font_for_style(serif: bool, bold: bool) -> Option<&'sta
     document_face(CRAFT_FONTS, serif, bold)
 }
 
+/// Every `Jpan` face that can stand in for the document text, the best match for the style first
+/// (the face [`document_japanese_font_for_style`] returns), then the others. Not every face has
+/// every glyph (their coverage of e.g. Cyrillic differs), so a caller can move on to the next one.
+/// Empty without craft-fonts.
+pub fn document_japanese_fonts_for_style(serif: bool, bold: bool) -> Vec<&'static CraftFont> {
+    document_faces(CRAFT_FONTS, serif, bold)
+}
+
 fn document_face(faces: &[CraftFont], serif: bool, bold: bool) -> Option<&CraftFont> {
+    document_faces(faces, serif, bold).into_iter().next()
+}
+
+fn document_faces(faces: &[CraftFont], serif: bool, bold: bool) -> Vec<&CraftFont> {
     let jpan = || faces.iter().filter(|f| f.covers("Jpan"));
+    let mut preferred = Vec::new();
     if !serif {
         let style = if bold { "Bold" } else { "Regular" };
-        if let Some(face) = jpan()
-            .find(|f| f.family == "BIZ UDPGothic" && f.style == style)
-            .or_else(|| jpan().find(|f| f.family == "BIZ UDPGothic" && f.style == "Regular"))
-        {
-            return Some(face);
+        preferred.extend(jpan().find(|f| f.family == "BIZ UDPGothic" && f.style == style));
+        preferred.extend(jpan().find(|f| f.family == "BIZ UDPGothic" && f.style == "Regular"));
+    }
+    for family in ["Shippori Mincho", "BIZ UDMincho"] {
+        preferred.extend(jpan().find(|f| f.family == family && f.style == "Regular"));
+    }
+    let mut out: Vec<&CraftFont> = Vec::new();
+    for face in preferred.into_iter().chain(jpan().filter(|f| f.style == "Regular")).chain(jpan()) {
+        if !out.iter().any(|f| std::ptr::eq(*f, face)) {
+            out.push(face);
         }
     }
-    ["Shippori Mincho", "BIZ UDMincho"]
-        .iter()
-        .find_map(|family| jpan().find(|f| f.family == *family && f.style == "Regular"))
-        .or_else(|| jpan().find(|f| f.style == "Regular"))
-        .or_else(|| jpan().next())
-}
-
-/// The document face for replacement `text`: [`document_japanese_font_for_style`]'s face when it
-/// has a glyph for every character, else the closest other Japanese face that has them all (a
-/// Mincho first for serif text, then the requested weight). Shippori Mincho has no Cyrillic or
-/// Greek but BIZ UDMincho and BIZ UDPGothic do, so Bulgarian text in a serif line still gets a
-/// Mincho. `None` without craft-fonts or when no face shows all of `text`.
-pub fn document_font_for_text(serif: bool, bold: bool, text: &str) -> Option<&'static CraftFont> {
-    document_face_for(CRAFT_FONTS, serif, bold, |f| crate::script::has_glyphs(f, text))
-}
-
-fn document_face_for(faces: &[CraftFont], serif: bool, bold: bool, shows: impl Fn(&CraftFont) -> bool) -> Option<&CraftFont> {
-    if let Some(face) = document_face(faces, serif, bold).filter(|f| shows(f)) {
-        return Some(face);
-    }
-    let mut jpan: Vec<&CraftFont> = faces.iter().filter(|f| f.covers("Jpan")).collect();
-    // Stable: manifest order within each group.
-    jpan.sort_by_key(|f| (f.family.contains("Mincho") != serif, (f.style == "Bold") != bold));
-    jpan.into_iter().find(|f| shows(f))
+    out
 }
 
 const fn str_eq(a: &str, b: &str) -> bool {
@@ -210,35 +211,13 @@ mod tests {
         assert_eq!(document_face(&faces, true, true).unwrap().bytes, b"serif");
         assert_eq!(document_face(&faces[..2], false, true).unwrap().bytes, b"sans");
         assert_eq!(document_face(&faces[..1], false, true).unwrap().bytes, b"serif");
+        // Every Japanese face is a candidate, the style's match first and none twice.
+        let order: Vec<&[u8]> = document_faces(&faces, false, true).iter().map(|f| f.bytes).collect();
+        assert_eq!(order, [b"bold".as_slice(), b"sans", b"serif"]);
+        let order: Vec<&[u8]> = document_faces(&faces, true, false).iter().map(|f| f.bytes).collect();
+        assert_eq!(order, [b"serif".as_slice(), b"sans", b"bold"]);
         assert!(document_face(&faces[3..], false, true).is_none());
         assert!(document_face(&[], false, true).is_none());
-    }
-
-    #[test]
-    fn document_face_for_text_falls_back_to_a_face_with_every_glyph() {
-        let faces = [
-            CraftFont { family: "Shippori Mincho", style: "Regular", scripts: &["Jpan"], bytes: b"shippori" },
-            CraftFont { family: "BIZ UDPGothic", style: "Regular", scripts: &["Jpan"], bytes: b"sans" },
-            CraftFont { family: "BIZ UDPGothic", style: "Bold", scripts: &["Jpan"], bytes: b"bold" },
-            CraftFont { family: "BIZ UDMincho", style: "Regular", scripts: &["Jpan"], bytes: b"mincho" },
-            CraftFont { family: "Latin Serif", style: "Regular", scripts: &["Latn"], bytes: b"latin" },
-        ];
-        // Every face shows the text: the style's own face, as before.
-        let all = |_: &CraftFont| true;
-        assert_eq!(document_face_for(&faces, true, false, all).unwrap().bytes, b"shippori");
-        assert_eq!(document_face_for(&faces, false, true, all).unwrap().bytes, b"bold");
-        // Shippori Mincho lacks the letters (Cyrillic): serif text keeps a Mincho.
-        let no_shippori = |f: &CraftFont| f.family != "Shippori Mincho";
-        assert_eq!(document_face_for(&faces, true, false, no_shippori).unwrap().bytes, b"mincho");
-        assert_eq!(document_face_for(&faces, true, true, no_shippori).unwrap().bytes, b"mincho");
-        assert_eq!(document_face_for(&faces, false, true, no_shippori).unwrap().bytes, b"bold");
-        // Only a Gothic has them: serif text takes it rather than failing.
-        let gothic = |f: &CraftFont| f.family == "BIZ UDPGothic" && f.style == "Regular";
-        assert_eq!(document_face_for(&faces, true, true, gothic).unwrap().bytes, b"sans");
-        // Non-Japanese faces aren't document fallbacks; nothing shows the text: None.
-        assert!(document_face_for(&faces, true, false, |f: &CraftFont| f.family == "Latin Serif").is_none());
-        assert!(document_face_for(&faces, true, false, |_: &CraftFont| false).is_none());
-        assert!(document_face_for(&[], true, false, all).is_none());
     }
 
     #[test]

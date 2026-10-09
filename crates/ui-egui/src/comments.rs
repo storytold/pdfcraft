@@ -808,11 +808,9 @@ fn select_input(
         && let Some(o) = origin
     {
         if let (Some(h), Some(a)) = (handle_at(o), selected) {
-            let aspect_ratio = view.signature_drag.aspect_ratio(cx.page, a.index).and_then(|ratio| {
-                let p = cx.info.pages.get(cx.page)?;
-                let rotation = u32::from(p.rotation) + u32::from(cx.xf.rot);
-                Some(if rotation % 180 == 0 { ratio } else { ratio.recip() })
-            });
+            // On screen, the image is also turned by the view's rotation.
+            let turned = !cx.xf.rot.is_multiple_of(180);
+            let aspect_ratio = view.signature_drag.aspect_ratio(cx.page, a.index).map(|ratio| if turned { ratio.recip() } else { ratio });
             cv.gesture = Some(Gesture::Resize { page: cx.page, index: a.index, handle: h, from: o, aspect_ratio });
             consumed = true;
         } else if let Some(a) = cx.hit(o)
@@ -1076,7 +1074,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             ui.set_width(260.0);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&prefs.author).font(theme::semibold(13.0)));
-                ui.label(egui::RichText::new(title).font(theme::regular(11.5)).color(t.text_faint));
+                ui.label(egui::RichText::new(tl!(title)).font(theme::regular(11.5)).color(t.text_faint));
             });
             ui.add_space(6.0);
             let hint = match c.kind {

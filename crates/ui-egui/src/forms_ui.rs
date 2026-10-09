@@ -226,7 +226,11 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
                                 .selectable_label(selected, text)
                                 .on_hover_text(crate::i18n::fmt(
                                     tl!("{month} {day}, {y}"),
-                                    &[("month", tl!(MONTHS[(m - 1) as usize])), ("day", &day.to_string()), ("y", &y.to_string())],
+                                    &[
+                                        ("month", tl_ctx!("calendar date", MONTHS[(m - 1) as usize])),
+                                        ("day", &day.to_string()),
+                                        ("y", &y.to_string()),
+                                    ],
                                 ))
                                 .clicked()
                             {

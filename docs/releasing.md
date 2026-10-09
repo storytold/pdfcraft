@@ -82,6 +82,9 @@ from Preview). Files opened from Finder arrive as Apple events, which
 - **Notarization:** the app is zipped and sent with `xcrun notarytool submit --wait`, the ticket is
   stapled, and the result is checked with `codesign --verify`, `stapler validate` and `spctl`. The
   app ships on a drag-to-Applications DMG, which is signed and notarized too.
+  Its Finder window (background, icon size and positions) comes from
+  [`packaging/macos/dmg/`](../packaging/macos/dmg/README.md), and its volume is named `PdfCraft`
+  without the version, which the window's background needs; the DMG file name keeps the version.
 - **CLI:** `pdfcraft-cli` is signed and notarized as a zip. A bare executable can't hold a stapled
   ticket, so Gatekeeper looks it up online the first time a downloaded copy runs.
 

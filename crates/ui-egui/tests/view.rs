@@ -35,6 +35,7 @@ fn harness(options: &'static [(&'static str, &'static str)]) -> Harness<'static,
 fn harness_stepping(step_dt: f32, options: &'static [(&'static str, &'static str)]) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(step_dt).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("pages.pdf", None, PAGES.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "none").unwrap();
@@ -63,6 +64,7 @@ trailer << /Root 1 0 R >>
 fn mixed_harness(options: &'static [(&'static str, &'static str)]) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("mixed.pdf", None, MIXED.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "none").unwrap();
@@ -230,6 +232,7 @@ fn layout_option_rejects_typos() {
 #[test]
 fn view_options_without_a_document() {
     let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
     assert!(app.set_option("default-layout", "single").is_ok(), "the default needs no document");
     assert_eq!(app.view_defaults.layout, pdfcraft_ui_egui::canvas::PageLayout::Single);
     assert!(app.set_option("cover", "on").is_err(), "cover needs an open document");
@@ -251,6 +254,7 @@ fn default_page_display_is_used_for_new_documents() {
     // Persisted preferences survive a restart.
     let saved = h.state().persist();
     let mut fresh = PdfCraftApp::new();
+    fresh.set_option("language", "en").unwrap();
     fresh.restore(&saved);
     assert_eq!(fresh.view_defaults.layout, PageLayout::Single);
     // Garbage keeps the previous default; casing is forgiven; legacy files lack the key.
@@ -259,6 +263,7 @@ fn default_page_display_is_used_for_new_documents() {
     fresh.restore(r#"{"default_layout":"TWO-UP"}"#);
     assert_eq!(fresh.view_defaults.layout, PageLayout::TwoUp);
     let mut legacy = PdfCraftApp::new();
+    legacy.set_option("language", "en").unwrap();
     legacy.restore("{}");
     assert_eq!(legacy.view_defaults.layout, PageLayout::Continuous);
 }
@@ -287,6 +292,7 @@ fn default_zoom_is_used_for_new_documents() {
     // Saved settings keep it, and garbage leaves it alone.
     let saved = h.state().persist();
     let mut fresh = PdfCraftApp::new();
+    fresh.set_option("language", "en").unwrap();
     fresh.restore(&saved);
     fresh.restore(r#"{"default_zoom":"bogus"}"#);
     fresh.open_bytes("again.pdf", None, PAGES.to_vec()).expect("opens");
@@ -445,6 +451,105 @@ fn clicking_a_link_goes_to_its_destination() {
     assert!((target.min.y - vp.min.y).abs() < 40.0, "page 3 is scrolled to the top: {target:?} in {vp:?}");
 }
 
+/// Bookmarks and a link with positioned destinations (ISO 32000-2 §12.3.2.2). Page 2's crop box
+/// is away from the origin (x 50..350, y 100..500), so its user-space y 420 is 20% down the page.
+const DESTS: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 10 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [20 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 400 600] /CropBox [50 100 350 500] >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R >> endobj
+10 0 obj << /Type /Outlines /First 11 0 R /Last 13 0 R /Count 3 >> endobj
+11 0 obj << /Title (Section 1.1 Shapes) /Parent 10 0 R /Next 12 0 R /Dest [4 0 R /XYZ 0 420 0] >> endobj
+12 0 obj << /Title (Zoomed in) /Parent 10 0 R /Next 13 0 R /Dest [4 0 R /XYZ 125 300 3] >> endobj
+13 0 obj << /Title (Broken) /Parent 10 0 R /Dest [5 0 R /XYZ (left) /top true] >> endobj
+20 0 obj << /Type /Annot /Subtype /Link /Rect [50 300 250 350] /Border [0 0 0] /Dest [4 0 R /FitH 420] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+fn dests_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("dests.pdf", None, DESTS.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "bookmarks").unwrap();
+        app
+    });
+    // The Bookmarks panel widens to fit its titles over many frames; fit-width zoom follows it.
+    // Positions are checked once the window's layout holds still.
+    let mut width = 0.0;
+    for _ in 0..400 {
+        h.run_steps(1);
+        let w = h.state().views[0].viewport_rect().width();
+        if w == width {
+            break;
+        }
+        width = w;
+    }
+    h
+}
+
+/// Where the point a fraction (`fx`, `fy`) across and down `page` is on screen, relative to the
+/// viewport's top-left corner.
+fn from_viewport_corner(h: &Harness<'static, PdfCraftApp>, page: usize, fx: f32, fy: f32) -> egui::Vec2 {
+    let (r, vp) = (rect(h, page).expect("page on screen"), h.state().views[0].viewport_rect());
+    egui::pos2(r.min.x + fx * r.width(), r.min.y + fy * r.height()) - vp.min
+}
+
+#[test]
+fn bookmark_destinations_scroll_to_their_position() {
+    use egui_kittest::kittest::Queryable;
+    use pdfcraft_ui_egui::canvas::Fit;
+    let mut h = dests_harness();
+    // Fit width: the pages are taller than the window, so any point of them can reach its top.
+    h.get_by_label("Section 1.1 Shapes").click();
+    h.run_steps(6);
+    let v = &h.state().views[0];
+    assert_eq!(v.current, 1, "the bookmark targets page 2");
+    assert_eq!(v.fit, Fit::Width, "/XYZ with zoom 0 keeps the zoom");
+    let d = from_viewport_corner(&h, 1, 0.0, 0.2);
+    assert!(d.y.abs() < 2.0, "y 420 on page 2 is at the top of the window, not the page top: {d:?}");
+
+    // /XYZ left top zoom: 300%, with (125, 300), a quarter across and half way down, at the
+    // window's top-left (the page is now wider than the window): its left is the edge of the
+    // gutter that keeps pages clear of the quick-action bar.
+    h.get_by_label("Zoomed in").click();
+    h.run_steps(6);
+    let v = &h.state().views[0];
+    assert_eq!((v.current, v.fit, v.zoom), (1, Fit::None, 3.0));
+    let d = from_viewport_corner(&h, 1, 0.25, 0.5);
+    assert!((d.x - 70.0).abs() < 2.0 && d.y.abs() < 2.0, "the destination point is at the window's top-left: {d:?}");
+
+    // Malformed operands fall back to the top of the page at the current zoom.
+    h.get_by_label("Broken").click();
+    h.run_steps(6);
+    let v = &h.state().views[0];
+    assert_eq!((v.current, v.zoom), (2, 3.0));
+    let d = from_viewport_corner(&h, 2, 0.0, 0.0);
+    assert!(d.y > 0.0 && d.y < 40.0, "page 3 is scrolled to its top: {d:?}");
+}
+
+#[test]
+fn link_destinations_scroll_to_their_position() {
+    use pdfcraft_ui_egui::canvas::Fit;
+    let mut h = dests_harness();
+    h.state_mut().set_option("zoom", "100%").unwrap();
+    h.run_steps(4);
+    let r = rect(&h, 0).expect("page 1");
+    // The link spans x 50..250, y 300..350 in PDF space on the 300×400 page 1.
+    let at = egui::pos2(r.min.x + r.width() * (150.0 / 300.0), r.min.y + r.height() * (1.0 - 325.0 / 400.0));
+    h.hover_at(at);
+    h.run_steps(2);
+    h.drag_at(at); // press
+    h.drop_at(at); // release
+    h.run_steps(8);
+    let v = &h.state().views[0];
+    assert_eq!((v.current, v.fit), (1, Fit::Width), "/FitH goes to page 2 and fits its width");
+    let d = from_viewport_corner(&h, 1, 0.0, 0.2);
+    assert!(d.y.abs() < 2.0, "y 420 on page 2 is at the top of the window: {d:?}");
+}
+
 /// Two pages with a text field on each and a non-embedded Helvetica.
 const FORM: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] >> >> endobj
@@ -463,6 +568,7 @@ trailer << /Root 1 0 R >>
 fn form_harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, FORM.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app
@@ -531,6 +637,7 @@ fn required_radio_buttons_get_a_round_red_border() {
     let _gpu = gpu();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("radios.pdf", None, RADIOS.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "none").unwrap();
@@ -575,6 +682,7 @@ fn field_highlighting_is_remembered() {
     assert!(h.state().views[1].highlight_fields, "the next document opens highlighted");
     let saved = h.state().persist();
     let mut next = PdfCraftApp::new();
+    next.set_option("language", "en").unwrap();
     next.restore(&saved);
     next.open_bytes("form.pdf", None, FORM.to_vec()).expect("opens");
     assert!(next.views[0].highlight_fields, "and so does the next session");
@@ -666,6 +774,7 @@ trailer << /Root 1 0 R >>
         let bytes = pdf.clone();
         let mut h = Harness::builder().with_size(egui::vec2(1000.0, 800.0)).with_pixels_per_point(ppp).build_eframe(move |_cc| {
             let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
             app.open_bytes("lines.pdf", None, bytes.clone()).expect("opens");
             app.set_option("left", "closed").unwrap();
             app.set_option("panel", "none").unwrap();

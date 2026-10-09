@@ -21,6 +21,9 @@
 	Name on new comments	新註解的作者名稱
 	Open…	開啟…
 	Open Recent	開啟最近的檔案
+	Clear Recent Files	清除最近的檔案
+	Remove from Recent	從最近的檔案中移除
+	Remove {name} from Recent	從最近的檔案中移除{name}
 	Pin folder to Home…	將資料夾釘選到首頁…
 	Folders	資料夾
 	Pin a folder…	釘選資料夾…
@@ -1968,3 +1971,4 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	選擇 PNG 或 JPEG 圖像（最大 4 MiB）。透明度會保留。
 	Couldn't import the signature image: {e}	無法匯入簽名圖像：{e}
 	Go to page…	轉到頁面…
+	Reopen the files that were open when PdfCraft last closed	重新開啟上次關閉 PdfCraft 時開啟的檔案

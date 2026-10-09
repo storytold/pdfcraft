@@ -109,6 +109,7 @@ impl Automation {
         };
         Ok(vec![
             Content::Json(json!({ "page": page + 1, "index": index + 1, "rect": rect_to_view(info, annotation.rect), "rotation": info.rotation,
+                "image_rotation": (i64::from(info.rotation) - preview.turn).rem_euclid(360),
                 "layer": layer, "opacity": preview.opacity, "dpi": dpi })),
             image,
         ])
@@ -386,7 +387,7 @@ impl Automation {
             let path = self.resolve(path, false)?;
             let file = std::fs::File::open(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
             let image = pdfcraft_engine::SignatureImage::read(file).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
-            let edit = image.edit(page, at, kind == "initials", &author).ok_or_else(|| ToolError::InvalidArgs("at must be finite".into()))?;
+            let edit = image.edit(page, &info, at, kind == "initials", &author).ok_or_else(|| ToolError::InvalidArgs("at must be finite".into()))?;
             return self.apply(a, edit);
         }
         let size = 10.0;
@@ -405,12 +406,12 @@ impl Automation {
                 let t = format!("{m}/{d}/{yy}");
                 (text_at(&t), t)
             }
-            // A typed signature or initials in the script font, left edge at `at`.
+            // A typed signature or initials in the script font, left edge at `at`, upright as displayed.
             kind @ ("signature" | "initials") => {
                 let t = a.str("text")?;
                 let h = if kind == "initials" { 24.0 } else { 32.0 };
-                let shape =
-                    pdfcraft_engine::typed_signature_shape(at, t, h).ok_or_else(|| ToolError::InvalidArgs("text has nothing to draw".into()))?;
+                let shape = pdfcraft_engine::typed_signature_shape(at, t, h, i64::from(info.rotation))
+                    .ok_or_else(|| ToolError::InvalidArgs("text has nothing to draw".into()))?;
                 (shape, String::new())
             }
             kind => {

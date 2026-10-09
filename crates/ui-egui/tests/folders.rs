@@ -51,6 +51,7 @@ impl Drop for TempFolder {
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         // List folders on the frame that asks, not on a worker thread.
         app.run_inline = true;
         setup(&mut app);
@@ -144,8 +145,10 @@ fn pinned_folders_survive_a_restart() {
     let dir = TempFolder::new("restart");
     let folder = dir.path();
     let mut a = PdfCraftApp::new();
+    a.set_option("language", "en").unwrap();
     assert!(a.pin_folder(&folder));
     let mut b = PdfCraftApp::new();
+    b.set_option("language", "en").unwrap();
     b.restore(&a.persist());
     assert_eq!(b.pinned.folders, [folder]);
     b.restore("{\"pinned_folders\": [5, \"relative/path\"]}");
@@ -195,8 +198,35 @@ fn show_more_reveals_the_older_pdfs() {
 }
 
 #[test]
+fn a_long_pdf_name_is_cut_before_its_date_and_size() {
+    let dir = TempFolder::new("long");
+    // Short enough for Windows' 260-character paths under the temp folder.
+    let name = format!("{}.pdf", "Signed contract with a long name ".repeat(4));
+    dir.file(&name, FIXTURE, Duration::from_secs(10));
+    let folder = dir.path();
+    let mut h = harness(move |app| {
+        app.pin_folder(&folder);
+    });
+    h.run_steps(2);
+    let text: Vec<(String, bool, egui::Rect)> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Text(t) => Some((t.galley.text().to_owned(), t.galley.elided, t.visual_bounding_rect())),
+            _ => None,
+        })
+        .collect();
+    let (_, cut, rect) = text.iter().find(|(s, ..)| *s == name).expect("the PDF is listed");
+    let detail = text.iter().find(|(s, _, r)| s.contains('·') && r.y_range().contains(rect.center().y)).expect("its row shows the date and size").2;
+    assert!(*cut, "the name is cut short");
+    assert!(rect.right() < detail.left(), "the name ends before the date and size");
+}
+
+#[test]
 fn pinning_is_limited_and_never_duplicates() {
     let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
     assert!(!app.pin_folder("relative/scans"), "a relative path is refused");
     let root = if cfg!(windows) { "C:\\" } else { "/" };
     let folders: Vec<String> = (0..MAX_PINNED).map(|i| Path::new(root).join(format!("pinned-{i}")).to_string_lossy().into_owned()).collect();

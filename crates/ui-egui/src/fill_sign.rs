@@ -5,7 +5,7 @@
 
 use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::{Edit, FillMark, NewAnnotation, Shape, SignatureImage, Style};
-use pdfcraft_render::DocInfo;
+use pdfcraft_render::{DocInfo, PageInfo};
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
@@ -190,38 +190,50 @@ pub fn typed(page: usize, at: [f64; 2], text: &str, author: &str) -> Edit {
 }
 
 /// Place a saved signature (strokes normalised to a 0–1 box, y up) with its left edge at `at`,
-/// 150 pt wide.
-pub fn signature_at(page: usize, at: [f64; 2], strokes: &[Vec<[f32; 2]>], author: &str) -> Option<Edit> {
+/// 150 pt wide. Left, centred and upright are as displayed on a page turned by `rotation` (its
+/// `/Rotate`), so the strokes are turned back into user space.
+pub fn signature_at(page: usize, at: [f64; 2], strokes: &[Vec<[f32; 2]>], rotation: i64, author: &str) -> Option<Edit> {
     let w = 150.0;
     let (min_y, max_y) = strokes.iter().flatten().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p[1]), b.max(p[1])));
     if !min_y.is_finite() {
         return None;
     }
     let h = f64::from(max_y - min_y).max(0.05) * w;
+    // Displayed right and up as user-space unit vectors (the identity on an unturned page).
+    let [a, b, c, d, ..] = pdfcraft_model::view_matrix_for(rotation, [0.0; 4]);
     let strokes: Vec<Vec<[f64; 2]>> = strokes
         .iter()
         .filter(|s| !s.is_empty())
-        .map(|s| s.iter().map(|p| [at[0] + f64::from(p[0]) * w, at[1] - h / 2.0 + f64::from(p[1] - min_y) * w]).collect())
+        .map(|s| {
+            s.iter()
+                .map(|p| {
+                    let (dx, dy) = (f64::from(p[0]) * w, f64::from(p[1] - min_y) * w - h / 2.0);
+                    [at[0] + a * dx + c * dy, at[1] + b * dx + d * dy]
+                })
+                .collect()
+        })
         .collect();
     (!strokes.is_empty()).then(|| new(page, Shape::Signature { strokes }, String::new(), author))
 }
 
-/// Place typed text in the script font with its left edge at `at`, `height` points tall.
-pub fn typed_signature_at(page: usize, at: [f64; 2], text: &str, height: f64, author: &str) -> Option<Edit> {
-    pdfcraft_engine::typed_signature_shape(at, text, height).map(|shape| new(page, shape, String::new(), author))
+/// Place typed text in the script font with its left edge at `at`, `height` points tall, upright
+/// as displayed on a page turned by `rotation`.
+pub fn typed_signature_at(page: usize, at: [f64; 2], text: &str, height: f64, rotation: i64, author: &str) -> Option<Edit> {
+    pdfcraft_engine::typed_signature_shape(at, text, height, rotation).map(|shape| new(page, shape, String::new(), author))
 }
 
-/// Place a saved signature or initials.
-pub fn place(page: usize, at: [f64; 2], sig: &SavedSig, initials: bool, author: &str) -> Option<Edit> {
+/// Place a saved signature or initials, upright as `info`'s page is displayed.
+pub fn place(page: usize, info: &PageInfo, at: [f64; 2], sig: &SavedSig, initials: bool, author: &str) -> Option<Edit> {
+    let rotation = i64::from(info.rotation);
     match sig {
-        SavedSig::Drawn(strokes) => signature_at(page, at, strokes, author),
-        SavedSig::Image(image) => image.edit(page, at, initials, author),
+        SavedSig::Drawn(strokes) => signature_at(page, at, strokes, rotation, author),
+        SavedSig::Image(image) => image.edit(page, info, at, initials, author),
         SavedSig::Typed(text) => {
             let [left, bottom, right, top] = pdfcraft_engine::script_outline(text).bounds();
             let height = if initials { 24.0_f64 } else { 32.0_f64 };
             // Keep long names within the same placement width as drawn signatures.
             let height = height.min(150.0 * (top - bottom).max(0.1) / (right - left).max(0.01));
-            typed_signature_at(page, at, text, height, author)
+            typed_signature_at(page, at, text, height, rotation, author)
         }
     }
 }
@@ -373,6 +385,7 @@ pub(crate) fn page_input(
     if !resp.contains_pointer() || !xf.rect.contains(pointer) {
         return None;
     }
+    let p = info.pages.get(page)?;
     let at = to_user(xf, info, page, pointer);
     let saved = match tool {
         FillTool::Signature => signature,
@@ -380,9 +393,9 @@ pub(crate) fn page_input(
         _ => None,
     };
     if let Some(SavedSig::Image(image)) = saved {
-        if let Some(rect) = image.rect(at, tool == FillTool::Initials) {
+        if let Some(rect) = image.rect(p, at, tool == FillTool::Initials) {
             let tex = image_texture(ui, image, preview);
-            xf.paint_user_image(ui.painter(), tex, info, page, rect, Color32::WHITE);
+            xf.paint_user_image(ui.painter(), tex, p, rect, i64::from(p.rotation), Color32::WHITE);
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         }
     } else {
@@ -401,11 +414,11 @@ pub(crate) fn page_input(
             Some(FillAction::Edit(Box::new(typed(page, [at[0], at[1] + TEXT_SIZE * 0.6], &format!("{m}/{d}/{y}"), author))))
         }
         FillTool::Signature => match signature {
-            Some(s) => place(page, at, s, false, author).map(|e| FillAction::Signature(Box::new(e))),
+            Some(s) => place(page, p, at, s, false, author).map(|e| FillAction::Signature(Box::new(e))),
             None => Some(FillAction::CreateSignature),
         },
         FillTool::Initials => match initials {
-            Some(s) => place(page, at, s, true, author).map(|e| FillAction::Signature(Box::new(e))),
+            Some(s) => place(page, p, at, s, true, author).map(|e| FillAction::Signature(Box::new(e))),
             None => Some(FillAction::CreateInitials),
         },
         mark => {

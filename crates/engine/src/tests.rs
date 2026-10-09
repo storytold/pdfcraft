@@ -36,6 +36,70 @@ fn session_with(n: usize) -> (Session, DocId) {
     (s, id)
 }
 
+#[test]
+fn custom_image_stamp_keeps_displayed_orientation_on_rotated_pages() {
+    let colours = [[240, 20, 20, 255], [20, 180, 20, 255], [20, 20, 240, 255], [230, 180, 20, 255]];
+    let image = image::RgbaImage::from_fn(80, 40, |x, y| image::Rgba(colours[usize::from(y >= 20) * 2 + usize::from(x >= 40)]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let bytes = Arc::new(png.into_inner());
+    for degrees in [0, 90, 180, 270] {
+        let (mut session, id) = session_with(1);
+        session.apply(id, Edit::RotatePages { pages: vec![0], degrees }).unwrap();
+        let at = session.get(id).unwrap().info.pages[0].view_to_user(100.0, 100.0).map(f64::from);
+        session
+            .apply(
+                id,
+                Edit::AddCustomStamp {
+                    page: 0,
+                    rect: [at[0], at[1], at[0], at[1]],
+                    name: "Original quadrants".into(),
+                    file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
+                    author: "Test".into(),
+                },
+            )
+            .unwrap();
+        let check = |session: &Session, points: [(u32, u32); 4]| {
+            let doc = session.get(id).unwrap();
+            let mut renderer = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+            let rendered = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+            assert!(rendered.error.is_none(), "{:?}", rendered.error);
+            for ((x, y), colour) in points.into_iter().zip(colours) {
+                let offset = ((y * rendered.width + x) * 4) as usize;
+                assert_eq!(&rendered.rgba[offset..offset + 4], &colour, "page rotation {degrees}; displayed point ({x}, {y})");
+            }
+        };
+        let points = [(80, 90), (120, 90), (80, 110), (120, 110)];
+        check(&session, points);
+        let info = session.get(id).unwrap().info.pages[0].clone();
+        let rect = session.get(id).unwrap().info.annotations[0].rect;
+        let a = info.user_to_view(rect[0], rect[1]);
+        let b = info.user_to_view(rect[2], rect[3]);
+        let bounds = [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])];
+        for (actual, expected) in bounds.into_iter().zip([60.0, 80.0, 140.0, 120.0]) {
+            assert!((actual - expected).abs() < 0.0001, "displayed bounds {bounds:?}");
+        }
+        session.apply(id, Edit::StyleAnnotation { page: 0, index: 0, color: None, opacity: Some(1.0), width: None }).unwrap();
+        check(&session, points);
+        let resized = info.view_rect_to_user([40.0, 70.0, 160.0, 130.0]).map(f64::from);
+        session.apply(id, Edit::ResizeAnnotation { page: 0, index: 0, rect: resized }).unwrap();
+        let resized_points = [(70, 85), (130, 85), (70, 115), (130, 115)];
+        check(&session, resized_points);
+        session.undo(id).unwrap();
+        check(&session, points);
+        session.redo(id).unwrap();
+        check(&session, resized_points);
+        let from = info.view_to_user(100.0, 100.0);
+        let to = info.view_to_user(110.0, 115.0);
+        session.apply(id, Edit::MoveAnnotation { page: 0, index: 0, dx: f64::from(to[0] - from[0]), dy: f64::from(to[1] - from[1]) }).unwrap();
+        check(&session, [(80, 100), (140, 100), (80, 130), (140, 130)]);
+        session.undo(id).unwrap();
+        check(&session, resized_points);
+        session.redo(id).unwrap();
+        check(&session, [(80, 100), (140, 100), (80, 130), (140, 130)]);
+    }
+}
+
 fn page_texts(s: &Session, id: DocId) -> Vec<String> {
     let doc = s.get(id).unwrap();
     let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
@@ -1585,6 +1649,39 @@ fn exporting_office_files_keeps_images() {
         std::fs::write(format!("{dir}/pic.docx"), &docx).unwrap();
     }
     assert!(String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap().contains("data:image/png;base64,"));
+}
+
+#[test]
+fn exporting_office_files_keeps_text_colour() {
+    // #526: a dark green heading came out black in Word.
+    let content = "BT /F1 24 Tf 0.05 0.23 0.18 rg 72 700 Td (Annual Report) Tj ET \
+BT /F1 11 Tf 0 g 72 650 Td (Black body text that is long enough to be the body size.) Tj ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>".into(),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new();
+    let id = s.open("c.pdf", None, Arc::new(pdf), None).unwrap();
+    let d = s.get(id).unwrap();
+    let html = String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap();
+    assert!(html.contains("style=\"color:#0D3B2E\">Annual Report"), "{html}");
+    let blocks = &d.export_pages()[0].blocks;
+    assert!(blocks.iter().any(|b| b.text == "Annual Report" && b.color == [0.05, 0.23, 0.18]), "{blocks:?}");
 }
 
 #[test]

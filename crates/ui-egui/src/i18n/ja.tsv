@@ -28,6 +28,9 @@
 	Name on new comments	新しい注釈の作成者名
 	Open…	開く…
 	Open Recent	最近のファイルを開く
+	Clear Recent Files	最近のファイルをクリア
+	Remove from Recent	最近のファイルから外す
+	Remove {name} from Recent	{name} を最近のファイルから外す
 	Pin folder to Home…	フォルダーをホームにピン留め…
 	Folders	フォルダー
 	Pin a folder…	フォルダーをピン留め…
@@ -1975,3 +1978,4 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	PNG または JPEG 画像を選択してください（最大 4 MiB）。透明度は保持されます。
 	Couldn't import the signature image: {e}	署名画像を読み込めませんでした: {e}
 	Go to page…	ページへ移動…
+	Reopen the files that were open when PdfCraft last closed	前回 PdfCraft を閉じたときに開いていたファイルを再度開く

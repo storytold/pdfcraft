@@ -19,6 +19,9 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use pdfcraft_ui_egui::PdfCraftApp;
 
 #[cfg(target_os = "macos")]
@@ -150,6 +153,85 @@ fn main() -> eframe::Result {
         }
     }
     let integrated = cfg!(target_os = "macos");
+    migrate_legacy_folders();
+    // The log file lives in the settings folder; opened after the arguments (so `--version` leaves
+    // no file behind) and after the PrintCraft migration (which a fresh folder would block).
+    // Records logged until now are written to it first.
+    if let (Some(logger), Some(dir)) = (logger, settings_dir()) {
+        match logger.attach_dir(&dir.join("logs")) {
+            Ok(path) => log::info!("PdfCraft {}, log file {}", env!("CARGO_PKG_VERSION"), path.display()),
+            // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
+            Err(e) => log::warn!("no log file: {e}"),
+        }
+    }
+    let choice = renderer_choice(std::env::var("PDFCRAFT_RENDERER").ok().as_deref());
+    let launch = Launch { files, options, control_file, create_images, integrated };
+    // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
+    // that launched us as well as later ones. Lives until the event loop returns.
+    #[cfg(target_os = "macos")]
+    let apple_events = apple_events::AppleEvents::install();
+    // Set once the app is created, which is after the renderer has started.
+    let started = Rc::new(Cell::new(false));
+    let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
+    let result = eframe::run_native(
+        "PdfCraft",
+        native_options(integrated, first),
+        app_creator(
+            launch.clone(),
+            Rc::clone(&started),
+            #[cfg(target_os = "macos")]
+            &apple_events,
+        ),
+    );
+    match result {
+        // Only a renderer that couldn't start: without a window or display at all, OpenGL can't
+        // help either, and winit's own error says more.
+        Err(e @ eframe::Error::Wgpu(_)) if retry_with_gl(choice, started.get()) => {
+            // Old or unusual GPUs and drivers (#461, #435, #392) can't give wgpu a device; OpenGL
+            // usually still works there, so that's better than quitting.
+            log::error!("the GPU renderer (wgpu) didn't start: {e}. Starting with OpenGL instead; set PDFCRAFT_RENDERER=gl to skip wgpu.");
+            eframe::run_native(
+                "PdfCraft",
+                native_options(integrated, eframe::Renderer::Glow),
+                app_creator(
+                    launch,
+                    started,
+                    #[cfg(target_os = "macos")]
+                    &apple_events,
+                ),
+            )
+        }
+        other => other,
+    }
+}
+
+/// Which renderer to start with, from `PDFCRAFT_RENDERER`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RendererChoice {
+    /// wgpu, then OpenGL if wgpu can't start (unset, or anything unrecognised).
+    Auto,
+    /// wgpu only (`wgpu`): a failure is reported, not worked around.
+    Wgpu,
+    /// OpenGL only (`gl`, `opengl` or `glow`): for drivers where wgpu starts but misbehaves.
+    Gl,
+}
+
+fn renderer_choice(value: Option<&str>) -> RendererChoice {
+    match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("wgpu") => RendererChoice::Wgpu,
+        Some("gl" | "opengl" | "glow") => RendererChoice::Gl,
+        _ => RendererChoice::Auto,
+    }
+}
+
+/// Whether a failed run should be retried with OpenGL: only when wgpu was tried first by choice of
+/// nobody, and it failed before the app was created (so while starting the renderer, not later).
+fn retry_with_gl(choice: RendererChoice, app_started: bool) -> bool {
+    choice == RendererChoice::Auto && !app_started
+}
+
+/// The window and renderer settings for one run.
+fn native_options(integrated: bool, renderer: eframe::Renderer) -> eframe::NativeOptions {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("PdfCraft")
         .with_inner_size([1440.0, 920.0])
@@ -165,77 +247,82 @@ fn main() -> eframe::Result {
     if integrated {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
     }
-    migrate_legacy_folders();
-    // The log file lives in the settings folder; opened after the arguments (so `--version` leaves
-    // no file behind) and after the PrintCraft migration (which a fresh folder would block).
-    // Records logged until now are written to it first.
-    if let (Some(logger), Some(dir)) = (logger, settings_dir()) {
-        match logger.attach_dir(&dir.join("logs")) {
-            Ok(path) => log::info!("PdfCraft {}, log file {}", env!("CARGO_PKG_VERSION"), path.display()),
-            // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
-            Err(e) => log::warn!("no log file: {e}"),
-        }
-    }
     let persistence_path = settings_dir().map(|d| d.join("app.ron"));
-    let mut native = eframe::NativeOptions { viewport, persistence_path, ..Default::default() };
-    configure_gpu(&mut native);
-    // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
-    // that launched us as well as later ones. Lives until the event loop returns.
-    #[cfg(target_os = "macos")]
-    let apple_events = apple_events::AppleEvents::install();
-    #[cfg(target_os = "macos")]
-    let apple_events = &apple_events;
-    eframe::run_native(
-        "PdfCraft",
-        native,
-        Box::new(move |cc| {
-            let mut app = PdfCraftApp::new();
-            if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string(LEGACY_STORAGE_KEY))) {
-                app.restore(&json);
+    // Set explicitly, so the renderer never depends on which one eframe defaults to.
+    let mut native = eframe::NativeOptions { viewport, persistence_path, renderer, ..Default::default() };
+    if renderer == eframe::Renderer::Wgpu {
+        configure_gpu(&mut native);
+    }
+    native
+}
+
+/// What the command line asked for, kept so a second run (with OpenGL) can start the same way.
+#[derive(Clone)]
+struct Launch {
+    files: Vec<String>,
+    options: Vec<(String, String)>,
+    control_file: Option<String>,
+    create_images: bool,
+    integrated: bool,
+}
+
+fn app_creator<'a>(
+    launch: Launch,
+    started: Rc<Cell<bool>>,
+    #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
+) -> eframe::AppCreator<'a> {
+    let Launch { files, options, control_file, create_images, integrated } = launch;
+    Box::new(move |cc| {
+        started.set(true);
+        let mut app = PdfCraftApp::new();
+        if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string(LEGACY_STORAGE_KEY))) {
+            app.restore(&json);
+        }
+        app.integrated_titlebar = integrated;
+        app.update_source = Some(std::sync::Arc::new(updates::latest_release));
+        app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
+        #[cfg(target_os = "macos")]
+        {
+            app.os_events = Some(apple_events.connect(&cc.egui_ctx));
+        }
+        if let Some(file) = &control_file {
+            let client = app.attach_control(&cc.egui_ctx);
+            match pdfcraft_ui_egui::control::serve(client).and_then(|ep| write_control_file(file, ep.port, &ep.token).map(|()| ep.port)) {
+                // Never the token (AGENTS.md §3): it stays in the owner-only file.
+                Ok(port) => log::info!("UI control channel on 127.0.0.1:{port} (connection details in {file})"),
+                Err(e) => log::error!("--control {file}: {e}"),
             }
-            app.integrated_titlebar = integrated;
-            app.update_source = Some(std::sync::Arc::new(updates::latest_release));
-            app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
-            #[cfg(target_os = "macos")]
-            {
-                app.os_events = Some(apple_events.connect(&cc.egui_ctx));
+        }
+        // Autosave unsaved changes; offer to recover documents a crashed session left behind.
+        if let Some(dir) = pdfcraft_ui_egui::RecoveryStore::default_dir() {
+            app.enable_recovery(pdfcraft_ui_egui::RecoveryStore::new(dir));
+        }
+        // A portable marker whose data folder can't be written (#157): say where settings went.
+        if let Some(w) = &pdfcraft_ui_egui::portable::current().unwritable {
+            app.notify_fmt(
+                "Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.",
+                &[("folder", &w.folder.display().to_string()), ("error", &w.error)],
+            );
+        }
+        if create_images {
+            if let Err(e) = app.begin_image_import_paths(&files) {
+                app.notify(e);
             }
-            if let Some(file) = &control_file {
-                let client = app.attach_control(&cc.egui_ctx);
-                match pdfcraft_ui_egui::control::serve(client).and_then(|ep| write_control_file(file, ep.port, &ep.token).map(|()| ep.port)) {
-                    // Never the token (AGENTS.md §3): it stays in the owner-only file.
-                    Ok(port) => log::info!("UI control channel on 127.0.0.1:{port} (connection details in {file})"),
-                    Err(e) => log::error!("--control {file}: {e}"),
-                }
+        } else {
+            // With the preference on, last session's files come back first; files named on
+            // the command line open after them, in front (#442).
+            app.reopen_last_files(&files);
+            for f in files {
+                app.open_path(&f);
             }
-            // Autosave unsaved changes; offer to recover documents a crashed session left behind.
-            if let Some(dir) = pdfcraft_ui_egui::RecoveryStore::default_dir() {
-                app.enable_recovery(pdfcraft_ui_egui::RecoveryStore::new(dir));
+        }
+        for (k, v) in options {
+            if let Err(e) = app.set_option(&k, &v) {
+                log::warn!("--{k} {v}: {e}");
             }
-            // A portable marker whose data folder can't be written (#157): say where settings went.
-            if let Some(w) = &pdfcraft_ui_egui::portable::current().unwritable {
-                app.notify_fmt(
-                    "Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.",
-                    &[("folder", &w.folder.display().to_string()), ("error", &w.error)],
-                );
-            }
-            if create_images {
-                if let Err(e) = app.begin_image_import_paths(&files) {
-                    app.notify(e);
-                }
-            } else {
-                for f in files {
-                    app.open_path(&f);
-                }
-            }
-            for (k, v) in options {
-                if let Err(e) = app.set_option(&k, &v) {
-                    log::warn!("--{k} {v}: {e}");
-                }
-            }
-            Ok(Box::new(app))
-        }),
-    )
+        }
+        Ok(Box::new(app))
+    })
 }
 
 /// Write the control endpoint so that only the current user can read the token.
@@ -294,7 +381,9 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
 ///   It also saves battery. Machines with one GPU are unaffected.
 /// - On Linux, draw on a GPU that a monitor is plugged into. On a desktop whose monitors all hang
 ///   off the discrete GPU, drawing on the integrated one leaves the window black under Wayland
-///   compositors on NVIDIA. Among the GPUs that drive a display, the integrated one still wins.
+///   compositors on NVIDIA. When several GPUs drive a display, the one driving a built-in panel
+///   wins (a hybrid laptop, issue #8); without a built-in panel (a desktop with a monitor on each
+///   GPU, issue #445) the discrete one wins, as the integrated one may fail to present there.
 /// - On Windows, use Direct3D 12, falling back to OpenGL, and never load Vulkan drivers unless
 ///   `WGPU_BACKEND` asks for them. Creating a Vulkan instance loads every installed Vulkan driver
 ///   into the process, and a faulty one (an Intel driver in issue #37) crashed PdfCraft before
@@ -330,52 +419,78 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
     }
 }
 
-/// PCI `(vendor, device)` ids of the GPUs with a connected monitor, read from the DRM connectors
-/// under `drm` (`card1-DP-3/status` is `connected`, `card1/device/{vendor,device}` hold `0x10de`).
+/// A GPU with a connected monitor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+struct DisplayGpu {
+    /// PCI `(vendor, device)` ids.
+    pci: (u32, u32),
+    /// Whether one of its connected connectors is a built-in panel (`eDP`, `LVDS` or `DSI`).
+    internal_panel: bool,
+}
+
+/// Whether a DRM connector name (`eDP-1`, `LVDS-1`, `DSI-1`) is a laptop's built-in panel.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn is_internal_panel(connector: &str) -> bool {
+    ["eDP", "LVDS", "DSI"].iter().any(|kind| connector.starts_with(kind))
+}
+
+/// The GPUs with a connected monitor, read from the DRM connectors under `drm` (`card1-DP-3/status`
+/// is `connected`, `card1/device/{vendor,device}` hold `0x10de`).
 #[cfg(target_os = "linux")]
-fn linux_display_gpus(drm: &std::path::Path) -> Vec<(u32, u32)> {
+fn linux_display_gpus(drm: &std::path::Path) -> Vec<DisplayGpu> {
     let read_hex = |p: std::path::PathBuf| -> Option<u32> {
         let s = std::fs::read_to_string(p).ok()?;
         u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok()
     };
-    let mut gpus = Vec::new();
+    let mut gpus: Vec<DisplayGpu> = Vec::new();
     let Ok(entries) = std::fs::read_dir(drm) else { return gpus };
     // A machine has a handful of connectors; the cap only bounds a pathological sysfs.
     for entry in entries.flatten().take(256) {
         let name = entry.file_name();
-        let Some((card, _connector)) = name.to_str().and_then(|n| n.split_once('-')) else { continue };
+        let Some((card, connector)) = name.to_str().and_then(|n| n.split_once('-')) else { continue };
         let connected = std::fs::read_to_string(entry.path().join("status")).is_ok_and(|s| s.trim() == "connected");
         if !connected {
             continue;
         }
         let device = drm.join(card).join("device");
-        if let (Some(v), Some(d)) = (read_hex(device.join("vendor")), read_hex(device.join("device")))
-            && !gpus.contains(&(v, d))
-        {
-            gpus.push((v, d));
+        let (Some(v), Some(d)) = (read_hex(device.join("vendor")), read_hex(device.join("device"))) else { continue };
+        let internal_panel = is_internal_panel(connector);
+        match gpus.iter_mut().find(|g| g.pci == (v, d)) {
+            Some(gpu) => gpu.internal_panel |= internal_panel,
+            None => gpus.push(DisplayGpu { pci: (v, d), internal_panel }),
         }
     }
     gpus
 }
 
-/// Index of the adapter to draw with: one that drives a display (by PCI ids) first, then the most
-/// frugal kind — integrated, discrete, other, virtual, software.
+/// Index of the adapter to draw with: one that drives a display (by PCI ids) first. Among several
+/// of those, the one driving a built-in panel (a hybrid laptop, #8), or else, with no built-in
+/// panel anywhere (a desktop with a monitor on each GPU, #445), the discrete one. Otherwise the
+/// most frugal kind: integrated, discrete, other, virtual, software.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[(u32, u32)]) -> Option<usize> {
+fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[DisplayGpu]) -> Option<usize> {
     use eframe::wgpu::DeviceType;
+    let display = |pci: (u32, u32)| displays.iter().find(|g| g.pci == pci);
+    let multi_gpu_desktop = displays.len() > 1 && !displays.iter().any(|g| g.internal_panel);
     adapters
         .iter()
         .enumerate()
         .min_by_key(|(_, (vendor, device, kind))| {
-            let drives_display = displays.contains(&(*vendor, *device));
-            let frugality = match kind {
-                DeviceType::IntegratedGpu => 0,
-                DeviceType::DiscreteGpu => 1,
-                DeviceType::Other => 2,
-                DeviceType::VirtualGpu => 3,
-                DeviceType::Cpu => 4,
+            let shown = display((*vendor, *device));
+            let drives_display = shown.is_some();
+            let drives_panel = shown.is_some_and(|g| g.internal_panel);
+            let rank = match kind {
+                // On a desktop with monitors on both, the integrated GPU can accept the window and
+                // still fail to present to it (#445).
+                DeviceType::DiscreteGpu if drives_display && multi_gpu_desktop => 0,
+                DeviceType::IntegratedGpu => 1,
+                DeviceType::DiscreteGpu => 2,
+                DeviceType::Other => 3,
+                DeviceType::VirtualGpu => 4,
+                DeviceType::Cpu => 5,
             };
-            (!drives_display, frugality)
+            (!drives_display, !drives_panel, rank)
         })
         .map(|(i, _)| i)
 }
@@ -404,6 +519,26 @@ mod tests {
     }
 
     #[test]
+    fn opengl_is_the_fallback_unless_a_renderer_was_chosen() {
+        use super::{RendererChoice, native_options, renderer_choice, retry_with_gl};
+        assert_eq!(renderer_choice(None), RendererChoice::Auto);
+        assert_eq!(renderer_choice(Some("")), RendererChoice::Auto);
+        assert_eq!(renderer_choice(Some("vulkan")), RendererChoice::Auto);
+        assert_eq!(renderer_choice(Some(" WGPU ")), RendererChoice::Wgpu);
+        for gl in ["gl", "OpenGL", "glow"] {
+            assert_eq!(renderer_choice(Some(gl)), RendererChoice::Gl);
+        }
+        // Retried with OpenGL only when wgpu failed to start by default, never after the app ran.
+        assert!(retry_with_gl(RendererChoice::Auto, false));
+        assert!(!retry_with_gl(RendererChoice::Auto, true));
+        assert!(!retry_with_gl(RendererChoice::Wgpu, false));
+        assert!(!retry_with_gl(RendererChoice::Gl, false));
+        // Each run states its renderer rather than relying on eframe's default.
+        assert_eq!(native_options(false, eframe::Renderer::Wgpu).renderer, eframe::Renderer::Wgpu);
+        assert_eq!(native_options(false, eframe::Renderer::Glow).renderer, eframe::Renderer::Glow);
+    }
+
+    #[test]
     fn gpu_backends_avoid_vulkan_on_windows_and_prefer_low_power() {
         let mut native = eframe::NativeOptions::default();
         super::configure_gpu(&mut native);
@@ -420,6 +555,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn winit_carries_the_windows_11_monitor_scale_fix() {
+        // Issue #324: winit 0.30.13 as released nudges a window dragged onto a monitor with another
+        // scale factor back onto the one it is leaving, so on Windows 11 it ends up on the wrong
+        // monitor, at the wrong size and scale. vendor/winit carries the fix from winit master. A
+        // dependency bump that resolves winit from crates.io again, or a re-vendored copy without
+        // the patch, would silently bring the bug back: re-apply the patch, or drop the copy once a
+        // winit 0.30 release has the fix (vendor/README.md).
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap();
+        let winit = lock.split("[[package]]").find(|p| p.contains("\nname = \"winit\"\n")).expect("winit is in Cargo.lock");
+        assert!(!winit.contains("\nsource = "), "winit must resolve to vendor/winit, not:{winit}");
+        let dpi_changed = std::fs::read_to_string(root.join("vendor/winit/src/platform_impl/windows/event_loop.rs")).unwrap();
+        let patch = "if !WIN10_BUILD_VERSION.is_some_and(|build| build < 22000) {\n                new_outer_rect = suggested_rect;";
+        assert!(dpi_changed.contains(patch), "vendor/winit lost its WM_DPICHANGED patch");
+    }
+
     const NVIDIA: (u32, u32) = (0x10de, 0x2684);
     const AMD_IGPU: (u32, u32) = (0x1002, 0x164e);
 
@@ -428,29 +580,65 @@ mod tests {
         vec![(NVIDIA.0, NVIDIA.1, DeviceType::DiscreteGpu), (AMD_IGPU.0, AMD_IGPU.1, DeviceType::IntegratedGpu), (0, 0, DeviceType::Cpu)]
     }
 
+    const INTEL_IGPU: (u32, u32) = (0x8086, 0xa780);
+
+    fn monitor(pci: (u32, u32)) -> super::DisplayGpu {
+        super::DisplayGpu { pci, internal_panel: false }
+    }
+
+    fn panel(pci: (u32, u32)) -> super::DisplayGpu {
+        super::DisplayGpu { pci, internal_panel: true }
+    }
+
     #[test]
     fn pick_adapter_prefers_the_gpu_driving_the_monitors() {
         // A desktop whose monitors are all on the discrete GPU: the integrated one shows black.
-        assert_eq!(super::pick_adapter(&adapters(), &[NVIDIA]), Some(0));
+        assert_eq!(super::pick_adapter(&adapters(), &[monitor(NVIDIA)]), Some(0));
     }
 
     #[test]
     fn pick_adapter_keeps_the_integrated_gpu_on_hybrid_laptops() {
         // Issue #8: the panel is on the integrated GPU, an external monitor on the discrete one.
-        assert_eq!(super::pick_adapter(&adapters(), &[NVIDIA, AMD_IGPU]), Some(1));
-        assert_eq!(super::pick_adapter(&adapters(), &[AMD_IGPU]), Some(1));
+        assert_eq!(super::pick_adapter(&adapters(), &[monitor(NVIDIA), panel(AMD_IGPU)]), Some(1));
+        assert_eq!(super::pick_adapter(&adapters(), &[panel(AMD_IGPU), monitor(NVIDIA)]), Some(1));
+        assert_eq!(super::pick_adapter(&adapters(), &[panel(AMD_IGPU)]), Some(1));
+        assert_eq!(super::pick_adapter(&adapters(), &[monitor(AMD_IGPU)]), Some(1));
+    }
+
+    #[test]
+    fn pick_adapter_prefers_the_discrete_gpu_on_desktops_with_a_monitor_on_each() {
+        // Issue #445: one monitor on the Intel iGPU, one on the NVIDIA card, no built-in panel.
+        use eframe::wgpu::DeviceType;
+        let desktop =
+            [(INTEL_IGPU.0, INTEL_IGPU.1, DeviceType::IntegratedGpu), (NVIDIA.0, NVIDIA.1, DeviceType::DiscreteGpu), (0, 0, DeviceType::Cpu)];
+        assert_eq!(super::pick_adapter(&desktop, &[monitor(INTEL_IGPU), monitor(NVIDIA)]), Some(1));
+        assert_eq!(super::pick_adapter(&desktop, &[monitor(NVIDIA), monitor(INTEL_IGPU)]), Some(1));
+        // A GPU driving no display still loses to one that does.
+        assert_eq!(super::pick_adapter(&adapters(), &[monitor(AMD_IGPU), monitor(INTEL_IGPU)]), Some(1));
     }
 
     #[test]
     fn pick_adapter_falls_back_to_low_power_without_a_match() {
-        assert_eq!(super::pick_adapter(&adapters(), &[(0x8086, 0x1234)]), Some(1));
-        assert_eq!(super::pick_adapter(&[], &[NVIDIA]), None);
+        assert_eq!(super::pick_adapter(&adapters(), &[monitor((0x8086, 0x1234))]), Some(1));
+        assert_eq!(super::pick_adapter(&adapters(), &[monitor((0x8086, 0x1234)), monitor((0x8086, 0x5678))]), Some(1));
+        assert_eq!(super::pick_adapter(&[], &[monitor(NVIDIA)]), None);
+    }
+
+    #[test]
+    fn internal_panels_are_edp_lvds_and_dsi_connectors() {
+        for name in ["eDP-1", "LVDS-1", "DSI-1"] {
+            assert!(super::is_internal_panel(name), "{name}");
+        }
+        for name in ["DP-3", "HDMI-A-1", "DVI-D-1", "VGA-1", "Writeback-1", ""] {
+            assert!(!super::is_internal_panel(name), "{name}");
+        }
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_display_gpus_reads_connected_connectors() -> std::io::Result<()> {
         let dir = std::env::temp_dir().join(format!("pdfcraft-drm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         let card = |name: &str, (vendor, device): (u32, u32)| -> std::io::Result<()> {
             std::fs::create_dir_all(dir.join(name).join("device"))?;
             std::fs::write(dir.join(name).join("device/vendor"), format!("{vendor:#06x}\n"))?;
@@ -466,9 +654,19 @@ mod tests {
         connector("card1-DP-4", "connected")?;
         connector("card2-HDMI-A-1", "disconnected")?;
         connector("card2-Writeback-1", "unknown")?;
-        let gpus = super::linux_display_gpus(&dir);
+        let desktop = super::linux_display_gpus(&dir);
+        // Issue #445: a monitor on the integrated GPU too, still no built-in panel.
+        connector("card2-HDMI-A-1", "connected")?;
+        let mut both = super::linux_display_gpus(&dir);
+        // A hybrid laptop: the integrated GPU drives the built-in panel as well.
+        connector("card2-eDP-1", "connected")?;
+        let mut laptop = super::linux_display_gpus(&dir);
         std::fs::remove_dir_all(&dir)?;
-        assert_eq!(gpus, vec![NVIDIA]);
+        assert_eq!(desktop, vec![monitor(NVIDIA)]);
+        both.sort_by_key(|g| g.pci);
+        assert_eq!(both, vec![monitor(AMD_IGPU), monitor(NVIDIA)]);
+        laptop.sort_by_key(|g| g.pci);
+        assert_eq!(laptop, vec![panel(AMD_IGPU), monitor(NVIDIA)]);
         assert!(super::linux_display_gpus(std::path::Path::new("/nonexistent/drm")).is_empty());
         Ok(())
     }

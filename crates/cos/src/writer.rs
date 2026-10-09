@@ -181,16 +181,17 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     let mut doc = doc.clone();
     stamp_mod_date(&mut doc, opts);
     let original = doc.bytes().clone();
-    let mut out = Vec::with_capacity(original.len() + 4096);
-    out.extend_from_slice(&original);
-    if !matches!(out.last(), Some(b'\n' | b'\r')) {
-        out.push(b'\n');
-    }
+    // The revision is written on its own and joined to the original at the end, so the result is
+    // allocated once at its exact size: growing a buffer that holds a large original past a
+    // guessed capacity would copy the whole file again and keep up to as much again unused.
+    let newline = !matches!(original.last(), Some(b'\n' | b'\r'));
+    let base = (original.len() + usize::from(newline)) as u64;
+    let mut out = Vec::new();
     let mut offsets: BTreeMap<u32, (u64, u16, bool)> = BTreeMap::new(); // num → (offset, gen, in use)
     for (num, generation, obj) in doc.overlay_entries().collect::<Vec<_>>() {
         match obj {
             Some(o) => {
-                offsets.insert(num, (out.len() as u64, generation, true));
+                offsets.insert(num, (base + out.len() as u64, generation, true));
                 write_indirect(num, generation, &prepared(&doc, num, num, generation, &o), &mut out);
             }
             None => {
@@ -210,16 +211,22 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     let size = doc.next_num().max(trailer.int(b"Size").unwrap_or(0) as u32);
     if as_stream {
         let rows = offsets.iter().map(|(n, (o, g, used))| (*n, if *used { Row::InFile(*o, *g) } else { Row::Free(*g) })).collect();
-        write_xref_stream(&mut out, &mut trailer, rows, size);
+        write_xref_stream(&mut out, base, &mut trailer, rows, size);
     } else {
         trailer.set(b"Size".to_vec(), Object::Int(size as i64));
-        let xref_at = out.len();
+        let xref_at = base + out.len() as u64;
         write_xref_table(&mut out, &offsets, prev.is_none());
         out.extend_from_slice(b"trailer\n");
         write_dict(&trailer, &mut out);
         let _ = write!(out, "\nstartxref\n{xref_at}\n%%EOF\n");
     }
-    Ok(out)
+    let mut file = Vec::with_capacity(original.len() + usize::from(newline) + out.len());
+    file.extend_from_slice(&original);
+    if newline {
+        file.push(b'\n');
+    }
+    file.extend_from_slice(&out);
+    Ok(file)
 }
 
 /// Write only reachable objects, renumbered from 1, with a classic cross-reference table.
@@ -317,7 +324,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         ensure_id(&mut trailer, opts, doc.bytes());
     }
     if opts.object_streams {
-        write_xref_stream(&mut out, &mut trailer, rows, next);
+        write_xref_stream(&mut out, 0, &mut trailer, rows, next);
     } else {
         trailer.set(b"Size".to_vec(), Object::Int(next as i64));
         let offsets: BTreeMap<u32, (u64, u16, bool)> =
@@ -328,6 +335,9 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         write_dict(&trailer, &mut out);
         let _ = write!(out, "\nstartxref\n{xref_at}\n%%EOF\n");
     }
+    // The size isn't known until the end, and the buffer grew by doubling. The result is often
+    // kept as a document's working bytes for as long as it's open: drop the unused capacity.
+    out.shrink_to_fit();
     Ok(out)
 }
 
@@ -374,9 +384,10 @@ fn write_xref_table(out: &mut Vec<u8>, offsets: &BTreeMap<u32, (u64, u16, bool)>
 }
 
 /// A cross-reference stream section (§7.5.8) that takes object number `num`, ending the file.
-/// Rows are Flate-compressed with the PNG Up predictor, and field widths fit the largest value.
-fn write_xref_stream(out: &mut Vec<u8>, trailer: &mut Dict, mut rows: BTreeMap<u32, Row>, num: u32) {
-    let xref_at = out.len() as u64;
+/// `out` holds the file from byte offset `base` on. Rows are Flate-compressed with the PNG Up
+/// predictor, and field widths fit the largest value.
+fn write_xref_stream(out: &mut Vec<u8>, base: u64, trailer: &mut Dict, mut rows: BTreeMap<u32, Row>, num: u32) {
+    let xref_at = base + out.len() as u64;
     rows.insert(num, Row::InFile(xref_at, 0));
     if trailer.get(b"Prev").is_none() {
         rows.entry(0).or_insert(Row::Free(65535));

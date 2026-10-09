@@ -72,6 +72,7 @@ pub mod forms_ui;
 mod home;
 mod icon_data;
 pub mod icons;
+pub mod last_session;
 mod pageboxes;
 mod palette;
 mod panels;
@@ -356,6 +357,9 @@ pub struct PdfCraftApp {
     pub left: LeftPanel,
     pub left_open: bool,
     pub right: Option<RightPanel>,
+    /// The user closed the Comments panel, so picking a comment tool leaves it closed until they
+    /// open it again (#225). Remembered across restarts.
+    pub comments_panel_closed: bool,
     pub quick_tool: QuickTool,
     /// The tool to go back to when Space, held for a temporary Hand, is released.
     space_hand: Option<QuickTool>,
@@ -374,6 +378,13 @@ pub struct PdfCraftApp {
     pub palette_query: String,
     pub all_tools_expanded: bool,
     pub recent: Vec<RecentFile>,
+    /// Preferences: reopen the files that were open when PdfCraft last closed (#442).
+    pub reopen_last_session: bool,
+    /// The files open when PdfCraft last closed, read from the settings for
+    /// [`PdfCraftApp::reopen_last_files`].
+    pub last_session: last_session::LastSession,
+    /// Quitting closes unsaved tabs one by one: what was open when the quit began.
+    quit_session: Option<last_session::LastSession>,
     /// Folders pinned to Home, and what they held when last listed.
     pub pinned: folders_ui::PinnedFolders,
     pub toast: Option<(String, f64)>,
@@ -470,7 +481,7 @@ pub struct PdfCraftApp {
     grid_drop: Option<GridDrop>,
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the
     /// system clipboard (tests turn that off).
-    pub last_snapshot: Option<(u32, u32, Vec<u8>)>,
+    pub last_snapshot: Option<(u32, u32, pdfcraft_render::Pixels)>,
     pub system_clipboard: bool,
     /// Attach file: the file to attach instead of asking (tests, automation).
     pub attach_override: Option<(String, Vec<u8>)>,
@@ -602,6 +613,7 @@ impl PdfCraftApp {
             left: LeftPanel::AllTools,
             left_open: true,
             right: None,
+            comments_panel_closed: false,
             quick_tool: QuickTool::Select,
             space_hand: None,
             comment_prefs: Default::default(),
@@ -615,6 +627,9 @@ impl PdfCraftApp {
             palette_query: String::new(),
             all_tools_expanded: false,
             recent: Vec::new(),
+            reopen_last_session: false,
+            last_session: Default::default(),
+            quit_session: None,
             pinned: Default::default(),
             toast: None,
             integrated_titlebar: false,
@@ -1032,6 +1047,7 @@ impl PdfCraftApp {
         self.session.close(id);
         self.active = match self.active {
             _ if self.views.is_empty() => None,
+            Some(a) if a > index => Some(a - 1),
             Some(a) if a >= self.views.len() => Some(self.views.len() - 1),
             other => other,
         };
@@ -1165,11 +1181,25 @@ impl PdfCraftApp {
         };
     }
 
+    /// Opens a right panel, or closes it with `None`, because the user chose to. Closing Comments
+    /// keeps comment tools from reopening it; opening it again lets them (#225).
+    pub fn choose_right_panel(&mut self, panel: Option<RightPanel>) {
+        if panel == Some(RightPanel::Comments) {
+            self.comments_panel_closed = false;
+        } else if panel.is_none() && self.right == Some(RightPanel::Comments) {
+            self.comments_panel_closed = true;
+        }
+        self.right = panel;
+    }
+
     /// Serialize the user's persistent state (recent files, theme). Local only.
     pub fn persist(&self) -> String {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
         serde_json::json!({
             "recent": self.recent,
+            "reopen_last_session": self.reopen_last_session,
+            // Kept only while the preference is on.
+            "last_session": self.reopen_last_session.then(|| self.session_to_save()),
             "pinned_folders": self.pinned.folders,
             "theme": self.theme_preference,
             "default_mode": self.default_mode,
@@ -1190,6 +1220,7 @@ impl PdfCraftApp {
             "javascript": self.session.javascript(),
             "actions": actions_ui::encode(&self.custom_actions),
             "combine_columns": self.combine_columns.to_json(),
+            "comments_panel_closed": self.comments_panel_closed,
         })
         .to_string()
     }
@@ -1204,6 +1235,10 @@ impl PdfCraftApp {
             let r: Vec<RecentFile> = r.into_iter().filter(|f| std::path::Path::new(&f.path).exists()).collect();
             self.recent = r;
         }
+        if let Some(on) = v["reopen_last_session"].as_bool() {
+            self.reopen_last_session = on;
+        }
+        self.last_session = last_session::LastSession::from_json(&v["last_session"]);
         self.pinned.restore(&v["pinned_folders"]);
         if let Ok(preference) = serde_json::from_value::<ThemePreference>(v["theme"].clone()) {
             self.set_theme_preference(preference);
@@ -1216,6 +1251,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
+        }
+        if let Some(closed) = v["comments_panel_closed"].as_bool() {
+            self.comments_panel_closed = closed;
         }
         if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
             self.view_defaults = defaults;

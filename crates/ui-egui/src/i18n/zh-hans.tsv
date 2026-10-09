@@ -62,6 +62,9 @@
 	Name on new comments	新注释的作者姓名
 	Open…	打开…
 	Open Recent	打开最近的文件
+	Clear Recent Files	清除最近的文件
+	Remove from Recent	从最近的文件中移除
+	Remove {name} from Recent	从最近的文件中移除{name}
 	Pin folder to Home…	将文件夹固定到主页…
 	Folders	文件夹
 	Pin a folder…	固定文件夹…
@@ -2005,6 +2008,7 @@
 	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	尚未安装文本识别功能：缺少模型（请运行 `cargo xtask models` 或设置 PDFCRAFT_MODELS）。
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	用于打开 PDF 时。如果启动参数或控制通道明确指定了模式，则本次会话优先使用该模式。
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF 未指定布局或缩放时使用。连续滚动时页面不会逐页吸附。
+	Reopen the files that were open when PdfCraft last closed	重新打开上次关闭 PdfCraft 时打开的文件
 	Write this email?	是否撰写此邮件？
 	{who} in this document wants to open this address in your browser:	此文档中的{who}请求在浏览器中打开以下地址：
 	{who} in this document wants to open your email app with this address:	此文档中的{who}请求打开邮件应用并使用以下地址：

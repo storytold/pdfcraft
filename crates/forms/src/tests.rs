@@ -36,6 +36,11 @@ fn fixture() -> Document {
         "<< /Type /Annot /Subtype /Widget /FT /Btn /T (go) /Ff 65536 /Rect [300 450 380 470] /P 3 0 R >>".into(), // 25
         "<< /Type /Annot /Subtype /Widget /FT /Btn /T (bare) /Rect [400 700 415 715] /P 3 0 R /Foo (kept) >>".into(), // 26 check box without AP
     ];
+    document(&objs)
+}
+
+/// A PDF of the given objects (numbered from 1).
+fn document(objs: &[String]) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -90,6 +95,40 @@ fn the_field_tree_is_read_with_inheritance() {
     assert_eq!(field(&all, "address.city").quadding, 1);
 }
 
+/// pdf-lib and other writers give radio groups and check boxes an `/Opt` array and name the on
+/// states by position (`/0`, `/1`): the export values select them, as in Acrobat.
+#[test]
+fn opt_export_values_select_button_states() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),                                                // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),                                 // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>".into(),                                       // 3
+        "<< /Fields [5 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),                                                 // 4
+        "<< /FT /Btn /T (ship) /Ff 49152 /Opt [(Post) (Pick-up)] /V /Off /Kids [6 0 R 7 0 R] >>".into(),            // 5 radio
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [100 700 115 715] /P 3 0 R /AP << /N << /0 9 0 R /Off 10 0 R >> >> >>".into(), // 6
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [200 700 215 715] /P 3 0 R /AP << /N << /1 9 0 R /Off 10 0 R >> >> >>".into(), // 7
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (terms) /Opt [(Accepted)] /V /Off /AS /Off /Rect [100 650 115 665] /P 3 0 R /AP << /N << /0 9 0 R /Off 10 0 R >> >> >>".into(), // 8 check box
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                                                              // 9
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                                                              // 10
+    ];
+    let mut doc = document(&objs);
+    let all = fields(&doc);
+    let ship = field(&all, "ship");
+    assert_eq!((0..2).map(|i| ship.export_of(i)).collect::<Vec<_>>(), [Some("Post"), Some("Pick-up")]);
+    assert_eq!((ship.state_for("Pick-up"), ship.state_for("1"), ship.state_for("Courier")), (Some("1"), Some("1"), None));
+    set_value(&mut doc, "ship", &FieldValue::Radio(Some("Pick-up".into()))).unwrap();
+    set_value(&mut doc, "terms", &FieldValue::Text("Accepted".into())).unwrap();
+    let mut doc = reopen(&doc);
+    let all = fields(&doc);
+    let ship = field(&all, "ship");
+    assert_eq!(ship.value, ["1"]);
+    assert_eq!(ship.export_for_state("1"), "Pick-up");
+    assert_eq!(ship.widgets.iter().map(|w| w.state.as_deref()).collect::<Vec<_>>(), [Some("Off"), Some("1")]);
+    assert_eq!(field(&all, "terms").value, ["0"]);
+    let err = set_value(&mut doc, "ship", &FieldValue::Radio(Some("Courier".into()))).unwrap_err();
+    assert!(err.to_string().contains("options: Post, Pick-up"), "{err}");
+}
+
 #[test]
 fn text_fields_get_new_appearances() {
     let mut doc = fixture();
@@ -121,6 +160,55 @@ fn text_fields_get_new_appearances() {
 }
 
 #[test]
+fn japanese_choices_use_the_unicode_cid_font() {
+    // A choice field whose /DA names a non-embedded CID font with a predefined Unicode CMap
+    // (UniJIS-UTF16-H). Selecting 令 must draw it in that font, not "?" in Helvetica.
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [8 0 R 9 0 R 10 0 R] >>".into(),
+        "<< /Fields [8 0 R 9 0 R 10 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R /HeiseiMin-W3 6 0 R /Emb 7 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Font /Subtype /Type0 /BaseFont /HeiseiMin-W3 /Encoding /UniJIS-UTF16-H /DescendantFonts [<< /Type /Font /Subtype /CIDFontType0 /BaseFont /HeiseiMin-W3 /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 6 >> >>] >>".into(),
+        "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+Subset /Encoding /Identity-H /DescendantFonts [] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (era) /Ff 131072 /DA (/HeiseiMin-W3 10 Tf 0 g) /Q 1 /Opt [<FEFF3000> <FEFF660E> <FEFF4EE4>] /V <FEFF3000> /Rect [50 700 80 715] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (address) /Ff 4096 /DA (/HeiseiMin-W3 10 Tf 0 g) /Rect [50 600 100 680] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (subset) /DA (/Emb 10 Tf 0 g) /Rect [50 500 100 520] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    assert_eq!(field(&fields(&doc), "era").options.get(2), Some(&("令".to_string(), "令".to_string())));
+    set_value(&mut doc, "era", &FieldValue::Text("令".into())).unwrap();
+    set_value(&mut doc, "address", &FieldValue::Text("日本語のテキスト入力欄です".into())).unwrap();
+    set_value(&mut doc, "subset", &FieldValue::Text("令和".into())).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    assert_eq!(field(&all, "era").value, ["令"]);
+    let raw = |name: &str| {
+        let w = &field(&all, name).widgets[0];
+        let n = doc.get(w.obj).as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        let fonts = doc.resolve(s.dict.get(b"Resources").unwrap()).as_dict().unwrap().get(b"Font").map(|f| doc.resolve(f)).unwrap();
+        let fonts: Vec<String> = fonts.as_dict().unwrap().iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect();
+        (s.decoded().unwrap(), fonts)
+    };
+    let utf16 = |t: &str| t.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>();
+    let (era, era_fonts) = raw("era");
+    assert!(era.windows(4).any(|x| x == b"(N\xe4)"), "令 as UTF-16BE: {}", String::from_utf8_lossy(&era));
+    assert!(String::from_utf8_lossy(&era).contains("/HeiseiMin-W3 10 Tf"));
+    assert!(!era.windows(3).any(|x| x == b"(?)"), "no WinAnsi fallback");
+    assert_eq!(era_fonts, ["HeiseiMin-W3"]);
+    // Multiline Japanese wraps by character at about one em each (50 pt wide, 10 pt type).
+    let (addr, _) = raw("address");
+    let addr_text = String::from_utf8_lossy(&addr);
+    assert!(addr_text.matches(" Tj").count() >= 4, "{addr_text}");
+    assert!(addr.windows(4).any(|x| x == utf16("日本").as_slice()));
+    // An Identity-H subset can't be addressed by Unicode: Helvetica, as before.
+    let (sub, sub_fonts) = raw("subset");
+    assert!(String::from_utf8_lossy(&sub).contains("/Helv "), "{}", String::from_utf8_lossy(&sub));
+    assert_eq!(sub_fonts, ["Helv"]);
+}
+
+#[test]
 fn check_boxes_and_radios_switch_states() {
     let mut doc = fixture();
     set_value(&mut doc, "agree", &FieldValue::Check(true)).unwrap();
@@ -144,6 +232,46 @@ fn check_boxes_and_radios_switch_states() {
     assert!(matches!(set_value(&mut doc, "size", &FieldValue::Radio(None)), Err(FormError::Invalid(_))));
     set_value(&mut doc, "agree", &FieldValue::Check(false)).unwrap();
     assert!(field(&fields(&doc), "agree").value.is_empty());
+}
+
+#[test]
+fn check_boxes_keep_non_utf8_state_names() {
+    // Japanese forms often name a check box's on state 「はい」 in Shift-JIS: ticking it has to
+    // write those exact bytes to /AS and /V, or no appearance matches and no mark shows.
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),
+        "<< /Fields [5 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /AS /Off /Rect [50 700 56 706] /P 3 0 R /AP << /N << /Off 6 0 R /#82#CD#82#A2 7 0 R >> >> >>".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    let sjis_hai: &[u8] = b"\x82\xcd\x82\xa2";
+    let mut doc = document(&objs);
+    let all = fields(&doc);
+    assert_eq!(field(&all, "agree").widgets[0].on_state.as_deref(), Some("#82#CD#82#A2"));
+    set_value(&mut doc, "agree", &FieldValue::Check(true)).unwrap();
+    let doc = reopen(&doc);
+    let f = field(&fields(&doc), "agree").clone();
+    let wd = doc.get(f.widgets[0].obj).as_dict().cloned().unwrap();
+    assert_eq!(wd.name(b"AS"), Some(sjis_hai));
+    assert_eq!(doc.get(f.obj).as_dict().unwrap().name(b"V"), Some(sjis_hai));
+    assert_eq!(f.value, ["#82#CD#82#A2"]);
+    let mut doc = doc;
+    set_value(&mut doc, "agree", &FieldValue::Check(false)).unwrap();
+    assert_eq!(doc.get(f.widgets[0].obj).as_dict().unwrap().name(b"AS"), Some(&b"Off"[..]));
+}
+
+#[test]
+fn name_text_round_trips() {
+    for bytes in [&b"Yes"[..], b"\x82\xcd\x82\xa2", "はい".as_bytes(), b"A#1", b"a b", b"", b"\xff#\x00"] {
+        assert_eq!(name_bytes(&name_text(bytes)), bytes, "{bytes:?}");
+    }
+    assert_eq!(name_text("はい".as_bytes()), "はい");
+    assert_eq!(name_text(b"A#1"), "A#231");
+    // Malformed escapes stay as they are.
+    assert_eq!(name_bytes("#G1#4"), b"#G1#4");
 }
 
 #[test]

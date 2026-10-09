@@ -1485,6 +1485,7 @@ fn image_signature_preview_layers_are_read_only_and_survive_encrypted_save() {
         assert_eq!(meta["layer"], "background");
         assert_eq!(image_meta["layer"], "image");
         assert_eq!(meta["rotation"], 90);
+        assert_eq!(meta["image_rotation"], 0, "placed upright as displayed on the turned page");
         assert_eq!(meta["opacity"], 0.5);
         assert_eq!((*width, *height), (120, 40));
         assert_eq!(image::load_from_memory(background).unwrap().to_rgba8(), expected, "page text and the other signature remain");
@@ -1883,6 +1884,47 @@ fn comments_and_form_data_travel_as_xfdf_fdf_and_text() {
 }
 
 #[test]
+fn natural_image_stamps_through_tools_on_rotated_pages() {
+    for degrees in [0, 90, 180, 270] {
+        let dir = workdir(&format!("natural-stamps-{degrees}"));
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 80, 40);
+            encoder.set_color(png::ColorType::Rgb);
+            encoder.set_depth(png::BitDepth::Eight);
+            let pixels: Vec<u8> = (0..40)
+                .flat_map(|y| {
+                    (0..80).flat_map(move |x| {
+                        [[240, 20, 20], [20, 180, 20], [20, 20, 240], [230, 180, 20]][usize::from(y >= 20) * 2 + usize::from(x >= 40)]
+                    })
+                })
+                .collect();
+            encoder.write_header().unwrap().write_image_data(&pixels).unwrap();
+        }
+        std::fs::write(dir.join("quadrants.png"), bytes).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+        ok(&mut a, "page_rotate", json!({"doc":doc,"pages":[1],"degrees":degrees}));
+        ok(&mut a, "stamp_custom", json!({"doc":doc,"page":1,"path":"quadrants.png","at":[100,100]}));
+        let rendered = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap();
+        let Content::Png { data, .. } = &rendered[0] else { panic!("expected PNG") };
+        let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+        assert_eq!(info.color_type, png::ColorType::Rgba);
+        for ((x, y), colour) in [(80, 90), (120, 90), (80, 110), (120, 110)].into_iter().zip([
+            [240, 20, 20, 255],
+            [20, 180, 20, 255],
+            [20, 20, 240, 255],
+            [230, 180, 20, 255],
+        ]) {
+            let offset = ((y * info.width + x) * 4) as usize;
+            assert_eq!(&pixels[offset..offset + 4], &colour, "page rotation {degrees}");
+        }
+    }
+}
+
+#[test]
 fn stamps_through_tools() {
     let dir = workdir("stamps");
     let mut a = auto(&dir);
@@ -2038,6 +2080,112 @@ fn note_icons_anchor_at_the_requested_corner_on_rotated_pages() {
         let rect: Vec<f64> = c["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
         assert!(rect.iter().zip(want).all(|(x, y)| (x - y).abs() < 0.01), "page {} {}: rect {rect:?}, want {want:?}", c["page"], c["type"]);
     }
+}
+
+/// An image signature is drawn upright as displayed, and anchored at the displayed point asked
+/// for, on every `/Rotate`: its picture is placed in user space, which the page turns, so the
+/// appearance is counter-rotated and its box is found in user space.
+#[test]
+fn image_signatures_stay_upright_on_rotated_pages() {
+    let dir = workdir("image-upright");
+    // 80 x 40 px, one colour per quadrant: red and green above, blue and yellow below.
+    let quadrants = image::RgbaImage::from_fn(80, 40, |x, y| match (x < 40, y < 20) {
+        (true, true) => image::Rgba([255, 0, 0, 255]),
+        (false, true) => image::Rgba([0, 255, 0, 255]),
+        (true, false) => image::Rgba([0, 0, 255, 255]),
+        (false, false) => image::Rgba([255, 255, 0, 255]),
+    });
+    quadrants.save(dir.join("quadrants.png")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 200, "height": 300, "pages": 4 }))["doc"].as_u64().unwrap();
+    for (page, degrees) in [(2, 90), (3, 180), (4, 270)] {
+        ok(&mut a, "page_rotate", json!({ "doc": doc, "pages": [page], "degrees": degrees }));
+    }
+    for page in 1..=4 {
+        // 64 x 32 pt from x = 60 as displayed, centred on y = 140.
+        ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": page, "type": "signature", "at": [60, 140], "path": "quadrants.png" }));
+    }
+    let (white, red, green, blue, yellow) = ([255, 255, 255], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0]);
+    let check = |a: &mut Automation, doc: u64| {
+        for page in 1..=4 {
+            let output = a.call("page_render", &json!({ "doc": doc, "page": page, "dpi": 72 })).unwrap();
+            let Content::Png { data, .. } = &output[0] else { panic!() };
+            let pixels = image::load_from_memory(data).unwrap().to_rgba8();
+            for (x, y, want, what) in [
+                (76, 132, red, "signature top-left"),
+                (108, 132, green, "signature top-right"),
+                (76, 148, blue, "signature bottom-left"),
+                (108, 148, yellow, "signature bottom-right"),
+                (56, 140, white, "left of the signature"),
+                (128, 140, white, "right of the signature"),
+                (92, 120, white, "above the signature"),
+                (92, 160, white, "below the signature"),
+            ] {
+                let got = pixels.get_pixel(x, y).0;
+                assert!(got[..3].iter().zip(want).all(|(g, w)| g.abs_diff(w) < 12), "page {page}, {what} at ({x}, {y}): {got:?}, want {want:?}");
+            }
+        }
+    };
+    check(&mut a, doc);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "placed.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "placed.pdf" }))["doc"].as_u64().unwrap();
+    check(&mut a, reopened);
+}
+
+/// Issue #299: a typed signature and initials read across, as displayed, on every `/Rotate`,
+/// anchored at the displayed point, and look the same as on an unturned page.
+#[test]
+fn typed_signatures_stay_upright_on_rotated_pages() {
+    let dir = workdir("typed-upright");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 200, "height": 300, "pages": 4 }))["doc"].as_u64().unwrap();
+    for (page, degrees) in [(2, 90), (3, 180), (4, 270)] {
+        ok(&mut a, "page_rotate", json!({ "doc": doc, "pages": [page], "degrees": degrees }));
+    }
+    for page in 1..=4 {
+        ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": page, "type": "signature", "at": [30, 60], "text": "Ada Lovelace" }));
+        ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": page, "type": "initials", "at": [30, 140], "text": "AL" }));
+    }
+    let check = |a: &mut Automation, doc: u64| {
+        let mut upright = Vec::new();
+        for page in 1..=4 {
+            let output = a.call("page_render", &json!({ "doc": doc, "page": page, "dpi": 72 })).unwrap();
+            let Content::Png { data, .. } = &output[0] else { panic!() };
+            let pixels = image::load_from_memory(data).unwrap().to_rgba8();
+            assert_eq!(pixels.dimensions(), if page % 2 == 1 { (200, 300) } else { (300, 200) }, "page {page}");
+            let dark: Vec<bool> = pixels.pixels().map(|p| p.0[..3].iter().all(|v| *v < 128)).collect();
+            for y in [60, 140] {
+                let mut b = [u32::MAX, u32::MAX, 0, 0];
+                for (x, py, p) in pixels.enumerate_pixels() {
+                    if py.abs_diff(y) < 40 && p.0[..3].iter().all(|v| *v < 128) {
+                        b = [b[0].min(x), b[1].min(py), b[2].max(x), b[3].max(py)];
+                    }
+                }
+                assert!(b[0] <= b[2], "page {page}: no ink near y = {y}");
+                assert!(b[2] - b[0] > b[3] - b[1], "page {page}: the name reads across: {b:?}");
+                assert!(b[0].abs_diff(30) <= 2 && b[1] < y && b[3] > y, "page {page}: anchored at (30, {y}): {b:?}");
+            }
+            if page == 1 {
+                upright = dark;
+                continue;
+            }
+            // Same pixels as the unturned page where both pages are (pages 2 and 4 are wider).
+            let width = pixels.width();
+            let (mut differ, mut ink) = (0, 0);
+            for y in 0..200 {
+                for x in 0..200 {
+                    let (want, got) = (upright[(y * 200 + x) as usize], dark[(y * width + x) as usize]);
+                    ink += usize::from(want);
+                    differ += usize::from(want != got);
+                }
+            }
+            assert!(differ * 10 < ink, "page {page}: {differ} of {ink} ink pixels differ from the unturned page");
+        }
+    };
+    check(&mut a, doc);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "placed.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "placed.pdf" }))["doc"].as_u64().unwrap();
+    check(&mut a, reopened);
 }
 
 #[test]

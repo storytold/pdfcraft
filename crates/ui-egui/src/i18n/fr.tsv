@@ -1909,6 +1909,7 @@
 	Default page display	Affichage des pages par défaut
 	Default zoom	Zoom par défaut
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Utilisé lorsqu'un PDF ne demande ni présentation ni zoom. Le défilement continu ne saute jamais d'une page à l'autre.
+	Reopen the files that were open when PdfCraft last closed	Rouvrir les fichiers qui étaient ouverts lors de la dernière fermeture de PdfCraft
 	Show	Afficher
 	Sort	Trier
 	Reverse the order	Inverser l'ordre
@@ -2013,6 +2014,9 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Choisissez une image PNG ou JPEG (jusqu’à 4 Mio). La transparence est conservée.
 	Couldn't import the signature image: {e}	Impossible d’importer l’image de la signature : {e}
 	Open Recent	Ouvrir un fichier récent
+	Clear Recent Files	Effacer les fichiers récents
+	Remove from Recent	Retirer des fichiers récents
+	Remove {name} from Recent	Retirer {name} des fichiers récents
 	Pin folder to Home…	Épingler un dossier à l'Accueil…
 	Folders	Dossiers
 	Pin a folder…	Épingler un dossier…
