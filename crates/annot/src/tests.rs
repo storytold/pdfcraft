@@ -60,7 +60,7 @@ fn list(doc: &Document, page: usize) -> Vec<Dict> {
 }
 
 fn ap_content(doc: &Document, d: &Dict) -> String {
-    let n = d.get(b"AP").and_then(|a| a.as_dict()).and_then(|a| a.reference(b"N")).expect("has /AP /N");
+    let n = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N"))).expect("has /AP /N");
     let obj = doc.get(n);
     let Object::Stream(s) = &*obj else { panic!("AP is not a stream") };
     String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
@@ -84,7 +84,7 @@ fn every_tool_creates_a_drawable_comment() {
         Shape::TextMarkup { kind: Markup::Squiggly, quads: vec![[72.0, 412.0, 200.0, 412.0, 72.0, 400.0, 200.0, 400.0]] },
         Shape::Rectangle { rect: [300.0, 300.0, 200.0, 200.0] },
         Shape::Oval { rect: [300.0, 300.0, 400.0, 350.0] },
-        Shape::Line { from: [50.0, 50.0], to: [150.0, 100.0], arrow: true },
+        Shape::Line { from: [50.0, 50.0], to: [150.0, 100.0], start: LineEnding::None, end: LineEnding::OpenArrow },
         Shape::Ink { strokes: vec![vec![[10.0, 10.0], [20.0, 30.0], [30.0, 10.0]], vec![[40.0, 40.0]]] },
         Shape::TextBox { rect: [300.0, 600.0, 500.0, 650.0], font_size: 14.0 },
     ];
@@ -141,6 +141,28 @@ fn every_tool_creates_a_drawable_comment() {
     assert_eq!(all[1].reference(b"Popup"), entries[2].as_ref());
 }
 
+/// #260 (page 7): Acrobat draws an Ink annotation as a smooth curve through its `/InkList`
+/// points, where PdfCraft drew straight segments between them. Three or more points now make a
+/// Catmull-Rom spline through every point (as cubic Béziers); two points stay a line, one a dot.
+#[test]
+fn ink_strokes_are_smooth_curves_through_their_points() {
+    let mut doc = fixture();
+    let strokes = vec![vec![[0.0, 0.0], [10.0, 10.0], [20.0, 0.0]], vec![[30.0, 0.0], [40.0, 10.0]], vec![[50.0, 50.0]]];
+    let i = add_annotation(&mut doc, &new(0, Shape::Ink { strokes }), &meta("ink")).unwrap();
+    let ap = ap_content(&doc, &list(&doc, 0)[i]);
+    // Tangents at each point run parallel to the chord between its neighbours (the ends use
+    // their own point): (0,0)→(10,10) leaves along (10,10) and arrives along (20,0).
+    assert!(ap.contains("0 0 m\n1.667 1.667 6.667 10 10 10 c\n13.333 10 18.333 1.667 20 0 c\nS\n"), "{ap}");
+    assert!(ap.contains("30 0 m\n40 10 l\nS\n"), "{ap}");
+    assert!(ap.contains("50 50 m\n50.01 50 l\nS\n"), "{ap}");
+    // /Rect holds the whole curve: rising to (20, 20) and dropping to (21, 0), it swings above
+    // y 20 (its control point is at y 21.667), beyond the points' own bounds plus the margin.
+    let rise = Shape::Ink { strokes: vec![vec![[0.0, 0.0], [10.0, 10.0], [20.0, 20.0], [21.0, 0.0]]] };
+    let j = add_annotation(&mut doc, &new(0, rise), &meta("rise")).unwrap();
+    let top = rect(&list(&doc, 0)[j])[3];
+    assert!(top >= 21.667 + 2.0 - 0.01, "/Rect top {top}");
+}
+
 #[test]
 fn indirect_annots_array_is_updated_in_place() {
     let mut doc = fixture();
@@ -157,7 +179,7 @@ fn invalid_geometry_is_rejected() {
     let bad = [
         Shape::TextMarkup { kind: Markup::Highlight, quads: vec![] },
         Shape::Rectangle { rect: [0.0, 0.0, 0.5, 10.0] },
-        Shape::Line { from: [1.0, 1.0], to: [1.0, 1.0], arrow: false },
+        Shape::Line { from: [1.0, 1.0], to: [1.0, 1.0], start: LineEnding::None, end: LineEnding::None },
         Shape::Ink { strokes: vec![vec![]] },
         Shape::Note { at: [f64::NAN, 0.0], icon: NoteIcon::Note },
     ];
@@ -239,7 +261,7 @@ fn move_shifts_all_geometry_and_the_popup() {
 fn restyle_and_resize_redraw_the_appearance() {
     let mut doc = fixture();
     let r = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 110.0, 60.0] }), &meta("r")).unwrap();
-    set_style(&mut doc, 0, r, Some([1.0, 0.0, 0.0]), Some(0.5), Some(4.0), &meta("")).unwrap();
+    set_style(&mut doc, 0, r, Some([1.0, 0.0, 0.0]), Some(0.5), Some(4.0), None, &meta("")).unwrap();
     set_rect(&mut doc, 0, r, [0.0, 0.0, 200.0, 100.0], &meta("")).unwrap();
     let doc2 = reopen(&doc);
     let d = &list(&doc2, 0)[r];
@@ -249,10 +271,15 @@ fn restyle_and_resize_redraw_the_appearance() {
     assert_eq!(d.get(b"CA").and_then(|o| o.as_f64()), Some(0.5));
     // A stamp's appearance can't be regenerated, so restyling it changes nothing.
     let before = list(&doc, 1)[0].clone();
-    assert_eq!(set_style(&mut doc, 1, 0, Some([0.0; 3]), None, None, &meta("")), Err(AnnotError::Unsupported("Stamp".into())));
+    assert_eq!(set_style(&mut doc, 1, 0, Some([0.0; 3]), None, None, None, &meta("")), Err(AnnotError::Unsupported("Stamp".into())));
     assert_eq!(list(&doc, 1)[0], before);
     // Lines can't be resized as rectangles.
-    let l = add_annotation(&mut doc, &new(0, Shape::Line { from: [0.0, 0.0], to: [10.0, 10.0], arrow: false }), &meta("l")).unwrap();
+    let l = add_annotation(
+        &mut doc,
+        &new(0, Shape::Line { from: [0.0, 0.0], to: [10.0, 10.0], start: LineEnding::None, end: LineEnding::None }),
+        &meta("l"),
+    )
+    .unwrap();
     assert!(matches!(set_rect(&mut doc, 0, l, [0.0, 0.0, 5.0, 5.0], &meta("")), Err(AnnotError::Invalid(_))));
 }
 
@@ -261,7 +288,7 @@ fn text_box_text_and_colour_changes_are_drawn() {
     let mut doc = fixture();
     let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [0.0, 0.0, 300.0, 100.0], font_size: 12.0 }), &meta("t")).unwrap();
     set_contents(&mut doc, 0, t, "Caf\u{e9} (draft) \u{2014} 100%", &meta("")).unwrap();
-    set_style(&mut doc, 0, t, Some([1.0, 0.0, 0.0]), None, None, &meta("")).unwrap();
+    set_style(&mut doc, 0, t, Some([1.0, 0.0, 0.0]), None, None, None, &meta("")).unwrap();
     let doc = reopen(&doc);
     let d = &list(&doc, 0)[t];
     assert_eq!(text(d, b"Contents"), "Caf\u{e9} (draft) \u{2014} 100%");
@@ -315,7 +342,16 @@ fn editing_a_callout_refits_the_box_and_keeps_the_leader() {
     let mut doc = fixture();
     let c = add_annotation(
         &mut doc,
-        &new(0, Shape::Callout { rect: [300.0, 600.0, 500.0, 612.0], knee: [260.0, 560.0], point: [200.0, 520.0], font_size: 12.0 }),
+        &new(
+            0,
+            Shape::Callout {
+                rect: [300.0, 600.0, 500.0, 612.0],
+                knee: [260.0, 560.0],
+                point: [200.0, 520.0],
+                font_size: 12.0,
+                ending: LineEnding::OpenArrow,
+            },
+        ),
         &meta("c"),
     )
     .unwrap();
@@ -407,8 +443,8 @@ fn fill_and_sign_items_are_drawn() {
     assert_eq!(text(&all[s], b"Subj"), "Signature");
     // Other stamps still can't be restyled; ours can.
     let mut doc = doc;
-    set_style(&mut doc, 1, marks[0], Some([0.0, 0.0, 1.0]), None, None, &meta("")).unwrap();
-    assert!(set_style(&mut doc, 1, 0, Some([0.0; 3]), None, None, &meta("")).is_err());
+    set_style(&mut doc, 1, marks[0], Some([0.0, 0.0, 1.0]), None, None, None, &meta("")).unwrap();
+    assert!(set_style(&mut doc, 1, 0, Some([0.0; 3]), None, None, None, &meta("")).is_err());
 }
 
 #[test]
@@ -493,11 +529,24 @@ fn polygons_clouds_connected_lines_callouts_and_carets_are_drawn() {
     let tri = vec![[100.0, 100.0], [200.0, 100.0], [150.0, 180.0]];
     let i = add_annotation(&mut doc, &new(0, Shape::Polygon { vertices: tri.clone(), cloud: false }), &meta("p")).unwrap();
     let c = add_annotation(&mut doc, &new(0, Shape::Polygon { vertices: tri.clone(), cloud: true }), &meta("c")).unwrap();
-    let l =
-        add_annotation(&mut doc, &new(0, Shape::PolyLine { vertices: vec![[300.0, 300.0], [350.0, 320.0], [400.0, 300.0]] }), &meta("l")).unwrap();
+    let l = add_annotation(
+        &mut doc,
+        &new(0, Shape::PolyLine { vertices: vec![[300.0, 300.0], [350.0, 320.0], [400.0, 300.0]], start: LineEnding::None, end: LineEnding::None }),
+        &meta("l"),
+    )
+    .unwrap();
     let co = add_annotation(
         &mut doc,
-        &new(0, Shape::Callout { rect: [300.0, 500.0, 420.0, 540.0], knee: [260.0, 520.0], point: [220.0, 460.0], font_size: 10.0 }),
+        &new(
+            0,
+            Shape::Callout {
+                rect: [300.0, 500.0, 420.0, 540.0],
+                knee: [260.0, 520.0],
+                point: [220.0, 460.0],
+                font_size: 10.0,
+                ending: LineEnding::OpenArrow,
+            },
+        ),
         &meta("co"),
     )
     .unwrap();
@@ -554,7 +603,7 @@ fn polygons_clouds_connected_lines_callouts_and_carets_are_drawn() {
 
     for bad in [
         Shape::Polygon { vertices: vec![[0.0, 0.0], [10.0, 10.0]], cloud: false },
-        Shape::PolyLine { vertices: vec![[0.0, 0.0]] },
+        Shape::PolyLine { vertices: vec![[0.0, 0.0]], start: LineEnding::None, end: LineEnding::None },
         Shape::Caret { rect: [0.0, 0.0, 0.0, 10.0] },
     ] {
         assert!(add_annotation(&mut doc, &new(0, bad), &meta("b")).is_err());
@@ -656,4 +705,217 @@ fn the_eraser_cuts_strokes_and_removes_empty_drawings() {
     erase_ink(&mut doc, 0, i, &all[..21], 8.0, &meta("e")).unwrap();
     erase_ink(&mut doc, 0, i, &all[21..], 8.0, &meta("e")).unwrap();
     assert!(!list(&doc, 0).iter().any(|d| d.name(b"Subtype") == Some(b"Ink")));
+}
+
+/// A one-page document from object bodies (object 1 is the catalog, 3 the page).
+fn document_of(objs: &[&[u8]]) -> Document {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).expect("opens")
+}
+
+#[test]
+fn comments_without_appearances_get_one_for_display_only() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [48 582 285 632] /Contents (FreeText annotation with valid /DA string.) /DA (/Helv 10 Tf 0 0 1 rg) /Border [0 0 1] /C [.85 .47 .02] >>",
+        b"<< /Type /Annot /Subtype /Ink /Rect [70 392 275 472] /InkList [[80 402 120 452 160 412 210 462 260 417]] /Border [0 0 2] /C [.49 .18 .07] >>",
+        b"<< /Type /Annot /Subtype /Text /Rect [400 717 420 737] /C [1 1 0] /Contents (A note) >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /C [1 0 0] /AP << /N 11 0 R >> >>",
+        b"<< /Type /Annot /Subtype /Link /Rect [48 717 308 741] /Border [0 0 1] /C [0 0 1] >>",
+        b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (f) /Rect [10 100 100 120] >>",
+        b"<< /Type /Annot /Subtype /Sound /Rect [10 200 30 220] >>",
+        b"<< /Type /XObject /Subtype /Form /BBox [10 10 50 50] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    let display = with_missing_appearances(&doc).expect("three comments need an appearance");
+    let has_ap = |doc: &Document| list(doc, 0).iter().map(|d| d.get(b"AP").is_some()).collect::<Vec<_>>();
+    assert_eq!(has_ap(&doc), [false, false, false, true, false, false, false], "the document itself is untouched");
+    assert_eq!(has_ap(&display), [true, true, true, true, false, false, false], "FreeText, Ink and Text get one; the rest don't");
+    let shown = list(&display, 0);
+    let free_text = ap_content(&display, &shown[0]);
+    assert!(free_text.contains("re f") && free_text.contains("Tj"), "background box and text: {free_text}");
+    assert_eq!(shown[3].get(b"AP"), list(&doc, 0)[3].get(b"AP"), "an existing appearance is kept");
+    // The display copy survives a save and reopen (what the renderer reads).
+    assert_eq!(has_ap(&reopen(&display)), [true, true, true, true, false, false, false]);
+    // Nothing to add: no copy.
+    let complete = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /Link /Rect [48 717 308 741] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /C [1 0 0] /AP << /N 6 0 R >> >>",
+        b"<< /Type /XObject /Subtype /Form /BBox [10 10 50 50] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    assert!(with_missing_appearances(&complete).is_none());
+}
+
+fn line_dict(coords: [f64; 4], ending: &str) -> pdfcraft_cos::Dict {
+    let mut d = pdfcraft_cos::Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Line"));
+    d.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 300.0, 300.0].into_iter().map(Object::Real).collect()));
+    d.set(b"C".to_vec(), Object::Array([1.0, 0.0, 0.0].into_iter().map(Object::Real).collect()));
+    d.set(b"L".to_vec(), Object::Array(coords.into_iter().map(Object::Real).collect()));
+    d.set(b"LE".to_vec(), Object::Array(vec![Object::name("None"), Object::name(ending)]));
+    d
+}
+
+#[test]
+fn every_line_ending_is_drawn() {
+    let filled = [LineEnding::Square, LineEnding::Circle, LineEnding::Diamond, LineEnding::ClosedArrow, LineEnding::RClosedArrow];
+    let (mut open, mut reverse) = (String::new(), String::new());
+    for ending in LineEnding::ALL {
+        let mut doc = fixture();
+        add_annotation(
+            &mut doc,
+            &new(0, Shape::Line { from: [80.0, 100.0], to: [200.0, 160.0], start: LineEnding::None, end: ending }),
+            &meta("ending"),
+        )
+        .unwrap();
+        let doc = reopen(&doc);
+        let line = list(&doc, 0).into_iter().find(|d| d.name(b"Subtype") == Some(b"Line")).expect("line");
+        let content = ap_content(&doc, &line);
+        assert!(!content.is_empty(), "{ending:?}");
+        let paints = content.contains("h B") || content.contains("B\n");
+        assert_eq!(paints, filled.contains(&ending), "{ending:?} fill: {content}");
+        if ending != LineEnding::None {
+            let r = rect(&line);
+            assert!(r[0] < 70.0 && r[2] > 210.0, "{ending:?} rectangle includes the ending: {r:?}");
+        }
+        if ending == LineEnding::OpenArrow {
+            open = content.clone();
+        }
+        if ending == LineEnding::ROpenArrow {
+            reverse = content;
+        }
+    }
+    assert_ne!(open, reverse, "a reverse arrow points the other way");
+
+    let mut doc = fixture();
+    let index = add_annotation(
+        &mut doc,
+        &new(0, Shape::Line { from: [40.0, 40.0], to: [140.0, 40.0], start: LineEnding::None, end: LineEnding::None }),
+        &meta("plain"),
+    )
+    .unwrap();
+    let before = rect(&list(&doc, 0).into_iter().find(|d| d.name(b"Subtype") == Some(b"Line")).expect("line"));
+    set_style(&mut doc, 0, index, None, None, None, Some(&[LineEnding::None, LineEnding::Square]), &meta("style")).unwrap();
+    let mut doc = reopen(&doc);
+    let line = list(&doc, 0).into_iter().find(|d| d.name(b"Subtype") == Some(b"Line")).expect("line");
+    let after = rect(&line);
+    assert!(after[1] < before[1] - 5.0 && after[3] > before[3] + 5.0, "the square is not clipped: {before:?} → {after:?}");
+    assert!(ap_content(&doc, &line).contains("re h B"), "square ending");
+
+    add_annotation(
+        &mut doc,
+        &new(0, Shape::PolyLine { vertices: vec![[40.0, 200.0], [90.0, 260.0], [150.0, 200.0]], start: LineEnding::Circle, end: LineEnding::Slash }),
+        &meta("poly"),
+    )
+    .unwrap();
+    add_annotation(
+        &mut doc,
+        &new(
+            0,
+            Shape::Callout {
+                rect: [300.0, 500.0, 420.0, 540.0],
+                knee: [260.0, 520.0],
+                point: [220.0, 460.0],
+                font_size: 10.0,
+                ending: LineEnding::Diamond,
+            },
+        ),
+        &meta("call"),
+    )
+    .unwrap();
+    let doc = reopen(&doc);
+    let all = list(&doc, 0);
+    let poly = all.iter().find(|d| d.name(b"Subtype") == Some(b"PolyLine")).expect("polyline");
+    let poly_ap = ap_content(&doc, poly);
+    assert!(poly_ap.contains("B\n") && poly_ap.contains(" l S"), "circle fills and the slash only strokes: {poly_ap}");
+    let call = all.iter().find(|d| d.name(b"IT") == Some(b"FreeTextCallout")).expect("callout");
+    assert_eq!(call.name(b"LE"), Some(b"Diamond".as_slice()));
+    assert!(ap_content(&doc, call).contains("h B"), "diamond callout");
+
+    assert!(appearance::build(&line_dict([f64::NAN, 0.0, 10.0, 0.0], "OpenArrow")).is_none(), "a non-finite endpoint is rejected");
+    assert!(appearance::build(&line_dict([0.0, 0.0, 10.0, 0.0], "Foo")).is_none(), "an unknown ending is not replaced");
+}
+
+#[test]
+fn redraw_keeps_shared_annotation_appearances_and_drops_stale_alternates() {
+    let alternates: [(&[u8], &[u8]); 2] = [(b"R", b"0 0 20 10 re f\n"), (b"D", b"1 1 18 8 re S\n")];
+    for indirect in [false, true] {
+        let mut doc = fixture();
+        let first = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 110.0, 60.0] }), &meta("first")).unwrap();
+        let other = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [120.0, 10.0, 220.0, 60.0] }), &meta("other")).unwrap();
+        let (_, first_ref) = annot_ref(&mut doc, 0, first).unwrap();
+        let (_, other_ref) = annot_ref(&mut doc, 0, other).unwrap();
+        let mut entries = annot_dict(&doc, first_ref).get(b"AP").unwrap().as_dict().unwrap().clone();
+        for (key, bytes) in alternates {
+            let mut d = Dict::new();
+            d.set(b"Type".to_vec(), Object::name("XObject"));
+            d.set(b"Subtype".to_vec(), Object::name("Form"));
+            d.set(b"BBox".to_vec(), num_array(&[0.0, 0.0, 20.0, 10.0]));
+            let r = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(d, bytes.to_vec())));
+            entries.set(key.to_vec(), Object::Ref(r));
+        }
+        entries.set(b"VendorState".to_vec(), Object::name("Retained"));
+        let shared = if indirect { Object::Ref(doc.add(Object::Dict(entries))) } else { Object::Dict(entries) };
+        for r in [first_ref, other_ref] {
+            doc.update_dict(r, |d| d.set(b"AP".to_vec(), shared.clone())).unwrap();
+        }
+        let mut doc = reopen(&doc);
+        let other_dict = list(&doc, 0)[other].clone();
+        let source = other_dict.get(b"AP").unwrap();
+        let before = doc.resolve(source);
+        set_style(&mut doc, 0, first, Some([1.0, 0.0, 0.0]), None, None, None, &meta("")).unwrap();
+        assert_eq!(doc.resolve(source), before, "a shared AP must not change");
+        for full in [false, true] {
+            let bytes = if full {
+                pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap()
+            } else {
+                assert!(!doc.revisions().is_empty(), "incremental save needs an existing revision");
+                assert!(!doc.encryption_changed() && !doc.full_save_required(), "this edit must not require a full rewrite");
+                let original = doc.bytes();
+                let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+                assert!(bytes.len() > original.len(), "incremental save appends the changed appearance");
+                assert!(bytes.starts_with(original.as_slice()), "incremental save preserves the complete original prefix");
+                bytes
+            };
+            hayro_syntax::Pdf::new(bytes.clone()).unwrap();
+            let doc = Document::open(Arc::new(bytes)).unwrap();
+            let all = list(&doc, 0);
+            let first_ap = doc.resolve(all[first].get(b"AP").unwrap());
+            let other_ap = doc.resolve(all[other].get(b"AP").unwrap());
+            let first_ap = first_ap.as_dict().unwrap();
+            let other_ap = other_ap.as_dict().unwrap();
+            assert_ne!(first_ap.get(b"N"), other_ap.get(b"N"));
+            // The restyled annotation keeps unknown entries, but not down/rollover looks in its
+            // old colour.
+            assert_eq!(first_ap.len(), 2);
+            assert_eq!(other_ap.len(), 4);
+            for (key, bytes) in alternates {
+                assert!(first_ap.get(key).is_none(), "stale /{}", String::from_utf8_lossy(key));
+                let object = doc.resolve(other_ap.get(key).unwrap());
+                let Object::Stream(stream) = &*object else { panic!("alternate appearance") };
+                assert_eq!(stream.decoded().unwrap(), bytes);
+            }
+            assert_eq!(first_ap.name(b"VendorState"), Some(&b"Retained"[..]));
+            assert_eq!(other_ap.name(b"VendorState"), Some(&b"Retained"[..]));
+            assert!(ap_content(&doc, &all[first]).contains("1 0 0 RG"));
+            assert!(ap_content(&doc, &all[other]).contains("0 0.4 1 RG"));
+        }
+    }
 }

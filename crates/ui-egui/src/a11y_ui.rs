@@ -386,12 +386,13 @@ impl PdfCraftApp {
                         let edit = self.session.get(id).map(|d| d.accessibility_fix(rule, None));
                         match edit {
                             Some(Ok(e)) => {
-                                if self.apply_edit(e) {
-                                    self.run_accessibility_check();
-                                    // The title can then be edited.
-                                    if rule == Rule::Title {
-                                        self.dialog = Some(Dialog::Properties(PropsTab::Description));
-                                    }
+                                if !self.apply_edit(e) {
+                                    return;
+                                }
+                                self.run_accessibility_check();
+                                // The title can then be edited.
+                                if rule == Rule::Title {
+                                    self.dialog = Some(Dialog::Properties(PropsTab::Description));
                                 }
                             }
                             Some(Err(e)) => self.notify_error(e),

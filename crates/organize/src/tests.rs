@@ -4,6 +4,18 @@ use pdfcraft_cos::{Document, Object, SaveOptions, write_full, write_incremental}
 
 use super::*;
 
+#[test]
+fn page_rotation_resolves_inheritance_overrides_and_missing_pages() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    for page in 0..3 {
+        assert_eq!(page_rotation(&doc, page).unwrap(), 90);
+    }
+    rotate_pages(&mut doc, &[1], -180).unwrap();
+    assert_eq!(page_rotation(&doc, 1).unwrap(), 270);
+    assert_eq!(page_rotation(&doc, 0).unwrap(), 90);
+    assert_eq!(page_rotation(&doc, 3), Err(OrganizeError::NoSuchPage(3)));
+}
+
 /// A 3-page document with a nested page tree. MediaBox and Rotate are inherited from the root,
 /// Resources from an intermediate node; each page's content says which page it is.
 fn fixture() -> Vec<u8> {
@@ -399,6 +411,167 @@ fn split_produces_standalone_documents_with_metadata() {
         assert_eq!(labels(&part), [format!("A{}", i + 1)]);
         assert_eq!(info(&part, "Author").as_deref(), Some("Alice"));
     }
+}
+
+// ── PDF/X (#263) ───────────────────────────────────────────────────────────────────────────────
+
+/// PDF/X-4 identification in XMP, as an attribute, next to a PDF/UA claim.
+const X4_XMP: &str = "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?><x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF \
+                      xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" \
+                      xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\" xmlns:pdfuaid=\"http://www.aiim.org/pdfua/ns/id/\" \
+                      pdfxid:GTS_PDFXVersion=\"PDF/X-4\" pdfuaid:part=\"1\"/></rdf:RDF></x:xmpmeta><?xpacket end=\"r\"?>";
+
+/// A two-page print file whose output intent prints to `condition` with `profile` as its ICC
+/// profile, with `info` as its document information and `xmp` as its XMP metadata.
+fn doc_print(condition: &str, profile: &str, info: &str, xmp: Option<&str>) -> Document {
+    let metadata = if xmp.is_some() { " /Metadata 10 0 R" } else { "" };
+    let mut b: Vec<String> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /OutputIntents [7 0 R]{metadata} >>"), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 252 144] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /TrimBox [9 9 243 135] >>".into(), // 3
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /TrimBox [9 9 243 135] >>".into(), // 4
+        body("X1"),                                                                    // 5
+        body("X2"),                                                                    // 6
+        format!("<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier ({condition}) /DestOutputProfile 8 0 R >>"), // 7
+        format!("<< /N 4 /Length {} >>\nstream\n{profile}\nendstream", profile.len()), // 8
+        format!("<< {info} >>"),                                                       // 9
+    ];
+    if let Some(x) = xmp {
+        b.push(format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{x}\nendstream", x.len())); // 10
+    }
+    open(build(&b, "/Root 1 0 R /Info 9 0 R"))
+}
+
+/// A PDF/X-4 business card printing to `condition` with `profile`.
+fn doc_x4(condition: &str, profile: &str) -> Document {
+    doc_print(condition, profile, "/Title (Card) /GTS_PDFXVersion (PDF/X-4) /Trapped /False", Some(X4_XMP))
+}
+
+/// What a document says about PDF/X.
+#[derive(Debug, Default, PartialEq)]
+struct Pdfx {
+    /// Each output intent's printing condition and decoded profile.
+    intents: Vec<(String, Vec<u8>)>,
+    version: Option<String>,
+    trapped: Option<Vec<u8>>,
+    xmp: Option<String>,
+}
+
+fn pdfx_of(doc: &Document) -> Pdfx {
+    let cat = catalog(doc);
+    let list = cat.get(b"OutputIntents").map(|o| doc.resolve(o).as_array().cloned().unwrap_or_default()).unwrap_or_default();
+    let intents = list
+        .iter()
+        .filter_map(|oi| {
+            let d = doc.resolve(oi).as_dict().cloned()?;
+            let id = d.get(b"OutputConditionIdentifier").and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())).unwrap_or_default();
+            let profile = match d.get(b"DestOutputProfile").map(|p| doc.resolve(p)).as_deref() {
+                Some(Object::Stream(s)) => s.decoded().unwrap(),
+                _ => Vec::new(),
+            };
+            Some((id, profile))
+        })
+        .collect();
+    let trapped = doc.trailer().get(b"Info").map(|i| doc.resolve(i)).and_then(|i| i.as_dict().and_then(|d| d.name(b"Trapped")).map(<[u8]>::to_vec));
+    let xmp = match cat.get(b"Metadata").map(|m| doc.resolve(m)).as_deref() {
+        Some(Object::Stream(s)) => Some(String::from_utf8(s.decoded().unwrap()).unwrap()),
+        _ => None,
+    };
+    Pdfx { intents, version: info(doc, "GTS_PDFXVersion"), trapped, xmp }
+}
+
+#[test]
+fn extract_and_split_keep_the_pdfx_output_intent_and_identification() {
+    // #263: the parts had no /OutputIntents, no GTS_PDFXVersion and no XMP pdfxid, so a PDF/X
+    // file stopped being one.
+    let src = doc_x4("FOGRA39", "icc-fogra39");
+    let mut outs = vec![extract_pages(&src, &[1]).unwrap()];
+    outs.extend(split(&src, &SplitBy::PageCount(1)).unwrap());
+    for out in &outs {
+        let x = pdfx_of(&full_roundtrip(out));
+        assert_eq!(x.intents, [("FOGRA39".to_string(), b"icc-fogra39".to_vec())]);
+        assert_eq!(x.version.as_deref(), Some("PDF/X-4"));
+        assert_eq!(x.trapped.as_deref(), Some(&b"False"[..]));
+        let xmp = x.xmp.expect("XMP metadata");
+        assert!(xmp.contains("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>"), "{xmp}");
+        assert!(xmp.contains(">Card</rdf:li>") && xmp.contains("<pdf:Trapped>False</pdf:Trapped>"), "{xmp}");
+        // The structure tree is not copied, so the source's PDF/UA claim must not be either.
+        assert!(!xmp.contains("pdfuaid"), "{xmp}");
+    }
+}
+
+#[test]
+fn combine_keeps_pdfx_when_every_source_agrees() {
+    // #263: a PDF/X-4 card combined with itself.
+    let (a, b) = (doc_x4("FOGRA39", "icc-fogra39"), doc_x4("FOGRA39", "icc-fogra39"));
+    let out = full_roundtrip(&combine(&[("a", &a), ("b", &b)]).unwrap());
+    assert_eq!(labels(&out), ["X1", "X2", "X1", "X2"]);
+    let x = pdfx_of(&out);
+    assert_eq!(x.intents, [("FOGRA39".to_string(), b"icc-fogra39".to_vec())], "one output intent, not one per source");
+    assert_eq!(x.version.as_deref(), Some("PDF/X-4"));
+    assert!(x.xmp.is_some_and(|x| x.contains("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>")));
+}
+
+#[test]
+fn combine_claims_no_pdfx_when_the_sources_disagree() {
+    // Another printing condition, the same name with another profile, or a source that is not
+    // PDF/X: no one standard describes the result, so it claims none.
+    let x4 = doc_x4("FOGRA39", "icc-fogra39");
+    for other in [doc_x4("GRACoL2013", "icc-gracol"), doc_x4("FOGRA39", "icc-other"), doc_b()] {
+        let out = full_roundtrip(&combine(&[("a", &x4), ("b", &other)]).unwrap());
+        assert_eq!(pdfx_of(&out), Pdfx::default());
+    }
+}
+
+#[test]
+fn documents_without_a_print_standard_gain_none() {
+    assert_eq!(pdfx_of(&full_roundtrip(&extract_pages(&doc_a(), &[0]).unwrap())), Pdfx::default());
+    assert_eq!(pdfx_of(&full_roundtrip(&combine(&[("a", &doc_a()), ("b", &doc_b())]).unwrap())), Pdfx::default());
+}
+
+#[test]
+fn the_pdfx_version_comes_from_xmp_or_the_document_information() {
+    // A PDF/X-4 file may name its version only in XMP (here as an element); a PDF/X-1a:2001 file
+    // (PDF 1.3) only in its document information, with no XMP, and gets no XMP added.
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description \
+               rdf:about=\"\" xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\">\
+               <pdfxid:GTS_PDFXVersion> PDF/X-4 </pdfxid:GTS_PDFXVersion><pdf:Trapped>True</pdf:Trapped></rdf:Description></rdf:RDF></x:xmpmeta>";
+    let x = pdfx_of(&full_roundtrip(&extract_pages(&doc_print("FOGRA51", "icc", "/Title (Flyer)", Some(xmp)), &[0]).unwrap()));
+    assert_eq!((x.version.as_deref(), x.trapped.as_deref()), (Some("PDF/X-4"), Some(&b"True"[..])));
+    assert!(x.xmp.is_some_and(|x| x.contains("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>")));
+
+    let x1a = doc_print("CGATS TR 001", "icc", "/GTS_PDFXVersion (PDF/X-1:2001) /GTS_PDFXConformance (PDF/X-1a:2001) /Trapped (False)", None);
+    let out = full_roundtrip(&extract_pages(&x1a, &[0]).unwrap());
+    let x = pdfx_of(&out);
+    assert_eq!((x.version.as_deref(), x.trapped.as_deref()), (Some("PDF/X-1:2001"), Some(&b"False"[..])));
+    assert_eq!(info(&out, "GTS_PDFXConformance").as_deref(), Some("PDF/X-1a:2001"));
+    assert_eq!(x.xmp, None);
+}
+
+#[test]
+fn malformed_output_intents_and_identification_do_not_fail() {
+    // Untrusted input: intents that are not dictionaries, a missing profile, an intent that is
+    // its own profile, an XMP packet that never closes, and a version full of markup and NULs.
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /OutputIntents [5 0 R 42 (junk) 6 0 R] /Metadata 7 0 R >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>".into(),                        // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".into(),                                          // 3
+        body("M1"),                                                                                        // 4
+        "<< /Type /OutputIntent /S /GTS_PDFX /DestOutputProfile 99 0 R >>".into(),                         // 5
+        "<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (x) /DestOutputProfile 6 0 R >>".into(), // 6
+        "<< /Length 30 >>\nstream\n<pdfxid:GTS_PDFXConformance>X\nendstream".into(),                       // 7
+        "<< /GTS_PDFXVersion (<PDF/X-4 & \"more\">\\000) /Trapped /Maybe >>".into(),                       // 8
+    ];
+    let src = open(build(&b, "/Root 1 0 R /Info 8 0 R"));
+    let out = full_roundtrip(&extract_pages(&src, &[0]).unwrap());
+    assert_eq!(labels(&out), ["M1"]);
+    let list = catalog(&out).get(b"OutputIntents").map(|o| out.resolve(o).as_array().cloned().unwrap_or_default()).unwrap_or_default();
+    assert_eq!(list.len(), 4, "every entry is kept as written");
+    let x = pdfx_of(&out);
+    assert_eq!(x.trapped, None, "/Maybe is not a trapping state");
+    let xmp = x.xmp.expect("XMP metadata");
+    assert!(xmp.contains("<pdfxid:GTS_PDFXVersion>&lt;PDF/X-4 &amp; &quot;more&quot;&gt;</pdfxid:GTS_PDFXVersion>"), "{xmp}");
+    assert!(!xmp.contains('\0') && !xmp.contains("GTS_PDFXConformance"), "{xmp}");
 }
 
 #[test]

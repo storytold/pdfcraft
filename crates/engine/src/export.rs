@@ -25,7 +25,7 @@ pub struct ExportSource {
 impl Document {
     /// The current state, for exporting on another thread.
     pub fn export_source(&self) -> ExportSource {
-        ExportSource { bytes: self.bytes.clone(), config: self.config.clone(), pages: self.info.pages.len() }
+        ExportSource { bytes: self.display.clone(), config: self.config.clone(), pages: self.info.pages.len() }
     }
 }
 

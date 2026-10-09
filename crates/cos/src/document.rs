@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::CosError;
 use crate::object::{Dict, ObjRef, Object};
-use crate::parser::{Lexer, is_whitespace, parse_indirect};
+use crate::parser::{Lexer, is_whitespace, parse_indirect, parse_indirect_shared};
 
 thread_local! {
     /// The objects being loaded on this thread, innermost last (see `Document::try_get`).
@@ -509,7 +509,7 @@ impl Document {
                     length
                 };
                 let off = *offset as usize;
-                let at = |off: usize| match parse_indirect(&self.data, off, &resolve) {
+                let at = |off: usize| match parse_indirect_shared(&self.data, off, &resolve) {
                     Ok((id, o)) if id.num == num => Some(self.decrypted(id, o)),
                     _ => None,
                 };
@@ -564,7 +564,7 @@ impl Document {
             if p > 0 && !is_whitespace(data[p - 1]) {
                 continue;
             }
-            if let Ok((id, o)) = parse_indirect(data, p, &|_| None)
+            if let Ok((id, o)) = parse_indirect_shared(data, p, &|_| None)
                 && id.num == num
             {
                 found = Some((id, o)); // keep the last (newest) definition
@@ -575,9 +575,22 @@ impl Document {
 
     // ── editing ─────────────────────────────────────────────────────────────────────────────
 
+    /// Stream data still pointing into another document's file would keep that whole file
+    /// alive for as long as this edit exists: give it a buffer of its own (just its bytes).
+    fn adopt(&self, obj: Object) -> Object {
+        match obj {
+            Object::Stream(mut s) if s.raw.borrows_other_than(&self.data) => {
+                s.raw = s.raw.detached();
+                Object::Stream(s)
+            }
+            other => other,
+        }
+    }
+
     /// Replace an object (keeping its generation).
     pub fn set(&mut self, r: ObjRef, obj: impl Into<Object>) {
-        self.overlay.insert(r.num, Slot::Set(r.generation, Arc::new(obj.into())));
+        let obj = self.adopt(obj.into());
+        self.overlay.insert(r.num, Slot::Set(r.generation, Arc::new(obj)));
         if r.num >= self.next_num {
             self.next_num = r.num + 1;
         }
@@ -587,7 +600,8 @@ impl Document {
     pub fn add(&mut self, obj: impl Into<Object>) -> ObjRef {
         let r = ObjRef::new(self.next_num, 0);
         self.next_num += 1;
-        self.overlay.insert(r.num, Slot::Set(0, Arc::new(obj.into())));
+        let obj = self.adopt(obj.into());
+        self.overlay.insert(r.num, Slot::Set(0, Arc::new(obj)));
         r
     }
 
@@ -1010,7 +1024,7 @@ mod tests {
         // Either recovered via the endstream search or reported — but never a stack overflow.
         let o = doc.get(ObjRef::new(3, 0));
         if let Object::Stream(s) = o.as_ref() {
-            assert_eq!(s.raw.as_slice(), b"abc");
+            assert_eq!(&s.raw[..], b"abc");
         }
     }
 

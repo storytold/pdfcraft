@@ -5,18 +5,22 @@
 //! untouched) or as a full, garbage-collected rewrite. The PDF object graph *is* PdfCraft's
 //! document model (plan/architecture.md §5, ADR-0010).
 //!
-//! Status (M1 in progress): parsing of all xref forms, object streams, repair by scanning,
-//! incremental and full writing. Not yet: encryption (M1.6), object-stream / xref-stream output
-//! for full saves, linearization (M11).
+//! Done: every cross-reference form (tables, streams, hybrid `/XRefStm`), object streams, repair
+//! by scanning, encryption on load and save (R2–R6, crypt filters, `/EFF`), incremental writing,
+//! and full saves that pack objects into compressed object streams with a cross-reference stream.
+//! Not yet: streaming very large files within a memory budget (`ByteSource`,
+//! `core.lazy-loading`), and linearized output (`core.linearization`, M11). See the README.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod bytes;
 mod document;
 mod object;
 mod parser;
 mod security;
 mod writer;
 
+pub use bytes::Bytes;
 pub use document::{Document, Revision, XrefEntry};
 pub use object::{Dict, MAX_DECODED, Name, ObjRef, Object, PdfString, Stream};
 pub use parser::{Lexer, parse_indirect};

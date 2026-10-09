@@ -43,6 +43,7 @@ fn harness_pages(pages: usize) -> (Harness<'static, PdfCraftApp>, ControlClient)
     let s = slot.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
         app.open_bytes("doc.pdf", None, fixture(pages)).unwrap();
         app
@@ -66,6 +67,35 @@ fn call(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, 
 
 fn ok(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, params: Value) -> Value {
     call(h, c, method, params).unwrap_or_else(|e| panic!("{method}: {e}"))
+}
+
+#[test]
+fn bookmark_titles_can_be_searched_over_control() {
+    let (mut h, c) = harness();
+    for (index, title, page) in [(0, "Background", 0), (1, "Target chapter", 3)] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark { parent: vec![], index, title: title.into(), page });
+    }
+    ok(&mut h, &c, "ui.set", json!({ "key": "panel", "value": "bookmarks" }));
+    h.run_steps(3);
+    let widgets = ok(&mut h, &c, "ui.inspect", json!({ "query": "Search", "role": "TextInput" }));
+    let rect = &widgets["widgets"][0]["rect"];
+    let x = (rect[0].as_f64().unwrap() + rect[2].as_f64().unwrap()) / 2.0;
+    let y = (rect[1].as_f64().unwrap() + rect[3].as_f64().unwrap()) / 2.0;
+    ok(&mut h, &c, "ui.click", json!({ "x": x, "y": y }));
+    ok(&mut h, &c, "ui.type", json!({ "text": "target" }));
+    h.get_by_label("Target chapter");
+    assert!(h.query_by_label("Background").is_none());
+    ok(&mut h, &c, "ui.click", json!({ "label": "Target chapter" }));
+    assert_eq!(h.state().views[0].current, 3);
+    if let Ok(dir) = std::env::var("PDFCRAFT_BOOKMARK_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/control-filtered-bookmarks.png")).unwrap();
+    }
+    ok(&mut h, &c, "ui.click", json!({ "label": "Clear" }));
+    h.get_by_label("Background");
+    h.get_by_label("Target chapter");
+    if let Ok(dir) = std::env::var("PDFCRAFT_BOOKMARK_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/control-cleared-bookmarks.png")).unwrap();
+    }
 }
 
 #[test]
@@ -102,7 +132,7 @@ fn language_switch_preserves_document_and_command_ids() {
     let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
     assert_eq!(documents[0]["dirty"], true);
     let commands = ok(&mut h, &c, "ui.commands", json!({}));
-    for code in ["ja", "zh-hans", "fr", "en"] {
+    for code in ["ja", "zh-hans", "fr", "de", "uk", "en"] {
         ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": code }));
         h.run_steps(2);
         let state = ok(&mut h, &c, "ui.state", json!({}));
@@ -473,6 +503,69 @@ fn japanese_controls_and_search_keep_command_ids() {
 }
 
 #[test]
+fn german_preferences_and_search_keep_command_ids() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "de" }));
+    ok(&mut h, &c, "ui.click", json!({ "label": "Lesen" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read");
+    ok(&mut h, &c, "ui.command", json!({ "id": "app.preferences" }));
+    let prefs = ok(&mut h, &c, "ui.inspect", json!({ "query": "Sprache der Oberfläche" }));
+    assert!(prefs["count"].as_u64().unwrap() > 0, "{prefs}");
+    let selector = ok(&mut h, &c, "ui.inspect", json!({ "query": "Deutsch" }));
+    let combo = selector["widgets"].as_array().unwrap().iter().find(|w| w["role"] == "ComboBox").expect("language selector");
+    ok(&mut h, &c, "ui.click", json!({ "id": combo["id"] }));
+    ok(&mut h, &c, "ui.click", json!({ "label": "English" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "en");
+    let selector = ok(&mut h, &c, "ui.inspect", json!({ "query": "English" }));
+    let combo = selector["widgets"].as_array().unwrap().iter().find(|w| w["role"] == "ComboBox").expect("language selector");
+    ok(&mut h, &c, "ui.click", json!({ "id": combo["id"] }));
+    ok(&mut h, &c, "ui.click", json!({ "label": "Deutsch" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "de");
+    ok(&mut h, &c, "ui.click", json!({ "label": "OK" }));
+    for query in ["Dokument teilen", "Split document", "page.split"] {
+        ok(&mut h, &c, "ui.command", json!({ "id": "view.palette" }));
+        ok(&mut h, &c, "ui.type", json!({ "text": query }));
+        let hits = ok(&mut h, &c, "ui.inspect", json!({ "query": "Dokument teilen…" }));
+        assert!(hits["count"].as_u64().unwrap() > 0, "{query}: {hits}");
+        ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
+        h.state_mut().palette_query.clear();
+    }
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["name"], "doc.pdf");
+}
+
+#[test]
+fn ukrainian_preferences_and_search_keep_command_ids() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "uk" }));
+    ok(&mut h, &c, "ui.command", json!({ "id": "app.preferences" }));
+    for label in ["Мова інтерфейсу", "Українська"] {
+        let found = ok(&mut h, &c, "ui.inspect", json!({ "query": label }));
+        assert!(found["count"].as_u64().unwrap() > 0, "{label}: {found}");
+    }
+    ok(&mut h, &c, "ui.click", json!({ "label": "OK" }));
+    for query in ["Розділити", "Split document", "page.split"] {
+        ok(&mut h, &c, "ui.command", json!({ "id": "view.palette" }));
+        ok(&mut h, &c, "ui.type", json!({ "text": query }));
+        let hits = ok(&mut h, &c, "ui.inspect", json!({ "query": "Розділити документ…" }));
+        assert!(hits["count"].as_u64().unwrap() > 0, "{query}: {hits}");
+        ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
+        h.state_mut().palette_query.clear();
+    }
+    for (dialog, label) in [("properties", "Властивості документа"), ("protect", "Захистити паролем"), ("about", "Учасники")]
+    {
+        ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": dialog }));
+        let found = ok(&mut h, &c, "ui.inspect", json!({ "query": label }));
+        assert!(found["count"].as_u64().unwrap() > 0, "{dialog}: {found}");
+    }
+    ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "none" }));
+    assert!(!h.state_mut().apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(state["language"], "uk");
+    assert_eq!(state["notice"], "Помилка «Видалити сторінки»: a document must keep at least one page");
+    assert_eq!(state["documents"][0]["name"], "doc.pdf");
+}
+
+#[test]
 fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "ja" }));
@@ -481,7 +574,8 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
     let menu = ok(&mut h, &c, "ui.inspect", json!({ "query": "環境設定…" }));
     let prefs = menu["widgets"].as_array().unwrap().iter().find(|w| w["clickable"] == true).expect("Preferences menu item");
     ok(&mut h, &c, "ui.click", json!({ "id": prefs["id"] }));
-    for (current, next, code) in [("日本語", "English", "en"), ("English", "日本語", "ja")] {
+    for (current, next, code) in [("日本語", "English", "en"), ("English", "Українська", "uk"), ("Українська", "日本語", "ja")]
+    {
         let selector = ok(&mut h, &c, "ui.inspect", json!({ "query": current }));
         let combo = selector["widgets"].as_array().unwrap().iter().find(|w| w["role"] == "ComboBox").expect("language selector");
         ok(&mut h, &c, "ui.click", json!({ "id": combo["id"] }));

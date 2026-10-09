@@ -41,20 +41,7 @@ pub(crate) fn image_import_body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bo
 }
 
 /// File types Open accepts besides PDF (converted on open).
-pub const CONVERTIBLE: [&str; 12] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "txt", "text"];
-
-fn is_image(bytes: &[u8]) -> bool {
-    bytes.starts_with(&[0xFF, 0xD8])
-        || bytes.starts_with(b"\x89PNG\r\n\x1a\n")
-        || bytes.starts_with(b"II*\0")
-        || bytes.starts_with(b"MM\0*")
-        || bytes.starts_with(b"GIF8")
-        // JPEG 2000: a JP2 file or a raw codestream.
-        || bytes.starts_with(&[0, 0, 0, 0x0C, b'j', b'P', b' ', b' '])
-        || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51])
-        // BMP: "BM" and a known header size (so text starting with "BM" stays text).
-        || (bytes.starts_with(b"BM") && bytes.get(14..18).is_some_and(|h| matches!(u32::from_le_bytes([h[0], h[1], h[2], h[3]]), 12 | 40 | 52 | 56 | 108 | 124)))
-}
+pub use pdfcraft_engine::CONVERTIBLE;
 
 /// What Create ▸ Clipboard found on the clipboard.
 #[derive(Clone, Debug, PartialEq)]
@@ -101,18 +88,11 @@ impl PdfCraftApp {
     /// Convert a non-PDF file (image, text) into a new tab. Returns `None` when `bytes` is not
     /// something Create understands (the caller then tries to open it as a PDF).
     pub(crate) fn open_converted(&mut self, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
-        let head = &bytes[..bytes.len().min(1024)];
-        if head.windows(5).any(|w| w == b"%PDF-") {
+        use pdfcraft_engine::SourceKind;
+        if !matches!(pdfcraft_engine::source_kind(name, bytes), Some(SourceKind::Image | SourceKind::Text)) {
             return None;
         }
-        let created = if is_image(bytes) {
-            self.session.create_from_images(&[(name.to_string(), bytes.to_vec())])
-        } else if name.to_ascii_lowercase().ends_with(".txt") {
-            let text = String::from_utf8_lossy(bytes);
-            self.session.create_from_text(stem(name), &text)
-        } else {
-            return None;
-        };
+        let created = self.session.convert_to_pdf(name, &Arc::new(bytes.to_vec())).map(|(_, pdf)| pdf);
         Some(self.open_created_bytes(&format!("{}.pdf", stem(name)), created.map_err(|e| e.to_string())))
     }
 
@@ -241,15 +221,9 @@ impl PdfCraftApp {
     }
 
     /// Reduce File Size: write a compacted copy with images downsampled (the open document is
-    /// unchanged).
+    /// unchanged). It runs in the background with a progress bar, like the PDF Optimizer.
     pub(crate) fn reduce_file_size(&mut self) {
-        // What's typed in a form field is part of the document (#166).
-        if !self.commit_form_typing() {
-            return;
-        }
-        let Some((_, id)) = self.active_ids() else { return };
-        let result = self.session.reduced_bytes(id).map(|(b, _)| (b, String::new()));
-        self.save_optimized(id, "reduced", result);
+        self.start_optimize(crate::optimize_ui::OptimizeKind::Reduce, &pdfcraft_engine::optimize::Settings::default(), &[]);
     }
 
     /// Save an optimized copy (Reduce File Size, Optimize PDF) next to the original, reporting

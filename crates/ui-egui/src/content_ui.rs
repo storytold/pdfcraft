@@ -11,6 +11,37 @@ use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
 use crate::widgets;
 
+/// The colour of the warning under text the standard fonts can't draw.
+const UNDRAWABLE: Color32 = Color32::from_rgb(0xD7, 0x37, 0x3F);
+
+/// The first character of a draft that can't be drawn, as the engine decides it (it refuses
+/// such text, #125): outside the standard fonts and not shaped with the Arabic face.
+pub(crate) fn undrawable(d: &TextDraft, memo: &UndrawableMemo) -> Option<char> {
+    // Checked as `finish` will commit it: without trailing whitespace.
+    let t = AddedText { text: d.text.trim_end().to_string(), rect: d.rect, ..d.style.clone() };
+    if let Some((key, c)) = memo.borrow().as_ref()
+        && *key == t
+    {
+        return *c;
+    }
+    let c = pdfcraft_engine::first_undrawable(&t);
+    *memo.borrow_mut() = Some((t, c));
+    c
+}
+
+/// The last draft [`undrawable`] checked and its answer: the check lays the text out (and shapes
+/// Arabic), too slow to repeat every frame for long text, so it reruns only when the text or
+/// anything that changes its layout does.
+pub(crate) type UndrawableMemo = std::cell::RefCell<Option<(AddedText, Option<char>)>>;
+
+/// The warning shown for text with `c` in it.
+pub(crate) fn undrawable_message(c: char) -> String {
+    crate::i18n::fmt(
+        tl!("The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now."),
+        &[("c", &c.to_string()), ("code", &format!("U+{:04X}", u32::from(c)))],
+    )
+}
+
 const SELECT_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
 /// The text being typed or retyped in place.
@@ -41,6 +72,24 @@ pub struct ContentView {
     /// Select the item an add creates (the page's item count before it).
     pub select_added: Option<(usize, usize)>,
     grab: Option<(usize, Grab, Pos2)>,
+    undrawable: UndrawableMemo,
+}
+
+impl ContentView {
+    /// The draft's first character the standard fonts can't draw. Such a draft is kept open, and
+    /// counts as unsaved work, until it is corrected or discarded.
+    pub(crate) fn blocked(&self) -> Option<char> {
+        self.draft.as_ref().and_then(|d| undrawable(d, &self.undrawable))
+    }
+
+    /// Keeps a blocked draft open and focused instead of finishing or replacing it.
+    pub(crate) fn hold_blocked(&mut self) -> bool {
+        let blocked = self.blocked().is_some();
+        if let Some(d) = self.draft.as_mut().filter(|_| blocked) {
+            d.focus = true;
+        }
+        blocked
+    }
 }
 
 /// Text style for new text (the panel's Format controls set it).
@@ -151,6 +200,10 @@ pub(crate) fn page_input(
     if adding_text && hit.is_none() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
         if resp.clicked() {
+            // Text that can't be drawn stays where it is being typed (#125).
+            if cv.hold_blocked() {
+                return true;
+            }
             // A click elsewhere keeps the text being typed and starts a new box (#74). The click
             // can reach the page before the editor sees it lose focus, so finish it here.
             let typed = cv.draft.take().and_then(|d| finish(cv, d, added));
@@ -195,6 +248,9 @@ pub(crate) fn page_input(
         && let Some((i, a)) = hit
         && let AddedContent::Text(t) = &a.content
     {
+        if cv.hold_blocked() {
+            return true;
+        }
         cv.draft = Some(TextDraft { page, index: Some(i), rect: t.rect, text: t.text.clone(), style: t.clone(), focus: true });
         cv.selected = Some((page, i));
         consumed = true;
@@ -277,6 +333,8 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
     let zoom = xf.rect.width() / xf.pw.max(1.0);
     let tokens = Tokens::get(ctx);
     let (mut commit, mut cancel, mut done) = (false, false, false);
+    let mut undrawable = None;
+    let memo = &view.content.undrawable;
     egui::Area::new(egui::Id::new(("added-text", view.id.0))).order(egui::Order::Foreground).fixed_pos(r.min).show(ctx, |ui| {
         let Some(t) = view.content.draft.as_mut() else { return };
         let [cr, cg, cb] = t.style.color.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
@@ -315,12 +373,18 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
             cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
             commit = done || resp.lost_focus() && !on_buttons;
         });
+        // Page text is drawn with the standard fonts; anything else would be saved as `?` (#125).
+        undrawable = self::undrawable(t, memo);
+        if let Some(c) = undrawable {
+            ui.label(egui::RichText::new(undrawable_message(c)).small().color(UNDRAWABLE));
+        }
     });
     if cancel {
         view.content.draft = None;
         return (None, false);
     }
-    if !commit {
+    // Text that can't be drawn stays in the editor, with the warning, rather than being lost.
+    if !commit || undrawable.is_some() {
         return (None, false);
     }
     let edit = view.content.draft.take().and_then(|d| finish(&mut view.content, d, added));

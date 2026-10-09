@@ -1,22 +1,6 @@
 //! pdfcraft-cli — headless PdfCraft.
 //!
-//! ```text
-//! pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
-//! pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
-//! pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
-//! pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
-//!                       [--insert-blank 1] [--title T] [--author A] [--full]
-//! pdfcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
-//! pdfcraft-cli extract <in.pdf> --pages 1,3,5 --out out.pdf
-//! pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
-//! pdfcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
-//! pdfcraft-cli tools                                       automation tools and their JSON Schemas
-//! pdfcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
-//! pdfcraft-cli run    --script steps.json [--root DIR]      [{"tool": "doc_open", "args": {…}}, …]
-//! pdfcraft-cli mcp    [--root DIR]                          MCP server on stdin/stdout (opt-in)
-//! pdfcraft-cli ui     --control FILE <method> [key=value …] [--out shot.png]
-//!                                                            drive a running app started with --control FILE
-//! ```
+//! Usage: `pdfcraft-cli --help`, which prints `USAGE` below.
 //!
 //! `run` and `mcp` drive the same tool table (`pdfcraft-automation`). In `run`, values parse as
 //! JSON when they can (`pages=[1,3]`, `degrees=90`) and are strings otherwise. A script runs its
@@ -42,28 +26,75 @@ use std::time::{Duration, Instant};
 use pdfcraft_engine::export::ImageFormat;
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, inspect};
 
+/// The `mcp` lines of [`USAGE`]: only a build with the `mcp` feature has the command.
+#[cfg(feature = "mcp")]
+macro_rules! mcp_usage {
+    () => {
+        "\
+pdfcraft-cli mcp    [--root DIR] [--compact]              MCP server on stdin/stdout (opt-in)
+                                                           --compact lists a core set of tools plus tool_search and tool_call
+"
+    };
+}
+#[cfg(not(feature = "mcp"))]
+macro_rules! mcp_usage {
+    () => {
+        ""
+    };
+}
+
+/// The full usage, printed by `--help` (also after a command, e.g. `render --help`).
+const USAGE: &str = concat!(
+    "\
+pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
+pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
+pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
+pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
+                      [--insert-blank 1] [--title T] [--author A] [--full]
+pdfcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
+pdfcraft-cli extract <in.pdf> --pages 1,3,5 --out out.pdf
+pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
+pdfcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
+pdfcraft-cli tools                                       automation tools and their JSON Schemas
+pdfcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
+pdfcraft-cli run    --script steps.json [--root DIR]      [{\"tool\": \"doc_open\", \"args\": {…}}, …]
+",
+    mcp_usage!(),
+    "\
+pdfcraft-cli ui     --control FILE <method> [key=value …] [--out shot.png]
+                                                           drive a running app started with --control FILE
+help and feedback: https://discord.gg/artcraft"
+);
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let result =
-        match args.first().map(String::as_str) {
-            Some("info") => info(&args[1..]),
-            Some("render") => render(&args[1..]),
-            Some("text") => text(&args[1..]),
-            Some("edit") => edit(&args[1..]),
-            Some("combine") => combine(&args[1..]),
-            Some("extract") => extract(&args[1..]),
-            Some("split") => split(&args[1..]),
-            Some("check") => check(&args[1..]),
-            Some("check-one") => check_one(&args[1..]),
-            Some("tools") => tools(),
-            Some("run") => run(&args[1..]),
-            Some("ui") => ui(&args[1..]),
-            #[cfg(feature = "mcp")]
-            Some("mcp") => mcp(&args[1..]),
-            Some("--version") => version(),
-            _ => Err("usage: pdfcraft-cli <info|render|text|edit|combine|extract|split|check|tools|run|mcp|ui> …  (see source header for options)\nhelp and feedback: https://discord.gg/artcraft"
-                .into()),
-        };
+    // `<command> --help` too; only right after the command, so a later `-h` (a value) still reaches it.
+    let command = match args.get(1).map(String::as_str) {
+        Some("--help" | "-h") => Some("--help"),
+        _ => args.first().map(String::as_str),
+    };
+    let result = match command {
+        Some("--help" | "-h" | "help") => stdout_line(format_args!("{USAGE}")),
+        None => Err(format!("usage:\n{USAGE}").into()),
+        Some("info") => info(&args[1..]),
+        Some("render") => render(&args[1..]),
+        Some("text") => text(&args[1..]),
+        Some("edit") => edit(&args[1..]),
+        Some("combine") => combine(&args[1..]),
+        Some("extract") => extract(&args[1..]),
+        Some("split") => split(&args[1..]),
+        Some("check") => check(&args[1..]),
+        Some("check-one") => check_one(&args[1..]),
+        Some("tools") => tools(),
+        Some("run") => run(&args[1..]),
+        Some("ui") => ui(&args[1..]),
+        #[cfg(feature = "mcp")]
+        Some("mcp") => mcp(&args[1..]),
+        #[cfg(not(feature = "mcp"))]
+        Some("mcp") => Err("mcp: this build leaves out the MCP server (built without the `mcp` feature)".into()),
+        Some("--version") => version(),
+        Some(other) => Err(format!("unknown command '{other}'; see pdfcraft-cli --help").into()),
+    };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(CliError::Stdout(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
@@ -175,6 +206,22 @@ fn info(args: &[String]) -> Result<(), CliError> {
 
 fn text(args: &[String]) -> Result<(), CliError> {
     let path = *positional(args).first().ok_or("text: missing file")?;
+    let mut selected_page = None;
+    // Validate every supplied value before reading, retaining the first valid selection.
+    let mut options = args.iter();
+    while let Some(option) = options.next() {
+        if option == "--page" {
+            let page = options
+                .next()
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|page| *page > 0)
+                .ok_or("bad --page: expected a positive page number")?;
+            selected_page.get_or_insert(page - 1);
+        } else if option.starts_with("--") {
+            // Match positional(): an option's operand is not itself another option.
+            options.next();
+        }
+    }
     let password = flag(args, "--password");
     let bytes = read(path)?;
     let mut r = PageRenderer::new(bytes.clone(), RenderConfig { password: password.map(Arc::from), ..Default::default() });
@@ -187,15 +234,15 @@ fn text(args: &[String]) -> Result<(), CliError> {
             return Err("text: the document could not be parsed".into());
         }
     }
-    let pages: Vec<usize> = match flag(args, "--page") {
-        Some(p) => vec![p.parse::<usize>().map_err(|_| "bad --page")?.saturating_sub(1)],
+    let pages: Vec<usize> = match selected_page {
+        Some(page) => vec![page],
         None => (0..r.page_count()).collect(),
     };
     let mut failed: Vec<usize> = Vec::new();
     for (n, p) in pages.iter().enumerate() {
         let out = r.render(RenderRequest { page: *p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
         if let Some(e) = out.error {
-            eprintln!("page {}: {e}", p + 1);
+            let _ = writeln!(std::io::stderr().lock(), "page {}: {e}", p + 1);
             failed.push(p + 1);
             continue;
         }
@@ -262,11 +309,11 @@ fn edit(args: &[String]) -> Result<(), CliError> {
             "--move" => {
                 let (pages, to) = value.split_once(':').ok_or("--move PAGES:TO")?;
                 let to: usize = to.parse().map_err(|_| "bad target")?;
-                edits.push(Edit::MovePages { pages: page_list(pages)?, to: to.saturating_sub(1) });
+                edits.push(Edit::MovePages { pages: page_list(pages)?, to: to.checked_sub(1).ok_or("--move target must be at least 1")? });
             }
             "--insert-blank" => {
                 let at: usize = value.parse().map_err(|_| "bad position")?;
-                edits.push(Edit::InsertBlankPage { at: at.saturating_sub(1), width: 612.0, height: 792.0 });
+                edits.push(Edit::InsertBlankPage { at: at.checked_sub(1).ok_or("--insert-blank must be at least 1")?, width: 612.0, height: 792.0 });
             }
             "--title" => edits.push(Edit::SetInfo { key: "Title".into(), value: value.into() }),
             "--author" => edits.push(Edit::SetInfo { key: "Author".into(), value: value.into() }),
@@ -337,6 +384,7 @@ fn split(args: &[String]) -> Result<(), CliError> {
 fn render(args: &[String]) -> Result<(), CliError> {
     let path = *positional(args).first().ok_or("render: missing file")?;
     let page: usize = flag(args, "--page").unwrap_or("1").parse().map_err(|_| "bad --page")?;
+    let page_index = page.checked_sub(1).ok_or("--page must be at least 1")?;
     let dpi: f32 = flag(args, "--dpi").unwrap_or("96").parse().map_err(|_| "bad --dpi")?;
     let out = flag(args, "--out").ok_or("render: missing --out (.png, .jpg, .tif or .pam)")?;
     // The file is what its name says (#248): a `.png` used to get a netpbm PAM stream.
@@ -348,7 +396,7 @@ fn render(args: &[String]) -> Result<(), CliError> {
         _ => return Err(format!("render: --out {out}: use a .png, .jpg, .tif or .pam name").into()),
     };
     let mut r = PageRenderer::new(read(path)?, RenderConfig { password: flag(args, "--password").map(Arc::from), ..Default::default() });
-    let p = r.render(RenderRequest { page: page.saturating_sub(1), kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0 });
+    let p = r.render(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0 });
     if let Some(e) = p.error {
         return Err(e.into());
     }
@@ -362,7 +410,7 @@ fn render(args: &[String]) -> Result<(), CliError> {
         }
     };
     std::fs::write(out, bytes).map_err(|e| format!("{out}: {e}"))?;
-    eprintln!("rendered page {page} at {dpi} dpi: {}×{} px in {} ms", p.width, p.height, p.millis);
+    let _ = writeln!(std::io::stderr().lock(), "rendered page {page} at {dpi} dpi: {}×{} px in {} ms", p.width, p.height, p.millis);
     Ok(())
 }
 
@@ -579,8 +627,14 @@ fn run(args: &[String]) -> Result<(), CliError> {
 
 #[cfg(feature = "mcp")]
 fn mcp(args: &[String]) -> Result<(), CliError> {
-    let mut server = pdfcraft_automation::mcp::McpServer::new(automation(args)?);
-    eprintln!("pdfcraft-cli: MCP server on stdio (protocol {}); close stdin to stop", pdfcraft_automation::mcp::PROTOCOL_VERSIONS[0]);
+    let compact = args.iter().any(|a| a == "--compact");
+    let mut server = pdfcraft_automation::mcp::McpServer::new(automation(args)?).with_compact(compact);
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "pdfcraft-cli: MCP server on stdio (protocol {}{}); close stdin to stop",
+        pdfcraft_automation::mcp::PROTOCOL_VERSIONS[0],
+        if compact { ", compact tool list" } else { "" }
+    );
     server.serve(std::io::stdin().lock(), std::io::stdout().lock()).map_err(|e| CliError::Message(e.to_string()))
 }
 

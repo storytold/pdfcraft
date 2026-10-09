@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2};
 use pdfcraft_engine::{DocId, Edit};
-use pdfcraft_render::{DocInfo, LayerOp, LinkTarget, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
+use pdfcraft_render::{DestView, DocInfo, LayerOp, LinkTarget, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, QuickTool, RightPanel, comments, icons, widgets};
@@ -109,11 +109,14 @@ pub struct ViewDefaults {
     pub fit: Fit,
     /// The zoom with [`Fit::None`] (1.0 = 100%).
     pub zoom: f32,
+    /// Highlight existing fields: a preference in Acrobat, so it carries over to the next
+    /// document and the next session.
+    pub highlight_fields: bool,
 }
 
 impl Default for ViewDefaults {
     fn default() -> Self {
-        Self { layout: PageLayout::Continuous, fit: Fit::Width, zoom: 1.0 }
+        Self { layout: PageLayout::Continuous, fit: Fit::Width, zoom: 1.0, highlight_fields: false }
     }
 }
 
@@ -197,9 +200,16 @@ pub struct DocView {
     pub forward: Vec<usize>,
     /// Pending navigation: page and fraction down the page to align with the viewport top.
     pub goto: Option<(usize, f32)>,
+    /// Pending position within that page from a destination ([`Self::go_to_dest`]): the point
+    /// (fractions of the displayed page; `None` leaves that axis to `goto`) to put `rel` points
+    /// from the viewport's top-left corner.
+    goto_point: Option<(usize, Option<f32>, Option<f32>, Vec2)>,
     /// Pending keyboard scrolling, in points down (negative: up): ↓ / ↑, and Page Down /
     /// Page Up where the pages scroll.
     pub key_scroll: f32,
+    /// Single-page view, as last drawn: the page shown and whether the view was at its top and
+    /// at its bottom, so ↑ / ↓ turn the page there instead of doing nothing (#273).
+    single_edges: Option<(usize, bool, bool)>,
     /// Briefly outline an annotation after navigating to it from a panel.
     pub flash: Option<(usize, [f32; 4], f64)>,
     /// Compare files: differences shaded on this document's pages (page, user-space box, colour).
@@ -219,6 +229,8 @@ pub struct DocView {
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
     selection: Option<Selection>,
+    /// Clicks in the current run on the text layer: two select a word, three the line, four the page.
+    clicks: u32,
     last_queue: Vec<RenderRequest>,
     viewport_w: f32,
     viewport_h: f32,
@@ -232,6 +244,8 @@ pub struct DocView {
     viewport_screen: Rect,
     /// Pending zoom anchor: page, position within it (0..1), and offset from the viewport corner.
     zoom_anchor: Option<(usize, f32, f32, Vec2)>,
+    /// The page view has been shown, so its scroll offset in egui's memory is this document's.
+    shown: bool,
     /// Turns wheel input into page turns in single-page view.
     wheel: crate::wheel_pager::WheelPager,
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
@@ -275,14 +289,27 @@ pub struct DocView {
     pub marquee_done: Option<crate::zoom_snap::Marquee>,
     /// Fill & Sign text being typed.
     pub fill_text: Option<crate::fill_sign::TypeBox>,
+    /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
+    pub(crate) fill_signature_page: Option<usize>,
+    pub(crate) signature_drag: crate::signature_drag::SignatureDrag,
     /// A non-edit action requested by the organize toolbar, handled by the app.
     pub pending_action: Option<ViewAction>,
+    /// The grid gap the next inserted files go to (set by a "+" between pages); otherwise they
+    /// go after the selection.
+    pub insert_at: Option<usize>,
+    /// The page-grid gap under the pointer this frame (where dropped files go), when it can
+    /// take pages.
+    pub grid_gap: Option<usize>,
 }
 
 /// Organize-toolbar actions that need the app (file pickers, new tabs, dialogs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewAction {
     InsertFromFile,
+    /// Insert files at a gap of the page grid (0 = before the first page).
+    InsertFromFileAt(usize),
+    /// Save the document as the grid shows it.
+    Save,
     Extract,
     Split,
     /// Copy the selected pages (Cut also deletes them).
@@ -327,14 +354,16 @@ impl DocView {
             rotation: 0,
             current: 0,
             organize: false,
-            highlight_fields: false,
+            highlight_fields: defaults.highlight_fields,
             page_input: "1".into(),
             notice_dismissed: false,
             cover: false,
             back: Vec::new(),
             forward: Vec::new(),
             goto: None,
+            goto_point: None,
             key_scroll: 0.0,
+            single_edges: None,
             flash: None,
             compare_marks: Vec::new(),
             pages: HashMap::new(),
@@ -347,6 +376,7 @@ impl DocView {
             text_failed: HashSet::new(),
             find: None,
             selection: None,
+            clicks: 0,
             last_queue: Vec::new(),
             viewport_w: 800.0,
             viewport_h: 600.0,
@@ -356,6 +386,7 @@ impl DocView {
             screen_xforms: Vec::new(),
             viewport_screen: Rect::NOTHING,
             zoom_anchor: None,
+            shown: false,
             wheel: Default::default(),
             auto_scroll: Default::default(),
             selected: BTreeSet::new(),
@@ -367,6 +398,8 @@ impl DocView {
             image_selection: None,
             block_drag: None,
             pending_action: None,
+            insert_at: None,
+            grid_gap: None,
             comments: Default::default(),
             measure: Default::default(),
             forms: Default::default(),
@@ -381,6 +414,8 @@ impl DocView {
             marquee: None,
             marquee_done: None,
             fill_text: None,
+            fill_signature_page: None,
+            signature_drag: Default::default(),
         }
     }
 
@@ -394,10 +429,15 @@ impl DocView {
         self.current = self.current.min(last);
         self.page_input = (self.current + 1).to_string();
         self.selected.retain(|p| *p <= last);
+        // Text being typed on a page that no longer exists goes with the page.
+        if self.content.draft.as_ref().is_some_and(|d| d.page > last || self.page_count == 0) {
+            self.content.draft = None;
+        }
         if self.select_anchor.is_some_and(|a| a > last) {
             self.select_anchor = None;
         }
         self.goto = None;
+        self.goto_point = None;
         self.zoom_anchor = None;
         self.flash = None;
     }
@@ -645,6 +685,67 @@ impl DocView {
         self.page_input = (page + 1).to_string();
     }
 
+    /// Go to a destination, a bookmark's or a link's (ISO 32000-2 §12.3.2.2): its page, scrolled
+    /// and zoomed as `dest` asks, as Acrobat does. `/XYZ` puts (left, top) at the window's
+    /// top-left at its zoom (null or 0 keeps the zoom); `/Fit`, `/FitH` and `/FitV` switch to fit
+    /// page, width and height with `top` or `left` at the window's edge; `/FitR` zooms so the
+    /// rectangle fits, centred. The `B` (content box) forms are read as the page. A null
+    /// coordinate keeps that scroll position (null `top` on a new page: its top), and a point
+    /// past the end of the document scrolls as far as it can.
+    pub fn go_to_dest(&mut self, page: usize, dest: DestView, info: &DocInfo) {
+        self.go_to_page(page);
+        let page = self.current;
+        self.goto_point = None;
+        let Some(p) = info.pages.get(page) else { return };
+        let point = |x: Option<f32>, y: Option<f32>| p.dest_fraction(x, y, self.rotation);
+        // The window's top-left as far as pages go: its left edge is the gutter that keeps them
+        // clear of the floating quick-action bar, so `left` 0 shows the page's edge beside it.
+        let corner = vec2(SIDE, 0.0);
+        let (fx, fy, rel) = match dest {
+            DestView::Top => return,
+            DestView::Xyz { left, top, zoom } => {
+                if let Some(z) = zoom {
+                    self.zoom = z.clamp(0.08, 64.0);
+                    self.fit = Fit::None;
+                    self.zoom_anchor = None;
+                }
+                let [fx, fy] = point(left, top);
+                (fx, fy, corner)
+            }
+            DestView::Fit => {
+                self.fit = Fit::Page;
+                return;
+            }
+            DestView::FitH { top } => {
+                self.fit = Fit::Width;
+                let [fx, fy] = point(None, top);
+                (fx, fy, corner)
+            }
+            DestView::FitV { left } => {
+                self.fit = Fit::Height;
+                let [fx, fy] = point(left, None);
+                (fx, fy, corner)
+            }
+            DestView::FitR { rect } => {
+                let ([Some(ax), Some(ay)], [Some(bx), Some(by)]) = (point(Some(rect[0]), Some(rect[3])), point(Some(rect[2]), Some(rect[1]))) else {
+                    return;
+                };
+                // The rectangle as displayed, in points (it can be turned a quarter).
+                let (dw, dh) = self.display_size(p);
+                let (w, h) = ((ax - bx).abs() * dw, (ay - by).abs() * dh);
+                if w >= 1.0 && h >= 1.0 && self.viewport_w >= 1.0 && self.viewport_h >= 1.0 {
+                    self.zoom = (self.viewport_w / (w * PT)).min(self.viewport_h / (h * PT)).clamp(0.08, 64.0);
+                    self.fit = Fit::None;
+                    self.zoom_anchor = None;
+                }
+                (Some((ax + bx) / 2.0), Some((ay + by) / 2.0), vec2(self.viewport_w, self.viewport_h) / 2.0)
+            }
+        };
+        if fx.is_some() || fy.is_some() {
+            self.goto_point = Some((page, fx, fy, rel));
+        }
+    }
+
     /// Next page (`true`) or previous page. In two-page view this moves a whole spread: the other
     /// page of the spread is already on screen, so stepping to it wouldn't move the view (#70).
     pub fn step_page(&mut self, forward: bool) {
@@ -849,7 +950,7 @@ impl DocView {
                 self.errors.insert(r.request.page, e);
                 continue;
             }
-            let img = egui::ColorImage::from_rgba_premultiplied([r.width as usize, r.height as usize], &r.rgba);
+            let img = texture_image([r.width as usize, r.height as usize], r.rgba);
             let page = r.request.page;
             if let Some(t) = r.request.tile {
                 let tex = ctx.load_texture(format!("tile-{:?}-{page}-{}-{}", self.id, t.x, t.y), img, TextureOptions::LINEAR);
@@ -863,6 +964,7 @@ impl DocView {
             } else {
                 let tex = ctx.load_texture(format!("page-{:?}-{page}", self.id), img, TextureOptions::LINEAR);
                 self.pages.insert(page, PageTex { tag: r.request.tag, tex });
+                self.signature_drag.page_received(page);
                 self.waiting_since.remove(&page);
             }
         }
@@ -933,9 +1035,22 @@ impl DocView {
     }
 
     fn render_scale(&self, ppp: f32) -> f32 {
-        // Quantize so tiny fit-width changes don't trigger re-renders.
-        ((self.zoom * PT * ppp) * 64.0).round() / 64.0
+        // Exactly the device scale: a raster at any other scale is resampled on screen, which
+        // blurs every line and glyph (#260).
+        self.zoom * PT * ppp
     }
+}
+
+/// The request tag for a raster at `scale`: equal tags mean the same scale (to 1/65536).
+fn scale_tag(scale: f32) -> u64 {
+    (f64::from(scale) * 65536.0).round() as u64
+}
+
+/// `r` moved so its corner lies on a whole physical pixel, so that a raster drawn from there
+/// maps texel for texel onto the screen.
+fn snap_to_pixels(r: Rect, ppp: f32) -> Rect {
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    Rect::from_min_size(pos2(snap(r.min.x), snap(r.min.y)), r.size())
 }
 
 /// Maps between a page's coordinate spaces and the screen, including view rotation.
@@ -954,6 +1069,33 @@ pub struct PageXform {
 }
 
 impl PageXform {
+    /// Draw an image in the PDF user-space `rect` as a custom stamp's appearance draws it: turned
+    /// back by `turn` (the page /Rotate it was placed for), so with the page's own rotation it
+    /// reads upright as displayed.
+    pub(crate) fn paint_user_image(
+        &self,
+        painter: &egui::Painter,
+        tex: egui::TextureId,
+        p: &pdfcraft_render::PageInfo,
+        rect: [f64; 4],
+        turn: i64,
+        color: Color32,
+    ) {
+        let mut mesh = egui::Mesh::with_texture(tex);
+        let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
+        let (shown_w, shown_h) = if turn % 180 == 0 { (w, h) } else { (h, w) };
+        let [a, b, c, d, e, f] = pdfcraft_model::view_matrix_for(turn, rect);
+        for (u, v) in [(0.0_f32, 0.0_f32), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+            // The texture's (u, v), from its top-left, in the picture's upright frame, then in user space.
+            let (dx, dy) = (f64::from(u) * shown_w, f64::from(1.0 - v) * shown_h);
+            let (x, y) = (a * dx + c * dy + e, b * dx + d * dy + f);
+            let q = p.user_to_view(x as f32, y as f32);
+            mesh.vertices.push(egui::epaint::Vertex { pos: self.norm_to_screen(q[0] / self.pw, q[1] / self.ph), uv: pos2(u, v), color });
+        }
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        painter.add(egui::Shape::mesh(mesh));
+    }
     pub fn norm_to_screen(&self, u: f32, v: f32) -> Pos2 {
         let (a, b) = match self.rot {
             90 => (1.0 - v, u),
@@ -1001,6 +1143,15 @@ impl PageXform {
         };
         let (a, b) = (norm(r[0], r[1]), norm(r[2], r[3]));
         Rect::from_two_pos(self.norm_to_screen(a.0, a.1), self.norm_to_screen(b.0, b.1))
+    }
+
+    /// This transform resized to a raster of `px` device pixels (width, height before the view
+    /// rotation), so each of its texels covers one screen pixel. The rectangle's corner must
+    /// already be on a whole pixel ([`snap_to_pixels`]).
+    fn texel_aligned(&self, px: [usize; 2], ppp: f32) -> PageXform {
+        let (w, h) = (px[0] as f32 / ppp, px[1] as f32 / ppp);
+        let size = if self.rot % 180 == 90 { vec2(h, w) } else { vec2(w, h) };
+        PageXform { rect: Rect::from_min_size(self.rect.min, size), ..*self }
     }
 
     /// Draw a texture covering the normalised page region, rotated with the view.
@@ -1093,12 +1244,31 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     if key(Key::ArrowLeft) || (key(Key::PageUp) && (command || !scrolls)) {
         view.step_page(false);
     }
-    // ↓ / ↑ scroll a line, and Page Down / Page Up a screen where the pages scroll.
+    // ↓ / ↑ scroll a line, and Page Down / Page Up a screen where the pages scroll. In
+    // single-page view, ↓ / ↑ turn the page once there is nothing left to scroll that way, as
+    // the wheel does (#273): always on a page that fits.
     if !command {
         let screen = (view.viewport_h - KEY_SCROLL_LINE).max(KEY_SCROLL_LINE);
         let steps = [(Key::ArrowDown, KEY_SCROLL_LINE), (Key::ArrowUp, -KEY_SCROLL_LINE), (Key::PageDown, screen), (Key::PageUp, -screen)];
         for (k, by) in steps {
-            if key(k) && (scrolls || matches!(k, Key::ArrowDown | Key::ArrowUp)) {
+            let arrow = matches!(k, Key::ArrowDown | Key::ArrowUp);
+            if !key(k) || !(scrolls || arrow) {
+                continue;
+            }
+            let forward = k == Key::ArrowDown;
+            // Only an up-to-date view counts: the page drawn is the current one, with no jump pending.
+            let at_end = !scrolls
+                && view.goto.is_none()
+                && view.single_edges.is_some_and(|(page, top, bottom)| page == view.current && if forward { bottom } else { top });
+            if at_end {
+                let before = view.current;
+                view.step_page(forward);
+                if !forward && view.current != before {
+                    // Going back up lands on the bottom of the previous page.
+                    view.goto = Some((view.current, 1.0));
+                }
+                view.single_edges = None;
+            } else {
                 view.key_scroll += by;
             }
         }
@@ -1142,12 +1312,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(Notice::Repairs) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
         Some(Notice::Security) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
         Some(Notice::Signatures) => app.right = Some(RightPanel::Signatures),
+        Some(Notice::FieldHighlights(on)) => app.view_defaults.highlight_fields = on,
         None => {}
     }
     // No dialog, close prompt or palette over the page: only then does page input count.
     let unobstructed = app.dialog.is_none() && app.close_request.is_none() && !app.palette_open;
     if view.organize {
-        organize_grid(view, info, &doc.renderer, doc.allows_assembly(), unobstructed, ui, &t);
+        organize_grid(view, info, &doc.renderer, doc.allows_assembly(), doc.dirty, unobstructed, ui, &t);
         return;
     }
 
@@ -1229,6 +1400,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     });
     // Each document keeps its own scroll position when switching tabs (#189).
     scroll = scroll.id_salt(("page-view", view.id));
+    // A newly opened document starts at the top. eframe saves egui's memory with the settings
+    // and document ids start again at 1 every launch, so the offset stored under this id can be
+    // where an earlier session left another document.
+    if !std::mem::replace(&mut view.shown, true) {
+        scroll = scroll.scroll_offset(Vec2::ZERO);
+    }
     if let Some((page, fx, fy, rel)) = view.zoom_anchor.take() {
         let r = rects[page.min(rects.len() - 1)];
         let point = pos2(r.left() + fx * r.width(), r.top() - y_shift + fy * r.height());
@@ -1240,7 +1417,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     let ppp = ui.ctx().pixels_per_point();
     let scale = view.render_scale(ppp);
-    let tag = (scale * 1000.0) as u64;
+    let tag = scale_tag(scale);
     let hand = app.quick_tool == QuickTool::Hand;
     let tool = app.quick_tool;
     // Text selection runs for the Select tool and for the markup tools (highlight…).
@@ -1303,6 +1480,19 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         view.content.selected = None;
     }
 
+    // A destination's position (bookmarks, links) refines `goto`: its point at the window's
+    // top-left, or the centre of a /FitR rectangle at the window's centre.
+    if let Some((page, fx, fy, rel)) = view.goto_point.take() {
+        let r = rects[page.min(rects.len() - 1)];
+        // Within the content, so an unreachable point never shows a frame scrolled past the end.
+        let (max_x, max_y) = ((content_w - avail.width()).max(0.0), (content_h - avail.height()).max(0.0));
+        if let Some(fx) = fx {
+            scroll = scroll.horizontal_scroll_offset((r.left() + fx * r.width() - rel.x).clamp(0.0, max_x));
+        }
+        if let Some(fy) = fy {
+            scroll = scroll.vertical_scroll_offset((r.top() - y_shift + fy * r.height() - rel.y).clamp(0.0, max_y));
+        }
+    }
     let out = scroll.show_viewport(ui, |ui, viewport| {
         // egui's drag responses accept every pointer button. Keep a wheel gesture from also
         // selecting text, drawing a mark, or panning with the Hand tool.
@@ -1342,7 +1532,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let mut current_overlap = -1.0f32;
         let pointer = ui.input(|i| i.pointer.hover_pos());
         for &i in &visible_pages {
-            let r = rects[i].translate(origin.to_vec2());
+            let r = snap_to_pixels(rects[i].translate(origin.to_vec2()), ppp);
             if !r.intersects(visible.expand(400.0)) {
                 continue;
             }
@@ -1381,17 +1571,25 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 painter.galley(pos2(r.center().x - msg.size().x / 2.0, r.center().y), msg, Color32::BLACK);
             } else {
                 let (pw_pt, ph_pt) = (info.pages[i].width.max(1.0), info.pages[i].height.max(1.0));
-                let tiled = pw_pt.max(ph_pt) * scale > TILE_THRESHOLD;
+                // A GPU may take smaller textures than these (OpenGL drivers report as little as
+                // 2048 pixels, and uploading a bigger one aborts), so both stay within its limit.
+                let max_side = ui.ctx().input(|inp| inp.max_texture_side) as f32;
+                let tiled = pw_pt.max(ph_pt) * scale > TILE_THRESHOLD.min(max_side);
                 // Whole-page raster: sharp when small, a low-res backdrop when tiled.
                 let (want_scale, want_tag) = if tiled {
-                    let bs = BASE_SIDE / pw_pt.max(ph_pt);
-                    (bs, (bs * 1000.0) as u64)
+                    let bs = BASE_SIDE.min(max_side) / pw_pt.max(ph_pt);
+                    (bs, scale_tag(bs))
                 } else {
                     (scale, tag)
                 };
                 match view.pages.get(&i) {
                     Some(p) => {
-                        xf.paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
+                        if !tiled && p.tag == want_tag {
+                            xf.texel_aligned(p.tex.size(), ppp).paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
+                        } else {
+                            // A backdrop, or a raster at an older scale until the new one arrives.
+                            xf.paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
+                        }
                         if p.tag != want_tag {
                             wanted.push((i, want_scale, want_tag, None));
                         }
@@ -1425,7 +1623,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                             match view.tiles.get(&(i, tx, ty)) {
                                 Some((ttag, tex)) if *ttag == tag => {
                                     let (fw, fh) = (dw as f32, dh as f32);
-                                    xf.paint_image(painter, tex.id(), x as f32 / fw, y as f32 / fh, (x + w) as f32 / fw, (y + h) as f32 / fh);
+                                    xf.texel_aligned([dw as usize, dh as usize], ppp).paint_image(
+                                        painter,
+                                        tex.id(),
+                                        x as f32 / fw,
+                                        y as f32 / fh,
+                                        (x + w) as f32 / fw,
+                                        (y + h) as f32 / fh,
+                                    );
                                 }
                                 _ => wanted.push((i, scale, tag, Some(Tile { x, y, w, h }))),
                             }
@@ -1490,8 +1695,25 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             if let QuickTool::Fill(ft) = tool
                 && allowed
             {
-                match crate::fill_sign::page_input(ui, &resp, &xf, i, info, ft, view, signature.as_ref(), initials.as_ref(), &author, today) {
+                match crate::fill_sign::page_input(
+                    ui,
+                    &resp,
+                    &xf,
+                    i,
+                    info,
+                    ft,
+                    view,
+                    signature.as_ref(),
+                    initials.as_ref(),
+                    &mut app.signature_preview,
+                    &author,
+                    today,
+                ) {
                     Some(crate::fill_sign::FillAction::Edit(e)) => view.pending_edit = Some(*e),
+                    Some(crate::fill_sign::FillAction::Signature(e)) => {
+                        view.pending_edit = Some(*e);
+                        view.fill_signature_page = Some(i);
+                    }
                     Some(crate::fill_sign::FillAction::CreateSignature) => open_signature = true,
                     Some(crate::fill_sign::FillAction::CreateInitials) => open_initials = true,
                     None => {}
@@ -1558,6 +1780,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(ui, &resp, &xf, i, info, &doc_links, view);
             let consumed = on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, &resp, &pcx, view);
 
+            let preview_target = (tool == QuickTool::Select && !comments_hidden).then_some(view.comments.selected).flatten();
+            view.signature_drag.prepare(ui.ctx(), doc, preview_target, scale);
+            view.signature_drag.paint(painter, &pcx, &view.comments, view.pending_edit.as_ref());
+
             // Text layer: find matches, selection, I-beam and drag-to-select.
             let to_screen = |g: [f32; 4]| xf.view_rect(g);
             if let Some(text) = view.texts.get(&i).cloned() {
@@ -1604,23 +1830,38 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     {
                         sel.head = h;
                     }
-                    if resp.double_clicked() && over_text {
-                        if let Some(a) = text.nearest(vx, vy) {
-                            // Expand to the word: stop at inferred spaces, explicit spaces and line ends.
-                            let is_break = |k: usize| text.glyphs[k].text.trim().is_empty();
-                            let mut s0 = a;
-                            while s0 > 0 && !text.space_before[s0] && text.line_of[s0 - 1] == text.line_of[s0] && !is_break(s0 - 1) {
-                                s0 -= 1;
-                            }
-                            let mut e = a;
-                            while e + 1 < text.glyphs.len() && !text.space_before[e + 1] && text.line_of[e + 1] == text.line_of[e] && !is_break(e + 1)
-                            {
-                                e += 1;
-                            }
-                            view.selection = Some(Selection { page: i, anchor: s0, head: e });
+                    // Quick clicks widen the selection: two a word, three the line, four the page.
+                    // egui counts up to three, so four come from the run kept here. The markup and
+                    // Redact tools mark a double-clicked word at once, so they stop at the word.
+                    let clicks = if resp.triple_clicked() {
+                        view.clicks.max(2).saturating_add(1)
+                    } else if resp.double_clicked() {
+                        2
+                    } else {
+                        u32::from(resp.clicked())
+                    };
+                    if clicks > 0 {
+                        view.clicks = clicks;
+                    }
+                    let clicks = if clicks > 2 && tool != QuickTool::Select { 1 } else { clicks };
+                    if clicks >= 2 && over_text {
+                        let span = text.nearest(vx, vy).and_then(|a| match clicks {
+                            2 => text.word_at(a),
+                            3 => text.line_at(a),
+                            _ => text.glyphs.len().checked_sub(1).map(|last| (0, last)),
+                        });
+                        if let Some((first, last)) = span {
+                            view.selection = Some(Selection { page: i, anchor: first, head: last });
                         }
                     } else if resp.clicked() && !over_link {
-                        view.selection = None;
+                        // ⇧-click extends a selection on this page to the click, keeping its
+                        // anchor (#527). Otherwise (no shift, or no selection on this page; a
+                        // selection cannot yet span pages) a click clears the selection.
+                        let shift = ui.input(|inp| inp.modifiers.shift);
+                        match (view.selection.as_mut().filter(|s| shift && s.page == i), text.nearest(vx, vy)) {
+                            (Some(sel), Some(h)) => sel.head = h,
+                            _ => view.selection = None,
+                        }
                     }
                 }
             }
@@ -1646,28 +1887,38 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
 
             // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
-            // red border.
+            // red border. Radio buttons are round, and so is theirs (as in Acrobat).
             if view.highlight_fields {
                 for f in form.iter() {
                     let required = f.has(pdfcraft_engine::field_flags::REQUIRED);
+                    let round = f.kind == pdfcraft_engine::FormFieldKind::Radio;
                     for w in f.widgets.iter().filter(|w| w.page == Some(i) && !w.hidden) {
                         let r = w.rect;
                         let sr = xf.user_rect(info, i, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]);
-                        painter.rect_filled(sr, CornerRadius::same(1), Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48));
+                        let tint = Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48);
                         let (width, color) =
                             if required { (2.0, Color32::from_rgb(0xE3, 0x22, 0x22)) } else { (1.0, Color32::from_rgb(0x6E, 0x8E, 0xF5)) };
-                        painter.rect_stroke(sr, CornerRadius::same(1), Stroke::new(width, color), egui::StrokeKind::Inside);
+                        if round {
+                            let radius = sr.width().min(sr.height()) / 2.0;
+                            painter.circle_filled(sr.center(), radius, tint);
+                            painter.circle_stroke(sr.center(), radius - width / 2.0, Stroke::new(width, color));
+                        } else {
+                            painter.rect_filled(sr, CornerRadius::same(1), tint);
+                            painter.rect_stroke(sr, CornerRadius::same(1), Stroke::new(width, color), egui::StrokeKind::Inside);
+                        }
                     }
                 }
             }
-            // Link hover + click.
-            if let Some(p) = pointer {
+            // Fill & Sign keeps its placement cursor clear of link/comment hover feedback.
+            if !matches!(tool, QuickTool::Fill(_))
+                && let Some(p) = pointer
+            {
                 for l in info.links.iter().filter(|l| l.page == i) {
                     let sr = xf.user_rect(info, i, l.rect);
                     if sr.contains(p) {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         let label = match &l.target {
-                            LinkTarget::Page(n) => {
+                            LinkTarget::Page(n, _) => {
                                 crate::i18n::fmt(tl!("Go to page {p}"), &[("p", info.pages.get(*n).map(|p| p.label.as_str()).unwrap_or("?"))])
                             }
                             LinkTarget::Uri(u) => u.clone(),
@@ -1680,8 +1931,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         }
                     }
                 }
-                // Annotation hover shows the comment, as Acrobat's popups do.
-                let gesturing = view.comments.gesture.is_some();
+                // Annotation hover shows the comment, as Acrobat's popups do; not while drawing
+                // freehand, where it would cover the next stroke (#429).
+                let freehand = matches!(tool, QuickTool::Comment(comments::CommentTool::Ink | comments::CommentTool::Eraser));
+                let gesturing = view.comments.gesture.is_some() || freehand;
                 for a in info.annotations.iter().filter(|a| a.page == i && a.in_reply_to.is_none() && !gesturing) {
                     let sr = xf.user_rect(info, i, a.rect);
                     if sr.contains(p) && hover_text.is_none() {
@@ -1783,6 +2036,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         });
         (wanted, visible_now)
     });
+    view.single_edges = visible_pages.first().copied().filter(|_| view.layout == PageLayout::Single).map(|page| {
+        // At the top once the page's top edge shows where going to a page puts it (a gap
+        // below the window's top). Within a point, as for wheel paging, so layout rounding
+        // can't hide an edge.
+        let max_y = (out.content_size.y - out.inner_rect.height()).max(0.0);
+        (page, out.state.offset.y <= MARGIN - GAP + 1.0, out.state.offset.y >= max_y - 1.0)
+    });
 
     view.auto_scroll.paint(ui, avail);
 
@@ -1883,12 +2143,16 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let field_props = field_props.then(|| view.prepare.selected.clone()).flatten();
     match canvas_action {
         Some(comments::CanvasAction::Edit(e)) => view.pending_edit = Some(*e),
-        Some(comments::CanvasAction::OpenComments) => app.right = Some(RightPanel::Comments),
+        // `choose_right_panel` would borrow all of `app` while `view` is held; same effect.
+        Some(comments::CanvasAction::OpenComments) => {
+            app.right = Some(RightPanel::Comments);
+            app.comments_panel_closed = false;
+        }
         Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
         None => {}
     }
     match clicked_link {
-        Some(LinkTarget::Page(p)) => view.go_to_page(p),
+        Some(LinkTarget::Page(p, dest)) => view.go_to_dest(p, dest, info),
         Some(LinkTarget::Uri(u)) => app.request_document_url(&u, crate::LinkOrigin::Link),
         Some(LinkTarget::SetLayers { changes, preserve_rb }) => set_layers(app, index, &changes, preserve_rb),
         Some(LinkTarget::Other(s)) => app.notify_fmt("{s} actions run in the JavaScript engine (M6)", &[("s", &s)]),
@@ -2180,6 +2444,8 @@ enum Notice {
     Security,
     Signatures,
     Repairs,
+    /// Highlight fields was turned on or off.
+    FieldHighlights(bool),
 }
 
 /// The notice bar above the pages: the signature status first (Acrobat's signature bar), then
@@ -2215,6 +2481,7 @@ fn notices(
     }
     let mut open_security = false;
     let mut open_repairs = false;
+    let mut toggled = None;
     let msg = if secured {
         Some(("lock", tl!("This document is secured. Some changes are restricted by its security settings.").to_string(), false))
     } else if let Some(x) = xfa {
@@ -2267,6 +2534,7 @@ fn notices(
                     let label = if view.highlight_fields { tl!("Hide field highlights") } else { tl!("Highlight fields") };
                     if crate::widgets::pill_button(ui, label, view.highlight_fields).clicked() {
                         view.highlight_fields = !view.highlight_fields;
+                        toggled = Some(Notice::FieldHighlights(view.highlight_fields));
                     }
                 }
                 if secured && crate::widgets::pill_button(ui, tl!("Security settings"), false).clicked() {
@@ -2281,7 +2549,7 @@ fn notices(
     if open_repairs {
         return Some(Notice::Repairs);
     }
-    open_security.then_some(Notice::Security)
+    open_security.then_some(Notice::Security).or(toggled)
 }
 
 /// The floating quick-action bar at the left edge of the document area.
@@ -2435,7 +2703,7 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
 }
 
 /// The organize toolbar: page operations on the selection (Acrobat's Organize Pages bar).
-fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, ui: &mut egui::Ui, t: &Tokens) {
+fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool, ui: &mut egui::Ui, t: &Tokens) {
     let targets = view.target_pages();
     let n = info.pages.len();
     let (first, last) = (targets.first().copied().unwrap_or(0), targets.last().copied().unwrap_or(0));
@@ -2509,6 +2777,11 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, ui: &mut
                 if widgets::ghost_button(ui, "x", tl!("Close")).on_hover_text(tl!("Back to the document")).clicked() {
                     view.organize = false;
                 }
+                // What the grid shows is what is saved.
+                let save = ui.add_enabled_ui(dirty, |ui| widgets::pill_button(ui, tl!("Save pages"), true)).inner;
+                if save.on_hover_text(tl!("Save these pages as one PDF")).on_disabled_hover_text(tl!("No changes to save")).clicked() {
+                    view.pending_action = Some(ViewAction::Save);
+                }
             });
         });
     });
@@ -2549,11 +2822,36 @@ fn drop_gap(cells: &[(usize, Rect)], p: Pos2) -> Option<usize> {
     Some(if p.x < r.center().x { *i } else { i + 1 })
 }
 
-fn organize_grid(view: &mut DocView, info: &DocInfo, pool: &RenderPool, editable: bool, auto_scroll_enabled: bool, ui: &mut egui::Ui, t: &Tokens) {
+/// A "+" on a gap of the page grid: insert files there. Returns whether it was clicked.
+fn gap_button(ui: &mut egui::Ui, gap: usize, at: Pos2, height: f32, label: String, t: &Tokens) -> bool {
+    let resp = ui.interact(Rect::from_center_size(at, Vec2::splat(22.0)), ui.id().with(("org-gap", gap)), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.clone()));
+    let hot = resp.hovered();
+    if hot {
+        ui.painter().line_segment([pos2(at.x, at.y - height / 2.0), pos2(at.x, at.y + height / 2.0)], Stroke::new(3.0, t.accent));
+    }
+    ui.painter().circle(at, 9.0, if hot { t.accent } else { t.chrome }, Stroke::new(1.0, if hot { t.accent } else { t.border }));
+    let ink = Stroke::new(1.5, if hot { Color32::WHITE } else { t.text_muted });
+    ui.painter().line_segment([at - vec2(4.0, 0.0), at + vec2(4.0, 0.0)], ink);
+    ui.painter().line_segment([at - vec2(0.0, 4.0), at + vec2(0.0, 4.0)], ink);
+    resp.on_hover_text(label).clicked()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn organize_grid(
+    view: &mut DocView,
+    info: &DocInfo,
+    pool: &RenderPool,
+    editable: bool,
+    dirty: bool,
+    auto_scroll_enabled: bool,
+    ui: &mut egui::Ui,
+    t: &Tokens,
+) {
     let ppp = ui.ctx().pixels_per_point();
     let cell = vec2(190.0, 250.0);
     let mut open_page = None;
-    organize_toolbar(view, info, editable, ui, t);
+    organize_toolbar(view, info, editable, dirty, ui, t);
     let viewport = ui.available_rect_before_wrap();
     view.viewport_screen = viewport;
     let auto_delta = if auto_scroll_enabled {
@@ -2647,6 +2945,25 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, pool: &RenderPool, editable
                 });
             }
         }
+        // Between pages (and at both ends): insert files right there.
+        if editable && !middle_gesture && view.org_drag.is_none() {
+            let mid = |r: &Rect| r.top() + 16.0 + (cell.y - 56.0) / 2.0;
+            for (i, c) in &cells {
+                let label = info
+                    .pages
+                    .get(*i)
+                    .map(|p| crate::i18n::fmt(tl!("Insert a file before page {label}"), &[("label", &p.label)]))
+                    .unwrap_or_default();
+                if gap_button(ui, *i, pos2(c.left(), mid(c)), cell.y - 56.0, label, t) {
+                    view.pending_action = Some(ViewAction::InsertFromFileAt(*i));
+                }
+            }
+            if let Some((i, c)) = cells.last()
+                && gap_button(ui, i + 1, pos2(c.right(), mid(c)), cell.y - 56.0, tl!("Insert a file at the end").to_string(), t)
+            {
+                view.pending_action = Some(ViewAction::InsertFromFileAt(i + 1));
+            }
+        }
         // While dragging: the gap the pages would go to, drawn as a bar.
         if let (Some(pages), Some(p)) = (view.org_drag.clone(), ui.input(|i| i.pointer.hover_pos())) {
             if let Some(gap) = drop_gap(&cells, p) {
@@ -2681,6 +2998,27 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, pool: &RenderPool, editable
             view.org_drag = None;
         }
     });
+    // Files dragged in from outside go to the gap under the pointer. Some platforms don't say
+    // where the pointer is until the files are dropped; then the whole grid is the target.
+    let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|p| viewport.contains(*p));
+    view.grid_gap = pointer.filter(|_| editable && view.org_drag.is_none()).and_then(|p| drop_gap(&cells, p));
+    if editable && ui.input(|i| !i.raw.hovered_files.is_empty()) {
+        let painter = ui.painter().with_clip_rect(viewport);
+        painter.rect_stroke(viewport.shrink(2.0), CornerRadius::same(6), Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
+        if let Some(gap) = view.grid_gap {
+            let at = cells.iter().find(|(i, _)| *i == gap).map(|(_, r)| (r.left() + 3.0, r.y_range()));
+            if let Some((x, row)) = at.or(cells.last().map(|(_, r)| (r.right() - 3.0, r.y_range()))) {
+                painter.line_segment([pos2(x, row.min + 10.0), pos2(x, row.max - 10.0)], Stroke::new(3.0, t.accent));
+            }
+        }
+        // A "+" that follows the pointer.
+        if let Some(p) = pointer {
+            let at = p + vec2(16.0, 16.0);
+            painter.circle_filled(at, 9.0, t.accent);
+            painter.line_segment([at - vec2(4.0, 0.0), at + vec2(4.0, 0.0)], Stroke::new(1.5, Color32::WHITE));
+            painter.line_segment([at - vec2(0.0, 4.0), at + vec2(0.0, 4.0)], Stroke::new(1.5, Color32::WHITE));
+        }
+    }
     view.auto_scroll.paint(ui, viewport);
     let s = THUMB_W * ppp / info.pages.iter().map(|p| p.width).fold(1.0, f32::max);
     let queue: Vec<RenderRequest> = (0..info.pages.len())
@@ -2697,9 +3035,41 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, pool: &RenderPool, editable
     }
 }
 
+/// A rendered raster as texture data. Its words are premultiplied RGBA bytes, exactly
+/// `Color32`s, so the renderer's buffer becomes the image without a copy on the UI thread.
+fn texture_image(size: [usize; 2], pixels: pdfcraft_render::Pixels) -> egui::ColorImage {
+    match bytemuck::allocation::try_cast_vec::<u32, Color32>(pixels.into_words()) {
+        Ok(px) if px.len() == size[0].saturating_mul(size[1]) => egui::ColorImage::new(size, px),
+        Ok(px) => egui::ColorImage::from_rgba_premultiplied(size, bytemuck::cast_slice(&px)),
+        Err((_, words)) => egui::ColorImage::from_rgba_premultiplied(size, bytemuck::cast_slice(&words)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rendered_rasters_become_texture_images_without_a_copy() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 50] /Contents 4 0 R >> endobj
+4 0 obj << /Length 35 >> stream
+0 0 1 rg 10 10 30 20 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+        let mut r = pdfcraft_render::PageRenderer::new(Arc::new(pdf.to_vec()), Default::default());
+        let out = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.5, tag: 0 });
+        assert!(out.error.is_none(), "{:?}", out.error);
+        let size = [out.width as usize, out.height as usize];
+        let copied = egui::ColorImage::from_rgba_premultiplied(size, &out.rgba);
+        let at = out.rgba.as_ptr();
+        let img = texture_image(size, out.rgba);
+        assert_eq!(img, copied);
+        assert_eq!(img.pixels.as_ptr().cast::<u8>(), at, "the renderer's own buffer");
+    }
 
     fn view(pages: usize, layout: PageLayout) -> DocView {
         let info = pdfcraft_render::DocInfo {
@@ -2791,5 +3161,48 @@ mod tests {
         }
         assert_eq!(PageLayout::try_parse(" Two-Up "), Some(PageLayout::TwoUp));
         assert_eq!(PageLayout::try_parse("facing"), None);
+    }
+
+    #[test]
+    fn destinations_set_the_zoom_mode_and_the_point_to_show() {
+        let info = pdfcraft_render::DocInfo {
+            pages: (0..3)
+                .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
+                .collect(),
+            ..Default::default()
+        };
+        let mut v = view(3, PageLayout::Continuous);
+        v.fit = Fit::Width;
+        // No position (or a malformed one): the top of the page, zoom as it was.
+        v.go_to_dest(1, DestView::Top, &info);
+        assert_eq!((v.current, v.goto, v.goto_point, v.fit), (1, Some((1, 0.0)), None, Fit::Width));
+        // /XYZ with a null zoom keeps the zoom mode; its point is a quarter down page 3.
+        v.go_to_dest(2, DestView::Xyz { left: None, top: Some(300.0), zoom: None }, &info);
+        assert_eq!((v.current, v.fit, v.goto_point), (2, Fit::Width, Some((2, None, Some(0.25), vec2(SIDE, 0.0)))));
+        v.go_to_dest(0, DestView::Xyz { left: Some(150.0), top: None, zoom: Some(2.5) }, &info);
+        assert_eq!((v.fit, v.zoom, v.goto_point), (Fit::None, 2.5, Some((0, Some(0.5), None, vec2(SIDE, 0.0)))));
+        // A zoom beyond the view's range is clamped to it.
+        v.go_to_dest(0, DestView::Xyz { left: None, top: None, zoom: Some(1e30) }, &info);
+        assert_eq!((v.zoom, v.goto_point), (64.0, None));
+        v.go_to_dest(0, DestView::Fit, &info);
+        assert_eq!((v.fit, v.goto_point), (Fit::Page, None));
+        v.go_to_dest(0, DestView::FitH { top: Some(100.0) }, &info);
+        assert_eq!((v.fit, v.goto_point), (Fit::Width, Some((0, None, Some(0.75), vec2(SIDE, 0.0)))));
+        v.go_to_dest(0, DestView::FitV { left: Some(75.0) }, &info);
+        assert_eq!((v.fit, v.goto_point), (Fit::Height, Some((0, Some(0.25), None, vec2(SIDE, 0.0)))));
+        // /FitR: the zoom that fits a 100×50 pt rectangle in an 800×600 window, centred.
+        (v.viewport_w, v.viewport_h) = (800.0, 600.0);
+        v.go_to_dest(0, DestView::FitR { rect: [0.0, 300.0, 100.0, 350.0] }, &info);
+        assert_eq!(v.fit, Fit::None);
+        assert!((v.zoom - 8.0 / PT).abs() < 1e-4, "{}", v.zoom);
+        let (page, fx, fy, rel) = v.goto_point.expect("a point to show");
+        assert_eq!((page, rel), (0, vec2(400.0, 300.0)));
+        assert!((fx.unwrap_or(-1.0) - 50.0 / 300.0).abs() < 1e-4 && (fy.unwrap_or(-1.0) - 75.0 / 400.0).abs() < 1e-4, "{fx:?} {fy:?}");
+        // A page past the end goes to the last page; a page the document info lacks, to its top.
+        v.go_to_dest(usize::MAX, DestView::FitH { top: Some(100.0) }, &info);
+        assert_eq!((v.current, v.goto_point.map(|g| g.0)), (2, Some(2)));
+        let empty = pdfcraft_render::DocInfo::default();
+        v.go_to_dest(1, DestView::FitH { top: Some(100.0) }, &empty);
+        assert_eq!((v.current, v.goto_point), (1, None));
     }
 }

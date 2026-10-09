@@ -14,6 +14,8 @@ pdfcraft-content = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
+# Display order of right-to-left lines in added text; already in the tree via the interface.
+unicode-bidi = "0.3"
 
 [dev-dependencies]
 hayro-syntax = { workspace = true }

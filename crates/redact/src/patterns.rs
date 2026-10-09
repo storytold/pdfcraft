@@ -56,7 +56,7 @@ fn digit_run(s: &[char], start: usize, seps: &[char], max_len: usize) -> (usize,
         let c = s[i];
         if c.is_ascii_digit() {
             n += 1;
-        } else if !(seps.contains(&c) && digit(s.get(i + 1)) || (c == '(' || c == ')') && seps.contains(&c)) {
+        } else if !(seps.contains(&c) && (digit(s.get(i + 1)) || s.get(i + 1) == Some(&'(')) || (c == '(' || c == ')') && seps.contains(&c)) {
             break;
         }
         i += 1;
@@ -73,14 +73,31 @@ fn phone(s: &[char], i: usize) -> Option<usize> {
     if !start_ok || word(i.checked_sub(1).and_then(|p| s.get(p))) || s.get(i.wrapping_sub(1)) == Some(&'+') {
         return None;
     }
-    let first = if s[i] == '+' { i + 1 } else { i };
-    let (end, n) = digit_run(s, first, &[' ', '-', '.', '(', ')'], 20);
-    let seps = s[first..end].iter().filter(|c| !c.is_ascii_digit()).count();
-    // 10 digits (11 with a country code), grouped by at least one separator.
-    if !(10..=11).contains(&n) || seps == 0 || digit(s.get(end)) {
+    let plus = s[i] == '+';
+    let first = if plus { i + 1 } else { i };
+    let (end, n) = digit_run(s, first, &[' ', '-', '.', '(', ')'], 28);
+    let run = s.get(first..end)?;
+    let seps = run.iter().filter(|c| !c.is_ascii_digit()).count();
+    // Always grouped by at least one separator, so plain numbers never match.
+    if seps == 0 || digit(s.get(end)) {
         return None;
     }
-    Some(end - i)
+    let ok = if plus {
+        // E.164: a `+` country code and up to 15 digits in all ("+49 2151 123456").
+        (8..=15).contains(&n)
+    } else {
+        // North American: 10 digits, 11 with a country code ("(555) 123-4567").
+        let nanp = (10..=11).contains(&n);
+        // National with a trunk 0 and 6–14 more digits ("0211 123456", "01 23 45 67 89").
+        // The first group needs two digits so decimals ("0.1234567") don't match, and
+        // day-first dates ("01.10.2026") are left to the date pattern.
+        let mut digits = run.iter().skip_while(|c| !c.is_ascii_digit());
+        let trunk_zero = digits.clone().next() == Some(&'0');
+        let lead = digits.by_ref().take_while(|c| c.is_ascii_digit()).count();
+        let trunk = trunk_zero && (7..=15).contains(&n) && lead >= 2 && date(s, i).is_none();
+        nanp || trunk
+    };
+    ok.then_some(end - i)
 }
 
 fn email(s: &[char], i: usize) -> Option<usize> {
@@ -254,6 +271,20 @@ mod tests {
         assert_eq!(
             found(Pattern::Phone, "Call (555) 123-4567 or 555.987.6543, +1 555 222 3333; not 12345 or 5551234567890"),
             ["(555) 123-4567", "555.987.6543", "+1 555 222 3333"]
+        );
+        // #525: international numbers match whole; "+49" used to stay visible.
+        assert_eq!(found(Pattern::Phone, "Tel. +49 2151 123456."), ["+49 2151 123456"]);
+        assert_eq!(
+            found(Pattern::Phone, "+44 20 7946 0018, +33 1 23 45 67 89, +49 (0) 2151 123456, (0211) 123456, 030 12345678, 01 23 45 67 89"),
+            ["+44 20 7946 0018", "+33 1 23 45 67 89", "+49 (0) 2151 123456", "(0211) 123456", "030 12345678", "01 23 45 67 89"]
+        );
+        // Not phone numbers: day-first dates, decimals, unseparated, too short or too long.
+        assert_eq!(
+            found(
+                Pattern::Phone,
+                "on 01.10.2026 or 09-10-2026, ratio 0.1234567, id 0211123456, +4921511234567, +1 234 567, 0211 12, +49 1234 5678 9012 3456"
+            ),
+            Vec::<String>::new()
         );
     }
 

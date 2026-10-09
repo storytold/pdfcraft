@@ -257,7 +257,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     ui.horizontal(|ui| {
         ui.label(tl!("Default workspace mode"));
         for (mode, label) in [
-            (crate::Mode::AllTools, "All Tools"),
+            (crate::Mode::AllTools, "All tools"),
             (crate::Mode::Read, "Read"),
             (crate::Mode::Edit, "Edit"),
             (crate::Mode::Convert, "Convert"),
@@ -295,6 +295,9 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             .small()
             .color(t.text_muted),
     );
+    // The web build has no file paths to reopen.
+    #[cfg(not(target_arch = "wasm32"))]
+    ui.checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed"));
     ui.add_space(8.0);
     // Identity: the author of new comments (Acrobat: Preferences ▸ Identity).
     ui.label(egui::RichText::new(tl!("Identity")).font(theme::semibold(13.0)));

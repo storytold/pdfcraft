@@ -208,6 +208,8 @@ struct FieldInfo {
     kind: pdfcraft_forms::FieldKind,
     value: Vec<String>,
     on_state: String,
+    /// List boxes that take several values (one per line in the data).
+    multi: bool,
 }
 
 fn field_infos(doc: &pdfcraft_cos::Document) -> HashMap<String, FieldInfo> {
@@ -215,7 +217,8 @@ fn field_infos(doc: &pdfcraft_cos::Document) -> HashMap<String, FieldInfo> {
         .into_iter()
         .map(|f| {
             let on_state = f.widgets.first().and_then(|w| w.on_state.clone()).unwrap_or_else(|| "1".into());
-            (f.name, FieldInfo { kind: f.kind, value: f.value, on_state })
+            let multi = f.kind == pdfcraft_forms::FieldKind::List && f.has(pdfcraft_forms::flags::MULTI_SELECT);
+            (f.name, FieldInfo { kind: f.kind, value: f.value, on_state, multi })
         })
         .collect()
 }
@@ -380,11 +383,13 @@ impl<'a, 'b> Runner<'a, 'b> {
             }
             // Read-only fields still take values from scripts (calculated totals are read-only).
             K::PushButton | K::Signature => return false,
+            K::List if info.multi => value.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect(),
             _ => vec![value.to_string()],
         };
         let same = match info.kind {
             K::CheckBox => info.value.is_empty() == new_value.is_empty(),
             K::Radio => info.value.first() == new_value.first(),
+            K::List if info.multi => info.value == new_value,
             _ => info.value.first().map_or(value.is_empty(), |v| v == value),
         };
         if same {

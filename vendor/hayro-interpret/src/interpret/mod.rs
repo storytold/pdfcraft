@@ -5,7 +5,7 @@ use crate::convert::{convert_line_cap, convert_line_join};
 use crate::device::Device;
 use crate::font::{Font, FontData, FontQuery, StandardFont};
 use crate::interpret::path::{
-    close_path, fill_path, fill_path_impl, fill_stroke_path, stroke_path,
+    apply_pending_clip, close_path, fill_path, fill_path_impl, fill_stroke_path, stroke_path,
 };
 use crate::interpret::state::{TextStateFont, handle_gs};
 use crate::interpret::text::TextRenderingMode;
@@ -25,6 +25,7 @@ use hayro_syntax::page::{Page, Resources};
 use kurbo::{Affine, BezPath, Point, Shape};
 use smallvec::smallvec;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) mod path;
 pub(crate) mod state;
@@ -109,6 +110,10 @@ pub struct InterpreterSettings {
     /// PdfCraft patch: viewer overrides for optional content groups (object number, generation,
     /// visible), applied on top of the document's default configuration (Layers panel toggles).
     pub ocg_overrides: Arc<Vec<(i32, i32, bool)>>,
+    /// PdfCraft patch: once this is `true`, interpretation stops before the next content
+    /// operator. What was drawn is then incomplete, so only set it when the output will be
+    /// thrown away (a viewer's render whose result nobody can receive any more).
+    pub cancelled: Option<Arc<AtomicBool>>,
 }
 
 impl Default for InterpreterSettings {
@@ -129,6 +134,7 @@ impl Default for InterpreterSettings {
             render_annotations: true,
             hide_comments: false,
             ocg_overrides: Arc::new(Vec::new()),
+            cancelled: None,
         }
     }
 }
@@ -325,6 +331,10 @@ pub fn interpret<'a>(
     context.save_state();
 
     while let Some(op) = ops.next() {
+        // PdfCraft patch: stop when the caller cancelled (see `InterpreterSettings::cancelled`).
+        if context.settings.cancelled.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+            break;
+        }
         match op {
             TypedInstruction::SaveState(_) => context.save_state(),
             TypedInstruction::StrokeColorDeviceRgb(s) => {
@@ -479,15 +489,7 @@ pub fn interpret<'a>(
                 stroke_path(context, device);
             }
             TypedInstruction::EndPath(_) => {
-                if let Some(clip) = *context.clip()
-                    && !context.path().elements().is_empty()
-                {
-                    let clip_path = context.get().ctm * context.path().clone();
-                    context.push_clip_path(clip_path, clip, device);
-
-                    *(context.clip_mut()) = None;
-                }
-
+                apply_pending_clip(context, device);
                 context.path_mut().truncate(0);
             }
             TypedInstruction::NonStrokeColor(c) => {

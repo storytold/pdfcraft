@@ -3,11 +3,13 @@
 //! Geometry follows the automation convention: points from the top-left of the displayed page,
 //! y down. It is converted to PDF user space (crop box, `/Rotate`) here.
 
-use pdfcraft_engine::{Edit, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort};
+use pdfcraft_engine::{
+    Edit, LineEnding, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort,
+};
 use pdfcraft_render::{Annotation, PageInfo};
 use serde_json::{Value, json};
 
-use crate::{Args, Automation, Result, ToolError, failed};
+use crate::{Args, Automation, Content, DEFAULT_DPI, MAX_DPI, Result, ToolError, encode_png, failed};
 
 /// Author used when a tool call names none.
 pub(crate) const DEFAULT_AUTHOR: &str = "PdfCraft";
@@ -32,6 +34,33 @@ pub(crate) fn parse_color(s: &str) -> Result<Rgb> {
     }
     let c = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).map(|v| v as f64 / 255.0).unwrap_or(0.0);
     Ok([c(0), c(2), c(4)])
+}
+
+const ENDING_NAMES: &str = "None, Square, Circle, Diamond, OpenArrow, ClosedArrow, Butt, ROpenArrow, RClosedArrow, Slash";
+
+fn line_endings(a: &Args) -> Result<Option<Vec<LineEnding>>> {
+    let Some(v) = a.get("endings") else { return Ok(None) };
+    let arr = v.as_array().ok_or_else(|| ToolError::InvalidArgs("endings must be an array of line-ending names".into()))?;
+    if arr.is_empty() || arr.len() > 2 {
+        return Err(ToolError::InvalidArgs("endings takes one name for a callout, or two for a line or polyline".into()));
+    }
+    arr.iter()
+        .map(|item| {
+            let name = item.as_str().ok_or_else(|| ToolError::InvalidArgs("endings must be line-ending names".into()))?;
+            LineEnding::parse(name).ok_or_else(|| ToolError::InvalidArgs(format!("unknown line ending {name:?} ({ENDING_NAMES})")))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
+}
+
+/// `[start, end]` for a line, arrow or polyline. An arrow with no `endings` stays `[None, OpenArrow]`.
+fn ending_pair(kind: &str, endings: Option<&[LineEnding]>) -> Result<[LineEnding; 2]> {
+    match endings {
+        None if kind == "arrow" => Ok([LineEnding::None, LineEnding::OpenArrow]),
+        None => Ok([LineEnding::None, LineEnding::None]),
+        Some(v) if v.len() == 2 => Ok([v.first().copied().unwrap_or(LineEnding::None), v.get(1).copied().unwrap_or(LineEnding::None)]),
+        Some(_) => Err(ToolError::InvalidArgs("a line or polyline needs two endings, the start and the end".into())),
+    }
 }
 
 fn hex(c: [f32; 3]) -> String {
@@ -86,6 +115,35 @@ impl Args<'_> {
 }
 
 impl Automation {
+    /// One of the read-only layers the GUI uses to drag/resize an embedded image signature.
+    pub(crate) fn comment_image_preview(&self, a: &Args) -> Result<Vec<Content>> {
+        let (page, index) = self.comment_target(a)?;
+        let dpi = a.opt_num("dpi")?.unwrap_or(DEFAULT_DPI);
+        if !(1.0..=MAX_DPI).contains(&dpi) {
+            return Err(ToolError::InvalidArgs(format!("dpi must be between 1 and {MAX_DPI}")));
+        }
+        let doc = self.doc(a)?;
+        let preview = doc.image_signature_preview(page, index).map_err(failed)?.ok_or_else(|| failed("choose an image signature or initials"))?;
+        let annotation = doc.info.annotations.iter().find(|c| c.page == page && c.index == index).ok_or_else(|| failed("no such comment"))?;
+        let info = doc.info.pages.get(page).ok_or_else(|| failed("no such page"))?;
+        let [w, h] = preview.image.size();
+        let layer = a.opt_str("layer")?.unwrap_or("background");
+        let image = match layer {
+            "image" => Content::Png { data: preview.image.bytes().as_ref().clone(), width: w as u32, height: h as u32 },
+            "background" => {
+                let out = preview.render_background((dpi / 72.0) as f32).map_err(failed)?;
+                Content::Png { data: encode_png(out.width, out.height, &out.rgba)?, width: out.width, height: out.height }
+            }
+            _ => return Err(ToolError::InvalidArgs("layer must be background or image".into())),
+        };
+        Ok(vec![
+            Content::Json(json!({ "page": page + 1, "index": index + 1, "rect": rect_to_view(info, annotation.rect), "rotation": info.rotation,
+                "image_rotation": (i64::from(info.rotation) - preview.turn).rem_euclid(360),
+                "layer": layer, "opacity": preview.opacity, "dpi": dpi })),
+            image,
+        ])
+    }
+
     /// Comments of a document, optionally only of one 0-based page.
     fn comments(&self, a: &Args) -> Result<Vec<Annotation>> {
         let doc = self.doc(a)?;
@@ -152,6 +210,10 @@ impl Automation {
         let page = self.page(a)?;
         let info = self.doc(a)?.info.pages[page].clone();
         let kind = a.str("type")?;
+        let endings = line_endings(a)?;
+        if endings.is_some() && !matches!(kind, "line" | "arrow" | "polyline" | "callout") {
+            return Err(ToolError::InvalidArgs("endings apply to a line, arrow, polyline or callout".into()));
+        }
         let markup = match kind {
             "highlight" => Some(Markup::Highlight),
             "underline" => Some(Markup::Underline),
@@ -225,7 +287,8 @@ impl Automation {
                 }
                 "line" | "arrow" => {
                     let (f, t) = (a.need::<2>("from", "a line")?, a.need::<2>("to", "a line")?);
-                    Shape::Line { from: to_user(&info, f[0], f[1]), to: to_user(&info, t[0], t[1]), arrow: kind == "arrow" }
+                    let [start, end] = ending_pair(kind, endings.as_deref())?;
+                    Shape::Line { from: to_user(&info, f[0], f[1]), to: to_user(&info, t[0], t[1]), start, end }
                 }
                 "ink" => {
                     let wrong = || ToolError::InvalidArgs("strokes must be an array of arrays of [x, y] points".into());
@@ -258,7 +321,10 @@ impl Automation {
                         })
                         .collect::<Result<Vec<_>>>()?;
                     match kind {
-                        "polyline" => Shape::PolyLine { vertices },
+                        "polyline" => {
+                            let [start, end] = ending_pair(kind, endings.as_deref())?;
+                            Shape::PolyLine { vertices, start, end }
+                        }
                         _ => Shape::Polygon { vertices, cloud: kind == "cloud" },
                     }
                 }
@@ -281,7 +347,17 @@ impl Automation {
                             [(point[0] + side) / 2.0, mid]
                         }
                     };
-                    Shape::Callout { rect, knee, point, font_size: a.opt_num("font_size")?.unwrap_or(10.0) }
+                    Shape::Callout {
+                        rect,
+                        knee,
+                        point,
+                        font_size: a.opt_num("font_size")?.unwrap_or(10.0),
+                        ending: match endings.as_deref() {
+                            None => LineEnding::OpenArrow,
+                            Some([ending]) => *ending,
+                            Some(_) => return Err(ToolError::InvalidArgs("a callout needs one ending".into())),
+                        },
+                    }
                 }
                 "attachment" => {
                     let [x, y] = a.need::<2>("at", "an attachment (its icon's top-left)")?;
@@ -350,13 +426,24 @@ impl Automation {
         let [x, y] = a.need::<2>("at", "Fill & Sign")?;
         let at = to_user(&info, x, y);
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
+        let kind = a.str("type")?;
+        if let Some(path) = a.opt_str("path")? {
+            if !matches!(kind, "signature" | "initials") || a.opt_str("text")?.is_some() {
+                return Err(ToolError::InvalidArgs("path is only for an image signature or initials; pass either path or text".into()));
+            }
+            let path = self.resolve(path, false)?;
+            let file = std::fs::File::open(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+            let image = pdfcraft_engine::SignatureImage::read(file).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+            let edit = image.edit(page, &info, at, kind == "initials", &author).ok_or_else(|| ToolError::InvalidArgs("at must be finite".into()))?;
+            return self.apply(a, edit);
+        }
         let size = 10.0;
         let text_at = |t: &str| {
             let w = (pdfcraft_engine::annot_text::text_width(t, size) + 8.0).clamp(20.0, 600.0);
             let h = size * 1.2 + 6.0;
             Shape::Typewriter { rect: [at[0], at[1] - h, at[0] + w, at[1]], font_size: size }
         };
-        let (shape, contents) = match a.str("type")? {
+        let (shape, contents) = match kind {
             "text" => {
                 let t = a.str("text")?.to_string();
                 (text_at(&t), t)
@@ -366,12 +453,12 @@ impl Automation {
                 let t = format!("{m}/{d}/{yy}");
                 (text_at(&t), t)
             }
-            // A typed signature or initials in the script font, left edge at `at`.
+            // A typed signature or initials in the script font, left edge at `at`, upright as displayed.
             kind @ ("signature" | "initials") => {
                 let t = a.str("text")?;
                 let h = if kind == "initials" { 24.0 } else { 32.0 };
-                let shape =
-                    pdfcraft_engine::typed_signature_shape(at, t, h).ok_or_else(|| ToolError::InvalidArgs("text has nothing to draw".into()))?;
+                let shape = pdfcraft_engine::typed_signature_shape(at, t, h, i64::from(info.rotation))
+                    .ok_or_else(|| ToolError::InvalidArgs("text has nothing to draw".into()))?;
                 (shape, String::new())
             }
             kind => {
@@ -444,7 +531,7 @@ impl Automation {
         }
         let (color, opacity, width) = (a.color("color")?, a.opt_num("opacity")?, a.opt_num("width")?);
         if color.is_some() || opacity.is_some() || width.is_some() {
-            edits.push(Edit::StyleAnnotation { page, index, color, opacity, width });
+            edits.push(Edit::StyleAnnotation { page, index, color, opacity, width, endings: None });
         }
         if let Some(r) = a.nums::<4>("rect")? {
             edits.push(Edit::ResizeAnnotation { page, index, rect: rect_to_user(&info, r) });

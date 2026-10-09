@@ -27,9 +27,33 @@
 	Identity	個人情報
 	Name on new comments	新しい注釈の作成者名
 	Open…	開く…
+	Open Recent	最近のファイルを開く
+	Clear Recent Files	最近のファイルをクリア
+	Remove from Recent	最近のファイルから外す
+	Remove {name} from Recent	{name} を最近のファイルから外す
+	Pin folder to Home…	フォルダーをホームにピン留め…
+	Folders	フォルダー
+	Pin a folder…	フォルダーをピン留め…
+	Pin a folder to Home	フォルダーをホームにピン留め
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	フォルダーをピン留めすると、スキャナーや同期中のクラウドドライブの保存先など、そのフォルダー内の新しい PDF がここに表示されます。
+	Unpin	ピン留めを外す
+	Unpin {folder}	{folder} のピン留めを外す
+	Looking for PDFs…	PDF を探しています…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	このフォルダーは現在利用できません。移動されたか、ドライブまたはクラウド同期がオフラインになっている可能性があります。
+	No PDFs in this folder yet	このフォルダーにはまだ PDF がありません
+	Show less	表示を減らす
+	Show {n} more	さらに {n} 件表示
+	The newest {n} of {total} PDFs	{total} 件中、新しい {n} 件の PDF
+	Pinned folders need the desktop app	フォルダーのピン留めにはデスクトップ版が必要です
+	Choose a folder on this computer to pin	ピン留めするフォルダーをこのコンピューターから選択してください
+	{folder} is already pinned to Home	{folder} はすでにホームにピン留めされています
+	You can pin up to {n} folders. Unpin one first.	ピン留めできるフォルダーは {n} 個までです。先にいずれかのピン留めを外してください。
+	Pinned {folder} to Home	{folder} をホームにピン留めしました
+	No recent files	最近のファイルがありません
 	New blank PDF	空白の PDF を作成
 	Create PDF from file…	ファイルから PDF を作成…
 	Create PDF from images…	画像から PDF を作成…
+	Create PDF from multiple files…	複数のファイルから PDF を作成…
 	Create PDF from clipboard	クリップボードから PDF を作成
 	Combine files…	ファイルを結合…
 	Save	保存
@@ -581,6 +605,7 @@
 	Bottom:	下:
 	Width:	幅:
 	Height:	高さ:
+	Rotation:	回転:
 	Points from the page's bottom-left corner.	ページの左下隅からの距離（ポイント）。
 	Alignment:	配置:
 	Default Value:	既定値:
@@ -1505,6 +1530,15 @@
 	Created 1 link	リンクを 1 件作成しました
 	Created {n} links	リンクを {n} 件作成しました
 	Text recognition is already running	テキスト認識はすでに実行中です
+	Optimizing… removing user data	最適化中… ユーザーデータを削除しています
+	Optimizing… image {d} of {t}	最適化中… 画像 {d} / {t}
+	Optimizing… cleaning up	最適化中… クリーンアップしています
+	Optimizing… merging identical objects	最適化中… 同一オブジェクトを統合しています
+	Optimizing… writing the copy	最適化中… コピーを書き込んでいます
+	Cancelling…	キャンセルしています…
+	Optimization is already running	最適化はすでに実行中です
+	Optimization cancelled	最適化をキャンセルしました
+	Couldn't optimize the file	ファイルを最適化できませんでした
 	Recognizing text… file {d} of {t}	テキストを認識中… ファイル {d} / {t}
 	Recognizing text… page {d} of {t}	テキストを認識中… ページ {d} / {t}
 	Recognized 1 word	1 語を認識しました
@@ -1528,7 +1562,63 @@
 	Sent to {printer}	{printer} に送信しました
 	Sent to {printer}: {msg}	{printer} に送信しました: {msg}
 	Choose a folder for the searchable files	検索可能なファイルの保存先フォルダーを選択
-	Files are combined in this order. Leave Pages empty to take every page.	この順序でファイルを結合します。すべてのページを使用する場合は「ページ」を空欄にしてください。
+	Files are combined from top to bottom. Leave Pages empty to take every page.	ファイルは上から順に結合されます。すべてのページを使用する場合は「ページ」を空欄にしてください。
+	Unlock…	ロックを解除…
+	Select a password-protected file first	先にパスワードで保護されたファイルを選択してください
+	Enter the permissions password to allow combining	結合を許可するには権限パスワードを入力してください
+	Enter the password that opens it	ファイルを開くパスワードを入力してください
+	Unlock {name}	{name} のロックを解除
+	Unlock {n} files	{n} 個のファイルのロックを解除
+	The same password is tried on each file.	同じパスワードを各ファイルに試します。
+	Hide password	パスワードを隠す
+	Show password	パスワードを表示
+	Wrong password	パスワードが違います
+	The password is only used to read the file; it isn't saved.	パスワードはファイルの読み込みにのみ使用され、保存されません。
+	Unlock	ロックを解除
+	Opened, but its security settings don't allow combining. Enter the permissions password.	開けましたが、セキュリティ設定により結合が許可されていません。権限パスワードを入力してください。
+	Unlocked: the combined file won't be password-protected	ロック解除済み: 結合後のファイルはパスワードで保護されません
+	Unlocked {n} of {m} files	{m} 個中 {n} 個のファイルのロックを解除しました
+	Drop PDFs or folders here, or choose them.	ここに PDF またはフォルダーをドロップするか、選択してください。
+	Add folder…	フォルダーを追加…
+	Add folder and subfolders…	フォルダーとサブフォルダーを追加…
+	More ways to add files	ファイルを追加するその他の方法
+	Every PDF in the folder	フォルダー内のすべての PDF
+	Every PDF in the folder and the folders inside it	フォルダーとその中のフォルダーにあるすべての PDF
+	Add folder	フォルダーを追加
+	Add folder and subfolders	フォルダーとサブフォルダーを追加
+	No PDFs found in {folder}	{folder} に PDF が見つかりません
+	Added the first {n} PDFs in {folder}	{folder} の最初の {n} 個の PDF を追加しました
+	Click to sort, drag to move the column. Drag its edge to resize it.	クリックで並べ替え、ドラッグで列を移動します。列の端をドラッグすると幅を変更できます。
+	Reset columns	列をリセット
+	Remove {n} files	{n} 個のファイルを削除
+	{n} selected	{n} 個選択
+	sorted ascending	昇順
+	sorted descending	降順
+	Protected: the combined file won't keep its security settings	保護されています: 結合後のファイルにはセキュリティ設定が引き継がれません
+	Add open documents	開いている文書を追加
+	All open documents	開いているすべての文書
+	No documents are open	開いている文書はありません
+	Select a file first	先にファイルを選択してください
+	1 file	1 個のファイル
+	{n} files	{n} 個のファイル
+	1 file needs attention	1 個のファイルに問題があります
+	{n} files need attention	{n} 個のファイルに問題があります
+	{name} can't be combined: {why}	{name} は結合できません: {why}
+	Check the pages of {name}: {why}	{name} のページ指定を確認してください: {why}
+	Add the PDFs to combine	結合する PDF を追加
+	File name	ファイル名
+	Warnings	警告
+	Drag to reorder	ドラッグして並べ替え
+	{k} of {n}	{k}/{n}
+	? of {n}	?/{n}
+	Added more than once	複数回追加されています
+	yesterday	昨日
+	{n} days ago	{n} 日前
+	No pages selected	ページが選択されていません
+	Password-protected	パスワードで保護されています
+	Its security settings don't allow copying pages	セキュリティ設定によりページのコピーが許可されていません
+	Can't be read: {e}	読み込めません: {e}
+	Includes unsaved changes	未保存の変更を含みます
 	Pages of {name} to combine, e.g. 1-3, 6	結合する {name} のページ（例: 1-3, 6）
 	Remove {name}	{name} を削除
 	Add files…	ファイルを追加…
@@ -1567,6 +1657,7 @@
 	Created a comment summary	注釈の一覧を作成しました
 	Couldn't open {name}: {e}	{name} を開けませんでした: {e}
 	Couldn't read {name}: {e}	{name} を読み取れませんでした: {e}
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	ポータブルモードは無効です: {folder} に書き込めません ({error})。設定は代わりにユーザーフォルダーに保存されます。
 	Couldn't save: {e}	保存できませんでした: {e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Web 版の添付ファイルのダウンロードは M3.10 で対応予定です（{n} バイト準備済み）
 	`{command}` {when}	`{command}`: {when}
@@ -1875,3 +1966,18 @@
 	Page display: {layout}	ページ表示：{layout}
 	Fit to width scrolling	幅に合わせてスクロール
 	Fit one full page	1ページずつ全体を表示
+	Created a PDF from {n} files	{n} 個のファイルから PDF を作成しました
+	PDF, images and text	PDF、画像、テキスト
+	Insert a file before page {label}	ページ {label} の前にファイルを挿入
+	Insert a file at the end	最後にファイルを挿入
+	Save pages	ページを保存
+	Save these pages as one PDF	これらのページを 1 つの PDF として保存
+	No changes to save	保存する変更はありません
+	Created a PDF from {n} files; left out: {names}	{n} 個のファイルから PDF を作成しました。除外: {names}
+	Created a PDF from the first {n} files	最初の {n} 個のファイルから PDF を作成しました
+	None of those files can be made into a PDF; use PDFs, images or .txt files	これらのファイルは PDF にできません。PDF、画像、.txt ファイルを使用してください
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	PNG または JPEG 画像を選択してください（最大 4 MiB）。透明度は保持されます。
+	Couldn't import the signature image: {e}	署名画像を読み込めませんでした: {e}
+	Go to page…	ページへ移動…
+	Reopen the files that were open when PdfCraft last closed	前回 PdfCraft を閉じたときに開いていたファイルを再度開く
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	標準フォントでは「{c}」（{code}）を表示できません。現在、テキストとして追加できるのは西ヨーロッパの文字のみです。

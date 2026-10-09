@@ -159,8 +159,8 @@ pub fn installed_font_definitions(prefer_hans: bool) -> FontDefinitions {
 }
 
 /// The interface fonts: Inter (and JetBrains Mono for code) first, then egui's defaults, then
-/// the CJK and Arabic faces of the optional craft-fonts build input as the last fallback in
-/// every family. Without craft-fonts there is no Japanese, Chinese or Arabic face here.
+/// the CJK, Arabic and Telugu faces of the optional craft-fonts build input as the last fallback
+/// in every family. Without craft-fonts there is no Japanese, Chinese, Arabic or Telugu face here.
 pub fn font_definitions() -> FontDefinitions {
     font_definitions_for(false)
 }
@@ -191,8 +191,9 @@ pub fn font_definitions_for(prefer_hans: bool) -> FontDefinitions {
             fonts.families.entry(family).or_default().push(name.clone());
         }
     }
-    // Arabic-script faces (file names, document titles) after the CJK ones; the ranges don't overlap.
-    for face in pdfcraft_fonts::ui_arabic_fonts() {
+    // Arabic-script faces (file names, document titles) and Telugu faces (the Telugu interface,
+    // file names) after the CJK ones; the ranges don't overlap.
+    for face in pdfcraft_fonts::ui_arabic_fonts().into_iter().chain(pdfcraft_fonts::ui_telugu_fonts()) {
         let name = face.name();
         if !fonts.font_data.contains_key(&name) {
             add(&mut fonts, &name, face.bytes);

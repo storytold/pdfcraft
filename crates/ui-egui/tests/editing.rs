@@ -4,7 +4,7 @@
 use egui::accesskit::Role;
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::{CloseRequest, PdfCraftApp};
 
@@ -37,6 +37,7 @@ fn fixture(n: usize) -> Vec<u8> {
 fn harness(pages: usize, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, fixture(pages)).expect("fixture opens");
         setup(&mut app);
         app
@@ -387,6 +388,119 @@ fn quitting_with_unsaved_changes_asks_for_each_document() {
     assert!(h.state().close_request.is_none());
 }
 
+/// PDFs written to a fresh temp folder, removed when the test ends.
+struct TempPdfs(std::path::PathBuf);
+
+impl TempPdfs {
+    fn new(test: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-session-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    fn file(&self, name: &str, pages: usize) -> String {
+        let path = self.0.join(name);
+        std::fs::write(&path, fixture(pages)).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+}
+
+impl Drop for TempPdfs {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The app with Preferences ▸ Reopen the files that were open when PdfCraft last closed on.
+fn session_harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.reopen_last_session = true;
+        setup(&mut app);
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+fn open_paths(app: &PdfCraftApp) -> Vec<String> {
+    app.views.iter().map(|v| app.session.get(v.id).and_then(|d| d.path.clone()).unwrap_or_default()).collect()
+}
+
+#[test]
+fn the_last_session_reopens_its_files_pages_and_active_tab() {
+    let dir = TempPdfs::new("reopen");
+    let files = [dir.file("a.pdf", 1), dir.file("b.pdf", 5), dir.file("c.pdf", 2)];
+    let opened = files.clone();
+    let mut h = session_harness(move |app| opened.iter().for_each(|f| app.open_path(f)));
+    h.state_mut().views[1].go_to_page(3);
+    h.state_mut().active = Some(1);
+    h.run_steps(4);
+    assert_eq!(h.state().views[1].current, 3, "b.pdf shows page 4");
+    let settings = h.state().persist();
+    let mut h = session_harness(move |app| {
+        app.restore(&settings);
+        app.reopen_last_files(&[]);
+    });
+    h.run_steps(4);
+    let app = h.state();
+    assert_eq!(open_paths(app), files, "the same files, in the same order");
+    assert_eq!(app.active, Some(1), "b.pdf is in front again");
+    assert_eq!(app.views[1].current, 3, "at the page it showed");
+}
+
+#[test]
+fn quitting_with_unsaved_changes_still_remembers_every_file() {
+    let dir = TempPdfs::new("quit");
+    let files = [dir.file("a.pdf", 1), dir.file("b.pdf", 1)];
+    let opened = files.clone();
+    let mut h = session_harness(move |app| opened.iter().for_each(|f| app.open_path(f)));
+    for tab in 0..2 {
+        h.state_mut().active = Some(tab);
+        h.state_mut().views[tab].select_pages(&[0]);
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    }
+    h.state_mut().active = Some(1);
+    h.state_mut().close_request = Some(CloseRequest::Quit);
+    h.run_steps(3);
+    // Each unsaved tab closes as it is answered, before PdfCraft quits.
+    for _ in 0..2 {
+        h.get_by_label("Don't save").click();
+        h.run_steps(3);
+    }
+    assert!(h.state().views.is_empty());
+    let mut app = PdfCraftApp::new();
+    app.restore(&h.state().persist());
+    app.reopen_last_files(&[]);
+    assert_eq!(open_paths(&app), files, "both files come back");
+    assert_eq!(app.active, Some(1), "with b.pdf in front, as when the quit began");
+}
+
+#[test]
+fn the_last_session_is_off_by_default_and_skips_missing_and_duplicate_files() {
+    let dir = TempPdfs::new("skip");
+    let (a, b) = (dir.file("a.pdf", 1), dir.file("b.pdf", 1));
+    let mut app = PdfCraftApp::new();
+    app.open_path(&a);
+    app.open_path(&b);
+    let off: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
+    assert!(off["last_session"].is_null(), "nothing is kept while the preference is off");
+    app.reopen_last_session = true;
+    let settings = app.persist();
+    let mut later = PdfCraftApp::new();
+    later.restore(&settings);
+    later.reopen_last_session = false;
+    later.reopen_last_files(&[]);
+    assert!(later.views.is_empty(), "turned off again: nothing reopens");
+    // b.pdf is gone, and a.pdf is about to open from the command line.
+    std::fs::remove_file(&b).unwrap();
+    let mut later = PdfCraftApp::new();
+    later.restore(&settings);
+    later.reopen_last_files(&[a]);
+    assert!(later.views.is_empty(), "neither opens from the session");
+}
+
 #[test]
 fn save_prompt_stays_inside_the_screen_for_a_long_filename() {
     // Issue #161: an unwrapped title carrying a long filename widened the centered modal past
@@ -395,6 +509,7 @@ fn save_prompt_stays_inside_the_screen_for_a_long_filename() {
                 Vliek, Ed Sutherland, -- 5, 2024 -- McGraw-Hill Education (UK) Ltd -- isbn13 97815268.pdf";
     let mut h = Harness::builder().with_size(egui::vec2(1365.0, 719.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes(name, None, fixture(1)).expect("fixture opens");
         app.close_request = Some(CloseRequest::Tab(app.views[0].id));
         app
@@ -408,6 +523,47 @@ fn save_prompt_stays_inside_the_screen_for_a_long_filename() {
     for button in ["Save", "Cancel", "Don't save"] {
         let rect = h.get_by_label(button).rect();
         assert!(inside(rect), "the {button} button rect {rect:?} leaves the screen");
+    }
+}
+
+#[test]
+fn save_prompt_fits_the_smallest_window_whatever_the_name() {
+    // Issue #236: wrapping (#161) kept the prompt narrow, but a long enough name still grew it
+    // taller than the window and pushed the buttons off-screen. On the web a `?file=` URL names
+    // the document, so the name has no length limit. Long names now give way in the middle.
+    let names = [
+        format!("{}.pdf", "a".repeat(400)),
+        format!("{}.pdf", "Quarterly_Report_FY2026_Final_v3_".repeat(12)),
+        format!("{}.pdf", "รายงานประจำปีงบประมาณ".repeat(15)),
+        format!("{}.pdf", "年".repeat(251)),
+        format!("{}.pdf", "W".repeat(2000)),
+    ];
+    // The desktop window's minimum inner size (apps/pdfcraft/src/main.rs).
+    let size = egui::vec2(820.0, 520.0);
+    for name in names {
+        let start: String = name.chars().take(10).collect();
+        let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes(&name, None, fixture(1)).expect("fixture opens");
+            app.close_request = Some(CloseRequest::Tab(app.views[0].id));
+            app
+        });
+        h.run_steps(4);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let inside = |r: egui::Rect| screen.contains(r.min) && screen.contains(r.max);
+        let title = h.get_by_label_contains("Save changes to");
+        let title_rect = title.rect();
+        assert!(inside(title_rect), "{start}…: the title rect {title_rect:?} leaves the screen");
+        let opening = format!("Save changes to “{start}");
+        assert!(
+            h.query_by(|n| n.value().is_some_and(|l| l.starts_with(&opening) && l.contains('…') && l.contains(".pdf” before closing?"))).is_some(),
+            "{start}…: the title keeps the start and the extension"
+        );
+        for button in ["Save", "Cancel", "Don't save"] {
+            let rect = h.get_by_label(button).rect();
+            assert!(inside(rect), "{start}…: the {button} button rect {rect:?} leaves the screen");
+        }
     }
 }
 
@@ -507,13 +663,20 @@ fn combine_files_takes_chosen_pages_in_the_order_listed() {
         app.use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("one.pdf".into(), fixture(3)), ("two.pdf".into(), fixture(2))]);
     });
     h.run_steps(3);
-    h.get_by_label_contains("Files are combined in this order");
-    h.get_by_label("3 pages");
-    // two.pdf first; one.pdf's pages 3 and 1.
-    h.get_all_by_label("Move up").last().unwrap().click();
+    h.get_by_label_contains("Files are combined from top to bottom");
+    // Nothing is selected yet: the toolbar's Move up is there but disabled.
+    assert!(h.get_by_label("Move up").accesskit_node().is_disabled());
+    // Select two.pdf with the keyboard and move it up: two.pdf first; one.pdf's pages 3 and 1.
+    h.key_press(Key::ArrowUp);
     h.run_steps(2);
+    assert_eq!(h.state().combine_selection(), [1]);
+    h.get_by_label("Move up").click();
+    h.run_steps(2);
+    assert_eq!(h.state().combine_draft[0].name, "two.pdf");
+    assert_eq!(h.state().combine_selection(), [0], "the selection follows the moved file");
     h.state_mut().combine_draft[1].range = "3, 1".into();
-    h.run_steps(1);
+    h.run_steps(2);
+    h.get_by_label("2 of 3");
     h.get_by_label("Combine").click();
     h.run_steps(3);
     let app = h.state();
@@ -521,6 +684,406 @@ fn combine_files_takes_chosen_pages_in_the_order_listed() {
     let doc = app.session.get(app.views[1].id).unwrap();
     assert_eq!(doc.info.outline.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(), ["two", "one"]);
     assert!(app.combine_draft.is_empty());
+    assert!(!app.combine_tab.open, "the tab makes way for the result");
+}
+
+#[test]
+fn combine_files_opens_in_its_own_tab() {
+    let mut h = harness(1, |_| {});
+    h.state_mut().execute("page.combine");
+    h.run_steps(3);
+    assert!(h.state().combine_showing() && h.state().active.is_none());
+    h.get_by_label("Add the PDFs to combine");
+    // Back to the document, then to Combine through its tab.
+    h.get_by_label("doc.pdf").click();
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(0));
+    assert!(!h.state().combine_showing() && h.state().combine_tab.open);
+    // The tab, in the tab strip (All tools lists Combine files too).
+    h.get_all_by_label("Combine files").find(|n| n.rect().top() < 40.0).unwrap().click();
+    h.run_steps(3);
+    assert!(h.state().combine_showing());
+    // Home hides it too.
+    h.get_by_label("Home").click();
+    h.run_steps(3);
+    assert!(!h.state().combine_showing() && h.state().combine_tab.open);
+}
+
+#[test]
+fn closing_the_combine_tab_forgets_its_list() {
+    let mut h = harness(1, |app| {
+        app.use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("one.pdf".into(), fixture(1))]);
+    });
+    h.run_steps(3);
+    assert!(h.state().combine_showing());
+    h.state_mut().close_combine_tab();
+    h.run_steps(3);
+    let app = h.state();
+    assert!(app.combine_draft.is_empty() && !app.combine_tab.open);
+    assert_eq!(app.active, Some(0), "the document next to it shows");
+}
+
+#[test]
+fn combine_lists_size_and_warns_before_combining() {
+    let mut h = harness(1, |app| {
+        app.use_files(
+            pdfcraft_ui_egui::FilePurpose::Combine,
+            vec![
+                ("one.pdf".into(), fixture(3)),
+                ("locked.pdf".into(), protected("", "owner", -1 ^ 1024 ^ 8)),
+                ("secret.pdf".into(), protected("pw", "owner", -1)),
+            ],
+        );
+    });
+    h.run_steps(3);
+    h.get_by_label("File name");
+    h.get_by_label("Warnings");
+    h.get_by_label("Its security settings don't allow copying pages");
+    h.get_by_label("Password-protected");
+    h.get_by_label("2 files need attention");
+    assert!(h.get_by_label("Combine").accesskit_node().is_disabled());
+    // Removing them (Delete on the selection) lets Combine run.
+    for _ in 0..2 {
+        h.state_mut().select_combine_rows(&[1]);
+        h.key_press(Key::Delete);
+        h.run_steps(2);
+    }
+    assert_eq!(h.state().combine_draft.len(), 1);
+    h.get_by_label_contains("1 file · 3 pages");
+}
+
+#[test]
+fn a_bad_range_stops_combine_until_fixed() {
+    let mut h = harness(1, |app| {
+        app.use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("one.pdf".into(), fixture(3)), ("two.pdf".into(), fixture(2))]);
+    });
+    h.run_steps(3);
+    h.get_by_label_contains("2 files · 5 pages");
+    h.state_mut().combine_draft[0].range = "1-99".into();
+    h.run_steps(2);
+    h.get_by_label("1 file needs attention");
+    assert!(h.get_by_label("Combine").accesskit_node().is_disabled());
+    h.state_mut().combine_draft[0].range = "2-3".into();
+    h.run_steps(2);
+    h.get_by_label_contains("2 files · 4 pages");
+    assert!(!h.get_by_label("Combine").accesskit_node().is_disabled());
+}
+
+#[test]
+fn alt_arrows_move_the_selected_file() {
+    let mut h = harness(1, |app| {
+        app.use_files(
+            pdfcraft_ui_egui::FilePurpose::Combine,
+            vec![("a.pdf".into(), fixture(1)), ("b.pdf".into(), fixture(1)), ("c.pdf".into(), fixture(1))],
+        );
+    });
+    h.run_steps(3);
+    h.key_press(Key::ArrowDown);
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowDown);
+    h.run_steps(2);
+    let names: Vec<_> = h.state().combine_draft.iter().map(|f| f.name.clone()).collect();
+    assert_eq!(names, ["b.pdf", "a.pdf", "c.pdf"]);
+    assert_eq!(h.state().combine_selection(), [1]);
+}
+
+fn combine_names(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
+    h.state().combine_draft.iter().map(|f| f.name.clone()).collect()
+}
+
+fn combine_of(names: &[(&str, usize)]) -> Harness<'static, PdfCraftApp> {
+    let files: Vec<(String, Vec<u8>)> = names.iter().map(|(n, p)| (n.to_string(), fixture(*p))).collect();
+    let mut h = harness(1, move |app| app.use_files(pdfcraft_ui_egui::FilePurpose::Combine, files));
+    h.run_steps(3);
+    h
+}
+
+#[test]
+fn column_headings_sort_the_list_and_flip_on_the_second_click() {
+    let mut h = combine_of(&[("scan10.pdf", 1), ("Scan2.pdf", 3), ("a.pdf", 2)]);
+    h.get_by_label("File name").click();
+    h.run_steps(2);
+    assert_eq!(combine_names(&h), ["a.pdf", "Scan2.pdf", "scan10.pdf"], "case-insensitive, numbers by value");
+    h.get_by_label("File name, sorted ascending").click();
+    h.run_steps(2);
+    assert_eq!(combine_names(&h), ["scan10.pdf", "Scan2.pdf", "a.pdf"]);
+    h.get_by_label("Pages").click();
+    h.run_steps(2);
+    assert_eq!(combine_names(&h), ["scan10.pdf", "a.pdf", "Scan2.pdf"]);
+    // Moving a file by hand ends the sorted order.
+    h.state_mut().select_combine_rows(&[2]);
+    h.get_by_label("Move up").click();
+    h.run_steps(2);
+    assert_eq!(h.state().combine_tab.sort, None);
+    h.get_by_label("Pages");
+}
+
+#[test]
+fn ctrl_and_shift_clicks_select_several_files_that_move_and_go_together() {
+    let mut h = combine_of(&[("a.pdf", 1), ("b.pdf", 1), ("c.pdf", 1), ("d.pdf", 1), ("e.pdf", 1)]);
+    h.get_by_label("b.pdf").click();
+    h.run_steps(1);
+    h.get_by_label("d.pdf").click_modifiers(Modifiers::SHIFT);
+    h.run_steps(1);
+    assert_eq!(h.state().combine_selection(), [1, 2, 3]);
+    h.get_by_label("c.pdf").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(1);
+    assert_eq!(h.state().combine_selection(), [1, 3], "Ctrl/⌘ toggles one file");
+    h.get_by_label("2 selected");
+    h.get_by_label("Move up").click();
+    h.run_steps(2);
+    assert_eq!(combine_names(&h), ["b.pdf", "a.pdf", "d.pdf", "c.pdf", "e.pdf"]);
+    h.get_by_label("Remove 2 files").click();
+    h.run_steps(2);
+    assert_eq!(combine_names(&h), ["a.pdf", "c.pdf", "e.pdf"]);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(1);
+    assert_eq!(h.state().combine_selection(), [0, 1, 2]);
+}
+
+#[test]
+fn undo_and_redo_restore_the_combine_list() {
+    let mut h = combine_of(&[("a.pdf", 1), ("b.pdf", 1), ("c.pdf", 1)]);
+    h.state_mut().select_combine_rows(&[0, 2]);
+    h.key_press(Key::Delete);
+    h.run_steps(2);
+    assert_eq!(combine_names(&h), ["b.pdf"]);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(2);
+    assert_eq!(combine_names(&h), ["a.pdf", "b.pdf", "c.pdf"], "⌘Z brings the removed files back");
+    assert_eq!(h.state().combine_selection(), [0, 2], "…selected as they were");
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+    h.run_steps(2);
+    assert_eq!(combine_names(&h), ["b.pdf"]);
+    // The toolbar's buttons do the same; undo also reverses a sort and the files' addition.
+    h.get_by_label("Undo").click();
+    h.run_steps(2);
+    h.get_by_label("File name").click();
+    h.run_steps(2);
+    h.get_by_label("File name, sorted ascending").click();
+    h.run_steps(2);
+    assert_eq!(combine_names(&h), ["c.pdf", "b.pdf", "a.pdf"]);
+    h.get_by_label("Undo").click();
+    h.run_steps(2);
+    assert_eq!(combine_names(&h), ["a.pdf", "b.pdf", "c.pdf"]);
+    // A page range typed in is one step.
+    h.state_mut().combine_draft[0].range.clear();
+    let field = h.get_all_by_role(Role::TextInput).next().unwrap();
+    field.focus();
+    h.run_steps(1);
+    h.get_all_by_role(Role::TextInput).next().unwrap().type_text("1");
+    h.run_steps(2);
+    assert_eq!(h.state().combine_draft[0].range, "1");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(2);
+    assert_eq!(h.state().combine_draft[0].range, "");
+    // The document's own history is untouched: it has nothing to undo.
+    h.get_by_label("doc.pdf").click();
+    h.run_steps(2);
+    assert!(h.state().session.get(h.state().views[0].id).unwrap().can_undo().is_none());
+}
+
+#[test]
+fn protected_files_that_can_be_combined_are_flagged() {
+    let mut h = harness(1, |app| {
+        app.use_files(
+            pdfcraft_ui_egui::FilePurpose::Combine,
+            vec![("one.pdf".into(), fixture(1)), ("no-copy.pdf".into(), protected("", "owner", -1 ^ 16))],
+        );
+    });
+    h.run_steps(3);
+    let app = h.state();
+    assert!(app.combine_draft[1].problem.is_none(), "copying text is withheld, assembling pages isn't");
+    h.get_by_label("Protected: the combined file won't keep its security settings");
+    assert!(!h.get_by_label("Combine").accesskit_node().is_disabled(), "a warning, not a blocker");
+}
+
+#[test]
+fn the_whole_heading_sorts_and_dragging_it_moves_the_column() {
+    let mut h = combine_of(&[("b.pdf", 1), ("a.pdf", 3)]);
+    // A click in the empty right part of the heading cell, away from its text.
+    let cell = h.get_by_label("File name").rect();
+    let spot = egui::pos2(cell.right() - 30.0, cell.center().y);
+    h.hover_at(spot);
+    h.run_steps(1);
+    h.drag_at(spot);
+    h.run_steps(1);
+    h.drop_at(spot);
+    h.run_steps(2);
+    assert_eq!(combine_names(&h), ["a.pdf", "b.pdf"]);
+    // Drag Size before File name.
+    let size = h.get_by_label("Size").rect().center();
+    let name = h.get_by_label("File name, sorted ascending").rect();
+    drag(&mut h, size, egui::pos2(name.left() + 10.0, name.center().y));
+    use pdfcraft_ui_egui::SortKey::*;
+    assert_eq!(h.state().combine_columns.order, [Size, Name, Pages, Modified, Warnings]);
+    assert_eq!(combine_names(&h), ["a.pdf", "b.pdf"], "moving a column doesn't sort");
+    let (size, name) = (h.get_by_label("Size").rect(), h.get_by_label("File name, sorted ascending").rect());
+    assert!(size.left() < name.left(), "Size now shows first");
+}
+
+#[test]
+fn columns_resize_and_the_layout_is_kept_in_the_settings() {
+    let mut h = combine_of(&[("a.pdf", 1), ("b.pdf", 1)]);
+    let size = h.get_by_label("Size").rect();
+    // The separator after Size: drag it right by 60 points.
+    let edge = egui::pos2(size.right() + 2.0, size.center().y);
+    drag(&mut h, edge, edge + egui::vec2(60.0, 0.0));
+    let widths = h.state().combine_columns.widths.expect("a resized column keeps its width");
+    let size_index = pdfcraft_ui_egui::SortKey::Size as usize;
+    assert!(widths[size_index] > 120.0, "{widths:?}");
+    let saved = h.state().persist();
+    let mut fresh = PdfCraftApp::new();
+    fresh.set_option("language", "en").unwrap();
+    fresh.restore(&saved);
+    assert_eq!(fresh.combine_columns, h.state().combine_columns);
+    // Malformed settings give the default layout.
+    fresh.restore(r#"{"combine_columns":{"order":["size","size"],"widths":[1,2]}}"#);
+    assert_eq!(fresh.combine_columns, Default::default());
+}
+
+#[test]
+fn a_folder_adds_its_pdfs_in_order_and_optionally_its_subfolders() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-combine-folder-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    for (name, pages) in [("page10.pdf", 1), ("page2.PDF", 2), ("sub/inner.pdf", 3)] {
+        std::fs::write(dir.join(name), fixture(pages)).unwrap();
+    }
+    std::fs::write(dir.join("notes.txt"), b"not a pdf").unwrap();
+    let mut h = harness(1, |_| {});
+    h.state_mut().execute("page.combine");
+    h.run_steps(2);
+    h.state_mut().pick_override = Some(vec![dir.to_string_lossy().into_owned()]);
+    h.get_by_label("Add folder…").click();
+    h.run_steps(4);
+    assert_eq!(combine_names(&h), ["page2.PDF", "page10.pdf"], "PDFs only, numbers by value");
+    // The toolbar's menu: the folder and its subfolders, as one undo step.
+    h.get_by_label("More ways to add files").click();
+    h.run_steps(2);
+    h.get_by_label("Add folder and subfolders…").click();
+    h.run_steps(4);
+    assert_eq!(combine_names(&h), ["page2.PDF", "page10.pdf", "page2.PDF", "page10.pdf", "inner.pdf"]);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(2);
+    assert_eq!(combine_names(&h).len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn type_password(h: &mut Harness<'static, PdfCraftApp>, password: &str) {
+    let field = h.get_by_role(Role::PasswordInput);
+    field.focus();
+    field.type_text(password);
+    h.run_steps(1);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+}
+
+#[test]
+fn a_password_protected_file_is_unlocked_with_its_password_and_combined() {
+    let mut h = combine_of(&[("one.pdf", 1)]);
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("secret.pdf".into(), protected("pw", "owner", -1))]);
+    h.run_steps(3);
+    h.get_by_label("Password-protected");
+    assert!(h.get_by_label("Combine").accesskit_node().is_disabled());
+    // The row's link (the toolbar's Unlock… comes first).
+    h.get_all_by_label("Unlock…").last().unwrap().click();
+    h.run_steps(3);
+    h.get_by_label("Unlock secret.pdf");
+    type_password(&mut h, "nope");
+    h.get_by_label("Wrong password");
+    assert!(h.state().combine_draft[1].lock.is_some());
+    // The box stays open for another try.
+    let field = h.get_by_role(Role::PasswordInput);
+    field.focus();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(1);
+    type_password(&mut h, "pw");
+    let f = &h.state().combine_draft[1];
+    assert!(f.lock.is_none() && f.problem.is_none());
+    assert_eq!(f.pages, 2);
+    h.get_by_label("Unlocked: the combined file won't be password-protected");
+    // Never printed: debug output ends up in logs.
+    assert!(!format!("{:?} {:?}", h.state().combine_draft, h.state().combine_tab).contains("pw\""));
+    h.get_by_label("Combine").click();
+    h.run_steps(3);
+    assert_eq!(texts_of(h.state(), 1), ["Page 1", "Page 1", "Page 2"]);
+}
+
+#[test]
+fn one_password_unlocks_several_selected_files_and_undo_locks_them_again() {
+    let mut h = combine_of(&[("one.pdf", 1)]);
+    h.state_mut().use_files(
+        pdfcraft_ui_egui::FilePurpose::Combine,
+        vec![
+            ("a.pdf".into(), protected("same", "o1", -1)),
+            ("b.pdf".into(), protected("same", "o2", -1)),
+            ("c.pdf".into(), protected("other", "o3", -1)),
+        ],
+    );
+    h.run_steps(3);
+    h.state_mut().select_combine_rows(&[1, 2, 3]);
+    h.run_steps(1);
+    h.get_all_by_label("Unlock…").next().unwrap().click(); // the toolbar's (the rows' links come after it)
+    h.run_steps(3);
+    h.get_by_label("Unlock 3 files");
+    type_password(&mut h, "same");
+    let locked: Vec<bool> = h.state().combine_draft.iter().map(|f| f.lock.is_some()).collect();
+    assert_eq!(locked, [false, false, false, true]);
+    h.get_by_label_contains("Unlocked 2 of 3 files");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(2);
+    assert!(h.state().combine_draft[1..].iter().all(|f| f.lock.is_some()), "undo locks them again");
+}
+
+#[test]
+fn a_file_that_opens_but_forbids_combining_takes_the_permissions_password() {
+    let mut h = combine_of(&[("one.pdf", 1)]);
+    // Opens with "pw"; only the owner may assemble pages.
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("both.pdf".into(), protected("pw", "owner", -1 ^ 1024 ^ 8))]);
+    h.run_steps(3);
+    assert!(h.state_mut().combine_unlock_rows(&[1], "pw"));
+    h.run_steps(2);
+    assert_eq!(h.state().combine_draft[1].lock, Some(pdfcraft_ui_egui::CombineLock::Permissions));
+    h.get_by_label_contains("Enter the permissions password");
+    h.get_all_by_label("Unlock…").last().unwrap().click();
+    h.run_steps(3);
+    h.get_by_label("Enter the permissions password to allow combining");
+    type_password(&mut h, "owner");
+    assert!(h.state().combine_draft[1].lock.is_none());
+    assert!(!h.get_by_label("Combine").accesskit_node().is_disabled());
+}
+
+#[test]
+fn an_rc4_file_unlocks_with_its_owner_password_too() {
+    // The engine reads RC4 files with their owner password; the inspector may not, and the
+    // engine's answer is the one that counts.
+    let mut h = combine_of(&[("one.pdf", 1)]);
+    h.state_mut().use_files(
+        pdfcraft_ui_egui::FilePurpose::Combine,
+        vec![("rc4.pdf".into(), protected_with(pdfcraft_cos::Algorithm::Rc4_128, "user", "boss", -1))],
+    );
+    h.run_steps(3);
+    assert!(h.state_mut().combine_unlock_rows(&[1], "boss"));
+    let f = &h.state().combine_draft[1];
+    assert!(f.lock.is_none());
+    assert_eq!(f.pages, 2);
+}
+
+#[test]
+fn open_documents_can_be_added_to_combine() {
+    let mut h = harness(2, |_| {});
+    h.state_mut().execute("page.combine");
+    h.run_steps(3);
+    h.get_by_label("Add open documents").click();
+    h.run_steps(2);
+    // The menu's entry, after the tab of the same name.
+    h.get_all_by_label("doc.pdf").last().unwrap().click();
+    h.run_steps(3);
+    let app = h.state();
+    assert_eq!(app.combine_draft.len(), 1);
+    assert_eq!(app.combine_draft[0].pages, 2);
+    assert!(app.combine_showing());
 }
 
 #[test]
@@ -553,6 +1116,133 @@ fn inserting_a_file_goes_after_the_selection_and_undoes() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(3);
     assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 2"]);
+}
+
+#[test]
+fn plus_between_pages_inserts_picked_files_there_in_order() {
+    let dir = temp_path("insert-gap");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (extra, note) = (dir.join("extra.pdf"), dir.join("note.txt"));
+    std::fs::write(&extra, fixture(2)).unwrap();
+    std::fs::write(&note, "a note").unwrap();
+    let mut h = organize(3);
+    // Page 3 is selected, yet the files go where the "+" is: between pages 1 and 2.
+    h.get_by_label("Page 3").click();
+    h.run_steps(2);
+    h.state_mut().pick_override = Some(vec![extra.to_string_lossy().into_owned(), note.to_string_lossy().into_owned()]);
+    h.get_by_label("Insert a file before page 2").click();
+    h.run_steps(4);
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 1", "Page 2", "a note", "Page 2", "Page 3"]);
+    assert_eq!(picked(&h), [1, 2, 3], "the inserted pages are selected");
+    // Each file is one undo step.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 2", "Page 3"]);
+    // Both ends.
+    h.state_mut().pick_override = Some(vec![note.to_string_lossy().into_owned()]);
+    h.get_by_label("Insert a file before page 1").click();
+    h.run_steps(4);
+    h.get_by_label("Insert a file at the end").click();
+    h.run_steps(4);
+    assert_eq!(texts_of(h.state(), 0), ["a note", "Page 1", "Page 2", "Page 3", "a note"]);
+    // The toolbar button still inserts after the selection, not at the last "+" used.
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.get_by_label("Insert pages from a file…").click();
+    h.run_steps(4);
+    assert_eq!(texts_of(h.state(), 0), ["a note", "Page 1", "a note", "Page 2", "Page 3", "a note"]);
+    // A file that can't be converted changes nothing.
+    let before = texts_of(h.state(), 0);
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::InsertPages, vec![("report.docx".into(), b"PK\x03\x04".to_vec())]);
+    h.run_steps(2);
+    assert_eq!(texts_of(h.state(), 0), before);
+}
+
+/// A file dropped on the window, as the windowing layer hands it over.
+#[derive(Debug)]
+struct Dropped(&'static str, Vec<u8>);
+
+impl egui::DroppedFile for Dropped {
+    fn path(&self) -> &std::path::Path {
+        std::path::Path::new(self.0)
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        Ok(self.1.clone())
+    }
+}
+
+fn drop_files(h: &mut Harness<'static, PdfCraftApp>, files: Vec<Dropped>) {
+    for f in files {
+        h.input_mut().dropped_files.push(std::sync::Arc::new(f));
+    }
+}
+
+#[test]
+fn files_dropped_between_pages_are_inserted_there() {
+    let mut h = organize(3);
+    // Over the gap between pages 1 and 2.
+    let gap = h.get_by_label("Insert a file before page 2").rect().center();
+    h.hover_at(gap + egui::vec2(0.0, 40.0));
+    h.run_steps(2);
+    drop_files(&mut h, vec![Dropped("extra.pdf", fixture(2)), Dropped("note.txt", b"a note".to_vec())]);
+    h.run_steps(4);
+    assert_eq!(h.state().views.len(), 1, "dropped files are not opened as documents");
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 1", "Page 2", "a note", "Page 2", "Page 3"]);
+    assert_eq!(picked(&h), [1, 2, 3], "the inserted pages are selected");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 2", "Page 3"]);
+    // Right of the last page: the end.
+    let last = h.get_by_label("Page 3").rect();
+    h.hover_at(last.center() + egui::vec2(last.width() * 0.4, 0.0));
+    h.run_steps(2);
+    drop_files(&mut h, vec![Dropped("note.txt", b"a note".to_vec())]);
+    h.run_steps(4);
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 2", "Page 3", "a note"]);
+}
+
+#[test]
+fn files_dropped_before_the_pointer_is_known_wait_for_it() {
+    // Some platforms don't report the pointer while files are dragged over the window.
+    let mut h = organize(2);
+    drop_files(&mut h, vec![Dropped("note.txt", b"a note".to_vec())]);
+    h.run_steps(1);
+    assert_eq!(texts_of(h.state(), 0).len(), 2, "not placed yet");
+    let gap = h.get_by_label("Insert a file before page 2").rect().center();
+    h.hover_at(gap + egui::vec2(0.0, 40.0));
+    h.run_steps(3);
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "a note", "Page 2"]);
+}
+
+#[test]
+fn files_dropped_outside_the_page_grid_still_open_as_documents() {
+    let mut h = harness(2, |_| {});
+    drop_files(&mut h, vec![Dropped("other.pdf", fixture(1))]);
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 2);
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 2"]);
+}
+
+#[test]
+fn save_pages_writes_what_the_grid_shows() {
+    let path = temp_path("grid-save.pdf");
+    let mut h = organize(3);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.key_press(Key::Delete);
+    h.run_steps(3);
+    h.state_mut().save_override = Some(path.to_string_lossy().into_owned());
+    h.get_by_label("Save pages").click();
+    h.run_steps(4);
+    assert!(!dirty(&h));
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("saved.pdf", None, std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(texts_of(&app, 0), ["Page 1", "Page 3"]);
 }
 
 #[test]
@@ -601,9 +1291,13 @@ fn split_before_selected_pages() {
 // ── Encrypted documents ───────────────────────────────────────────────────────────────────────
 
 fn protected(user: &str, owner: &str, permissions: i32) -> Vec<u8> {
+    protected_with(pdfcraft_cos::Algorithm::Aes256, user, owner, permissions)
+}
+
+fn protected_with(algorithm: pdfcraft_cos::Algorithm, user: &str, owner: &str, permissions: i32) -> Vec<u8> {
     let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(2))).unwrap();
     doc.set_encryption(&pdfcraft_cos::NewEncryption {
-        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        algorithm,
         user_password: user,
         owner_password: owner,
         permissions,
@@ -618,6 +1312,7 @@ fn protected(user: &str, owner: &str, permissions: i32) -> Vec<u8> {
 fn password_prompt_opens_and_security_tab_reports_the_details() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("secret.pdf", None, protected("pw", "owner", -1)).unwrap();
         app
     });
@@ -642,6 +1337,7 @@ fn password_prompt_opens_and_security_tab_reports_the_details() {
 fn restricted_documents_show_a_notice_and_block_page_changes() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("locked.pdf", None, protected("", "owner", 0b0100)).unwrap(); // opens without a password
         app.set_option("organize", "on").unwrap();
         app
@@ -654,6 +1350,7 @@ fn restricted_documents_show_a_notice_and_block_page_changes() {
     h.key_press(Key::Delete);
     h.run_steps(3);
     assert_eq!(texts_of(h.state(), 0).len(), 2, "page changes are blocked");
+    assert_eq!(h.query_all_by_label_contains("Insert a file").count(), 0, "nothing to insert into");
     assert!(!dirty(&h));
     h.get_by_label("Security settings").click();
     h.run_steps(3);
@@ -663,6 +1360,7 @@ fn restricted_documents_show_a_notice_and_block_page_changes() {
 #[test]
 fn replace_pages_dialog_swaps_page_content() {
     let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
     app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
     app.views[0].select_pages(&[1]);
     app.start_replace("other.pdf".into(), fixture(5));
@@ -788,6 +1486,7 @@ fn source_font_fixture() -> Vec<u8> {
 fn open_source_font_fixture() -> Harness<'static, PdfCraftApp> {
     Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("fonts.pdf", None, source_font_fixture()).expect("font fixture opens");
         app
     })
@@ -888,6 +1587,7 @@ fn double_drawn() -> Vec<u8> {
 fn editing_a_double_drawn_line_replaces_every_copy() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("bold.pdf", None, double_drawn()).expect("opens");
         app
     });
@@ -918,9 +1618,36 @@ fn editing_existing_images_on_the_page() {
     // A page made from a 40 × 20 image (at 72 dpi: a 40 × 20 pt page filled by it).
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    check_existing_artwork("picture.png", png);
+}
+
+#[test]
+fn editing_existing_form_artwork_on_the_page() {
+    use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_incremental};
+    let mut doc = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&doc)[0].clone();
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 200, 300].map(Object::Int).to_vec()));
+    let artwork = doc.add(Object::Stream(Stream::flate(form, b"0.2 0.5 0.9 rg 20 20 160 260 re f")));
+    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), b"/Figure Do")));
+    doc.update_dict(page.obj, |d| {
+        d.set(b"Contents".to_vec(), Object::Ref(contents));
+        let mut xo = Dict::new();
+        xo.set(b"Figure".to_vec(), Object::Ref(artwork));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xo));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    check_existing_artwork("figure.pdf", write_incremental(&doc, &SaveOptions::default()).unwrap());
+}
+
+fn check_existing_artwork(name: &'static str, bytes: Vec<u8>) {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
-        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app.set_option("language", "en").unwrap();
+        app.open_bytes(name, None, bytes.clone()).expect("opens");
         app
     });
     h.run_steps(4);
@@ -1041,10 +1768,67 @@ fn dragging_a_paragraph_moves_it_and_its_edge_rewraps_it() {
     assert!(h.state().views[0].line_editor.is_none());
 }
 
+/// A quick flick: press at `from`, and the next frame already finds the pointer at `to`.
+fn flick(h: &mut Harness<'static, PdfCraftApp>, from: egui::Pos2, to: egui::Pos2) {
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    h.hover_at(to);
+    h.run_steps(1);
+    h.drop_at(to);
+    h.run_steps(4);
+}
+
+#[test]
+fn a_quick_flick_on_either_edge_rewraps_the_paragraph() {
+    let mut h = harness(1, |_| {});
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let lines = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_lines(0)
+    };
+    let block = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(0)[0].clone()
+    };
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
+    let near = |a: f64, b: f64| (a - b).abs() < 1.5;
+    // Grab edges near the box's top: a rewrapped box reaches the window's bottom, where the
+    // tool's toast sits over the page and takes the press.
+    let grip_y = |b: &pdfcraft_engine::TextBlock| b.rect[3] - 6.0;
+    // Narrow "Page 1" from its right edge to about 45 pt: it rewraps onto two lines.
+    let b = block(&h);
+    let edge = screen(b.rect[2], grip_y(&b)) + egui::vec2(2.0, 0.0);
+    flick(&mut h, edge, edge - egui::vec2((b.rect[2] - b.rect[0] - 45.0) as f32 * k, 0.0));
+    let text: Vec<String> = lines(&h).iter().map(|l| l.text.clone()).collect();
+    assert_eq!(text, ["Page", "1"], "narrowed from the right edge");
+    // Flick the right edge outward, past the box and its handle: back onto one line.
+    let b = block(&h);
+    let edge = screen(b.rect[2], grip_y(&b)) + egui::vec2(2.0, 0.0);
+    flick(&mut h, edge, edge + egui::vec2(80.0 * k, 0.0));
+    let text: Vec<String> = lines(&h).iter().map(|l| l.text.clone()).collect();
+    assert_eq!(text, ["Page 1"], "widened by a fast drag that left the handle at once");
+    // Flick the left edge inward: it rewraps and its left side follows the pointer.
+    let b = block(&h);
+    let edge = screen(b.rect[0], grip_y(&b)) - egui::vec2(2.0, 0.0);
+    let inward = (b.rect[2] - b.rect[0] - 45.0) as f32;
+    flick(&mut h, edge, edge + egui::vec2(inward * k, 0.0));
+    let after = lines(&h);
+    let text: Vec<String> = after.iter().map(|l| l.text.clone()).collect();
+    assert_eq!(text, ["Page", "1"], "narrowed from the left edge");
+    assert!(near(after[0].rect[0], b.rect[0] + inward as f64), "{:?} → {:?}", b.rect, after[0].rect);
+    assert!(h.state().views[0].line_editor.is_none());
+}
+
 /// The Pages panel, in a window tall enough to show every thumbnail of a short fixture.
 fn pages_panel(pages: usize) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, fixture(pages)).expect("fixture opens");
         app.set_option("panel", "pages").unwrap();
         app

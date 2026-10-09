@@ -21,6 +21,8 @@ pub struct Block {
     pub size: f64,
     pub bold: bool,
     pub italic: bool,
+    /// Text fill colour as sRGB components in 0..=1 (black when unknown).
+    pub color: [f64; 3],
 }
 
 /// An image of a page.
@@ -48,6 +50,8 @@ pub struct Cell {
     pub size: f64,
     pub bold: bool,
     pub italic: bool,
+    /// Text fill colour as sRGB components in 0..=1.
+    pub color: [f64; 3],
     pub span: usize,
 }
 
@@ -96,10 +100,11 @@ fn level(b: &Block, body: f64) -> u8 {
 
 /// How far two cell left edges may drift (points) and still be the same grid column.
 const COL_TOL: f64 = 4.0;
-/// More grid columns than this isn't a table. It also bounds a table's size: every row is
-/// materialized to all its columns, so a hostile page laid out as a staircase of blocks would
-/// otherwise make (blocks / 2)² cells.
-const MAX_COLS: usize = 64;
+/// More grid columns than this isn't a table. It is Word's limit: a .docx whose table has 64 or
+/// more columns doesn't open. It also bounds a table's size: every row is materialized to all
+/// its columns, so a hostile page laid out as a staircase of blocks would otherwise make
+/// (blocks / 2)² cells.
+const MAX_COLS: usize = 63;
 /// A cell is short: taller blocks are body text (or a multi-column layout), not table cells.
 fn is_cell_like(b: &Block) -> bool {
     (b.rect[3] - b.rect[1]) <= b.size * 5.0 && !b.text.trim().is_empty()
@@ -198,7 +203,7 @@ fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
                 let b = &blocks[bi];
                 let Some(slot) = edges.iter().position(|e| (*e - b.rect[0]).abs() <= COL_TOL) else { continue };
                 let span = edges[slot + 1..].iter().filter(|e| **e > b.rect[0] + COL_TOL && **e < b.rect[2] - COL_TOL).count() + 1;
-                let cell = Cell { text: b.text.trim().to_string(), size: b.size, bold: b.bold, italic: b.italic, span };
+                let cell = Cell { text: b.text.trim().to_string(), size: b.size, bold: b.bold, italic: b.italic, color: b.color, span };
                 match &mut slots[slot] {
                     Some(c) => {
                         c.text.push(' ');
@@ -219,7 +224,7 @@ fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
                     }
                     None => {
                         column += 1;
-                        materialized.push(Cell { text: String::new(), size: 11.0, bold: false, italic: false, span: 1 });
+                        materialized.push(Cell { text: String::new(), size: 11.0, bold: false, italic: false, color: [0.0; 3], span: 1 });
                     }
                 }
             }
@@ -360,9 +365,10 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                 if b.bold && lvl == 0 {
                     t = format!("<strong>{t}</strong>");
                 }
+                let style = hex(b.color).map_or(String::new(), |h| format!(" style=\"color:#{h}\""));
                 match lvl {
-                    0 => s.push_str(&format!("<p>{t}</p>\n")),
-                    l => s.push_str(&format!("<h{l}>{t}</h{l}>\n")),
+                    0 => s.push_str(&format!("<p{style}>{t}</p>\n")),
+                    l => s.push_str(&format!("<h{l}{style}>{t}</h{l}>\n")),
                 }
             }
             Item::Table(t) => {
@@ -378,7 +384,8 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                             body = format!("<strong>{body}</strong>");
                         }
                         let span = if c.span > 1 { format!(" colspan=\"{}\"", c.span) } else { String::new() };
-                        s.push_str(&format!("<td{span}>{body}</td>"));
+                        let style = hex(c.color).map_or(String::new(), |h| format!(" style=\"color:#{h}\""));
+                        s.push_str(&format!("<td{span}{style}>{body}</td>"));
                     }
                     s.push_str("</tr>\n");
                 }
@@ -395,14 +402,29 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
     s
 }
 
+/// A colour's 8-bit sRGB components (NaN and out-of-range values clamp; NaN reads as 0).
+fn rgb8(c: [f64; 3]) -> [u8; 3] {
+    // The value is clamped to 0..=255 before the cast, so it cannot truncate.
+    c.map(|v| if v.is_finite() { (v.clamp(0.0, 1.0) * 255.0).round() as u8 } else { 0 })
+}
+
+/// The colour as `RRGGBB`, or `None` for black (the default every format already uses).
+fn hex(c: [f64; 3]) -> Option<String> {
+    let [r, g, b] = rgb8(c);
+    (r | g | b != 0).then(|| format!("{r:02X}{g:02X}{b:02X}"))
+}
+
 /// A formatted text run (shared by paragraphs and table cells).
-fn run_xml(text: &str, size: f64, bold: bool, italic: bool) -> String {
+fn run_xml(text: &str, size: f64, bold: bool, italic: bool, color: [f64; 3]) -> String {
     let mut rpr = String::new();
     if bold {
         rpr.push_str("<w:b/>");
     }
     if italic {
         rpr.push_str("<w:i/>");
+    }
+    if let Some(h) = hex(color) {
+        rpr.push_str(&format!("<w:color w:val=\"{h}\"/>"));
     }
     let half_points = if size.is_finite() { (size * 2.0).round().clamp(2.0, 3276.0) as i64 } else { 24 };
     rpr.push_str(&format!("<w:sz w:val=\"{half_points}\"/>"));
@@ -439,7 +461,7 @@ fn docx_table(t: &Table) -> String {
             let w: i64 = widths.iter().take(c.span.min(widths.len())).sum();
             s.push_str(&format!(
                 "<w:tc><w:tcPr><w:tcW w:w=\"{w}\" w:type=\"dxa\"/>{span}</w:tcPr><w:p>{}</w:p></w:tc>",
-                run_xml(&c.text, c.size, c.bold, c.italic)
+                run_xml(&c.text, c.size, c.bold, c.italic, c.color)
             ));
         }
         // Pad the grid so every row covers all columns (Word rejects short rows).
@@ -467,7 +489,7 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
     let mut media: Vec<(String, &Image)> = Vec::new();
     // Word needs a paragraph between adjacent tables and after the last one in the body.
     let mut after_table = false;
-    let run = |b: &Block| run_xml(&b.text, b.size, b.bold, b.italic);
+    let run = |b: &Block| run_xml(&b.text, b.size, b.bold, b.italic, b.color);
     for it in items(pages) {
         match &it {
             Item::Para(b, lvl) => {
@@ -585,8 +607,36 @@ fn rtf_text(s: &str) -> String {
 /// Rich Text Format: paragraphs with their sizes and bold/italic, real table rows, page breaks
 /// between pages (images are left out).
 pub fn rtf(pages: &[Page]) -> String {
+    let items = items(pages);
+    // The colour table: entry 0 is the default (auto) colour, then each non-black colour once.
+    let mut colors: Vec<[u8; 3]> = Vec::new();
+    let mut note = |c: [f64; 3]| {
+        let c = rgb8(c);
+        if c != [0, 0, 0] && !colors.contains(&c) {
+            colors.push(c);
+        }
+    };
+    for it in &items {
+        match it {
+            Item::Para(b, _) => note(b.color),
+            Item::Table(t) => t.rows.iter().flatten().for_each(|c| note(c.color)),
+            Item::Img(_) | Item::PageBreak => {}
+        }
+    }
+    // `\cfN` for a colour (nothing for black, which keeps the default).
+    let cf = |c: [f64; 3]| {
+        let c = rgb8(c);
+        colors.iter().position(|e| *e == c).map_or(String::new(), |i| format!("\\cf{}", i + 1))
+    };
     let mut s = String::from("{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Helvetica;}}\n");
-    for it in items(pages) {
+    if !colors.is_empty() {
+        s.push_str("{\\colortbl;");
+        for [r, g, b] in &colors {
+            s.push_str(&format!("\\red{r}\\green{g}\\blue{b};"));
+        }
+        s.push_str("}\n");
+    }
+    for it in items {
         match it {
             Item::Para(b, _) => {
                 let mut fmt = format!("\\fs{}", (b.size * 2.0).round() as i64);
@@ -596,6 +646,7 @@ pub fn rtf(pages: &[Page]) -> String {
                 if b.italic {
                     fmt.push_str("\\i");
                 }
+                fmt.push_str(&cf(b.color));
                 s.push_str(&format!("{{\\pard{fmt} {}\\par}}\n", rtf_text(&b.text)));
             }
             Item::Table(t) => {
@@ -621,6 +672,7 @@ pub fn rtf(pages: &[Page]) -> String {
                         if c.italic {
                             fmt.push_str("\\i");
                         }
+                        fmt.push_str(&cf(c.color));
                         s.push_str(&format!("{{{fmt} {}}}\\cell", rtf_text(&c.text)));
                     }
                     s.push_str("\\row\n");
@@ -639,7 +691,14 @@ mod tests {
     use super::*;
 
     fn page() -> Page {
-        let b = |t: &str, y: f64, size: f64, bold: bool| Block { text: t.into(), rect: [72.0, y, 500.0, y + size], size, bold, italic: false };
+        let b = |t: &str, y: f64, size: f64, bold: bool| Block {
+            text: t.into(),
+            rect: [72.0, y, 500.0, y + size],
+            size,
+            bold,
+            italic: false,
+            color: [0.0; 3],
+        };
         Page {
             width: 612.0,
             height: 792.0,
@@ -711,6 +770,7 @@ mod tests {
             size: f64::NAN,
             bold: false,
             italic: false,
+            color: [0.0; 3],
         });
         let xml = part(&docx(&[p.clone()], "Receipt\u{1}"), "word/document.xml");
         assert!(xml.contains(">Total 4.50\tGBP</w:t>"), "{xml}");
@@ -725,9 +785,34 @@ mod tests {
     }
 
     #[test]
+    fn text_colour_survives_every_format() {
+        // #526: a dark green heading (0.05 0.23 0.18 rg) came out black in Word.
+        let mut p = page();
+        p.blocks[1].color = [0.05, 0.23, 0.18];
+        p.blocks[3].color = [f64::NAN, 2.0, -1.0];
+        let xml = part(&docx(&[p.clone()], "Colour"), "word/document.xml");
+        assert!(xml.contains("<w:color w:val=\"0D3B2E\"/>"), "{xml}");
+        assert!(xml.contains("<w:color w:val=\"00FF00\"/>"), "out-of-range values clamp: {xml}");
+        // Black text keeps Word's default colour.
+        assert_eq!(xml.matches("<w:color ").count(), 2, "{xml}");
+        let h = html(&[p.clone()], "Colour");
+        assert!(h.contains("<h1 style=\"color:#0D3B2E\">Annual Report</h1>"), "{h}");
+        assert!(h.contains("<p style=\"color:#00FF00\">"), "{h}");
+        let r = rtf(&[p]);
+        assert!(r.contains("{\\colortbl;\\red13\\green59\\blue46;\\red0\\green255\\blue0;}"), "{r}");
+        assert!(r.contains("\\cf1 Annual Report"), "{r}");
+        // A table cell keeps its colour too.
+        let mut t = table_page();
+        t.blocks[0].color = [1.0, 0.0, 0.0];
+        let xml = part(&docx(&[t.clone()], "Grid"), "word/document.xml");
+        assert!(xml.contains("<w:color w:val=\"FF0000\"/>"), "{xml}");
+        assert!(html(&[t], "Grid").contains("style=\"color:#FF0000\""));
+    }
+
+    #[test]
     fn rtf_escapes_and_sizes() {
         let mut p = page();
-        p.blocks.push(Block { text: "Café {x}".into(), rect: [72.0, 100.0, 200.0, 110.0], size: 10.0, bold: false, italic: true });
+        p.blocks.push(Block { text: "Café {x}".into(), rect: [72.0, 100.0, 200.0, 110.0], size: 10.0, bold: false, italic: true, color: [0.0; 3] });
         let r = rtf(&[p]);
         assert!(r.starts_with("{\\rtf1") && r.ends_with('}'));
         assert!(r.contains("\\fs48\\b Annual Report"));
@@ -736,7 +821,14 @@ mod tests {
 
     /// A 3-column table with a spanning header row and a hole in the last row.
     fn table_page() -> Page {
-        let cell = |t: &str, x: f64, y: f64, w: f64| Block { text: t.into(), rect: [x, y, x + w, y + 12.0], size: 11.0, bold: false, italic: false };
+        let cell = |t: &str, x: f64, y: f64, w: f64| Block {
+            text: t.into(),
+            rect: [x, y, x + w, y + 12.0],
+            size: 11.0,
+            bold: false,
+            italic: false,
+            color: [0.0; 3],
+        };
         Page {
             width: 612.0,
             height: 792.0,
@@ -757,6 +849,7 @@ mod tests {
                     size: 11.0,
                     bold: false,
                     italic: false,
+                    color: [0.0; 3],
                 },
             ],
             images: Vec::new(),
@@ -800,13 +893,35 @@ mod tests {
             .map(|i| {
                 let (row, col) = (i / 2, i / 2 + i % 2);
                 let (x, y) = (10.0 + col as f64 * 20.0, 10_000.0 - row as f64 * 14.0);
-                Block { text: "x".into(), rect: [x, y, x + 8.0, y + 12.0], size: 11.0, bold: false, italic: false }
+                Block { text: "x".into(), rect: [x, y, x + 8.0, y + 12.0], size: 11.0, bold: false, italic: false, color: [0.0; 3] }
             })
             .collect();
         let started = std::time::Instant::now();
         let (tables, _) = tables(&blocks);
         assert!(tables.iter().all(|t| t.cols.len() <= MAX_COLS), "{} columns", tables.iter().map(|t| t.cols.len()).max().unwrap_or(0));
         assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn word_opens_tables_up_to_its_column_limit() {
+        // Rows of short numbers on a regular grid, n columns wide.
+        let grid = |n: usize| Page {
+            width: 1500.0,
+            height: 792.0,
+            blocks: (0..3)
+                .flat_map(|row| {
+                    (0..n).map(move |col| {
+                        let (x, y) = (20.0 + col as f64 * 22.0, 700.0 - row as f64 * 14.0);
+                        Block { text: (col + 1).to_string(), rect: [x, y, x + 8.0, y + 8.0], size: 8.0, bold: false, italic: false, color: [0.0; 3] }
+                    })
+                })
+                .collect(),
+            images: Vec::new(),
+        };
+        let grid_cols = |p: &Page| part(&docx(std::slice::from_ref(p), "Grid"), "word/document.xml").matches("<w:gridCol ").count();
+        assert_eq!(grid_cols(&grid(63)), 63, "63 columns is still a table");
+        // Word refuses to open a document with a 64-column table, so that grid stays text.
+        assert_eq!(grid_cols(&grid(64)), 0);
     }
 
     #[test]
@@ -817,6 +932,7 @@ mod tests {
             size: 11.0,
             bold: false,
             italic: false,
+            color: [0.0; 3],
         };
         let p = Page {
             width: 612.0,
