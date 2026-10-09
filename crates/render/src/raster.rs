@@ -73,7 +73,13 @@ fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
         return None;
     }
     let face = match japanese_face(f.post_script_name.as_deref().unwrap_or_default(), f.is_serif, f.is_bold || f.font_weight >= 600) {
-        JapaneseFace::Mincho => pdfcraft_fonts::document_japanese_font(),
+        // BIZ UDMincho before the document face (Shippori Mincho): it covers half-width katakana
+        // (U+FF61–U+FF9F), which Shippori Mincho lacks, and hayro draws a CID the substitute
+        // can't map by Unicode by glyph index, i.e. as an unrelated glyph (ﬁ, ﬂ, …).
+        JapaneseFace::Mincho => pdfcraft_fonts::ui_japanese_fonts()
+            .into_iter()
+            .find(|c| c.family == "BIZ UDMincho" && c.style == "Regular")
+            .or_else(pdfcraft_fonts::document_japanese_font),
         JapaneseFace::Gothic { bold } => {
             let faces = pdfcraft_fonts::ui_japanese_fonts();
             let style = if bold { "Bold" } else { "Regular" };
@@ -1650,6 +1656,29 @@ trailer << /Root 1 0 R >>
             // 日本 at 40 pt covers a few hundred dark pixels; a blank or missing-glyph run doesn't.
             assert!(inked > 300, "{base_font}: 日本 is drawn ({inked} dark pixels)");
         }
+    }
+
+    /// Half-width katakana are common in Japanese documents set in a non-embedded Mincho font
+    /// such as HeiseiMin-W3. The Mincho substitute must have those glyphs: one that lacks them
+    /// (Shippori Mincho) draws each CID by glyph index instead, as unrelated glyphs (ﬁ, ﬂ).
+    #[test]
+    fn mincho_substitute_covers_half_width_katakana() {
+        use hayro::hayro_interpret::font::FallbackFontQuery;
+        use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+        use skrifa::MetadataProvider;
+        let query = FontQuery::Fallback(FallbackFontQuery {
+            post_script_name: Some("HeiseiMin-W3".into()),
+            character_collection: Some(CharacterCollection { family: CidFamily::AdobeJapan1, supplement: 2 }),
+            ..FallbackFontQuery::default()
+        });
+        let Some((data, index)) = super::japanese_fallback(&query) else {
+            eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): no Japanese face to check");
+            return;
+        };
+        let font = skrifa::FontRef::from_index((*data).as_ref(), index).expect("a craft-fonts face parses");
+        let charmap = font.charmap();
+        let missing: Vec<char> = ('\u{FF61}'..='\u{FF9F}').chain(['日', '本']).filter(|&c| charmap.map(c).is_none()).collect();
+        assert!(missing.is_empty(), "the Mincho substitute lacks {missing:?}");
     }
 
     #[test]

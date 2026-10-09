@@ -3751,6 +3751,7 @@ dependencies = [
  "log",
  "lopdf",
  "pdfcraft-fonts",
+ "skrifa 0.44.0",
  "thiserror 2.0.21",
 ]
 
