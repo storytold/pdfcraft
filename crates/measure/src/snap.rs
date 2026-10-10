@@ -321,7 +321,8 @@ impl Walker<'_> {
                     }
                 }
                 "S" | "s" | "f" | "F" | "f*" | "B" | "B*" | "b" | "b*" => {
-                    if matches!(String::from_utf8_lossy(&op.op).as_ref(), "s" | "b" | "b*")
+                    // Fills close open subpaths implicitly (ISO 32000-2 8.5.3.3); only a bare stroke leaves the path open.
+                    if String::from_utf8_lossy(&op.op).as_ref() != "S"
                         && let (Some(a), Some(b)) = (current, start)
                     {
                         path.edge(a, b);

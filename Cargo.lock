@@ -3814,6 +3814,9 @@ dependencies = [
 [[package]]
 name = "pdfcraft-platform"
 version = "0.5.0"
+dependencies = [
+ "zbus",
+]
 
 [[package]]
 name = "pdfcraft-preflight"
