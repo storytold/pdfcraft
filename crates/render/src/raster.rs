@@ -69,7 +69,7 @@ impl RenderConfig {
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
             hide_comments: self.hide_comments,
-            font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| standard(query))),
+            font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| arabic_fallback(query)).or_else(|| standard(query))),
             ..InterpreterSettings::default()
         }
     }
@@ -100,6 +100,20 @@ fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
         }
     }?;
     Some((Arc::new(face.bytes), 0))
+}
+
+/// An installed font for a CID font the PDF doesn't embed whose name is that of an installed font
+/// with Arabic (`Arial`, `TraditionalArabic,Bold`, …), in its weight. hayro's own substitutes are
+/// the Latin standard 14, which have no Arabic letters, so such text drew nothing. `None` for
+/// every other font, and where installed fonts can't be read.
+fn arabic_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
+    let FontQuery::Fallback(f) = query else { return None };
+    let name = f.post_script_name.as_deref().or(f.font_name.as_deref())?;
+    let family = pdfcraft_fonts::arabic_font_family(name)?;
+    let bold = f.is_bold || f.font_weight >= 600 || name.to_ascii_lowercase().contains("bold");
+    let face = pdfcraft_fonts::arabic_candidates(Some(family), &[], f.is_serif, bold).into_iter().next()?;
+    let bytes = face.bytes()?;
+    Some((Arc::new(bytes), face.index))
 }
 
 #[derive(Debug, PartialEq)]
@@ -4395,6 +4409,52 @@ trailer << /Root 1 0 R >>
             assert!(missing == notdef, "{base_font}: 𠮷 draws .notdef ({} dark pixels, .notdef {})", inked(&missing), inked(&notdef));
             assert!(inked(&covered) > 300 && covered != notdef, "{base_font}: 吉 is drawn ({} dark pixels)", inked(&covered));
         }
+    }
+
+    /// A CID font the PDF doesn't embed, named after an installed font with Arabic, is drawn with
+    /// that font (its letters found through ToUnicode); other names keep hayro's substitutes.
+    #[test]
+    fn arabic_cid_fonts_that_arent_embedded_use_the_installed_font() {
+        use hayro::hayro_interpret::font::FallbackFontQuery;
+        let query = |name: &str| FontQuery::Fallback(FallbackFontQuery { post_script_name: Some(name.into()), ..FallbackFontQuery::default() });
+        assert!(super::arabic_fallback(&query("NoSuchFont-Regular")).is_none());
+        assert!(super::arabic_fallback(&FontQuery::Standard(hayro::hayro_interpret::font::StandardFont::Helvetica)).is_none());
+        if pdfcraft_fonts::arabic_font_family("Arial").is_none() {
+            eprintln!("skipping: Arial with Arabic isn't installed here");
+            return;
+        }
+        assert!(super::arabic_fallback(&query("ArialMT")).is_some());
+        // A page showing two Arabic letters (beh, alef) in a non-embedded Identity-H font named Arial.
+        let cmap =
+            "begincmap\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n2 beginbfchar\n<0001> <0628>\n<0002> <0627>\nendbfchar\nendcmap\n";
+        let pdf = |name: &str| {
+            format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 41 >> stream
+BT /F1 40 Tf 10 15 Td <00010002> Tj ET
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /{name} /Encoding /Identity-H /DescendantFonts [6 0 R] /ToUnicode 8 0 R >> endobj
+6 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /{name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 7 0 R /DW 600 >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /{name} /Flags 32 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 900 /Descent -200 /CapHeight 700 /StemV 80 >> endobj
+8 0 obj << /Length {} >> stream
+{cmap}endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+                cmap.len()
+            )
+        };
+        let render = |name: &str| {
+            let mut r = PageRenderer::new(Arc::new(pdf(name).into_bytes()), RenderConfig::default());
+            r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 }).rgba
+        };
+        let arial = render("ArialMT");
+        let ink = arial.chunks(4).filter(|px| px[0] < 128).count();
+        assert!(ink > 20, "the Arabic letters are drawn ({ink} dark pixels)");
+        // A name nothing installed has keeps hayro's standard substitute: a different picture.
+        assert_ne!(arial, render("NoSuchFontMT"));
     }
 
     #[test]

@@ -2206,9 +2206,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         l
                     }
                 };
-                // Images first (they can sit under text boxes' corners); then paragraphs.
-                crate::edit_text_ui::image_input(ui, &resp, &xf, i, info, &images, view, &mut image_action)
-                    || crate::edit_text_ui::page_input(ui, &resp, &xf, i, info, &lines, view)
+                // Images first (they can sit under text boxes' corners); then paragraphs. Text drawn
+                // over an image (a letterhead or background covering the page, as Word writes it) is
+                // text first, unless an image is being dragged; a paragraph being dragged stays first
+                // wherever the pointer goes.
+                let over_text = view.block_drag.is_some()
+                    || ui
+                        .input(|inp| inp.pointer.hover_pos())
+                        .is_some_and(|p| lines.iter().any(|l| xf.user_rect(info, i, l.rect.map(|v| v as f32)).expand(2.0).contains(p)));
+                let text_first = over_text && !view.image_selection.as_ref().is_some_and(crate::edit_text_ui::ImageSelection::dragging);
+                (text_first && crate::edit_text_ui::page_input(ui, &resp, &xf, i, info, &lines, view))
+                    || crate::edit_text_ui::image_input(ui, &resp, &xf, i, info, &images, view, &mut image_action)
+                    || (!text_first && crate::edit_text_ui::page_input(ui, &resp, &xf, i, info, &lines, view))
             };
             let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(ui, &resp, &xf, i, info, &doc_links, view);
             let consumed = on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, &resp, &pcx, view);

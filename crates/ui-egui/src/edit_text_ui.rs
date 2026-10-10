@@ -100,6 +100,7 @@ impl LineEditor {
                 .then_some(self.extras.line_spacing),
             char_spacing: (self.extras.char_spacing != self.extras0.char_spacing).then_some(self.extras.char_spacing),
             scale: (self.extras.scale != self.extras0.scale).then_some(self.extras.scale),
+            arabic_font: if l.arabic_font != o.arabic_font { l.arabic_font.clone() } else { None },
             ..Default::default()
         }
     }
@@ -141,7 +142,31 @@ fn source_look(base_font: &str, size: f64, color: [f64; 3], detected_bold: bool,
 }
 
 fn look_of(b: &pdfcraft_engine::TextBlock) -> pdfcraft_engine::AddedText {
-    source_look(&b.base_font, b.size, b.color, b.bold, b.italic)
+    let mut look = source_look(&b.base_font, b.size, b.color, b.bold, b.italic);
+    // Arabic text in an installed font shows that font in the font list.
+    if b.text.chars().any(|c| matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF)) {
+        look.arabic_font = pdfcraft_fonts::arabic_font_family(&b.base_font).map(str::to_string);
+    }
+    look
+}
+
+/// The paragraph's installed font (`look.arabic_font`) as an interface font family, so the editor
+/// draws the text with the page's shapes and widths and breaks its lines where the page will.
+/// It is added to egui on first use and is there from the next frame; `None` until then, and
+/// when the paragraph isn't set in an installed font.
+fn document_family(ctx: &egui::Context, look: &pdfcraft_engine::AddedText) -> Option<FontFamily> {
+    use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
+    let wanted = look.arabic_font.as_deref()?;
+    let face = pdfcraft_fonts::arabic_candidates(Some(wanted), &[], false, look.bold).into_iter().next().filter(|f| f.family == wanted)?;
+    let name = format!("pdf-font:{}:{}", face.family, face.style);
+    let family = FontFamily::Name(name.clone().into());
+    if ctx.fonts(|f| f.families().contains(&family)) {
+        return Some(family);
+    }
+    let mut data = egui::FontData::from_owned(face.bytes()?.to_vec());
+    data.index = face.index;
+    ctx.add_font(FontInsert::new(&name, data, vec![InsertFontFamily { family, priority: FontPriority::Highest }]));
+    None
 }
 
 fn editor_font(look: &pdfcraft_engine::AddedText, size: f32) -> FontId {
@@ -168,6 +193,13 @@ pub struct ImageSelection {
     pub index: usize,
     /// Dragging: the start point and, for a corner, the opposite corner (screen).
     drag: Option<(Pos2, Option<Pos2>)>,
+}
+
+impl ImageSelection {
+    /// Whether the image is being moved or resized.
+    pub(crate) fn dragging(&self) -> bool {
+        self.drag.is_some()
+    }
 }
 
 /// What a drag on a paragraph box takes hold of.
@@ -496,55 +528,94 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     let page = view.line_editor.as_ref()?.page;
     let xf = view.page_xform(page)?;
     let viewport_right = view.viewport_rect().right();
+    let viewport_left = view.viewport_rect().left();
     let ed = view.line_editor.as_mut()?;
     // Reproject the source box every frame. The page may have been zoomed, scrolled or rotated
     // while the format panel was open.
     ed.rect = xf.user_rect(info, ed.page, ed.source_rect).expand(2.0);
+    // A right-to-left paragraph is anchored on its right edge, and a single line grows to the left.
+    let rtl = unicode_bidi::get_base_direction(ed.original.as_str()) == unicode_bidi::Direction::Rtl;
     let right = xf.rect.right().min(viewport_right) - 6.0;
-    ed.max_width = if ed.multiline { ed.rect.width() } else { (right - ed.rect.left()).max(ed.rect.width()) };
+    let left = xf.rect.left().max(viewport_left) + 6.0;
+    ed.max_width = match (ed.multiline, rtl) {
+        (true, _) => ed.rect.width(),
+        (false, true) => (ed.rect.right() - left).max(ed.rect.width()),
+        (false, false) => (right - ed.rect.left()).max(ed.rect.width()),
+    };
     let scale = (ed.rect.width() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(1.0)).max(0.01);
     ed.size = (ed.look.size as f32 * scale).clamp(8.0, 72.0);
-    let font = editor_font(&ed.look, ed.size);
+    // The paragraph's own installed font when it has one, so the box shows the text as the page does.
+    let font = document_family(ctx, &ed.look).map_or_else(|| editor_font(&ed.look, ed.size), |family| FontId::new(ed.size, family));
     let text_color = color32(ed.look.color);
     let mut done = None;
-    egui::Area::new(egui::Id::new("edit-text-line")).order(egui::Order::Foreground).fixed_pos(Pos2::new(ed.rect.left(), ed.rect.top())).show(
-        ctx,
-        |ui| {
-            // The box follows the text as you type: as wide as the longest drafted line needs
-            // (up to what the rewrite allows), so new content grows the box instead of wrapping
-            // inside the old one.
-            let mut width = ed.rect.width().max(120.0);
-            if ed.max_width > width {
-                let needed = ui.fonts_mut(|f| {
-                    ed.text.lines().map(|l| f.layout_no_wrap(l.to_owned(), font.clone(), text_color).size().x).fold(0.0_f32, f32::max)
-                }) + 8.0;
-                width = width.max(needed).min(ed.max_width);
+    // The box follows the text as you type: as wide as the longest drafted line needs (up to what
+    // the rewrite allows), so new content grows the box instead of wrapping inside the old one.
+    let mut width = if rtl { ed.rect.width() } else { ed.rect.width().max(120.0) };
+    if ed.max_width > width {
+        let needed = ctx
+            .fonts_mut(|f| ed.text.lines().map(|l| f.layout_no_wrap(l.to_owned(), font.clone(), text_color).size().x).fold(0.0_f32, f32::max))
+            + 8.0;
+        width = width.max(needed).min(ed.max_width);
+    }
+    let x = if rtl { ed.rect.right() - width - 4.0 } else { ed.rect.left() };
+    let upright = info.pages.get(page).is_some_and(|p| p.rotation % 180 == 0);
+    let unchanged = ed.text == ed.original && ed.style() == pdfcraft_engine::BlockStyle::default();
+    let mut grabbed = None;
+    let area_id = egui::Id::new("edit-text-line");
+    egui::Area::new(area_id).order(egui::Order::Foreground).fixed_pos(Pos2::new(x, ed.rect.top())).show(ctx, |ui| {
+        // The area keeps the size of an earlier paragraph; this one's box is as wide as it is.
+        ui.set_max_width(width + 8.0);
+        // The open box's border moves it, and its left and right edges rewrap it, as a closed
+        // box's do (the text inside, drawn over it, keeps clicks and drags for typing).
+        let frame = ctx.memory(|m| m.area_rect(area_id));
+        let border = frame.map(|r| (r, ui.interact(r.expand(EDGE_REACH), area_id.with("border"), egui::Sense::drag())));
+        if let Some((r, b)) = &border
+            && b.hovered()
+        {
+            let edge = ui.input(|i| i.pointer.hover_pos()).and_then(|p| upright.then(|| edge_at(*r, p)).flatten());
+            ui.ctx().set_cursor_icon(if edge.is_some() { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::Grab });
+        }
+        if let Some((r, b)) = &border
+            && b.drag_started()
+            && let Some(o) = ui.input(|i| i.pointer.press_origin())
+        {
+            grabbed = Some((o, upright.then(|| edge_at(*r, o)).flatten().unwrap_or(Grip::Move)));
+        }
+        egui::Frame::NONE.fill(Color32::WHITE).stroke(Stroke::new(1.5, ACCENT)).inner_margin(egui::Margin::symmetric(2, 0)).show(ui, |ui| {
+            let rows = ed.text.lines().count().max(1);
+            // Right-to-left text is shown, and clicked into, in display order.
+            let mut layouter =
+                |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap: f32| crate::rtl_text::layout(ui, text.as_str(), &font, text_color, wrap, None);
+            let selection = crate::rtl_text::hide_selection(ui, &ed.text, text_color);
+            let output = egui::TextEdit::multiline(&mut ed.text)
+                .id(egui::Id::new("edit-text-line-input"))
+                .font(font.clone())
+                .text_color(text_color)
+                .frame(egui::Frame::NONE)
+                .desired_width(width)
+                .desired_rows(rows)
+                .layouter(&mut layouter)
+                .show(ui);
+            crate::rtl_text::pointer(ui, &output, &ed.text, selection);
+            let r = output.response.response;
+            if ed.focus {
+                r.request_focus();
+                ed.focus = false;
             }
-            egui::Frame::NONE.fill(Color32::WHITE).stroke(Stroke::new(1.5, ACCENT)).inner_margin(egui::Margin::symmetric(2, 0)).show(ui, |ui| {
-                let rows = ed.text.lines().count().max(1);
-                let r = ui.add(
-                    egui::TextEdit::multiline(&mut ed.text)
-                        .id(egui::Id::new("edit-text-line-input"))
-                        .font(font.clone())
-                        .text_color(text_color)
-                        .frame(egui::Frame::NONE)
-                        .desired_width(width)
-                        .desired_rows(rows),
-                );
-                if ed.focus {
-                    r.request_focus();
-                    ed.focus = false;
-                }
-                let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                let apply = ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
-                if esc {
-                    done = Some(false);
-                } else if apply || (r.lost_focus() && !outside) {
-                    done = Some(true);
-                }
-            });
-        },
-    );
+            let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let apply = ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
+            if esc {
+                done = Some(false);
+            } else if apply || (r.lost_focus() && !outside) || grabbed.is_some() {
+                // Grabbing the border of an edited paragraph applies the edit; the new box is then
+                // dragged like any other.
+                done = Some(!unchanged || grabbed.is_none());
+            }
+        });
+    });
+    if unchanged && let Some((start, grip)) = grabbed {
+        view.block_drag = Some(BlockDrag { page, block: view.line_editor.as_ref()?.block, start, grip });
+    }
     match done {
         Some(apply) => {
             let ed = view.line_editor.take()?;
