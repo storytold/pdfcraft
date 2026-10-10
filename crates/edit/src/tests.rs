@@ -175,6 +175,26 @@ fn flattening_draws_appearances_into_the_page_and_removes_the_comments() {
     assert!(marks_present(&doc).is_empty(), "flattened content is not a removable mark");
 }
 
+/// #805: a supported note with no stored appearance is still drawn by viewers. Flattening must
+/// generate that appearance and bake it into the page, not delete a comment that shows an icon.
+#[test]
+fn flattening_keeps_a_note_whose_appearance_is_missing() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /Contents (Synthetic note) /Name /Comment /Open false /F 0 >>",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "the note icon is drawn");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "the note is gone once its icon is baked in");
+    let flat = streams(&doc, 0).pop().unwrap();
+    assert!(flat.contains("q 1 0 0 1 10 10 cm /PCFl0 Do Q"), "{flat}");
+}
+
 /// Display space is in points, so on a `/UserUnit 2` page an item's box maps to half as many
 /// user-space units. Items record the `/UserUnit` they were written for; one without it was
 /// written when display space was in user-space units, and reads back scaled to points.
