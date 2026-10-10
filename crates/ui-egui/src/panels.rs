@@ -762,7 +762,7 @@ const LABEL_MEASURE_CHARS: usize = 64;
 /// boundary, and the loop always ends (at the ellipsis alone). A label is document text: only
 /// its first [`LABEL_MEASURE_CHARS`] characters are measured, so a huge one can't make each
 /// frame lay out thousands of candidates.
-fn ellipsized_prefix(text: &str, mut fits: impl FnMut(&str) -> bool) -> String {
+pub(crate) fn ellipsized_prefix(text: &str, mut fits: impl FnMut(&str) -> bool) -> String {
     let mut s: String = text.chars().take(LABEL_MEASURE_CHARS).collect();
     if s.len() == text.len() && fits(text) {
         return text.to_owned();

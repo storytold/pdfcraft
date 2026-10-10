@@ -1761,6 +1761,34 @@ fn exporting_office_files_keeps_images() {
     assert!(String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap().contains("data:image/png;base64,"));
 }
 
+/// #314: a page whose content is drawn through a form XObject exports its text (the file from
+/// the report: no xref table, wrong stream lengths).
+#[test]
+fn exporting_office_files_reads_form_xobjects() {
+    let pdf = b"%PDF-1.4
+1 0 obj <</Type/Catalog/Pages 2 0 R>> endobj
+2 0 obj <</Type/Pages/Kids[3 0 R]/Count 1>> endobj
+3 0 obj <</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Resources<</XObject<</Fm1 7 0 R>>>>/Contents 5 0 R>> endobj
+4 0 obj <</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>> endobj
+5 0 obj <</Length 22>> stream
+q 1 0 0 1 0 0 cm /Fm1 Do Q
+endstream endobj
+7 0 obj <</Type/XObject/Subtype/Form/BBox[0 0 595 842]/Resources<</Font<</F1 4 0 R>>>>/Length 60>> stream
+BT /F1 18 Tf 72 760 Td (Hello from a test invoice) Tj ET
+endstream endobj
+trailer <</Root 1 0 R>>
+%%EOF
+";
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, Arc::new(pdf.to_vec()), None).unwrap();
+    let d = s.get(id).unwrap();
+    let blocks: Vec<String> = d.export_pages()[0].blocks.iter().map(|b| b.text.clone()).collect();
+    assert_eq!(blocks, ["Hello from a test invoice"]);
+    assert!(String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap().contains("Hello from a test invoice"));
+    // Edit text still offers only what the page's own streams show.
+    assert!(d.text_blocks(0).is_empty());
+}
+
 #[test]
 fn exporting_office_files_keeps_text_colour() {
     // #526: a dark green heading came out black in Word.
@@ -2375,5 +2403,16 @@ fn comments_without_appearances_are_drawn_but_not_saved() {
     let reopened = pdfcraft_cos::Document::open(saved).unwrap();
     for r in [pdfcraft_cos::ObjRef::new(4, 0), pdfcraft_cos::ObjRef::new(5, 0)] {
         assert!(reopened.get(r).as_dict().is_some_and(|d| !d.contains(b"AP")), "{r:?} is saved without /AP");
+    }
+}
+
+/// Titles a browser writes for a blank page or a pop-up name no document; real titles stay.
+#[test]
+fn placeholder_titles_are_recognised() {
+    for t in ["about:blank", "About:Blank", " about:srcdoc ", "blob:https://bank.example/3f2a", "data:text/html,x", "Untitled", "untitled"] {
+        assert!(is_placeholder_title(t), "{t:?}");
+    }
+    for t in ["Quarterly report", "Untitled report", "About: our company", "Statement", "blank"] {
+        assert!(!is_placeholder_title(t), "{t:?}");
     }
 }

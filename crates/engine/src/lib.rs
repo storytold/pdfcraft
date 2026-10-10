@@ -467,14 +467,14 @@ impl Document {
     }
 
     /// The name shown on the tab and window: the document title when the document asks for it
-    /// (Initial View ▸ Show: Document Title) and has one, else the file name.
+    /// (Initial View ▸ Show: Document Title) and has a real one, else the file name.
     pub fn display_name(&self) -> String {
         self.editor
             .as_ref()
             .filter(|e| pdfcraft_organize::displays_doc_title(&e.cos))
             .and_then(|e| pdfcraft_organize::info(&e.cos, "Title"))
             .map(|t| t.trim().to_owned())
-            .filter(|t| !t.is_empty())
+            .filter(|t| !t.is_empty() && !is_placeholder_title(t))
             .unwrap_or_else(|| self.name.clone())
     }
 
@@ -488,6 +488,16 @@ impl Document {
     pub fn repair_log(&self) -> Vec<String> {
         self.editor.as_ref().map(|e| e.cos.repair_log().to_vec()).unwrap_or_default()
     }
+}
+
+/// A title that names no document: what a web browser writes when it saves a blank page or a
+/// pop-up as PDF (`about:blank`), another browser-internal address, or a bare "Untitled". Such a
+/// title says less than the file name, so the file name is shown instead. An address is one
+/// word: "About: our company" is a real title.
+fn is_placeholder_title(title: &str) -> bool {
+    let t = title.trim().to_lowercase();
+    let address = !t.contains(char::is_whitespace) && ["about:", "blob:", "data:"].iter().any(|p| t.starts_with(p));
+    address || t == "untitled"
 }
 
 /// What is displayed: the working file, plus (in memory only, never saved) the appearances

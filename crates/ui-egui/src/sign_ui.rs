@@ -1071,7 +1071,7 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
                         ("Validity starts", c.not_before.to_string()),
                         ("Validity ends", c.not_after.to_string()),
                         ("Public key", c.public_key.describe()),
-                        ("Basic constraints", if c.is_ca { "Certificate authority".into() } else { "End entity".into() }),
+                        ("Basic constraints", tl!(if c.is_ca { "Certificate authority" } else { "End entity" }).to_string()),
                         ("Key usage", c.key_usage.map(key_usage).unwrap_or_else(|| tl!("Not present").to_string())),
                         ("Self-signed", if c.is_self_signed() { tl!("Yes").to_string() } else { tl!("No").to_string() }),
                         ("SHA-1 digest", hex(&sign::keys::DigestAlg::Sha1.digest(&[&c.raw]))),
