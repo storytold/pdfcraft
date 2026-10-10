@@ -2869,6 +2869,9 @@ enum Notice {
     FieldHighlights(bool),
 }
 
+/// The Dismiss button of the notice strip — and, with no pill in the strip, its height too.
+const NOTICE_DISMISS: f32 = 22.0;
+
 /// The notice bar above the pages: the signature status first (Acrobat's signature bar), then
 /// security, forms and warnings.
 fn notices(
@@ -2885,15 +2888,19 @@ fn notices(
     if let Some((icon, color, template, arg)) = signed {
         let mut open = false;
         egui::Frame::NONE.fill(t.accent_soft).inner_margin(egui::Margin::symmetric(14, 7)).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.add(icons::image(icon, 16.0, color));
-                ui.label(egui::RichText::new(crate::i18n::fmt(tl!(template), &[("by", &arg)])).color(t.text));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if crate::widgets::pill_button(ui, tl!("Signature panel"), false).clicked() {
-                        open = true;
-                    }
-                });
-            });
+            ui.allocate_ui_with_layout(
+                vec2(ui.available_width(), crate::widgets::PILL_HEIGHT),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.add(icons::image(icon, 16.0, color));
+                    ui.label(egui::RichText::new(crate::i18n::fmt(tl!(template), &[("by", &arg)])).color(t.text));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if crate::widgets::pill_button(ui, tl!("Signature panel"), false).clicked() {
+                            open = true;
+                        }
+                    });
+                },
+            );
         });
         return open.then_some(Notice::Signatures);
     }
@@ -2944,12 +2951,19 @@ fn notices(
         None
     };
     let (icon, text, fields) = msg?;
+    // Which pills the row will hold, decided up front because they come after the text: the strip
+    // is as tall as the tallest of them.
+    let pill = fields || secured || (repaired && info.fields.is_empty());
     egui::Frame::NONE.fill(t.accent_soft).inner_margin(egui::Margin::symmetric(14, 7)).show(ui, |ui| {
-        ui.horizontal(|ui| {
+        // egui centres each widget of a row against the row's *initial* height and lets anything
+        // taller hang below it, so the 28 pt pill decided the strip's height while its icon and
+        // sentence stayed at the top. Reserving the band the strip grows to centres all of it.
+        let band = if pill { crate::widgets::PILL_HEIGHT } else { NOTICE_DISMISS };
+        ui.allocate_ui_with_layout(vec2(ui.available_width(), band), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.add(icons::image(icon, 16.0, t.accent_text));
             ui.label(egui::RichText::new(text).color(t.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked() {
+                if icons::button(ui, "x", NOTICE_DISMISS, false, tl!("Dismiss")).clicked() {
                     view.notice_dismissed = true;
                 }
                 if fields {
