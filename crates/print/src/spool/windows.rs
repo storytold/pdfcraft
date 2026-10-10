@@ -148,9 +148,7 @@ fn verify_ticket_size(ticket: &PrintTicket, width: u32, height: u32, landscape: 
             .and_then(|n| n.text())
             .and_then(|v| v.trim().parse::<u32>().ok())
     };
-    if !dimension("MediaSizeWidth").is_some_and(|w| w.abs_diff(width) <= 250)
-        || !dimension("MediaSizeHeight").is_some_and(|h| h.abs_diff(height) <= 250)
-    {
+    if dimension("MediaSizeWidth").is_none_or(|w| w.abs_diff(width) > 250) || dimension("MediaSizeHeight").is_none_or(|h| h.abs_diff(height) > 250) {
         return Err(spool_error("The printer driver substituted a different paper size. No job was sent; select a supported sheet size."));
     }
     let orientation = feature("PageOrientation").and_then(|f| f.children().find(|n| n.has_tag_name((winprint::ticket::document::NS_PSF, "Option"))));
