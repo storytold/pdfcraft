@@ -2050,3 +2050,4 @@
 	The field {name} no longer exists.	El campo {name} ya no existe.
 	A selected field has no widget on any page, so the fields can't be edited together.	Un campo seleccionado no tiene ningún widget en ninguna página, así que los campos no se pueden editar juntos.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} ppp, el mayor tamaño al que se pueden dibujar)
+	This printer's driver doesn't offer two-sided printing to other programs. If the printer prints two-sided, set it in Properties…	El controlador de esta impresora no ofrece la impresión a doble cara a otros programas. Si la impresora imprime a doble cara, configúrelo en Propiedades…

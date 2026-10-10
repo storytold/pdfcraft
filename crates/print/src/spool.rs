@@ -347,6 +347,64 @@ pub fn printers_parsed(queues: &str, available: Option<&str>) -> Vec<Printer> {
     printers
 }
 
+/// What a printer's driver takes from the Print dialog through the system's standard job
+/// options. Drivers that offer a setting only under their own names apply their own default
+/// instead; the user sets those in the driver's preferences (Properties…).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Support {
+    pub two_sided: bool,
+}
+
+/// The standard job options a printer's driver offers (Windows: its PrintCapabilities). `None`
+/// where that can't be read, and on CUPS, which maps the standard options to every driver
+/// itself. Asks the driver, which can take seconds, so call it off the UI thread.
+pub fn support(printer: &str) -> Option<Support> {
+    #[cfg(windows)]
+    {
+        windows::support(printer)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = printer;
+        None
+    }
+}
+
+/// A print-ready PDF whose sheets are one paper size in both orientations (orientation Auto),
+/// with every sheet turned to the first sheet's orientation: the others get a quarter turn
+/// (`/Rotate`), as a driver turns a landscape job onto the paper. A spooler that takes one
+/// orientation per job (Windows) then prints the document as one job, so two-sided sheets and
+/// collated copies stay together. `None` when the sheets already agree, or differ in size.
+#[cfg(any(test, windows))]
+pub(crate) fn one_orientation(pdf: &[u8]) -> Result<Option<Vec<u8>>, PrintError> {
+    use pdfcraft_cos::Object;
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(pdf.to_vec()))?;
+    let pages = pdfcraft_model::pages(&doc);
+    let first = pages.first().ok_or(PrintError::NoPages)?.display_size(&doc);
+    let (short, long) = (first.0.min(first.1), first.0.max(first.1));
+    let mut turned = false;
+    for page in &pages {
+        let s = page.display_size(&doc);
+        if (s.0.min(s.1) - short).abs() > 0.1 || (s.0.max(s.1) - long).abs() > 0.1 {
+            return Ok(None);
+        }
+        if (s.0 > s.1) == (first.0 > first.1) {
+            continue;
+        }
+        // Landscape onto portrait paper: a quarter turn counter-clockwise (the Print Schema's
+        // Landscape); portrait onto landscape paper turns back the other way.
+        let turn = if s.0 > s.1 { 270 } else { 90 };
+        let Object::Dict(mut dict) = (*doc.get(page.obj)).clone() else { return Ok(None) };
+        dict.set(b"Rotate".to_vec(), Object::Int((page.rotation(&doc) + turn) % 360));
+        doc.set(page.obj, Object::Dict(dict));
+        turned = true;
+    }
+    if !turned {
+        return Ok(None);
+    }
+    Ok(Some(pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default())?))
+}
+
 /// Send a print-ready PDF to the spooler. Returns the spooler's message (the job id).
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, PrintError> {
     #[cfg(windows)]

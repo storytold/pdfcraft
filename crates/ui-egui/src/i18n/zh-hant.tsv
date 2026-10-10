@@ -2020,3 +2020,4 @@
 	The field {name} no longer exists.	欄位 {name} 已不存在。
 	A selected field has no widget on any page, so the fields can't be edited together.	某個所選欄位在任何頁面上都沒有控制項，因此無法一起編輯這些欄位。
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 張以可繪製的最大尺寸 {dpi} dpi 匯出）
+	This printer's driver doesn't offer two-sided printing to other programs. If the printer prints two-sided, set it in Properties…	此印表機的驅動程式不向其他程式提供雙面列印。如果印表機支援雙面列印，請在此處設定：屬性…

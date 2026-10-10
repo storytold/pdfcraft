@@ -576,6 +576,9 @@ pub struct PdfCraftApp {
     pub print_draft: PrintDraft,
     #[cfg(windows)]
     pub(crate) pending_print: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// The printer whose driver is being asked what it offers, and where the answer arrives.
+    #[cfg(windows)]
+    pub(crate) pending_support: Option<(String, std::sync::mpsc::Receiver<Option<pdfcraft_engine::print::spool::Support>>)>,
     pub link_draft: Option<LinkDraft>,
     /// The style new text gets (Edit a PDF ▸ Format text).
     pub text_style: pdfcraft_engine::AddedText,
@@ -785,6 +788,8 @@ impl PdfCraftApp {
             print_draft: PrintDraft::default(),
             #[cfg(windows)]
             pending_print: None,
+            #[cfg(windows)]
+            pending_support: None,
             link_draft: None,
             text_style: content_ui::default_style(),
             replace_draft: None,
@@ -1869,6 +1874,8 @@ impl eframe::App for PdfCraftApp {
         self.poll_updates();
         #[cfg(windows)]
         self.poll_print();
+        #[cfg(windows)]
+        self.poll_printer_support();
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
         self.shortcuts(ctx);

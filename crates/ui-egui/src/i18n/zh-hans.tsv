@@ -2098,3 +2098,4 @@
 	The field {name} no longer exists.	字段 {name} 已不存在。
 	A selected field has no widget on any page, so the fields can't be edited together.	某个所选字段在任何页面上都没有控件，因此无法一起编辑这些字段。
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 张以可绘制的最大尺寸 {dpi} dpi 导出）
+	This printer's driver doesn't offer two-sided printing to other programs. If the printer prints two-sided, set it in Properties…	此打印机的驱动程序不向其他程序提供双面打印。如果打印机支持双面打印，请在此处设置：属性…

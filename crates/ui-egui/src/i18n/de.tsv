@@ -2134,3 +2134,4 @@ action wizard	Start	Starten
 	The field {name} no longer exists.	Das Feld {name} existiert nicht mehr.
 	A selected field has no widget on any page, so the fields can't be edited together.	Ein ausgewähltes Feld hat auf keiner Seite ein Widget, daher können die Felder nicht gemeinsam bearbeitet werden.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} mit {dpi} dpi, der größten Auflösung, in der sie gezeichnet werden können)
+	This printer's driver doesn't offer two-sided printing to other programs. If the printer prints two-sided, set it in Properties…	Der Treiber dieses Druckers bietet anderen Programmen keinen beidseitigen Druck an. Wenn der Drucker beidseitig druckt, stellen Sie es ein unter Eigenschaften…

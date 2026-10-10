@@ -2132,3 +2132,4 @@ action wizard	Start	Indítás
 	The field {name} no longer exists.	A(z) {name} mező már nem létezik.
 	A selected field has no widget on any page, so the fields can't be edited together.	Az egyik kijelölt mezőnek egyik oldalon sincs widgetje, ezért a mezők nem szerkeszthetők együtt.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} {dpi} dpi felbontással, a legnagyobb méretben, amelyben megjeleníthetők)
+	This printer's driver doesn't offer two-sided printing to other programs. If the printer prints two-sided, set it in Properties…	A nyomtató illesztőprogramja nem kínál kétoldalas nyomtatást más programoknak. Ha a nyomtató tud kétoldalasan nyomtatni, itt állítsa be: Tulajdonságok…

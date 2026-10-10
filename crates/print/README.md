@@ -43,8 +43,12 @@ local/connected queues and submits PDFs through Windows.Data.Pdf and Direct2D us
 `winprint` wrapper. The job uses a private temporary directory which is removed after
 submission. Validated PrintTickets carry copies, collation, duplex, colour, paper size and
 orientation. Driver media names are preserved, and substituted dimensions, orientation or scaling
-are rejected before submission. One Windows job has one sheet size and orientation; choose a fixed
-orientation or submit differing sheets separately. The print-ready PDF can always be saved.
+are rejected before submission. One Windows job has one sheet size and orientation: with
+orientation Auto, sheets in the other orientation get a quarter turn onto the first sheet's, as a
+driver turns a landscape job, so the document stays one job (two-sided sheets and collated copies
+stay together). Drivers that offer two-sided printing only under their own Print Schema names, not
+the standard one, apply their own setting; the Print dialog and the job's message say so and point
+to Properties…. The print-ready PDF can always be saved.
 
 Not yet: web spoolers, native printer-properties UI, print as image, poster labels, PostScript output, colour
 conversion for grayscale.

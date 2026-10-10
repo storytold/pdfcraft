@@ -241,6 +241,33 @@ fn imposed_pdf_has_the_sheets_and_honours_comments_and_forms() {
 }
 
 #[test]
+fn mixed_orientations_turn_onto_the_first_sheets_orientation() {
+    let doc = fixture(3);
+    let sizes = |pdf: &[u8]| {
+        let d = Document::open(Arc::new(pdf.to_vec())).unwrap();
+        pdfcraft_model::pages(&d).iter().map(|p| (p.display_size(&d), p.rotation(&d))).collect::<Vec<_>>()
+    };
+    // Auto: pages 1 and 2 on portrait Letter, the landscape page 3 on landscape Letter.
+    let mixed = impose(&doc, &settings(vec![0, 1, 2], Layout::Size(SizeMode::Fit))).unwrap();
+    assert_eq!(sizes(&mixed)[2], ((792.0, 612.0), 0));
+    let one = spool::one_orientation(&mixed).unwrap().unwrap();
+    assert_eq!(sizes(&one), vec![((612.0, 792.0), 0), ((612.0, 792.0), 0), ((612.0, 792.0), 270)]);
+    // Starting landscape, the portrait sheets turn the other way.
+    let landscape_first = impose(&doc, &settings(vec![2, 0], Layout::Size(SizeMode::Fit))).unwrap();
+    assert_eq!(sizes(&spool::one_orientation(&landscape_first).unwrap().unwrap()), vec![((792.0, 612.0), 0), ((792.0, 612.0), 90)]);
+    // Nothing to turn, or sheets of different sizes: left as they are.
+    let portrait = impose(&doc, &settings(vec![0, 1], Layout::Size(SizeMode::Fit))).unwrap();
+    assert_eq!(spool::one_orientation(&portrait).unwrap(), None);
+    let mut sized = fixture(3);
+    let page2 = pdfcraft_model::pages(&sized)[1].obj;
+    let Object::Dict(mut dict) = (*sized.get(page2)).clone() else { panic!("page 2 is a dictionary") };
+    dict.set(b"MediaBox".to_vec(), Object::Array([0.0, 0.0, 100.0, 100.0].iter().map(|v| Object::Real(*v)).collect()));
+    sized.set(page2, Object::Dict(dict));
+    let sized = write_full(&sized, &SaveOptions::default()).unwrap();
+    assert_eq!(spool::one_orientation(&sized).unwrap(), None);
+}
+
+#[test]
 fn spooler_arguments_and_printer_list() {
     let out = "printer Office_Laser is idle.  enabled since Thu Oct  1 09:00:00 2026\nprinter Label_Writer disabled since …\nsystem default destination: Office_Laser\n";
     assert_eq!(

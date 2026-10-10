@@ -5,10 +5,12 @@ use std::sync::Arc;
 
 use winprint::printer::{FilePrinter, PrinterDevice, WinPdfPrinter};
 use winprint::ticket::document::{NS_PSK, OwnedName, PrintFeature, PrintTicketDocument, reader::ParsableXmlDocument};
-use winprint::ticket::{FeatureOptionPack, PrintCapabilities, PrintTicket, PrintTicketBuilder};
+use winprint::ticket::{
+    FeatureOptionPack, FeatureOptionPackWithPredefined, PredefinedDuplexType, PrintCapabilities, PrintTicket, PrintTicketBuilder,
+};
 use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 
-use super::{Duplex, Job, Printer};
+use super::{Duplex, Job, Printer, Support};
 use crate::PrintError;
 
 fn spool_error(e: impl std::fmt::Display) -> PrintError {
@@ -84,7 +86,22 @@ fn job_filename(title: &str) -> String {
     format!("PdfCraft-{safe}.pdf")
 }
 
-fn driver_ticket(device: &PrinterDevice, job: &Job, width: f64, height: f64) -> Result<PrintTicket, PrintError> {
+/// Whether the driver offers two-sided printing under the standard Print Schema feature that
+/// [`ticket`] sets. A driver that offers it only under a name of its own ignores the request.
+fn offers_two_sided(capabilities: &PrintCapabilities) -> bool {
+    capabilities
+        .duplexes()
+        .any(|d| matches!(d.as_predefined_name(), Some(PredefinedDuplexType::TwoSidedLongEdge | PredefinedDuplexType::TwoSidedShortEdge)))
+}
+
+pub(super) fn support(printer: &str) -> Option<Support> {
+    let device = PrinterDevice::all().ok()?.into_iter().find(|p| p.name() == printer)?;
+    let capabilities = PrintCapabilities::fetch(&device).ok()?;
+    Some(Support { two_sided: offers_two_sided(&capabilities) })
+}
+
+/// The validated ticket, and whether the driver takes two-sided printing from it.
+fn driver_ticket(device: &PrinterDevice, job: &Job, width: f64, height: f64) -> Result<(PrintTicket, bool), PrintError> {
     let requested = ticket(job, width, height)?;
     let capabilities = PrintCapabilities::fetch(device).map_err(spool_error)?;
     let w = (width.min(height) * 25_400.0 / 72.0).round() as u32;
@@ -124,7 +141,7 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, width: f64, height: f64) -> 
     builder.merge(PrintTicket::from(document)).map_err(spool_error)?;
     let validated = builder.build().map_err(spool_error)?;
     verify_ticket_size(&validated, w, h, width > height)?;
-    Ok(validated)
+    Ok((validated, offers_two_sided(&capabilities)))
 }
 
 fn verify_ticket_size(ticket: &PrintTicket, width: u32, height: u32, landscape: bool) -> Result<(), PrintError> {
@@ -169,31 +186,33 @@ fn verify_ticket_size(ticket: &PrintTicket, width: u32, height: u32, landscape: 
 
 pub(super) fn submit(pdf: &[u8], job: &Job) -> Result<String, PrintError> {
     let device = select_device(PrinterDevice::all().map_err(spool_error)?, job.printer.as_deref(), default_printer().as_deref())?;
+    // This backend has one ticket per job: sheets in the other orientation are turned onto the
+    // first sheet's, as the driver turns a landscape job. Never silently scale mixed sizes.
+    let turned = super::one_orientation(pdf)?;
+    let pdf = turned.as_deref().unwrap_or(pdf);
     let doc = pdfcraft_cos::Document::open(Arc::new(pdf.to_vec()))?;
     let pages = pdfcraft_model::pages(&doc);
     let first = pages.first().ok_or(PrintError::NoPages)?.display_size(&doc);
-    // This backend has one ticket per job. Never silently rotate/scale mixed sheets.
     if pages.iter().any(|p| {
         let s = p.display_size(&doc);
         (s.0 - first.0).abs() > 0.1 || (s.1 - first.1).abs() > 0.1
     }) {
-        return Err(spool_error(
-            "Windows printing requires one sheet size and orientation per job. Choose Portrait or Landscape instead of Auto, or print the differing sheets separately.",
-        ));
+        return Err(spool_error("Windows printing requires one sheet size per job. Print the differing sheets separately."));
     }
     let dir = tempfile::Builder::new().prefix("pdfcraft-job-").tempdir().map_err(spool_error)?;
     let path = dir.path().join(job_filename(&job.title));
     let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(spool_error)?;
     file.write_all(pdf).map_err(spool_error)?;
     drop(file);
+    let wants_two_sided = job.duplex != Duplex::Off;
     let job = job.clone();
     // A dedicated thread gives WinRT its own COM apartment, independent of egui or CLI callers.
     // Join before dropping the private temporary directory so the spooler can read the PDF.
     let result = std::thread::Builder::new()
         .name("pdfcraft-windows-print".into())
         .spawn(move || {
-            let options = driver_ticket(&device, &job, first.0, first.1)?;
-            WinPdfPrinter::new(device).print(&path, options).map_err(|e| {
+            let (options, two_sided) = driver_ticket(&device, &job, first.0, first.1)?;
+            WinPdfPrinter::new(device).print(&path, options).map(|()| two_sided).map_err(|e| {
                 let mut message = e.to_string();
                 let mut cause = std::error::Error::source(&e);
                 while let Some(source) = cause {
@@ -206,8 +225,12 @@ pub(super) fn submit(pdf: &[u8], job: &Job) -> Result<String, PrintError> {
         .map_err(spool_error)?
         .join()
         .map_err(|_| spool_error("The Windows print worker failed. Check the queue before retrying to avoid duplicate output."))?;
-    result?;
-    Ok("Accepted by the Windows print spooler".into())
+    let two_sided = result?;
+    Ok(if wants_two_sided && !two_sided {
+        "Accepted by the Windows print spooler. This printer's driver doesn't offer two-sided printing to other programs; if the printer prints two-sided, set it in the printer's Properties.".into()
+    } else {
+        "Accepted by the Windows print spooler".into()
+    })
 }
 
 #[cfg(test)]
@@ -261,7 +284,7 @@ mod tests {
     fn installed_driver_accepts_arch_d_without_substitution() {
         let name = std::env::var("PDFCRAFT_TEST_PRINTER").unwrap();
         let device = select_device(PrinterDevice::all().unwrap(), Some(&name), None).unwrap();
-        let ticket = driver_ticket(&device, &Job::default(), 2592.0, 1728.0).unwrap();
+        let (ticket, _) = driver_ticket(&device, &Job::default(), 2592.0, 1728.0).unwrap();
         verify_ticket_size(&ticket, 609600, 914400, true).unwrap();
         if let Ok(path) = std::env::var("PDFCRAFT_TEST_TICKET_OUTPUT") {
             std::fs::write(path, ticket.get_xml()).unwrap();

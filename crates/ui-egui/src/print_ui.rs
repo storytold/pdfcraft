@@ -72,6 +72,9 @@ pub struct PrintDraft {
     pub show_driver_options: bool,
     /// Why the printer's preferences window didn't open (Windows).
     pub driver_error: Option<String>,
+    /// The standard job options the printer's driver takes, and the printer they were read for
+    /// (Windows; `None` inside when they couldn't be read).
+    pub support: Option<(String, Option<spool::Support>)>,
 }
 
 impl Default for PrintDraft {
@@ -109,6 +112,7 @@ impl Default for PrintDraft {
             driver_choices: Default::default(),
             show_driver_options: false,
             driver_error: None,
+            support: None,
         }
     }
 }
@@ -186,7 +190,8 @@ impl PdfCraftApp {
             (true, Which::Selected) => Which::All,
             (true, other) => other,
         };
-        self.print_draft = PrintDraft { printers, printer: default, current_page: current, sheet: 0, selected, which, ..keep };
+        // The driver may have been changed since: read what it offers again.
+        self.print_draft = PrintDraft { printers, printer: default, current_page: current, sheet: 0, selected, which, support: None, ..keep };
         self.dialog = Some(crate::Dialog::Print);
     }
 
@@ -325,6 +330,41 @@ impl PdfCraftApp {
                 self.notify("The print worker stopped unexpectedly. Check the queue before retrying.".to_string());
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
+    /// Read what the Print dialog's printer's driver offers (`spool::support`), one printer at a
+    /// time on a worker thread: some drivers take seconds to answer.
+    #[cfg(windows)]
+    pub(crate) fn poll_printer_support(&mut self) {
+        if let Some((printer, receive)) = self.pending_support.take() {
+            match receive.try_recv() {
+                Ok(support) => self.print_draft.support = Some((printer, support)),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.pending_support = Some((printer, receive));
+                    return;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.print_draft.support = Some((printer, None)),
+            }
+        }
+        if self.dialog != Some(crate::Dialog::Print) {
+            return;
+        }
+        let Some(printer) = self.print_draft.printer.clone() else { return };
+        if self.print_draft.support.as_ref().is_some_and(|(read_for, _)| *read_for == printer) {
+            return;
+        }
+        let (send, receive) = std::sync::mpsc::channel();
+        let (name, ctx) = (printer.clone(), self.ctx.clone());
+        let started = std::thread::Builder::new().name("pdfcraft-printer-support".into()).spawn(move || {
+            let _ = send.send(std::panic::catch_unwind(|| spool::support(&name)).ok().flatten());
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+        match started {
+            Ok(_) => self.pending_support = Some((printer, receive)),
+            Err(_) => self.print_draft.support = Some((printer, None)),
         }
     }
 }
@@ -533,6 +573,17 @@ pub(crate) fn body(
                 });
                 ui.end_row();
             });
+            if d.duplex != spool::Duplex::Off
+                && let (Some(printer), Some((read_for, Some(support)))) = (&d.printer, &d.support)
+                && printer == read_for
+                && !support.two_sided
+            {
+                ui.label(
+                    egui::RichText::new(tl!("This printer's driver doesn't offer two-sided printing to other programs. If the printer prints two-sided, set it in Properties…"))
+                        .small()
+                        .color(t.text_muted),
+                );
+            }
             if let Some(e) = &d.driver_error {
                 ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Couldn't open the printer's preferences: {e}"), &[("e", e)])).small().color(t.text_muted));
             }
