@@ -2163,3 +2163,5 @@ key	Space	Szóköz
 	Switch to List view to change the pages it takes.	Válts listanézetre, ha módosítanád, mely oldalak kerüljenek bele.
 	Expand all	Összes kibontása
 	Collapse all	Összes összecsukása
+	Remove page	Oldal eltávolítása
+	Remove {n} pages	{n} oldal eltávolítása

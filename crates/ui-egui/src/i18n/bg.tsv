@@ -2127,3 +2127,5 @@ key	Space	Интервал
 	Switch to List view to change the pages it takes.	Превключете към изглед списък, за да промените кои страници се вземат.
 	Expand all	Разгъни всички
 	Collapse all	Свий всички
+	Remove page	Премахни страницата
+	Remove {n} pages	Премахни {n} страници

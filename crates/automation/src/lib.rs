@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use pdfcraft_engine::{DocId, Document, Edit, Session, commands};
+use pdfcraft_engine::{CombineSource, DocId, Document, Edit, Session, commands};
 use pdfcraft_platform::staging::{StagingName, create_staging, staging_suffixes};
 use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
 use serde_json::{Value, json};
@@ -1294,15 +1294,58 @@ impl Automation {
             }
             Some(_) => return Err(ToolError::InvalidArgs("passwords must list a password (or null) for each path".into())),
         };
-        let mut sources = Vec::new();
-        for (p, range) in paths.into_iter().zip(ranges) {
+        // Entries sharing a group number are one file split into parts placed apart.
+        let groups: Option<Vec<Option<u64>>> = match a.get("groups") {
+            None | Some(Value::Null) => None,
+            Some(Value::Array(v)) if v.len() == paths.len() && v.iter().all(|x| x.is_u64() || x.is_null()) => {
+                Some(v.iter().map(Value::as_u64).collect())
+            }
+            Some(_) => return Err(ToolError::InvalidArgs("groups must list a number (or null) for each path".into())),
+        };
+        let mut sources: Vec<CombineSource> = Vec::new();
+        let mut firsts: Vec<(u64, PathBuf, usize)> = Vec::new();
+        for (i, (p, range)) in paths.into_iter().zip(ranges).enumerate() {
             let path = self.resolve(p, false)?;
-            let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+            let group = groups.as_ref().and_then(|g| g.get(i).copied().flatten());
+            let first = group.and_then(|g| firsts.iter().find(|f| f.0 == g));
+            let bytes = match first {
+                Some((g, first_path, at)) => {
+                    if *first_path != path {
+                        return Err(ToolError::InvalidArgs(format!("groups[{i}]: group {g} is {}, not {}", first_path.display(), path.display())));
+                    }
+                    sources.get(*at).map(|s| s.1.clone()).ok_or_else(|| failed("group source missing"))?
+                }
+                None => {
+                    if let Some(g) = group {
+                        firsts.push((g, path.clone(), sources.len()));
+                    }
+                    Arc::new(std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?)
+                }
+            };
             let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            sources.push((name, Arc::new(bytes), range));
+            sources.push((name, bytes, range));
         }
         let passwords: Vec<Option<&str>> = passwords.iter().map(Option::as_deref).collect();
-        let bytes = self.session.combine_unlocked(&sources, &passwords).map_err(failed)?;
+        let bytes = match groups {
+            None => self.session.combine_unlocked(&sources, &passwords),
+            Some(groups) => {
+                // A path without a group is a file of its own: give it a key no group uses.
+                let mut next = groups.iter().flatten().max().map_or(Some(0), |m| m.checked_add(1));
+                let mut keys = Vec::with_capacity(groups.len());
+                for g in &groups {
+                    keys.push(match g {
+                        Some(g) => *g,
+                        None => {
+                            let own = next.ok_or_else(|| ToolError::InvalidArgs("group numbers are too large".into()))?;
+                            next = own.checked_add(1);
+                            own
+                        }
+                    });
+                }
+                self.session.combine_grouped(&sources, &keys, &passwords)
+            }
+        }
+        .map_err(failed)?;
         self.deliver(a, "Combined", bytes)
     }
 

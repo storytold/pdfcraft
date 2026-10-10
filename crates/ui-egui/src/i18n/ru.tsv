@@ -2078,3 +2078,5 @@ key	Space	Пробел
 	Switch to List view to change the pages it takes.	Переключитесь на вид списком, чтобы изменить, какие страницы взять.
 	Expand all	Развернуть все
 	Collapse all	Свернуть все
+	Remove page	Удалить страницу
+	Remove {n} pages	Удалить страницы: {n}

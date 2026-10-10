@@ -2129,3 +2129,5 @@ key	Space	空格
 	Switch to List view to change the pages it takes.	切换到列表视图以更改要使用的页面。
 	Expand all	全部展开
 	Collapse all	全部折叠
+	Remove page	删除页面
+	Remove {n} pages	删除 {n} 页
