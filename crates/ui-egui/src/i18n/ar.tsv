@@ -2163,3 +2163,10 @@ certificate	Subject	صاحب الشهادة
 	A selected field has no widget on any page, so the fields can't be edited together.	أحد الحقول المحددة ليس له عنصر واجهة في أي صفحة، لذا لا يمكن تحرير الحقول معًا.
 	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	التعرف على النص غير مثبت: نماذجه مفقودة (شغّل `cargo xtask models`، أو اضبط PDFCRAFT_MODELS).
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} بدقة {dpi} dpi، وهي أكبر دقة يمكن رسمها بها)
+	Grid view	عرض الشبكة
+	List view	عرض القائمة
+	Files are combined in the order shown. Drag them to change it.	تُدمج الملفات بالترتيب المعروض. اسحبها لتغيير الترتيب.
+	Preview unavailable: {e}	المعاينة غير متاحة: {e}
+	Pages: {k} of {n}	الصفحات: {k} من {n}
+	Check the pages	تحقق من الصفحات
+	Switch to List view to change the pages it takes.	انتقل إلى عرض القائمة لتغيير الصفحات التي يأخذها.

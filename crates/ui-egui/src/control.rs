@@ -566,6 +566,16 @@ impl Host for crate::PdfCraftApp {
                 "selected_comment": v.comments.selected.map(|(p, i)| json!({ "page": p + 1, "index": i + 1 })),
                 "comment_composer_open": v.comments.composer.is_some(),
             })),
+            // The Combine files tab: how its files show, and each grid thumbnail's state.
+            "combine": {
+                "showing": self.combine_showing(),
+                "view": self.combine_view.as_str(),
+                "zoom": self.combine_zoom,
+                "files": self.combine_draft.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
+                "selected": self.combine_selection(),
+                "thumbnails": self.combine_thumbnails().iter().map(|t| format!("{t:?}")).collect::<Vec<_>>(),
+                "preview": self.combine_preview().map(|(file, page, render)| json!({ "file": file, "page": page + 1, "render": format!("{render:?}") })),
+            },
             "quick_tool": match self.quick_tool {
                 crate::QuickTool::Measure(t) => format!("measure-{}", t.name()),
                 crate::QuickTool::Select => "select".to_string(),

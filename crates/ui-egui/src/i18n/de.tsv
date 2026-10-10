@@ -2141,3 +2141,10 @@ action wizard	Start	Starten
 	The field {name} no longer exists.	Das Feld {name} existiert nicht mehr.
 	A selected field has no widget on any page, so the fields can't be edited together.	Ein ausgewähltes Feld hat auf keiner Seite ein Widget, daher können die Felder nicht gemeinsam bearbeitet werden.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} mit {dpi} dpi, der größten Auflösung, in der sie gezeichnet werden können)
+	Grid view	Rasteransicht
+	List view	Listenansicht
+	Files are combined in the order shown. Drag them to change it.	Dateien werden in der gezeigten Reihenfolge kombiniert. Zieh sie, um sie zu ändern.
+	Preview unavailable: {e}	Keine Vorschau: {e}
+	Pages: {k} of {n}	Seiten: {k} von {n}
+	Check the pages	Prüfe die Seiten
+	Switch to List view to change the pages it takes.	Wechsle zur Listenansicht, um die übernommenen Seiten zu ändern.

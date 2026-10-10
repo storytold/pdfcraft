@@ -2141,3 +2141,10 @@ signature pad	Type	Saisir
 	The field {name} no longer exists.	Le champ {name} n'existe plus.
 	A selected field has no widget on any page, so the fields can't be edited together.	Un champ sélectionné n'a de widget sur aucune page : les champs ne peuvent pas être modifiés ensemble.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} à {dpi} ppp, la plus grande taille possible pour les dessiner)
+	Grid view	Vue en grille
+	List view	Vue en liste
+	Files are combined in the order shown. Drag them to change it.	Les fichiers sont combinés dans l'ordre affiché. Faites-les glisser pour le modifier.
+	Preview unavailable: {e}	Aperçu indisponible : {e}
+	Pages: {k} of {n}	Pages : {k} sur {n}
+	Check the pages	Vérifiez les pages
+	Switch to List view to change the pages it takes.	Passez à la vue en liste pour modifier les pages prises.

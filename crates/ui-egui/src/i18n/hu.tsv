@@ -2139,3 +2139,10 @@ action wizard	Start	Indítás
 	The field {name} no longer exists.	A(z) {name} mező már nem létezik.
 	A selected field has no widget on any page, so the fields can't be edited together.	Az egyik kijelölt mezőnek egyik oldalon sincs widgetje, ezért a mezők nem szerkeszthetők együtt.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} {dpi} dpi felbontással, a legnagyobb méretben, amelyben megjeleníthetők)
+	Grid view	Rácsnézet
+	List view	Listanézet
+	Files are combined in the order shown. Drag them to change it.	A fájlok a látható sorrendben egyesülnek. Húzd őket a sorrend módosításához.
+	Preview unavailable: {e}	Nincs előnézet: {e}
+	Pages: {k} of {n}	Oldalak: {k} / {n}
+	Check the pages	Ellenőrizd az oldalakat
+	Switch to List view to change the pages it takes.	Válts listanézetre, ha módosítanád, mely oldalak kerüljenek bele.

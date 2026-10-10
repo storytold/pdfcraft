@@ -2164,3 +2164,10 @@ certificate	Subject	Власник сертифіката
 	The field {name} no longer exists.	Поле {name} більше не існує.
 	A selected field has no widget on any page, so the fields can't be edited together.	Одне з вибраних полів не має віджета на жодній сторінці, тому поля не можна редагувати разом.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} — з роздільністю {dpi} dpi, найбільшою, з якою їх можна відобразити)
+	Grid view	Вигляд сіткою
+	List view	Вигляд списком
+	Files are combined in the order shown. Drag them to change it.	Файли об’єднуються в показаному порядку. Перетягніть їх, щоб змінити його.
+	Preview unavailable: {e}	Попередній перегляд недоступний: {e}
+	Pages: {k} of {n}	Сторінки: {k} із {n}
+	Check the pages	Перевірте сторінки
+	Switch to List view to change the pages it takes.	Перейдіть до вигляду списком, щоб змінити, які сторінки взяти.

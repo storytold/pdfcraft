@@ -2054,3 +2054,10 @@
 	The field {name} no longer exists.	Поле {name} больше не существует.
 	A selected field has no widget on any page, so the fields can't be edited together.	У одного из выбранных полей нет виджета ни на одной странице, поэтому поля нельзя изменить вместе.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} — с разрешением {dpi} dpi, максимальным, с каким их можно отрисовать)
+	Grid view	Вид сеткой
+	List view	Вид списком
+	Files are combined in the order shown. Drag them to change it.	Файлы объединяются в показанном порядке. Перетащите их, чтобы изменить его.
+	Preview unavailable: {e}	Предпросмотр недоступен: {e}
+	Pages: {k} of {n}	Страницы: {k} из {n}
+	Check the pages	Проверьте страницы
+	Switch to List view to change the pages it takes.	Переключитесь на вид списком, чтобы изменить, какие страницы взять.

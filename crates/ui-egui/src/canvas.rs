@@ -60,7 +60,7 @@ fn texture_bytes(tex: &TextureHandle) -> usize {
 
 /// Visible grid rows, plus one adjacent row in either direction. Work is independent of
 /// document length, including after a large scroll jump.
-fn thumbnail_rows(top: f32, bottom: f32, row_height: f32, rows: usize) -> Range<usize> {
+pub(crate) fn thumbnail_rows(top: f32, bottom: f32, row_height: f32, rows: usize) -> Range<usize> {
     let first = (top.max(0.0) / row_height).floor() as usize;
     let end = (bottom.max(0.0) / row_height).ceil() as usize;
     first.saturating_sub(1).min(rows)..end.saturating_add(1).min(rows)
@@ -3274,7 +3274,7 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: b
 /// Organize pages: a thumbnail grid (Acrobat's Organize Pages view). Click selects, ⌘-click
 /// toggles, ⇧-click extends; double-click opens the page.
 /// The gap (0 = before the first page, n = after the last) the pointer points at in the grid.
-fn drop_gap(cells: &[(usize, Rect)], p: Pos2) -> Option<usize> {
+pub(crate) fn drop_gap(cells: &[(usize, Rect)], p: Pos2) -> Option<usize> {
     let (i, r) = cells.iter().min_by(|(_, a), (_, b)| a.distance_sq_to_pos(p).total_cmp(&b.distance_sq_to_pos(p)))?;
     Some(if p.x < r.center().x { *i } else { i + 1 })
 }
@@ -3525,7 +3525,7 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
 
 /// A rendered raster as texture data. Its words are premultiplied RGBA bytes, exactly
 /// `Color32`s, so the renderer's buffer becomes the image without a copy on the UI thread.
-fn texture_image(size: [usize; 2], pixels: pdfcraft_render::Pixels) -> egui::ColorImage {
+pub(crate) fn texture_image(size: [usize; 2], pixels: pdfcraft_render::Pixels) -> egui::ColorImage {
     match bytemuck::allocation::try_cast_vec::<u32, Color32>(pixels.into_words()) {
         Ok(px) if px.len() == size[0].saturating_mul(size[1]) => egui::ColorImage::new(size, px),
         Ok(px) => egui::ColorImage::from_rgba_premultiplied(size, bytemuck::cast_slice(&px)),

@@ -2103,3 +2103,10 @@ action wizard	Start	Старт
 	The field {name} no longer exists.	Полето {name} вече не съществува.
 	A selected field has no widget on any page, so the fields can't be edited together.	Едно от избраните полета няма елемент на нито една страница, затова полетата не могат да се редактират заедно.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} с {dpi} dpi, най-голямата резолюция, с която могат да бъдат изобразени)
+	Grid view	Изглед мрежа
+	List view	Изглед списък
+	Files are combined in the order shown. Drag them to change it.	Файловете се обединяват в показания ред. Плъзнете ги, за да го промените.
+	Preview unavailable: {e}	Няма преглед: {e}
+	Pages: {k} of {n}	Страници: {k} от {n}
+	Check the pages	Проверете страниците
+	Switch to List view to change the pages it takes.	Превключете към изглед списък, за да промените кои страници се вземат.

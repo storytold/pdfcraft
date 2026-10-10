@@ -2072,3 +2072,13 @@ action wizard	Start	ప్రారంభించు
 	The field {name} no longer exists.	{name} ఫీల్డ్ ఇకపై లేదు.
 	A selected field has no widget on any page, so the fields can't be edited together.	ఎంచుకున్న ఒక ఫీల్డ్‌కు ఏ పేజీలోనూ విడ్జెట్ లేదు, కాబట్టి ఫీల్డ్‌లను కలిపి సవరించలేము.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} {dpi} dpi వద్ద, అవి గీయగల అతిపెద్ద పరిమాణం)
+	Grid view	గ్రిడ్ వీక్షణ
+	List view	జాబితా వీక్షణ
+	Files are combined in the order shown. Drag them to change it.	ఫైల్‌లు చూపిన క్రమంలో కలపబడతాయి. క్రమాన్ని మార్చడానికి వాటిని లాగండి.
+	Preview unavailable: {e}	ప్రివ్యూ అందుబాటులో లేదు: {e}
+	Pages: {k} of {n}	పేజీలు: {n}లో {k}
+	Check the pages	పేజీలను తనిఖీ చేయండి
+	Switch to List view to change the pages it takes.	ఇది తీసుకునే పేజీలను మార్చడానికి జాబితా వీక్షణకు మారండి.
+	Larger pages	పెద్ద పేజీలు
+	Smaller pages	చిన్న పేజీలు
+	Reset page size	పేజీ పరిమాణాన్ని రీసెట్ చేయి

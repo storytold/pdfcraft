@@ -2105,3 +2105,10 @@
 	The field {name} no longer exists.	字段 {name} 已不存在。
 	A selected field has no widget on any page, so the fields can't be edited together.	某个所选字段在任何页面上都没有控件，因此无法一起编辑这些字段。
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 张以可绘制的最大尺寸 {dpi} dpi 导出）
+	Grid view	网格视图
+	List view	列表视图
+	Files are combined in the order shown. Drag them to change it.	文件按显示的顺序合并。拖动可更改顺序。
+	Preview unavailable: {e}	无法预览：{e}
+	Pages: {k} of {n}	页面：{k}/{n}
+	Check the pages	请检查页码
+	Switch to List view to change the pages it takes.	切换到列表视图以更改要使用的页面。

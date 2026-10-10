@@ -2057,3 +2057,10 @@
 	The field {name} no longer exists.	El campo {name} ya no existe.
 	A selected field has no widget on any page, so the fields can't be edited together.	Un campo seleccionado no tiene ningún widget en ninguna página, así que los campos no se pueden editar juntos.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} ppp, el mayor tamaño al que se pueden dibujar)
+	Grid view	Vista de cuadrícula
+	List view	Vista de lista
+	Files are combined in the order shown. Drag them to change it.	Los archivos se combinan en el orden mostrado. Arrástralos para cambiarlo.
+	Preview unavailable: {e}	Vista previa no disponible: {e}
+	Pages: {k} of {n}	Páginas: {k} de {n}
+	Check the pages	Revisa las páginas
+	Switch to List view to change the pages it takes.	Cambia a la vista de lista para cambiar las páginas que se incluyen.
