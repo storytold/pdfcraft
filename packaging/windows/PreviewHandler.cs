@@ -30,6 +30,9 @@
 //    It is registered on SystemFileAssociations\.pdf (consulted last) and Linkco's own ProgIDs, so
 //    another PDF app's thumbnail provider keeps priority. Windows runs it in its isolated thumbnail
 //    process (dllhost.exe).
+//  * Uninstall: UnregisterPreviewHandlerForAllUsers() removes the per-user registration from every
+//    user profile on the PC (mounting the hives of users who aren't signed in), restoring each
+//    user's previous handlers, so no account is left pointing Explorer at the deleted DLL.
 //  * Diagnostics: %USERPROFILE%\AppData\LocalLow\LinkcoPdfPreview\preview.log (size-capped), and
 //    [LinkcoPdfPreview.LinkcoPdfPreviewHandler]::Diagnose() from PowerShell.
 
@@ -607,6 +610,302 @@ namespace LinkcoPdfPreview
     }
 
     /// <summary>Small, size-capped diagnostic log in the preview temp folder (no document contents).</summary>
+    /// <summary>
+    /// A registry root the registration code writes to: HKCU, HKLM or another user's profile. Paths
+    /// are relative to the hive root ("Software\Classes\...", "Software\Linkco\..."). For a user
+    /// profile whose classes live in a separately loaded hive (UsrClass.dat, mounted next to
+    /// NTUSER.DAT) "Software\Classes\..." is routed to that hive, exactly as Windows maps
+    /// HKCU\Software\Classes for a logged-on user. Does not own the keys it wraps.
+    /// </summary>
+    internal sealed class RegRoot
+    {
+        private const string ClassesPrefix = @"Software\Classes";
+        private readonly RegistryKey _root;
+        private readonly RegistryKey _classes;
+
+        public RegRoot(RegistryKey root) : this(root, null)
+        {
+        }
+
+        public RegRoot(RegistryKey root, RegistryKey classes)
+        {
+            if (root == null)
+                throw new ArgumentNullException("root");
+            _root = root;
+            _classes = classes;
+        }
+
+        public static implicit operator RegRoot(RegistryKey root)
+        {
+            return root == null ? null : new RegRoot(root);
+        }
+
+        public string Name
+        {
+            get { return _root.Name; }
+        }
+
+        /// <summary>The key a path lives in, and the path relative to it.</summary>
+        private RegistryKey Route(string path, out string rest)
+        {
+            if (_classes != null && path.StartsWith(ClassesPrefix, StringComparison.OrdinalIgnoreCase) &&
+                path.Length > ClassesPrefix.Length && path[ClassesPrefix.Length] == '\\')
+            {
+                rest = path.Substring(ClassesPrefix.Length + 1);
+                return _classes;
+            }
+            rest = path;
+            return _root;
+        }
+
+        public RegistryKey OpenSubKey(string path)
+        {
+            return OpenSubKey(path, false);
+        }
+
+        public RegistryKey OpenSubKey(string path, bool writable)
+        {
+            string rest;
+            return Route(path, out rest).OpenSubKey(rest, writable);
+        }
+
+        public RegistryKey CreateSubKey(string path)
+        {
+            string rest;
+            return Route(path, out rest).CreateSubKey(rest);
+        }
+
+        public void DeleteSubKey(string path, bool throwOnMissingSubKey)
+        {
+            string rest;
+            Route(path, out rest).DeleteSubKey(rest, throwOnMissingSubKey);
+        }
+
+        public void DeleteSubKeyTree(string path, bool throwOnMissingSubKey)
+        {
+            string rest;
+            Route(path, out rest).DeleteSubKeyTree(rest, throwOnMissingSubKey);
+        }
+
+        /// <summary>The names directly under Software\Classes (extensions, ProgIDs, CLSID, ...).</summary>
+        public string[] ClassesSubKeyNames()
+        {
+            if (_classes != null)
+                return _classes.GetSubKeyNames();
+            using (RegistryKey c = _root.OpenSubKey(ClassesPrefix, false))
+            {
+                return c == null ? new string[0] : c.GetSubKeyNames();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Visits the registry of every user profile on this PC, so an elevated uninstaller can remove
+    /// what Linkco PDF Editor registered for each user (it registers per user, for each user who
+    /// starts it). Logged-on users' hives are already loaded under HKEY_USERS; the others are
+    /// mounted from NTUSER.DAT and UsrClass.dat for the visit and unmounted right after. Mounting
+    /// needs the backup and restore privileges, i.e. an elevated administrator or LocalSystem.
+    /// </summary>
+    internal static class UserProfileHives
+    {
+        private const string ProfileListKey = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList";
+        private static readonly IntPtr HKEY_USERS = new IntPtr(unchecked((int)0x80000003));
+        private const uint TOKEN_ADJUST_PRIVILEGES = 0x0020;
+        private const uint TOKEN_QUERY = 0x0008;
+        private const int SE_PRIVILEGE_ENABLED = 0x00000002;
+        private const int ERROR_NOT_ALL_ASSIGNED = 1300;
+
+        [StructLayout(LayoutKind.Sequential, Pack = 4)]
+        private struct TokenPrivilege
+        {
+            public int Count;
+            public long Luid;
+            public int Attributes;
+        }
+
+        [DllImport("advapi32.dll", EntryPoint = "RegLoadKeyW", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        private static extern int RegLoadKey(IntPtr hKey, string lpSubKey, string lpFile);
+
+        [DllImport("advapi32.dll", EntryPoint = "RegUnLoadKeyW", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        private static extern int RegUnLoadKey(IntPtr hKey, string lpSubKey);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentProcess();
+
+        [DllImport("kernel32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr handle);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool OpenProcessToken(IntPtr process, uint desiredAccess, out IntPtr token);
+
+        [DllImport("advapi32.dll", EntryPoint = "LookupPrivilegeValueW", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool LookupPrivilegeValue(string systemName, string name, out long luid);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool AdjustTokenPrivileges(IntPtr token, [MarshalAs(UnmanagedType.Bool)] bool disableAll,
+            ref TokenPrivilege newState, int bufferLength, IntPtr previousState, IntPtr returnLength);
+
+        /// <summary>Real people: local and domain accounts (S-1-5-21-...) and Microsoft Entra ID accounts (S-1-12-1-...).</summary>
+        internal static bool IsUserSid(string sid)
+        {
+            if (string.IsNullOrEmpty(sid) || !(sid.StartsWith("S-1-5-21-", StringComparison.Ordinal) || sid.StartsWith("S-1-12-1-", StringComparison.Ordinal)))
+                return false;
+            foreach (char c in sid)
+            {
+                if (!(c == '-' || c == 'S' || (c >= '0' && c <= '9')))
+                    return false; // e.g. "S-1-5-21-...-1001.bak", a profile Windows set aside
+            }
+            return true;
+        }
+
+        private static bool EnablePrivilege(string name)
+        {
+            IntPtr token;
+            if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, out token))
+                return false;
+            try
+            {
+                TokenPrivilege tp = new TokenPrivilege();
+                if (!LookupPrivilegeValue(null, name, out tp.Luid))
+                    return false;
+                tp.Count = 1;
+                tp.Attributes = SE_PRIVILEGE_ENABLED;
+                if (!AdjustTokenPrivileges(token, false, ref tp, 0, IntPtr.Zero, IntPtr.Zero))
+                    return false;
+                return Marshal.GetLastWin32Error() != ERROR_NOT_ALL_ASSIGNED;
+            }
+            finally
+            {
+                CloseHandle(token);
+            }
+        }
+
+        /// <summary>
+        /// Calls <paramref name="visit"/> once per user profile with that user's registry. Returns
+        /// false when profiles that aren't loaded can't be mounted (not elevated); loaded ones are
+        /// still visited when the process may open them.
+        /// </summary>
+        public static bool ForEach(Action<string, RegRoot> visit)
+        {
+            List<KeyValuePair<string, string>> profiles = new List<KeyValuePair<string, string>>();
+            using (RegistryKey hklm = PreviewEnvironment.OpenHive(RegistryHive.LocalMachine))
+            using (RegistryKey list = hklm.OpenSubKey(ProfileListKey, false))
+            {
+                if (list != null)
+                {
+                    foreach (string sid in list.GetSubKeyNames())
+                    {
+                        if (!IsUserSid(sid))
+                            continue;
+                        using (RegistryKey p = list.OpenSubKey(sid, false))
+                        {
+                            string dir = p == null ? null : p.GetValue("ProfileImagePath") as string;
+                            profiles.Add(new KeyValuePair<string, string>(sid, dir ?? ""));
+                        }
+                    }
+                }
+            }
+
+            bool canMount = EnablePrivilege("SeRestorePrivilege") && EnablePrivilege("SeBackupPrivilege");
+            using (RegistryKey users = PreviewEnvironment.OpenHive(RegistryHive.Users))
+            {
+                foreach (KeyValuePair<string, string> profile in profiles)
+                {
+                    string sid = profile.Key;
+                    try
+                    {
+                        RegistryKey loaded = null;
+                        try { loaded = users.OpenSubKey(sid, true); } catch (System.Security.SecurityException) { } catch (UnauthorizedAccessException) { }
+                        if (loaded != null)
+                        {
+                            using (loaded)
+                            using (RegistryKey classes = OpenOrNull(users, sid + "_Classes"))
+                            {
+                                visit(sid, new RegRoot(loaded, classes));
+                            }
+                            continue;
+                        }
+                        if (canMount)
+                            VisitUnloaded(users, sid, profile.Value, visit);
+                    }
+                    catch (Exception ex)
+                    {
+                        PreviewLog.Error("User profile " + sid, ex);
+                    }
+                }
+            }
+            return canMount;
+        }
+
+        private static RegistryKey OpenOrNull(RegistryKey parent, string name)
+        {
+            try { return parent.OpenSubKey(name, true); } catch { return null; }
+        }
+
+        private static void VisitUnloaded(RegistryKey users, string sid, string profileDir, Action<string, RegRoot> visit)
+        {
+            if (string.IsNullOrEmpty(profileDir))
+                return;
+            string ntUser = Path.Combine(profileDir, "NTUSER.DAT");
+            string usrClass = Path.Combine(profileDir, @"AppData\Local\Microsoft\Windows\UsrClass.dat");
+            // Without a per-user classes hive the user has no per-user COM or shell registrations,
+            // so there is nothing of ours to remove.
+            if (!File.Exists(ntUser) || !File.Exists(usrClass))
+                return;
+
+            string mount = "LinkcoPdfCleanup-" + Guid.NewGuid().ToString("N").Substring(0, 12);
+            string mountClasses = mount + "_Classes";
+            int rc = RegLoadKey(HKEY_USERS, mount, ntUser);
+            if (rc != 0)
+            {
+                PreviewLog.Write("Could not mount the registry of " + sid + " (error " + rc.ToString(CultureInfo.InvariantCulture) + "); skipped.");
+                return;
+            }
+            bool classesMounted = false;
+            try
+            {
+                rc = RegLoadKey(HKEY_USERS, mountClasses, usrClass);
+                classesMounted = rc == 0;
+                if (!classesMounted)
+                {
+                    PreviewLog.Write("Could not mount the classes registry of " + sid + " (error " + rc.ToString(CultureInfo.InvariantCulture) + "); skipped.");
+                    return;
+                }
+                using (RegistryKey software = users.OpenSubKey(mount, true))
+                using (RegistryKey classes = users.OpenSubKey(mountClasses, true))
+                {
+                    if (software != null && classes != null)
+                        visit(sid, new RegRoot(software, classes));
+                }
+            }
+            finally
+            {
+                if (classesMounted)
+                    Unmount(mountClasses);
+                Unmount(mount);
+            }
+        }
+
+        private static void Unmount(string mount)
+        {
+            for (int attempt = 0; attempt < 5; attempt++)
+            {
+                // A handle still open anywhere in the process keeps the hive loaded.
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                int rc = RegUnLoadKey(HKEY_USERS, mount);
+                if (rc == 0)
+                    return;
+                Thread.Sleep(100 * (attempt + 1));
+            }
+            PreviewLog.Write("Could not unmount HKEY_USERS\\" + mount + "; Windows unloads it at the next restart.");
+        }
+    }
+
     internal static class PreviewLog
     {
         private static readonly object Gate = new object();
@@ -1123,6 +1422,41 @@ namespace LinkcoPdfPreview
             NotifyShell();
         }
 
+        /// <summary>
+        /// Removes Linkco PDF Editor's per-user registration from every user profile on this PC —
+        /// it registers for each user who starts it — restoring each user's previous preview and
+        /// thumbnail handlers, so no account is left pointing Explorer at a deleted DLL. For
+        /// uninstallers running elevated (or as LocalSystem, e.g. a deferred MSI custom action);
+        /// machine-wide (HKLM) entries are left to the installer. Returns the number of profiles
+        /// cleaned, or -1 when profiles of users who aren't signed in could not be opened because
+        /// the process isn't elevated (signed-in users' profiles are still cleaned if accessible).
+        /// </summary>
+        public static int UnregisterPreviewHandlerForAllUsers()
+        {
+            int cleaned = 0;
+            bool complete = UserProfileHives.ForEach(delegate(string sid, RegRoot root)
+            {
+                try
+                {
+                    if (CleanUserRoot(root))
+                    {
+                        cleaned++;
+                        PreviewLog.Write("Removed the per-user registration of " + sid + ".");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    PreviewLog.Error("UnregisterPreviewHandlerForAllUsers(" + sid + ")", ex);
+                }
+            });
+            if (cleaned > 0)
+            {
+                StopStalePrevHost();
+                NotifyShell();
+            }
+            return complete ? cleaned : -1;
+        }
+
         /// <summary>The preview handler CLSID Explorer currently resolves for .pdf files.</summary>
         public static string QueryEffectiveHandler()
         {
@@ -1233,7 +1567,7 @@ namespace LinkcoPdfPreview
             }
         }
 
-        private static void RegisterInRoot(RegistryKey root, string fullDllPath, bool perUser)
+        private static void RegisterInRoot(RegRoot root, string fullDllPath, bool perUser)
         {
             string dllDir = Path.GetDirectoryName(fullDllPath) ?? "";
             string cliPath = Path.Combine(dllDir, "pdfcraft-cli.exe");
@@ -1327,7 +1661,7 @@ namespace LinkcoPdfPreview
         /// threading) for <paramref name="type"/> and its ProgID, and returns the open CLSID key for
         /// class-specific values. The caller disposes it.
         /// </summary>
-        private static RegistryKey WriteComServer(RegistryKey root, string clsid, string name, Type type, string progId, string codeBase)
+        private static RegistryKey WriteComServer(RegRoot root, string clsid, string name, Type type, string progId, string codeBase)
         {
             Assembly asm = type.Assembly;
             string asmFullName = asm.FullName;
@@ -1394,7 +1728,7 @@ namespace LinkcoPdfPreview
         /// only. Explorer consults the default app's ProgID and .pdf before SystemFileAssociations, so
         /// a thumbnail provider another PDF app registered there keeps working.
         /// </summary>
-        private static void RegisterThumbnailProvider(RegistryKey root, string codeBase)
+        private static void RegisterThumbnailProvider(RegRoot root, string codeBase)
         {
             string clsid = LinkcoPdfThumbnailProvider.ClsidBraced;
             using (WriteComServer(root, clsid, LinkcoPdfThumbnailProvider.ProviderName, typeof(LinkcoPdfThumbnailProvider), LinkcoPdfThumbnailProvider.ProgIdName, codeBase))
@@ -1408,7 +1742,7 @@ namespace LinkcoPdfPreview
             }
         }
 
-        private static void UnregisterThumbnailProvider(RegistryKey root, bool perUser)
+        private static void UnregisterThumbnailProvider(RegRoot root, bool perUser)
         {
             string clsid = LinkcoPdfThumbnailProvider.ClsidBraced;
             foreach (string own in OwnProgIds)
@@ -1462,7 +1796,7 @@ namespace LinkcoPdfPreview
             return result;
         }
 
-        private static List<string> PreviouslyTouchedProgIds(RegistryKey root)
+        private static List<string> PreviouslyTouchedProgIds(RegRoot root)
         {
             List<string> progIds = new List<string>();
             foreach (string p in KnownSharedProgIds)
@@ -1531,33 +1865,46 @@ namespace LinkcoPdfPreview
 
         private static string ReadUserChoiceProgId(string extension)
         {
-            string basePath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\" + extension;
             try
             {
                 using (RegistryKey hkcu = PreviewEnvironment.OpenHive(RegistryHive.CurrentUser))
                 {
-                    using (RegistryKey latest = hkcu.OpenSubKey(basePath + @"\UserChoiceLatest", false))
+                    return ReadUserChoiceProgId(hkcu, extension);
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>The default app's ProgID for <paramref name="extension"/> of the user whose hive <paramref name="hkcu"/> is.</summary>
+        private static string ReadUserChoiceProgId(RegRoot hkcu, string extension)
+        {
+            string basePath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\" + extension;
+            try
+            {
+                using (RegistryKey latest = hkcu.OpenSubKey(basePath + @"\UserChoiceLatest", false))
+                {
+                    if (latest != null)
                     {
-                        if (latest != null)
+                        string p = latest.GetValue("ProgId") as string;
+                        if (string.IsNullOrEmpty(p))
                         {
-                            string p = latest.GetValue("ProgId") as string;
-                            if (string.IsNullOrEmpty(p))
+                            using (RegistryKey sub = latest.OpenSubKey("ProgId", false))
                             {
-                                using (RegistryKey sub = latest.OpenSubKey("ProgId", false))
-                                {
-                                    if (sub != null)
-                                        p = sub.GetValue("ProgId") as string;
-                                }
+                                if (sub != null)
+                                    p = sub.GetValue("ProgId") as string;
                             }
-                            if (!string.IsNullOrEmpty(p))
-                                return p;
                         }
+                        if (!string.IsNullOrEmpty(p))
+                            return p;
                     }
-                    using (RegistryKey uc = hkcu.OpenSubKey(basePath + @"\UserChoice", false))
-                    {
-                        if (uc != null)
-                            return uc.GetValue("ProgId") as string;
-                    }
+                }
+                using (RegistryKey uc = hkcu.OpenSubKey(basePath + @"\UserChoice", false))
+                {
+                    if (uc != null)
+                        return uc.GetValue("ProgId") as string;
                 }
             }
             catch { }
@@ -1621,13 +1968,13 @@ namespace LinkcoPdfPreview
             return false;
         }
 
-        private static void BackupAndSetShellEx(RegistryKey root, string subKeyPath, string backupValueName)
+        private static void BackupAndSetShellEx(RegRoot root, string subKeyPath, string backupValueName)
         {
             BackupAndSetShellEx(root, subKeyPath, backupValueName, ClsidBraced);
         }
 
         /// <summary>Points a ShellEx handler key at <paramref name="ourClsid"/>, backing up the previous handler once.</summary>
-        private static void BackupAndSetShellEx(RegistryKey root, string subKeyPath, string backupValueName, string ourClsid)
+        private static void BackupAndSetShellEx(RegRoot root, string subKeyPath, string backupValueName, string ourClsid)
         {
             string existing = null;
             using (RegistryKey k = root.OpenSubKey(subKeyPath, false))
@@ -1649,7 +1996,7 @@ namespace LinkcoPdfPreview
             }
         }
 
-        private static void UnregisterFromRoot(RegistryKey root, bool perUser)
+        private static void UnregisterFromRoot(RegRoot root, bool perUser)
         {
             using (RegistryKey handlers = root.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\PreviewHandlers", true))
             {
@@ -1665,7 +2012,12 @@ namespace LinkcoPdfPreview
             foreach (string p in PreviouslyTouchedProgIds(root))
                 AddUnique(progIds, p);
             if (perUser)
-                AddUnique(progIds, ReadUserChoiceProgId(".pdf"));
+            {
+                AddUnique(progIds, ReadUserChoiceProgId(root, ".pdf"));
+                // Default apps come and go; find every ProgID of this user still pointing at us.
+                foreach (string p in ProgIdsPointingAtUs(root))
+                    AddUnique(progIds, p);
+            }
             AddUnique(progIds, ReadClassesRootDefault(".pdf"));
 
             foreach (string progId in progIds)
@@ -1695,7 +2047,84 @@ namespace LinkcoPdfPreview
             }
         }
 
-        private static void RestoreOrRemoveShellEx(RegistryKey root, string progId, bool perUser)
+        /// <summary>
+        /// Removes the per-user registration from one user's registry (Software and Classes may be
+        /// separate hives). Returns false, touching nothing, when that user has none.
+        /// </summary>
+        internal static bool CleanUserHive(RegistryKey software, RegistryKey classes)
+        {
+            return CleanUserRoot(new RegRoot(software, classes));
+        }
+
+        private static bool CleanUserRoot(RegRoot root)
+        {
+            if (!HasPerUserRegistration(root))
+                return false;
+            UnregisterFromRoot(root, true);
+            return true;
+        }
+
+        private static bool HasPerUserRegistration(RegRoot root)
+        {
+            foreach (string clsid in new string[] { ClsidBraced, LinkcoPdfThumbnailProvider.ClsidBraced })
+            {
+                using (RegistryKey k = root.OpenSubKey(@"Software\Classes\CLSID\" + clsid, false))
+                {
+                    if (k != null)
+                        return true;
+                }
+            }
+            using (RegistryKey cfg = root.OpenSubKey(LinkcoConfigKey, false))
+            {
+                if (cfg != null)
+                {
+                    foreach (string name in cfg.GetValueNames())
+                    {
+                        if (name.StartsWith("Prev", StringComparison.Ordinal))
+                            return true; // PreviewHandler* and the Prev*/Previous* backups
+                    }
+                }
+            }
+            return ProgIdsPointingAtUs(root).Count > 0;
+        }
+
+        /// <summary>ProgIDs in <paramref name="root"/>'s classes whose preview handler is ours.</summary>
+        private static List<string> ProgIdsPointingAtUs(RegRoot root)
+        {
+            List<string> result = new List<string>();
+            string[] names;
+            try
+            {
+                names = root.ClassesSubKeyNames();
+            }
+            catch
+            {
+                return result;
+            }
+            int scanned = 0;
+            foreach (string name in names)
+            {
+                if (++scanned > 100000)
+                    break;
+                // Extensions (.pdf is handled with its own backup) and CLSID/AppID/... containers aren't ProgIDs.
+                if (name.Length == 0 || name[0] == '.' || name.IndexOf('\\') >= 0 ||
+                    string.Equals(name, "CLSID", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(name, "SystemFileAssociations", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                try
+                {
+                    using (RegistryKey k = root.OpenSubKey(ProgIdShellExPath(name), false))
+                    {
+                        if (k != null && string.Equals(k.GetValue("") as string, ClsidBraced, StringComparison.OrdinalIgnoreCase))
+                            result.Add(name);
+                    }
+                }
+                catch { }
+            }
+            return result;
+        }
+
+        private static void RestoreOrRemoveShellEx(RegRoot root, string progId, bool perUser)
         {
             bool removed = RestoreOrRemove(root, ProgIdShellExPath(progId), "PrevProgId_" + progId, false);
             if (removed)
@@ -1708,12 +2137,12 @@ namespace LinkcoPdfPreview
         }
 
         /// <summary>Restores the previous handler (or removes ours). Returns true when the key was deleted.</summary>
-        private static bool RestoreOrRemove(RegistryKey root, string subKeyPath, string backupValueName, bool edgeFallback)
+        private static bool RestoreOrRemove(RegRoot root, string subKeyPath, string backupValueName, bool edgeFallback)
         {
             return RestoreOrRemove(root, subKeyPath, backupValueName, edgeFallback, ClsidBraced);
         }
 
-        private static bool RestoreOrRemove(RegistryKey root, string subKeyPath, string backupValueName, bool edgeFallback, string ourClsid)
+        private static bool RestoreOrRemove(RegRoot root, string subKeyPath, string backupValueName, bool edgeFallback, string ourClsid)
         {
             string current = null;
             using (RegistryKey k = root.OpenSubKey(subKeyPath, false))
@@ -1737,9 +2166,9 @@ namespace LinkcoPdfPreview
                 return false;
 
             string restore = null;
-            if (!string.IsNullOrEmpty(backup) && ClsidExists(backup))
+            if (!string.IsNullOrEmpty(backup) && ClsidExists(root, backup))
                 restore = backup;
-            else if (edgeFallback && root.Name.StartsWith("HKEY_LOCAL_MACHINE", StringComparison.OrdinalIgnoreCase) && ClsidExists(EdgePreviewHandlerClsid))
+            else if (edgeFallback && root.Name.StartsWith("HKEY_LOCAL_MACHINE", StringComparison.OrdinalIgnoreCase) && ClsidExists(root, EdgePreviewHandlerClsid))
                 restore = EdgePreviewHandlerClsid;
 
             if (restore != null)
@@ -1755,7 +2184,7 @@ namespace LinkcoPdfPreview
             return true;
         }
 
-        private static void DeleteIfEmpty(RegistryKey root, string subKeyPath)
+        private static void DeleteIfEmpty(RegRoot root, string subKeyPath)
         {
             try
             {
@@ -1772,12 +2201,21 @@ namespace LinkcoPdfPreview
             catch { }
         }
 
-        private static bool ClsidExists(string clsid)
+        /// <summary>
+        /// True when <paramref name="clsid"/> is registered machine-wide or in <paramref name="root"/>
+        /// (whose user may not be the one running this code).
+        /// </summary>
+        private static bool ClsidExists(RegRoot root, string clsid)
         {
             try
             {
-                using (RegistryKey hkcr = PreviewEnvironment.OpenHive(RegistryHive.ClassesRoot))
-                using (RegistryKey k = hkcr.OpenSubKey(@"CLSID\" + clsid, false))
+                using (RegistryKey k = root.OpenSubKey(@"Software\Classes\CLSID\" + clsid, false))
+                {
+                    if (k != null)
+                        return true;
+                }
+                using (RegistryKey hklm = PreviewEnvironment.OpenHive(RegistryHive.LocalMachine))
+                using (RegistryKey k = hklm.OpenSubKey(@"Software\Classes\CLSID\" + clsid, false))
                 {
                     return k != null;
                 }

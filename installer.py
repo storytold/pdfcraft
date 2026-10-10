@@ -465,6 +465,15 @@ namespace LinkcoSetup
                 if (m != null)
                 {
                     m.Invoke(null, null);
+                    // Linkco PDF Editor registers per user, for each user who starts it. An elevated
+                    // (machine-wide) uninstall also removes it from every other user profile, so no
+                    // account is left with Explorer pointing at the deleted DLL.
+                    MethodInfo all = t.GetMethod("UnregisterPreviewHandlerForAllUsers", Type.EmptyTypes);
+                    if (all != null && IsMachineInstall())
+                    {
+                        try { all.Invoke(null, null); }
+                        catch (Exception ex) { Trace.WriteLine("Linkco setup: all-users preview handler cleanup failed: " + ex.Message); }
+                    }
                     return;
                 }
             }

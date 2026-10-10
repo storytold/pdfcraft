@@ -65,8 +65,23 @@
         ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand JABFAHIAcgBvAHIAQQBjAHQAaQBvAG4AUAByAGUAZgBlAHIAZQBuAGMAZQA9ACcAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQAnADsAIAAkAGQAPQBKAG8AaQBuAC0AUABhAHQAaAAgACgARwBlAHQALQBMAG8AYwBhAHQAaQBvAG4AKQAuAFAAYQB0AGgAIAAnAEwAaQBuAGsAYwBvAFAAZABmAFAAcgBlAHYAaQBlAHcASABhAG4AZABsAGUAcgAuAGQAbABsACcAOwAgAGkAZgAgACgAVABlAHMAdAAtAFAAYQB0AGgAIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACQAZAApACAAewAgACQAYQA9AFsAUwB5AHMAdABlAG0ALgBSAGUAZgBsAGUAYwB0AGkAbwBuAC4AQQBzAHMAZQBtAGIAbAB5AF0AOgA6AEwAbwBhAGQAKABbAFMAeQBzAHQAZQBtAC4ASQBPAC4ARgBpAGwAZQBdADoAOgBSAGUAYQBkAEEAbABsAEIAeQB0AGUAcwAoACQAZAApACkAOwAgACQAdAA9ACQAYQAuAEcAZQB0AFQAeQBwAGUAKAAnAEwAaQBuAGsAYwBvAFAAZABmAFAAcgBlAHYAaQBlAHcALgBMAGkAbgBrAGMAbwBQAGQAZgBQAHIAZQB2AGkAZQB3AEgAYQBuAGQAbABlAHIAJwApADsAIABpAGYAIAAoACQAdAApACAAewAgACQAdAAuAEcAZQB0AE0AZQB0AGgAbwBkACgAJwBVAG4AcgBlAGcAaQBzAHQAZQByAFAAcgBlAHYAaQBlAHcASABhAG4AZABsAGUAcgAnACkALgBJAG4AdgBvAGsAZQAoACQAbgB1AGwAbAAsACQAbgB1AGwAbAApACAAfAAgAE8AdQB0AC0ATgB1AGwAbAAgAH0AIAB9AA=="
         Execute="immediate"
         Return="ignore" />
+    <!-- The app registers per user, for each user who starts it, so the uninstalling user is not the
+         only one: this removes the registration from every other user profile on the PC too
+         (restoring their previous handlers), so no account is left with Explorer pointing at the
+         deleted DLL. Deferred and not impersonated, i.e. as LocalSystem, which may open other
+         users' registry hives; before RemoveFiles, while the DLL exists. The script is
+           $ErrorActionPreference='SilentlyContinue'; $d=Join-Path (Get-Location).Path 'LinkcoPdfPreviewHandler.dll'; if (Test-Path -LiteralPath $d) { $a=[System.Reflection.Assembly]::Load([System.IO.File]::ReadAllBytes($d)); $t=$a.GetType('LinkcoPdfPreview.LinkcoPdfPreviewHandler'); if ($t) { $t.GetMethod('UnregisterPreviewHandlerForAllUsers').Invoke($null,$null) | Out-Null } }
+         with the working directory set to INSTALLFOLDER. -->
+    <CustomAction Id="UnregisterPreviewHandlerForAllUsers"
+        Directory="INSTALLFOLDER"
+        ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand JABFAHIAcgBvAHIAQQBjAHQAaQBvAG4AUAByAGUAZgBlAHIAZQBuAGMAZQA9ACcAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQAnADsAIAAkAGQAPQBKAG8AaQBuAC0AUABhAHQAaAAgACgARwBlAHQALQBMAG8AYwBhAHQAaQBvAG4AKQAuAFAAYQB0AGgAIAAnAEwAaQBuAGsAYwBvAFAAZABmAFAAcgBlAHYAaQBlAHcASABhAG4AZABsAGUAcgAuAGQAbABsACcAOwAgAGkAZgAgACgAVABlAHMAdAAtAFAAYQB0AGgAIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACQAZAApACAAewAgACQAYQA9AFsAUwB5AHMAdABlAG0ALgBSAGUAZgBsAGUAYwB0AGkAbwBuAC4AQQBzAHMAZQBtAGIAbAB5AF0AOgA6AEwAbwBhAGQAKABbAFMAeQBzAHQAZQBtAC4ASQBPAC4ARgBpAGwAZQBdADoAOgBSAGUAYQBkAEEAbABsAEIAeQB0AGUAcwAoACQAZAApACkAOwAgACQAdAA9ACQAYQAuAEcAZQB0AFQAeQBwAGUAKAAnAEwAaQBuAGsAYwBvAFAAZABmAFAAcgBlAHYAaQBlAHcALgBMAGkAbgBrAGMAbwBQAGQAZgBQAHIAZQB2AGkAZQB3AEgAYQBuAGQAbABlAHIAJwApADsAIABpAGYAIAAoACQAdAApACAAewAgACQAdAAuAEcAZQB0AE0AZQB0AGgAbwBkACgAJwBVAG4AcgBlAGcAaQBzAHQAZQByAFAAcgBlAHYAaQBlAHcASABhAG4AZABsAGUAcgBGAG8AcgBBAGwAbABVAHMAZQByAHMAJwApAC4ASQBuAHYAbwBrAGUAKAAkAG4AdQBsAGwALAAkAG4AdQBsAGwAKQAgAHwAIABPAHUAdAAtAE4AdQBsAGwAIAB9ACAAfQA="
+        Execute="deferred"
+        Impersonate="no"
+        Return="ignore" />
     <InstallExecuteSequence>
       <Custom Action="UnregisterPreviewHandlerForUser" Before="RemoveFiles"
+          Condition="REMOVE = &quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="UnregisterPreviewHandlerForAllUsers" Before="RemoveFiles"
           Condition="REMOVE = &quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>
 

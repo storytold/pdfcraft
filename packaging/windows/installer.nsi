@@ -148,13 +148,13 @@ Section "Uninstall"
   SetRegView 64
   SetShellVarContext all
 
-  ; Remove the per-user File Explorer preview handler registration that Linkco PDF Editor made
-  ; for this user (restoring the previous handler) while the DLL still exists. The script (Base64
-  ; UTF-16LE so NSIS doesn't expand its $variables) loads LinkcoPdfPreviewHandler.dll from the
-  ; working directory and calls UnregisterPreviewHandler().
+  ; Remove what Linkco PDF Editor registered for File Explorer previews and thumbnails while the
+  ; DLL still exists, restoring the previous handlers: for this user, then for every other user
+  ; profile on the PC (the app registers per user, for each user who starts it). The DLL is loaded
+  ; from the working directory. Kept short and readable: NSIS limits strings to 1024 characters.
   SetOutPath "$INSTDIR"
   ${DisableX64FSRedirection}
-  nsExec::Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand JABFAHIAcgBvAHIAQQBjAHQAaQBvAG4AUAByAGUAZgBlAHIAZQBuAGMAZQA9ACcAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQAnADsAIAAkAGQAPQBKAG8AaQBuAC0AUABhAHQAaAAgACgARwBlAHQALQBMAG8AYwBhAHQAaQBvAG4AKQAuAFAAYQB0AGgAIAAnAEwAaQBuAGsAYwBvAFAAZABmAFAAcgBlAHYAaQBlAHcASABhAG4AZABsAGUAcgAuAGQAbABsACcAOwAgAGkAZgAgACgAVABlAHMAdAAtAFAAYQB0AGgAIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACQAZAApACAAewAgACQAYQA9AFsAUwB5AHMAdABlAG0ALgBSAGUAZgBsAGUAYwB0AGkAbwBuAC4AQQBzAHMAZQBtAGIAbAB5AF0AOgA6AEwAbwBhAGQAKABbAFMAeQBzAHQAZQBtAC4ASQBPAC4ARgBpAGwAZQBdADoAOgBSAGUAYQBkAEEAbABsAEIAeQB0AGUAcwAoACQAZAApACkAOwAgACQAdAA9ACQAYQAuAEcAZQB0AFQAeQBwAGUAKAAnAEwAaQBuAGsAYwBvAFAAZABmAFAAcgBlAHYAaQBlAHcALgBMAGkAbgBrAGMAbwBQAGQAZgBQAHIAZQB2AGkAZQB3AEgAYQBuAGQAbABlAHIAJwApADsAIABpAGYAIAAoACQAdAApACAAewAgACQAdAAuAEcAZQB0AE0AZQB0AGgAbwBkACgAJwBVAG4AcgBlAGcAaQBzAHQAZQByAFAAcgBlAHYAaQBlAHcASABhAG4AZABsAGUAcgAnACkALgBJAG4AdgBvAGsAZQAoACQAbgB1AGwAbAAsACQAbgB1AGwAbAApACAAfAAgAE8AdQB0AC0ATgB1AGwAbAAgAH0AIAB9AA=='
+  nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$$t=[Reflection.Assembly]::Load([IO.File]::ReadAllBytes('LinkcoPdfPreviewHandler.dll')).GetType('LinkcoPdfPreview.LinkcoPdfPreviewHandler'); try { $$t::UnregisterPreviewHandler() } catch {}; try { $$t::UnregisterPreviewHandlerForAllUsers() | Out-Null } catch {}"`
   Pop $0
   ${EnableX64FSRedirection}
   SetOutPath "$TEMP"

@@ -3,11 +3,13 @@
 // SDK or Mono needed. It compiles them exactly as the Windows build does with .NET Framework's
 // csc.exe: C# 5, against the .NET Framework 4.8 reference assemblies, warning level 4.
 //
-//   node packaging/windows/csharp-check/check.cjs            # PreviewHandler.cs + the Setup EXE
-//   node packaging/windows/csharp-check/check.cjs --no-setup  # PreviewHandler.cs only
+//   node packaging/windows/csharp-check/check.cjs            # compile both, run the logic tests
+//   node packaging/windows/csharp-check/check.cjs --no-setup  # skip the Setup EXE
+//   node packaging/windows/csharp-check/check.cjs --no-tests  # compile only
 //
-// Exits 0 when everything compiles with no warnings, 1 on any error or warning, 2 when the
-// toolchain could not be set up. See README.md in this folder for how it works.
+// It also runs the registry cleanup code of PreviewHandler.cs against an in-memory registry
+// (tests/). Exits 0 when everything compiles with no warnings and every test passes, 1 otherwise,
+// 2 when the toolchain could not be set up. See README.md in this folder for how it works.
 'use strict';
 
 const { execFileSync } = require('child_process');
@@ -77,6 +79,63 @@ function ensureToolchain() {
     git('fetch', '-q', '--depth', '1', '--filter=blob:none', 'origin', REFASM_COMMIT);
     git('checkout', '-q', 'FETCH_HEAD');
   }
+}
+
+/**
+ * The registry code under test, cut out of PreviewHandler.cs: the RegRoot class and these members
+ * of LinkcoPdfPreviewHandler / LinkcoPdfThumbnailProvider (all overloads). Compiled with
+ * tests/FakeRegistry.cs in place of Microsoft.Win32's registry and PreviewEnvironment.
+ */
+const TESTED_METHODS = ['UnregisterFromRoot', 'RestoreOrRemoveShellEx', 'RestoreOrRemove', 'DeleteIfEmpty', 'ClsidExists',
+  'ReadUserChoiceProgId', 'ProgIdsPointingAtUs', 'HasPerUserRegistration', 'CleanUserHive', 'CleanUserRoot',
+  'PreviouslyTouchedProgIds', 'AddUnique', 'UnregisterThumbnailProvider', 'ProgIdShellExPath', 'ReadClassesRootDefault',
+  'BackupAndSetShellEx'];
+const TESTED_FIELDS = ['ClsidBraced', 'PreviewHandlerCategoryGuid', 'LinkcoConfigKey', 'HandlerProgId', 'EdgePreviewHandlerClsid',
+  'OwnProgIds', 'KnownPdfProgIds', 'KnownSharedProgIds', 'SysPdfThumbnailPath'];
+const TESTED_THUMBNAIL_CONSTS = ['ClsidBraced', 'ThumbnailCategoryGuid', 'ProgIdName'];
+
+/** The text from `start` through the brace that closes the first `{` after it. */
+function braceBlock(src, start) {
+  let depth = 0;
+  for (let i = src.indexOf('{', start); i >= 0 && i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}' && --depth === 0) return src.slice(start, i + 1);
+  }
+  throw new Error(`unbalanced braces after offset ${start}`);
+}
+
+function extractTestedCode(src) {
+  const need = (cond, what) => {
+    if (!cond) throw new Error(`PreviewHandler.cs: ${what} not found (update csharp-check/check.cjs if it was renamed)`);
+  };
+  const rr = src.indexOf('    internal sealed class RegRoot');
+  need(rr >= 0, 'class RegRoot');
+  const methods = TESTED_METHODS.map((name) => {
+    const re = new RegExp(`\\n        (?:public|private|internal) static [\\w<>\\[\\]]+ ${name}\\(`, 'g');
+    const found = [...src.matchAll(re)].map((m) => braceBlock(src, m.index + 1));
+    need(found.length > 0, `method ${name}`);
+    return found.join('\n');
+  });
+  const fields = TESTED_FIELDS.map((name) => {
+    const m = new RegExp(`\\n        (?:public|private|internal) (?:const|static readonly) [\\w\\[\\]]+ ${name} = `).exec(src);
+    need(m, `field ${name}`);
+    return src.slice(m.index + 1, src.indexOf(';', m.index) + 1);
+  });
+  const thumbAt = src.indexOf('class LinkcoPdfThumbnailProvider');
+  need(thumbAt >= 0, 'class LinkcoPdfThumbnailProvider');
+  const thumbConsts = TESTED_THUMBNAIL_CONSTS.map((name) => {
+    const m = new RegExp(`(?:public|internal|private) const string ${name} = [^;]+;`).exec(src.slice(thumbAt));
+    need(m, `LinkcoPdfThumbnailProvider.${name}`);
+    return '        ' + m[0];
+  });
+  return [
+    'namespace LinkcoPdfPreview {',
+    'using System; using System.Collections.Generic; using System.IO; using Microsoft.Win32;',
+    braceBlock(src, rr),
+    'internal static class LinkcoPdfThumbnailProvider {', ...thumbConsts, '}',
+    'internal static partial class LinkcoPdfPreviewHandler {', ...fields, ...methods, '}',
+    '}',
+  ].join('\n');
 }
 
 /** Serves the WebAssembly bundle to the runtime, which loads its assemblies with fetch(). */
@@ -171,6 +230,22 @@ async function main() {
       process.stdout.write(out.replace(/^RESULT .*$/m, '').trimEnd() + (out.trim().startsWith('RESULT') ? '' : '\n'));
       for (const e of result.errors || []) console.log(`driver error ${e.id || ''}: ${e.message}`);
       console.log(`${ok ? 'ok  ' : 'FAIL'} ${job.title}${summary ? ` (${summary[2]} errors, ${summary[3]} warnings)` : ''}`);
+      failed = failed || !ok;
+    }
+    if (!process.argv.includes('--no-tests')) {
+      const src = fs.readFileSync(path.join(REPO, 'packaging', 'windows', 'PreviewHandler.cs'), 'utf8');
+      const program = [
+        fs.readFileSync(path.join(HERE, 'tests', 'FakeRegistry.cs'), 'utf8'),
+        extractTestedCode(src),
+        fs.readFileSync(path.join(HERE, 'tests', 'RegistryCleanupTests.cs'), 'utf8'),
+      ].join('\n');
+      const result = JSON.parse(await invoke('RunCode', program, ''));
+      const out = (result.output || '').trimEnd();
+      const ok = result.success && /^ALL PASS$/m.test(out);
+      if (!ok || process.argv.includes('--verbose')) console.log(out);
+      for (const e of result.errors || []) console.log(`test error ${e.id || ''}: ${e.message}`);
+      const checks = (out.match(/^ {2}ok {3}/gm) || []).length;
+      console.log(`${ok ? 'ok  ' : 'FAIL'} PreviewHandler.cs registry cleanup tests (${checks} checks passed)`);
       failed = failed || !ok;
     }
   } catch (e) {

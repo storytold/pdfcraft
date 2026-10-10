@@ -160,7 +160,12 @@ $thumbClass = Read-Row ('SELECT `Value` FROM `Registry` WHERE `Key` = ''Software
 Assert-Equal $thumbClass[0] 'LinkcoPdfPreview.LinkcoPdfThumbnailProvider' 'PDF thumbnail provider class'
 $cleanupRow = Read-Row 'SELECT `Action`, `Condition` FROM `InstallExecuteSequence` WHERE `Action` = ''UnregisterPreviewHandlerForUser''' 2
 Assert-Equal $cleanupRow[0] 'UnregisterPreviewHandlerForUser' 'per-user preview handler cleanup on uninstall'
+$allUsersRow = Read-Row 'SELECT `Action`, `Condition` FROM `InstallExecuteSequence` WHERE `Action` = ''UnregisterPreviewHandlerForAllUsers''' 2
+Assert-Equal $allUsersRow[0] 'UnregisterPreviewHandlerForAllUsers' 'all-users preview handler cleanup on uninstall'
+$allUsersType = [int] (Read-Row 'SELECT `Type`, `Target` FROM `CustomAction` WHERE `Action` = ''UnregisterPreviewHandlerForAllUsers''' 2)[0]
+# msidbCustomActionTypeInScript (0x400) + msidbCustomActionTypeNoImpersonate (0x800): deferred, as LocalSystem.
+Assert-Equal ($allUsersType -band 0xC00) 0xC00 'all-users cleanup runs deferred as LocalSystem'
 
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
-Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut (default on, checkbox), PDF Preview Handler and thumbnails, icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'
+Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut (default on, checkbox), PDF Preview Handler and thumbnails (with per-user and all-users cleanup), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'

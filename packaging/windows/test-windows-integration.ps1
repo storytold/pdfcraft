@@ -59,6 +59,52 @@ try {
   $comVisible = $handlerType.GetCustomAttributes([System.Runtime.InteropServices.ComVisibleAttribute], $false)
   if ($comVisible.Count -ne 1 -or -not $comVisible[0].Value) { throw "LinkcoPdfPreviewHandler must be [ComVisible(true)]" }
   Write-Output "  [PASS] Registration API present (Register/Unregister/QueryEffectiveHandler/IsEffectiveHandler/Diagnose)."
+  if ($null -eq ($handlerType.GetMethods() | Where-Object { $_.Name -eq 'UnregisterPreviewHandlerForAllUsers' -and $_.IsStatic -and $_.IsPublic })) {
+    throw "LinkcoPdfPreviewHandler is missing UnregisterPreviewHandlerForAllUsers"
+  }
+
+  # Uninstall cleanup of another user's profile, whose registry comes as two hives (NTUSER.DAT and
+  # UsrClass.dat). Simulated with two scratch keys under HKCU, so no admin rights are needed and
+  # nothing real is touched.
+  $preview = '{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}'; $thumbs = '{3D8CDE4B-E969-481F-BEB0-5E3B98287416}'
+  $pvCat = '{8895b1c6-b41f-4c1c-a562-0d564250836f}'; $thCat = '{e357fccd-a995-4576-b01f-234630154e96}'
+  $other = '{0D3C1E7A-5B9F-4C2D-8E61-7F4A2B9C3D10}'   # "another app's" previewer, registered for that user only
+  $scratch = 'Software\LinkcoPdfTest-' + [Guid]::NewGuid().ToString('N')
+  $hkcu = [Microsoft.Win32.Registry]::CurrentUser
+  try {
+    $sw = $hkcu.CreateSubKey("$scratch\User"); $cl = $hkcu.CreateSubKey("$scratch\Classes")
+    $cl.CreateSubKey("CLSID\$preview\InprocServer32").SetValue('CodeBase', 'file:///C:/Gone/LinkcoPdfPreviewHandler.dll')
+    $cl.CreateSubKey("CLSID\$thumbs\InprocServer32").SetValue('CodeBase', 'file:///C:/Gone/LinkcoPdfPreviewHandler.dll')
+    $cl.CreateSubKey("CLSID\$other").SetValue('', 'Other PDF previewer')
+    $cl.CreateSubKey(".pdf\ShellEx\$pvCat").SetValue('', $preview)                       # replaced $other: backed up
+    $cl.CreateSubKey("Vendor.PdfFile\ShellEx\$pvCat").SetValue('', $preview)             # replaced $other: backed up
+    $cl.CreateSubKey("FormerDefault.Pdf\ShellEx\$pvCat").SetValue('', $preview)          # an old default app, no backup
+    $cl.CreateSubKey("SystemFileAssociations\.pdf\ShellEx\$thCat").SetValue('', $thumbs)
+    $cl.CreateSubKey("LinkcoPDFEditor.Document\ShellEx\$thCat").SetValue('', $thumbs)
+    $cfg = $sw.CreateSubKey('Software\Linkco\Linkco PDF Editor')
+    $cfg.SetValue('PreviewHandlerDll', 'C:\Gone\LinkcoPdfPreviewHandler.dll'); $cfg.SetValue('CliPath', 'C:\Gone\pdfcraft-cli.exe')
+    $cfg.SetValue('PreviousPdfPreviewHandler', $other); $cfg.SetValue('PrevProgId_Vendor.PdfFile', $other)
+    $sw.CreateSubKey('Software\Microsoft\Windows\CurrentVersion\PreviewHandlers').SetValue($preview, 'Linkco PDF Preview Handler')
+
+    $clean = $handlerType.GetMethod('CleanUserHive', [Reflection.BindingFlags] 'NonPublic, Static')
+    if (-not $clean.Invoke($null, @($sw, $cl))) { throw 'CleanUserHive found no registration to remove' }
+    $val = { param($root, $path) $k = $root.OpenSubKey($path); if ($k) { $k.GetValue('') } }
+    if ($cl.OpenSubKey("CLSID\$preview") -or $cl.OpenSubKey("CLSID\$thumbs")) { throw 'COM registrations were not removed' }
+    if (-not $cl.OpenSubKey("CLSID\$other")) { throw "Another app's CLSID was removed" }
+    if ((& $val $cl ".pdf\ShellEx\$pvCat") -ne $other) { throw '.pdf preview handler was not restored' }
+    if ((& $val $cl "Vendor.PdfFile\ShellEx\$pvCat") -ne $other) { throw 'ProgID preview handler was not restored' }
+    if ($cl.OpenSubKey('FormerDefault.Pdf')) { throw 'A ProgID that only pointed at us was left behind' }
+    if ($cl.OpenSubKey("SystemFileAssociations\.pdf\ShellEx\$thCat") -or $cl.OpenSubKey('LinkcoPDFEditor.Document')) { throw 'Thumbnail registrations were not removed' }
+    if ($null -ne $sw.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\PreviewHandlers').GetValue($preview)) { throw 'PreviewHandlers entry was not removed' }
+    $cfg = $sw.OpenSubKey('Software\Linkco\Linkco PDF Editor')
+    foreach ($n in 'PreviewHandlerDll', 'PreviousPdfPreviewHandler', 'PrevProgId_Vendor.PdfFile') { if ($null -ne $cfg.GetValue($n)) { throw "Config value $n was not removed" } }
+    if ($sw.OpenSubKey('Software\Classes')) { throw 'Classes paths were written to the wrong hive' }
+    if ($clean.Invoke($null, @($sw, $cl))) { throw 'CleanUserHive should find nothing the second time' }
+  } finally {
+    $hkcu.DeleteSubKeyTree($scratch, $false)
+  }
+  Write-Output "  [PASS] Uninstall cleanup of another user's profile (split hives): our entries removed, previous handlers restored."
+
   Write-Output "  Current File Explorer preview registration on this machine (read-only):"
   ($handlerType.GetMethod('Diagnose').Invoke($null, $null) -split "`r?`n") | ForEach-Object { Write-Output "    $_" }
 
