@@ -1,6 +1,6 @@
 # UI and interaction parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (same-page mixed selection and movement, #844) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (same-page mixed selection and movement, #844) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft's tools, panels, shortcuts and feel compare with Acrobat Pro's current interface (the
 2023+ "new Acrobat": All tools pane on the left, quick-action toolbar, Home view). Behaviour is
@@ -81,5 +81,5 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-11 | minor | Added mixed selection/group movement (#844), with cancellation, generation invalidation and draft preservation. |
+| 2026-10-10 | minor | Added mixed selection/group movement (#844), with cancellation, generation invalidation and draft preservation. |
 | 2026-10-10 | major | Created from the command registry, automation tools, the View area of the checklist and open UI issues |

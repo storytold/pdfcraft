@@ -8,6 +8,9 @@ In **Edit a PDF → Edit text & images**, select several items on the same page:
   are selected; hold one of those modifiers to add to the selection.
 - Drag the selection to move all its items by the same distance. Blue outlines preview the move;
   releasing commits it as **one undo step**. Escape cancels the gesture or clears the selection.
+- Switching tabs, opening Home or a modal dialog, or losing window focus cancels a drag preview.
+  Returning to the document keeps the selection without committing a release from elsewhere.
+- Modifier-clicks prefer added items and text over background artwork, so labels remain selectable.
 - Clear the selection or double-click an item to return to ordinary text editing and image resizing.
   Finish or discard a text draft before starting a multi-selection.
 
@@ -16,7 +19,9 @@ and text/images added by PdfCraft. A Form remains one item, including its nested
 resources. Added items appear once in the selection inventory. Selections stay on one page and
 contain at most 1,000 items; pages with more than 10,000 recognised objects are refused for group
 selection. Content streams must decode completely within 64 MiB each and 128 MiB per page, with
-a 1,024-level graphics-state limit and 100,000 content operations; unreadable or missing streams are refused. Moving between pages, arbitrary paths, inline images, group resizing, align/distribute,
+a 1,024-level graphics-state limit and 100,000 content operations. These limits apply to both the
+original page and the moved result; unreadable or missing streams are refused. Moving between pages,
+arbitrary paths, inline images, group resizing, align/distribute,
 and vertical or clipping text are outside this operation's scope. A refusal changes nothing.
 
 Added streams move by changing their outer placement, preserving drawing bytes, fonts, crop paths,

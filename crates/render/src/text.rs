@@ -30,6 +30,24 @@ pub struct TextGlyph {
     pub direction: [f32; 2],
 }
 
+/// `s` folded for case-insensitive search, one character for one character.
+///
+/// The dotted and dotless i of Turkish and Azerbaijani (`İ` U+0130, `ı` U+0131) and the Latin
+/// `I`/`i` all fold to `i`. `str::to_lowercase` follows no locale: it turns `İ` into `i` plus a
+/// combining dot (two characters) and leaves `ı` alone, so neither `İSTANBUL` nor `IRMAK` could
+/// be found by typing `istanbul` or `ırmak`. Search can't know the document's language, so the
+/// four are treated as one letter; this only adds matches where an `ı` or `İ` is involved.
+fn fold_case(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            'I' | 'i' | '\u{130}' | '\u{131}' => out.push('i'),
+            _ => out.extend(c.to_lowercase()),
+        }
+    }
+    out
+}
+
 /// The text of one page, in content order, with line structure.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageText {
@@ -76,7 +94,7 @@ impl PageText {
 
     /// Search with Acrobat's find options: case-sensitive, whole words only.
     pub fn find_opts(&self, needle: &str, case_sensitive: bool, whole_words: bool) -> Vec<std::ops::Range<usize>> {
-        let fold = |s: &str| if case_sensitive { s.to_string() } else { s.to_lowercase() };
+        let fold = |s: &str| if case_sensitive { s.to_string() } else { fold_case(s) };
         let needle: Vec<char> = fold(needle).split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
         if needle.is_empty() {
             return Vec::new();
@@ -909,6 +927,45 @@ mod tests {
         }
         // A 90° page: the view's top-right corner is the upright top-left.
         assert_eq!(to_upright([290.0, 0.0, 300.0, 10.0], 1, 300.0, 200.0), [0.0, 0.0, 10.0, 10.0]);
+    }
+
+    #[test]
+    fn turkish_dotted_and_dotless_i_match_in_any_case() {
+        // "İSTANBUL IRMAK KIŞ" on one line: each word typed in lower case must find it, and the
+        // reverse. `to_lowercase` alone made `İ` two characters and left `ı` unmatched.
+        let mut v = Vec::new();
+        word(&mut v, "İSTANBUL", 10.0, 10.0, 7.0);
+        word(&mut v, "IRMAK", 80.0, 10.0, 7.0);
+        word(&mut v, "KIŞ", 130.0, 10.0, 7.0);
+        let upper = layout(v);
+        assert_eq!(upper.plain_text(), "İSTANBUL IRMAK KIŞ");
+        assert_eq!(upper.find("istanbul"), vec![0..8]);
+        assert_eq!(upper.find("İstanbul"), vec![0..8]);
+        assert_eq!(upper.find("ırmak"), vec![8..13]);
+        assert_eq!(upper.find("kış"), vec![13..16]);
+        assert_eq!(upper.find("istanbul ırmak kış"), vec![0..16], "a phrase across the words");
+        assert_eq!(upper.find_opts("ırmak", false, true), vec![8..13], "whole words");
+        assert!(upper.find_opts("istanbul", true, false).is_empty(), "case-sensitive search stays exact");
+        assert_eq!(upper.find_opts("İSTANBUL", true, false), vec![0..8]);
+
+        let mut v = Vec::new();
+        word(&mut v, "istanbul", 10.0, 10.0, 7.0);
+        word(&mut v, "ırmak", 80.0, 10.0, 7.0);
+        word(&mut v, "kış", 130.0, 10.0, 7.0);
+        let lower = layout(v);
+        assert_eq!(lower.find("İSTANBUL"), vec![0..8]);
+        assert_eq!(lower.find("IRMAK"), vec![8..13]);
+        assert_eq!(lower.find("KIŞ"), vec![13..16]);
+    }
+
+    #[test]
+    fn case_folding_keeps_one_character_per_character() {
+        for s in ["İSTANBUL", "ırmak", "Hello WORLD", "ÇAĞLAR", "Straße", "ΣΟΦΙΑ", "日本語"] {
+            assert_eq!(fold_case(s).chars().count(), s.chars().count(), "{s}");
+        }
+        assert_eq!(fold_case("Hello WORLD"), "hello world");
+        assert_eq!(fold_case("ÇAĞLAR Şişli"), "çağlar şişli");
+        assert_eq!(fold_case("İIıi"), "iiii");
     }
 
     fn g(t: &str, x0: f32, y0: f32, x1: f32) -> TextGlyph {

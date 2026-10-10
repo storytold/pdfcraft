@@ -23,6 +23,7 @@ pub(crate) struct ObjectSelection {
     pub notice: Option<String>,
     pub hold_editor: bool,
     blocked_page: Option<usize>,
+    input_blocked: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -36,6 +37,16 @@ struct Gesture {
 impl ObjectSelection {
     pub fn count(&self) -> usize {
         self.selected.len()
+    }
+
+    /// A preview belongs to the active, focused document. Returning from another tab or a
+    /// modal must not turn a release that happened elsewhere into a document edit.
+    pub fn set_input_blocked(&mut self, blocked: bool) {
+        self.input_blocked = blocked;
+        if blocked {
+            self.gesture = None;
+            self.blocked_page = None;
+        }
     }
 
     fn clear(&mut self) {
@@ -136,6 +147,9 @@ fn leave_single(view: &mut DocView) {
 /// Returns true while group selection owns the interaction. Ordinary clicks still reach the
 /// single-object text/resize tools. A text draft is finished or discarded through its editor.
 pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, page: usize, doc: &Document, view: &mut DocView) -> bool {
+    if view.objects.input_blocked {
+        return true;
+    }
     if view.content.draft.is_some() || view.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
         let blocked = view.objects.blocked_page == Some(page);
         let modifier_press = ui.input(|i| i.pointer.primary_pressed())
@@ -243,7 +257,11 @@ fn input(s: &mut ObjectSelection, ui: &egui::Ui, resp: &egui::Response, xf: &Pag
         }
     };
     let additive = modified(ui);
-    let hit = objects.iter().rev().find(|o| screen(xf, info, page, o).expand(2.0).contains(p));
+    // A page-sized background image must not hide editable labels or added notes.
+    // Within each kind, prefer the last object as the ordinary single-item tools do.
+    let hit = [ObjectKind::Added, ObjectKind::Text, ObjectKind::Image]
+        .into_iter()
+        .find_map(|kind| objects.iter().rev().find(|o| o.target.kind == kind && screen(xf, info, page, o).expand(2.0).contains(p)));
     if additive {
         if s.page != Some(page) {
             s.clear();

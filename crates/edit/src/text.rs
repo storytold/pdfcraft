@@ -1374,36 +1374,6 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     Ok(LineEdit { substituted })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn paragraph_wrapping_keeps_ideographic_spaces() {
-        let width = |s: &str| s.chars().count() as f64;
-        assert_eq!(wrap("A　　B C", 4.0, width), ["A　　B", "C"]);
-        assert_eq!(wrap("A\u{a0}B C", 3.0, width), ["A B", "C"]);
-        assert_eq!(wrap("A\u{2028}B C", 3.0, width), ["A B", "C"]);
-        assert_eq!(wrap(" \tA  B\r\nC ", 3.0, width), ["A B", "C"]);
-    }
-
-    #[test]
-    fn fallback_face_moves_on_when_the_best_face_lacks_a_character() {
-        static JPAN: &[&str] = &["Jpan"];
-        let mincho = CraftFont { family: "Mincho", style: "Regular", scripts: JPAN, bytes: b"" };
-        let gothic = CraftFont { family: "Gothic", style: "Regular", scripts: JPAN, bytes: b"" };
-        let faces = [&mincho, &gothic];
-        // Only the Gothic face has the Cyrillic letter.
-        let has = |face: &CraftFont, ch: char| ch.is_ascii() || face.family == "Gothic";
-        assert_eq!(fallback_face(&faces, &['a', 'ф'], has).map(|f| f.family), Some("Gothic"));
-        // Characters the best face has keep it.
-        assert_eq!(fallback_face(&faces, &['a', 'b'], has).map(|f| f.family), Some("Mincho"));
-        // No face has them all: the best face stays, and names the missing glyph.
-        assert_eq!(fallback_face(&faces, &['a', 'ф'], |_, ch| ch.is_ascii()).map(|f| f.family), Some("Mincho"));
-        assert!(fallback_face(&[], &['a'], has).is_none());
-    }
-}
-
 /// Existing paragraph indexes, excluding streams owned by an added-content item.
 pub(crate) fn selectable_blocks(
     doc: &Document,
@@ -1569,4 +1539,34 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     let contents = rewritten_contents(doc, &streams, data);
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paragraph_wrapping_keeps_ideographic_spaces() {
+        let width = |s: &str| s.chars().count() as f64;
+        assert_eq!(wrap("A　　B C", 4.0, width), ["A　　B", "C"]);
+        assert_eq!(wrap("A\u{a0}B C", 3.0, width), ["A B", "C"]);
+        assert_eq!(wrap("A\u{2028}B C", 3.0, width), ["A B", "C"]);
+        assert_eq!(wrap(" \tA  B\r\nC ", 3.0, width), ["A B", "C"]);
+    }
+
+    #[test]
+    fn fallback_face_moves_on_when_the_best_face_lacks_a_character() {
+        static JPAN: &[&str] = &["Jpan"];
+        let mincho = CraftFont { family: "Mincho", style: "Regular", scripts: JPAN, bytes: b"" };
+        let gothic = CraftFont { family: "Gothic", style: "Regular", scripts: JPAN, bytes: b"" };
+        let faces = [&mincho, &gothic];
+        // Only the Gothic face has the Cyrillic letter.
+        let has = |face: &CraftFont, ch: char| ch.is_ascii() || face.family == "Gothic";
+        assert_eq!(fallback_face(&faces, &['a', 'ф'], has).map(|f| f.family), Some("Gothic"));
+        // Characters the best face has keep it.
+        assert_eq!(fallback_face(&faces, &['a', 'b'], has).map(|f| f.family), Some("Mincho"));
+        // No face has them all: the best face stays, and names the missing glyph.
+        assert_eq!(fallback_face(&faces, &['a', 'ф'], |_, ch| ch.is_ascii()).map(|f| f.family), Some("Mincho"));
+        assert!(fallback_face(&[], &['a'], has).is_none());
+    }
 }

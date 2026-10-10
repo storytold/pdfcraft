@@ -2008,3 +2008,23 @@ fn group_selection_refuses_incomplete_content_and_resource_budget_overruns() {
     doc.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Ref(broken))).unwrap();
     assert!(editable_objects(&doc, 0).is_err(), "an undecodable stream is refused");
 }
+
+#[test]
+fn group_move_budget_refusals_keep_the_original_page_selectable() {
+    let text = text_page(&format!("{} BT /F1 12 Tf 40 400 Td (Target) Tj ET", "n ".repeat(99_995)));
+    assert_eq!(pdfcraft_content::parse(&page_content_bytes(&text, 0)).ops.len(), 100_000);
+    let mut image = image_page();
+    let page = pdfcraft_model::pages(&image)[0].obj;
+    let bytes = format!("{} /Im0 Do {}", "q ".repeat(1024), "Q ".repeat(1024));
+    let content = image.add(Object::Stream(Stream::flate(Dict::new(), bytes.as_bytes())));
+    image.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Ref(content))).unwrap();
+    for mut doc in [text, image] {
+        let objects = editable_objects(&doc, 0).unwrap();
+        assert_eq!(objects.len(), 1);
+        let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+        let error = move_objects(&mut doc, 0, &[objects[0].target], [10.0, 5.0]).unwrap_err();
+        assert!(error.to_string().contains("too many content operations") || error.to_string().contains("nested too deeply"), "{error}");
+        assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
+        assert_eq!(editable_objects(&doc, 0).unwrap(), objects, "refusal retains a usable inventory");
+    }
+}

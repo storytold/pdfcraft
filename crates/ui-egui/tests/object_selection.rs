@@ -6,15 +6,20 @@ use pdfcraft_engine::{AddedText, Edit, EditableObject};
 use pdfcraft_ui_egui::PdfCraftApp;
 
 fn fixture(clipping: bool) -> Vec<u8> {
+    fixture_with_background(clipping, false)
+}
+
+fn fixture_with_background(clipping: bool, background: bool) -> Vec<u8> {
     let stream = |body: &str, dict: &str| format!("<< {dict} /Length {} >>\nstream\n{body}\nendstream", body.len());
-    let objects = [
+    let mut objects = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 500] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Figure 6 0 R >> >> >>"
             .into(),
         stream(
             &format!(
-                "q BT {} Tr /F1 18 Tf 40 430 Td (Group headline) Tj ET Q q 1 0 0 1 40 340 cm /Figure Do Q BT /F1 12 Tf 240 90 Td (Keep here) Tj ET",
+                "{}q BT {} Tr /F1 18 Tf 40 430 Td (Group headline) Tj ET Q q 1 0 0 1 40 340 cm /Figure Do Q BT /F1 12 Tf 240 90 Td (Keep here) Tj ET",
+                if background { "q /Background Do Q " } else { "" },
                 if clipping { 4 } else { 0 }
             ),
             "",
@@ -22,6 +27,10 @@ fn fixture(clipping: bool) -> Vec<u8> {
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
         stream("1 0.2 0.1 rg 0 0 60 30 re f", "/Type /XObject /Subtype /Form /BBox [0 0 60 30]"),
     ];
+    if background {
+        objects[2] = objects[2].replace("/Figure 6 0 R", "/Figure 6 0 R /Background 7 0 R");
+        objects.push(stream("1 1 1 rg 0 0 400 500 re f", "/Type /XObject /Subtype /Form /BBox [0 0 400 500]"));
+    }
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, object) in objects.iter().enumerate() {
@@ -42,11 +51,15 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 }
 
 fn harness_with(clipping: bool) -> Harness<'static, PdfCraftApp> {
+    harness_document(clipping, false)
+}
+
+fn harness_document(clipping: bool, background: bool) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
         app.set_option("language", "en").unwrap();
-        app.open_bytes("group.pdf", None, fixture(clipping)).unwrap();
+        app.open_bytes("group.pdf", None, fixture_with_background(clipping, background)).unwrap();
         let id = app.views[0].id;
         app.session
             .apply(
@@ -309,5 +322,60 @@ fn group_drag_respects_document_rotation_and_view_rotation() {
                 assert!((new.rect[i] - old.rect[i] - expected[i % 2]).abs() < 0.01, "rotation {document_rotation}");
             }
         }
+    }
+}
+
+#[test]
+fn group_drags_cancel_on_focus_loss_tab_switch_home_and_modal_dialogs() {
+    for case in 0..4 {
+        let mut h = harness();
+        let before = objects(&h);
+        marquee(&mut h);
+        let (a, b) = (at(&h, 55.0, 70.0), at(&h, 90.0, 110.0));
+        h.hover_at(a);
+        h.run_steps(2);
+        h.drag_at(a);
+        h.run_steps(2);
+        h.hover_at(b);
+        h.run_steps(2);
+        match case {
+            0 => h.input_mut().focused = false,
+            1 => {
+                h.state_mut().open_bytes("other.pdf", None, fixture(false)).unwrap();
+            }
+            2 => h.state_mut().active = None,
+            _ => h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::About),
+        }
+        h.run_steps(2);
+        h.drop_at(b);
+        h.run_steps(2);
+        h.input_mut().focused = true;
+        h.state_mut().active = Some(0);
+        h.state_mut().dialog = None;
+        h.run_steps(4);
+        assert_eq!(objects(&h), before, "cancelled gesture case {case}");
+        assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "case {case}");
+        h.get_by_label("3 objects selected");
+    }
+}
+
+#[test]
+fn modifier_selection_picks_foreground_text_and_added_items_over_background_artwork() {
+    let mut h = harness_document(false, true);
+    let before = objects(&h);
+    assert_eq!(before.len(), 5);
+    for (x, y) in [(55.0, 70.0), (150.0, 135.0), (60.0, 145.0)] {
+        let p = at(&h, x, y);
+        click(&mut h, p, Modifiers::SHIFT);
+    }
+    h.get_by_label("3 objects selected");
+    let (a, b) = (at(&h, 55.0, 70.0), at(&h, 80.0, 100.0));
+    drag(&mut h, a, b);
+    let after = objects(&h);
+    for old in before {
+        let new = after.iter().find(|o| o.target == old.target).unwrap();
+        let stationary = old.text.as_deref() == Some("Keep here") || (old.target.kind == pdfcraft_engine::ObjectKind::Image && old.target.index == 0);
+        let shift = if stationary { [0.0, 0.0] } else { [25.0, -30.0] };
+        assert!(new.rect.iter().enumerate().all(|(i, value)| (value - old.rect[i] - shift[i % 2]).abs() < 0.01), "{old:?} -> {new:?}");
     }
 }

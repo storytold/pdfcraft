@@ -124,6 +124,9 @@ pub fn move_objects(doc: &mut Document, page: usize, targets: &[ObjectTarget], o
     crate::text::translate_blocks(&mut work, page, &indexes(ObjectKind::Text), offset)?;
     crate::images::translate_images(&mut work, page, &indexes(ObjectKind::Image), offset)?;
     translate_added(&mut work, page, &indexes(ObjectKind::Added), offset)?;
+    // Placement operators add to size/depth/work budgets, and moving paragraphs can change
+    // their grouping. Keep the resulting inventory usable; refuse before swapping otherwise.
+    editable_objects(&work, page)?;
     *doc = work;
     Ok(())
 }
