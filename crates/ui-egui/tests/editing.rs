@@ -1381,6 +1381,28 @@ fn split_dialog_writes_one_file_per_part() {
 }
 
 #[test]
+fn split_at_bookmarks_with_equal_titles_keeps_every_part() {
+    let dir = temp_path("split-dup-titles");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = organize(3);
+    h.state_mut().export_dir_override = Some(dir.to_string_lossy().into_owned());
+    for (index, title) in [(0, "Same"), (1, "Same"), (2, "same")] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark { parent: vec![], index, title: title.into(), page: index });
+    }
+    h.state_mut().split_draft.mode = pdfcraft_ui_egui::SplitMode::Bookmarks;
+    h.state_mut().run_command("page.split");
+    h.run_steps(3);
+    h.get_by_label_contains("Creates 3 files from 3 pages");
+    h.get_by_label("Split").click();
+    h.run_steps(3);
+    let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(names, ["doc - Same (2).pdf", "doc - Same.pdf", "doc - same (3).pdf"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn split_before_selected_pages() {
     let dir = temp_path("split-sel");
     let _ = std::fs::remove_dir_all(&dir);

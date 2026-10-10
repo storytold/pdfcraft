@@ -118,6 +118,23 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
             .unwrap_or_default();
         let mut gone: HashSet<ObjRef> = HashSet::new();
         let mut gone_inline: HashSet<usize> = HashSet::new();
+        // A viewer draws many comments from their dictionary even when the file stores no
+        // appearance (notes, FreeText, ink, stamps…). Build the appearance it would show, so
+        // flattening keeps a comment that still has ink on screen instead of deleting it.
+        for entry in &list {
+            let Some(r) = entry.as_ref() else { continue };
+            let d = doc.resolve(entry).as_dict().cloned().unwrap_or_default();
+            let subtype = d.name(b"Subtype").unwrap_or_default();
+            if subtype == b"Widget" || !selected(doc, &d, which) {
+                continue;
+            }
+            let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+            if flags & (HIDDEN | NO_VIEW) != 0 || appearance(doc, &d).is_some() {
+                continue;
+            }
+            // A subtype this build cannot draw only fails here; it is still removed below.
+            let _ = pdfcraft_annot::set_appearance(doc, r);
+        }
         for (k, entry) in list.iter().enumerate() {
             let obj = doc.resolve(entry);
             let Some(d) = obj.as_dict() else { continue };

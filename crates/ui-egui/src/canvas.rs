@@ -306,6 +306,12 @@ pub struct DocView {
     shown: bool,
     /// Turns wheel input into page turns in single-page view.
     wheel: crate::wheel_pager::WheelPager,
+    /// Until this time, apply precise (touchpad) wheel input 1:1 and suppress egui's eased copy.
+    /// A precision touchpad sends pixel-precise `MouseWheel` events; on Windows they arrive with
+    /// no `TouchPhase::Start`, so egui eases deltas of 8 px or more and the page lags the finger
+    /// (#759). The window outlasts a single frame so egui's internal easing tail is suppressed as
+    /// it decays, instead of adding on top of the 1:1 motion.
+    precise_scroll_until: f64,
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
     /// Pages selected in the organize grid or the Pages panel (0-based). Empty means "the current page".
     pub selected: BTreeSet<usize>,
@@ -503,6 +509,7 @@ impl DocView {
             zoom_anchor: None,
             shown: false,
             wheel: Default::default(),
+            precise_scroll_until: 0.0,
             auto_scroll: Default::default(),
             selected: BTreeSet::new(),
             select_anchor: None,
@@ -1357,7 +1364,7 @@ impl DocView {
         let avail_w = (self.viewport_w - 2.0 * SIDE).max(100.0);
         let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
         match self.fit {
-            Fit::Width => self.zoom = (avail_w - GAP * (per_row - 1.0)) / (max_w * PT * per_row),
+            Fit::Width => self.zoom = (avail_w - GAP * (per_row - 1.0)) / (w * PT * per_row),
             Fit::Page => {
                 let zw = (avail_w - GAP * (per_row - 1.0)) / (w * PT * per_row);
                 let zh = (self.viewport_h - 2.0 * MARGIN) / (h * PT);
@@ -1367,6 +1374,16 @@ impl DocView {
             Fit::None => {}
         }
         self.zoom = self.zoom.clamp(0.08, 64.0);
+    }
+
+    /// Width of the scroll content. Single-page view sizes it to the page it shows, so a
+    /// wider page elsewhere in the document can't push the shown one off-centre.
+    fn content_width(&self, info: &DocInfo, avail_w: f32) -> f32 {
+        let single = (self.layout == PageLayout::Single).then(|| self.current.min(info.pages.len().saturating_sub(1)));
+        let shown = info.pages.iter().enumerate().filter(|&(i, _)| single.is_none_or(|c| c == i));
+        let max_w = shown.map(|(_, p)| self.display_size(p).0).fold(0.0, f32::max);
+        let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
+        (max_w * self.zoom * PT * per_row + 2.0 * SIDE).max(avail_w)
     }
 
     /// Page rects in content coordinates (origin at the scroll content's top-left).
@@ -1612,7 +1629,9 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
         view.fit = Fit::Width;
         view.goto = Some((view.current, 0.0));
     }
-    if pressed(cmd(Key::G)) {
+    if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::G)) {
+        view.find_step(false);
+    } else if pressed(cmd(Key::G)) {
         view.find_step(true);
     }
     if pressed(cmd(Key::OpenBracket)) {
@@ -1620,9 +1639,6 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     }
     if pressed(cmd(Key::CloseBracket)) {
         view.view_history(true);
-    }
-    if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::G)) {
-        view.find_step(false);
     }
     // ⌘C arrives as a Copy event on most platforms.
     let copy = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)));
@@ -1756,21 +1772,19 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Vec2::ZERO
     };
 
-    let max_w = info.pages.iter().map(|p| view.display_size(p).0).fold(0.0, f32::max)
-        * view.zoom
-        * PT
-        * if view.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
-    let content_w = (max_w + 2.0 * SIDE).max(avail.width());
+    let content_w = view.content_width(info, avail.width());
     let rects = view.layout(info, content_w);
     let middle_gesture = view.auto_scroll.blocks_input();
     // Single page: when the whole page fits, the wheel would do nothing, so it turns pages
     // instead; zoomed in far enough to pan, it pans. Touch drags are untouched: with nothing
     // to pan, touch users turn pages with the rail buttons, the page box and the arrow keys.
     // Runs before `visible_pages` so the frame that turns the page draws it.
+    let mut single_paging = false;
     if view.layout == PageLayout::Single {
         // Within a point, so layout rounding can't stop a fitting page from turning.
         let fits = rects.get(view.current.min(rects.len().saturating_sub(1))).is_some_and(|r| r.height() + 2.0 * MARGIN <= avail.height() + 1.0);
         let can_turn = fits && !middle_gesture && unobstructed && ui.rect_contains_pointer(avail);
+        single_paging = can_turn;
         // Every wheel event goes to the pager, so it follows each trackpad touch to its end
         // even while the page can't turn.
         ui.input(|i| {
@@ -1787,6 +1801,46 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             // part, as `ScrollArea` itself handles each axis.
             ui.input_mut(|i| i.smooth_scroll_delta.y = 0.0);
         }
+    }
+    // Touchpad scrolling 1:1 (#759). A precision touchpad sends pixel-precise `MouseWheel`
+    // events; on Windows they carry no `TouchPhase::Start`, so egui never takes its no-smoothing
+    // path and eases deltas of 8 px or more, leaving the page a frame behind the finger. Apply
+    // the precise delta ourselves this frame through the un-animated scroll path, and suppress
+    // egui's eased copy while it decays so it neither doubles nor trails the motion. A coarse
+    // mouse wheel keeps egui's easing (pleasant for chunky notches).
+    let now = ui.input(|i| i.time);
+    let mut precise_scroll = Vec2::ZERO;
+    if ui.rect_contains_pointer(avail) {
+        let mut coarse_wheel = false;
+        ui.input(|i| {
+            for e in &i.events {
+                if let egui::Event::MouseWheel { unit, delta, modifiers, .. } = e {
+                    if modifiers.command || modifiers.ctrl {
+                        continue; // Zooming, not scrolling.
+                    }
+                    match unit {
+                        // Shift scrolls sideways, matching egui's own wheel handling.
+                        egui::MouseWheelUnit::Point if modifiers.shift => precise_scroll.x += delta.x + delta.y,
+                        egui::MouseWheelUnit::Point => precise_scroll += *delta,
+                        egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => coarse_wheel = true,
+                    }
+                }
+            }
+        });
+        if coarse_wheel {
+            view.precise_scroll_until = 0.0;
+        } else if precise_scroll != Vec2::ZERO {
+            view.precise_scroll_until = now + 0.25;
+        }
+    }
+    // Paging owns the vertical axis in single-page view; leave it to the pager.
+    if single_paging {
+        precise_scroll.y = 0.0;
+    }
+    if now < view.precise_scroll_until {
+        ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+    } else {
+        precise_scroll = Vec2::ZERO;
     }
     let visible_pages: Vec<usize> = match view.layout {
         PageLayout::Single => vec![view.current.min(rects.len() - 1)],
@@ -1917,8 +1971,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             // Only interactions pause; the document must keep its original colours.
             ui.set_opacity(opacity);
         }
-        // Middle-button auto-scroll and the keyboard (positive y moves the content down).
-        let delta = auto_delta - vec2(0.0, key_scroll);
+        // Middle-button auto-scroll, the keyboard and precise touchpad input (#759); positive y
+        // moves the content down. All three scroll without easing, unlike egui's wheel default.
+        let delta = auto_delta - vec2(0.0, key_scroll) + precise_scroll;
         if delta != Vec2::ZERO {
             ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
         }
@@ -4078,6 +4133,31 @@ trailer << /Root 1 0 R >>
             v.fit_zoom(&info);
             assert!(v.zoom > big, "{fit:?}: single-page view fits the page it shows");
         }
+    }
+
+    #[test]
+    fn fit_width_fits_the_shown_page_in_single_page_view_only() {
+        let page =
+            |width: f32, height: f32| pdfcraft_render::PageInfo { width, height, label: String::new(), crop: [0.0, 0.0, width, height], rotation: 0 };
+        let info = DocInfo { pages: vec![page(300.0, 400.0), page(600.0, 400.0)], ..Default::default() };
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        (v.fit, v.viewport_w, v.viewport_h) = (Fit::Width, 1000.0, 800.0);
+        v.layout = PageLayout::Single;
+        v.fit_zoom(&info);
+        let narrow = v.zoom;
+        // The shown page fills the width between the side gutters, not centred for the wide page.
+        let shown = v.layout(&info, v.content_width(&info, 1000.0))[0];
+        assert!((shown.left() - SIDE).abs() < 1e-2 && (shown.width() - 860.0).abs() < 1e-2, "{shown:?}");
+        v.current = 1;
+        v.fit_zoom(&info);
+        assert!((narrow / v.zoom - 2.0).abs() < 1e-3, "the narrow page gets twice the zoom of the wide one");
+        // Scrolling views keep one zoom for the whole document.
+        v.layout = PageLayout::Continuous;
+        v.fit_zoom(&info);
+        let wide = v.zoom;
+        v.current = 0;
+        v.fit_zoom(&info);
+        assert_eq!(v.zoom, wide, "continuous fit width holds still across page sizes");
     }
 
     #[test]
