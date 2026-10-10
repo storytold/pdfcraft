@@ -466,6 +466,87 @@ fn mixed_files_convert_and_combine_in_order() {
 }
 
 #[test]
+fn a_file_split_around_another_combines_in_order_with_one_bookmark() {
+    let mut s = Session::new();
+    let (a, b) = (Arc::new(fixture(3)), Arc::new(fixture(2)));
+    // a's pages 1–2, then b, then a's page 3: one file (group 7) split around another.
+    let sources: Vec<CombineSource> = vec![("a".into(), a.clone(), Some("1-2".into())), ("b".into(), b, None), ("a".into(), a, Some("3".into()))];
+    let combined = s.combine_grouped(&sources, &[7, 9, 7], &[]).unwrap();
+    let id = s.open_new("Combined.pdf", combined).unwrap();
+    assert_eq!(page_texts(&s, id), ["Page 1", "Page 2", "Page 1", "Page 2", "Page 3"]);
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["a→1", "b→3"], "one bookmark for a, at its first page");
+    // Without groups each source is a file of its own, as combine_ranges.
+    let (a, b) = (Arc::new(fixture(3)), Arc::new(fixture(2)));
+    let sources: Vec<CombineSource> = vec![("a".into(), a.clone(), Some("1".into())), ("b".into(), b, None), ("a".into(), a, Some("3".into()))];
+    let combined = s.combine_grouped(&sources, &[], &[]).unwrap();
+    let id = s.open_new("Combined 2.pdf", combined).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["a→1", "b→2", "a→4"]);
+    // A bad range is refused with the file's name.
+    let bad: Vec<CombineSource> = vec![("a".into(), Arc::new(fixture(1)), Some("9".into()))];
+    assert!(matches!(s.combine_grouped(&bad, &[1], &[]), Err(EditError::Print(e)) if e.starts_with("a:")));
+}
+
+#[test]
+fn a_page_with_a_form_field_shown_twice_keeps_one_field() {
+    // Regression (found by review): the repeated page copied the whole field again, so the
+    // result had two fields named "shared", filled in separately.
+    use pdfcraft_cos::{Dict, Document, Object, PdfString};
+    let mut doc = Document::open(Arc::new(fixture(2))).unwrap();
+    let pages: Vec<_> = pdfcraft_organize::pages(&doc).unwrap().into_iter().map(|p| p.obj).collect();
+    let field = doc.add(Object::Null);
+    let widgets: Vec<_> = pages
+        .iter()
+        .map(|p| {
+            let mut w = Dict::new();
+            w.set(b"Type".to_vec(), Object::name("Annot"));
+            w.set(b"Subtype".to_vec(), Object::name("Widget"));
+            w.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(100), Object::Int(20)]));
+            w.set(b"Parent".to_vec(), Object::Ref(field));
+            w.set(b"P".to_vec(), Object::Ref(*p));
+            doc.add(w)
+        })
+        .collect();
+    let mut f = Dict::new();
+    f.set(b"FT".to_vec(), Object::name("Tx"));
+    f.set(b"T".to_vec(), Object::String(PdfString::text("shared")));
+    f.set(b"V".to_vec(), Object::String(PdfString::text("Ada")));
+    f.set(b"Kids".to_vec(), Object::Array(widgets.iter().copied().map(Object::Ref).collect()));
+    doc.set(field, Object::Dict(f));
+    for (p, w) in pages.iter().zip(&widgets) {
+        doc.update_dict(*p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(*w)]))).unwrap();
+    }
+    let mut form = Dict::new();
+    form.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(field)]));
+    doc.update_dict(doc.root().unwrap(), |d| d.set(b"AcroForm".to_vec(), Object::Dict(form))).unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
+    // Pages 1, 2, then page 1 again: one file split around nothing but itself.
+    let s = Session::new();
+    let sources: Vec<CombineSource> = vec![("form".into(), bytes.clone(), Some("1-2".into())), ("form".into(), bytes, Some("1".into()))];
+    let out = s.combine_grouped(&sources, &[1, 1], &[]).unwrap();
+    let mut out = Document::open(out).unwrap();
+    pdfcraft_forms::set_value(&mut out, "shared", &pdfcraft_forms::FieldValue::Text("Grace".into())).unwrap();
+    let fields = pdfcraft_forms::fields(&out);
+    assert!(
+        !fields.is_empty() && fields.iter().all(|f| f.name == "shared" && f.value == ["Grace"]),
+        "one field, one value: {:?}",
+        fields.iter().map(|f| (&f.name, &f.value)).collect::<Vec<_>>()
+    );
+    let catalog = out.get(out.root().unwrap()).as_dict().cloned().unwrap();
+    let form = out.resolve(catalog.get(b"AcroForm").unwrap()).as_dict().cloned().unwrap();
+    let listed = form.get(b"Fields").and_then(|f| f.as_array()).cloned().unwrap();
+    assert_eq!(listed.len(), 1, "the field isn't copied again for the repeated page");
+    // Its widgets: one on each of the three pages, each belonging to its own page.
+    let out_pages: Vec<_> = pdfcraft_organize::pages(&out).unwrap().into_iter().map(|p| p.obj).collect();
+    let kids = out.resolve(&listed[0]).as_dict().and_then(|f| f.get(b"Kids").and_then(|k| k.as_array()).cloned()).unwrap();
+    assert_eq!(kids.len(), 3);
+    let mut on: Vec<_> = kids.iter().map(|k| out.resolve(k).as_dict().and_then(|w| w.reference(b"P")).unwrap()).collect();
+    on.sort();
+    let mut expected = out_pages.clone();
+    expected.sort();
+    assert_eq!(on, expected, "a widget per page, on its own page");
+}
+
+#[test]
 fn files_that_cannot_be_converted_are_refused_clearly() {
     let s = Session::new();
     let err = s.convert_to_pdf("report.docx", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();

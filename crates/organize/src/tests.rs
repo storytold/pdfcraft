@@ -443,6 +443,11 @@ fn links_are_rewired_to_copied_pages_or_dropped() {
     assert!(!link.contains(b"Dest") && !link.contains(b"A"));
 }
 
+/// A widget annotation that is its own form field (no `/Parent`).
+fn own_field(doc: &Document, r: ObjRef) -> bool {
+    doc.get(r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget") && !d.contains(b"Parent"))
+}
+
 #[test]
 fn repeated_page_gets_independent_annotations() {
     // A1 has a link, A2 a link and a form field, A3 a note with a popup; each is listed twice.
@@ -456,11 +461,15 @@ fn repeated_page_gets_independent_annotations() {
         assert!(!refs[i].is_empty());
         assert_eq!(refs[i].len(), refs[i + 1].len());
         for (a, b) in refs[i].iter().zip(&refs[i + 1]) {
-            assert_ne!(a, b, "each copy of the page has its own annotation objects");
+            // A widget that is its own field stays one object on both pages, so the field stays
+            // one (#790); every other annotation is copied.
+            if !own_field(&out, *a) {
+                assert_ne!(a, b, "each copy of the page has its own annotation objects");
+            }
         }
     }
     for (i, list) in refs.iter().enumerate() {
-        for a in list {
+        for a in list.iter().filter(|a| !own_field(&out, **a)) {
             assert_eq!(out.get(*a).as_dict().unwrap().reference(b"P"), Some(ps[i].obj), "/P names the page holding the copy");
         }
     }
@@ -749,6 +758,96 @@ fn layers_are_registered_with_their_default_state() {
     // Page 1 uses no layer, so extracting it alone adds no OCProperties.
     let out = extract_pages(&doc_c(), &[0]).unwrap();
     assert!(!catalog(&out).contains(b"OCProperties"));
+}
+
+/// The top-level bookmarks' titles, in order.
+fn top_titles(doc: &Document) -> Vec<String> {
+    let Some(outlines) = catalog(doc).reference(b"Outlines") else { return Vec::new() };
+    let mut item = doc.get(outlines).as_dict().and_then(|o| o.reference(b"First"));
+    let mut titles = Vec::new();
+    while let Some(r) = item {
+        let d = doc.get(r).as_dict().cloned().unwrap();
+        titles.push(d.get(b"Title").and_then(|t| t.as_string()).map(|s| s.to_text()).unwrap());
+        item = d.reference(b"Next");
+    }
+    titles
+}
+
+#[test]
+fn a_file_split_around_another_is_copied_once_with_one_bookmark() {
+    // C's first page, then all of A, then C's second page.
+    let (a, c) = (doc_a(), doc_c());
+    let out = full_roundtrip(&crate::combine_grouped(&[(0, "C", &c, Some(&[0])), (1, "A", &a, None), (0, "C", &c, Some(&[1]))]).unwrap());
+    assert_eq!(labels(&out), ["C1", "A1", "A2", "A3", "C2"]);
+    assert_eq!(top_titles(&out), ["C", "A"], "one bookmark per file, not per run");
+    let ps = pages(&out).unwrap();
+    let outlines = out.get(catalog(&out).reference(b"Outlines").unwrap()).as_dict().cloned().unwrap();
+    let file = out.get(outlines.reference(b"First").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(file.get(b"Dest").and_then(|d| d.as_array()).unwrap()[0].as_ref(), Some(ps[0].obj), "C's bookmark: its first page shown");
+    // Its own bookmarks follow its pages wherever they went: the section is on C2, now last.
+    let chapter = out.get(file.reference(b"First").unwrap()).as_dict().cloned().unwrap();
+    let section = out.get(chapter.reference(b"First").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(section.get(b"Dest").and_then(|d| d.as_array()).unwrap()[0].as_ref(), Some(ps[4].obj));
+    // The link from C1 to C2 still works across A's pages between them.
+    let link = &annots(&out, 0)[0];
+    assert_eq!(link.get(b"Dest").and_then(|d| d.as_array()).expect("kept").first().and_then(|o| o.as_ref()), Some(ps[4].obj));
+    // Its attachment once, not once per run.
+    let names = out.resolve(catalog(&out).get(b"Names").unwrap()).as_dict().cloned().unwrap();
+    let tree = out.resolve(names.get(b"EmbeddedFiles").unwrap()).as_dict().cloned().unwrap();
+    let keys: Vec<String> = tree.get(b"Names").and_then(|n| n.as_array()).unwrap().chunks(2).map(|p| p[0].as_string().unwrap().to_text()).collect();
+    assert_eq!(keys, ["notes.txt"]);
+}
+
+#[test]
+fn a_page_shown_twice_gets_its_own_annotations() {
+    // One page with an indirect comment (and its popup), and a second page.
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),                                                          // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(),                    // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Annots [6 0 R] >>".into(),                            // 3
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>".into(),                                            // 4
+        body("D1"),                                                                                          // 5
+        "<< /Type /Annot /Subtype /Text /Rect [0 0 10 10] /Contents (note) /P 3 0 R /Popup 8 0 R >>".into(), // 6
+        body("D2"),                                                                                          // 7
+        "<< /Type /Annot /Subtype /Popup /Rect [10 10 50 50] /Parent 6 0 R >>".into(),                       // 8
+    ];
+    let d = open(build(&b, "/Root 1 0 R"));
+    // Page 1 twice, from one file split around its page 2 (and the same through combine_selected).
+    for out in [
+        crate::combine_grouped(&[(0, "D", &d, Some(&[0, 1])), (0, "D", &d, Some(&[0]))]).unwrap(),
+        combine_selected(&[("D", &d, Some(&[0, 1, 0]))]).unwrap(),
+    ] {
+        let out = full_roundtrip(&out);
+        assert_eq!(labels(&out), ["D1", "D2", "D1"]);
+        let ps = pages(&out).unwrap();
+        let annot_of = |i: usize| page_dict(&out, i).get(b"Annots").and_then(|a| a.as_array()).and_then(|a| a[0].as_ref()).unwrap();
+        let (first, again) = (annot_of(0), annot_of(2));
+        assert_ne!(first, again, "two pages, two comments");
+        for (annot, page) in [(first, ps[0].obj), (again, ps[2].obj)] {
+            let a = out.get(annot).as_dict().cloned().unwrap();
+            assert_eq!(a.reference(b"P"), Some(page), "each comment belongs to its own page");
+            let popup = out.get(a.reference(b"Popup").unwrap()).as_dict().cloned().unwrap();
+            assert_eq!(popup.reference(b"Parent"), Some(annot), "and its popup to it");
+        }
+    }
+}
+
+#[test]
+fn grouped_runs_keep_their_order_repeats_and_separate_files() {
+    let (a, b) = (doc_a(), doc_b());
+    // B's page 2, A's page 1, B's page 1, A's page 1 again (a repeat is a page of its own).
+    let out = full_roundtrip(
+        &crate::combine_grouped(&[(0, "B", &b, Some(&[1])), (1, "A", &a, Some(&[0])), (0, "B", &b, Some(&[0])), (1, "A", &a, Some(&[0]))]).unwrap(),
+    );
+    assert_eq!(labels(&out), ["B2", "A1", "B1", "A1"]);
+    assert_eq!(top_titles(&out), ["B", "A"]);
+    let ps = pages(&out).unwrap();
+    assert_ne!(ps[1].obj, ps[3].obj, "a page shown twice is two pages");
+    // The same file added twice on purpose (two groups) keeps two bookmarks, as combine does.
+    let twice = full_roundtrip(&crate::combine_grouped(&[(0, "A", &a, None), (1, "A again", &a, None)]).unwrap());
+    assert_eq!(top_titles(&twice), ["A", "A again"]);
+    // A page that isn't there is refused, as combine_selected does.
+    assert!(matches!(crate::combine_grouped(&[(0, "A", &a, Some(&[9]))]), Err(crate::OrganizeError::NoSuchPage(9))));
 }
 
 #[test]
@@ -1396,4 +1495,28 @@ fn extract_keeps_images_type3_glyphs_may_draw() {
     let part = full_roundtrip(&extract_pages(&doc_images_with(&raw("/ImB Do"), font), &[0]).unwrap());
     let names = xobject_names(&part, 0);
     assert!(names.iter().any(|n| n.as_slice() == b"ImB"), "pruning must not run through Type 3 resources");
+}
+
+/// A page listed twice whose widget's field keeps `/Kids` as an array object of its own: the
+/// second widget joins that array, and the field keeps every widget it had.
+#[test]
+fn a_repeated_widget_joins_an_indirect_kids_array() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),                   // 3
+        "<< /Type /Page /Parent 2 0 R /Annots [8 0 R] >>".into(),                   // 4
+        "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /Rect [10 10 90 30] /P 3 0 R >>".into(), // 5
+        "<< /FT /Tx /T (name) /V (Ada) /Kids 7 0 R >>".into(),                      // 6
+        "[5 0 R 8 0 R]".into(),                                                     // 7
+        "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /Rect [10 40 90 60] /P 4 0 R >>".into(), // 8
+    ];
+    let src = open(build(&b, "/Root 1 0 R"));
+    let out = full_roundtrip(&extract_pages(&src, &[0, 0, 1]).unwrap());
+    let form = out.resolve(catalog(&out).get(b"AcroForm").unwrap());
+    let fields = form.as_dict().unwrap().get(b"Fields").and_then(Object::as_array).cloned().unwrap();
+    assert_eq!(fields.len(), 1, "one field");
+    let field = out.resolve(&fields[0]).as_dict().cloned().unwrap();
+    let kids = out.resolve(field.get(b"Kids").unwrap()).as_array().cloned().unwrap();
+    assert_eq!(kids.len(), 3, "both original widgets and the repeat's own: {kids:?}");
 }
