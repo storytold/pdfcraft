@@ -135,18 +135,19 @@ pub fn claim(files: &[String], may_hand_off: bool) -> Claim {
     }
 }
 
-/// The socket in `%LOCALAPPDATA%\PdfCraft` (beside the crash-recovery folder); none for a portable
-/// copy.
+/// The socket in `%LOCALAPPDATA%\PdfCraft` (beside the crash-recovery folder), or in the portable
+/// data folder if `%LOCALAPPDATA%` is unset (#889).
 #[cfg(windows)]
 fn socket_path() -> Option<std::path::PathBuf> {
     let name = socket_name(std::env::var("SESSIONNAME").ok().as_deref());
-    // A portable copy may sit in a folder other accounts can write to (`C:\Tools`): a socket
-    // there would let them receive this user's file paths or send it files to open. Portable
-    // launches each open their own window instead, and write nothing outside their folder.
-    if pdfcraft_ui_egui::portable::data_dir().is_some() {
-        return None;
-    }
-    std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(|d| std::path::PathBuf::from(d).join("PdfCraft").join(name))
+    // The IPC socket lives in %LOCALAPPDATA%\PdfCraft, which is isolated to the user's Windows
+    // sign-in by NTFS ACLs, so other user accounts cannot intercept or send launches. A portable
+    // copy uses the user's %LOCALAPPDATA% for the temporary runtime socket (#889), falling back
+    // to its own data folder if %LOCALAPPDATA% is unavailable.
+    std::env::var_os("LOCALAPPDATA")
+        .filter(|v| !v.is_empty())
+        .map(|d| std::path::PathBuf::from(d).join("PdfCraft").join(&name))
+        .or_else(|| pdfcraft_ui_egui::portable::data_dir().map(|d| d.join(&name)))
 }
 
 /// The socket's file name for a Windows session (`SESSIONNAME`: `Console`, `RDP-Tcp#3`…). The
