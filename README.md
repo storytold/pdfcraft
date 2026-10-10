@@ -89,12 +89,12 @@ The Home dashboard provides one-click access to the core tools implemented in th
 ### From Source
 
 1. Install the Rust toolchain via [rustup](https://www.rust-lang.org/tools/install).
-2. Clone this repository and build the release binaries:
+2. Clone this repository and build the release binaries using `build.py` (or `cargo`):
 
 ```bash
 git clone https://github.com/b-lincko/linkco-pdf.git
 cd linkco-pdf
-cargo build --release -p pdfcraft -p pdfcraft-cli
+python build.py
 ```
 
 ---
@@ -115,15 +115,22 @@ The Windows packaging pipeline lives in `packaging/windows/` and embeds full Lin
 
 ### Building the Windows Installer
 
-From a Windows PowerShell prompt with the Rust toolchain, WiX Toolset v5 (`wix`), and optionally NSIS (`makensis`) installed:
+On Windows (with Python 3 and the Rust toolchain installed), run `installer.py`:
+
+```bash
+python installer.py
+```
+
+Or from PowerShell using WiX Toolset v5 (`wix`) and optionally NSIS (`makensis`):
 
 ```powershell
 pwsh -File packaging/windows/package.ps1
 ```
 
-This produces:
-- `dist/release/LinkcoPDFEditorSetup-<version>-windows-<arch>.msi` (validated by `packaging/windows/test-msi.ps1`)
-- `dist/release/LinkcoPDFEditorSetup.exe` (when NSIS `makensis` is available in `PATH`)
+This builds the Windows release binaries and produces in `dist/release/`:
+- `dist/release/LinkcoPDFEditorSetup.exe` (standalone Windows GUI installer — built via NSIS `makensis` when installed, or automatically via Windows' built-in `.NET` `csc.exe` compiler)
+- `dist/release/LinkcoPDFEditorSetup-<version>-windows-<arch>.msi` (when WiX v5 is installed; validated by `packaging/windows/test-msi.ps1`)
+- `dist/release/LinkcoPDFEditor-<version>-windows-<arch>-portable.zip` (portable ZIP containing `LinkcoPDFEditor.exe`, `pdfcraft.exe`, and `pdfcraft-cli.exe`)
 
 ---
 
@@ -186,14 +193,17 @@ cargo xtask parity
 ## Build
 
 ```bash
-# Debug build of the entire workspace
-cargo build --workspace
+# Build release binaries into dist/release/ using the Python build script
+python build.py
 
-# Optimized release build of the desktop application and CLI
+# Build the Windows application + Windows Setup installer (LinkcoPDFEditorSetup.exe)
+python installer.py
+
+# Or build directly with Cargo
 cargo build --release -p pdfcraft -p pdfcraft-cli
 ```
 
-Compiled binaries are placed in `target/release/pdfcraft` (`target\release\pdfcraft.exe` on Windows) and `target/release/pdfcraft-cli`.
+Compiled binaries are placed in `dist/release/LinkcoPDFEditor.exe` (`dist/release/LinkcoPDFEditor` on Linux/macOS) as well as `target/release/pdfcraft` and `target/release/pdfcraft-cli`.
 
 ---
 
