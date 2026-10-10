@@ -71,3 +71,8 @@ sync_github_name = true
 [people.Hathor875]
 real_name = "Krzysztof Cieślik"
 sync_github_name = true
+
+[people.menezesd]
+real_name = "Dean Menezes"
+display_name = "Dean Menezes"
+sync_github_name = false

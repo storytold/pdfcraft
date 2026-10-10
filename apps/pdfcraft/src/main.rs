@@ -306,6 +306,8 @@ fn app_creator<'a>(
         #[cfg(target_os = "macos")]
         {
             app.os_events = Some(apple_events.connect(&cc.egui_ctx));
+            // The menus go in the menu bar at the top of the screen, not in the window (#80).
+            app.install_native_menu();
         }
         if let Some(server) = instance {
             app.os_events = Some(server.connect(&cc.egui_ctx));
