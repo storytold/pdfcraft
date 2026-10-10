@@ -2229,7 +2229,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 field_placed |= o.placed;
                 o.consumed || field_tool.is_some()
             } else {
-                tool == QuickTool::Select && crate::forms_ui::page_input(ui, &resp, &xf, i, info, &form, can_fill, view)
+                tool == QuickTool::Select
+                    && !comments::select_grabs(ui, &pcx, view)
+                    && crate::forms_ui::page_input(ui, &resp, &xf, i, info, &form, can_fill, view)
             };
             // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat).
             let area_tool = tool == QuickTool::Redact && can_modify || tool == QuickTool::Comment(comments::CommentTool::Highlight) && allowed;
