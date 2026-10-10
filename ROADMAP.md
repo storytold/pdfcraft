@@ -29,8 +29,8 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **≈ 67.5%** tier-weighted (57.1% unweighted: 425 shipped + 75 partial of 810; P0 94.2%) | measured, `parity/acrobat-features.toml` |
-| Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.4% unweighted; P0 95.3%) | measured ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
+| **Feature breadth** | **≈ 67%** tier-weighted (56.9% unweighted: 423 shipped + 74 partial of 808; P0 94.2%) | measured, `parity/acrobat-features.toml` |
+| Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.2% unweighted; P0 95.3%) | measured ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 49%** (45–53%) | estimated, weighted sum over [dimensions](#by-dimension) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, essentials user | **≈ 66%** (60–70%) | estimated ([method](docs/target-app-parity.md#essentials-user)) |
@@ -58,7 +58,7 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 
 | Dimension | Ready | Weight | Remaining (h) | Doc |
 |---|---|---|---|---|
-| Features (14 areas) | ≈ 49% depth · 67.5% breadth | 40% | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
+| Features (14 areas) | ≈ 49% depth · 67% breadth | 40% | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
 | UI/UX fidelity | ≈ 55% | 10% | 30–60 | [ui-parity.md](docs/ui-parity.md) |
 | File formats and conversion | ≈ 40% | 12% | 120–220 (within features) | [file-format-parity.md](docs/file-format-parity.md) |
 | PDF specification and standards | ≈ 60% | 8% | 150–260 (within features) | [pdf-spec-parity.md](docs/pdf-spec-parity.md) |
@@ -76,9 +76,9 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 | Area | Breadth (measured) | Ready (estimated) | Remaining (h) |
 |---|---|---|---|
 | A Core model and fidelity | 76.8% | 70% | 25–45 |
-| B View and navigation | 62.9% | 55% | 110–190 |
-| C Content editing | 54.1% | 30% | 100–180 |
-| D Organize pages | 61.7% | 70% | 12–25 |
+| B View and navigation | 62.5% | 55% | 110–190 |
+| C Content editing | 53.3% | 30% | 100–180 |
+| D Organize pages | 61.2% | 70% | 12–25 |
 | E Comments and review | 77.7% | 70% | 12–25 |
 | F Forms and JavaScript | 78.5% | 65% | 40–75 |
 | G Protect, redact, sanitize | 58.5% | 55% | 15–30 |
@@ -135,6 +135,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 Newest first: the date, what moved, and the new overall estimate.
 
+- **2026-10-10 (M14, interface size):** Preferences ▸ Interface size scales the whole interface (50–250 %, setting `ui_scale`, control option `ui-scale`); 50 % brings an interface the system draws at 200 % back to 100 % (#456). Auto, the default, follows the desktop's text scaling: on Linux and the BSDs the desktop app reads GNOME's `text-scaling-factor` once at launch, so with Large Text (1.25) on a 1× display the interface no longer draws 13 px labels that show their pixels next to the system's text. The size is egui's zoom factor, so `pixels_per_point` grows with it and page rasters stay one texel per screen pixel; egui's own ⌘+/⌘− interface zoom is turned off so those keys stay page zoom. Still missing: KDE's font DPI and Windows' "Make text bigger" aren't read (both scale only text there), and egui's text is still greyscale-antialiased without the system's gamma, so small text looks rougher than GTK's at 100 %.
 - **2026-10-10 (M14, #496):** Shortcut displays share a UI formatter across toolbar search, registry menus, command palette, Help and tooltips. Modifier and key names use a dedicated catalog context in every bundled translation; missing entries keep the English key name rather than a command translation. German shows Strg/Umschalt/Entf, macOS retains its symbols, and runtime language changes refresh the display. Regression coverage checks localized layout widths, English/German switching, platform conventions and unchanged command execution. Milestone and effort estimates unchanged.
 
 - **2026-10-10 (M5, shape fill colour, #686):** Rectangles, ovals, polygons and clouds can be filled. The comment quick bar has a Fill colour control for those tools ("No fill" or a swatch; it persists with the other per-tool styles), Comment Properties ▸ Appearance has a Fill colour row (one undo step with the other changes, carried over by Make Current Properties Default), and `comment_edit` takes `fill` (`"none"` removes it). `pdfcraft-annot::set_fill` writes or removes `/IC` and redraws the appearance; lines, ink and locked comments refuse it. Still missing: a custom colour picker (only the comment palette), and a separate fill for line endings.
@@ -159,8 +160,6 @@ Newest first: the date, what moved, and the new overall estimate.
 - **2026-10-10 (M14, platform shortcut labels):** View ▸ Zoom and Page navigation, the rail, find-bar, toolbar and bookmark tooltips, and Help ▸ Keyboard shortcuts write shortcuts for the platform (`Ctrl+1`, `Ctrl+Shift++` off macOS) instead of hard-coded ⌘. Labels follow egui's detected OS, so the web build in a Linux or Windows browser shows Ctrl too. Fit visible is listed once in View. Translated tooltips take a `{key}` placeholder. Overall estimate unchanged (about 30–35%).
 - **2026-10-10 (M14):** Arabic interface language: a 2,137-entry catalog (`ar.tsv`, six CLDR plural forms, Arabic month and weekday names for dates), selected by `ar` and every `ar-*` locale. egui joins Arabic letters but places words left to right, so the catalog is put into display order when it loads (`bidi::display_rtl`: placeholders, keyboard shortcuts, edge spaces and caption colons are kept in place), and the command search matches a multi-word Arabic query word by word. Arabic glyphs come from the craft-fonts `Arab` face (kept in the web build); the CI and release pin of craft-fonts moves to the revision that has it, and `crates/fonts/build.rs` now refuses to embed the Noto Sans CJK SC that revision also carries (AGENTS.md §1.1). Not done: the layout is not mirrored, a wrapped Arabic paragraph breaks at the wrong end, and text typed into fields is not reordered; these need bidi support in the text layout itself.
 - **2026-10-10 (M6, #95):** Prepare a form edits shared General, Appearance and applicable Options properties in one atomic undo step. Explicit opt-in controls keep mixed values unchanged; partial appearance patches preserve custom font resources, each widget's style, indirect dictionary contents and unknown keys. Ctrl/Command+A selects the current page; rectangle selection and the Fields panel support multi-selection, with panel double-click opening properties. CLI/MCP `form_set_props` accepts a bounded, unique `fields` list. Regression tests cover save/reopen, undo/redo, locked-field rollback, stale dialogs, invalid arguments and selection. Names, positions, choices/defaults and script tabs remain individual GUI edits. Integrated upstream 0.5.0 and completed Portuguese/Italian catalogs without losing translator credit; shared-property labels now cover all 14 bundled translations. Kept the new Italian interface and Fill & Sign date-language registries aligned, including accented date output; the About-dialog regression waits for the larger contributor list to settle before clicking. Milestone and overall effort estimates unchanged (about 30–35%).
-- **2026-10-10 (#844, mixed selection and movement):** Edit a PDF supports Shift/Ctrl/Command-click and empty-space marquee selection of same-page paragraphs, Image/Form artwork and added text/images. Group drag previews commit as one atomic undo step; glyph bytes/fonts/kerning and neighbouring content stay intact. CLI/MCP `object_list` and `object_move` share the engine edit and optional generation guard. Counts and geometry are bounded; drafts survive selection requests, Escape cancels, and unsupported vertical/clipping text refuses the whole move. General object editing remains partial; arbitrary paths, inline images, cross-page transfer and arrange/align remain. M7 estimates unchanged.
-
 - **2026-10-09 (M5, line-ending labels):** Comment properties names each line ending in words ("Reverse open arrow", "Butt", …) and those labels are translated. The PDF `/LE` token is unchanged. Overall estimate unchanged (about 30–35%).
 - **2026-10-09 (M3, #171):** A browser startup `?file=` download opens in a background tab once the user has started working, so it cannot switch the active document or the next Save. Deliberate opens still activate their tab; Home, Combine files, workspace choices and another file's password prompt are preserved. Initial-view geometry is applied to the background document, and its script notices wait until its tab is selected. Synthetic shell tests cover the race, saving the local edit, tab switching, encrypted arrivals, errors and converted text. Milestone and overall effort estimates unchanged (about 30–35%).
 - **2026-10-09 (never-crash, #378):** On Windows the window is drawn on the GPU that drives the primary display, as on Linux: `EnumDisplayDevices` (through the safe `winsafe` crate) says which adapter shows each desktop display, and `pick_adapter` matches it to the wgpu adapters by PCI ids. Before, the low-power preference chose a Ryzen integrated GPU with no monitor on a desktop whose monitors hang off an NVIDIA card, and presenting across adapters took the AMD display driver down for two minutes. The log now names the GPU chosen. Synthetic tests for the Windows device-id parser and the primary-display rule; a live test on the running machine. Overall unchanged.
@@ -308,7 +307,6 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-10 | minor | Same-page mixed selection/movement (#844); general object editor remains partial. |
 | 2026-10-10 | minor | Readiness table with hours per audience; full number restated as the additive weighted sum over dimensions (47% → 49%; method aligned with the standard, no new evidence) |
 | 2026-10-10 | minor | Essentials-user score added (≈ 66%) |
 | 2026-10-10 | minor | Gate consistency check: convert and share re-judged partial, not blocking; stage pre-alpha → alpha |

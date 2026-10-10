@@ -1251,7 +1251,7 @@ status = "shipped"
 commands = []
 tools = ["doc_info"]
 evidence = ["crates/ui-egui/tests/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/control.rs::state_and_view_options", "crates/ui-egui/tests/view.rs::bookmark_destinations_scroll_to_their_position"]
-notes = "A bookmark goes to its destination's position and zoom, not just its page"
+notes = "A bookmark goes to its destination's position and zoom, not just its page. The panel shows the first 10,000 bookmarks, nested 33 levels deep at most, and says so; bookmark_list pages through every bookmark in the file (up to 33 levels deep)."
 
 [[feature]]
 id = "view.highlight-current-bookmark"
@@ -10011,7 +10011,7 @@ status = "planned"
 commands = []
 tools = []
 evidence = []
-notes = "Windows MSI creates a Start menu shortcut and an optional (default on) desktop shortcut and confirms full-UI completion with Finish (#143); packaging/windows/test-msi.ps1 checks the compiled MSI and windows-arm64.yml checks installation/removal. Signed installers across platforms remain planned."
+notes = "Windows MSI creates a Start menu shortcut and an optional (default on) desktop shortcut and confirms full-UI completion with Finish (#143); packaging/windows/test-msi.ps1 checks the compiled MSI and windows-arm64.yml checks installation/removal. PDF files use a dedicated embedded document icon when PdfCraft is chosen as the default reader (confirmed in Windows Explorer); first-page thumbnails remain unsupported. Signed installers across platforms remain planned."
 
 [[feature]]
 id = "misc.web-deploy"

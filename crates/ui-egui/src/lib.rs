@@ -112,6 +112,7 @@ mod recovery;
 #[cfg(not(target_arch = "wasm32"))]
 mod system_fonts;
 pub mod theme;
+pub mod ui_scale;
 pub mod updates;
 mod wheel_pager;
 mod widgets;
@@ -413,6 +414,13 @@ pub struct PdfCraftApp {
     desktop_dark: Option<bool>,
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
+    /// Preferences ▸ Interface size as a factor, or `None` to follow [`Self::system_text_scale`].
+    pub ui_scale: Option<f32>,
+    /// The desktop's text scaling (GNOME's text scaling factor), which the desktop app reads at
+    /// launch. 1.0 elsewhere, so tests and screenshots don't depend on the machine.
+    pub system_text_scale: f32,
+    /// The interface size last given to egui ([`ui_scale::sync`]).
+    ui_scale_applied: Option<f32>,
     /// Preferences: bake Fill & Sign marks into the page when saving. Off, so a normal save stays editable.
     pub flatten_fill_sign_on_save: bool,
     pub dialog: Option<Dialog>,
@@ -710,6 +718,9 @@ impl PdfCraftApp {
             desktop_theme: pdfcraft_platform::desktop_theme::DesktopTheme::start(),
             desktop_dark: None,
             language: i18n::AUTO.to_string(),
+            ui_scale: None,
+            system_text_scale: 1.0,
+            ui_scale_applied: None,
             flatten_fill_sign_on_save: false,
             dialog: None,
             update_source: None,
@@ -1362,6 +1373,8 @@ impl PdfCraftApp {
             "default_zoom": self.view_defaults.zoom_name(),
             "highlight_fields": self.view_defaults.highlight_fields,
             "language": self.language,
+            // Null follows the system's text scaling.
+            "ui_scale": self.ui_scale,
             "flatten_fill_sign": self.flatten_fill_sign_on_save,
             "date_format": self.session.date_format(),
             // Null follows the interface language.
@@ -1444,6 +1457,8 @@ impl PdfCraftApp {
         if let Some(on) = v["flatten_fill_sign"].as_bool() {
             self.flatten_fill_sign_on_save = on;
         }
+        // Settings are untrusted: a size out of range follows the system instead.
+        self.ui_scale = v["ui_scale"].as_f64().and_then(ui_scale::valid);
         // Settings are untrusted: an unusable pattern keeps the default.
         if let Some(f) = v["date_format"].as_str() {
             let _ = self.session.set_date_format(f);
@@ -1727,6 +1742,7 @@ impl PdfCraftApp {
                 };
             }
             ("author", _) => self.comment_prefs.author = value.to_string(),
+            ("ui-scale", _) => self.ui_scale = ui_scale::parse(value)?,
             ("flatten-fill-sign", _) => {
                 self.flatten_fill_sign_on_save = match value {
                     "true" => true,
@@ -1888,6 +1904,7 @@ impl eframe::App for PdfCraftApp {
             }
         }
         self.sync_theme(ctx);
+        ui_scale::sync(ctx, ui_scale::factor(self.ui_scale, self.system_text_scale), &mut self.ui_scale_applied);
         // Remember user work even if its tab is subsequently closed or Home is selected.
         self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.dialog.is_some() || self.password_prompt.is_some();
         // Before taking this frame's drop: the grid must be drawn once with the pointer where

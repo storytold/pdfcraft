@@ -1,6 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (same-page multi-selection/movement implemented; alpha markers removed after the gate was re-judged: no gap blocks alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (alpha markers removed after the gate was re-judged: no gap blocks alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every known shortfall, one entry each, ranked by what it costs users. This is the work list: agents
 choose from the top unless the owner says otherwise, and prefer these over new P2/P3 checklist
@@ -88,11 +88,9 @@ update the numbers.
   structure tags, find and replace in edit mode; vector and object editing; arrange and align.
 - **Evidence:** `edit.text-edit` is partial (font reused or Helvetica substituted);
   `edit.rtl-cjk-editing`, `edit.rotated-text-editing`, `edit.keep-tags-on-edit`,
-  `edit.vector-edit` is planned; `edit.edit-object-tool` is partial (mixed selection/movement). Users:
+  `edit.vector-edit`, `edit.edit-object-tool` are planned. Users:
   [#766](https://github.com/storytold/pdfcraft/issues/766) (editing Arabic text),
-  [#844](https://github.com/storytold/pdfcraft/issues/844) now supports moving recognised paragraphs,
-  Image/Form artwork and added items together on one page ([guide](editing-multiple-objects.md));
-  arbitrary paths, inline images and cross-page movement remain. Related reports:
+  [#844](https://github.com/storytold/pdfcraft/issues/844) (can't move several elements),
   [#787](https://github.com/storytold/pdfcraft/issues/787) (move images between pages),
   [#791](https://github.com/storytold/pdfcraft/issues/791).
 - **Impact:** "Edit PDF" is one of Acrobat Pro's top reasons to buy. Substituting Helvetica changes
@@ -235,7 +233,7 @@ update the numbers.
 
 ### 16. UI precision gaps
 
-- **Missing:** arbitrary-path and cross-page group movement (recognised objects now move together on one page, #844), nudging with arrow keys, single-key tool accelerators,
+- **Missing:** moving several selected objects together (#844), nudging with arrow keys, single-key tool accelerators,
   rulers, grids and guides, loupe and dynamic zoom, multiple windows and split view, comment
   pop-ups that can be moved, connector lines, customisable quick tools, column text selection
   (#740); shortcut display and touchpad scrolling bugs (#746, #759, #721), macOS window controls
@@ -302,7 +300,6 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-10 | minor | Gap 3: same-page mixed selection/group movement implemented (#844); general object editing remains partial. |
 | 2026-10-10 | minor | Removed the alpha markers: with the cross-app gate rule, gaps 1 and 8 are partial sub-cases, not blockers; stage alpha |
 | 2026-10-10 | minor | Marked the alpha blockers (gap 1 and the Office part of gap 8) after the core-workflow gate put the stage at pre-alpha |
 | 2026-10-10 | major | Created. Ranked 24 gaps from the 2026-10-10 re-measure, the open GitHub issues and the former ROADMAP.md §Where we're lacking and where we're going (renderer, hardening, fidelity, editing, Pro workflows, 1.0 polish), which this file replaces |

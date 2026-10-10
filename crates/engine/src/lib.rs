@@ -584,6 +584,51 @@ fn apply_layer_state(layers: &mut [Layer], groups: &[Vec<(u32, u16)>], changes: 
 /// A file to combine: its name (the bookmark title), bytes, and page range (`None`: all).
 pub type CombineSource = (String, Arc<Vec<u8>>, Option<String>);
 
+/// A bookmark as the bookmark list shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BookmarkRow {
+    /// Child indices from the top level, 0-based, as the edit functions take them.
+    pub path: Vec<usize>,
+    pub title: String,
+    /// Shown expanded (a positive `/Count`).
+    pub open: bool,
+    /// The 0-based page it goes to.
+    pub page: Option<usize>,
+}
+
+/// One page of the bookmark list, in outline order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BookmarkPage {
+    pub rows: Vec<BookmarkRow>,
+    /// Where the next page starts, or `None` at the end.
+    pub next: Option<usize>,
+    /// Set only when the document's structure could not be read for editing: its listing then
+    /// comes from the viewer's copy of the outline, which is shorter than the file's.
+    pub truncated: bool,
+}
+
+/// The rows of a viewer outline, in outline order, with their paths.
+fn outline_rows(items: &[pdfcraft_render::OutlineItem]) -> Vec<BookmarkRow> {
+    let mut rows = Vec::new();
+    // One entry per open level: its items, and how many of them have been listed.
+    let mut levels: Vec<(&[pdfcraft_render::OutlineItem], usize)> = vec![(items, 0)];
+    while let Some(&(list, next)) = levels.last() {
+        let Some(item) = list.get(next) else {
+            levels.pop();
+            continue;
+        };
+        if let Some(top) = levels.last_mut() {
+            top.1 += 1;
+        }
+        let path: Vec<usize> = levels.iter().map(|(_, listed)| listed.saturating_sub(1)).collect();
+        rows.push(BookmarkRow { path, title: item.title.clone(), open: item.open, page: item.page });
+        if !item.children.is_empty() {
+            levels.push((&item.children, 0));
+        }
+    }
+    rows
+}
+
 /// A document's working file captured for crash recovery.
 #[derive(Clone, Debug)]
 pub struct RecoverySnapshot {
@@ -2984,10 +3029,29 @@ impl Session {
         out
     }
 
+    /// A page of the bookmark list in outline order: up to `limit` bookmarks from position `offset`.
+    /// The document's own structure is read for it, so every bookmark can be reached by paging.
+    pub fn bookmark_page(&self, id: DocId, offset: usize, limit: usize) -> Option<BookmarkPage> {
+        let doc = self.get(id)?;
+        if let Some(editor) = doc.editor.as_ref() {
+            let page = pdfcraft_organize::bookmark_page(&editor.cos, offset, limit);
+            let rows = page.bookmarks.into_iter().map(|b| BookmarkRow { path: b.path, title: b.title, open: b.open, page: b.page }).collect();
+            return Some(BookmarkPage { rows, next: page.next, truncated: false });
+        }
+        let all = outline_rows(&doc.info.outline);
+        let end = offset.saturating_add(limit);
+        let rows = all.iter().skip(offset).take(limit).cloned().collect();
+        Some(BookmarkPage { rows, next: (end < all.len()).then_some(end), truncated: doc.info.outline_more })
+    }
+
     /// Top-level bookmarks as split points: (first page of each part, its bookmark's title).
     pub fn bookmark_splits(&self, id: DocId) -> Vec<(usize, String)> {
         let Some(doc) = self.get(id) else { return Vec::new() };
-        let mut out: Vec<(usize, String)> = doc.info.outline.iter().filter_map(|o| Some((o.page?, o.title.clone()))).collect();
+        let top: Vec<(Option<usize>, String)> = match doc.editor.as_ref() {
+            Some(editor) => pdfcraft_organize::top_level_bookmarks(&editor.cos).into_iter().map(|b| (b.page, b.title)).collect(),
+            None => doc.info.outline.iter().map(|o| (o.page, o.title.clone())).collect(),
+        };
+        let mut out: Vec<(usize, String)> = top.into_iter().filter_map(|(page, title)| Some((page?, title))).collect();
         out.sort_by_key(|x| x.0);
         out.dedup_by_key(|x| x.0);
         out

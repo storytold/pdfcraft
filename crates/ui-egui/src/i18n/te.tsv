@@ -22,6 +22,9 @@ comment menu	Edit	సవరించు
 	Preferences	ప్రాధాన్యతలు
 	Preferences…	ప్రాధాన్యతలు…
 	Interface language	ఇంటర్‌ఫేస్ భాష
+	Interface size	ఇంటర్‌ఫేస్ పరిమాణం
+	Auto ({percent}%)	ఆటో ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	ఆటో సిస్టమ్ టెక్స్ట్ పరిమాణాన్ని అనుసరిస్తుంది. పేజీలు ఎల్లప్పుడూ డిస్‌ప్లే పూర్తి రిజల్యూషన్‌లో చూపబడతాయి.
 	Identity	గుర్తింపు
 	Name on new comments	కొత్త వ్యాఖ్యలపై చూపే పేరు
 	Open…	తెరువు…
@@ -1070,6 +1073,7 @@ comment menu	Edit	సవరించు
 	Dates	తేదీలు
 	Text in images isn't found; recognise text (OCR) first.	చిత్రాలలోని టెక్స్ట్ కనుగొనబడదు; ముందుగా టెక్స్ట్‌ను గుర్తించండి (OCR).
 	No matches.	సరిపోలికలు ఏవీ లేవు.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	కొన్ని బుక్‌మార్క్‌లు ఇక్కడ చూపబడవు: ప్యానెల్ పరిమిత సంఖ్యలో, పరిమిత లోతు వరకు మాత్రమే జాబితా చేస్తుంది.
 	{n} match(es) marked for redaction.	రెడాక్షన్ కోసం గుర్తించిన సరిపోలికలు: {n}.
 	Multiple words or phrases	బహుళ పదాలు లేదా పదబంధాలు
 	One word or phrase per line	ఒక్కో పంక్తికి ఒక పదం లేదా పదబంధం

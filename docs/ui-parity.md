@@ -1,6 +1,6 @@
 # UI and interaction parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (same-page mixed selection and movement, #844) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first UI/UX checklist) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft's tools, panels, shortcuts and feel compare with Acrobat Pro's current interface (the
 2023+ "new Acrobat": All tools pane on the left, quick-action toolbar, Home view). Behaviour is
@@ -14,7 +14,7 @@ interface is copied. Gaps ranked in [gaps.md](gaps.md).
 - **184 registered commands** (`crates/engine/src/commands.rs`), every one in the menus, the
   command palette and the automation `command_run` tool; menus are generated from the registry
   (`view.menus-from-registry`).
-- **143 automation tools** (`crates/automation/src/tools.rs`), so every UI action can be checked
+- **141 automation tools** (`crates/automation/src/tools.rs`), so every UI action can be checked
   headlessly.
 - **View area of the checklist: 62.5% breadth** (52 shipped, 11 partial of 92).
 
@@ -46,7 +46,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Dynamic zoom, loupe, pan-and-zoom window | yes | no | planned |
 | Hand tool, middle-button pan, autoscroll | yes | hand tool; Linux autoscroll | partial |
 | Text selection, column select | yes, Alt-drag columns | reading-order selection; no column mode (#740) | partial |
-| Select and move several objects at once | yes | same-page paragraphs, Image/Form artwork and added items; modifier-click, marquee and group drag | partial: `object_selection.rs`; arbitrary paths and cross-page movement remain |
+| Select and move several objects at once | yes | no (#844) | gap |
 | Object handles: corners keep proportion, edges free | yes | yes for added images and signatures | shipped |
 | Arrange, align and distribute page objects | yes | fields only | partial |
 | Rulers, grids, snap to grid, guides | yes | no | planned |
@@ -81,5 +81,4 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-10 | minor | Added mixed selection/group movement (#844), with cancellation, generation invalidation and draft preservation. |
 | 2026-10-10 | major | Created from the command registry, automation tools, the View area of the checklist and open UI issues |
