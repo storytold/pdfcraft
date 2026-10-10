@@ -24,6 +24,9 @@
 	Preferences	環境設定
 	Preferences…	環境設定…
 	Interface language	表示言語
+	Interface size	表示サイズ
+	Auto ({percent}%)	自動 ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	自動にすると、システムの文字サイズに合わせます。ページは常にディスプレイの最大解像度で描画されます。
 	Identity	個人情報
 	Name on new comments	新しい注釈の作成者名
 	Open…	開く…
@@ -1095,6 +1098,7 @@
 	Dates	日付
 	Text in images isn't found; recognise text (OCR) first.	画像内のテキストは検索できません。先に OCR でテキストを認識してください。
 	No matches.	一致する項目はありません。
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	一部のしおりはここに表示されません。パネルに表示できる数と階層の深さには上限があります。
 	{n} match(es) marked for redaction.	{n} 件の一致項目に墨消しマークを付けました。
 	Multiple words or phrases	複数の単語または語句
 	One word or phrase per line	1 行に 1 つの単語または語句
@@ -2156,3 +2160,14 @@ key	Esc	Esc
 key	Home	Home
 key	End	End
 key	Space	スペース
+	Grid view	グリッド表示
+	List view	リスト表示
+	Files are combined in the order shown. Drag them to change it.	ファイルは表示されている順に結合されます。ドラッグして順番を変更できます。
+	Preview unavailable: {e}	プレビューを表示できません: {e}
+	Pages: {k} of {n}	ページ: {k}/{n}
+	Check the pages	ページ指定を確認してください
+	Switch to List view to change the pages it takes.	使用するページを変更するには、リスト表示に切り替えてください。
+	Expand all	すべて展開
+	Collapse all	すべて折りたたむ
+	Remove page	ページを削除
+	Remove {n} pages	{n} ページを削除

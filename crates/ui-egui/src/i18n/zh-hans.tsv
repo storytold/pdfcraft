@@ -58,6 +58,9 @@
 	Preferences	首选项
 	Preferences…	首选项…
 	Interface language	界面语言
+	Interface size	界面大小
+	Auto ({percent}%)	自动 ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	“自动”会跟随系统的文字大小。页面始终以显示器的完整分辨率渲染。
 	Identity	身份
 	Name on new comments	新注释的作者姓名
 	Open…	打开…
@@ -794,6 +797,7 @@
 	Dates	日期
 	Text in images isn't found; recognise text (OCR) first.	图像中的文本无法找到；请先识别文本（OCR）。
 	No matches.	无匹配。
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	此处未显示部分书签：面板列出的书签数量和嵌套深度有限。
 	{n} match(es) marked for redaction.	已标记 {n} 个匹配以待密文。
 	Multiple words or phrases	多个单词或短语
 	One word or phrase per line	每行一个单词或短语
@@ -2120,3 +2124,14 @@ key	Esc	Esc
 key	Home	Home
 key	End	End
 key	Space	空格
+	Grid view	网格视图
+	List view	列表视图
+	Files are combined in the order shown. Drag them to change it.	文件按显示的顺序合并。拖动可更改顺序。
+	Preview unavailable: {e}	无法预览：{e}
+	Pages: {k} of {n}	页面：{k}/{n}
+	Check the pages	请检查页码
+	Switch to List view to change the pages it takes.	切换到列表视图以更改要使用的页面。
+	Expand all	全部展开
+	Collapse all	全部折叠
+	Remove page	删除页面
+	Remove {n} pages	删除 {n} 页

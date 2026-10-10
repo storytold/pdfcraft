@@ -26,8 +26,10 @@ mod a11y_ui;
 mod actions_ui;
 pub mod canvas;
 mod chrome;
+mod combine_grid;
+pub use combine_grid::ThumbState as CombineThumb;
 mod combine_ui;
-pub use combine_ui::{Columns as CombineColumns, Lock as CombineLock, SortKey};
+pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
 mod commands;
 mod comment_props;
 pub mod comments;
@@ -109,6 +111,7 @@ mod recovery;
 #[cfg(not(target_arch = "wasm32"))]
 mod system_fonts;
 pub mod theme;
+pub mod ui_scale;
 pub mod updates;
 mod wheel_pager;
 mod widgets;
@@ -410,6 +413,13 @@ pub struct PdfCraftApp {
     desktop_dark: Option<bool>,
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
+    /// Preferences ▸ Interface size as a factor, or `None` to follow [`Self::system_text_scale`].
+    pub ui_scale: Option<f32>,
+    /// The desktop's text scaling (GNOME's text scaling factor), which the desktop app reads at
+    /// launch. 1.0 elsewhere, so tests and screenshots don't depend on the machine.
+    pub system_text_scale: f32,
+    /// The interface size last given to egui ([`ui_scale::sync`]).
+    ui_scale_applied: Option<f32>,
     /// Preferences: bake Fill & Sign marks into the page when saving. Off, so a normal save stays editable.
     pub flatten_fill_sign_on_save: bool,
     pub dialog: Option<Dialog>,
@@ -516,6 +526,13 @@ pub struct PdfCraftApp {
     pub combine_tab: combine_ui::CombineTab,
     /// The Combine files table's column order and widths (kept in the settings).
     pub combine_columns: combine_ui::Columns,
+    /// Combine files as thumbnails or as the table (kept in the settings).
+    pub combine_view: combine_ui::CombineView,
+    /// How large the Combine grid draws its cards (1.0 = the usual; kept in the settings). Set
+    /// with [`PdfCraftApp::set_combine_zoom`].
+    pub combine_zoom: f32,
+    /// The Combine grid's thumbnails: rendered off the UI thread, a few at a time.
+    pub(crate) combine_thumbs: combine_grid::Thumbs,
     /// Images waiting for the resolution choice (released on cancel).
     pub image_import: Option<create_ui::ImageImport>,
     /// The custom stamp library, and the stamp being created.
@@ -700,6 +717,9 @@ impl PdfCraftApp {
             desktop_theme: pdfcraft_platform::desktop_theme::DesktopTheme::start(),
             desktop_dark: None,
             language: i18n::AUTO.to_string(),
+            ui_scale: None,
+            system_text_scale: 1.0,
+            ui_scale_applied: None,
             flatten_fill_sign_on_save: false,
             dialog: None,
             update_source: None,
@@ -764,6 +784,9 @@ impl PdfCraftApp {
             combine_draft: Vec::new(),
             combine_tab: Default::default(),
             combine_columns: Default::default(),
+            combine_view: Default::default(),
+            combine_zoom: 1.0,
+            combine_thumbs: Default::default(),
             image_import: None,
             custom_stamps: Vec::new(),
             stamp_draft: Default::default(),
@@ -1182,6 +1205,12 @@ impl PdfCraftApp {
         self.active.and_then(|i| self.views.get(i).map(|v| (i, v.id)))
     }
 
+    /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
+    /// on the document underneath it.
+    pub(crate) fn modal_open(&self) -> bool {
+        self.dialog.is_some() || self.close_request.is_some() || self.password_prompt.is_some() || self.pending_link.is_some() || self.updates.open
+    }
+
     /// Enable the UI control channel on `ctx` (opt-in; see [`control`]). Returns a client that
     /// sends requests to this app; [`control::serve`] exposes it on loopback.
     pub fn attach_control(&mut self, ctx: &egui::Context) -> control::ControlClient {
@@ -1343,6 +1372,8 @@ impl PdfCraftApp {
             "default_zoom": self.view_defaults.zoom_name(),
             "highlight_fields": self.view_defaults.highlight_fields,
             "language": self.language,
+            // Null follows the system's text scaling.
+            "ui_scale": self.ui_scale,
             "flatten_fill_sign": self.flatten_fill_sign_on_save,
             "date_format": self.session.date_format(),
             // Null follows the interface language.
@@ -1373,6 +1404,8 @@ impl PdfCraftApp {
             "javascript": self.session.javascript(),
             "actions": actions_ui::encode(&self.custom_actions),
             "combine_columns": self.combine_columns.to_json(),
+            "combine_view": self.combine_view.as_str(),
+            "combine_zoom": self.combine_zoom,
             "comments_panel_closed": self.comments_panel_closed,
         })
         .to_string()
@@ -1382,6 +1415,12 @@ impl PdfCraftApp {
     pub fn restore(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
         self.combine_columns = combine_ui::Columns::from_json(&v["combine_columns"]);
+        if let Some(view) = v["combine_view"].as_str().and_then(combine_ui::CombineView::parse) {
+            self.combine_view = view;
+        }
+        if let Some(zoom) = v["combine_zoom"].as_f64() {
+            self.set_combine_zoom(zoom as f32);
+        }
         if let Ok(r) = serde_json::from_value::<Vec<RecentFile>>(v["recent"].clone()) {
             // Only keep entries whose files still exist.
             #[cfg(not(target_arch = "wasm32"))]
@@ -1417,6 +1456,8 @@ impl PdfCraftApp {
         if let Some(on) = v["flatten_fill_sign"].as_bool() {
             self.flatten_fill_sign_on_save = on;
         }
+        // Settings are untrusted: a size out of range follows the system instead.
+        self.ui_scale = v["ui_scale"].as_f64().and_then(ui_scale::valid);
         // Settings are untrusted: an unusable pattern keeps the default.
         if let Some(f) = v["date_format"].as_str() {
             let _ = self.session.set_date_format(f);
@@ -1700,6 +1741,7 @@ impl PdfCraftApp {
                 };
             }
             ("author", _) => self.comment_prefs.author = value.to_string(),
+            ("ui-scale", _) => self.ui_scale = ui_scale::parse(value)?,
             ("flatten-fill-sign", _) => {
                 self.flatten_fill_sign_on_save = match value {
                     "true" => true,
@@ -1714,6 +1756,18 @@ impl PdfCraftApp {
                     (p.trim().parse().map_err(|_| "comment: PAGE:INDEX")?, i.trim().parse().map_err(|_| "comment: PAGE:INDEX")?);
                 v.comments.selected = Some((p.saturating_sub(1), i.saturating_sub(1)));
                 v.comments.reveal = true;
+            }
+            // `--combine-view list`: Combine files as thumbnails (grid) or as the table (list).
+            ("combine-view", _) => {
+                self.combine_view = combine_ui::CombineView::parse(value).ok_or("combine-view must be grid or list")?;
+            }
+            // `--combine-zoom 150`: the size of the cards in the Combine grid, in percent.
+            ("combine-zoom", _) => {
+                let percent = value.trim_end_matches('%').parse::<f32>().map_err(|e| e.to_string())?;
+                if !percent.is_finite() || !combine_grid::ZOOM_RANGE.contains(&(percent / 100.0)) {
+                    return Err("combine-zoom must be between 60 and 200".into());
+                }
+                self.set_combine_zoom(percent / 100.0);
             }
             (k, None)
                 if ["page", "zoom", "layout", "cover", "organize", "grid-zoom", "fields", "find", "rotate", "select", "notice", "comment"]
@@ -1737,13 +1791,19 @@ impl PdfCraftApp {
             }
             return;
         }
+        // The other dialogs and prompts are modal too (⌘W closed the file behind Preferences,
+        // #870).
+        if self.modal_open() {
+            return;
+        }
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
             && view.auto_scroll.escape(ctx)
         {
             return;
         }
         self.registry_shortcuts(ctx);
-        if self.full_screen && ctx.input(|i| i.key_pressed(Key::Escape)) {
+        // (Esc closes a Combine file shown large first.)
+        if self.full_screen && self.combine_tab.preview.is_none() && ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.set_full_screen(ctx, false);
         }
         if let Some(i) = self.active {
@@ -1843,6 +1903,7 @@ impl eframe::App for PdfCraftApp {
             }
         }
         self.sync_theme(ctx);
+        ui_scale::sync(ctx, ui_scale::factor(self.ui_scale, self.system_text_scale), &mut self.ui_scale_applied);
         // Remember user work even if its tab is subsequently closed or Home is selected.
         self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.dialog.is_some() || self.password_prompt.is_some();
         // Before taking this frame's drop: the grid must be drawn once with the pointer where
@@ -1925,7 +1986,7 @@ impl eframe::App for PdfCraftApp {
         self.shortcuts(ctx);
         // Scrolling is transient: never resume after changing tabs, opening a modal/palette,
         // or returning to a window that lost focus.
-        let blocked = self.dialog.is_some() || self.close_request.is_some() || self.palette_open || !ctx.input(|i| i.focused);
+        let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
         for (index, view) in self.views.iter_mut().enumerate() {
             if blocked || self.active != Some(index) {
                 view.auto_scroll.cancel();
@@ -2018,6 +2079,8 @@ impl eframe::App for PdfCraftApp {
 
 impl PdfCraftApp {
     fn finish_render_frame(&mut self, ctx: &egui::Context) {
+        // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
+        self.combine_thumbs_frame(ctx);
         // Retire hidden documents before admitting the visible document's textures, so the
         // three cache limits apply to the application, regardless of how many tabs are open.
         for (i, view) in self.views.iter_mut().enumerate() {

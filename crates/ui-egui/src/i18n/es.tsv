@@ -18,6 +18,9 @@
 	Preferences	Preferencias
 	Preferences…	Preferencias…
 	Interface language	Idioma de la interfaz
+	Interface size	Tamaño de la interfaz
+	Auto ({percent}%)	Automático ({percent} %)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Automático sigue el tamaño del texto del sistema. Las páginas siempre se muestran con la resolución completa de la pantalla.
 	Identity	Identidad
 	Name on new comments	Nombre en los comentarios nuevos
 	Open…	Abrir…
@@ -1089,6 +1092,7 @@
 	Dates	Fechas
 	Text in images isn't found; recognise text (OCR) first.	El texto de las imágenes no se encuentra; reconoce antes el texto (OCR).
 	No matches.	Sin coincidencias.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	Algunos marcadores no se muestran aquí: el panel muestra un número limitado, con una profundidad de anidación limitada.
 	{n} match(es) marked for redaction.	{n} coincidencia(s) marcada(s) para censurar.
 	Multiple words or phrases	Varias palabras o frases
 	One word or phrase per line	Una palabra o frase por línea
@@ -2072,3 +2076,14 @@ key	Esc	Esc
 key	Home	Inicio
 key	End	Fin
 key	Space	Espacio
+	Grid view	Vista de cuadrícula
+	List view	Vista de lista
+	Files are combined in the order shown. Drag them to change it.	Los archivos se combinan en el orden mostrado. Arrástralos para cambiarlo.
+	Preview unavailable: {e}	Vista previa no disponible: {e}
+	Pages: {k} of {n}	Páginas: {k} de {n}
+	Check the pages	Revisa las páginas
+	Switch to List view to change the pages it takes.	Cambia a la vista de lista para cambiar las páginas que se incluyen.
+	Expand all	Expandir todo
+	Collapse all	Contraer todo
+	Remove page	Quitar página
+	Remove {n} pages	Quitar {n} páginas

@@ -6,7 +6,7 @@ use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
-use pdfcraft_ui_egui::{CloseRequest, PdfCraftApp};
+use pdfcraft_ui_egui::{CloseRequest, Dialog, PdfCraftApp};
 
 /// An `n`-page document with a proper xref table; page `i` shows "Page i+1".
 fn fixture(n: usize) -> Vec<u8> {
@@ -357,6 +357,46 @@ fn the_save_prompt_answers_to_the_keyboard() {
 }
 
 #[test]
+fn keys_leave_the_document_under_a_dialog_alone() {
+    // Issue #870: ⌘W with Preferences open closed the file underneath it, and in the page grid
+    // Delete deleted the selected page. While a dialog is open its keys are its own.
+    let mut h = organize(3);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(3);
+    assert!(h.state_mut().execute("app.preferences"));
+    h.run_steps(3);
+    let shift = Modifiers::COMMAND | Modifiers::SHIFT;
+    for (m, key) in [
+        (Modifiers::COMMAND, Key::W),
+        (shift, Key::W),
+        (Modifiers::COMMAND, Key::Z),
+        (Modifiers::COMMAND, Key::D),
+        (Modifiers::COMMAND, Key::F),
+        (Modifiers::NONE, Key::Delete),
+        (Modifiers::NONE, Key::Backspace),
+    ] {
+        h.key_press_modifiers(m, key);
+        h.run_steps(3);
+        let app = h.state();
+        assert_eq!(app.views.len(), 1, "{m:?}+{key:?} closed the file");
+        assert!(app.close_request.is_none(), "{m:?}+{key:?} asked to close the file");
+        assert!(app.session.get(app.views[0].id).unwrap().can_undo().is_some(), "{m:?}+{key:?} undid the rotation");
+        assert!(app.views[0].find.is_none(), "{m:?}+{key:?} opened Find");
+        assert_eq!(app.dialog, Some(Dialog::Preferences), "{m:?}+{key:?} replaced Preferences");
+    }
+    assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3"], "a page was deleted under the dialog");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes Preferences");
+    assert_eq!(h.state().views[0].target_pages(), [1], "Escape went to the dialog, not the page selection");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::W);
+    h.run_steps(3);
+    assert!(h.state().close_request.is_some(), "with the dialog closed, ⌘W closes the file again");
+}
+
+#[test]
 fn clean_tabs_close_without_asking() {
     let mut h = harness(1, |_| {});
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);
@@ -661,6 +701,7 @@ fn combining_files_opens_a_new_unsaved_tab() {
 #[test]
 fn combine_files_takes_chosen_pages_in_the_order_listed() {
     let mut h = harness(1, |app| {
+        app.set_option("combine-view", "list").unwrap();
         app.use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("one.pdf".into(), fixture(3)), ("two.pdf".into(), fixture(2))]);
     });
     h.run_steps(3);
@@ -727,6 +768,7 @@ fn closing_the_combine_tab_forgets_its_list() {
 #[test]
 fn combine_lists_size_and_warns_before_combining() {
     let mut h = harness(1, |app| {
+        app.set_option("combine-view", "list").unwrap();
         app.use_files(
             pdfcraft_ui_egui::FilePurpose::Combine,
             vec![
@@ -792,9 +834,13 @@ fn combine_names(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
     h.state().combine_draft.iter().map(|f| f.name.clone()).collect()
 }
 
+/// Files in the Combine tab's list view (the table: headings, page ranges, row links).
 fn combine_of(names: &[(&str, usize)]) -> Harness<'static, PdfCraftApp> {
     let files: Vec<(String, Vec<u8>)> = names.iter().map(|(n, p)| (n.to_string(), fixture(*p))).collect();
-    let mut h = harness(1, move |app| app.use_files(pdfcraft_ui_egui::FilePurpose::Combine, files));
+    let mut h = harness(1, move |app| {
+        app.set_option("combine-view", "list").unwrap();
+        app.use_files(pdfcraft_ui_egui::FilePurpose::Combine, files);
+    });
     h.run_steps(3);
     h
 }
@@ -887,6 +933,7 @@ fn undo_and_redo_restore_the_combine_list() {
 #[test]
 fn protected_files_that_can_be_combined_are_flagged() {
     let mut h = harness(1, |app| {
+        app.set_option("combine-view", "list").unwrap();
         app.use_files(
             pdfcraft_ui_egui::FilePurpose::Combine,
             vec![("one.pdf".into(), fixture(1)), ("no-copy.pdf".into(), protected("", "owner", -1 ^ 16))],

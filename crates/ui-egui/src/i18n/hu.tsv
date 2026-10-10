@@ -18,6 +18,9 @@
 	Preferences	Beállítások
 	Preferences…	Beállítások…
 	Interface language	Felület nyelve
+	Interface size	Felület mérete
+	Auto ({percent}%)	Automatikus ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Az Automatikus beállítás a rendszer szövegméretét követi. Az oldalak mindig a kijelző teljes felbontásában jelennek meg.
 	Identity	Személyazonosság
 	Name on new comments	Név az új megjegyzéseken
 	Open…	Megnyitás…
@@ -1065,6 +1068,7 @@
 	Dates	Dátumok
 	Text in images isn't found; recognise text (OCR) first.	A képekben lévő szöveg nem található meg; előbb futtass szövegfelismerést (OCR).
 	No matches.	Nincs találat.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	Néhány könyvjelző itt nem látható: a panel korlátozott számút és korlátozott mélységig sorol fel.
 	{n} match(es) marked for redaction.	{n} találat megjelölve kitakarásra.
 	Multiple words or phrases	Több szó vagy kifejezés
 	One word or phrase per line	Soronként egy szó vagy kifejezés
@@ -2154,3 +2158,14 @@ key	Esc	Esc
 key	Home	Home
 key	End	End
 key	Space	Szóköz
+	Grid view	Rácsnézet
+	List view	Listanézet
+	Files are combined in the order shown. Drag them to change it.	A fájlok a látható sorrendben egyesülnek. Húzd őket a sorrend módosításához.
+	Preview unavailable: {e}	Nincs előnézet: {e}
+	Pages: {k} of {n}	Oldalak: {k} / {n}
+	Check the pages	Ellenőrizd az oldalakat
+	Switch to List view to change the pages it takes.	Válts listanézetre, ha módosítanád, mely oldalak kerüljenek bele.
+	Expand all	Összes kibontása
+	Collapse all	Összes összecsukása
+	Remove page	Oldal eltávolítása
+	Remove {n} pages	{n} oldal eltávolítása

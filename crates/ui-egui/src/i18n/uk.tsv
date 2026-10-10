@@ -27,6 +27,9 @@
 	Preferences	Налаштування
 	Preferences…	Налаштування…
 	Interface language	Мова інтерфейсу
+	Interface size	Розмір інтерфейсу
+	Auto ({percent}%)	Автоматично ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Автоматичний режим використовує розмір тексту із системних налаштувань. Сторінки завжди відображаються в повній роздільній здатності екрана.
 	Identity	Особисті дані
 	Name on new comments	Ім’я в нових коментарях
 	Open…	Відкрити…
@@ -1093,6 +1096,7 @@
 	Dates	Дати
 	Text in images isn't found; recognise text (OCR) first.	Текст у зображеннях не знаходиться; спочатку розпізнайте текст (OCR).
 	No matches.	Збігів немає.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	Деякі закладки тут не показано: панель показує обмежену кількість закладок з обмеженою глибиною вкладення.
 	{n} match(es) marked for redaction.	Збігів, позначених для вилучення: {n}.
 	Multiple words or phrases	Кілька слів або фраз
 	One word or phrase per line	По одному слову або фразі в рядку
@@ -2179,3 +2183,14 @@ key	Esc	Esc
 key	Home	Home
 key	End	End
 key	Space	Пробіл
+	Grid view	Вигляд сіткою
+	List view	Вигляд списком
+	Files are combined in the order shown. Drag them to change it.	Файли об’єднуються в показаному порядку. Перетягніть їх, щоб змінити його.
+	Preview unavailable: {e}	Попередній перегляд недоступний: {e}
+	Pages: {k} of {n}	Сторінки: {k} із {n}
+	Check the pages	Перевірте сторінки
+	Switch to List view to change the pages it takes.	Перейдіть до вигляду списком, щоб змінити, які сторінки взяти.
+	Expand all	Розгорнути всі
+	Collapse all	Згорнути всі
+	Remove page	Видалити сторінку
+	Remove {n} pages	Видалити сторінки: {n}
