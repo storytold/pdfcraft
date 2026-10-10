@@ -149,13 +149,53 @@ pub fn installed_font_definitions(prefer_hans: bool) -> FontDefinitions {
     #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
     let mut fonts = font_definitions_for(prefer_hans);
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(data) = crate::system_fonts::fallback() {
-        fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
-        for stack in fonts.families.values_mut() {
-            stack.push(SYSTEM_FALLBACK.to_owned());
+    {
+        if let Some(data) = crate::system_fonts::fallback() {
+            fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
+            for stack in fonts.families.values_mut() {
+                stack.push(SYSTEM_FALLBACK.to_owned());
+            }
+        }
+        // CJK system fallback: a face already installed on this machine (PingFang, Heiti, Noto…)
+        // so builds without craft-fonts can still render Chinese, Japanese and Korean text.
+        if let Some((name, data)) = system_cjk_font() {
+            fonts.font_data.insert(name.clone(), data);
+            for stack in fonts.families.values_mut() {
+                stack.push(name.clone());
+            }
         }
     }
     fonts
+}
+
+/// A CJK font already installed on the system, as a last-resort fallback.
+fn system_cjk_font() -> Option<(String, Arc<FontData>)> {
+    let paths: &[&str] = if cfg!(target_os = "macos") {
+        &[
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/System/Library/Fonts/Supplemental/Songti.ttc",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ]
+    } else if cfg!(target_os = "windows") {
+        &[r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simhei.ttf", r"C:\Windows\Fonts\simsun.ttc"]
+    } else {
+        &[
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        ]
+    };
+    for path in paths {
+        if let Ok(bytes) = std::fs::read(path) {
+            let mut data = FontData::from_owned(bytes);
+            data.index = 0;
+            return Some(("system-cjk".to_string(), Arc::new(data)));
+        }
+    }
+    None
 }
 
 /// The interface fonts: Inter (and JetBrains Mono for code) first, then egui's defaults, then

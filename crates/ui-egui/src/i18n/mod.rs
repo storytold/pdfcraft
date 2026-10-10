@@ -220,6 +220,13 @@ pub fn lang_from_tag(tag: &str) -> Option<Lang> {
     cands.iter().find_map(|c| Lang::from_code(c))
 }
 
+/// True when `tag` names the generic `C` / `POSIX` locale (or a variant like `C.UTF-8`), which on
+/// macOS means "no particular language" rather than English: the system language list decides.
+fn is_c_locale(tag: &str) -> bool {
+    let base = tag.split(['.', '@']).next().unwrap_or("").to_ascii_lowercase();
+    matches!(base.as_str(), "c" | "posix")
+}
+
 /// The system language (cached). English when it can't be determined.
 pub fn system_lang() -> Lang {
     // Tests drive the UI by its English labels whatever the developer's locale is. This covers
@@ -235,7 +242,13 @@ pub fn system_lang() -> Lang {
 #[cfg(not(target_arch = "wasm32"))]
 fn detect_system_lang() -> Lang {
     for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
-        if let Some(l) = std::env::var(var).ok().filter(|v| !v.is_empty()).and_then(|v| lang_from_tag(&v)) {
+        let Some(v) = std::env::var(var).ok().filter(|v| !v.is_empty()) else { continue };
+        // `C` / `POSIX` (and variants like `C.UTF-8`) mean "no particular locale": don't force
+        // English, fall through to the OS preferred-languages list below.
+        if is_c_locale(&v) {
+            continue;
+        }
+        if let Some(l) = lang_from_tag(&v) {
             return l;
         }
     }
