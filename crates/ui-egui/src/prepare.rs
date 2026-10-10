@@ -1209,7 +1209,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
     ui.checkbox(&mut d.locked, tl!("Locked"));
     ui.add_space(6.0);
     let (mut apply, mut cancel) = (enter, false);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    widgets::pill_row(ui, |ui| {
         if widgets::pill_button(ui, tl!("OK"), true).clicked() {
             apply = true;
         }

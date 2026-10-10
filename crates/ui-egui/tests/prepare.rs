@@ -388,7 +388,8 @@ fn preview_fills_the_form_and_locked_fields_keep_their_properties() {
     h.state_mut().open_field_props("city", 0);
     h.run_steps(2);
     h.get_by_label("Locked").click();
-    h.run_steps(1);
+    // Locking adds the hint line, so the dialog re-centres: let it settle before clicking OK.
+    h.run_steps(3);
     h.get_by_label("OK").click();
     h.run_steps(3);
     let locked = |h: &Harness<'static, PdfCraftApp>| {
@@ -400,7 +401,7 @@ fn preview_fills_the_form_and_locked_fields_keep_their_properties() {
     h.run_steps(2);
     h.get_by_label_contains("This field is locked");
     h.get_by_label("Locked").click();
-    h.run_steps(1);
+    h.run_steps(3);
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert!(!locked(&h));

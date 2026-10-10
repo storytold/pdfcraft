@@ -5,7 +5,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use egui::{Align, Layout};
 use pdfcraft_engine::export::{ExportSource, Exporter, ImageFormat};
 
 use crate::marks_ui::PageRange;
@@ -110,7 +109,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
     d.range.ui(ui, count);
     ui.add_space(12.0);
     let (mut apply, mut cancel) = (false, false);
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+    widgets::pill_row(ui, |ui| {
         let ok = !d.range.pages(count).is_empty();
         if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, tl!("Export"), true)).inner.clicked() {
             apply = true;

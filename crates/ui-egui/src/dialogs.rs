@@ -1,7 +1,5 @@
 //! Modal dialogs: Document Properties, Keyboard Shortcuts, About (with the Contributors and Models credits).
 
-use egui::{Align, Layout};
-
 use crate::theme::{self, Tokens};
 use pdfcraft_engine::Edit;
 
@@ -501,7 +499,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     .color(t.text_faint),
                 );
                 ui.add_space(10.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                widgets::pill_row(ui, |ui| {
                     if ui.add_enabled_ui(fits, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
                         replace_now = true;
                         close = true;
@@ -571,7 +569,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 ui.checkbox(&mut app.extract_draft.delete, tl!("Delete pages after extracting"));
                 ui.checkbox(&mut app.extract_draft.separate, tl!("Extract pages as separate files"));
                 ui.add_space(12.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                widgets::pill_row(ui, |ui| {
                     if widgets::pill_button(ui, tl!("Extract"), true).clicked() {
                         extract_now = true;
                         close = true;
@@ -644,7 +642,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 });
                 d.to = d.to.max(d.from);
                 ui.add_space(12.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                widgets::pill_row(ui, |ui| {
                     if widgets::pill_button(ui, tl!("OK"), true).clicked() {
                         rotate_now = true;
                         close = true;
@@ -674,7 +672,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 });
                 d.to = d.to.max(d.from);
                 ui.add_space(12.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                widgets::pill_row(ui, |ui| {
                     if widgets::pill_button(ui, tl!("OK"), true).clicked() {
                         let pages: Vec<usize> = if d.all { (0..n).collect() } else { (d.from - 1..d.to.min(n)).collect() };
                         duplicate_now = Some(Edit::DuplicateField { name: d.name.clone(), pages });
@@ -743,7 +741,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     });
                 });
                 ui.add_space(12.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                widgets::pill_row(ui, |ui| {
                     if widgets::pill_button(ui, tl!("Create PDF Comment Summary"), true).clicked() {
                         summarize_now = true;
                         close = true;
@@ -763,7 +761,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     &[("name", &name)],
                 ));
                 ui.add_space(12.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                widgets::pill_row(ui, |ui| {
                     if widgets::pill_button(ui, tl!("Revert"), true).clicked() {
                         revert_now = true;
                         close = true;
@@ -1117,7 +1115,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         }
         ui.add_space(12.0);
         let changed = draft_changes(app).is_some_and(|c| !c.is_empty());
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        widgets::pill_row(ui, |ui| {
             if dialog == Dialog::Recovery {
                 if widgets::pill_button(ui, tl!("Recover"), true).clicked() {
                     recover = Some(true);
@@ -1399,7 +1397,7 @@ fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ui.add_space(6.0);
         ui.label(egui::RichText::new(tl!("Your changes will be lost if you don't save them.")).color(t.text_muted));
         ui.add_space(14.0);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        widgets::pill_row(ui, |ui| {
             if widgets::pill_button(ui, tl!("Save"), true).clicked() {
                 choice = Some(Some(true));
             }
@@ -1481,7 +1479,7 @@ fn link_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
             .small(),
         );
         ui.add_space(14.0);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        widgets::pill_row(ui, |ui| {
             if widgets::pill_button(ui, tl!("Cancel"), true).clicked() {
                 choice = Some(false);
             }
@@ -1530,7 +1528,7 @@ fn password(app: &mut PdfCraftApp, ctx: &egui::Context) {
             ui.label(egui::RichText::new(tl!(e)).color(egui::Color32::from_rgb(0xD1, 0x3B, 0x3B)));
         }
         ui.add_space(12.0);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        widgets::pill_row(ui, |ui| {
             if widgets::pill_button(ui, tl!("Open"), true).clicked() {
                 submit = true;
             }

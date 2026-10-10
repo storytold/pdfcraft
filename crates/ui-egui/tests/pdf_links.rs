@@ -52,6 +52,8 @@ fn drawing_editing_and_deleting_links() {
     assert_eq!(h.state().dialog, Some(Dialog::LinkProps));
     h.get_by_label("Create Link");
     h.state_mut().link_draft.as_mut().unwrap().url = "https://example.org".into();
+    // A valid address enables OK and moves it: give the dialog the frame it needs to redraw first.
+    h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
     let l = links(&h);

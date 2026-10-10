@@ -3,7 +3,6 @@
 
 use std::sync::Arc;
 
-use egui::{Align, Layout};
 use serde::{Deserialize, Serialize};
 
 use crate::theme::{self, Tokens};
@@ -84,7 +83,7 @@ pub(crate) fn create_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) 
     ui.add_space(12.0);
     let ok = !d.category.trim().is_empty() && !d.name.trim().is_empty();
     let (mut save, mut cancel) = (false, false);
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+    widgets::pill_row(ui, |ui| {
         if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
             save = true;
         }
