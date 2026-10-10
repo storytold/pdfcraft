@@ -30,6 +30,13 @@ const MAX_LAYER_STATE: usize = 1024;
 /// At most this many layers are read from all of `/RBGroups` together.
 const MAX_LAYER_GROUP_ENTRIES: usize = 4096;
 
+/// `DocInfo::outline` holds the first this many bookmarks in outline order. Opening a document
+/// reads only this window; the rest are listed by page through `pdfcraft_organize`.
+const OUTLINE_WINDOW: usize = 10_000;
+
+/// Deepest level `DocInfo::outline` nests (the top level is 0); deeper bookmarks are left out.
+const OUTLINE_DEPTH: usize = 32;
+
 fn load_options(password: Option<&str>) -> LoadOptions {
     LoadOptions { password: password.map(str::to_owned), max_decompressed_size: Some(LOAD_STREAM_LIMIT), ..LoadOptions::default() }
 }
@@ -51,6 +58,8 @@ pub struct DocInfo {
     pub xfa: Option<Xfa>,
     pub pages: Vec<PageInfo>,
     pub outline: Vec<OutlineItem>,
+    /// The outline has bookmarks that `outline` leaves out (see `OUTLINE_WINDOW`, `OUTLINE_DEPTH`).
+    pub outline_more: bool,
     pub annotations: Vec<Annotation>,
     pub fields: Vec<Field>,
     pub links: Vec<Link>,
@@ -475,8 +484,7 @@ impl<'a> Inspector<'a> {
             Err(reason) => info.warnings.push(format!("Page labels were skipped: {reason}; using physical page numbers.")),
         }
         if let Some(first) = catalog.get(b"Outlines").ok().and_then(|o| self.dict(o)).and_then(|d| d.get(b"First").ok()) {
-            let mut seen = HashSet::new();
-            info.outline = self.outline_siblings(first, &mut seen, 0);
+            (info.outline, info.outline_more) = self.outline_window(first);
         }
         self.annotations(info);
         let mut field_seen = HashSet::new();
@@ -668,34 +676,49 @@ impl<'a> Inspector<'a> {
 
     // ── outline ─────────────────────────────────────────────────────────────────────────────
 
-    fn outline_siblings(&self, first: &'a Object, seen: &mut HashSet<ObjectId>, depth: u32) -> Vec<OutlineItem> {
-        let mut items = Vec::new();
-        let mut cur = Some(first);
-        while let Some(o) = cur {
+    /// The window `DocInfo::outline` keeps: the first `OUTLINE_WINDOW` bookmarks in outline order,
+    /// nested no deeper than `OUTLINE_DEPTH`, and whether any bookmark was left out. Iterative, and
+    /// each bookmark is read once, so the work and memory stay within the window.
+    fn outline_window(&self, first: &'a Object) -> (Vec<OutlineItem>, bool) {
+        let mut seen = HashSet::new();
+        // The listed bookmarks in outline order, with their depth.
+        let mut listed: Vec<(usize, OutlineItem)> = Vec::new();
+        // One entry per open level: its next sibling, or `None` once that run of siblings has ended.
+        let mut levels: Vec<Option<&'a Object>> = vec![Some(first)];
+        let mut more = false;
+        while let Some(depth) = levels.len().checked_sub(1) {
+            let Some(slot) = levels.get_mut(depth) else { break };
+            let Some(o) = slot.take() else {
+                levels.pop();
+                continue;
+            };
             if let Object::Reference(id) = o
                 && !seen.insert(*id)
             {
-                break; // cycle
+                continue; // cycle: this run of siblings ends here
             }
-            let Some(d) = self.dict(o) else { break };
+            let Some(d) = self.dict(o) else { continue };
+            if listed.len() >= OUTLINE_WINDOW {
+                more = true;
+                break;
+            }
+            *slot = d.get(b"Next").ok();
             let dest = d
                 .get(b"Dest")
                 .ok()
                 .and_then(|dest| self.dest(dest, 0))
                 .or_else(|| d.get(b"A").ok().and_then(|a| self.dict(a)).and_then(|a| a.get(b"D").ok()).and_then(|dest| self.dest(dest, 0)));
             let (page, view) = dest.map_or((None, DestView::Top), |(p, v)| (Some(p), v));
-            let children = match (d.get(b"First").ok(), depth < 32) {
-                (Some(f), true) => self.outline_siblings(f, seen, depth + 1),
-                _ => Vec::new(),
-            };
-            let open = d.get(b"Count").ok().and_then(|c| c.as_i64().ok()).is_some_and(|c| c > 0);
-            items.push(OutlineItem { title: self.text(d, b"Title").unwrap_or_default(), page, view, children, open });
-            cur = d.get(b"Next").ok();
-            if items.len() > 100_000 {
-                break;
+            match d.get(b"First").ok() {
+                Some(child) if depth < OUTLINE_DEPTH => levels.push(Some(child)),
+                Some(_) => more = true,
+                None => {}
             }
+            let open = d.get(b"Count").ok().and_then(|c| c.as_i64().ok()).is_some_and(|c| c > 0);
+            let title = self.text(d, b"Title").unwrap_or_default();
+            listed.push((depth, OutlineItem { title, page, view, children: Vec::new(), open }));
         }
-        items
+        (nest_outline(listed), more)
     }
 
     // ── page labels (ISO 32000-2 §12.4.2) ───────────────────────────────────────────────────
@@ -1201,6 +1224,33 @@ impl<'a> Inspector<'a> {
 /// ([`pdfcraft_cos::PdfString::to_text`]) so the panels and outline editing agree.
 fn text_string(bytes: &[u8]) -> String {
     pdfcraft_cos::PdfString::literal(bytes).to_text()
+}
+
+/// Nests a pre-order list of `(depth, item)` into the outline tree.
+fn nest_outline(listed: Vec<(usize, OutlineItem)>) -> Vec<OutlineItem> {
+    let mut roots = Vec::new();
+    // The open ancestors, outermost first; each collects its children until it closes.
+    let mut open: Vec<(usize, OutlineItem)> = Vec::new();
+    for (depth, item) in listed {
+        while open.last().is_some_and(|(d, _)| *d >= depth) {
+            close_outline(&mut open, &mut roots);
+        }
+        open.push((depth, item));
+    }
+    while !open.is_empty() {
+        close_outline(&mut open, &mut roots);
+    }
+    roots
+}
+
+/// Closes the innermost open bookmark: it joins its parent's children, or the top level.
+fn close_outline(open: &mut Vec<(usize, OutlineItem)>, roots: &mut Vec<OutlineItem>) {
+    if let Some((_, item)) = open.pop() {
+        match open.last_mut() {
+            Some((_, parent)) => parent.children.push(item),
+            None => roots.push(item),
+        }
+    }
 }
 
 fn rect4(o: &Object) -> [f32; 4] {
@@ -1978,6 +2028,95 @@ trailer << /Root 1 0 R >>
         // UTF-16BE, UTF-8 with BOM, invalid UTF-8 after a BOM (lossy, not dropped), BOM-less
         // raw UTF-8, PDFDocEncoding Latin-1, and a doubled BOM.
         assert_eq!(titles, ["第一章", "目录", "A\u{FFFD}B", "概述", "Café", "A"]);
+    }
+
+    /// A file whose objects are `bodies` in order (object 1 first), with a cross-reference table.
+    fn pdf_of(bodies: &[String]) -> Vec<u8> {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in bodies.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
+        out
+    }
+
+    /// A one-page file whose outline is `items` (objects 5, 6, … in order).
+    fn outline_file(items: &[String]) -> Vec<u8> {
+        let mut bodies = vec![
+            "<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R >>".to_string(),
+            format!("<< /Type /Outlines /First 5 0 R /Count {} >>", items.len()),
+        ];
+        bodies.extend(items.iter().cloned());
+        pdf_of(&bodies)
+    }
+
+    /// The titles of `items`, with children in brackets (`Parent[Child]`).
+    fn shape(items: &[OutlineItem]) -> Vec<String> {
+        items.iter().map(|o| if o.children.is_empty() { o.title.clone() } else { format!("{}[{}]", o.title, shape(&o.children).join(",")) }).collect()
+    }
+
+    #[test]
+    fn outline_window_keeps_the_first_bookmarks_and_says_when_more_follow() {
+        const COUNT: usize = OUTLINE_WINDOW + 5;
+        let items: Vec<String> = (0..COUNT)
+            .map(|k| {
+                let prev = if k == 0 { String::new() } else { format!(" /Prev {} 0 R", 4 + k) };
+                let next = if k + 1 == COUNT { String::new() } else { format!(" /Next {} 0 R", 6 + k) };
+                format!("<< /Title (Item {k}) /Parent 4 0 R{prev}{next} /Dest [3 0 R /Fit] >>")
+            })
+            .collect();
+        let info = inspect(Arc::new(outline_file(&items)), None).expect("opens");
+        assert_eq!(info.outline.len(), OUTLINE_WINDOW);
+        assert_eq!(info.outline.last().map(|o| o.title.as_str()), Some("Item 9999"));
+        assert!(info.outline_more);
+
+        let one = inspect(Arc::new(outline_file(&["<< /Title (Only) /Parent 4 0 R /Dest [3 0 R /Fit] >>".into()])), None).expect("opens");
+        assert_eq!(shape(&one.outline), ["Only"]);
+        assert!(!one.outline_more);
+    }
+
+    #[test]
+    fn outline_window_nests_no_deeper_than_its_depth_limit() {
+        // A chain of 40 bookmarks, each the first child of the one before.
+        let items: Vec<String> = (0..40)
+            .map(|k| {
+                let parent = if k == 0 { 4 } else { 4 + k };
+                let first = if k + 1 == 40 { String::new() } else { format!(" /First {} 0 R", 6 + k) };
+                format!("<< /Title (Deep {k}) /Parent {parent} 0 R{first} /Dest [3 0 R /Fit] >>")
+            })
+            .collect();
+        let info = inspect(Arc::new(outline_file(&items)), None).expect("opens");
+        let mut levels = 0;
+        let mut level = info.outline.first();
+        while let Some(item) = level {
+            levels += 1;
+            level = item.children.first();
+        }
+        assert_eq!(levels, OUTLINE_DEPTH + 1);
+        assert!(info.outline_more);
+    }
+
+    #[test]
+    fn outline_window_ends_cycles_and_broken_links_without_looping() {
+        let listed = |items: &[&str]| {
+            let items: Vec<String> = items.iter().map(|s| s.to_string()).collect();
+            shape(&inspect(Arc::new(outline_file(&items)), None).expect("opens").outline)
+        };
+        assert_eq!(listed(&["<< /Title (Self) /Parent 4 0 R /Next 5 0 R >>"]), ["Self"]);
+        assert_eq!(listed(&["<< /Title (Self) /Parent 4 0 R /First 5 0 R >>"]), ["Self"]);
+        assert_eq!(listed(&["<< /Title (A) /Parent 4 0 R /Next 6 0 R >>", "<< /Title (B) /Parent 4 0 R /Next 5 0 R >>"]), ["A", "B"]);
+        assert_eq!(listed(&["<< /Title (A) /Parent 4 0 R /First 6 0 R >>", "<< /Title (B) /Parent 5 0 R /First 5 0 R >>"]), ["A[B]"]);
+        assert_eq!(listed(&["<< /Title (A) /Parent 4 0 R /Next 99 0 R >>"]), ["A"]);
+        assert_eq!(listed(&["<< /Title (A) /Parent 4 0 R /Next 6 0 R >>", "42"]), ["A"]);
     }
 
     #[test]

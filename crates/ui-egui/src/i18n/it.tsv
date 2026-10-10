@@ -24,6 +24,9 @@
 	Preferences	Preferenze
 	Preferences…	Preferenze…
 	Interface language	Lingua dell'interfaccia
+	Interface size	Dimensione dell'interfaccia
+	Auto ({percent}%)	Auto ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Auto segue la dimensione del testo del sistema. Le pagine vengono sempre visualizzate alla piena risoluzione dello schermo.
 	Identity	Identità
 	Name on new comments	Nome sui nuovi commenti
 	Open…	Apri…
@@ -1091,6 +1094,7 @@
 	Dates	Date
 	Text in images isn't found; recognise text (OCR) first.	Il testo nelle immagini non viene trovato; esegui prima il riconoscimento del testo (OCR).
 	No matches.	Nessuna corrispondenza.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	Alcuni segnalibri non sono mostrati qui: il pannello ne elenca un numero limitato, fino a una profondità limitata.
 	{n} match(es) marked for redaction.	Corrispondenze contrassegnate per l'oscuramento: {n}.
 	Multiple words or phrases	Più parole o frasi
 	One word or phrase per line	Una parola o frase per riga
@@ -2174,3 +2178,5 @@ key	Space	Spazio
 	Switch to List view to change the pages it takes.	Passa alla vista elenco per cambiare le pagine incluse.
 	Expand all	Espandi tutto
 	Collapse all	Comprimi tutto
+	Remove page	Rimuovi pagina
+	Remove {n} pages	Rimuovi {n} pagine

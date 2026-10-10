@@ -405,7 +405,7 @@ fn interpret(
                         Object::String(s) => {
                             for (code, len) in m.codes(&s.bytes) {
                                 match m.text_of(code) {
-                                    Some(t) => text.push_str(t),
+                                    Some(t) => text.push_str(&t),
                                     None => decodable = false,
                                 }
                                 let w = m.width(code) * ts.size + ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 };

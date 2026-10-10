@@ -35,7 +35,7 @@ pub use pdfcraft_organize::LabelStyle;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
 pub use pdfcraft_cos::Algorithm;
-pub use pdfcraft_create::{CONVERTIBLE, ImageResolution, SourceKind, source_kind};
+pub use pdfcraft_create::{CONVERTIBLE, ImageResolution, SourceKind, decode_text, source_kind};
 pub use pdfcraft_edit::{
     Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, MarkKind, Watermark,
 };
@@ -555,6 +555,51 @@ fn apply_layer_state(layers: &mut [Layer], groups: &[Vec<(u32, u16)>], changes: 
 
 /// A file to combine: its name (the bookmark title), bytes, and page range (`None`: all).
 pub type CombineSource = (String, Arc<Vec<u8>>, Option<String>);
+
+/// A bookmark as the bookmark list shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BookmarkRow {
+    /// Child indices from the top level, 0-based, as the edit functions take them.
+    pub path: Vec<usize>,
+    pub title: String,
+    /// Shown expanded (a positive `/Count`).
+    pub open: bool,
+    /// The 0-based page it goes to.
+    pub page: Option<usize>,
+}
+
+/// One page of the bookmark list, in outline order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BookmarkPage {
+    pub rows: Vec<BookmarkRow>,
+    /// Where the next page starts, or `None` at the end.
+    pub next: Option<usize>,
+    /// Set only when the document's structure could not be read for editing: its listing then
+    /// comes from the viewer's copy of the outline, which is shorter than the file's.
+    pub truncated: bool,
+}
+
+/// The rows of a viewer outline, in outline order, with their paths.
+fn outline_rows(items: &[pdfcraft_render::OutlineItem]) -> Vec<BookmarkRow> {
+    let mut rows = Vec::new();
+    // One entry per open level: its items, and how many of them have been listed.
+    let mut levels: Vec<(&[pdfcraft_render::OutlineItem], usize)> = vec![(items, 0)];
+    while let Some(&(list, next)) = levels.last() {
+        let Some(item) = list.get(next) else {
+            levels.pop();
+            continue;
+        };
+        if let Some(top) = levels.last_mut() {
+            top.1 += 1;
+        }
+        let path: Vec<usize> = levels.iter().map(|(_, listed)| listed.saturating_sub(1)).collect();
+        rows.push(BookmarkRow { path, title: item.title.clone(), open: item.open, page: item.page });
+        if !item.children.is_empty() {
+            levels.push((&item.children, 0));
+        }
+    }
+    rows
+}
 
 /// A document's working file captured for crash recovery.
 #[derive(Clone, Debug)]
@@ -1812,6 +1857,17 @@ fn keys_after(edit: &Edit) -> Option<Keys> {
     }
 }
 
+/// The recovered user password of an R2–R4 file as text for the renderer, which tries a password
+/// as its UTF-8 bytes and then in PDFDocEncoding: UTF-8 bytes (as some writers store passwords
+/// PDFDocEncoding can't hold, such as "şifre") stay UTF-8, and other bytes are read as
+/// PDFDocEncoding, so either way the renderer gets back exactly these bytes.
+fn renderer_password(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => bytes.iter().map(|b| pdfcraft_cos::pdfdoc_char(*b)).collect(),
+    }
+}
+
 /// The last-resort guard (AGENTS.md §4): run `f`, turning a panic that escapes it into an error
 /// message, so one bad file or edit can't take the app and its other documents down. It is a
 /// safety net for bugs, not a substitute for returning errors.
@@ -2129,7 +2185,7 @@ impl Session {
                     Ok(Ok(d)) => d.security().and_then(|s| s.recovered_user_password()),
                     _ => None,
                 };
-                let user: String = user.ok_or(OpenError::WrongPassword)?.iter().map(|b| char::from(*b)).collect();
+                let user = renderer_password(&user.ok_or(OpenError::WrongPassword)?);
                 (inspect(bytes.clone(), Some(&user))?, Some(user))
             }
             Err(e) => return Err(e),
@@ -2703,7 +2759,7 @@ impl Session {
         let created = guard(|| match kind {
             SourceKind::Pdf => open_source(name, bytes).map(|_| bytes.clone()),
             SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]),
-            SourceKind::Text => self.create_from_text(title, &String::from_utf8_lossy(bytes)),
+            SourceKind::Text => self.create_from_text(title, &decode_text(bytes)),
         })
         .map_err(|_| EditError::Source(format!("{name}: the file could not be read")))?;
         Ok((kind, created?))
@@ -2799,6 +2855,50 @@ impl Session {
         self.write_new(&out)
     }
 
+    /// [`Self::combine_unlocked`] where sources with the same `groups` key (by position) are one
+    /// file split into several runs placed apart: each file is opened and copied once, so it keeps
+    /// one bookmark, its links between its own pages, its fields and its attachments whole (see
+    /// `pdfcraft_organize::combine_grouped`). A group's later sources use its first source's bytes
+    /// and password; a source without a key is a file of its own.
+    pub fn combine_grouped(&self, sources: &[CombineSource], groups: &[u64], passwords: &[Option<&str>]) -> Result<Arc<Vec<u8>>, EditError> {
+        // Each file opened once: `file[i]` is source i's place in `docs`.
+        let (mut keys, mut docs, mut file): (Vec<Option<u64>>, Vec<pdfcraft_cos::Document>, Vec<usize>) = (Vec::new(), Vec::new(), Vec::new());
+        for (i, (name, bytes, _)) in sources.iter().enumerate() {
+            let key = groups.get(i).copied();
+            let known = key.and_then(|k| keys.iter().position(|g| *g == Some(k)));
+            let at = match known {
+                Some(at) => at,
+                None => {
+                    docs.push(open_source_with(name, bytes, passwords.get(i).copied().flatten())?);
+                    keys.push(key);
+                    docs.len() - 1
+                }
+            };
+            file.push(at);
+        }
+        let mut pages = Vec::with_capacity(sources.len());
+        for ((name, _, range), at) in sources.iter().zip(&file) {
+            let range = range.as_deref().map(str::trim).filter(|r| !r.is_empty());
+            let Some(d) = docs.get(*at) else { return Err(EditError::Write(format!("{name}: not opened"))) };
+            pages.push(match range {
+                Some(r) => {
+                    let n = pdfcraft_organize::page_count(d)?;
+                    let p = pdfcraft_print::select_pages(n, Some(r), &[], pdfcraft_print::Subset::All, false)
+                        .map_err(|e| EditError::Print(format!("{name}: {e}")))?;
+                    Some(p)
+                }
+                None => None,
+            });
+        }
+        let mut runs: Vec<pdfcraft_organize::Run<'_>> = Vec::with_capacity(sources.len());
+        for (((name, _, _), at), p) in sources.iter().zip(&file).zip(&pages) {
+            let Some(d) = docs.get(*at) else { return Err(EditError::Write(format!("{name}: not opened"))) };
+            runs.push((*at, name.as_str(), d, p.as_deref()));
+        }
+        let out = pdfcraft_organize::combine_grouped(&runs)?;
+        self.write_new(&out)
+    }
+
     /// New PDF bytes containing copies of `pages` of the document (Extract Pages).
     pub fn extract(&self, id: DocId, pages: &[usize]) -> Result<Arc<Vec<u8>>, EditError> {
         let src = self.cos(id)?;
@@ -2891,10 +2991,29 @@ impl Session {
         out
     }
 
+    /// A page of the bookmark list in outline order: up to `limit` bookmarks from position `offset`.
+    /// The document's own structure is read for it, so every bookmark can be reached by paging.
+    pub fn bookmark_page(&self, id: DocId, offset: usize, limit: usize) -> Option<BookmarkPage> {
+        let doc = self.get(id)?;
+        if let Some(editor) = doc.editor.as_ref() {
+            let page = pdfcraft_organize::bookmark_page(&editor.cos, offset, limit);
+            let rows = page.bookmarks.into_iter().map(|b| BookmarkRow { path: b.path, title: b.title, open: b.open, page: b.page }).collect();
+            return Some(BookmarkPage { rows, next: page.next, truncated: false });
+        }
+        let all = outline_rows(&doc.info.outline);
+        let end = offset.saturating_add(limit);
+        let rows = all.iter().skip(offset).take(limit).cloned().collect();
+        Some(BookmarkPage { rows, next: (end < all.len()).then_some(end), truncated: doc.info.outline_more })
+    }
+
     /// Top-level bookmarks as split points: (first page of each part, its bookmark's title).
     pub fn bookmark_splits(&self, id: DocId) -> Vec<(usize, String)> {
         let Some(doc) = self.get(id) else { return Vec::new() };
-        let mut out: Vec<(usize, String)> = doc.info.outline.iter().filter_map(|o| Some((o.page?, o.title.clone()))).collect();
+        let top: Vec<(Option<usize>, String)> = match doc.editor.as_ref() {
+            Some(editor) => pdfcraft_organize::top_level_bookmarks(&editor.cos).into_iter().map(|b| (b.page, b.title)).collect(),
+            None => doc.info.outline.iter().map(|o| (o.page, o.title.clone())).collect(),
+        };
+        let mut out: Vec<(usize, String)> = top.into_iter().filter_map(|(page, title)| Some((page?, title))).collect();
         out.sort_by_key(|x| x.0);
         out.dedup_by_key(|x| x.0);
         out

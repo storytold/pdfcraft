@@ -18,6 +18,9 @@
 	Preferences	Einstellungen
 	Preferences…	Einstellungen…
 	Interface language	Sprache der Oberfläche
+	Interface size	Größe der Oberfläche
+	Auto ({percent}%)	Automatisch ({percent} %)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Automatisch folgt der Textgröße des Systems. Seiten werden immer in der vollen Auflösung des Bildschirms dargestellt.
 	Identity	Identität
 	Name on new comments	Name für neue Kommentare
 	Open…	Öffnen…
@@ -1076,6 +1079,7 @@
 	Dates	Datumsangaben
 	Text in images isn't found; recognise text (OCR) first.	Text in Bildern wird nicht gefunden; führe zuerst Text erkennen (OCR) aus.
 	No matches.	Keine Treffer.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	Einige Lesezeichen werden hier nicht angezeigt: Das Fenster listet nur eine begrenzte Anzahl bis zu einer begrenzten Tiefe auf.
 	{n} match(es) marked for redaction.	{n} Treffer zum Schwärzen markiert.
 	Multiple words or phrases	Mehrere Wörter oder Ausdrücke
 	One word or phrase per line	Ein Wort oder Ausdruck pro Zeile
@@ -2165,3 +2169,5 @@ key	Space	Leertaste
 	Switch to List view to change the pages it takes.	Wechsle zur Listenansicht, um die übernommenen Seiten zu ändern.
 	Expand all	Alle ausklappen
 	Collapse all	Alle einklappen
+	Remove page	Seite entfernen
+	Remove {n} pages	{n} Seiten entfernen

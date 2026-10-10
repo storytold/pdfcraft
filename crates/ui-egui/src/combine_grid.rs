@@ -99,6 +99,8 @@ pub enum ThumbState {
 struct GridDrag {
     file: u64,
     revision: u64,
+    /// A page card's page (entry id, place among its pages): that page moves, not its file.
+    page: Option<(u64, usize)>,
 }
 
 /// Everything a thumbnail depends on: the file's bytes, how it was read (its password), the page
@@ -501,8 +503,8 @@ pub(crate) struct PageList {
 }
 
 /// The pages an expanded file shows, worked out again only when its range or page count
-/// changes; `None` when it can't be expanded (locked, unreadable, a bad range, a single page, or
-/// more than [`MAX_EXPAND`]).
+/// changes; `None` when it can't be shown as its pages (locked, unreadable, a bad range, no page,
+/// or more than [`MAX_EXPAND`]).
 pub(crate) fn pages_shown(cache: &mut HashMap<u64, PageList>, f: &CombineFile) -> Option<PageList> {
     if f.lock.is_some() || f.problem.is_some() {
         return None;
@@ -518,7 +520,8 @@ pub(crate) fn pages_shown(cache: &mut HashMap<u64, PageList>, f: &CombineFile) -
             list
         }
     };
-    (list.order.len() > 1 && list.order.len() <= MAX_EXPAND).then_some(list)
+    // (One page shows as a page card too: a file split into parts may leave one page in a part.)
+    (!list.order.is_empty() && list.order.len() <= MAX_EXPAND).then_some(list)
 }
 
 /// The grid's places, in order: each file's card, or its pages when it is expanded.
@@ -564,11 +567,12 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks:
     let released = drag.is_some() && ctx.input(|i| i.pointer.any_released());
     let n = app.combine_draft.len();
     // The same file twice is allowed (e.g. a cover sheet), but probably a mistake.
-    let mut copies: HashMap<(&str, usize), usize> = HashMap::new();
+    // (A file's parts are the one file, not copies: counted by file.)
+    let mut copies: HashMap<(&str, usize), std::collections::BTreeSet<u64>> = HashMap::new();
     for f in &app.combine_draft {
-        *copies.entry((f.name.as_str(), f.bytes.len())).or_default() += 1;
+        copies.entry((f.name.as_str(), f.bytes.len())).or_default().insert(f.group);
     }
-    let twice: Vec<bool> = app.combine_draft.iter().map(|f| copies.get(&(f.name.as_str(), f.bytes.len())).is_some_and(|n| *n > 1)).collect();
+    let twice: Vec<bool> = app.combine_draft.iter().map(|f| copies.get(&(f.name.as_str(), f.bytes.len())).is_some_and(|g| g.len() > 1)).collect();
     let places = layout(app);
     // Each file's first place (for the keys and to scroll to it).
     let mut first_place = vec![0usize; n];
@@ -578,6 +582,20 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks:
         }
     }
     app.combine_tab.grid_places = places.iter().map(|c| c.file).collect();
+    // Pages counted over the list (an entry that can't be split counting as one, see
+    // `moved_pages`): where each place's pages start, for a page dropped before it.
+    let counts: Vec<usize> = app
+        .combine_draft
+        .iter_mut()
+        .map(|f| if f.lock.is_none() && f.problem.is_none() { f.selection().ok().filter(|k| *k > 0).unwrap_or(1) } else { 1 })
+        .collect();
+    let mut page_at = Vec::with_capacity(places.len());
+    let mut total_pages = 0usize;
+    for c in &places {
+        page_at.push(total_pages);
+        total_pages = total_pages.saturating_add(if c.page.is_some() { 1 } else { counts.get(c.file).copied().unwrap_or(1) });
+    }
+    let picked_pages = app.combine_tab.selected_pages.clone();
     let reveal = app.combine_tab.reveal.take();
     let fit = paper_box(app.combine_zoom);
     let cell = fit + AROUND;
@@ -652,7 +670,8 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks:
                     page: place.page,
                     rect: c,
                     check: checks.get(place.file).cloned().unwrap_or(Ok(f.pages)),
-                    selected: selected.get(place.file).copied().unwrap_or(false),
+                    selected: selected.get(place.file).copied().unwrap_or(false)
+                        || place.page.is_some_and(|(nth, ..)| picked_pages.contains(&(f.id, nth))),
                     twice: twice.get(place.file).copied().unwrap_or(false),
                     revision,
                     ppp,
@@ -667,10 +686,32 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks:
                 }
             }
         }
-        // While a card is dragged: the file gap it would go to, drawn as a bar, and how many go.
+        // While a page card is dragged: the page gap it would go to (any place, between any two
+        // pages), drawn at the nearest card's edge, and how many pages go.
         if let Some(d) = drag
+            && let Some(page) = d.page
             && let Some(p) = pointer
         {
+            let at = crate::canvas::drop_gap(&cells, p);
+            let nearest = cells.iter().min_by(|(_, a), (_, b)| a.distance_sq_to_pos(p).total_cmp(&b.distance_sq_to_pos(p)));
+            if let Some((_, r)) = nearest {
+                let x = if p.x < r.center().x { r.left() + 2.0 } else { r.right() - 2.0 };
+                ui.painter().line_segment([pos2(x, r.top() + 10.0), pos2(x, r.bottom() - 30.0)], Stroke::new(3.0, t.accent));
+            }
+            let moving = if picked_pages.contains(&page) { picked_pages.len() } else { 1 };
+            let label = if moving == 1 { tl!("1 page").to_string() } else { crate::i18n::fmt(tl!("{n} pages"), &[("n", &moving.to_string())]) };
+            ui.painter().text(p + vec2(14.0, 14.0), Align2::LEFT_TOP, label, theme::medium(12.0), t.accent_text);
+            if released
+                && viewport.contains(p)
+                && let Some(at) = at
+            {
+                let gap = page_at.get(at).copied().unwrap_or(total_pages);
+                action = Some(RowAction::MovePages { page, revision: d.revision, gap });
+            }
+        } else if let Some(d) = drag
+            && let Some(p) = pointer
+        {
+            // A file's card: the file gap it would go to, drawn as a bar, and how many files go.
             let gap = crate::canvas::drop_gap(&cells, p).map(|at| file_gap(&places, at, n));
             // Drawn at the end of the file before the gap or the start of the one after (an
             // expanded file's pages are never split), whichever is nearer the pointer.
@@ -864,7 +905,7 @@ impl Card {
                     let scale = (size.x * self.ppp / w).min(size.y * self.ppp / h).min(MAX_SIDE / w.max(h));
                     let px = [w * scale, h * scale].map(|v| (v.max(1.0).ceil() as u32).div_ceil(SIZE_STEP).saturating_mul(SIZE_STEP));
                     let key = Key { source: Arc::as_ptr(&f.bytes) as usize, auth: f.auth, page: p, px };
-                    let look = thumbs.look((f.id, p), key);
+                    let look = thumbs.look((f.group, p), key);
                     let mut want = false;
                     match look {
                         Look::Ready(tex) => {
@@ -880,7 +921,7 @@ impl Card {
                     }
                     if want && scale.is_finite() && scale > 0.0 {
                         thumbs.wants.push(Want {
-                            slot: (f.id, p),
+                            slot: (f.group, p),
                             key,
                             bytes: f.bytes.clone(),
                             password: f.password().map(Arc::from),
@@ -950,14 +991,15 @@ impl Card {
             Some((nth, ..)) => RowAction::PreviewAt(f.id, nth),
             None => RowAction::Preview(f.id),
         };
-        // The card's own actions, in this order: expand (or, on a page, collapse), remove, show
-        // large. Page cards can't be removed one by one (yet): no trash on them.
+        // The card's own actions, in this order: expand (or, on a page, collapse), remove (the file,
+        // or the page), show large.
         let mut buttons: Vec<(&str, String, RowAction)> = Vec::new();
         if expandable {
             buttons.push(("maximize-2", tl!("Expand").to_owned(), RowAction::Expand(f.id, true)));
         }
-        if self.page.is_some() {
+        if let Some((nth, ..)) = self.page {
             buttons.push(("minimize-2", tl!("Collapse").to_owned(), RowAction::Expand(f.id, false)));
+            buttons.push(("trash-2", tl!("Remove page").to_owned(), RowAction::RemovePages(Some((f.id, nth)))));
         } else {
             buttons.push(("trash-2", crate::i18n::fmt(tl!("Remove {name}"), &[("name", &f.name)]), RowAction::RemoveFile(f.id)));
         }
@@ -1025,10 +1067,14 @@ impl Card {
             }
         });
         if resp.drag_started() {
-            egui::DragAndDrop::set_payload(ui.ctx(), GridDrag { file: f.id, revision: self.revision });
+            egui::DragAndDrop::set_payload(ui.ctx(), GridDrag { file: f.id, revision: self.revision, page: self.page.map(|(nth, ..)| (f.id, nth)) });
         }
         if resp.clicked() {
-            action = Some(RowAction::Click(self.i, resp.ctx.input(|i| i.modifiers)));
+            let mods = resp.ctx.input(|i| i.modifiers);
+            action = Some(match self.page {
+                Some((nth, ..)) => RowAction::ClickPage(f.id, nth, mods),
+                None => RowAction::Click(self.i, mods),
+            });
         }
         action
     }
@@ -1130,7 +1176,7 @@ pub(crate) fn preview(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens) {
                 }
                 Look::Pending(stand_in) => {
                     // A smaller render of this page stands in: the last size shown, or its card's.
-                    let card = thumbs.entries.get(&(f.id, page)).filter(|e| e.key.auth == f.auth).and_then(|e| e.tex.as_ref());
+                    let card = thumbs.entries.get(&(f.group, page)).filter(|e| e.key.auth == f.auth).and_then(|e| e.tex.as_ref());
                     if let Some(tex) = stand_in.or(card.map(TextureHandle::id)) {
                         painter.image(tex, paper, uv, Color32::WHITE);
                     }
@@ -1196,18 +1242,24 @@ impl PdfCraftApp {
     pub(crate) fn combine_thumbs_frame(&mut self, ctx: &egui::Context) {
         // What each thumbnail must match now (cards out of view included): each file's first page,
         // and an expanded file's pages (looked up in its sorted list, never listed one by one).
+        // (By file: the parts a file is split into share its thumbnails.)
         struct Shown {
             source: usize,
             auth: u64,
-            first: usize,
-            sorted: Option<Arc<[usize]>>,
+            pages: Vec<usize>,
         }
         let mut shown: HashMap<u64, Shown> = HashMap::with_capacity(self.combine_draft.len());
         let tab = &mut self.combine_tab;
         for f in self.combine_draft.iter_mut() {
             let Ok(first) = f.first_page() else { continue };
             let sorted = tab.expanded.contains(&f.id).then(|| pages_shown(&mut tab.page_lists, f)).flatten().map(|l| l.sorted);
-            shown.insert(f.id, Shown { source: Arc::as_ptr(&f.bytes) as usize, auth: f.auth, first, sorted });
+            let entry = shown.entry(f.group).or_insert_with(|| Shown { source: Arc::as_ptr(&f.bytes) as usize, auth: f.auth, pages: Vec::new() });
+            entry.pages.push(first);
+            entry.pages.extend(sorted.iter().flat_map(|s| s.iter().copied()));
+        }
+        for s in shown.values_mut() {
+            s.pages.sort_unstable();
+            s.pages.dedup();
         }
         // The page shown large, while it shows: leaving the tab closes it.
         if !self.combine_showing() {
@@ -1224,14 +1276,30 @@ impl PdfCraftApp {
             }
             let (id, page) = slot;
             let s = shown.get(&id)?;
-            (page == s.first || s.sorted.as_ref().is_some_and(|p| p.binary_search(&page).is_ok())).then_some(Key {
-                source: s.source,
-                auth: s.auth,
-                page,
-                px: [0, 0],
-            })
+            s.pages.binary_search(&page).is_ok().then_some(Key { source: s.source, auth: s.auth, page, px: [0, 0] })
         };
         self.combine_thumbs.finish(ctx, &current);
+    }
+
+    /// The single pages selected: each one's entry (by place in the list) and page (0-based, in
+    /// the file), in list order (tests and the control channel).
+    pub fn combine_selected_pages(&self) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        for (i, f) in self.combine_draft.iter().enumerate() {
+            let pages = f.pages_taken().unwrap_or_default();
+            for (nth, page) in pages.iter().enumerate() {
+                if self.combine_tab.selected_pages.contains(&(f.id, nth)) {
+                    out.push((i, *page));
+                }
+            }
+        }
+        out
+    }
+
+    /// Each entry's name and the pages it takes (0-based, in order): a file split into parts is
+    /// several entries (tests and the control channel).
+    pub fn combine_parts_shown(&self) -> Vec<(String, Vec<usize>)> {
+        self.combine_draft.iter().map(|f| (f.name.clone(), f.pages_taken().unwrap_or_default())).collect()
     }
 
     /// The files shown as their pages in the grid, by place in the list (tests and the control
@@ -1245,12 +1313,12 @@ impl PdfCraftApp {
     pub fn combine_page_thumbnails(&self, file: usize) -> Vec<(usize, ThumbState)> {
         let Some(f) = self.combine_draft.get(file).filter(|f| self.combine_tab.expanded.contains(&f.id)) else { return Vec::new() };
         let pages = f.pages_taken().unwrap_or_default();
-        pages.into_iter().map(|p| (p, self.combine_thumbs.state((f.id, p)))).collect()
+        pages.into_iter().map(|p| (p, self.combine_thumbs.state((f.group, p)))).collect()
     }
 
     /// Each listed file's grid thumbnail, in list order (tests and the control channel).
     pub fn combine_thumbnails(&self) -> Vec<ThumbState> {
-        self.combine_draft.iter().map(|f| f.first_taken().map_or(ThumbState::None, |p| self.combine_thumbs.state((f.id, p)))).collect()
+        self.combine_draft.iter().map(|f| f.first_taken().map_or(ThumbState::None, |p| self.combine_thumbs.state((f.group, p)))).collect()
     }
 
     /// Thumbnail renders under way (tests: never more than a few).
