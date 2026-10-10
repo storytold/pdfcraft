@@ -106,6 +106,16 @@ public static class Program {
         using (var k = r.CreateSubKey("software\\classes\\Lower")) { }
         Check(Has(cl4, "Lower"), "routing: case-insensitive");
 
+        // 6. DllPathKey: the same vectors as windows_preview.rs's dll_path_key test (the app compares
+        //    this ASCII form through reg.exe, which can't print most non-ASCII paths).
+        Console.WriteLine("DllPathKey:");
+        Check(LinkcoPdfPreviewHandler.DllPathKey("C:\\Program Files\\Linkco\\Linkco PDF Editor\\LinkcoPdfPreviewHandler.dll") ==
+            "C:\\PROGRAM FILES\\LINKCO\\LINKCO PDF EDITOR\\LINKCOPDFPREVIEWHANDLER.DLL", "ASCII path: upper-cased");
+        Check(LinkcoPdfPreviewHandler.DllPathKey("C:\\Users\\\u0645\u062d\u0645\u062f\\AppData\\Local\\Programs\\Linkco\\Linkco PDF Editor\\LinkcoPdfPreviewHandler.dll") ==
+            "C:\\USERS\\%0645%062D%0645%062F\\APPDATA\\LOCAL\\PROGRAMS\\LINKCO\\LINKCO PDF EDITOR\\LINKCOPDFPREVIEWHANDLER.DLL", "Arabic user name: %XXXX");
+        Check(LinkcoPdfPreviewHandler.DllPathKey("D:\\100% Tools\\\u00dcn\u00efcode \U0001F600\\x.dll") ==
+            "D:\\100%0025 TOOLS\\%00DCN%00EFCODE %D83D%DE00\\X.DLL", "'%', Latin-1 and a surrogate pair");
+
         Console.WriteLine(fails == 0 ? "ALL PASS" : ("FAILURES: " + fails));
     }
 }

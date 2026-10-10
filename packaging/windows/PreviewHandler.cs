@@ -1631,6 +1631,7 @@ namespace LinkcoPdfPreview
                 if (File.Exists(cliPath))
                     cfg.SetValue("CliPath", cliPath);
                 cfg.SetValue("PreviewHandlerDll", fullDllPath);
+                cfg.SetValue("PreviewHandlerDllKey", DllPathKey(fullDllPath));
                 cfg.SetValue("PreviewHandlerSchema", RegistrationSchema, RegistryValueKind.DWord);
                 // Let Linkco PDF Editor tell cheaply (without loading .NET) whether this registration
                 // still matches the DLL on disk and the user's current default PDF app; it registers
@@ -1639,6 +1640,29 @@ namespace LinkcoPdfPreview
                 if (perUser)
                     cfg.SetValue("PreviewHandlerUserChoice", ReadUserChoiceProgId(".pdf") ?? "");
             }
+        }
+
+        /// <summary>
+        /// The DLL path in plain ASCII, for Linkco PDF Editor's start-up check, which reads the
+        /// registry through reg.exe: reg.exe prints in the console's OEM code page, which can't carry
+        /// most non-ASCII text (an Arabic user name in C:\Users\..., say), so comparing the path
+        /// itself would fail on every start. ASCII letters are upper-cased (paths compare
+        /// case-insensitively); '%', control characters and every non-ASCII UTF-16 code unit become
+        /// "%XXXX" (upper-case hex). windows_preview.rs's dll_path_key must produce the same text.
+        /// </summary>
+        public static string DllPathKey(string path)
+        {
+            StringBuilder sb = new StringBuilder(path.Length + 16);
+            foreach (char c in path)
+            {
+                if (c >= 'a' && c <= 'z')
+                    sb.Append((char)(c - 32));
+                else if (c < 0x20 || c > 0x7E || c == '%')
+                    sb.Append('%').Append(((int)c).ToString("X4", CultureInfo.InvariantCulture));
+                else
+                    sb.Append(c);
+            }
+            return sb.ToString();
         }
 
         /// <summary>"length:last-write-time-as-UTC-FILETIME" of a file, both decimal.</summary>
@@ -2040,6 +2064,7 @@ namespace LinkcoPdfPreview
                 if (cfg != null)
                 {
                     cfg.DeleteValue("PreviewHandlerDll", false);
+                    cfg.DeleteValue("PreviewHandlerDllKey", false);
                     cfg.DeleteValue("PreviewHandlerSchema", false);
                     cfg.DeleteValue("PreviewHandlerDllStamp", false);
                     cfg.DeleteValue("PreviewHandlerUserChoice", false);

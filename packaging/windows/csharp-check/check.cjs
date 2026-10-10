@@ -89,7 +89,7 @@ function ensureToolchain() {
 const TESTED_METHODS = ['UnregisterFromRoot', 'RestoreOrRemoveShellEx', 'RestoreOrRemove', 'DeleteIfEmpty', 'ClsidExists',
   'ReadUserChoiceProgId', 'ProgIdsPointingAtUs', 'HasPerUserRegistration', 'CleanUserHive', 'CleanUserRoot',
   'PreviouslyTouchedProgIds', 'AddUnique', 'UnregisterThumbnailProvider', 'ProgIdShellExPath', 'ReadClassesRootDefault',
-  'BackupAndSetShellEx'];
+  'BackupAndSetShellEx', 'DllPathKey'];
 const TESTED_FIELDS = ['ClsidBraced', 'PreviewHandlerCategoryGuid', 'LinkcoConfigKey', 'HandlerProgId', 'EdgePreviewHandlerClsid',
   'OwnProgIds', 'KnownPdfProgIds', 'KnownSharedProgIds', 'SysPdfThumbnailPath'];
 const TESTED_THUMBNAIL_CONSTS = ['ClsidBraced', 'ThumbnailCategoryGuid', 'ProgIdName'];
@@ -130,7 +130,7 @@ function extractTestedCode(src) {
   });
   return [
     'namespace LinkcoPdfPreview {',
-    'using System; using System.Collections.Generic; using System.IO; using Microsoft.Win32;',
+    'using System; using System.Collections.Generic; using System.Globalization; using System.IO; using System.Text; using Microsoft.Win32;',
     braceBlock(src, rr),
     'internal static class LinkcoPdfThumbnailProvider {', ...thumbConsts, '}',
     'internal static partial class LinkcoPdfPreviewHandler {', ...fields, ...methods, '}',

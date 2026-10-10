@@ -8,7 +8,8 @@
 //! the per-user registration still matches
 //!
 //! * the DLL beside the running executable (path, size and modification time — an update or a
-//!   moved install registers again),
+//!   moved install registers again; the path is compared in an ASCII form, [`dll_path_key`],
+//!   because `reg.exe` can't print most non-ASCII paths faithfully),
 //! * the registration schema the DLL writes ([`SCHEMA`]), and
 //! * the user's current default PDF app,
 //!
@@ -97,11 +98,29 @@ fn dll_stamp(len: u64, modified: std::time::SystemTime) -> Option<String> {
     Some(format!("{len}:{}", since_unix.as_nanos() / 100 + FILETIME_UNIX_EPOCH))
 }
 
-/// Whether the per-user registration recorded under `HKCU\Software\Linkco\Linkco PDF Editor`
-/// (`config`) is current for the DLL at `dll` with `stamp` and the user's default app
-/// `user_choice`, and the COM server it points at (`codebase_registered`) still exists.
+/// `PreviewHandlerDllKey` as PreviewHandler.cs's `DllPathKey` writes it, from the path's UTF-16
+/// code units: ASCII letters upper-cased, `%`, control characters and every non-ASCII unit as
+/// `%XXXX`. Pure ASCII, so it survives `reg.exe`, which prints in the console's OEM code page and
+/// turns e.g. an Arabic user name in `C:\Users\…` into `?`s; comparing the path itself would then
+/// fail, and the app would register again (PowerShell, an Explorer refresh) on every start.
 #[cfg(any(windows, test))]
-fn registry_values_match(config: &[RegValue], dll: &str, stamp: &str, user_choice: &str, codebase_registered: bool) -> bool {
+fn dll_path_key(utf16: impl IntoIterator<Item = u16>) -> String {
+    let mut key = String::new();
+    for unit in utf16 {
+        match u8::try_from(unit).ok().filter(|b| (0x20..=0x7E).contains(b) && *b != b'%') {
+            Some(b) => key.push(char::from(b.to_ascii_uppercase())),
+            None => key.push_str(&format!("%{unit:04X}")),
+        }
+    }
+    key
+}
+
+/// Whether the per-user registration recorded under `HKCU\Software\Linkco\Linkco PDF Editor`
+/// (`config`) is current for the DLL whose [`dll_path_key`] is `dll_key`, with `stamp` and the
+/// user's default app `user_choice`, and the COM server it points at (`codebase_registered`)
+/// still exists.
+#[cfg(any(windows, test))]
+fn registry_values_match(config: &[RegValue], dll_key: &str, stamp: &str, user_choice: &str, codebase_registered: bool) -> bool {
     let key = r"\Software\Linkco\Linkco PDF Editor";
     let schema = entry(config, key, "PreviewHandlerSchema")
         .filter(|v| v.kind == "REG_DWORD")
@@ -109,7 +128,7 @@ fn registry_values_match(config: &[RegValue], dll: &str, stamp: &str, user_choic
         .and_then(|hex| u32::from_str_radix(hex, 16).ok());
     codebase_registered
         && schema == Some(SCHEMA)
-        && value(config, key, "PreviewHandlerDll").is_some_and(|d| d.eq_ignore_ascii_case(dll))
+        && value(config, key, "PreviewHandlerDllKey") == Some(dll_key)
         && value(config, key, "PreviewHandlerDllStamp") == Some(stamp)
         && value(config, key, "PreviewHandlerUserChoice").unwrap_or_default().eq_ignore_ascii_case(user_choice)
 }
@@ -171,13 +190,14 @@ fn reg_query(args: &[&str]) -> Option<Vec<RegValue>> {
 
 #[cfg(windows)]
 fn is_current(dll: &std::path::Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
     let Some(stamp) = std::fs::metadata(dll).ok().and_then(|m| dll_stamp(m.len(), m.modified().ok()?)) else { return false };
     let Some(config) = reg_query(&[r"HKCU\Software\Linkco\Linkco PDF Editor"]) else { return false };
     let codebase = reg_query(&[r"HKCU\Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32", "/v", "CodeBase"]).is_some();
     let choice = reg_query(&[r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.pdf", "/s"])
         .map(|values| user_choice_prog_id(&values))
         .unwrap_or_default();
-    registry_values_match(&config, &dll.to_string_lossy(), &stamp, &choice, codebase)
+    registry_values_match(&config, &dll_path_key(dll.as_os_str().encode_wide()), &stamp, &choice, codebase)
 }
 
 /// Runs the DLL's `RegisterPreviewHandler(path)` (per user) in a hidden PowerShell. The DLL is
@@ -212,19 +232,23 @@ fn register(dll: &std::path::Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    const CONFIG: &str = "\r\nHKEY_CURRENT_USER\\Software\\Linkco\\Linkco PDF Editor\r\n    InstallDir    REG_SZ    C:\\Program Files\\Linkco\\Linkco PDF Editor\r\n    PreviewHandlerDll    REG_SZ    C:\\Program Files\\Linkco\\Linkco PDF Editor\\LinkcoPdfPreviewHandler.dll\r\n    PreviewHandlerSchema    REG_DWORD    0x4\r\n    PreviewHandlerDllStamp    REG_SZ    123:456\r\n    PreviewHandlerUserChoice    REG_SZ    LinkcoPDFEditor.Document\r\n\r\n";
+    const CONFIG: &str = "\r\nHKEY_CURRENT_USER\\Software\\Linkco\\Linkco PDF Editor\r\n    InstallDir    REG_SZ    C:\\Program Files\\Linkco\\Linkco PDF Editor\r\n    PreviewHandlerDll    REG_SZ    C:\\Program Files\\Linkco\\Linkco PDF Editor\\LinkcoPdfPreviewHandler.dll\r\n    PreviewHandlerDllKey    REG_SZ    C:\\PROGRAM FILES\\LINKCO\\LINKCO PDF EDITOR\\LINKCOPDFPREVIEWHANDLER.DLL\r\n    PreviewHandlerSchema    REG_DWORD    0x4\r\n    PreviewHandlerDllStamp    REG_SZ    123:456\r\n    PreviewHandlerUserChoice    REG_SZ    LinkcoPDFEditor.Document\r\n\r\n";
     const DLL: &str = "C:\\Program Files\\Linkco\\Linkco PDF Editor\\LinkcoPdfPreviewHandler.dll";
+
+    fn key(path: &str) -> String {
+        dll_path_key(path.encode_utf16())
+    }
 
     #[test]
     fn parses_reg_query_output() {
         let v = parse_reg_query(CONFIG);
-        assert_eq!(v.len(), 5);
+        assert_eq!(v.len(), 6);
         assert_eq!(v[0].key, "HKEY_CURRENT_USER\\Software\\Linkco\\Linkco PDF Editor");
         assert_eq!(v[1].name, "PreviewHandlerDll");
         assert_eq!(v[1].kind, "REG_SZ");
         assert_eq!(v[1].data, DLL);
-        assert_eq!(v[2].kind, "REG_DWORD");
-        assert_eq!(v[2].data, "0x4");
+        assert_eq!(v[3].kind, "REG_DWORD");
+        assert_eq!(v[3].data, "0x4");
     }
 
     #[test]
@@ -238,27 +262,49 @@ mod tests {
     #[test]
     fn current_registration_matches() {
         let v = parse_reg_query(CONFIG);
-        assert!(registry_values_match(&v, DLL, "123:456", "LinkcoPDFEditor.Document", true));
+        assert!(registry_values_match(&v, &key(DLL), "123:456", "LinkcoPDFEditor.Document", true));
         // Paths and ProgIds compare case-insensitively, like Windows does.
-        assert!(registry_values_match(&v, &DLL.to_ascii_lowercase(), "123:456", "linkcopdfeditor.document", true));
+        assert!(registry_values_match(&v, &key(&DLL.to_ascii_lowercase()), "123:456", "linkcopdfeditor.document", true));
     }
 
     #[test]
     fn any_change_requires_registering_again() {
         let v = parse_reg_query(CONFIG);
-        assert!(!registry_values_match(&v, "D:\\Other\\LinkcoPdfPreviewHandler.dll", "123:456", "LinkcoPDFEditor.Document", true), "moved install");
-        assert!(!registry_values_match(&v, DLL, "124:456", "LinkcoPDFEditor.Document", true), "updated DLL");
-        assert!(!registry_values_match(&v, DLL, "123:456", "AcroExch.Document.DC", true), "new default PDF app");
-        assert!(!registry_values_match(&v, DLL, "123:456", "LinkcoPDFEditor.Document", false), "COM server removed");
+        let dll = key(DLL);
+        assert!(!registry_values_match(&v, &key("D:\\Other\\LinkcoPdfPreviewHandler.dll"), "123:456", "LinkcoPDFEditor.Document", true), "moved install");
+        assert!(!registry_values_match(&v, &dll, "124:456", "LinkcoPDFEditor.Document", true), "updated DLL");
+        assert!(!registry_values_match(&v, &dll, "123:456", "AcroExch.Document.DC", true), "new default PDF app");
+        assert!(!registry_values_match(&v, &dll, "123:456", "LinkcoPDFEditor.Document", false), "COM server removed");
         let old_schema = parse_reg_query(&CONFIG.replace("0x4", "0x3"));
-        assert!(!registry_values_match(&old_schema, DLL, "123:456", "LinkcoPDFEditor.Document", true), "older schema");
-        assert!(!registry_values_match(&[], DLL, "123:456", "", true), "never registered");
+        assert!(!registry_values_match(&old_schema, &dll, "123:456", "LinkcoPDFEditor.Document", true), "older schema");
+        let no_key: String = CONFIG.lines().filter(|l| !l.contains("PreviewHandlerDllKey")).collect::<Vec<_>>().join("\r\n");
+        assert!(!registry_values_match(&parse_reg_query(&no_key), &dll, "123:456", "LinkcoPDFEditor.Document", true), "registered by an older build");
+        assert!(!registry_values_match(&[], &dll, "123:456", "", true), "never registered");
     }
 
     #[test]
     fn no_default_app_matches_an_empty_recorded_choice() {
         let v = parse_reg_query(&CONFIG.replace("REG_SZ    LinkcoPDFEditor.Document", "REG_SZ    "));
-        assert!(registry_values_match(&v, DLL, "123:456", "", true));
+        assert!(registry_values_match(&v, &key(DLL), "123:456", "", true));
+    }
+
+    /// The same vectors as csharp-check's test of PreviewHandler.cs's `DllPathKey`.
+    #[test]
+    fn dll_path_key_is_ascii_and_matches_the_handler() {
+        assert_eq!(key(DLL), "C:\\PROGRAM FILES\\LINKCO\\LINKCO PDF EDITOR\\LINKCOPDFPREVIEWHANDLER.DLL");
+        assert_eq!(
+            key("C:\\Users\\\u{645}\u{62d}\u{645}\u{62f}\\AppData\\Local\\Programs\\Linkco\\Linkco PDF Editor\\LinkcoPdfPreviewHandler.dll"),
+            "C:\\USERS\\%0645%062D%0645%062F\\APPDATA\\LOCAL\\PROGRAMS\\LINKCO\\LINKCO PDF EDITOR\\LINKCOPDFPREVIEWHANDLER.DLL"
+        );
+        assert_eq!(key("D:\\100% Tools\\\u{dc}n\u{ef}code \u{1f600}\\x.dll"), "D:\\100%0025 TOOLS\\%00DCN%00EFCODE %D83D%DE00\\X.DLL");
+        // An Arabic install path, as reg.exe prints it (OEM code page), still matches through the key.
+        let arabic = "C:\\Users\\\u{645}\u{62d}\u{645}\u{62f}\\LinkcoPdfPreviewHandler.dll";
+        let reg_output = format!(
+            "HKEY_CURRENT_USER\\Software\\Linkco\\Linkco PDF Editor\r\n    PreviewHandlerDll    REG_SZ    C:\\Users\\????\\LinkcoPdfPreviewHandler.dll\r\n    PreviewHandlerDllKey    REG_SZ    {}\r\n    PreviewHandlerSchema    REG_DWORD    0x4\r\n    PreviewHandlerDllStamp    REG_SZ    1:2\r\n    PreviewHandlerUserChoice    REG_SZ    \r\n",
+            key(arabic)
+        );
+        assert!(registry_values_match(&parse_reg_query(&reg_output), &key(arabic), "1:2", "", true));
+        assert!(key(arabic).is_ascii());
     }
 
     #[test]
