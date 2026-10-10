@@ -521,6 +521,8 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 width = width.max(needed).min(ed.max_width);
             }
             egui::Frame::NONE.fill(Color32::WHITE).stroke(Stroke::new(1.5, ACCENT)).inner_margin(egui::Margin::symmetric(2, 0)).show(ui, |ui| {
+                // The box is white in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
+                ui.visuals_mut().text_cursor.stroke.color = caret_color_on(Color32::WHITE);
                 let rows = ed.text.lines().count().max(1);
                 let r = ui.add(
                     egui::TextEdit::multiline(&mut ed.text)
@@ -557,5 +559,23 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             })
         }
         None => None,
+    }
+}
+
+/// Caret colour that stays visible on a field filled with `fill`: black on light fills, white on dark ones.
+pub(crate) fn caret_color_on(fill: Color32) -> Color32 {
+    let luma = 299 * u32::from(fill.r()) + 587 * u32::from(fill.g()) + 114 * u32::from(fill.b());
+    if luma > 127_500 { Color32::BLACK } else { Color32::WHITE }
+}
+
+#[cfg(test)]
+mod caret_tests {
+    use super::*;
+
+    #[test]
+    fn caret_contrasts_with_its_fill() {
+        assert_eq!(caret_color_on(Color32::WHITE), Color32::BLACK);
+        assert_eq!(caret_color_on(Color32::from_rgb(0xFF, 0xFF, 0xF4)), Color32::BLACK);
+        assert_eq!(caret_color_on(Color32::BLACK), Color32::WHITE);
     }
 }

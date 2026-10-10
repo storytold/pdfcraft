@@ -12,6 +12,8 @@ use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
 
 const FOCUS_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
+/// Background of the in-place text field editor, the same in every theme.
+const FIELD_FILL: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xF4);
 
 /// The field being edited.
 #[derive(Clone, Debug, PartialEq)]
@@ -295,11 +297,13 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
             egui::Area::new(egui::Id::new(("form-editor", view.id.0))).order(egui::Order::Foreground).fixed_pos(rect.min).show(ctx, |ui| {
                 ui.set_min_size(rect.size());
                 let Some(fx) = view.forms.focus.as_mut() else { return };
+                // The field is pale yellow in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
+                ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(FIELD_FILL);
                 let mut te = if multiline { egui::TextEdit::multiline(&mut fx.text) } else { egui::TextEdit::singleline(&mut fx.text) };
                 te = te
                     .desired_width(rect.width() - 6.0)
                     .font(egui::FontId::proportional(font))
-                    .background_color(Color32::from_rgb(0xFF, 0xFF, 0xF4))
+                    .background_color(FIELD_FILL)
                     .text_color(Color32::BLACK)
                     .margin(egui::Margin::symmetric(3, 1))
                     .password(f.has(field_flags::PASSWORD))
