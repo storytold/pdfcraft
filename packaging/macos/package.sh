@@ -137,15 +137,32 @@ ln -s /Applications "$STAGE/Applications"
 mkdir -p "$STAGE/.background"
 cp "$HERE/dmg/background.tiff" "$STAGE/.background/background.tiff"
 cp "$HERE/dmg/dmg-layout.DS_Store" "$STAGE/.DS_Store"
-rm -f "$DMG" "$WORK/raw.dmg"
-# makehybrid + convert builds the image without attaching a device, unlike `create -srcfolder`,
-# which is flaky on CI runners ("Resource busy") and hangs in sandboxed sessions.
-# The volume name has no version: .DS_Store finds the background through an alias that includes it.
-hdiutil makehybrid -hfs -hfs-volume-name "PdfCraft" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
-hdiutil convert "$WORK/raw.dmg" -format UDZO -imagekey zlib-level=9 -o "$DMG"
-rm -f "$WORK/raw.dmg"
+rm -f "$DMG"
+# `hdiutil create -srcfolder` writes the files as they are. `makehybrid -hfs` gave every file a
+# com.apple.FinderInfo (a Finder location of -1,-1), which `codesign --verify --strict` rejects as
+# "Finder information, or similar detritus" on the app in the image and on a copy installed from it,
+# so MDM and compliance checks reported a correctly notarized app as damaged (#390). `create`
+# attaches a device while it copies, which fails now and then on CI runners ("Resource busy"), so
+# it gets a few tries. The volume name has no version: .DS_Store finds the background through an
+# alias that includes it.
+for attempt in 1 2 3 4 5; do
+  if hdiutil create -srcfolder "$STAGE" -volname "PdfCraft" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$DMG"; then
+    break
+  fi
+  rm -f "$DMG"
+  [ "$attempt" = 5 ] && { echo "hdiutil create failed 5 times" >&2; exit 1; }
+  warn "hdiutil create failed (attempt $attempt of 5); retrying in $((attempt * 10))s"
+  sleep $((attempt * 10))
+done
 sign "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
+# The app inside the image must still pass --strict, so a makehybrid-style regression can't ship.
+MOUNT="$WORK/dmg-check"
+rm -rf "$MOUNT"
+mkdir -p "$MOUNT"
+hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT" "$DMG" >/dev/null
+codesign --verify --strict --deep --verbose=2 "$MOUNT/PdfCraft.app" || { hdiutil detach "$MOUNT" >/dev/null; exit 1; }
+hdiutil detach "$MOUNT" >/dev/null
 if [ "$NOTARIZE" = 1 ]; then
   notarize "$DMG"
   xcrun stapler staple "$DMG"
