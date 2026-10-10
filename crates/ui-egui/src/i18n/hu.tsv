@@ -1465,6 +1465,8 @@
 	Right Edge	Jobb szél
 	Language	Nyelv
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Mentve ide: {place}: {before} → {after} ({pct}%-kal kisebb){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	Ez a fájl már a lehető legkisebb ({size}). Nem készült másolat.
+	Saved {place}: {before} → {after} (not smaller){detail}	Mentve ide: {place}: {before} → {after} (nem kisebb){detail}
 	Couldn't save the image: {e}	A képet nem sikerült menteni: {e}
 	Adding images arrives on the web with file pickers for images	A képek hozzáadása a webes változatban a képválasztóval együtt érkezik
 	Replacing images on page {p} arrives on the web with image pickers ({i})	A {p}. oldal képeinek cseréje a webes változatban a képválasztóval együtt érkezik ({i})

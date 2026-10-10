@@ -1154,6 +1154,53 @@ fn page_label_too_long_range_falls_back_alone() {
     assert_eq!(labels[1], "2");
 }
 
+/// A document whose page tree is one flat node over `pages` leaves. The label tests below need
+/// more pages than `doc_a` has.
+fn flat_doc(pages: usize) -> Document {
+    let kids = (0..pages).map(|i| format!("{} 0 R", i + 3)).collect::<Vec<_>>().join(" ");
+    let mut objs = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string(), format!("<< /Type /Pages /Kids [{kids}] /Count {pages} >>")];
+    objs.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R >>".to_string()));
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    open(out)
+}
+
+/// Each label is valid (1,004 bytes), but the 5,000 of them total about 5 MB, past the old 4 MiB
+/// limit on the whole sequence. Every label is readable.
+#[test]
+fn page_labels_past_four_mib_in_total_stay_readable() {
+    let mut d = flat_doc(5_000);
+    let mut spec = Dict::new();
+    spec.set(b"P".to_vec(), Object::String(PdfString::text(&"x".repeat(1000))));
+    spec.set(b"S".to_vec(), Object::name("D"));
+    let mut tree = Dict::new();
+    tree.set(b"Nums".to_vec(), Object::Array(vec![Object::Int(0), Object::Dict(spec)]));
+    let tree = d.add(Object::Dict(tree));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    let labels = crate::page_labels(&d).unwrap();
+    assert_eq!(labels.len(), 5_000);
+    assert_eq!(labels[0], format!("{}1", "x".repeat(1000)));
+    assert_eq!(labels[4_999], format!("{}5000", "x".repeat(1000)));
+}
+
+/// The same 5,000 labels written by an edit: the edit is accepted and reads back.
+#[test]
+fn number_pages_past_four_mib_in_total_is_accepted() {
+    let mut d = flat_doc(5_000);
+    crate::number_pages(&mut d, 0, 4_999, crate::LabelStyle::Decimal, &"x".repeat(1000), 1).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap()[4_999], format!("{}5000", "x".repeat(1000)));
+}
+
 #[test]
 fn page_boxes_default_inherit_and_set() {
     let mut doc = open(fixture());

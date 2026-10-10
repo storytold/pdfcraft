@@ -1791,8 +1791,11 @@ fn creating_and_reducing_through_tools() {
     let t = ok(&mut a, "doc_create", json!({ "from": "text", "path": "notes.txt" }))["doc"].as_u64().unwrap();
     assert_eq!(page_text(&mut a, t), ["Meeting notes\nAction items"]);
     ok(&mut a, "doc_save", json!({ "doc": t, "path": "notes.pdf" }));
+    // A new text PDF is already compact: Reduce writes nothing rather than a copy no smaller.
     let r = ok(&mut a, "doc_reduce", json!({ "doc": t, "path": "notes-small.pdf" }));
-    assert!(r["bytes_after"].as_u64().unwrap() > 0 && dir.join("notes-small.pdf").exists());
+    assert!(r["bytes_after"].as_u64().unwrap() >= r["bytes_before"].as_u64().unwrap(), "{r}");
+    assert_eq!(r["written"], false);
+    assert!(!dir.join("notes-small.pdf").exists());
     assert!(matches!(a.call("doc_create", &json!({ "from": "images", "paths": ["notes.txt"] })), Err(ToolError::Failed(_))));
 }
 
@@ -2752,8 +2755,11 @@ fn digital_ids_signing_and_validation_through_tools() {
     let ids = store["ids"].as_array().unwrap();
     assert_eq!(store["count"].as_u64().unwrap(), ids.len() as u64);
     assert!(ids.iter().all(|id| id["id"].as_str().unwrap().starts_with("windows:")));
+    // Store certificates that can't sign are explained, not dropped (issue #179).
+    let unusable = store["unusable"].as_array().unwrap();
+    assert!(unusable.iter().all(|u| u["subject"].is_string() && !u["reason"].as_str().unwrap().is_empty() && u["no_private_key"].is_boolean()));
     #[cfg(not(windows))]
-    assert!(ids.is_empty());
+    assert!(ids.is_empty() && unusable.is_empty());
     assert!(matches!(
         a.call("sign_document", &json!({ "doc": doc, "id": "ada.p12", "password": "wrong!", "out": "signed.pdf" })),
         Err(ToolError::InvalidArgs(_))
@@ -2824,6 +2830,8 @@ fn optimizing_through_tools() {
     assert_eq!(small["pages"], 1);
     let reduced = ok(&mut a, "doc_reduce", json!({ "doc": doc, "path": "reduced.pdf" }));
     assert!(reduced["bytes_after"].as_u64().unwrap() < reduced["bytes_before"].as_u64().unwrap());
+    assert_eq!(reduced["written"], true);
+    assert_eq!(std::fs::metadata(dir.join("reduced.pdf")).unwrap().len(), reduced["bytes_after"].as_u64().unwrap());
     assert!(matches!(
         a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "color": { "compression": "gif" } })),
         Err(ToolError::InvalidArgs(_))
@@ -3734,4 +3742,31 @@ fn object_move_rejects_invalid_nested_references_without_any_change() {
         assert!(a.call("object_move", &json!({"doc":doc,"page":1,"objects":[{"kind":"text","index":1}],"offset":offset})).is_err());
         assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1})), before);
     }
+}
+
+#[test]
+fn a_deleted_image_is_not_kept_by_reduce_or_optimize() {
+    let dir = workdir("deleted-image");
+    let (w, h) = (600u32, 400u32);
+    let px: Vec<u8> = (0..w * h).flat_map(|i| [(i % w * 255 / w) as u8 ^ (i & 7) as u8, (i / w * 255 / h) as u8, 128]).collect();
+    let mut photo = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut photo, w, h);
+        enc.set_color(png::ColorType::Rgb);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.write_header().unwrap().write_image_data(&px).unwrap();
+    }
+    std::fs::write(dir.join("photo.png"), photo).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["photo.png"] }))["doc"].as_u64().unwrap();
+    ok(&mut a, "image_edit", json!({ "doc": doc, "page": 1, "image": 1, "action": "delete" }));
+    assert_eq!(ok(&mut a, "page_images", json!({ "doc": doc, "page": 1 }))["count"], 0);
+    // The page is blank, so the copies are tiny: the picture's data is not carried along.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "optimized.pdf" }));
+    assert_eq!(r["unused_xobjects"], 1, "{r}");
+    assert!(r["bytes_after"].as_u64().unwrap() < 4_000, "{r}");
+    let r = ok(&mut a, "doc_reduce", json!({ "doc": doc, "path": "reduced.pdf" }));
+    assert!(r["bytes_after"].as_u64().unwrap() < 4_000, "{r}");
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "reduced.pdf" }));
+    assert_eq!(reopened["pages"], 1);
 }

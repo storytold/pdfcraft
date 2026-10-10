@@ -2186,3 +2186,24 @@ fn the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page()
     assert_eq!(page_texts(h.state()), ["Page 1"]);
     assert_eq!(h.state().views[0].current, 0);
 }
+
+#[test]
+fn host_dirty_hears_when_unsaved_work_appears_and_goes() {
+    let reports = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = reports.clone();
+    let mut h = harness(2, move |app| {
+        app.set_option("organize", "on").unwrap();
+        app.host_dirty = Some(Box::new(move |dirty| sink.lock().unwrap().push(dirty)));
+    });
+    assert_eq!(reports.lock().unwrap().last(), Some(&false), "a freshly opened document has nothing unsaved");
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(3);
+    assert_eq!(reports.lock().unwrap().last(), Some(&true), "an edit is unsaved work");
+
+    let out = temp_path("host-dirty.pdf");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run_steps(3);
+    assert_eq!(reports.lock().unwrap().last(), Some(&false), "saving clears it");
+    let _ = std::fs::remove_file(out);
+}

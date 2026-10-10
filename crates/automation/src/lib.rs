@@ -303,8 +303,12 @@ impl Automation {
                 let before = self.doc(&a)?.bytes.len();
                 let path = self.resolve(a.str("path")?, true)?;
                 let (bytes, merged) = self.session.reduced_bytes(id).map_err(failed)?;
-                write_atomic(&path, &bytes)?;
-                json!({ "path": path.to_string_lossy(), "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged })
+                // As in the app, a copy that isn't smaller is not written (#490).
+                let written = bytes.len() < before;
+                if written {
+                    write_atomic(&path, &bytes)?;
+                }
+                json!({ "path": path.to_string_lossy(), "written": written, "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged })
             }
             "doc_optimize" => self.doc_optimize(&a)?,
             "doc_initial_view" => self.doc_initial_view(&a)?,
@@ -598,14 +602,23 @@ impl Automation {
             }
             "sign_windows_ids" => {
                 #[cfg(target_os = "windows")]
-                let ids: Vec<Value> = pdfcraft_engine::sign::windows::identities()
-                    .map_err(failed)?
-                    .iter()
-                    .map(|id| json!({ "id": pdfcraft_engine::sign::windows::reference(&id.certificate), "certificate": signing::cert_json(&id.certificate) }))
-                    .collect();
+                let (ids, unusable): (Vec<Value>, Vec<Value>) = {
+                    let listing = pdfcraft_engine::sign::windows::list().map_err(failed)?;
+                    let ids = listing
+                        .ids
+                        .iter()
+                        .map(|id| json!({ "id": pdfcraft_engine::sign::windows::reference(&id.certificate), "certificate": signing::cert_json(&id.certificate) }))
+                        .collect();
+                    let unusable = listing
+                        .unusable
+                        .iter()
+                        .map(|u| json!({ "subject": u.subject, "sha256": u.fingerprint, "reason": u.reason, "no_private_key": u.no_private_key }))
+                        .collect();
+                    (ids, unusable)
+                };
                 #[cfg(not(target_os = "windows"))]
-                let ids: Vec<Value> = Vec::new();
-                json!({ "count": ids.len(), "ids": ids })
+                let (ids, unusable): (Vec<Value>, Vec<Value>) = (Vec::new(), Vec::new());
+                json!({ "count": ids.len(), "ids": ids, "unusable": unusable })
             }
             "sign_trust" => self.sign_trust(&a)?,
             "comment_mark" => self.comment_mark(&a)?,
@@ -853,6 +866,7 @@ impl Automation {
             "invalid_links": o.invalid_links,
             "invalid_bookmarks": o.invalid_bookmarks,
             "unreferenced_dests": o.unreferenced_dests,
+            "unused_xobjects": o.unused_xobjects,
             "merged_objects": r.merged,
             "discarded": r.discarded.iter().map(|(h, n)| json!({ "category": h.id(), "count": n })).collect::<Vec<_>>(),
         }))
