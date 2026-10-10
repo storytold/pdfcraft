@@ -1,0 +1,11 @@
+kind = "app"
+categories = ["Office", "Viewer"]
+icon = "assets/app-icon/hicolor/256x256/apps/ai.storyteller.pdfcraft.png"
+
+[linux.x86_64]
+asset = "pdfcraft-{version}-linux-x86_64.tar.gz"
+exec = "pdfcraft-{version}-linux-x86_64/usr/bin/pdfcraft"
+
+[linux.aarch64]
+asset = "pdfcraft-{version}-linux-aarch64.tar.gz"
+exec = "pdfcraft-{version}-linux-aarch64/usr/bin/pdfcraft"
