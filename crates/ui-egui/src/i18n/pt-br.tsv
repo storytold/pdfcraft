@@ -2149,6 +2149,19 @@ comment menu	Edit	Editar
 	The field {name} no longer exists.	O campo {name} não existe mais.
 	A selected field has no widget on any page, so the fields can't be edited together.	Um campo selecionado não tem widget em nenhuma página, então os campos não podem ser editados juntos.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} dpi, o maior tamanho em que podem ser desenhadas)
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	{n} objeto selecionado|{n} objetos selecionados
+	Drag the selection to move it. Esc clears the selection.	Arraste a seleção para movê-la. Esc limpa a seleção.
+	Shift-click to select several objects. Drag empty space to select an area.	Use Shift e clique para selecionar vários objetos. Arraste em um espaço vazio para selecionar uma área.
+	Select at most 1000 objects at a time.	Selecione no máximo 1000 objetos por vez.
+	Finish or discard the text being edited before selecting several objects.	Conclua ou descarte a edição do texto antes de selecionar vários objetos.
+	Move object	Mover objeto
+	Move objects	Mover objetos
+	Vertical text cannot be moved with this selection.	O texto vertical não pode ser movido com esta seleção.
+	Text used as a clipping path cannot be moved with this selection.	O texto usado como caminho de recorte não pode ser movido com esta seleção.
+	These objects could not be moved. Select them again and try a smaller move.	Não foi possível mover estes objetos. Selecione-os novamente e tente um deslocamento menor.
+	This page contains objects that cannot be selected together.	Esta página contém objetos que não podem ser selecionados juntos.
 	Fill colour	Cor de preenchimento
 	No fill	Sem preenchimento
 	Fill colour: none	Cor de preenchimento: nenhuma

@@ -58,6 +58,7 @@ pub mod marks {
 }
 mod content_ui;
 mod link_ui;
+mod object_ui;
 pub use create_ui::Clip;
 pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
@@ -1984,10 +1985,11 @@ impl eframe::App for PdfCraftApp {
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
         self.shortcuts(ctx);
-        // Scrolling is transient: never resume after changing tabs, opening a modal/palette,
-        // or returning to a window that lost focus.
+        // Scrolling and group-drag previews are transient: never resume after changing tabs,
+        // opening a modal/palette, or returning to a window that lost focus.
         let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
         for (index, view) in self.views.iter_mut().enumerate() {
+            view.objects.set_input_blocked(blocked || self.active != Some(index));
             if blocked || self.active != Some(index) {
                 view.auto_scroll.cancel();
             }

@@ -2170,6 +2170,19 @@ certificate	Subject	صاحب الشهادة
 	A selected field has no widget on any page, so the fields can't be edited together.	أحد الحقول المحددة ليس له عنصر واجهة في أي صفحة، لذا لا يمكن تحرير الحقول معًا.
 	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	التعرف على النص غير مثبت: نماذجه مفقودة (شغّل `cargo xtask models`، أو اضبط PDFCRAFT_MODELS).
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} بدقة {dpi} dpi، وهي أكبر دقة يمكن رسمها بها)
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	تم تحديد {n} عنصر|تم تحديد {n} عنصر|تم تحديد {n} عنصرين|تم تحديد {n} عناصر|تم تحديد {n} عنصرًا|تم تحديد {n} عنصر
+	Drag the selection to move it. Esc clears the selection.	اسحب التحديد لنقله. يمسح Esc التحديد.
+	Shift-click to select several objects. Drag empty space to select an area.	انقر مع الضغط على Shift لتحديد عدة عناصر. اسحب في مساحة فارغة لتحديد منطقة.
+	Select at most 1000 objects at a time.	حدد 1000 عنصر كحد أقصى في المرة الواحدة.
+	Finish or discard the text being edited before selecting several objects.	أكمل تحرير النص أو تجاهله قبل تحديد عدة عناصر.
+	Move object	نقل عنصر
+	Move objects	نقل عناصر
+	Vertical text cannot be moved with this selection.	لا يمكن نقل النص العمودي مع هذا التحديد.
+	Text used as a clipping path cannot be moved with this selection.	لا يمكن نقل النص المستخدم كمسار قص مع هذا التحديد.
+	These objects could not be moved. Select them again and try a smaller move.	تعذر نقل هذه العناصر. حددها مجددًا وحاول نقلها بمسافة أقل.
+	This page contains objects that cannot be selected together.	تحتوي هذه الصفحة على عناصر لا يمكن تحديدها معًا.
 	Fill colour	لون التعبئة
 	No fill	بلا تعبئة
 	Fill colour: none	لون التعبئة: بلا

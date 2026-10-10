@@ -150,6 +150,14 @@ pub fn tools() -> Vec<ToolDef> {
         t("page_render", "Render a page", "Render one page to a PNG image (default 96 dpi, at most 600).")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "dpi": { "type": "number", "minimum": 1, "maximum": 600 } }), &["doc", "page"])),
+        t("object_list", "List editable objects", "List existing paragraphs, Image/Form artwork and added content once, with source kind/index references, displayed rectangles and document generation. Indexes change when content changes; use generation in object_move to reject stale references.")
+            .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1}}), &["doc","page"])),
+        t("object_move", "Move objects together", "Atomically translate 1–1000 mixed references from object_list by [dx, dy] in displayed points (right/down). Preserves glyph codes, fonts, image data and relative spacing; success is one undo step. Clipping and vertical text are refused. A bad/stale reference refuses the entire move.")
+            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},
+                "objects":{"type":"array","minItems":1,"maxItems":1000,"uniqueItems":true,"items":{
+                    "type":"object","properties":{"kind":{"type":"string","enum":["added","text","image"]},"index":{"type":"integer","minimum":1}},"required":["kind","index"],"additionalProperties":false}},
+                "offset":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},
+                "generation":{"type":"integer","minimum":0,"description":"Use generation returned by object_list to reject a stale selection."}}), &["doc","page","objects","offset"])),
         t("text_extract", "Extract text", "Extract the text of some or all pages, in reading order. With rect, only the text inside that rectangle on each page, as Column select takes it: one row per visual line, side-by-side pieces (table cells) separated by a tab.")
             .ro()
             .cmd("edit.column_select")

@@ -3828,6 +3828,62 @@ fn command_batch_refuses_more_than_a_thousand_steps() {
 }
 
 #[test]
+fn mixed_objects_move_through_tools_with_generation_and_one_undo() {
+    let dir = workdir("mixed-object-move");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({"doc":doc,"page":1,"text":"Added label","rect":[20,20,130,45]}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"before.pdf"}));
+    let inventory = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert_eq!(inventory["count"], 2);
+    let objects: Vec<_> = inventory["objects"].as_array().unwrap().iter().map(|o| json!({"kind":o["kind"],"index":o["index"]})).collect();
+    let moved = ok(&mut a, "object_move", json!({"doc":doc,"page":1,"generation":inventory["generation"],"objects":objects,"offset":[18,27]}));
+    assert_eq!(moved["moved"], 2);
+    let after = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    for (old, new) in inventory["objects"].as_array().unwrap().iter().zip(after["objects"].as_array().unwrap()) {
+        for i in 0..4 {
+            assert!((new["rect"][i].as_f64().unwrap() - old["rect"][i].as_f64().unwrap() - if i % 2 == 0 { 18.0 } else { 27.0 }).abs() < 0.02);
+        }
+        assert_eq!(old["text"], new["text"]);
+    }
+    assert!(a.call("object_move", &json!({"doc":doc,"page":1,"generation":inventory["generation"],"objects":objects,"offset":[1,1]})).is_err());
+    let stable = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert_eq!(stable, after, "a stale generation cannot edit");
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["objects"], inventory["objects"]);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"moved.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"moved.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":reopened,"page":1}))["objects"], after["objects"]);
+    assert!(page_text(&mut a, reopened)[0].contains("Added label"));
+}
+
+#[test]
+fn object_move_rejects_invalid_nested_references_without_any_change() {
+    let dir = workdir("object-move-refusals");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    for objects in [
+        json!([]),
+        json!([{"kind":"text","index":0}]),
+        json!([{"kind":"path","index":1}]),
+        json!([{"kind":"text","index":1,"extra":true}]),
+        json!([{"kind":"text","index":1.5}]),
+        json!([{"kind":"text","index":1},{"kind":"text","index":1}]),
+        json!([{"kind":"text","index":1},{"kind":"image","index":99}]),
+        json!(vec![json!({"kind":"text","index":1}); 1001]),
+    ] {
+        assert!(a.call("object_move", &json!({"doc":doc,"page":1,"objects":objects,"offset":[10,20]})).is_err());
+        assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1})), before);
+    }
+    for offset in [json!([0, 0]), json!([1]), json!([1, 2, 3]), json!(["1", 2]), json!([1e30, 1])] {
+        assert!(a.call("object_move", &json!({"doc":doc,"page":1,"objects":[{"kind":"text","index":1}],"offset":offset})).is_err());
+        assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1})), before);
+    }
+}
+
+#[test]
 fn a_deleted_image_is_not_kept_by_reduce_or_optimize() {
     let dir = workdir("deleted-image");
     let (w, h) = (600u32, 400u32);

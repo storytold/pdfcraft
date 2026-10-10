@@ -2157,6 +2157,19 @@ signature pad	Type	Digita
 	The field {name} no longer exists.	Il campo {name} non esiste più.
 	A selected field has no widget on any page, so the fields can't be edited together.	Un campo selezionato non ha widget in nessuna pagina, quindi i campi non possono essere modificati insieme.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} dpi, la dimensione massima a cui si possono disegnare)
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	{n} oggetto selezionato|{n} oggetti selezionati
+	Drag the selection to move it. Esc clears the selection.	Trascina la selezione per spostarla. Esc annulla la selezione.
+	Shift-click to select several objects. Drag empty space to select an area.	Maiusc-clic per selezionare più oggetti. Trascina in uno spazio vuoto per selezionare un’area.
+	Select at most 1000 objects at a time.	Seleziona al massimo 1000 oggetti alla volta.
+	Finish or discard the text being edited before selecting several objects.	Completa o annulla la modifica del testo prima di selezionare più oggetti.
+	Move object	Sposta oggetto
+	Move objects	Sposta oggetti
+	Vertical text cannot be moved with this selection.	Il testo verticale non può essere spostato con questa selezione.
+	Text used as a clipping path cannot be moved with this selection.	Il testo usato come tracciato di ritaglio non può essere spostato con questa selezione.
+	These objects could not be moved. Select them again and try a smaller move.	Non è stato possibile spostare questi oggetti. Selezionali di nuovo e prova uno spostamento più piccolo.
+	This page contains objects that cannot be selected together.	Questa pagina contiene oggetti che non possono essere selezionati insieme.
 	Fill colour	Colore riempimento
 	No fill	Nessun riempimento
 	Fill colour: none	Colore riempimento: nessuno

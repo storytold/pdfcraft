@@ -2148,6 +2148,19 @@ action wizard	Start	Starten
 	The field {name} no longer exists.	Das Feld {name} existiert nicht mehr.
 	A selected field has no widget on any page, so the fields can't be edited together.	Ein ausgewähltes Feld hat auf keiner Seite ein Widget, daher können die Felder nicht gemeinsam bearbeitet werden.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} mit {dpi} dpi, der größten Auflösung, in der sie gezeichnet werden können)
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	{n} Objekt ausgewählt|{n} Objekte ausgewählt
+	Drag the selection to move it. Esc clears the selection.	Ziehen Sie die Auswahl, um sie zu verschieben. Esc hebt die Auswahl auf.
+	Shift-click to select several objects. Drag empty space to select an area.	Mit Umschalt-Klick mehrere Objekte auswählen. Ziehen Sie in einem leeren Bereich, um einen Auswahlrahmen aufzuziehen.
+	Select at most 1000 objects at a time.	Wählen Sie höchstens 1000 Objekte gleichzeitig aus.
+	Finish or discard the text being edited before selecting several objects.	Schließen Sie die Textbearbeitung ab oder verwerfen Sie sie, bevor Sie mehrere Objekte auswählen.
+	Move object	Objekt verschieben
+	Move objects	Objekte verschieben
+	Vertical text cannot be moved with this selection.	Vertikaler Text kann mit dieser Auswahl nicht verschoben werden.
+	Text used as a clipping path cannot be moved with this selection.	Text, der als Beschneidungspfad dient, kann mit dieser Auswahl nicht verschoben werden.
+	These objects could not be moved. Select them again and try a smaller move.	Diese Objekte konnten nicht verschoben werden. Wählen Sie sie erneut aus und versuchen Sie eine kleinere Verschiebung.
+	This page contains objects that cannot be selected together.	Diese Seite enthält Objekte, die nicht gemeinsam ausgewählt werden können.
 	Fill colour	Füllfarbe
 	No fill	Keine Füllung
 	Fill colour: none	Füllfarbe: keine

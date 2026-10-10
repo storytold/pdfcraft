@@ -2148,6 +2148,19 @@ signature pad	Type	入力
 	The field {name} no longer exists.	フィールド {name} はもう存在しません。
 	A selected field has no widget on any page, so the fields can't be edited together.	選択したフィールドの一つがどのページにもウィジェットを持たないため、まとめて編集できません。
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 件は描画できる最大サイズの {dpi} dpi で書き出しました）
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	{n}個のオブジェクトを選択中
+	Drag the selection to move it. Esc clears the selection.	選択範囲をドラッグして移動します。Escで選択を解除します。
+	Shift-click to select several objects. Drag empty space to select an area.	Shiftを押しながらクリックすると複数のオブジェクトを選択できます。空白をドラッグすると範囲選択できます。
+	Select at most 1000 objects at a time.	一度に選択できるオブジェクトは1000個までです。
+	Finish or discard the text being edited before selecting several objects.	複数のオブジェクトを選択する前に、テキストの編集を完了するか破棄してください。
+	Move object	オブジェクトを移動
+	Move objects	複数のオブジェクトを移動
+	Vertical text cannot be moved with this selection.	この選択範囲では縦書きのテキストを移動できません。
+	Text used as a clipping path cannot be moved with this selection.	この選択範囲ではクリッピングパスとして使われているテキストを移動できません。
+	These objects could not be moved. Select them again and try a smaller move.	これらのオブジェクトを移動できませんでした。選択し直し、移動量を小さくして試してください。
+	This page contains objects that cannot be selected together.	このページには一緒に選択できないオブジェクトがあります。
 	Fill colour	塗りつぶし色
 	No fill	塗りつぶしなし
 	Fill colour: none	塗りつぶし色: なし

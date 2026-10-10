@@ -2176,3 +2176,16 @@ key	Esc	Esc
 key	Home	Home
 key	End	End
 key	Space	Spacja
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	{n} obiekt zaznaczony|{n} obiekty zaznaczone|{n} obiektów zaznaczonych
+	Drag the selection to move it. Esc clears the selection.	Przeciągnij zaznaczenie, aby je przenieść. Esc anuluje zaznaczenie.
+	Shift-click to select several objects. Drag empty space to select an area.	Klikaj z wciśniętym Shift, aby zaznaczyć kilka obiektów. Przeciągnij w pustym miejscu, aby zaznaczyć obszar.
+	Select at most 1000 objects at a time.	Zaznacz najwyżej 1000 obiektów naraz.
+	Finish or discard the text being edited before selecting several objects.	Zakończ lub odrzuć edycję tekstu przed zaznaczeniem kilku obiektów.
+	Move object	Przenieś obiekt
+	Move objects	Przenieś obiekty
+	Vertical text cannot be moved with this selection.	Tekstu pionowego nie można przenieść razem z tym zaznaczeniem.
+	Text used as a clipping path cannot be moved with this selection.	Tekstu używanego jako ścieżka przycinania nie można przenieść razem z tym zaznaczeniem.
+	These objects could not be moved. Select them again and try a smaller move.	Nie udało się przenieść tych obiektów. Zaznacz je ponownie i spróbuj mniejszego przesunięcia.
+	This page contains objects that cannot be selected together.	Ta strona zawiera obiekty, których nie można zaznaczyć razem.

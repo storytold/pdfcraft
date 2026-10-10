@@ -2146,6 +2146,19 @@ action wizard	Start	Indítás
 	The field {name} no longer exists.	A(z) {name} mező már nem létezik.
 	A selected field has no widget on any page, so the fields can't be edited together.	Az egyik kijelölt mezőnek egyik oldalon sincs widgetje, ezért a mezők nem szerkeszthetők együtt.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} {dpi} dpi felbontással, a legnagyobb méretben, amelyben megjeleníthetők)
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	{n} objektum kijelölve|{n} objektum kijelölve
+	Drag the selection to move it. Esc clears the selection.	A kijelölés áthelyezéséhez húzza azt. Az Esc törli a kijelölést.
+	Shift-click to select several objects. Drag empty space to select an area.	Több objektum kijelöléséhez kattintson a Shift lenyomásával. Terület kijelöléséhez húzzon az üres részen.
+	Select at most 1000 objects at a time.	Egyszerre legfeljebb 1000 objektumot jelöljön ki.
+	Finish or discard the text being edited before selecting several objects.	Több objektum kijelölése előtt fejezze be vagy vesse el a szöveg szerkesztését.
+	Move object	Objektum áthelyezése
+	Move objects	Objektumok áthelyezése
+	Vertical text cannot be moved with this selection.	A függőleges szöveg nem helyezhető át ezzel a kijelöléssel.
+	Text used as a clipping path cannot be moved with this selection.	A vágógörbeként használt szöveg nem helyezhető át ezzel a kijelöléssel.
+	These objects could not be moved. Select them again and try a smaller move.	Ezeket az objektumokat nem sikerült áthelyezni. Jelölje ki őket újra, és próbáljon kisebb elmozdítást.
+	This page contains objects that cannot be selected together.	Ez az oldal olyan objektumokat tartalmaz, amelyek nem jelölhetők ki együtt.
 	Fill colour	Kitöltőszín
 	No fill	Nincs kitöltés
 	Fill colour: none	Kitöltőszín: nincs

@@ -1593,8 +1593,9 @@ pub fn move_annotation(doc: &mut Document, page: usize, index: usize, dx: f64, d
     Ok(())
 }
 
-/// Resize a rectangle, oval, text box or stamp to `rect`. Stamps keep their appearance,
-/// which PDF viewers scale from its bounding box into the new rectangle.
+/// Resize a rectangle, oval, text box, stamp or drawing to `rect`. Stamps keep their appearance,
+/// which PDF viewers scale from its bounding box into the new rectangle; drawings scale their
+/// strokes and get a new one.
 pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
@@ -1611,10 +1612,59 @@ pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], m
         })?;
         return Ok(());
     }
+    if subtype == "Ink" {
+        return resize_ink(doc, r, normalize(rect), meta);
+    }
     if !matches!(subtype.as_str(), "Square" | "Circle" | "FreeText") {
         return Err(AnnotError::Invalid(format!("{subtype} comments can't be resized")));
     }
     apply_text_box(doc, r, rect, meta)
+}
+
+/// Scale a drawing's strokes into `rect`. The margin between the strokes and the old `/Rect` (half
+/// the line width and a little more) stays the same on each side, so the line isn't clipped.
+fn resize_ink(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta) -> Result<(), AnnotError> {
+    let d = annot_dict(doc, r);
+    let strokes: Vec<Vec<[f64; 2]>> = d
+        .get(b"InkList")
+        .map(|l| doc.resolve(l))
+        .and_then(|l| l.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .map(|s| {
+            let v: Vec<f64> = doc.resolve(s).as_array().map(|a| a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect()).unwrap_or_default();
+            v.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect()
+        })
+        .collect();
+    let Some(inner) = bounds(strokes.iter().flatten().copied()) else {
+        return Err(AnnotError::Invalid("the drawing has no strokes".into()));
+    };
+    let old = d.get(b"Rect").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
+    let old: Vec<f64> = old.iter().filter_map(|v| doc.resolve(v).as_f64()).collect();
+    let old = match old[..] {
+        [a, b, c, e] => normalize([a, b, c, e]),
+        _ => inner,
+    };
+    let margin = [inner[0] - old[0], inner[1] - old[1], old[2] - inner[2], old[3] - inner[3]].map(|m| m.max(0.0));
+    let target = [rect[0] + margin[0], rect[1] + margin[1], rect[2] - margin[2], rect[3] - margin[3]];
+    if !finite(&rect) || target[2] < target[0] || target[3] < target[1] || rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
+        return Err(AnnotError::Invalid("invalid rectangle (too small)".into()));
+    }
+    // An axis with no extent (a straight stroke) is centred rather than scaled.
+    let axis = |v: f64, a0: f64, a1: f64, b0: f64, b1: f64| if a1 > a0 { b0 + (v - a0) / (a1 - a0) * (b1 - b0) } else { (b0 + b1) / 2.0 };
+    let scaled: Vec<Vec<[f64; 2]>> = strokes
+        .iter()
+        .map(|s| {
+            s.iter().map(|p| [axis(p[0], inner[0], inner[2], target[0], target[2]), axis(p[1], inner[1], inner[3], target[1], target[3])]).collect()
+        })
+        .collect();
+    doc.update_dict(r, |d| {
+        d.set(b"InkList".to_vec(), Object::Array(scaled.iter().map(|s| num_array(&s.concat())).collect()));
+        d.set(b"Rect".to_vec(), num_array(&rect));
+        touch(d, meta);
+    })?;
+    set_appearance(doc, r)?;
+    Ok(())
 }
 
 /// Store `rect` as a FreeText annotation's text box (or a square's/oval's rectangle): a callout's

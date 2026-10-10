@@ -2148,6 +2148,19 @@ signature pad	Type	Saisir
 	The field {name} no longer exists.	Le champ {name} n'existe plus.
 	A selected field has no widget on any page, so the fields can't be edited together.	Un champ sélectionné n'a de widget sur aucune page : les champs ne peuvent pas être modifiés ensemble.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} à {dpi} ppp, la plus grande taille possible pour les dessiner)
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	{n} objet sélectionné|{n} objets sélectionnés
+	Drag the selection to move it. Esc clears the selection.	Faites glisser la sélection pour la déplacer. Échap annule la sélection.
+	Shift-click to select several objects. Drag empty space to select an area.	Maj-clic pour sélectionner plusieurs objets. Faites glisser dans un espace vide pour sélectionner une zone.
+	Select at most 1000 objects at a time.	Sélectionnez au maximum 1000 objets à la fois.
+	Finish or discard the text being edited before selecting several objects.	Terminez ou abandonnez la modification du texte avant de sélectionner plusieurs objets.
+	Move object	Déplacer un objet
+	Move objects	Déplacer des objets
+	Vertical text cannot be moved with this selection.	Le texte vertical ne peut pas être déplacé avec cette sélection.
+	Text used as a clipping path cannot be moved with this selection.	Le texte utilisé comme chemin de découpe ne peut pas être déplacé avec cette sélection.
+	These objects could not be moved. Select them again and try a smaller move.	Ces objets n’ont pas pu être déplacés. Sélectionnez-les à nouveau et essayez un déplacement plus petit.
+	This page contains objects that cannot be selected together.	Cette page contient des objets qui ne peuvent pas être sélectionnés ensemble.
 	Fill colour	Couleur de fond
 	No fill	Sans fond
 	Fill colour: none	Couleur de fond : aucune

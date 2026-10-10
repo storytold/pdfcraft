@@ -50,6 +50,8 @@ pub use pdfcraft_edit::{BlockStyle, PageImage, TextBlock, TextLine, first_undraw
 pub use pdfcraft_measure as measure;
 pub use pdfcraft_xfa::Report as XfaLayout;
 
+pub use pdfcraft_edit::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
+
 /// A change to an existing page image.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ImageEdit {
@@ -272,6 +274,32 @@ impl Document {
     /// Edit a PDF: the images `page` draws (0-based).
     pub fn page_images(&self, page: usize) -> Vec<pdfcraft_edit::PageImage> {
         self.editor.as_ref().and_then(|e| pdfcraft_edit::page_images(&e.cos, page).ok()).unwrap_or_default()
+    }
+
+    /// Mixed editable objects on one page. Source inventories are zero-based and added items
+    /// appear once. Rectangles are user-space points, independent of the viewer's zoom.
+    pub fn editable_objects(&self, page: usize) -> Result<Vec<EditableObject>, String> {
+        let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+        pdfcraft_edit::editable_objects(&editor.cos, page).map_err(|e| e.to_string())
+    }
+
+    /// Displayed top-left-origin motion to a user-space vector. Use the linear map only,
+    /// so even a large crop-box origin cannot erase a small drag by cancellation.
+    pub fn object_move_offset(&self, page: usize, delta: [f64; 2]) -> Result<[f64; 2], String> {
+        let p = self.info.pages.get(page).ok_or("the page no longer exists")?;
+        let [x0, y0, x1, y1] = p.crop.map(f64::from);
+        let (a, b) = (delta[0] / f64::from(p.width.max(1e-3)), delta[1] / f64::from(p.height.max(1e-3)));
+        let (u, v) = match p.rotation {
+            90 => (b, -a),
+            180 => (-a, -b),
+            270 => (-b, a),
+            _ => (a, b),
+        };
+        let offset = [u * (x1 - x0), -v * (y1 - y0)];
+        if !offset.iter().all(|v| v.is_finite()) {
+            return Err("the move must be finite and non-zero".into());
+        }
+        Ok(offset)
     }
 
     /// Save image as: image `index` on `page` as a file (extension, bytes).
@@ -1040,6 +1068,13 @@ pub enum Edit {
         index: usize,
         change: ImageEdit,
     },
+    /// Move mixed existing and added objects together. References resolve before any change;
+    /// offset is a user-space vector. No retyping, reflow or font substitution is involved.
+    MoveObjects {
+        page: usize,
+        objects: Vec<ObjectTarget>,
+        offset: [f64; 2],
+    },
     /// Edit text in a paragraph box: replace paragraph `block` (from `Document::text_blocks`),
     /// rewrapped to the box's width.
     EditTextBlock {
@@ -1229,6 +1264,7 @@ impl Edit {
             Edit::SetDocumentScript { script: None, .. } => "Delete document JavaScript".into(),
             Edit::SetDocumentScript { .. } => "Edit document JavaScript".into(),
             Edit::EditTextLine { .. } | Edit::EditTextBlock { .. } => "Edit text".into(),
+            Edit::MoveObjects { objects, .. } => plural("Move object", objects.len()),
             Edit::EditPageImage { change, .. } => match change {
                 ImageEdit::Move(_) => "Move image".into(),
                 ImageEdit::Rotate(_) => "Rotate image".into(),
@@ -1381,6 +1417,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::AddText { .. }
         | Edit::AddImage { .. }
         | Edit::UpdateContent { .. }
+        | Edit::MoveObjects { .. }
         | Edit::DeleteContent { .. }
         | Edit::ReplaceImage { .. }
         | Edit::ClearRedactions
@@ -1703,6 +1740,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             };
             pdfcraft_edit::change_image(doc, *page, *index, &c)?;
         }
+        Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
         }

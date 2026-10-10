@@ -2112,6 +2112,19 @@
 	The field {name} no longer exists.	字段 {name} 已不存在。
 	A selected field has no widget on any page, so the fields can't be edited together.	某个所选字段在任何页面上都没有控件，因此无法一起编辑这些字段。
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 张以可绘制的最大尺寸 {dpi} dpi 导出）
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	已选择 {n} 个对象
+	Drag the selection to move it. Esc clears the selection.	拖动选区即可移动。按 Esc 清除选择。
+	Shift-click to select several objects. Drag empty space to select an area.	按住 Shift 单击可选择多个对象。拖动空白区域可框选。
+	Select at most 1000 objects at a time.	一次最多选择 1000 个对象。
+	Finish or discard the text being edited before selecting several objects.	请先完成或放弃正在编辑的文本，再选择多个对象。
+	Move object	移动对象
+	Move objects	移动多个对象
+	Vertical text cannot be moved with this selection.	无法随此选区移动竖排文本。
+	Text used as a clipping path cannot be moved with this selection.	无法随此选区移动用作剪切路径的文本。
+	These objects could not be moved. Select them again and try a smaller move.	无法移动这些对象。请重新选择并尝试较小的移动距离。
+	This page contains objects that cannot be selected together.	此页面包含无法一起选择的对象。
 	Fill colour	填充颜色
 	No fill	无填充
 	Fill colour: none	填充颜色：无
