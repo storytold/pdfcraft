@@ -34,7 +34,7 @@ fn load() -> Option<Arc<FontData>> {
 fn candidates() -> Vec<PathBuf> {
     if cfg!(windows) {
         let dir = std::env::var_os("WINDIR").or_else(|| std::env::var_os("SystemRoot")).map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
-        ["segoeui.ttf", "tahoma.ttf", "arial.ttf"].iter().map(|f| dir.join("Fonts").join(f)).collect()
+        ["msyh.ttc","segoeui.ttf", "tahoma.ttf", "arial.ttf"].iter().map(|f| dir.join("Fonts").join(f)).collect()
     } else if cfg!(target_os = "macos") {
         ["/System/Library/Fonts/SFArabic.ttf", "/System/Library/Fonts/GeezaPro.ttc", "/System/Library/Fonts/Supplemental/Arial.ttf"]
             .iter()
@@ -60,7 +60,7 @@ fn read(path: &Path) -> Option<Arc<FontData>> {
         return None;
     }
     let bytes = std::fs::read(path).ok()?;
-    let index = face_with(&bytes, PROBE)?;
+    let index = if path.file_name().is_some_and(|n| n == "msyh.ttc") { 0 } else { face_with(&bytes, PROBE)? };
     let mut data = FontData::from_owned(bytes);
     data.index = index;
     log::info!("interface font fallback: {}", path.display());
