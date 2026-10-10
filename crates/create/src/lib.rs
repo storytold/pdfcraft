@@ -228,18 +228,31 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     }
     let (mut i, mut size, mut comps, mut dpi, mut adobe) = (2usize, None, 0u8, (72.0, 72.0), false);
     let mut icc_chunks = Vec::new();
-    while i + 4 <= bytes.len() {
-        if bytes[i] != 0xFF {
+    while let Some(&byte) = bytes.get(i) {
+        if byte != 0xFF {
             i += 1;
             continue;
         }
-        let marker = bytes[i + 1];
+        i += 1;
+        // Markers may be preceded by any number of 0xFF fill bytes.
+        while bytes.get(i) == Some(&0xFF) {
+            i += 1;
+        }
+        let marker = *bytes.get(i).ok_or_else(|| bad("truncated JPEG marker"))?;
+        i += 1;
+        // Metadata ends at the first scan; entropy-coded bytes are not segments.
+        if marker == 0xDA || marker == 0xD9 {
+            break;
+        }
         if marker == 0xD8 || marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
-            i += 2;
             continue;
         }
-        let len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
-        let seg = bytes.get(i + 4..i + 2 + len).ok_or_else(|| bad("truncated"))?;
+        let len = usize::from(be16(bytes, i).ok_or_else(|| bad("truncated JPEG segment length"))?);
+        if len < 2 {
+            return Err(bad("invalid JPEG segment length"));
+        }
+        let end = i.checked_add(len).ok_or_else(|| bad("JPEG segment length overflow"))?;
+        let seg = bytes.get(i + 2..end).ok_or_else(|| bad("truncated JPEG segment"))?;
         match marker {
             // APP0 JFIF density.
             0xE0 if seg.starts_with(b"JFIF\0") && seg.len() >= 12 => {
@@ -259,18 +272,16 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
                     icc_chunks.push((*seq, *count, data));
                 }
             }
-            0xC0..=0xCF if marker != 0xC4 && marker != 0xC8 && marker != 0xCC => {
+            0xC0..=0xCF if marker != 0xC4 && marker != 0xC8 && marker != 0xCC && size.is_none() => {
                 if seg.len() < 6 {
                     return Err(bad("bad frame header"));
                 }
                 size = Some((u16::from_be_bytes([seg[3], seg[4]]) as u32, u16::from_be_bytes([seg[1], seg[2]]) as u32));
                 comps = seg[5];
-                break;
             }
-            0xDA => break,
             _ => {}
         }
-        i += 2 + len;
+        i = end;
     }
     let (w, h) = size.filter(|(w, h)| *w > 0 && *h > 0).ok_or_else(|| bad("no image size"))?;
     let mut d = Dict::new();
