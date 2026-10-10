@@ -3,8 +3,6 @@ Type=Application
 Name=PdfCraft
 GenericName=PDF Editor
 Comment=Read, organize, combine, split and secure PDFs
-# XRandR reports the panel's physical DPI while XFCE renders at 96, so winit scales
-# every window up and the app looks zoomed. Pin the X11 scale to 1 to match the desktop.
 Exec=env WINIT_X11_SCALE_FACTOR=1 pdfcraft %U
 TryExec=pdfcraft
 Icon=ai.storyteller.pdfcraft
