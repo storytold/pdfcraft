@@ -787,6 +787,11 @@
 	Text in images isn't found; recognise text (OCR) first.	Текстът в изображения не се открива; първо разпознайте текста (OCR).
 	No matches.	Няма съвпадения.
 	{n} match(es) marked for redaction.	{n} съвпадение(я) маркирани за заличаване.
+	Multiple words or phrases	Няколко думи или фрази
+	One word or phrase per line	По една дума или фраза на ред
+	Import list…	Импортиране на списък…
+	{n} word(s) or phrase(s)	{n} дума(и) или фраза(и)
+	{name} is too large for a word list (at most 1 MB).	{name} е твърде голям за списък с думи (най-много 1 MB).
 	Redaction Tool Properties	Свойства на инструмента за заличаване
 	Redacted area fill colour:	Цвят на запълване на заличената област:
 	Use overlay text	Използвай текст върху заличаването
@@ -1739,6 +1744,7 @@
 	Security properties…	Свойства на защитата…
 	Organize pages	Организиране на страници
 	New bookmark	Нова отметка
+	New bookmarks from structure	Нови отметки от структурата
 	Rotate pages clockwise	Завърти страниците по часовниковата стрелка
 	Rotate pages counterclockwise	Завърти страниците обратно на часовниковата стрелка
 	Delete pages	Изтрий страници

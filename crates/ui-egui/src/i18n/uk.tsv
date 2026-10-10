@@ -276,6 +276,7 @@
 	Security properties…	Властивості захисту…
 	Organize pages	Упорядкувати сторінки
 	New bookmark	Нова закладка
+	New bookmarks from structure	Нові закладки зі структури
 	Rotate pages clockwise	Повернути сторінки за годинниковою стрілкою
 	Rotate pages counterclockwise	Повернути сторінки проти годинникової стрілки
 	Delete pages	Видалити сторінки
@@ -1092,6 +1093,11 @@
 	Text in images isn't found; recognise text (OCR) first.	Текст у зображеннях не знаходиться; спочатку розпізнайте текст (OCR).
 	No matches.	Збігів немає.
 	{n} match(es) marked for redaction.	Збігів, позначених для вилучення: {n}.
+	Multiple words or phrases	Кілька слів або фраз
+	One word or phrase per line	По одному слову або фразі в рядку
+	Import list…	Імпортувати список…
+	{n} word(s) or phrase(s)	Слів або фраз: {n}
+	{name} is too large for a word list (at most 1 MB).	Файл {name} завеликий для списку слів (не більше 1 МБ).
 	Redaction Tool Properties	Властивості інструмента вилучення вмісту
 	Redacted area fill colour:	Колір заливки вилученої області:
 	Use overlay text	Використовувати накладений текст

@@ -45,6 +45,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut field_props_now = false;
     let mut bulk_field_props_now = false;
     let mut redact_now: Option<Dialog> = None;
+    let mut import_words = false;
     let mut print_go = false;
     let mut revert_now = false;
     let mut summarize_now = false;
@@ -515,10 +516,11 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 return;
             }
             Dialog::RedactSearch => {
-                let (go, cancel) = crate::redact_ui::search_body(ui, &mut app.redact_search, &t);
+                let (go, cancel, import) = crate::redact_ui::search_body(ui, &mut app.redact_search, &t);
                 if go {
                     redact_now = Some(dialog);
                 }
+                import_words = import;
                 close = cancel;
                 return;
             }
@@ -561,6 +563,12 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     crate::i18n::fmt(tl!("{n} pages selected."), &[("n", &count.to_string())])
                 };
                 ui.label(text);
+                ui.add_space(4.0);
+                // The name the pages are saved under (#737); separate files add " (page N)".
+                ui.horizontal(|ui| {
+                    let l = ui.label(tl!("File name"));
+                    ui.add(egui::TextEdit::singleline(&mut app.extract_draft.name).desired_width(240.0)).labelled_by(l.id);
+                });
                 ui.checkbox(&mut app.extract_draft.delete, tl!("Delete pages after extracting"));
                 ui.checkbox(&mut app.extract_draft.separate, tl!("Extract pages as separate files"));
                 ui.add_space(12.0);
@@ -1207,6 +1215,9 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     if rotate_now {
         app.rotate_with_draft();
+    }
+    if import_words {
+        app.pick_files(crate::files::FilePurpose::RedactWords, false);
     }
     match redact_now {
         Some(Dialog::RedactPages) => app.redact_pages(),

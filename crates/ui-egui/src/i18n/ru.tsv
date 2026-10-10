@@ -271,6 +271,7 @@
 	Security properties…	Свойства безопасности…
 	Organize pages	Организовать страницы
 	New bookmark	Новая закладка
+	New bookmarks from structure	Новые закладки из структуры
 	Rotate pages clockwise	Повернуть страницы по часовой стрелке
 	Rotate pages counterclockwise	Повернуть страницы против часовой стрелки
 	Delete pages	Удалить страницы
@@ -1095,6 +1096,11 @@
 	Text in images isn't found; recognise text (OCR) first.	Текст в изображениях не находится; сначала распознайте текст (OCR).
 	No matches.	Совпадений нет.
 	{n} match(es) marked for redaction.	Отмечено для сокрытия: {n} совпад.
+	Multiple words or phrases	Несколько слов или фраз
+	One word or phrase per line	По одному слову или фразе в строке
+	Import list…	Импортировать список…
+	{n} word(s) or phrase(s)	Слов или фраз: {n}
+	{name} is too large for a word list (at most 1 MB).	Файл {name} слишком велик для списка слов (не более 1 МБ).
 	Redaction Tool Properties	Свойства инструмента сокрытия
 	Redacted area fill colour:	Цвет заливки скрытой области:
 	Use overlay text	Использовать текст поверх

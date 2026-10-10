@@ -250,6 +250,7 @@
 	Security properties…	Sicherheitseigenschaften…
 	Organize pages	Seiten organisieren
 	New bookmark	Neues Lesezeichen
+	New bookmarks from structure	Neue Lesezeichen aus der Struktur
 	Rotate pages clockwise	Seiten im Uhrzeigersinn drehen
 	Rotate pages counterclockwise	Seiten gegen den Uhrzeigersinn drehen
 	Delete pages	Seiten löschen
@@ -1075,6 +1076,11 @@
 	Text in images isn't found; recognise text (OCR) first.	Text in Bildern wird nicht gefunden; führe zuerst Text erkennen (OCR) aus.
 	No matches.	Keine Treffer.
 	{n} match(es) marked for redaction.	{n} Treffer zum Schwärzen markiert.
+	Multiple words or phrases	Mehrere Wörter oder Ausdrücke
+	One word or phrase per line	Ein Wort oder Ausdruck pro Zeile
+	Import list…	Liste importieren…
+	{n} word(s) or phrase(s)	Wörter oder Ausdrücke: {n}
+	{name} is too large for a word list (at most 1 MB).	{name} ist zu groß für eine Wortliste (höchstens 1 MB).
 	Redaction Tool Properties	Eigenschaften des Schwärzungswerkzeugs
 	Redacted area fill colour:	Füllfarbe geschwärzter Bereiche:
 	Use overlay text	Überlagerungstext verwenden

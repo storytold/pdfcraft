@@ -66,6 +66,11 @@ issuers Windows chains its certificate to, without the root.
   `pathLenConstraint` that allows the CAs below it, and, given the signing time, validity then.
   Certificates embedded in a document are in the pool too, so an ordinary subscriber certificate
   can never vouch for another one; when an issuer is refused, the signature's details say why.
+- **The signer's certificate must allow signing documents** (`Certificate::signing_problem`): a
+  key usage needs digitalSignature or nonRepudiation, an extended key usage needs a
+  document-signing purpose (any, emailProtection, codeSigning, RFC 9336 documentSigning, Adobe
+  Authentic Documents, Microsoft document signing), and no critical extension may be one PdfCraft
+  doesn't process. Otherwise the verdict is unknown, never valid, and the details say why.
 - **BER as well as DER.** The CMS is read with `der::Tlv::parse_ber`, as Windows CryptoAPI, Adobe
   PPKMS, DocuSign, Documenso and `openssl cms -stream` write it: indefinite lengths and an
   OCTET STRING split into segments. Only the structure is read that way; certificates and signed

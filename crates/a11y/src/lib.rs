@@ -14,10 +14,12 @@ use pdfcraft_cos::Document;
 
 mod alt;
 mod content;
+mod headings;
 mod report;
 mod structure;
 
 pub use alt::{AltError, Figure, figures, mark_decorative, set_alt};
+pub use headings::{Heading, headings};
 pub use report::report_html;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

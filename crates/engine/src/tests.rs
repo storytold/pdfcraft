@@ -134,6 +134,84 @@ fn edits_update_view_data_and_mark_dirty() {
 }
 
 #[test]
+fn metadata_edit_keeps_the_renderer_without_changing_page_content() {
+    let (mut s, id) = session_with(1);
+    let request = pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Pixels, scale: 1.0, ..Default::default() };
+    let render = |session: &Session| {
+        let doc = session.get(id).unwrap();
+        doc.renderer.set_queue(vec![request]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if let Some(page) = doc.renderer.try_recv() {
+                assert!(page.error.is_none(), "{:?}", page.error);
+                return (doc.renderer.stats(), page.rgba);
+            }
+            assert!(std::time::Instant::now() < deadline, "page render did not finish");
+            std::thread::yield_now();
+        }
+    };
+
+    let (before, before_pixels) = render(&s);
+    assert_eq!(before.page_interpretations, 1);
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Report".into() }).unwrap();
+    assert_eq!(s.get(id).unwrap().info_value("Title").as_deref(), Some("Report"));
+    assert_eq!(s.get(id).unwrap().renderer.stats().page_interpretations, 1, "a metadata edit keeps the renderer and its page interpretation");
+    let (after, after_pixels) = render(&s);
+    assert_eq!(after.page_interpretations, 2, "the same renderer serves the second request, so its count continues");
+    assert_eq!(before_pixels, after_pixels, "document properties do not change page pixels");
+}
+
+#[test]
+fn metadata_edits_and_history_reuse_the_render_pool() {
+    let (mut s, id) = session_with(1);
+    let pixels = shown(&s, id, 0).rgba;
+    let doc = s.get(id).unwrap();
+    let stats = doc.renderer.stats();
+    let display = doc.display.clone();
+    assert_eq!(stats.page_interpretations, 1);
+
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Report".into() }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.title.as_deref(), Some("Report"));
+    assert_eq!(doc.renderer.stats(), stats);
+    assert!(Arc::ptr_eq(&doc.display, &display));
+    assert_eq!(pixels.as_ref().len(), 200 * 300 * 4);
+
+    s.undo(id).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.title, None);
+    assert_eq!(doc.renderer.stats(), stats);
+    assert!(Arc::ptr_eq(&doc.display, &display));
+
+    s.redo(id).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.title.as_deref(), Some("Report"));
+    assert_eq!(doc.renderer.stats(), stats);
+    assert!(Arc::ptr_eq(&doc.display, &display));
+}
+
+#[test]
+fn field_and_comment_edits_still_rebuild_the_render_pool() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let _ = shown(&s, id, 0);
+    assert_eq!(s.get(id).unwrap().renderer.stats().page_interpretations, 1);
+
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();
+    assert_eq!(s.get(id).unwrap().renderer.stats().page_interpretations, 0);
+    let _ = shown(&s, id, 0);
+    assert_eq!(s.get(id).unwrap().renderer.stats().page_interpretations, 1);
+
+    let shape = Shape::Rectangle { rect: [20.0, 20.0, 60.0, 60.0] };
+    s.apply(
+        id,
+        Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Test".into() }),
+    )
+    .unwrap();
+    assert_eq!(s.get(id).unwrap().renderer.stats().page_interpretations, 0);
+}
+
+#[test]
 fn undo_and_redo_restore_exact_states() {
     let (mut s, id) = session_with(3);
     let original = s.get(id).unwrap().bytes.clone();
@@ -500,6 +578,19 @@ fn autosave_snapshots_only_changed_documents() {
 }
 
 #[test]
+fn autosave_snapshots_a_new_unsaved_document_once() {
+    let (mut s, clean) = session_with(1);
+    let id = s.open_new("Untitled.pdf", Arc::new(fixture(1))).unwrap();
+    let snaps = s.autosave_snapshots();
+    assert_eq!(snaps.len(), 1, "the new document is unsaved work");
+    assert_eq!(snaps[0].doc, id);
+    assert!(snaps.iter().all(|x| x.doc != clean), "the clean document stays out");
+    assert!(s.autosave_snapshots().is_empty(), "nothing new since the last snapshot");
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    assert_eq!(s.autosave_snapshots().len(), 1, "a later edit is snapshotted again");
+}
+
+#[test]
 fn recovered_documents_reopen_unsaved_at_their_original_path() {
     let (mut s, id) = session_with(2);
     s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
@@ -551,6 +642,51 @@ fn bookmark_edits_show_in_the_viewer_undo_and_save() {
     let mut again = Session::new();
     let id2 = again.open("again.pdf", None, saved, None).unwrap();
     assert_eq!(outline_titles(&again.get(id2).unwrap().info.outline), ["Start→1", "Finish→3"]);
+}
+
+/// Two pages tagged with an H1 on the first and an H2 on the second.
+fn tagged_headings_fixture() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] /Resources << /Font << /F1 6 0 R >> >> >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Length 52 >>\nstream\n/H1 << /MCID 0 >> BDC BT /F1 12 Tf (Intro) Tj ET EMC\nendstream",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /StructTreeRoot /K [8 0 R 9 0 R] >>",
+        "<< /S /H1 /Pg 3 0 R /K 0 >>",
+        "<< /S /H2 /Pg 4 0 R /ActualText (Details) >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn bookmarks_from_structure_nest_the_headings_and_undo() {
+    let mut s = Session::new();
+    let id = s.open("tagged.pdf", None, Arc::new(tagged_headings_fixture()), None).unwrap();
+    s.apply(id, Edit::BookmarksFromStructure).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Untitled→0[Intro→1[Details→2]]"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("New bookmarks from structure"));
+    s.undo(id).unwrap();
+    assert!(s.get(id).unwrap().info.outline.is_empty());
+
+    // Untagged: a clear error and nothing changes.
+    let (mut s, id) = session_with(2);
+    let err = s.apply(id, Edit::BookmarksFromStructure).unwrap_err();
+    assert_eq!(err.to_string(), "this document has no tagged headings to make bookmarks from");
+    assert!(s.get(id).unwrap().info.outline.is_empty());
 }
 
 #[test]
@@ -1417,6 +1553,19 @@ fn comments_lock_take_checkmarks_hide_and_summarize() {
     assert_eq!(comment_summary("x", &[], SummarySort::Page), "Summary of Comments on x\n\nThis document has no comments.\n");
 }
 
+/// #820: the generated summary includes replies to replies, indented one level deeper.
+#[test]
+fn comment_summary_includes_replies_to_replies() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, rect_comment(0, [40.0, 40.0, 90.0, 90.0])).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "FIRST_REPLY".into(), author: "A".into() }).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 1, text: "NESTED_REPLY".into(), author: "B".into() }).unwrap();
+    let text = comment_summary("doc.pdf", &s.get(id).unwrap().info.annotations, SummarySort::Page);
+    assert!(text.contains("FIRST_REPLY"), "{text}");
+    assert!(text.contains("NESTED_REPLY"), "replies to replies are summarized: {text}");
+    assert!(text.contains("        NESTED_REPLY"), "the nested reply is indented under its parent: {text}");
+}
+
 #[test]
 fn signing_saving_trusting_and_commenting_afterwards() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
@@ -1561,6 +1710,24 @@ fn backgrounds_and_watermarks_from_files() {
 
 /// Scan & OCR ▸ Recognize text on a page that is only a picture of text (needs the models:
 /// `cargo xtask models`; skipped without them).
+#[test]
+fn recognize_text_reads_the_euro_sign() {
+    if !ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = s.create_from_text("t", "Total amount due: €250 by Friday").unwrap();
+    let id = s.open("text.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(id).unwrap()).png(0, 150.0).unwrap();
+    let scan = s.create_from_images(&[("scan.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    s.recognize_text(id, &[], ocr::OcrSettings::default()).unwrap();
+    let text = page_texts(&s, id)[0].clone();
+    // The model was trained with € where the ocrs crate's alphabet has a second E.
+    assert!(text.contains("€250"), "{text}");
+}
+
 #[test]
 fn recognize_text_makes_a_scanned_page_searchable() {
     if !ocr::available() {

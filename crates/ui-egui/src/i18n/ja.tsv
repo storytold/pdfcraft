@@ -277,6 +277,7 @@
 	Security properties…	セキュリティのプロパティ…
 	Organize pages	ページを整理
 	New bookmark	しおりを追加
+	New bookmarks from structure	構造からしおりを作成
 	Rotate pages clockwise	ページを時計回りに回転
 	Rotate pages counterclockwise	ページを反時計回りに回転
 	Delete pages	ページを削除
@@ -1094,6 +1095,11 @@
 	Text in images isn't found; recognise text (OCR) first.	画像内のテキストは検索できません。先に OCR でテキストを認識してください。
 	No matches.	一致する項目はありません。
 	{n} match(es) marked for redaction.	{n} 件の一致項目に墨消しマークを付けました。
+	Multiple words or phrases	複数の単語または語句
+	One word or phrase per line	1 行に 1 つの単語または語句
+	Import list…	リストを読み込み…
+	{n} word(s) or phrase(s)	{n} 件の単語または語句
+	{name} is too large for a word list (at most 1 MB).	{name} は単語リストとして大きすぎます (最大 1 MB)。
 	Redaction Tool Properties	墨消しツールのプロパティ
 	Redacted area fill colour:	墨消し領域の塗りつぶし色:
 	Use overlay text	オーバーレイテキストを使用

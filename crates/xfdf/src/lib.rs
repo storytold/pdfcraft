@@ -2,7 +2,7 @@
 //!
 //! - **XFDF** (ISO 19444-1, Acrobat's "Export all to data file" / "Import comments", and form
 //!   data): comments with their geometry, colours, flags, authors, dates, replies, pop-ups,
-//!   ink, quadrilaterals and line ends; field values, nested by name.
+//!   ink, quadrilaterals, line ends and callouts; field values, nested by name.
 //! - **FDF** (ISO 32000-2 §12.7.8): fields and comments in PDF syntax.
 //! - Form data as **XML**, **CSV** and **tab-delimited text** (Acrobat's Export data formats).
 //!
@@ -244,6 +244,21 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
                 let name = |o: &Object| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned()).unwrap_or_else(|| "None".into());
                 let _ = write!(attrs, " head=\"{}\" tail=\"{}\"", name(&le[0]), name(&le[1]));
             }
+            // A callout: its leader path, text-box inset, intent and (single-name) line ending.
+            let cl = nums_of(doc, d.get(b"CL"));
+            if cl.len() == 4 || cl.len() == 6 {
+                let _ = write!(attrs, " callout=\"{}\"", cl.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
+                let rd = nums_of(doc, d.get(b"RD"));
+                if rd.len() == 4 {
+                    let _ = write!(attrs, " fringe=\"{}\"", rd.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
+                }
+                if let Some(it) = d.get(b"IT").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned())) {
+                    let _ = write!(attrs, " intent=\"{}\"", esc(&it));
+                }
+                if let Some(le) = d.get(b"LE").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned())) {
+                    let _ = write!(attrs, " head=\"{}\"", esc(&le));
+                }
+            }
             if let Some(irt) = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| names.get(&r)) {
                 let _ = write!(attrs, " inreplyto=\"{}\"", esc(irt));
             }
@@ -263,6 +278,12 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
                     let _ = write!(out, "<gesture>{}</gesture>", pts.join(";"));
                 }
                 out.push_str("</inklist>");
+            }
+            // Polygon and polyline points (XFDF `<vertices>`: `x,y;x,y;…`).
+            let vertices = nums_of(doc, d.get(b"Vertices"));
+            let pts: Vec<String> = vertices.as_chunks::<2>().0.iter().map(|p| format!("{},{}", n(p[0]), n(p[1]))).collect();
+            if !pts.is_empty() {
+                let _ = write!(out, "<vertices>{}</vertices>", pts.join(";"));
             }
             if let Some(pd) = d.get(b"Popup").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) {
                 let r = nums_of(doc, pd.get(b"Rect"));
@@ -601,6 +622,20 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
             Object::Array(vec![Object::name(node.attribute("head").unwrap_or("None")), Object::name(node.attribute("tail").unwrap_or("None"))]),
         );
     }
+    if let Some(cl) = node.attribute("callout").map(csv).filter(|c| c.len() == 4 || c.len() == 6) {
+        d.set(b"CL".to_vec(), arr(&cl));
+        if let Some(rd) = node.attribute("fringe").map(csv).filter(|r| r.len() == 4) {
+            d.set(b"RD".to_vec(), arr(&rd));
+        }
+        d.set(b"IT".to_vec(), Object::name(node.attribute("intent").unwrap_or("FreeTextCallout")));
+        // A callout's /LE is one name, not the head/tail pair of a line.
+        match node.attribute("head") {
+            Some(h) => d.set(b"LE".to_vec(), Object::name(h)),
+            None => {
+                d.remove(b"LE");
+            }
+        }
+    }
     for child in node.children().filter(|c| c.is_element()) {
         match child.tag_name().name() {
             "contents" => {
@@ -616,6 +651,14 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
                     .map(|g| arr(&g.text().unwrap_or("").split(';').flat_map(|p| csv(p).into_iter()).collect::<Vec<_>>()))
                     .collect();
                 d.set(b"InkList".to_vec(), Object::Array(list));
+            }
+            "vertices" => {
+                // Whole x,y pairs only; a stray trailing number is dropped.
+                let mut v = csv(child.text().unwrap_or(""));
+                v.truncate(v.len() - v.len() % 2);
+                if !v.is_empty() {
+                    d.set(b"Vertices".to_vec(), arr(&v));
+                }
             }
             _ => {}
         }
@@ -635,13 +678,21 @@ fn place(doc: &mut Document, page_ref: ObjRef, d: Dict) -> Result<ObjRef, DataEr
         .and_then(|a| a.as_array().cloned())
         .unwrap_or_default();
     let mut kept = Vec::new();
+    let mut removed: Vec<ObjRef> = Vec::new();
     for a in annots {
         let same = nm.is_some()
             && a.as_ref().and_then(|r| doc.get(r).as_dict().and_then(|x| x.get(b"NM").and_then(|n| n.as_string().map(|s| s.to_text())))) == nm;
-        if !same {
+        if same {
+            removed.extend(a.as_ref());
+        } else {
             kept.push(a);
         }
     }
+    // The replaced note's pop-up goes with it; otherwise it stays on the page pointing at a note that is no longer there.
+    kept.retain(|a| {
+        let Some(x) = a.as_ref().map(|r| doc.get(r)).and_then(|o| o.as_dict().cloned()) else { return true };
+        x.name(b"Subtype") != Some(b"Popup".as_slice()) || x.reference(b"Parent").is_none_or(|p| !removed.contains(&p))
+    });
     let r = doc.add(Object::Dict(d));
     // Our own appearance where we can draw one; others keep none (viewers draw a default).
     let _ = pdfcraft_annot::set_appearance(doc, r);

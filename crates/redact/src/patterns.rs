@@ -257,9 +257,36 @@ pub fn find(pattern: Pattern, text: &[char]) -> Vec<Range<usize>> {
     out
 }
 
+/// The most entries a word list keeps (Find Text ▸ Multiple words or phrases).
+pub const MAX_WORDS: usize = 1000;
+/// The most characters an entry keeps.
+pub const MAX_WORD_CHARS: usize = 256;
+
+/// A word list from text with one word or phrase per line: trimmed, without empty lines or
+/// repeats, in order, at most [`MAX_WORDS`] entries of at most [`MAX_WORD_CHARS`] characters.
+pub fn word_list(text: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    text.lines()
+        .map(|l| l.trim().chars().take(MAX_WORD_CHARS).collect::<String>())
+        .filter(|w| !w.is_empty() && seen.insert(w.clone()))
+        .take(MAX_WORDS)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn word_lists_are_trimmed_unique_and_bounded() {
+        assert_eq!(word_list("  John Smith \n\n\tACME\r\nJohn Smith\n  \nő ű"), ["John Smith", "ACME", "ő ű"]);
+        let long = "é".repeat(MAX_WORD_CHARS + 10);
+        assert_eq!(word_list(&long)[0].chars().count(), MAX_WORD_CHARS);
+        let many: String = (0..MAX_WORDS + 50).map(|i| format!("w{i}\n")).collect();
+        let list = word_list(&many);
+        assert_eq!((list.len(), list.last().map(String::as_str)), (MAX_WORDS, Some("w999")));
+        assert!(word_list("").is_empty());
+    }
 
     fn found(p: Pattern, s: &str) -> Vec<String> {
         let c: Vec<char> = s.chars().collect();

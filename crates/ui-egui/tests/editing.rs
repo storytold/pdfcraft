@@ -1309,7 +1309,7 @@ fn zoomed_pages_in_view_are_rendered_at_the_size_drawn() {
     // Zoomed out again, thumbnails are enough and the sharp renders are dropped.
     h.state_mut().set_option("grid-zoom", "50").unwrap();
     h.run_steps(3);
-    assert!(sharp(&h, 0).is_none());
+    assert!(sharp(&h, 0).is_none(), "page 0 still has a sharp render: {:?}", sharp(&h, 0));
 }
 
 #[test]
@@ -1381,6 +1381,28 @@ fn split_dialog_writes_one_file_per_part() {
 }
 
 #[test]
+fn split_at_bookmarks_with_equal_titles_keeps_every_part() {
+    let dir = temp_path("split-dup-titles");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = organize(3);
+    h.state_mut().export_dir_override = Some(dir.to_string_lossy().into_owned());
+    for (index, title) in [(0, "Same"), (1, "Same"), (2, "same")] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark { parent: vec![], index, title: title.into(), page: index });
+    }
+    h.state_mut().split_draft.mode = pdfcraft_ui_egui::SplitMode::Bookmarks;
+    h.state_mut().run_command("page.split");
+    h.run_steps(3);
+    h.get_by_label_contains("Creates 3 files from 3 pages");
+    h.get_by_label("Split").click();
+    h.run_steps(3);
+    let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(names, ["doc - Same (2).pdf", "doc - Same.pdf", "doc - same (3).pdf"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn split_before_selected_pages() {
     let dir = temp_path("split-sel");
     let _ = std::fs::remove_dir_all(&dir);
@@ -1445,6 +1467,35 @@ fn password_prompt_opens_and_security_tab_reports_the_details() {
     h.get_by_label("User password");
 }
 
+/// #785: the notice's message used to be laid out before its buttons, so in a narrow document
+/// area (a side panel open) it ran under "Security settings" and on into the panel, and it sat
+/// off the buttons' centre line.
+#[test]
+fn the_security_notice_wraps_beside_its_buttons_and_lines_up_with_them() {
+    // Wide: one line. Narrower: wrapped. Narrowest: cut short (the full text is on hover).
+    for (width, wraps) in [(1700.0, false), (1250.0, true), (900.0, false)] {
+        let mut h = Harness::builder().with_size(egui::vec2(width, 800.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
+            app.set_option("panel", "bookmarks").unwrap();
+            app
+        });
+        h.run_steps(4);
+        let msg = h.get_by_label_contains("This document is secured").rect();
+        let button = h.get_by_label("Security settings").rect();
+        let dismiss = h.get_by_label("Dismiss").rect();
+        assert!(msg.right() <= button.left() + 0.5, "{width}: the message stops before the buttons: {msg:?} vs {button:?}");
+        assert!(button.right() <= dismiss.left() + 0.5, "{width}: {button:?} vs {dismiss:?}");
+        assert!((button.center().y - dismiss.center().y).abs() <= 0.5, "{width}: the buttons share a centre line");
+        assert!(msg.top() >= button.top(), "{width}: the message stays inside the bar: {msg:?} vs {button:?}");
+        let lines = (msg.height() / 14.0).floor().max(1.0);
+        let first_line = msg.top() + msg.height() / lines / 2.0;
+        assert!((first_line - button.center().y).abs() <= 1.5, "{width}: first line centred on the buttons: {msg:?} vs {button:?}");
+        assert_eq!(msg.height() > button.height(), wraps, "{width}: {msg:?}");
+    }
+}
+
 #[test]
 fn restricted_documents_show_a_notice_and_block_page_changes() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
@@ -1503,7 +1554,7 @@ fn extract_options_and_rotate_pages_dialog() {
     h.state_mut().views[0].select_pages(&[1, 2]);
     h.state_mut().run_command("page.extract");
     h.run_steps(2);
-    h.state_mut().extract_draft = pdfcraft_ui_egui::ExtractDraft { separate: true, delete: true };
+    h.state_mut().extract_draft = pdfcraft_ui_egui::ExtractDraft { separate: true, delete: true, ..Default::default() };
     h.get_all_by_label("Extract").last().unwrap().click();
     h.run_steps(3);
     let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
@@ -2134,4 +2185,25 @@ fn the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page()
     h.run_steps(4);
     assert_eq!(page_texts(h.state()), ["Page 1"]);
     assert_eq!(h.state().views[0].current, 0);
+}
+
+#[test]
+fn host_dirty_hears_when_unsaved_work_appears_and_goes() {
+    let reports = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = reports.clone();
+    let mut h = harness(2, move |app| {
+        app.set_option("organize", "on").unwrap();
+        app.host_dirty = Some(Box::new(move |dirty| sink.lock().unwrap().push(dirty)));
+    });
+    assert_eq!(reports.lock().unwrap().last(), Some(&false), "a freshly opened document has nothing unsaved");
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(3);
+    assert_eq!(reports.lock().unwrap().last(), Some(&true), "an edit is unsaved work");
+
+    let out = temp_path("host-dirty.pdf");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run_steps(3);
+    assert_eq!(reports.lock().unwrap().last(), Some(&false), "saving clears it");
+    let _ = std::fs::remove_file(out);
 }

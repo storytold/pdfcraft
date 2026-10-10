@@ -84,7 +84,7 @@ mod print_ui;
 mod signature_drag;
 pub use print_ui::{Handling as PrintHandling, PrintDraft, Which as PrintWhich};
 mod redact_ui;
-pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft};
+pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
 
 /// [`PdfCraftApp::date_text`] for callers that already borrow other parts of the app.
@@ -341,6 +341,14 @@ pub enum OsEvent {
 /// Returns the [`OsEvent`]s that arrived since it was last called (set by the desktop app).
 pub type OsEventsFn = Box<dyn FnMut() -> Vec<OsEvent>>;
 
+/// Hands a saved PDF to the page embedding PdfCraft (web): `(name, bytes, save_as)`. `save_as`
+/// is `true` for Save As. Set by the web app when a host page (such as a Nextcloud app) asked
+/// for saves; without it the browser downloads the file.
+pub type HostSaveFn = Box<dyn Fn(&str, &[u8], bool) -> Result<(), String>>;
+
+/// Told every frame whether any tab has unsaved work, so a host page can warn before leaving.
+pub type HostDirtyFn = Box<dyn FnMut(bool)>;
+
 pub struct PasswordPrompt {
     pub name: String,
     pub path: Option<String>,
@@ -349,6 +357,9 @@ pub struct PasswordPrompt {
     pub error: Option<String>,
     /// A late startup file must stay in the background even after it is unlocked.
     activate: bool,
+    /// The bytes are a recovery snapshot: once the document is open it takes the snapshot's
+    /// path and recovery entry. Cancelling the prompt drops the association with it (#813).
+    recovered: Option<RecoveryMeta>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -390,6 +401,10 @@ pub struct PdfCraftApp {
     /// Resolved colours, including the current OS theme when following the system.
     pub theme: ThemeKind,
     pub theme_preference: ThemePreference,
+    /// The desktop's light/dark choice, watched while the app runs (Linux has no winit answer).
+    desktop_theme: pdfcraft_platform::desktop_theme::DesktopTheme,
+    /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
+    desktop_dark: Option<bool>,
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
     /// Preferences: bake Fill & Sign marks into the page when saving. Off, so a normal save stays editable.
@@ -424,8 +439,14 @@ pub struct PdfCraftApp {
     startup_superseded: bool,
     /// Asynchronous opens that failed (web `?file=` fetches), shown as a notice.
     pub failed_inbox: FailedInbox,
+    /// Mirrors "some document has unsaved work" each frame, so the web page's `beforeunload` handler can read it (#812).
+    pub unsaved_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Requests from the operating system, polled every frame (macOS Apple events).
     pub os_events: Option<OsEventsFn>,
+    /// Save delivers to the embedding page instead of downloading (web, see [`HostSaveFn`]).
+    pub host_save: Option<HostSaveFn>,
+    /// Reports unsaved work to the embedding page (web, see [`HostDirtyFn`]).
+    pub host_dirty: Option<HostDirtyFn>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
     /// Save to this path instead of asking (tests and automation).
@@ -523,7 +544,6 @@ pub struct PdfCraftApp {
     pub recoverable: Vec<RecoveryMeta>,
     recovery_keys: std::collections::HashMap<DocId, String>,
     last_autosave: f64,
-    pending_recovered: Option<RecoveryMeta>,
     allow_quit: bool,
     /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
     /// `registry_shortcuts`).
@@ -629,6 +649,12 @@ impl Default for PdfCraftApp {
     }
 }
 
+/// What the operating system says about light and dark, as "draw dark". `None` means nobody
+/// answered, not a preference, so the caller keeps what it chose.
+fn system_theme(ctx: &egui::Context, desktop_dark: Option<bool>) -> Option<bool> {
+    ctx.system_theme().map(|theme| theme == egui::Theme::Dark).or(desktop_dark)
+}
+
 /// A restored colour: an `[r, g, b]` array of finite numbers, each clamped to 0–1 (restored
 /// settings are untrusted). Anything else (a string, a wrong length, a null or a non-finite
 /// number) is refused whole, so the caller keeps its default.
@@ -668,6 +694,8 @@ impl PdfCraftApp {
             comment_prefs: Default::default(),
             theme: ThemeKind::Light,
             theme_preference: ThemePreference::Light,
+            desktop_theme: pdfcraft_platform::desktop_theme::DesktopTheme::start(),
+            desktop_dark: None,
             language: i18n::AUTO.to_string(),
             flatten_fill_sign_on_save: false,
             dialog: None,
@@ -689,7 +717,10 @@ impl PdfCraftApp {
             startup_inbox: Default::default(),
             startup_superseded: false,
             failed_inbox: Default::default(),
+            unsaved_flag: Default::default(),
             os_events: None,
+            host_save: None,
+            host_dirty: None,
             close_request: None,
             save_override: None,
             props_draft: None,
@@ -748,7 +779,6 @@ impl PdfCraftApp {
             recoverable: Vec::new(),
             recovery_keys: Default::default(),
             last_autosave: 0.0,
-            pending_recovered: None,
             allow_quit: false,
             deferred_commands: Vec::new(),
             dialog_seen: None,
@@ -866,7 +896,8 @@ impl PdfCraftApp {
             Ok(id) => id,
             Err(e @ (OpenError::NeedsPassword | OpenError::WrongPassword)) => {
                 let error = matches!(e, OpenError::WrongPassword).then(|| "Incorrect password. Try again.".to_string());
-                self.password_prompt = Some(PasswordPrompt { name: name.to_string(), path, bytes, input: String::new(), error, activate });
+                self.password_prompt =
+                    Some(PasswordPrompt { name: name.to_string(), path, bytes, input: String::new(), error, activate, recovered: None });
                 return Ok(());
             }
             Err(e) => return Err(e.to_string()),
@@ -1047,17 +1078,28 @@ impl PdfCraftApp {
     /// Answer the password prompt (`None` cancels).
     pub fn submit_password(&mut self, password: Option<String>) {
         let Some(p) = self.password_prompt.take() else { return };
-        let Some(pw) = password else { return };
+        let Some(pw) = password else {
+            // A cancelled recovery goes back on offer; its snapshot stays in the store and must
+            // not attach itself to whatever document is unlocked next (#813).
+            if let Some(meta) = p.recovered {
+                self.recoverable.push(meta);
+            }
+            return;
+        };
         match self.try_open(&p.name, p.path, p.bytes, Some(&pw), p.activate) {
             Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &p.name), ("e", &e.to_string())]),
-            // A recovered encrypted document is open once its foreground prompt is gone.
-            // Unlocking a background startup file must not finish another file's recovery.
-            Ok(()) if p.activate && self.password_prompt.is_none() => {
-                if let Some(meta) = self.pending_recovered.clone() {
-                    self.finish_recovery(&meta);
+            // A recovered encrypted document is open once its prompt is gone.
+            Ok(()) if self.password_prompt.is_none() => {
+                if let Some(meta) = &p.recovered {
+                    self.finish_recovery(meta);
                 }
             }
-            Ok(()) => {}
+            // Wrong password: the new prompt is for the same bytes, so it keeps the snapshot.
+            Ok(()) => {
+                if let Some(prompt) = self.password_prompt.as_mut() {
+                    prompt.recovered = p.recovered;
+                }
+            }
         }
     }
 
@@ -1208,7 +1250,9 @@ impl PdfCraftApp {
 
     pub fn set_theme_preference(&mut self, preference: ThemePreference) {
         self.theme_preference = preference;
-        self.theme = preference.resolve(self.ctx.as_ref().and_then(egui::Context::system_theme), self.theme);
+        // Before the first frame there is no context to ask, so the last choice stands.
+        let system = self.ctx.as_ref().and_then(|ctx| system_theme(ctx, self.desktop_dark));
+        self.theme = preference.resolve(system, self.theme);
         if let Some(ctx) = &self.ctx {
             theme::apply(ctx, self.theme);
         }
@@ -1222,7 +1266,10 @@ impl PdfCraftApp {
     }
 
     fn sync_theme(&mut self, ctx: &egui::Context) {
-        let kind = self.theme_preference.resolve(ctx.system_theme(), self.theme);
+        if let Some(dark) = self.desktop_theme.take_change() {
+            self.desktop_dark = Some(dark);
+        }
+        let kind = self.theme_preference.resolve(system_theme(ctx, self.desktop_dark), self.theme);
         if kind != self.theme {
             self.theme = kind;
             theme::apply(ctx, kind);
@@ -1862,6 +1909,12 @@ impl eframe::App for PdfCraftApp {
         self.guard_quit(ctx);
         let now = ctx.input(|i| i.time);
         self.autosave_tick(now);
+        if self.host_dirty.is_some() {
+            let dirty = self.first_dirty().is_some();
+            if let Some(report) = self.host_dirty.as_mut() {
+                report(dirty);
+            }
+        }
         self.poll_updates();
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);

@@ -248,6 +248,7 @@
 	Security properties…	Biztonság tulajdonságai…
 	Organize pages	Oldalak rendezése
 	New bookmark	Új könyvjelző
+	New bookmarks from structure	Új könyvjelzők a szerkezetből
 	Rotate pages clockwise	Oldalak forgatása az óramutató járásával megegyezően
 	Rotate pages counterclockwise	Oldalak forgatása az óramutató járásával ellentétesen
 	Delete pages	Oldalak törlése
@@ -1064,6 +1065,11 @@
 	Text in images isn't found; recognise text (OCR) first.	A képekben lévő szöveg nem található meg; előbb futtass szövegfelismerést (OCR).
 	No matches.	Nincs találat.
 	{n} match(es) marked for redaction.	{n} találat megjelölve kitakarásra.
+	Multiple words or phrases	Több szó vagy kifejezés
+	One word or phrase per line	Soronként egy szó vagy kifejezés
+	Import list…	Lista importálása…
+	{n} word(s) or phrase(s)	{n} szó vagy kifejezés
+	{name} is too large for a word list (at most 1 MB).	A(z) {name} túl nagy egy szólistához (legfeljebb 1 MB).
 	Redaction Tool Properties	Kitakaróeszköz tulajdonságai
 	Redacted area fill colour:	Kitakart terület kitöltőszíne:
 	Use overlay text	Fedőszöveg használata

@@ -108,6 +108,33 @@ fn redaction_codes_become_the_overlay_text() {
 }
 
 #[test]
+fn redacting_an_imported_word_list() {
+    let memo = pdfcraft_engine::Session::new().create_from_text("memo", "Call Ada today\nAda is private\nPublic line").unwrap().to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("memo.pdf", None, memo.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().execute("redact.search");
+    h.run_steps(2);
+    h.get_by_label("Multiple words or phrases");
+    let list = b"  Ada \n\nprivate\nAda\nabsent\n".to_vec();
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::RedactWords, vec![("names.txt".into(), list)]);
+    let d = &h.state().redact_search;
+    assert_eq!((d.mode, d.words.as_str()), (pdfcraft_ui_egui::RedactSearchMode::Words, "Ada\nprivate\nabsent"));
+    h.run_steps(2);
+    h.get_by_label("3 word(s) or phrase(s)");
+    h.get_by_label("Mark all").click();
+    h.run_steps(3);
+    assert_eq!((marks(&h), h.state().redact_search.found), (3, Some(3)));
+    let too_big = vec![b'a'; 2 << 20];
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::RedactWords, vec![("huge.txt".into(), too_big)]);
+    assert_eq!(h.state().redact_search.words, "Ada\nprivate\nabsent", "an oversized list changes nothing");
+}
+
+#[test]
 fn removing_hidden_information_and_sanitizing() {
     let mut h = harness();
     h.state_mut().execute("protect.remove_hidden");

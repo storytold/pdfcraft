@@ -250,6 +250,7 @@
 	Security properties…	Propriétés de protection…
 	Organize pages	Organiser les pages
 	New bookmark	Nouveau signet
+	New bookmarks from structure	Nouveaux signets à partir de la structure
 	Rotate pages clockwise	Pivoter les pages vers la droite
 	Rotate pages counterclockwise	Pivoter les pages vers la gauche
 	Delete pages	Supprimer des pages
@@ -1074,6 +1075,11 @@
 	Text in images isn't found; recognise text (OCR) first.	Le texte dans les images n'est pas trouvé ; reconnaissez d'abord le texte (OCR).
 	No matches.	Aucune correspondance.
 	{n} match(es) marked for redaction.	{n} correspondance(s) marquée(s) pour biffure.
+	Multiple words or phrases	Plusieurs mots ou expressions
+	One word or phrase per line	Un mot ou une expression par ligne
+	Import list…	Importer une liste…
+	{n} word(s) or phrase(s)	{n} mot(s) ou expression(s)
+	{name} is too large for a word list (at most 1 MB).	{name} est trop volumineux pour une liste de mots (1 Mo au maximum).
 	Redaction Tool Properties	Propriétés de l'outil de biffure
 	Redacted area fill colour:	Couleur de remplissage de la zone biffée :
 	Use overlay text	Utiliser un texte en superposition

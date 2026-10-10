@@ -271,6 +271,7 @@
 	Security properties…	Propiedades de seguridad…
 	Organize pages	Organizar páginas
 	New bookmark	Nuevo marcador
+	New bookmarks from structure	Nuevos marcadores a partir de la estructura
 	Rotate pages clockwise	Girar páginas a la derecha
 	Rotate pages counterclockwise	Girar páginas a la izquierda
 	Delete pages	Eliminar páginas
@@ -1088,6 +1089,11 @@
 	Text in images isn't found; recognise text (OCR) first.	El texto de las imágenes no se encuentra; reconoce antes el texto (OCR).
 	No matches.	Sin coincidencias.
 	{n} match(es) marked for redaction.	{n} coincidencia(s) marcada(s) para censurar.
+	Multiple words or phrases	Varias palabras o frases
+	One word or phrase per line	Una palabra o frase por línea
+	Import list…	Importar lista…
+	{n} word(s) or phrase(s)	{n} palabra(s) o frase(s)
+	{name} is too large for a word list (at most 1 MB).	{name} es demasiado grande para una lista de palabras (máximo 1 MB).
 	Redaction Tool Properties	Propiedades de la herramienta de censura
 	Redacted area fill colour:	Color de relleno del área censurada:
 	Use overlay text	Usar texto superpuesto

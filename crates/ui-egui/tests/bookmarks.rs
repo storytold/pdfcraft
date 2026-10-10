@@ -215,6 +215,36 @@ fn bookmark_search_is_per_document() {
 }
 
 #[test]
+fn new_bookmarks_from_structure_nest_the_tagged_headings() {
+    const TAGGED: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+5 0 obj << /Type /StructTreeRoot /K [6 0 R 7 0 R] >> endobj
+6 0 obj << /S /H1 /Pg 3 0 R /ActualText (Overview) >> endobj
+7 0 obj << /S /H2 /Pg 4 0 R /ActualText (Method) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut h = harness();
+    h.state_mut().open_bytes("tagged.pdf", None, TAGGED.to_vec()).unwrap();
+    h.run_steps(3);
+    h.get_by_label("Bookmark options").click();
+    h.run_steps(2);
+    h.get_by_label("New bookmarks from structure").click();
+    h.run_steps(3);
+    let id = h.state().active.and_then(|i| h.state().views.get(i)).unwrap().id;
+    let titles: Vec<String> = h.state().session.get(id).unwrap().info.outline.iter().map(|o| o.title.clone()).collect();
+    assert_eq!(titles, ["Untitled"]);
+    h.get_by_label("Overview");
+    h.get_by_label("Method");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("New bookmarks from structure"));
+    if let Ok(dir) = std::env::var("PDFCRAFT_BOOKMARK_SHOTS") {
+        h.render().unwrap().save(std::path::Path::new(&dir).join("bookmarks-from-structure.png")).unwrap();
+    }
+}
+
+#[test]
 fn expanding_and_collapsing_all_bookmarks() {
     use pdfcraft_engine::Edit;
     let mut h = harness();

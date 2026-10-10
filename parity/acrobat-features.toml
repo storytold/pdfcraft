@@ -2722,8 +2722,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.extract"]
 tools = ["page_extract"]
-evidence = ["crates/ui-egui/tests/editing.rs::extract_options_and_rotate_pages_dialog", "crates/automation/tests/automation.rs::organizing_with_filters_bookmark_splits_and_extract_options"]
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::extract_options_and_rotate_pages_dialog", "crates/automation/tests/automation.rs::organizing_with_filters_bookmark_splits_and_extract_options", "crates/ui-egui/tests/pickers.rs::extract_pages_saves_under_the_file_name_typed_in_the_dialog"]
+notes = "The dialog has a File name field (#737), filled in with the document's name: pages are written as `<name> (page N).pdf` into the chosen folder, and one renamed page as `<name>.pdf`. Extracting into a new tab names the tab (and so Save As) after it."
 
 [[feature]]
 id = "organize.extract-and-delete"
@@ -3259,11 +3259,11 @@ title = "Generate bookmarks from headings or tags"
 area = "D"
 tier = "P1"
 milestone = "M4"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["bookmark.from_structure"]
+tools = ["bookmark_from_structure"]
+evidence = ["crates/a11y/src/tests.rs::headings_are_found_with_their_levels_titles_and_pages", "crates/organize/src/tests.rs::a_bookmark_tree_nests_entries_by_level_under_a_new_first_bookmark", "crates/engine/src/tests.rs::bookmarks_from_structure_nest_the_headings_and_undo", "crates/automation/tests/automation.rs::bookmarks_from_structure_through_tools", "crates/ui-egui/tests/bookmarks.rs::new_bookmarks_from_structure_nest_the_tagged_headings"]
+notes = "Bookmark options ▸ New bookmarks from structure: tagged headings (H1–H6 through the role map; a plain H takes its Sect/Part/Art nesting) become bookmarks nested by level under a new first \"Untitled\" bookmark, each linked to its element (/SE). Titles come from /ActualText, the marked text drawn directly on the page (not inside Form XObjects), /Alt or /T. Not yet: Acrobat's choice of element types (only headings), and destinations go to the heading's page rather than its position on it"
 
 [[feature]]
 id = "organize.attachments-add"
@@ -5226,8 +5226,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["sign.fill.signature", "sign.fill.initials", "sign.fill.signature.change", "sign.fill.initials.change", "sign.fill.signature.remove", "sign.fill.initials.remove"]
 tools = ["fill_sign_add", "comment_edit", "comment_image_preview"]
-evidence = ["crates/ui-egui/tests/fill_sign.rs::drawn_and_typed_signatures_stay_upright_on_rotated_pages", "crates/automation/tests/automation.rs::typed_signatures_stay_upright_on_rotated_pages", "crates/ui-egui/tests/fill_sign.rs::image_signature_corners_restore_original_aspect_after_edge_resize_and_reopen", "crates/ui-egui/src/comments.rs::proportional_corners_keep_the_opposite_anchor_and_edges_stretch_one_axis", "crates/ui-egui/tests/fill_sign.rs::image_signature_live_resize_and_move_preserve_background_and_hide_moving_handles", "crates/ui-egui/tests/fill_sign.rs::embedded_image_signature_live_gestures_follow_document_and_view_rotation", "crates/automation/tests/automation.rs::image_signature_preview_layers_are_read_only_and_survive_encrypted_save", "crates/engine/src/signature_image.rs::embedded_signature_preview_preserves_alpha_without_editing_the_document", "crates/engine/src/signature_image.rs::oversized_embedded_signature_preview_is_rejected_before_decoding", "crates/ui-egui/tests/fill_sign.rs::image_signature_preview_follows_pointer_at_page_size_with_zoom_and_rotation", "crates/ui-egui/tests/fill_sign.rs::image_signature_placement_selects_resize_handles_and_requires_reselecting_to_repeat", "crates/ui-egui/tests/fill_sign.rs::typed_signatures_and_initials", "crates/ui-egui/tests/fill_sign.rs::signing_draws_a_signature_once_and_places_it", "crates/ui-egui/tests/fill_sign.rs::changing_saved_signatures_and_initials_preserves_placed_marks", "crates/ui-egui/tests/fill_sign.rs::changing_drawn_signatures_can_be_cancelled_or_switched_to_type", "crates/ui-egui/tests/fill_sign.rs::saved_signature_cards_remove_and_add_without_changing_the_document", "crates/ui-egui/tests/fill_sign.rs::long_typed_names_fit_the_placed_signature_and_keep_every_outline", "crates/ui-egui/src/fill_sign.rs::long_signature_previews_have_clear_margins", "crates/ui-egui/tests/control.rs::saved_signature_can_be_changed_through_the_control_channel", "crates/fonts/src/script.rs::a_name_becomes_outlines", "crates/fonts/src/script.rs::long_names_keep_every_glyph_with_bounded_outline_work", "crates/automation/tests/automation.rs::fill_and_sign_through_tools", "crates/ui-egui/tests/fill_sign.rs::image_signatures_and_initials_can_be_imported_placed_and_remembered", "crates/ui-egui/tests/fill_sign.rs::image_import_cancel_clear_and_errors_preserve_saved_signatures", "crates/engine/src/signature_image.rs::image_signatures_preserve_alpha_and_fit_the_signature_box", "crates/engine/src/signature_image.rs::invalid_and_oversized_signature_images_are_rejected", "crates/engine/src/signature_image.rs::jpeg_signatures_are_normalized_to_png", "crates/engine/src/signature_image.rs::jpeg_signature_orientation_is_applied_before_preview_and_embedding", "crates/engine/src/signature_image.rs::very_wide_image_signatures_keep_the_requested_rectangle", "crates/automation/tests/automation.rs::image_signatures_through_tools_preserve_transparency_and_survive_save"]
-notes = "signature and initials, typed (Dancing Script outlines as filled paths, no font embedded), drawn or imported from local PNG/JPEG images; all three are placed upright and anchored as displayed on pages with /Rotate (#299); saved in settings with preview cards and add/change/remove controls; changes leave placed annotations untouched; images preserve alpha, aspect ratio and EXIF orientation, fit within 150 pt by 32 pt (24 pt for initials), and are normalized without source paths or metadata; image previews follow the pointer at placement size with zoom and rotation; signatures/initials place once then select the new annotation; embedded image signatures resize and move live, hiding the frame during movement and restoring it on release; corner handles preserve the original aspect ratio of the embedded image with the opposite corner anchored, while edge midpoint handles stretch width or height independently; cached background layers preserve page content and alpha, including reopened/encrypted documents; Escape cancels a gesture without committing; stamps resize through selection handles or comment_edit with their original appearance; native and web asynchronous pickers; fill_sign_add accepts path instead of text; image imports capped at 4 MiB, 4 megapixels and 4096 pixels per side"
+evidence = ["crates/ui-egui/tests/fill_sign.rs::drawn_and_typed_signatures_stay_upright_on_rotated_pages", "crates/automation/tests/automation.rs::typed_signatures_stay_upright_on_rotated_pages", "crates/ui-egui/tests/fill_sign.rs::image_signature_corners_restore_original_aspect_after_edge_resize_and_reopen", "crates/ui-egui/src/comments.rs::proportional_corners_keep_the_opposite_anchor_and_edges_stretch_one_axis", "crates/ui-egui/tests/fill_sign.rs::image_signature_live_resize_and_move_preserve_background_and_hide_moving_handles", "crates/ui-egui/tests/fill_sign.rs::embedded_image_signature_live_gestures_follow_document_and_view_rotation", "crates/automation/tests/automation.rs::image_signature_preview_layers_are_read_only_and_survive_encrypted_save", "crates/engine/src/signature_image.rs::embedded_signature_preview_preserves_alpha_without_editing_the_document", "crates/engine/src/signature_image.rs::oversized_embedded_signature_preview_is_rejected_before_decoding", "crates/ui-egui/tests/fill_sign.rs::image_signature_preview_follows_pointer_at_page_size_with_zoom_and_rotation", "crates/ui-egui/tests/fill_sign.rs::image_signature_placement_selects_resize_handles_and_requires_reselecting_to_repeat", "crates/ui-egui/tests/fill_sign.rs::typed_signatures_and_initials", "crates/ui-egui/tests/fill_sign.rs::signing_draws_a_signature_once_and_places_it", "crates/ui-egui/tests/fill_sign.rs::changing_saved_signatures_and_initials_preserves_placed_marks", "crates/ui-egui/tests/fill_sign.rs::changing_drawn_signatures_can_be_cancelled_or_switched_to_type", "crates/ui-egui/tests/fill_sign.rs::saved_signature_cards_remove_and_add_without_changing_the_document", "crates/ui-egui/tests/fill_sign.rs::long_typed_names_fit_the_placed_signature_and_keep_every_outline", "crates/ui-egui/src/fill_sign.rs::long_signature_previews_have_clear_margins", "crates/ui-egui/tests/control.rs::saved_signature_can_be_changed_through_the_control_channel", "crates/fonts/src/script.rs::a_name_becomes_outlines", "crates/fonts/src/script.rs::long_names_keep_every_glyph_with_bounded_outline_work", "crates/automation/tests/automation.rs::fill_and_sign_through_tools", "crates/ui-egui/tests/fill_sign.rs::image_signatures_and_initials_can_be_imported_placed_and_remembered", "crates/ui-egui/tests/fill_sign.rs::image_import_cancel_clear_and_errors_preserve_saved_signatures", "crates/engine/src/signature_image.rs::image_signatures_preserve_alpha_and_fit_the_signature_box", "crates/engine/src/signature_image.rs::invalid_and_oversized_signature_images_are_rejected", "crates/engine/src/signature_image.rs::jpeg_signatures_are_normalized_to_png", "crates/engine/src/signature_image.rs::jpeg_signature_orientation_is_applied_before_preview_and_embedding", "crates/engine/src/signature_image.rs::very_wide_image_signatures_keep_the_requested_rectangle", "crates/automation/tests/automation.rs::image_signatures_through_tools_preserve_transparency_and_survive_save", "crates/ui-egui/tests/fill_sign.rs::fill_and_sign_tools_pick_up_placed_marks_to_move_and_resize_them"]
+notes = "signature and initials, typed (Dancing Script outlines as filled paths, no font embedded), drawn or imported from local PNG/JPEG images; all three are placed upright and anchored as displayed on pages with /Rotate (#299); saved in settings with preview cards and add/change/remove controls; changes leave placed annotations untouched; images preserve alpha, aspect ratio and EXIF orientation, fit within 150 pt by 32 pt (24 pt for initials), and are normalized without source paths or metadata; image previews follow the pointer at placement size with zoom and rotation; signatures/initials place once then select the new annotation; while a Fill & Sign tool is active, marks already placed are picked up as with Select (hover shows the move cursor, a click selects, a drag moves, the selected mark's handles resize) and the tool places only away from them; embedded image signatures resize and move live, hiding the frame during movement and restoring it on release; corner handles preserve the original aspect ratio of the embedded image with the opposite corner anchored, while edge midpoint handles stretch width or height independently; cached background layers preserve page content and alpha, including reopened/encrypted documents; Escape cancels a gesture without committing; stamps resize through selection handles or comment_edit with their original appearance; native and web asynchronous pickers; fill_sign_add accepts path instead of text; image imports capped at 4 MiB, 4 megapixels and 4096 pixels per side"
 
 [[feature]]
 id = "form.fill-sign-flatten"
@@ -5515,11 +5515,11 @@ title = "Redact lists of words or phrases"
 area = "G"
 tier = "P1"
 milestone = "M8"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["redact.search"]
+tools = ["redact_mark"]
+evidence = ["crates/redact/src/patterns.rs::word_lists_are_trimmed_unique_and_bounded", "crates/automation/tests/automation.rs::redacting_word_lists_through_tools", "crates/ui-egui/tests/redact.rs::redacting_an_imported_word_list"]
+notes = "Find text and redact ▸ Multiple words or phrases: one per line, typed or imported from a .txt file (at most 1 MB, 1,000 entries of 256 characters); every match of each is marked in one undo step; redact_mark words reports marks per word. Not yet: whole-words-only and case-sensitive options, exporting the list"
 
 [[feature]]
 id = "protect.redact-patterns"
@@ -5826,6 +5826,18 @@ evidence = ["crates/sign/tests/pdf.rs::signing_with_windows_store_identities", "
 notes = "Current User Personal (My) CNG identities: RSA PKCS #1 v1.5 and DER-encoded ECDSA P-256/P-384. Keys never leave Windows; windows:<fingerprint|common name> for agents and Windows store labels in the desktop ID picker. The signature embeds the issuers Windows chains the certificate to. Tested with throwaway software-backed RSA-2048, P-256 and P-384 certificates (run with --ignored). Smart cards and tokens whose driver registers a CNG key storage provider sign with the provider's own PIN dialog (checked by hand with a SafeNet token only; no hardware in CI); direct PKCS #11 still planned."
 
 [[feature]]
+id = "sign.encrypted-documents"
+title = "Sign and timestamp password-protected (encrypted) documents"
+area = "H"
+tier = "P0"
+milestone = "M9"
+status = "shipped"
+commands = ["sign.digital", "sign.certify"]
+tools = ["sign_document"]
+evidence = ["crates/sign/tests/pdf.rs::encrypted_documents_are_signed_with_an_unencrypted_contents", "crates/sign/tests/pdf.rs::encrypted_documents_are_signed_only_as_their_permissions_allow", "crates/sign/tests/pdf.rs::encrypted_documents_take_a_document_timestamp", "crates/cos/tests/encryption.rs::signature_contents_stay_unencrypted", "crates/automation/tests/automation.rs::signing_an_encrypted_form_through_tools"]
+notes = "RC4-40/128, AES-128 and AES-256 Standard security; the incremental update keeps /Encrypt and /ID, encrypts the new strings and streams, and leaves the signature /Contents unencrypted (§7.6.2), which reading also honours. Opened with the user password, permissions (Table 22) apply: existing signature fields need fill-forms, new fields need annotate + modify, certifying needs modify, a document timestamp needs fill-forms; the owner may do anything. Not yet: certificate (public-key) security, which PdfCraft can't open; checked only against PdfCraft's own validator, not yet against an external one (pyHanko) or Acrobat"
+
+[[feature]]
 id = "sign.pkcs11"
 title = "Sign with PKCS#11 tokens and smart cards"
 area = "H"
@@ -6086,8 +6098,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.validate"]
 tools = ["sign_list"]
-evidence = ["crates/sign/tests/pdf.rs::signing_then_validating_with_and_without_trust", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools"]
-notes = ""
+evidence = ["crates/sign/tests/pdf.rs::signing_then_validating_with_and_without_trust", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/chain.rs::a_trusted_signer_whose_certificate_may_not_sign_is_not_valid"]
+notes = "The signer's key usage, extended key usage and critical extensions are checked; name constraints are not"
 
 [[feature]]
 id = "sign.signatures-panel"
@@ -9110,8 +9122,8 @@ milestone = "M13"
 status = "shipped"
 commands = ["actions.wizard"]
 tools = ["action_list", "action_run"]
-evidence = ["crates/engine/src/tests.rs::actions_run_their_steps_on_files", "crates/automation/tests/automation.rs::actions_through_tools", "crates/ui-egui/tests/actions.rs::run_and_create_actions"]
-notes = "Pick an action and files; results go to a chosen folder, in the background with progress."
+evidence = ["crates/ui-egui/tests/actions.rs::desktop_actions_preserve_duplicate_names_and_results_from_earlier_runs", "crates/engine/src/tests.rs::actions_run_their_steps_on_files", "crates/automation/tests/automation.rs::actions_through_tools", "crates/ui-egui/tests/actions.rs::run_and_create_actions"]
+notes = "Desktop output filenames receive numbered suffixes when occupied, preserving every batch result and previous outputs. Pick an action and files; results go to a chosen folder, in the background with progress."
 
 [[feature]]
 id = "misc.action-wizard-create"
