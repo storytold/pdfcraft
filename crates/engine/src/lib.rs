@@ -389,6 +389,11 @@ impl Document {
         self.permissions().is_none_or(|p| p.print())
     }
 
+    /// High-resolution printing is allowed (Table 22, bit 12). When `false`, printing is capped at 150 DPI.
+    pub fn allows_high_quality_printing(&self) -> bool {
+        self.permissions().is_none_or(|p| p.print_high_quality())
+    }
+
     /// Page changes (insert, delete, rotate, move, extract) are allowed.
     pub fn allows_assembly(&self) -> bool {
         self.editable() && self.permissions().is_none_or(|p| p.assemble())
@@ -2742,6 +2747,61 @@ impl Session {
             }
         };
         pdfcraft_print::impose(&cos, settings).map_err(|e| EditError::Print(e.to_string()))
+    }
+
+    /// Rasterize an imposed print-ready PDF's sheets at `dpi` (clamped 72..=600, or capped at 150
+    /// if the source document only permits low-resolution printing) into lossless PNG sheets for
+    /// OS print drivers (such as Windows GDI/XPS) and print-quality verification.
+    pub fn render_print_sheets(
+        &self,
+        id: DocId,
+        imposed_pdf: &[u8],
+        dpi: u32,
+        grayscale: bool,
+    ) -> Result<Vec<print::spool::RenderedSheet>, EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if !doc.allows_printing() {
+            return Err(EditError::NotPermitted("printing"));
+        }
+        let max_dpi = if doc.allows_high_quality_printing() { print::spool::MAX_PRINT_DPI } else { 150 };
+        let effective_dpi = dpi.clamp(print::spool::MIN_PRINT_DPI, max_dpi);
+        let scale = effective_dpi as f32 / 72.0;
+
+        let arc_bytes = Arc::new(imposed_pdf.to_vec());
+        let cos = pdfcraft_cos::Document::open(arc_bytes.clone()).map_err(|e| EditError::Print(e.to_string()))?;
+        let sizes: Vec<(f64, f64)> = pdfcraft_model::pages(&cos).iter().map(|p| p.display_size(&cos)).collect();
+        if sizes.is_empty() {
+            return Err(EditError::Print(print::PrintError::NoPages.to_string()));
+        }
+
+        let mut renderer = pdfcraft_render::PageRenderer::new(arc_bytes, pdfcraft_render::RenderConfig::default());
+        let mut out = Vec::with_capacity(sizes.len());
+        for (page_idx, &(width_pt, height_pt)) in sizes.iter().enumerate() {
+            let mut rendered = renderer.render(pdfcraft_render::RenderRequest {
+                page: page_idx,
+                kind: pdfcraft_render::RequestKind::Pixels,
+                tile: None,
+                scale,
+                tag: 0,
+            });
+            if let Some(err) = rendered.error {
+                return Err(EditError::Print(format!("sheet {}: {err}", page_idx + 1)));
+            }
+            if grayscale {
+                print::spool::apply_grayscale_rgba(rendered.rgba.bytes_mut());
+            }
+            let png = export::encode_image(rendered.width, rendered.height, &rendered.rgba, export::ImageFormat::Png)
+                .map_err(EditError::Write)?;
+            out.push(print::spool::RenderedSheet {
+                width_pt,
+                height_pt,
+                width_px: rendered.width,
+                height_px: rendered.height,
+                dpi: effective_dpi,
+                png,
+            });
+        }
+        Ok(out)
     }
 
     /// Combine whole files, in order, into new PDF bytes (one bookmark per file).

@@ -1,536 +1,328 @@
 <p align="center">
-  <a href="https://getartcraft.com/">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/artcraft-logo-white.svg">
-      <img alt="ArtCraft" src="docs/brand/artcraft-logo.svg" width="200">
-    </picture>
-  </a>
+  <img src="assets/app-icon/pdfcraft.svg" width="96" height="96" alt="Linkco PDF Editor logo" />
 </p>
 
-
-<h1 align="center">PdfCraft</h1>
-
-<p align="center">
-  <b>The PDF workbench; an open-source, clean-room reimplementation of Adobe Acrobat, rebuilt in pure Rust.</b><br>
-  Read, organize, combine, split and secure PDFs in a fast, native app, written in Rust from the ground up.<br>
-  macOS · Windows · Linux · FreeBSD · the web
-</p>
+<h1 align="center">Linkco PDF Editor</h1>
 
 <p align="center">
-  <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-12a58a">
-  <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-0a7563">
-  <img alt="Platforms: macOS, Windows, Linux, FreeBSD, web" src="https://img.shields.io/badge/runs%20on-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20FreeBSD%20%C2%B7%20web-12a58a">
-  <img alt="No account, no telemetry" src="https://img.shields.io/badge/no%20account-no%20telemetry-0a7563">
-</p>
-
-<p align="center">
-  <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
-</p>
-
-<p align="center">
-  <a href="https://getartcraft.com/apps/pdfcraft"><b>PdfCraft on getartcraft.com</b></a> ·
-  <a href="https://getartcraft.com/">ArtCraft</a> ·
-  <a href="https://getartcraft.com/apps">All Crafting Apps</a>
-</p>
-
-<br>
-
-<p align="center">
-  <img src="docs/images/pdfcraft-viewer.png" alt="PdfCraft with the PdfCraft Showcase cover page open, the All tools panel on the left and 20 threaded comments on the right" width="100%">
-  <br>
-  <sub>The PdfCraft Showcase, a 13-page specimen PDF, open with the All tools panel and threaded comments.</sub>
-</p>
-
-> [!NOTE]
-> **ArtCraft is a community of artists from all walks of life.** Digital, generative, music,
-> games &mdash; if you make things, you're one of us. **[Come say hi on Discord](https://discord.gg/artcraft).**
-
-<p align="center">
-  <a href="#highlights">Highlights</a> ·
-  <a href="#read-anything-beautifully">Read</a> ·
-  <a href="#find-it-select-it-copy-it">Find</a> ·
-  <a href="#organize-pages-like-cards-on-a-table">Organize</a> ·
-  <a href="#combine-and-split-without-losing-a-thing">Combine &amp; split</a> ·
-  <a href="#open-protected-documents-and-respect-their-rules">Protect</a> ·
-  <a href="#comments-forms-layers-and-attachments">Forms &amp; layers</a> ·
-  <a href="#runs-everywhere-stays-yours">Everywhere</a> ·
-  <a href="#built-for-agents-too">Agents</a> ·
-  <a href="#how-its-built">How it's built</a> ·
-  <a href="#get-started">Get started</a> ·
-  <a href="#whats-next">What's next</a> ·
-  <a href="#downloads">Downloads</a> ·
-  <a href="#the-crafting-apps">Crafting Apps</a>
+  <strong>Professional PDF tools for Linkco (Al Rawabet Commercial Services &amp; Contracting Company W.L.L.)</strong><br />
+  <sub>Doha, State of Qatar · C.R. No.: 32942 · ISO 9001, 14001 &amp; 45001 Certified · <code>www.linkco.com.qa</code></sub>
 </p>
 
 ---
 
-## Community
+## Overview
 
-PdfCraft is part of [ArtCraft](https://getartcraft.com). Come say hello, get help and follow development:
+**Linkco PDF Editor** is a native desktop PDF reader, editor, and document processing suite developed for **Linkco** (**Al Rawabet Commercial Services and Contracting Company W.L.L.** — `www.linkco.com.qa`, Doha, State of Qatar). Written entirely in safe Rust with zero `unsafe` blocks across the workspace, it provides a fast, offline-first environment for viewing, editing, organizing, converting, signing, redacting, and validating PDF documents across engineering, contracting, facility maintenance, and commercial workflows.
 
-- **Discord: [discord.gg/artcraft](https://discord.gg/artcraft)**. This is the fastest way to get help and share feedback. The app has a Discord button in its title bar.
-- **Web page:** [getartcraft.com/apps/pdfcraft](https://getartcraft.com/apps/pdfcraft)
-- **Source:** [github.com/storytold/pdfcraft](https://github.com/storytold/pdfcraft)
-
-The ArtCraft name and logos in `docs/brand/` are trademarks of the ArtCraft Team and are not open source. They may be used only unmodified, and only as part of PdfCraft (see `docs/brand/LICENSE-brand.txt`). Forks and modified versions must remove them.
-
-## Highlights
-
-<table>
-<tr>
-<td width="33%" valign="top">
-
-### Faithful
-Real-world typography: world scripts, vertical Japanese, colour emoji, gradients, soft masks and transparency. All of it renders the way the author intended.
-
-</td>
-<td width="33%" valign="top">
-
-### Fearless
-Every save appends your changes and leaves the original bytes untouched. Writes are atomic, undo runs deep, and nothing is lost if you close by mistake.
-
-</td>
-<td width="33%" valign="top">
-
-### Yours
-No account, no telemetry, no cloud. It works offline and opens instantly. The engine, CLI and app are all open source.
-
-</td>
-</tr>
-</table>
+All document rendering and editing operations execute locally on your workstation without requiring an account, cloud upload, or telemetry connection.
 
 ---
 
-## Read anything, beautifully
+## Features
 
-PdfCraft renders PDFs with care for the details that make a page feel right: kerning and ligatures, right-to-left and complex scripts, vertical CJK, colour emoji, shadings, blend modes, soft masks and optional content.
-
-<p align="center">
-  <img src="docs/images/pdfcraft-scripts.png" alt="The Scripts of the World page: Arabic, Hebrew, Devanagari, Thai, Greek, Cyrillic, Chinese, Korean, IPA, Armenian, Georgian and Tamil samples, with vertical Japanese in the right margin" width="100%">
-  <br>
-  <sub>Twelve writing systems on one page, plus vertical Japanese, at 125%.</sub>
-</p>
-
-- **Deep zoom stays sharp.** Large pages render in tiles, so text stays crisp at any magnification.
-- **Built to survive bad files.** Every page renders in isolation and damaged documents are repaired. Across the 983-file pdf.js test corpus the result is 0 crashes.
-- **Layouts for every task:** continuous, single page, two-up, view rotation, full screen and a distraction-free Read mode.
-- **Light and dark themes**, both designed to be easy on the eyes for long sessions.
-
-<table>
-<tr>
-<td width="50%"><img src="docs/images/pdfcraft-twoup.png" alt="Two facing pages in Read mode with the dark theme: the Foreword and the Setting Text chapter with its drop cap and pull quote"></td>
-<td width="50%"><img src="docs/images/pdfcraft-dark.png" alt="The dark theme showing the Code and Images chapter, a syntax-coloured listing and a fractal image, with the comments panel open"></td>
-</tr>
-<tr>
-<td align="center"><sub>Two-up Read mode, ready for long reading</sub></td>
-<td align="center"><sub>The dark theme, with the comments panel open</sub></td>
-</tr>
-</table>
-
-## Find it, select it, copy it
-
-Search the whole document as you type, step through matches with <kbd>⌘G</kbd>, and select text that comes out in the right reading order. That holds for columns, right-to-left runs and CJK too.
-
-## Navigate long documents
-
-Bookmarks, page thumbnails and the document's own page labels (i, ii, 1, 2…) keep you oriented in long documents. Search bookmark titles in the Bookmarks panel to find nested entries even when their parents are collapsed. Matches keep their ancestors for context; Clear restores the unfiltered tree without changing its expansion state.
-
-<table>
-<tr>
-<td width="50%"><img src="docs/images/pdfcraft-find.png" alt="The find bar showing match 10 of 16 for the word 'type', highlighted in the Expressive Type chapter heading"></td>
-<td width="50%"><img src="docs/images/pdfcraft-bookmarks.png" alt="The Bookmarks panel showing the nested outline of the showcase, with page labels such as Cover, i and ii, next to the Scripts of the World page"></td>
-</tr>
-<tr>
-<td align="center"><sub>Find as you type: match 10 of 16</sub></td>
-<td align="center"><sub>Nested bookmarks with the document's own page labels</sub></td>
-</tr>
-</table>
+- **Document Viewing & Navigation** — Continuous, single-page, two-up, and cover-page layouts; zero-copy memory-mapped PDF stream decoding; 1:1 texel high-DPI rendering with seamless tile retention during zoom; automatic OpenGL (`glow`) fallback on GPU initialization failure; Windows primary-display adapter selection; page thumbnails; searchable hierarchical bookmarks; Optional Content Group (OCG) layer controls; file attachments; article threads; session tab reopening (`Reopen last session`); `File ▸ Open Recent`; pinned Home folders; and side-by-side synchronous document comparison.
+- **Page Organization** — Interactive zoomable thumbnail grid (`crates/organize`) and Pages side panel for rotating, drag-reordering, deleting, extracting, duplicating, inserting (before any page or at the end), replacing, cropping, and splitting pages (by page count, file size, or top-level bookmarks), extracting pages under a chosen file name, building bookmarks from a tagged document's headings, plus a dedicated **Combine Files** tab (`page.combine`).
+- **Direct Content Editing** — Multi-stream reflow-aware paragraph and line text editing (`crates/edit`), Arabic shaping (`harfrust`) and bidirectional (`unicode-bidi`) Type 3 text rendering, Cyrillic/Greek/WinAnsi and Japanese CID/katakana editing, grouped Form XObject figure selection and editing, new text blocks, image insertion and replacement, headers and footers, watermarks, backgrounds, Bates numbering, link editing, and vector object inspection.
+- **Annotations & Markup** — Sticky notes, highlights, underlines, strikethroughs, squiggly lines, free-text callouts, ink drawings, stamps, polygons, polylines, rectangles, ellipses, lines, arrows, carets, redaction marks, and XFDF comment import/export.
+- **Interactive Forms, XFA & E-Sign** — Full AcroForm field filling and authoring (text, checkbox, radio button, combo box, list box, push button, signature field, barcode), bulk multi-field property editing, rotated `/MK /R` widget rendering, `/Opt` export values, sandboxed `AF*` JavaScript and XFA FormCalc interpreter (`crates/xfa`), and **Fill & Sign** tools (text, checkmarks, crosses, dots, lines, localized dates, drawn/typed/image signatures with automatic white-background removal and live resize, initials, and optional flatten-on-save).
+- **Digital Signatures & Certificates** — PKCS#7 / CMS and PAdES (`B-B`, `B-T`, `B-LT`, `B-LTA`) digital signature verification and signing (`crates/sign`), native Windows Certificate Store (`CNG` via `rustls-cng`) and macOS Keychain integration, BER `.p12`/PKCS#7 support, RSA/PSS/ECDSA/Ed25519 algorithms, strict X.509 chain validation, RFC 3161 `/DocTimeStamp` verification and timestamping, signing and timestamping password-encrypted documents, PIN prompts for smart cards and tokens in the Windows certificate store, signer certificates checked for document-signing key usage / EKU and unknown critical extensions, and DocMDP modification detection.
+- **Security & True Redaction** — Password encryption (AES-256, AES-128, RC4) and permission enforcement, content-stream glyph and image redaction with verifiable byte removal, redaction of whole lists of words or phrases (typed or imported from a text file), U.S. FOIA and Privacy Act exemption codes as redaction overlay text, metadata scrubbing, and hidden-data sanitization.
+- **Export & Conversion** — Export PDFs to Microsoft Word (`.docx` with Form XObject content, text color preservation, and 63-column table caps), PNG images, extracted embedded images, HTML web pages, Rich Text Format (`.rtf`), and plain text (`.txt`), or create PDFs from multiple files, images, plain text, HTML, or blank page templates.
+- **High-Resolution Printing & Windows Print Spooler Integration** — Full imposition engine (Fit, Actual Size, Shrink, Custom Scale, Multiple pages per sheet with Cut & Stack, Saddle-Stitch Booklet, and Tiled Poster with cut marks), live high-DPI sheet preview, 150 / 300 / 600 DPI print rendering, native printer driver `Properties…` (`rundll32 printui.dll` on Windows / `lpoptions` PPD options on Unix), and 3-tier Windows Print Spooler (`Win32_Printer` / `.NET` `System.Drawing.Printing` / Registry) and CUPS (`lpstat -p`/`-e`) printer detection with default-printer and offline-status awareness.
+- **Windows File Explorer PDF Preview Handler** — Out-of-process `IPreviewHandler` shell extension (`LinkcoPdfPreviewHandler.dll`) hosted by `prevhost.exe` that renders PDF pages directly inside the Windows 10/11 File Explorer Preview Pane with page navigation and zoom without launching the full editor. The same DLL provides first-page **PDF thumbnails** for Explorer's icon views. PDFs opened from Explorer, Outlook attachments or Open With while the editor is running open as tabs in the existing window (one instance per Windows sign-in; `--new-window` forces a separate one), and the executable declares Per-Monitor V2 DPI awareness for sharp rendering on mixed-DPI displays.
+- **Scan & OCR** — Optical Character Recognition (`crates/ocr`) for single or multiple files with deskew, image preprocessing, and invisible searchable text layer (`Tr 3`) generation (OCR models bundled by `cargo xtask models` during release packaging or via `PDFCRAFT_MODELS`).
+- **Measurement, Standards, Accessibility & Guided Actions** — Distance, perimeter, and area measurement tools (`crates/measure`) with vector snapping, calibration, and CSV export; PDF/A-2b and PDF/A-3b verification and conversion (`crates/preflight`); 32-rule accessibility checker, alternate-text editor, and HTML accessibility reports (`crates/a11y`); page box (`CropBox`, `BleedBox`, `TrimBox`, `ArtBox`) editing; multi-file batch automation via the Action Wizard (`crates/engine/src/actions.rs`); and 16 interface languages (English, Arabic with a right-to-left interface, Japanese, Brazilian Portuguese, Spanish, Telugu, Czech, Simplified Chinese, Traditional Chinese, French, German, Italian, Russian, Ukrainian, Bulgarian, and Hungarian).
 
 ---
 
-## Organize pages like cards on a table
+## Recommended Tools
 
-Open **Organize pages** to see every page at once:
-- **Select pages:** click, <kbd>⌘</kbd>-click or <kbd>⇧</kbd>-click.
-- **Change them:** rotate, delete, insert blank pages, insert pages from another file, and move them earlier or later.
-- **Undo anything:** <kbd>⌘Z</kbd>, then save.
+The Home dashboard provides one-click access to the core tools implemented in the workspace (`crates/ui-egui/src/home.rs`):
 
-<p align="center">
-  <img src="docs/images/pdfcraft-organize.png" alt="The Organize pages grid with the showcase's pages as thumbnails, three of them selected, and the page toolbar above" width="100%">
-  <br>
-  <sub>Organize pages with three pages selected and the page tools in the toolbar above.</sub>
-</p>
+| Tool | Description | Primary Commands |
+| :--- | :--- | :--- |
+| **Organize pages** | Page grid · Rotate · Delete | Opens the interactive page-organization grid (`organize`) |
+| **Edit a PDF** | Edit text & images · Add text | Activates direct PDF content editing (`edit`) |
+| **Combine files** | Merge PDFs · Reorder · Insert | Opens the Combine Files workspace (`page.combine`) |
+| **Compress a PDF** | Reduce file size · Optimize PDF | Deduplicates streams, subsets fonts, and optimizes file size (`file.reduce_size`) |
+| **Export a PDF** | Word · Image · HTML · Text | Exports the active document to `.docx`, `.png`, `.html`, `.rtf`, or `.txt` (`export`) |
+| **Scan & OCR** | Recognize text · Searchable PDF | Runs optical character recognition to generate a searchable text layer (`ocr.recognize`) |
+| **Fill & Sign** | Fill form fields · Sign document | Places text, checkmarks, dates, initials, and signatures on pages (`fill_sign`) |
+| **Protect a PDF** | Password security · Sanitize | Applies password encryption, permissions, or document sanitization (`protect`) |
+| **Open file** | Browse local filesystem | Opens one or more PDF documents from disk (`file.open`) |
 
-<table>
-<tr>
-<td width="50%" valign="top">
+---
 
-**Undo that goes the distance.** Each change is one step in a history you can walk backwards and forwards. The Edit menu names the step ("Undo Rotate pages"), and undo still works after you save.
+## Screenshots
 
-**Saves you can trust:**
-- *Incremental:* the original bytes stay byte-for-byte intact.
-- *Atomic:* the file is written to a temporary copy, then swapped in.
-- *Verified:* independently checked with qpdf.
+### Home Dashboard & Recommended Tools
 
-When open documents exceed the window width, scroll over the tab strip with the mouse wheel or trackpad, or use its horizontal scrollbar. Opening or switching to a document brings its tab into view.
+![Linkco PDF Editor — Home Dashboard](docs/images/linkco-home-dashboard.png)
 
-Unsaved documents carry a dot on their tab, and closing or quitting asks before anything is lost. Changes are autosaved every minute. If PdfCraft ever quits unexpectedly, it offers to recover your work the next time it opens. Encrypted documents stay encrypted on disk.
+### Organize Pages View
 
-</td>
-<td width="50%" valign="top"><img src="docs/images/pdfcraft-split.png" alt="The Split document dialog over the organize view, set to one page per file and reporting that it creates 13 files from 13 pages"><br><sub>Split document: one page per file makes 13 files.</sub></td>
-</tr>
-</table>
+![Linkco PDF Editor — Organize Pages](docs/images/linkco-organize-pages.png)
 
-## Combine and split without losing a thing
+---
 
-**Combine files** merges any number of PDFs into one. Each file gets a bookmark, with its own bookmarks nested underneath.
+## System Requirements
 
-**Extract** copies the pages you select into a new document. **Split** divides a document every *n* pages, or before the pages you choose.
+| Platform | Minimum Requirements |
+| :--- | :--- |
+| **Operating System** | Windows 10 / 11 (x64, x86, or ARM64), macOS 12+ (Apple Silicon or Intel), or Linux (x86_64 / aarch64 with X11 or Wayland) |
+| **Processor** | 64-bit dual-core CPU (quad-core recommended for concurrent rendering and OCR) |
+| **Memory** | 4 GB RAM minimum (8 GB RAM recommended for large multi-hundred-page documents) |
+| **Graphics** | Direct3D 11/12, Metal, Vulkan, or OpenGL 3.3+ (automatic `wgpu` → `glow` OpenGL fallback included) |
+| **Disk Space** | 120 MB for installed application binaries and bundled OCR models |
+| **Build Toolchain** | Rust 1.85+ (`edition = "2024"`, validated on Rust 1.92) |
 
-Nothing quietly disappears along the way:
-- links and named destinations are rewired to the copied pages;
-- form fields stay interactive;
-- layers keep their on/off defaults;
-- attachments come along.
+---
 
-Every page of a combined document renders pixel-identical to its source.
+## Installation
 
-```sh
-pdfcraft-cli combine report.pdf appendix.pdf --out combined.pdf
-pdfcraft-cli extract report.pdf --pages 1,3,5 --out highlights.pdf
-pdfcraft-cli split   report.pdf --every 10 --out-dir parts/
+### From a Packaged Installer
+
+1. Build or obtain the native installer for your platform from `dist/release/`:
+   - **Windows (NSIS / Self-Extracting Setup EXE):** `LinkcoPDFEditorSetup.exe`
+   - **Windows (MSI Package):** `LinkcoPDFEditorSetup-<version>-windows-<arch>.msi`
+   - **Windows (Portable ZIP):** `LinkcoPDFEditor-<version>-windows-<arch>-portable.zip` (extract anywhere; `portable.txt` or `LinkcoPDFEditor.portable` beside the executable stores settings, logs, recovery files, and digital IDs in `PdfCraftData\` next to the executable instead of `%APPDATA%`)
+2. Run the installer and follow the on-screen prompts.
+3. Launch **Linkco PDF Editor** from the Windows Start Menu, Desktop shortcut, or by opening any `.pdf` file.
+
+### From Source
+
+1. Install the Rust toolchain via [rustup](https://www.rust-lang.org/tools/install).
+2. Clone this repository and build the release binaries using `build.py` (or `cargo`):
+
+```bash
+git clone https://github.com/b-lincko/linkco-pdf.git
+cd linkco-pdf
+python build.py
 ```
 
 ---
 
-## Open protected documents and respect their rules
+## Windows Installer
 
-PdfCraft implements the PDF standard security handler completely:
-- every revision, from 40-bit RC4 to AES-256;
-- user and owner passwords, including Unicode passwords normalised with SASLprep;
-- crypt filters and attachment-only encryption.
+The Windows packaging pipeline lives in `packaging/windows/` and embeds full Linkco product metadata into both the executable (`apps/pdfcraft/build.rs`) and the installers:
 
-Documents restricted by their author show a clear notice, and PdfCraft honours their permissions. Enter the owner password and the restrictions lift. Edits to encrypted documents are saved encrypted, under the same keys.
+- **Product Name:** `Linkco PDF Editor`
+- **Publisher / Company Name:** `Al Rawabet Commercial Services & Contracting Company W.L.L.`
+- **Internal Name:** `LinkcoPDFEditor`
+- **Original Filename:** `LinkcoPDFEditor.exe`
+- **Application Icon:** `assets/app-icon/pdfcraft.ico`
+- **Shortcuts Created:**
+  - Start Menu: `Linkco PDF Editor`
+  - Desktop: `Linkco PDF Editor`
+- **Windows File Explorer Preview Pane (`IPreviewHandler`):** Installs and registers `LinkcoPdfPreviewHandler.dll` (`CLSID {D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}`) for `.pdf` files, backing up any previously registered preview handler and restoring it cleanly on uninstall.
+- **Image Context Menu Integration:** Adds `Create PDF with Linkco PDF Editor…` to `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.gif`, `.bmp`, `.jp2`, `.j2k`, and `.jpx` context menus without altering default image file associations.
+- **Installed Apps Registration:** Registers **Linkco PDF Editor** in Windows *Installed Apps / Add or Remove Programs* with version, icon, publisher, and clean uninstaller support, and registers `.pdf` under *Open With* without overriding the user's default PDF handler.
 
-<table>
-<tr>
-<td width="50%" valign="top"><img src="docs/images/pdfcraft-properties.png" alt="The Document Properties dialog on its Description tab, with editable title, author, subject and keywords, and tabs for Security, Fonts and Advanced"><br><sub>Document Properties, Description tab</sub></td>
-<td width="50%" valign="top">
+### Building the Windows Installer
 
-**Document Properties** shows:
-- the document's title, author, subject and keywords, which you can edit;
-- the fonts it uses and whether each is embedded;
-- PDF version, page size, tags, fields, layers and attachments;
-- the full security picture: encryption method, which password opened it, and each permission.
+On Windows (with Python 3 and the Rust toolchain installed), run `installer.py`:
 
-</td>
-</tr>
-</table>
-
-## Comments, forms, layers and attachments
-
-<table>
-<tr>
-<td width="50%"><img src="docs/images/pdfcraft-forms.png" alt="The Interactive Form page with highlighted text fields, checkboxes, radio buttons, a list and a signature field, and the Fields panel listing all 13 fields and their values"></td>
-<td width="50%"><img src="docs/images/pdfcraft-layers.png" alt="The Review and Markup page with highlights, shapes, ink and an APPROVED stamp under a DRAFT watermark, and the Layers panel with Draft watermark and Print-only notes"></td>
-</tr>
-<tr>
-<td valign="top"><b>Forms</b>: every field with its current value, field highlighting, and checkboxes, radio buttons, lists and signatures drawn the way their author designed them.</td>
-<td valign="top"><b>Layers</b>: switch optional content on and off and the page re-renders instantly. <b>Comments</b> appear as threaded conversations, and <b>attachments</b> can be opened or saved.</td>
-</tr>
-</table>
-
-## Every tool, one keystroke away
-
-Press <kbd>⌘K</kbd> to search every tool and command, or browse the **All tools** catalogue. Tools that are still in development are marked with the milestone that will ship them.
-
-<table>
-<tr>
-<td width="50%"><img src="docs/images/pdfcraft-palette.png" alt="The command palette searching for 'page', listing Page grid, Page labels, Rotate pages, Insert pages, Delete pages, Extract pages and more, each with the tool it belongs to"></td>
-<td width="50%"><img src="docs/images/pdfcraft-tools.png" alt="The Welcome to PdfCraft home screen with recommended tools, a recent file, a privacy note, and the full tool catalogue in the side panel"></td>
-</tr>
-<tr>
-<td align="center"><sub>The <kbd>⌘K</kbd> command palette</sub></td>
-<td align="center"><sub>The home screen and the All tools catalogue</sub></td>
-</tr>
-</table>
-
----
-
-## Runs everywhere, stays yours
-
-- **Native on macOS, Windows, Linux and FreeBSD**, and **in the browser** through WebAssembly, from the same Rust codebase. Windows builds come for x64, x86 and ARM64 (Windows on ARM, no emulation); every ARM64 change is tested on ARM64 hardware in CI.
-- **Private by design.** Documents never leave your machine. There's no account, no telemetry and no cloud processing.
-- **Engine first.** Parsing, rendering and editing live in reusable library crates. The interface is one swappable layer on top.
-- **Scriptable.** The `pdfcraft-cli` tool (see [Built for agents, too](#built-for-agents-too)) covers inspecting, rendering, extracting text, editing, combining, extracting pages and splitting. Robustness sweeps run on the same engine as the app.
-
-```sh
-pdfcraft-cli info  form.pdf                                  # structure as JSON
-pdfcraft-cli text  paper.pdf --page 3                        # reading-order text
-pdfcraft-cli edit  in.pdf --rotate 1,2:90 --delete 5 --title "Q3" --out out.pdf
+```bash
+python installer.py
 ```
 
----
-
-## Built for agents, too
-
-Every engine feature is reachable without the GUI, through one table of JSON-Schema-described tools: open, inspect, render pages to PNG, extract and find text, rotate, delete, move and insert pages, edit bookmarks and page labels, add, reply to, restyle and delete comments (highlight a phrase just by naming it), list and fill in form fields, protect with passwords, set metadata, undo and redo, save, combine, extract and split. Three front doors share it:
-
-- **`pdfcraft-cli run`**, for one-off calls and JSON scripts:
-
-  ```sh
-  pdfcraft-cli tools                                        # every tool and its JSON Schema
-  pdfcraft-cli run text_find doc=1 query=invoice            # key=value; values parse as JSON
-  pdfcraft-cli run --script review.json                     # e.g. comment_add {"type": "highlight", "find": "total due"}
-  pdfcraft-cli run --script steps.json --root ./work        # several steps in one session
-  ```
-
-  With `--root`, every file the script's steps read or write stays in that directory, including the PNG a step saves with `"out"` (the script itself is read from wherever you name it).
-
-- **An MCP server**, for AI agents such as Claude. **It is opt-in:** PdfCraft never starts it on its own, and it opens no network port. It runs only while an agent launches `pdfcraft-cli mcp`, talks over stdin/stdout, and stops when the agent disconnects. To enable it, add it to your agent's MCP configuration:
-
-  ```json
-  { "mcpServers": { "pdfcraft": { "command": "pdfcraft-cli", "args": ["mcp", "--root", "/path/to/your/pdfs"] } } }
-  ```
-
-  `--compact` shrinks the tool list the agent has to read: `tools/list` returns about ten core tools plus `tool_search` and `tool_call`, which find and run every other tool, so the list costs far fewer tokens. Every tool still works.
-
-  `--root` confines every file the agent can read or write to one directory. Builds that should not include the server at all can use `cargo build -p pdfcraft-cli --no-default-features`.
-
-- **The Rust API** (`pdfcraft_automation::Automation::call`), for embedding.
-
-Edits stay in memory, undoable, until `doc_save`. Saving to the same file appends an incremental update, so the original bytes are preserved, and the write is atomic. Unsaved changes are never discarded silently.
-
-### Driving the app itself
-
-Start the desktop app with `pdfcraft --control ~/.pdfcraft-control.json` and an agent can see and operate the real interface: the widget tree with labels and positions (from the accessibility tree), clicks, typing, keys, commands, view options and screenshots. This is also off by default. It listens only on loopback, and every connection must present the random token written to that file, which only you can read.
-
-Keep the control file in a folder only you can write, not a shared one such as `/tmp`: another user could create the file there first and receive your commands. `pdfcraft-cli ui` refuses a control file that is a symbolic link, and on macOS, Linux and FreeBSD one that another user owns or can read or write. The app doesn't start if it can't write the file.
-
-```sh
-pdfcraft-cli ui --control ~/.pdfcraft-control.json inspect query=rotate      # find widgets
-pdfcraft-cli ui --control ~/.pdfcraft-control.json click label="Organize pages"
-pdfcraft-cli ui --control ~/.pdfcraft-control.json key key=K modifiers='["command"]'
-pdfcraft-cli ui --control ~/.pdfcraft-control.json command id=comment.square   # pick a tool, then draw:
-pdfcraft-cli ui --control ~/.pdfcraft-control.json drag from='[400,300]' to='[600,420]'
-pdfcraft-cli ui --control ~/.pdfcraft-control.json screenshot --out window.png
-```
-
----
-
-## How it's built
-
-PdfCraft is a Cargo workspace of focused crates, layered so the core never depends on the UI:
-
-| Crate | What it does |
-|---|---|
-| `pdfcraft-filters` | Every PDF stream filter (Flate, LZW, ASCII85, RunLength, predictors), encode and decode, property-tested |
-| `pdfcraft-crypt` | The standard security handler: RC4, AES-128/256, revisions 2–6, permissions |
-| `pdfcraft-cos` | The PDF object layer: tolerant parsing, repair, copy-on-write edits, incremental and full writing |
-| `pdfcraft-organize` | Page operations, combine / extract / split, bookmarks, page labels, document information |
-| `pdfcraft-fonts` | Font metrics and encodings for generated appearances |
-| `pdfcraft-annot` | Comments: builders and appearance streams for notes, text markup, shapes, ink and text boxes; replies, status, edits |
-| `pdfcraft-forms` | Interactive forms: the field model, filling with regenerated appearances, Clear form |
-| `pdfcraft-render` | Rendering, inspection and text extraction with reading order |
-| `pdfcraft-engine` | The façade every frontend uses: sessions, edits, undo, saving, the tool catalogue |
-| `pdfcraft-automation` | Agent control: the headless tool table, `pdfcraft-cli run`, and the opt-in MCP server |
-| `pdfcraft-ui-egui` | The desktop and web interface |
-
-**Quality gates.** Every change passes the same automated checks:
-- formatting, and Clippy with warnings as errors;
-- 200+ unit, property and UI tests;
-- crate-layering rules and a WebAssembly build check;
-- an asset-licence audit.
-
-On top of those, two corpus sweeps run over real-world files:
-- **Opening and rendering:** of the 983 pdf.js test files, 963 open and render cleanly, with 0 crashes.
-- **Open, edit and save round trips:** 958 succeed.
-
-The output is verified with independent tools: hayro, qpdf and poppler.
-
-PdfCraft is a clean-room implementation. Its behaviour comes from the ISO 32000 specification and black-box observation, never from anyone else's code. Every icon, font and image is openly licensed and listed in [ATTRIBUTION.md](ATTRIBUTION.md).
-
-## Get started
-
-```sh
-git clone https://github.com/storytold/pdfcraft
-cd pdfcraft
-cargo run --release -p pdfcraft -- some.pdf     # desktop app
-cargo xtask demo-pdf                              # build the showcase PDF used in these screenshots
-cargo xtask screenshots                           # regenerate every screenshot in this README
-```
-
-The interface language is chosen in **Menu → Edit → Preferences…** (Command-comma on macOS,
-Ctrl-comma elsewhere, also with no document open; Auto follows the system language;
-see [docs/localization.md](docs/localization.md)) and saved. Japanese covers commands,
-dialogs, panels and keyboard shortcuts. Command search accepts the translated label, the
-English label and the stable command id; filenames, PDF contents, author names, custom
-action names and error details from the engine or the operating system keep their own text.
-
-Japanese fonts come from [craft-fonts](https://github.com/storytold/craft-fonts), an optional build
-input that every release includes. To build with them (Japanese interface text, and Japanese text in
-edited PDFs):
-
-```sh
-git clone https://github.com/storytold/craft-fonts ../craft-fonts
-CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p pdfcraft -- some.pdf
-```
-
-Each [GitHub release](https://github.com/storytold/pdfcraft/releases) has ready-made builds for macOS,
-Windows, Linux (AppImage, Flatpak, `.deb`, `.rpm` and a tarball), FreeBSD and the web; see
-[Downloads](#downloads). On Gentoo, the community [::snakebyte
-overlay](https://github.com/switch87/snakebyte-overlay) packages the Linux release as
-`app-text/pdfcraft-bin` (not maintained by the PdfCraft team):
-
-```sh
-eselect repository add snakebyte git https://github.com/switch87/snakebyte-overlay.git
-emaint sync -r snakebyte
-echo 'app-text/pdfcraft-bin ~amd64' >> /etc/portage/package.accept_keywords/pdfcraft
-emerge --ask app-text/pdfcraft-bin
-```
-
-Logs, environment variables and other development notes are in [docs/development.md](docs/development.md).
-
-## What's next
-
-PdfCraft is young and moving fast. The aim is a workbench where you can view, organize, annotate, fill, sign and edit PDFs, at parity with Acrobat Pro.
-
-**Where it stands (October 2026), honestly:** about half of Acrobat Pro's offline features are in (88% of the must-haves), but that is roughly a third of the work, because the hardest parts are still ahead.
-
-- **Good today:** viewing and search; organizing, combining and splitting; most kinds of comment; filling and authoring forms (with sandboxed JavaScript); passwords, redaction and sanitizing; basic digital signatures; printing; the Accessibility Checker; agent control through the CLI and MCP.
-- **Still borrowed:** pages are drawn by the `hayro` crate while our own renderer is built.
-- **Thin or missing:** reliable editing of existing text (especially CJK), OCR beyond Latin script, Office import/export, signature timestamps and long-term validation, PDF/A/X/UA preflight, XFA forms and localization.
-- **Hardening:** fuzzing still turns up crashes and hangs on hostile files; each one is fixed with a regression test. Quality has not yet been compared with Acrobat side by side.
-
-**Next, in order:** our own renderer, hardening and a fidelity harness against Acrobat, editing existing content, then the Pro workflows (signatures, OCR, Office, preflight, XFA) and 1.0 polish.
-
-The honest assessment by area, what's lacking and where we're going are in **[ROADMAP.md](ROADMAP.md#honest-assessment-2026-10-05)**, with the full plan, progress and estimates.
-
----
-
-## Downloads
-
-**New to PdfCraft?** Download it from the [PdfCraft page on getartcraft.com](https://getartcraft.com/apps/pdfcraft). That's the easiest way to install it.
-
-**Want a specific build or format?** On GitHub, the [latest release](https://github.com/storytold/pdfcraft/releases/latest) has every build listed below, and [all releases](https://github.com/storytold/pdfcraft/releases) has earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
-
-### Windows
-
-| Build | Installer | Portable |
-|---|---|---|
-| x64 (64-bit Intel/AMD) | `pdfcraft-<ver>-windows-x64.msi` | `pdfcraft-<ver>-windows-x64-portable.zip` |
-| arm64 (Snapdragon and other ARM PCs) | `pdfcraft-<ver>-windows-arm64.msi` | `pdfcraft-<ver>-windows-arm64-portable.zip` |
-| x86 (32-bit) | `pdfcraft-<ver>-windows-x86.msi` | `pdfcraft-<ver>-windows-x86-portable.zip` |
-
-Installers and executables are code-signed.
-
-The portable zip runs from any folder, a USB stick included. Its `portable.txt` keeps the settings,
-logs and crash recovery in a `PdfCraftData` folder next to `pdfcraft.exe`, so nothing is written to
-`%APPDATA%`; delete that file to use the normal per-user folders.
-
-The MSI installs for all users and requires administrator privileges. For unattended deployment
-without a desktop shortcut, run from an elevated terminal:
+Or from PowerShell using WiX Toolset v5 (`wix`) and optionally NSIS (`makensis`):
 
 ```powershell
-msiexec /i "pdfcraft-<ver>-windows-x64.msi" /qn /norestart INSTALLDESKTOPSHORTCUT=0
+pwsh -File packaging/windows/package.ps1
 ```
 
-Use the MSI for your architecture. Per-user installation overrides are not supported.
-
-### macOS
-
-| Build | File | Notes |
-|---|---|---|
-| App, universal (Apple silicon + Intel) | `pdfcraft-<ver>-macos-universal.dmg` | Signed and notarized |
-| Command-line tool, universal | `pdfcraft-cli-<ver>-macos-universal.zip` | Signed and notarized |
-
-### Linux
-
-| Format | x86_64 | aarch64 (ARM64) | Notes |
-|---|---|---|---|
-| AppImage | `pdfcraft-<ver>-linux-x86_64.AppImage` | `pdfcraft-<ver>-linux-aarch64.AppImage` | Runs anywhere; updates itself with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`.zsync` files) |
-| Flatpak | `pdfcraft-<ver>-linux-x86_64.flatpak` | `pdfcraft-<ver>-linux-aarch64.flatpak` | Sandboxed; `flatpak install --user <file>` |
-| Debian/Ubuntu | `pdfcraft-<ver>-linux-x86_64.deb` | `pdfcraft-<ver>-linux-aarch64.deb` | |
-| Fedora/RHEL/openSUSE | `pdfcraft-<ver>-linux-x86_64.rpm` | `pdfcraft-<ver>-linux-aarch64.rpm` | |
-| Tarball | `pdfcraft-<ver>-linux-x86_64.tar.gz` | `pdfcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
-| Command-line tool | `pdfcraft-cli-<ver>-linux-x86_64.tar.gz` | `pdfcraft-cli-<ver>-linux-aarch64.tar.gz` | `pdfcraft-cli` alone (and its opt-in MCP server), for servers, CI and agents |
-
-Every Linux build needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 10).
-
-### FreeBSD
-
-| Build | File |
-|---|---|
-| x86_64 | `pdfcraft-<ver>-freebsd-x86_64.tar.gz` |
-
-### Web (WebAssembly)
-
-| Build | File | Notes |
-|---|---|---|
-| Static site | `pdfcraft-web-<ver>.zip` | Runs in a modern browser; host it on any static server |
+This builds the Windows release binaries, fetches the OCR models (`cargo xtask models`), and produces in `dist/release/`:
+- `dist/release/LinkcoPDFEditorSetup.exe` (standalone Windows GUI installer — built via NSIS `makensis` when installed, or automatically via Windows' built-in `.NET` `csc.exe` compiler, supporting both Administrator per-machine and standard per-user installations)
+- `dist/release/LinkcoPDFEditorSetup-<version>-windows-<arch>.msi` (when WiX v5 is installed; validated by `packaging/windows/test-msi.ps1`)
+- `dist/release/LinkcoPDFEditor-<version>-windows-<arch>-portable.zip` (portable ZIP containing `pdfcraft.exe`, `pdfcraft-cli.exe`, `models\`, and `portable.txt`)
 
 ---
 
-## The Crafting Apps
+## Usage
 
-PdfCraft is one of the **Crafting Apps**: free, open-source creative tools from the
-[ArtCraft](https://getartcraft.com/) team, each written from scratch in Rust and each able to
-stand on its own.
+### Desktop GUI
 
-| | App | What it's for | Code | Learn more |
-|:-:|---|---|---|---|
-| <img src="https://raw.githubusercontent.com/storytold/photocraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.photocraft.png" alt="" width="32" height="32"> | **PhotoCraft** | Image editing: layers, masks, type and real PSD files | [GitHub](https://github.com/storytold/photocraft) | [Website](https://getartcraft.com/apps/photocraft) |
-| <img src="https://raw.githubusercontent.com/storytold/vectorcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.vectorcraft.png" alt="" width="32" height="32"> | **VectorCraft** | Vector illustration | [GitHub](https://github.com/storytold/vectorcraft) | [Website](https://getartcraft.com/apps/vectorcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/filmcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.filmcraft.png" alt="" width="32" height="32"> | **FilmCraft** | Video editing, color and sound | [GitHub](https://github.com/storytold/filmcraft) | [Website](https://getartcraft.com/apps/filmcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/lightcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.lightcraft.png" alt="" width="32" height="32"> | **LightCraft** | Photo library and raw development | [GitHub](https://github.com/storytold/lightcraft) | [Website](https://getartcraft.com/apps/lightcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/pdfcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.pdfcraft.png" alt="" width="32" height="32"> | **PdfCraft** | **Reading, organizing and protecting PDFs · you are here** | [GitHub](https://github.com/storytold/pdfcraft) | [Website](https://getartcraft.com/apps/pdfcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/effectcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.effectcraft.png" alt="" width="32" height="32"> | **EffectCraft** | Motion graphics and visual effects | [GitHub](https://github.com/storytold/effectcraft) | [Website](https://getartcraft.com/apps/effectcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/designcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.designcraft.png" alt="" width="32" height="32"> | **DesignCraft** | Page layout and publishing | [GitHub](https://github.com/storytold/designcraft) | [Website](https://getartcraft.com/apps/designcraft) |
+Launch the desktop editor directly or pass one or more PDF files on the command line:
 
-And [**ArtCraft**](https://getartcraft.com/) itself, our AI image and video studio for artists who want real control.
+```bash
+# Open the Home dashboard
+cargo run --release -p pdfcraft
 
-<br>
+# Open specific PDF files at a target page
+cargo run --release -p pdfcraft -- --page 1 document.pdf
 
-<p align="center">
-  <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
-</p>
+# Force the OpenGL (glow) renderer instead of wgpu
+cargo run --release -p pdfcraft -- --renderer glow
+```
 
-<h3 align="center">Come make things with us</h3>
+### Command-Line Interface (`pdfcraft-cli`)
 
-<p align="center">
-  Our Discord is where artists of every kind hang out: people who paint, shoot, draw, cut film,
-  set type, and people still figuring out what they like to make. Share what you're working on,
-  ask for help, tell us what's broken, or tell us what you wish these tools could do.
-  Whatever your medium and however long you've been at it, you're welcome here.
-</p>
+The companion CLI binary supports headless inspection, text extraction, page rendering, encryption, optimization, batch processing, and MCP server execution:
 
-<p align="center">
-  <a href="https://discord.gg/artcraft"><b>discord.gg/artcraft</b></a> ·
-  <a href="https://getartcraft.com/">getartcraft.com</a> ·
-  <a href="https://getartcraft.com/apps">The Crafting Apps</a> ·
-  <a href="https://getartcraft.com/apps/pdfcraft">PdfCraft</a>
-</p>
+```bash
+# Inspect document metadata, page count, and PDF version
+cargo run --release -p pdfcraft-cli -- info document.pdf
+
+# Render pages to PNG images at 150 DPI
+cargo run --release -p pdfcraft-cli -- render document.pdf --dpi 150 --out page-1.png
+
+# Generate a single-page preview image with structured status output (used by the Windows Preview Handler)
+cargo run --release -p pdfcraft-cli -- preview document.pdf --page 1 --dpi 150 --out preview.png
+# …or fit a given pixel width (what the Explorer preview pane asks for), capping the longer side
+cargo run --release -p pdfcraft-cli -- preview document.pdf --page 1 --width 800 --max-px 4096 --out preview.png
+
+# Extract plain text from a PDF
+cargo run --release -p pdfcraft-cli -- text document.pdf
+
+# Start the opt-in Model Context Protocol (MCP) server over stdio
+cargo run --release -p pdfcraft-cli -- mcp --compact
+```
 
 ---
 
-## License and credits
+## Development
 
-PdfCraft is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
-Copyright (c) 2026 ArtCraft Team and the PdfCraft contributors. Required notices are in [NOTICE](NOTICE).
+### Prerequisites
 
-Bundled fonts, icons, images and other assets keep their own open licenses; each one is listed
-with its author, source and license in [ATTRIBUTION.md](ATTRIBUTION.md). Release builds also embed
-the Japanese fonts of [craft-fonts](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md)
-(SIL Open Font License 1.1).
+- Rust toolchain (`rustc` and `cargo` supporting Rust 2024 edition)
+- On Linux, standard GUI development headers (`libxcb`, `libxkbcommon`, `libwayland`, `libfontconfig`, `libasound2`)
 
-The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the
-ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
-part of this repository and PdfCraft, under [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt).
-Forks and modified versions must remove them.
+### Useful Workspace Commands
 
-<sub>Adobe, Photoshop, Illustrator, Premiere Pro, Lightroom, Acrobat, After Effects and InDesign are trademarks or registered trademarks of Adobe Inc. in the United States and/or other countries. PdfCraft is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Adobe Inc.; these names are used only to describe the workflows it is compatible with.</sub>
+```bash
+# Verify asset attribution and regenerate ATTRIBUTION.md
+cargo xtask assets
 
-<p align="center">
-  <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
-  <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
-</p>
+# Fetch OCR models into assets/models/
+cargo xtask models
+
+# Run repository engineering gates (no unsafe, no panics, licence & metadata checks)
+cargo xtask gates
+
+# Verify workspace version consistency across packaging manifests
+cargo xtask version
+
+# Verify feature parity matrix against engine commands
+cargo xtask parity
+```
+
+---
+
+## Build
+
+```bash
+# Build release binaries into dist/release/ using the Python build script
+python build.py
+
+# Build the Windows application + Windows Setup installer (LinkcoPDFEditorSetup.exe)
+python installer.py
+
+# Or build directly with Cargo
+cargo build --release -p pdfcraft -p pdfcraft-cli
+```
+
+`build.py` and `installer.py` fetch the [craft-fonts](https://github.com/storytold/craft-fonts) build input (Japanese fonts and Noto Sans Arabic, about 70 MB, into the git-ignored `craft-fonts/` folder) at the commit pinned in `.github/workflows/release.yml`, and copy the fonts' `OFL-*.txt` licences next to the binaries. These fonts are what let the editor **write Arabic and Japanese text into PDFs**; the Arabic interface itself also works with Windows' own Segoe UI. Pass `--no-craft-fonts` (or set `LINKCO_NO_CRAFT_FONTS=1`) to skip the download, or `CRAFT_FONTS_DIR=<checkout>` to use an existing checkout. A plain `cargo build` builds without them unless `CRAFT_FONTS_DIR` is set.
+
+Compiled binaries are placed in `dist/release/LinkcoPDFEditor.exe` (`dist/release/LinkcoPDFEditor` on Linux/macOS) as well as `target/release/pdfcraft` and `target/release/pdfcraft-cli`.
+
+---
+
+## Testing
+
+Run the workspace unit and integration test suites:
+
+```bash
+# Run all workspace library and integration tests
+cargo test --workspace
+
+# Run UI integration tests (home dashboard, links, pickers, signing, keyboard shortcuts)
+cargo test -p pdfcraft-ui-egui
+
+# Run engine unit tests (catalog, commands, links, redaction, editing)
+cargo test -p pdfcraft-engine
+
+# Run clippy lints across all targets
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+---
+
+## Project Structure
+
+```text
+linkco-pdf/
+├── apps/
+│   ├── pdfcraft/          # Desktop GUI binary (Linkco PDF Editor) & Windows resource script
+│   ├── pdfcraft-cli/      # Headless CLI, single-page preview renderer, batch runner, and MCP host
+│   └── pdfcraft-web/      # WebAssembly browser application target
+├── crates/
+│   ├── cos/               # PDF 1.7 / 2.0 object model, zero-copy file-backed streams, and incremental writer
+│   ├── filters/           # Stream compression and decompression filters (Flate, LZW, RunLength, ASCII85/Hex)
+│   ├── crypt/             # PDF standard security handler (RC4, AES-128, AES-256) and permission flags
+│   ├── geom/              # 2D geometry primitives (points, rectangles, affine matrices)
+│   ├── model/             # High-level document tree (pages, outlines/bookmarks, page labels, layers, attachments)
+│   ├── fonts/             # Standard 14 PDF font metrics, Arabic/BiDi shaping, and embedded CJK/Indic/Cyrillic fonts
+│   ├── content/           # PDF content stream tokenizer, text extraction, and full-text search
+│   ├── render/            # PDF page renderer (backed by hayro) and document inspector
+│   ├── organize/          # Page rotation, deletion, insertion, extraction, splitting, combining, and page boxes
+│   ├── annot/             # PDF annotations, appearance stream generation, and link editing
+│   ├── xfdf/              # ISO 19444-1 XFDF and FDF comment/form data import and export
+│   ├── forms/             # AcroForm field reading, filling, authoring, and rotated appearance streams
+│   ├── js/                # Sandboxed Acrobat form JavaScript runtime (backed by boa_engine)
+│   ├── xfa/               # XFA template layout, FormCalc/JavaScript execution, and datasets sync
+│   ├── edit/              # Multi-stream text reflow/editing, Form XObject figures, images, headers/footers, watermarks
+│   ├── create/            # PDF creation from multiple files, images, plain text, HTML, and blank templates
+│   ├── export/            # PDF export to Word (.docx), HTML, Rich Text (.rtf), PNG images, and plain text
+│   ├── sign/              # PKCS#7 / CMS and PAdES digital signatures, Windows CNG store, and X.509 certificates
+│   ├── redact/            # True content-stream text/image redaction and hidden-information sanitization
+│   ├── optimize/          # File size reduction, image resampling, stream compression, and space audit
+│   ├── ocr/               # Optical character recognition pipeline and searchable PDF text layer generation
+│   ├── compare/           # Word-by-word and visual document comparison
+│   ├── measure/           # Distance, perimeter, and area measurement tools with vector snapping and CSV export
+│   ├── print/             # Sheet imposition (Size, Multiple, Cut & Stack, Booklet, Poster) and OS print spooler
+│   ├── preflight/         # PDF/A-2b and PDF/A-3b verification and conversion
+│   ├── a11y/              # 32-rule PDF accessibility checker, fixes, alternate text, and HTML reporting
+│   ├── engine/            # Unified document session facade, command registry, tool catalog, and Action Wizard
+│   ├── automation/        # Headless automation tool table and opt-in Model Context Protocol (MCP) server
+│   └── ui-egui/           # Immediate-mode desktop/web UI shell, Home dashboard, dialogs, and 14 i18n catalogs
+├── assets/
+│   ├── app-icon/          # Linkco PDF Editor application icons (.svg, .ico, .icns, .png)
+│   ├── fonts/             # Bundled UI and PDF fonts
+│   └── icons/             # Bundled Lucide UI icons (ISC licence)
+├── docs/
+│   └── images/            # Local application screenshots used in documentation
+├── packaging/
+│   ├── windows/           # Windows WiX (.wxs), NSIS (installer.nsi), PreviewHandler.cs, and PowerShell scripts
+│   ├── macos/             # macOS .app / .dmg / .pkg packaging scripts
+│   ├── linux/             # Linux .deb, .rpm, AppImage, Flatpak, and tarball scripts
+│   └── freebsd/           # FreeBSD packaging scripts
+├── build.py               # Cross-platform Python build script for Linkco PDF Editor binaries
+├── installer.py           # Windows installer build script (produces LinkcoPDFEditorSetup.exe)
+└── xtask/                 # Workspace engineering gates, asset attribution, version, and parity tasks
+```
+
+---
+
+## Security & Privacy
+
+- **Local Document Processing & Network Policy:** Linkco PDF Editor processes all PDF files locally on your workstation and includes no analytics, telemetry, crash-reporting beacons, or advertisements. The application performs no background network requests; the only network activity is the optional, user-initiated `Help ▸ Check for updates…` action (`apps/pdfcraft/src/updates.rs`), which queries the GitHub Releases API (`https://api.github.com/repos/b-lincko/linkco-pdf/releases/latest`) when clicked and never downloads or installs updates automatically.
+- **Memory-Safe Architecture:** `unsafe_code = "forbid"` is enforced across all workspace crates (`crates/`, `apps/`, `xtask/`), preventing buffer overflows and memory corruption in workspace code when parsing untrusted PDF files.
+- **External Link Protection:** Clicking a link inside a PDF document never opens a browser or executes a local file path silently; only `https://`, `http://`, and `mailto:` schemes are permitted, and every external URL requires explicit user confirmation in a modal dialog showing the full destination address (with homograph/mixed-script warnings).
+- **Sandboxed Scripting:** Document JavaScript (`crates/js`) and XFA scripts (`crates/xfa`) execute inside an isolated `boa_engine` sandbox with strict loop-iteration, recursion, and execution-time limits and zero filesystem or network access.
+- **Corporate Certifications Note:** References to ISO 9001, ISO 14001, and ISO 45001 refer to the corporate quality, environmental, and occupational health & safety management certifications of **Al Rawabet Commercial Services and Contracting Company W.L.L. (Linkco)**, not third-party cryptographic or software security certifications of the binary.
+
+---
+
+## License
+
+Dual-licensed under either of:
+
+- **Apache License, Version 2.0** ([`LICENSE-APACHE`](LICENSE-APACHE))
+- **MIT License** ([`LICENSE-MIT`](LICENSE-MIT))
+
+at your option. Third-party font and icon attributions are cataloged in [`ATTRIBUTION.md`](ATTRIBUTION.md).
+
+Copyright © Al Rawabet Commercial Services & Contracting Company W.L.L. (Linkco)  
+Building 159, Street 220, Zone 24, P.O. Box 32282, Doha – Qatar · Phone: +974 4437 2511 · Email: `info@linkco.com.qa` · Web: `www.linkco.com.qa`

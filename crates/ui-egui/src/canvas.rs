@@ -689,9 +689,19 @@ impl DocView {
     }
 
     /// The print preview's picture of `page`: the sheet raster when it has arrived, otherwise the
-    /// thumbnail.
+    /// sharpest available full-page or thumbnail texture.
     pub(crate) fn page_preview(&self, page: usize) -> Option<egui::TextureId> {
-        self.print_pages.get(&page).map(|(_, tex)| tex.id()).or_else(|| self.thumb_id(page))
+        if let Some((_, tex)) = self.print_pages.get(&page) {
+            return Some(tex.id());
+        }
+        let thumb = self.thumbs.get(&page);
+        if let Some(p) = self.pages.get(&page) {
+            let tw = thumb.map_or(0, |t| t.tex.size()[0]);
+            if p.tex.size()[0] > tw && (p.tag != STALE_TAG || thumb.is_none()) {
+                return Some(p.tex.id());
+            }
+        }
+        self.thumb_id(page)
     }
 
     pub(crate) fn page_text(&self, page: usize) -> Option<Arc<PageText>> {
@@ -2749,7 +2759,7 @@ fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action: pdfcraft_
         }
         B::Alert(m) => app.notify(m),
         B::Submit(url) => app.notify_fmt(
-            "{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.",
+            "{name} submits the form to {url}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.",
             &[("name", name), ("url", &url)],
         ),
         B::ImportIcon => app.choose_field_image(name),
@@ -2931,7 +2941,7 @@ fn notices(
     } else if info.xfa == Some(pdfcraft_render::Xfa::Dynamic) {
         Some((
             "triangle-alert",
-            tl!("This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.").to_string(),
+            tl!("This is a dynamic XFA form, which Linkco PDF Editor can't display yet. What you see is the file's placeholder page.").to_string(),
             false,
         ))
     } else if info.xfa == Some(pdfcraft_render::Xfa::Static) {

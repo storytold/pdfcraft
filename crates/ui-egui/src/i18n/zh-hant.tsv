@@ -5,7 +5,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Traditional Chinese computing vocabulary. No proprietary localisation resource, string table or
 # product UI (Acrobat's included) was consulted or copied; add entries the same way.
-# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
+# Product and technology names (Linkco PDF Editor, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept.
 
 	Menu	選單
@@ -388,9 +388,9 @@
 	Check for updates	檢驗更新
 	No check has run yet.	尚未執行檢驗。
 	Checking for a newer version…	正在檢驗新版本…
-	PdfCraft {v} is available.	PdfCraft {v} 可用。
+	Linkco PDF Editor {v} is available.	Linkco PDF Editor {v} 可用。
 	You have version {c}. Download the new version from its release page.	當前版本為 {c}。請從其釋出頁面下載新版本。
-	PdfCraft {c} is up to date.	PdfCraft {c} 已是最新。
+	Linkco PDF Editor {c} is up to date.	Linkco PDF Editor {c} 已是最新。
 	Couldn't check for updates: {e}	無法檢驗更新：{e}
 	You have version {c}. All releases are listed at {page}.	當前版本為 {c}。所有版本列在 {page}。
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	向 GitHub 搜尋最新版本。不會自動下載或安裝任何內容。
@@ -497,8 +497,8 @@
 	No changes allowed	不允許任何更改
 	Annotations, form fill-in, and digital signatures	註解、填寫表單和數位簽章
 	Form fill-in and digital signatures	填寫表單和數位簽章
-	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	金鑰位於 macOS 鑰匙串中，系統可能會詢問是否允許 PdfCraft 使用它。
-	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	金鑰位於 Windows 憑證存放區中，系統可能會詢問是否允許 PdfCraft 使用它。
+	The key is in the macOS Keychain, which may ask to allow Linkco PDF Editor to use it.	金鑰位於 macOS 鑰匙串中，系統可能會詢問是否允許 Linkco PDF Editor 使用它。
+	The key is in the Windows certificate store, which may ask to allow Linkco PDF Editor to use it.	金鑰位於 Windows 憑證存放區中，系統可能會詢問是否允許 Linkco PDF Editor 使用它。
 	Digital ID password	數位 ID 密碼
 	Back	返回
 	Validate all	全部驗證
@@ -867,7 +867,7 @@
 	Searchable Image (Exact)	可搜尋圖片（精確）
 	Adds invisible text over each word; the page image is not changed	在每個詞上新增不可見文字；頁面圖片保持不變
 	Downsample to	降取樣至
-	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	未安裝文字辨識：缺少模型檔案。請重新安裝 PdfCraft，或將 PDFCRAFT_MODELS 設定為包含這些檔案的資料夾。
+	Text recognition isn't installed: its model files are missing. Reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them.	未安裝文字辨識：缺少模型檔案。請重新安裝 Linkco PDF Editor，或將 PDFCRAFT_MODELS 設定為包含這些檔案的資料夾。
 	Settings	設定
 	Protect	保護
 	Advanced options	進階選項
@@ -1248,7 +1248,7 @@
 	Anyone opening the document will need this password. It's applied when you save.	開啟文件的任何人都需要此密碼。儲存時應用。
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	開啟文件無需密碼；更改限制需要此密碼。儲存時應用。
 	Recover unsaved documents?	要恢復未儲存的文件嗎？
-	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft 未正常關閉。以下文件的更改已自動儲存：
+	Linkco PDF Editor didn't shut down normally. These documents had changes that were autosaved:	Linkco PDF Editor 未正常關閉。以下文件的更改已自動儲存：
 	just now	剛剛
 	{n} min ago	{n} 分鐘前
 	{n} h ago	{n} 小時前
@@ -1414,10 +1414,10 @@
 	On the web, open or drop an image to convert it	在 Web 端，開啟或拖入圖片進行轉換
 	Couldn't optimize the file: {e}	無法最佳化檔案：{e}
 	Couldn't write {path}: {e}	無法寫入{path}：{e}
-	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	該表單請求提交到{u}；PdfCraft 不傳送表單資料。請儲存文件以保留填寫內容。
+	The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	該表單請求提交到{u}；Linkco PDF Editor 不傳送表單資料。請儲存文件以保留填寫內容。
 	{s} actions run in the JavaScript engine (M6)	{s} 動作在 JavaScript 引擎中執行 (M6)
 	{name}: the {other} action isn't supported yet	{name}：{other} 動作暫不受支援
-	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} 將表單提交到{url}；PdfCraft 不傳送表單資料。請儲存文件以保留填寫內容。
+	{name} submits the form to {url}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	{name} 將表單提交到{url}；Linkco PDF Editor 不傳送表單資料。請儲存文件以保留填寫內容。
 	Export stopped: {e}	匯出中止：{e}
 	Exported 1 image	已匯出 1 張圖片
 	Exported {n} images	已匯出{n}張圖片
@@ -1640,8 +1640,8 @@
 	Signed and all signatures are valid.	已簽名，所有簽名均有效。
 	At least one signature has problems.	至少一個簽名存在問題。
 	This document is secured. Some changes are restricted by its security settings.	本文件已加密。其安全設定限制了部分更改。
-	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	這是動態 XFA 表單，PdfCraft 暫無法顯示。您看到的是檔案的佔位頁面。
-	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	此表單還包含 XFA 資料，PdfCraft 暫不讀取。您可以填寫欄位，但 Acrobat 可能顯示 XFA 值。
+	This is a dynamic XFA form, which Linkco PDF Editor can't display yet. What you see is the file's placeholder page.	這是動態 XFA 表單，Linkco PDF Editor 暫無法顯示。您看到的是檔案的佔位頁面。
+	This form also contains XFA data, which Linkco PDF Editor doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	此表單還包含 XFA 資料，Linkco PDF Editor 暫不讀取。您可以填寫欄位，但 Acrobat 可能顯示 XFA 值。
 	This document contains {n} interactive form fields.	本文件包含 {n} 個互動式表單欄位。
 	This file was damaged and has been repaired. Saving keeps the repaired version.	此檔案已損壞並已修復。儲存將保留修復後的版本。
 	Dismiss	關閉
@@ -1680,7 +1680,7 @@
 	Read	閱讀
 	Convert	轉換
 	E-Sign	電子簽署
-	Welcome to PdfCraft	歡迎使用 PdfCraft
+	Welcome to Linkco PDF Editor	歡迎使用 Linkco PDF Editor
 	An open-source PDF workbench — local, private, and scriptable.	開源 PDF 工作台，在本機處理、保護隱私，並支援指令碼。
 	Recommended tools	推薦工具
 	Use now	立即使用
@@ -1718,11 +1718,11 @@
 	Join the ArtCraft community	加入 ArtCraft 社群
 	Get help, share feedback and follow development on Discord.	在 Discord 取得協助、提供意見並追蹤開發進度。
 	Join our Discord	加入 Discord 社群
-	PdfCraft web page	PdfCraft 網頁
-	PdfCraft on GitHub	GitHub 上的 PdfCraft
+	Linkco PDF Editor web page	Linkco PDF Editor 網頁
+	Linkco PDF Editor on GitHub	GitHub 上的 Linkco PDF Editor
 	ArtCraft website	ArtCraft 網站
 	Check for updates…	尋找更新…
-	About PdfCraft	關於 PdfCraft
+	About Linkco PDF Editor	關於 Linkco PDF Editor
 	JavaScript console…	JavaScript 主控台…
 	Document JavaScripts…	文件 JavaScript…
 	Recognize text…	辨識文字…
@@ -1732,8 +1732,8 @@
 	Add background…	新增背景…
 	Prepare a form	準備表單
 	Digitally sign	數位簽署
-	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	在 PdfCraft 開啟過的檔案會顯示在這裡。將 PDF 拖曳至視窗即可開啟。
-	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft 可離線使用，不收集遙測資料，也不需要帳號。只有在您新增服務供應商後，才會使用雲端處理。
+	Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.	在 Linkco PDF Editor 開啟過的檔案會顯示在這裡。將 PDF 拖曳至視窗即可開啟。
+	Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider.	Linkco PDF Editor 可離線使用，不收集遙測資料，也不需要帳號。只有在您新增服務供應商後，才會使用雲端處理。
 	Double-click	滑鼠按兩下
 	PDF/A…	PDF/A…
 	Microsoft Word (.docx)	Microsoft Word（.docx）
@@ -1775,7 +1775,7 @@
 	there are no pages to print	沒有可列印的頁面
 	the document has no tags	此文件沒有標籤
 	{0}: {1}	{0}：{1}
-	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	尚未安裝文字辨識模型（請重新安裝 PdfCraft，或將 PDFCRAFT_MODELS 設定為包含這些模型的資料夾）
+	the text recognition models are not installed (reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them)	尚未安裝文字辨識模型（請重新安裝 Linkco PDF Editor，或將 PDFCRAFT_MODELS 設定為包含這些模型的資料夾）
 	the image is empty	圖片是空的
 	this file isn't XFDF, FDF, XML or text form data	此檔案不是 XFDF、FDF、XML 或純文字表單資料
 	nothing in the file matches this document	檔案中沒有與此文件相符的資料
@@ -1979,7 +1979,7 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	選擇 PNG 或 JPEG 圖像（最大 4 MiB）。透明度會保留。
 	Couldn't import the signature image: {e}	無法匯入簽名圖像：{e}
 	Go to page…	轉到頁面…
-	Reopen the files that were open when PdfCraft last closed	重新開啟上次關閉 PdfCraft 時開啟的檔案
+	Reopen the files that were open when Linkco PDF Editor last closed	重新開啟上次關閉 Linkco PDF Editor 時開啟的檔案
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	標準字型無法顯示「{c}」（{code}）。目前只能新增西歐字元作為文字。
 	Open arrow	開口箭頭
 	Closed arrow	閉合箭頭
@@ -2003,7 +2003,7 @@
 	Printer properties	印表機內容
 	Reset to printer defaults	還原印表機預設值
 	This printer offers no settings of its own.	此印表機沒有專屬設定。
-	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft 正在不使用圖形處理器的情況下繪製，因此可能較慢。更新顯示卡驅動程式可能會有幫助。
+	Linkco PDF Editor is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	Linkco PDF Editor 正在不使用圖形處理器的情況下繪製，因此可能較慢。更新顯示卡驅動程式可能會有幫助。
 	Scroll tabs left	向左捲動索引標籤
 	Scroll tabs right	向右捲動索引標籤
 
@@ -2027,3 +2027,7 @@
 	The field {name} no longer exists.	欄位 {name} 已不存在。
 	A selected field has no widget on any page, so the fields can't be edited together.	某個所選欄位在任何頁面上都沒有控制項，因此無法一起編輯這些欄位。
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 張以可繪製的最大尺寸 {dpi} dpi 匯出）
+	Linkco PDF Editor	Linkco PDF 編輯器
+	Professional PDF tools for everyday document work.	適用於日常文件工作的專業 PDF 工具。
+	Professional PDF document tools by Linkco.	Linkco 出品的專業 PDF 文件工具。
+	View all tools →	檢視所有工具 →

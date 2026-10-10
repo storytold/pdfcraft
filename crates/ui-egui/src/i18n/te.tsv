@@ -9,7 +9,7 @@
 # Style: commands are plain imperatives (సేవ్ చేయి), titles and labels are nouns, sentences are
 # polite (…ఎంచుకోండి). Words Telugu users already say in English keep that form in Telugu script
 # (ఫైల్, పేజీ, జూమ్); a Telugu word is used where it is natural (పత్రం, సంతకం, వ్యాఖ్య).
-# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
+# Product and technology names (Linkco PDF Editor, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
 
 	Menu	మెనూ
@@ -125,7 +125,7 @@ comment menu	Edit	సవరించు
 	Next page	తదుపరి పేజీ
 	Previous page	మునుపటి పేజీ
 	Current page — type a page number or label (such as iv) and press Enter	ప్రస్తుత పేజీ — పేజీ సంఖ్యను లేదా లేబుల్‌ను (iv వంటిది) టైప్ చేసి Enter నొక్కండి
-	Welcome to PdfCraft	PdfCraftకు స్వాగతం
+	Welcome to Linkco PDF Editor	Linkco PDF Editorకు స్వాగతం
 	An open-source PDF workbench — local, private, and scriptable.	ఓపెన్-సోర్స్ PDF వర్క్‌బెంచ్ — మీ కంప్యూటర్‌లోనే నడుస్తుంది, గోప్యంగా ఉంటుంది, స్క్రిప్ట్‌లతో ఆటోమేట్ చేయవచ్చు.
 	Join the ArtCraft community	ArtCraft కమ్యూనిటీలో చేరండి
 	Get help, share feedback and follow development on Discord.	Discordలో సహాయం పొందండి, మీ అభిప్రాయాన్ని పంచుకోండి, అభివృద్ధిని అనుసరించండి.
@@ -133,9 +133,9 @@ comment menu	Edit	సవరించు
 	Use now	ఇప్పుడే ఉపయోగించు
 	Open file	ఫైల్‌ను తెరువు
 	Recent	ఇటీవలి
-	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	PdfCraftలో మీరు తెరిచే ఫైల్‌లు ఇక్కడ కనిపిస్తాయి. PDFను తెరవడానికి దాన్ని ఎక్కడైనా లాగి వదలండి.
+	Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.	Linkco PDF Editorలో మీరు తెరిచే ఫైల్‌లు ఇక్కడ కనిపిస్తాయి. PDFను తెరవడానికి దాన్ని ఎక్కడైనా లాగి వదలండి.
 	Privacy	గోప్యత
-	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft ఆఫ్‌లైన్‌లో పనిచేస్తుంది. టెలిమెట్రీ లేదు, ఖాతా అవసరం లేదు, మీరు ప్రొవైడర్‌ను జోడిస్తే తప్ప క్లౌడ్ ప్రాసెసింగ్ ఉండదు.
+	Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider.	Linkco PDF Editor ఆఫ్‌లైన్‌లో పనిచేస్తుంది. టెలిమెట్రీ లేదు, ఖాతా అవసరం లేదు, మీరు ప్రొవైడర్‌ను జోడిస్తే తప్ప క్లౌడ్ ప్రాసెసింగ్ ఉండదు.
 	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	స్క్రిప్ట్‌లు ఫైల్ లేదా నెట్‌వర్క్ యాక్సెస్ లేని శాండ్‌బాక్స్‌లో నడుస్తాయి. JavaScript ఆఫ్‌లో ఉన్నా, Acrobat ప్రామాణిక ఫార్మాట్, ధృవీకరణ, గణన ఫంక్షన్‌లు పనిచేస్తాయి.
 	Back to all tools	అన్ని సాధనాలకు తిరిగి వెళ్లు
 	Close panel	ప్యానెల్‌ను మూసివేయి
@@ -270,11 +270,11 @@ comment menu	Edit	సవరించు
 	Number pages…	పేజీలకు సంఖ్యలు వేయి…
 	Keyboard shortcuts	కీబోర్డ్ షార్ట్‌కట్‌లు
 	Join the ArtCraft Discord	ArtCraft Discordలో చేరండి
-	PdfCraft web page	PdfCraft వెబ్ పేజీ
-	PdfCraft on GitHub	GitHubలో PdfCraft
+	Linkco PDF Editor web page	Linkco PDF Editor వెబ్ పేజీ
+	Linkco PDF Editor on GitHub	GitHubలో Linkco PDF Editor
 	ArtCraft website	ArtCraft వెబ్‌సైట్
 	Check for updates…	అప్‌డేట్‌ల కోసం తనిఖీ చేయి…
-	About PdfCraft	PdfCraft గురించి
+	About Linkco PDF Editor	Linkco PDF Editor గురించి
 	Export a PDF	PDFను ఎగుమతి చేయి
 	Export to	ఎగుమతి ఫార్మాట్
 	Microsoft Word (.docx)	Microsoft Word పత్రం (.docx)
@@ -717,9 +717,9 @@ comment menu	Edit	సవరించు
 	Check for updates	అప్‌డేట్‌ల కోసం తనిఖీ చేయి
 	No check has run yet.	ఇంకా తనిఖీ జరగలేదు.
 	Checking for a newer version…	కొత్త వెర్షన్ కోసం తనిఖీ చేస్తోంది…
-	PdfCraft {v} is available.	PdfCraft {v} అందుబాటులో ఉంది.
+	Linkco PDF Editor {v} is available.	Linkco PDF Editor {v} అందుబాటులో ఉంది.
 	You have version {c}. Download the new version from its release page.	మీ వద్ద వెర్షన్ {c} ఉంది. కొత్త వెర్షన్‌ను దాని విడుదల పేజీ నుండి డౌన్‌లోడ్ చేసుకోండి.
-	PdfCraft {c} is up to date.	PdfCraft {c} తాజా వెర్షన్.
+	Linkco PDF Editor {c} is up to date.	Linkco PDF Editor {c} తాజా వెర్షన్.
 	Couldn't check for updates: {e}	అప్‌డేట్‌ల కోసం తనిఖీ చేయడం సాధ్యం కాలేదు: {e}
 	You have version {c}. All releases are listed at {page}.	మీ వద్ద వెర్షన్ {c} ఉంది. అన్ని విడుదలల జాబితా: {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	తాజా విడుదల గురించి GitHubను అడుగుతుంది. ఏదీ ఆటోమేటిక్‌గా డౌన్‌లోడ్ లేదా ఇన్‌స్టాల్ చేయబడదు.
@@ -825,7 +825,7 @@ comment menu	Edit	సవరించు
 	No changes allowed	మార్పులు ఏవీ అనుమతించబడవు
 	Annotations, form fill-in, and digital signatures	ఉల్లేఖనలు, ఫారం నింపడం మరియు డిజిటల్ సంతకాలు
 	Form fill-in and digital signatures	ఫారం నింపడం మరియు డిజిటల్ సంతకాలు
-	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	కీ macOS Keychainలో ఉంది; దాన్ని ఉపయోగించడానికి PdfCraftను అనుమతించమని Keychain అడగవచ్చు.
+	The key is in the macOS Keychain, which may ask to allow Linkco PDF Editor to use it.	కీ macOS Keychainలో ఉంది; దాన్ని ఉపయోగించడానికి Linkco PDF Editorను అనుమతించమని Keychain అడగవచ్చు.
 	Digital ID password	డిజిటల్ ఐడీ పాస్‌వర్డ్
 	Back	వెనుకకు
 	Validate all	అన్నీ ధృవీకరించు
@@ -1180,7 +1180,7 @@ comment menu	Edit	సవరించు
 	Searchable Image (Exact)	వెతకగలిగే చిత్రం (యథాతథం)
 	Adds invisible text over each word; the page image is not changed	ప్రతి పదంపై కనిపించని టెక్స్ట్‌ను జోడిస్తుంది; పేజీ చిత్రం మారదు
 	Downsample to	ఈ రిజల్యూషన్‌కు తగ్గించు
-	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	టెక్స్ట్ గుర్తింపు ఇన్‌స్టాల్ కాలేదు: దాని మోడల్ ఫైల్‌లు లేవు. PdfCraftను మళ్లీ ఇన్‌స్టాల్ చేయండి, లేదా వాటిని కలిగి ఉన్న ఫోల్డర్‌కు PDFCRAFT_MODELSను సెట్ చేయండి.
+	Text recognition isn't installed: its model files are missing. Reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them.	టెక్స్ట్ గుర్తింపు ఇన్‌స్టాల్ కాలేదు: దాని మోడల్ ఫైల్‌లు లేవు. Linkco PDF Editorను మళ్లీ ఇన్‌స్టాల్ చేయండి, లేదా వాటిని కలిగి ఉన్న ఫోల్డర్‌కు PDFCRAFT_MODELSను సెట్ చేయండి.
 	Settings	సెట్టింగ్‌లు
 	Optional	ఐచ్ఛికం
 	Planned · {m}	ప్రణాళికలో ఉంది · {m}
@@ -1324,7 +1324,7 @@ signature pad	Type	టైప్ చేయి
 	Anyone opening the document will need this password. It's applied when you save.	పత్రాన్ని తెరిచే ప్రతి ఒక్కరికీ ఈ పాస్‌వర్డ్ అవసరం. మీరు సేవ్ చేసినప్పుడు ఇది వర్తిస్తుంది.
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	పత్రం పాస్‌వర్డ్ లేకుండానే తెరుచుకుంటుంది; పరిమితులను మార్చడానికి ఈ పాస్‌వర్డ్ అవసరం. మీరు సేవ్ చేసినప్పుడు ఇది వర్తిస్తుంది.
 	Recover unsaved documents?	సేవ్ చేయని పత్రాలను పునరుద్ధరించాలా?
-	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft సక్రమంగా మూసివేయబడలేదు. ఈ పత్రాలలో ఆటోసేవ్ అయిన మార్పులు ఉన్నాయి:
+	Linkco PDF Editor didn't shut down normally. These documents had changes that were autosaved:	Linkco PDF Editor సక్రమంగా మూసివేయబడలేదు. ఈ పత్రాలలో ఆటోసేవ్ అయిన మార్పులు ఉన్నాయి:
 	just now	ఇప్పుడే
 	{n} min ago	{n} నిమి. క్రితం
 	{n} h ago	{n} గం. క్రితం
@@ -1481,10 +1481,10 @@ action wizard	Start	ప్రారంభించు
 	On the web, open or drop an image to convert it	వెబ్‌లో అయితే, చిత్రాన్ని మార్చడానికి దాన్ని తెరవండి లేదా ఇక్కడ డ్రాప్ చేయండి
 	Couldn't optimize the file: {e}	ఫైల్‌ను ఆప్టిమైజ్ చేయడం సాధ్యం కాలేదు: {e}
 	Couldn't write {path}: {e}	{path}ను రాయడం సాధ్యం కాలేదు: {e}
-	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	ఈ ఫారం {u}కు సమర్పించమని అడుగుతోంది; PdfCraft ఫారం డేటాను పంపదు. మీరు నింపిన వివరాలను ఉంచుకోవడానికి పత్రాన్ని సేవ్ చేయండి.
+	The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	ఈ ఫారం {u}కు సమర్పించమని అడుగుతోంది; Linkco PDF Editor ఫారం డేటాను పంపదు. మీరు నింపిన వివరాలను ఉంచుకోవడానికి పత్రాన్ని సేవ్ చేయండి.
 	{s} actions run in the JavaScript engine (M6)	{s} చర్యలు JavaScript ఇంజిన్‌లో అమలవుతాయి (M6)
 	{name}: the {other} action isn't supported yet	{name}: {other} చర్యకు ఇంకా మద్దతు లేదు
-	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} ఫారాన్ని {url}కు సమర్పిస్తుంది; PdfCraft ఫారం డేటాను పంపదు. మీరు నింపిన వివరాలను ఉంచుకోవడానికి పత్రాన్ని సేవ్ చేయండి.
+	{name} submits the form to {url}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	{name} ఫారాన్ని {url}కు సమర్పిస్తుంది; Linkco PDF Editor ఫారం డేటాను పంపదు. మీరు నింపిన వివరాలను ఉంచుకోవడానికి పత్రాన్ని సేవ్ చేయండి.
 	Export stopped: {e}	ఎగుమతి ఆగిపోయింది: {e}
 	Exported 1 image	1 చిత్రం ఎగుమతి చేయబడింది
 	Exported {n} images	{n} చిత్రాలు ఎగుమతి చేయబడ్డాయి
@@ -1650,8 +1650,8 @@ action wizard	Start	ప్రారంభించు
 	Signed and all signatures are valid.	సంతకం చేయబడింది, అన్ని సంతకాలు చెల్లుబాటు అవుతాయి.
 	At least one signature has problems.	కనీసం ఒక సంతకంలో సమస్యలు ఉన్నాయి.
 	This document is secured. Some changes are restricted by its security settings.	ఈ పత్రం రక్షించబడింది. దీని భద్రతా సెట్టింగ్‌లు కొన్ని మార్పులను పరిమితం చేస్తాయి.
-	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	ఇది డైనమిక్ XFA ఫారం, దీన్ని ప్రదర్శించడానికి PdfCraftలో ఇంకా మద్దతు లేదు. మీరు చూస్తున్నది ఫైల్‌లోని ప్లేస్‌హోల్డర్ పేజీ.
-	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	ఈ ఫారంలో XFA డేటా కూడా ఉంది, దాన్ని చదవడానికి PdfCraftలో ఇంకా మద్దతు లేదు. మీరు దీని ఫీల్డ్‌లను నింపవచ్చు, కానీ Acrobat బదులుగా XFA విలువలను చూపించవచ్చు.
+	This is a dynamic XFA form, which Linkco PDF Editor can't display yet. What you see is the file's placeholder page.	ఇది డైనమిక్ XFA ఫారం, దీన్ని ప్రదర్శించడానికి Linkco PDF Editorలో ఇంకా మద్దతు లేదు. మీరు చూస్తున్నది ఫైల్‌లోని ప్లేస్‌హోల్డర్ పేజీ.
+	This form also contains XFA data, which Linkco PDF Editor doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	ఈ ఫారంలో XFA డేటా కూడా ఉంది, దాన్ని చదవడానికి Linkco PDF Editorలో ఇంకా మద్దతు లేదు. మీరు దీని ఫీల్డ్‌లను నింపవచ్చు, కానీ Acrobat బదులుగా XFA విలువలను చూపించవచ్చు.
 	This document contains {n} interactive form fields.	ఈ పత్రంలో {n} ఇంటరాక్టివ్ ఫారం ఫీల్డ్‌లు ఉన్నాయి.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	ఈ ఫైల్ పాడైంది, దాన్ని సరిచేయడం జరిగింది. సేవ్ చేస్తే సరిచేసిన వెర్షన్ ఉంచబడుతుంది.
 	Dismiss	మూసివేయి
@@ -1700,7 +1700,7 @@ action wizard	Start	ప్రారంభించు
 	there are no pages to print	ముద్రించడానికి పేజీలు ఏవీ లేవు
 	the document has no tags	పత్రంలో ట్యాగ్‌లు లేవు
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	టెక్స్ట్ గుర్తింపు మోడల్‌లు ఇన్‌స్టాల్ చేయబడలేదు (PdfCraftను మళ్లీ ఇన్‌స్టాల్ చేయండి, లేదా వాటిని కలిగి ఉన్న ఫోల్డర్‌కు PDFCRAFT_MODELSను సెట్ చేయండి)
+	the text recognition models are not installed (reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them)	టెక్స్ట్ గుర్తింపు మోడల్‌లు ఇన్‌స్టాల్ చేయబడలేదు (Linkco PDF Editorను మళ్లీ ఇన్‌స్టాల్ చేయండి, లేదా వాటిని కలిగి ఉన్న ఫోల్డర్‌కు PDFCRAFT_MODELSను సెట్ చేయండి)
 	the image is empty	చిత్రం ఖాళీగా ఉంది
 	this file isn't XFDF, FDF, XML or text form data	ఈ ఫైల్ XFDF, FDF, XML లేదా టెక్స్ట్ ఫారం డేటా కాదు
 	nothing in the file matches this document	ఫైల్‌లోని ఏదీ ఈ పత్రంతో సరిపోలడం లేదు
@@ -1918,7 +1918,7 @@ action wizard	Start	ప్రారంభించు
 	Default page display	డిఫాల్ట్ పేజీ ప్రదర్శన
 	Default zoom	డిఫాల్ట్ జూమ్
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF ఏ లేఅవుట్‌ను గానీ జూమ్‌ను గానీ కోరనప్పుడు ఉపయోగించబడుతుంది. నిరంతర స్క్రోలింగ్ పేజీల మధ్య ఎప్పుడూ స్నాప్ అవ్వదు.
-	Reopen the files that were open when PdfCraft last closed	PdfCraftను చివరిసారి మూసివేసినప్పుడు తెరిచి ఉన్న ఫైల్‌లను మళ్లీ తెరువు
+	Reopen the files that were open when Linkco PDF Editor last closed	Linkco PDF Editorను చివరిసారి మూసివేసినప్పుడు తెరిచి ఉన్న ఫైల్‌లను మళ్లీ తెరువు
 	About	పరిచయం
 	Contributors	సహకారులు
 	Models	మోడల్‌లు
@@ -1959,7 +1959,7 @@ action wizard	Start	ప్రారంభించు
 	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	ఈ పత్రాన్ని మీరు విశ్వసిస్తేనే కొనసాగించండి. ఒక చిరునామా పత్రంలోని సమాచారాన్ని, ఉదాహరణకు దాని ఫారంలో మీరు టైప్ చేసినదాన్ని, తనతో పాటు తీసుకెళ్లగలదు.
 	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	ఒక వైపు మాత్రమే ముద్రించండి. షీట్‌ల క్రమం మారకుండా ఉంచి, గుర్తుల వద్ద కత్తిరించండి, ఆపై కుప్పలను ఎడమ నుండి కుడికి, పై నుండి కిందికి ఒకదానిపై ఒకటి పేర్చండి.
 	Windows store  ·  	Windows స్టోర్  ·  
-	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	కీ Windows సర్టిఫికెట్ స్టోర్‌లో ఉంది; దాన్ని ఉపయోగించడానికి PdfCraftను అనుమతించమని Windows అడగవచ్చు.
+	The key is in the Windows certificate store, which may ask to allow Linkco PDF Editor to use it.	కీ Windows సర్టిఫికెట్ స్టోర్‌లో ఉంది; దాన్ని ఉపయోగించడానికి Linkco PDF Editorను అనుమతించమని Windows అడగవచ్చు.
 	Selected pages	ఎంచుకున్న పేజీలు
 	Set layer visibility	లేయర్‌లను చూపించు లేదా దాచు
 	Files are combined from top to bottom. Leave Pages empty to take every page.	ఫైల్‌లు పై నుండి కిందికి కలపబడతాయి. అన్ని పేజీలను తీసుకోవడానికి పేజీలు ఫీల్డ్‌ను ఖాళీగా వదలండి.
@@ -2072,3 +2072,7 @@ action wizard	Start	ప్రారంభించు
 	The field {name} no longer exists.	{name} ఫీల్డ్ ఇకపై లేదు.
 	A selected field has no widget on any page, so the fields can't be edited together.	ఎంచుకున్న ఒక ఫీల్డ్‌కు ఏ పేజీలోనూ విడ్జెట్ లేదు, కాబట్టి ఫీల్డ్‌లను కలిపి సవరించలేము.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} {dpi} dpi వద్ద, అవి గీయగల అతిపెద్ద పరిమాణం)
+	Linkco PDF Editor	Linkco PDF Editor
+	Professional PDF tools for everyday document work.	పత్రం పని కోసం PDF సాధనాలు.
+	Professional PDF document tools by Linkco.	Linkco PDF పత్రం సాధనాలు.
+	View all tools →	అన్ని సాధనాలు చూపించు →

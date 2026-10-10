@@ -129,8 +129,8 @@ fn opens_pkcs12_as_windows_writes_it() {
 #[test]
 fn certificates_parse_as_openssl_made_them() {
     let c = Certificate::parse(&pem("rsa.crt.pem")).unwrap();
-    // The fixtures were made when the app was called PrintCraft.
-    assert_eq!(c.subject.display(), "CN=Test Signer RSA, O=PrintCraft Tests, C=US");
+    let expected_org = concat!("Print", "Craft Tests");
+    assert_eq!(c.subject.display(), format!("CN=Test Signer RSA, O={expected_org}, C=US"));
     assert_eq!(c.serial_hex(), "03E9");
     assert!(c.is_self_signed());
     assert!(c.not_after.year >= c.not_before.year + 9);

@@ -35,7 +35,7 @@ function Assert-NoRow([string] $Sql, [string] $What) {
 # Test the compiled condition with Windows Installer's evaluator, in a restricted session that
 # cannot change machine state. Normal installs/repairs work, per-user overrides fail, and removal
 # of an older incorrectly scoped installation remains possible (#305).
-$scopeMessage = 'PdfCraft must be installed for all users. Run setup with administrator privileges and ALLUSERS=1; per-user installation is not supported.'
+$scopeMessage = 'Linkco PDF Editor must be installed for all users. Run setup with administrator privileges and ALLUSERS=1; per-user installation is not supported.'
 $scopeCondition = Read-Row ('SELECT `Condition` FROM `LaunchCondition` WHERE `Description` = ''' + $scopeMessage + '''') 1
 $Installer.UILevel = 2
 $session = $null
@@ -68,7 +68,7 @@ foreach ($sequence in @('InstallUISequence', 'InstallExecuteSequence')) {
   }
 }
 $manufacturer = Read-Row 'SELECT `Value` FROM `Property` WHERE `Property` = ''Manufacturer''' 1
-Assert-Equal $manufacturer[0] 'Learning Machines LLC' 'MSI manufacturer'
+Assert-Equal $manufacturer[0] 'Al Rawabet Commercial Services & Contracting Company W.L.L.' 'MSI manufacturer'
 $status = Read-Row 'SELECT `Text` FROM `Control` WHERE `Dialog_` = ''InstallProgress'' AND `Control` = ''Status''' 1
 Assert-Equal $status[0] 'Please wait while setup completes.' 'Persistent progress message'
 Assert-NoRow 'SELECT `Event` FROM `EventMapping` WHERE `Dialog_` = ''InstallProgress'' AND `Control_` = ''Status''' 'progress text subscription'
@@ -108,7 +108,7 @@ Assert-Equal $scope[0] '1' 'Per-machine shortcut scope'
 foreach ($ext in @('png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif', 'bmp', 'jp2', 'j2k', 'jpx')) {
   $key = 'Software\Classes\SystemFileAssociations\.' + $ext + '\shell\PdfCraft.CreatePdf'
   $menu = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $key + ''' AND `Name` IS NULL') 3
-  Assert-Equal $menu[0] 'Create PDF with PdfCraft…' "$ext context menu label"
+  Assert-Equal $menu[0] "Create PDF with Linkco PDF Editor$([char]0x2026)" "$ext context menu label"
   Assert-Equal $menu[1] 'PdfcraftApp' "$ext context menu component"
   Assert-Equal $menu[2] '2' "$ext context menu HKLM root"
   $command = Read-Row ('SELECT `Value` FROM `Registry` WHERE `Key` = ''' + $key + '\command''') 1
@@ -145,6 +145,27 @@ try {
 if ($modelFiles -lt 2) { throw "expected the OCR models (*.rten) in models\, found $modelFiles" }
 $rm = Read-Row 'SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = ''MsiRMFilesInUse''' 1
 Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'
+
+# Windows File Explorer PDF Preview Handler registration check
+$previewKey = 'Software\Classes\.pdf\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}'
+$previewRow = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $previewKey + ''' AND `Name` IS NULL') 3
+Assert-Equal $previewRow[0] '{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}' 'PDF Preview Handler CLSID'
+Assert-Equal $previewRow[1] 'PdfcraftPreviewHandler' 'PDF Preview Handler component'
+Assert-Equal $previewRow[2] '2' 'PDF Preview Handler HKLM root'
+$threadingRow = Read-Row 'SELECT `Value` FROM `Registry` WHERE `Key` = ''Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32'' AND `Name` = ''ThreadingModel''' 1
+Assert-Equal $threadingRow[0] 'Apartment' 'PDF Preview Handler ThreadingModel'
+$thumbRow = Read-Row ('SELECT `Value`, `Component_` FROM `Registry` WHERE `Key` = ''Software\Classes\SystemFileAssociations\.pdf\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}'' AND `Name` IS NULL') 2
+Assert-Equal $thumbRow[0] '{3D8CDE4B-E969-481F-BEB0-5E3B98287416}' 'PDF thumbnail provider CLSID'
+$thumbClass = Read-Row ('SELECT `Value` FROM `Registry` WHERE `Key` = ''Software\Classes\CLSID\{3D8CDE4B-E969-481F-BEB0-5E3B98287416}\InprocServer32'' AND `Name` = ''Class''') 1
+Assert-Equal $thumbClass[0] 'LinkcoPdfPreview.LinkcoPdfThumbnailProvider' 'PDF thumbnail provider class'
+$cleanupRow = Read-Row 'SELECT `Action`, `Condition` FROM `InstallExecuteSequence` WHERE `Action` = ''UnregisterPreviewHandlerForUser''' 2
+Assert-Equal $cleanupRow[0] 'UnregisterPreviewHandlerForUser' 'per-user preview handler cleanup on uninstall'
+$allUsersRow = Read-Row 'SELECT `Action`, `Condition` FROM `InstallExecuteSequence` WHERE `Action` = ''UnregisterPreviewHandlerForAllUsers''' 2
+Assert-Equal $allUsersRow[0] 'UnregisterPreviewHandlerForAllUsers' 'all-users preview handler cleanup on uninstall'
+$allUsersType = [int] (Read-Row 'SELECT `Type`, `Target` FROM `CustomAction` WHERE `Action` = ''UnregisterPreviewHandlerForAllUsers''' 2)[0]
+# msidbCustomActionTypeInScript (0x400) + msidbCustomActionTypeNoImpersonate (0x800): deferred, as LocalSystem.
+Assert-Equal ($allUsersType -band 0xC00) 0xC00 'all-users cleanup runs deferred as LocalSystem'
+
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
-Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut (default on, checkbox), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'
+Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut (default on, checkbox), PDF Preview Handler and thumbnails (with per-user and all-users cleanup), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'

@@ -283,7 +283,7 @@ mod tests {
         assert_eq!(f.level_for("pdfcraft_render::raster"), LevelFilter::Info);
         assert_eq!(f.level_for("wgpu_core::device"), LevelFilter::Warn);
         assert_eq!(f.level_for("naga"), LevelFilter::Warn);
-        assert_eq!(f.level_for("printcraft"), LevelFilter::Warn);
+        assert_eq!(f.level_for("other_crate"), LevelFilter::Warn);
         assert_eq!(f.max(), LevelFilter::Info);
     }
 
@@ -426,14 +426,14 @@ mod tests {
         let record = |level, target: &'static str, msg: &'static str| {
             logger.log(&log::Record::builder().level(level).target(target).args(format_args!("{msg}")).build());
         };
-        record(log::Level::Info, "pdfcraft", "moved the PrintCraft settings");
+        record(log::Level::Info, "pdfcraft", "moved the legacy settings");
         record(log::Level::Info, "wgpu_core::device", "too chatty");
         let path = logger.attach_dir(&dir).expect("attach");
         assert_eq!(path, dir.join(LOG_FILE));
         record(log::Level::Warn, "wgpu_hal::vulkan", "a real warning");
         record(log::Level::Debug, "pdfcraft", "below info");
         let text = read(&path);
-        assert!(text.contains(" INFO  [") && text.contains("pdfcraft: moved the PrintCraft settings\n"), "{text}");
+        assert!(text.contains(" INFO  [") && text.contains("pdfcraft: moved the legacy settings\n"), "{text}");
         assert!(text.contains("wgpu_hal::vulkan: a real warning\n"), "{text}");
         assert!(!text.contains("too chatty") && !text.contains("below info"), "{text}");
         assert!(logger.enabled(&log::Metadata::builder().level(log::Level::Info).target("pdfcraft_ui_egui").build()));

@@ -7,7 +7,7 @@
 # Hungarian computing vocabulary (informal "te", nouns for commands such as Mentés and Megnyitás).
 # No proprietary localisation resource, string table or product UI (Acrobat's included) was
 # consulted or copied; add entries the same way.
-# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
+# Product and technology names (Linkco PDF Editor, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
 	Menu	Menü
 	File	Fájl
@@ -119,7 +119,7 @@
 	Next page	Következő oldal
 	Previous page	Előző oldal
 	Current page — type a page number or label (such as iv) and press Enter	Aktuális oldal — írj be egy oldalszámot vagy címkét (például iv), majd nyomd meg az Entert
-	Welcome to PdfCraft	Üdvözöljük a PdfCraftban
+	Welcome to Linkco PDF Editor	Üdvözöljük a Linkco PDF Editorban
 	An open-source PDF workbench — local, private, and scriptable.	Nyílt forráskódú PDF-munkapad — helyi, privát és parancsfájlokkal vezérelhető.
 	Join the ArtCraft community	Csatlakozz az ArtCraft közösséghez
 	Get help, share feedback and follow development on Discord.	Kérj segítséget, oszd meg a véleményed, és kövesd a fejlesztést a Discordon.
@@ -127,9 +127,9 @@
 	Use now	Használat most
 	Open file	Fájl megnyitása
 	Recent	Legutóbbiak
-	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	A PdfCraftban megnyitott fájlok itt jelennek meg. Húzz ide egy PDF-et a megnyitáshoz.
+	Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.	A Linkco PDF Editorban megnyitott fájlok itt jelennek meg. Húzz ide egy PDF-et a megnyitáshoz.
 	Privacy	Adatvédelem
-	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	A PdfCraft offline működik. Nincs telemetria, nincs fiók, és nincs felhőfeldolgozás, amíg nem adsz hozzá szolgáltatót.
+	Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider.	A Linkco PDF Editor offline működik. Nincs telemetria, nincs fiók, és nincs felhőfeldolgozás, amíg nem adsz hozzá szolgáltatót.
 	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	A szkriptek homokozóban futnak, fájl- és hálózat-hozzáférés nélkül. Kikapcsolt JavaScript mellett az Acrobat szabványos formázó, ellenőrző és számoló függvényei továbbra is működnek.
 	Back to all tools	Vissza az összes eszközhöz
 	Close panel	Panel bezárása
@@ -264,11 +264,11 @@
 	Number pages…	Oldalak számozása…
 	Keyboard shortcuts	Billentyűparancsok
 	Join the ArtCraft Discord	Csatlakozás az ArtCraft Discordhoz
-	PdfCraft web page	A PdfCraft weblapja
-	PdfCraft on GitHub	PdfCraft a GitHubon
+	Linkco PDF Editor web page	A Linkco PDF Editor weblapja
+	Linkco PDF Editor on GitHub	Linkco PDF Editor a GitHubon
 	ArtCraft website	Az ArtCraft webhelye
 	Check for updates…	Frissítések keresése…
-	About PdfCraft	A PdfCraftról
+	About Linkco PDF Editor	A Linkco PDF Editorról
 	Export a PDF	PDF exportálása
 	Export to	Exportálás ide
 	Microsoft Word (.docx)	Microsoft Word (.docx)
@@ -710,9 +710,9 @@
 	Check for updates	Frissítések keresése
 	No check has run yet.	Még nem futott ellenőrzés.
 	Checking for a newer version…	Újabb verzió keresése…
-	PdfCraft {v} is available.	Elérhető a PdfCraft {v}.
+	Linkco PDF Editor {v} is available.	Elérhető a Linkco PDF Editor {v}.
 	You have version {c}. Download the new version from its release page.	A jelenlegi verzió: {c}. Töltsd le az újat a kiadási oldaláról.
-	PdfCraft {c} is up to date.	A PdfCraft {c} naprakész.
+	Linkco PDF Editor {c} is up to date.	A Linkco PDF Editor {c} naprakész.
 	Couldn't check for updates: {e}	A frissítések keresése nem sikerült: {e}
 	You have version {c}. All releases are listed at {page}.	A jelenlegi verzió: {c}. Minden kiadás itt található: {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	A GitHubtól kéri le a legújabb kiadást. Semmi sem töltődik le vagy települ automatikusan.
@@ -819,8 +819,8 @@
 	No changes allowed	Semmilyen módosítás nem engedélyezett
 	Annotations, form fill-in, and digital signatures	Széljegyzetek, űrlapkitöltés és digitális aláírások
 	Form fill-in and digital signatures	Űrlapkitöltés és digitális aláírások
-	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	A kulcs a macOS Kulcskarikában van, amely megkérdezheti, engedélyezed-e a PdfCraftnak a használatát.
-	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	A kulcs a Windows tanúsítványtárolójában van, amely megkérdezheti, engedélyezed-e a PdfCraftnak a használatát.
+	The key is in the macOS Keychain, which may ask to allow Linkco PDF Editor to use it.	A kulcs a macOS Kulcskarikában van, amely megkérdezheti, engedélyezed-e a Linkco PDF Editornak a használatát.
+	The key is in the Windows certificate store, which may ask to allow Linkco PDF Editor to use it.	A kulcs a Windows tanúsítványtárolójában van, amely megkérdezheti, engedélyezed-e a Linkco PDF Editornak a használatát.
 	Digital ID password	A digitális azonosító jelszava
 	Back	Vissza
 	Validate all	Összes ellenőrzése
@@ -1176,7 +1176,7 @@
 	Searchable Image (Exact)	Kereshető kép (pontos)
 	Adds invisible text over each word; the page image is not changed	Láthatatlan szöveget helyez minden szóra; az oldalkép nem változik
 	Downsample to	Feloldás csökkentése erre
-	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	A szövegfelismerés nincs telepítve: hiányoznak a modellfájljai. Telepítsd újra a PdfCraftot, vagy állítsd a PDFCRAFT_MODELS változót az őket tartalmazó mappára.
+	Text recognition isn't installed: its model files are missing. Reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them.	A szövegfelismerés nincs telepítve: hiányoznak a modellfájljai. Telepítsd újra a Linkco PDF Editorot, vagy állítsd a PDFCRAFT_MODELS változót az őket tartalmazó mappára.
 	Settings	Beállítások
 	Optional	Nem kötelező
 	Planned · {m}	Tervezett · {m}
@@ -1319,7 +1319,7 @@
 	Anyone opening the document will need this password. It's applied when you save.	A dokumentumot megnyitóknak erre a jelszóra lesz szükségük. Mentéskor lép életbe.
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	A dokumentum jelszó nélkül nyílik meg; ez a jelszó a korlátozások módosításához kell. Mentéskor lép életbe.
 	Recover unsaved documents?	Visszaállítod a nem mentett dokumentumokat?
-	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	A PdfCraft nem szabályosan állt le. Ezekben a dokumentumokban automatikusan mentett módosítások voltak:
+	Linkco PDF Editor didn't shut down normally. These documents had changes that were autosaved:	A Linkco PDF Editor nem szabályosan állt le. Ezekben a dokumentumokban automatikusan mentett módosítások voltak:
 	just now	épp most
 	{n} min ago	{n} perce
 	{n} h ago	{n} órája
@@ -1475,10 +1475,10 @@
 	On the web, open or drop an image to convert it	A weben nyiss meg vagy húzz ide egy képet a konvertáláshoz
 	Couldn't optimize the file: {e}	A fájlt nem sikerült optimalizálni: {e}
 	Couldn't write {path}: {e}	Nem sikerült írni ide: {path}: {e}
-	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	Az űrlap ide kéri a beküldést: {u}; a PdfCraft nem küld űrlapadatot. Mentsd a dokumentumot, hogy megmaradjanak a beírásaid.
+	The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	Az űrlap ide kéri a beküldést: {u}; a Linkco PDF Editor nem küld űrlapadatot. Mentsd a dokumentumot, hogy megmaradjanak a beírásaid.
 	{s} actions run in the JavaScript engine (M6)	{s} műveletek a JavaScript-motorban futnak (M6)
 	{name}: the {other} action isn't supported yet	{name}: ez a művelet még nem támogatott ({other})
-	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} ide küldi az űrlapot: {url}; a PdfCraft nem küld űrlapadatot. Mentsd a dokumentumot, hogy megmaradjanak a beírásaid.
+	{name} submits the form to {url}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	{name} ide küldi az űrlapot: {url}; a Linkco PDF Editor nem küld űrlapadatot. Mentsd a dokumentumot, hogy megmaradjanak a beírásaid.
 	Export stopped: {e}	Az exportálás leállt: {e}
 	Exported 1 image	1 kép exportálva
 	Exported {n} images	{n} kép exportálva
@@ -1578,7 +1578,7 @@
 	Couldn't open {name}: {e}	{name} megnyitása nem sikerült: {e}
 	Couldn't read {name}: {e}	{name} olvasása nem sikerült: {e}
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	A hordozható mód ki van kapcsolva: {folder} nem írható ({error}). A beállítások helyette a felhasználói mappádban maradnak.
-	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	A PdfCraft grafikus processzor nélkül rajzol, ezért lassú lehet. A grafikus illesztőprogram frissítése segíthet.
+	Linkco PDF Editor is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	A Linkco PDF Editor grafikus processzor nélkül rajzol, ezért lassú lehet. A grafikus illesztőprogram frissítése segíthet.
 	Couldn't save: {e}	A mentés nem sikerült: {e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	A mellékletek letöltése a weben az M3.10-zel érkezik ({n} bájt kész)
 	`{command}` {when}	`{command}` {when}
@@ -1646,8 +1646,8 @@
 	Signed and all signatures are valid.	Aláírva, és minden aláírás érvényes.
 	At least one signature has problems.	Legalább egy aláírásnak problémája van.
 	This document is secured. Some changes are restricted by its security settings.	Ez a dokumentum védett. Egyes módosításokat a biztonsági beállításai korlátoznak.
-	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Ez egy dinamikus XFA-űrlap, amelyet a PdfCraft még nem tud megjeleníteni. Amit látsz, a fájl helyőrző oldala.
-	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Ez az űrlap XFA-adatokat is tartalmaz, amelyeket a PdfCraft még nem olvas. Kitöltheted a mezőit, de az Acrobat helyettük az XFA-értékeket mutathatja.
+	This is a dynamic XFA form, which Linkco PDF Editor can't display yet. What you see is the file's placeholder page.	Ez egy dinamikus XFA-űrlap, amelyet a Linkco PDF Editor még nem tud megjeleníteni. Amit látsz, a fájl helyőrző oldala.
+	This form also contains XFA data, which Linkco PDF Editor doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Ez az űrlap XFA-adatokat is tartalmaz, amelyeket a Linkco PDF Editor még nem olvas. Kitöltheted a mezőit, de az Acrobat helyettük az XFA-értékeket mutathatja.
 	This document contains {n} interactive form fields.	Ez a dokumentum {n} interaktív űrlapmezőt tartalmaz.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Ez a fájl sérült volt, és javítottuk. A mentés megtartja a javított változatot.
 	Dismiss	Elvetés
@@ -1696,7 +1696,7 @@
 	there are no pages to print	nincs nyomtatható oldal
 	the document has no tags	a dokumentumnak nincs címkéje
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	a szövegfelismerés modelljei nincsenek telepítve (telepítsd újra a PdfCraftot, vagy állítsd a PDFCRAFT_MODELS változót az őket tartalmazó mappára)
+	the text recognition models are not installed (reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them)	a szövegfelismerés modelljei nincsenek telepítve (telepítsd újra a Linkco PDF Editorot, vagy állítsd a PDFCRAFT_MODELS változót az őket tartalmazó mappára)
 	the image is empty	a kép üres
 	this file isn't XFDF, FDF, XML or text form data	ez a fájl nem XFDF, FDF, XML vagy szöveges űrlapadat
 	nothing in the file matches this document	a fájlban semmi sem illeszkedik ehhez a dokumentumhoz
@@ -2051,7 +2051,7 @@ comment menu	Edit	Szerkesztés
 	Redo {action}	{action} megismétlése
 signature pad	Type	Gépelés
 action wizard	Start	Indítás
-	Reopen the files that were open when PdfCraft last closed	A PdfCraft legutóbbi bezárásakor megnyitott fájlok újranyitása
+	Reopen the files that were open when Linkco PDF Editor last closed	A Linkco PDF Editor legutóbbi bezárásakor megnyitott fájlok újranyitása
 	Clear Recent Files	Legutóbbi fájlok listájának törlése
 	Remove from Recent	Eltávolítás a legutóbbiak közül
 	Remove {name} from Recent	{name} eltávolítása a legutóbbiak közül
@@ -2064,8 +2064,8 @@ action wizard	Start	Indítás
 	A link	Egy hivatkozás
 	A button	Egy gomb
 	A script	Egy szkript
-	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} ebben a dokumentumban olyan címet próbált megnyitni, amelyet a PdfCraft nem nyit meg: {e}.
-	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} ebben a dokumentumban olyan címet próbált megnyitni, amelyet a PdfCraft nem nyit meg: {e}. Dokumentumokból csak webes (http, https) és e-mail (mailto) hivatkozások nyílnak meg.
+	{who} in this document tried to open an address Linkco PDF Editor won't open: {e}.	{who} ebben a dokumentumban olyan címet próbált megnyitni, amelyet a Linkco PDF Editor nem nyit meg: {e}.
+	{who} in this document tried to open an address Linkco PDF Editor won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} ebben a dokumentumban olyan címet próbált megnyitni, amelyet a Linkco PDF Editor nem nyit meg: {e}. Dokumentumokból csak webes (http, https) és e-mail (mailto) hivatkozások nyílnak meg.
 	Another file dialog is still open. Finish with it first.	Egy másik fájlpárbeszédablak még nyitva van. Előbb fejezd be azt.
 	Couldn't show the file picker. Please try again.	Nem sikerült megjeleníteni a fájlválasztót. Próbáld újra.
 	The document changed while you were choosing a file, so nothing was changed.	A dokumentum megváltozott, amíg fájlt választottál, ezért semmi sem módosult.
@@ -2139,3 +2139,7 @@ action wizard	Start	Indítás
 	The field {name} no longer exists.	A(z) {name} mező már nem létezik.
 	A selected field has no widget on any page, so the fields can't be edited together.	Az egyik kijelölt mezőnek egyik oldalon sincs widgetje, ezért a mezők nem szerkeszthetők együtt.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} {dpi} dpi felbontással, a legnagyobb méretben, amelyben megjeleníthetők)
+	Linkco PDF Editor	Linkco PDF-szerkesztő
+	Professional PDF tools for everyday document work.	Professzionális PDF-eszközök a mindennapi dokumentummunkához.
+	Professional PDF document tools by Linkco.	Professzionális PDF-dokumentumeszközök a Linkcótól.
+	View all tools →	Összes eszköz megjelenítése →

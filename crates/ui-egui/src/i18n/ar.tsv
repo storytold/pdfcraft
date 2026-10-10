@@ -13,7 +13,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Arabic computing vocabulary. No proprietary localisation resource, string table or product UI
 # (Acrobat's included) was consulted or copied; add entries the same way.
-# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
+# Product and technology names (Linkco PDF Editor, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept. Digits are Western (0-9).
 #
 # Write every entry in logical (typing) order. The interface draws text left to right, so
@@ -149,7 +149,7 @@
 	Next page	الصفحة التالية
 	Previous page	الصفحة السابقة
 	Current page — type a page number or label (such as iv) and press Enter	الصفحة الحالية — اكتب رقم صفحة أو تسميتها (مثل iv) ثم اضغط Enter
-	Welcome to PdfCraft	مرحبًا بك في PdfCraft
+	Welcome to Linkco PDF Editor	مرحبًا بك في Linkco PDF Editor
 	An open-source PDF workbench — local, private, and scriptable.	منضدة عمل مفتوحة المصدر لملفات PDF — محلية وخاصة وقابلة للبرمجة.
 	Join the ArtCraft community	انضم إلى مجتمع ArtCraft
 	Get help, share feedback and follow development on Discord.	احصل على المساعدة وشارك ملاحظاتك وتابع التطوير على Discord.
@@ -157,9 +157,9 @@
 	Use now	استخدم الآن
 	Open file	فتح ملف
 	Recent	الأخيرة
-	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	الملفات التي تفتحها في PdfCraft تظهر هنا. أفلت ملف PDF في أي مكان لفتحه.
+	Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.	الملفات التي تفتحها في Linkco PDF Editor تظهر هنا. أفلت ملف PDF في أي مكان لفتحه.
 	Privacy	الخصوصية
-	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	يعمل PdfCraft دون اتصال. لا قياس عن بُعد ولا حساب ولا معالجة سحابية إلا إذا أضفت مزوّدًا.
+	Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider.	يعمل Linkco PDF Editor دون اتصال. لا قياس عن بُعد ولا حساب ولا معالجة سحابية إلا إذا أضفت مزوّدًا.
 	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	تعمل السكربتات في بيئة معزولة دون وصول إلى الملفات أو الشبكة. عند إيقاف JavaScript تبقى دوال Acrobat القياسية للتنسيق والتحقق والحساب تعمل.
 	Back to all tools	العودة إلى كل الأدوات
 	Close panel	إغلاق اللوحة
@@ -294,11 +294,11 @@
 	Number pages…	ترقيم الصفحات…
 	Keyboard shortcuts	اختصارات لوحة المفاتيح
 	Join the ArtCraft Discord	انضم إلى خادم ArtCraft على Discord
-	PdfCraft web page	صفحة PdfCraft على الويب
-	PdfCraft on GitHub	PdfCraft على GitHub
+	Linkco PDF Editor web page	صفحة Linkco PDF Editor على الويب
+	Linkco PDF Editor on GitHub	Linkco PDF Editor على GitHub
 	ArtCraft website	موقع ArtCraft
 	Check for updates…	التحقق من التحديثات…
-	About PdfCraft	حول PdfCraft
+	About Linkco PDF Editor	حول Linkco PDF Editor
 	Export a PDF	تصدير ملف PDF
 	Export to	تصدير إلى
 	Microsoft Word (.docx)	Microsoft Word (.docx)
@@ -740,9 +740,9 @@
 	Check for updates	التحقق من التحديثات
 	No check has run yet.	لم يُجرَ أي تحقق بعد.
 	Checking for a newer version…	جارٍ التحقق من وجود إصدار أحدث…
-	PdfCraft {v} is available.	PdfCraft {v} متاح.
+	Linkco PDF Editor {v} is available.	Linkco PDF Editor {v} متاح.
 	You have version {c}. Download the new version from its release page.	لديك الإصدار {c}. نزّل الإصدار الجديد من صفحة إصداره.
-	PdfCraft {c} is up to date.	PdfCraft {c} محدَّث.
+	Linkco PDF Editor {c} is up to date.	Linkco PDF Editor {c} محدَّث.
 	Couldn't check for updates: {e}	تعذّر التحقق من التحديثات: {e}
 	You have version {c}. All releases are listed at {page}.	لديك الإصدار {c}. كل الإصدارات مدرجة في {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	يسأل GitHub عن أحدث إصدار. لا يُنزَّل أو يُثبَّت شيء تلقائيًا.
@@ -849,8 +849,8 @@
 	No changes allowed	لا يُسمح بأي تغييرات
 	Annotations, form fill-in, and digital signatures	التعليقات وتعبئة النماذج والتوقيعات الرقمية
 	Form fill-in and digital signatures	تعبئة النماذج والتوقيعات الرقمية
-	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	المفتاح موجود في سلسلة مفاتيح macOS، وقد تطلب الإذن لـ PdfCraft باستخدامه.
-	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	المفتاح موجود في مخزن شهادات Windows، وقد يطلب الإذن لـ PdfCraft باستخدامه.
+	The key is in the macOS Keychain, which may ask to allow Linkco PDF Editor to use it.	المفتاح موجود في سلسلة مفاتيح macOS، وقد تطلب الإذن لـ Linkco PDF Editor باستخدامه.
+	The key is in the Windows certificate store, which may ask to allow Linkco PDF Editor to use it.	المفتاح موجود في مخزن شهادات Windows، وقد يطلب الإذن لـ Linkco PDF Editor باستخدامه.
 	Digital ID password	كلمة مرور المعرّف الرقمي
 	Back	رجوع
 	Validate all	التحقق من الكل
@@ -1206,7 +1206,7 @@
 	Searchable Image (Exact)	صورة قابلة للبحث (مطابقة)
 	Adds invisible text over each word; the page image is not changed	يضيف نصًا غير مرئي فوق كل كلمة؛ صورة الصفحة لا تتغير
 	Downsample to	تقليل العينات إلى
-	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	التعرف على النص غير مثبت: ملفات نماذجه مفقودة. أعد تثبيت PdfCraft، أو اضبط PDFCRAFT_MODELS على المجلد الذي يحتويها.
+	Text recognition isn't installed: its model files are missing. Reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them.	التعرف على النص غير مثبت: ملفات نماذجه مفقودة. أعد تثبيت Linkco PDF Editor، أو اضبط PDFCRAFT_MODELS على المجلد الذي يحتويها.
 	Settings	الإعدادات
 	Optional	اختياري
 	Planned · {m}	مخطط له · {m}
@@ -1350,7 +1350,7 @@
 	Anyone opening the document will need this password. It's applied when you save.	كل من يفتح المستند سيحتاج إلى كلمة المرور هذه. تُطبَّق عند الحفظ.
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	يُفتح المستند دون كلمة مرور؛ كلمة المرور هذه لازمة لتغيير القيود. تُطبَّق عند الحفظ.
 	Recover unsaved documents?	استعادة المستندات غير المحفوظة؟
-	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	لم يُغلق PdfCraft بشكل طبيعي. هذه المستندات فيها تغييرات حُفظت تلقائيًا:
+	Linkco PDF Editor didn't shut down normally. These documents had changes that were autosaved:	لم يُغلق Linkco PDF Editor بشكل طبيعي. هذه المستندات فيها تغييرات حُفظت تلقائيًا:
 	just now	الآن
 	{n} min ago	قبل {n} دقيقة
 	{n} h ago	قبل {n} ساعة
@@ -1506,10 +1506,10 @@
 	On the web, open or drop an image to convert it	على الويب، افتح صورة أو أفلتها لتحويلها
 	Couldn't optimize the file: {e}	تعذّر تحسين الملف: {e}
 	Couldn't write {path}: {e}	تعذّرت الكتابة في {path}: {e}
-	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	النموذج يطلب إرساله إلى {u}؛ PdfCraft لا يرسل بيانات النماذج. احفظ المستند للاحتفاظ بما أدخلته.
+	The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	النموذج يطلب إرساله إلى {u}؛ Linkco PDF Editor لا يرسل بيانات النماذج. احفظ المستند للاحتفاظ بما أدخلته.
 	{s} actions run in the JavaScript engine (M6)	إجراءات {s} تعمل في محرك JavaScript (M6)
 	{name}: the {other} action isn't supported yet	{name}: الإجراء {other} غير مدعوم بعد
-	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} يرسل النموذج إلى {url}؛ PdfCraft لا يرسل بيانات النماذج. احفظ المستند للاحتفاظ بما أدخلته.
+	{name} submits the form to {url}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	{name} يرسل النموذج إلى {url}؛ Linkco PDF Editor لا يرسل بيانات النماذج. احفظ المستند للاحتفاظ بما أدخلته.
 	Export stopped: {e}	توقف التصدير: {e}
 	Exported 1 image	صُدِّرت صورة واحدة
 	Exported {n} images	صُدِّرت {n} صور
@@ -1722,8 +1722,8 @@
 	Signed and all signatures are valid.	موقَّع وكل التوقيعات صالحة.
 	At least one signature has problems.	توقيع واحد على الأقل فيه مشكلات.
 	This document is secured. Some changes are restricted by its security settings.	هذا المستند مؤمَّن. بعض التغييرات مقيدة بإعدادات أمانه.
-	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	هذا نموذج XFA ديناميكي، لا يستطيع PdfCraft عرضه بعد. ما تراه هو الصفحة البديلة للملف.
-	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	هذا النموذج يحتوي أيضًا على بيانات XFA، لا يقرؤها PdfCraft بعد. يمكنك تعبئة حقوله، لكن Acrobat قد يعرض قيم XFA بدلًا منها.
+	This is a dynamic XFA form, which Linkco PDF Editor can't display yet. What you see is the file's placeholder page.	هذا نموذج XFA ديناميكي، لا يستطيع Linkco PDF Editor عرضه بعد. ما تراه هو الصفحة البديلة للملف.
+	This form also contains XFA data, which Linkco PDF Editor doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	هذا النموذج يحتوي أيضًا على بيانات XFA، لا يقرؤها Linkco PDF Editor بعد. يمكنك تعبئة حقوله، لكن Acrobat قد يعرض قيم XFA بدلًا منها.
 	This document contains {n} interactive form fields.	هذا المستند يحتوي على {n} حقول نموذج تفاعلية.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	هذا الملف كان تالفًا وأُصلح. الحفظ يُبقي النسخة المُصلَحة.
 	Dismiss	تجاهل
@@ -1772,7 +1772,7 @@
 	there are no pages to print	لا توجد صفحات للطباعة
 	the document has no tags	المستند لا يحتوي على وسوم
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	نماذج التعرف على النص غير مثبتة (أعد تثبيت PdfCraft، أو اضبط PDFCRAFT_MODELS على المجلد الذي يحتويها)
+	the text recognition models are not installed (reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them)	نماذج التعرف على النص غير مثبتة (أعد تثبيت Linkco PDF Editor، أو اضبط PDFCRAFT_MODELS على المجلد الذي يحتويها)
 	the image is empty	الصورة فارغة
 	this file isn't XFDF, FDF, XML or text form data	هذا الملف ليس بيانات نموذج بصيغة XFDF أو FDF أو XML أو نص
 	nothing in the file matches this document	لا شيء في الملف يطابق هذا المستند
@@ -2016,7 +2016,7 @@
 	Couldn't optimize the file	تعذّر تحسين الملف
 	Files are combined in this order. Leave Pages empty to take every page.	تُدمج الملفات بهذا الترتيب. اترك «الصفحات» فارغًا لأخذ كل الصفحات.
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	الوضع المحمول متوقف: تتعذر الكتابة في {folder} ({error}). تُحفظ الإعدادات في مجلد المستخدم بدلًا منه.
-	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	يرسم PdfCraft دون معالج رسوميات، لذا قد يكون بطيئًا. تحديث تعريف بطاقة الرسوميات قد يفيد.
+	Linkco PDF Editor is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	يرسم Linkco PDF Editor دون معالج رسوميات، لذا قد يكون بطيئًا. تحديث تعريف بطاقة الرسوميات قد يفيد.
 	Show	إظهار
 	Sort	فرز
 	Reverse the order	عكس الترتيب
@@ -2074,7 +2074,7 @@ calendar date	September	سبتمبر
 calendar date	October	أكتوبر
 calendar date	November	نوفمبر
 calendar date	December	ديسمبر
-	Reopen the files that were open when PdfCraft last closed	إعادة فتح الملفات التي كانت مفتوحة عند آخر إغلاق لـ PdfCraft
+	Reopen the files that were open when Linkco PDF Editor last closed	إعادة فتح الملفات التي كانت مفتوحة عند آخر إغلاق لـ Linkco PDF Editor
 	Clear Recent Files	مسح الملفات الأخيرة
 	Remove from Recent	إزالة من الأخيرة
 	Remove {name} from Recent	إزالة {name} من الأخيرة
@@ -2086,8 +2086,8 @@ calendar date	December	ديسمبر
 	A link	رابط
 	A button	زر
 	A script	سكربت
-	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} في هذا المستند حاول فتح عنوان لن يفتحه PdfCraft: {e}.
-	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} في هذا المستند حاول فتح عنوان لن يفتحه PdfCraft: {e}. روابط الويب (http, https) والبريد (mailto) وحدها تُفتح من المستندات.
+	{who} in this document tried to open an address Linkco PDF Editor won't open: {e}.	{who} في هذا المستند حاول فتح عنوان لن يفتحه Linkco PDF Editor: {e}.
+	{who} in this document tried to open an address Linkco PDF Editor won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} في هذا المستند حاول فتح عنوان لن يفتحه Linkco PDF Editor: {e}. روابط الويب (http, https) والبريد (mailto) وحدها تُفتح من المستندات.
 	Another file dialog is still open. Finish with it first.	يوجد حوار ملفات آخر ما زال مفتوحًا. أنهِ العمل فيه أولًا.
 	Couldn't show the file picker. Please try again.	تعذّر إظهار منتقي الملفات. حاول مجددًا.
 	The document changed while you were choosing a file, so nothing was changed.	تغيّر المستند أثناء اختيارك ملفًا، فلم يُغيَّر شيء.
@@ -2163,3 +2163,7 @@ certificate	Subject	صاحب الشهادة
 	A selected field has no widget on any page, so the fields can't be edited together.	أحد الحقول المحددة ليس له عنصر واجهة في أي صفحة، لذا لا يمكن تحرير الحقول معًا.
 	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	التعرف على النص غير مثبت: نماذجه مفقودة (شغّل `cargo xtask models`، أو اضبط PDFCRAFT_MODELS).
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} بدقة {dpi} dpi، وهي أكبر دقة يمكن رسمها بها)
+	Linkco PDF Editor	محرر Linkco لملفات PDF
+	Professional PDF tools for everyday document work.	أدوات PDF احترافية للعمل اليومي على المستندات.
+	Professional PDF document tools by Linkco.	أدوات احترافية لمستندات PDF من Linkco.
+	View all tools →	عرض كل الأدوات ←

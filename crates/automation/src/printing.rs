@@ -12,7 +12,20 @@ fn bad(m: impl Into<String>) -> ToolError {
 
 impl Automation {
     pub(crate) fn printers(&self) -> Result<Value> {
-        let list: Vec<Value> = spool::printers().into_iter().map(|p| json!({ "name": p.name, "default": p.default })).collect();
+        let list: Vec<Value> = spool::printers_detailed()
+            .into_iter()
+            .map(|p| {
+                json!({
+                    "name": p.name,
+                    "default": p.default,
+                    "status": p.status.as_str(),
+                    "offline": p.status.is_offline(),
+                    "port": p.port,
+                    "driver": p.driver,
+                    "network": p.network,
+                })
+            })
+            .collect();
         Ok(json!({ "count": list.len(), "printers": list }))
     }
 
@@ -146,7 +159,14 @@ impl Automation {
                         Some(_) => return Err(bad("options must be an object of option keys and choices from printer_options")),
                     },
                 };
-                out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
+                let dpi = a.opt_int("dpi")?.unwrap_or(i64::from(spool::DEFAULT_PRINT_DPI)).clamp(72, 600) as u32;
+                let rendered_sheets = if cfg!(target_os = "windows") {
+                    self.session.render_print_sheets(id, &bytes, dpi, job.grayscale).map_err(failed)?
+                } else {
+                    Vec::new()
+                };
+                out["dpi"] = json!(dpi);
+                out["job"] = json!(spool::submit_sheets(&bytes, &rendered_sheets, &job).map_err(|e| failed(e.to_string()))?);
             }
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
         }

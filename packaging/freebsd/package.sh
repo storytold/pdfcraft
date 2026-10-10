@@ -30,7 +30,7 @@ case "$ARCH" in
 esac
 BASENAME="pdfcraft-$VERSION-freebsd-$ARCH"
 
-echo "==> PdfCraft $VERSION for FreeBSD $ARCH"
+echo "==> Linkco PDF Editor $VERSION for FreeBSD $ARCH"
 
 if [ "$SKIP_BUILD" = 0 ]; then
   (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli)

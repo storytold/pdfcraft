@@ -207,6 +207,73 @@ fn spooler_arguments_and_printer_list() {
 }
 
 #[test]
+fn windows_printer_enumeration_and_status_parsing() {
+    use crate::spool::{PrinterStatus, apply_grayscale_rgba, parse_lpstat_detailed, parse_windows_printers_tsv, parse_windows_reg_printers};
+
+    let tsv = "\
+Microsoft Print to PDF\tTrue\tFalse\t3\t0\tPORTPROMPT:\tMicrosoft Print To PDF
+\\\\doha-print01\\Linkco_HQ_Ricoh\tFalse\tFalse\t4\t0\tIP_10.10.20.15\tRicoh PCL6 UniversalDriver
+HP_LaserJet_Warehouse\tFalse\tTrue\t3\t7\tUSB001\tHP Universal Printing PCL 6
+Canon_Plotter_A0\tFalse\tFalse\t6\t8\tWSD-1234\tCanon Driver
+Brother_Label\tFalse\tFalse\t3\t9\tUSB002\tBrother Driver
+";
+    let list = parse_windows_printers_tsv(tsv);
+    assert_eq!(list.len(), 5);
+    assert_eq!(list[0].name, "Microsoft Print to PDF");
+    assert!(list[0].default);
+    assert_eq!(list[0].status, PrinterStatus::Ready);
+    assert!(!list[0].network);
+
+    assert_eq!(list[1].name, r"\\doha-print01\Linkco_HQ_Ricoh");
+    assert!(!list[1].default);
+    assert_eq!(list[1].status, PrinterStatus::Printing);
+    assert!(list[1].network);
+
+    assert_eq!(list[2].name, "HP_LaserJet_Warehouse");
+    assert_eq!(list[2].status, PrinterStatus::Offline);
+    assert!(list[2].status.is_offline());
+    assert!(!list[2].status.is_available());
+
+    assert_eq!(list[3].name, "Canon_Plotter_A0");
+    assert_eq!(list[3].status, PrinterStatus::Paused);
+
+    assert_eq!(list[4].name, "Brother_Label");
+    assert_eq!(list[4].status, PrinterStatus::Error);
+
+    // Registry fallback parsing (HKCU\Software\Microsoft\Windows NT\CurrentVersion\Devices).
+    let reg_devices = "\
+HKEY_CURRENT_USER\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Devices
+    Microsoft Print to PDF    REG_SZ    winspool,Ne01:
+    \\\\server\\Floor2_Printer    REG_SZ    winspool,Ne02:
+";
+    let reg_default = "\
+HKEY_CURRENT_USER\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows
+    Device    REG_SZ    \\\\server\\Floor2_Printer,winspool,Ne02:
+";
+    let reg_list = parse_windows_reg_printers(reg_devices, reg_default);
+    assert_eq!(reg_list.len(), 2);
+    assert!(!reg_list[0].default);
+    assert!(reg_list[1].default);
+    assert!(reg_list[1].network);
+
+    // Detailed CUPS lpstat status parsing.
+    let lp = "printer Office_Laser is idle.  enabled since Thu Oct  1 09:00:00 2026\nprinter Label_Writer disabled since …\nsystem default destination: Office_Laser\n";
+    let lp_det = parse_lpstat_detailed(lp);
+    assert_eq!(lp_det[0].status, PrinterStatus::Ready);
+    assert_eq!(lp_det[1].status, PrinterStatus::Paused);
+
+    // Grayscale RGBA conversion preserves alpha and neutralises colour channels.
+    let mut px = [255u8, 0, 0, 200, 0, 255, 0, 255];
+    apply_grayscale_rgba(&mut px);
+    assert_eq!(px[0], px[1]);
+    assert_eq!(px[1], px[2]);
+    assert_eq!(px[3], 200);
+    assert_eq!(px[4], px[5]);
+    assert_eq!(px[5], px[6]);
+    assert_eq!(px[7], 255);
+}
+
+#[test]
 fn lpstat_output_is_untranslated() {
     // A localized lpstat (here Polish) is unreadable to parse_lpstat...
     assert!(parse_lpstat("drukarka Office_Laser jest bezczynna.\ndomyślny cel systemowy: Office_Laser\n").is_empty());

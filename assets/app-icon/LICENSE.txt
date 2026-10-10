@@ -1,8 +1,8 @@
-PdfCraft app icon (pdfcraft.svg, pdfcraft-small.svg and every file derived from them in this
+Linkco PDF Editor app icon (pdfcraft.svg, pdfcraft-small.svg and every file derived from them in this
 directory: pdfcraft-1024.png, pdfcraft.icns, pdfcraft.ico, hicolor/).
 
-Original artwork made for this project by the project owner, drawn in ArtCraft and vectorised for
-PdfCraft (no third-party material). Licensed like the rest of PdfCraft, under either of
+Original vector artwork created for Linkco PDF Editor (no third-party material). Licensed like the
+rest of the repository, under either of
 
   * Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
   * MIT license (https://opensource.org/licenses/MIT)

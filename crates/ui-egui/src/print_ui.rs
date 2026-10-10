@@ -35,12 +35,14 @@ pub enum Handling {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrintDraft {
     pub printers: Vec<spool::Printer>,
+    pub printer_details: Vec<spool::PrinterDetail>,
     /// `None` = Save as PDF.
     pub printer: Option<String>,
     pub copies: u32,
     pub collate: bool,
     pub grayscale: bool,
     pub duplex: spool::Duplex,
+    pub dpi: u32,
     pub which: Which,
     pub range: String,
     /// The pages `Which::Selected` prints (0-based, in page order); empty when none were picked.
@@ -78,11 +80,13 @@ impl Default for PrintDraft {
     fn default() -> Self {
         PrintDraft {
             printers: Vec::new(),
+            printer_details: Vec::new(),
             printer: None,
             copies: 1,
             collate: true,
             grayscale: false,
             duplex: spool::Duplex::Off,
+            dpi: spool::DEFAULT_PRINT_DPI,
             which: Which::All,
             range: String::new(),
             selected: Vec::new(),
@@ -168,8 +172,15 @@ impl PrintDraft {
 impl PdfCraftApp {
     pub fn open_print(&mut self) {
         let Some((i, _)) = self.active_ids() else { return };
-        let printers = spool::printers();
-        let default = printers.iter().find(|p| p.default).or(printers.first()).map(|p| p.name.clone());
+        let details = spool::printers_detailed();
+        let printers: Vec<spool::Printer> = details.iter().map(|d| d.to_printer()).collect();
+        let default = details
+            .iter()
+            .find(|p| p.default && !p.status.is_offline())
+            .or_else(|| details.iter().find(|p| p.default))
+            .or_else(|| details.iter().find(|p| !p.status.is_offline()))
+            .or_else(|| details.first())
+            .map(|p| p.name.clone());
         let current = self.views[i].current;
         let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
         let keep = std::mem::take(&mut self.print_draft);
@@ -180,7 +191,7 @@ impl PdfCraftApp {
             (true, Which::Selected) => Which::All,
             (true, other) => other,
         };
-        self.print_draft = PrintDraft { printers, printer: default, current_page: current, sheet: 0, selected, which, ..keep };
+        self.print_draft = PrintDraft { printers, printer_details: details, printer: default, current_page: current, sheet: 0, selected, which, ..keep };
         self.dialog = Some(crate::Dialog::Print);
     }
 
@@ -211,20 +222,34 @@ impl PdfCraftApp {
             }
         };
         match self.print_draft.printer.clone() {
-            Some(printer) => match spool::submit(&bytes, &self.print_draft.job(&name)) {
-                Ok(msg) => {
-                    self.notify(if msg.is_empty() {
-                        crate::i18n::fmt(tl!("Sent to {printer}"), &[("printer", &printer)])
-                    } else {
-                        crate::i18n::fmt(tl!("Sent to {printer}: {msg}"), &[("printer", &printer), ("msg", &msg)])
-                    });
-                    true
+            Some(printer) => {
+                let job = self.print_draft.job(&name);
+                let rendered_sheets = if cfg!(target_os = "windows") {
+                    match self.session.render_print_sheets(id, &bytes, self.print_draft.dpi, self.print_draft.grayscale) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            self.notify_error(e);
+                            return false;
+                        }
+                    }
+                } else {
+                    Vec::new()
+                };
+                match spool::submit_sheets(&bytes, &rendered_sheets, &job) {
+                    Ok(msg) => {
+                        self.notify(if msg.is_empty() {
+                            crate::i18n::fmt(tl!("Sent to {printer}"), &[("printer", &printer)])
+                        } else {
+                            crate::i18n::fmt(tl!("Sent to {printer}: {msg}"), &[("printer", &printer), ("msg", &msg)])
+                        });
+                        true
+                    }
+                    Err(e) => {
+                        self.notify_error(e);
+                        false
+                    }
                 }
-                Err(e) => {
-                    self.notify_error(e);
-                    false
-                }
-            },
+            }
             None => self.save_print_pdf(&name, bytes),
         }
     }
@@ -418,9 +443,22 @@ pub(crate) fn body(
                 let before = d.printer.clone();
                 ui.horizontal(|ui| {
                     let shown = d.printer.clone().unwrap_or_else(|| tl!("Save as PDF").to_string());
-                    egui::ComboBox::from_id_salt("printer").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt("printer").selected_text(shown).width(235.0).show_ui(ui, |ui| {
                         for p in &d.printers {
-                            let label = if p.default { crate::i18n::fmt(tl!("{name} (default)"), &[("name", &p.name)]) } else { p.name.clone() };
+                            let status_suffix = d
+                                .printer_details
+                                .iter()
+                                .find(|det| det.name == p.name)
+                                .and_then(|det| (!det.status.is_available()).then_some(det.status.label()));
+                            let base_label = if p.default {
+                                crate::i18n::fmt(tl!("{name} (default)"), &[("name", &p.name)])
+                            } else {
+                                p.name.clone()
+                            };
+                            let label = match status_suffix {
+                                Some(st) => format!("{base_label} [{st}]"),
+                                None => base_label,
+                            };
                             ui.selectable_value(&mut d.printer, Some(p.name.clone()), label);
                         }
                         ui.selectable_value(&mut d.printer, None, tl!("Save as PDF"));
@@ -444,12 +482,32 @@ pub(crate) fn body(
                             d.show_driver_options = !d.show_driver_options;
                         }
                     }
+                    if crate::icons::button(ui, "rotate-cw", 24.0, false, tl!("Check again")).clicked() {
+                        let details = spool::printers_detailed();
+                        d.printers = details.iter().map(|det| det.to_printer()).collect();
+                        d.printer_details = details;
+                        if d.printer.is_none() {
+                            d.printer = d.printers.iter().find(|p| p.default).or(d.printers.first()).map(|p| p.name.clone());
+                        }
+                    }
                 });
                 if d.printer != before {
                     d.show_driver_options = false;
                     d.driver_error = None;
                 }
                 ui.end_row();
+                if let Some(selected_name) = &d.printer
+                    && let Some(det) = d.printer_details.iter().find(|det| &det.name == selected_name)
+                    && !det.status.is_available()
+                {
+                    ui.label("");
+                    ui.label(
+                        egui::RichText::new(format!("Printer status: {} — check connection before printing", det.status.label()))
+                            .small()
+                            .color(Color32::from_rgb(0xD9, 0x77, 0x06)),
+                    );
+                    ui.end_row();
+                }
                 ui.label(tl!("Copies:"));
                 ui.horizontal(|ui| {
                     ui.add(egui::DragValue::new(&mut d.copies).range(1..=999));
@@ -458,17 +516,26 @@ pub(crate) fn body(
                 });
                 ui.end_row();
                 ui.label(tl!("Two-sided:"));
-                combo(
-                    ui,
-                    "duplex",
-                    &mut d.duplex,
-                    &[
-                        (spool::Duplex::Off, tl!("Off")),
-                        (spool::Duplex::LongEdge, tl!("Flip on long edge")),
-                        (spool::Duplex::ShortEdge, tl!("Flip on short edge")),
-                    ],
-                    160.0,
-                );
+                ui.horizontal(|ui| {
+                    combo(
+                        ui,
+                        "duplex",
+                        &mut d.duplex,
+                        &[
+                            (spool::Duplex::Off, tl!("Off")),
+                            (spool::Duplex::LongEdge, tl!("Flip on long edge")),
+                            (spool::Duplex::ShortEdge, tl!("Flip on short edge")),
+                        ],
+                        150.0,
+                    );
+                    combo(
+                        ui,
+                        "print-dpi",
+                        &mut d.dpi,
+                        &[(150, "150 DPI"), (300, "300 DPI"), (600, "600 DPI")],
+                        90.0,
+                    );
+                });
                 ui.end_row();
                 ui.label(tl!("Paper:"));
                 egui::ComboBox::from_id_salt("paper").selected_text(PAPERS[d.paper].0).width(160.0).show_ui(ui, |ui| {

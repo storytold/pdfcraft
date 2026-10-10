@@ -1,45 +1,65 @@
-//! Home tab: recommended tools, open card, pinned folders and recent files (local only, never
-//! another app's list).
+//! Home tab: Linkco PDF Editor dashboard with recommended tools, open card, pinned folders, and
+//! recent files (local only, never another app's list).
 
-use egui::{Align2, CornerRadius, Rect, Sense, Stroke, vec2};
+use egui::{Align, Align2, CornerRadius, Layout, Rect, Sense, Stroke, vec2};
 use pdfcraft_engine::catalog;
 
 use crate::theme::{self, Tokens};
 use crate::{LeftPanel, PdfCraftApp, icons, panels::human_size, widgets};
 
-const RECOMMENDED: [&str; 5] = ["organize", "comment", "form", "edit", "protect"];
+const RECOMMENDED: [&str; 8] = ["organize", "edit", "combine", "compress", "export", "scan", "fill_sign", "protect"];
 
 pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 36, right: 36, top: 28, bottom: 28 }).show(ui, |ui| {
-            ui.label(egui::RichText::new(tl!("Welcome to PdfCraft")).font(theme::semibold(24.0)));
-            ui.label(
-                egui::RichText::new(tl!("An open-source PDF workbench — local, private, and scriptable."))
-                    .color(t.text_muted)
-                    .font(theme::regular(14.0)),
-            );
-            ui.add_space(14.0);
+            // Linkco (linkco.com.qa) branded header banner
             egui::Frame::NONE
-                .fill(t.card)
-                .stroke(Stroke::new(1.0, t.border))
+                .fill(if t.dark() { egui::Color32::from_rgb(0x0B, 0x19, 0x26) } else { egui::Color32::from_rgb(0x01, 0x13, 0x1C) })
+                .stroke(Stroke::new(1.0, egui::Color32::from_rgb(0xF2, 0x24, 0x24)))
                 .corner_radius(CornerRadius::same(12))
-                .inner_margin(egui::Margin::same(14))
+                .inner_margin(egui::Margin { left: 20, right: 20, top: 16, bottom: 16 })
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        widgets::artcraft_mark(ui, 28.0);
+                        widgets::app_mark(ui, 48.0);
+                        ui.add_space(10.0);
                         ui.vertical(|ui| {
-                            ui.label(egui::RichText::new(tl!("Join the ArtCraft community")).font(theme::semibold(15.0)));
-                            ui.label(egui::RichText::new(tl!("Get help, share feedback and follow development on Discord.")).color(t.text_muted));
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(tl!("Linkco PDF Editor"))
+                                        .color(egui::Color32::WHITE)
+                                        .font(theme::semibold(23.0)),
+                                );
+                                egui::Frame::NONE
+                                    .fill(egui::Color32::from_rgb(0xF2, 0x24, 0x24))
+                                    .corner_radius(CornerRadius::same(4))
+                                    .inner_margin(egui::Margin::symmetric(8, 2))
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            egui::RichText::new("LINKCO")
+                                                .color(egui::Color32::WHITE)
+                                                .font(theme::semibold(10.5)),
+                                        );
+                                    });
+                            });
+                            ui.label(
+                                egui::RichText::new(tl!("Professional PDF tools for everyday document work."))
+                                    .color(egui::Color32::from_rgb(0xCB, 0xD5, 0xE1))
+                                    .font(theme::regular(13.5)),
+                            );
+                            ui.add_space(2.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "Al Rawabet Commercial Services & Contracting Co. W.L.L. (Linkco)  ·  Doha, Qatar  ·  www.linkco.com.qa",
+                                )
+                                .color(egui::Color32::from_rgb(0x94, 0xA3, 0xB8))
+                                .font(theme::regular(11.5)),
+                            );
                         });
                     });
-                    ui.add_space(8.0);
-                    if let Some(cmd) = widgets::community_links(ui) {
-                        app.execute(cmd);
-                    }
                 });
-            ui.add_space(22.0);
+            ui.add_space(20.0);
 
             egui::Frame::NONE
                 .fill(t.card)
@@ -48,8 +68,23 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 .inner_margin(egui::Margin::same(18))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(egui::RichText::new(tl!("Recommended tools")).font(theme::semibold(15.0)));
-                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(tl!("Recommended tools")).font(theme::semibold(15.0)));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui
+                                .add(
+                                    egui::Label::new(egui::RichText::new(tl!("View all tools →")).color(t.accent_text).font(theme::medium(13.0)))
+                                        .sense(Sense::click()),
+                                )
+                                .clicked()
+                            {
+                                app.left = LeftPanel::AllTools;
+                                app.left_open = true;
+                                app.all_tools_expanded = true;
+                            }
+                        });
+                    });
+                    ui.add_space(12.0);
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = vec2(14.0, 14.0);
                         for id in RECOMMENDED {
@@ -127,7 +162,9 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             });
             ui.add_space(8.0);
             if app.recent.is_empty() {
-                ui.label(egui::RichText::new(tl!("Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.")).color(t.text_muted));
+                ui.label(
+                    egui::RichText::new(tl!("Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.")).color(t.text_muted),
+                );
             }
             let mut open = None;
             let mut remove = None;
@@ -186,8 +223,18 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             ui.add_space(20.0);
             widgets::section_title(ui, tl!("Privacy"));
             ui.label(
-                egui::RichText::new(tl!("PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider."))
-                    .color(t.text_muted),
+                egui::RichText::new(tl!(
+                    "Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider."
+                ))
+                .color(t.text_muted),
+            );
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(
+                    "Al Rawabet Commercial Services and Contracting Company W.L.L. (Linkco)  ·  C.R. No. 32942  ·  ISO 9001, 14001 & 45001 Certified  ·  Building 159, Street 220, Zone 24, P.O. Box 32282, Doha – Qatar  ·  +974 4437 2511  ·  info@linkco.com.qa",
+                )
+                .color(t.text_faint)
+                .font(theme::regular(11.5)),
             );
         });
     });
@@ -204,17 +251,6 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.set_fonts(theme::font_definitions());
         let mut app = PdfCraftApp::new();
-        let blurb = catalog::group("form")
-            .unwrap()
-            .sections
-            .first()
-            .unwrap()
-            .items
-            .iter()
-            .take(3)
-            .map(|item| crate::i18n::tr(de, item.label))
-            .collect::<Vec<_>>()
-            .join(" · ");
         let output = ctx
             .run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1440.0, 900.0))), ..Default::default() }, |ui| {
                 show(&mut app, ui)
@@ -222,16 +258,29 @@ mod tests {
         crate::i18n::set_current(crate::i18n::Lang::EN);
         let text_shapes: Vec<_> =
             output.shapes.iter().filter_map(|shape| if let egui::Shape::Text(text) = &shape.shape { Some(text) } else { None }).collect();
-        let description = text_shapes.iter().find(|text| text.galley.job.text == blurb).unwrap();
-        let action = text_shapes
-            .iter()
-            .find(|text| text.galley.job.text == crate::i18n::tr(de, "Use now") && (text.pos.x - description.pos.x).abs() < 0.1)
-            .unwrap();
-        assert!(description.galley.rows.len() <= 2);
-        assert!(
-            description.pos.y + description.galley.size().y + 4.0 <= action.pos.y,
-            "the translated description must leave a visible gap before its action"
-        );
+        for id in RECOMMENDED {
+            let blurb = catalog::group(id)
+                .unwrap()
+                .sections
+                .first()
+                .unwrap()
+                .items
+                .iter()
+                .take(3)
+                .map(|item| crate::i18n::tr(de, item.label))
+                .collect::<Vec<_>>()
+                .join(" · ");
+            let description = text_shapes.iter().find(|text| text.galley.job.text == blurb).unwrap();
+            let action = text_shapes
+                .iter()
+                .find(|text| text.galley.job.text == crate::i18n::tr(de, "Use now") && (text.pos.x - description.pos.x).abs() < 0.1)
+                .unwrap();
+            assert!(description.galley.rows.len() <= 2);
+            assert!(
+                description.pos.y + description.galley.size().y + 4.0 <= action.pos.y,
+                "the translated description for {id} must leave a visible gap before its action"
+            );
+        }
         output.drop_without_applying_deltas();
     }
 }

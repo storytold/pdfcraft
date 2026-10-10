@@ -62,7 +62,7 @@ fn checking_fixing_skipping_and_reporting() {
     h.run_steps(3);
     assert_eq!(status(&h, Rule::Title), Status::Passed);
     assert!(matches!(h.state().dialog, Some(Dialog::Properties(_))));
-    assert_eq!(h.state().window_title, "notes — PdfCraft");
+    assert_eq!(h.state().window_title, "notes — Linkco PDF Editor");
     h.state_mut().dialog = None;
     h.run_steps(2);
     // Skip a rule; it stays skipped when checking again.

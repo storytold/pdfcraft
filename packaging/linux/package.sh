@@ -37,10 +37,10 @@ case "$ARCH" in
   aarch64 | arm64) ARCH=aarch64; DEB_ARCH=arm64 ;;
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
 esac
-export PDFCRAFT_MAINTAINER="${PDFCRAFT_MAINTAINER:-PdfCraft maintainers <pdfcraft@storyteller.ai>}"
+export PDFCRAFT_MAINTAINER="${PDFCRAFT_MAINTAINER:-Al Rawabet Commercial Services & Contracting Company W.L.L.}"
 BASENAME="pdfcraft-$VERSION-linux-$ARCH"
 
-echo "==> PdfCraft $VERSION for Linux $ARCH ($FORMATS)"
+echo "==> Linkco PDF Editor $VERSION for Linux $ARCH ($FORMATS)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
   (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli)

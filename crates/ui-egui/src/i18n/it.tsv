@@ -12,7 +12,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Italian computing vocabulary. No proprietary localisation resource, string table or product UI
 # (Acrobat's included) was consulted or copied; add entries the same way.
-# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
+# Product and technology names (Linkco PDF Editor, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept.
 
 	Menu	Menu
@@ -145,7 +145,7 @@
 	Next page	Pagina successiva
 	Previous page	Pagina precedente
 	Current page — type a page number or label (such as iv) and press Enter	Pagina corrente: digita un numero o un'etichetta di pagina (ad esempio iv) e premi Invio
-	Welcome to PdfCraft	Benvenuto in PdfCraft
+	Welcome to Linkco PDF Editor	Benvenuto in Linkco PDF Editor
 	An open-source PDF workbench — local, private, and scriptable.	Un banco di lavoro PDF open source: locale, riservato e programmabile.
 	Join the ArtCraft community	Unisciti alla community di ArtCraft
 	Get help, share feedback and follow development on Discord.	Chiedi aiuto, condividi commenti e segui lo sviluppo su Discord.
@@ -153,9 +153,9 @@
 	Use now	Usa ora
 	Open file	Apri file
 	Recent	Recenti
-	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	I file aperti in PdfCraft compaiono qui. Trascina un PDF in un punto qualsiasi per aprirlo.
+	Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.	I file aperti in Linkco PDF Editor compaiono qui. Trascina un PDF in un punto qualsiasi per aprirlo.
 	Privacy	Privacy
-	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft funziona offline. Nessuna telemetria, nessun account e nessuna elaborazione nel cloud, a meno che tu non aggiunga un fornitore.
+	Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider.	Linkco PDF Editor funziona offline. Nessuna telemetria, nessun account e nessuna elaborazione nel cloud, a meno che tu non aggiunga un fornitore.
 	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Gli script vengono eseguiti in una sandbox senza accesso a file o rete. Con JavaScript disattivato, le funzioni standard di formato, convalida e calcolo di Acrobat continuano a funzionare.
 	Back to all tools	Torna a tutti gli strumenti
 	Close panel	Chiudi pannello
@@ -290,11 +290,11 @@
 	Number pages…	Numera pagine…
 	Keyboard shortcuts	Scorciatoie da tastiera
 	Join the ArtCraft Discord	Unisciti al Discord di ArtCraft
-	PdfCraft web page	Pagina web di PdfCraft
-	PdfCraft on GitHub	PdfCraft su GitHub
+	Linkco PDF Editor web page	Pagina web di Linkco PDF Editor
+	Linkco PDF Editor on GitHub	Linkco PDF Editor su GitHub
 	ArtCraft website	Sito web di ArtCraft
 	Check for updates…	Verifica aggiornamenti…
-	About PdfCraft	Informazioni su PdfCraft
+	About Linkco PDF Editor	Informazioni su Linkco PDF Editor
 	Export a PDF	Esporta un PDF
 	Export to	Esporta in
 	Microsoft Word (.docx)	Microsoft Word (.docx)
@@ -736,9 +736,9 @@
 	Check for updates	Verifica aggiornamenti
 	No check has run yet.	Nessuna verifica eseguita finora.
 	Checking for a newer version…	Ricerca di una versione più recente…
-	PdfCraft {v} is available.	PdfCraft {v} è disponibile.
+	Linkco PDF Editor {v} is available.	Linkco PDF Editor {v} è disponibile.
 	You have version {c}. Download the new version from its release page.	Hai la versione {c}. Scarica la nuova versione dalla sua pagina di rilascio.
-	PdfCraft {c} is up to date.	PdfCraft {c} è aggiornato.
+	Linkco PDF Editor {c} is up to date.	Linkco PDF Editor {c} è aggiornato.
 	Couldn't check for updates: {e}	Impossibile verificare gli aggiornamenti: {e}
 	You have version {c}. All releases are listed at {page}.	Hai la versione {c}. Tutte le versioni sono elencate su {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Chiede a GitHub qual è l'ultima versione. Nulla viene scaricato o installato automaticamente.
@@ -845,8 +845,8 @@
 	No changes allowed	Nessuna modifica consentita
 	Annotations, form fill-in, and digital signatures	Annotazioni, compilazione moduli e firme digitali
 	Form fill-in and digital signatures	Compilazione moduli e firme digitali
-	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	La chiave si trova nel Portachiavi di macOS, che potrebbe chiedere di autorizzarne l'uso da parte di PdfCraft.
-	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	La chiave si trova nell'archivio certificati di Windows, che potrebbe chiedere di autorizzarne l'uso da parte di PdfCraft.
+	The key is in the macOS Keychain, which may ask to allow Linkco PDF Editor to use it.	La chiave si trova nel Portachiavi di macOS, che potrebbe chiedere di autorizzarne l'uso da parte di Linkco PDF Editor.
+	The key is in the Windows certificate store, which may ask to allow Linkco PDF Editor to use it.	La chiave si trova nell'archivio certificati di Windows, che potrebbe chiedere di autorizzarne l'uso da parte di Linkco PDF Editor.
 	Digital ID password	Password dell'ID digitale
 	Back	Indietro
 	Validate all	Convalida tutte
@@ -1345,7 +1345,7 @@
 	Anyone opening the document will need this password. It's applied when you save.	Chiunque apra il documento avrà bisogno di questa password. Viene applicata al salvataggio.
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	Il documento si apre senza password; questa password serve per modificare le restrizioni. Viene applicata al salvataggio.
 	Recover unsaved documents?	Recuperare i documenti non salvati?
-	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft non è stato chiuso correttamente. Questi documenti avevano modifiche salvate automaticamente:
+	Linkco PDF Editor didn't shut down normally. These documents had changes that were autosaved:	Linkco PDF Editor non è stato chiuso correttamente. Questi documenti avevano modifiche salvate automaticamente:
 	just now	poco fa
 	{n} min ago	{n} min fa
 	{n} h ago	{n} h fa
@@ -1501,10 +1501,10 @@
 	On the web, open or drop an image to convert it	Sul web, apri o trascina un'immagine per convertirla
 	Couldn't optimize the file: {e}	Impossibile ottimizzare il file: {e}
 	Couldn't write {path}: {e}	Impossibile scrivere {path}: {e}
-	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	Il modulo chiede di essere inviato a {u}; PdfCraft non invia dati dei moduli. Salva il documento per conservare i dati inseriti.
+	The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	Il modulo chiede di essere inviato a {u}; Linkco PDF Editor non invia dati dei moduli. Salva il documento per conservare i dati inseriti.
 	{s} actions run in the JavaScript engine (M6)	Le azioni {s} vengono eseguite nel motore JavaScript (M6)
 	{name}: the {other} action isn't supported yet	{name}: l'azione {other} non è ancora supportata
-	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} invia il modulo a {url}; PdfCraft non invia dati dei moduli. Salva il documento per conservare i dati inseriti.
+	{name} submits the form to {url}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	{name} invia il modulo a {url}; Linkco PDF Editor non invia dati dei moduli. Salva il documento per conservare i dati inseriti.
 	Export stopped: {e}	Esportazione interrotta: {e}
 	Exported 1 image	Esportata 1 immagine
 	Exported {n} images	Esportate {n} immagini
@@ -1727,8 +1727,8 @@
 	Signed and all signatures are valid.	Firmato e tutte le firme sono valide.
 	At least one signature has problems.	Almeno una firma presenta problemi.
 	This document is secured. Some changes are restricted by its security settings.	Questo documento è protetto. Alcune modifiche sono limitate dalle sue impostazioni di sicurezza.
-	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Questo è un modulo XFA dinamico, che PdfCraft non è ancora in grado di visualizzare. Quella che vedi è la pagina segnaposto del file.
-	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Questo modulo contiene anche dati XFA, che PdfCraft non legge ancora. Puoi compilarne i campi, ma Acrobat potrebbe mostrare invece i valori XFA.
+	This is a dynamic XFA form, which Linkco PDF Editor can't display yet. What you see is the file's placeholder page.	Questo è un modulo XFA dinamico, che Linkco PDF Editor non è ancora in grado di visualizzare. Quella che vedi è la pagina segnaposto del file.
+	This form also contains XFA data, which Linkco PDF Editor doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Questo modulo contiene anche dati XFA, che Linkco PDF Editor non legge ancora. Puoi compilarne i campi, ma Acrobat potrebbe mostrare invece i valori XFA.
 	This document contains {n} interactive form fields.	Questo documento contiene {n} campi modulo interattivi.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Questo file era danneggiato ed è stato riparato. Il salvataggio mantiene la versione riparata.
 	Dismiss	Ignora
@@ -2080,7 +2080,7 @@
 	Open arrow	Freccia aperta
 	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Apre le preferenze del driver della stampante. Vengono salvate per ogni stampa da questo computer; copie, fronte-retro, scala di grigi e carta scelti qui restano validi.
 	Pattern	Schema
-	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft sta disegnando senza un processore grafico, quindi potrebbe essere lento. Aggiornare il driver grafico può aiutare.
+	Linkco PDF Editor is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	Linkco PDF Editor sta disegnando senza un processore grafico, quindi potrebbe essere lento. Aggiornare il driver grafico può aiutare.
 	Place saved {what}	Posiziona l'elemento salvato: {what}
 	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	Stampa solo fronte. Tieni i fogli in ordine, taglia sui segni, poi impila le pile da sinistra a destra, dall'alto in basso.
 	Printer properties	Proprietà della stampante
@@ -2088,7 +2088,7 @@
 	Remove from Recent	Rimuovi dai recenti
 	Remove saved {what}	Rimuovi l'elemento salvato: {what}
 	Remove {name} from Recent	Rimuovi {name} dai recenti
-	Reopen the files that were open when PdfCraft last closed	Riapri i file aperti alla chiusura precedente di PdfCraft
+	Reopen the files that were open when Linkco PDF Editor last closed	Riapri i file aperti alla chiusura precedente di Linkco PDF Editor
 	Reset page size	Ripristina dimensione pagine
 	Reset to printer defaults	Ripristina le impostazioni predefinite della stampante
 	Reverse closed arrow	Freccia chiusa inversa
@@ -2105,7 +2105,7 @@
 	Smaller pages	Pagine più piccole
 	Squiggly	Ondulata
 	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Le righe di tabella devono stare direttamente in una tabella o nella sua intestazione, corpo o piè. Correggi i tag della tabella.
-	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Il riconoscimento del testo non è installato: mancano i file dei modelli. Reinstalla PdfCraft o imposta PDFCRAFT_MODELS sulla cartella che li contiene.
+	Text recognition isn't installed: its model files are missing. Reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them.	Il riconoscimento del testo non è installato: mancano i file dei modelli. Reinstalla Linkco PDF Editor o imposta PDFCRAFT_MODELS sulla cartella che li contiene.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Testo, segni e firme diventano parte della pagina. Gli altri commenti restano modificabili.
 	That didn't work: an internal error stopped it ({m}).	Non ha funzionato: un errore interno l'ha interrotto ({m}).
 	The Windows store's digital IDs couldn't be listed: {e}	Impossibile elencare gli ID digitali dell'archivio di Windows: {e}
@@ -2118,11 +2118,11 @@
 	Today: {date}	Oggi: {date}
 	Undo {action}	Annulla {action}
 	Use {what}	Usa {what}
-	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	i modelli di riconoscimento del testo non sono installati (reinstalla PdfCraft o imposta PDFCRAFT_MODELS sulla cartella che li contiene)
+	the text recognition models are not installed (reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them)	i modelli di riconoscimento del testo non sono installati (reinstalla Linkco PDF Editor o imposta PDFCRAFT_MODELS sulla cartella che li contiene)
 	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy o yy anno · m o mm mese · mmm o mmmm nome del mese · d o dd giorno · ddd o dddd giorno della settimana. H, h, M, s e t sono lettere dell'ora e non si possono usare da sole: metti {escape} prima di una lettera per mostrarla così com'è.
 	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} non si può ancora scrivere nel PDF: il testo di Compila e firma è solo dell'Europa occidentale. Scegli un formato numerico come dd.mm.yyyy.
-	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} in questo documento ha provato ad aprire un indirizzo che PdfCraft non apre: {e}.
-	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} in questo documento ha provato ad aprire un indirizzo che PdfCraft non apre: {e}. Dai documenti si aprono solo collegamenti web (http, https) ed e-mail (mailto).
+	{who} in this document tried to open an address Linkco PDF Editor won't open: {e}.	{who} in questo documento ha provato ad aprire un indirizzo che Linkco PDF Editor non apre: {e}.
+	{who} in this document tried to open an address Linkco PDF Editor won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} in questo documento ha provato ad aprire un indirizzo che Linkco PDF Editor non apre: {e}. Dai documenti si aprono solo collegamenti web (http, https) ed e-mail (mailto).
 	Certificate authority	Autorità di certificazione
 	End entity	Entità finale
 action wizard	Start	Avvia
@@ -2150,3 +2150,7 @@ signature pad	Type	Digita
 	The field {name} no longer exists.	Il campo {name} non esiste più.
 	A selected field has no widget on any page, so the fields can't be edited together.	Un campo selezionato non ha widget in nessuna pagina, quindi i campi non possono essere modificati insieme.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} dpi, la dimensione massima a cui si possono disegnare)
+	Linkco PDF Editor	Editor PDF Linkco
+	Professional PDF tools for everyday document work.	Strumenti PDF professionali per il lavoro quotidiano sui documenti.
+	Professional PDF document tools by Linkco.	Strumenti professionali per documenti PDF di Linkco.
+	View all tools →	Mostra tutti gli strumenti →

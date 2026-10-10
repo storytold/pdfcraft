@@ -33,9 +33,10 @@ fn the_exe_has_version_info_with_the_package_version() {
     let start = find(&exe, &utf16("VS_VERSION_INFO")).expect("no version resource");
     let resource = &exe[start..];
     for (key, value) in [
-        ("ProductName", "PdfCraft"),
-        ("FileDescription", "PdfCraft command-line tool"),
-        ("LegalCopyright", "Copyright (c) the PdfCraft contributors. MIT OR Apache-2.0."),
+        ("ProductName", "Linkco PDF Editor"),
+        ("CompanyName", "Al Rawabet Commercial Services & Contracting Company W.L.L."),
+        ("FileDescription", "Linkco PDF Editor command-line tool"),
+        ("LegalCopyright", "© Al Rawabet Commercial Services & Contracting Company W.L.L. MIT OR Apache-2.0."),
         ("OriginalFilename", "pdfcraft-cli.exe"),
         ("InternalName", "pdfcraft-cli"),
         ("FileVersion", env!("CARGO_PKG_VERSION")),

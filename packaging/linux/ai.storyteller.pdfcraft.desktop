@@ -1,14 +1,15 @@
 [Desktop Entry]
 Type=Application
-Name=PdfCraft
+Version=1.0
+Name=Linkco PDF Editor
 GenericName=PDF Editor
-Comment=Read, organize, combine, split and secure PDFs
+Comment=Professional PDF tools for everyday document work
 Exec=pdfcraft %U
 TryExec=pdfcraft
 Icon=ai.storyteller.pdfcraft
 Terminal=false
 StartupNotify=true
 StartupWMClass=pdfcraft
-Categories=Office;Viewer;
-Keywords=pdf;viewer;editor;annotate;sign;forms;merge;split;
+Categories=Office;Viewer;Graphics;
+Keywords=pdf;viewer;editor;annotate;sign;forms;merge;split;linkco;
 MimeType=application/pdf;

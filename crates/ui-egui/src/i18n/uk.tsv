@@ -12,7 +12,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Ukrainian computing vocabulary. No proprietary localisation resource, string table or product UI
 # (Acrobat's included) was consulted or copied; add entries the same way.
-# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
+# Product and technology names (Linkco PDF Editor, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept.
 
 # Integer plurals (CLDR uk): one (1, 21) | few (2–4, 22–24) | many (0, 5–19); 11–14 take many.
@@ -147,7 +147,7 @@
 	Next page	Наступна сторінка
 	Previous page	Попередня сторінка
 	Current page — type a page number or label (such as iv) and press Enter	Поточна сторінка — введіть номер або позначку сторінки (наприклад iv) і натисніть Enter
-	Welcome to PdfCraft	Вітаємо в PdfCraft
+	Welcome to Linkco PDF Editor	Вітаємо в Linkco PDF Editor
 	An open-source PDF workbench — local, private, and scriptable.	Відкритий інструментарій для PDF — локальний, приватний і з підтримкою сценаріїв.
 	Join the ArtCraft community	Приєднатися до спільноти ArtCraft
 	Get help, share feedback and follow development on Discord.	Отримуйте допомогу, діліться відгуками й стежте за розробкою в Discord.
@@ -155,9 +155,9 @@
 	Use now	Використати зараз
 	Open file	Відкрити файл
 	Recent	Нещодавні
-	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Тут з’являються файли, які ви відкриваєте в PdfCraft. Перетягніть PDF будь-куди, щоб відкрити його.
+	Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.	Тут з’являються файли, які ви відкриваєте в Linkco PDF Editor. Перетягніть PDF будь-куди, щоб відкрити його.
 	Privacy	Приватність
-	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft працює офлайн. Без телеметрії, облікового запису та хмарної обробки, якщо ви не додасте постачальника.
+	Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider.	Linkco PDF Editor працює офлайн. Без телеметрії, облікового запису та хмарної обробки, якщо ви не додасте постачальника.
 	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Сценарії виконуються в ізольованому середовищі без доступу до файлів і мережі. Коли JavaScript вимкнено, стандартні функції форматування, перевірки й обчислення Acrobat усе одно працюють.
 	Back to all tools	Назад до всіх інструментів
 	Close panel	Закрити панель
@@ -292,11 +292,11 @@
 	Number pages…	Пронумерувати сторінки…
 	Keyboard shortcuts	Клавіатурні скорочення
 	Join the ArtCraft Discord	Приєднатися до Discord ArtCraft
-	PdfCraft web page	Вебсторінка PdfCraft
-	PdfCraft on GitHub	PdfCraft на GitHub
+	Linkco PDF Editor web page	Вебсторінка Linkco PDF Editor
+	Linkco PDF Editor on GitHub	Linkco PDF Editor на GitHub
 	ArtCraft website	Вебсайт ArtCraft
 	Check for updates…	Перевірити оновлення…
-	About PdfCraft	Про PdfCraft
+	About Linkco PDF Editor	Про Linkco PDF Editor
 	Export a PDF	Експортувати PDF
 	Export to	Експортувати в
 	Microsoft Word (.docx)	Microsoft Word (.docx)
@@ -738,9 +738,9 @@
 	Check for updates	Перевірити оновлення
 	No check has run yet.	Перевірку ще не виконано.
 	Checking for a newer version…	Перевірка наявності новішої версії…
-	PdfCraft {v} is available.	Доступна версія PdfCraft {v}.
+	Linkco PDF Editor {v} is available.	Доступна версія Linkco PDF Editor {v}.
 	You have version {c}. Download the new version from its release page.	У вас версія {c}. Завантажте нову версію зі сторінки випуску.
-	PdfCraft {c} is up to date.	Ваша версія PdfCraft {c} актуальна.
+	Linkco PDF Editor {c} is up to date.	Ваша версія Linkco PDF Editor {c} актуальна.
 	Couldn't check for updates: {e}	Не вдалося перевірити оновлення: {e}
 	You have version {c}. All releases are listed at {page}.	У вас версія {c}. Усі випуски наведено на {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Запитує в GitHub найновіший випуск. Нічого не завантажується й не встановлюється автоматично.
@@ -847,8 +847,8 @@
 	No changes allowed	Зміни заборонено
 	Annotations, form fill-in, and digital signatures	Коментарі, заповнення форми й цифрові підписи
 	Form fill-in and digital signatures	Заповнення форми й цифрові підписи
-	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	Ключ у В’язці ключів macOS, яка може запитати дозвіл на його використання PdfCraft.
-	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	Ключ у сховищі сертифікатів Windows, яке може запитати дозвіл на його використання PdfCraft.
+	The key is in the macOS Keychain, which may ask to allow Linkco PDF Editor to use it.	Ключ у В’язці ключів macOS, яка може запитати дозвіл на його використання Linkco PDF Editor.
+	The key is in the Windows certificate store, which may ask to allow Linkco PDF Editor to use it.	Ключ у сховищі сертифікатів Windows, яке може запитати дозвіл на його використання Linkco PDF Editor.
 	Digital ID password	Пароль цифрового посвідчення
 	Back	Назад
 	Validate all	Перевірити все
@@ -1204,7 +1204,7 @@
 	Searchable Image (Exact)	Зображення з пошуком (точне)
 	Adds invisible text over each word; the page image is not changed	Додає невидимий текст поверх кожного слова; зображення сторінки не змінюється
 	Downsample to	Знизити роздільну здатність до
-	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Розпізнавання тексту не встановлено: бракує файлів моделей. Перевстановіть PdfCraft або задайте в PDFCRAFT_MODELS теку, у якій вони лежать.
+	Text recognition isn't installed: its model files are missing. Reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them.	Розпізнавання тексту не встановлено: бракує файлів моделей. Перевстановіть Linkco PDF Editor або задайте в PDFCRAFT_MODELS теку, у якій вони лежать.
 	Settings	Налаштування
 	Optional	Необов’язково
 	Planned · {m}	Заплановано · {m}
@@ -1348,7 +1348,7 @@
 	Anyone opening the document will need this password. It's applied when you save.	Кожному, хто відкриватиме документ, знадобиться цей пароль. Він застосовується під час збереження.
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	Документ відкривається без пароля; цей пароль потрібен для зміни обмежень. Він застосовується під час збереження.
 	Recover unsaved documents?	Відновити незбережені документи?
-	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft завершив роботу некоректно. Зміни цих документів було автоматично збережено:
+	Linkco PDF Editor didn't shut down normally. These documents had changes that were autosaved:	Linkco PDF Editor завершив роботу некоректно. Зміни цих документів було автоматично збережено:
 	just now	щойно
 	{n} min ago	{n} хв тому
 	{n} h ago	{n} год тому
@@ -1504,10 +1504,10 @@
 	On the web, open or drop an image to convert it	У вебверсії відкрийте або перетягніть зображення, щоб перетворити його
 	Couldn't optimize the file: {e}	Не вдалося оптимізувати файл: {e}
 	Couldn't write {path}: {e}	Не вдалося записати {path}: {e}
-	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	Форма запитує надсилання до {u}; PdfCraft не надсилає дані форми. Збережіть документ, щоб зберегти введені дані.
+	The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	Форма запитує надсилання до {u}; Linkco PDF Editor не надсилає дані форми. Збережіть документ, щоб зберегти введені дані.
 	{s} actions run in the JavaScript engine (M6)	Дії ({s}) виконуються в рушії JavaScript (M6)
 	{name}: the {other} action isn't supported yet	{name}: дія {other} ще не підтримується
-	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} надсилає форму до {url}; PdfCraft не надсилає дані форми. Збережіть документ, щоб зберегти введені дані.
+	{name} submits the form to {url}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	{name} надсилає форму до {url}; Linkco PDF Editor не надсилає дані форми. Збережіть документ, щоб зберегти введені дані.
 	Export stopped: {e}	Експорт зупинено: {e}
 	Exported 1 image	Експортовано 1 зображення
 	Exported {n} images	Експортовано зображень: {n}
@@ -1720,8 +1720,8 @@
 	Signed and all signatures are valid.	Підписано, і всі підписи дійсні.
 	At least one signature has problems.	Щонайменше один підпис має проблеми.
 	This document is secured. Some changes are restricted by its security settings.	Цей документ захищено. Деякі зміни обмежено налаштуваннями захисту.
-	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Це динамічна форма XFA, яку PdfCraft ще не може відобразити. Ви бачите сторінку-заглушку файлу.
-	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Ця форма також містить дані XFA, які PdfCraft ще не читає. Ви можете заповнювати поля, але Acrobat може показувати натомість значення XFA.
+	This is a dynamic XFA form, which Linkco PDF Editor can't display yet. What you see is the file's placeholder page.	Це динамічна форма XFA, яку Linkco PDF Editor ще не може відобразити. Ви бачите сторінку-заглушку файлу.
+	This form also contains XFA data, which Linkco PDF Editor doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Ця форма також містить дані XFA, які Linkco PDF Editor ще не читає. Ви можете заповнювати поля, але Acrobat може показувати натомість значення XFA.
 	This document contains {n} interactive form fields.	Цей документ містить інтерактивні поля форми: {n}.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Цей файл було пошкоджено й виправлено. Збереження збереже виправлену версію.
 	Dismiss	Приховати
@@ -1770,7 +1770,7 @@
 	there are no pages to print	немає сторінок для друку
 	the document has no tags	документ не має тегів
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	моделі розпізнавання тексту не встановлено (перевстановіть PdfCraft або задайте в PDFCRAFT_MODELS теку, у якій вони лежать)
+	the text recognition models are not installed (reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them)	моделі розпізнавання тексту не встановлено (перевстановіть Linkco PDF Editor або задайте в PDFCRAFT_MODELS теку, у якій вони лежать)
 	the image is empty	зображення порожнє
 	this file isn't XFDF, FDF, XML or text form data	цей файл не містить даних форми XFDF, FDF, XML чи текстових даних
 	nothing in the file matches this document	ніщо у файлі не відповідає цьому документу
@@ -2014,7 +2014,7 @@
 	Couldn't optimize the file	Не вдалося оптимізувати файл
 	Files are combined in this order. Leave Pages empty to take every page.	Файли об’єднуються в цьому порядку. Залиште «Сторінки» порожнім, щоб узяти всі сторінки.
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Портативний режим вимкнено: неможливо записати в {folder} ({error}). Налаштування зберігаються у вашій користувацькій теці.
-	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft малює без графічного процесора, тому може працювати повільно. Оновлення графічного драйвера може допомогти.
+	Linkco PDF Editor is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	Linkco PDF Editor малює без графічного процесора, тому може працювати повільно. Оновлення графічного драйвера може допомогти.
 	Show	Показувати
 	Sort	Сортувати
 	Reverse the order	Зворотний порядок
@@ -2072,7 +2072,7 @@ calendar date	September	вересня
 calendar date	October	жовтня
 calendar date	November	листопада
 calendar date	December	грудня
-	Reopen the files that were open when PdfCraft last closed	Знову відкривати файли, які були відкриті під час останнього закриття PdfCraft
+	Reopen the files that were open when Linkco PDF Editor last closed	Знову відкривати файли, які були відкриті під час останнього закриття Linkco PDF Editor
 	Clear Recent Files	Очистити список нещодавніх файлів
 	Remove from Recent	Вилучити з нещодавніх
 	Remove {name} from Recent	Вилучити {name} з нещодавніх
@@ -2086,8 +2086,8 @@ calendar date	December	грудня
 	A link	Посилання
 	A button	Кнопка
 	A script	Сценарій
-	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} у цьому документі намагається відкрити адресу, яку PdfCraft не відкриває: {e}.
-	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} у цьому документі намагається відкрити адресу, яку PdfCraft не відкриває: {e}. З документів відкриваються лише вебпосилання (http, https) та посилання на електронну пошту (mailto).
+	{who} in this document tried to open an address Linkco PDF Editor won't open: {e}.	{who} у цьому документі намагається відкрити адресу, яку Linkco PDF Editor не відкриває: {e}.
+	{who} in this document tried to open an address Linkco PDF Editor won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} у цьому документі намагається відкрити адресу, яку Linkco PDF Editor не відкриває: {e}. З документів відкриваються лише вебпосилання (http, https) та посилання на електронну пошту (mailto).
 	Another file dialog is still open. Finish with it first.	Ще відкрито інше вікно вибору файлу. Спершу завершіть роботу з ним.
 	Couldn't show the file picker. Please try again.	Не вдалося показати вікно вибору файлу. Спробуйте ще раз.
 	The document changed while you were choosing a file, so nothing was changed.	Документ змінився, поки ви вибирали файл, тому нічого не змінено.
@@ -2164,3 +2164,7 @@ certificate	Subject	Власник сертифіката
 	The field {name} no longer exists.	Поле {name} більше не існує.
 	A selected field has no widget on any page, so the fields can't be edited together.	Одне з вибраних полів не має віджета на жодній сторінці, тому поля не можна редагувати разом.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} — з роздільністю {dpi} dpi, найбільшою, з якою їх можна відобразити)
+	Linkco PDF Editor	Редактор PDF Linkco
+	Professional PDF tools for everyday document work.	Професійні інструменти PDF для щоденної роботи з документами.
+	Professional PDF document tools by Linkco.	Професійні інструменти для документів PDF від Linkco.
+	View all tools →	Переглянути всі інструменти →

@@ -1,6 +1,6 @@
 //! A Model Context Protocol server over the automation tools.
 //!
-//! **Opt-in only.** Nothing in PdfCraft starts this server on its own: it runs when a user
+//! **Opt-in only.** Nothing in Linkco PDF Editor starts this server on its own: it runs when a user
 //! launches `pdfcraft-cli mcp` (usually by adding that command to their agent's MCP
 //! configuration), and stops when its input closes. It opens no network port; the transport is
 //! newline-delimited JSON-RPC 2.0 over stdin/stdout.
@@ -26,7 +26,7 @@ const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
-const INSTRUCTIONS: &str = "PdfCraft edits PDFs. Open a file with doc_open to get a document id, then inspect \
+const INSTRUCTIONS: &str = "Linkco PDF Editor edits PDFs. Open a file with doc_open to get a document id, then inspect \
 (doc_info, text_extract, text_find, page_render) or edit it (page_*, doc_set_info). Edits are undoable \
 (edit_undo) and stay in memory until doc_save. Page numbers are 1-based. Open documents are also \
 resources: pdfcraft://doc/{doc}/info, /text, /page/{page}/text and /page/{page}/image. \
@@ -131,7 +131,7 @@ impl McpServer {
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false }, "resources": { "listChanged": false, "subscribe": false } },
-                    "serverInfo": { "name": "pdfcraft", "title": "PdfCraft", "version": env!("CARGO_PKG_VERSION"), "websiteUrl": pdfcraft_engine::links::APP_PAGE },
+                    "serverInfo": { "name": "pdfcraft", "title": "Linkco PDF Editor", "version": env!("CARGO_PKG_VERSION"), "websiteUrl": pdfcraft_engine::links::APP_PAGE },
                     "instructions": if self.compact { format!("{INSTRUCTIONS}{COMPACT_INSTRUCTIONS}") } else { INSTRUCTIONS.to_string() },
                 }))
             }

@@ -5,7 +5,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Simplified Chinese computing vocabulary. No proprietary localisation resource, string table or
 # product UI (Acrobat's included) was consulted or copied; add entries the same way.
-# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
+# Product and technology names (Linkco PDF Editor, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept.
 
 # About, contributor/model credits, and multiline interface guidance.
@@ -432,9 +432,9 @@
 	Check for updates	检查更新
 	No check has run yet.	尚未运行检查。
 	Checking for a newer version…	正在检查新版本…
-	PdfCraft {v} is available.	PdfCraft {v} 可用。
+	Linkco PDF Editor {v} is available.	Linkco PDF Editor {v} 可用。
 	You have version {c}. Download the new version from its release page.	当前版本为 {c}。请从其发布页面下载新版本。
-	PdfCraft {c} is up to date.	PdfCraft {c} 已是最新。
+	Linkco PDF Editor {c} is up to date.	Linkco PDF Editor {c} 已是最新。
 	Couldn't check for updates: {e}	无法检查更新：{e}
 	You have version {c}. All releases are listed at {page}.	当前版本为 {c}。所有版本列在 {page}。
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	向 GitHub 查询最新版本。不会自动下载或安装任何内容。
@@ -541,8 +541,8 @@
 	No changes allowed	不允许任何更改
 	Annotations, form fill-in, and digital signatures	注释、填写表单和数字签名
 	Form fill-in and digital signatures	填写表单和数字签名
-	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	密钥位于 macOS 钥匙串中，系统可能会询问是否允许 PdfCraft 使用它。
-	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	密钥位于 Windows 证书存储中，系统可能会询问是否允许 PdfCraft 使用它。
+	The key is in the macOS Keychain, which may ask to allow Linkco PDF Editor to use it.	密钥位于 macOS 钥匙串中，系统可能会询问是否允许 Linkco PDF Editor 使用它。
+	The key is in the Windows certificate store, which may ask to allow Linkco PDF Editor to use it.	密钥位于 Windows 证书存储中，系统可能会询问是否允许 Linkco PDF Editor 使用它。
 	Digital ID password	数字 ID 密码
 	Back	返回
 	Validate all	全部验证
@@ -918,7 +918,7 @@
 	Searchable Image (Exact)	可搜索图像（精确）
 	Adds invisible text over each word; the page image is not changed	在每个词上添加不可见文本；页面图像保持不变
 	Downsample to	降采样至
-	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	未安装文本识别：缺少模型文件。请重新安装 PdfCraft，或将 PDFCRAFT_MODELS 设置为包含这些文件的文件夹。
+	Text recognition isn't installed: its model files are missing. Reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them.	未安装文本识别：缺少模型文件。请重新安装 Linkco PDF Editor，或将 PDFCRAFT_MODELS 设置为包含这些文件的文件夹。
 	Settings	设置
 	Protect	保护
 	Advanced options	高级选项
@@ -1299,7 +1299,7 @@
 	Anyone opening the document will need this password. It's applied when you save.	打开文档的任何人都需要此密码。保存时应用。
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	打开文档无需密码；更改限制需要此密码。保存时应用。
 	Recover unsaved documents?	要恢复未保存的文档吗？
-	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft 未正常关闭。以下文档的更改已自动保存：
+	Linkco PDF Editor didn't shut down normally. These documents had changes that were autosaved:	Linkco PDF Editor 未正常关闭。以下文档的更改已自动保存：
 	just now	刚刚
 	{n} min ago	{n} 分钟前
 	{n} h ago	{n} 小时前
@@ -1465,10 +1465,10 @@
 	On the web, open or drop an image to convert it	在 Web 端，打开或拖入图像进行转换
 	Couldn't optimize the file: {e}	无法优化文件：{e}
 	Couldn't write {path}: {e}	无法写入{path}：{e}
-	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	该表单请求提交到{u}；PdfCraft 不发送表单数据。请保存文档以保留填写内容。
+	The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	该表单请求提交到{u}；Linkco PDF Editor 不发送表单数据。请保存文档以保留填写内容。
 	{s} actions run in the JavaScript engine (M6)	{s} 动作在 JavaScript 引擎中运行 (M6)
 	{name}: the {other} action isn't supported yet	{name}：{other} 动作暂不受支持
-	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} 将表单提交到{url}；PdfCraft 不发送表单数据。请保存文档以保留填写内容。
+	{name} submits the form to {url}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	{name} 将表单提交到{url}；Linkco PDF Editor 不发送表单数据。请保存文档以保留填写内容。
 	Export stopped: {e}	导出中止：{e}
 	Exported 1 image	已导出 1 张图像
 	Exported {n} images	已导出{n}张图像
@@ -1624,7 +1624,7 @@
 	Couldn't open {name}: {e}	无法打开{name}：{e}
 	Couldn't read {name}: {e}	无法读取{name}：{e}
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	便携模式已关闭：无法写入{folder}（{error}）。设置改为保存在你的用户文件夹中。
-	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft 正在不使用图形处理器的情况下绘制，因此可能较慢。更新显卡驱动程序可能会有帮助。
+	Linkco PDF Editor is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	Linkco PDF Editor 正在不使用图形处理器的情况下绘制，因此可能较慢。更新显卡驱动程序可能会有帮助。
 	Couldn't save: {e}	无法保存：{e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Web 端附件下载将于 M3.10 到来（{n} 字节已就绪）
 	`{command}` {when}	`{command}` {when}
@@ -1692,8 +1692,8 @@
 	Signed and all signatures are valid.	已签名，所有签名均有效。
 	At least one signature has problems.	至少一个签名存在问题。
 	This document is secured. Some changes are restricted by its security settings.	本文档已加密。其安全设置限制了部分更改。
-	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	这是动态 XFA 表单，PdfCraft 暂无法显示。您看到的是文件的占位页面。
-	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	此表单还包含 XFA 数据，PdfCraft 暂不读取。您可以填写字段，但 Acrobat 可能显示 XFA 值。
+	This is a dynamic XFA form, which Linkco PDF Editor can't display yet. What you see is the file's placeholder page.	这是动态 XFA 表单，Linkco PDF Editor 暂无法显示。您看到的是文件的占位页面。
+	This form also contains XFA data, which Linkco PDF Editor doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	此表单还包含 XFA 数据，Linkco PDF Editor 暂不读取。您可以填写字段，但 Acrobat 可能显示 XFA 值。
 	This document contains {n} interactive form fields.	本文档包含 {n} 个交互式表单域。
 	This file was damaged and has been repaired. Saving keeps the repaired version.	此文件已损坏并已修复。保存将保留修复后的版本。
 	Dismiss	关闭
@@ -1732,7 +1732,7 @@
 	Read	阅读
 	Convert	转换
 	E-Sign	电子签名
-	Welcome to PdfCraft	欢迎使用 PdfCraft
+	Welcome to Linkco PDF Editor	欢迎使用 Linkco PDF Editor
 	An open-source PDF workbench — local, private, and scriptable.	开源 PDF 工作台——本地、私密、可编写脚本。
 	Recommended tools	推荐工具
 	Use now	立即使用
@@ -1770,11 +1770,11 @@
 	Join the ArtCraft community	加入 ArtCraft 社区
 	Get help, share feedback and follow development on Discord.	在 Discord 上获取帮助、分享反馈并关注开发动态。
 	Join our Discord	加入我们的 Discord
-	PdfCraft web page	PdfCraft 网页
-	PdfCraft on GitHub	GitHub 上的 PdfCraft
+	Linkco PDF Editor web page	Linkco PDF Editor 网页
+	Linkco PDF Editor on GitHub	GitHub 上的 Linkco PDF Editor
 	ArtCraft website	ArtCraft 官网
 	Check for updates…	检查更新…
-	About PdfCraft	关于 PdfCraft
+	About Linkco PDF Editor	关于 Linkco PDF Editor
 	JavaScript console…	JavaScript 控制台…
 	Document JavaScripts…	文档 JavaScript…
 	Recognize text…	识别文本…
@@ -1784,8 +1784,8 @@
 	Add background…	添加背景…
 	Prepare a form	准备表单
 	Digitally sign	数字签名
-	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	在 PdfCraft 中打开的文件会显示在这里。将 PDF 拖放到任意位置即可打开。
-	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft 可离线工作。无遥测、无账号，除非您自行添加服务商，否则无云端处理。
+	Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.	在 Linkco PDF Editor 中打开的文件会显示在这里。将 PDF 拖放到任意位置即可打开。
+	Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider.	Linkco PDF Editor 可离线工作。无遥测、无账号，除非您自行添加服务商，否则无云端处理。
 
 	Measure distance	测量距离
 	Measure perimeter	测量周长
@@ -1992,7 +1992,7 @@
 	the image is empty	图像为空
 	The operation failed.	操作失败。
 	the password is incorrect	密码不正确
-	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	尚未安装文本识别模型（请重新安装 PdfCraft，或将 PDFCRAFT_MODELS 设置为包含这些模型的文件夹）
+	the text recognition models are not installed (reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them)	尚未安装文本识别模型（请重新安装 Linkco PDF Editor，或将 PDFCRAFT_MODELS 设置为包含这些模型的文件夹）
 	The title in the metadata and the document information differ	元数据与文档信息中的标题不一致
 	the title must not be empty	标题不能为空
 	there are no pages to print	没有可打印的页面
@@ -2025,7 +2025,7 @@
 	Switch to two-page view first to show the cover page	请先切换到双页视图，才能显示封面页
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	用于打开 PDF 时。如果启动参数或控制通道明确指定了模式，则本次会话优先使用该模式。
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF 未指定布局或缩放时使用。连续滚动时页面不会逐页吸附。
-	Reopen the files that were open when PdfCraft last closed	重新打开上次关闭 PdfCraft 时打开的文件
+	Reopen the files that were open when Linkco PDF Editor last closed	重新打开上次关闭 Linkco PDF Editor 时打开的文件
 	Write this email?	是否撰写此邮件？
 	{who} in this document wants to open this address in your browser:	此文档中的{who}请求在浏览器中打开以下地址：
 	{who} in this document wants to open your email app with this address:	此文档中的{who}请求打开邮件应用并使用以下地址：
@@ -2105,3 +2105,7 @@
 	The field {name} no longer exists.	字段 {name} 已不存在。
 	A selected field has no widget on any page, so the fields can't be edited together.	某个所选字段在任何页面上都没有控件，因此无法一起编辑这些字段。
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 张以可绘制的最大尺寸 {dpi} dpi 导出）
+	Linkco PDF Editor	Linkco PDF 编辑器
+	Professional PDF tools for everyday document work.	面向日常文档工作的专业 PDF 工具。
+	Professional PDF document tools by Linkco.	Linkco 出品的专业 PDF 文档工具。
+	View all tools →	查看全部工具 →

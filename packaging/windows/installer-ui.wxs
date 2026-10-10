@@ -10,8 +10,8 @@
 
       <Dialog Id="InstallWelcome" Width="370" Height="180" Title="[ProductName] Setup">
         <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Install [ProductName]" />
-        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="40"
-            Text="Setup will install [ProductName] for all users and add it to the Start menu. Click Install to continue." />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="45"
+            Text="Setup will install [ProductName] by Al Rawabet Commercial Services &amp; Contracting Co. W.L.L. (Linkco — www.linkco.com.qa) for all users. Click Install to continue." />
         <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="105" Width="330" Height="17"
             Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
         <Control Id="Install" Type="PushButton" X="195" Y="145" Width="75" Height="23" Default="yes" ElevationShield="yes" Text="&amp;Install">

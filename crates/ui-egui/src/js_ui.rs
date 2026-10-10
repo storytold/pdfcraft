@@ -45,7 +45,7 @@ impl PdfCraftApp {
                 }
                 Request::LaunchUrl(u) => self.request_document_url(&u, crate::LinkOrigin::Script),
                 Request::Submit(u) => self.notify_fmt(
-                    "The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.",
+                    "The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.",
                     &[("u", &u)],
                 ),
                 Request::SaveAs => self.run_command("file.save_as"),
@@ -297,7 +297,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     );
     // The web build has no file paths to reopen.
     #[cfg(not(target_arch = "wasm32"))]
-    ui.checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed"));
+    ui.checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when Linkco PDF Editor last closed"));
     ui.add_space(8.0);
     // Identity: the author of new comments (Acrobat: Preferences ▸ Identity).
     ui.label(egui::RichText::new(tl!("Identity")).font(theme::semibold(13.0)));

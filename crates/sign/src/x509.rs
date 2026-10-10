@@ -361,7 +361,7 @@ impl Certificate {
         } else if self.extended_key_usage.as_ref().is_some_and(|e| !e.iter().any(|o| DOCUMENT_SIGNING_EKUS.contains(&o.as_str()))) {
             Some("The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).".into())
         } else if !self.unknown_critical.is_empty() {
-            Some(format!("The signer's certificate has critical extensions PdfCraft does not recognize ({}).", self.unknown_critical.join(", ")))
+            Some(format!("The signer's certificate has critical extensions Linkco PDF Editor does not recognize ({}).", self.unknown_critical.join(", ")))
         } else {
             None
         }

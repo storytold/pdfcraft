@@ -4,7 +4,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Bulgarian computing vocabulary. No proprietary localisation resource, string table or product UI
 # (Acrobat's included) was consulted or copied; add entries the same way.
-# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
+# Product and technology names (Linkco PDF Editor, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept.
 
 	About	За програмата
@@ -426,9 +426,9 @@
 	Check for updates	Провери за актуализации
 	No check has run yet.	Още не е извършвана проверка.
 	Checking for a newer version…	Проверка за по-нова версия…
-	PdfCraft {v} is available.	Налична е PdfCraft {v}.
+	Linkco PDF Editor {v} is available.	Налична е Linkco PDF Editor {v}.
 	You have version {c}. Download the new version from its release page.	Имате версия {c}. Изтеглете новата версия от страницата на изданието.
-	PdfCraft {c} is up to date.	PdfCraft {c} е актуална.
+	Linkco PDF Editor {c} is up to date.	Linkco PDF Editor {c} е актуална.
 	Couldn't check for updates: {e}	Неуспешна проверка за актуализации: {e}
 	You have version {c}. All releases are listed at {page}.	Имате версия {c}. Всички издания са изброени на {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Запитва GitHub за най-новото издание. Нищо не се изтегля и не се инсталира автоматично.
@@ -534,8 +534,8 @@
 	No changes allowed	Не се разрешават промени
 	Annotations, form fill-in, and digital signatures	Анотации, попълване на формуляри и цифрови подписи
 	Form fill-in and digital signatures	Попълване на формуляри и цифрови подписи
-	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	Ключът е в macOS Keychain, който може да поиска разрешение PdfCraft да го използва.
-	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	Ключът е в хранилището за сертификати на Windows, което може да поиска разрешение PdfCraft да го използва.
+	The key is in the macOS Keychain, which may ask to allow Linkco PDF Editor to use it.	Ключът е в macOS Keychain, който може да поиска разрешение Linkco PDF Editor да го използва.
+	The key is in the Windows certificate store, which may ask to allow Linkco PDF Editor to use it.	Ключът е в хранилището за сертификати на Windows, което може да поиска разрешение Linkco PDF Editor да го използва.
 	Digital ID password	Парола за цифровия идентификатор
 	Back	Назад
 	Validate all	Провери всички
@@ -911,7 +911,7 @@
 	Searchable Image (Exact)	Изображение с възможност за търсене (точно)
 	Adds invisible text over each word; the page image is not changed	Добавя невидим текст върху всяка дума; изображението на страницата не се променя
 	Downsample to	Намали разделителната способност до
-	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Разпознаването на текст не е инсталирано: файловете на моделите му липсват. Инсталирайте PdfCraft отново или задайте в PDFCRAFT_MODELS папката, която ги съдържа.
+	Text recognition isn't installed: its model files are missing. Reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them.	Разпознаването на текст не е инсталирано: файловете на моделите му липсват. Инсталирайте Linkco PDF Editor отново или задайте в PDFCRAFT_MODELS папката, която ги съдържа.
 	Settings	Настройки
 	Protect	Защита
 	Advanced options	Разширени опции
@@ -1292,7 +1292,7 @@
 	Anyone opening the document will need this password. It's applied when you save.	Всеки, който отваря документа, ще се нуждае от тази парола. Тя се прилага при записване.
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	Документът се отваря без парола; тази парола е нужна за промяна на ограниченията. Тя се прилага при записване.
 	Recover unsaved documents?	Да се възстановят ли незаписаните документи?
-	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft не беше затворен нормално. Тези документи имат автоматично записани промени:
+	Linkco PDF Editor didn't shut down normally. These documents had changes that were autosaved:	Linkco PDF Editor не беше затворен нормално. Тези документи имат автоматично записани промени:
 	just now	току-що
 	{n} min ago	преди {n} мин
 	{n} h ago	преди {n} ч
@@ -1458,10 +1458,10 @@
 	On the web, open or drop an image to convert it	В уеб версията отворете или пуснете изображение, за да го конвертирате
 	Couldn't optimize the file: {e}	Файлът не можа да бъде оптимизиран: {e}
 	Couldn't write {path}: {e}	Не можа да се запише {path}: {e}
-	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	Формулярът изисква да бъде изпратен до {u}; PdfCraft не изпраща данни от формуляри. Запишете документа, за да запазите въведеното.
+	The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	Формулярът изисква да бъде изпратен до {u}; Linkco PDF Editor не изпраща данни от формуляри. Запишете документа, за да запазите въведеното.
 	{s} actions run in the JavaScript engine (M6)	Действията {s} се изпълняват в JavaScript машината (M6)
 	{name}: the {other} action isn't supported yet	{name}: действието {other} все още не се поддържа
-	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} изпраща формуляра до {url}; PdfCraft не изпраща данни от формуляри. Запишете документа, за да запазите въведеното.
+	{name} submits the form to {url}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	{name} изпраща формуляра до {url}; Linkco PDF Editor не изпраща данни от формуляри. Запишете документа, за да запазите въведеното.
 	Export stopped: {e}	Експортирането е спряно: {e}
 	Exported 1 image	Експортирано е 1 изображение
 	Exported {n} images	Експортирани са {n} изображения
@@ -1617,7 +1617,7 @@
 	Couldn't open {name}: {e}	{name} не можа да бъде отворен: {e}
 	Couldn't read {name}: {e}	{name} не можа да бъде прочетен: {e}
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Преносимият режим е изключен: в {folder} не може да се записва ({error}). Вместо това настройките се пазят в потребителската ви папка.
-	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft рисува без графичен процесор, затова може да е бавен. Обновяването на графичния драйвер може да помогне.
+	Linkco PDF Editor is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	Linkco PDF Editor рисува без графичен процесор, затова може да е бавен. Обновяването на графичния драйвер може да помогне.
 	Couldn't save: {e}	Записването не бе успешно: {e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Изтеглянето на прикачени файлове в уеб версията ще стане достъпно с M3.10 ({n} байта готови)
 	`{command}` {when}	`{command}` {when}
@@ -1685,8 +1685,8 @@
 	Signed and all signatures are valid.	Подписан, всички подписи са валидни.
 	At least one signature has problems.	Поне един подпис има проблеми.
 	This document is secured. Some changes are restricted by its security settings.	Този документ е защитен. Някои промени са ограничени от настройките му за защита.
-	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Това е динамичен XFA формуляр, който PdfCraft все още не може да показва. Виждате заместващата страница на файла.
-	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Този формуляр съдържа и XFA данни, които PdfCraft все още не чете. Можете да попълвате полетата му, но Acrobat може да покаже вместо това XFA стойностите.
+	This is a dynamic XFA form, which Linkco PDF Editor can't display yet. What you see is the file's placeholder page.	Това е динамичен XFA формуляр, който Linkco PDF Editor все още не може да показва. Виждате заместващата страница на файла.
+	This form also contains XFA data, which Linkco PDF Editor doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Този формуляр съдържа и XFA данни, които Linkco PDF Editor все още не чете. Можете да попълвате полетата му, но Acrobat може да покаже вместо това XFA стойностите.
 	This document contains {n} interactive form fields.	Този документ съдържа {n} интерактивни полета на формуляр.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Този файл беше повреден и е поправен. При записване се запазва поправената версия.
 	Dismiss	Скрий
@@ -1725,7 +1725,7 @@
 	Read	Четене
 	Convert	Конвертиране
 	E-Sign	Е-подпис
-	Welcome to PdfCraft	Добре дошли в PdfCraft
+	Welcome to Linkco PDF Editor	Добре дошли в Linkco PDF Editor
 	An open-source PDF workbench — local, private, and scriptable.	PDF работна среда с отворен код — локална, поверителна и програмируема.
 	Recommended tools	Препоръчани инструменти
 	Use now	Използвай сега
@@ -1763,11 +1763,11 @@
 	Join the ArtCraft community	Присъедини се към общността на ArtCraft
 	Get help, share feedback and follow development on Discord.	Получете помощ, споделете мнение и следете разработката в Discord.
 	Join our Discord	Присъедини се към нашия Discord
-	PdfCraft web page	Уебстраница на PdfCraft
-	PdfCraft on GitHub	PdfCraft в GitHub
+	Linkco PDF Editor web page	Уебстраница на Linkco PDF Editor
+	Linkco PDF Editor on GitHub	Linkco PDF Editor в GitHub
 	ArtCraft website	Уебсайт на ArtCraft
 	Check for updates…	Провери за актуализации…
-	About PdfCraft	За PdfCraft
+	About Linkco PDF Editor	За Linkco PDF Editor
 	JavaScript console…	JavaScript конзола…
 	Document JavaScripts…	JavaScript на документа…
 	Recognize text…	Разпознай текст…
@@ -1777,8 +1777,8 @@
 	Add background…	Добави фон…
 	Prepare a form	Подготви формуляр
 	Digitally sign	Подпиши цифрово
-	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Файловете, които отваряте в PdfCraft, се показват тук. Пуснете PDF файл където и да е, за да го отворите.
-	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft работи офлайн. Без телеметрия, без акаунт и без обработка в облака, освен ако не добавите доставчик.
+	Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.	Файловете, които отваряте в Linkco PDF Editor, се показват тук. Пуснете PDF файл където и да е, за да го отворите.
+	Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider.	Linkco PDF Editor работи офлайн. Без телеметрия, без акаунт и без обработка в облака, освен ако не добавите доставчик.
 	Measure distance	Измери разстояние
 	Measure perimeter	Измери периметър
 	Measure area	Измери площ
@@ -1982,7 +1982,7 @@
 	the image is empty	изображението е празно
 	The operation failed.	Операцията е неуспешна.
 	the password is incorrect	паролата е грешна
-	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	моделите за разпознаване на текст не са инсталирани (инсталирайте PdfCraft отново или задайте в PDFCRAFT_MODELS папката, която ги съдържа)
+	the text recognition models are not installed (reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them)	моделите за разпознаване на текст не са инсталирани (инсталирайте Linkco PDF Editor отново или задайте в PDFCRAFT_MODELS папката, която ги съдържа)
 	The title in the metadata and the document information differ	Заглавието в метаданните и в информацията за документа се различават
 	the title must not be empty	заглавието не може да е празно
 	there are no pages to print	няма страници за печат
@@ -2059,7 +2059,7 @@ comment menu	Edit	Редактирай
 signature pad	Type	Въвеждане
 action wizard	Start	Старт
 	Margins (in)	Полета (in)
-	Reopen the files that were open when PdfCraft last closed	Отваряй отново файловете, които бяха отворени при последното затваряне на PdfCraft
+	Reopen the files that were open when Linkco PDF Editor last closed	Отваряй отново файловете, които бяха отворени при последното затваряне на Linkco PDF Editor
 	Clear Recent Files	Изчисти последно отваряните файлове
 	Remove from Recent	Премахни от последно отваряните
 	Remove {name} from Recent	Премахни {name} от последно отваряните
@@ -2103,3 +2103,7 @@ action wizard	Start	Старт
 	The field {name} no longer exists.	Полето {name} вече не съществува.
 	A selected field has no widget on any page, so the fields can't be edited together.	Едно от избраните полета няма елемент на нито една страница, затова полетата не могат да се редактират заедно.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} с {dpi} dpi, най-голямата резолюция, с която могат да бъдат изобразени)
+	Linkco PDF Editor	PDF редактор Linkco
+	Professional PDF tools for everyday document work.	Професионални PDF инструменти за ежедневна работа с документи.
+	Professional PDF document tools by Linkco.	Професионални инструменти за PDF документи от Linkco.
+	View all tools →	Виж всички инструменти →

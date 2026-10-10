@@ -6,7 +6,7 @@
 # Spanish computing vocabulary (European Spanish, informal "tú"). No proprietary localisation
 # resource, string table or product UI (Acrobat's included) was consulted or copied; add entries
 # the same way.
-# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
+# Product and technology names (Linkco PDF Editor, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
 
 	Menu	Menú
@@ -142,7 +142,7 @@
 	Next page	Página siguiente
 	Previous page	Página anterior
 	Current page — type a page number or label (such as iv) and press Enter	Página actual: escribe un número o una etiqueta de página (por ejemplo, iv) y pulsa Intro
-	Welcome to PdfCraft	Te damos la bienvenida a PdfCraft
+	Welcome to Linkco PDF Editor	Te damos la bienvenida a Linkco PDF Editor
 	An open-source PDF workbench — local, private, and scriptable.	Un banco de trabajo PDF de código abierto: local, privado y automatizable.
 	Join the ArtCraft community	Únete a la comunidad de ArtCraft
 	Get help, share feedback and follow development on Discord.	Recibe ayuda, comparte tu opinión y sigue el desarrollo en Discord.
@@ -150,9 +150,9 @@
 	Use now	Usar ahora
 	Open file	Abrir archivo
 	Recent	Recientes
-	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Los archivos que abras en PdfCraft aparecerán aquí. Suelta un PDF en cualquier parte para abrirlo.
+	Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.	Los archivos que abras en Linkco PDF Editor aparecerán aquí. Suelta un PDF en cualquier parte para abrirlo.
 	Privacy	Privacidad
-	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft funciona sin conexión. Sin telemetría, sin cuenta y sin procesamiento en la nube, salvo que añadas un proveedor.
+	Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider.	Linkco PDF Editor funciona sin conexión. Sin telemetría, sin cuenta y sin procesamiento en la nube, salvo que añadas un proveedor.
 	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Los scripts se ejecutan en un entorno aislado, sin acceso a archivos ni a la red. Con JavaScript desactivado, las funciones estándar de formato, validación y cálculo de Acrobat siguen funcionando.
 	Back to all tools	Volver a todas las herramientas
 	Close panel	Cerrar panel
@@ -287,11 +287,11 @@
 	Number pages…	Numerar páginas…
 	Keyboard shortcuts	Atajos de teclado
 	Join the ArtCraft Discord	Únete al Discord de ArtCraft
-	PdfCraft web page	Página web de PdfCraft
-	PdfCraft on GitHub	PdfCraft en GitHub
+	Linkco PDF Editor web page	Página web de Linkco PDF Editor
+	Linkco PDF Editor on GitHub	Linkco PDF Editor en GitHub
 	ArtCraft website	Sitio web de ArtCraft
 	Check for updates…	Buscar actualizaciones…
-	About PdfCraft	Acerca de PdfCraft
+	About Linkco PDF Editor	Acerca de Linkco PDF Editor
 	Export a PDF	Exportar un PDF
 	Export to	Exportar a
 	Microsoft Word (.docx)	Microsoft Word (.docx)
@@ -734,9 +734,9 @@
 	Check for updates	Buscar actualizaciones
 	No check has run yet.	Aún no se ha hecho ninguna comprobación.
 	Checking for a newer version…	Buscando una versión más reciente…
-	PdfCraft {v} is available.	PdfCraft {v} está disponible.
+	Linkco PDF Editor {v} is available.	Linkco PDF Editor {v} está disponible.
 	You have version {c}. Download the new version from its release page.	Tienes la versión {c}. Descarga la nueva versión desde su página de publicación.
-	PdfCraft {c} is up to date.	PdfCraft {c} está actualizado.
+	Linkco PDF Editor {c} is up to date.	Linkco PDF Editor {c} está actualizado.
 	Couldn't check for updates: {e}	No se pudieron buscar actualizaciones: {e}
 	You have version {c}. All releases are listed at {page}.	Tienes la versión {c}. Todas las versiones aparecen en {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Consulta a GitHub cuál es la última versión. No se descarga ni se instala nada automáticamente.
@@ -843,8 +843,8 @@
 	No changes allowed	No se permite ningún cambio
 	Annotations, form fill-in, and digital signatures	Anotaciones, rellenado de formularios y firmas digitales
 	Form fill-in and digital signatures	Rellenado de formularios y firmas digitales
-	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	La clave está en el Llavero de macOS, que puede pedirte permiso para que PdfCraft la use.
-	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	La clave está en el almacén de certificados de Windows, que puede pedirte permiso para que PdfCraft la use.
+	The key is in the macOS Keychain, which may ask to allow Linkco PDF Editor to use it.	La clave está en el Llavero de macOS, que puede pedirte permiso para que Linkco PDF Editor la use.
+	The key is in the Windows certificate store, which may ask to allow Linkco PDF Editor to use it.	La clave está en el almacén de certificados de Windows, que puede pedirte permiso para que Linkco PDF Editor la use.
 	Digital ID password	Contraseña del ID digital
 	Back	Atrás
 	Validate all	Validar todas
@@ -1200,7 +1200,7 @@
 	Searchable Image (Exact)	Imagen con búsqueda (exacta)
 	Adds invisible text over each word; the page image is not changed	Añade texto invisible sobre cada palabra; la imagen de la página no cambia
 	Downsample to	Reducir resolución a
-	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	El reconocimiento de texto no está instalado: faltan sus archivos de modelo. Reinstala PdfCraft o define PDFCRAFT_MODELS con la carpeta que los contiene.
+	Text recognition isn't installed: its model files are missing. Reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them.	El reconocimiento de texto no está instalado: faltan sus archivos de modelo. Reinstala Linkco PDF Editor o define PDFCRAFT_MODELS con la carpeta que los contiene.
 	Settings	Ajustes
 	Optional	Opcional
 	Planned · {m}	Previsto · {m}
@@ -1344,7 +1344,7 @@
 	Anyone opening the document will need this password. It's applied when you save.	Cualquiera que abra el documento necesitará esta contraseña. Se aplica al guardar.
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	El documento se abre sin contraseña; esta contraseña hace falta para cambiar las restricciones. Se aplica al guardar.
 	Recover unsaved documents?	¿Recuperar documentos sin guardar?
-	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft no se cerró correctamente. Estos documentos tenían cambios que se guardaron automáticamente:
+	Linkco PDF Editor didn't shut down normally. These documents had changes that were autosaved:	Linkco PDF Editor no se cerró correctamente. Estos documentos tenían cambios que se guardaron automáticamente:
 	just now	ahora mismo
 	{n} min ago	hace {n} min
 	{n} h ago	hace {n} h
@@ -1500,10 +1500,10 @@
 	On the web, open or drop an image to convert it	En la versión web, abre o suelta una imagen para convertirla
 	Couldn't optimize the file: {e}	No se pudo optimizar el archivo: {e}
 	Couldn't write {path}: {e}	No se pudo escribir {path}: {e}
-	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	El formulario pide enviarse a {u}; PdfCraft no envía datos de formulario. Guarda el documento para conservar lo que has introducido.
+	The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	El formulario pide enviarse a {u}; Linkco PDF Editor no envía datos de formulario. Guarda el documento para conservar lo que has introducido.
 	{s} actions run in the JavaScript engine (M6)	Las acciones {s} se ejecutan en el motor de JavaScript (M6)
 	{name}: the {other} action isn't supported yet	{name}: la acción {other} aún no es compatible
-	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} envía el formulario a {url}; PdfCraft no envía datos de formulario. Guarda el documento para conservar lo que has introducido.
+	{name} submits the form to {url}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	{name} envía el formulario a {url}; Linkco PDF Editor no envía datos de formulario. Guarda el documento para conservar lo que has introducido.
 	Export stopped: {e}	Exportación detenida: {e}
 	Exported 1 image	Se ha exportado 1 imagen
 	Exported {n} images	Se han exportado {n} imágenes
@@ -1659,7 +1659,7 @@
 	Couldn't open {name}: {e}	No se pudo abrir {name}: {e}
 	Couldn't read {name}: {e}	No se pudo leer {name}: {e}
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	El modo portátil está desactivado: no se puede escribir en {folder} ({error}). La configuración se guarda en tu carpeta de usuario.
-	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft está dibujando sin procesador gráfico, así que puede ir lento. Actualizar el controlador gráfico puede ayudar.
+	Linkco PDF Editor is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	Linkco PDF Editor está dibujando sin procesador gráfico, así que puede ir lento. Actualizar el controlador gráfico puede ayudar.
 	Couldn't save: {e}	No se pudo guardar: {e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	La descarga de archivos adjuntos en la versión web llegará con M3.10 ({n} bytes listos)
 	`{command}` {when}	`{command}` {when}
@@ -1727,8 +1727,8 @@
 	Signed and all signatures are valid.	Firmado y todas las firmas son válidas.
 	At least one signature has problems.	Al menos una firma tiene problemas.
 	This document is secured. Some changes are restricted by its security settings.	Este documento está protegido. Su configuración de seguridad restringe algunos cambios.
-	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Este es un formulario XFA dinámico, que PdfCraft aún no puede mostrar. Lo que ves es la página de marcador de posición del archivo.
-	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Este formulario también contiene datos XFA, que PdfCraft aún no lee. Puedes rellenar sus campos, pero Acrobat puede mostrar los valores XFA en su lugar.
+	This is a dynamic XFA form, which Linkco PDF Editor can't display yet. What you see is the file's placeholder page.	Este es un formulario XFA dinámico, que Linkco PDF Editor aún no puede mostrar. Lo que ves es la página de marcador de posición del archivo.
+	This form also contains XFA data, which Linkco PDF Editor doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Este formulario también contiene datos XFA, que Linkco PDF Editor aún no lee. Puedes rellenar sus campos, pero Acrobat puede mostrar los valores XFA en su lugar.
 	This document contains {n} interactive form fields.	Este documento contiene {n} campos de formulario interactivos.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Este archivo estaba dañado y se ha reparado. Al guardar se conserva la versión reparada.
 	Dismiss	Cerrar
@@ -1777,7 +1777,7 @@
 	there are no pages to print	no hay páginas que imprimir
 	the document has no tags	el documento no tiene etiquetas
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	los modelos de reconocimiento de texto no están instalados (reinstala PdfCraft o define PDFCRAFT_MODELS con la carpeta que los contiene)
+	the text recognition models are not installed (reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them)	los modelos de reconocimiento de texto no están instalados (reinstala Linkco PDF Editor o define PDFCRAFT_MODELS con la carpeta que los contiene)
 	the image is empty	la imagen está vacía
 	this file isn't XFDF, FDF, XML or text form data	este archivo no contiene datos de formulario XFDF, FDF, XML ni de texto
 	nothing in the file matches this document	nada en el archivo coincide con este documento
@@ -1997,7 +1997,7 @@
 	Default page display	Presentación de página predeterminada
 	Default zoom	Zoom predeterminado
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Se usa cuando un PDF no pide una presentación ni un zoom. El desplazamiento continuo nunca salta de página en página.
-	Reopen the files that were open when PdfCraft last closed	Volver a abrir los archivos que estaban abiertos al cerrar PdfCraft por última vez
+	Reopen the files that were open when Linkco PDF Editor last closed	Volver a abrir los archivos que estaban abiertos al cerrar Linkco PDF Editor por última vez
 	Created a PDF from {n} files	Se creó un PDF a partir de {n} archivos
 	PDF, images and text	PDF, imágenes y texto
 	Insert a file before page {label}	Insertar un archivo antes de la página {label}
@@ -2057,3 +2057,7 @@
 	The field {name} no longer exists.	El campo {name} ya no existe.
 	A selected field has no widget on any page, so the fields can't be edited together.	Un campo seleccionado no tiene ningún widget en ninguna página, así que los campos no se pueden editar juntos.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} ppp, el mayor tamaño al que se pueden dibujar)
+	Linkco PDF Editor	Linkco PDF Editor
+	Professional PDF tools for everyday document work.	Herramientas profesionales de PDF para el trabajo diario con documentos.
+	Professional PDF document tools by Linkco.	Herramientas profesionales para documentos PDF de Linkco.
+	View all tools →	Ver todas las herramientas →

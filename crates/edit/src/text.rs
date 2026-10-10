@@ -802,7 +802,7 @@ fn unicode_hex(ch: char) -> String {
 /// This build has no Japanese face to draw replacement text with.
 fn no_japanese_font() -> EditError {
     EditError::Invalid(
-        "this text needs PdfCraft's Japanese fallback font, which this build doesn't include \
+        "this text needs Linkco PDF Editor's Japanese fallback font, which this build doesn't include \
          (official releases do; to build it in, set CRAFT_FONTS_DIR to a craft-fonts checkout)"
             .into(),
     )

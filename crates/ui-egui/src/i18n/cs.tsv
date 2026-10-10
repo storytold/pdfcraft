@@ -5,7 +5,7 @@
 # Clean-room: written from the meaning of the English labels, following common Czech desktop
 # conventions (menus are nouns, commands are infinitives); not taken from Adobe Acrobat's Czech
 # localisation or any other product's translation. Terminology: annotations are "komentáře",
-# pages are "stránky", form fields are "formulářová pole". Product and format names (PdfCraft,
+# pages are "stránky", form fields are "formulářová pole". Product and format names (Linkco PDF Editor,
 # PDF, Word, HTML…) stay in Latin letters; the trailing "…" of dialog commands is kept.
 
 	Menu	Nabídka
@@ -96,11 +96,11 @@
 	Number pages…	Očíslovat stránky…
 	Keyboard shortcuts	Klávesové zkratky
 	Join the ArtCraft Discord	Připojit se ke komunitě ArtCraft na Discordu
-	PdfCraft web page	Webová stránka PdfCraft
-	PdfCraft on GitHub	PdfCraft na GitHubu
+	Linkco PDF Editor web page	Webová stránka Linkco PDF Editor
+	Linkco PDF Editor on GitHub	Linkco PDF Editor na GitHubu
 	ArtCraft website	Web ArtCraft
 	Check for updates…	Zkontrolovat aktualizace…
-	About PdfCraft	O aplikaci PdfCraft
+	About Linkco PDF Editor	O aplikaci Linkco PDF Editor
 	Auto	Automaticky
 	Continuous scrolling	Plynulé posouvání
 	Single page	Jednostránkové zobrazení
@@ -114,11 +114,11 @@
 	Fit to width scrolling	Plynulé posouvání s přizpůsobením šířce
 	Fit one full page	Celá jedna stránka
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Používá se, když PDF nepožaduje rozložení ani zvětšení. Plynulé posouvání mezi stránkami neskáče.
-	Reopen the files that were open when PdfCraft last closed	Znovu otevřít soubory, které byly otevřené při posledním zavření aplikace PdfCraft
+	Reopen the files that were open when Linkco PDF Editor last closed	Znovu otevřít soubory, které byly otevřené při posledním zavření aplikace Linkco PDF Editor
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Vyberte obrázek PNG nebo JPEG (nejvýše 4 MiB). Průhlednost bude zachována.
 	Couldn't import the signature image: {e}	Obrázek podpisu nelze importovat: {e}
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Přenosný režim je vypnutý: do složky {folder} nelze zapisovat ({error}). Nastavení se místo toho ukládá do vaší uživatelské složky.
-	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft vykresluje bez grafického procesoru, takže může být pomalý. Pomoci může aktualizace grafického ovladače.
+	Linkco PDF Editor is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	Linkco PDF Editor vykresluje bez grafického procesoru, takže může být pomalý. Pomoci může aktualizace grafického ovladače.
 	Go to page…	Přejít na stránku…
 	Open arrow	Otevřená šipka
 	Closed arrow	Zavřená šipka
@@ -140,6 +140,10 @@
 	Character limit:	Limit znaků:
 	Character limit 0 means no limit. A comb of characters needs a limit.	Limit znaků 0 znamená bez omezení. Rozdělení na znaky vyžaduje limit.
 	To change locked fields, also set Locked to No.	Chcete-li změnit zamčená pole, nastavte také „Zamčeno“ na „Ne“.
+	Linkco PDF Editor	Editor PDF Linkco
+	Professional PDF tools for everyday document work.	Profesionální nástroje PDF pro každodenní práci s dokumenty.
+	Professional PDF document tools by Linkco.	Profesionální nástroje pro dokumenty PDF od společnosti Linkco.
+	View all tools →	Zobrazit všechny nástroje →
 	Multiple words or phrases	Více slov nebo frází
 	One word or phrase per line	Jedno slovo nebo fráze na řádek
 	Import list…	Importovat seznam…

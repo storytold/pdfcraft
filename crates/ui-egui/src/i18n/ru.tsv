@@ -5,7 +5,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Russian computing vocabulary. No proprietary localisation resource, string table or product UI
 # (Acrobat's included) was consulted or copied; add entries the same way.
-# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
+# Product and technology names (Linkco PDF Editor, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
 
 	Menu	Меню
@@ -142,7 +142,7 @@
 	Next page	Следующая страница
 	Previous page	Предыдущая страница
 	Current page — type a page number or label (such as iv) and press Enter	Текущая страница — введите номер или метку страницы (например, iv) и нажмите Enter
-	Welcome to PdfCraft	Добро пожаловать в PdfCraft
+	Welcome to Linkco PDF Editor	Добро пожаловать в Linkco PDF Editor
 	An open-source PDF workbench — local, private, and scriptable.	Открытый PDF-редактор — локальный, приватный и программируемый.
 	Join the ArtCraft community	Присоединяйтесь к сообществу ArtCraft
 	Get help, share feedback and follow development on Discord.	Получайте помощь, делитесь отзывами и следите за разработкой в Discord.
@@ -150,9 +150,9 @@
 	Use now	Использовать сейчас
 	Open file	Открыть файл
 	Recent	Недавние
-	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Файлы, которые вы открываете в PdfCraft, появляются здесь. Перетащите PDF в любое место, чтобы открыть.
+	Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.	Файлы, которые вы открываете в Linkco PDF Editor, появляются здесь. Перетащите PDF в любое место, чтобы открыть.
 	Privacy	Конфиденциальность
-	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft работает офлайн. Без телеметрии, аккаунтов и облачной обработки, если вы не добавите провайдера.
+	Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider.	Linkco PDF Editor работает офлайн. Без телеметрии, аккаунтов и облачной обработки, если вы не добавите провайдера.
 	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Скрипты выполняются в песочнице без доступа к файлам и сети. При отключённом JavaScript стандартные функции Acrobat форматирования, проверки и вычислений всё равно работают.
 	Back to all tools	Назад ко всем инструментам
 	Close panel	Закрыть панель
@@ -287,11 +287,11 @@
 	Number pages…	Пронумеровать страницы…
 	Keyboard shortcuts	Горячие клавиши
 	Join the ArtCraft Discord	Присоединяйтесь к Discord ArtCraft
-	PdfCraft web page	Веб-страница PdfCraft
-	PdfCraft on GitHub	PdfCraft на GitHub
+	Linkco PDF Editor web page	Веб-страница Linkco PDF Editor
+	Linkco PDF Editor on GitHub	Linkco PDF Editor на GitHub
 	ArtCraft website	Веб-сайт ArtCraft
 	Check for updates…	Проверить обновления…
-	About PdfCraft	О программе PdfCraft
+	About Linkco PDF Editor	О программе Linkco PDF Editor
 	Export a PDF	Экспортировать PDF
 	Export to	Экспортировать в
 	Microsoft Word (.docx)	Microsoft Word (.docx)
@@ -734,9 +734,9 @@
 	Check for updates	Проверить обновления
 	No check has run yet.	Проверка ещё не выполнялась.
 	Checking for a newer version…	Проверка новой версии…
-	PdfCraft {v} is available.	Доступна PdfCraft {v}.
+	Linkco PDF Editor {v} is available.	Доступна Linkco PDF Editor {v}.
 	You have version {c}. Download the new version from its release page.	У вас версия {c}. Скачайте новую версию со страницы релизов.
-	PdfCraft {c} is up to date.	У вас последняя версия PdfCraft {c}.
+	Linkco PDF Editor {c} is up to date.	У вас последняя версия Linkco PDF Editor {c}.
 	Couldn't check for updates: {e}	Не удалось проверить обновления: {e}
 	You have version {c}. All releases are listed at {page}.	У вас версия {c}. Все релизы перечислены на {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Запрашивает у GitHub последний релиз. Ничего не скачивается и не устанавливается автоматически.
@@ -843,8 +843,8 @@
 	No changes allowed	Изменения не разрешены
 	Annotations, form fill-in, and digital signatures	Аннотации, заполнение форм и цифровые подписи
 	Form fill-in and digital signatures	Заполнение форм и цифровые подписи
-	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	Ключ находится в Keychain macOS, который может запросить разрешение на использование PdfCraft.
-	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	Ключ находится в хранилище сертификатов Windows, которое может запросить разрешение на использование PdfCraft.
+	The key is in the macOS Keychain, which may ask to allow Linkco PDF Editor to use it.	Ключ находится в Keychain macOS, который может запросить разрешение на использование Linkco PDF Editor.
+	The key is in the Windows certificate store, which may ask to allow Linkco PDF Editor to use it.	Ключ находится в хранилище сертификатов Windows, которое может запросить разрешение на использование Linkco PDF Editor.
 	Digital ID password	Пароль цифрового идентификатора
 	Back	Назад
 	Validate all	Проверить все
@@ -1207,7 +1207,7 @@
 	Searchable Image (Exact)	Доступное для поиска изображение (точное)
 	Adds invisible text over each word; the page image is not changed	Добавляет невидимый текст над каждым словом; изображение страницы не меняется
 	Downsample to	Уменьшить до
-	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Распознавание текста не установлено: отсутствуют файлы моделей. Переустановите PdfCraft или задайте в PDFCRAFT_MODELS папку, в которой они лежат.
+	Text recognition isn't installed: its model files are missing. Reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them.	Распознавание текста не установлено: отсутствуют файлы моделей. Переустановите Linkco PDF Editor или задайте в PDFCRAFT_MODELS папку, в которой они лежат.
 	Settings	Настройки
 	Optional	Опционально
 	Planned · {m}	Запланировано · {m}
@@ -1351,7 +1351,7 @@
 	Anyone opening the document will need this password. It's applied when you save.	Любой, кто открывает документ, будет нуждаться в этом пароле. Он применяется при сохранении.
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	Документ открывается без пароля; этот пароль нужен для изменения ограничений. Он применяется при сохранении.
 	Recover unsaved documents?	Восстановить несохранённые документы?
-	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft завершился некорректно. В этих документах были изменения, сохранённые автоматически:
+	Linkco PDF Editor didn't shut down normally. These documents had changes that were autosaved:	Linkco PDF Editor завершился некорректно. В этих документах были изменения, сохранённые автоматически:
 	just now	только что
 	{n} min ago	{n} мин назад
 	{n} h ago	{n} ч назад
@@ -1507,10 +1507,10 @@
 	On the web, open or drop an image to convert it	В веб-версии откройте или перетащите изображение для конвертации
 	Couldn't optimize the file: {e}	Не удалось оптимизировать файл: {e}
 	Couldn't write {path}: {e}	Не удалось записать {path}: {e}
-	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	Форма просит отправить данные на {u}; PdfCraft не отправляет данные форм. Сохраните документ, чтобы сохранить введённые данные.
+	The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	Форма просит отправить данные на {u}; Linkco PDF Editor не отправляет данные форм. Сохраните документ, чтобы сохранить введённые данные.
 	{s} actions run in the JavaScript engine (M6)	{s} действий выполняется в движке JavaScript (M6)
 	{name}: the {other} action isn't supported yet	{name}: действие {other} пока не поддерживается
-	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} отправляет форму на {url}; PdfCraft не отправляет данные форм. Сохраните документ, чтобы сохранить введённые данные.
+	{name} submits the form to {url}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	{name} отправляет форму на {url}; Linkco PDF Editor не отправляет данные форм. Сохраните документ, чтобы сохранить введённые данные.
 	Export stopped: {e}	Экспорт остановлен: {e}
 	Exported 1 image	Экспортировано 1 изображение
 	Exported {n} images	Экспортировано {n} изображений
@@ -1723,8 +1723,8 @@
 	Signed and all signatures are valid.	Подписано и все подписи действительны.
 	At least one signature has problems.	Хотя бы одна подпись имеет проблемы.
 	This document is secured. Some changes are restricted by its security settings.	Этот документ защищён. Некоторые изменения ограничены его настройками безопасности.
-	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Это динамическая форма XFA, которую PdfCraft пока не может отобразить. То, что вы видите, — заглушка страницы файла.
-	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Эта форма также содержит данные XFA, которые PdfCraft пока не читает. Вы можете заполнить её поля, но Acrobat может показать значения XFA вместо них.
+	This is a dynamic XFA form, which Linkco PDF Editor can't display yet. What you see is the file's placeholder page.	Это динамическая форма XFA, которую Linkco PDF Editor пока не может отобразить. То, что вы видите, — заглушка страницы файла.
+	This form also contains XFA data, which Linkco PDF Editor doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Эта форма также содержит данные XFA, которые Linkco PDF Editor пока не читает. Вы можете заполнить её поля, но Acrobat может показать значения XFA вместо них.
 	This document contains {n} interactive form fields.	Этот документ содержит {n} интерактивных полей формы.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Этот файл был повреждён и восстановлен. Сохранение сохраняет восстановленную версию.
 	Dismiss	Закрыть
@@ -1773,7 +1773,7 @@
 	there are no pages to print	нет страниц для печати
 	the document has no tags	у документа нет тегов
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	модели распознавания текста не установлены (переустановите PdfCraft или задайте в PDFCRAFT_MODELS папку, в которой они лежат)
+	the text recognition models are not installed (reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them)	модели распознавания текста не установлены (переустановите Linkco PDF Editor или задайте в PDFCRAFT_MODELS папку, в которой они лежат)
 	the image is empty	изображение пустое
 	this file isn't XFDF, FDF, XML or text form data	этот файл не является XFDF, FDF, XML или текстовыми данными формы
 	nothing in the file matches this document	ничего в файле не соответствует этому документу
@@ -1991,7 +1991,7 @@
 	Default page display	Отображение страниц по умолчанию
 	Default zoom	Масштаб по умолчанию
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Используется, когда PDF не запрашивает макет или масштаб. Непрерывная прокрутка никогда не привязывается между страницами.
-	Reopen the files that were open when PdfCraft last closed	Повторно открывать файлы, которые были открыты при последнем закрытии PdfCraft
+	Reopen the files that were open when Linkco PDF Editor last closed	Повторно открывать файлы, которые были открыты при последнем закрытии Linkco PDF Editor
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Выберите изображение PNG или JPEG (до 4 МиБ). Прозрачность сохраняется.
 	Couldn't import the signature image: {e}	Не удалось импортировать изображение подписи: {e}
 
@@ -2054,3 +2054,18 @@
 	The field {name} no longer exists.	Поле {name} больше не существует.
 	A selected field has no widget on any page, so the fields can't be edited together.	У одного из выбранных полей нет виджета ни на одной странице, поэтому поля нельзя изменить вместе.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} — с разрешением {dpi} dpi, максимальным, с каким их можно отрисовать)
+	Linkco PDF Editor	Редактор PDF Linkco
+	Professional PDF tools for everyday document work.	Профессиональные инструменты PDF для повседневной работы с документами.
+	Professional PDF document tools by Linkco.	Профессиональные инструменты для работы с документами PDF от Linkco.
+	View all tools →	Показать все инструменты →
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	Продолжайте, только если вы доверяете этому документу. Адрес может передавать данные из документа, например введённые вами в форму.
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	Печатайте с одной стороны. Сохраняйте порядок листов, разрежьте по меткам, затем сложите стопки слева направо и сверху вниз.
+	Sort	Сортировка
+	Table	Таблица
+	{n} contributors · {c} commits	Участников: {n} · коммитов: {c}
+	Reverse the order	Обратный порядок
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} коммитов, +{added} / −{deleted} строк (Δ {delta}), +{bin_added} / −{bin_deleted} бинарных ресурсов, {first} – {last}
+	No model credits were built into this copy.	Сведения о моделях не включены в эту сборку.
+	Show	Показать
+	Grab bag	Разное
+	No contributor data was built into this copy.	Данные об участниках не включены в эту сборку.
