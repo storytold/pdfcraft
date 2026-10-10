@@ -14,6 +14,7 @@
 mod a11y;
 mod comments;
 mod content;
+mod conventions;
 mod forms;
 mod links;
 #[cfg(feature = "mcp")]
@@ -29,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pdfcraft_engine::{DocId, Document, Edit, Session, commands};
+use pdfcraft_platform::staging::{StagingName, create_staging, staging_suffixes};
 use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
 use serde_json::{Value, json};
 
@@ -119,6 +121,12 @@ impl Automation {
         &self.session
     }
 
+    /// Mutable access for callers that drive the session directly, such as saving bytes
+    /// (`Session::save_bytes` runs the document's Will Save script).
+    pub fn session_mut(&mut self) -> &mut Session {
+        &mut self.session
+    }
+
     /// Save `bytes` that a caller writes on the session's behalf, such as `pdfcraft-cli run`
     /// saving a rendered page. With a root, it is confined like a tool's own output (a relative
     /// path resolves inside it) and written atomically. Without one, the path is written as
@@ -154,6 +162,7 @@ impl Automation {
                 self.apply(&a, edit)?
             }
             "page_render" => return self.page_render(&a).map(|c| vec![c]),
+            "comment_image_preview" => return self.comment_image_preview(&a),
             "text_extract" => self.text_extract(&a)?,
             "text_find" => self.text_find(&a)?,
             "page_rotate" => {
@@ -200,6 +209,7 @@ impl Automation {
             "page_insert_file" => self.insert_file(&a)?,
             "page_extract" => self.page_extract(&a)?,
             "doc_combine" => self.doc_combine(&a)?,
+            "doc_create_multiple" => self.doc_create_multiple(&a)?,
             "doc_split" => self.doc_split(&a)?,
             "edit_undo" => {
                 let id = self.doc(&a)?.id;
@@ -212,6 +222,10 @@ impl Automation {
                 json!({ "redone": label, "document": summary(self.doc(&a)?) })
             }
             "command_list" => self.command_list(&a)?,
+            "command_run" => return self.command_run(&a),
+            "command_batch" => self.command_batch(&a)?,
+            "doc_inspect" => self.doc_inspect(&a)?,
+            "render_preview" => return self.render_preview(&a).map(|c| vec![c]),
             "page_number" => {
                 use pdfcraft_organize::LabelStyle as L;
                 let n = self.doc(&a)?.info.pages.len();
@@ -260,6 +274,11 @@ impl Automation {
                 let (path, page) = (a.path("path")?, self.page(&a)?);
                 self.apply(&a, Edit::SetBookmarkPage { path, page })?
             }
+            "bookmark_from_structure" => {
+                let mut out = self.apply(&a, Edit::BookmarksFromStructure)?;
+                out["bookmarks"] = json!(bookmark_tree(&self.doc(&a)?.info.outline, &[]));
+                out
+            }
             "doc_protect" => self.doc_protect(&a)?,
             "page_replace" => {
                 let pages = self.pages(&a, "pages")?;
@@ -290,8 +309,12 @@ impl Automation {
                 let before = self.doc(&a)?.bytes.len();
                 let path = self.resolve(a.str("path")?, true)?;
                 let (bytes, merged) = self.session.reduced_bytes(id).map_err(failed)?;
-                write_atomic(&path, &bytes)?;
-                json!({ "path": path.to_string_lossy(), "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged })
+                // As in the app, a copy that isn't smaller is not written (#490).
+                let written = bytes.len() < before;
+                if written {
+                    write_atomic(&path, &bytes)?;
+                }
+                json!({ "path": path.to_string_lossy(), "written": written, "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged })
             }
             "doc_optimize" => self.doc_optimize(&a)?,
             "doc_initial_view" => self.doc_initial_view(&a)?,
@@ -329,7 +352,7 @@ impl Automation {
                     .enumerate()
                     .map(|(i, im)| {
                         let (u, v) = (info.user_to_view(im.rect[0] as f32, im.rect[1] as f32), info.user_to_view(im.rect[2] as f32, im.rect[3] as f32));
-                        json!({ "image": i + 1, "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))], "pixels": [im.width, im.height], "name": im.name })
+                        json!({ "image": i + 1, "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))], "pixels": [im.width, im.height], "name": im.name, "kind": if im.is_form { "form" } else { "image" } })
                     })
                     .collect();
                 json!({ "page": page + 1, "count": list.len(), "images": list })
@@ -417,6 +440,7 @@ impl Automation {
                 let block = self.doc(&a)?.text_blocks(page)[k as usize - 1].clone();
                 let text = a.opt_str("text")?.map(str::to_owned).unwrap_or(block.text);
                 let mut style = pdfcraft_engine::BlockStyle {
+                    bold: a.opt_bool("bold")?,
                     size: a.opt_num("size")?,
                     underline: a.opt_bool("underline")?,
                     line_spacing: a.opt_num("line_spacing")?,
@@ -512,6 +536,7 @@ impl Automation {
             "redact_clear" => self.redact_clear(&a)?,
             "doc_hidden_info" => self.doc_hidden_info(&a)?,
             "printers" => self.printers()?,
+            "printer_options" => self.printer_options(&a)?,
             "link_list" => self.link_list(&a)?,
             "link_add" => self.link_add(&a)?,
             "link_edit" => self.link_edit(&a)?,
@@ -526,6 +551,7 @@ impl Automation {
             "doc_print" => self.doc_print(&a)?,
             "doc_remove_hidden" => self.doc_remove_hidden(&a)?,
             "fill_sign_add" => self.fill_sign_add(&a)?,
+            "fill_sign_date_format" => self.fill_sign_date_format(&a)?,
             "measure_distance" => self.measurement_add(&a, pdfcraft_engine::measure::Kind::Distance)?,
             "measure_perimeter" => self.measurement_add(&a, pdfcraft_engine::measure::Kind::Perimeter)?,
             "measure_area" => self.measurement_add(&a, pdfcraft_engine::measure::Kind::Area)?,
@@ -581,14 +607,23 @@ impl Automation {
             }
             "sign_windows_ids" => {
                 #[cfg(target_os = "windows")]
-                let ids: Vec<Value> = pdfcraft_engine::sign::windows::identities()
-                    .map_err(failed)?
-                    .iter()
-                    .map(|id| json!({ "id": pdfcraft_engine::sign::windows::reference(&id.certificate), "certificate": signing::cert_json(&id.certificate) }))
-                    .collect();
+                let (ids, unusable): (Vec<Value>, Vec<Value>) = {
+                    let listing = pdfcraft_engine::sign::windows::list().map_err(failed)?;
+                    let ids = listing
+                        .ids
+                        .iter()
+                        .map(|id| json!({ "id": pdfcraft_engine::sign::windows::reference(&id.certificate), "certificate": signing::cert_json(&id.certificate) }))
+                        .collect();
+                    let unusable = listing
+                        .unusable
+                        .iter()
+                        .map(|u| json!({ "subject": u.subject, "sha256": u.fingerprint, "reason": u.reason, "no_private_key": u.no_private_key }))
+                        .collect();
+                    (ids, unusable)
+                };
                 #[cfg(not(target_os = "windows"))]
-                let ids: Vec<Value> = Vec::new();
-                json!({ "count": ids.len(), "ids": ids })
+                let (ids, unusable): (Vec<Value>, Vec<Value>) = (Vec::new(), Vec::new());
+                json!({ "count": ids.len(), "ids": ids, "unusable": unusable })
             }
             "sign_trust" => self.sign_trust(&a)?,
             "comment_mark" => self.comment_mark(&a)?,
@@ -646,6 +681,10 @@ impl Automation {
         let same_file = doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
         // Saving to a new file is a full rewrite unless asked otherwise, like Save As.
         let full = a.opt_bool("full")?.unwrap_or(!same_file);
+        let flatten_fill_sign = a.opt_bool("flatten_fill_sign")?.unwrap_or(false);
+        if flatten_fill_sign {
+            self.apply(a, Edit::FlattenFillSign)?;
+        }
         let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) }.map_err(failed)?;
         write_atomic(&target, &bytes)?;
         let path = target.to_string_lossy().into_owned();
@@ -836,6 +875,7 @@ impl Automation {
             "invalid_links": o.invalid_links,
             "invalid_bookmarks": o.invalid_bookmarks,
             "unreferenced_dests": o.unreferenced_dests,
+            "unused_xobjects": o.unused_xobjects,
             "merged_objects": r.merged,
             "discarded": r.discarded.iter().map(|(h, n)| json!({ "category": h.id(), "count": n })).collect::<Vec<_>>(),
         }))
@@ -970,13 +1010,23 @@ impl Automation {
             f => return Err(ToolError::InvalidArgs(format!("unknown format {f:?} (png, jpeg, tiff)"))),
         };
         let mut files = Vec::new();
+        let mut lowered = Vec::new();
         for p in pages {
             let img = ex.image(p, dpi, format).map_err(failed)?;
             let path = child(&folder, &format!("{stem}_page_{}.{}", p + 1, format.extension()));
             write_atomic(&path, &img)?;
             files.push(path.to_string_lossy().into_owned());
+            // A page too large for the renderer at `dpi` is drawn at the most it allows.
+            let used = ex.dpi_used(p, dpi);
+            if used < dpi.clamp(18.0, 1200.0) - 0.5 {
+                lowered.push(json!({ "page": p + 1, "dpi": used.floor() }));
+            }
         }
-        Ok(json!({ "count": files.len(), "files": files }))
+        if lowered.is_empty() {
+            Ok(json!({ "count": files.len(), "files": files }))
+        } else {
+            Ok(json!({ "count": files.len(), "files": files, "lower_dpi": lowered }))
+        }
     }
 
     fn doc_create(&mut self, a: &Args) -> Result<Value> {
@@ -1145,6 +1195,63 @@ impl Automation {
         Ok(result)
     }
 
+    fn doc_create_multiple(&mut self, a: &Args) -> Result<Value> {
+        let paths = a.strs("paths")?;
+        if paths.is_empty() || paths.len() > pdfcraft_engine::MAX_CREATE_FILES {
+            return Err(ToolError::InvalidArgs(format!("paths must list 1 to {} files", pdfcraft_engine::MAX_CREATE_FILES)));
+        }
+        let separate = match a.opt_str("mode")? {
+            None | Some("combine") => false,
+            Some("separate") => true,
+            Some(m) => return Err(ToolError::InvalidArgs(format!("mode must be \"combine\" or \"separate\", not {m:?}"))),
+        };
+        if separate {
+            return self.create_separate(a, &paths);
+        }
+        let ranges: Vec<Option<String>> = match a.get("pages") {
+            None | Some(Value::Null) => vec![None; paths.len()],
+            Some(Value::Array(v)) if v.len() == paths.len() => v.iter().map(|x| x.as_str().map(str::to_owned)).collect(),
+            Some(_) => return Err(ToolError::InvalidArgs("pages must list a range (or null) for each path".into())),
+        };
+        let mut sources = Vec::new();
+        for (p, range) in paths.into_iter().zip(ranges) {
+            let path = self.resolve(p, false)?;
+            let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let (_, pdf) = self.session.convert_to_pdf(&name, &Arc::new(bytes)).map_err(failed)?;
+            let title = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            sources.push((title, pdf, range));
+        }
+        let bytes = self.session.combine_ranges(&sources).map_err(failed)?;
+        self.deliver(a, "Combined", bytes)
+    }
+
+    /// One PDF per file, written into `out_dir`; a file that fails doesn't stop the others.
+    fn create_separate(&mut self, a: &Args, paths: &[&str]) -> Result<Value> {
+        let dir = self.resolve(a.str("out_dir").map_err(|_| ToolError::InvalidArgs("mode \"separate\" needs out_dir".into()))?, true)?;
+        std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
+        let mut out = Vec::new();
+        for &p in paths {
+            let converted = self.resolve(p, false).map_err(|e| e.to_string()).and_then(|src| {
+                let bytes = std::fs::read(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+                let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let stem = src.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
+                let (kind, pdf) = self.session.convert_to_pdf(&name, &Arc::new(bytes)).map_err(|e| e.to_string())?;
+                Ok((kind, stem, pdf))
+            });
+            out.push(match converted {
+                Ok((pdfcraft_engine::SourceKind::Pdf, ..)) => json!({ "path": p, "skipped": "already a PDF" }),
+                Ok((_, stem, pdf)) => {
+                    let target = unused(&dir, &stem);
+                    write_atomic(&target, &pdf)?;
+                    json!({ "path": p, "output": target.to_string_lossy(), "bytes": pdf.len() })
+                }
+                Err(e) => json!({ "path": p, "error": e }),
+            });
+        }
+        Ok(json!({ "files": out }))
+    }
+
     fn page_extract(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, name) = (doc.id, format!("{} (extract)", doc.name));
@@ -1180,7 +1287,15 @@ impl Automation {
         }
         let ranges: Vec<Option<String>> = match a.get("pages") {
             None | Some(Value::Null) => vec![None; paths.len()],
-            Some(Value::Array(v)) if v.len() == paths.len() => v.iter().map(|x| x.as_str().map(str::to_owned)).collect(),
+            Some(Value::Array(v)) if v.len() == paths.len() => v
+                .iter()
+                .enumerate()
+                .map(|(index, value)| match value {
+                    Value::Null => Ok(None),
+                    Value::String(range) => Ok(Some(range.clone())),
+                    _ => Err(ToolError::InvalidArgs(format!("pages[{index}] must be a range string or null"))),
+                })
+                .collect::<Result<_>>()?,
             Some(_) => return Err(ToolError::InvalidArgs("pages must list a range (or null) for each path".into())),
         };
         let passwords: Vec<Option<String>> = match a.get("passwords") {
@@ -1238,13 +1353,21 @@ impl Automation {
         let dir = self.resolve(a.str("out_dir")?, true)?;
         std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
         let mut files = Vec::new();
+        let mut used = std::collections::HashSet::new();
         for (i, (first, last, bytes)) in parts.iter().enumerate() {
             let safe = |t: &str| t.chars().map(|c| if c.is_alphanumeric() || " -_.,()".contains(c) { c } else { '_' }).collect::<String>();
             let file = match titles.iter().find(|t| t.0 + 1 == *first) {
                 Some((_, t)) => format!("{stem}-{}.pdf", safe(t)),
                 None => format!("{stem}-part{}.pdf", i + 1),
             };
-            let path = child(&dir, &file);
+            // Equal titles (or titles that sanitize alike) get -2, -3, ... so no part overwrites another; compared case-insensitively.
+            let mut unique = file.clone();
+            let mut n = 1;
+            while !used.insert(unique.to_lowercase()) {
+                n += 1;
+                unique = format!("{}-{n}.pdf", file.trim_end_matches(".pdf"));
+            }
+            let path = child(&dir, &unique);
             write_atomic(&path, bytes)?;
             files.push(json!({ "path": path.to_string_lossy(), "first_page": first, "last_page": last }));
         }
@@ -1280,10 +1403,10 @@ impl Automation {
         let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
         let fresh = || {
             let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
-            (doc.bytes.clone(), PageRenderer::new(doc.bytes.clone(), config))
+            (doc.display.clone(), PageRenderer::new(doc.display.clone(), config))
         };
         let entry = self.renderers.entry(id).or_insert_with(fresh);
-        if !Arc::ptr_eq(&entry.0, &doc.bytes) {
+        if !Arc::ptr_eq(&entry.0, &doc.display) {
             *entry = fresh();
         }
         Ok(&mut entry.1)
@@ -1341,8 +1464,14 @@ impl Automation {
             Some(_) => self.pages(a, "pages")?,
             None => (0..doc.info.pages.len()).collect(),
         };
+        // Column select (#740): only the text inside the rectangle, row by row.
+        let rect = a.nums::<4>("rect")?.map(|r| r.map(|v| v as f32));
         let texts = self.page_texts(id, &pages)?;
-        let out: Vec<Value> = pages.iter().zip(texts).map(|(p, t)| json!({ "page": p + 1, "text": t.plain_text() })).collect();
+        let text = |t: &PageText| match rect {
+            Some(r) => t.column_text(&t.glyphs_in(r)),
+            None => t.plain_text(),
+        };
+        let out: Vec<Value> = pages.iter().zip(texts).map(|(p, t)| json!({ "page": p + 1, "text": text(&t) })).collect();
         Ok(json!({ "pages": out }))
     }
 
@@ -1369,6 +1498,8 @@ impl Automation {
             Some(_) => Some(self.doc(a)?.id),
             None => None,
         };
+        let filter = a.opt_str("filter")?.unwrap_or("").to_lowercase();
+        let enabled_only = a.opt_bool("enabled_only")?.unwrap_or(false);
         let list: Vec<Value> = commands::COMMANDS
             .iter()
             .map(|c| {
@@ -1379,7 +1510,16 @@ impl Automation {
                     "shortcut": c.shortcut.map(|s| s.label(cfg!(target_os = "macos"))),
                     "enabled": commands::is_enabled(c, &self.session, active),
                     "tool": tools::tool_for_command(c.id),
+                    "params": tools::tool_for_command(c.id).and_then(tools::find).map(|t| &t.input_schema),
                 })
+            })
+            .collect();
+        let list: Vec<Value> = list
+            .into_iter()
+            .filter(|c| {
+                (!enabled_only || c.get("enabled").and_then(Value::as_bool) == Some(true))
+                    && (filter.is_empty()
+                        || ["id", "label", "menu"].iter().any(|k| c.get(k).is_some_and(|v| v.to_string().to_lowercase().contains(&filter))))
             })
             .collect();
         Ok(json!({ "commands": list }))
@@ -1626,7 +1766,7 @@ fn info(d: &Document) -> Value {
         "links": i.links.iter().map(|l| json!({
             "page": page1(l.page), "rect": view_rect(i, l.page, l.rect),
             "target": match &l.target {
-                pdfcraft_render::LinkTarget::Page(p) => json!({ "page": page1(*p) }),
+                pdfcraft_render::LinkTarget::Page(p, _) => json!({ "page": page1(*p) }),
                 pdfcraft_render::LinkTarget::Uri(u) => json!({ "uri": u }),
                 pdfcraft_render::LinkTarget::SetLayers { changes, preserve_rb } => json!({
                     "layers": changes.iter().map(|(op, ocg)| json!({
@@ -1731,6 +1871,15 @@ fn child(dir: &Path, name: &str) -> PathBuf {
     dir.join(safe)
 }
 
+/// `<stem>.pdf` in `dir`, or `<stem> (2).pdf` and so on when that name is taken.
+fn unused(dir: &Path, stem: &str) -> PathBuf {
+    let first = child(dir, &format!("{stem}.pdf"));
+    if !first.exists() {
+        return first;
+    }
+    (2..10_000u32).map(|n| child(dir, &format!("{stem} ({n}).pdf"))).find(|p| !p.exists()).unwrap_or(first)
+}
+
 /// Write via a temporary file in the same directory, then rename over the target.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     write_atomic_with(path, bytes, staging_suffixes())
@@ -1747,7 +1896,8 @@ fn write_atomic_with(path: &Path, bytes: &[u8], suffixes: impl IntoIterator<Item
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let name = path.file_name().ok_or_else(|| failed(format!("{}: not a file path", path.display())))?;
     std::fs::create_dir_all(dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
-    let (tmp, file) = create_staging(dir, &name.to_string_lossy(), suffixes).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
+    let (tmp, file) =
+        create_staging(dir, &name.to_string_lossy(), StagingName::SuffixThenTag, suffixes).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
     // Closed at the end of the block, before the rename.
     let written = {
         let mut file = file;
@@ -1763,49 +1913,10 @@ fn write_atomic_with(path: &Path, bytes: &[u8], suffixes: impl IntoIterator<Item
     })
 }
 
-/// How many staging names [`create_staging`] tries. A random 64-bit name is only taken if someone
-/// put a file there on purpose, so running out means refusing, not trying harder.
-const STAGING_ATTEMPTS: usize = 16;
-
-/// Create a new, empty staging file in `dir` for the file `name`, one name per suffix. It is
-/// opened with `create_new`, which fails if anything already has the name (a file, a hard link,
-/// a symbolic link even when dangling, a folder), on Windows as everywhere else; such a name is
-/// skipped, never opened, so a file planted at the staging path can't receive or redirect the
-/// write.
-fn create_staging(dir: &Path, name: &str, suffixes: impl IntoIterator<Item = u64>) -> std::io::Result<(PathBuf, std::fs::File)> {
-    // At most 128 bytes of the target's name, cut between characters, so the staging name fits
-    // the 255-byte (Linux, macOS) and 255-unit (Windows) limits however long that name is.
-    let mut stem = String::new();
-    for c in name.chars() {
-        if stem.len() + c.len_utf8() > 128 {
-            break;
-        }
-        stem.push(c);
-    }
-    for suffix in suffixes.into_iter().take(STAGING_ATTEMPTS) {
-        let tmp = dir.join(format!(".{stem}.{suffix:016x}.pdfcraft-tmp"));
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
-            Ok(file) => return Ok((tmp, file)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            // Windows reports a folder at the name as "access denied"; it is taken all the same.
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && tmp.symlink_metadata().is_ok() => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "every temporary file name tried is taken"))
-}
-
-/// Unpredictable staging-name suffixes, so a name can't be planted in advance. `RandomState` is
-/// keyed from the operating system's random source.
-fn staging_suffixes() -> impl Iterator<Item = u64> {
-    use std::hash::BuildHasher;
-    let state = std::hash::RandomState::new();
-    (0u64..).map(move |i| state.hash_one(i))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pdfcraft_platform::staging::STAGING_ATTEMPTS;
 
     #[test]
     fn dot_dot_resolves_by_name_and_never_climbs_above_the_start() {

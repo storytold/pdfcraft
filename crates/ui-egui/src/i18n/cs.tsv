@@ -10,6 +10,7 @@
 
 	Menu	Nabídka
 	File	Soubor
+	Rotation:	Otočení:
 	Edit	Úpravy
 	Pages	Stránky
 	View	Zobrazení
@@ -28,9 +29,17 @@
 	Enable Acrobat JavaScript	Povolit Acrobat JavaScript
 	OK	OK
 	Open…	Otevřít…
+	Open Recent	Otevřít nedávné soubory
+	Clear Recent Files	Vymazat nedávné soubory
+	Remove from Recent	Odebrat z nedávných souborů
+	Remove {name} from Recent	Odebrat {name} z nedávných souborů
+	Clear	Vymazat
+	Pin folder to Home…	Připnout složku na úvodní stránku…
+	No recent files	Žádné nedávné soubory
 	New blank PDF	Nový prázdný dokument PDF
 	Create PDF from file…	Vytvořit PDF ze souboru…
 	Create PDF from images…	Vytvořit PDF z obrázků…
+	Create PDF from multiple files…	Vytvořit PDF z více souborů…
 	Create PDF from clipboard	Vytvořit PDF ze schránky
 	Combine files…	Sloučit soubory…
 	Save	Uložit
@@ -42,6 +51,8 @@
 	Document properties…	Vlastnosti dokumentu…
 	Export to image…	Exportovat jako obrázek…
 	Reduce file size…	Zmenšit velikost souboru…
+	This file is already as small as it can be made ({size}). No copy was saved.	Soubor je už tak malý, jak to jde ({size}). Žádná kopie nebyla uložena.
+	Saved {place}: {before} → {after} (not smaller){detail}	Uloženo {place}: {before} → {after} (není menší){detail}
 	Optimize PDF…	Optimalizovat PDF…
 	Export to text…	Exportovat jako text…
 	Export to Word…	Exportovat do formátu Word…
@@ -56,6 +67,7 @@
 	Find…	Najít…
 	Advanced search…	Rozšířené hledání…
 	Take a snapshot	Pořídit snímek
+	Column select	Výběr sloupce
 	Clear form	Vymazat formulář
 	Copy pages	Kopírovat stránky
 	Cut pages	Vyjmout stránky
@@ -71,6 +83,7 @@
 	Signatures panel	Panel podpisů
 	Organize pages	Uspořádat stránky
 	New bookmark	Nová záložka
+	New bookmarks from structure	Nové záložky ze struktury
 	Rotate pages clockwise	Otočit stránky po směru hodinových ručiček
 	Rotate pages counterclockwise	Otočit stránky proti směru hodinových ručiček
 	Delete pages	Odstranit stránky
@@ -104,3 +117,43 @@
 	Fit to width scrolling	Plynulé posouvání s přizpůsobením šířce
 	Fit one full page	Celá jedna stránka
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Používá se, když PDF nepožaduje rozložení ani zvětšení. Plynulé posouvání mezi stránkami neskáče.
+	Reopen the files that were open when PdfCraft last closed	Znovu otevřít soubory, které byly otevřené při posledním zavření aplikace PdfCraft
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Vyberte obrázek PNG nebo JPEG (nejvýše 4 MiB). Průhlednost bude zachována.
+	Couldn't import the signature image: {e}	Obrázek podpisu nelze importovat: {e}
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Přenosný režim je vypnutý: do složky {folder} nelze zapisovat ({error}). Nastavení se místo toho ukládá do vaší uživatelské složky.
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft vykresluje bez grafického procesoru, takže může být pomalý. Pomoci může aktualizace grafického ovladače.
+	Go to page…	Přejít na stránku…
+	Open arrow	Otevřená šipka
+	Closed arrow	Zavřená šipka
+	Butt	Tupý konec
+	Reverse open arrow	Otevřená šipka obráceně
+	Reverse closed arrow	Zavřená šipka obráceně
+	Slash	Lomítko
+	Scroll tabs left	Posunout karty doleva
+	Scroll tabs right	Posunout karty doprava
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	Společné vlastnosti polí
+	{n} fields selected	Vybráno polí: {n}
+	Mixed	Různé hodnoty
+	Custom font	Vlastní písmo
+	Only checked properties will change. Mixed means the selected fields have different values.	Změní se pouze zaškrtnuté vlastnosti. „Různé hodnoty“ znamená, že vybraná pole mají odlišné hodnoty.
+	Shift- or Ctrl/Command-click to select several fields.	Kliknutím se Shift nebo Ctrl/Command vyberete více polí.
+	Font size 0 uses automatic sizing.	Velikost písma 0 zapne automatickou velikost.
+	Character limit:	Limit znaků:
+	Character limit 0 means no limit. A comb of characters needs a limit.	Limit znaků 0 znamená bez omezení. Rozdělení na znaky vyžaduje limit.
+	To change locked fields, also set Locked to No.	Chcete-li změnit zamčená pole, nastavte také „Zamčeno“ na „Ne“.
+	Multiple words or phrases	Více slov nebo frází
+	One word or phrase per line	Jedno slovo nebo fráze na řádek
+	Import list…	Importovat seznam…
+	{n} word(s) or phrase(s)	Slova nebo fráze: {n}
+	{name} is too large for a word list (at most 1 MB).	{name} je pro seznam slov příliš velký (nejvýše 1 MB).
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	Mezerník

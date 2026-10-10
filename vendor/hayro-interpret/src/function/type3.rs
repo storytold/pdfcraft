@@ -16,12 +16,34 @@ pub(crate) struct Type3 {
 
 impl Type3 {
     /// Create a new type 3 function.
-    pub(crate) fn new(dict: &Dict<'_>) -> Option<Self> {
+    pub(super) fn new(
+        dict: &Dict<'_>,
+        budget: &mut super::ConstructionBudget,
+        depth: usize,
+    ) -> Option<Self> {
         let clamper = Clamper::new(dict)?;
 
-        let functions = dict
-            .get::<Array<'_>>(FUNCTIONS)
-            .and_then(|d| d.iter::<Object<'_>>().map(|o| Function::new(&o)).collect())?;
+        // PdfCraft patch: all descendants share the caller's depth, work and cycle guards.
+        // The resolved iterator also ends on an unresolved/cyclic reference. Require one
+        // resolved child per raw slot so that failure cannot silently shorten the function list.
+        let array = dict.get::<Array<'_>>(FUNCTIONS)?;
+        let mut objects = array.iter::<Object<'_>>();
+        let functions: Vec<Function> = array
+            .raw_iter()
+            .map(|_| {
+                let Some(object) = objects.next() else {
+                    warn!(
+                        "PDF stitching function contains an unresolved or cyclic child reference"
+                    );
+                    return None;
+                };
+                Function::new_inner(&object, budget, depth)
+            })
+            .collect::<Option<_>>()?;
+        if functions.is_empty() {
+            warn!("PDF stitching function has no child functions");
+            return None;
+        }
         let domain = *clamper.domain.first()?;
         let mut bounds = vec![domain.0 - 0.0001];
         if let Some(a) = dict.get::<Array<'_>>(BOUNDS) {
@@ -131,5 +153,50 @@ mod tests {
             function.eval(smallvec![7.0]).unwrap().as_slice(),
             &[0.7, 0.7, 0.7]
         );
+    }
+
+    fn function_limits_stitching(levels: usize) -> String {
+        let mut function = "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>".to_owned();
+        for _ in 1..levels {
+            function = format!(
+                "<< /FunctionType 3 /Domain [0 1] /Functions [{function}] /Bounds [] /Encode [0 1] >>"
+            );
+        }
+        function
+    }
+
+    #[test]
+    fn function_limits_stitching_depth_is_bounded() {
+        let data = function_limits_stitching(64);
+        let object = Object::from_bytes(data.as_bytes()).unwrap();
+        assert_eq!(
+            Function::new(&object).unwrap().eval(smallvec![0.5]),
+            Some(smallvec![0.5])
+        );
+        let data = function_limits_stitching(65);
+        // Direct nesting beyond the hayro-syntax cap (PdfCraft patch) is refused while parsing,
+        // before this guard; the guard is tested with indirect references in pdfcraft-render
+        // (`function_limits_depth_guard_refuses_a_chain_of_references`).
+        assert!(Object::from_bytes(data.as_bytes()).is_none());
+    }
+
+    fn function_limits_fanout(children: usize) -> String {
+        let leaf = "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> ";
+        format!(
+            "<< /FunctionType 3 /Domain [0 1] /Functions [{}] /Bounds [{}] /Encode [{}] >>",
+            leaf.repeat(children),
+            "0.5 ".repeat(children.saturating_sub(1)),
+            "0 1 ".repeat(children)
+        )
+    }
+
+    #[test]
+    fn function_limits_stitching_fanout_shares_a_node_budget() {
+        let data = function_limits_fanout(9999);
+        let object = Object::from_bytes(data.as_bytes()).unwrap();
+        assert!(Function::new(&object).is_some());
+        let data = function_limits_fanout(10000);
+        let object = Object::from_bytes(data.as_bytes()).unwrap();
+        assert!(Function::new(&object).is_none());
     }
 }

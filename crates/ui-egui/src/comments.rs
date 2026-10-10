@@ -13,7 +13,7 @@
 //! applied by the app, so each change is one undo step.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
-use pdfcraft_engine::{Edit, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
+use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
 use pdfcraft_render::{Annotation, DocInfo};
 
 use crate::canvas::{DocView, PageXform};
@@ -191,6 +191,11 @@ impl CommentTool {
         self.draws() || self.clicks_points()
     }
 
+    /// Whether the fill-colour control applies: shapes with an interior (#686).
+    pub fn has_fill(self) -> bool {
+        matches!(self, Self::Rectangle | Self::Oval | Self::Polygon | Self::Cloud)
+    }
+
     /// A placeholder shape of this kind (for per-tool default styles).
     fn sample(self) -> Shape {
         match self {
@@ -200,14 +205,14 @@ impl CommentTool {
                 Shape::TextMarkup { kind: self.markup().unwrap_or(Markup::Highlight), quads: Vec::new() }
             }
             Self::Ink => Shape::Ink { strokes: Vec::new() },
-            Self::Line => Shape::Line { from: [0.0; 2], to: [0.0; 2], arrow: false },
-            Self::Arrow => Shape::Line { from: [0.0; 2], to: [0.0; 2], arrow: true },
+            Self::Line => Shape::Line { from: [0.0; 2], to: [0.0; 2], start: LineEnding::None, end: LineEnding::None },
+            Self::Arrow => Shape::Line { from: [0.0; 2], to: [0.0; 2], start: LineEnding::None, end: LineEnding::OpenArrow },
             Self::Rectangle => Shape::Rectangle { rect: [0.0; 4] },
             Self::Oval => Shape::Oval { rect: [0.0; 4] },
             Self::Polygon => Shape::Polygon { vertices: Vec::new(), cloud: false },
             Self::Cloud => Shape::Polygon { vertices: Vec::new(), cloud: true },
-            Self::PolyLine => Shape::PolyLine { vertices: Vec::new() },
-            Self::Callout => Shape::Callout { rect: [0.0; 4], knee: [0.0; 2], point: [0.0; 2], font_size: 10.0 },
+            Self::PolyLine => Shape::PolyLine { vertices: Vec::new(), start: LineEnding::None, end: LineEnding::None },
+            Self::Callout => Shape::Callout { rect: [0.0; 4], knee: [0.0; 2], point: [0.0; 2], font_size: 10.0, ending: LineEnding::OpenArrow },
             Self::Caret => Shape::Caret { rect: [0.0; 4] },
             Self::ReplaceText => Shape::TextMarkup { kind: Markup::StrikeOut, quads: Vec::new() },
             Self::Eraser => Shape::Ink { strokes: Vec::new() },
@@ -263,6 +268,11 @@ impl CommentPrefs {
         self.styles.iter().find(|(t, _)| *t == tool).map(|(_, s)| s.clone()).unwrap_or_default()
     }
 
+    /// Every tool with its current default style (the persisted settings read this).
+    pub fn styles(&self) -> impl Iterator<Item = (CommentTool, &Style)> {
+        self.styles.iter().map(|(t, s)| (*t, s))
+    }
+
     pub fn set_color(&mut self, tool: CommentTool, c: Rgb) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             s.color = c;
@@ -279,6 +289,13 @@ impl CommentPrefs {
     pub fn set_opacity(&mut self, tool: CommentTool, o: f64) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             s.opacity = if o.is_finite() { o.clamp(0.1, 1.0) } else { 1.0 };
+        }
+    }
+
+    /// The tool's fill (`None`: no fill). Only shapes with an interior keep one.
+    pub fn set_fill(&mut self, tool: CommentTool, fill: Option<Rgb>) {
+        if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            s.fill = if tool.has_fill() { fill.filter(|c| c.iter().all(|x| x.is_finite())).map(|c| c.map(|x| x.clamp(0.0, 1.0))) } else { None };
         }
     }
 
@@ -335,7 +352,7 @@ pub enum Gesture {
     /// Moving a comment, from the press position on screen.
     Move { page: usize, index: usize, from: Pos2 },
     /// Resizing a comment by one of its handles: (dx, dy) ∈ {-1, 0, 1}² says which sides move.
-    Resize { page: usize, index: usize, handle: (i8, i8), from: Pos2 },
+    Resize { page: usize, index: usize, handle: (i8, i8), from: Pos2, aspect_ratio: Option<f32> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -371,6 +388,8 @@ pub struct CommentView {
     /// The selected comment: (page, index in `/Annots`).
     pub selected: Option<(usize, usize)>,
     pub gesture: Option<Gesture>,
+    /// Escape ends egui's drag too; ignore its synthetic release until the mouse is up.
+    cancelled_drag: bool,
     pub composer: Option<Composer>,
     /// Reply being typed under the selected card.
     pub reply: String,
@@ -474,8 +493,39 @@ impl PageCx<'_> {
         self.comments().filter(|a| self.screen_rects(a).iter().any(|r| r.expand(3.0).contains(p))).last()
     }
 
-    fn get(&self, index: usize) -> Option<&Annotation> {
+    pub(crate) fn get(&self, index: usize) -> Option<&Annotation> {
         self.comments().find(|a| a.index == index)
+    }
+
+    pub(crate) fn rect_to_user(&self, r: Rect) -> [f64; 4] {
+        let (a, b) = (self.to_user(r.left_top()), self.to_user(r.right_bottom()));
+        [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
+    }
+
+    /// The same geometry drives the live image, its handles, and the edit on release.
+    pub(crate) fn adjusted_rect(&self, a: &Annotation, gesture: Option<&Gesture>, pointer: Option<Pos2>, pending: Option<&Edit>) -> Rect {
+        let r = self.screen_rect(a);
+        if let Some(Edit::ResizeAnnotation { page, index, rect }) = pending
+            && (*page, *index) == (self.page, a.index)
+        {
+            return self.xf.user_rect(self.info, self.page, rect.map(|v| v as f32));
+        }
+        if let Some(Edit::MoveAnnotation { page, index, dx, dy }) = pending
+            && (*page, *index) == (self.page, a.index)
+        {
+            return self.xf.user_rect(
+                self.info,
+                self.page,
+                [a.rect[0] + *dx as f32, a.rect[1] + *dy as f32, a.rect[2] + *dx as f32, a.rect[3] + *dy as f32],
+            );
+        }
+        match (gesture, pointer) {
+            (Some(Gesture::Move { page, index, from }), Some(p)) if (*page, *index) == (self.page, a.index) => r.translate(p - *from),
+            (Some(Gesture::Resize { page, index, handle, from, aspect_ratio }), Some(p)) if (*page, *index) == (self.page, a.index) => {
+                resized(r, *handle, p - *from, *aspect_ratio)
+            }
+            _ => r,
+        }
     }
 }
 
@@ -483,10 +533,10 @@ fn is_markup(subtype: &str) -> bool {
     matches!(subtype, "Highlight" | "Underline" | "StrikeOut" | "Squiggly")
 }
 
-/// Rectangles, ovals and text boxes. A callout's `/Rect` also holds its leader line, so it
+/// Rectangles, ovals, text boxes and stamps. A callout's `/Rect` also holds its leader line, so it
 /// only moves.
 fn resizable(a: &Annotation) -> bool {
-    matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText") && a.intent.as_deref() != Some("FreeTextCallout")
+    matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Stamp") && a.intent.as_deref() != Some("FreeTextCallout")
 }
 
 const HANDLES: [(i8, i8); 8] = [(-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0)];
@@ -505,7 +555,17 @@ fn handle_pos(r: Rect, (hx, hy): (i8, i8)) -> Pos2 {
     pos2(x, y)
 }
 
-fn resized(r: Rect, (hx, hy): (i8, i8), d: egui::Vec2) -> Rect {
+fn resized(r: Rect, (hx, hy): (i8, i8), d: egui::Vec2, aspect_ratio: Option<f32>) -> Rect {
+    if hx != 0
+        && hy != 0
+        && let Some(ratio) = aspect_ratio.filter(|v| v.is_finite() && *v > 0.0)
+    {
+        // As in content_ui, the larger requested dimension drives proportional corner resizing.
+        // Keep the opposite corner fixed and prevent crossing it from flipping the image.
+        let width = (r.width() + f32::from(hx) * d.x).max((r.height() + f32::from(hy) * d.y) * ratio).max(4.0).max(4.0 * ratio);
+        let anchor = handle_pos(r, (-hx, -hy));
+        return Rect::from_two_pos(anchor, anchor + vec2(f32::from(hx) * width, f32::from(hy) * width / ratio));
+    }
     let mut r = r;
     match hx {
         -1 => r.min.x += d.x,
@@ -528,7 +588,16 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     let page_rect = cx.xf.rect;
     let pressed_here = origin.is_some_and(|o| page_rect.contains(o));
     let over_page = pointer.is_some_and(|p| page_rect.contains(p));
+    let fill_grab = fill_grabs(ui, cx, view);
     let cv = &mut view.comments;
+    if cv.gesture.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        cv.gesture = None;
+        cv.cancelled_drag = true;
+        return true;
+    }
+    if cv.cancelled_drag {
+        return true;
+    }
     if resp.secondary_clicked()
         && let Some(p) = pointer.filter(|p| page_rect.contains(*p))
     {
@@ -712,8 +781,33 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             true
         }
         QuickTool::Select => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
+        QuickTool::Fill(_) if fill_grab => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
         _ => false,
     }
+}
+
+/// With a Fill & Sign tool, the Fill & Sign marks already on the page are picked up as with the
+/// Select tool, as in Acrobat: hovering one shows the move cursor, a click selects it, a drag
+/// moves it and the selected one's handles resize it. Elsewhere the tool places its mark. While
+/// the button is down the press decides; otherwise the pointer (egui clears the press origin on
+/// release, so a click is located by the pointer).
+pub(crate) fn fill_grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView) -> bool {
+    if !matches!(cx.tool, QuickTool::Fill(_)) || cx.hidden {
+        return false;
+    }
+    let cv = &view.comments;
+    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. }) if page == cx.page) {
+        return true;
+    }
+    let (pointer, origin, down) = ui.input(|i| (i.pointer.hover_pos(), i.pointer.press_origin(), i.pointer.any_down()));
+    let Some(p) = (if down { origin } else { pointer }).filter(|p| cx.xf.rect.contains(*p)) else { return false };
+    let on_handle = cv
+        .selected
+        .filter(|(page, _)| *page == cx.page)
+        .and_then(|(_, i)| cx.get(i))
+        .filter(|a| a.fill_sign && cx.allowed && resizable(a))
+        .is_some_and(|a| HANDLES.into_iter().any(|h| handle_pos(cx.screen_rect(a), h).distance(p) <= 7.0));
+    on_handle || cx.hit(p).is_some_and(|a| a.fill_sign)
 }
 
 fn clamp_to(r: Rect, p: Pos2) -> Pos2 {
@@ -757,7 +851,10 @@ fn select_input(
         && let Some(o) = origin
     {
         if let (Some(h), Some(a)) = (handle_at(o), selected) {
-            cv.gesture = Some(Gesture::Resize { page: cx.page, index: a.index, handle: h, from: o });
+            // On screen, the image is also turned by the view's rotation.
+            let turned = !cx.xf.rot.is_multiple_of(180);
+            let aspect_ratio = view.signature_drag.aspect_ratio(cx.page, a.index).map(|ratio| if turned { ratio.recip() } else { ratio });
+            cv.gesture = Some(Gesture::Resize { page: cx.page, index: a.index, handle: h, from: o, aspect_ratio });
             consumed = true;
         } else if let Some(a) = cx.hit(o)
             && !is_markup(&a.subtype)
@@ -785,12 +882,11 @@ fn select_input(
                     view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
                 }
             }
-            Some(Gesture::Resize { page, index, handle, from }) if page == cx.page => {
+            Some(Gesture::Resize { page, index, handle, from, aspect_ratio }) if page == cx.page => {
                 cv.gesture = None;
                 if let Some(a) = cx.get(index) {
-                    let r = resized(cx.screen_rect(a), handle, p - from);
-                    let (u0, u1) = (cx.to_user(r.left_top()), cx.to_user(r.right_bottom()));
-                    let rect = [u0[0].min(u1[0]), u0[1].min(u1[1]), u0[0].max(u1[0]), u0[1].max(u1[1])];
+                    let r = resized(cx.screen_rect(a), handle, p - from, aspect_ratio);
+                    let rect = cx.rect_to_user(r);
                     if r.width() >= 4.0 && r.height() >= 4.0 {
                         view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
                     }
@@ -859,9 +955,9 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
     let cv = &view.comments;
     let pointer = ui.input(|i| i.pointer.hover_pos());
-    if cx.tool == QuickTool::Select
-        && cv.gesture.is_none()
+    if cv.gesture.is_none()
         && let Some(a) = pointer.and_then(|p| cx.hit(p))
+        && (cx.tool == QuickTool::Select || matches!(cx.tool, QuickTool::Fill(_)) && a.fill_sign)
         && cv.selected != Some((cx.page, a.index))
     {
         for r in cx.screen_rects(a) {
@@ -878,14 +974,11 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             }
             return paint_gesture(painter, cx, view);
         }
-        let mut r = cx.screen_rect(a).expand(2.0);
-        if let (Some(p), Some(g)) = (pointer, &cv.gesture) {
-            match g {
-                Gesture::Move { page, index: gi, from } if *page == cx.page && *gi == index => r = r.translate(p - *from),
-                Gesture::Resize { page, index: gi, handle, from } if *page == cx.page && *gi == index => r = resized(r, *handle, p - *from),
-                _ => {}
-            }
+        if view.signature_drag.contains(page, index) && matches!(cv.gesture, Some(Gesture::Move { page: p, index: i, .. }) if (p, i) == (page, index))
+        {
+            return paint_gesture(painter, cx, view);
         }
+        let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, view.pending_edit.as_ref()).expand(2.0);
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
         if cx.allowed && resizable(a) {
             for h in HANDLES {
@@ -958,13 +1051,20 @@ fn drawn_shape(tool: CommentTool, points: &[[f64; 2]]) -> Option<Shape> {
     let big = rect[2] - rect[0] >= 2.0 && rect[3] - rect[1] >= 2.0;
     match tool {
         CommentTool::Ink if points.len() >= 2 => Some(Shape::Ink { strokes: vec![points.to_vec()] }),
-        CommentTool::Line | CommentTool::Arrow if far => Some(Shape::Line { from: first, to: last, arrow: tool == CommentTool::Arrow }),
+        CommentTool::Line | CommentTool::Arrow if far => Some(Shape::Line {
+            from: first,
+            to: last,
+            start: LineEnding::None,
+            end: if tool == CommentTool::Arrow { LineEnding::OpenArrow } else { LineEnding::None },
+        }),
         CommentTool::Rectangle if big => Some(Shape::Rectangle { rect }),
         CommentTool::Oval if big => Some(Shape::Oval { rect }),
         CommentTool::Polygon | CommentTool::Cloud if points.len() >= 3 => {
             Some(Shape::Polygon { vertices: points.to_vec(), cloud: tool == CommentTool::Cloud })
         }
-        CommentTool::PolyLine if points.len() >= 2 => Some(Shape::PolyLine { vertices: points.to_vec() }),
+        CommentTool::PolyLine if points.len() >= 2 => {
+            Some(Shape::PolyLine { vertices: points.to_vec(), start: LineEnding::None, end: LineEnding::None })
+        }
         _ => None,
     }
 }
@@ -1024,7 +1124,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             ui.set_width(260.0);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&prefs.author).font(theme::semibold(13.0)));
-                ui.label(egui::RichText::new(title).font(theme::regular(11.5)).color(t.text_faint));
+                ui.label(egui::RichText::new(tl!(title)).font(theme::regular(11.5)).color(t.text_faint));
             });
             ui.add_space(6.0);
             let hint = match c.kind {
@@ -1094,7 +1194,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 (rect[0] + rect[2]) / 2.0
             };
             let knee = [(point[0] + side) / 2.0, (rect[1] + rect[3]) / 2.0];
-            Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size: 10.0 }, text))
+            Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size: 10.0, ending: LineEnding::OpenArrow }, text))
         }
         ComposerKind::Replace => {
             view.comments.tool_done = true;
@@ -1129,6 +1229,9 @@ pub fn text_box_rect(at: [f64; 2], text: &str, size: f64) -> [f64; 4] {
 
 /// Delete / Escape handling for comments (only while no text field has focus).
 pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool, allowed: bool) {
+    if !ctx.input(|i| i.pointer.any_down()) {
+        view.comments.cancelled_drag = false;
+    }
     if ctx.egui_wants_keyboard_input() {
         return;
     }
@@ -1183,8 +1286,14 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                 });
                 ui.menu_button(tl!("Colour"), |ui| {
                     if let Some(c) = swatch_grid(ui, a.color.map(|c| c.map(f64::from))) {
-                        action =
-                            Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation { page, index, color: Some(c), opacity: None, width: None })));
+                        action = Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation {
+                            page,
+                            index,
+                            color: Some(c),
+                            opacity: None,
+                            width: None,
+                            endings: None,
+                        })));
                         ui.close();
                     }
                 });
@@ -1262,7 +1371,23 @@ pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
     picked
 }
 
-/// The comment tools' extra quick-bar controls: pin, colour, opacity and thickness.
+/// "No fill" and the colour swatches; returns the choice clicked (`Some(None)`: no fill).
+pub fn fill_picker(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Option<Rgb>> {
+    let mut picked = None;
+    ui.push_id("fill-picker", |ui| {
+        ui.vertical(|ui| {
+            if ui.selectable_label(current.is_none(), tl!("No fill")).clicked() {
+                picked = Some(None);
+            }
+            if let Some(c) = swatch_grid(ui, current) {
+                picked = Some(Some(c));
+            }
+        });
+    });
+    picked
+}
+
+/// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.
 pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) {
     let style = prefs.style(tool);
     if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
@@ -1278,6 +1403,16 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
             ui.close();
         }
     });
+    if tool.has_fill() {
+        let resp = fill_button(ui, style.fill);
+        egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).show(|ui| {
+            ui.label(egui::RichText::new(tl!("Fill colour")).font(theme::semibold(12.0)));
+            if let Some(f) = fill_picker(ui, style.fill) {
+                prefs.set_fill(tool, f);
+                ui.close();
+            }
+        });
+    }
     let resp = icons::button(ui, "blend", 32.0, false, tl!("Opacity"));
     egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_min_width(180.0);
@@ -1300,6 +1435,32 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
     }
 }
 
+/// The quick bar's fill button: a filled square in the fill colour, or a crossed-out outline
+/// for no fill.
+fn fill_button(ui: &mut egui::Ui, fill: Option<Rgb>) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
+    let sq = Rect::from_center_size(r.center(), vec2(16.0, 16.0));
+    let edge = Stroke::new(1.0, Color32::from_black_alpha(90));
+    match fill {
+        Some(c) => {
+            ui.painter().rect_filled(sq, 2.0, color32(c));
+        }
+        None => {
+            ui.painter().line_segment([sq.left_bottom(), sq.right_top()], Stroke::new(1.5, Color32::from_rgb(0xD3, 0x2F, 0x2F)));
+        }
+    }
+    ui.painter().rect_stroke(sq, 2.0, edge, egui::StrokeKind::Inside);
+    if resp.hovered() {
+        ui.painter().rect_stroke(r.shrink(2.0), 6.0, Stroke::new(1.0, Color32::from_black_alpha(40)), egui::StrokeKind::Inside);
+    }
+    let label = match fill {
+        Some(_) => tl!("Fill colour"),
+        None => tl!("Fill colour: none"),
+    };
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    resp.on_hover_text(label)
+}
+
 /// Status badge icon and label for a review state name.
 pub fn status_badge(state: &str) -> Option<(&'static str, &'static str, Color32)> {
     match state {
@@ -1316,6 +1477,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn proportional_corners_keep_the_opposite_anchor_and_edges_stretch_one_axis() {
+        let r = Rect::from_min_max(pos2(100.0, 100.0), pos2(196.0, 132.0));
+        for (hx, hy) in [(-1, -1), (1, -1), (-1, 1), (1, 1)] {
+            for (dx, dy) in [(24.0, 0.0), (0.0, 16.0), (-48.0, -20.0), (-200.0, -200.0)] {
+                let out = resized(r, (hx, hy), vec2(f32::from(hx) * dx, f32::from(hy) * dy), Some(3.0));
+                assert_eq!(handle_pos(out, (-hx, -hy)), handle_pos(r, (-hx, -hy)));
+                assert!((out.width() / out.height() - 3.0).abs() < 0.001);
+                assert!(out.width() >= 4.0 && out.height() >= 4.0);
+            }
+        }
+        for handle in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
+            let out = resized(r, handle, vec2(24.0, 16.0), Some(3.0));
+            assert_eq!(out, resized(r, handle, vec2(24.0, 16.0), None));
+            assert_eq!(if handle.0 == 0 { out.width() } else { out.height() }, if handle.0 == 0 { r.width() } else { r.height() });
+        }
+        // Ordinary comment corners keep their existing independent width/height behavior.
+        let free = resized(r, (1, 1), vec2(24.0, 0.0), None);
+        assert_eq!(free.size(), vec2(120.0, 32.0));
+    }
+
+    #[test]
     fn tools_round_trip_through_their_commands() {
         for t in ALL {
             assert_eq!(CommentTool::from_command(t.command()), Some(t));
@@ -1330,7 +1512,10 @@ mod tests {
         assert_eq!(drawn_shape(CommentTool::Rectangle, &[[0.0, 0.0], [1.0, 1.0]]), None);
         assert_eq!(drawn_shape(CommentTool::Rectangle, &[[10.0, 0.0], [0.0, 10.0]]), Some(Shape::Rectangle { rect: [0.0, 0.0, 10.0, 10.0] }));
         assert_eq!(drawn_shape(CommentTool::Ink, &[[0.0, 0.0]]), None);
-        assert!(matches!(drawn_shape(CommentTool::Arrow, &[[0.0, 0.0], [5.0, 0.0]]), Some(Shape::Line { arrow: true, .. })));
+        assert!(matches!(
+            drawn_shape(CommentTool::Arrow, &[[0.0, 0.0], [5.0, 0.0]]),
+            Some(Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. })
+        ));
     }
 
     #[test]

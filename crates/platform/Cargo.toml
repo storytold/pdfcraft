@@ -1,0 +1,17 @@
+[package]
+name = "pdfcraft-platform"
+description = "Operating-system services shared by the PdfCraft desktop app and automation tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The desktop's light/dark choice (see `desktop_theme.rs`). Already in the tree, with the features
+# this needs, through accesskit's accessibility bus; pinned to the same version so nothing is
+# built twice.
+zbus = "=5.19.0"

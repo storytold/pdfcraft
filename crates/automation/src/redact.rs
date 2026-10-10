@@ -1,7 +1,10 @@
 //! Redaction tools: mark areas, text, patterns or whole pages for redaction, apply the marks
 //! (removing what they cover for good) or clear them.
 
-use pdfcraft_engine::{Edit, Hidden, NewAnnotation, RedactPattern, Shape, Style, find_pattern, rect_quad};
+use pdfcraft_engine::{
+    Edit, Hidden, NewAnnotation, REDACT_MAX_WORDS, REDACTION_CODE_SETS, RedactPattern, RedactionCodeSet, Shape, Style, find_pattern, rect_quad,
+    redact_word_list,
+};
 use serde_json::{Value, json};
 
 use crate::comments::{DEFAULT_AUTHOR, parse_color};
@@ -15,7 +18,25 @@ impl Automation {
             Some(_) => self.pages(a, "pages")?,
             None => (0..n).collect(),
         };
-        let overlay = a.opt_str("overlay")?.unwrap_or("").to_string();
+        let overlay = match (a.opt_str("overlay")?, a.opt_str("code_set")?) {
+            (Some(_), Some(_)) => return Err(ToolError::InvalidArgs("pass overlay or code_set with codes, not both".into())),
+            (Some(o), None) => o.to_string(),
+            (None, Some(id)) => {
+                let set = RedactionCodeSet::from_id(id).ok_or_else(|| {
+                    let ids: Vec<_> = REDACTION_CODE_SETS.iter().map(|s| s.id).collect();
+                    ToolError::InvalidArgs(format!("unknown code_set {id:?}; allowed: {}", ids.join(", ")))
+                })?;
+                let picked = a.strs("codes")?;
+                let allowed = || format!("allowed in {}: {}", set.id, set.codes.join(", "));
+                match set.overlay(&picked) {
+                    Ok(o) if !o.is_empty() => o,
+                    Ok(_) => return Err(ToolError::InvalidArgs(format!("codes is empty; {}", allowed()))),
+                    Err(bad) => return Err(ToolError::InvalidArgs(format!("unknown code {bad:?}; {}", allowed()))),
+                }
+            }
+            (None, None) if a.get("codes").is_some() => return Err(ToolError::InvalidArgs("codes needs code_set".into())),
+            (None, None) => String::new(),
+        };
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
         let mut style = Style::default_for(&Shape::Redact { quads: Vec::new(), overlay: String::new(), look: Default::default() });
         if let Some(c) = a.opt_str("fill")? {
@@ -23,10 +44,18 @@ impl Automation {
         }
         // (page, quads) per mark.
         let mut marks: Vec<(usize, Vec<[f64; 8]>)> = Vec::new();
-        let chosen = [a.get("rect").is_some(), a.get("find").is_some(), a.get("pattern").is_some(), a.opt_bool("whole_pages")?.unwrap_or(false)];
+        let chosen = [
+            a.get("rect").is_some(),
+            a.get("find").is_some(),
+            a.get("words").is_some(),
+            a.get("pattern").is_some(),
+            a.opt_bool("whole_pages")?.unwrap_or(false),
+        ];
         if chosen.iter().filter(|c| **c).count() != 1 {
-            return Err(ToolError::InvalidArgs("pass exactly one of rect (with page), find, pattern or whole_pages: true".into()));
+            return Err(ToolError::InvalidArgs("pass exactly one of rect (with page), find, words, pattern or whole_pages: true".into()));
         }
+        // Per searched word or phrase: how many marks it made.
+        let mut matched_words: Vec<(String, usize)> = Vec::new();
         if a.get("rect").is_some() {
             let page = self.page(a)?;
             let info = &self.doc(a)?.info.pages[page];
@@ -41,23 +70,40 @@ impl Automation {
                 marks.push((p, vec![rect_quad([c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64])]));
             }
         } else {
-            let find = a.opt_str("find")?.map(str::to_owned);
             let pattern = match a.opt_str("pattern")? {
                 Some(p) => Some(RedactPattern::from_id(p).ok_or_else(|| ToolError::InvalidArgs(format!("unknown pattern {p:?}")))?),
                 None => None,
             };
+            let needles: Vec<String> = match (a.opt_str("find")?, a.get("words")) {
+                (Some(f), _) => vec![f.to_owned()],
+                (None, Some(_)) => {
+                    let raw = a.strs("words")?;
+                    if raw.len() > REDACT_MAX_WORDS {
+                        return Err(ToolError::InvalidArgs(format!("words has {} entries; at most {REDACT_MAX_WORDS} are allowed", raw.len())));
+                    }
+                    let list = redact_word_list(&raw.join("\n"));
+                    if list.is_empty() {
+                        return Err(ToolError::InvalidArgs("words must hold at least one non-empty word or phrase".into()));
+                    }
+                    list
+                }
+                (None, None) => Vec::new(),
+            };
+            matched_words = needles.iter().map(|w| (w.clone(), 0)).collect();
             let texts = self.page_texts(id, &pages)?;
             let info = self.doc(a)?.info.clone();
             for (&p, text) in pages.iter().zip(&texts) {
-                let hits = match (&find, pattern) {
-                    (Some(f), _) => text.find(f),
-                    (None, Some(pat)) => text.find_with(|chars| find_pattern(pat, chars)),
-                    _ => Vec::new(),
+                let hits: Vec<(Option<usize>, _)> = match pattern {
+                    Some(pat) => text.find_with(|chars| find_pattern(pat, chars)).into_iter().map(|h| (None, h)).collect(),
+                    None => needles.iter().enumerate().flat_map(|(i, w)| text.find(w).into_iter().map(move |h| (Some(i), h))).collect(),
                 };
-                for h in hits {
+                for (word, h) in hits {
                     let quads: Vec<[f64; 8]> = text.line_rects(h).into_iter().map(|r| info.pages[p].view_rect_to_quad(r)).collect();
                     if !quads.is_empty() {
                         marks.push((p, quads));
+                        if let Some(m) = word.and_then(|i| matched_words.get_mut(i)) {
+                            m.1 += 1;
+                        }
                     }
                 }
             }
@@ -81,6 +127,9 @@ impl Automation {
         out["marked"] = json!(count);
         out["pages_marked"] = json!(marks.iter().map(|m| m.0 + 1).collect::<std::collections::BTreeSet<_>>());
         out["marks_pending"] = json!(self.doc(a)?.redaction_marks());
+        if a.get("words").is_some() {
+            out["matched_words"] = json!(matched_words.iter().map(|(w, n)| json!({ "word": w, "marked": n })).collect::<Vec<_>>());
+        }
         Ok(out)
     }
 

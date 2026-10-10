@@ -27,13 +27,13 @@ pub enum AltError {
     Cos(#[from] pdfcraft_cos::CosError),
 }
 
-fn tree_root(doc: &Document) -> Option<Dict> {
+pub(crate) fn tree_root(doc: &Document) -> Option<Dict> {
     let cat = doc.root().and_then(|r| doc.get(r).as_dict().cloned())?;
     cat.get(b"StructTreeRoot").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned())
 }
 
 /// The standard type of a structure type through the role map.
-fn standard(doc: &Document, role_map: &Dict, s: &[u8]) -> Vec<u8> {
+pub(crate) fn standard(doc: &Document, role_map: &Dict, s: &[u8]) -> Vec<u8> {
     let mut t = s.to_vec();
     for _ in 0..12 {
         if crate::structure::is_standard(&t) {
@@ -105,7 +105,7 @@ fn mcids(d: &Dict) -> Vec<i64> {
     out
 }
 
-fn page_content(doc: &Document, page: &Dict) -> Vec<u8> {
+pub(crate) fn page_content(doc: &Document, page: &Dict) -> Vec<u8> {
     let Some(c) = page.get(b"Contents") else { return Vec::new() };
     match &*doc.resolve(c) {
         Object::Stream(s) => s.decoded().unwrap_or_default(),
@@ -144,10 +144,8 @@ fn content_bbox(doc: &Document, page: &Dict, ids: &HashSet<i64>) -> Option<[f64;
         let top = ctm.last().copied().unwrap_or(Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
         match op.op.as_slice() {
             b"q" => ctm.push(top),
-            b"Q" => {
-                if ctm.len() > 1 {
-                    ctm.pop();
-                }
+            b"Q" if ctm.len() > 1 => {
+                ctm.pop();
             }
             b"cm" => {
                 if let Some(m) = Matrix::from_operands(&op.operands)

@@ -23,18 +23,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # No macOS on PRs, main or nightly: the org's 5 macOS slots are kept for release builds,
+        # and release.yml builds macOS (a failing release is fixed and rebuilt).
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
       # The optional craft-fonts build input (Japanese fonts), so the Japanese font tests run on
-      # Linux; macOS and Windows test the build without it. See craftrules standards/fonts.md.
+      # Linux; Windows tests the build without it. See craftrules standards/fonts.md.
       - name: Check out craft-fonts (Linux)
         if: runner.os == 'Linux'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: storytold/craft-fonts
-          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
 
       - name: Install Linux system dependencies (egui/winit/rfd)
@@ -48,6 +50,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+
+      - name: Require Windows executable resources
+        if: runner.os == 'Windows'
+        run: Add-Content -Path $env:GITHUB_ENV -Value 'PDFCRAFT_REQUIRE_WINRES=1'
+        shell: pwsh
 
       - uses: Swatinem/rust-cache@v2
 

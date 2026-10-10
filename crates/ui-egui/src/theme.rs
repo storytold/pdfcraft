@@ -22,13 +22,16 @@ pub enum ThemePreference {
 }
 
 impl ThemePreference {
-    pub fn resolve(self, system: Option<egui::Theme>, fallback: ThemeKind) -> ThemeKind {
+    /// The colours to draw. `system` is what the operating system says, `None` when it says
+    /// nothing; `fallback` is then what the app last drew, so an unanswering desktop leaves the
+    /// user's choice alone.
+    pub fn resolve(self, system: Option<bool>, fallback: ThemeKind) -> ThemeKind {
         match self {
             Self::Light => ThemeKind::Light,
             Self::Dark => ThemeKind::Dark,
             Self::System => match system {
-                Some(egui::Theme::Light) => ThemeKind::Light,
-                Some(egui::Theme::Dark) => ThemeKind::Dark,
+                Some(true) => ThemeKind::Dark,
+                Some(false) => ThemeKind::Light,
                 None => fallback,
             },
         }
@@ -159,8 +162,8 @@ pub fn installed_font_definitions(prefer_hans: bool) -> FontDefinitions {
 }
 
 /// The interface fonts: Inter (and JetBrains Mono for code) first, then egui's defaults, then
-/// the CJK and Arabic faces of the optional craft-fonts build input as the last fallback in
-/// every family. Without craft-fonts there is no Japanese, Chinese or Arabic face here.
+/// the CJK, Arabic and Telugu faces of the optional craft-fonts build input as the last fallback
+/// in every family. Without craft-fonts there is no Japanese, Chinese, Arabic or Telugu face here.
 pub fn font_definitions() -> FontDefinitions {
     font_definitions_for(false)
 }
@@ -191,8 +194,9 @@ pub fn font_definitions_for(prefer_hans: bool) -> FontDefinitions {
             fonts.families.entry(family).or_default().push(name.clone());
         }
     }
-    // Arabic-script faces (file names, document titles) after the CJK ones; the ranges don't overlap.
-    for face in pdfcraft_fonts::ui_arabic_fonts() {
+    // Arabic-script faces (file names, document titles) and Telugu faces (the Telugu interface,
+    // file names) after the CJK ones; the ranges don't overlap.
+    for face in pdfcraft_fonts::ui_arabic_fonts().into_iter().chain(pdfcraft_fonts::ui_telugu_fonts()) {
         let name = face.name();
         if !fonts.font_data.contains_key(&name) {
             add(&mut fonts, &name, face.bytes);
@@ -283,6 +287,23 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// "Use system setting" draws what the operating system says, dark or light.
+    #[test]
+    fn following_the_system_draws_what_the_system_says() {
+        assert_eq!(ThemePreference::System.resolve(Some(true), ThemeKind::Light), ThemeKind::Dark);
+        assert_eq!(ThemePreference::System.resolve(Some(false), ThemeKind::Dark), ThemeKind::Light);
+    }
+
+    /// An operating system that says nothing leaves the last choice standing, and an explicit
+    /// Light or Dark is never overridden by what the system says.
+    #[test]
+    fn an_answerless_system_leaves_the_choice_and_an_explicit_one_stands() {
+        assert_eq!(ThemePreference::System.resolve(None, ThemeKind::Light), ThemeKind::Light);
+        assert_eq!(ThemePreference::System.resolve(None, ThemeKind::Dark), ThemeKind::Dark);
+        assert_eq!(ThemePreference::Light.resolve(Some(true), ThemeKind::Dark), ThemeKind::Light);
+        assert_eq!(ThemePreference::Dark.resolve(Some(false), ThemeKind::Light), ThemeKind::Dark);
+    }
 
     /// WCAG 2 contrast ratio between two opaque colours.
     fn contrast(a: Color32, b: Color32) -> f32 {

@@ -59,12 +59,19 @@ pub struct Shortcut {
 }
 
 impl Shortcut {
-    const fn cmd(key: &'static str) -> Self {
+    /// ⌘ (Ctrl elsewhere) and `key`.
+    pub const fn cmd(key: &'static str) -> Self {
         Self { command: true, shift: false, mac_ctrl: false, key }
     }
 
-    const fn cmd_shift(key: &'static str) -> Self {
+    /// ⇧⌘ (Ctrl+Shift elsewhere) and `key`.
+    pub const fn cmd_shift(key: &'static str) -> Self {
         Self { command: true, shift: true, mac_ctrl: false, key }
+    }
+
+    /// The command modifier on its own, for text such as "⌘-scroll" / "Ctrl-scroll".
+    pub fn command_name(mac: bool) -> &'static str {
+        if mac { "⌘" } else { "Ctrl" }
     }
 
     /// How the shortcut is written in menus: `⇧⌘S` on macOS, `Ctrl+Shift+S` elsewhere.
@@ -149,6 +156,10 @@ const HELP: Option<&str> = Some("Help");
 /// Every command, in menu order.
 pub const COMMANDS: &[CommandSpec] = &[
     c("file.open", "Open…", FILE, Some(Shortcut::cmd("O")), Nothing, "folder-open"),
+    c("file.open_recent", "Open Recent", FILE, None, Nothing, "clock"),
+    // Shown at the foot of File ▸ Open Recent and on Home, not as its own File menu item.
+    c("file.clear_recent", "Clear Recent Files", None, None, Nothing, "trash-2"),
+    c("file.pin_folder", "Pin folder to Home…", FILE, None, Nothing, "folder-plus"),
     c("create.blank", "New blank PDF", FILE, None, Nothing, "file-plus-2"),
     c("measure.distance", "Measure distance", None, None, Annotate, "ruler"),
     c("measure.perimeter", "Measure perimeter", None, None, Annotate, "ruler"),
@@ -161,6 +172,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.cut", "Cut pages", None, None, Assembly, "scissors"),
     c("page.paste", "Paste pages", None, None, Assembly, "clipboard-paste"),
     c("create.file", "Create PDF from file…", FILE, None, Nothing, "file-input"),
+    c("create.multiple", "Create PDF from multiple files…", FILE, None, Nothing, "files"),
     c("create.images", "Create PDF from images…", FILE, None, Nothing, "image"),
     c("create.clipboard", "Create PDF from clipboard", FILE, None, Nothing, "copy-plus"),
     c("page.combine", "Combine files…", FILE, None, Nothing, "files"),
@@ -185,11 +197,18 @@ pub const COMMANDS: &[CommandSpec] = &[
     // Acrobat's view modes, a page display and a zoom at once (the rail's Page display menu).
     c("view.fit_width_scrolling", "Fit to width scrolling", None, None, Document, "arrow-left-right"),
     c("view.fit_one_page", "Fit one full page", None, None, Document, "maximize-2"),
-    c("view.fit_visible", "Fit visible", VIEW, Some(Shortcut::cmd("3")), Document, "scan"),
+    // In View ▸ Zoom with the view-local zoom keys, so `menu = None` keeps it out of the generated
+    // View menu (where it would show twice). The palette and ⌘3 still run it.
+    c("view.fit_visible", "Fit visible", None, Some(Shortcut::cmd("3")), Document, "scan"),
     c("view.marquee_zoom", "Marquee zoom", VIEW, None, Document, "zoom-in"),
+    // Acrobat's column select: drag a rectangle and select only the text inside it. Alt/Option-
+    // drag with the Select tool does the same; this is the way in where the desktop takes
+    // Alt-drag for moving windows (several Linux window managers).
+    c("edit.column_select", "Column select", EDIT, None, Document, "text-select"),
     c("edit.snapshot", "Take a snapshot", EDIT, None, Document, "camera"),
     c("view.full_screen", "Full screen mode", VIEW, Some(Shortcut::cmd("L")), Document, "maximize"),
     c("view.read_mode", "Read mode", VIEW, Some(Shortcut { command: true, shift: false, mac_ctrl: true, key: "H" }), Document, "book-open"),
+    c("view.focus_page_input", "Go to page…", VIEW, Some(Shortcut::cmd_shift("N")), Document, "text-cursor-input"),
     c("view.theme", "Switch light / dark theme", None, None, Nothing, "moon"),
     c("view.theme.system", "Use system setting", None, None, Nothing, "settings"),
     c("view.theme.light", "Light gray", None, None, Nothing, "sun"),
@@ -309,6 +328,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("protect.properties", "Security properties…", FILE, None, Document, "shield-check"),
     c("page.organize", "Organize pages", PAGES, None, Document, "layout-grid"),
     c("bookmark.add", "New bookmark", PAGES, Some(Shortcut::cmd("B")), Assembly, "bookmark-plus"),
+    c("bookmark.from_structure", "New bookmarks from structure", PAGES, None, Assembly, "list"),
     c("page.rotate", "Rotate pages clockwise", PAGES, None, Assembly, "rotate-cw"),
     c("page.rotate_ccw", "Rotate pages counterclockwise", PAGES, None, Assembly, "rotate-ccw"),
     c("page.delete", "Delete pages", PAGES, None, Assembly, "trash-2"),
@@ -406,6 +426,11 @@ mod tests {
         assert_eq!(s.label(true), "⇧⌘S");
         assert_eq!(s.label(false), "Ctrl+Shift+S");
         assert_eq!(command("view.read_mode").unwrap().shortcut.unwrap().label(true), "⌃⌘H");
+        assert_eq!(Shortcut::cmd("+").label(false), "Ctrl++");
+        assert_eq!(Shortcut::cmd_shift("−").label(true), "⇧⌘−");
+        assert_eq!(Shortcut::cmd_shift("−").label(false), "Ctrl+Shift+−");
+        assert_eq!(Shortcut::command_name(true), "⌘");
+        assert_eq!(Shortcut::command_name(false), "Ctrl");
     }
 
     #[test]

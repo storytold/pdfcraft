@@ -20,12 +20,36 @@
 	Identity	個人資訊
 	Name on new comments	新註解的作者名稱
 	Open…	開啟…
+	Open Recent	開啟最近的檔案
+	Clear Recent Files	清除最近的檔案
+	Remove from Recent	從最近的檔案中移除
+	Remove {name} from Recent	從最近的檔案中移除{name}
+	Pin folder to Home…	將資料夾釘選到首頁…
+	Folders	資料夾
+	Pin a folder…	釘選資料夾…
+	Pin a folder to Home	將資料夾釘選到首頁
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	釘選資料夾後，即可在此列出其中最新的 PDF，例如掃描器或同步雲端硬碟儲存檔案的位置。
+	Unpin	取消釘選
+	Unpin {folder}	取消釘選 {folder}
+	Looking for PDFs…	正在尋找 PDF…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	此資料夾目前無法使用。它可能已被移動，或其所在磁碟或雲端同步處於離線狀態。
+	No PDFs in this folder yet	此資料夾中還沒有 PDF
+	Show less	顯示較少
+	Show {n} more	再顯示 {n} 個
+	The newest {n} of {total} PDFs	共 {total} 個 PDF 中最新的 {n} 個
+	Pinned folders need the desktop app	釘選資料夾需要桌面版應用程式
+	Choose a folder on this computer to pin	請選擇這部電腦上要釘選的資料夾
+	{folder} is already pinned to Home	{folder} 已釘選到首頁
+	You can pin up to {n} folders. Unpin one first.	最多可釘選 {n} 個資料夾。請先取消釘選一個。
+	Pinned {folder} to Home	已將 {folder} 釘選到首頁
+	No recent files	沒有最近的檔案
 	Open	開啟
 	Open file	開啟檔案
 	Home	首頁
 	New blank PDF	新增空白 PDF
 	Create PDF from file…	從檔案建立 PDF…
 	Create PDF from images…	從圖片建立 PDF…
+	Create PDF from multiple files…	從多個檔案建立 PDF…
 	Create PDF from clipboard	從剪貼簿建立 PDF
 	Combine files…	合併檔案…
 	Save	儲存
@@ -50,6 +74,7 @@
 	Rotate view clockwise	順時針旋轉檢視
 	Rotate view counterclockwise	逆時針旋轉檢視
 	Take a snapshot	擷取快照
+	Column select	欄選取
 	Full screen mode	全螢幕模式
 	Read mode	閱讀模式
 	Switch light / dark theme	切換淺色／深色主題
@@ -230,6 +255,7 @@
 	Bottom:	下：
 	Width:	寬：
 	Height:	高：
+	Rotation:	旋轉：
 	Points from the page's bottom-left corner.	從頁面左下角算起的點數。
 	Alignment:	對齊：
 	Default Value:	預設值：
@@ -718,10 +744,16 @@
 	Text in images isn't found; recognise text (OCR) first.	圖片中的文字無法找到；請先識別文字（OCR）。
 	No matches.	無匹配。
 	{n} match(es) marked for redaction.	已標記 {n} 個匹配以待遮蔽內容。
+	Multiple words or phrases	多個單字或片語
+	One word or phrase per line	每行一個單字或片語
+	Import list…	匯入清單…
+	{n} word(s) or phrase(s)	{n} 個單字或片語
+	{name} is too large for a word list (at most 1 MB).	{name} 太大，無法用作單字清單（最多 1 MB）。
 	Redaction Tool Properties	遮蔽內容工具屬性
 	Redacted area fill colour:	遮蔽內容區域填充顏色：
 	Use overlay text	使用覆蓋文字
 	Custom text:	自定義文字：
+	Redaction code:	遮蔽代碼：
 	Font:	字型：
 	Font size:	字號：
 	Auto-size text to fit redaction region	自動調整文字大小以適應遮蔽內容區域
@@ -836,7 +868,7 @@
 	Searchable Image (Exact)	可搜尋圖片（精確）
 	Adds invisible text over each word; the page image is not changed	在每個詞上新增不可見文字；頁面圖片保持不變
 	Downsample to	降取樣至
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	未安裝文字識別：缺少模型（執行 `cargo xtask models`，或設定 PRINTCRAFT_MODELS）。
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	未安裝文字辨識：缺少模型檔案。請重新安裝 PdfCraft，或將 PDFCRAFT_MODELS 設定為包含這些檔案的資料夾。
 	Settings	設定
 	Protect	保護
 	Advanced options	進階選項
@@ -999,19 +1031,19 @@
 	Attachments	附件
 	Signatures	簽章
 	Accessibility Checker	無障礙偵測工具
-	Zoom out (⌘−)	縮小（⌘−）
-	Zoom in (⌘+)	放大（⌘+）
-	Rotate view clockwise (⇧⌘+)	順時針旋轉檢視（⇧⌘+）
+	Zoom out ({key})	縮小（{key}）
+	Zoom in ({key})	放大（{key}）
+	Rotate view clockwise ({key})	順時針旋轉檢視（{key}）
 	Toggle fit page / fit width	切換符合頁面／符合寬度
 	Next page	下一頁
 	Previous page	上一頁
 	Current page — type a page number or label (such as iv) and press Enter	目前頁面：輸入頁碼或頁面標籤（例如 iv），再按 Enter
-	Open a PDF (⌘O)	開啟 PDF（⌘O）
+	Open a PDF ({key})	開啟 PDF（{key}）
 	Dark gray theme	深灰色主題
 	Light theme	淺色主題
-	Print (⌘P)	列印（⌘P）
+	Print ({key})	列印（{key}）
 	Save (M4)	儲存（M4）
-	Document properties (⌘D)	文件內容（⌘D）
+	Document properties ({key})	文件內容（{key}）
 	Action Wizard…	動作精靈…
 	Add Bates numbering…	新增 Bates 編號…
 	Add a button	新增按鈕
@@ -1141,7 +1173,7 @@
 	Expand all bookmarks	展開所有書籤
 	Expand top-level bookmarks	展開頂層書籤
 	Collapse all bookmarks	摺疊所有書籤
-	New bookmark (⌘B)	新建書籤 (⌘B)
+	New bookmark ({key})	新建書籤 ({key})
 	This document has no bookmarks.	本文件沒有書籤。
 	This document has no layers.	本文件沒有圖層。
 	This document has no attachments.	本文件沒有附件。
@@ -1156,8 +1188,8 @@
 	No matches	無匹配
 	Searching… {s}/{p}	正在搜尋… {s}/{p}
 	{c} of {n}{more}	{c} / {n}{more}
-	Previous (⇧⌘G)	上一個 (⇧⌘G)
-	Next (⌘G)	下一個 (⌘G)
+	Previous ({key})	上一個 ({key})
+	Next ({key})	下一個 ({key})
 	Find options	尋找選項
 	Whole words only	僅全字匹配
 	Case-sensitive	區分大小寫
@@ -1228,7 +1260,7 @@
 	Copy selected text	複製所選文字
 	Select a word	選取一個詞
 	Clear selection / close find	清除選取／關閉尋找
-	Zoom in / out (also pinch or ⌘-scroll)	放大／縮小（也可用雙指縮放或 ⌘ 加捲動）
+	Zoom in / out (also pinch or {key}-scroll)	放大／縮小（也可用雙指縮放或 {key} 加捲動）
 	Rotate view	旋轉檢視
 	First / last page	第一頁／最後一頁
 	Previous / next page	上一頁／下一頁
@@ -1373,6 +1405,8 @@
 	Right Edge	右邊緣
 	Language	語言
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	已儲存{place}：{before} → {after}（縮小了{pct}%）{detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	此檔案已經是最小的了（{size}）。未儲存副本。
+	Saved {place}: {before} → {after} (not smaller){detail}	已儲存{place}：{before} → {after}（未縮小）{detail}
 	Couldn't save the image: {e}	無法儲存圖片：{e}
 	Adding images arrives on the web with file pickers for images	Web 端新增圖片將使用圖片檔案選擇器
 	Replacing images on page {p} arrives on the web with image pickers ({i})	在 Web 端替換第{p}頁的圖片將使用圖片選擇器（{i}）
@@ -1414,6 +1448,15 @@
 	Created 1 link	已建立 1 個連結
 	Created {n} links	已建立{n}個連結
 	Text recognition is already running	文字識別已在執行
+	Optimizing… removing user data	正在最佳化…移除使用者資料
+	Optimizing… image {d} of {t}	正在最佳化…第{d}張圖片，共{t}張
+	Optimizing… cleaning up	正在最佳化…清理
+	Optimizing… merging identical objects	正在最佳化…合併相同物件
+	Optimizing… writing the copy	正在最佳化…寫入副本
+	Cancelling…	正在取消…
+	Optimization is already running	最佳化已在執行
+	Optimization cancelled	已取消最佳化
+	Couldn't optimize the file	無法最佳化檔案
 	Recognizing text… file {d} of {t}	正在辨識文字…第{d}個檔案，共{t}個
 	Recognizing text… page {d} of {t}	正在辨識文字…第{d}頁，共{t}頁
 	Recognized 1 word	辨識了 1 個單詞
@@ -1532,6 +1575,7 @@
 	Created a comment summary	已建立註解摘要
 	Couldn't open {name}: {e}	無法開啟{name}：{e}
 	Couldn't read {name}: {e}	無法讀取{name}：{e}
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	可攜模式已關閉：無法寫入{folder}（{error}）。設定改為儲存在你的使用者資料夾中。
 	Couldn't save: {e}	無法儲存：{e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Web 端附件下載將於 M3.10 到來（{n} 位元組已就緒）
 	`{command}` {when}	`{command}` {when}
@@ -1658,6 +1702,7 @@
 	Security properties…	安全性內容…
 	Organize pages	整理頁面
 	New bookmark	新增書籤
+	New bookmarks from structure	從結構新增書籤
 	Rotate pages clockwise	順時針旋轉頁面
 	Rotate pages counterclockwise	逆時針旋轉頁面
 	Delete pages	刪除頁面
@@ -1733,7 +1778,7 @@
 	there are no pages to print	沒有可列印的頁面
 	the document has no tags	此文件沒有標籤
 	{0}: {1}	{0}：{1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	尚未安裝文字辨識模型，請執行 `cargo xtask models` 或設定 PRINTCRAFT_MODELS
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	尚未安裝文字辨識模型（請重新安裝 PdfCraft，或將 PDFCRAFT_MODELS 設定為包含這些模型的資料夾）
 	the image is empty	圖片是空的
 	this file isn't XFDF, FDF, XML or text form data	此檔案不是 XFDF、FDF、XML 或純文字表單資料
 	nothing in the file matches this document	檔案中沒有與此文件相符的資料
@@ -1924,3 +1969,76 @@
 	Page display: {layout}	頁面顯示：{layout}
 	Fit to width scrolling	符合寬度連續捲動
 	Fit one full page	單頁完整顯示
+	Created a PDF from {n} files	已從 {n} 個檔案建立 PDF
+	PDF, images and text	PDF、圖片和文字
+	Insert a file before page {label}	在第 {label} 頁之前插入檔案
+	Insert a file at the end	在結尾插入檔案
+	Save pages	儲存頁面
+	Save these pages as one PDF	將這些頁面儲存為一個 PDF
+	No changes to save	沒有要儲存的變更
+	Created a PDF from {n} files; left out: {names}	已從 {n} 個檔案建立 PDF；已略過：{names}
+	Created a PDF from the first {n} files	已從前 {n} 個檔案建立 PDF
+	None of those files can be made into a PDF; use PDFs, images or .txt files	這些檔案都無法轉換為 PDF；請使用 PDF、圖片或 .txt 檔案
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	選擇 PNG 或 JPEG 圖像（最大 4 MiB）。透明度會保留。
+	Couldn't import the signature image: {e}	無法匯入簽名圖像：{e}
+	Go to page…	轉到頁面…
+	Reopen the files that were open when PdfCraft last closed	重新開啟上次關閉 PdfCraft 時開啟的檔案
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	標準字型無法顯示「{c}」（{code}）。目前只能新增西歐字元作為文字。
+	Open arrow	開口箭頭
+	Closed arrow	閉合箭頭
+	Butt	平頭
+	Reverse open arrow	反向開口箭頭
+	Reverse closed arrow	反向閉合箭頭
+	Slash	斜線
+	Larger pages	放大頁面
+	Smaller pages	縮小頁面
+	Reset page size	重設頁面大小
+	Date format	日期格式
+	Fill & Sign dates	填寫與簽署的日期
+	Pattern	模式
+	Today: {date}	今天：{date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy 或 yy 年 · m 或 mm 月 · mmm 或 mmmm 月份名稱 · d 或 dd 日 · ddd 或 dddd 星期。H、h、M、s 和 t 是時間字母，不能單獨使用：在字母前加上 {escape} 即可照原樣顯示。
+	Same as interface ({language})	與介面相同（{language}）
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	暫時無法將 {chars} 寫入 PDF：填寫與簽署的文字僅支援西歐字元。請選擇數字格式，例如 dd.mm.yyyy。
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	開啟印表機驅動程式的喜好設定。這些設定會儲存並用於此電腦的所有列印；此處選擇的份數、雙面、灰階和紙張仍然適用。
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	此次列印的印表機驅動程式專屬設定：紙匣、紙張類型、裝訂整理等。
+	Couldn't open the printer's preferences: {e}	無法開啟印表機喜好設定：{e}
+	Printer properties	印表機內容
+	Reset to printer defaults	還原印表機預設值
+	This printer offers no settings of its own.	此印表機沒有專屬設定。
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft 正在不使用圖形處理器的情況下繪製，因此可能較慢。更新顯示卡驅動程式可能會有幫助。
+	Scroll tabs left	向左捲動索引標籤
+	Scroll tabs right	向右捲動索引標籤
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	共用欄位屬性
+	{n} fields selected	已選取 {n} 個欄位
+	Mixed	混合
+	Custom font	自訂字型
+	Only checked properties will change. Mixed means the selected fields have different values.	只會變更勾選的屬性。「混合」表示所選欄位的值不同。
+	Shift- or Ctrl/Command-click to select several fields.	按住 Shift 或 Ctrl/Command 點按可選取多個欄位。
+	Font size 0 uses automatic sizing.	字型大小為 0 時自動調整大小。
+	Character limit:	字元數限制：
+	Character limit 0 means no limit. A comb of characters needs a limit.	字元數限制為 0 表示無限制。分格字元必須設定字元數限制。
+	To change locked fields, also set Locked to No.	若要變更鎖定的欄位，也須將「鎖定」設為「否」。
+	Comb of characters	字元梳
+	The document changed while you were editing field properties.	編輯欄位屬性時文件已變更。
+	The document is no longer open.	文件已不再開啟。
+	The field properties dialog is no longer open.	欄位屬性對話方塊已不再開啟。
+	The field properties could not be changed.	無法變更欄位屬性。
+	The selected fields could not be found. Select them again.	找不到所選欄位。請重新選取。
+	The field {name} no longer exists.	欄位 {name} 已不存在。
+	A selected field has no widget on any page, so the fields can't be edited together.	某個所選欄位在任何頁面上都沒有控制項，因此無法一起編輯這些欄位。
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 張以可繪製的最大尺寸 {dpi} dpi 匯出）
+	Fill colour	填充顏色
+	No fill	無填充
+	Fill colour: none	填充顏色：無
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	空格

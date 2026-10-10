@@ -1,9 +1,16 @@
 //! Optimize PDF ▸ Advanced optimization (Acrobat's PDF Optimizer): Images, Discard Objects,
 //! Discard User Data and Clean Up panels. The result is saved as a copy, like Reduce File Size.
+//!
+//! The optimization (this dialog's, or Reduce File Size's fixed choices) runs on a worker thread
+//! and shows its progress in a notice with a bar and a Cancel button; the copy is saved once it
+//! is done.
+
+use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
-use pdfcraft_engine::Hidden;
 use pdfcraft_engine::optimize::{Compression, ImageSettings, QUALITIES, Settings};
+use pdfcraft_engine::optimizer::{OptimizeStage, Optimized};
+use pdfcraft_engine::{DocId, EditError, Hidden, OptimizeReport};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
@@ -30,6 +37,73 @@ impl Default for OptimizeDraft {
     fn default() -> Self {
         Self { tab: OptimizeTab::Images, settings: Settings::default(), discard: Vec::new(), audit: false }
     }
+}
+
+/// Progress of a background optimization: the stage, the result once finished, and a cancel
+/// request.
+#[derive(Default)]
+pub struct OptimizeProgress {
+    pub stage: OptimizeStage,
+    pub result: Option<Result<Optimized, EditError>>,
+    pub cancel: bool,
+}
+
+/// Which command started an optimization: they save under different names, and only the
+/// Optimizer's notice lists what it did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptimizeKind {
+    /// Reduce File Size (Acrobat's defaults).
+    Reduce,
+    /// Optimize PDF ▸ Advanced optimization (the dialog's choices).
+    Advanced,
+}
+
+impl OptimizeKind {
+    /// The suffix of the saved copy's name ("notes (reduced).pdf").
+    pub(crate) fn suffix(self) -> &'static str {
+        match self {
+            OptimizeKind::Reduce => "reduced",
+            OptimizeKind::Advanced => "optimized",
+        }
+    }
+}
+
+pub struct OptimizeRun {
+    pub doc: DocId,
+    pub kind: OptimizeKind,
+    pub progress: Arc<Mutex<OptimizeProgress>>,
+}
+
+/// The notice's text for a stage.
+fn stage_label(stage: OptimizeStage) -> String {
+    match stage {
+        OptimizeStage::Discarding => tl!("Optimizing… removing user data").to_string(),
+        OptimizeStage::Images { done, total } => crate::i18n::fmt(
+            tl!("Optimizing… image {d} of {t}"),
+            &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
+        ),
+        OptimizeStage::CleaningUp => tl!("Optimizing… cleaning up").to_string(),
+        OptimizeStage::Merging => tl!("Optimizing… merging identical objects").to_string(),
+        OptimizeStage::Writing => tl!("Optimizing… writing the copy").to_string(),
+    }
+}
+
+/// What the saved notice adds after the size: images optimized and items discarded.
+fn summary(r: &OptimizeReport) -> String {
+    let o = &r.optimize;
+    let mut parts = Vec::new();
+    if o.images_resampled + o.images_recompressed > 0 {
+        parts.push(format!(
+            "{} image{} optimized",
+            o.images_resampled + o.images_recompressed,
+            if o.images_resampled + o.images_recompressed == 1 { "" } else { "s" }
+        ));
+    }
+    let discarded: usize = r.discarded.iter().map(|(_, n)| n).sum();
+    if discarded > 0 {
+        parts.push(format!("{discarded} item{} discarded", if discarded == 1 { "" } else { "s" }));
+    }
+    if parts.is_empty() { String::new() } else { format!("; {}", parts.join(", ")) }
 }
 
 fn image_row(ui: &mut egui::Ui, id: &str, title: &str, s: &mut ImageSettings) {
@@ -188,30 +262,153 @@ pub(crate) fn audit_body(ui: &mut egui::Ui, rows: &[pdfcraft_engine::optimize::S
 }
 
 impl PdfCraftApp {
-    /// Optimize PDF with the dialog's choices and save the copy.
+    /// Optimize PDF with the dialog's choices on a worker thread; the copy is saved when done.
     pub fn optimize_with_draft(&mut self) {
+        let (settings, discard) = (self.optimize_draft.settings.clone(), self.optimize_draft.discard.clone());
+        self.start_optimize(OptimizeKind::Advanced, &settings, &discard);
+    }
+
+    /// Run an optimization of the active document on a worker thread (inline in tests and on
+    /// the web), showing its progress; the copy is saved when it is done.
+    pub(crate) fn start_optimize(&mut self, kind: OptimizeKind, settings: &Settings, discard: &[Hidden]) {
         // What's typed in a form field is part of the document (#166).
         if !self.commit_form_typing() {
             return;
         }
         let Some((_, id)) = self.active_ids() else { return };
-        let d = self.optimize_draft.clone();
-        let result = self.session.optimized_bytes(id, &d.settings, &d.discard).map(|(b, r)| {
-            let o = &r.optimize;
-            let mut parts = Vec::new();
-            if o.images_resampled + o.images_recompressed > 0 {
-                parts.push(format!(
-                    "{} image{} optimized",
-                    o.images_resampled + o.images_recompressed,
-                    if o.images_resampled + o.images_recompressed == 1 { "" } else { "s" }
-                ));
+        if self.optimize_run.is_some() {
+            self.notify_tr("Optimization is already running");
+            return;
+        }
+        let job = match self.session.optimize_job(id, settings, discard) {
+            Ok(job) => job,
+            Err(e) => return self.save_optimized(id, kind, Err(e)),
+        };
+        let progress = Arc::new(Mutex::new(OptimizeProgress::default()));
+        let p = progress.clone();
+        let work = move || {
+            let result = job.run(|stage| {
+                let Ok(mut s) = p.lock() else { return false };
+                s.stage = stage;
+                !s.cancel
+            });
+            if let Ok(mut s) = p.lock() {
+                s.result = Some(result);
             }
-            let discarded: usize = r.discarded.iter().map(|(_, n)| n).sum();
-            if discarded > 0 {
-                parts.push(format!("{discarded} item{} discarded", if discarded == 1 { "" } else { "s" }));
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.run_inline {
+            work();
+        } else if let Err(e) = std::thread::Builder::new().name("pdfcraft-optimize".into()).spawn(work) {
+            // No worker: report the failure instead of waiting for a result that never comes.
+            if let Ok(mut s) = progress.lock() {
+                s.result = Some(Err(EditError::Optimize(e.to_string())));
             }
-            (b, if parts.is_empty() { String::new() } else { format!("; {}", parts.join(", ")) })
+        }
+        #[cfg(target_arch = "wasm32")]
+        work();
+        self.optimize_run = Some(OptimizeRun { doc: id, kind, progress });
+        self.poll_optimize();
+    }
+
+    /// Stop a running optimization (nothing is saved).
+    pub fn cancel_optimize(&mut self) {
+        if let Some(r) = &self.optimize_run
+            && let Ok(mut s) = r.progress.lock()
+        {
+            s.cancel = true;
+        }
+    }
+
+    /// Show progress; save the copy once the worker is done.
+    pub(crate) fn poll_optimize(&mut self) {
+        let Some(run) = self.optimize_run.as_ref() else { return };
+        let (doc, kind, progress) = (run.doc, run.kind, run.progress.clone());
+        let Ok(mut s) = progress.lock() else {
+            // The worker panicked while holding the lock: it will never report back.
+            self.optimize_run = None;
+            self.progress_notice = None;
+            self.notify_tr("Couldn't optimize the file");
+            return;
+        };
+        let Some(result) = s.result.take() else {
+            let cancelling = s.cancel;
+            let stage = s.stage;
+            drop(s);
+            let label = if cancelling { tl!("Cancelling…").to_string() } else { stage_label(stage) };
+            self.progress_notice = Some(crate::widgets::ProgressNotice { label, fraction: stage.fraction(), cancellable: !cancelling });
+            if let Some(ctx) = &self.ctx {
+                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            }
+            return;
+        };
+        drop(s);
+        self.optimize_run = None;
+        self.progress_notice = None;
+        match result {
+            Err(EditError::Cancelled) => self.notify_tr("Optimization cancelled"),
+            result => {
+                let result = result.map(|(b, r)| {
+                    let detail = if kind == OptimizeKind::Advanced { summary(&r) } else { String::new() };
+                    (b, detail)
+                });
+                self.save_optimized(doc, kind, result);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    use super::*;
+
+    #[test]
+    fn the_progress_card_shows_the_stage_and_cancels() {
+        let progress = Arc::new(Mutex::new(OptimizeProgress { stage: OptimizeStage::Images { done: 3, total: 10 }, ..Default::default() }));
+        let p = progress.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
+            let (_, doc) = app.active_ids().unwrap();
+            app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Advanced, progress: p });
+            app.notify("Saved notes.pdf");
+            app
         });
-        self.save_optimized(id, "optimized", result);
+        // 1.5 s (kittest steps a quarter second): the bar has eased in, the toast still shows.
+        h.run_steps(6);
+        if let Ok(path) = std::env::var("PDFCRAFT_OPTIMIZE_PROGRESS_SHOT") {
+            h.render().unwrap().save(path).unwrap();
+        }
+        h.get_by_label("Optimizing… image 4 of 10");
+        let shown = h.state().progress_notice.clone().unwrap();
+        assert!((shown.fraction - 0.275).abs() < 1e-4, "{shown:?}");
+        assert!(shown.cancellable);
+
+        h.get_by_label("Cancel").click();
+        h.run_steps(2);
+        assert!(progress.lock().unwrap().cancel, "the worker is asked to stop");
+        h.get_by_label("Cancelling…");
+        assert!(h.query_by_label("Cancel").is_none(), "Cancel is not offered twice");
+
+        // The worker stops and reports back.
+        progress.lock().unwrap().result = Some(Err(EditError::Cancelled));
+        h.run_steps(2);
+        assert!(h.state().optimize_run.is_none() && h.state().progress_notice.is_none());
+        assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Optimization cancelled"));
+    }
+
+    #[test]
+    fn a_second_run_is_refused_while_one_is_going() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
+        let (_, doc) = app.active_ids().unwrap();
+        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, progress: Arc::default() });
+        app.optimize_with_draft();
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Optimization is already running"));
     }
 }

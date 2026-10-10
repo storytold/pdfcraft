@@ -46,6 +46,7 @@ fn files_in(s: &RecoveryStore) -> usize {
 /// A session that edits a document, autosaves, and then "crashes" (is dropped).
 fn crashed_session(s: &RecoveryStore, bytes: Vec<u8>, password: Option<&str>, path: Option<&str>) {
     let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
     app.enable_recovery(s.clone());
     match password {
         Some(pw) => {
@@ -62,6 +63,7 @@ fn crashed_session(s: &RecoveryStore, bytes: Vec<u8>, password: Option<&str>, pa
 fn harness(s: RecoveryStore) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.enable_recovery(s);
         app
     });
@@ -103,6 +105,7 @@ fn discarding_removes_the_autosaves() {
 fn saving_or_closing_clears_the_entry_and_nothing_is_written_for_clean_documents() {
     let s = store("save");
     let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
     app.enable_recovery(s.clone());
     app.open_bytes("a.pdf", None, fixture(2)).unwrap();
     app.autosave_now();
@@ -130,6 +133,7 @@ fn quitting_cleanly_leaves_nothing_behind() {
         let s = s.clone();
         move |_cc| {
             let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
             app.enable_recovery(s);
             app.open_bytes("q.pdf", None, fixture(2)).unwrap();
             app
@@ -149,19 +153,24 @@ fn quitting_cleanly_leaves_nothing_behind() {
     assert_eq!(files_in(&s), 0);
 }
 
-#[test]
-fn encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password() {
-    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(2))).unwrap();
+/// `bytes` protected with an open password (AES-256).
+fn encrypted(bytes: Vec<u8>, password: &str) -> Vec<u8> {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(bytes)).unwrap();
     doc.set_encryption(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes256,
-        user_password: "pw",
+        user_password: password,
         owner_password: "owner",
         permissions: -1,
         encrypt_metadata: true,
         seed: [2; 32],
     })
     .unwrap();
-    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()
+}
+
+#[test]
+fn encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password() {
+    let bytes = encrypted(fixture(2), "pw");
     let s = store("encrypted");
     crashed_session(&s, bytes, Some("pw"), None);
     let meta = s.list().remove(0);
@@ -186,6 +195,42 @@ fn encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password()
     let _ = Modifiers::NONE;
 }
 
+/// #813: cancelling the password prompt of a recovered snapshot must not hand its path and
+/// recovery entry to the next encrypted document that is unlocked (Save would then overwrite
+/// the snapshot's original file and delete the snapshot).
+#[test]
+fn a_cancelled_recovery_password_does_not_attach_to_the_next_unlocked_document() {
+    let s = store("cancelled");
+    crashed_session(&s, encrypted(fixture(2), "pw-a"), Some("pw-a"), Some("/docs/A.pdf"));
+    assert_eq!(s.list().len(), 1);
+    let mut h = harness(s.clone());
+    h.get_by_label("Recover").click();
+    h.run_steps(3);
+    assert!(h.state().password_prompt.is_some(), "the snapshot asks for its password");
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().password_prompt.is_none());
+    assert!(h.state().views.is_empty());
+
+    let app = h.state_mut();
+    app.open_bytes("B.pdf", Some("/docs/B.pdf".into()), encrypted(fixture(1), "pw-b")).unwrap();
+    app.submit_password(Some("pw-b".into()));
+    h.run_steps(3);
+    let app = h.state();
+    assert_eq!(app.views.len(), 1);
+    let b = app.session.get(app.views[0].id).unwrap();
+    assert_eq!(b.path.as_deref(), Some("/docs/B.pdf"), "B keeps its own path");
+    assert!(!b.dirty, "B is clean: it is not the recovered document");
+    assert_eq!(s.list().len(), 1, "A's snapshot is still in the store");
+    assert_eq!(app.recoverable.len(), 1, "and on offer again");
+
+    // Closing B (clean, so no prompt) must not remove A's snapshot either.
+    h.state_mut().execute("file.close");
+    h.run_steps(3);
+    assert!(h.state().views.is_empty());
+    assert_eq!(s.list().len(), 1, "A's snapshot survives closing B");
+}
+
 #[test]
 fn incomplete_entries_are_ignored_and_cleaned_up() {
     let s = store("partial");
@@ -206,6 +251,7 @@ fn control_click_effects_are_visible_when_the_reply_arrives() {
     let (slot2, s2) = (slot.clone(), s.clone());
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         *slot2.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
         app.enable_recovery(s2);
         app

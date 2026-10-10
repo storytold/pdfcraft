@@ -57,6 +57,11 @@ impl Name {
         self.get(C)
     }
 
+    /// The name Acrobat shows: the common name, else the organization, else the DN.
+    pub fn display_name(&self) -> String {
+        self.common_name().or(self.organization()).map(str::to_string).unwrap_or_else(|| self.display())
+    }
+
     /// "CN=Ada Lovelace, O=Example, E=ada@example.com"
     pub fn display(&self) -> String {
         self.attrs
@@ -117,6 +122,11 @@ pub struct Certificate {
     pub public_key: PublicKey,
     /// Basic constraints: a CA certificate.
     pub is_ca: bool,
+    /// Whether the certificate has a basicConstraints extension at all (old v1 roots don't).
+    pub has_basic_constraints: bool,
+    /// Basic constraints `pathLenConstraint`: how many CA certificates may follow this one
+    /// before the end-entity certificate.
+    pub path_len: Option<u32>,
     /// Key usage bits (bit 0 = digitalSignature, 1 = nonRepudiation, 5 = keyCertSign), if present.
     pub key_usage: Option<u16>,
     pub subject_key_id: Option<Vec<u8>>,
@@ -128,7 +138,37 @@ pub struct Certificate {
     pub ocsp_urls: Vec<String>,
     /// CRL distribution point URLs (2.5.29.31).
     pub crl_urls: Vec<String>,
+    /// The `version` field: 0 for v1, 1 for v2, 2 for v3.
+    pub version: u64,
+    /// OIDs of extensions marked critical that PdfCraft does not process (RFC 5280 §4.2).
+    pub unknown_critical: Vec<String>,
 }
+
+/// Extensions PdfCraft reads or may safely ignore when they are critical: the ones
+/// `Extensions::read` handles, subject/issuer alternative names, and certificate policies
+/// (accepted as any policy).
+/// qcStatements (1.3.6.1.5.5.7.1.3) is included: RFC 3739 lets qualified (eIDAS and other national)
+/// certificates mark it critical, and it declares the certificate's status rather than limiting
+/// what the key may sign.
+const PROCESSED_EXTENSIONS: [&str; 11] = [
+    "2.5.29.19",
+    "2.5.29.15",
+    "2.5.29.14",
+    "2.5.29.35",
+    "2.5.29.37",
+    "1.3.6.1.5.5.7.1.1",
+    "2.5.29.31",
+    "2.5.29.17",
+    "2.5.29.18",
+    "2.5.29.32",
+    "1.3.6.1.5.5.7.1.3",
+];
+
+/// Extended key usages that allow signing documents: anyExtendedKeyUsage, emailProtection,
+/// codeSigning, documentSigning (RFC 9336), Adobe Authentic Documents and Microsoft document
+/// signing.
+const DOCUMENT_SIGNING_EKUS: [&str; 6] =
+    ["2.5.29.37.0", "1.3.6.1.5.5.7.3.4", "1.3.6.1.5.5.7.3.3", "1.3.6.1.5.5.7.3.36", "1.2.840.113583.1.1.5", "1.3.6.1.4.1.311.10.3.12"];
 
 /// The certificate extensions `Certificate::parse` reads, gathered tolerantly: an
 /// extension that does not parse leaves its field at the default instead of failing the
@@ -137,6 +177,8 @@ pub struct Certificate {
 #[derive(Default)]
 struct Extensions {
     is_ca: bool,
+    has_basic_constraints: bool,
+    path_len: Option<u32>,
     key_usage: Option<u16>,
     subject_key_id: Option<Vec<u8>>,
     authority_key_id: Option<Vec<u8>>,
@@ -149,10 +191,21 @@ impl Extensions {
     fn read(&mut self, oid: &str, value: &Tlv<'_>) {
         match oid {
             "2.5.29.19" => {
+                // Present at all, even when it doesn't parse: a malformed basicConstraints must
+                // not make a certificate look like an old v1 root (which may issue). Unparsed,
+                // it stays "not a CA".
+                self.has_basic_constraints = true;
                 let Ok(bc) = Tlv::parse_all(value.value) else { return };
-                self.is_ca = bc.children().is_ok_and(|c| c.first().is_some_and(|b| b.tag == tag::BOOLEAN && b.value != [0]));
+                let fields = bc.children().unwrap_or_default();
+                self.is_ca = fields.first().is_some_and(|b| b.tag == tag::BOOLEAN && b.value != [0]);
+                // pathLenConstraint is the INTEGER after the optional cA BOOLEAN. One that is
+                // present but unreadable (negative, too long) allows no CA below, not any number.
+                self.path_len = fields.iter().find(|t| t.tag == tag::INTEGER).map(|t| t.u64().map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX)));
             }
             "2.5.29.15" => {
+                // A keyUsage that is present restricts the key even when it doesn't parse: an
+                // unreadable one allows no usage at all, never every usage.
+                self.key_usage = Some(0);
                 let Ok(bits) = Tlv::parse_all(value.value) else { return };
                 let Some((_, b)) = bits.value.split_first() else { return };
                 // Bit 0 is the most significant bit of the first byte.
@@ -231,8 +284,11 @@ impl Certificate {
         let parts = cert.children()?;
         let [tbs, sig_alg, sig] = parts.as_slice() else { return Err(SignError::Malformed("Certificate".into())) };
         let mut f = tbs.children()?.into_iter().peekable();
+        // version [0] EXPLICIT INTEGER DEFAULT v1 (0); v3 is 2. Unreadable counts as v3, the
+        // stricter reading (no v1-root exception in `may_issue`).
+        let mut version = 0u64;
         if f.peek().is_some_and(|t| t.tag == tag::ctx(0)) {
-            f.next();
+            version = f.next().and_then(|v| v.inner().ok()).and_then(|v| v.u64().ok()).unwrap_or(2);
         }
         let serial = f.next().ok_or_else(|| SignError::Malformed("serial".into()))?.expect(tag::INTEGER, "serial")?.value.to_vec();
         let _inner_alg = f.next();
@@ -242,6 +298,7 @@ impl Certificate {
         let subject = Name::parse(&f.next().ok_or_else(|| SignError::Malformed("subject".into()))?)?;
         let public_key = PublicKey::from_spki(&f.next().ok_or_else(|| SignError::Malformed("public key".into()))?)?;
         let mut ext = Extensions::default();
+        let mut unknown_critical = Vec::new();
         for t in f {
             if t.tag != tag::ctx(3) {
                 continue;
@@ -250,12 +307,26 @@ impl Certificate {
                 let e = ext_tlv.children()?;
                 let Some(o) = e.first().and_then(|o| o.oid().ok()) else { continue };
                 let Some(value) = e.last().filter(|v| v.tag == tag::OCTET_STRING) else { continue };
+                let critical = e.len() == 3 && e.get(1).is_some_and(|b| b.tag == tag::BOOLEAN && b.value != [0]);
+                if critical && !PROCESSED_EXTENSIONS.contains(&o.as_str()) {
+                    unknown_critical.push(o.clone());
+                }
                 // A malformed or unreadable extension must never reject the whole certificate:
                 // unreadable ones are skipped and the fields they carry keep their defaults.
                 ext.read(o.as_str(), value);
             }
         }
-        let Extensions { is_ca, key_usage, subject_key_id, authority_key_id, extended_key_usage, ocsp_urls, crl_urls } = ext;
+        let Extensions {
+            is_ca,
+            has_basic_constraints,
+            path_len,
+            key_usage,
+            subject_key_id,
+            authority_key_id,
+            extended_key_usage,
+            ocsp_urls,
+            crl_urls,
+        } = ext;
         Ok(Certificate {
             raw: raw.to_vec(),
             tbs: tbs.raw.to_vec(),
@@ -268,13 +339,37 @@ impl Certificate {
             not_after: na.time()?,
             public_key,
             is_ca,
+            has_basic_constraints,
+            path_len,
             key_usage,
             subject_key_id,
             authority_key_id,
             extended_key_usage,
             ocsp_urls,
             crl_urls,
+            version,
+            unknown_critical,
         })
+    }
+
+    /// Why this certificate may not sign documents, if it may not (RFC 5280 §4.2.1.3,
+    /// §4.2.1.12, §4.2): a key usage without digitalSignature or nonRepudiation, an extended key
+    /// usage without a document-signing purpose, or a critical extension PdfCraft doesn't process.
+    pub fn signing_problem(&self) -> Option<String> {
+        /// keyUsage bits 0 (digitalSignature) and 1 (nonRepudiation).
+        const SIGNING_BITS: u16 = 0b11;
+        if self.key_usage.is_some_and(|u| u & SIGNING_BITS == 0) {
+            Some(
+                "The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation)."
+                    .into(),
+            )
+        } else if self.extended_key_usage.as_ref().is_some_and(|e| !e.iter().any(|o| DOCUMENT_SIGNING_EKUS.contains(&o.as_str()))) {
+            Some("The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).".into())
+        } else if !self.unknown_critical.is_empty() {
+            Some(format!("The signer's certificate has critical extensions PdfCraft does not recognize ({}).", self.unknown_critical.join(", ")))
+        } else {
+            None
+        }
     }
 
     /// Issued by itself (subject = issuer and its own key verifies it).
@@ -285,8 +380,22 @@ impl Certificate {
     /// Whether `key` verifies this certificate's signature.
     pub fn signed_by(&self, key: &PublicKey) -> bool {
         let Ok(alg) = Tlv::parse_all(&self.sig_alg) else { return false };
-        let Ok((scheme, Some(digest))) = keys::signature_algorithm(&alg) else { return false };
-        key.verify(scheme, digest, &digest.digest(&[&self.tbs]), &self.signature).unwrap_or(false)
+        match keys::signature_algorithm(&alg) {
+            Ok((scheme @ keys::Scheme::Ed25519, _)) => key.verify_message(scheme, &self.tbs, &self.signature).unwrap_or(false),
+            Ok((scheme, Some(digest))) => key.verify(scheme, digest, &digest.digest(&[&self.tbs]), &self.signature).unwrap_or(false),
+            _ => false,
+        }
+    }
+
+    /// Whether this certificate may issue certificates (RFC 5280 §4.2.1.9, §4.2.1.3): it is a
+    /// CA by its basic constraints, and if it has a key usage, that includes `keyCertSign`. A
+    /// self-signed v1 or v2 certificate (an old root, which predates extensions) with no basic
+    /// constraints counts as a CA; a v3 certificate must say it is one.
+    pub fn may_issue(&self) -> bool {
+        /// keyUsage bit 5.
+        const KEY_CERT_SIGN: u16 = 1 << 5;
+        let old_root = self.version < 2 && !self.has_basic_constraints && self.is_self_signed();
+        (self.is_ca || old_root) && self.key_usage.is_none_or(|u| u & KEY_CERT_SIGN != 0)
     }
 
     /// Valid at `t`.
@@ -296,7 +405,7 @@ impl Certificate {
 
     /// The display name Acrobat uses: the common name, else the organization, else the DN.
     pub fn display_name(&self) -> String {
-        self.subject.common_name().or(self.subject.organization()).map(str::to_string).unwrap_or_else(|| self.subject.display())
+        self.subject.display_name()
     }
 
     /// SHA-256 fingerprint as upper-case hex pairs.
@@ -348,21 +457,66 @@ impl Certificate {
     }
 }
 
-/// The chain from `leaf` up through `pool`, as far as issuers can be found and their keys
-/// verify the certificate below. Stops at a self-signed certificate.
-pub fn build_chain<'a>(leaf: &'a Certificate, pool: &'a [Certificate]) -> Vec<&'a Certificate> {
+/// The subject alone, to name a certificate `Certificate::parse` rejects (one with a key type
+/// PdfCraft doesn't support, say). `None` when even that can't be read.
+pub fn subject_of(raw: &[u8]) -> Option<Name> {
+    let cert = Tlv::parse_all(raw).ok()?.expect(tag::SEQUENCE, "Certificate").ok()?;
+    let tbs = cert.children().ok()?.into_iter().next()?;
+    let mut f = tbs.children().ok()?.into_iter().peekable();
+    if f.peek().is_some_and(|t| t.tag == tag::ctx(0)) {
+        f.next();
+    }
+    // serial, signature algorithm, issuer, validity, then the subject.
+    Name::parse(&f.nth(4)?).ok()
+}
+
+/// The chain from `leaf` up through `pool`, as far as issuers can be found and may issue: each
+/// issuer's key verifies the certificate below it, it is a CA allowed to sign certificates, its
+/// `pathLenConstraint` allows the CA certificates below it, and (when `at` is given) it was valid
+/// then. Stops at a self-signed certificate. Certificates embedded in a document are in `pool`
+/// too, so an ordinary end-entity certificate must never be accepted as an issuer.
+pub fn build_chain<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at: Option<Time>) -> Vec<&'a Certificate> {
+    build_chain_noted(leaf, pool, at).0
+}
+
+/// [`build_chain`], and why it stopped where it did if a certificate that matched the issuer by
+/// name and signature was refused.
+pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at: Option<Time>) -> (Vec<&'a Certificate>, Option<String>) {
     let mut chain = vec![leaf];
+    let mut refused = None;
     while chain.len() < 10 {
         let Some(&last) = chain.last() else { break };
         if last.issuer.raw == last.subject.raw {
             break;
         }
-        let Some(issuer) = pool.iter().find(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by(&c.public_key)) else {
-            break;
-        };
+        // CA certificates between `last` and the leaf: what a candidate's pathLenConstraint limits.
+        let below = chain.len() - 1;
+        let mut found = None;
+        for c in pool.iter().filter(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by(&c.public_key)) {
+            let why = if !c.may_issue() {
+                Some("is not a CA certificate that may issue certificates")
+            } else if c.path_len.is_some_and(|n| below > n as usize) {
+                Some("does not allow this many CA certificates below it (path length)")
+            } else if at.is_some_and(|t| !c.valid_at(t)) {
+                Some("was not valid at the time of signing")
+            } else {
+                None
+            };
+            match why {
+                None => {
+                    found = Some(c);
+                    break;
+                }
+                Some(why) => {
+                    refused = Some(format!("The certificate of {} {why}, so it is not used to vouch for {}.", c.display_name(), last.display_name()))
+                }
+            }
+        }
+        let Some(issuer) = found else { break };
+        refused = None;
         chain.push(issuer);
     }
-    chain
+    (chain, refused)
 }
 
 /// Certificates from a file: DER, or PEM with one or more `CERTIFICATE` blocks (`.cer`, `.crt`,

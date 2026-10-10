@@ -6,8 +6,9 @@ use crate::object::{Name, ObjectIdentifier};
 use crate::object::{Object, ObjectLike};
 use crate::reader::Reader;
 use crate::reader::{Readable, ReaderContext, ReaderExt, Skippable};
-use crate::sync::Arc;
 use crate::sync::FxHashMap;
+use crate::sync::{Arc, OnceLock};
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Formatter};
@@ -128,10 +129,27 @@ impl<'a> Dict<'a> {
         }
     }
 
-    fn offsets(&self) -> Option<&FxHashMap<Name<'a>, usize>> {
+    fn offsets(&self) -> Option<&FxHashMap<Name<'static>, usize>> {
         match &self.0 {
             Inner::Empty => None,
-            Inner::Some(repr) => Some(&repr.offsets),
+            Inner::Some(repr) => Some(repr.offsets.get_or_init(|| {
+                // PdfCraft patch: (#307) large resource dictionaries are read for every
+                // page at open, but most are never looked up. Index them only on demand.
+                // The first pass already validated the same immutable bytes with this
+                // context. Keep the same parser, including duplicate-key and repair rules.
+                let mut offsets = new_offsets();
+                let mut reader = Reader::new(repr.data);
+                let (start, end): (Option<&[u8]>, &[u8]) = if repr.inline {
+                    (None, b"ID")
+                } else {
+                    (Some(b"<<"), b">>")
+                };
+                let _ = parse_dict_with(&mut reader, &repr.ctx, start, end, |name, offset, _| {
+                    offsets.insert(name.into_owned(), offset);
+                    Some(())
+                });
+                offsets
+            })),
         }
     }
 }
@@ -159,8 +177,10 @@ impl Debug for Dict<'_> {
 impl Skippable for Dict<'_> {
     fn skip(r: &mut Reader<'_>, is_content_stream: bool) -> Option<()> {
         r.forward_tag(b"<<")?;
+        r.enter_container()?;
 
-        loop {
+        // PdfCraft patch: leave even when a value or garbage fails through `?`.
+        let result = (|| loop {
             r.skip_white_spaces_and_comments();
 
             if let Some(()) = r.forward_tag(b">>") {
@@ -180,7 +200,9 @@ impl Skippable for Dict<'_> {
                     r.skip::<MaybeRef<Object<'_>>>(is_content_stream)?;
                 }
             }
-        }
+        })();
+        r.leave_container();
+        result
     }
 }
 
@@ -190,36 +212,114 @@ impl<'a> Readable<'a> for Dict<'a> {
     }
 }
 
+// PdfCraft patch: (#307) retain the fast single-pass index for ordinary small
+// dictionaries. Above this entry count, validate without retaining a hash table.
+const EAGER_DICT_ENTRIES: usize = 32;
+
+fn new_offsets() -> FxHashMap<Name<'static>, usize> {
+    #[cfg(feature = "std")]
+    return FxHashMap::with_capacity_and_hasher(8, rustc_hash::FxBuildHasher);
+    #[cfg(not(feature = "std"))]
+    FxHashMap::new()
+}
+
+pub(crate) type SharedIndex = Arc<OnceLock<FxHashMap<Name<'static>, usize>>>;
+
+#[derive(Debug)]
+pub(crate) struct CachedDict {
+    data: Box<[u8]>,
+    offsets: SharedIndex,
+}
+
+// PdfCraft patch: share a validated large dictionary's index across pages. The cache
+// belongs to the xref, owns its keys, and is bounded even on documents with many unique
+// dictionaries. Comparing the bytes also makes address reuse harmless. No reader context
+// is cached: decryption, object identity and reference-cycle tracking stay with each read.
+#[derive(Debug, Default)]
+pub(crate) struct DictCache {
+    entries: FxHashMap<usize, Arc<CachedDict>>,
+    bytes: usize,
+}
+
+impl DictCache {
+    fn get(&self, data: &[u8]) -> Option<Arc<CachedDict>> {
+        self.entries
+            .get(&(data.as_ptr() as usize))
+            .filter(|cached| data.starts_with(&cached.data))
+            .cloned()
+    }
+
+    fn insert(&mut self, data: &[u8], offsets: SharedIndex) {
+        const MAX_BYTES: usize = 8 << 20;
+        if self.entries.len() < 256 && data.len() <= MAX_BYTES.saturating_sub(self.bytes) {
+            self.bytes += data.len();
+            self.entries.insert(
+                data.as_ptr() as usize,
+                Arc::new(CachedDict {
+                    data: data.into(),
+                    offsets,
+                }),
+            );
+        }
+    }
+}
+
 fn read_inner<'a>(
     r: &mut Reader<'a>,
     ctx: &ReaderContext<'a>,
     start_tag: Option<&[u8]>,
     end_tag: &[u8],
 ) -> Option<Dict<'a>> {
-    // TODO: Figure out how to
-    // 1) Make dictionaries easily cloneable without wrapping in Arc.
-    // 2) Maybe have an efficient per-document allocator pool for hashmaps
-    // that can be reused.
-    #[cfg(feature = "std")]
-    let mut offsets = FxHashMap::with_capacity_and_hasher(8, rustc_hash::FxBuildHasher);
-    #[cfg(not(feature = "std"))]
-    let mut offsets = FxHashMap::new();
+    let cacheable = start_tag.is_some() && !ctx.in_content_stream();
+    if cacheable {
+        let tail = r.tail()?;
+        if let Some(cached) = ctx
+            .xref()
+            .with_dict_cache(|cache| cache.get(tail))
+            .flatten()
+        {
+            let data = r.read_bytes(cached.data.len())?;
+            return Some(Dict(Inner::Some(Arc::new(Repr {
+                data,
+                offsets: cached.offsets.clone(),
+                inline: false,
+                ctx: ctx.clone(),
+            }))));
+        }
+    }
+    let mut offsets = Some(new_offsets());
 
-    let data = parse_dict_with(
+    let (data, repaired) = parse_dict_with(
         r,
         ctx,
         start_tag,
         end_tag,
         #[inline]
         |name, offset, _| {
-            offsets.insert(name, offset);
+            if let Some(index) = &mut offsets {
+                index.insert(name.into_owned(), offset);
+                if index.len() > EAGER_DICT_ENTRIES {
+                    offsets = None;
+                }
+            }
             Some(())
         },
     )?;
 
+    let index = Arc::new(OnceLock::new());
+    if let Some(offsets) = offsets {
+        let _ = index.set(offsets);
+    }
+    // Repair may read objects through the current reference context; only cache the
+    // context-independent validating path. Inline/content dictionaries stay uncached.
+    if cacheable && !repaired && data.len() >= 1024 {
+        ctx.xref()
+            .with_dict_cache(|cache| cache.insert(data, index.clone()));
+    }
     Some(Dict(Inner::Some(Arc::new(Repr {
         data,
-        offsets,
+        offsets: index,
+        inline: start_tag.is_none(),
         ctx: ctx.clone(),
     }))))
 }
@@ -242,7 +342,7 @@ pub(crate) fn probe_dict<'a>(
     let mut has_root = false;
     let mut has_type = false;
 
-    let data = parse_dict_with(
+    let (data, _) = parse_dict_with(
         r,
         ctx,
         start_tag,
@@ -266,18 +366,38 @@ pub(crate) fn probe_dict<'a>(
     })
 }
 
+// PdfCraft patch: an object where a key belongs is read, not skipped, so a dictionary
+// holding another one there (`<< << …`) recursed without a bound. Count each parsed
+// dictionary like a skipped one, and leave on every exit of the parse below.
 fn parse_dict_with<'a, F>(
     r: &mut Reader<'a>,
     ctx: &ReaderContext<'a>,
     start_tag: Option<&[u8]>,
     end_tag: &[u8],
+    on_entry: F,
+) -> Option<(&'a [u8], bool)>
+where
+    F: FnMut(Name<'a>, usize, &Reader<'a>) -> Option<()>,
+{
+    r.enter_container()?;
+    let result = parse_dict_with_inner(r, ctx, start_tag, end_tag, on_entry);
+    r.leave_container();
+    result
+}
+
+fn parse_dict_with_inner<'a, F>(
+    r: &mut Reader<'a>,
+    ctx: &ReaderContext<'a>,
+    start_tag: Option<&[u8]>,
+    end_tag: &[u8],
     mut on_entry: F,
-) -> Option<&'a [u8]>
+) -> Option<(&'a [u8], bool)>
 where
     F: FnMut(Name<'a>, usize, &Reader<'a>) -> Option<()>,
 {
     let dict_data = r.tail()?;
     let start_offset = r.offset();
+    let mut repaired = false;
 
     // Inline image dictionaries don't start with '<<'.
     if let Some(start_tag) = start_tag {
@@ -292,13 +412,14 @@ where
             r.forward_tag(end_tag)?;
             let end_offset = r.offset() - start_offset;
 
-            break Some(&dict_data[..end_offset]);
+            break Some((&dict_data[..end_offset], repaired));
         } else {
             let Some(name) = r.read_without_context::<Name<'_>>() else {
                 if start_tag.is_some() {
                     // In case there is garbage in-between, be lenient and just try to skip it.
                     // But only do this if we are parsing a proper dictionary as opposed to an
                     // inline dictionary.
+                    repaired = true;
                     r.read::<Object<'_>>(ctx)?;
                     continue;
                 } else {
@@ -330,7 +451,8 @@ object!(Dict<'a>, Dict);
 
 struct Repr<'a> {
     data: &'a [u8],
-    offsets: FxHashMap<Name<'a>, usize>,
+    offsets: SharedIndex,
+    inline: bool,
     ctx: ReaderContext<'a>,
 }
 
@@ -345,6 +467,129 @@ impl<'a> InlineImageDict<'a> {
 impl<'a> Readable<'a> for InlineImageDict<'a> {
     fn read(r: &mut Reader<'a>, ctx: &ReaderContext<'a>) -> Option<Self> {
         Some(Self(read_inner(r, ctx, None, b"ID")?))
+    }
+}
+
+#[cfg(test)]
+mod lazy_index_tests {
+    use super::*;
+    use crate::object::{Array, FromBytes};
+    use alloc::string::String;
+
+    fn entries() -> String {
+        let mut data = String::new();
+        for i in 0..100 {
+            data.push_str(&format!("/Key{i} {i} "));
+        }
+        // Escaped and long names, duplicate keys, null and nested values keep
+        // exactly the same semantics after the second (index-building) pass.
+        data.push_str("/Key99 123 /Esc#61ped 7 /ThisNameIsLongerThanTheInlineNameBuffer 9 /Nil null /Nested << /N [1 2 3] >> ");
+        data
+    }
+
+    #[test]
+    fn large_indexes_are_deferred_and_clones_share_the_result() {
+        let data = format!("<< {} >>", entries());
+        let dict = Dict::from_bytes(data.as_bytes()).unwrap();
+        let Inner::Some(repr) = &dict.0 else {
+            panic!("nonempty")
+        };
+        assert!(repr.offsets.get().is_none());
+        let cloned = dict.clone();
+        assert_eq!(cloned.get::<i32>(b"Key99"), Some(123));
+        assert!(repr.offsets.get().is_some());
+        assert_eq!(dict.len(), 104);
+        assert_eq!(dict.get::<i32>(b"Escaped"), Some(7));
+        assert_eq!(
+            dict.get::<i32>(b"ThisNameIsLongerThanTheInlineNameBuffer"),
+            Some(9)
+        );
+        assert!(dict.contains_key(b"Nil"));
+        assert!(!dict.contains_key(b"Missing"));
+        assert_eq!(
+            dict.get::<Dict<'_>>(b"Nested")
+                .unwrap()
+                .get::<Array<'_>>(b"N")
+                .unwrap()
+                .iter::<i32>()
+                .collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert_eq!(dict.keys().count(), dict.len());
+        assert_eq!(dict.entries().count(), dict.len());
+        assert!(core::ptr::eq(
+            dict.offsets().unwrap(),
+            cloned.offsets().unwrap()
+        ));
+    }
+
+    #[test]
+    fn small_indexes_stay_eager_and_large_inline_dicts_work() {
+        let dict = Dict::from_bytes(b"<< /Key 42 >>").unwrap();
+        let Inner::Some(repr) = &dict.0 else {
+            panic!("nonempty")
+        };
+        assert!(repr.offsets.get().is_some());
+        assert_eq!(dict.get::<i32>(b"Key"), Some(42));
+        let data = format!("{} ID", entries());
+        let mut reader = Reader::new(data.as_bytes());
+        let inline = InlineImageDict::read(&mut reader, &ReaderContext::dummy()).unwrap();
+        assert_eq!(inline.0.get::<i32>(b"Key99"), Some(123));
+        assert_eq!(inline.0.len(), 104);
+    }
+
+    #[test]
+    fn large_dicts_are_still_validated_before_any_lookup() {
+        let data = format!("<< {} /Broken [", entries());
+        assert!(Dict::from_bytes(data.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn repeated_resource_reads_share_indexes_but_keep_object_context() {
+        let data = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources 5 0 R >> endobj\n4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources 5 0 R >> endobj\n5 0 obj << /XObject << {} >> >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            entries()
+        );
+        let pdf = crate::Pdf::new(data.into_bytes()).unwrap();
+        let a = pdf
+            .xref()
+            .get::<Dict<'_>>(ObjectIdentifier::new(5, 0))
+            .unwrap()
+            .get::<Dict<'_>>(b"XObject")
+            .unwrap();
+        let b = pdf
+            .xref()
+            .get::<Dict<'_>>(ObjectIdentifier::new(5, 0))
+            .unwrap()
+            .get::<Dict<'_>>(b"XObject")
+            .unwrap();
+        let (Inner::Some(a_repr), Inner::Some(b_repr)) = (&a.0, &b.0) else {
+            panic!("nonempty")
+        };
+        assert!(Arc::ptr_eq(&a_repr.offsets, &b_repr.offsets));
+        assert_eq!(a.obj_id(), Some(ObjectIdentifier::new(5, 0)));
+        assert_eq!(a.get::<i32>(b"Key99"), Some(123));
+        assert_eq!(b.get::<i32>(b"Escaped"), Some(7));
+        assert!(core::ptr::eq(a.offsets().unwrap(), b.offsets().unwrap()));
+    }
+
+    #[test]
+    fn index_cache_is_bounded_and_rejects_changed_or_truncated_bytes() {
+        let mut cache = DictCache::default();
+        let mut data = format!("<< {} >>", entries()).into_bytes();
+        cache.insert(&data, Arc::new(OnceLock::new()));
+        assert!(cache.get(&data).is_some());
+        assert!(cache.get(&data[..data.len() - 1]).is_none());
+        data[3] = b'Z';
+        assert!(cache.get(&data).is_none());
+        let buffers: Vec<_> = (0..300)
+            .map(|i| format!("<< /Key{i} 1 >>").into_bytes())
+            .collect();
+        for data in &buffers {
+            cache.insert(data, Arc::new(OnceLock::new()));
+        }
+        assert_eq!(cache.entries.len(), 256);
+        assert!(cache.bytes <= 8 << 20);
     }
 }
 

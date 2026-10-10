@@ -7,8 +7,9 @@ use crate::data::{
     DatasetsWrite, FieldData, FieldDatum, build_data, iso_to_pattern, parse_datasets, pattern_to_iso, read_values, som_to_path, write_datasets,
 };
 use crate::data::{add_data_instances, remove_data_instance, write_data_value};
-use crate::fixtures::{scripted_template, shell, static_shell, template, template_with_data};
+use crate::fixtures::{TINY_GIF, fields_template, scripted_template, shell, static_shell, template, template_with_data, tiny_png};
 use crate::layout::Item;
+use crate::layout::WidgetKind;
 use crate::model::*;
 use crate::script::{NodeKind, Overrides, apply_overrides, fields_by_som, form_tree, overrides, rerender, set_overrides};
 
@@ -761,4 +762,350 @@ fn top_fields(doc: &Document) -> Vec<(String, pdfcraft_cos::Dict)> {
             Some((t, d))
         })
         .collect()
+}
+
+#[test]
+fn choice_lists_signatures_passwords_and_pictures_become_fields_and_images() {
+    let form = layout_xml(&fields_template("")).unwrap();
+    let p1 = &form.pages[0];
+    let w = widgets(p1);
+    let country = w.iter().find(|w| w.name == "country").unwrap();
+    assert_eq!(
+        country.kind,
+        WidgetKind::Choice {
+            options: vec![("CA".into(), "Canada".into()), ("FR".into(), "France".into()), ("JP".into(), "Japan".into())],
+            list_box: false,
+            multi: false,
+            editable: false,
+        }
+    );
+    assert_eq!(country.value.as_deref(), Some("FR"), "the template default, as a saved value");
+    let langs = w.iter().find(|w| w.name == "langs").unwrap();
+    assert!(
+        matches!(&langs.kind, WidgetKind::Choice { options, list_box: true, multi: true, editable: false } if options.len() == 3 && options[0] == ("English".into(), "English".into()))
+    );
+    let other = w.iter().find(|w| w.name == "other").unwrap();
+    assert!(matches!(&other.kind, WidgetKind::Choice { list_box: false, multi: false, editable: true, .. }));
+    assert_eq!(w.iter().find(|w| w.name == "pin").unwrap().kind, WidgetKind::Password);
+    assert_eq!(w.iter().find(|w| w.name == "sign").unwrap().kind, WidgetKind::Signature);
+    assert!(w.iter().all(|w| w.name != "photo" && w.name != "code"), "image and barcode fields make no widget");
+    // The PNG in the image field and the GIF in the draw are pictures, fitted to their boxes.
+    let images: Vec<(&Rect, usize)> =
+        p1.items.iter().filter_map(|i| if let Item::Image { rect, data, .. } = i { Some((rect, data.len())) } else { None }).collect();
+    assert_eq!(images.len(), 2, "{images:?}");
+    assert!((images[0].0.w - 72.0).abs() < 0.01 && (images[0].0.h - 72.0).abs() < 0.01, "a square picture fills a 1in square: {:?}", images[0].0);
+    assert_eq!(images[1].1, TINY_GIF.len());
+    let t = texts(p1);
+    assert!(t.iter().any(|s| s == "12345"), "the barcode's value as text: {t:?}");
+    assert!(form.warnings.iter().any(|w| w.contains("barcode")) && form.warnings.iter().any(|w| w.contains("image fields")), "{:?}", form.warnings);
+
+    // Written into the PDF: /Ch fields with their options and flags, a /Sig field, a password
+    // field, and Flate images (the PNG with a soft mask).
+    let mut doc = Document::open(Arc::new(shell(&fields_template("")))).unwrap();
+    let report = render_into(&mut doc).unwrap();
+    assert_eq!(report.fields, 6, "country, langs, other, pin, sign, summary");
+    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let fields = pdfcraft_forms_free_fields(&doc);
+    let field = |n: &str| fields.iter().find(|(name, _)| name == n).map(|(_, d)| d.clone()).unwrap_or_else(|| panic!("no field {n}"));
+    let country = field("country");
+    assert_eq!(country.name(b"FT"), Some(b"Ch".as_slice()));
+    assert_eq!(country.int(b"Ff"), Some(1 << 17), "a combo box");
+    let opt = doc.resolve(country.get(b"Opt").unwrap()).as_array().unwrap().clone();
+    assert_eq!(opt.len(), 3);
+    let pair = doc.resolve(&opt[1]).as_array().unwrap().clone();
+    assert_eq!(pair[0].as_string().unwrap().to_text(), "FR");
+    assert_eq!(pair[1].as_string().unwrap().to_text(), "France");
+    assert_eq!(country.get(b"V").and_then(|v| v.as_string()).map(|s| s.to_text()).as_deref(), Some("FR"));
+    assert_eq!(country.get(b"DV").and_then(|v| v.as_string()).map(|s| s.to_text()).as_deref(), Some("FR"));
+    let langs = field("langs");
+    assert_eq!(langs.int(b"Ff"), Some(1 << 21), "a multi-select list box");
+    let opt = doc.resolve(langs.get(b"Opt").unwrap()).as_array().unwrap().clone();
+    assert_eq!(opt[0].as_string().unwrap().to_text(), "English", "same shown text and value: a plain string");
+    assert_eq!(field("other").int(b"Ff"), Some((1 << 17) | (1 << 18)), "an editable combo box");
+    assert_eq!(field("pin").int(b"Ff"), Some(1 << 13), "a password field");
+    assert_eq!(field("sign").name(b"FT"), Some(b"Sig".as_slice()));
+    let streams: Vec<pdfcraft_cos::Stream> = doc
+        .object_numbers()
+        .into_iter()
+        .filter_map(|n| if let Object::Stream(st) = &*doc.get(pdfcraft_cos::ObjRef { num: n, generation: 0 }) { Some(st.clone()) } else { None })
+        .filter(|s| s.dict.name(b"Subtype") == Some(b"Image"))
+        .collect();
+    assert_eq!(streams.len(), 3, "the PNG, its soft mask, the GIF");
+    let png = streams.iter().find(|s| s.dict.contains(b"SMask")).expect("the PNG has a soft mask");
+    assert_eq!(png.dict.name(b"ColorSpace"), Some(b"DeviceRGB".as_slice()));
+    assert_eq!(png.dict.name(b"Filter"), Some(b"FlateDecode".as_slice()));
+    assert_eq!(png.decoded().unwrap().len(), 12, "2 × 2 RGB samples");
+    let gif = streams.iter().find(|s| s.dict.int(b"Width") == Some(1)).expect("the 1 × 1 GIF");
+    assert_eq!(gif.dict.name(b"ColorSpace"), Some(b"DeviceGray".as_slice()), "a white pixel is gray");
+    assert_eq!(gif.decoded().unwrap(), vec![255]);
+}
+
+/// The terminal field dictionaries by name (one level: this fixture has no hierarchy).
+fn pdfcraft_forms_free_fields(doc: &Document) -> Vec<(String, pdfcraft_cos::Dict)> {
+    let root = doc.get(doc.root().unwrap());
+    let acro = doc.resolve(root.as_dict().unwrap().get(b"AcroForm").unwrap());
+    let fields = doc.resolve(acro.as_dict().unwrap().get(b"Fields").unwrap()).as_array().unwrap().clone();
+    fields
+        .iter()
+        .filter_map(|f| {
+            let d = doc.resolve(f).as_dict()?.clone();
+            let name = d.get(b"T").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(|s| s.to_text()))?;
+            Some((name, d))
+        })
+        .collect()
+}
+
+#[test]
+fn choice_values_come_from_the_data_as_saved_values_and_several_for_lists() {
+    // Shown text in the data is taken too (an editable list the user typed into saves text).
+    let xml = fields_template("<form><page1><country>Japan</country><langs>English\nSpanish</langs><other>typed</other></page1></form>");
+    let form = layout_xml(&xml).unwrap();
+    let w = widgets(&form.pages[0]);
+    assert_eq!(w.iter().find(|w| w.name == "country").unwrap().value.as_deref(), Some("JP"));
+    assert_eq!(w.iter().find(|w| w.name == "langs").unwrap().value.as_deref(), Some("English\nSpanish"));
+    assert_eq!(w.iter().find(|w| w.name == "other").unwrap().value.as_deref(), Some("typed"));
+    let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+    render_into(&mut doc).unwrap();
+    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let fields = pdfcraft_forms_free_fields(&doc);
+    let langs = &fields.iter().find(|(n, _)| n == "langs").unwrap().1;
+    let v = doc.resolve(langs.get(b"V").unwrap()).as_array().unwrap().clone();
+    assert_eq!(v.iter().map(|s| s.as_string().unwrap().to_text()).collect::<Vec<_>>(), vec!["English", "Spanish"]);
+    let i = doc.resolve(langs.get(b"I").unwrap()).as_array().unwrap().clone();
+    assert_eq!(i.iter().map(|o| o.as_int().unwrap()).collect::<Vec<_>>(), vec![0, 2]);
+}
+
+#[test]
+fn pictures_are_sized_from_their_headers_and_hostile_ones_are_refused_unallocated() {
+    use crate::image::{Kind, decode, kind, size};
+    assert_eq!(kind(&tiny_png()), Some(Kind::Png));
+    assert_eq!(size(&tiny_png()), Some((2, 2)));
+    assert_eq!(kind(TINY_GIF), Some(Kind::Gif));
+    assert_eq!(size(TINY_GIF), Some((1, 1)));
+    assert_eq!(kind(b"BM..."), None);
+    assert_eq!(size(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"), None, "a header cut short");
+    let decoded = decode(&tiny_png()).unwrap();
+    assert_eq!((decoded.width, decoded.height, decoded.color_space), (2, 2, "DeviceRGB"));
+    assert_eq!(decoded.samples, vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0]);
+    assert_eq!(decoded.alpha, Some(vec![255, 255, 255, 0]));
+    assert_eq!(decode(TINY_GIF).unwrap().samples, vec![255]);
+    // A PNG claiming 100,000 × 100,000 pixels is refused from its header, before any buffer.
+    let mut huge = tiny_png();
+    huge[16..20].copy_from_slice(&100_000u32.to_be_bytes());
+    huge[20..24].copy_from_slice(&100_000u32.to_be_bytes());
+    assert_eq!(size(&huge), None, "no size for layout: the box is used");
+    assert!(decode(&huge).unwrap_err().contains("million pixels"));
+    // Truncated and corrupt data are errors, not panics.
+    let cut = &tiny_png()[..30];
+    assert!(decode(cut).is_err());
+    let mut bad = tiny_png();
+    for b in bad.iter_mut().skip(40) {
+        *b ^= 0x55;
+    }
+    assert!(decode(&bad).is_err() || decode(&bad).is_ok());
+    let mut gif = TINY_GIF.to_vec();
+    gif.truncate(12);
+    assert!(decode(&gif).is_err());
+    // A form whose picture is broken still lays out, with a warning, and keeps the rest.
+    let xml = fields_template("")
+        .replace("image/gif", "image/gif\" transferEncoding=\"none")
+        .replace("<image contentType=\"image/png\">", "<image contentType=\"image/png\">AAAA");
+    let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+    let report = render_into(&mut doc).unwrap();
+    assert_eq!(report.fields, 6);
+    assert!(report.warnings.iter().any(|w| w.contains("image")), "{:?}", report.warnings);
+}
+
+#[test]
+fn choice_values_are_saved_values_first_deduplicated_and_defaults_are_saved_values_too() {
+    // Designer's "specify item values": shown 0..3, saved 1..4. The data's 1 means the item
+    // shown as 0, not the item shown as 1.
+    let tpl = fields_template("<form><page1><country>1</country></page1></form>")
+        .replace("<text>Canada</text><text>France</text><text>Japan</text>", "<text>0</text><text>1</text><text>2</text><text>3</text>")
+        .replace("<text>CA</text><text>FR</text><text>JP</text>", "<text>1</text><text>2</text><text>3</text><text>4</text>")
+        .replace("<value><text>FR</text></value></field>", "<value><text>1</text></value></field>");
+    let form = layout_xml(&tpl).unwrap();
+    let w = widgets(&form.pages[0]);
+    assert_eq!(w.iter().find(|w| w.name == "country").unwrap().value.as_deref(), Some("1"));
+    let (t, _) = parse(&tpl).unwrap();
+    let tree = form_tree(&t, parse_datasets(&tpl).as_ref(), &Overrides::default());
+    let node = tree.root.children.iter().find(|n| n.name == "page1").unwrap().children.iter().find(|n| n.name == "country").unwrap();
+    assert_eq!(node.value, "1", "scripts read the saved value");
+    // Several values: each once, never more than there are items, written as ascending indices;
+    // a single-select list takes the first line; defaults are saved values.
+    let tpl = fields_template("<form><page1><country>Japan\nCanada</country><langs>Spanish\nEnglish\nEnglish\nSpanish</langs></page1></form>")
+        .replace("<value><text>FR</text></value></field>", "<value><text>France</text></value></field>")
+        .replace(
+            "<items><text>English</text><text>French</text><text>Spanish</text></items>",
+            "<items><text>English</text><text>French</text><text>Spanish</text></items><value><text>English\nFrench</text></value>",
+        );
+    let form = layout_xml(&tpl).unwrap();
+    let w = widgets(&form.pages[0]);
+    assert_eq!(w.iter().find(|w| w.name == "langs").unwrap().value.as_deref(), Some("Spanish\nEnglish"));
+    assert_eq!(w.iter().find(|w| w.name == "country").unwrap().value.as_deref(), Some("JP"));
+    assert_eq!(w.iter().find(|w| w.name == "country").unwrap().default.as_deref(), Some("FR"));
+    let mut doc = Document::open(Arc::new(shell(&tpl))).unwrap();
+    render_into(&mut doc).unwrap();
+    let doc = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let fields = pdfcraft_forms_free_fields(&doc);
+    let langs = &fields.iter().find(|(n, _)| n == "langs").unwrap().1;
+    let i = doc.resolve(langs.get(b"I").unwrap()).as_array().unwrap().clone();
+    assert_eq!(i.iter().map(|o| o.as_int().unwrap()).collect::<Vec<_>>(), vec![0, 2]);
+    let dv = doc.resolve(langs.get(b"DV").unwrap()).as_array().unwrap().clone();
+    assert_eq!(dv.iter().map(|s| s.as_string().unwrap().to_text()).collect::<Vec<_>>(), vec!["English", "French"]);
+    let country = &fields.iter().find(|(n, _)| n == "country").unwrap().1;
+    assert_eq!(country.get(b"DV").and_then(|v| v.as_string()).map(|s| s.to_text()).as_deref(), Some("FR"));
+    assert_eq!(doc.resolve(country.get(b"I").unwrap()).as_array().unwrap().len(), 1);
+    // Picks stored as <value> children are read too.
+    let tpl = fields_template("<form><page1><langs><value>English</value><value>Spanish</value></langs></page1></form>");
+    let form = layout_xml(&tpl).unwrap();
+    assert_eq!(widgets(&form.pages[0]).iter().find(|w| w.name == "langs").unwrap().value.as_deref(), Some("English\nSpanish"));
+    // More items than the cap: kept to the cap, and said so.
+    let many: String = (0..1500).map(|i| format!("<text>i{i}</text>")).collect();
+    let tpl = fields_template("").replace("<items><text>A</text><text>B</text></items>", &format!("<items>{many}</items>"));
+    let form = layout_xml(&tpl).unwrap();
+    let other = widgets(&form.pages[0]).into_iter().find(|w| w.name == "other").unwrap();
+    assert!(matches!(&other.kind, WidgetKind::Choice { options, .. } if options.len() == 1000));
+    assert!(form.warnings.iter().any(|w| w.contains("other") && w.contains("1000 items")), "{:?}", form.warnings);
+}
+
+#[test]
+fn pictures_are_embedded_once_across_relayouts_and_bad_data_pictures_are_reported() {
+    use crate::image::{decode, size};
+    let tpl = fields_template("<form><page1><country>JP</country></page1></form>");
+    let mut doc = Document::open(Arc::new(shell(&tpl))).unwrap();
+    render_into(&mut doc).unwrap();
+    let (t, _) = parse(&tpl).unwrap();
+    rerender(&mut doc, &t).unwrap();
+    rerender(&mut doc, &t).unwrap();
+    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let images = doc
+        .object_numbers()
+        .into_iter()
+        .filter(
+            |n| matches!(&*doc.get(pdfcraft_cos::ObjRef { num: *n, generation: 0 }), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image")),
+        )
+        .count();
+    assert_eq!(images, 3, "the PNG, its soft mask and the GIF, however many times the form was laid out");
+    // No private map in the catalog: earlier pictures are found on the pages, by their hash.
+    let root = doc.get(doc.root().unwrap());
+    assert!(!root.as_dict().unwrap().contains(b"PCXfaImages"));
+    // Pictures in the data that aren't pictures: a warning naming the field, the template's
+    // picture shown instead.
+    for (data, what) in [("Qk0AAAAA", "not a JPEG, PNG or GIF"), ("not base64!", "not base64")] {
+        let tpl = fields_template(&format!("<form><page1><photo>{data}</photo></page1></form>"));
+        let form = layout_xml(&tpl).unwrap();
+        assert!(form.warnings.iter().any(|w| w.contains("photo") && w.contains(what)), "{what}: {:?}", form.warnings);
+        assert_eq!(form.pages[0].items.iter().filter(|i| matches!(i, Item::Image { .. })).count(), 2);
+    }
+    // A hostile PNG header: no size for layout (the draw keeps its box), refused at decode.
+    let mut tall = tiny_png();
+    tall[16..20].copy_from_slice(&1u32.to_be_bytes());
+    tall[20..24].copy_from_slice(&4_000_000_000u32.to_be_bytes());
+    assert_eq!(size(&tall), None);
+    assert!(decode(&tall).unwrap_err().contains("million pixels"));
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&tall);
+    let tpl = fields_template("").replace(
+        r#"<draw name="logo" w="0.5in" h="0.5in">"#,
+        &format!(
+            r#"<draw name="tall" w="2in"><value><image contentType="image/png">{b64}</image></value></draw><draw name="logo" w="0.5in" h="0.5in">"#
+        ),
+    );
+    let form = layout_xml(&tpl).unwrap();
+    assert_eq!(form.pages.len(), 1, "a picture of unknown size takes its box, not a page");
+    // A GIF whose frame is far larger than its 1 × 1 screen is refused before it is allocated.
+    let mut gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00,\x00\x00\x00\x00".to_vec();
+    gif.extend_from_slice(&11_000u16.to_le_bytes());
+    gif.extend_from_slice(&11_000u16.to_le_bytes());
+    gif.extend_from_slice(b"\x00\x02\x02D\x01\x00;");
+    let started = std::time::Instant::now();
+    assert!(decode(&gif).unwrap_err().contains("million pixels"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    // A template picture over 1 MiB is read whole (text is cut at 1 MiB, pictures are not).
+    let big = "A".repeat(1_600_000);
+    let tpl = fields_template("").replace(r#"<image contentType="image/gif">"#, &format!(r#"<image contentType="image/gif">{big}"#));
+    let (t, _) = parse(&tpl).unwrap();
+    fn find_image(nodes: &[Node]) -> Option<usize> {
+        nodes.iter().find_map(|n| match n {
+            Node::Draw(d) => match &d.value {
+                Value::Image { data, .. } => Some(data.len()),
+                _ => None,
+            },
+            Node::Subform(s) => find_image(&s.children),
+            _ => None,
+        })
+    }
+    assert!(find_image(&t.root.children).is_some_and(|n| n > 1_200_000));
+}
+
+/// A repeating subform drawn inside positioned content (a top-to-bottom table in an area of a
+/// positioned subform) gets its `occur` instances, as in Adobe's viewers: real Designer forms
+/// have tables like this whose calculations read every row. Before, only one row was laid
+/// out, and the field after the table was placed as if there were one.
+#[test]
+fn repeating_subforms_inside_positioned_content_get_their_instances() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" w="7.5in" h="8in">
+  <area name="box" x="0.5in" y="1in">
+   <subform name="wrap" layout="tb" w="4in">
+    <subform name="table" layout="tb" w="4in">
+     <subform name="row" w="4in" h="0.3in"><occur min="3" max="-1"/>
+      <field name="reason" w="4in" h="0.3in"><ui><textEdit/></ui></field>
+     </subform>
+    </subform>
+    <field name="after" w="4in" h="0.3in"><ui><textEdit/></ui></field>
+   </subform>
+  </area>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let form = layout_xml(xdp).unwrap();
+    let all: Vec<&Widget> = form.pages.iter().flat_map(widgets).collect();
+    let rows: Vec<&Widget> = all.iter().copied().filter(|w| w.som.ends_with(".reason[0]")).collect();
+    let soms: Vec<&str> = rows.iter().map(|w| w.som.as_str()).collect();
+    assert_eq!(
+        soms,
+        [
+            "form[0].page1[0].box[0].wrap[0].table[0].row[0].reason[0]",
+            "form[0].page1[0].box[0].wrap[0].table[0].row[1].reason[0]",
+            "form[0].page1[0].box[0].wrap[0].table[0].row[2].reason[0]",
+        ],
+        "one widget per instance, each with its own SOM index"
+    );
+    // The rows are stacked, not drawn on top of each other…
+    let step = rows[1].rect.y - rows[0].rect.y;
+    assert!(step.abs() > 1.0, "rows overlap: {:?}", rows.iter().map(|w| w.rect).collect::<Vec<_>>());
+    assert!(((rows[2].rect.y - rows[1].rect.y) - step).abs() < 0.01, "rows are evenly spaced");
+    // …and what follows the table is placed after all of them (the table was measured with
+    // its instances, not with one row).
+    let after = all.iter().find(|w| w.som.ends_with(".after[0]")).expect("the field after the table");
+    assert!(((after.rect.y - rows[2].rect.y) - step).abs() < 0.01, "after: {:?}, last row: {:?}", after.rect, rows[2].rect);
+}
+
+/// Areas are named in SOM expressions but are not data scopes; unnamed subforms and areas have
+/// no segment at all. What the template doesn't have is kept as it is.
+#[test]
+fn data_paths_leave_areas_out() {
+    let (tpl, _) = parse(&crate::fixtures::leave_template("")).unwrap();
+    let path = |som: &str| data_path(&tpl, som).into_iter().map(|(n, i)| format!("{n}[{i}]")).collect::<Vec<_>>().join(".");
+    // The area `box` (inside an unnamed subform) is dropped; indexes are kept.
+    assert_eq!(path("form[0].page[0].box[0].table[0].row[2].days[0]"), "form[0].page[0].table[0].row[2].days[0]");
+    assert_eq!(path("form[0].page[0].box[0].rest[0]"), "form[0].page[0].rest[0]");
+    // No area on the way: as som_to_path.
+    assert_eq!(path("form[0].page[0]"), "form[0].page[0]");
+    // Unknown segments, past a leaf, or a SOM from another template: kept.
+    assert_eq!(path("form[0].page[0].box[0].nothing[0].x[1]"), "form[0].page[0].nothing[0].x[1]");
+    assert_eq!(path("form[0].page[0].box[0].rest[0].box[0]"), "form[0].page[0].rest[0].box[0]");
+    assert_eq!(path("other[0].box[0].rest[0]"), "other[0].box[0].rest[0]");
+    assert_eq!(data_path(&tpl, ""), Vec::new());
 }

@@ -9,6 +9,7 @@ use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app.set_option("zoom", "150").unwrap();
         app
@@ -77,6 +78,60 @@ fn marking_applying_and_clearing() {
     let doc = s.session.get(s.views[0].id).unwrap();
     assert_eq!((doc.redaction_marks(), doc.can_undo()), (0, Some("Apply redactions")));
     assert!(doc.form.is_empty(), "the whole page was redacted, fields included");
+}
+
+#[test]
+fn redaction_codes_become_the_overlay_text() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("redact.properties"));
+    h.run_steps(2);
+    h.get_by_label("Redaction Tool Properties");
+    h.get_by_label("Use overlay text").click();
+    h.run_steps(2);
+    h.state_mut().redact_prefs.overlay = "CONFIDENTIAL".into();
+    h.get_by_label("Redaction code:").click();
+    h.run_steps(2);
+    h.get_by_label("(b)(7)(C)").click();
+    h.run_steps(2);
+    h.get_by_label("(b)(6)").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    let prefs = &h.state().redact_prefs;
+    assert_eq!(prefs.overlay_text(), "(b)(6), (b)(7)(C)", "codes in the set's order");
+    let pdfcraft_engine::Edit::AddAnnotation(a) = prefs.mark(0, vec![pdfcraft_engine::rect_quad([10.0, 10.0, 50.0, 30.0])], "T") else {
+        panic!("a mark adds an annotation")
+    };
+    assert!(matches!(a.shape, pdfcraft_engine::Shape::Redact { ref overlay, .. } if overlay == "(b)(6), (b)(7)(C)"));
+    h.state_mut().redact_prefs.use_code = false;
+    assert_eq!(h.state().redact_prefs.overlay_text(), "CONFIDENTIAL", "custom text is kept while codes are used");
+}
+
+#[test]
+fn redacting_an_imported_word_list() {
+    let memo = pdfcraft_engine::Session::new().create_from_text("memo", "Call Ada today\nAda is private\nPublic line").unwrap().to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("memo.pdf", None, memo.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().execute("redact.search");
+    h.run_steps(2);
+    h.get_by_label("Multiple words or phrases");
+    let list = b"  Ada \n\nprivate\nAda\nabsent\n".to_vec();
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::RedactWords, vec![("names.txt".into(), list)]);
+    let d = &h.state().redact_search;
+    assert_eq!((d.mode, d.words.as_str()), (pdfcraft_ui_egui::RedactSearchMode::Words, "Ada\nprivate\nabsent"));
+    h.run_steps(2);
+    h.get_by_label("3 word(s) or phrase(s)");
+    h.get_by_label("Mark all").click();
+    h.run_steps(3);
+    assert_eq!((marks(&h), h.state().redact_search.found), (3, Some(3)));
+    let too_big = vec![b'a'; 2 << 20];
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::RedactWords, vec![("huge.txt".into(), too_big)]);
+    assert_eq!(h.state().redact_search.words, "Ada\nprivate\nabsent", "an oversized list changes nothing");
 }
 
 #[test]

@@ -5,12 +5,18 @@
 //! marked-content block as viewers expect. Supported: single-line, multiline (wrapped), comb,
 //! password, quadding, auto font size (`0 Tf`), combo boxes and list boxes (selection shown).
 //!
-//! The `/DA` font is used when the form's `/DR` defines it as a simple font; text is encoded in
-//! WinAnsi. Otherwise (composite fonts, missing resources) Helvetica is used, so text is always
-//! visible. Widths use the approximate Helvetica metrics of `pdfcraft-fonts`.
+//! The `/DA` font is used when the form's `/DR` defines it as a simple font (text encoded in
+//! WinAnsi) or as a composite font with a predefined Unicode CMap such as `UniJIS-UTF16-H`, as
+//! Japanese forms use (text encoded in that CMap). Otherwise (other composite fonts, missing
+//! resources) Helvetica is used, so text is always visible. Widths use the approximate metrics
+//! of `pdfcraft-fonts` (Helvetica, or one em per full-width character in composite fonts).
+//!
+//! `/MK /R` (0, 90, 180, 270, counterclockwise) lays the content out in the upright box and sets
+//! the appearance `/Matrix` so that box lands on the widget rectangle. Any other value is 0, and
+//! rotation 0 leaves `/Matrix` off.
 
 use pdfcraft_cos::{Dict, Document, Object, Stream};
-use pdfcraft_fonts::{helvetica_width, literal, win_ansi, wrap};
+use pdfcraft_fonts::{UnicodeCMap, cjk_width, helvetica_width, literal, win_ansi, wrap_with};
 
 use crate::{Field, FieldKind, Widget, acroform, flags};
 
@@ -24,6 +30,57 @@ fn n(v: f64) -> String {
 /// Format a number for content streams (up to three decimals).
 pub fn fmt(v: f64) -> String {
     n(v)
+}
+
+/// `/MK /R` as a quadrant, or 0 when it is missing or not a multiple of 90.
+pub(crate) fn mk_rotation(doc: &Document, wd: &Dict) -> i64 {
+    let Some(raw) = wd.get(b"MK") else { return 0 };
+    let mk_obj = doc.resolve(raw);
+    let Some(mk) = mk_obj.as_dict() else { return 0 };
+    let Some(r_obj) = mk.get(b"R") else { return 0 };
+    let resolved = doc.resolve(r_obj);
+    let Some(r) = degrees(&resolved) else { return 0 };
+    match r.rem_euclid(360) {
+        q @ (0 | 90 | 180 | 270) => q,
+        _ => 0,
+    }
+}
+
+fn degrees(o: &Object) -> Option<i64> {
+    if let Some(i) = o.as_int() {
+        return Some(i);
+    }
+    let v = o.as_f64()?;
+    (v.is_finite() && v.abs() <= 1.0e6).then_some(v.round() as i64)
+}
+
+/// Where an appearance is drawn: the upright layout box, and the `/Matrix` that turns it onto
+/// the widget rectangle. Rotation 0 has no matrix.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Placement {
+    pub layout_w: f64,
+    pub layout_h: f64,
+    pub matrix: Option<[f64; 6]>,
+}
+
+pub(crate) fn placement(rotation: i64, page_w: f64, page_h: f64) -> Placement {
+    let (layout_w, layout_h, matrix) = match rotation {
+        // (x, y) -> (page_w - y, x): text that ran to the right runs upward.
+        90 => (page_h, page_w, Some([0.0, 1.0, -1.0, 0.0, page_w, 0.0])),
+        180 => (page_w, page_h, Some([-1.0, 0.0, 0.0, -1.0, page_w, page_h])),
+        // (x, y) -> (y, page_h - x): text that ran to the right runs downward.
+        270 => (page_h, page_w, Some([0.0, -1.0, 1.0, 0.0, 0.0, page_h])),
+        _ => (page_w, page_h, None),
+    };
+    Placement { layout_w, layout_h, matrix }
+}
+
+pub(crate) fn set_form_box(d: &mut Dict, place: Placement) {
+    let box_ = [0.0, 0.0, place.layout_w, place.layout_h];
+    d.set(b"BBox".to_vec(), Object::Array(box_.iter().map(|v| Object::Real(*v)).collect()));
+    if let Some(m) = place.matrix {
+        d.set(b"Matrix".to_vec(), Object::Array(m.iter().map(|v| Object::Real(*v)).collect()));
+    }
 }
 
 /// A parsed default appearance string: font resource name, size (0 = auto) and colour operator.
@@ -53,8 +110,32 @@ pub fn parse_da(da: &str) -> Da {
     out
 }
 
-/// The font resource for `name` from the form's `/DR`, if it is a simple font we can encode for.
-fn dr_font(doc: &Document, name: &str) -> Option<Object> {
+/// How a field font's text is encoded and measured.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FontText {
+    WinAnsi,
+    /// A composite font with a predefined Unicode CMap.
+    Unicode(UnicodeCMap),
+}
+
+impl FontText {
+    fn encode(self, s: &str) -> Vec<u8> {
+        match self {
+            Self::WinAnsi => win_ansi(s),
+            Self::Unicode(cmap) => cmap.encode(s),
+        }
+    }
+
+    fn width(self, s: &str, size: f64) -> f64 {
+        match self {
+            Self::WinAnsi => helvetica_width(s, size),
+            Self::Unicode(_) => cjk_width(s, size),
+        }
+    }
+}
+
+/// The font resource for `name` from the form's `/DR`, if it is a font we can encode for.
+fn dr_font(doc: &Document, name: &str) -> Option<(Object, FontText)> {
     let af = acroform(doc)?;
     let dr = doc.resolve(af.get(b"DR")?);
     let fonts = doc.resolve(dr.as_dict()?.get(b"Font")?);
@@ -63,13 +144,17 @@ fn dr_font(doc: &Document, name: &str) -> Option<Object> {
     let fd = font.as_dict()?;
     match fd.name(b"Subtype") {
         Some(b"Type1" | b"TrueType" | b"MMType1") => {}
+        // Japanese, Chinese and Korean forms: a CID font addressed by Unicode (a non-embedded
+        // `/HeiseiMin-W3` with `/UniJIS-UCS2-H`, say). Embedded CMap streams and Identity-H need
+        // the font's own mapping, so those still fall back to Helvetica.
+        Some(b"Type0") => return Some((entry, FontText::Unicode(UnicodeCMap::from_name(fd.name(b"Encoding")?)?))),
         _ => return None,
     }
     // Symbolic fonts (ZapfDingbats, Symbol) can't show WinAnsi text.
     if matches!(fd.name(b"BaseFont"), Some(b"ZapfDingbats" | b"Symbol")) {
         return None;
     }
-    Some(entry)
+    Some((entry, FontText::WinAnsi))
 }
 
 fn helvetica() -> Object {
@@ -192,12 +277,15 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     };
     let wobj = doc.get(w.obj);
     let wd = wobj.as_dict().cloned().unwrap_or_default();
-    let (width, height) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
+    let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
+    let place = placement(mk_rotation(doc, &wd), page_w, page_h);
+    let (width, height) = (place.layout_w, place.layout_h);
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
-    let (font_name, font_obj) = match dr_font(doc, &da.font) {
-        Some(o) => (da.font.clone(), o),
-        None => ("Helv".to_string(), helvetica()),
+    let (font_name, font_obj, enc) = match dr_font(doc, &da.font) {
+        Some((o, enc)) => (da.font.clone(), o, enc),
+        None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
     };
+    let width_of = |text: &str, size: f64| enc.width(text, size);
     let (mut c, bw) = frame(doc, &wd, width, height);
     let pad = 2.0 + bw;
     let inner_w = (width - 2.0 * pad).max(1.0);
@@ -205,11 +293,11 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     let mut body: Vec<u8> = Vec::new();
     let show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str| {
         body.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
-        body.extend(literal(&win_ansi(text)));
+        body.extend(literal(&enc.encode(text)));
         body.extend_from_slice(b" Tj\n");
     };
     let x_for = |text: &str, size: f64| -> f64 {
-        let tw = helvetica_width(text, size);
+        let tw = width_of(text, size);
         match q {
             1 => pad + (inner_w - tw) / 2.0,
             2 => width - pad - tw,
@@ -249,12 +337,12 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
                 if size == 0.0 {
                     // Auto size: the largest size (≤ 12) whose wrapped lines fit the height.
                     size = 12.0;
-                    while size > 4.0 && wrap(&text, size, inner_w).len() as f64 * size * 1.15 > height - 2.0 * pad {
+                    while size > 4.0 && wrap_with(&text, size, inner_w, width_of).len() as f64 * size * 1.15 > height - 2.0 * pad {
                         size -= 0.5;
                     }
                 }
                 let mut y = height - pad - size * 0.85;
-                for line in wrap(&text, size, inner_w) {
+                for line in wrap_with(&text, size, inner_w, width_of) {
                     if y < -size {
                         break;
                     }
@@ -264,7 +352,7 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
             } else {
                 if size == 0.0 {
                     size = ((height - 2.0 * pad) / 1.15).clamp(4.0, 12.0);
-                    let tw = helvetica_width(&text, size);
+                    let tw = width_of(&text, size);
                     if tw > inner_w && !comb {
                         size = (size * inner_w / tw).max(4.0);
                     }
@@ -276,7 +364,7 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
                     let cell = width / cells as f64;
                     for (i, ch) in text.chars().take(cells).enumerate() {
                         let s = ch.to_string();
-                        show(&mut body, cell * i as f64 + (cell - helvetica_width(&s, size)) / 2.0, y, &s);
+                        show(&mut body, cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, &s);
                     }
                 } else {
                     show(&mut body, x_for(&text, size), y, &text);
@@ -307,7 +395,7 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("XObject"));
     d.set(b"Subtype".to_vec(), Object::name("Form"));
-    d.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, width, height].iter().map(|v| Object::Real(*v)).collect()));
+    set_form_box(&mut d, place);
     d.set(b"Resources".to_vec(), Object::Dict(res));
     Stream::flate(d, &content)
 }
@@ -318,20 +406,22 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
 pub fn check_box_states(doc: &mut Document, w: &Widget, kind: FieldKind, on_name: &str) -> Dict {
     let wobj = doc.get(w.obj);
     let wd = wobj.as_dict().cloned().unwrap_or_default();
-    let (width, height) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
+    let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
+    let place = placement(mk_rotation(doc, &wd), page_w, page_h);
+    let (width, height) = (place.layout_w, place.layout_h);
     let (frame_c, _) = frame(doc, &wd, width, height);
     let style = crate::author::CheckStyle::of_widget(doc, &wd, kind);
     let mut form = |content: String| -> Object {
         let mut d = Dict::new();
         d.set(b"Type".to_vec(), Object::name("XObject"));
         d.set(b"Subtype".to_vec(), Object::name("Form"));
-        d.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, width, height].iter().map(|v| Object::Real(*v)).collect()));
+        set_form_box(&mut d, place);
         Object::Ref(doc.add(Object::Stream(Stream::flate(d, content.as_bytes()))))
     };
     let s = width.min(height);
     let mark = check_mark(style, width / 2.0, height / 2.0, s);
     let mut nd = Dict::new();
-    nd.set(on_name.as_bytes().to_vec(), form(format!("{frame_c}{mark}")));
+    nd.set(crate::name_bytes(on_name), form(format!("{frame_c}{mark}")));
     nd.set(b"Off".to_vec(), form(frame_c));
     let mut ap = Dict::new();
     ap.set(b"N".to_vec(), Object::Dict(nd));

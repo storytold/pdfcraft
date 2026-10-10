@@ -4,6 +4,30 @@ use pdfcraft_cos::{Document, Object, SaveOptions, write_full, write_incremental}
 
 use super::*;
 
+#[test]
+fn page_rotation_resolves_inheritance_overrides_and_missing_pages() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    for page in 0..3 {
+        assert_eq!(page_rotation(&doc, page).unwrap(), 90);
+    }
+    rotate_pages(&mut doc, &[1], -180).unwrap();
+    assert_eq!(page_rotation(&doc, 1).unwrap(), 270);
+    assert_eq!(page_rotation(&doc, 0).unwrap(), 90);
+    assert_eq!(page_rotation(&doc, 3), Err(OrganizeError::NoSuchPage(3)));
+}
+
+#[test]
+fn rotate_rejects_angles_that_are_not_multiples_of_90() {
+    // The page tree only turns in quarter steps, so anything else used to be silently truncated
+    // by the integer division. It has to be an error, and the document must stay as it was.
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    assert_eq!(rotate_pages(&mut doc, &[0], 45), Err(OrganizeError::Invalid("rotation must be a multiple of 90 degrees".into())));
+    assert_eq!(rotate_pages(&mut doc, &[0], 91), Err(OrganizeError::Invalid("rotation must be a multiple of 90 degrees".into())));
+    assert_eq!(page_rotation(&doc, 0).unwrap(), 90);
+    rotate_pages(&mut doc, &[0], -90).unwrap();
+    assert_eq!(page_rotation(&doc, 0).unwrap(), 0);
+}
+
 /// A 3-page document with a nested page tree. MediaBox and Rotate are inherited from the root,
 /// Resources from an intermediate node; each page's content says which page it is.
 fn fixture() -> Vec<u8> {
@@ -147,6 +171,45 @@ fn deleted_pages_are_not_kept_by_what_points_at_them() {
 }
 
 #[test]
+fn deleting_the_opening_page_drops_the_open_action() {
+    let open_action = |doc: &Document| doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"OpenAction").cloned();
+    let set_open = |doc: &mut Document, value: Object| {
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"OpenAction".to_vec(), value)).unwrap();
+    };
+    let page = |doc: &Document, i: usize| pages(doc).unwrap()[i].obj;
+    for as_action in [false, true] {
+        let target = |doc: &Document, i: usize| {
+            let dest = Object::Array(vec![Object::Ref(page(doc, i)), Object::Name(b"Fit".to_vec())]);
+            if as_action {
+                let mut a = Dict::new();
+                a.set(b"S".to_vec(), Object::Name(b"GoTo".to_vec()));
+                a.set(b"D".to_vec(), dest);
+                Object::Dict(a)
+            } else {
+                dest
+            }
+        };
+        // The opening page goes: no OpenAction is left to point at nothing.
+        let mut doc = doc_a();
+        let open = target(&doc, 0);
+        set_open(&mut doc, open);
+        delete_pages(&mut doc, &[0]).unwrap();
+        let out = full_roundtrip(&doc);
+        assert_eq!(labels(&out), ["A2", "A3"]);
+        assert_eq!(open_action(&out), None);
+        // Another page goes: the opening page keeps its OpenAction.
+        let mut doc = doc_a();
+        let open = target(&doc, 0);
+        set_open(&mut doc, open);
+        delete_pages(&mut doc, &[2]).unwrap();
+        let out = full_roundtrip(&doc);
+        assert_eq!(labels(&out), ["A1", "A2"]);
+        assert!(open_action(&out).is_some());
+    }
+}
+
+#[test]
 fn cannot_delete_every_page_or_missing_pages() {
     let mut doc = open(fixture());
     assert_eq!(delete_pages(&mut doc, &[0, 1, 2]), Err(OrganizeError::WouldRemoveAllPages));
@@ -213,6 +276,42 @@ fn full_save_drops_unreachable_objects() {
     assert!(full.object_numbers().len() < doc.object_numbers().len());
     assert_eq!(info(&full, "Title").as_deref(), Some("Original"));
     assert_eq!(hayro_syntax::Pdf::new(bytes).unwrap().pages().len(), 1);
+}
+
+#[test]
+fn deleting_a_page_drops_the_named_destinations_to_it() {
+    // Four names (two in the /Names tree, two in the legacy /Dests dictionary) go to P1 or P3;
+    // P2 has a link for each. Deleting P1 must drop its names and their links, keep P3's.
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Names << /Dests 6 0 R >> /Dests 7 0 R >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R >>".into(),                                          // 3
+        "<< /Type /Page /Parent 2 0 R /Annots [8 0 R 9 0 R 10 0 R 11 0 R] >>".into(),      // 4
+        "<< /Type /Page /Parent 2 0 R >>".into(),                                          // 5
+        "<< /Names [(treeFirst) [3 0 R /Fit] (treeLast) [5 0 R /Fit]] >>".into(),          // 6
+        "<< /legacyFirst [3 0 R /Fit] /legacyLast << /D [5 0 R /Fit] >> >>".into(),        // 7
+        "<< /Type /Annot /Subtype /Link /Rect [0 0 9 9] /Dest (treeFirst) >>".into(),      // 8
+        "<< /Type /Annot /Subtype /Link /Rect [0 0 9 9] /Dest (treeLast) >>".into(),       // 9
+        "<< /Type /Annot /Subtype /Link /Rect [0 0 9 9] /Dest /legacyFirst >>".into(),     // 10
+        "<< /Type /Annot /Subtype /Link /Rect [0 0 9 9] /A << /S /GoTo /D /legacyLast >> >>".into(), // 11
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    delete_pages(&mut doc, &[0]).unwrap();
+    let out = full_roundtrip(&doc);
+    let cat = out.get(out.root().unwrap()).as_dict().cloned().unwrap();
+    let tree = out.resolve(out.resolve(cat.get(b"Names").unwrap()).as_dict().unwrap().get(b"Dests").unwrap());
+    let pairs = tree.as_dict().unwrap().get(b"Names").and_then(Object::as_array).cloned().unwrap();
+    assert_eq!(pairs.len(), 2, "{pairs:?}");
+    assert_eq!(pairs[0].as_string().map(|s| s.bytes.clone()), Some(b"treeLast".to_vec()));
+    let page3 = pages(&out).unwrap()[1].obj;
+    assert_eq!(out.resolve(&pairs[1]).as_array().and_then(|a| a.first()).and_then(Object::as_ref), Some(page3));
+    let legacy = out.resolve(cat.get(b"Dests").unwrap()).as_dict().cloned().unwrap();
+    assert!(!legacy.contains(b"legacyFirst") && legacy.contains(b"legacyLast"), "{legacy:?}");
+    let links = annots(&out, 0);
+    assert!(!links[0].contains(b"Dest"), "{:?}", links[0]);
+    assert!(links[1].contains(b"Dest"), "{:?}", links[1]);
+    assert!(!links[2].contains(b"Dest"), "{:?}", links[2]);
+    assert!(links[3].contains(b"A"), "{:?}", links[3]);
 }
 
 // ── Combine / extract / split ──────────────────────────────────────────────────────────────────
@@ -345,6 +444,35 @@ fn links_are_rewired_to_copied_pages_or_dropped() {
 }
 
 #[test]
+fn repeated_page_gets_independent_annotations() {
+    // A1 has a link, A2 a link and a form field, A3 a note with a popup; each is listed twice.
+    let out = full_roundtrip(&extract_pages(&doc_a(), &[0, 0, 1, 1, 2, 2]).unwrap());
+    let ps = pages(&out).unwrap();
+    let refs: Vec<Vec<ObjRef>> = (0..6)
+        .map(|i| page_dict(&out, i).get(b"Annots").map(|a| out.resolve(a).as_array().cloned().unwrap_or_default()).unwrap_or_default())
+        .map(|list| list.iter().filter_map(|a| a.as_ref()).collect())
+        .collect();
+    for i in (0..6).step_by(2) {
+        assert!(!refs[i].is_empty());
+        assert_eq!(refs[i].len(), refs[i + 1].len());
+        for (a, b) in refs[i].iter().zip(&refs[i + 1]) {
+            assert_ne!(a, b, "each copy of the page has its own annotation objects");
+        }
+    }
+    for (i, list) in refs.iter().enumerate() {
+        for a in list {
+            assert_eq!(out.get(*a).as_dict().unwrap().reference(b"P"), Some(ps[i].obj), "/P names the page holding the copy");
+        }
+    }
+    // Each note keeps its own popup, pointing back at that note.
+    let popups: Vec<ObjRef> = [4, 5].iter().map(|&i| out.get(refs[i][0]).as_dict().unwrap().reference(b"Popup").unwrap()).collect();
+    assert_ne!(popups[0], popups[1]);
+    for (k, p) in popups.iter().enumerate() {
+        assert_eq!(out.get(*p).as_dict().unwrap().reference(b"Parent"), Some(refs[4 + k][0]));
+    }
+}
+
+#[test]
 fn form_fields_come_along_and_are_registered() {
     let out = full_roundtrip(&extract_pages(&doc_a(), &[1]).unwrap());
     let cat = out.get(out.root().unwrap()).as_dict().cloned().unwrap();
@@ -399,6 +527,167 @@ fn split_produces_standalone_documents_with_metadata() {
         assert_eq!(labels(&part), [format!("A{}", i + 1)]);
         assert_eq!(info(&part, "Author").as_deref(), Some("Alice"));
     }
+}
+
+// ── PDF/X (#263) ───────────────────────────────────────────────────────────────────────────────
+
+/// PDF/X-4 identification in XMP, as an attribute, next to a PDF/UA claim.
+const X4_XMP: &str = "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?><x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF \
+                      xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" \
+                      xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\" xmlns:pdfuaid=\"http://www.aiim.org/pdfua/ns/id/\" \
+                      pdfxid:GTS_PDFXVersion=\"PDF/X-4\" pdfuaid:part=\"1\"/></rdf:RDF></x:xmpmeta><?xpacket end=\"r\"?>";
+
+/// A two-page print file whose output intent prints to `condition` with `profile` as its ICC
+/// profile, with `info` as its document information and `xmp` as its XMP metadata.
+fn doc_print(condition: &str, profile: &str, info: &str, xmp: Option<&str>) -> Document {
+    let metadata = if xmp.is_some() { " /Metadata 10 0 R" } else { "" };
+    let mut b: Vec<String> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /OutputIntents [7 0 R]{metadata} >>"), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 252 144] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /TrimBox [9 9 243 135] >>".into(), // 3
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /TrimBox [9 9 243 135] >>".into(), // 4
+        body("X1"),                                                                    // 5
+        body("X2"),                                                                    // 6
+        format!("<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier ({condition}) /DestOutputProfile 8 0 R >>"), // 7
+        format!("<< /N 4 /Length {} >>\nstream\n{profile}\nendstream", profile.len()), // 8
+        format!("<< {info} >>"),                                                       // 9
+    ];
+    if let Some(x) = xmp {
+        b.push(format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{x}\nendstream", x.len())); // 10
+    }
+    open(build(&b, "/Root 1 0 R /Info 9 0 R"))
+}
+
+/// A PDF/X-4 business card printing to `condition` with `profile`.
+fn doc_x4(condition: &str, profile: &str) -> Document {
+    doc_print(condition, profile, "/Title (Card) /GTS_PDFXVersion (PDF/X-4) /Trapped /False", Some(X4_XMP))
+}
+
+/// What a document says about PDF/X.
+#[derive(Debug, Default, PartialEq)]
+struct Pdfx {
+    /// Each output intent's printing condition and decoded profile.
+    intents: Vec<(String, Vec<u8>)>,
+    version: Option<String>,
+    trapped: Option<Vec<u8>>,
+    xmp: Option<String>,
+}
+
+fn pdfx_of(doc: &Document) -> Pdfx {
+    let cat = catalog(doc);
+    let list = cat.get(b"OutputIntents").map(|o| doc.resolve(o).as_array().cloned().unwrap_or_default()).unwrap_or_default();
+    let intents = list
+        .iter()
+        .filter_map(|oi| {
+            let d = doc.resolve(oi).as_dict().cloned()?;
+            let id = d.get(b"OutputConditionIdentifier").and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())).unwrap_or_default();
+            let profile = match d.get(b"DestOutputProfile").map(|p| doc.resolve(p)).as_deref() {
+                Some(Object::Stream(s)) => s.decoded().unwrap(),
+                _ => Vec::new(),
+            };
+            Some((id, profile))
+        })
+        .collect();
+    let trapped = doc.trailer().get(b"Info").map(|i| doc.resolve(i)).and_then(|i| i.as_dict().and_then(|d| d.name(b"Trapped")).map(<[u8]>::to_vec));
+    let xmp = match cat.get(b"Metadata").map(|m| doc.resolve(m)).as_deref() {
+        Some(Object::Stream(s)) => Some(String::from_utf8(s.decoded().unwrap()).unwrap()),
+        _ => None,
+    };
+    Pdfx { intents, version: info(doc, "GTS_PDFXVersion"), trapped, xmp }
+}
+
+#[test]
+fn extract_and_split_keep_the_pdfx_output_intent_and_identification() {
+    // #263: the parts had no /OutputIntents, no GTS_PDFXVersion and no XMP pdfxid, so a PDF/X
+    // file stopped being one.
+    let src = doc_x4("FOGRA39", "icc-fogra39");
+    let mut outs = vec![extract_pages(&src, &[1]).unwrap()];
+    outs.extend(split(&src, &SplitBy::PageCount(1)).unwrap());
+    for out in &outs {
+        let x = pdfx_of(&full_roundtrip(out));
+        assert_eq!(x.intents, [("FOGRA39".to_string(), b"icc-fogra39".to_vec())]);
+        assert_eq!(x.version.as_deref(), Some("PDF/X-4"));
+        assert_eq!(x.trapped.as_deref(), Some(&b"False"[..]));
+        let xmp = x.xmp.expect("XMP metadata");
+        assert!(xmp.contains("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>"), "{xmp}");
+        assert!(xmp.contains(">Card</rdf:li>") && xmp.contains("<pdf:Trapped>False</pdf:Trapped>"), "{xmp}");
+        // The structure tree is not copied, so the source's PDF/UA claim must not be either.
+        assert!(!xmp.contains("pdfuaid"), "{xmp}");
+    }
+}
+
+#[test]
+fn combine_keeps_pdfx_when_every_source_agrees() {
+    // #263: a PDF/X-4 card combined with itself.
+    let (a, b) = (doc_x4("FOGRA39", "icc-fogra39"), doc_x4("FOGRA39", "icc-fogra39"));
+    let out = full_roundtrip(&combine(&[("a", &a), ("b", &b)]).unwrap());
+    assert_eq!(labels(&out), ["X1", "X2", "X1", "X2"]);
+    let x = pdfx_of(&out);
+    assert_eq!(x.intents, [("FOGRA39".to_string(), b"icc-fogra39".to_vec())], "one output intent, not one per source");
+    assert_eq!(x.version.as_deref(), Some("PDF/X-4"));
+    assert!(x.xmp.is_some_and(|x| x.contains("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>")));
+}
+
+#[test]
+fn combine_claims_no_pdfx_when_the_sources_disagree() {
+    // Another printing condition, the same name with another profile, or a source that is not
+    // PDF/X: no one standard describes the result, so it claims none.
+    let x4 = doc_x4("FOGRA39", "icc-fogra39");
+    for other in [doc_x4("GRACoL2013", "icc-gracol"), doc_x4("FOGRA39", "icc-other"), doc_b()] {
+        let out = full_roundtrip(&combine(&[("a", &x4), ("b", &other)]).unwrap());
+        assert_eq!(pdfx_of(&out), Pdfx::default());
+    }
+}
+
+#[test]
+fn documents_without_a_print_standard_gain_none() {
+    assert_eq!(pdfx_of(&full_roundtrip(&extract_pages(&doc_a(), &[0]).unwrap())), Pdfx::default());
+    assert_eq!(pdfx_of(&full_roundtrip(&combine(&[("a", &doc_a()), ("b", &doc_b())]).unwrap())), Pdfx::default());
+}
+
+#[test]
+fn the_pdfx_version_comes_from_xmp_or_the_document_information() {
+    // A PDF/X-4 file may name its version only in XMP (here as an element); a PDF/X-1a:2001 file
+    // (PDF 1.3) only in its document information, with no XMP, and gets no XMP added.
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description \
+               rdf:about=\"\" xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\">\
+               <pdfxid:GTS_PDFXVersion> PDF/X-4 </pdfxid:GTS_PDFXVersion><pdf:Trapped>True</pdf:Trapped></rdf:Description></rdf:RDF></x:xmpmeta>";
+    let x = pdfx_of(&full_roundtrip(&extract_pages(&doc_print("FOGRA51", "icc", "/Title (Flyer)", Some(xmp)), &[0]).unwrap()));
+    assert_eq!((x.version.as_deref(), x.trapped.as_deref()), (Some("PDF/X-4"), Some(&b"True"[..])));
+    assert!(x.xmp.is_some_and(|x| x.contains("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>")));
+
+    let x1a = doc_print("CGATS TR 001", "icc", "/GTS_PDFXVersion (PDF/X-1:2001) /GTS_PDFXConformance (PDF/X-1a:2001) /Trapped (False)", None);
+    let out = full_roundtrip(&extract_pages(&x1a, &[0]).unwrap());
+    let x = pdfx_of(&out);
+    assert_eq!((x.version.as_deref(), x.trapped.as_deref()), (Some("PDF/X-1:2001"), Some(&b"False"[..])));
+    assert_eq!(info(&out, "GTS_PDFXConformance").as_deref(), Some("PDF/X-1a:2001"));
+    assert_eq!(x.xmp, None);
+}
+
+#[test]
+fn malformed_output_intents_and_identification_do_not_fail() {
+    // Untrusted input: intents that are not dictionaries, a missing profile, an intent that is
+    // its own profile, an XMP packet that never closes, and a version full of markup and NULs.
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /OutputIntents [5 0 R 42 (junk) 6 0 R] /Metadata 7 0 R >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>".into(),                        // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".into(),                                          // 3
+        body("M1"),                                                                                        // 4
+        "<< /Type /OutputIntent /S /GTS_PDFX /DestOutputProfile 99 0 R >>".into(),                         // 5
+        "<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (x) /DestOutputProfile 6 0 R >>".into(), // 6
+        "<< /Length 30 >>\nstream\n<pdfxid:GTS_PDFXConformance>X\nendstream".into(),                       // 7
+        "<< /GTS_PDFXVersion (<PDF/X-4 & \"more\">\\000) /Trapped /Maybe >>".into(),                       // 8
+    ];
+    let src = open(build(&b, "/Root 1 0 R /Info 8 0 R"));
+    let out = full_roundtrip(&extract_pages(&src, &[0]).unwrap());
+    assert_eq!(labels(&out), ["M1"]);
+    let list = catalog(&out).get(b"OutputIntents").map(|o| out.resolve(o).as_array().cloned().unwrap_or_default()).unwrap_or_default();
+    assert_eq!(list.len(), 4, "every entry is kept as written");
+    let x = pdfx_of(&out);
+    assert_eq!(x.trapped, None, "/Maybe is not a trapping state");
+    let xmp = x.xmp.expect("XMP metadata");
+    assert!(xmp.contains("<pdfxid:GTS_PDFXVersion>&lt;PDF/X-4 &amp; &quot;more&quot;&gt;</pdfxid:GTS_PDFXVersion>"), "{xmp}");
+    assert!(!xmp.contains('\0') && !xmp.contains("GTS_PDFXConformance"), "{xmp}");
 }
 
 #[test]
@@ -510,6 +799,57 @@ fn combine_and_insert_share_identical_resources() {
     assert_eq!(labels(&d), ["A1", "A2", "A3", "A1", "A2"]);
 }
 
+/// A one-page document drawing one image, written the way ImageMagick writes it: the colour
+/// space is an indirect `/DeviceRGB` object of its own (#878).
+fn indirect_colour_space_doc() -> Document {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>".to_vec(),
+        stream(b"q 100 0 0 100 0 0 cm /Im0 Do Q"),
+        [
+            b"<< /Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace 6 0 R /BitsPerComponent 8 /Length 6 >>\nstream\n".as_slice(),
+            &[255, 0, 0, 0, 0, 255],
+            b"\nendstream",
+        ]
+        .concat(),
+        b"/DeviceRGB".to_vec(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    open(out)
+}
+
+#[test]
+fn combine_stores_an_image_once_when_its_colour_space_is_an_indirect_name() {
+    let images = |d: &Document| {
+        d.object_numbers()
+            .into_iter()
+            .filter(|n| matches!(&*d.get(ObjRef::new(*n, d.generation(*n))), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image")))
+            .count()
+    };
+    let src = indirect_colour_space_doc();
+    let out = full_roundtrip(&crate::combine(&[("one", &src), ("two", &src), ("three", &src)]).unwrap());
+    assert_eq!(images(&out), 1);
+    assert_eq!(pages(&out).unwrap().len(), 3);
+    // Inserting the same pages again reuses the image already there.
+    let mut d = indirect_colour_space_doc();
+    crate::import_pages(&mut d, &indirect_colour_space_doc(), &[0], 1).unwrap();
+    assert_eq!(images(&full_roundtrip(&d)), 1);
+}
+
 // ---- bookmarks (M4.6) --------------------------------------------------------------------------
 
 fn titles(b: &[crate::Bookmark]) -> Vec<String> {
@@ -563,6 +903,30 @@ fn bookmarks_add_rename_move_delete() {
 }
 
 #[test]
+fn a_bookmark_tree_nests_entries_by_level_under_a_new_first_bookmark() {
+    let mut d = doc_a();
+    crate::add_bookmark(&mut d, &[], 0, "Existing", 0).unwrap();
+    let e = |level, title: &str, page, element| crate::OutlineEntry { level, title: title.into(), page, element };
+    let se = ObjRef::new(4242, 0);
+    let entries = [e(1, "One", 0, Some(se)), e(3, "Deep", 1, None), e(2, "Two", 1, None), e(1, "Next", 2, None)];
+    assert_eq!(crate::add_bookmark_tree(&mut d, "Untitled", &entries).unwrap(), vec![0]);
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Untitled[One[Deep,Two],Next]", "Existing"]);
+
+    let b = crate::bookmarks(&d);
+    let root = d.get(d.root().unwrap()).as_dict().unwrap().reference(b"Outlines").unwrap();
+    assert_eq!((count_of(&d, root), count_of(&d, b[0].obj), count_of(&d, b[0].children[0].obj)), (Some(6), Some(4), Some(2)));
+    let one = d.get(b[0].children[0].obj).as_dict().cloned().unwrap();
+    assert_eq!(one.get(b"SE"), Some(&Object::Ref(se)));
+    let pages = crate::walk(&d).unwrap();
+    let next = d.get(b[0].children[1].obj).as_dict().cloned().unwrap();
+    assert_eq!(next.get(b"Dest").and_then(|x| x.as_array()).map(|a| a[0].clone()), Some(Object::Ref(pages[2].0)));
+
+    assert_eq!(crate::add_bookmark_tree(&mut d, "Untitled", &[]), Err(crate::OutlineError::NoEntries));
+    assert!(crate::add_bookmark_tree(&mut d, "Untitled", &[e(1, "Nowhere", 9, None)]).is_err());
+    assert_eq!(titles(&crate::bookmarks(&full_roundtrip(&d))), ["Untitled[One[Deep,Two],Next]", "Existing"]);
+}
+
+#[test]
 fn bookmark_edits_keep_unknown_keys_and_touch_few_objects() {
     let mut d = doc_a();
     crate::add_bookmark(&mut d, &[], 0, "One", 0).unwrap();
@@ -606,6 +970,235 @@ fn number_pages_like_acrobat() {
     crate::number_pages(&mut d, 0, 5, Decimal, "", 1).unwrap();
     assert!(crate::page_label_ranges(&d).is_empty());
     assert!(d.get(d.root().unwrap()).as_dict().unwrap().get(b"PageLabels").is_none());
+}
+
+#[test]
+fn page_label_limits_reject_unsupported_edits_before_mutating() {
+    use crate::LabelStyle::*;
+    for (style, prefix, first) in [
+        (LowerRoman, String::new(), 1_025_000),
+        (LowerAlpha, String::new(), 26 * 1024 + 1),
+        (Decimal, "x".repeat(1025), 1),
+        (Decimal, String::new(), u32::MAX),
+    ] {
+        let mut d = doc_a();
+        let before = d.modified_objects();
+        assert!(crate::number_pages(&mut d, 0, 1, style, &prefix, first).is_err());
+        assert_eq!(d.modified_objects(), before, "a refused label edit must not change the tree");
+        assert!(crate::page_label_ranges(&d).is_empty());
+    }
+}
+
+#[test]
+fn page_label_limits_reject_unsupported_ranges_before_mutating() {
+    let mut d = doc_a();
+    let before = d.modified_objects();
+    let ranges = [crate::LabelRange { start: 0, style: crate::LabelStyle::LowerRoman, prefix: String::new(), first: 1_025_000 }];
+    assert!(crate::set_page_label_ranges(&mut d, &ranges).is_err());
+    assert_eq!(d.modified_objects(), before);
+}
+
+#[test]
+fn page_label_limits_reject_cyclic_old_trees_without_rewriting() {
+    let mut d = doc_a();
+    let tree = d.add(Object::Null);
+    let mut dict = Dict::new();
+    dict.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(tree)]));
+    d.set(tree, Object::Dict(dict));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    let before = d.modified_objects();
+    assert!(crate::page_labels(&d).is_err());
+    assert!(crate::page_label_ranges(&d).is_empty(), "compatibility query has documented empty fallback");
+    assert!(crate::number_pages(&mut d, 0, 1, crate::LabelStyle::Decimal, "", 1).is_err());
+    assert_eq!(d.modified_objects(), before);
+    assert_eq!(d.get(d.root().unwrap()).as_dict().unwrap().reference(b"PageLabels"), Some(tree));
+}
+
+#[test]
+fn page_label_limits_reject_oversized_old_arrays_without_rewriting() {
+    let mut d = doc_a();
+    let mut dict = Dict::new();
+    dict.set(b"Kids".to_vec(), Object::Array(vec![Object::Null; pdfcraft_cos::page_labels::MAX_LABEL_TREE_WORK + 1]));
+    let tree = d.add(Object::Dict(dict));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    let before = d.modified_objects();
+    assert!(crate::page_labels(&d).is_err());
+    assert!(crate::number_pages(&mut d, 0, 1, crate::LabelStyle::Decimal, "", 1).is_err());
+    assert_eq!(d.modified_objects(), before);
+}
+
+#[test]
+fn page_label_limits_keep_preview_fallback_and_valid_boundary_edits() {
+    use crate::LabelStyle::*;
+    assert_eq!(LowerRoman.format(u32::MAX), u32::MAX.to_string());
+    assert_eq!(LowerAlpha.format(u32::MAX), u32::MAX.to_string());
+    let mut d = doc_a();
+    crate::number_pages(&mut d, 0, 2, None, &"x".repeat(1024), 1).unwrap();
+    assert!(crate::page_labels(&d).unwrap().iter().all(|s| s.len() == 1024));
+}
+
+#[test]
+fn page_label_limits_preserve_prefix_only_max_first_and_aliases() {
+    let mut d = doc_a();
+    crate::number_pages(&mut d, 0, 2, crate::LabelStyle::None, "prefix", u32::MAX).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap(), ["prefix", "prefix", "prefix"]);
+    crate::number_pages(&mut d, 0, 0, crate::LabelStyle::Decimal, "", 1).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap(), ["1", "prefix", "prefix"]);
+
+    let prefix = d.add(Object::String(PdfString::text("alias")));
+    let prefix_alias = d.add(Object::Ref(prefix));
+    let mut spec = Dict::new();
+    spec.set(b"P".to_vec(), Object::Ref(prefix_alias));
+    spec.set(b"St".to_vec(), Object::Int(i64::MAX)); // unused without /S
+    let spec = d.add(Object::Dict(spec));
+    let spec_alias = d.add(Object::Ref(spec));
+    let nums = d.add(Object::Array(vec![Object::Int(0), Object::Ref(spec_alias)]));
+    let nums_alias = d.add(Object::Ref(nums));
+    let mut tree = Dict::new();
+    tree.set(b"Nums".to_vec(), Object::Ref(nums_alias));
+    let tree = d.add(Object::Dict(tree));
+    let tree_alias = d.add(Object::Ref(tree));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree_alias))).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap(), ["alias", "alias", "alias"]);
+    crate::number_pages(&mut d, 0, 0, crate::LabelStyle::Decimal, "", 1).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap(), ["1", "alias", "alias"]);
+}
+
+#[test]
+fn page_label_limits_refuse_reference_only_cycles_without_rewriting() {
+    let mut d = doc_a();
+    let tree = d.add(Object::Null);
+    d.set(tree, Object::Ref(tree));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    let before = d.modified_objects();
+    assert!(crate::page_labels(&d).is_err());
+    assert!(crate::number_pages(&mut d, 0, 1, crate::LabelStyle::Decimal, "", 1).is_err());
+    assert_eq!(d.modified_objects(), before);
+}
+
+#[test]
+fn page_label_limits_validate_the_same_ranges_that_are_written() {
+    use crate::{LabelRange, LabelStyle};
+    let mut d = doc_a();
+    let duplicates = [
+        LabelRange { start: 0, style: LabelStyle::None, prefix: "ok".into(), first: 1 },
+        LabelRange { start: 0, style: LabelStyle::None, prefix: "x".repeat(1024), first: 1 },
+    ];
+    let before = d.modified_objects();
+    assert!(crate::set_page_label_ranges(&mut d, &duplicates).unwrap_err().to_string().contains("unique"));
+    assert_eq!(d.modified_objects(), before);
+    let unsorted = [
+        LabelRange { start: 1, style: LabelStyle::UpperAlpha, prefix: "".into(), first: 1 },
+        LabelRange { start: 0, style: LabelStyle::LowerRoman, prefix: "".into(), first: 4 },
+    ];
+    crate::set_page_label_ranges(&mut d, &unsorted).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap(), ["iv", "A", "B"]);
+    let catalog = d.get(d.root().unwrap());
+    let tree = d.resolve(catalog.as_dict().unwrap().get(b"PageLabels").unwrap());
+    let nums = tree.as_dict().unwrap().get(b"Nums").unwrap().as_array().unwrap();
+    assert_eq!(nums[0].as_int(), Some(0));
+    assert_eq!(nums[2].as_int(), Some(1));
+}
+
+#[test]
+fn page_label_duplicate_starts_keep_the_later_range() {
+    let mut d = doc_a();
+    let mut a = Dict::new();
+    a.set(b"P".to_vec(), Object::String(PdfString::text("first")));
+    let mut b = Dict::new();
+    b.set(b"P".to_vec(), Object::String(PdfString::text("last")));
+    let mut tree = Dict::new();
+    tree.set(b"Nums".to_vec(), Object::Array(vec![Object::Int(0), Object::Dict(a), Object::Int(0), Object::Dict(b)]));
+    let tree = d.add(Object::Dict(tree));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap()[0], "last");
+    crate::number_pages(&mut d, 0, 0, crate::LabelStyle::Decimal, "", 1).unwrap();
+}
+
+/// Two kids naming objects the file doesn't have both resolve to a fresh `Null`; they are not
+/// the same node, so the tree isn't refused as cyclic.
+#[test]
+fn page_label_missing_kids_are_not_a_cycle() {
+    let mut d = doc_a();
+    let mut leaf = Dict::new();
+    let mut spec = Dict::new();
+    spec.set(b"P".to_vec(), Object::String(PdfString::text("p-")));
+    spec.set(b"S".to_vec(), Object::name("D"));
+    leaf.set(b"Nums".to_vec(), Object::Array(vec![Object::Int(0), Object::Dict(spec)]));
+    let leaf = d.add(Object::Dict(leaf));
+    let mut tree = Dict::new();
+    let missing = |n| Object::Ref(pdfcraft_cos::ObjRef { num: n, generation: 0 });
+    tree.set(b"Kids".to_vec(), Object::Array(vec![missing(9_000), missing(9_001), Object::Ref(leaf)]));
+    let tree = d.add(Object::Dict(tree));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap()[0], "p-1");
+}
+
+/// A range whose labels would be too long shows physical page numbers; other ranges keep
+/// their labels.
+#[test]
+fn page_label_too_long_range_falls_back_alone() {
+    let mut d = doc_a();
+    let mut ok = Dict::new();
+    ok.set(b"P".to_vec(), Object::String(PdfString::text("ok-")));
+    ok.set(b"S".to_vec(), Object::name("D"));
+    let mut huge = Dict::new();
+    huge.set(b"S".to_vec(), Object::name("r"));
+    huge.set(b"St".to_vec(), Object::Int(1_025_000));
+    let mut tree = Dict::new();
+    tree.set(b"Nums".to_vec(), Object::Array(vec![Object::Int(0), Object::Dict(ok), Object::Int(1), Object::Dict(huge)]));
+    let tree = d.add(Object::Dict(tree));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    let labels = crate::page_labels(&d).unwrap();
+    assert_eq!(labels[0], "ok-1");
+    assert_eq!(labels[1], "2");
+}
+
+/// A document whose page tree is one flat node over `pages` leaves. The label tests below need
+/// more pages than `doc_a` has.
+fn flat_doc(pages: usize) -> Document {
+    let kids = (0..pages).map(|i| format!("{} 0 R", i + 3)).collect::<Vec<_>>().join(" ");
+    let mut objs = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string(), format!("<< /Type /Pages /Kids [{kids}] /Count {pages} >>")];
+    objs.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R >>".to_string()));
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    open(out)
+}
+
+/// Each label is valid (1,004 bytes), but the 5,000 of them total about 5 MB, past the old 4 MiB
+/// limit on the whole sequence. Every label is readable.
+#[test]
+fn page_labels_past_four_mib_in_total_stay_readable() {
+    let mut d = flat_doc(5_000);
+    let mut spec = Dict::new();
+    spec.set(b"P".to_vec(), Object::String(PdfString::text(&"x".repeat(1000))));
+    spec.set(b"S".to_vec(), Object::name("D"));
+    let mut tree = Dict::new();
+    tree.set(b"Nums".to_vec(), Object::Array(vec![Object::Int(0), Object::Dict(spec)]));
+    let tree = d.add(Object::Dict(tree));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    let labels = crate::page_labels(&d).unwrap();
+    assert_eq!(labels.len(), 5_000);
+    assert_eq!(labels[0], format!("{}1", "x".repeat(1000)));
+    assert_eq!(labels[4_999], format!("{}5000", "x".repeat(1000)));
+}
+
+/// The same 5,000 labels written by an edit: the edit is accepted and reads back.
+#[test]
+fn number_pages_past_four_mib_in_total_is_accepted() {
+    let mut d = flat_doc(5_000);
+    crate::number_pages(&mut d, 0, 4_999, crate::LabelStyle::Decimal, &"x".repeat(1000), 1).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap()[4_999], format!("{}5000", "x".repeat(1000)));
 }
 
 #[test]

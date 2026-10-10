@@ -17,6 +17,7 @@ trailer << /Root 1 0 R >>
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("pages.pdf", None, PAGES.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "bookmarks").unwrap();
@@ -97,6 +98,26 @@ fn new_rename_reorder_indent_delete_and_undo() {
     assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
+/// The side panel's width as egui keeps it from one frame to the next.
+fn panel_width(h: &Harness<'static, PdfCraftApp>) -> f32 {
+    egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("right_panel")).expect("the side panel is shown").size().x
+}
+
+#[test]
+fn the_panel_keeps_its_width_while_the_pointer_moves() {
+    // The search row was 2 px wider than the panel, and a resizable panel keeps the width its
+    // content used, so every repaint (any pointer move) widened it until it reached its maximum.
+    let mut h = harness();
+    add(&mut h, "Intro");
+    h.get_by_label("Search"); // the search row shows once there are bookmarks
+    let before = panel_width(&h);
+    for i in 0..30 {
+        h.hover_at(egui::pos2(300.0 + 10.0 * i as f32, 400.0));
+        h.run_steps(1);
+    }
+    assert_eq!(panel_width(&h), before, "the Bookmarks panel drifted wider");
+}
+
 #[test]
 fn escape_cancels_a_rename() {
     let mut h = harness();
@@ -126,6 +147,101 @@ fn number_pages_dialog_labels_the_selected_pages() {
     let labels: Vec<String> = h.state().session.get(id).unwrap().info.pages.iter().map(|p| p.label.clone()).collect();
     assert_eq!(labels, ["i", "ii", "3"]);
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Number pages"));
+}
+
+#[test]
+fn search_finds_collapsed_bookmarks_and_keeps_original_paths() {
+    use pdfcraft_engine::Edit;
+    let mut h = harness();
+    for (parent, index, title, page) in
+        [(vec![], 0, "Unrelated", 0), (vec![], 1, "Reports", 0), (vec![1], 0, "Other chapter", 1), (vec![1], 1, "Résumé results", 2)]
+    {
+        h.state_mut().apply_edit(Edit::AddBookmark { parent, index, title: title.into(), page });
+    }
+    h.run_steps(3);
+    h.get_by_label("Bookmark options").click();
+    h.run_steps(2);
+    h.get_by_label("Collapse all bookmarks").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Résumé results").is_none());
+    let id = h.state().views[0].id;
+    let before = h.state_mut().session.save_full_bytes(id).unwrap();
+    h.get_by_label("Search").click();
+    h.run_steps(1);
+    h.get_by_label("Search").type_text("RÉSUMÉ");
+    h.run_steps(3);
+    h.get_by_label("Reports");
+    h.get_by_label("Résumé results").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 2);
+    assert!(h.query_by_label("Unrelated").is_none());
+    assert!(h.query_by_label("Other chapter").is_none());
+    assert_eq!(h.state_mut().session.save_full_bytes(id).unwrap(), before, "search doesn't edit the PDF");
+    if let Ok(dir) = std::env::var("PDFCRAFT_BOOKMARK_SHOTS") {
+        h.render().unwrap().save(std::path::Path::new(&dir).join("filtered-bookmarks.png")).unwrap();
+    }
+    menu(&mut h, "Résumé results", "Delete");
+    assert_eq!(outline(&h).len(), 3);
+    assert!(outline(&h).iter().any(|b| b.0 == "Other chapter"));
+    h.get_by_label("No matches.");
+    add(&mut h, "New section");
+    assert!(outline(&h).iter().any(|b| b.0 == "New section"), "new bookmarks remain nameable while searching");
+    h.get_by_label("No matches.");
+    h.get_by_label("Clear").click();
+    h.run_steps(3);
+    h.get_by_label("Unrelated");
+    assert!(h.query_by_label("Other chapter").is_none(), "search did not change saved expansion state");
+}
+
+#[test]
+fn bookmark_search_is_per_document() {
+    let mut h = harness();
+    add(&mut h, "First document");
+    h.get_by_label("Search").click();
+    h.run_steps(1);
+    h.get_by_label("Search").type_text("not found");
+    h.run_steps(3);
+    h.get_by_label("No matches.");
+    h.state_mut().open_bytes("second.pdf", None, PAGES.to_vec()).unwrap();
+    h.run_steps(3);
+    add(&mut h, "Second document");
+    h.get_by_label("Second document");
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+    h.get_by_label("No matches.");
+    h.get_by_label("Clear").click();
+    h.run_steps(3);
+    h.get_by_label("First document");
+}
+
+#[test]
+fn new_bookmarks_from_structure_nest_the_tagged_headings() {
+    const TAGGED: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+5 0 obj << /Type /StructTreeRoot /K [6 0 R 7 0 R] >> endobj
+6 0 obj << /S /H1 /Pg 3 0 R /ActualText (Overview) >> endobj
+7 0 obj << /S /H2 /Pg 4 0 R /ActualText (Method) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut h = harness();
+    h.state_mut().open_bytes("tagged.pdf", None, TAGGED.to_vec()).unwrap();
+    h.run_steps(3);
+    h.get_by_label("Bookmark options").click();
+    h.run_steps(2);
+    h.get_by_label("New bookmarks from structure").click();
+    h.run_steps(3);
+    let id = h.state().active.and_then(|i| h.state().views.get(i)).unwrap().id;
+    let titles: Vec<String> = h.state().session.get(id).unwrap().info.outline.iter().map(|o| o.title.clone()).collect();
+    assert_eq!(titles, ["Untitled"]);
+    h.get_by_label("Overview");
+    h.get_by_label("Method");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("New bookmarks from structure"));
+    if let Ok(dir) = std::env::var("PDFCRAFT_BOOKMARK_SHOTS") {
+        h.render().unwrap().save(std::path::Path::new(&dir).join("bookmarks-from-structure.png")).unwrap();
+    }
 }
 
 #[test]

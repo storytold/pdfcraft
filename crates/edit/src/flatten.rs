@@ -51,9 +51,53 @@ fn placement(doc: &Document, form: &Dict, rect: [f64; 4]) -> Option<[f64; 6]> {
     Some([sx, 0.0, 0.0, sy, rect[0] - x0 * sx, rect[1] - y0 * sy])
 }
 
+#[derive(Clone, Copy)]
+enum Which {
+    /// Every comment and/or every form field.
+    Comments { comments: bool, fields: bool },
+    /// Fill & Sign text, marks and signatures only.
+    FillSign,
+}
+
+fn selected(doc: &Document, d: &Dict, which: Which) -> bool {
+    let subtype = d.name(b"Subtype").unwrap_or_default();
+    match which {
+        Which::Comments { comments, fields } => {
+            let widget = subtype == b"Widget";
+            !matches!(subtype, b"Link" | b"Popup") && (!widget || fields) && (widget || comments)
+        }
+        Which::FillSign => !matches!(subtype, b"Link" | b"Popup" | b"Widget") && pdfcraft_annot::is_fill_sign(doc, d),
+    }
+}
+
+/// An XObject name that is not already on the page, so a later flatten cannot replace `PCFl0`.
+fn xobject_name(existing: &Dict, pending: &Dict, n: &mut u32) -> String {
+    loop {
+        let name = format!("PCFl{n}");
+        if *n == u32::MAX {
+            return format!("PCFl{}", existing.len().saturating_add(pending.len()));
+        }
+        *n += 1;
+        if !existing.contains(name.as_bytes()) && !pending.contains(name.as_bytes()) {
+            return name;
+        }
+    }
+}
+
 /// Flatten comments and/or form fields on `pages`. Returns how many annotations were merged
 /// into page content.
 pub fn flatten(doc: &mut Document, pages: &[usize], comments: bool, fields: bool) -> Result<usize, EditError> {
+    flatten_which(doc, pages, Which::Comments { comments, fields })
+}
+
+/// Bake Fill & Sign text, marks and signatures into `pages` and remove those annotations.
+/// Other comments, links and form fields stay. Returns how many appearances were drawn.
+/// Does not modify the document when nothing matches.
+pub fn flatten_fill_sign(doc: &mut Document, pages: &[usize]) -> Result<usize, EditError> {
+    flatten_which(doc, pages, Which::FillSign)
+}
+
+fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
     let mut drawn = 0;
@@ -64,14 +108,39 @@ pub fn flatten(doc: &mut Document, pages: &[usize], comments: bool, fields: bool
         let Some(list) = annots_obj.as_ref().map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()) else { continue };
         let mut content = String::new();
         let mut xobjects = Dict::new();
+        let mut name_n = 0u32;
+        let existing_xo = page
+            .dict
+            .get(b"Resources")
+            .map(|r| doc.resolve(r))
+            .and_then(|r| r.as_dict().cloned())
+            .and_then(|r| r.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()))
+            .unwrap_or_default();
         let mut gone: HashSet<ObjRef> = HashSet::new();
         let mut gone_inline: HashSet<usize> = HashSet::new();
+        // A viewer draws many comments from their dictionary even when the file stores no
+        // appearance (notes, FreeText, ink, stamps…). Build the appearance it would show, so
+        // flattening keeps a comment that still has ink on screen instead of deleting it.
+        for entry in &list {
+            let Some(r) = entry.as_ref() else { continue };
+            let d = doc.resolve(entry).as_dict().cloned().unwrap_or_default();
+            let subtype = d.name(b"Subtype").unwrap_or_default();
+            if subtype == b"Widget" || !selected(doc, &d, which) {
+                continue;
+            }
+            let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+            if flags & (HIDDEN | NO_VIEW) != 0 || appearance(doc, &d).is_some() {
+                continue;
+            }
+            // A subtype this build cannot draw only fails here; it is still removed below.
+            let _ = pdfcraft_annot::set_appearance(doc, r);
+        }
         for (k, entry) in list.iter().enumerate() {
             let obj = doc.resolve(entry);
             let Some(d) = obj.as_dict() else { continue };
             let subtype = d.name(b"Subtype").unwrap_or_default();
             let widget = subtype == b"Widget";
-            if matches!(subtype, b"Link" | b"Popup") || (widget && !fields) || (!widget && !comments) {
+            if !selected(doc, d, which) {
                 continue;
             }
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
@@ -82,7 +151,7 @@ pub fn flatten(doc: &mut Document, pages: &[usize], comments: bool, fields: bool
             if let (Some(ap), Some(rect)) = (appearance(doc, d), rect) {
                 let form = doc.get(ap).as_dict().cloned().unwrap_or_default();
                 if let Some(m) = placement(doc, &form, rect) {
-                    let name = format!("PCFl{drawn}");
+                    let name = xobject_name(&existing_xo, &xobjects, &mut name_n);
                     content.push_str(&format!("q {} {} {} {} {} {} cm /{name} Do Q\n", n(m[0]), n(m[1]), n(m[2]), n(m[3]), n(m[4]), n(m[5])));
                     xobjects.set(name.into_bytes(), Object::Ref(ap));
                     drawn += 1;

@@ -20,6 +20,15 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-automation = { workspace = true }
 base64 = "0.22"
 
+[target.'cfg(unix)'.dependencies]
+# `geteuid` for `ui`'s control-file owner check: safe, so no `unsafe` libc call here.
+# Already in Cargo.lock through the GUI crates.
+rustix = { version = "1", features = ["process"] }
+
+[build-dependencies]
+# VERSIONINFO for pdfcraft-cli.exe; build.rs only uses it when targeting Windows.
+winresource = "0.1"
+
 [features]
 default = ["mcp"]
 # The opt-in MCP server (`pdfcraft-cli mcp`). Build with --no-default-features to leave it out.

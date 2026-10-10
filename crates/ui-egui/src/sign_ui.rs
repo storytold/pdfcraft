@@ -21,6 +21,10 @@ pub struct DigitalIdEntry {
     pub issuer: String,
     pub email: String,
     pub expires: String,
+    /// Why the ID can't sign (a Windows store certificate whose key PdfCraft can't use): shown
+    /// greyed with the reason, and never selectable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unusable: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,14 +97,16 @@ pub struct SignDraft {
 }
 
 impl SignDraft {
-    fn new(page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>, ids: usize) -> Self {
+    /// Starts at Choose when there are IDs to show (even only unusable ones, so their reasons
+    /// are seen), with the first usable one selected.
+    fn new(page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>, ids: &[DigitalIdEntry]) -> Self {
         Self {
             page,
             rect,
             field,
             certify,
-            step: if ids == 0 { SignStep::Configure } else { SignStep::Choose },
-            selected: (ids > 0).then_some(0),
+            step: if ids.is_empty() { SignStep::Configure } else { SignStep::Choose },
+            selected: ids.iter().position(|e| e.unusable.is_none()),
             password: String::new(),
             reason: String::new(),
             location: String::new(),
@@ -157,9 +163,44 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
     }
 }
 
-/// Where new digital IDs are saved: next to the recovery folder (`…/PdfCraft/Digital IDs`).
+/// Where new digital IDs are saved: next to the recovery folder (`…/PdfCraft/Digital IDs`, or
+/// `PdfCraftData/Digital IDs` in portable mode).
 fn id_dir() -> Option<PathBuf> {
     crate::recovery::RecoveryStore::default_dir().and_then(|d| d.parent().map(|p| p.join("Digital IDs")))
+}
+
+/// Save a new digital ID as `<stem>.p12`, or `<stem> 2.p12`, … when the name is taken. The file
+/// is always created fresh, never opened through a file or link already at the name (checking
+/// first and then writing would let one be planted in between), and on Unix only its owner can
+/// read it: it holds the private key.
+fn save_new_id_file(dir: &std::path::Path, stem: &str, p12: &[u8]) -> std::io::Result<PathBuf> {
+    use std::io::{ErrorKind, Write};
+    for i in 1..=10_000u32 {
+        let path = dir.join(if i == 1 { format!("{stem}.p12") } else { format!("{stem} {i}.p12") });
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+        let file = match opts.open(&path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            // Windows refuses `create_new` on a folder with "access denied"; the name is taken all
+            // the same. A folder we can't write to, with nothing at the name, still fails here.
+            Err(e) if e.kind() == ErrorKind::PermissionDenied && path.symlink_metadata().is_ok() => continue,
+            Err(e) => return Err(e),
+        };
+        // The block closes the file before a failed one is removed (Windows can't remove an open file).
+        let written = {
+            let mut file = file;
+            file.write_all(p12).and_then(|()| file.sync_all())
+        };
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&path);
+            return Err(e);
+        }
+        return Ok(path);
+    }
+    Err(std::io::Error::new(ErrorKind::AlreadyExists, "no free file name for the digital ID"))
 }
 
 /// A Keychain identity by its `keychain:` reference.
@@ -185,6 +226,20 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
         issuer: c.issuer.common_name().map(str::to_string).unwrap_or_else(|| c.issuer.display()),
         email: c.subject.email().unwrap_or("").to_string(),
         expires: format!("{:04}.{:02}.{:02}", c.not_after.year, c.not_after.month, c.not_after.day),
+        unusable: None,
+    }
+}
+
+/// A greyed entry for a Windows store certificate that can't sign, with the reason.
+#[cfg(target_os = "windows")]
+fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
+    DigitalIdEntry {
+        path: format!("windows:{}", u.fingerprint.split(' ').collect::<String>().to_ascii_lowercase()),
+        name: u.subject.clone(),
+        issuer: String::new(),
+        email: String::new(),
+        expires: String::new(),
+        unusable: Some(u.reason.clone()),
     }
 }
 
@@ -192,7 +247,7 @@ impl PdfCraftApp {
     /// Start signing: the rectangle (or field) is known; show Sign with a Digital ID.
     pub fn start_signing(&mut self, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>) {
         self.refresh_os_key_store_ids();
-        self.sign_draft = Some(SignDraft::new(page, rect, field, certify, self.digital_ids.len()));
+        self.sign_draft = Some(SignDraft::new(page, rect, field, certify, &self.digital_ids));
         self.dialog = Some(crate::Dialog::Sign);
     }
 
@@ -212,10 +267,15 @@ impl PdfCraftApp {
         }
         #[cfg(target_os = "windows")]
         if self.os_key_store_ids {
-            match sign::windows::identities() {
-                Ok(ids) => {
-                    for id in ids {
+            match sign::windows::list() {
+                Ok(listing) => {
+                    for id in &listing.ids {
                         self.digital_ids.push(entry_for(&sign::windows::reference(&id.certificate), &id.certificate));
+                    }
+                    // Certificates without a private key aren't identities; the rest are shown
+                    // greyed with why they can't sign (issue #179).
+                    for u in listing.unusable.iter().filter(|u| !u.no_private_key) {
+                        self.digital_ids.push(entry_unusable(u));
                     }
                 }
                 Err(e) => self.notify_fmt("The Windows store's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
@@ -266,11 +326,7 @@ impl PdfCraftApp {
         .ok_or("There is no folder to save the digital ID in.")?;
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let stem: String = d.name.trim().chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
-        let path = (1..=u64::MAX)
-            .map(|i| dir.join(if i == 1 { format!("{stem}.p12") } else { format!("{stem} {i}.p12") }))
-            .find(|p| !p.exists())
-            .ok_or("no free file name for the digital ID")?;
-        std::fs::write(&path, &p12).map_err(|e| e.to_string())?;
+        let path = save_new_id_file(&dir, &stem, &p12).map_err(|e| e.to_string())?;
         Ok(self.add_digital_id(&path.to_string_lossy(), &cert))
     }
 
@@ -294,7 +350,7 @@ impl PdfCraftApp {
         }
         let Some((_, doc_id)) = self.active_ids() else { return Err("no document".into()) };
         let d = self.sign_draft.clone().ok_or("nothing to sign")?;
-        let entry = d.selected.and_then(|i| self.digital_ids.get(i)).cloned().ok_or("Choose a digital ID.")?;
+        let entry = d.selected.and_then(|i| self.digital_ids.get(i)).filter(|e| e.unusable.is_none()).cloned().ok_or("Choose a digital ID.")?;
         let id = if entry.path.starts_with("keychain:") {
             keychain_id(&entry.path)?
         } else if entry.path.starts_with("windows:") {
@@ -436,34 +492,54 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
         for (i, e) in ids.iter().enumerate() {
             let selected = d.selected == Some(i);
+            let usable = e.unusable.is_none();
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), egui::Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, &e.name));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, usable, selected, &e.name));
             let fill = if selected {
                 t.accent_soft
-            } else if resp.hovered() {
+            } else if resp.hovered() && usable {
                 t.hover
             } else {
                 Color32::TRANSPARENT
             };
             ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
-            icons::paint(ui, Rect::from_min_size(rect.min + vec2(10.0, 15.0), vec2(20.0, 20.0)), "badge-check", 18.0, t.accent);
-            ui.painter().text(rect.min + vec2(40.0, 9.0), egui::Align2::LEFT_TOP, &e.name, theme::semibold(13.0), t.text);
-            let sub = format!(
-                "{keychain}{email}{issued}{issuer}{expires}{date}",
-                keychain = if e.path.starts_with("keychain:") {
-                    tl!("Keychain  ·  ").to_string()
-                } else if e.path.starts_with("windows:") {
-                    tl!("Windows store  ·  ").to_string()
-                } else {
-                    String::new()
-                },
-                email = if e.email.is_empty() { String::new() } else { format!("{}  ·  ", e.email) },
-                issued = tl!("Issued by: "),
-                issuer = e.issuer,
-                expires = tl!(", Expires: "),
-                date = e.expires,
-            );
-            ui.painter().text(rect.min + vec2(40.0, 28.0), egui::Align2::LEFT_TOP, sub, theme::regular(11.5), t.text_muted);
+            // An unusable ID is greyed, with the reason where the issuer would be.
+            let (icon, name_color) = if usable { (t.accent, t.text) } else { (t.text_muted, t.text_muted) };
+            icons::paint(ui, Rect::from_min_size(rect.min + vec2(10.0, 15.0), vec2(20.0, 20.0)), "badge-check", 18.0, icon);
+            // Certificate names can be any length: cut both lines with "…" at the row's edge
+            // and show them whole on hover.
+            let line = |text: &str, font: egui::FontId, color: Color32| {
+                let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+                job.wrap = egui::text::TextWrapping::truncate_at_width((rect.width() - 50.0).max(0.0));
+                ui.painter().layout_job(job)
+            };
+            let name = line(&e.name, theme::semibold(13.0), name_color);
+            let store = if e.path.starts_with("keychain:") {
+                tl!("Keychain  ·  ").to_string()
+            } else if e.path.starts_with("windows:") {
+                tl!("Windows store  ·  ").to_string()
+            } else {
+                String::new()
+            };
+            let sub = match &e.unusable {
+                Some(reason) => format!("{store}{reason}"),
+                None => format!(
+                    "{store}{email}{issued}{issuer}{expires}{date}",
+                    email = if e.email.is_empty() { String::new() } else { format!("{}  ·  ", e.email) },
+                    issued = tl!("Issued by: "),
+                    issuer = e.issuer,
+                    expires = tl!(", Expires: "),
+                    date = e.expires,
+                ),
+            };
+            let details = line(&sub, theme::regular(11.5), t.text_muted);
+            let elided = name.elided || details.elided;
+            ui.painter().galley(rect.min + vec2(40.0, 9.0), name, name_color);
+            ui.painter().galley(rect.min + vec2(40.0, 28.0), details, t.text_muted);
+            let resp = if elided { resp.on_hover_text(format!("{}\n{sub}", e.name)) } else { resp };
+            if !usable {
+                continue;
+            }
             if resp.clicked() {
                 d.selected = Some(i);
             }
@@ -1013,7 +1089,7 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
             let grid = |ui: &mut egui::Ui, rows: Vec<(&str, String)>| {
                 egui::Grid::new(("cert-rows", v.tab as u8)).num_columns(2).spacing([12.0, 5.0]).show(ui, |ui| {
                     for (k, val) in rows {
-                        ui.label(egui::RichText::new(tl!(k)).color(t.text_muted));
+                        ui.label(egui::RichText::new(tl_ctx!("certificate", k)).color(t.text_muted));
                         ui.add(egui::Label::new(val).wrap());
                         ui.end_row();
                     }
@@ -1040,7 +1116,7 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
                         ("Validity starts", c.not_before.to_string()),
                         ("Validity ends", c.not_after.to_string()),
                         ("Public key", c.public_key.describe()),
-                        ("Basic constraints", if c.is_ca { "Certificate authority".into() } else { "End entity".into() }),
+                        ("Basic constraints", tl!(if c.is_ca { "Certificate authority" } else { "End entity" }).to_string()),
                         ("Key usage", c.key_usage.map(key_usage).unwrap_or_else(|| tl!("Not present").to_string())),
                         ("Self-signed", if c.is_self_signed() { tl!("Yes").to_string() } else { tl!("No").to_string() }),
                         ("SHA-1 digest", hex(&sign::keys::DigestAlg::Sha1.digest(&[&c.raw]))),
@@ -1078,4 +1154,87 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
 /// The text of an exported certificate (`.cer`, PEM).
 pub fn certificate_pem(c: &Certificate) -> String {
     sign::x509::to_pem(c)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh folder per call: tests run in parallel.
+    fn scratch() -> PathBuf {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("pdfcraft-sign-ui-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Create a digital ID named "Grace Hopper" in `dir`, as Configure New Digital ID ▸ Create
+    /// does. Returns where it was saved.
+    fn create_in(dir: &std::path::Path) -> Result<PathBuf, String> {
+        let mut app = PdfCraftApp::new();
+        app.export_dir_override = Some(dir.to_string_lossy().into_owned());
+        let mut draft = SignDraft::new(0, None, None, None, &[]);
+        // P-256 keeps the test fast.
+        let key = KEY_ALGORITHMS.iter().position(|k| k.1 == "p256").unwrap();
+        draft.new_id =
+            NewIdDraft { name: "Grace Hopper".into(), key, password: "secret1".into(), confirm: "secret1".into(), ..NewIdDraft::default() };
+        app.sign_draft = Some(draft);
+        let i = app.create_digital_id()?;
+        Ok(PathBuf::from(&app.digital_ids[i].path))
+    }
+
+    #[test]
+    fn a_new_digital_id_skips_names_already_taken_without_writing_through_them() {
+        let dir = scratch();
+        // Another file's hard link at the first name, and a folder at the second (Windows refuses
+        // `create_new` on a folder with "access denied" rather than "already exists").
+        std::fs::write(dir.join("victim.txt"), "keep me").unwrap();
+        std::fs::hard_link(dir.join("victim.txt"), dir.join("Grace Hopper.p12")).unwrap();
+        std::fs::create_dir(dir.join("Grace Hopper 2.p12")).unwrap();
+        let saved = create_in(&dir).unwrap();
+        assert_eq!(saved, dir.join("Grace Hopper 3.p12"));
+        assert_eq!(std::fs::read_to_string(dir.join("victim.txt")).unwrap(), "keep me");
+        assert!(sign::pkcs12::open(&std::fs::read(&saved).unwrap(), "secret1").is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_digital_id_is_not_written_through_a_dangling_link() {
+        // `exists()` follows links, so a link to a file that doesn't exist yet looked free, and
+        // `fs::write` then created the private key wherever the link pointed.
+        let dir = scratch();
+        let (link, target) = (dir.join("Grace Hopper.p12"), dir.join("elsewhere.p12"));
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&target, &link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&target, &link);
+        #[cfg(not(any(unix, windows)))]
+        let made: std::io::Result<()> = {
+            let _ = (&target, &link);
+            Err(std::io::ErrorKind::Unsupported.into())
+        };
+        if let Err(e) = made {
+            // Windows needs Developer Mode (or admin) for symlinks.
+            eprintln!("skipped: can't create a symlink here: {e}");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let saved = create_in(&dir).unwrap();
+        assert!(!target.exists(), "nothing written through the link");
+        assert_eq!(saved, dir.join("Grace Hopper 2.p12"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_digital_id_is_readable_by_its_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch();
+        let saved = create_in(&dir).unwrap();
+        let mode = std::fs::metadata(&saved).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "the private key is not readable by others: {mode:o}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

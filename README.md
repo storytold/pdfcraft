@@ -133,7 +133,7 @@ Search the whole document as you type, step through matches with <kbd>⌘G</kbd>
 
 ## Navigate long documents
 
-Bookmarks, page thumbnails and the document's own page labels (i, ii, 1, 2…) keep you oriented in long documents.
+Bookmarks, page thumbnails and the document's own page labels (i, ii, 1, 2…) keep you oriented in long documents. Search bookmark titles in the Bookmarks panel to find nested entries even when their parents are collapsed. Matches keep their ancestors for context; Clear restores the unfiltered tree without changing its expansion state.
 
 <table>
 <tr>
@@ -171,6 +171,8 @@ Open **Organize pages** to see every page at once:
 - *Incremental:* the original bytes stay byte-for-byte intact.
 - *Atomic:* the file is written to a temporary copy, then swapped in.
 - *Verified:* independently checked with qpdf.
+
+When open documents exceed the window width, scroll over the tab strip with the mouse wheel or trackpad, or use its horizontal scrollbar. Opening or switching to a document brings its tab into view.
 
 Unsaved documents carry a dot on their tab, and closing or quitting asks before anything is lost. Changes are autosaved every minute. If PdfCraft ever quits unexpectedly, it offers to recover your work the next time it opens. Encrypted documents stay encrypted on disk.
 
@@ -291,6 +293,8 @@ Every engine feature is reachable without the GUI, through one table of JSON-Sch
   { "mcpServers": { "pdfcraft": { "command": "pdfcraft-cli", "args": ["mcp", "--root", "/path/to/your/pdfs"] } } }
   ```
 
+  `--compact` shrinks the tool list the agent has to read: `tools/list` returns about ten core tools plus `tool_search` and `tool_call`, which find and run every other tool, so the list costs far fewer tokens. Every tool still works.
+
   `--root` confines every file the agent can read or write to one directory. Builds that should not include the server at all can use `cargo build -p pdfcraft-cli --no-default-features`.
 
 - **The Rust API** (`pdfcraft_automation::Automation::call`), for embedding.
@@ -299,15 +303,17 @@ Edits stay in memory, undoable, until `doc_save`. Saving to the same file append
 
 ### Driving the app itself
 
-Start the desktop app with `pdfcraft --control /tmp/pc.json` and an agent can see and operate the real interface: the widget tree with labels and positions (from the accessibility tree), clicks, typing, keys, commands, view options and screenshots. This is also off by default. It listens only on loopback, and every connection must present the random token written to that file, which only you can read.
+Start the desktop app with `pdfcraft --control ~/.pdfcraft-control.json` and an agent can see and operate the real interface: the widget tree with labels and positions (from the accessibility tree), clicks, typing, keys, commands, view options and screenshots. This is also off by default. It listens only on loopback, and every connection must present the random token written to that file, which only you can read.
+
+Keep the control file in a folder only you can write, not a shared one such as `/tmp`: another user could create the file there first and receive your commands. `pdfcraft-cli ui` refuses a control file that is a symbolic link, and on macOS, Linux and FreeBSD one that another user owns or can read or write. The app doesn't start if it can't write the file.
 
 ```sh
-pdfcraft-cli ui --control /tmp/pc.json inspect query=rotate      # find widgets
-pdfcraft-cli ui --control /tmp/pc.json click label="Organize pages"
-pdfcraft-cli ui --control /tmp/pc.json key key=K modifiers='["command"]'
-pdfcraft-cli ui --control /tmp/pc.json command id=comment.square   # pick a tool, then draw:
-pdfcraft-cli ui --control /tmp/pc.json drag from='[400,300]' to='[600,420]'
-pdfcraft-cli ui --control /tmp/pc.json screenshot --out window.png
+pdfcraft-cli ui --control ~/.pdfcraft-control.json inspect query=rotate      # find widgets
+pdfcraft-cli ui --control ~/.pdfcraft-control.json click label="Organize pages"
+pdfcraft-cli ui --control ~/.pdfcraft-control.json key key=K modifiers='["command"]'
+pdfcraft-cli ui --control ~/.pdfcraft-control.json command id=comment.square   # pick a tool, then draw:
+pdfcraft-cli ui --control ~/.pdfcraft-control.json drag from='[400,300]' to='[600,420]'
+pdfcraft-cli ui --control ~/.pdfcraft-control.json screenshot --out window.png
 ```
 
 ---
@@ -389,16 +395,16 @@ Logs, environment variables and other development notes are in [docs/development
 
 PdfCraft is young and moving fast. The aim is a workbench where you can view, organize, annotate, fill, sign and edit PDFs, at parity with Acrobat Pro.
 
-**Where it stands (October 2026), honestly:** about half of Acrobat Pro's offline features are in (88% of the must-haves), but that is roughly a third of the work, because the hardest parts are still ahead.
+**Where it stands (October 2026), honestly:** PdfCraft is **alpha**. Most of Acrobat Pro's offline features exist in some form (57% of all tracked features, 94% of the must-haves). For everyday work (viewing, commenting, filling and signing forms, organizing pages) it is about 55% of the way to replacing Acrobat; against all of Acrobat Pro, about 49%; for someone who only needs the essentials, about 66%. Every everyday workflow can be completed, but converting and sharing is weak: password-protected files Acrobat can't open, no Office-to-PDF, and Word export that loses layout.
 
 - **Good today:** viewing and search; organizing, combining and splitting; most kinds of comment; filling and authoring forms (with sandboxed JavaScript); passwords, redaction and sanitizing; basic digital signatures; printing; the Accessibility Checker; agent control through the CLI and MCP.
 - **Still borrowed:** pages are drawn by the `hayro` crate while our own renderer is built.
-- **Thin or missing:** reliable editing of existing text (especially CJK), OCR beyond Latin script, Office import/export, signature timestamps and long-term validation, PDF/A/X/UA preflight, XFA forms and localization.
+- **Thin or missing:** reliable editing of existing text (especially CJK and right-to-left), OCR beyond Latin script, Office import/export, signature tokens and online long-term validation, Preflight and PDF/X/UA, printing on Windows, and full XFA forms.
 - **Hardening:** fuzzing still turns up crashes and hangs on hostile files; each one is fixed with a regression test. Quality has not yet been compared with Acrobat side by side.
 
-**Next, in order:** our own renderer, hardening and a fidelity harness against Acrobat, editing existing content, then the Pro workflows (signatures, OCR, Office, preflight, XFA) and 1.0 polish.
+**Next, in order:** encrypted files that Acrobat opens, the reported bugs and Windows printing, a fidelity harness against Acrobat and the renderer, editing existing content, then the Pro workflows (OCR, Office, Preflight, signatures, accessibility tagging) and 1.0 polish.
 
-The honest assessment by area, what's lacking and where we're going are in **[ROADMAP.md](ROADMAP.md#honest-assessment-2026-10-05)**, with the full plan, progress and estimates.
+The summary is in **[ROADMAP.md](ROADMAP.md)**; the full assessment by dimension and area is in [docs/target-app-parity.md](docs/target-app-parity.md), the ranked gaps in [docs/gaps.md](docs/gaps.md), and the milestones in [docs/roadmap.md](docs/roadmap.md).
 
 ---
 
@@ -417,6 +423,10 @@ The honest assessment by area, what's lacking and where we're going are in **[RO
 | x86 (32-bit) | `pdfcraft-<ver>-windows-x86.msi` | `pdfcraft-<ver>-windows-x86-portable.zip` |
 
 Installers and executables are code-signed.
+
+The portable zip runs from any folder, a USB stick included. Its `portable.txt` keeps the settings,
+logs and crash recovery in a `PdfCraftData` folder next to `pdfcraft.exe`, so nothing is written to
+`%APPDATA%`; delete that file to use the normal per-user folders.
 
 The MSI installs for all users and requires administrator privileges. For unattended deployment
 without a desktop shortcut, run from an elevated terminal:
@@ -443,6 +453,9 @@ Use the MSI for your architecture. Per-user installation overrides are not suppo
 | Debian/Ubuntu | `pdfcraft-<ver>-linux-x86_64.deb` | `pdfcraft-<ver>-linux-aarch64.deb` | |
 | Fedora/RHEL/openSUSE | `pdfcraft-<ver>-linux-x86_64.rpm` | `pdfcraft-<ver>-linux-aarch64.rpm` | |
 | Tarball | `pdfcraft-<ver>-linux-x86_64.tar.gz` | `pdfcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
+| Command-line tool | `pdfcraft-cli-<ver>-linux-x86_64.tar.gz` | `pdfcraft-cli-<ver>-linux-aarch64.tar.gz` | `pdfcraft-cli` alone (and its opt-in MCP server), for servers, CI and agents |
+
+Every Linux build needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 10).
 
 ### FreeBSD
 

@@ -5,11 +5,12 @@
 //!   smallest over its uses, through form XObjects); colour and grayscale images above a
 //!   threshold are resampled (bicubic) to a target resolution and recompressed as JPEG or Flate.
 //!   A new image replaces the old one only if it is smaller. Images PdfCraft can't decode
-//!   faithfully (CMYK and other colour spaces, masks, decode arrays, JPEG 2000, JBIG2, CCITT,
-//!   more than 8 bits) are left alone.
+//!   faithfully (CMYK and other colour spaces, masks, decode arrays other than the default,
+//!   JPEG 2000, JBIG2, CCITT, other than 8 bits) are left alone.
 //! - **Discard objects:** page thumbnails, alternate images, document tags (structure tree),
 //!   print settings.
-//! - **Clean up:** Flate-compress streams that have no filter.
+//! - **Clean up:** drop images and forms that pages list but never draw (such as a deleted
+//!   image); Flate-compress streams that have no filter.
 //!
 //! Metadata, attachments, comments, scripts, private data, hidden layers, bookmarks and form
 //! fields are discarded by `pdfcraft-redact`'s Remove Hidden Information, which the engine
@@ -20,6 +21,7 @@
 mod audit;
 mod images;
 mod links;
+mod unused;
 
 pub use audit::{SpaceCategory, SpaceUse, audit_space};
 
@@ -33,6 +35,17 @@ pub enum OptimizeError {
     NoPages,
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
+    #[error("the optimization was cancelled")]
+    Cancelled,
+}
+
+/// Where an optimization is, reported to [`optimize_with_progress`]'s callback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    /// About to process image `done` (0-based) of `total`; `done == total` once all are done.
+    Images { done: usize, total: usize },
+    /// Discarding objects, cleaning up links and compressing unencoded streams.
+    CleanUp,
 }
 
 /// How resampled (or recompressed) images are stored.
@@ -114,13 +127,26 @@ pub struct Report {
     pub invalid_links: usize,
     pub invalid_bookmarks: usize,
     pub unreferenced_dests: usize,
+    /// Images and forms the pages listed but never drew, dropped (Clean Up).
+    pub unused_xobjects: usize,
 }
 
 /// Optimize `doc` in place.
 pub fn optimize(doc: &mut Document, settings: &Settings) -> Result<Report, OptimizeError> {
+    optimize_with_progress(doc, settings, &mut |_| true)
+}
+
+/// [`optimize`], calling `progress` before each image and before the clean-up (and now and then
+/// during a long one). Returning `false` stops with [`OptimizeError::Cancelled`]; `doc` is then
+/// partly optimized and should be dropped.
+pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress: &mut dyn FnMut(Stage) -> bool) -> Result<Report, OptimizeError> {
     let mut report = Report::default();
     let pages = pdfcraft_annot::page_refs(doc).map_err(|_| OptimizeError::NoPages)?;
-    images::run(doc, &pages, settings, &mut report)?;
+    images::run(doc, &pages, settings, &mut report, progress)?;
+    if !progress(Stage::CleanUp) {
+        return Err(OptimizeError::Cancelled);
+    }
+    report.unused_xobjects = unused::remove_unused(doc, &pages, progress)?;
     if settings.discard_thumbnails {
         for p in &pages {
             if doc.get(*p).as_dict().is_some_and(|d| d.contains(b"Thumb")) {

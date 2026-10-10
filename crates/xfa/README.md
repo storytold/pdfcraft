@@ -17,13 +17,14 @@ the automation tools) works on it unchanged. The engine does this when it opens 
   page areas, content areas and media; measurements in mm, cm, in, pt and px; fonts, paragraphs,
   margins, borders (edge order rules), captions with reserves, check-button items, pictures,
   rich text (`exData` XHTML: paragraphs, `br`, bold/italic/underline/size spans, embedded fields),
-  inline JPEG images, lines, rectangles, occurrences, `breakBefore`/`breakAfter`, overflow
+  inline JPEG, PNG and GIF images, lines, rectangles, occurrences, `breakBefore`/`breakAfter`, overflow
   leaders, `columnWidths` and `colSpan`.
 - **Layout** (`layout`): positioned, `tb`, `lr-tb`/`rl-tb`, `table` and `row` layouts; a
   container without a width is as wide as its content; flow across content areas and pages with
   page masters chosen by occurrence; a table's header row repeats after a break; presence
   `hidden` takes no space, `invisible` takes space; repeating subforms get their initial
-  instances; fields that compute the page number or count on layout show the numbers.
+  instances, in flowed content and in a top-to-bottom container inside positioned content (a
+  table in an area) alike; fields that compute the page number or count on layout show the numbers.
 - **PDF** (`pdf::write_form`): pages with content streams in the standard 14 fonts (Arial and
   friends → Helvetica, Courier New → Courier, serif faces → Times; nothing is embedded), JPEG
   XObjects, and widgets: text (multi-line, max length, alignment), date (Acrobat's `AFDate`
@@ -34,7 +35,8 @@ the automation tools) works on it unchanged. The engine does this when it opens 
   twice. The XFA packets stay, so Adobe's viewers keep rendering the form from them.
 
 - **Data** (`data`): the `datasets` packet. On layout, a field takes its value from the data
-  node at its SOM path (dates in ISO form, check and radio states by their on values), and a
+  node at its data path: its SOM path without areas, which are named in SOM expressions but are
+  not data scopes (`data_path`, as Adobe's viewers bind) (dates in ISO form, check and radio states by their on values), and a
   repeating subform or row gets as many instances as the data has. `write_datasets` merges the
   AcroForm fields' values (by `/PCSom`, or by the Designer field names of a static form) into
   the existing `xfa:data`: only the bound nodes' text changes and missing nodes are added, so
@@ -112,8 +114,13 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   allocates is not capped (the same holds for AcroForm JavaScript).
 - **Static XFA forms** (`/NeedsRendering` absent, AcroForm fields present) keep their AcroForm;
   only their data is read and written.
-- Choice lists are text fields; signature, image, barcode and password fields are left blank;
-  PNG and GIF images, `keep` constraints, `subformSet` relations, `rl-tb` is mirrored `lr-tb`,
-  font metrics are the approximate Helvetica ones, and line heights are 1.15 × size.
+- **Field kinds.** Choice lists become combo boxes (editable with `textEntry`) or list boxes
+  (`open="always"`, multi-select with `open="multiSelect"`), with the shown items and the saved
+  values of `<items save="1">` as the options; the data holds saved values, several on
+  separate lines. Password fields are password text fields. Signature fields are `/Sig` fields
+  the app can sign. Image fields show the picture the data or template holds (JPEG, PNG, GIF)
+  but a new picture can't be chosen; barcode fields show their value as text, not as bars.
+- Missing: `keep` constraints, `subformSet` relations, `rl-tb` is mirrored `lr-tb`, font
+  metrics are the approximate Helvetica ones, and line heights are 1.15 × size.
 - Acrobat cannot be an oracle here (clean-room rules): layout follows the specification, and
   fidelity has been checked by eye on real government forms, not pixel-compared.

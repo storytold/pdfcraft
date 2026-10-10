@@ -252,6 +252,9 @@ fn strings(v: &JsValue, ctx: &mut Context) -> JsResult<Vec<String>> {
     {
         let a = JsArray::from_object(o.clone())?;
         let n = a.length(ctx)?;
+        if n > MAX_ARRAY_LENGTH {
+            return Err(error(format!("array length exceeds {MAX_ARRAY_LENGTH}")));
+        }
         let mut out = Vec::new();
         for i in 0..n {
             let x = a.get(i, ctx)?;
@@ -661,15 +664,23 @@ fn timer(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
 fn printf(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let fmt = text(&arg(args, 0), ctx)?;
     let mut out = String::new();
+    let check_output = |len: usize| -> JsResult<()> {
+        if len > MAX_PRINTF_OUTPUT_BYTES {
+            return Err(error(format!("util.printf output exceeds {MAX_PRINTF_OUTPUT_BYTES} bytes")));
+        }
+        Ok(())
+    };
     let mut next = 1;
     let mut chars = fmt.chars().peekable();
     while let Some(c) = chars.next() {
         if c != '%' {
+            check_output(out.len().saturating_add(c.len_utf8()))?;
             out.push(c);
             continue;
         }
         if chars.peek() == Some(&'%') {
             chars.next();
+            check_output(out.len().saturating_add(1))?;
             out.push('%');
             continue;
         }
@@ -691,7 +702,7 @@ fn printf(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
         }
         let mut width = 0usize;
         while let Some(d) = chars.peek().and_then(|d| d.to_digit(10)) {
-            width = width * 10 + d as usize;
+            width = width.saturating_mul(10).saturating_add(d as usize);
             chars.next();
         }
         let mut prec = None;
@@ -699,10 +710,13 @@ fn printf(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
             chars.next();
             let mut p = 0usize;
             while let Some(d) = chars.peek().and_then(|d| d.to_digit(10)) {
-                p = p * 10 + d as usize;
+                p = p.saturating_mul(10).saturating_add(d as usize);
                 chars.next();
             }
             prec = Some(p);
+        }
+        if width > MAX_PRINTF_WIDTH_PRECISION || prec.is_some_and(|p| p > MAX_PRINTF_WIDTH_PRECISION) {
+            return Err(error(format!("util.printf width or precision exceeds {MAX_PRINTF_WIDTH_PRECISION}")));
         }
         let conv = chars.next().unwrap_or('s');
         let v = arg(args, next);
@@ -732,6 +746,7 @@ fn printf(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
             }
         };
         let pad = width.saturating_sub(body.chars().count());
+        check_output(out.len().saturating_add(pad).saturating_add(body.len()))?;
         if zero && matches!(conv, 'd' | 'f') {
             let (sign, digits) = if body.starts_with(['-', '+', ' ']) { body.split_at(1) } else { ("", body.as_str()) };
             out.push_str(sign);
@@ -1159,6 +1174,13 @@ fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
 
 /// Longest script, in bytes.
 pub(crate) const MAX_SCRIPT_BYTES: usize = 256 * 1024;
+/// Largest width or precision accepted by `util.printf`.
+const MAX_PRINTF_WIDTH_PRECISION: usize = 4096;
+/// Longest `util.printf` output, in bytes.
+const MAX_PRINTF_OUTPUT_BYTES: usize = 1 << 20;
+/// Longest array read item by item (`resetForm`, a field's `value` or colours). A sparse array's
+/// length costs the script nothing but the host one string per item; real lists are tiny.
+const MAX_ARRAY_LENGTH: u64 = 1 << 20;
 /// Deepest nesting of `(`, `[` and `{`.
 const MAX_BRACKET_DEPTH: usize = 64;
 /// Longest run of prefix operators (`!`, `~`, `+`, `-`).

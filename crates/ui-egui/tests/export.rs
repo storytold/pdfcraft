@@ -20,6 +20,7 @@ fn export_dialogs_write_images_and_text() {
     let d = dir.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
         app.export_dir_override = Some(d.to_string_lossy().into_owned());
         app
