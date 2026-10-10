@@ -3,7 +3,7 @@ Type=Application
 Name=PdfCraft
 GenericName=PDF Editor
 Comment=Read, organize, combine, split and secure PDFs
-Exec=pdfcraft %U
+Exec=env WINIT_X11_SCALE_FACTOR=1 pdfcraft %U
 TryExec=pdfcraft
 Icon=ai.storyteller.pdfcraft
 Terminal=false
