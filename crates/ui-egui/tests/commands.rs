@@ -401,3 +401,33 @@ fn the_about_dialog_shows_the_running_version() {
     h.run_steps(3);
     h.get_by_label_contains(&format!("Version {}", env!("CARGO_PKG_VERSION")));
 }
+
+#[test]
+fn command_w_closes_empty_macos_window_but_not_an_empty_windows_window() {
+    for (os, should_close) in [(OperatingSystem::Mac, true), (OperatingSystem::Windows, false)] {
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|_cc| PdfCraftApp::new());
+        h.ctx.set_os(os);
+        h.run_steps(4);
+        assert!(h.state().views.is_empty());
+        h.event(egui::Event::Key {
+            key: Key::W,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        });
+        h.step();
+        let closes = h.output().viewport_output.values().any(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+        assert_eq!(closes, should_close, "{os:?}: only an empty macOS window should close");
+    }
+}
+
+#[test]
+fn command_w_still_closes_the_document_tab_on_macos() {
+    let mut h = harness();
+    h.ctx.set_os(OperatingSystem::Mac);
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::W);
+    h.run_steps(2);
+    assert!(h.state().views.is_empty(), "⌘W closes the clean document tab");
+}

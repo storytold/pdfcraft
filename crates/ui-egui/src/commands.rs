@@ -625,6 +625,11 @@ impl PdfCraftApp {
                     // this document only.
                     self.deferred_commands.push((spec.id, active.map(|(_, id)| id)));
                     ctx.request_repaint();
+                } else if spec.id == "file.close" && active.is_none() && crate::commands::mac_shortcuts(ctx) && !cfg!(target_arch = "wasm32") {
+                    // macOS ⌘W closes the last window when no document tabs remain (#869).
+                    // Route through the normal viewport-close path (and its quit guard),
+                    // not the disabled document-only `file.close` command.
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 } else {
                     self.execute(spec.id);
                 }
