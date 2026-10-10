@@ -53,7 +53,8 @@ macOS Keychain and Windows Current User Personal (My) store identities sign thro
 ECDSA P-256/P-384; the store integration is tested with software-backed keys. A smart card
 or token whose driver registers a CNG key storage provider is such an identity too: the key
 is opened for signing without the silent flag, so the provider shows its own PIN dialog
-(checked by hand with a SafeNet token; CI has no hardware).
+(checked by hand with a SafeNet token; CI has no hardware). A store identity signs with the
+issuers Windows chains its certificate to, without the root.
 - **Validation:** `/ByteRange` and the CMS are read from the file's own bytes; the digest,
   the signature value and the signer's chain (against a `TrustStore`) are checked. Later
   revisions are diffed against the signed one, and the changes are classified (signing, form

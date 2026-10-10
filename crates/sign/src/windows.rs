@@ -51,20 +51,35 @@ pub fn reference(certificate: &Certificate) -> String {
     format!("windows:{}", digest.iter().map(|b| format!("{b:02x}")).collect::<String>())
 }
 
-/// Find an identity by its reference or subject common name.
+/// Find an identity by its reference or subject common name. Its `chain` holds the issuers
+/// Windows finds for the certificate, so a signature embeds them as it does for a file's.
 pub fn find(reference_or_name: &str) -> Result<DigitalId, SignError> {
-    identities()?
+    let (context, mut id) = entries()?
         .into_iter()
-        .find(|id| {
+        .find(|(_, id)| {
             reference(&id.certificate) == reference_or_name
                 || id.certificate.subject.common_name() == Some(reference_or_name.strip_prefix("windows:").unwrap_or(reference_or_name))
         })
-        .ok_or_else(|| SignError::Crypto(format!("no Windows certificate store identity {reference_or_name}")))
+        .ok_or_else(|| SignError::Crypto(format!("no Windows certificate store identity {reference_or_name}")))?;
+    id.chain = issuers(&context, &id.certificate);
+    Ok(id)
+}
+
+/// The certificates Windows chains `certificate` to, without the root. Best effort: an
+/// identity signs without them too.
+fn issuers(context: &CertContext, certificate: &Certificate) -> Vec<Certificate> {
+    let Ok(chain) = context.as_chain_der() else { return Vec::new() };
+    chain.iter().filter(|der| **der != certificate.raw).filter_map(|der| Certificate::parse(der).ok()).collect()
 }
 
 /// List usable RSA, P-256 and P-384 CNG identities in Current User > Personal.
 /// Certificates with unsupported keys or without an accessible private key are skipped.
 pub fn identities() -> Result<Vec<DigitalId>, SignError> {
+    Ok(entries()?.into_iter().map(|(_, id)| id).collect())
+}
+
+/// Each usable identity with the store's certificate context it came from.
+fn entries() -> Result<Vec<(CertContext, DigitalId)>, SignError> {
     let store = CertStore::open(CertStoreType::CurrentUser, "My")
         .map_err(|e| SignError::Crypto(format!("the Windows Current User Personal store couldn't be opened: {e}")))?;
     let contexts = store.find_all().map_err(|e| SignError::Crypto(format!("the Windows certificate store couldn't be searched: {e}")))?;
@@ -85,9 +100,9 @@ pub fn identities() -> Result<Vec<DigitalId>, SignError> {
         // The silent handle was only for the checks above; `sign` acquires its own.
         drop(key);
         let public = certificate.public_key.clone();
-        let key = PrivateKey::external(public.clone(), Arc::new(WindowsKey { context, public }));
+        let key = PrivateKey::external(public.clone(), Arc::new(WindowsKey { context: context.clone(), public }));
         let friendly_name = Some(certificate.display_name());
-        out.push(DigitalId { key, certificate, chain: Vec::new(), friendly_name });
+        out.push((context, DigitalId { key, certificate, chain: Vec::new(), friendly_name }));
     }
     Ok(out)
 }
