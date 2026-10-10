@@ -3250,5 +3250,5 @@ source = "this repository; base 1c33e6f851fc4a75805c9d3504c578a7623bbac5 and fix
 licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "image"
-usage = "PR comparison of rejected Thai input and saved Thai text. Synthetic text only; PdfCraft UI, Lucide icons, Inter and OFL Noto Sans Thai from craft-fonts. Both builds use the same font input, 200% zoom and PDFCRAFT_SYSTEM_FONTS=0."
-sha256 = "efbc5a2cd983b72bcce2a51cb177b7d215b491592584fcf2720bfb51d2b5f70d"
+usage = "PR comparison of rejected Thai input and saved Thai text: nine lines with stacked marks, both Sara Am encodings, Thai numerals and mixed English; 198 Unicode code points verified by extraction. Synthetic text only; PdfCraft UI, Lucide icons, Inter and OFL Noto Sans Thai from craft-fonts. Both builds use the same font input, 200% zoom and PDFCRAFT_SYSTEM_FONTS=0."
+sha256 = "57e5143756410b8dba55f6e21dcb76bb7a25fbd96378a33bca3f10787fc1355c"
