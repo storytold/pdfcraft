@@ -51,6 +51,9 @@ fn main() {
                             ctx.request_repaint();
                         });
                     }
+                    // eframe never raises a close request on a browser reload or tab close, so `guard_quit` never
+                    // prompts; ask the browser to confirm instead while a document has unsaved work (#812).
+                    warn_before_unload(app.unsaved_flag.clone());
                     Ok(Box::new(app))
                 }),
             )
@@ -59,6 +62,20 @@ fn main() {
             eframe::web_sys::console::error_1(&e);
         }
     });
+}
+
+#[cfg(target_arch = "wasm32")]
+fn warn_before_unload(unsaved: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    use eframe::wasm_bindgen::{JsCast, closure::Closure};
+    let Some(window) = web_sys::window() else { return };
+    let handler = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+        if unsaved.load(std::sync::atomic::Ordering::Relaxed) {
+            event.prevent_default();
+        }
+    });
+    if window.add_event_listener_with_callback("beforeunload", handler.as_ref().unchecked_ref()).is_ok() {
+        handler.forget();
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

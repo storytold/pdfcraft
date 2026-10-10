@@ -9122,8 +9122,8 @@ milestone = "M13"
 status = "shipped"
 commands = ["actions.wizard"]
 tools = ["action_list", "action_run"]
-evidence = ["crates/engine/src/tests.rs::actions_run_their_steps_on_files", "crates/automation/tests/automation.rs::actions_through_tools", "crates/ui-egui/tests/actions.rs::run_and_create_actions"]
-notes = "Pick an action and files; results go to a chosen folder, in the background with progress."
+evidence = ["crates/ui-egui/tests/actions.rs::desktop_actions_preserve_duplicate_names_and_results_from_earlier_runs", "crates/engine/src/tests.rs::actions_run_their_steps_on_files", "crates/automation/tests/automation.rs::actions_through_tools", "crates/ui-egui/tests/actions.rs::run_and_create_actions"]
+notes = "Desktop output filenames receive numbered suffixes when occupied, preserving every batch result and previous outputs. Pick an action and files; results go to a chosen folder, in the background with progress."
 
 [[feature]]
 id = "misc.action-wizard-create"
