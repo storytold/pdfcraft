@@ -9,6 +9,13 @@ use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, wid
 
 const INFO_KEYS: [&str; 4] = ["Title", "Author", "Subject", "Keywords"];
 
+/// The frame of every dialog. [`egui::Frame::popup`]'s own margin is the 8 pt meant for menus and
+/// tooltips, which lets a dialog's text touch its border — most visibly in Chinese, whose glyphs
+/// fill their box and have no side bearing to fall back on.
+pub(crate) fn dialog_frame(ctx: &egui::Context) -> egui::Frame {
+    egui::Frame::popup(&ctx.global_style()).inner_margin(egui::Margin::symmetric(20, 16))
+}
+
 pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     password(app, ctx);
     save_prompt(app, ctx);
@@ -61,7 +68,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut close = false;
     let mut next = dialog;
-    let modal = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::new("dialog")).frame(dialog_frame(ctx)).show(ctx, |ui| {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
@@ -1374,7 +1381,7 @@ fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // the prompt taller than the window (#236); 80 characters wrap to a few lines.
     let shown = shorten_middle(&name, 80);
     let mut choice: Option<Option<bool>> = None;
-    let modal = egui::Modal::new(egui::Id::new("save_prompt")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::new("save_prompt")).frame(dialog_frame(ctx)).show(ctx, |ui| {
         ui.set_width(420.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("save", 22.0, t.accent));
@@ -1435,7 +1442,7 @@ fn link_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let email = pending.url.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("mailto:"));
     let (title, open) = if email { (tl!("Write this email?"), tl!("Open email app")) } else { (tl!("Open this web page?"), tl!("Open link")) };
     let mut choice: Option<bool> = None;
-    let modal = egui::Modal::new(egui::Id::new("link_prompt")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::new("link_prompt")).frame(dialog_frame(ctx)).show(ctx, |ui| {
         ui.set_width(460.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("external-link", 22.0, t.accent));
@@ -1501,7 +1508,7 @@ fn password(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut submit = false;
     let mut cancel = false;
-    let modal = egui::Modal::new(egui::Id::new("password")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::new("password")).frame(dialog_frame(ctx)).show(ctx, |ui| {
         ui.set_width(400.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("lock", 22.0, t.accent));

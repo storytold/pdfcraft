@@ -363,8 +363,7 @@ fn an_earlier_revision_opens_from_document_properties() {
     }
     h.run_steps(2);
     h.state_mut().dialog = Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::Advanced));
-    h.run_steps(2);
-    h.run_steps(2);
+    h.run_steps(6);
     h.get_by_label("View revision 1").click();
     h.run_steps(3);
     let s = h.state();
