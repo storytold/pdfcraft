@@ -138,16 +138,28 @@ pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
     ctx.set_fonts(installed_font_definitions(prefer_hans));
 }
 
-/// The name of the installed face [`installed_font_definitions`] may add after the embedded ones.
+/// The existing installed Arabic-script fallback, last in every interface family.
 pub const SYSTEM_FALLBACK: &str = "system-fallback";
+/// An installed Chinese face; never part of the embedded-only definitions.
+pub const SYSTEM_CHINESE_FALLBACK: &str = "system-chinese-fallback";
 
-/// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
-/// already installed on this machine as the last fallback of every family. It only draws
-/// characters no embedded face has (an Arabic file name in a build without craft-fonts);
-/// `PDFCRAFT_SYSTEM_FONTS=0` leaves it out.
+/// What [`install_fonts_for`] installs: the embedded faces plus at most two installed UI
+/// fallbacks. In Chinese mode the Chinese face precedes Japanese faces to keep shared and
+/// script-specific characters on the same baseline, but follows any embedded Chinese face.
+/// In other languages it follows all embedded faces (including Japanese). The existing
+/// Arabic fallback stays last. `PDFCRAFT_SYSTEM_FONTS=0` leaves both installed faces out.
 pub fn installed_font_definitions(prefer_hans: bool) -> FontDefinitions {
     #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
     let mut fonts = font_definitions_for(prefer_hans);
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(data) = crate::system_fonts::chinese_fallback() {
+        fonts.font_data.insert(SYSTEM_CHINESE_FALLBACK.to_owned(), data);
+        let japanese: Vec<String> = pdfcraft_fonts::ui_japanese_fonts().iter().map(|face| face.name()).collect();
+        for stack in fonts.families.values_mut() {
+            let at = if prefer_hans { stack.iter().position(|name| japanese.contains(name)).unwrap_or(stack.len()) } else { stack.len() };
+            stack.insert(at, SYSTEM_CHINESE_FALLBACK.to_owned());
+        }
+    }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(data) = crate::system_fonts::fallback() {
         fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);

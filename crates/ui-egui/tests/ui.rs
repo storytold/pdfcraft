@@ -2,7 +2,7 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 /// A tiny PDF with two pages, two bookmarks and one sticky note.
 const FIXTURE: &[u8] = b"%PDF-1.7
@@ -784,4 +784,46 @@ fn cancelling_then_discarding_an_earlier_dirty_tab_preserves_the_selected_docume
         assert_eq!(doc.bytes.as_slice(), FIXTURE);
         assert!(!doc.dirty);
     }
+}
+
+/// Every dialog shares one modal area, and an egui area only ever grows — it keeps the largest size
+/// it has been drawn at. A footer written with `Ui::with_layout(right_to_left)` lays its pills over
+/// the *whole remaining height*, so it stretched to whatever height the tallest dialog or credits
+/// tab ever shown had reached, and every dialog opened after it was that tall: a list ending
+/// halfway down with its Close pill marooned under a block of blank. A footer reserves its own row
+/// (`widgets::pill_row`), which keeps a dialog as tall as its content.
+#[test]
+fn a_dialog_is_only_as_tall_as_its_content() {
+    fn card(h: &Harness<'static, PdfCraftApp>) -> Option<f32> {
+        h.ctx.memory(|m| m.area_rect(egui::Id::new("dialog"))).map(|r| r.height())
+    }
+
+    let mut h = harness(|app| app.dialog = Some(Dialog::About));
+    h.run_steps(8);
+    let about = card(&h).expect("the About dialog has a size");
+    h.get_by_label("Contributors").click();
+    h.run_steps(8);
+    let contributors = card(&h).expect("the Contributors tab has a size");
+    h.get_by_label("Models").click();
+    h.run_steps(8);
+    let models = card(&h).expect("the Models tab has a size");
+    assert!(models > contributors + 1.0, "the two tabs are meant to differ in height, saw {models} and {contributors}");
+
+    // Coming back down: the shorter tab takes its own height back instead of keeping the tallest one.
+    h.get_by_label("Contributors").click();
+    h.run_steps(8);
+    assert_eq!(card(&h), Some(contributors), "the Contributors tab kept the taller Models tab's height");
+    h.get_by_label("About").click();
+    h.run_steps(8);
+    assert_eq!(card(&h), Some(about), "the About tab kept a credits tab's height");
+
+    // And a dialog opened after them does not inherit one either.
+    h.get_by_label("Close").click();
+    h.run_steps(4);
+    h.state_mut().dialog = Some(Dialog::Shortcuts);
+    h.run_steps(8);
+    let shortcuts = card(&h).expect("the shortcut list has a size");
+    let mut fresh = harness(|app| app.dialog = Some(Dialog::Shortcuts));
+    fresh.run_steps(8);
+    assert_eq!(Some(shortcuts), card(&fresh), "the shortcut list kept the height of a dialog it never showed");
 }

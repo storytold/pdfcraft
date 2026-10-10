@@ -220,6 +220,12 @@ trailer << /Root 1 0 R >>
     });
     h.run_steps(4);
     h.get_by_label_contains("This file was damaged and has been repaired.");
+    // The strip's height comes from its 28 pt pill, which the text is shorter than. egui aligns each
+    // widget of a row against the row's initial height, so without reserving that band the icon and
+    // its sentence hug the top of the strip — about 5 pt too high, and far more visible in Chinese.
+    let centres: Vec<f32> =
+        ["This file was damaged and has been repaired.", "Details", "Dismiss"].map(|l| h.get_by_label_contains(l).rect().center().y).into();
+    assert!(centres.windows(2).all(|c| (c[0] - c[1]).abs() < 0.6), "the notice strip's parts are at {centres:?}, not on one centre line");
     h.get_by_label("Details").click();
     h.run_steps(3);
     assert_eq!(h.state().dialog, Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::Advanced)));
@@ -363,8 +369,7 @@ fn an_earlier_revision_opens_from_document_properties() {
     }
     h.run_steps(2);
     h.state_mut().dialog = Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::Advanced));
-    h.run_steps(2);
-    h.run_steps(2);
+    h.run_steps(6);
     h.get_by_label("View revision 1").click();
     h.run_steps(3);
     let s = h.state();

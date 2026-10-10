@@ -23,12 +23,25 @@ pub fn mode_tab(ui: &mut egui::Ui, label: &str, active: bool) -> Response {
     resp
 }
 
+/// The height of [`pill_button`], and of any strip that has to centre itself around one.
+pub const PILL_HEIGHT: f32 = 28.0;
+
+/// A right-aligned row of [`pill_button`]s, exactly [`PILL_HEIGHT`] tall: how a dialog ends.
+///
+/// `Ui::with_layout` lays its children over the *whole remaining height* of its parent, so a
+/// footer written that way stretches to fill whatever height the modal area was last drawn at —
+/// and an area that size is never given back, leaving every later dialog in it blank below its
+/// buttons. Reserving the row's own height keeps a dialog as tall as its content.
+pub fn pill_row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), PILL_HEIGHT), egui::Layout::right_to_left(egui::Align::Center), add);
+}
+
 /// Rounded pill button; `primary` fills with the accent.
 pub fn pill_button(ui: &mut egui::Ui, label: &str, primary: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = theme::medium(12.5);
     let w = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font.clone(), t.text).size().x);
-    let (rect, resp) = ui.allocate_exact_size(vec2(w + 26.0, 28.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w + 26.0, PILL_HEIGHT), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
     let (fill, stroke, text) = if primary {
         (if resp.hovered() { t.accent_text } else { t.accent }, Stroke::NONE, Color32::WHITE)

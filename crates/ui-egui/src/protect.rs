@@ -2,7 +2,7 @@
 //! Password Security settings behind "Advanced Options" (compatibility, what to encrypt,
 //! printing, changes, copying, screen readers). Execution plan M8.1.
 
-use egui::{Align, Color32, Layout};
+use egui::Color32;
 use pdfcraft_engine::{Changes, Edit, Printing, Protection};
 
 use crate::theme::{self, Tokens};
@@ -221,7 +221,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     );
     ui.add_space(12.0);
     let (mut apply, mut cancel) = (false, false);
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+    widgets::pill_row(ui, |ui| {
         let ok = d.problem().is_none();
         if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, tl!("Apply"), true)).inner.clicked() {
             apply = true;

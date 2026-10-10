@@ -1,13 +1,18 @@
 //! Modal dialogs: Document Properties, Keyboard Shortcuts, About (with the Contributors and Models credits).
 
-use egui::{Align, Layout};
-
 use crate::theme::{self, Tokens};
 use pdfcraft_engine::Edit;
 
 use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, widgets};
 
 const INFO_KEYS: [&str; 4] = ["Title", "Author", "Subject", "Keywords"];
+
+/// The frame of every dialog. [`egui::Frame::popup`]'s own margin is the 8 pt meant for menus and
+/// tooltips, which lets a dialog's text touch its border — most visibly in Chinese, whose glyphs
+/// fill their box and have no side bearing to fall back on.
+pub(crate) fn dialog_frame(ctx: &egui::Context) -> egui::Frame {
+    egui::Frame::popup(&ctx.global_style()).inner_margin(egui::Margin::symmetric(20, 16))
+}
 
 pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     password(app, ctx);
@@ -61,7 +66,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut close = false;
     let mut next = dialog;
-    let modal = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::new("dialog")).frame(dialog_frame(ctx)).show(ctx, |ui| {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
@@ -494,7 +499,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     .color(t.text_faint),
                 );
                 ui.add_space(10.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                widgets::pill_row(ui, |ui| {
                     if ui.add_enabled_ui(fits, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
                         replace_now = true;
                         close = true;
@@ -564,7 +569,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 ui.checkbox(&mut app.extract_draft.delete, tl!("Delete pages after extracting"));
                 ui.checkbox(&mut app.extract_draft.separate, tl!("Extract pages as separate files"));
                 ui.add_space(12.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                widgets::pill_row(ui, |ui| {
                     if widgets::pill_button(ui, tl!("Extract"), true).clicked() {
                         extract_now = true;
                         close = true;
@@ -637,7 +642,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 });
                 d.to = d.to.max(d.from);
                 ui.add_space(12.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                widgets::pill_row(ui, |ui| {
                     if widgets::pill_button(ui, tl!("OK"), true).clicked() {
                         rotate_now = true;
                         close = true;
@@ -667,7 +672,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 });
                 d.to = d.to.max(d.from);
                 ui.add_space(12.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                widgets::pill_row(ui, |ui| {
                     if widgets::pill_button(ui, tl!("OK"), true).clicked() {
                         let pages: Vec<usize> = if d.all { (0..n).collect() } else { (d.from - 1..d.to.min(n)).collect() };
                         duplicate_now = Some(Edit::DuplicateField { name: d.name.clone(), pages });
@@ -736,7 +741,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     });
                 });
                 ui.add_space(12.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                widgets::pill_row(ui, |ui| {
                     if widgets::pill_button(ui, tl!("Create PDF Comment Summary"), true).clicked() {
                         summarize_now = true;
                         close = true;
@@ -756,7 +761,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     &[("name", &name)],
                 ));
                 ui.add_space(12.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                widgets::pill_row(ui, |ui| {
                     if widgets::pill_button(ui, tl!("Revert"), true).clicked() {
                         revert_now = true;
                         close = true;
@@ -1110,7 +1115,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         }
         ui.add_space(12.0);
         let changed = draft_changes(app).is_some_and(|c| !c.is_empty());
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        widgets::pill_row(ui, |ui| {
             if dialog == Dialog::Recovery {
                 if widgets::pill_button(ui, tl!("Recover"), true).clicked() {
                     recover = Some(true);
@@ -1374,7 +1379,7 @@ fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // the prompt taller than the window (#236); 80 characters wrap to a few lines.
     let shown = shorten_middle(&name, 80);
     let mut choice: Option<Option<bool>> = None;
-    let modal = egui::Modal::new(egui::Id::new("save_prompt")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::new("save_prompt")).frame(dialog_frame(ctx)).show(ctx, |ui| {
         ui.set_width(420.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("save", 22.0, t.accent));
@@ -1392,7 +1397,7 @@ fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ui.add_space(6.0);
         ui.label(egui::RichText::new(tl!("Your changes will be lost if you don't save them.")).color(t.text_muted));
         ui.add_space(14.0);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        widgets::pill_row(ui, |ui| {
             if widgets::pill_button(ui, tl!("Save"), true).clicked() {
                 choice = Some(Some(true));
             }
@@ -1435,7 +1440,7 @@ fn link_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let email = pending.url.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("mailto:"));
     let (title, open) = if email { (tl!("Write this email?"), tl!("Open email app")) } else { (tl!("Open this web page?"), tl!("Open link")) };
     let mut choice: Option<bool> = None;
-    let modal = egui::Modal::new(egui::Id::new("link_prompt")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::new("link_prompt")).frame(dialog_frame(ctx)).show(ctx, |ui| {
         ui.set_width(460.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("external-link", 22.0, t.accent));
@@ -1474,7 +1479,7 @@ fn link_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
             .small(),
         );
         ui.add_space(14.0);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        widgets::pill_row(ui, |ui| {
             if widgets::pill_button(ui, tl!("Cancel"), true).clicked() {
                 choice = Some(false);
             }
@@ -1501,7 +1506,7 @@ fn password(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut submit = false;
     let mut cancel = false;
-    let modal = egui::Modal::new(egui::Id::new("password")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::new("password")).frame(dialog_frame(ctx)).show(ctx, |ui| {
         ui.set_width(400.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("lock", 22.0, t.accent));
@@ -1523,7 +1528,7 @@ fn password(app: &mut PdfCraftApp, ctx: &egui::Context) {
             ui.label(egui::RichText::new(tl!(e)).color(egui::Color32::from_rgb(0xD1, 0x3B, 0x3B)));
         }
         ui.add_space(12.0);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        widgets::pill_row(ui, |ui| {
             if widgets::pill_button(ui, tl!("Open"), true).clicked() {
                 submit = true;
             }

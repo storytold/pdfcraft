@@ -717,7 +717,7 @@ pub(crate) fn body(
     });
     ui.add_space(12.0);
     let (mut go, mut cancel) = (false, false);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    widgets::pill_row(ui, |ui| {
         let label = if d.printer.is_some() { "Print" } else { "Save as PDF" };
         if ui.add_enabled_ui(settings.is_ok() && !sheets.is_empty(), |ui| widgets::pill_button(ui, label, true)).inner.clicked() {
             go = true;

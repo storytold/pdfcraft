@@ -88,6 +88,16 @@ jobs:
       - name: Apply version override
         if: inputs.version != ''
         run: cargo xtask version set "$PDFCRAFT_VERSION"
+      # A release whose Chinese interface would show boxes must not go out as a green build: this
+      # runs the interface-font test with the installed face REQUIRED (docs/development.md). Before
+      # signing, so a failure costs no certificate or notarization time, and in the same release
+      # profile the package step reuses.
+      - name: Chinese interface font check
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+          PDFCRAFT_TEST_REQUIRE_CJK: "1"
+        run: cargo test --release --locked -p pdfcraft-ui-egui --test chinese_system_font
       - name: Import signing certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -148,6 +158,18 @@ jobs:
         if: inputs.version != ''
         shell: bash
         run: cargo xtask version set "$PDFCRAFT_VERSION"
+      # The same test on the real Windows host, in the profile the package step reuses. It does not
+      # require a Chinese face: a release must not hinge on which fonts the runner image happens to
+      # carry, and every Windows desktop install ships Microsoft YaHei anyway, so this is the
+      # code-path check, not the packaging gate. Only the host arch runs tests; x86 and ARM64 are
+      # cross-compiled.
+      - name: Chinese interface font check
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+        run: cargo test --release --locked --target ${{ matrix.target }} -p pdfcraft-ui-egui --test chinese_system_font
       - name: Install WiX
         shell: pwsh
         run: dotnet tool install --global wix --version 5.0.2

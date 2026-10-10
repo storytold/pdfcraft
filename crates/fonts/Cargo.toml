@@ -14,3 +14,5 @@ pdfcraft-cos = { workspace = true }
 skrifa = "0.44"
 # Arabic shaping for text written into PDFs; already in the tree via egui, on the same read-fonts.
 harfrust = "0.12"
+# One line when an installed fallback face is found (system module).
+log = { workspace = true }

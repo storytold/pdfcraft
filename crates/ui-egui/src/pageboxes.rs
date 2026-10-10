@@ -3,7 +3,7 @@
 //! Choose a box (crop, trim, bleed, art, media), margins from the media box in points, inches or
 //! millimetres, and the pages. A preview shows the current page's media box and the new box.
 
-use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
+use egui::{Color32, CornerRadius, Rect, Stroke, pos2, vec2};
 use pdfcraft_engine::{BoxSpec, Edit, PageBox};
 
 use crate::theme::{self, Tokens};
@@ -201,7 +201,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     });
     ui.add_space(12.0);
     let (mut apply, mut cancel) = (false, false);
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+    widgets::pill_row(ui, |ui| {
         if widgets::pill_button(ui, tl!("OK"), true).clicked() {
             apply = true;
         }

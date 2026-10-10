@@ -1775,8 +1775,11 @@ impl eframe::App for PdfCraftApp {
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
         i18n::set_current(lang);
-        // Simplified Chinese wants its own faces before the Japanese ones (one baseline per line).
-        let hans = lang.code() == "zh-hans";
+        // Either Chinese interface wants a Han face before the Japanese ones: egui draws each
+        // character with the FIRST face that has its glyph, so with Japanese first a character no
+        // Japanese face has lands in another face and the mixed vertical metrics sink it below the
+        // line, and the Han characters they do share come out in Japanese shapes.
+        let hans = matches!(lang.code(), "zh-hans" | "zh-hant");
         if !self.styled {
             egui_extras::install_image_loaders(ctx);
             theme::install_fonts_for(ctx, hans);

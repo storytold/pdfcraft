@@ -55,4 +55,10 @@ currently has no Chinese face, so Chinese there still shows the replacement glyp
 Font files are never
 committed here (`AGENTS.md` §1.4; team members: [craftrules `standards/fonts.md`](https://github.com/storytold/craftrules/blob/main/standards/fonts.md), internal).
 
+`system` (desktop only) reads a face already installed on the machine at runtime: `han`, a Chinese
+face covering both Simplified and Traditional. It serves two callers with one search — the
+interface (`crates/ui-egui/src/system_fonts.rs`, which also keeps its own Arabic fallback) and the
+page renderer, which substitutes it for a Chinese CID font the document does not embed, to draw it
+on screen only. Such a face is never embedded, shipped, committed or copied (AGENTS.md §1.4).
+
 The full font subsystem (parsing, shaping, subsetting and embedding) arrives with M2.2/M7.

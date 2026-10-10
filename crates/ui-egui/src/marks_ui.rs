@@ -2,7 +2,7 @@
 //! dialog snapshots d13, d14, d12d). Each has the shared Page Range Options and a schematic
 //! preview of the current page. "Update" opens the same dialog in replace mode.
 
-use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
+use egui::{Color32, CornerRadius, Rect, Stroke, pos2, vec2};
 use pdfcraft_engine::{Background, Edit, HeaderFooter, MarkKind, Watermark};
 
 use crate::theme::{self, Tokens};
@@ -380,7 +380,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     });
     ui.add_space(10.0);
     let (mut apply, mut cancel) = (false, false);
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+    widgets::pill_row(ui, |ui| {
         let ready = match kind {
             MarkKind::HeaderFooter => d.hf.text.iter().any(|x| !x.trim().is_empty()),
             MarkKind::Watermark => {

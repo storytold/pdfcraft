@@ -271,7 +271,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Token
     }
     ui.add_space(12.0);
     let (mut a, mut c) = (false, false);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    widgets::pill_row(ui, |ui| {
         if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
             a = true;
         }

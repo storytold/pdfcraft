@@ -62,4 +62,40 @@ OpenGL can't start either, PdfCraft exits with both errors in the log. The fallb
 | `WGPU_BACKEND` | Graphics backend; by default Windows uses Direct3D 12, falling back to OpenGL |
 | `PDFCRAFT_RENDERER` | `gl` starts with OpenGL (glow) and never loads wgpu; `wgpu` reports a wgpu failure instead of retrying with OpenGL; unset, wgpu is retried with OpenGL when it can't start (see [Renderer fallback](#renderer-fallback)) |
 | `CRAFT_FONTS_DIR` | Build time: a [craft-fonts](https://github.com/storytold/craft-fonts) checkout to embed (Japanese fonts) |
-| `PDFCRAFT_SYSTEM_FONTS` | `0` stops the desktop app from using an installed font for characters its embedded fonts lack (`cargo xtask screenshots` sets it) |
+| `PDFCRAFT_SYSTEM_FONTS` | `0` disables both runtime UI fallbacks (`cargo xtask screenshots` sets it); no effect on fonts embedded in PDFs |
+| `PDFCRAFT_TEST_REQUIRE_CJK` | `1` makes the Chinese interface-font test fail instead of skipping when the machine has no Chinese face (the macOS release job sets it) |
+
+## Installed interface fonts
+
+Chinese has no embedded face: the craft-fonts build input's only `Hans` face is Noto CJK, which
+`AGENTS.md` §1.1 rules out. So the desktop app reads one Chinese face that is already installed on
+the machine — the same face the page renderer substitutes for a non-embedded Chinese CID font, so
+one search answers for both (`crates/fonts/src/system.rs`, `pdfcraft_fonts::han`). It tries
+Microsoft YaHei / SimHei / SimSun / JhengHei on Windows, PingFang or Hiragino Sans GB on macOS and
+WenQuanYi / AR PL on Linux and FreeBSD, and every candidate must map a whole set of Chinese
+characters in one collection face before it is used. The face serves the interface in every
+language, because a Chinese file name appears in an English interface too.
+
+Neither runtime face is read in a web build, and if the machine has no Chinese face the interface
+keeps working with replacement glyphs. `PDFCRAFT_SYSTEM_FONTS=0` turns both off, on every platform.
+
+Both are read once, capped at 32 MiB each and 16 collection faces, and used only for drawing. No
+system font file is copied, converted, embedded in a PDF, committed, downloaded or included in the
+installer. Use fonts legally installed on the user's machine; Microsoft's
+[font redistribution FAQ](https://learn.microsoft.com/en-us/typography/fonts/font-faq) permits
+Windows applications to use system-wide Windows fonts for interface display, while generally
+prohibiting redistribution without a separate licence. Other fonts retain their own terms.
+
+Published screenshots must use `PDFCRAFT_SYSTEM_FONTS=0`, as required by `AGENTS.md` §1.4.
+For regression validation with an installed Chinese font, set
+`PDFCRAFT_TEST_REQUIRE_CJK=1` and run
+`cargo test -p pdfcraft-ui-egui --test chinese_system_font -- --nocapture`.
+Without the flag the test skips when no Chinese face is installed; with it, the same run **fails**,
+which is what the macOS release job does before packaging — a build whose Chinese interface would
+show boxes cannot be shipped as a green pipeline. The Windows release job runs the same test
+*without* the flag: which fonts a CI image carries is nobody's promise, while every Windows desktop
+install ships Microsoft YaHei, so a missing face there is the runner's problem and not a reason to
+block a release. The test checks every non-ASCII
+translated character in `zh-hans.tsv` and `zh-hant.tsv`, Chinese file names in both UI font orders,
+all four interface families, and retention of the existing Arabic fallback. Run the same test in a
+separate process with `PDFCRAFT_SYSTEM_FONTS=0` to verify the publication opt-out.

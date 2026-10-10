@@ -68,7 +68,11 @@ fn help_commands_open_each_link() {
 
 #[test]
 fn about_dialog_has_contributors_and_models_tabs() {
+    // A modal is centred on the size it reached last frame and its list shrinks to its content, so
+    // the dialog keeps moving for a few frames after it opens. Let it settle before each click, or
+    // the click lands where a button was rather than where it is.
     let mut h = harness(|app| app.dialog = Some(Dialog::About));
+    h.run_steps(6);
     h.get_by_label("Contributors").click();
     // Tab changes resize and recenter the modal as the compiled-in credits grow.
     // Let its layout settle before clicking the next control at its new position.
@@ -84,4 +88,32 @@ fn about_dialog_has_contributors_and_models_tabs() {
     h.get_by_label("Models").click();
     h.run_steps(4);
     assert!(h.query_all_by_label("Anthropic").count() >= 1);
+}
+
+/// The smallest window the app allows (820×520, `apps/pdfcraft/src/main.rs`). A dialog that sizes to
+/// its content can push its own buttons off the bottom of the window, and a dialog you cannot close
+/// is worse than a dialog with no margins.
+#[test]
+fn about_dialog_keeps_its_close_button_reachable() {
+    let mut h = Harness::builder().with_size(egui::vec2(820.0, 520.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.dialog = Some(Dialog::About);
+        app
+    });
+    h.run_steps(6);
+    for tab in ["Contributors", "Models"] {
+        h.get_by_label(tab).click();
+        // A modal is centred on the size it reached last frame, so give it the frames it needs to
+        // settle before treating a button as where it is drawn.
+        h.run_steps(6);
+        let close = h.get_by_label("Close");
+        let r = close.rect();
+        assert!(r.bottom() <= 520.0 && r.top() >= 0.0, "the {tab} tab put Close at {r:?} of a 520 pt window");
+        close.click();
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none(), "Close did not close the {tab} tab");
+        h.state_mut().dialog = Some(Dialog::About);
+        h.run_steps(6);
+    }
 }

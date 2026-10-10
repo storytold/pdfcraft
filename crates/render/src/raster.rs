@@ -69,20 +69,30 @@ impl RenderConfig {
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
             hide_comments: self.hide_comments,
-            font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| standard(query))),
+            font_resolver: Arc::new(move |query| cjk_fallback(query).or_else(|| standard(query))),
             ..InterpreterSettings::default()
         }
     }
 }
 
-/// A Japanese face from craft-fonts for a CID font of the Adobe-Japan1 collection that the PDF
-/// doesn't embed (`HeiseiMin-W3`, `KozGoPro-Medium`, …). hayro's own substitutes for fonts that
-/// aren't embedded are the Latin standard 14, so such text drew nothing. `None` for every other
-/// font, and when PdfCraft was built without craft-fonts. Only Japanese: the pinned craft-fonts
-/// has no other CJK faces, and its later Chinese face is Noto CJK, which AGENTS.md §1.1 rules out.
-fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
+/// A substitute face for a CID font the PDF doesn't embed: a craft-fonts Japanese face for the
+/// Adobe-Japan1 collection (`HeiseiMin-W3`, `KozGoPro-Medium`, …), or a face installed on this
+/// machine for Adobe-GB1/Adobe-CNS1 (Chinese). hayro's own substitutes for fonts that aren't
+/// embedded are the Latin standard 14, so such text drew nothing. `None` for every other font, and
+/// for Japanese when PdfCraft was built without craft-fonts.
+fn cjk_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
     let FontQuery::Fallback(f) = query else { return None };
-    if f.character_collection.as_ref()?.family != CidFamily::AdobeJapan1 {
+    let family = &f.character_collection.as_ref()?.family;
+    // Chinese: no craft-fonts face is allowed (its only `Hans` face is Noto CJK, which AGENTS.md
+    // §1.1 rules out), so an installed CJK font stands in — for on-screen drawing only; it is
+    // never embedded or written into the document (AGENTS.md §1.4).
+    #[cfg(not(target_arch = "wasm32"))]
+    if matches!(family, CidFamily::AdobeGB1 | CidFamily::AdobeCNS1) {
+        let face = pdfcraft_fonts::han()?;
+        let bytes: Arc<Vec<u8>> = Arc::clone(&face.bytes);
+        return Some((bytes, face.index));
+    }
+    if family != &CidFamily::AdobeJapan1 {
         return None;
     }
     let face = match japanese_face(f.post_script_name.as_deref().unwrap_or_default(), f.is_serif, f.is_bold || f.font_weight >= 600) {
@@ -3762,7 +3772,7 @@ trailer << /Root 1 0 R >>
             character_collection: Some(CharacterCollection { family: CidFamily::AdobeJapan1, supplement: 2 }),
             ..FallbackFontQuery::default()
         });
-        let Some((data, index)) = super::japanese_fallback(&query) else {
+        let Some((data, index)) = super::cjk_fallback(&query) else {
             eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): no Japanese face to check");
             return;
         };
@@ -3770,6 +3780,45 @@ trailer << /Root 1 0 R >>
         let charmap = font.charmap();
         let missing: Vec<char> = ('\u{FF61}'..='\u{FF9F}').chain(['日', '本']).filter(|&c| charmap.map(c).is_none()).collect();
         assert!(missing.is_empty(), "the Mincho substitute lacks {missing:?}");
+    }
+
+    /// A non-embedded Chinese CID font (Adobe-GB1) drew nothing: hayro's substitutes for fonts
+    /// that aren't embedded are Latin-only and no craft-fonts face is allowed. On desktop an
+    /// installed CJK font now stands in for on-screen drawing; without one (or with
+    /// `PDFCRAFT_SYSTEM_FONTS=0`) nothing changes.
+    #[test]
+    fn non_embedded_chinese_cid_fonts_draw_with_an_installed_face() {
+        let pdf = |base_font: &str| {
+            let content = "BT /F1 40 Tf 5 15 Td <4E2D56FD> Tj ET";
+            format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /{base_font} /Encoding /UniGB-UCS2-H /DescendantFonts [6 0 R] >> endobj
+6 0 obj << /Type /Font /Subtype /CIDFontType0 /BaseFont /{base_font} /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >>
+  /FontDescriptor 7 0 R /DW 1000 >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /{base_font} /Flags 4 /FontBBox [0 -250 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent -250 /CapHeight 700 /StemV 80 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+                content.len()
+            )
+        };
+        for base_font in ["STSong-Light", "STHeiti-Regular"] {
+            let mut r = PageRenderer::new(Arc::new(pdf(base_font).into_bytes()), RenderConfig::default());
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+            assert!(p.error.is_none(), "{base_font}: {:?}", p.error);
+            let inked = p.rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count();
+            if pdfcraft_fonts::han().is_none() {
+                eprintln!("no installed Chinese font (or PDFCRAFT_SYSTEM_FONTS=0): nothing to check");
+                continue;
+            }
+            // 中国 at 40 pt covers a few hundred dark pixels; a blank or missing-glyph run doesn't.
+            assert!(inked > 300, "{base_font}: 中国 is drawn ({inked} dark pixels)");
+        }
     }
 
     /// 𠮷 (U+20BB7, Adobe-Japan1 CID 13706) in a non-embedded Japanese font: neither craft-fonts
