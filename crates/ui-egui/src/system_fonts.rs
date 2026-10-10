@@ -1,9 +1,9 @@
 //! The last-resort interface font: one face already installed on this machine.
 //!
-//! The embedded faces (Inter, egui's defaults, craft-fonts) come first in every family; this one
-//! only draws characters none of them has, such as an Arabic file name in a build without
-//! craft-fonts. It is read at runtime and never embedded or shipped (AGENTS.md §1.4), and
-//! `PDFCRAFT_SYSTEM_FONTS=0` turns it off (published screenshots do).
+//! Normally the embedded faces come first. In a macOS Simplified Chinese interface without
+//! an embedded Hans face, an installed Chinese face precedes the Japanese fallback so shared
+//! and Simplified-only characters use the same vertical metrics. It is read at runtime and never
+//! embedded or shipped (AGENTS.md §1.4). `PDFCRAFT_SYSTEM_FONTS=0` turns it off (published screenshots do).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -12,15 +12,43 @@ use egui::FontData;
 
 /// Larger files are not read: a font path is still untrusted input.
 const MAX_BYTES: u64 = 32 << 20;
+/// Apple's Chinese collections (including STHeiti) are larger than the Arabic faces.
+const MAX_CHINESE_BYTES: u64 = 128 << 20;
 /// Faces tried in a collection (`.ttc`).
 const MAX_FACES: u32 = 16;
 /// Arabic letter alef: the face must have it to be worth loading.
 const PROBE: char = '\u{0627}';
+/// Simplified-only character: a Japanese-only face must not pass this probe.
+const CHINESE_PROBE: char = '欢';
 
 /// The installed fallback face, read once. `None` when it is turned off or no candidate fits.
-pub fn fallback() -> Option<Arc<FontData>> {
+pub fn fallback(prefer_hans: bool) -> Option<Arc<FontData>> {
     static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
-    CACHE.get_or_init(load).clone()
+    static CHINESE_CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    if cfg!(target_os = "macos") && prefer_hans {
+        CHINESE_CACHE.get_or_init(load_chinese).clone()
+    } else {
+        CACHE.get_or_init(load).clone()
+    }
+}
+
+fn load_chinese() -> Option<Arc<FontData>> {
+    if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
+        return None;
+    }
+    chinese_candidates().iter().find_map(|path| read_with(path, CHINESE_PROBE, MAX_CHINESE_BYTES))
+}
+
+/// Read installed collections only; never copy them into the package or a PDF.
+fn chinese_candidates() -> Vec<PathBuf> {
+    [
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/System/Library/Fonts/STHeiti Medium.ttc",
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .collect()
 }
 
 fn load() -> Option<Arc<FontData>> {
@@ -55,12 +83,16 @@ fn candidates() -> Vec<PathBuf> {
 }
 
 fn read(path: &Path) -> Option<Arc<FontData>> {
+    read_with(path, PROBE, MAX_BYTES)
+}
+
+fn read_with(path: &Path, probe: char, max_bytes: u64) -> Option<Arc<FontData>> {
     let meta = std::fs::metadata(path).ok()?;
-    if !meta.is_file() || meta.len() > MAX_BYTES {
+    if !meta.is_file() || meta.len() > max_bytes {
         return None;
     }
     let bytes = std::fs::read(path).ok()?;
-    let index = face_with(&bytes, PROBE)?;
+    let index = face_with(&bytes, probe)?;
     let mut data = FontData::from_owned(bytes);
     data.index = index;
     log::info!("interface font fallback: {}", path.display());
@@ -93,6 +125,7 @@ mod tests {
         // Inter is Latin, Greek and Cyrillic only.
         let inter = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
         assert_eq!(face_with(inter, PROBE), None);
+        assert_eq!(face_with(inter, CHINESE_PROBE), None);
         assert_eq!(face_with(inter, 'A'), Some(0));
     }
 
