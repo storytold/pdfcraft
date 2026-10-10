@@ -124,6 +124,39 @@ fn text_marks_and_date() {
     assert!(v.iter().any(|(t, _)| t == "Stamp"));
 }
 
+/// The open type box, found as the focused text input.
+fn type_box_rect(h: &Harness<'static, PdfCraftApp>) -> egui::Rect {
+    h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| n.is_focused()).expect("an open type box").rect()
+}
+
+#[test]
+fn clicking_elsewhere_with_add_text_keeps_the_typed_text() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    click(&mut h, 50.0, 250.0);
+    h.event(egui::Event::Text("Ada Lovelace".into()));
+    h.run_steps(1);
+    // Still on Add text: the next click starts a new box, and must keep the first one.
+    click(&mut h, 50.0, 150.0);
+    h.run_steps(2);
+    let v = items(&h);
+    assert_eq!(v, vec![("FreeText".to_string(), Some("Ada Lovelace".to_string()))]);
+    assert!(h.state().views[0].fill_text.as_ref().is_some_and(|t| t.text.is_empty()), "a new, empty box is open");
+}
+
+#[test]
+fn the_type_box_grows_as_text_is_typed() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    click(&mut h, 50.0, 250.0);
+    h.run_steps(2);
+    let empty = type_box_rect(&h).width();
+    h.event(egui::Event::Text("Ada Lovelace, Countess of Lovelace".into()));
+    h.run_steps(3);
+    let full = type_box_rect(&h).width();
+    assert!(full > empty * 2.0, "the box widens with its text: {empty} -> {full}");
+}
+
 #[test]
 fn signing_draws_a_signature_once_and_places_it() {
     let mut h = harness();
