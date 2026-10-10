@@ -53,7 +53,7 @@ const ZH_DAYS: [&str; 7] = ["星期日", "星期一", "星期二", "星期三", 
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub const DATE_LANGUAGES: [DateLanguage; 14] = [
+pub const DATE_LANGUAGES: [DateLanguage; 15] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -218,6 +218,15 @@ pub const DATE_LANGUAGES: [DateLanguage; 14] = [
         months_short: ["січ.", "лют.", "бер.", "квіт.", "трав.", "черв.", "лип.", "серп.", "вер.", "жовт.", "лист.", "груд."],
         days: ["неділя", "понеділок", "вівторок", "середа", "четвер", "пʼятниця", "субота"],
         days_short: ["нд", "пн", "вт", "ср", "чт", "пт", "сб"],
+    },
+    DateLanguage {
+        code: "it",
+        name: "Italiano",
+        months: ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"],
+        months_with_day: None,
+        months_short: ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"],
+        days: ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"],
+        days_short: ["dom", "lun", "mar", "mer", "gio", "ven", "sab"],
     },
 ];
 
@@ -527,7 +536,7 @@ mod tests {
         assert_eq!(s.today_text(None, None).as_deref(), Ok("terça-feira 14 novembro"));
         assert_eq!(s.today_text(Some("d mmmm"), Some("uk")).as_deref(), Ok("14 листопада"), "Ukrainian months after a day");
         assert_eq!(s.today_text(Some("dddd d mmmm"), Some("de")).as_deref(), Ok("Dienstag 14 November"));
-        assert!(s.set_date_language(Some("it")).unwrap_err().contains("zh-hant"), "only the interface languages");
+        assert!(s.set_date_language(Some("xx")).unwrap_err().contains("zh-hant"), "only the interface languages");
         assert_eq!(s.date_language(), Some("pt-br"), "an unknown language keeps the previous one");
         s.set_date_language(None).unwrap();
         assert_eq!(s.date_language(), None);

@@ -263,6 +263,11 @@ impl CommentPrefs {
         self.styles.iter().find(|(t, _)| *t == tool).map(|(_, s)| s.clone()).unwrap_or_default()
     }
 
+    /// Every tool with its current default style (the persisted settings read this).
+    pub fn styles(&self) -> impl Iterator<Item = (CommentTool, &Style)> {
+        self.styles.iter().map(|(t, s)| (*t, s))
+    }
+
     pub fn set_color(&mut self, tool: CommentTool, c: Rgb) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             s.color = c;

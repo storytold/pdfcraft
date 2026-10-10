@@ -537,6 +537,13 @@ fn make_current_properties_default() {
     h.run_steps(3);
     let st = h.state().comment_prefs.style(pdfcraft_ui_egui::comments::CommentTool::Rectangle);
     assert_eq!((st.color, st.opacity, st.width), ([0.0, 0.47, 0.84], 0.5, 5.0));
+    // The default survives a restart (#340): a fresh app reads the persisted settings and its
+    // next rectangle still takes the style.
+    let json = h.state().persist();
+    let mut fresh = PdfCraftApp::new();
+    fresh.restore(&json);
+    let st = fresh.comment_prefs.style(pdfcraft_ui_egui::comments::CommentTool::Rectangle);
+    assert_eq!((st.color, st.opacity, st.width), ([0.0, 0.47, 0.84], 0.5, 5.0), "the tool default persisted");
     // The next rectangle takes it.
     h.state_mut().set_option("quick", "square").unwrap();
     drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
