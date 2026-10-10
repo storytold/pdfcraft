@@ -110,6 +110,17 @@ usage = "Italian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
 sha256 = "e558d1b1374c5725b68792446b08ae31c35c7b6fd68c4a54d257b6ca439f0250"
 
 [[asset]]
+path = "crates/ui-egui/src/i18n/pl.tsv"
+title = "Polish interface translation catalog"
+author = "PdfCraft contributors"
+source = "Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Polish UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "7c1c9d32b5aa6d7bd827bc91134fb8050187ed00d589e8c3d9a1327069840ef8"
+
+[[asset]]
 path = "crates/ui-egui/src/i18n/ru.tsv"
 title = "Russian interface translation catalog"
 author = "PdfCraft contributors"
