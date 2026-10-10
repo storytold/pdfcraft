@@ -715,8 +715,8 @@ fn walk(
     if let Some(ft) = d.name(b"FT") {
         inh.ft = Some(ft.to_vec());
     }
-    if let Some(ff) = d.get(b"Ff").and_then(|o| doc.resolve(o).as_int()) {
-        inh.ff = Some(ff as u32);
+    if let Some(ff) = field_flags(doc, d) {
+        inh.ff = Some(ff);
     }
     for (k, slot) in [(&b"V"[..], &mut inh.v), (b"DV", &mut inh.dv)] {
         if let Some(v) = d.get(k) {
@@ -810,6 +810,10 @@ fn walk(
         actions,
         button,
     });
+}
+
+fn field_flags(doc: &Document, dict: &Dict) -> Option<u32> {
+    dict.get(b"Ff").and_then(|value| doc.resolve(value).as_int()).and_then(|value| u32::try_from(value).ok())
 }
 
 // ── writing ─────────────────────────────────────────────────────────────────────────────────

@@ -27,14 +27,20 @@ impl From<RenderRequest> for Key {
     }
 }
 
+impl Key {
+    fn request(self) -> RenderRequest {
+        RenderRequest { page: self.page, kind: self.kind, tile: self.tile, scale: f32::from_bits(self.scale), tag: self.tag }
+    }
+}
+
 struct Completed {
     page: RenderedPage,
     bytes: usize,
-    valid: Option<Arc<AtomicBool>>,
+    valid: Vec<Arc<AtomicBool>>,
 }
 
-fn valid(token: &Option<Arc<AtomicBool>>) -> bool {
-    token.as_ref().is_none_or(|v| v.load(Ordering::Acquire))
+fn valid(tokens: &[Arc<AtomicBool>]) -> bool {
+    tokens.iter().all(|token| token.load(Ordering::Acquire))
 }
 
 #[cfg(any(test, not(target_arch = "wasm32")))]
@@ -124,21 +130,23 @@ impl Default for WorkQueue {
 }
 
 impl WorkQueue {
-    pub(super) fn replace(&self, requests: Vec<RenderRequest>) {
+    pub(super) fn replace(&self, requests: Vec<RenderRequest>) -> Vec<RenderRequest> {
         let mut state = lock(&self.state);
         if state.closed {
-            return;
+            return Vec::new();
         }
         let mut desired = HashSet::with_capacity(requests.len());
         let requests: Vec<_> = requests.into_iter().filter(|r| desired.insert(Key::from(*r))).collect();
         state.results.retain(|r| desired.contains(&Key::from(r.page.request)) && valid(&r.valid));
         state.bytes = state.results.iter().fold(0usize, |n, r| n.saturating_add(r.bytes));
         let completed: HashSet<_> = state.results.iter().map(|r| Key::from(r.page.request)).collect();
+        let obsolete = state.active.iter().filter(|key| !desired.contains(key)).copied().map(Key::request).collect();
         state.desired = requests.iter().enumerate().map(|(priority, req)| (Key::from(*req), priority)).collect();
         state.pending =
             requests.into_iter().rev().filter(|r| !state.active.contains(&Key::from(*r)) && !completed.contains(&Key::from(*r))).collect();
         drop(state);
         self.changed.notify_all();
+        obsolete
     }
 
     pub(super) fn pop(&self) -> Option<RenderRequest> {
@@ -179,6 +187,11 @@ impl WorkQueue {
     /// using the pool's fallback parser, including when failure occurs after enqueueing.
     #[cfg(any(test, not(target_arch = "wasm32")))]
     pub(super) fn send_valid(&self, page: RenderedPage, token: Option<Arc<AtomicBool>>) -> Result<(), ()> {
+        self.send_valid_with_tokens(page, token.into_iter().collect())
+    }
+
+    #[cfg(any(test, not(target_arch = "wasm32")))]
+    pub(super) fn send_valid_with_tokens(&self, page: RenderedPage, tokens: Vec<Arc<AtomicBool>>) -> Result<(), ()> {
         let key = Key::from(page.request);
         let bytes = result_bytes(&page);
         let mut state = lock(&self.state);
@@ -191,7 +204,7 @@ impl WorkQueue {
                 state.active.remove(&key);
                 return Ok(());
             }
-            if !valid(&token) {
+            if !valid(&tokens) {
                 state.retry(page.request);
                 self.changed.notify_all();
                 return Ok(());
@@ -199,7 +212,7 @@ impl WorkQueue {
             if state.results.len() < self.max_count && (state.results.is_empty() || state.bytes.saturating_add(bytes) <= self.max_bytes) {
                 state.active.remove(&key);
                 state.bytes = state.bytes.saturating_add(bytes);
-                state.results.push_back(Completed { page, bytes, valid: token });
+                state.results.push_back(Completed { page, bytes, valid: tokens });
                 drop(state);
                 self.changed.notify_all();
                 return Ok(());
@@ -236,7 +249,7 @@ impl WorkQueue {
             }
         }
         state.bytes = state.bytes.saturating_add(bytes);
-        state.results.push_front(Completed { page, bytes, valid: None });
+        state.results.push_front(Completed { page, bytes, valid: Vec::new() });
         drop(state);
         self.changed.notify_all();
     }

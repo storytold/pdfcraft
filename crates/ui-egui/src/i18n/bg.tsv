@@ -791,6 +791,7 @@
 	Redacted area fill colour:	Цвят на запълване на заличената област:
 	Use overlay text	Използвай текст върху заличаването
 	Custom text:	Потребителски текст:
+	Redaction code:	Код за заличаване:
 	Font:	Шрифт:
 	Font size:	Размер на шрифта:
 	Auto-size text to fit redaction region	Автоматично оразмеряване на текста според областта на заличаване
@@ -1068,19 +1069,19 @@
 	Attachments	Прикачени файлове
 	Signatures	Подписи
 	Accessibility Checker	Проверка на достъпността
-	Zoom out (⌘−)	Намали мащаба (⌘−)
-	Zoom in (⌘+)	Увеличи мащаба (⌘+)
-	Rotate view clockwise (⇧⌘+)	Завърти изгледа по часовниковата стрелка (⇧⌘+)
+	Zoom out ({key})	Намали мащаба ({key})
+	Zoom in ({key})	Увеличи мащаба ({key})
+	Rotate view clockwise ({key})	Завърти изгледа по часовниковата стрелка ({key})
 	Toggle fit page / fit width	Превключи между „побери страницата“ и „побери по ширина“
 	Next page	Следваща страница
 	Previous page	Предишна страница
 	Current page — type a page number or label (such as iv) and press Enter	Текуща страница — въведете номер или етикет на страница (например iv) и натиснете Enter
-	Open a PDF (⌘O)	Отвори PDF файл (⌘O)
+	Open a PDF ({key})	Отвори PDF файл ({key})
 	Dark gray theme	Тъмносива тема
 	Light theme	Светла тема
-	Print (⌘P)	Печат (⌘P)
+	Print ({key})	Печат ({key})
 	Save (M4)	Запиши (M4)
-	Document properties (⌘D)	Свойства на документа (⌘D)
+	Document properties ({key})	Свойства на документа ({key})
 	Action Wizard…	Съветник за действия…
 	Add Bates numbering…	Добави номериране на Бейтс…
 	Add a button	Добави бутон
@@ -1210,7 +1211,7 @@
 	Expand all bookmarks	Разгъни всички отметки
 	Expand top-level bookmarks	Разгъни отметките от първо ниво
 	Collapse all bookmarks	Свий всички отметки
-	New bookmark (⌘B)	Нова отметка (⌘B)
+	New bookmark ({key})	Нова отметка ({key})
 	This document has no bookmarks.	Този документ няма отметки.
 	This document has no layers.	Този документ няма слоеве.
 	This document has no attachments.	Този документ няма прикачени файлове.
@@ -1225,8 +1226,8 @@
 	No matches	Няма съвпадения
 	Searching… {s}/{p}	Търсене… {s}/{p}
 	{c} of {n}{more}	{c} от {n}{more}
-	Previous (⇧⌘G)	Предишно (⇧⌘G)
-	Next (⌘G)	Следващо (⌘G)
+	Previous ({key})	Предишно ({key})
+	Next ({key})	Следващо ({key})
 	Find options	Опции за търсене
 	Whole words only	Само цели думи
 	Case-sensitive	Чувствително към регистъра
@@ -1297,7 +1298,7 @@
 	Copy selected text	Копирай избрания текст
 	Select a word	Избери дума
 	Clear selection / close find	Изчисти избора / затвори търсенето
-	Zoom in / out (also pinch or ⌘-scroll)	Увеличи / намали (също с щипване или ⌘ + превъртане)
+	Zoom in / out (also pinch or {key}-scroll)	Увеличи / намали (също с щипване или {key} + превъртане)
 	Rotate view	Завърти изгледа
 	First / last page	Първа / последна страница
 	Previous / next page	Предишна / следваща страница

@@ -3553,6 +3553,7 @@ dependencies = [
  "pollster 1.0.1",
  "rustls-native-certs",
  "serde_json",
+ "uds_windows",
  "ureq",
  "winresource",
  "winsafe",

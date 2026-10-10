@@ -470,8 +470,7 @@ pub fn scale_at(doc: &Document, page_index: usize, at: Point) -> Result<Scale> {
             }
         }
     }
-    let user_unit = p.dict.get(b"UserUnit").and_then(Object::as_f64).unwrap_or(1.0);
-    Scale::new(user_unit / 72.0, "in", 2)
+    Scale::new(p.user_unit(doc) / 72.0, "in", 2)
 }
 /// Add a named rectangular viewport. Existing viewports are preserved in drawing order.
 pub fn set_scale(doc: &mut Document, page_index: usize, bbox: [f64; 4], name: &str, scale: &Scale) -> Result<()> {
@@ -531,25 +530,17 @@ mod tests;
 pub fn view_to_user(doc: &Document, page_index: usize, at: Point) -> Result<Point> {
     check_points(&[at])?;
     let page = page(doc, page_index)?;
-    let unit = page.dict.get(b"UserUnit").and_then(Object::as_f64).unwrap_or(1.0);
-    if !unit.is_finite() || unit <= 0.0 || unit > 75000.0 {
-        return Err(invalid("invalid page UserUnit"));
-    }
     let (_, height) = page.display_size(doc);
     let m = pdfcraft_content::Matrix(page.view_matrix(doc));
-    let (x, y) = m.apply(at[0] / unit, height - at[1] / unit);
+    let (x, y) = m.apply(at[0], height - at[1]);
     check_points(&[[x, y]])?;
     Ok([x, y])
 }
 pub fn user_to_view(doc: &Document, page_index: usize, at: Point) -> Result<Point> {
     check_points(&[at])?;
     let page = page(doc, page_index)?;
-    let unit = page.dict.get(b"UserUnit").and_then(Object::as_f64).unwrap_or(1.0);
-    if !unit.is_finite() || unit <= 0.0 || unit > 75000.0 {
-        return Err(invalid("invalid page UserUnit"));
-    }
     let (_, height) = page.display_size(doc);
     let m = pdfcraft_content::Matrix(page.view_matrix(doc)).invert().ok_or_else(|| invalid("invalid page transform"))?;
     let (x, y) = m.apply(at[0], at[1]);
-    Ok([x * unit, (height - y) * unit])
+    Ok([x, height - y])
 }

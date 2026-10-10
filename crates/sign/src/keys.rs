@@ -302,6 +302,15 @@ pub enum PublicKey {
     },
 }
 
+/// The private key a platform key store (the Windows certificate store, through CNG) must
+/// hold to sign for a certificate, see [`PublicKey::store_signing_key`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoreKey {
+    Rsa,
+    /// ECDSA with a key of this many bits.
+    Ecdsa(u32),
+}
+
 impl PublicKey {
     /// The `subjectPublicKey` BIT STRING contents — what OCSP's `issuerKeyHash` covers
     /// (RFC 6960 §4.1.1). RSA keys are re-encoded; EC points are the stored bytes.
@@ -380,6 +389,48 @@ impl PublicKey {
             PublicKey::BrainpoolP512(_) => "ECDSA brainpoolP512r1".into(),
             PublicKey::Ed25519(_) => "Ed25519".into(),
             PublicKey::Unsupported { what, .. } => format!("unsupported ({what})"),
+        }
+    }
+
+    // The two decisions below are what `windows.rs` asks of a key. They live here, with every
+    // variant named and no `_` arm, so that a new variant fails to compile on every platform
+    // rather than only in the Windows-only module (#386 added six and broke the Windows build).
+
+    /// The key a platform key store must hold to sign for this public key, or `None` when
+    /// PdfCraft doesn't sign with this kind of key (it only verifies P-521, brainpool and
+    /// Ed25519 signatures), so the store's identity is skipped.
+    pub fn store_signing_key(&self) -> Option<StoreKey> {
+        match self {
+            PublicKey::Rsa { .. } => Some(StoreKey::Rsa),
+            PublicKey::P256(_) => Some(StoreKey::Ecdsa(256)),
+            PublicKey::P384(_) => Some(StoreKey::Ecdsa(384)),
+            PublicKey::P521(_)
+            | PublicKey::BrainpoolP256(_)
+            | PublicKey::BrainpoolP384(_)
+            | PublicKey::BrainpoolP512(_)
+            | PublicKey::Ed25519(_)
+            | PublicKey::Unsupported { .. } => None,
+        }
+    }
+
+    /// A key store's signature as a CMS signature carries it: RSA unchanged, ECDSA's fixed-size
+    /// `r ‖ s` (what CNG returns) as a DER `ECDSA-Sig-Value`. Keys [`Self::store_signing_key`]
+    /// rejects give [`SignError::Unsupported`].
+    pub fn store_signature_der(&self, raw: &[u8]) -> Result<Vec<u8>, SignError> {
+        match self {
+            PublicKey::Rsa { .. } => Ok(raw.to_vec()),
+            PublicKey::P256(_) => p256::ecdsa::Signature::from_slice(raw)
+                .map(|s| s.to_der().as_bytes().to_vec())
+                .map_err(|e| SignError::Crypto(format!("the key store returned an invalid P-256 signature: {e}"))),
+            PublicKey::P384(_) => p384::ecdsa::Signature::from_slice(raw)
+                .map(|s| s.to_der().as_bytes().to_vec())
+                .map_err(|e| SignError::Crypto(format!("the key store returned an invalid P-384 signature: {e}"))),
+            PublicKey::P521(_)
+            | PublicKey::BrainpoolP256(_)
+            | PublicKey::BrainpoolP384(_)
+            | PublicKey::BrainpoolP512(_)
+            | PublicKey::Ed25519(_)
+            | PublicKey::Unsupported { .. } => Err(SignError::Unsupported(format!("signing with {} keys", self.describe()))),
         }
     }
 

@@ -170,6 +170,10 @@ fn color(d: &Dict, key: &[u8]) -> Option<Option<Rgb>> {
     })
 }
 
+fn interior_color(d: &Dict, fallback: Option<Rgb>) -> Option<Rgb> {
+    color(d, b"IC").flatten().or(fallback)
+}
+
 fn border_width(d: &Dict) -> f64 {
     if let Some(w) = d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()) {
         return w.max(0.0);
@@ -369,7 +373,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
             }
         }
         b"Square" | b"Circle" => {
-            let fill = color(d, b"IC")?;
+            let fill = interior_color(d, None);
             if stroke.is_none() && fill.is_none() {
                 return Some(form(rect, c.as_bytes(), res));
             }
@@ -403,7 +407,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
             if ends.len() != 2 || ends.iter().any(|e| !known_ending(e)) {
                 return None;
             }
-            let fill = color(d, b"IC")?.unwrap_or(col);
+            let fill = interior_color(d, Some(col)).unwrap_or(col);
             c.push_str(&format!("{}{}{} w 1 J 1 j\n{}", rg_stroke(col), rg(fill), n(w), dash(d)));
             c.push_str(&format!("{} {} m {} {} l S\n[] 0 d\n", n(l[0]), n(l[1]), n(l[2]), n(l[3])));
             for (end, (tip, from)) in ends.iter().zip([((l[0], l[1]), (l[2], l[3])), ((l[2], l[3]), (l[0], l[1]))]) {
@@ -417,7 +421,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
             let pts: Vec<(f64, f64)> = v.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
             let col = stroke;
             let closed = subtype == b"Polygon";
-            let fill = if closed { color(d, b"IC")? } else { None };
+            let fill = if closed { interior_color(d, None) } else { None };
             let ends = if subtype == b"PolyLine" {
                 match d.get(b"LE") {
                     None => None,
@@ -461,7 +465,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                 let (Some(start), Some(end)) = (ends.first(), ends.get(1)) else { return None };
                 let (Some(&tip0), Some(&from0)) = (pts.first(), pts.get(1)) else { return None };
                 let (Some(&tip1), Some(&from1)) = (pts.last(), pts.get(pts.len().saturating_sub(2))) else { return None };
-                let fill = color(d, b"IC")?.unwrap_or(col);
+                let fill = interior_color(d, Some(col)).unwrap_or(col);
                 c.push_str(&format!("[] 0 d\n{}", rg(fill)));
                 if !line_end(&mut c, start, tip0, from0, w) || !line_end(&mut c, end, tip1, from1, w) {
                     return None;

@@ -92,7 +92,7 @@
 	Double-click	Doppio clic
 	Select a word	Seleziona una parola
 	Clear selection / close find	Deseleziona / chiudi ricerca
-	Zoom in / out (also pinch or ⌘-scroll)	Aumenta/riduci ingrandimento (anche con pizzico o ⌘ + rotellina)
+	Zoom in / out (also pinch or {key}-scroll)	Aumenta/riduci ingrandimento (anche con pizzico o {key} + rotellina)
 	Rotate view	Ruota vista
 	First / last page	Prima/ultima pagina
 	Previous / next page	Pagina precedente/successiva
@@ -100,16 +100,16 @@
 	Select all pages (Organize)	Seleziona tutte le pagine (Organizza)
 	Home	Home
 	Open	Apri
-	Open a PDF (⌘O)	Apri un PDF (⌘O)
+	Open a PDF ({key})	Apri un PDF ({key})
 	Dark gray theme	Tema grigio scuro
 	Light theme	Tema chiaro
 	All tools	Tutti gli strumenti
 	Read	Lettura
 	Convert	Converti
 	E-Sign	Firma elettronica
-	Print (⌘P)	Stampa (⌘P)
+	Print ({key})	Stampa ({key})
 	Save (M4)	Salva (M4)
-	Document properties (⌘D)	Proprietà documento (⌘D)
+	Document properties ({key})	Proprietà documento ({key})
 	Find tools and commands	Trova strumenti e comandi
 	Fit to height	Adatta all'altezza
 	Zoom in	Aumenta ingrandimento
@@ -138,9 +138,9 @@
 	Compare	Confronta
 	Page thumbnails	Miniature pagine
 	Form fields	Campi modulo
-	Zoom out (⌘−)	Riduci ingrandimento (⌘−)
-	Zoom in (⌘+)	Aumenta ingrandimento (⌘+)
-	Rotate view clockwise (⇧⌘+)	Ruota vista in senso orario (⇧⌘+)
+	Zoom out ({key})	Riduci ingrandimento ({key})
+	Zoom in ({key})	Aumenta ingrandimento ({key})
+	Rotate view clockwise ({key})	Ruota vista in senso orario ({key})
 	Toggle fit page / fit width	Alterna adatta alla pagina / adatta alla larghezza
 	Next page	Pagina successiva
 	Previous page	Pagina precedente
@@ -1094,6 +1094,7 @@
 	Redacted area fill colour:	Colore di riempimento dell'area oscurata:
 	Use overlay text	Usa testo sovrapposto
 	Custom text:	Testo personalizzato:
+	Redaction code:	Codice di oscuramento:
 	Font:	Carattere:
 	Font size:	Dimensione carattere:
 	Auto-size text to fit redaction region	Adatta automaticamente il testo all'area oscurata
@@ -1262,7 +1263,7 @@
 	Expand all bookmarks	Espandi tutti i segnalibri
 	Expand top-level bookmarks	Espandi segnalibri di primo livello
 	Collapse all bookmarks	Comprimi tutti i segnalibri
-	New bookmark (⌘B)	Nuovo segnalibro (⌘B)
+	New bookmark ({key})	Nuovo segnalibro ({key})
 	This document has no bookmarks.	Questo documento non ha segnalibri.
 	This document has no layers.	Questo documento non ha livelli.
 	This document has no attachments.	Questo documento non ha allegati.
@@ -1277,8 +1278,8 @@
 	No matches	Nessuna corrispondenza
 	Searching… {s}/{p}	Ricerca in corso… {s}/{p}
 	{c} of {n}{more}	{c} di {n}{more}
-	Previous (⇧⌘G)	Precedente (⇧⌘G)
-	Next (⌘G)	Successivo (⌘G)
+	Previous ({key})	Precedente ({key})
+	Next ({key})	Successivo ({key})
 	Find options	Opzioni di ricerca
 	Whole words only	Solo parole intere
 	Case-sensitive	Maiuscole/minuscole

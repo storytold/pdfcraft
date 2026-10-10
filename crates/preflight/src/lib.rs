@@ -138,24 +138,73 @@ fn dict_of(o: &Object) -> Option<&Dict> {
 }
 
 fn has_pdfa_intent(doc: &Document) -> bool {
+    pdfa_intent_profile(doc).is_some()
+}
+
+/// The PDF/A output intent's destination profile: `Some(n)` with the profile's number of colour
+/// components (`/N`, else the ICC header's data colour space; `None` when neither says), or
+/// `None` when the document has no PDF/A output intent.
+fn pdfa_intent_profile(doc: &Document) -> Option<Option<i64>> {
     let cat = catalog(doc);
-    cat.get(b"OutputIntents")
-        .map(|o| doc.resolve(o))
-        .and_then(|o| o.as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .any(|oi| doc.resolve(oi).as_dict().is_some_and(|d| d.name(b"S") == Some(b"GTS_PDFA1") && d.get(b"DestOutputProfile").is_some()))
+    let list = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
+    list.iter().find_map(|oi| {
+        let d = doc.resolve(oi).as_dict().cloned()?;
+        if d.name(b"S") != Some(b"GTS_PDFA1") {
+            return None;
+        }
+        let profile = doc.resolve(d.get(b"DestOutputProfile")?);
+        let Object::Stream(s) = &*profile else { return Some(None) };
+        Some(s.dict.int(b"N").or_else(|| {
+            // ICC.1 header: the data colour space is bytes 16–19.
+            match s.decoded().ok()?.get(16..20)? {
+                b"GRAY" => Some(1),
+                b"RGB " => Some(3),
+                b"CMYK" => Some(4),
+                _ => None,
+            }
+        }))
+    })
+}
+
+/// Which device colour spaces the document uses.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct DeviceColour {
+    gray: bool,
+    rgb: bool,
+    cmyk: bool,
+    /// Resources that define `DefaultRGB` / `DefaultCMYK`: device colour there is drawn in that
+    /// space, which PDF/A accepts whatever the output intent (ISO 19005-2 6.2.4.3).
+    default_rgb: bool,
+    default_cmyk: bool,
+}
+
+impl DeviceColour {
+    fn any(self) -> bool {
+        self.gray || self.rgb || self.cmyk
+    }
 }
 
 /// Whether any content or object uses a device colour space.
-fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> (bool, bool) {
-    let (mut rgb_or_gray, mut cmyk) = (false, false);
+fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> DeviceColour {
+    let mut used = DeviceColour::default();
     for (_, o) in objs {
         let Some(d) = dict_of(o) else { continue };
+        // A resource dictionary's /ColorSpace, whether it is this object or the page's inline
+        // /Resources.
+        let resources = d.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned());
+        for holder in [Some(d), resources.as_ref()].into_iter().flatten() {
+            if let Some(spaces) = holder.get(b"ColorSpace").map(|c| doc.resolve(c))
+                && let Some(spaces) = spaces.as_dict()
+            {
+                used.default_rgb |= spaces.get(b"DefaultRGB").is_some();
+                used.default_cmyk |= spaces.get(b"DefaultCMYK").is_some();
+            }
+        }
         if let Some(cs) = d.get(b"ColorSpace").map(|c| doc.resolve(c)) {
             match &*cs {
-                Object::Name(n) if n == b"DeviceRGB" || n == b"DeviceGray" => rgb_or_gray = true,
-                Object::Name(n) if n == b"DeviceCMYK" => cmyk = true,
+                Object::Name(n) if n == b"DeviceGray" => used.gray = true,
+                Object::Name(n) if n == b"DeviceRGB" => used.rgb = true,
+                Object::Name(n) if n == b"DeviceCMYK" => used.cmyk = true,
                 _ => {}
             }
         }
@@ -167,14 +216,15 @@ fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
             // Content streams: rg/RG/g/G/k/K operators.
             for line in data.split(|b| *b == b'\n' || *b == b' ') {
                 match line {
-                    b"rg" | b"RG" | b"g" | b"G" => rgb_or_gray = true,
-                    b"k" | b"K" => cmyk = true,
+                    b"g" | b"G" => used.gray = true,
+                    b"rg" | b"RG" => used.rgb = true,
+                    b"k" | b"K" => used.cmyk = true,
                     _ => {}
                 }
             }
         }
     }
-    (rgb_or_gray, cmyk)
+    used
 }
 
 /// Check `doc` against `level`.
@@ -204,12 +254,24 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     // 6.2.2: output intent when device colour is used.
     let objs = objects(doc);
-    let (rgb, cmyk) = uses_device_colour(doc, &objs);
-    if (rgb || cmyk) && !has_pdfa_intent(doc) {
-        issue("6.2.3", "Device colour is used, but there is no PDF/A output intent".into(), None, !cmyk);
-        if cmyk {
-            issue("6.2.4.3", "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)".into(), None, false);
+    let used = uses_device_colour(doc, &objs);
+    match pdfa_intent_profile(doc) {
+        None if used.any() => {
+            issue("6.2.3", "Device colour is used, but there is no PDF/A output intent".into(), None, !used.cmyk);
+            if used.cmyk {
+                issue("6.2.4.3", "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)".into(), None, false);
+            }
         }
+        // 6.2.4.3: DeviceRGB needs an RGB output intent and DeviceCMYK a CMYK one (#667).
+        Some(n) => {
+            if used.cmyk && !used.default_cmyk && n != Some(4) {
+                issue("6.2.4.3", "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile".into(), None, false);
+            }
+            if used.rgb && !used.default_rgb && n != Some(3) {
+                issue("6.2.4.3", "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile".into(), None, false);
+            }
+        }
+        None => {}
     }
     // 6.1.3 / 6.6.1: catalog actions.
     if cat.get(b"AA").is_some() {
@@ -435,7 +497,9 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
         cat.set(b"AcroForm".to_vec(), Object::Dict(af));
         fixed.push("Cleared NeedAppearances".into());
     }
-    if !has_pdfa_intent(doc) {
+    // An sRGB output intent describes RGB and gray content only: a document with CMYK content
+    // needs a CMYK output condition, which only the user can choose (#667).
+    if !has_pdfa_intent(doc) && !uses_device_colour(doc, &objects(doc)).cmyk {
         let mut icc = Dict::new();
         icc.set(b"N".to_vec(), Object::Int(3));
         let profile = doc.add(Object::Stream(Stream::flate(icc, &icc::srgb())));

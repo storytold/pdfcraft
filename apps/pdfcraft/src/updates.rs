@@ -18,8 +18,21 @@ pub fn latest_release() -> Result<Release, String> {
         .get(LATEST)
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", concat!("PdfCraft/", env!("CARGO_PKG_VERSION")))
+        // Read error statuses ourselves: a 403 from GitHub usually means its anonymous
+        // rate limit ran out, and the retry time rides along in a response header.
+        .config()
+        .http_status_as_error(false)
+        .build()
         .call()
         .map_err(|e| format!("couldn't reach GitHub ({e})"))?;
+    let status = response.status().as_u16();
+    if status == 403 {
+        let reset = response.headers().get("x-ratelimit-reset").and_then(|v| v.to_str().ok());
+        return Err(rate_limited(reset, now_unix()));
+    }
+    if !(200..300).contains(&status) {
+        return Err(format!("couldn't reach GitHub (http status: {status})"));
+    }
     let body = response.body_mut().with_config().limit(1 << 20).read_to_string().map_err(|e| format!("unreadable answer ({e})"))?;
     parse(&body)
 }
@@ -32,6 +45,28 @@ fn os_roots() -> Result<ureq::tls::RootCerts, String> {
         return Err("no trusted certificates found on this system".into());
     }
     Ok(ureq::tls::RootCerts::new_with_certs(&certs))
+}
+
+/// The current Unix time in seconds (0 when the clock gives nothing usable).
+fn now_unix() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// What to tell the user when GitHub answers 403: its anonymous quota (60 checks an hour,
+/// shared by everyone behind the same address) ran out. `reset` is the `x-ratelimit-reset`
+/// header, the Unix time the quota refills; `now` is the current Unix time. Anything
+/// surprising (no header, not a number, already past) falls back to asking for patience.
+fn rate_limited(reset: Option<&str>, now: u64) -> String {
+    const FALLBACK: &str = "GitHub is limiting update checks for now (shared hourly quota); try again later";
+    let wait = reset.and_then(|r| r.trim().parse::<u64>().ok()).and_then(|reset| reset.checked_sub(now)).filter(|&wait| wait > 0);
+    match wait {
+        Some(wait) => {
+            let minutes = wait.div_ceil(60).max(1);
+            let plural = if minutes == 1 { "" } else { "s" };
+            format!("GitHub is limiting update checks for now (shared hourly quota); try again in about {minutes} minute{plural}")
+        }
+        None => FALLBACK.into(),
+    }
 }
 
 fn parse(body: &str) -> Result<Release, String> {
@@ -59,6 +94,26 @@ mod tests {
         }
         assert!(parse(r#"{"message":"Not Found"}"#).is_err());
         assert!(parse("<html>").is_err());
+    }
+
+    #[test]
+    fn rate_limit_messages_name_the_wait() {
+        let limited = "GitHub is limiting update checks for now (shared hourly quota); try again in about 20 minutes";
+        assert_eq!(rate_limited(Some("1800001200"), 1800000000), limited);
+        // Rounds up: 61 seconds out reads as 2 minutes.
+        assert_eq!(
+            rate_limited(Some("1800000061"), 1800000000),
+            "GitHub is limiting update checks for now (shared hourly quota); try again in about 2 minutes"
+        );
+        assert_eq!(
+            rate_limited(Some("1800000060"), 1800000000),
+            "GitHub is limiting update checks for now (shared hourly quota); try again in about 1 minute"
+        );
+        // No header, not a number, or already past: ask for patience instead of a time.
+        let later = "GitHub is limiting update checks for now (shared hourly quota); try again later";
+        for bad in [None, Some(""), Some("soon"), Some("1799999999"), Some("1800000000")] {
+            assert_eq!(rate_limited(bad, 1800000000), later);
+        }
     }
 
     /// Live: asks GitHub over TLS with the OS's roots (`cargo test -p pdfcraft -- --ignored`).

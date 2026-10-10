@@ -68,7 +68,7 @@
 	Double-click	Doppelklick
 	Select a word	Wort auswählen
 	Clear selection / close find	Auswahl aufheben / Suche schließen
-	Zoom in / out (also pinch or ⌘-scroll)	Vergrößern / Verkleinern (auch per Pinch-Geste oder ⌘ + Scrollen)
+	Zoom in / out (also pinch or {key}-scroll)	Vergrößern / Verkleinern (auch per Pinch-Geste oder {key} + Scrollen)
 	Rotate view	Ansicht drehen
 	First / last page	Erste / letzte Seite
 	Previous / next page	Vorherige / nächste Seite
@@ -76,16 +76,16 @@
 	Select all pages (Organize)	Alle Seiten auswählen (Organisieren)
 	Home	Start
 	Open	Öffnen
-	Open a PDF (⌘O)	PDF öffnen (⌘O)
+	Open a PDF ({key})	PDF öffnen ({key})
 	Dark gray theme	Dunkelgraues Design
 	Light theme	Helles Design
 	All tools	Alle Werkzeuge
 	Read	Lesen
 	Convert	Konvertieren
 	E-Sign	E-Signatur
-	Print (⌘P)	Drucken (⌘P)
+	Print ({key})	Drucken ({key})
 	Save (M4)	Speichern (M4)
-	Document properties (⌘D)	Dokumenteigenschaften (⌘D)
+	Document properties ({key})	Dokumenteigenschaften ({key})
 	Find tools and commands	Tools und Befehle suchen
 	Fit to height	Seitenhöhe
 	Zoom in	Vergrößern
@@ -114,9 +114,9 @@
 	Compare	Vergleichen
 	Page thumbnails	Seitenminiaturen
 	Form fields	Formularfelder
-	Zoom out (⌘−)	Verkleinern (⌘−)
-	Zoom in (⌘+)	Vergrößern (⌘+)
-	Rotate view clockwise (⇧⌘+)	Ansicht im Uhrzeigersinn drehen (⇧⌘+)
+	Zoom out ({key})	Verkleinern ({key})
+	Zoom in ({key})	Vergrößern ({key})
+	Rotate view clockwise ({key})	Ansicht im Uhrzeigersinn drehen ({key})
 	Toggle fit page / fit width	Ganze Seite / Seitenbreite umschalten
 	Next page	Nächste Seite
 	Previous page	Vorherige Seite
@@ -1079,6 +1079,7 @@
 	Redacted area fill colour:	Füllfarbe geschwärzter Bereiche:
 	Use overlay text	Überlagerungstext verwenden
 	Custom text:	Eigener Text:
+	Redaction code:	Schwärzungscode:
 	Font:	Schrift:
 	Font size:	Schriftgröße:
 	Auto-size text to fit redaction region	Textgröße automatisch an Schwärzungsbereich anpassen
@@ -1248,7 +1249,7 @@
 	Expand all bookmarks	Alle Lesezeichen erweitern
 	Expand top-level bookmarks	Lesezeichen der obersten Ebene erweitern
 	Collapse all bookmarks	Alle Lesezeichen reduzieren
-	New bookmark (⌘B)	Neues Lesezeichen (⌘B)
+	New bookmark ({key})	Neues Lesezeichen ({key})
 	This document has no bookmarks.	Dieses Dokument hat keine Lesezeichen.
 	This document has no layers.	Dieses Dokument hat keine Ebenen.
 	This document has no attachments.	Dieses Dokument hat keine Anhänge.
@@ -1262,8 +1263,8 @@
 	No matches	Keine Treffer
 	Searching… {s}/{p}	Suche läuft… {s}/{p}
 	{c} of {n}{more}	{c} von {n}{more}
-	Previous (⇧⌘G)	Vorheriger (⇧⌘G)
-	Next (⌘G)	Nächster (⌘G)
+	Previous ({key})	Vorheriger ({key})
+	Next ({key})	Nächster ({key})
 	Find options	Suchoptionen
 	Whole words only	Nur ganze Wörter
 	Case-sensitive	Groß-/Kleinschreibung beachten

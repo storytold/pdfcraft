@@ -95,7 +95,7 @@
 	Double-click	ダブルクリック
 	Select a word	単語を選択
 	Clear selection / close find	選択を解除／検索を閉じる
-	Zoom in / out (also pinch or ⌘-scroll)	拡大／縮小（ピンチ操作や ⌘＋スクロールも使用可能）
+	Zoom in / out (also pinch or {key}-scroll)	拡大／縮小（ピンチ操作や {key}＋スクロールも使用可能）
 	Rotate view	表示を回転
 	First / last page	最初／最後のページ
 	Previous / next page	前／次のページ
@@ -103,16 +103,16 @@
 	Select all pages (Organize)	すべてのページを選択（ページ整理）
 	Home	ホーム
 	Open	開く
-	Open a PDF (⌘O)	PDF を開く（⌘O）
+	Open a PDF ({key})	PDF を開く（{key}）
 	Dark gray theme	ダークグレーのテーマ
 	Light theme	ライトテーマ
 	All tools	すべてのツール
 	Read	閲覧
 	Convert	変換
 	E-Sign	電子署名
-	Print (⌘P)	印刷（⌘P）
+	Print ({key})	印刷（{key}）
 	Save (M4)	保存（M4）
-	Document properties (⌘D)	文書のプロパティ（⌘D）
+	Document properties ({key})	文書のプロパティ（{key}）
 	Find tools and commands	ツールとコマンドを検索
 	Fit to height	高さに合わせる
 	Zoom in	拡大
@@ -141,9 +141,9 @@
 	Compare	比較
 	Page thumbnails	ページサムネール
 	Form fields	フォームフィールド
-	Zoom out (⌘−)	縮小（⌘−）
-	Zoom in (⌘+)	拡大（⌘+）
-	Rotate view clockwise (⇧⌘+)	表示を時計回りに回転（⇧⌘+）
+	Zoom out ({key})	縮小（{key}）
+	Zoom in ({key})	拡大（{key}）
+	Rotate view clockwise ({key})	表示を時計回りに回転（{key}）
 	Toggle fit page / fit width	ページ全体／幅に合わせるを切り替え
 	Next page	次のページ
 	Previous page	前のページ
@@ -1098,6 +1098,7 @@
 	Redacted area fill colour:	墨消し領域の塗りつぶし色:
 	Use overlay text	オーバーレイテキストを使用
 	Custom text:	カスタムテキスト:
+	Redaction code:	墨消しコード:
 	Font:	フォント:
 	Font size:	フォントサイズ:
 	Auto-size text to fit redaction region	墨消し領域に合わせて文字サイズを自動調整
@@ -1267,7 +1268,7 @@
 	Expand all bookmarks	すべてのしおりを展開
 	Expand top-level bookmarks	最上位のしおりを展開
 	Collapse all bookmarks	すべてのしおりを折りたたむ
-	New bookmark (⌘B)	新しいしおり（⌘B）
+	New bookmark ({key})	新しいしおり（{key}）
 	This document has no bookmarks.	この文書にしおりはありません。
 	This document has no layers.	この文書にレイヤーはありません。
 	This document has no attachments.	この文書に添付ファイルはありません。
@@ -1282,8 +1283,8 @@
 	No matches	一致なし
 	Searching… {s}/{p}	検索中… {s}/{p}
 	{c} of {n}{more}	{c} / {n}{more}
-	Previous (⇧⌘G)	前へ（⇧⌘G）
-	Next (⌘G)	次へ（⌘G）
+	Previous ({key})	前へ（{key}）
+	Next ({key})	次へ（{key}）
 	Find options	検索オプション
 	Whole words only	単語単位で検索
 	Case-sensitive	大文字と小文字を区別
