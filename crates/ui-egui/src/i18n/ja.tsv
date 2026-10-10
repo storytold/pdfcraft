@@ -278,6 +278,7 @@
 	Security properties…	セキュリティのプロパティ…
 	Organize pages	ページを整理
 	New bookmark	しおりを追加
+	New bookmarks from structure	構造からしおりを作成
 	Rotate pages clockwise	ページを時計回りに回転
 	Rotate pages counterclockwise	ページを反時計回りに回転
 	Delete pages	ページを削除
@@ -1095,6 +1096,11 @@
 	Text in images isn't found; recognise text (OCR) first.	画像内のテキストは検索できません。先に OCR でテキストを認識してください。
 	No matches.	一致する項目はありません。
 	{n} match(es) marked for redaction.	{n} 件の一致項目に墨消しマークを付けました。
+	Multiple words or phrases	複数の単語または語句
+	One word or phrase per line	1 行に 1 つの単語または語句
+	Import list…	リストを読み込み…
+	{n} word(s) or phrase(s)	{n} 件の単語または語句
+	{name} is too large for a word list (at most 1 MB).	{name} は単語リストとして大きすぎます (最大 1 MB)。
 	Redaction Tool Properties	墨消しツールのプロパティ
 	Redacted area fill colour:	墨消し領域の塗りつぶし色:
 	Use overlay text	オーバーレイテキストを使用
@@ -1491,6 +1497,8 @@
 	Right Edge	右端
 	Language	言語
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	{place} に保存: {before} → {after}（{pct}% 削減）{detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	このファイルはすでに最小のサイズです（{size}）。コピーは保存されませんでした。
+	Saved {place}: {before} → {after} (not smaller){detail}	{place} に保存: {before} → {after}（縮小なし）{detail}
 	Couldn't save the image: {e}	画像を保存できませんでした: {e}
 	Adding images arrives on the web with file pickers for images	Web 版の画像追加は画像ファイル選択に対応した際に利用可能になります
 	Replacing images on page {p} arrives on the web with image pickers ({i})	ページ {p} の画像置換は Web 版の画像選択に対応した際に利用可能になります（{i}）
@@ -2136,3 +2144,15 @@ signature pad	Type	入力
 	The field {name} no longer exists.	フィールド {name} はもう存在しません。
 	A selected field has no widget on any page, so the fields can't be edited together.	選択したフィールドの一つがどのページにもウィジェットを持たないため、まとめて編集できません。
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 件は描画できる最大サイズの {dpi} dpi で書き出しました）
+	Fill colour	塗りつぶし色
+	No fill	塗りつぶしなし
+	Fill colour: none	塗りつぶし色: なし
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	スペース

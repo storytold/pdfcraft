@@ -251,6 +251,7 @@
 	Security properties…	Propriétés de protection…
 	Organize pages	Organiser les pages
 	New bookmark	Nouveau signet
+	New bookmarks from structure	Nouveaux signets à partir de la structure
 	Rotate pages clockwise	Pivoter les pages vers la droite
 	Rotate pages counterclockwise	Pivoter les pages vers la gauche
 	Delete pages	Supprimer des pages
@@ -1075,6 +1076,11 @@
 	Text in images isn't found; recognise text (OCR) first.	Le texte dans les images n'est pas trouvé ; reconnaissez d'abord le texte (OCR).
 	No matches.	Aucune correspondance.
 	{n} match(es) marked for redaction.	{n} correspondance(s) marquée(s) pour biffure.
+	Multiple words or phrases	Plusieurs mots ou expressions
+	One word or phrase per line	Un mot ou une expression par ligne
+	Import list…	Importer une liste…
+	{n} word(s) or phrase(s)	{n} mot(s) ou expression(s)
+	{name} is too large for a word list (at most 1 MB).	{name} est trop volumineux pour une liste de mots (1 Mo au maximum).
 	Redaction Tool Properties	Propriétés de l'outil de biffure
 	Redacted area fill colour:	Couleur de remplissage de la zone biffée :
 	Use overlay text	Utiliser un texte en superposition
@@ -1470,6 +1476,8 @@
 	Right Edge	Bord droit
 	Language	Langue
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Enregistré {place} : {before} → {after} ({pct} % plus petit){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	Ce fichier est déjà aussi petit que possible ({size}). Aucune copie n'a été enregistrée.
+	Saved {place}: {before} → {after} (not smaller){detail}	Enregistré {place} : {before} → {after} (pas plus petit){detail}
 	Couldn't save the image: {e}	Impossible d'enregistrer l'image : {e}
 	Adding images arrives on the web with file pickers for images	L'ajout d'images arrivera sur le web avec les sélecteurs de fichiers d'images
 	Replacing images on page {p} arrives on the web with image pickers ({i})	Le remplacement d'images à la page {p} arrivera sur le web avec les sélecteurs d'images ({i})
@@ -2136,3 +2144,15 @@ signature pad	Type	Saisir
 	The field {name} no longer exists.	Le champ {name} n'existe plus.
 	A selected field has no widget on any page, so the fields can't be edited together.	Un champ sélectionné n'a de widget sur aucune page : les champs ne peuvent pas être modifiés ensemble.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} à {dpi} ppp, la plus grande taille possible pour les dessiner)
+	Fill colour	Couleur de fond
+	No fill	Sans fond
+	Fill colour: none	Couleur de fond : aucune
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Maj
+key	Delete	Suppr
+key	Esc	Échap
+key	Home	Début
+key	End	Fin
+key	Space	Espace

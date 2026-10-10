@@ -899,6 +899,41 @@ fn bookmarks_through_tools() {
 }
 
 #[test]
+fn bookmarks_from_structure_through_tools() {
+    let dir = workdir("bookmarks-structure");
+    std::fs::write(
+        dir.join("tagged.pdf"),
+        b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+5 0 obj << /Type /StructTreeRoot /K 6 0 R /RoleMap << /Heading /H1 >> >> endobj
+6 0 obj << /S /Document /K [7 0 R << /S /Sect /K 8 0 R >>] >> endobj
+7 0 obj << /S /Heading /Pg 3 0 R /ActualText (Report) >> endobj
+8 0 obj << /S /H2 /Pg 4 0 R /Alt (Findings) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+            .as_slice(),
+    )
+    .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "tagged.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "bookmark_from_structure", json!({ "doc": doc }));
+    let top = &r["bookmarks"][0];
+    assert_eq!(
+        (top["title"].as_str(), top["children"][0]["title"].as_str(), top["children"][0]["page"].as_u64()),
+        (Some("Untitled"), Some("Report"), Some(1))
+    );
+    assert_eq!(top["children"][0]["children"][0]["title"], "Findings");
+    assert_eq!(top["children"][0]["children"][0]["path"], json!([1, 1, 1]));
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "New bookmarks from structure");
+    // An untagged document: an error that says why.
+    let plain = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    assert!(matches!(a.call("bookmark_from_structure", &json!({ "doc": plain })), Err(ToolError::Failed(m)) if m.contains("no tagged headings")));
+}
+
+#[test]
 fn numbering_pages_through_tools() {
     let dir = workdir("labels");
     let mut a = auto(&dir);
@@ -954,6 +989,15 @@ fn comments_through_tools() {
     let undo = ok(&mut a, "edit_undo", json!({ "doc": doc }));
     assert_eq!(undo["undone"], "Edit comment");
     ok(&mut a, "edit_redo", json!({ "doc": doc }));
+    // Rectangles, ovals and polygons take a fill (#686); "none" removes it. Lines have none.
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": page, "index": index, "fill": "yellow" }));
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": page, "index": index, "fill": "none" }));
+    assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": page, "index": index, "fill": "mauve" })), Err(ToolError::InvalidArgs(_))));
+    let arrow = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 3 }))["comments"][0].clone();
+    assert!(matches!(
+        a.call("comment_edit", &json!({ "doc": doc, "page": arrow["page"], "index": arrow["index"], "fill": "red" })),
+        Err(ToolError::Failed(_))
+    ));
 
     // Editing a text box re-fits its rectangle to the new text: the wrap width and top edge
     // stay, the height follows the wrapped lines.
@@ -988,6 +1032,29 @@ fn comments_through_tools() {
     assert_eq!(ok(&mut b, "comment_list", json!({ "doc": re }))["count"], 5);
 }
 
+/// #806: a reply to another reply stays in the listing, at any depth.
+#[test]
+fn nested_replies_stay_in_the_listing() {
+    let dir = workdir("nested-replies");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let root = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [40, 40], "contents": "ROOT_NOTE", "author": "A" }));
+    let root_id = root["comment"]["id"].as_str().unwrap().to_string();
+    ok(&mut a, "comment_reply", json!({ "doc": doc, "id": root_id, "text": "DIRECT_REPLY", "author": "B" }));
+    let listed = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let root_comment = listed["comments"].as_array().unwrap().iter().find(|c| c["contents"] == "ROOT_NOTE").unwrap().clone();
+    let direct_id =
+        root_comment["replies"].as_array().unwrap().iter().find(|r| r["contents"] == "DIRECT_REPLY").unwrap()["id"].as_str().unwrap().to_string();
+    ok(&mut a, "comment_reply", json!({ "doc": doc, "id": direct_id, "text": "NESTED_REPLY", "author": "C" }));
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [120, 120], "contents": "CONTROL_NOTE", "author": "D" }));
+
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(list["count"], 2, "the two notes stay roots: {list}");
+    let root = list["comments"].as_array().unwrap().iter().find(|c| c["contents"] == "ROOT_NOTE").unwrap().clone();
+    let replies: Vec<&str> = root["replies"].as_array().unwrap().iter().filter_map(|r| r["contents"].as_str()).collect();
+    assert!(replies.contains(&"DIRECT_REPLY") && replies.contains(&"NESTED_REPLY"), "the nested reply is listed: {replies:?}");
+}
+
 #[test]
 fn protecting_through_tools() {
     let dir = workdir("protect");
@@ -1020,6 +1087,45 @@ fn protecting_through_tools() {
     ok(&mut b, "doc_save", json!({ "doc": owner, "path": "open.pdf" }));
     let mut c = auto(&dir);
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
+}
+
+/// A form secured with "fill-sign" changes and no open password (how secured forms are usually
+/// distributed): its existing signature field can be signed without the permissions password,
+/// the update keeps the encryption, and the signature validates after reopening. A new field
+/// needs the permissions password.
+#[test]
+fn signing_an_encrypted_form_through_tools() {
+    let dir = workdir("sign-encrypted");
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret1", "path": "ada.p12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let field = ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "signature", "rect": [20, 200, 180, 250] }))["field"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(&mut a, "doc_protect", json!({ "doc": doc, "permissions_password": "boss", "changes": "fill-sign" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "form.pdf" }));
+    let mut b = auto(&dir);
+    let form = ok(&mut b, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut b, "doc_info", json!({ "doc": form }))["security"]["protected"], true);
+    match b.call(
+        "sign_document",
+        &json!({ "doc": form, "id": "ada.p12", "password": "secret1", "page": 1, "rect": [200, 200, 380, 250], "out": "new.pdf" }),
+    ) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("adding new signature fields"), "{m}"),
+        other => panic!("a new field needs the permissions password: {other:?}"),
+    }
+    let r = ok(&mut b, "sign_document", json!({ "doc": form, "id": "ada.p12", "password": "secret1", "field": field, "out": "signed.pdf" }));
+    assert_eq!((r["signature"]["signer"].as_str(), r["signature"]["status"].as_str()), (Some("Ada Lovelace"), Some("unknown")));
+    let original = std::fs::read(dir.join("form.pdf")).unwrap();
+    let signed = std::fs::read(dir.join("signed.pdf")).unwrap();
+    assert!(signed.starts_with(&original), "an incremental update");
+    let mut c = auto(&dir);
+    let re = ok(&mut c, "doc_open", json!({ "path": "signed.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut c, "doc_info", json!({ "doc": re }))["security"]["protected"], true, "still encrypted");
+    ok(&mut c, "sign_trust", json!({ "paths": ["ada.p12"], "password": "secret1" }));
+    let list = ok(&mut c, "sign_list", json!({ "doc": re }));
+    assert_eq!((list["all_valid"].as_bool(), list["signatures"][0]["status"].as_str()), (Some(true), Some("valid")), "{list}");
 }
 
 #[test]
@@ -1694,8 +1800,11 @@ fn creating_and_reducing_through_tools() {
     let t = ok(&mut a, "doc_create", json!({ "from": "text", "path": "notes.txt" }))["doc"].as_u64().unwrap();
     assert_eq!(page_text(&mut a, t), ["Meeting notes\nAction items"]);
     ok(&mut a, "doc_save", json!({ "doc": t, "path": "notes.pdf" }));
+    // A new text PDF is already compact: Reduce writes nothing rather than a copy no smaller.
     let r = ok(&mut a, "doc_reduce", json!({ "doc": t, "path": "notes-small.pdf" }));
-    assert!(r["bytes_after"].as_u64().unwrap() > 0 && dir.join("notes-small.pdf").exists());
+    assert!(r["bytes_after"].as_u64().unwrap() >= r["bytes_before"].as_u64().unwrap(), "{r}");
+    assert_eq!(r["written"], false);
+    assert!(!dir.join("notes-small.pdf").exists());
     assert!(matches!(a.call("doc_create", &json!({ "from": "images", "paths": ["notes.txt"] })), Err(ToolError::Failed(_))));
 }
 
@@ -1974,6 +2083,27 @@ fn redacting_with_codes_through_tools() {
 }
 
 #[test]
+fn redacting_word_lists_through_tools() {
+    let dir = workdir("redact-words");
+    std::fs::write(dir.join("memo.txt"), "Call Ada today\nAda is private\nPublic line").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "memo.txt" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "redact_mark", json!({ "doc": doc, "words": ["Ada", " private ", "absent", "Ada"] }));
+    assert_eq!(r["marked"].as_u64(), Some(3), "{r}");
+    assert_eq!(r["matched_words"], json!([{ "word": "Ada", "marked": 2 }, { "word": "private", "marked": 1 }, { "word": "absent", "marked": 0 }]));
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Mark for redaction");
+    assert_eq!(ok(&mut a, "redact_mark", json!({ "doc": doc, "words": ["Ada", "private"] }))["marks_pending"].as_u64(), Some(3));
+    ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    let text = page_text(&mut a, doc)[0].clone();
+    assert!(!text.contains("Ada") && !text.contains("private"), "{text}");
+    assert!(text.contains("Call") && text.contains("Public line"), "{text}");
+    for bad in [json!({ "doc": doc, "words": [] }), json!({ "doc": doc, "words": ["  "] }), json!({ "doc": doc, "words": ["x"], "find": "x" })] {
+        assert!(matches!(a.call("redact_mark", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert!(matches!(a.call("redact_mark", &json!({ "doc": doc, "words": ["absent", "nowhere"] })), Err(ToolError::Failed(_))));
+}
+
+#[test]
 fn removing_hidden_information_through_tools() {
     let dir = workdir("hidden");
     let mut a = auto(&dir);
@@ -2214,6 +2344,27 @@ fn stamps_through_tools() {
     assert_eq!(page_text(&mut a, doc)[1].matches('2').count(), 2);
     assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Add stamp");
     assert!(matches!(a.call("stamp_custom", &json!({ "doc": doc, "page": 1, "path": "nope.png", "at": [1, 1] })), Err(ToolError::Failed(_))));
+}
+
+#[test]
+fn bookmark_split_with_equal_titles_keeps_every_part() {
+    let dir = workdir("organize_dup_titles");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "bookmark_add", json!({ "doc": doc, "title": "Same", "page": 1 }));
+    ok(&mut a, "bookmark_add", json!({ "doc": doc, "title": "Same", "page": 2 }));
+    ok(&mut a, "bookmark_add", json!({ "doc": doc, "title": "same", "page": 3 }));
+    let s = ok(&mut a, "doc_split", json!({ "doc": doc, "bookmarks": true, "out_dir": "parts" }));
+    let files: Vec<String> = s["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| std::path::Path::new(f["path"].as_str().unwrap()).file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(files, ["a-Same.pdf", "a-Same-2.pdf", "a-same-3.pdf"]);
+    for f in &files {
+        assert!(dir.join("parts").join(f).exists(), "{f} missing");
+    }
 }
 
 #[test]
@@ -2613,8 +2764,11 @@ fn digital_ids_signing_and_validation_through_tools() {
     let ids = store["ids"].as_array().unwrap();
     assert_eq!(store["count"].as_u64().unwrap(), ids.len() as u64);
     assert!(ids.iter().all(|id| id["id"].as_str().unwrap().starts_with("windows:")));
+    // Store certificates that can't sign are explained, not dropped (issue #179).
+    let unusable = store["unusable"].as_array().unwrap();
+    assert!(unusable.iter().all(|u| u["subject"].is_string() && !u["reason"].as_str().unwrap().is_empty() && u["no_private_key"].is_boolean()));
     #[cfg(not(windows))]
-    assert!(ids.is_empty());
+    assert!(ids.is_empty() && unusable.is_empty());
     assert!(matches!(
         a.call("sign_document", &json!({ "doc": doc, "id": "ada.p12", "password": "wrong!", "out": "signed.pdf" })),
         Err(ToolError::InvalidArgs(_))
@@ -2685,6 +2839,8 @@ fn optimizing_through_tools() {
     assert_eq!(small["pages"], 1);
     let reduced = ok(&mut a, "doc_reduce", json!({ "doc": doc, "path": "reduced.pdf" }));
     assert!(reduced["bytes_after"].as_u64().unwrap() < reduced["bytes_before"].as_u64().unwrap());
+    assert_eq!(reduced["written"], true);
+    assert_eq!(std::fs::metadata(dir.join("reduced.pdf")).unwrap().len(), reduced["bytes_after"].as_u64().unwrap());
     assert!(matches!(
         a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "color": { "compression": "gif" } })),
         Err(ToolError::InvalidArgs(_))
@@ -2732,6 +2888,18 @@ fn ocr_tools_make_a_scan_searchable() {
     let again = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "pages": [1] }));
     assert!(again["pages"][0]["skipped"].is_string(), "{again}");
     assert!(matches!(a.call("ocr_recognize", &json!({ "doc": scan, "language": "xx" })), Err(ToolError::InvalidArgs(_))));
+}
+
+#[test]
+fn ocr_recognize_files_refuses_paths_outside_the_root() {
+    let dir = workdir("ocr-files-root");
+    let mut a = auto(&dir);
+    // Refused before anything else, with or without the OCR models installed.
+    for path in ["../outside.pdf", "sub/../../outside.pdf", "/outside.pdf"] {
+        let r = a.call("ocr_recognize_files", &json!({ "paths": ["a.pdf", path], "folder": "out" }));
+        assert!(matches!(&r, Err(e) if e.to_string().contains("outside the allowed directory")), "{path}: {r:?}");
+    }
+    assert!(!dir.join("out").exists(), "nothing was started");
 }
 
 #[test]
@@ -2894,6 +3062,36 @@ fn actions_through_tools() {
     let r = ok(&mut a, "action_run", json!({ "steps": [{ "step": "set_title", "arg": "Hello" }], "paths": ["a.pdf"], "folder": "out2" }));
     assert_eq!(r["files"][0]["log"][0], "Set document title");
     assert!(a.call("action_run", &json!({ "steps": [{ "step": "fly" }], "paths": ["a.pdf"], "folder": "x" })).is_err());
+}
+
+#[test]
+fn action_run_keeps_outputs_with_duplicate_input_basenames() {
+    let dir = workdir("action-duplicate-basenames");
+    std::fs::create_dir_all(dir.join("left")).unwrap();
+    std::fs::create_dir_all(dir.join("right")).unwrap();
+    std::fs::write(dir.join("left/report.pdf"), fixture(1)).unwrap();
+    std::fs::write(dir.join("right/report.pdf"), fixture(2)).unwrap();
+    let mut a = auto(&dir);
+    let args = json!({
+        "steps": [{ "step": "set_title", "arg": "Processed" }],
+        "paths": ["left/report.pdf", "right/report.pdf"],
+        "folder": "results"
+    });
+    let result = ok(&mut a, "action_run", args.clone());
+    let files = result["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    let first_path = files[0]["output"].as_str().unwrap();
+    let second_path = files[1]["output"].as_str().unwrap();
+    assert!(first_path.ends_with("report.pdf"), "{first_path}");
+    assert!(second_path.ends_with("report (2).pdf"), "{second_path}");
+    let first_bytes = std::fs::read(first_path).unwrap();
+    assert_eq!(ok(&mut a, "doc_open", json!({ "path": first_path }))["pages"], 1);
+    assert_eq!(ok(&mut a, "doc_open", json!({ "path": second_path }))["pages"], 2);
+
+    let repeated = ok(&mut a, "action_run", args);
+    assert!(repeated["files"][0]["output"].as_str().unwrap().ends_with("report (3).pdf"));
+    assert!(repeated["files"][1]["output"].as_str().unwrap().ends_with("report (4).pdf"));
+    assert_eq!(std::fs::read(first_path).unwrap(), first_bytes, "an earlier output must not be replaced");
 }
 
 #[test]
@@ -3497,6 +3695,33 @@ fn command_batch_refuses_more_than_a_thousand_steps() {
     let steps: Vec<Value> = (0..1001).map(|_| json!({"id":"no.such.command"})).collect();
     let err = a.call("command_batch", &json!({"steps": steps})).unwrap_err();
     assert!(err.to_string().contains("at most 1000 steps"), "{err}");
+}
+
+#[test]
+fn a_deleted_image_is_not_kept_by_reduce_or_optimize() {
+    let dir = workdir("deleted-image");
+    let (w, h) = (600u32, 400u32);
+    let px: Vec<u8> = (0..w * h).flat_map(|i| [(i % w * 255 / w) as u8 ^ (i & 7) as u8, (i / w * 255 / h) as u8, 128]).collect();
+    let mut photo = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut photo, w, h);
+        enc.set_color(png::ColorType::Rgb);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.write_header().unwrap().write_image_data(&px).unwrap();
+    }
+    std::fs::write(dir.join("photo.png"), photo).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["photo.png"] }))["doc"].as_u64().unwrap();
+    ok(&mut a, "image_edit", json!({ "doc": doc, "page": 1, "image": 1, "action": "delete" }));
+    assert_eq!(ok(&mut a, "page_images", json!({ "doc": doc, "page": 1 }))["count"], 0);
+    // The page is blank, so the copies are tiny: the picture's data is not carried along.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "optimized.pdf" }));
+    assert_eq!(r["unused_xobjects"], 1, "{r}");
+    assert!(r["bytes_after"].as_u64().unwrap() < 4_000, "{r}");
+    let r = ok(&mut a, "doc_reduce", json!({ "doc": doc, "path": "reduced.pdf" }));
+    assert!(r["bytes_after"].as_u64().unwrap() < 4_000, "{r}");
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "reduced.pdf" }));
+    assert_eq!(reopened["pages"], 1);
 }
 
 /// A two-page PDF with the same three-row table ("Name Qty / Apple 12 / Pear 7"); the second

@@ -255,6 +255,7 @@ comment menu	Edit	సవరించు
 	Security properties…	భద్రతా లక్షణాలు…
 	Organize pages	పేజీలను నిర్వహించు
 	New bookmark	కొత్త బుక్‌మార్క్
+	New bookmarks from structure	నిర్మాణం నుండి కొత్త బుక్‌మార్క్‌లు
 	Rotate pages clockwise	పేజీలను సవ్యదిశలో తిప్పు
 	Rotate pages counterclockwise	పేజీలను అపసవ్యదిశలో తిప్పు
 	Delete pages	పేజీలను తొలగించు
@@ -1070,6 +1071,11 @@ comment menu	Edit	సవరించు
 	Text in images isn't found; recognise text (OCR) first.	చిత్రాలలోని టెక్స్ట్ కనుగొనబడదు; ముందుగా టెక్స్ట్‌ను గుర్తించండి (OCR).
 	No matches.	సరిపోలికలు ఏవీ లేవు.
 	{n} match(es) marked for redaction.	రెడాక్షన్ కోసం గుర్తించిన సరిపోలికలు: {n}.
+	Multiple words or phrases	బహుళ పదాలు లేదా పదబంధాలు
+	One word or phrase per line	ఒక్కో పంక్తికి ఒక పదం లేదా పదబంధం
+	Import list…	జాబితాను దిగుమతి చేయండి…
+	{n} word(s) or phrase(s)	పదాలు లేదా పదబంధాలు: {n}
+	{name} is too large for a word list (at most 1 MB).	పద జాబితాకు {name} చాలా పెద్దది (గరిష్ఠంగా 1 MB).
 	Redaction Tool Properties	రెడాక్షన్ సాధనం లక్షణాలు
 	Redacted area fill colour:	రెడాక్ట్ చేసిన ప్రాంతం నింపు రంగు:
 	Use overlay text	ఓవర్‌లే టెక్స్ట్‌ను ఉపయోగించు
@@ -1466,6 +1472,8 @@ action wizard	Start	ప్రారంభించు
 	Right Edge	కుడి అంచు
 	Language	భాష
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	{place} సేవ్ చేయబడింది: {before} → {after} ({pct}% తగ్గింది){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	ఈ ఫైల్ ఇప్పటికే సాధ్యమైనంత చిన్నదిగా ఉంది ({size}). కాపీ ఏదీ సేవ్ చేయబడలేదు.
+	Saved {place}: {before} → {after} (not smaller){detail}	{place} సేవ్ చేయబడింది: {before} → {after} (తగ్గలేదు){detail}
 	Couldn't save the image: {e}	చిత్రాన్ని సేవ్ చేయడం సాధ్యం కాలేదు: {e}
 	Adding images arrives on the web with file pickers for images	చిత్రాలను జోడించడం, చిత్రాల కోసం ఫైల్ పికర్‌లతో పాటు వెబ్‌లో వస్తుంది
 	Replacing images on page {p} arrives on the web with image pickers ({i})	{p}వ పేజీలోని చిత్రాలను భర్తీ చేయడం, చిత్రాల పికర్‌లతో పాటు వెబ్‌లో వస్తుంది ({i})
@@ -2067,3 +2075,12 @@ action wizard	Start	ప్రారంభించు
 	The field {name} no longer exists.	{name} ఫీల్డ్ ఇకపై లేదు.
 	A selected field has no widget on any page, so the fields can't be edited together.	ఎంచుకున్న ఒక ఫీల్డ్‌కు ఏ పేజీలోనూ విడ్జెట్ లేదు, కాబట్టి ఫీల్డ్‌లను కలిపి సవరించలేము.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} {dpi} dpi వద్ద, అవి గీయగల అతిపెద్ద పరిమాణం)
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	స్పేస్

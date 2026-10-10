@@ -732,6 +732,11 @@
 	Text in images isn't found; recognise text (OCR) first.	Texto em imagens não é encontrado; reconheça o texto (OCR) primeiro.
 	No matches.	Nenhuma correspondência.
 	{n} match(es) marked for redaction.	{n} correspondência(s) marcada(s) para ocultação.
+	Multiple words or phrases	Várias palavras ou frases
+	One word or phrase per line	Uma palavra ou frase por linha
+	Import list…	Importar lista…
+	{n} word(s) or phrase(s)	{n} palavra(s) ou frase(s)
+	{name} is too large for a word list (at most 1 MB).	{name} é grande demais para uma lista de palavras (no máximo 1 MB).
 	Redaction Tool Properties	Propriedades da ferramenta de ocultação
 	Redacted area fill colour:	Cor de preenchimento da área ocultada:
 	Use overlay text	Usar texto de sobreposição
@@ -1385,6 +1390,8 @@
 	Right Edge	Borda direita
 	Language	Idioma
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Salvo {place}: {before} → {after} ({pct}% menor){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	Este arquivo já está o menor possível ({size}). Nenhuma cópia foi salva.
+	Saved {place}: {before} → {after} (not smaller){detail}	Salvo {place}: {before} → {after} (não ficou menor){detail}
 	Couldn't save the image: {e}	Não foi possível salvar a imagem: {e}
 	Adding images arrives on the web with file pickers for images	A adição de imagens chegará à Web com seletores de arquivo para imagens
 	Replacing images on page {p} arrives on the web with image pickers ({i})	A substituição de imagens na página {p} chegará à Web com seletores de imagem ({i})
@@ -1614,6 +1621,7 @@
 	Security properties…	Propriedades de segurança…
 	Organize pages	Organizar páginas
 	New bookmark	Novo marcador
+	New bookmarks from structure	Novos marcadores a partir da estrutura
 	Rotate pages clockwise	Girar páginas em sentido horário
 	Rotate pages counterclockwise	Girar páginas em sentido anti-horário
 	Delete pages	Excluir páginas
@@ -2137,3 +2145,15 @@ comment menu	Edit	Editar
 	The field {name} no longer exists.	O campo {name} não existe mais.
 	A selected field has no widget on any page, so the fields can't be edited together.	Um campo selecionado não tem widget em nenhuma página, então os campos não podem ser editados juntos.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} dpi, o maior tamanho em que podem ser desenhadas)
+	Fill colour	Cor de preenchimento
+	No fill	Sem preenchimento
+	Fill colour: none	Cor de preenchimento: nenhuma
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	Espaço
