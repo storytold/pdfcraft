@@ -341,6 +341,14 @@ pub enum OsEvent {
 /// Returns the [`OsEvent`]s that arrived since it was last called (set by the desktop app).
 pub type OsEventsFn = Box<dyn FnMut() -> Vec<OsEvent>>;
 
+/// Hands a saved PDF to the page embedding PdfCraft (web): `(name, bytes, save_as)`. `save_as`
+/// is `true` for Save As. Set by the web app when a host page (such as a Nextcloud app) asked
+/// for saves; without it the browser downloads the file.
+pub type HostSaveFn = Box<dyn Fn(&str, &[u8], bool) -> Result<(), String>>;
+
+/// Told every frame whether any tab has unsaved work, so a host page can warn before leaving.
+pub type HostDirtyFn = Box<dyn FnMut(bool)>;
+
 pub struct PasswordPrompt {
     pub name: String,
     pub path: Option<String>,
@@ -426,6 +434,10 @@ pub struct PdfCraftApp {
     pub failed_inbox: FailedInbox,
     /// Requests from the operating system, polled every frame (macOS Apple events).
     pub os_events: Option<OsEventsFn>,
+    /// Save delivers to the embedding page instead of downloading (web, see [`HostSaveFn`]).
+    pub host_save: Option<HostSaveFn>,
+    /// Reports unsaved work to the embedding page (web, see [`HostDirtyFn`]).
+    pub host_dirty: Option<HostDirtyFn>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
     /// Save to this path instead of asking (tests and automation).
@@ -690,6 +702,8 @@ impl PdfCraftApp {
             startup_superseded: false,
             failed_inbox: Default::default(),
             os_events: None,
+            host_save: None,
+            host_dirty: None,
             close_request: None,
             save_override: None,
             props_draft: None,
@@ -1862,6 +1876,12 @@ impl eframe::App for PdfCraftApp {
         self.guard_quit(ctx);
         let now = ctx.input(|i| i.time);
         self.autosave_tick(now);
+        if self.host_dirty.is_some() {
+            let dirty = self.first_dirty().is_some();
+            if let Some(report) = self.host_dirty.as_mut() {
+                report(dirty);
+            }
+        }
         self.poll_updates();
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
