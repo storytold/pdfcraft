@@ -480,10 +480,8 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 }
                             });
                         }
-                        if panel == RightPanel::Bookmarks
-                            && bm_editable
-                            && icons::button(ui, "bookmark-plus", 26.0, false, tl!("New bookmark (⌘B)")).clicked()
-                        {
+                        let new_tip = crate::commands::command_tip(ui.ctx(), tl!("New bookmark ({key})"), "bookmark.add");
+                        if panel == RightPanel::Bookmarks && bm_editable && icons::button(ui, "bookmark-plus", 26.0, false, &new_tip).clicked() {
                             bm_action = Some(BmAction::New);
                         }
                     });
