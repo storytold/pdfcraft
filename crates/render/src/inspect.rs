@@ -476,12 +476,33 @@ impl<'a> Inspector<'a> {
             info.outline = self.outline_siblings(first, &mut seen, 0);
         }
         self.annotations(info);
+        let mut field_seen = HashSet::new();
         if let Some(form) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o))
             && let Ok(fields) = form.get(b"Fields").and_then(|o| self.resolve(o).as_array())
         {
-            let mut seen = HashSet::new();
             for f in fields {
-                self.field(f, None, &mut info.fields, &mut seen, 0);
+                self.field(f, None, &mut info.fields, &mut field_seen, 0);
+            }
+        }
+        // Widgets no `/Fields` entry reaches are fields too (Acrobat and the browsers fill them);
+        // each is adopted through its topmost unlisted `/Parent`, so a split field stays one.
+        let mut pages: Vec<_> = self.page_index.iter().collect();
+        pages.sort_by_key(|(_, i)| **i);
+        for (&pid, _) in pages {
+            let Ok(page_dict) = self.doc.get_dictionary(pid) else { continue };
+            let Ok(Object::Array(annots)) = page_dict.get(b"Annots").map(|o| self.resolve(o)) else { continue };
+            for a in annots {
+                let Some(d) = self.dict(a) else { continue };
+                if self.name(d, b"Subtype").as_deref() != Some("Widget")
+                    || (d.get(b"FT").is_err() && d.get(b"T").is_err() && d.get(b"Parent").is_err())
+                {
+                    continue;
+                }
+                if let Object::Reference(id) = a
+                    && let Some(root) = self.unlisted_field(*id, &field_seen)
+                {
+                    self.field(&Object::Reference(root), None, &mut info.fields, &mut field_seen, 0);
+                }
             }
         }
         info.has_javascript |= info.fields.iter().any(|f| f.has_actions);
@@ -1004,6 +1025,31 @@ impl<'a> Inspector<'a> {
             let arr = self.resolve(annots).as_array().ok()?;
             arr.iter().any(|a| matches!(a, Object::Reference(id) if targets.contains(id))).then_some(idx)
         })
+    }
+
+    /// The topmost field above widget `id` (itself without a `/Parent`), or `None` when it or an
+    /// ancestor is already reachable from the `/Fields` tree, or a `/Parent` loop hides the top.
+    fn unlisted_field(&self, id: ObjectId, seen: &HashSet<ObjectId>) -> Option<ObjectId> {
+        let mut top = id;
+        let mut visited = HashSet::from([id]);
+        loop {
+            let o = Object::Reference(top);
+            let d = self.dict(&o)?;
+            let parent = match d.get(b"Parent") {
+                Ok(Object::Reference(p)) => Some(*p),
+                _ => None,
+            };
+            let Some(p) = parent else {
+                return if seen.contains(&top) { None } else { Some(top) };
+            };
+            if !visited.insert(p) || visited.len() > 64 {
+                return None;
+            }
+            if seen.contains(&p) {
+                return None;
+            }
+            top = p;
+        }
     }
 
     // ── optional content ────────────────────────────────────────────────────────────────────
@@ -1535,6 +1581,23 @@ trailer << /Root 1 0 R >>
         assert_eq!(layers, [((5, 0), "Red", true), ((6, 0), "Green", false), ((7, 0), "Blue", true)]);
         // A group of one constrains nothing; an indirect group is read.
         assert_eq!(info.layer_groups, [vec![(5, 0), (6, 0)], vec![(6, 0), (7, 0)]]);
+    }
+
+    const ORPHAN_FIELDS: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R 6 0 R] >> endobj
+4 0 obj << /Fields [] >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (alpha) /V (one) /Rect [10 100 90 120] >> endobj
+6 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (beta) /Rect [10 60 90 80] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+    #[test]
+    fn fields_listed_only_on_the_pages_are_listed() {
+        let info = inspect(Arc::new(ORPHAN_FIELDS.to_vec()), None).expect("opens");
+        let listed: Vec<_> = info.fields.iter().map(|f| (f.name.as_str(), f.value.as_deref(), f.page)).collect();
+        assert_eq!(listed, [("alpha", Some("one"), Some(0)), ("beta", None, Some(0))], "{:?}", info.fields);
     }
 
     #[test]
