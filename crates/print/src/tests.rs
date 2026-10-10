@@ -232,7 +232,15 @@ fn driverless_printers_join_the_list_without_a_queue() {
     );
     // An old spooler without `-e` (CUPS < 1.7) keeps its queues; only the driverless names are lost.
     assert_eq!(spool::printers_parsed(queues, None), [spool::Printer { name: "Office_Laser".into(), default: true }]);
+    // The default can itself be driverless (`lpoptions -d` names a destination no queue exists
+    // for): it keeps its marker, so the dialog preselects the user's default, not the first queue.
+    assert_eq!(
+        spool::printers_parsed("system default destination: Basement_Color\n", Some("Basement_Color\n")),
+        [spool::Printer { name: "Basement_Color".into(), default: true }],
+        "a default destination without a queue is still the default"
+    );
     assert!(spool::parse_lpstat_e("\n \n").is_empty(), "no destinations is empty, not [\"\"]");
+    assert_eq!(spool::parse_lpstat_e("A\r\nB \n"), ["A".to_string(), "B".to_string()], "CRLF and stray spaces are trimmed");
 }
 
 fn cut_stack(cols: usize, rows: usize) -> Layout {

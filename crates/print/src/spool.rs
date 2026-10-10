@@ -39,13 +39,18 @@ impl Default for Job {
     }
 }
 
+/// The `lpstat -d` line's destination name, when the spooler has a default.
+fn default_destination(out: &str) -> Option<&str> {
+    out.lines().find_map(|l| l.strip_prefix("system default destination:")).map(str::trim)
+}
+
 /// Parse `lpstat -p -d` output.
 pub fn parse_lpstat(out: &str) -> Vec<Printer> {
-    let default = out.lines().find_map(|l| l.strip_prefix("system default destination:")).map(|s| s.trim().to_string());
+    let default = default_destination(out);
     out.lines()
         .filter_map(|l| l.strip_prefix("printer "))
         .filter_map(|l| l.split_whitespace().next())
-        .map(|n| Printer { name: n.to_string(), default: default.as_deref() == Some(n) })
+        .map(|n| Printer { name: n.to_string(), default: default == Some(n) })
         .collect()
 }
 
@@ -284,6 +289,10 @@ pub fn lpstat_command() -> std::process::Command {
 /// `lpstat -e`: every destination CUPS can print to, including driverless network printers no
 /// permanent queue exists for (a queue is built only when a job needs one). GTK's and macOS's
 /// print dialogs list them the same way. CUPS ≥ 1.7 (2013).
+///
+/// Gated like its only caller, `printers`' unix block: off unix this is dead code, and the
+/// Windows clippy gate builds with `-D warnings`.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
 fn lpstat_e_command() -> std::process::Command {
     lpstat_with(&["-e"])
 }
@@ -308,14 +317,16 @@ pub fn printers() -> Vec<Printer> {
 
 /// The Print dialog's printers from lpstat's two answers: the spooler's queues (`-p -d`), then
 /// the driverless destinations of `available` (`-e`) that have no queue — CUPS builds a temporary
-/// queue when `lp` sends them a job. Each destination once, queues first; `None` when the spooler
-/// doesn't know `-e` (CUPS < 1.7, 2013), which loses only the driverless names.
+/// queue when `lp` sends them a job. Each destination once, queues first; the default still comes
+/// from `-d`, so a driverless default keeps its marker. `None` when the spooler doesn't know `-e`
+/// (CUPS < 1.7, 2013), which loses only the driverless names.
 pub fn printers_parsed(queues: &str, available: Option<&str>) -> Vec<Printer> {
     let mut printers = parse_lpstat(queues);
+    let default = default_destination(queues);
     if let Some(names) = available {
         for name in parse_lpstat_e(names) {
             if !printers.iter().any(|p| p.name == name) {
-                printers.push(Printer { name, default: false });
+                printers.push(Printer { default: default == Some(name.as_str()), name });
             }
         }
     }
