@@ -138,21 +138,28 @@ pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
     ctx.set_fonts(installed_font_definitions(prefer_hans));
 }
 
-/// The name of the installed face [`installed_font_definitions`] may add after the embedded ones.
+/// The name of the installed Arabic-script face [`installed_font_definitions`] may add after the
+/// embedded ones.
 pub const SYSTEM_FALLBACK: &str = "system-fallback";
 
-/// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
-/// already installed on this machine as the last fallback of every family. It only draws
-/// characters no embedded face has (an Arabic file name in a build without craft-fonts);
-/// `PDFCRAFT_SYSTEM_FONTS=0` leaves it out.
+/// The name of the installed Thai-script face [`installed_font_definitions`] may add after the
+/// embedded ones.
+pub const SYSTEM_FALLBACK_THAI: &str = "system-fallback-thai";
+
+/// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, faces already
+/// installed on this machine as the last fallback of every family — at most one per probed script
+/// (Arabic, Thai). They only draw characters no embedded face has (an Arabic or Thai file name in
+/// a build without craft-fonts); `PDFCRAFT_SYSTEM_FONTS=0` leaves them out.
 pub fn installed_font_definitions(prefer_hans: bool) -> FontDefinitions {
     #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
     let mut fonts = font_definitions_for(prefer_hans);
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(data) = crate::system_fonts::fallback() {
-        fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
+    for (name, data) in crate::system_fonts::fallbacks() {
+        fonts.font_data.insert(name.to_owned(), data);
         for stack in fonts.families.values_mut() {
-            stack.push(SYSTEM_FALLBACK.to_owned());
+            if !stack.iter().any(|existing| existing.as_str() == name) {
+                stack.push(name.to_owned());
+            }
         }
     }
     fonts
