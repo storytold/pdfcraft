@@ -1137,6 +1137,12 @@ impl PdfCraftApp {
         self.active.and_then(|i| self.views.get(i).map(|v| (i, v.id)))
     }
 
+    /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
+    /// on the document underneath it.
+    pub(crate) fn modal_open(&self) -> bool {
+        self.dialog.is_some() || self.close_request.is_some() || self.password_prompt.is_some() || self.pending_link.is_some() || self.updates.open
+    }
+
     /// Enable the UI control channel on `ctx` (opt-in; see [`control`]). Returns a client that
     /// sends requests to this app; [`control::serve`] exposes it on loopback.
     pub fn attach_control(&mut self, ctx: &egui::Context) -> control::ControlClient {
@@ -1686,6 +1692,11 @@ impl PdfCraftApp {
             }
             return;
         }
+        // The other dialogs and prompts are modal too (⌘W closed the file behind Preferences,
+        // #870).
+        if self.modal_open() {
+            return;
+        }
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
             && view.auto_scroll.escape(ctx)
         {
@@ -1868,7 +1879,7 @@ impl eframe::App for PdfCraftApp {
         self.shortcuts(ctx);
         // Scrolling is transient: never resume after changing tabs, opening a modal/palette,
         // or returning to a window that lost focus.
-        let blocked = self.dialog.is_some() || self.close_request.is_some() || self.palette_open || !ctx.input(|i| i.focused);
+        let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
         for (index, view) in self.views.iter_mut().enumerate() {
             if blocked || self.active != Some(index) {
                 view.auto_scroll.cancel();

@@ -6,7 +6,7 @@ use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
-use pdfcraft_ui_egui::{CloseRequest, PdfCraftApp};
+use pdfcraft_ui_egui::{CloseRequest, Dialog, PdfCraftApp};
 
 /// An `n`-page document with a proper xref table; page `i` shows "Page i+1".
 fn fixture(n: usize) -> Vec<u8> {
@@ -354,6 +354,46 @@ fn the_save_prompt_answers_to_the_keyboard() {
     let saved = pdfcraft_render::inspect(std::sync::Arc::new(std::fs::read(&out).unwrap()), None).unwrap();
     assert_eq!(saved.pages[0].rotation, 90);
     let _ = std::fs::remove_file(out);
+}
+
+#[test]
+fn keys_leave_the_document_under_a_dialog_alone() {
+    // Issue #870: ⌘W with Preferences open closed the file underneath it, and in the page grid
+    // Delete deleted the selected page. While a dialog is open its keys are its own.
+    let mut h = organize(3);
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(3);
+    assert!(h.state_mut().execute("app.preferences"));
+    h.run_steps(3);
+    let shift = Modifiers::COMMAND | Modifiers::SHIFT;
+    for (m, key) in [
+        (Modifiers::COMMAND, Key::W),
+        (shift, Key::W),
+        (Modifiers::COMMAND, Key::Z),
+        (Modifiers::COMMAND, Key::D),
+        (Modifiers::COMMAND, Key::F),
+        (Modifiers::NONE, Key::Delete),
+        (Modifiers::NONE, Key::Backspace),
+    ] {
+        h.key_press_modifiers(m, key);
+        h.run_steps(3);
+        let app = h.state();
+        assert_eq!(app.views.len(), 1, "{m:?}+{key:?} closed the file");
+        assert!(app.close_request.is_none(), "{m:?}+{key:?} asked to close the file");
+        assert!(app.session.get(app.views[0].id).unwrap().can_undo().is_some(), "{m:?}+{key:?} undid the rotation");
+        assert!(app.views[0].find.is_none(), "{m:?}+{key:?} opened Find");
+        assert_eq!(app.dialog, Some(Dialog::Preferences), "{m:?}+{key:?} replaced Preferences");
+    }
+    assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3"], "a page was deleted under the dialog");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes Preferences");
+    assert_eq!(h.state().views[0].target_pages(), [1], "Escape went to the dialog, not the page selection");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::W);
+    h.run_steps(3);
+    assert!(h.state().close_request.is_some(), "with the dialog closed, ⌘W closes the file again");
 }
 
 #[test]
