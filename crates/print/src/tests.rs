@@ -65,16 +65,46 @@ fn page_selection() {
     assert_eq!(select_pages(5, Some("ii-2, A-1"), &labels, Subset::All, false).unwrap(), [1, 2, 3, 4], "labels, even with a dash");
     assert_eq!(select_pages(5, None, &[], Subset::Even, true).unwrap(), [3, 1]);
     assert_eq!(select_pages(5, None, &[], Subset::Odd, false).unwrap(), [0, 2, 4]);
-    assert!(matches!(select_pages(5, Some("7"), &[], Subset::All, false), Err(PrintError::Invalid(_))));
-    assert!(matches!(select_pages(5, Some("x"), &[], Subset::All, false), Err(PrintError::Invalid(_))));
+    assert_eq!(select_pages(5, Some("7"), &[], Subset::All, false), Err(PrintError::OutOfRange(7, 5)));
+    assert_eq!(select_pages(5, Some("x"), &[], Subset::All, false), Err(PrintError::NotAPage("x".into())));
+    assert_eq!(select_pages(5, Some("7"), &[], Subset::All, false).unwrap_err().to_string(), "page 7 is out of range (1–5)");
     assert_eq!(select_pages(1, None, &[], Subset::Even, false), Err(PrintError::NoPages));
     // An explicit list (selected thumbnails): positions, never labels, in the order given.
     assert_eq!(select_listed(5, &[1, 3], Subset::All, false).unwrap(), [1, 3]);
     assert_eq!(select_listed(5, &[0, 2, 4], Subset::Even, false).unwrap(), [2]);
     assert_eq!(select_listed(5, &[0, 2, 4], Subset::Odd, true).unwrap(), [4, 0]);
-    assert!(matches!(select_listed(5, &[1, 5], Subset::All, false), Err(PrintError::Invalid(_))));
-    assert!(matches!(select_listed(0, &[usize::MAX], Subset::All, false), Err(PrintError::Invalid(_))));
+    assert_eq!(select_listed(5, &[1, 5], Subset::All, false), Err(PrintError::OutOfRange(6, 5)));
+    assert!(matches!(select_listed(0, &[usize::MAX], Subset::All, false), Err(PrintError::OutOfRange(_, 0))));
     assert_eq!(select_listed(5, &[], Subset::All, false), Err(PrintError::NoPages));
+}
+
+/// Every mistake a person can make about what to print says itself out of a wording on the list
+/// and the numbers apart from it, and says itself in English exactly as the error prints itself.
+#[test]
+fn wordings_are_said() {
+    let mistakes = [PrintError::NoPages, PrintError::OutOfRange(7, 5), PrintError::NotAPage("x".into())];
+    for e in &mistakes {
+        assert_eq!(e.said(&in_english), e.to_string(), "{e:?} says itself in English the way it prints itself");
+    }
+    // Each wording is one of a mistake's, and each mistake's is on the list: the hole names and
+    // all, so a catalog that translates the list translates every sentence a person can be shown.
+    let said: Vec<String> = WORDINGS.iter().map(|w| w.to_string()).collect();
+    assert_eq!(said.len(), mistakes.len(), "one wording per mistake");
+    for w in WORDINGS {
+        assert!(!w.is_empty() && w.ends_with(|c: char| c.is_alphanumeric() || c == ')'), "a whole sentence, not a fragment: {w:?}");
+    }
+    // A fault is not a mistake: it carries its own text and is not on the list.
+    let fault = PrintError::Spool("lp: no such printer".into());
+    assert_eq!(fault.said(&in_english), "lp: no such printer");
+    assert_eq!(fault.said(&|_| "traducido".to_string()), "lp: no such printer", "nothing to translate");
+    // Said in another language, the numbers still go in, and in that language's own order.
+    let other = |w: &str| match w {
+        "page {n} is out of range (1–{count})" => "el documento tiene {count} páginas, no {n}".to_string(),
+        w => w.to_string(),
+    };
+    assert_eq!(PrintError::OutOfRange(7, 5).said(&other), "el documento tiene 5 páginas, no 7");
+    // What was typed goes in as it stands, braces and all, and is never read as a hole.
+    assert_eq!(PrintError::NotAPage("{count}".into()).said(&other), "\"{count}\" is not a page number or label");
 }
 
 #[test]

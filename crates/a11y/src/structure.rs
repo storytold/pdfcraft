@@ -1,5 +1,8 @@
 //! The structure tree (tags) as the checker needs it, and the rules that read it: alternate
 //! text, tables, lists and headings (ISO 32000-2 §14.7–14.8).
+//!
+//! Every sentence a rule here can say is listed in [`crate::WORDINGS`], so interfaces can say it in
+//! their own language; a test in this crate keeps that list complete.
 
 use std::collections::{HashMap, HashSet};
 
@@ -7,6 +10,9 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use pdfcraft_model::Page;
 
 use crate::{Finding, Rule};
+
+/// Why a table's rows are irregular; `{min}` and `{max}` are the narrowest and widest row.
+const IRREGULAR: &str = "rows have between {min} and {max} columns";
 
 /// Standard structure types (PDF 1.7 and 2.0); anything else goes through the role map.
 const STANDARD: &[&[u8]] = &[
@@ -153,11 +159,27 @@ impl Tree {
         self.elems[i].parent.is_some_and(|p| types.contains(&self.elems[p].ty.as_slice()))
     }
 
-    fn finding(&self, i: usize, what: &str) -> Finding {
+    /// A finding about element `i`: which element it is, and in `{what}` what is wrong with it.
+    ///
+    /// `what` is a wording, not a finished sentence, and `extra` fills any holes it has of its own.
+    /// With and without a page are separate wordings so each reads the way the language reads it;
+    /// `{ty}` is the structure tag's own name and goes in as it stands.
+    fn finding(&self, i: usize, what: &'static str, extra: Vec<(&'static str, String)>) -> Finding {
         let e = &self.elems[i];
-        let ty = String::from_utf8_lossy(&e.ty);
-        let at = e.page.map(|p| format!(" on page {}", p + 1)).unwrap_or_default();
-        Finding { page: e.page, message: format!("{ty} element{at}: {what}") }
+        let mut values = extra;
+        values.push(("{ty}", String::from_utf8_lossy(&e.ty).into_owned()));
+        match e.page {
+            Some(p) => {
+                values.push(("{p}", (p + 1).to_string()));
+                Finding::nested(e.page, "{ty} element on page {p}: {what}", what, values)
+            }
+            None => Finding::nested(None, "{ty} element: {what}", what, values),
+        }
+    }
+
+    /// A finding whose `{what}` wording has no holes of its own.
+    fn says(&self, i: usize, what: &'static str) -> Finding {
+        self.finding(i, what, Vec::new())
     }
 
     pub fn rule(&self, rule: Rule) -> Vec<Finding> {
@@ -167,86 +189,86 @@ impl Tree {
             Rule::FiguresAltText => {
                 for &i in &order {
                     if self.is(i, b"Figure") && !self.elems[i].alt && !self.ancestors(i).any(|a| self.elems[a].alt) {
-                        out.push(self.finding(i, "no alternate text"));
+                        out.push(self.says(i, "no alternate text"));
                     }
                 }
             }
             Rule::OtherElementsAltText => {
                 for &i in &order {
                     if self.is(i, b"Formula") && !self.elems[i].alt && !self.ancestors(i).any(|a| self.elems[a].alt) {
-                        out.push(self.finding(i, "no alternate text"));
+                        out.push(self.says(i, "no alternate text"));
                     }
                 }
             }
             Rule::NestedAltText => {
                 for &i in &order {
                     if self.elems[i].alt && self.ancestors(i).any(|a| self.elems[a].alt) {
-                        out.push(self.finding(i, "its alternate text is inside another element's and will never be read"));
+                        out.push(self.says(i, "its alternate text is inside another element's and will never be read"));
                     }
                 }
             }
             Rule::AltTextAssociated => {
                 for &i in &order {
                     if self.elems[i].alt && !self.subtree(i).iter().any(|j| self.elems[*j].content) {
-                        out.push(self.finding(i, "alternate text on an element with no page content"));
+                        out.push(self.says(i, "alternate text on an element with no page content"));
                     }
                 }
             }
             Rule::AltTextHidesAnnotation => {
                 for &i in &order {
                     if self.elems[i].alt && self.subtree(i).iter().any(|j| !self.elems[*j].annots.is_empty()) {
-                        out.push(self.finding(i, "alternate text hides an annotation inside it"));
+                        out.push(self.says(i, "alternate text hides an annotation inside it"));
                     }
                 }
             }
             Rule::TableRows => {
                 for &i in &order {
                     if self.is(i, b"TR") && !self.parent_is(i, &[b"Table", b"THead", b"TBody", b"TFoot"]) {
-                        out.push(self.finding(i, "not in a Table, THead, TBody or TFoot"));
+                        out.push(self.says(i, "not in a Table, THead, TBody or TFoot"));
                     }
                 }
             }
             Rule::TableCells => {
                 for &i in &order {
                     if (self.is(i, b"TH") || self.is(i, b"TD")) && !self.parent_is(i, &[b"TR"]) {
-                        out.push(self.finding(i, "not in a TR"));
+                        out.push(self.says(i, "not in a TR"));
                     }
                 }
             }
             Rule::TableHeaders => {
                 for &i in &order {
                     if self.is(i, b"Table") && !self.table_cells(i).iter().any(|(_, c)| self.is(*c, b"TH")) {
-                        out.push(self.finding(i, "no header cells (TH)"));
+                        out.push(self.says(i, "no header cells (TH)"));
                     }
                 }
             }
             Rule::TableRegularity => {
                 for &i in &order {
                     if self.is(i, b"Table")
-                        && let Some(why) = self.irregular(i)
+                        && let Some(widths) = self.irregular(i)
                     {
-                        out.push(self.finding(i, &why));
+                        out.push(self.finding(i, IRREGULAR, widths));
                     }
                 }
             }
             Rule::TableSummary => {
                 for &i in &order {
                     if self.is(i, b"Table") && self.attr(i, b"Summary").is_none() {
-                        out.push(self.finding(i, "no summary"));
+                        out.push(self.says(i, "no summary"));
                     }
                 }
             }
             Rule::ListItems => {
                 for &i in &order {
                     if self.is(i, b"LI") && !self.parent_is(i, &[b"L"]) {
-                        out.push(self.finding(i, "not in an L (list)"));
+                        out.push(self.says(i, "not in an L (list)"));
                     }
                 }
             }
             Rule::LblLBody => {
                 for &i in &order {
                     if (self.is(i, b"Lbl") || self.is(i, b"LBody")) && !self.parent_is(i, &[b"LI"]) && !self.inside_toc_or_note(i) {
-                        out.push(self.finding(i, "not in an LI (list item)"));
+                        out.push(self.says(i, "not in an LI (list item)"));
                     }
                 }
             }
@@ -258,8 +280,16 @@ impl Tree {
                         _ => continue,
                     };
                     if level > prev + 1 {
-                        let what = if prev == 0 { format!("the first heading is an H{level}") } else { format!("H{level} follows an H{prev}") };
-                        out.push(self.finding(i, &format!("{what}; headings should not skip levels")));
+                        // A whole sentence each way: what is wrong with the first heading and what is
+                        // wrong with a later one are not the same remark with a word swapped.
+                        let mut values = vec![("{n}", level.to_string())];
+                        let what = if prev == 0 {
+                            "the first heading is an H{n}; headings should not skip levels"
+                        } else {
+                            values.push(("{d}", prev.to_string()));
+                            "H{n} follows an H{d}; headings should not skip levels"
+                        };
+                        out.push(self.finding(i, what, values));
                     }
                     prev = level;
                 }
@@ -308,8 +338,9 @@ impl Tree {
         rows
     }
 
-    /// Why the table's rows don't all have the same width, counting row and column spans.
-    fn irregular(&self, table: usize) -> Option<String> {
+    /// The narrowest and widest row, when the table's rows don't all have the same width, counting
+    /// row and column spans. They fill [`IRREGULAR`]'s holes.
+    fn irregular(&self, table: usize) -> Option<Vec<(&'static str, String)>> {
         let rows = self.table_rows(table);
         if rows.len() < 2 {
             return None;
@@ -340,7 +371,7 @@ impl Tree {
             carry = next;
         }
         let (min, max) = (widths.iter().min()?, widths.iter().max()?);
-        (min != max).then(|| format!("rows have between {min} and {max} columns"))
+        (min != max).then(|| vec![("{min}", min.to_string()), ("{max}", max.to_string())])
     }
 }
 

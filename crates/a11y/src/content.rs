@@ -1,5 +1,8 @@
 //! The Document, Page Content and Forms rules: catalog settings, page content (tagged or
 //! artifact, text, images, fonts) and annotations.
+//!
+//! Every sentence a rule here can say is listed in [`crate::WORDINGS`], so interfaces can say it in
+//! their own language; a test in this crate keeps that list complete.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -145,8 +148,8 @@ fn text_of(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
     d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text())).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
 }
 
-fn doc_finding(message: impl Into<String>) -> Vec<Finding> {
-    vec![Finding { page: None, message: message.into() }]
+fn doc_finding(sentence: &'static str) -> Vec<Finding> {
+    vec![Finding::plain(None, sentence)]
 }
 
 pub(crate) fn document_rule(doc: &Document, rule: Rule, pages: &[Page], scan: &Scan) -> Vec<Finding> {
@@ -168,10 +171,10 @@ pub(crate) fn document_rule(doc: &Document, rule: Rule, pages: &[Page], scan: &S
             let marked = cat.get(b"MarkInfo").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().and_then(|d| d.get(b"Marked").cloned()));
             let mut out = Vec::new();
             if !cat.contains(b"StructTreeRoot") {
-                out.push(Finding { page: None, message: "The document has no tags (structure tree)".into() });
+                out.push(Finding::plain(None, "The document has no tags (structure tree)"));
             }
             if !matches!(marked, Some(Object::Bool(true))) {
-                out.push(Finding { page: None, message: "The document isn't marked as tagged (MarkInfo Marked)".into() });
+                out.push(Finding::plain(None, "The document isn't marked as tagged (MarkInfo Marked)"));
             }
             out
         }
@@ -186,7 +189,7 @@ pub(crate) fn document_rule(doc: &Document, rule: Rule, pages: &[Page], scan: &S
             let mut out = Vec::new();
             let info = doc.trailer().get(b"Info").map(|i| doc.resolve(i)).and_then(|i| i.as_dict().cloned()).unwrap_or_default();
             if text_of(doc, &info, b"Title").is_none() {
-                out.push(Finding { page: None, message: "The document has no title".into() });
+                out.push(Finding::plain(None, "The document has no title"));
             }
             let shows = cat
                 .get(b"ViewerPreferences")
@@ -194,13 +197,17 @@ pub(crate) fn document_rule(doc: &Document, rule: Rule, pages: &[Page], scan: &S
                 .and_then(|v| v.as_dict().and_then(|d| d.get(b"DisplayDocTitle").map(|x| matches!(&*doc.resolve(x), Object::Bool(true)))))
                 .unwrap_or(false);
             if !shows {
-                out.push(Finding { page: None, message: "The window shows the file name, not the title (Initial View > Show)".into() });
+                out.push(Finding::plain(None, "The window shows the file name, not the title (Initial View > Show)"));
             }
             out
         }
         Rule::Bookmarks => {
             let has = cat.get(b"Outlines").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().map(|d| d.contains(b"First"))).unwrap_or(false);
-            if pages.len() > 20 && !has { doc_finding(format!("{} pages and no bookmarks", pages.len())) } else { Vec::new() }
+            if pages.len() > 20 && !has {
+                vec![Finding::worded(None, "{n} pages and no bookmarks", vec![("{n}", pages.len().to_string())])]
+            } else {
+                Vec::new()
+            }
         }
         _ => Vec::new(),
     }
@@ -228,7 +235,10 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                 return doc_finding("The document isn't tagged, so none of its content is");
             }
             for (p, n) in &scan.untagged {
-                out.push(Finding { page: Some(*p), message: format!("Page {}: {n} untagged content item{}", p + 1, if *n == 1 { "" } else { "s" }) });
+                // One item and several items are separate wordings, so a language can agree the
+                // noun with the number its own way.
+                let pattern = if *n == 1 { "Page {p}: {n} untagged content item" } else { "Page {p}: {n} untagged content items" };
+                out.push(Finding::worded(Some(*p), pattern, vec![("{p}", (p + 1).to_string()), ("{n}", n.to_string())]));
             }
         }
         Rule::TaggedAnnotations | Rule::TaggedMultimedia | Rule::TaggedFormFields => {
@@ -242,8 +252,17 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                         _ => st != b"Widget" && !MULTIMEDIA.contains(&st) && st != b"PrinterMark",
                     };
                     if applies && !(tagged && a.contains(b"StructParent")) {
-                        let what = if st == b"Widget" { "Form field".to_string() } else { format!("{} annotation", subtype_name(&a)) };
-                        out.push(Finding { page: Some(p), message: format!("{what} on page {} isn't tagged", p + 1) });
+                        // A whole sentence each way, rather than a noun put in front of one: a form
+                        // field and an annotation of some subtype read differently in other
+                        // languages. The subtype itself is the PDF's own name and goes in as it is.
+                        let mut values = vec![("{p}", (p + 1).to_string())];
+                        let pattern = if st == b"Widget" {
+                            "Form field on page {p} isn't tagged"
+                        } else {
+                            values.push(("{}", subtype_name(&a)));
+                            "{} annotation on page {p} isn't tagged"
+                        };
+                        out.push(Finding::worded(Some(p), pattern, values));
                     }
                 }
             }
@@ -252,7 +271,7 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
             for &p in list {
                 let Some(page) = pages.get(p) else { continue };
                 if !annots(page).is_empty() && page.dict.name(b"Tabs") != Some(b"S") {
-                    out.push(Finding { page: Some(p), message: format!("Page {} doesn't tab in structure order", p + 1) });
+                    out.push(Finding::worded(Some(p), "Page {p} doesn't tab in structure order", vec![("{p}", (p + 1).to_string())]));
                 }
             }
         }
@@ -264,8 +283,18 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                         && let Some(f) = doc.get(*r).as_dict()
                         && !maps_to_unicode(doc, f)
                     {
-                        let name = f.name(b"BaseFont").map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_else(|| "(unnamed)".into());
-                        out.push(Finding { page: Some(*p), message: format!("Font {name} on page {} doesn't map its characters to Unicode", p + 1) });
+                        // A font with no name gets its own whole sentence, so another language can
+                        // word that rather than translate a parenthesis. The name itself is the
+                        // document's own and goes in as it stands.
+                        let page = ("{p}", (p + 1).to_string());
+                        out.push(match f.name(b"BaseFont") {
+                            Some(n) => Finding::worded(
+                                Some(*p),
+                                "Font {} on page {p} doesn't map its characters to Unicode",
+                                vec![("{}", String::from_utf8_lossy(n).into_owned()), page],
+                            ),
+                            None => Finding::worded(Some(*p), "Font (unnamed) on page {p} doesn't map its characters to Unicode", vec![page]),
+                        });
                     }
                 }
             }
@@ -286,10 +315,11 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                     }
                     let fd = doc.get(field).as_dict().cloned().unwrap_or_default();
                     if text_of(doc, &fd, b"TU").is_none() {
-                        out.push(Finding {
-                            page: Some(p),
-                            message: format!("Field \"{}\" on page {} has no description (tooltip)", full_name(doc, field), p + 1),
-                        });
+                        out.push(Finding::worded(
+                            Some(p),
+                            "Field \"{}\" on page {p} has no description (tooltip)",
+                            vec![("{}", full_name(doc, field)), ("{p}", (p + 1).to_string())],
+                        ));
                     }
                 }
             }

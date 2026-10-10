@@ -377,13 +377,22 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
     }
 }
 
+/// The edit `spec` names now, with the wording that names it ("Undo {}"), so an interface can say
+/// each part in its own language. `None` for every other command, and when there is nothing to undo.
+pub fn current_edit<'a>(spec: &CommandSpec, session: &'a Session, active: Option<DocId>) -> Option<(&'static str, &'a crate::Label)> {
+    let doc = active.and_then(|id| session.get(id))?;
+    match spec.id {
+        "edit.undo" => doc.undo_label().map(|l| ("Undo {}", l)),
+        "edit.redo" => doc.redo_label().map(|l| ("Redo {}", l)),
+        _ => None,
+    }
+}
+
 /// The label to show for `spec` now ("Undo Rotate page" rather than "Undo").
 pub fn current_label(spec: &CommandSpec, session: &Session, active: Option<DocId>) -> String {
-    let doc = active.and_then(|id| session.get(id));
-    match (spec.id, doc) {
-        ("edit.undo", Some(d)) => d.can_undo().map(|l| format!("Undo {l}")).unwrap_or_else(|| spec.label.into()),
-        ("edit.redo", Some(d)) => d.can_redo().map(|l| format!("Redo {l}")).unwrap_or_else(|| spec.label.into()),
-        _ => spec.label.into(),
+    match current_edit(spec, session, active) {
+        Some((wording, label)) => wording.replacen("{}", label.as_str(), 1),
+        None => spec.label.into(),
     }
 }
 

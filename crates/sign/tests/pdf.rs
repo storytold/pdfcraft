@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use pdfcraft_cos::{Document, Object, PdfString, SaveOptions, write_incremental};
-use pdfcraft_sign::{Modification, SignError, SignOptions, Status, Time, TimestampAuthority, TrustStore, der, pkcs12, signatures};
+use pdfcraft_sign::{
+    Detail, Modification, SignError, SignOptions, Status, Time, TimestampAuthority, TrustStore, WORDINGS, der, in_english, kind, pkcs12, signatures,
+};
 
 fn data(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/data/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
@@ -89,7 +91,7 @@ fn signing_then_validating_with_and_without_trust() {
         assert_eq!(s.signer.as_deref(), id.certificate.subject.common_name());
         assert_eq!((s.reason.as_deref(), s.location.as_deref(), s.page), (Some("I approve this document"), Some("London"), Some(0)));
         assert!(s.visible && s.signed_len == signed.len() && s.revision == 2);
-        assert!(s.details.iter().any(|d| d.contains("identity is unknown")));
+        assert!(s.details.iter().any(|d| d.message.contains("identity is unknown")));
         // The unsigned field is listed too.
         assert!(sigs.iter().any(|s| s.field == "Approval" && !s.signed));
         // Trusting the signer (or its root) makes it valid.
@@ -104,7 +106,7 @@ fn signing_then_validating_with_and_without_trust() {
         tampered[i] = b'K';
         let s = signatures(&open(&tampered), &tampered, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
         assert_eq!(s.status, Status::Invalid);
-        assert!(s.details[0].contains("altered or corrupted"), "{:?}", s.details);
+        assert!(s.details[0].message.contains("altered or corrupted"), "{:?}", s.details);
     }
 }
 
@@ -120,7 +122,7 @@ fn signing_an_existing_field_and_counter_signing() {
     assert!(a.signed);
     assert_eq!(a.rect, Some([150.0, 20.0, 280.0, 70.0]));
     assert_eq!(a.revision, 2);
-    assert_eq!(a.modification, Modification::Allowed(vec!["signature".into()]), "{:?}", a.details);
+    assert_eq!(a.modification, Modification::Allowed(vec![kind::SIGNATURE]), "{:?}", a.details);
     assert_eq!(a.status, Status::Unknown);
     let b = sigs.iter().find(|s| s.field == "Signature1").unwrap();
     assert_eq!((b.revision, b.modification.clone()), (3, Modification::None));
@@ -169,10 +171,10 @@ fn later_changes_are_classified_under_the_signature_permissions() {
     let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
     let s = check(&edit_after(&signed, add_comment));
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
-    assert_eq!(s.modification, Modification::Allowed(vec!["comments".into()]));
+    assert_eq!(s.modification, Modification::Allowed(vec![kind::COMMENTS]));
     let s = check(&edit_after(&signed, change_text));
     assert_eq!(s.status, Status::Invalid);
-    assert_eq!(s.modification, Modification::Disallowed(vec!["page content".into()]));
+    assert_eq!(s.modification, Modification::Disallowed(vec![kind::PAGE_CONTENT]));
     // Certified with "no changes allowed": even a comment invalidates it.
     let certified = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
     let s = check(&certified);
@@ -231,13 +233,13 @@ fn signing_with_a_timestamp_embeds_a_verified_rfc3161_token() {
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
     assert!(s.timestamp, "{:?}", s.details);
     assert_eq!(s.timestamp_time, Some(tsa.time), "the token's generation time, verified over the signature value");
-    assert!(s.details.iter().any(|d| d.contains("trusted time")), "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("trusted time")), "{:?}", s.details);
     // A trusted signer with an untrusted TSA: still valid, but the token's time is unverified.
     let s = signatures(&open(&signed), &signed, &TrustStore { certs: vec![anchor] }).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
     assert!(s.timestamp);
     assert_eq!(s.timestamp_time, None);
-    assert!(s.details.iter().any(|d| d.contains("unverified timestamp")), "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("unverified timestamp")), "{:?}", s.details);
     // Untrusted, the signature stays intact-but-unknown; the timestamp is still noted.
     let s = signatures(&open(&signed), &signed, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Unknown);
@@ -288,7 +290,7 @@ fn a_document_timestamp_covers_the_file_and_validates() {
         Modification::Allowed(k) => k,
         other => panic!("{other:?}"),
     };
-    assert!(allowed.contains(&"signature".to_string()), "{allowed:?}");
+    assert!(allowed.contains(&kind::SIGNATURE), "{allowed:?}");
     let stamp = all.iter().find(|s| s.doc_timestamp).unwrap();
     assert_eq!(stamp.status, Status::Valid, "{:?}", stamp.details);
 }
@@ -360,7 +362,7 @@ fn embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid() {
         Modification::Allowed(k) => k,
         other => panic!("{other:?}"),
     };
-    assert!(allowed.contains(&"document security store".to_string()), "{allowed:?}");
+    assert!(allowed.contains(&kind::SECURITY_STORE), "{allowed:?}");
     // Embedding twice keeps one certificate (byte-identical dedup) and stays valid.
     let twice = dss::embed(&doc, &evidence).unwrap();
     let doc2 = open(&twice);
@@ -389,8 +391,8 @@ fn sign_then_ltv_then_timestamp_makes_a_b_lta_file() {
         Modification::Allowed(k) => k,
         other => panic!("{other:?}"),
     };
-    assert!(allowed.contains(&"document security store".to_string()) && allowed.contains(&"signature".to_string()), "{allowed:?}");
-    assert!(!allowed.contains(&"page content".to_string()), "{allowed:?}");
+    assert!(allowed.contains(&kind::SECURITY_STORE) && allowed.contains(&kind::SIGNATURE), "{allowed:?}");
+    assert!(!allowed.contains(&kind::PAGE_CONTENT), "{allowed:?}");
     let stamp = all.iter().find(|s| s.doc_timestamp).unwrap();
     assert_eq!(stamp.status, Status::Valid, "{:?}", stamp.details);
 }
@@ -421,7 +423,7 @@ fn an_embedded_verified_revocation_invalidates_the_signature() {
     let ltv = dss::embed(&open(&signed), &Evidence { certs: Vec::new(), ocsps: Vec::new(), crls: vec![crl] }).unwrap();
     let s = signatures(&open(&ltv), &ltv, &TrustStore::default()).into_iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
     assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
-    assert!(s.details.iter().any(|d| d.contains("revoked") && d.contains("CRL")), "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("revoked") && d.message.contains("CRL")), "{:?}", s.details);
 }
 
 #[test]
@@ -440,7 +442,7 @@ fn validates_a_signature_made_by_openssl() {
     // A later comment is allowed for this approval signature.
     let edited = edit_after(&bytes, add_comment);
     let s = signatures(&open(&edited), &edited, &TrustStore::default()).into_iter().next().unwrap();
-    assert_eq!(s.modification, Modification::Allowed(vec!["comments".into()]));
+    assert_eq!(s.modification, Modification::Allowed(vec![kind::COMMENTS]));
 }
 
 #[test]
@@ -585,7 +587,7 @@ fn declaring_a_form_xfa_does_not_excuse_replacing_the_pages() {
         assert_eq!(check(&signed).status, Status::Valid);
         let s = check(&edit_after(&signed, xfa_page_swap));
         assert_eq!(s.status, Status::Invalid, "{certify:?}: {:?}", s.details);
-        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&"document structure".to_string())), "{:?}", s.modification);
+        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::STRUCTURE)), "{:?}", s.modification);
     }
 }
 
@@ -628,7 +630,7 @@ fn validates_signatures_written_with_ber_indefinite_lengths() {
         let anchor = id.certificate.clone();
         let s = signatures(&open(&signed), &signed, &TrustStore { certs: vec![anchor] }).into_iter().find(|s| s.signed).unwrap();
         assert_eq!(s.status, Status::Valid, "{file}: {:?}", s.details);
-        assert!(s.details.iter().any(|d| d.contains("BER")), "the tolerance is reported: {:?}", s.details);
+        assert!(s.details.iter().any(|d| d.message.contains("BER")), "the tolerance is reported: {:?}", s.details);
         // Tampering is still caught: the digest check is not relaxed.
         let mut tampered = signed.clone();
         let i = tampered.windows(13).position(|w| w == b"Contract text").unwrap();
@@ -746,7 +748,7 @@ fn assert_refused_at_every_level(base: &[u8], kind: &str, attack: impl Fn(&mut D
         assert_eq!(check(&signed).status, Status::Valid, "{certify:?}: untouched");
         let s = check(&edit_after(&signed, &attack));
         assert_eq!(s.status, Status::Invalid, "{certify:?}: {:?} {:?}", s.modification, s.details);
-        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.iter().any(|k| k == kind)), "{certify:?}: {:?}", s.modification);
+        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind)), "{certify:?}: {:?}", s.modification);
     }
 }
 
@@ -912,7 +914,7 @@ fn the_catalogs_own_xmp_stream_may_still_be_rewritten_after_signing() {
             doc.set(pdfcraft_cos::ObjRef { num: 7, generation: 0 }, Object::Stream(pdfcraft_cos::Stream::from_raw(d, b"<x:xmpmeta />".to_vec())));
         });
         let s = signatures(&open(&edited), &edited, &trust).into_iter().find(|s| s.signed).unwrap();
-        assert!(matches!(&s.modification, Modification::Allowed(k) if k.iter().any(|k| k == "metadata")), "{certify:?}: {:?}", s.modification);
+        assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::METADATA)), "{certify:?}: {:?}", s.modification);
         assert_eq!(s.status, Status::Valid, "{certify:?}: {:?}", s.details);
     }
 }
@@ -956,14 +958,14 @@ fn a_signed_store_may_grow_but_not_lose_or_swap_entries() {
         });
         let s = check(&grown);
         assert_eq!(s.status, Status::Valid, "{certify:?}: {:?} {:?}", s.modification, s.details);
-        assert!(matches!(&s.modification, Modification::Allowed(k) if k.iter().any(|k| k == "document security store")), "{:?}", s.modification);
+        assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::SECURITY_STORE)), "{:?}", s.modification);
         // Dropping what was signed is a change, not an addition.
         let dropped = edit_after(&signed, |doc| {
             doc.set(pdfcraft_cos::ObjRef { num: certs, generation: 0 }, Object::Array(vec![]));
         });
         let s = check(&dropped);
         assert_eq!(s.status, Status::Invalid, "{certify:?}: {:?}", s.modification);
-        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.iter().any(|k| k == "other changes")), "{:?}", s.modification);
+        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::OTHER)), "{:?}", s.modification);
     }
 }
 
@@ -984,7 +986,7 @@ fn a_form_xobject_relabelled_metadata_is_not_a_metadata_change() {
     let edited = edit_after(&signed, relabel);
     let s = signatures(&open(&edited), &edited, &trust).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
-    assert!(matches!(&s.modification, Modification::Disallowed(k) if !k.contains(&"metadata".to_string())), "{:?}", s.modification);
+    assert!(matches!(&s.modification, Modification::Disallowed(k) if !k.contains(&kind::METADATA)), "{:?}", s.modification);
     // The catalog's own XMP stream may still be updated.
     let with_xmp = edit_after(&fixture_with_xobject(), |doc| {
         let xmp = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>".to_vec();
@@ -1009,7 +1011,7 @@ fn a_form_xobject_relabelled_metadata_is_not_a_metadata_change() {
     });
     let s = signatures(&open(&rewrite_xmp), &rewrite_xmp, &trust).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
-    assert_eq!(s.modification, Modification::Allowed(vec!["metadata".into()]));
+    assert_eq!(s.modification, Modification::Allowed(vec!["metadata"]));
 }
 
 /// A self-signed CRL from `id` revoking its own certificate, valid from `this` to `next`.
@@ -1040,9 +1042,9 @@ fn a_revoked_certificate_stays_invalid_when_it_was_also_expired_at_signing() {
     let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
     for trust in [TrustStore::default(), TrustStore { certs: vec![anchor] }] {
         let s = signatures(&open(&ltv), &ltv, &trust).into_iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
-        assert!(s.details.iter().any(|d| d.contains("not valid at the time of signing")), "{:?}", s.details);
+        assert!(s.details.iter().any(|d| d.message.contains("not valid at the time of signing")), "{:?}", s.details);
         assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
-        assert!(s.details.iter().any(|d| d.contains("revoked")), "{:?}", s.details);
+        assert!(s.details.iter().any(|d| d.message.contains("revoked")), "{:?}", s.details);
     }
 }
 
@@ -1061,9 +1063,9 @@ fn an_untrusted_timestamp_does_not_set_the_validation_time() {
     let s = signatures(&open(&signed), &signed, &TrustStore { certs: vec![anchor.clone()] }).into_iter().find(|s| s.signed).unwrap();
     assert_ne!(s.status, Status::Valid, "{:?}", s.details);
     assert_eq!(s.timestamp_time, None, "an untrusted token's time is not a trusted time");
-    assert!(s.details.iter().any(|d| d.contains("not valid at the time of signing")), "{:?}", s.details);
-    assert!(!s.details.iter().any(|d| d.contains("trusted time")), "{:?}", s.details);
-    assert!(s.details.iter().any(|d| d.contains("unverified timestamp")), "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("not valid at the time of signing")), "{:?}", s.details);
+    assert!(!s.details.iter().any(|d| d.message.contains("trusted time")), "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("unverified timestamp")), "{:?}", s.details);
     // Trusting the TSA makes its time authoritative: the certificate was valid then.
     let trust = TrustStore { certs: vec![anchor, tsa.id.certificate.clone()] };
     let s = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
@@ -1271,14 +1273,14 @@ fn a_document_timestamp_held_by_a_signature_field_is_checked_as_a_timestamp() {
     // Without trusting the TSA the stamp is intact but unknown, never "altered".
     let s = signatures(&open(&stamped), &stamped, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
-    assert!(!s.details.iter().any(|d| d.contains("altered or corrupted")), "{:?}", s.details);
+    assert!(!s.details.iter().any(|d| d.message.contains("altered or corrupted")), "{:?}", s.details);
     // A changed byte in what it covers is still caught, and reported as the timestamp's.
     let mut tampered = stamped.clone();
     let i = tampered.windows(13).position(|w| w == b"Contract text").unwrap();
     tampered[i] = b'K';
     let s = signatures(&open(&tampered), &tampered, &trust).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Invalid);
-    assert!(s.details.iter().any(|d| d.contains("since the timestamp was applied")), "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("since the timestamp was applied")), "{:?}", s.details);
 }
 
 /// A trusted timestamp authority whose certificate was not yet valid when it stamped proves
@@ -1295,8 +1297,8 @@ fn a_field_timestamp_from_a_trusted_tsa_outside_its_validity_is_not_valid() {
     let s = signatures(&open(&stamped), &stamped, &trust).into_iter().find(|s| s.signed).unwrap();
     assert!(s.doc_timestamp);
     assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
-    assert!(s.details.iter().any(|d| d.contains("was not valid at the time of timestamping")), "{:?}", s.details);
-    assert!(!s.details.iter().any(|d| d.contains("its authority is trusted")), "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("was not valid at the time of timestamping")), "{:?}", s.details);
+    assert!(!s.details.iter().any(|d| d.message.contains("its authority is trusted")), "{:?}", s.details);
 }
 
 #[test]
@@ -1328,7 +1330,7 @@ fn a_legacy_x509_signature_with_a_malformed_rsa_key_is_invalid() {
     let s = signatures(&open(&bad), &bad, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.sub_filter.as_deref(), Some("adbe.x509.rsa_sha1"));
     assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
-    assert!(!s.details.iter().any(|d| d.contains("can't check this signature yet")), "{:?}", s.details);
+    assert!(!s.details.iter().any(|d| d.message.contains("can't check this signature yet")), "{:?}", s.details);
 }
 
 #[test]
@@ -1344,8 +1346,8 @@ fn validates_the_legacy_adbe_x509_rsa_sha1_format() {
     assert_eq!(s.modification, Modification::None);
     // SHA-1 still validates, but the panel says it is weak.
     let weak = "This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.";
-    assert_eq!(s.details.iter().filter(|d| *d == weak).count(), 1, "{:?}", s.details);
-    assert!(s.details.iter().any(|d| d.contains("legacy adbe.x509.rsa_sha1 format")), "{:?}", s.details);
+    assert_eq!(s.details.iter().filter(|d| d.message == weak).count(), 1, "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("legacy adbe.x509.rsa_sha1 format")), "{:?}", s.details);
     let trusted = TrustStore { certs: vec![id.certificate.clone()] };
     let s = signatures(&open(&pdf), &pdf, &trusted).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
@@ -1419,7 +1421,7 @@ fn encrypted_documents_are_signed_with_an_unencrypted_contents() {
         let sigs = signatures(&open_pw(&both, None), &both, &trust);
         let first = sigs.iter().find(|s| s.field == "Signature1").unwrap();
         assert_eq!(first.status, Status::Valid, "{alg:?}: {:?}", first.details);
-        assert_eq!(first.modification, Modification::Allowed(vec!["signature".into()]), "{alg:?}: {:?}", first.details);
+        assert_eq!(first.modification, Modification::Allowed(vec![kind::SIGNATURE]), "{alg:?}: {:?}", first.details);
         let second = sigs.iter().find(|s| s.field == "Approval").unwrap();
         assert_eq!((second.status, second.revision), (Status::Valid, 3), "{alg:?}: {:?}", second.details);
         // The page text is still encrypted, and tampering with its ciphertext breaks both.
@@ -1490,4 +1492,90 @@ fn encrypted_documents_take_a_document_timestamp() {
     assert_eq!((s.status, s.timestamp_time), (Status::Valid, Some(tsa.time)), "{:?}", s.details);
     let print_only = open_pw(&protected(pdfcraft_cos::Algorithm::Aes128, -3900), None);
     assert!(matches!(pdfcraft_sign::timestamp_document(&print_only, &tsa, "D:20261006120000Z"), Err(SignError::Pdf(_))));
+}
+
+/// Every sentence this crate says about a signature is listed in `WORDINGS`, and every sentence on
+/// that list is one it still says: the details are written as `Detail::plain`/`Detail::of`, the
+/// sentences the modules that read a signature word for themselves are pushed as notes and quirks,
+/// and the summaries are the only words `summary` chooses between, so all of them can be read off
+/// the files. An interface then has these to translate and only these.
+#[test]
+fn wordings_are_complete() {
+    let source = include_str!("../src/pdf.rs");
+    // The modules below `pdf` word whole sentences too: how a signature value had to be read, and
+    // what a certificate does not allow.
+    let elsewhere =
+        [include_str!("../src/x509.rs"), include_str!("../src/cms.rs"), include_str!("../src/keys.rs"), include_str!("../src/rsa_pad.rs")];
+    /// A sentence said to the user, as opposed to an OID, a name or a tag: it reads as English.
+    fn is_sentence(s: &str) -> bool {
+        s.len() > 24 && s.ends_with('.') && s.contains(' ') && s.starts_with(|c: char| c.is_ascii_uppercase())
+    }
+    // The literals of a stretch of the file, each as it is written there.
+    fn literals(text: &str) -> Vec<&str> {
+        let (mut out, mut rest) = (Vec::new(), text);
+        while let Some(at) = rest.find('"') {
+            rest = &rest[at + 1..];
+            let Some(end) = rest.find('"') else { break };
+            out.push(&rest[..end]);
+            rest = &rest[end + 1..];
+        }
+        out
+    }
+    /// The literals written right after each of `shapes`, wherever they appear in `text`.
+    fn after<'a>(text: &'a str, shapes: &[&str]) -> Vec<&'a str> {
+        let mut out = Vec::new();
+        for shape in shapes {
+            let mut rest = text;
+            while let Some(at) = rest.find(shape) {
+                rest = &rest[at + shape.len()..];
+                // A long sentence is written on the line below, and `plain` passes its own on.
+                let Some(text) = rest.trim_start().strip_prefix('"') else { continue };
+                let Some(end) = text.find('"') else { break };
+                out.push(&text[..end]);
+                rest = text;
+            }
+        }
+        out
+    }
+    let mut said = after(source, &["Detail::plain(", "Detail::of("]);
+    let at_hand = ["Detail::plain(", "Detail::of(", ".push(", "Some("];
+    said.extend(elsewhere.iter().flat_map(|s| after(s, &at_hand)).filter(|s| is_sentence(s)));
+    let summary = source.split("pub fn summary").nth(1).and_then(|s| s.split("\n    }").next()).unwrap_or_default();
+    said.extend(literals(summary));
+    assert!(said.len() >= 40, "the sentences are not being read off the files: {said:#?}");
+    let missing: Vec<&&str> = said.iter().filter(|s| !WORDINGS.contains(s)).collect();
+    assert!(missing.is_empty(), "add these to WORDINGS, and a translation of each to every interface: {missing:#?}");
+    let unsaid: Vec<&&str> = WORDINGS.iter().filter(|s| !said.contains(s)).collect();
+    assert!(unsaid.is_empty(), "WORDINGS lists sentences this crate no longer says: {unsaid:#?}");
+    // And every word it calls a change by is in `kind::ALL`, which is what an interface translates.
+    let vocabulary = source.split("pub mod kind {").nth(1).and_then(|s| s.split("\n}").next()).unwrap_or_default();
+    let words = literals(vocabulary);
+    assert!(words.len() >= 11, "the vocabulary is not being read off the file: {words:#?}");
+    let missing: Vec<&&str> = words.iter().filter(|w| !kind::ALL.contains(w)).collect();
+    assert!(missing.is_empty(), "add these to kind::ALL, and a translation of each to every interface: {missing:#?}");
+    let gone: Vec<&&str> = kind::ALL.iter().filter(|w| !words.contains(w)).collect();
+    assert!(gone.is_empty(), "kind::ALL lists words that are no longer there: {gone:#?}");
+}
+
+/// Each detail says itself: in English it comes to the sentence it carries, and its wording is one an
+/// interface can look up. This is what the Signatures panel relies on to read in another language.
+#[test]
+fn details_say_themselves() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let sigs = signatures(&open(&signed), &signed, &TrustStore::default());
+    let details: Vec<&Detail> = sigs.iter().flat_map(|s| s.details.iter()).collect();
+    assert!(!details.is_empty());
+    for d in details {
+        assert_eq!(d.said(&in_english), d.message);
+        assert!(WORDINGS.contains(&d.pattern), "{:?} is not in WORDINGS", d.pattern);
+        // A wording has exactly as many holes as its fill has things to put in them.
+        let holes = d.pattern.matches("{}").count();
+        let wanted = match &d.fill {
+            pdfcraft_sign::Fill::Nothing => 0,
+            pdfcraft_sign::Fill::Names(..) => 2,
+            _ => 1,
+        };
+        assert_eq!(holes, wanted, "{:?} has {holes} holes", d.pattern);
+    }
 }

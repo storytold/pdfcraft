@@ -1805,6 +1805,8 @@
 	The document is encrypted	El documento está cifrado
 	Device colour is used, but there is no PDF/A output intent	Se usa color de dispositivo, pero no hay propósito de salida PDF/A
 	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	Se usa DeviceCMYK: necesita un propósito de salida CMYK (no se añade automáticamente)
+	DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile	Se usa DeviceCMYK, pero el propósito de salida PDF/A no es un perfil CMYK
+	DeviceRGB is used, but the PDF/A output intent isn't an RGB profile	Se usa DeviceRGB, pero el propósito de salida PDF/A no es un perfil RGB
 	The document has additional actions (/AA)	El documento tiene acciones adicionales (/AA)
 	The document has document-level JavaScript	El documento tiene JavaScript de nivel de documento
 	The form asks viewers to make appearances (NeedAppearances)	El formulario pide a los visores que generen las apariencias (NeedAppearances)
@@ -1882,6 +1884,7 @@
 	Delete link	Eliminar enlace
 	Create link	Crear enlace
 	Flatten	Acoplar
+	Flatten Fill & Sign	Acoplar Rellenar y firmar
 	Add sticky note	Añadir nota adhesiva
 	Add highlight	Añadir resaltado
 	Add underline	Añadir subrayado
@@ -2007,8 +2010,8 @@
 	No changes to save	No hay cambios que guardar
 	Created a PDF from {n} files; left out: {names}	Se creó un PDF a partir de {n} archivos; omitidos: {names}
 	Created a PDF from the first {n} files	Se creó un PDF a partir de los primeros {n} archivos
-	None of those files can be made into a PDF; use PDFs, images or .txt files	Ninguno de esos archivos se puede convertir en PDF; use archivos PDF, imágenes o .txt
-	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Elija una imagen PNG o JPEG (hasta 4 MiB). Se conserva la transparencia.
+	None of those files can be made into a PDF; use PDFs, images or .txt files	Ninguno de esos archivos se puede convertir en PDF; usa archivos PDF, imágenes o .txt
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Elige una imagen PNG o JPEG (hasta 4 MiB). Se conserva la transparencia.
 	Couldn't import the signature image: {e}	No se pudo importar la imagen de la firma: {e}
 	Go to page…	Ir a la página…
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Las fuentes estándar no pueden mostrar «{c}» ({code}). Por ahora solo se pueden añadir como texto caracteres de Europa occidental.
@@ -2057,3 +2060,145 @@
 	The field {name} no longer exists.	El campo {name} ya no existe.
 	A selected field has no widget on any page, so the fields can't be edited together.	Un campo seleccionado no tiene ningún widget en ninguna página, así que los campos no se pueden editar juntos.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} ppp, el mayor tamaño al que se pueden dibujar)
+
+# What the layers below word for themselves, now that the engine hands the wording over apart from
+# the document's own words: `pdfcraft_a11y::{WORDINGS, REPORT_WORDS}`, `pdfcraft_preflight::WORDINGS`,
+# `pdfcraft_sign::pdf::{WORDINGS, kind::ALL}`, `pdfcraft_print::WORDINGS` and the engine's
+# `EDIT_LABELS`. `spanish_covers_what_the_engine_says` keeps this section complete.
+#
+# What the checker finds (a11y::WORDINGS).
+	The security settings don't allow screen readers to read the text	La configuración de seguridad no permite que los lectores de pantalla lean el texto
+	No page has text: the document appears to be images of pages	Ninguna página tiene texto: el documento parece ser imágenes de páginas
+	The document has no tags (structure tree)	El documento no tiene etiquetas (árbol de estructura)
+	The document isn't marked as tagged (MarkInfo Marked)	El documento no está marcado como etiquetado (MarkInfo Marked)
+	No document language is set	No se ha indicado el idioma del documento
+	The document has no title	El documento no tiene título
+	The window shows the file name, not the title (Initial View > Show)	La ventana muestra el nombre del archivo, no el título (Vista inicial > Mostrar)
+	{n} pages and no bookmarks	{n} páginas y ningún marcador
+	The document isn't tagged, so none of its content is	El documento no está etiquetado, así que su contenido tampoco lo está
+	Page {p}: {n} untagged content item	Página {p}: {n} elemento de contenido sin etiquetar
+	Page {p}: {n} untagged content items	Página {p}: {n} elementos de contenido sin etiquetar
+	Form field on page {p} isn't tagged	Un campo de formulario de la página {p} no está etiquetado
+	{} annotation on page {p} isn't tagged	Una anotación {} de la página {p} no está etiquetada
+	Page {p} doesn't tab in structure order	La página {p} no se tabula en el orden de la estructura
+	Font {} on page {p} doesn't map its characters to Unicode	La fuente {} de la página {p} no asigna sus caracteres a Unicode
+	Font (unnamed) on page {p} doesn't map its characters to Unicode	Una fuente sin nombre de la página {p} no asigna sus caracteres a Unicode
+	Field "{}" on page {p} has no description (tooltip)	El campo «{}» de la página {p} no tiene descripción (información sobre herramientas)
+	{ty} element: {what}	Elemento {ty}: {what}
+	{ty} element on page {p}: {what}	Elemento {ty} de la página {p}: {what}
+	no alternate text	sin texto alternativo
+	its alternate text is inside another element's and will never be read	su texto alternativo está dentro del de otro elemento y nunca se leerá
+	alternate text on an element with no page content	texto alternativo en un elemento sin contenido de página
+	alternate text hides an annotation inside it	el texto alternativo oculta una anotación que hay dentro
+	not in a Table, THead, TBody or TFoot	no está dentro de un Table, THead, TBody ni TFoot
+	not in a TR	no está dentro de un TR
+	no header cells (TH)	sin celdas de encabezado (TH)
+	rows have between {min} and {max} columns	las filas tienen entre {min} y {max} columnas
+	no summary	sin resumen
+	not in an L (list)	no está dentro de una L (lista)
+	not in an LI (list item)	no está dentro de un LI (elemento de lista)
+	the first heading is an H{n}; headings should not skip levels	el primer encabezado es un H{n}; los encabezados no deben saltarse niveles
+	H{n} follows an H{d}; headings should not skip levels	un H{n} va después de un H{d}; los encabezados no deben saltarse niveles
+	… and {n} more	… y {n} más
+# The saved accessibility report (a11y::REPORT_WORDS).
+	Accessibility Report	Informe de accesibilidad
+	Filename	Nombre del archivo
+	Report created	Informe creado
+	The checker found problems which may prevent the document from being fully accessible.	El comprobador ha encontrado problemas que pueden impedir que el documento sea del todo accesible.
+	Detailed Report	Informe detallado
+	Rule Name	Nombre de la regla
+# What the PDF/A verifier reports (preflight::WORDINGS).
+	The metadata doesn't identify the file as {}	Los metadatos no identifican el archivo como {}
+	Page {} has additional actions	La página {} tiene acciones adicionales
+	A {} action isn't allowed	No se permite una acción {}
+	{} annotations aren't allowed	No se permiten las anotaciones {}
+	A {} annotation isn't set to print, or is hidden	Una anotación {} no está marcada para imprimirse, o está oculta
+	A {} annotation has no appearance stream	Una anotación {} no tiene flujo de apariencia
+	A {} annotation has additional actions	Una anotación {} tiene acciones adicionales
+	The font {} isn't embedded	La fuente {} no está incrustada
+	A font isn't embedded	Hay una fuente que no está incrustada
+# What a signature's details say (sign::pdf::WORDINGS).
+	The signature has no valid byte range.	La firma no tiene un intervalo de bytes válido.
+	The signature's byte range does not match the file.	El intervalo de bytes de la firma no se corresponde con el archivo.
+	The signature's byte range does not exclude exactly its contents.	El intervalo de bytes de la firma no excluye exactamente su contenido.
+	The signature contents are not hexadecimal.	El contenido de la firma no es hexadecimal.
+	The signature could not be read ({}).	No se ha podido leer la firma ({}).
+	PdfCraft can't check this signature yet: {}.	PdfCraft todavía no puede comprobar esta firma: {}.
+	The signature uses the legacy adbe.x509.rsa_sha1 format.	La firma usa el formato antiguo adbe.x509.rsa_sha1.
+# What was read leniently on the way, each sentence worded where the reading happens.
+	The signature is BER-encoded (indefinite lengths) rather than DER; it was read leniently.	La firma está codificada en BER (longitudes indefinidas) en vez de en DER; se ha leído con indulgencia.
+	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	El contenido firmado es un OCTET STRING construido (segmentado), como permite BER; se ha leído igualmente.
+	The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.	El valor de la firma RSA no tiene la longitud del módulo de la clave (se han quitado o añadido ceros iniciales); se ha leído igualmente.
+	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	El DigestInfo de la firma RSA no lleva el parámetro NULL (los firmadores antiguos lo escriben así); se ha leído igualmente.
+	The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.	La firma ECDSA no está en DER canónico (bytes de sobra, relleno o falta el byte de signo); se ha leído igualmente.
+	The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.	La firma ECDSA son los valores r y s en bruto en vez de una secuencia DER; se ha leído igualmente.
+	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	El algoritmo de la firma y el algoritmo de resumen del SignerInfo nombran hashes distintos; la firma se hizo con el del SignerInfo.
+# What a signature that validates with an old hash still does not prove.
+	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Esta firma usa SHA-1, un algoritmo de hash débil: se han demostrado colisiones en él. Sigue siendo válida porque muchos documentos firmados hace años lo usan, pero no conviene fiarse de ella.
+	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Esta firma usa RIPEMD-160, un algoritmo de hash heredado de 160 bits que ya no se recomienda para firmas. Sigue siendo válida, pero no conviene fiarse de ella.
+	The document has been altered or corrupted since the signature was applied.	El documento se ha alterado o se ha dañado desde que se aplicó la firma.
+	The signer's certificate is not in the signature.	El certificado del firmante no está en la firma.
+	The signature value does not match the signer's certificate: the signature is corrupt.	El valor de la firma no se corresponde con el certificado del firmante: la firma está dañada.
+	The signature could not be checked ({}).	No se ha podido comprobar la firma ({}).
+	The signature could not be verified ({}).	No se ha podido verificar la firma ({}).
+	This document has not been modified since this signature was applied.	Este documento no se ha modificado desde que se aplicó esta firma.
+	The document has been modified since this signature was applied, but the changes are permitted ({}).	El documento se ha modificado desde que se aplicó esta firma, pero son cambios que permite ({}).
+	The document has been altered since this signature was applied in ways it does not permit ({}).	El documento se ha alterado desde que se aplicó esta firma de maneras que no permite ({}).
+	The signer's certificate was not valid at the time of signing.	El certificado del firmante no era válido en el momento de la firma.
+	The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).	El certificado del firmante no permite firmas digitales (su uso de clave no incluye ni firma digital ni no repudio).
+	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	El certificado del firmante no está emitido para firmar documentos (su uso extendido de clave no incluye ningún propósito de firma de documentos).
+	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	El certificado del firmante tiene extensiones críticas que PdfCraft no reconoce ({}).
+# Why a certificate that matched the issuer was not used to build the chain.
+	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	El certificado de {} no es un certificado de CA que pueda emitir certificados, así que no se usa para avalar a {}.
+	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	El certificado de {} no admite tantos certificados de CA por debajo (longitud de ruta), así que no se usa para avalar a {}.
+	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	El certificado de {} no era válido en el momento de la firma, así que no se usa para avalar a {}.
+	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	La identidad del firmante es desconocida porque no está en tu lista de certificados de confianza y ninguno de los certificados superiores es de confianza.
+	The signer's identity is valid.	La identidad del firmante es válida.
+	The signature includes an embedded timestamp.	La firma incluye un sello de tiempo incrustado.
+	Signing time is from the clock on the signer's computer.	La hora de la firma es la del reloj del ordenador del firmante.
+	The signature's timestamp token does not cover the signature value.	El sello de tiempo de la firma no cubre el valor de la firma.
+	The signature's timestamp token could not be verified ({}).	No se ha podido verificar el sello de tiempo de la firma ({}).
+	The embedded timestamp token is valid and its authority is trusted; trusted time is {}.	El sello de tiempo incrustado es válido y su autoridad es de confianza; la hora de confianza es {}.
+	The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.	La firma lleva un sello de tiempo sin verificar ({}): la autoridad de sellado de tiempo no está en tu lista de certificados de confianza, así que se usa la hora de firma que indica el firmante.
+	The signer's certificate has been revoked ({}).	El certificado del firmante está revocado ({}).
+	The document's embedded revocation information shows that the signer's certificate has not been revoked.	La información de revocación incrustada en el documento indica que el certificado del firmante no está revocado.
+	The timestamp has no valid byte range.	El sello de tiempo no tiene un intervalo de bytes válido.
+	The timestamp's byte range does not match the file.	El intervalo de bytes del sello de tiempo no se corresponde con el archivo.
+	The timestamp's byte range does not exclude exactly its contents.	El intervalo de bytes del sello de tiempo no excluye exactamente su contenido.
+	The timestamp contents are not hexadecimal.	El contenido del sello de tiempo no es hexadecimal.
+	The timestamp token could not be read ({}).	No se ha podido leer el sello de tiempo ({}).
+	The document has been altered or corrupted since the timestamp was applied.	El documento se ha alterado o se ha dañado desde que se aplicó el sello de tiempo.
+	The timestamp authority's certificate was not valid at the time of timestamping.	El certificado de la autoridad de sellado de tiempo no era válido en el momento del sellado.
+	This document has not been modified since this timestamp was applied.	Este documento no se ha modificado desde que se aplicó este sello de tiempo.
+	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	El documento se ha modificado desde que se aplicó este sello de tiempo, pero son cambios que permite ({}).
+	The document has been altered since this timestamp was applied in ways it does not permit ({}).	El documento se ha alterado desde que se aplicó este sello de tiempo de maneras que no permite ({}).
+	The timestamp token is valid and its authority is trusted.	El sello de tiempo es válido y su autoridad es de confianza.
+	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	El sello de tiempo es válido, pero la autoridad de sellado de tiempo no está en tu lista de certificados de confianza.
+	Unsigned signature field	Campo de firma sin firmar
+	Signature is valid	La firma es válida
+	Signature validity is unknown	La validez de la firma es desconocida
+	Signature is invalid	La firma no es válida
+# The changes a signature allows or does not allow, as they are listed in those sentences
+# (sign::pdf::kind::ALL): words in an enumeration, so no article and no capital.
+	page content	contenido de las páginas
+	form fill	relleno de formularios
+	comments	comentarios
+	document security store	almacén de seguridad del documento
+	metadata	metadatos
+	links	enlaces
+	document structure	estructura del documento
+	pages added or removed	páginas añadidas o quitadas
+	other changes	otros cambios
+	the signed version could not be read	no se ha podido leer la versión firmada
+# What can be wrong with the pages to print (print::WORDINGS).
+	page {n} is out of range (1–{count})	la página {n} está fuera del intervalo (1–{count})
+	{page} is not a page number or label	{page} no es un número ni una etiqueta de página
+# What an edit is called in the Edit menu and the history (EDIT_LABELS, BATCH_LABELS).
+	Change Title	Cambiar el título
+	Change Author	Cambiar el autor
+	Change Subject	Cambiar el asunto
+	Change Keywords	Cambiar las palabras clave
+	Run form script	Ejecutar el script del formulario
+	Save as {level}	Guardar como {level}
+	Create links	Crear enlaces
+	Mark differences	Marcar diferencias

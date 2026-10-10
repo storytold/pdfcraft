@@ -19,8 +19,8 @@ fn page_of(tok: &str, count: usize, labels: &[String]) -> Result<usize, PrintErr
     }
     match t.parse::<usize>() {
         Ok(n) if n >= 1 && n <= count => Ok(n - 1),
-        Ok(n) => Err(PrintError::Invalid(format!("page {n} is out of range (1–{count})"))),
-        Err(_) => Err(PrintError::Invalid(format!("{t:?} is not a page number or label"))),
+        Ok(n) => Err(PrintError::OutOfRange(n, count)),
+        Err(_) => Err(PrintError::NotAPage(t.to_string())),
     }
 }
 
@@ -58,7 +58,7 @@ pub fn select_pages(count: usize, range: Option<&str>, labels: &[String], subset
 /// labels. The subset and `reverse` apply as in [`select_pages`].
 pub fn select_listed(count: usize, pages: &[usize], subset: Subset, reverse: bool) -> Result<Vec<usize>, PrintError> {
     if let Some(p) = pages.iter().find(|p| **p >= count) {
-        return Err(PrintError::Invalid(format!("page {} is out of range (1–{count})", p.saturating_add(1))));
+        return Err(PrintError::OutOfRange(p.saturating_add(1), count));
     }
     narrow(pages.to_vec(), subset, reverse)
 }

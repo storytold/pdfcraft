@@ -60,6 +60,39 @@ fn verify_reports_what_breaks_pdfa() {
     }
     assert!(issues.iter().find(|i| i.message.starts_with("The font")).is_some_and(|i| !i.fixable));
     assert!(clauses(&issues).contains(&"6.6.2.1"));
+    // Each problem is also worded separately from what the document calls things, so an interface
+    // can say it in another language; in English the two come to the same sentence.
+    for i in &issues {
+        assert_eq!(i.said(&in_english), i.message);
+        assert!(WORDINGS.contains(&i.pattern), "{:?} is not in WORDINGS", i.pattern);
+    }
+    let font = issues.iter().find(|i| i.pattern == "The font {} isn't embedded").unwrap();
+    assert_eq!(font.said(&|w: &str| format!("«{w}»")), "«The font {} isn't embedded»".replace("{}", "Helvetica"));
+}
+
+/// Every problem the rules can report is listed in `WORDINGS`, so an interface showing them in
+/// another language has something to translate. The wording is `verify`'s second argument, which is
+/// what this reads off the file; the sentences `convert` reports as fixed are not wordings.
+#[test]
+fn wordings_are_complete() {
+    let source = include_str!("lib.rs");
+    let mut said = Vec::new();
+    let mut rest = source;
+    while let Some(at) = rest.find("issue(\"") {
+        rest = &rest[at + 7..];
+        // Step over the clause, then take the wording that follows it.
+        let Some(end) = rest.find('"') else { break };
+        rest = &rest[end + 1..];
+        let Some(text) = rest.strip_prefix(", \"") else { continue };
+        let Some(end) = text.find('"') else { break };
+        said.push(&text[..end]);
+        rest = text;
+    }
+    assert!(said.len() >= 24, "the wordings are not being read off the file: {said:#?}");
+    let missing: Vec<&&str> = said.iter().filter(|word| !WORDINGS.contains(word)).collect();
+    assert!(missing.is_empty(), "add these to WORDINGS, and a translation of each to every interface: {missing:#?}");
+    let unsaid: Vec<&&str> = WORDINGS.iter().filter(|word| !said.contains(word)).collect();
+    assert!(unsaid.is_empty(), "WORDINGS lists problems the rules no longer report: {unsaid:#?}");
 }
 
 #[test]

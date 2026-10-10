@@ -130,7 +130,9 @@ impl PrintDraft {
         } else {
             print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse)
         }
-        .map_err(|e| e.to_string())?;
+        // What the person got wrong about what to print is said in their language: the engine hands
+        // the wording over whole and the page numbers apart from it.
+        .map_err(|e| e.said(&crate::i18n::words))?;
         let layout = match self.handling {
             Handling::Size => Layout::Size(match self.size {
                 SizeMode::Custom(_) => SizeMode::Custom(self.custom_scale),

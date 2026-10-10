@@ -113,7 +113,7 @@ fn an_end_entity_certificate_cannot_issue() {
     let pool = [e.cert.clone(), r.cert.clone()];
     let (chain, why) = build_chain_noted(&forged.cert, &pool, None);
     assert_eq!(names(&chain), ["Bank AG"], "the subscriber certificate does not vouch for what it signed");
-    assert!(why.is_some_and(|w| w.contains("not a CA")), "the reason is reported");
+    assert!(why.is_some_and(|w| w.message.contains("not a CA")), "the reason is reported");
     // Neither does one without basicConstraints (not a v1 root: it has an issuer).
     let plain = issue("No Constraints", Some(&r), FOREVER, &[]);
     let under_plain = end_entity("Under Plain", &plain);
@@ -159,7 +159,7 @@ fn issuers_must_have_been_valid_when_it_matters() {
     assert_eq!(names(&build_chain(&l.cert, &pool, Some(time(2021)))), ["Leaf", "Short Lived CA", "Test Root"]);
     let (chain, why) = build_chain_noted(&l.cert, &pool, Some(time(2023)));
     assert_eq!(names(&chain), ["Leaf"], "expired by then");
-    assert!(why.is_some_and(|w| w.contains("not valid")));
+    assert!(why.is_some_and(|w| w.message.contains("not valid")));
     assert_eq!(names(&build_chain(&l.cert, &pool, Some(time(2019)))), ["Leaf"], "not yet valid");
     // With no time to judge by, nothing is refused on validity.
     assert_eq!(names(&build_chain(&l.cert, &pool, None)).len(), 3);
@@ -191,7 +191,9 @@ fn verdict(leaf: Party, embedded: Vec<Certificate>, anchor: &Certificate) -> (St
     let signed = pdfcraft_sign::sign(&doc, &id, &opts).unwrap();
     let trust = TrustStore { certs: vec![anchor.clone()] };
     let s = signatures(&Document::open(Arc::new(signed.clone())).unwrap(), &signed, &trust).into_iter().rfind(|s| s.signed).unwrap();
-    (s.status, s.details)
+    // The details as they read in English; what an interface says in another language is checked in
+    // `tests/pdf.rs`.
+    (s.status, s.details.iter().map(|d| d.message.clone()).collect())
 }
 
 #[test]
@@ -242,19 +244,19 @@ fn the_signer_certificate_must_allow_document_signing() {
     let r = root();
     let problem = |exts: &[Vec<u8>]| signer_with("Signer", &r, exts).cert.signing_problem();
     // Key usage without digitalSignature or nonRepudiation.
-    assert!(problem(&[key_usage(KEY_CERT_SIGN)]).is_some_and(|w| w.contains("key usage")));
+    assert!(problem(&[key_usage(KEY_CERT_SIGN)]).is_some_and(|w| w.message.contains("key usage")));
     assert!(problem(&[key_usage(KEY_ENCIPHERMENT)]).is_some());
     assert!(problem(&[key_usage(DIGITAL_SIGNATURE)]).is_none());
     // nonRepudiation alone is enough.
     assert!(problem(&[key_usage(0x40)]).is_none());
     // Extended key usage without a document-signing purpose.
-    assert!(problem(&[extended_key_usage(&[SERVER_AUTH])]).is_some_and(|w| w.contains("extended key usage")));
+    assert!(problem(&[extended_key_usage(&[SERVER_AUTH])]).is_some_and(|w| w.message.contains("extended key usage")));
     for ok in ["2.5.29.37.0", "1.3.6.1.5.5.7.3.4", "1.3.6.1.5.5.7.3.36", "1.2.840.113583.1.1.5", "1.3.6.1.4.1.311.10.3.12"] {
         assert!(problem(&[extended_key_usage(&[SERVER_AUTH, ok])]).is_none(), "{ok}");
     }
     // An unknown critical extension refuses; the same extension non-critical does not.
     let unknown = "1.2.3.4.5.6";
-    assert!(problem(&[ext(unknown, &der::octets(&[0]))]).is_some_and(|w| w.contains(unknown)));
+    assert!(problem(&[ext(unknown, &der::octets(&[0]))]).is_some_and(|w| w.message.contains(unknown)));
     assert!(problem(&[der::seq(&[&der::oid(unknown), &der::octets(&der::octets(&[0]))])]).is_none());
     // Critical extensions PdfCraft knows, or may accept as they are, don't refuse.
     assert!(problem(&[ext("2.5.29.32", &der::seq(&[]))]).is_none());

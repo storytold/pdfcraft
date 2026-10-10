@@ -58,16 +58,89 @@ impl Level {
 }
 
 /// A rule a document breaks.
+///
+/// [`message`](Issue::message) is the problem in English, ready to read. An interface that reads in
+/// another language says it from [`pattern`](Issue::pattern) and [`value`](Issue::value) instead:
+/// the pattern is wording of ours, listed in [`WORDINGS`], and the value — when there is one — is
+/// the document's own name for something, a PDF keyword that reads the same in every language.
+/// [`Issue::said`] does that.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Issue {
     /// The ISO 19005-2 clause.
     pub clause: &'static str,
     pub message: String,
+    /// The problem as it is worded here, with `{}` where the document's own name goes.
+    pub pattern: &'static str,
+    /// What goes in the pattern's `{}`: an annotation subtype, an action, a font, a page number.
+    pub value: Option<String>,
     /// 0-based page, when the problem is on a page.
     pub page: Option<usize>,
     /// Whether [`convert`] can fix it.
     pub fixable: bool,
 }
+
+impl Issue {
+    /// The problem as one sentence, said in the language `words` translates into.
+    ///
+    /// The wording is translated and the document's own name goes in afterwards, in one pass, so a
+    /// font called `{}` cannot turn into anything else. With [`in_english`] this is
+    /// [`message`](Issue::message).
+    pub fn said(&self, words: Words) -> String {
+        let said = words(self.pattern);
+        match &self.value {
+            Some(v) => said.replacen("{}", v, 1),
+            None => said,
+        }
+    }
+}
+
+/// How an interface says one of our wordings in its own language: given the English in [`WORDINGS`],
+/// the same wording in that language. [`in_english`] keeps the English.
+pub type Words<'a> = &'a dyn Fn(&str) -> String;
+
+/// The [`Words`] that translate nothing: the wording as it is written here.
+pub fn in_english(wording: &str) -> String {
+    wording.to_owned()
+}
+
+/// Every problem [`verify`] can report, in English, with `{}` where the document's own name goes.
+///
+/// An interface that shows them in another language translates these, which is the whole reason they
+/// are gathered here; `wordings_are_complete` fails if a rule says something that is not on the
+/// list. What [`convert`] reports as fixed is not here: that is read by scripts, in English.
+pub const WORDINGS: &[&str] = &[
+    // Identification and metadata.
+    "The document has no XMP metadata",
+    "The metadata doesn't identify the file as {}",
+    "The title in the metadata and the document information differ",
+    // The document as a whole.
+    "The document is encrypted",
+    "Device colour is used, but there is no PDF/A output intent",
+    "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)",
+    "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile",
+    "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile",
+    "The document has additional actions (/AA)",
+    "The document has document-level JavaScript",
+    "The form asks viewers to make appearances (NeedAppearances)",
+    // Pages, actions, annotations and fields.
+    "Page {} has additional actions",
+    "A {} action isn't allowed",
+    "{} annotations aren't allowed",
+    "A {} annotation isn't set to print, or is hidden",
+    "A {} annotation has no appearance stream",
+    "A {} annotation has additional actions",
+    "A form field has additional actions",
+    // Fonts, streams, images and embedded files.
+    "The font {} isn't embedded",
+    "A font isn't embedded",
+    "A stream uses LZW compression",
+    "A stream refers to an external file",
+    "An image asks to be interpolated",
+    "An image has alternates or OPI information",
+    "PostScript XObjects aren't allowed",
+    "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)",
+    "An embedded file has no AFRelationship",
+];
 
 /// What a document declares (the Standards panel).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -230,62 +303,70 @@ fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
 /// Check `doc` against `level`.
 pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     let mut out = Vec::new();
-    let mut issue = |clause: &'static str, message: String, page: Option<usize>, fixable: bool| out.push(Issue { clause, message, page, fixable });
+    // Each problem is worded here and named by the document there: the wording goes on the list in
+    // `WORDINGS` for an interface to translate, and the name goes in its `{}` as it stands.
+    let mut issue = |clause: &'static str, pattern: &'static str, value: Option<String>, page: Option<usize>, fixable: bool| {
+        let message = match &value {
+            Some(v) => pattern.replacen("{}", v, 1),
+            None => pattern.to_owned(),
+        };
+        out.push(Issue { clause, message, pattern, value, page, fixable });
+    };
     let cat = catalog(doc);
     // 6.1.3 / 6.6: identification and metadata.
     match metadata(doc) {
-        None => issue("6.6.2.1", "The document has no XMP metadata".into(), None, true),
+        None => issue("6.6.2.1", "The document has no XMP metadata", None, None, true),
         Some(x) => {
             let part = xmp::value(&x, "pdfaid:part");
             let conf = xmp::value(&x, "pdfaid:conformance");
             if part.as_deref() != Some(&level.part().to_string()) || conf.as_deref().map(str::to_uppercase).as_deref() != Some("B") {
-                issue("6.6.4", format!("The metadata doesn't identify the file as {}", level.label()), None, true);
+                issue("6.6.4", "The metadata doesn't identify the file as {}", Some(level.label().to_owned()), None, true);
             }
             if let Some(title) = info(doc, "Title")
                 && xmp::value(&x, "dc:title").is_some_and(|t| t != title)
             {
-                issue("6.6.3", "The title in the metadata and the document information differ".into(), None, true);
+                issue("6.6.3", "The title in the metadata and the document information differ", None, None, true);
             }
         }
     }
     // 6.1.3: encryption.
     if doc.trailer().get(b"Encrypt").is_some() {
-        issue("6.1.3", "The document is encrypted".into(), None, true);
+        issue("6.1.3", "The document is encrypted", None, None, true);
     }
     // 6.2.2: output intent when device colour is used.
     let objs = objects(doc);
     let used = uses_device_colour(doc, &objs);
     match pdfa_intent_profile(doc) {
         None if used.any() => {
-            issue("6.2.3", "Device colour is used, but there is no PDF/A output intent".into(), None, !used.cmyk);
+            issue("6.2.3", "Device colour is used, but there is no PDF/A output intent", None, None, !used.cmyk);
             if used.cmyk {
-                issue("6.2.4.3", "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)".into(), None, false);
+                issue("6.2.4.3", "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)", None, None, false);
             }
         }
         // 6.2.4.3: DeviceRGB needs an RGB output intent and DeviceCMYK a CMYK one (#667).
         Some(n) => {
             if used.cmyk && !used.default_cmyk && n != Some(4) {
-                issue("6.2.4.3", "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile".into(), None, false);
+                issue("6.2.4.3", "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile", None, None, false);
             }
             if used.rgb && !used.default_rgb && n != Some(3) {
-                issue("6.2.4.3", "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile".into(), None, false);
+                issue("6.2.4.3", "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile", None, None, false);
             }
         }
         None => {}
     }
     // 6.1.3 / 6.6.1: catalog actions.
     if cat.get(b"AA").is_some() {
-        issue("6.5.2", "The document has additional actions (/AA)".into(), None, true);
+        issue("6.5.2", "The document has additional actions (/AA)", None, None, true);
     }
     if let Some(names) = cat.get(b"Names").map(|n| doc.resolve(n))
         && names.as_dict().is_some_and(|n| n.get(b"JavaScript").is_some())
     {
-        issue("6.5.1", "The document has document-level JavaScript".into(), None, true);
+        issue("6.5.1", "The document has document-level JavaScript", None, None, true);
     }
     if let Some(af) = cat.get(b"AcroForm").map(|a| doc.resolve(a))
         && af.as_dict().is_some_and(|a| matches!(a.get(b"NeedAppearances"), Some(Object::Bool(true))))
     {
-        issue("6.4.1", "The form asks viewers to make appearances (NeedAppearances)".into(), None, true);
+        issue("6.4.1", "The form asks viewers to make appearances (NeedAppearances)", None, None, true);
     }
     // Pages: annotations and page actions.
     let pages = pdfcraft_model::pages(doc);
@@ -302,7 +383,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     };
     for (i, p) in pages.iter().enumerate() {
         if p.dict.get(b"AA").is_some() {
-            issue("6.5.2", format!("Page {} has additional actions", i + 1), Some(i), true);
+            issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true);
         }
     }
     for (r, o) in &objs {
@@ -314,19 +395,19 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             && FORBIDDEN_ACTIONS.contains(&s)
             && is_action(d)
         {
-            issue("6.5.1", format!("A {} action isn't allowed", String::from_utf8_lossy(s)), None, true);
+            issue("6.5.1", "A {} action isn't allowed", Some(String::from_utf8_lossy(s).into_owned()), None, true);
         }
         // Annotations.
         if ty == Some(b"Annot") || (sub.is_some() && d.get(b"Rect").is_some() && d.get(b"P").is_some()) {
             let page = page_of(*r);
             let name = sub.map(|s| String::from_utf8_lossy(s).into_owned()).unwrap_or_default();
             if sub.is_some_and(|s| FORBIDDEN_ANNOTS.contains(&s)) {
-                issue("6.3.1", format!("{name} annotations aren't allowed"), page, true);
+                issue("6.3.1", "{} annotations aren't allowed", Some(name), page, true);
                 continue;
             }
             let f = d.int(b"F").unwrap_or(0);
             if sub != Some(b"Popup") && (f & 4 == 0 || f & (1 | 2 | 32) != 0) {
-                issue("6.3.2", format!("A {name} annotation isn't set to print, or is hidden"), page, true);
+                issue("6.3.2", "A {} annotation isn't set to print, or is hidden", Some(name.clone()), page, true);
             }
             let has_ap = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).is_some_and(|a| a.get(b"N").is_some());
             if !has_ap && !matches!(sub, Some(b"Popup") | Some(b"Link")) {
@@ -335,16 +416,16 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
                     v.len() == 4 && (v[2] - v[0]).abs() < 1e-6 && (v[3] - v[1]).abs() < 1e-6
                 });
                 if !zero {
-                    issue("6.3.3", format!("A {name} annotation has no appearance stream"), page, false);
+                    issue("6.3.3", "A {} annotation has no appearance stream", Some(name.clone()), page, false);
                 }
             }
             if d.get(b"AA").is_some() {
-                issue("6.5.2", format!("A {name} annotation has additional actions"), page, true);
+                issue("6.5.2", "A {} annotation has additional actions", Some(name), page, true);
             }
         }
         // Form fields with additional actions (non-widget fields).
         if d.get(b"FT").is_some() && d.get(b"AA").is_some() && ty != Some(b"Annot") {
-            issue("6.5.2", "A form field has additional actions".into(), None, true);
+            issue("6.5.2", "A form field has additional actions", None, None, true);
         }
         // Fonts.
         if ty == Some(b"Font") || d.get(b"BaseFont").is_some() && sub.is_some() {
@@ -361,30 +442,30 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
                 None => Vec::new(),
             };
             if filters.iter().any(|f| f == b"LZWDecode") {
-                issue("6.1.7.2", "A stream uses LZW compression".into(), None, false);
+                issue("6.1.7.2", "A stream uses LZW compression", None, None, false);
             }
             if s.dict.get(b"F").is_some() || s.dict.get(b"FFilter").is_some() {
-                issue("6.1.7.1", "A stream refers to an external file".into(), None, false);
+                issue("6.1.7.1", "A stream refers to an external file", None, None, false);
             }
             if sub == Some(b"Image") {
                 if matches!(s.dict.get(b"Interpolate"), Some(Object::Bool(true))) {
-                    issue("6.2.8", "An image asks to be interpolated".into(), None, true);
+                    issue("6.2.8", "An image asks to be interpolated", None, None, true);
                 }
                 if s.dict.get(b"Alternates").is_some() || s.dict.get(b"OPI").is_some() {
-                    issue("6.2.8", "An image has alternates or OPI information".into(), None, true);
+                    issue("6.2.8", "An image has alternates or OPI information", None, None, true);
                 }
             }
             if sub == Some(b"PS") {
-                issue("6.2.9", "PostScript XObjects aren't allowed".into(), None, false);
+                issue("6.2.9", "PostScript XObjects aren't allowed", None, None, false);
             }
         }
         // Embedded files.
         if ty == Some(b"Filespec") && d.get(b"EF").is_some() {
             match level {
-                Level::A2b => issue("6.8", "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)".into(), None, false),
+                Level::A2b => issue("6.8", "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)", None, None, false),
                 Level::A3b => {
                     if d.get(b"AFRelationship").is_none() {
-                        issue("6.8", "An embedded file has no AFRelationship".into(), None, true);
+                        issue("6.8", "An embedded file has no AFRelationship", None, None, true);
                     }
                 }
             }
@@ -396,12 +477,12 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     out
 }
 
-fn check_font(doc: &Document, d: &Dict, issue: &mut impl FnMut(&'static str, String, Option<usize>, bool)) {
+fn check_font(doc: &Document, d: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
     let sub = d.name(b"Subtype");
     if sub == Some(b"Type3") {
         return;
     }
-    let name = d.name(b"BaseFont").map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_else(|| "a font".into());
+    let name = d.name(b"BaseFont").map(|n| String::from_utf8_lossy(n).into_owned());
     let descriptor = if sub == Some(b"Type0") {
         d.get(b"DescendantFonts")
             .map(|x| doc.resolve(x))
@@ -416,7 +497,12 @@ fn check_font(doc: &Document, d: &Dict, issue: &mut impl FnMut(&'static str, Str
         .and_then(|fd| fd.as_dict().cloned())
         .is_some_and(|fd| fd.get(b"FontFile").is_some() || fd.get(b"FontFile2").is_some() || fd.get(b"FontFile3").is_some());
     if !embedded {
-        issue("6.2.11.4", format!("The font {name} isn't embedded"), None, false);
+        // A font the document doesn't name gets a sentence of its own, rather than the word for
+        // "a font" put where a name goes, which read badly even in English.
+        match name {
+            Some(n) => issue("6.2.11.4", "The font {} isn't embedded", Some(n), None, false),
+            None => issue("6.2.11.4", "A font isn't embedded", None, None, false),
+        }
     }
 }
 

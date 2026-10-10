@@ -218,9 +218,15 @@ fn rules_have_ids_and_the_report_lists_them() {
     let per: Vec<usize> = Category::ALL.iter().map(|c| Rule::ALL.iter().filter(|r| r.category() == *c).count()).collect();
     assert_eq!(per, [8, 9, 2, 5, 5, 2, 1]);
     let doc = pdf(&good(), "/Info 8 0 R");
-    let html = report_html(&check(&doc, &Options::default()), "a<b>.pdf", "2026-10-02");
+    let report = check(&doc, &Options::default());
+    let html = report_html(&report, "a<b>.pdf", "2026-10-02", "en", &in_english);
     assert!(html.contains("a&lt;b&gt;.pdf") && html.contains("Accessibility permission flag") && html.contains("Needs manual check: 5"));
     assert!(html.contains("<h3>Headings</h3>"));
+    // In another language every word of ours is said in it, down to the `lang`; the file name is the
+    // file's own and stays as it is.
+    let other = report_html(&report, "a<b>.pdf", "2026-10-02", "es", &|w| format!("«{w}»"));
+    assert!(other.contains("<html lang=\"es\">") && other.contains("<h3>«Headings»</h3>") && other.contains("a&lt;b&gt;.pdf"));
+    assert!(!other.contains(">Headings<"), "an English heading is left in the report: {other}");
 }
 
 fn figures_doc() -> Document {
@@ -334,4 +340,94 @@ fn an_untagged_document_has_no_headings() {
     let mut objs = headings_doc();
     objs[0] = "<< /Type /Catalog /Pages 2 0 R >>".into();
     assert!(headings(&pdf(&objs, "")).is_empty());
+}
+
+/// The text of every `"…"` literal with a space in it, outside comments and byte strings.
+fn sentences(source: &str) -> Vec<String> {
+    let b = source.as_bytes();
+    let (mut out, mut i) = (Vec::new(), 0);
+    while i < b.len() {
+        if b[i] == b'/' && b.get(i + 1) == Some(&b'/') {
+            while i < b.len() && b[i] != b'\n' {
+                i += 1;
+            }
+        } else if b[i] == b'"' {
+            let byte_string = i > 0 && b[i - 1] == b'b';
+            let start = i + 1;
+            i = start;
+            while i < b.len() && b[i] != b'"' {
+                i += if b[i] == b'\\' { 2 } else { 1 };
+            }
+            // Quotes and backslashes are ASCII, so this never cuts a character in two.
+            let text = source.get(start..i.min(b.len())).unwrap_or_default();
+            if !byte_string && text.contains(' ') {
+                out.push(text.replace("\\\"", "\""));
+            }
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Every sentence the rules can say is listed in `WORDINGS`, so an interface showing the report in
+/// another language has something to translate. The two rule files hold no prose of their own, so a
+/// literal with a space in it is a sentence a person reads.
+#[test]
+fn wordings_are_complete() {
+    let mut missing = Vec::new();
+    for source in [include_str!("content.rs"), include_str!("structure.rs")] {
+        for sentence in sentences(source) {
+            if !WORDINGS.contains(&sentence.as_str()) {
+                missing.push(sentence);
+            }
+        }
+    }
+    assert!(missing.is_empty(), "add these to WORDINGS, and a translation of each to every interface: {missing:#?}");
+}
+
+/// Every word the report page says of its own is listed in `REPORT_WORDS`, and every word on that
+/// list is one the page says: the page hands each over to `words` as a literal, so the two can be
+/// read off one another.
+#[test]
+fn report_words_are_complete() {
+    let source = include_str!("report.rs");
+    let mut said = Vec::new();
+    let mut rest = source;
+    while let Some(at) = rest.find("words(\"") {
+        rest = &rest[at + 7..];
+        let Some(end) = rest.find('"') else { break };
+        said.push(&rest[..end]);
+        rest = &rest[end..];
+    }
+    let missing: Vec<&&str> = said.iter().filter(|word| !REPORT_WORDS.contains(word)).collect();
+    assert!(missing.is_empty(), "add these to REPORT_WORDS, and a translation of each to every interface: {missing:#?}");
+    let unsaid: Vec<&&str> = REPORT_WORDS.iter().filter(|word| !said.contains(word)).collect();
+    assert!(unsaid.is_empty(), "REPORT_WORDS lists words the page no longer says: {unsaid:#?}");
+}
+
+/// `say` puts the values in, and what it puts in is never read as a hole of its own: a document that
+/// names a font `{p}` cannot make a finding say which page it is on.
+#[test]
+fn say_fills_holes_once() {
+    let values = [("{p}", "7".to_string()), ("{}", "{p} {n}".to_string())];
+    assert_eq!(
+        say("Font {} on page {p} doesn't map its characters to Unicode", &values),
+        "Font {p} {n} on page 7 doesn't map its characters to Unicode"
+    );
+    // A hole with nothing for it, and a brace with nothing closing it, are left as they stand.
+    assert_eq!(say("{a} {p} {", &values), "{a} 7 {");
+}
+
+/// A finding whose frame holds another wording says the whole thing in English, holes and all
+/// filled, and still hands the interface the two wordings to translate.
+#[test]
+fn a_nested_finding_says_itself() {
+    let values = vec![("{min}", "1".to_string()), ("{max}", "2".to_string()), ("{ty}", "Table".to_string()), ("{p}", "3".to_string())];
+    let f = Finding::nested(Some(2), "{ty} element on page {p}: {what}", "rows have between {min} and {max} columns", values);
+    assert_eq!(f.message, "Table element on page 3: rows have between 1 and 2 columns");
+    assert_eq!(f.said(&in_english), f.message, "saying it in English is the message");
+    // Both wordings are translated, each on its own, and the document's words are left alone.
+    assert_eq!(f.said(&|w: &str| format!("«{w}»")), "«Table element on page 3: «rows have between 1 and 2 columns»»");
 }
