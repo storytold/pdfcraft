@@ -131,6 +131,45 @@ fn view_history_select_all_and_find_options() {
 }
 
 #[test]
+fn find_shortcuts_advance_and_retreat_matches() {
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    h.state_mut().views[0].open_find();
+    h.state_mut().views[0].find.as_mut().unwrap().query = "page".into();
+    h.state_mut().views[0].rerun_find();
+    // Find runs in the background: wait by a deadline, not a frame count, which a loaded machine
+    // can use up before the last page is searched.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        h.run_steps(2);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        if h.state().views[0].find.as_ref().unwrap().matches.len() >= 15 {
+            break;
+        }
+    }
+    let n = h.state().views[0].find.as_ref().unwrap().matches.len();
+    assert_eq!(n, 15);
+    // Surrender text edit focus so canvas shortcut handler receives key events.
+    h.state_mut().views[0].find.as_mut().unwrap().focus = false;
+    h.ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("find-input")));
+    h.run_steps(2);
+    let start = h.state().views[0].find.as_ref().unwrap().current.unwrap();
+    // ⌘G advances to next match.
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::G);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].find.as_ref().unwrap().current, Some((start + 1) % n));
+    // ⇧⌘G retreats to previous match.
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::G);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].find.as_ref().unwrap().current, Some(start));
+    // ⇧⌘G again wraps backwards.
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::G);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].find.as_ref().unwrap().current, Some((start + n - 1) % n));
+}
+
+#[test]
 fn layouts_fit_height_labels_and_system_theme() {
     use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
     let mut h = harness();

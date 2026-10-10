@@ -284,13 +284,18 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             collect_refs(&reader.get(r), &mut |x| pending.push(x));
         }
     }
+    // Acrobat refuses an encrypted file whose catalog sits in an object stream ("the file is
+    // damaged and could not be repaired", before it even asks for the password), while other
+    // readers accept it. qpdf keeps the catalog out of object streams too. Verified with
+    // Acrobat DC on macOS (#774).
+    let root_outside = if reader.document.output_security().0.is_some() { trailer_in.reference(b"Root") } else { None };
     let mut rows: BTreeMap<u32, Row> = BTreeMap::new();
     // Keep only references, not renamed copies of the entire object graph. Standalone
     // objects still precede object streams, preserving the established output order.
     let mut packed: Vec<(u32, ObjRef)> = Vec::new();
     for (i, (r, is_stream)) in order.iter().enumerate() {
         let num = output_number(i)?;
-        let in_stream = opts.object_streams && !is_stream && !encryption_objects.contains(r);
+        let in_stream = opts.object_streams && !is_stream && !encryption_objects.contains(r) && root_outside != Some(*r);
         if in_stream {
             packed.push((num, *r));
         } else {
