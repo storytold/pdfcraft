@@ -72,7 +72,7 @@ comment menu	Edit	సవరించు
 	Double-click	డబుల్-క్లిక్
 	Select a word	ఒక పదాన్ని ఎంచుకో
 	Clear selection / close find	ఎంపికను క్లియర్ చేయి / శోధనను మూసివేయి
-	Zoom in / out (also pinch or ⌘-scroll)	జూమ్ పెంచు / తగ్గించు (పించ్ లేదా ⌘-స్క్రోల్‌తో కూడా)
+	Zoom in / out (also pinch or {key}-scroll)	జూమ్ పెంచు / తగ్గించు (పించ్ లేదా {key}-స్క్రోల్‌తో కూడా)
 	Rotate view	వీక్షణను తిప్పు
 	First / last page	మొదటి / చివరి పేజీ
 	Previous / next page	మునుపటి / తదుపరి పేజీ
@@ -80,16 +80,16 @@ comment menu	Edit	సవరించు
 	Select all pages (Organize)	అన్ని పేజీలను ఎంచుకో (పేజీల నిర్వహణలో)
 	Home	హోమ్
 	Open	తెరువు
-	Open a PDF (⌘O)	PDFను తెరువు (⌘O)
+	Open a PDF ({key})	PDFను తెరువు ({key})
 	Dark gray theme	ముదురు బూడిద రంగు థీమ్
 	Light theme	లేత థీమ్
 	All tools	అన్ని సాధనాలు
 	Read	చదవడం
 	Convert	మార్పిడి
 	E-Sign	ఇ-సంతకం
-	Print (⌘P)	ముద్రించు (⌘P)
+	Print ({key})	ముద్రించు ({key})
 	Save (M4)	సేవ్ చేయి (M4)
-	Document properties (⌘D)	పత్ర లక్షణాలు (⌘D)
+	Document properties ({key})	పత్ర లక్షణాలు ({key})
 	Find tools and commands	సాధనాలను, కమాండ్‌లను కనుగొను
 	Fit to height	ఎత్తుకు సరిపోయేలా
 	Zoom in	జూమ్ పెంచు
@@ -118,9 +118,9 @@ comment menu	Edit	సవరించు
 	Compare	పోల్చు
 	Page thumbnails	పేజీ థంబ్‌నెయిల్‌లు
 	Form fields	ఫారం ఫీల్డ్‌లు
-	Zoom out (⌘−)	జూమ్ తగ్గించు (⌘−)
-	Zoom in (⌘+)	జూమ్ పెంచు (⌘+)
-	Rotate view clockwise (⇧⌘+)	వీక్షణను సవ్యదిశలో తిప్పు (⇧⌘+)
+	Zoom out ({key})	జూమ్ తగ్గించు ({key})
+	Zoom in ({key})	జూమ్ పెంచు ({key})
+	Rotate view clockwise ({key})	వీక్షణను సవ్యదిశలో తిప్పు ({key})
 	Toggle fit page / fit width	పేజీకి సరిపోయేలా / వెడల్పుకు సరిపోయేలా మధ్య మారు
 	Next page	తదుపరి పేజీ
 	Previous page	మునుపటి పేజీ
@@ -1073,6 +1073,7 @@ comment menu	Edit	సవరించు
 	Redacted area fill colour:	రెడాక్ట్ చేసిన ప్రాంతం నింపు రంగు:
 	Use overlay text	ఓవర్‌లే టెక్స్ట్‌ను ఉపయోగించు
 	Custom text:	అనుకూల టెక్స్ట్:
+	Redaction code:	రెడాక్షన్ కోడ్:
 	Font:	ఫాంట్:
 	Font size:	ఫాంట్ పరిమాణం:
 	Auto-size text to fit redaction region	రెడాక్షన్ ప్రాంతానికి సరిపోయేలా టెక్స్ట్ పరిమాణాన్ని స్వయంచాలకంగా మార్చు
@@ -1242,7 +1243,7 @@ signature pad	Type	టైప్ చేయి
 	Expand all bookmarks	అన్ని బుక్‌మార్క్‌లను విస్తరించు
 	Expand top-level bookmarks	పై స్థాయి బుక్‌మార్క్‌లను విస్తరించు
 	Collapse all bookmarks	అన్ని బుక్‌మార్క్‌లను ముడుచు
-	New bookmark (⌘B)	కొత్త బుక్‌మార్క్ (⌘B)
+	New bookmark ({key})	కొత్త బుక్‌మార్క్ ({key})
 	This document has no bookmarks.	ఈ పత్రంలో బుక్‌మార్క్‌లు లేవు.
 	This document has no layers.	ఈ పత్రంలో లేయర్‌లు లేవు.
 	This document has no attachments.	ఈ పత్రంలో జోడింపులు లేవు.
@@ -1256,8 +1257,8 @@ signature pad	Type	టైప్ చేయి
 	No matches	సరిపోలికలు లేవు
 	Searching… {s}/{p}	వెతుకుతోంది… {s}/{p}
 	{c} of {n}{more}	{n}{more}లో {c}
-	Previous (⇧⌘G)	మునుపటి (⇧⌘G)
-	Next (⌘G)	తదుపరి (⌘G)
+	Previous ({key})	మునుపటి ({key})
+	Next ({key})	తదుపరి ({key})
 	Find options	కనుగొనే ఎంపికలు
 	Whole words only	పూర్తి పదాలు మాత్రమే
 	Case-sensitive	పెద్ద/చిన్న అక్షరాల తేడాతో

@@ -103,6 +103,7 @@ pub use pdfcraft_forms::detect;
 pub use pdfcraft_optimize as optimize;
 pub use pdfcraft_preflight as pdfa;
 pub use pdfcraft_print as print;
+pub use pdfcraft_redact::codes::{CODE_SETS as REDACTION_CODE_SETS, CodeSet as RedactionCodeSet};
 pub use pdfcraft_redact::patterns::{PATTERNS as REDACT_PATTERNS, Pattern as RedactPattern, find as find_pattern};
 pub use pdfcraft_redact::sanitize::{HIDDEN, Hidden};
 pub use pdfcraft_sign as sign;
@@ -145,6 +146,8 @@ struct Keys {
 enum Scope {
     /// Anything: re-inspect the whole document.
     Full,
+    /// Document-information entries; page content and appearances are unchanged.
+    Metadata,
     /// Only comments: re-read the comment list from the object graph.
     Comments,
     /// Only form field values (and their widget appearances).
@@ -162,6 +165,7 @@ fn uses_scripts(edit: &Edit) -> bool {
 
 fn scope_of(edit: &Edit) -> Scope {
     match edit {
+        Edit::SetInfo { .. } => Scope::Metadata,
         // A file attachment also changes the Attachments list.
         Edit::AddAnnotation(a) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
         Edit::AddMeasurement(_)
@@ -2466,7 +2470,8 @@ impl Session {
         }
     }
 
-    /// Rebuild the working bytes and renderer, and the view data that `scope` may have changed.
+    /// Rebuild the working bytes and the view data that `scope` may have changed. Metadata edits
+    /// keep the renderer; other scopes also replace it.
     /// Comment and form edits skip the full re-inspection (seconds on very large files): the
     /// comment list and field values are re-read from the object graph instead.
     fn refresh_scoped(doc: &mut Document, scope: Scope) -> Result<(), EditError> {
@@ -2479,10 +2484,28 @@ impl Session {
         } else {
             editor.cos.bytes().clone()
         };
+        if scope == Scope::Metadata {
+            // Read the way the full inspection reads them (NULs and spaces trimmed, empty is
+            // none), so editing one entry doesn't change how the others display.
+            let info = |key| pdfcraft_organize::info(&editor.cos, key).map(|v| v.trim_matches('\0').trim().to_string()).filter(|v| !v.is_empty());
+            doc.info.title = info("Title");
+            doc.info.author = info("Author");
+            doc.info.subject = info("Subject");
+            doc.info.keywords = info("Keywords");
+            doc.info.creator = info("Creator");
+            doc.info.producer = info("Producer");
+            doc.info.file_size = bytes.len();
+            if !doc.signatures.is_empty() {
+                doc.signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+            }
+            doc.bytes = bytes;
+            return Ok(());
+        }
         let mut form = pdfcraft_forms::fields(&editor.cos);
         xfa::mark_script_buttons(&editor.cos, &mut form);
         let form = Arc::new(form);
         match scope {
+            Scope::Metadata => return Ok(()),
             Scope::Comments => doc.info.annotations = comment_list(&editor.cos),
             Scope::Form => {
                 for f in &mut doc.info.fields {

@@ -44,6 +44,9 @@ pub struct LangInfo {
     /// Plural form index for a count (English: 0 = one, 1 = other; Japanese: always 0). A catalog's
     /// `@plural` entries list one form per index.
     pub plural: fn(u64) -> usize,
+    /// The language is written right to left. egui lays text out left to right, so the catalog's
+    /// translations are put into display order when it loads ([`crate::bidi::display_rtl`]).
+    pub rtl: bool,
     catalog: OnceLock<Catalog>,
 }
 
@@ -99,36 +102,69 @@ fn plural_ukrainian(n: u64) -> usize {
     }
 }
 
+/// Arabic (CLDR `ar`, integer counts): zero (0), one (1), two (2), few (3–10, 103–110),
+/// many (11–99, 111–199), other (100–102, 200–202).
+fn plural_arabic(n: u64) -> usize {
+    match (n, n % 100) {
+        (0, _) => 0,
+        (1, _) => 1,
+        (2, _) => 2,
+        (_, 3..=10) => 3,
+        (_, 11..=99) => 4,
+        _ => 5,
+    }
+}
+
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 15] = [
-    LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, catalog: OnceLock::new() },
-    LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, catalog: OnceLock::new() },
+pub static LANGUAGES: [LangInfo; 16] = [
+    LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
-    LangInfo { code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), plural: plural_none, catalog: OnceLock::new() },
+    LangInfo {
+        code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new()
+    },
     // Traditional Chinese in the vocabulary used in Taiwan; `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant-*`
     // locales all resolve here (see `candidates`).
-    LangInfo { code: "zh-hant", name: "繁體中文", source: include_str!("zh-hant.tsv"), plural: plural_none, catalog: OnceLock::new() },
-    LangInfo { code: "cs", name: "Čeština", source: include_str!("cs.tsv"), plural: plural_cs, catalog: OnceLock::new() },
+    LangInfo {
+        code: "zh-hant", name: "繁體中文", source: include_str!("zh-hant.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new()
+    },
+    LangInfo { code: "cs", name: "Čeština", source: include_str!("cs.tsv"), plural: plural_cs, rtl: false, catalog: OnceLock::new() },
     // Brazilian Portuguese; `pt`, `pt-BR` and `pt-PT` locales all resolve here (see `candidates`).
-    LangInfo { code: "pt-br", name: "Português (Brasil)", source: include_str!("pt-br.tsv"), plural: plural_pt, catalog: OnceLock::new() },
+    LangInfo {
+        code: "pt-br",
+        name: "Português (Brasil)",
+        source: include_str!("pt-br.tsv"),
+        plural: plural_pt,
+        rtl: false,
+        catalog: OnceLock::new(),
+    },
     // German (informal "du"); every `de-*` locale (`de-DE`, `de-AT`, `de-CH` ...) resolves here.
-    LangInfo { code: "de", name: "Deutsch", source: include_str!("de.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
+    LangInfo { code: "de", name: "Deutsch", source: include_str!("de.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
     // Spanish (European vocabulary); every `es-*` locale (`es-ES`, `es-MX`, `es-419` ...) resolves here.
-    LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
+    LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
     // French; every `fr-*` locale (`fr-FR`, `fr-CA`, `fr-BE` ...) resolves here.
-    LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv"), plural: plural_fr, catalog: OnceLock::new() },
+    LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv"), plural: plural_fr, rtl: false, catalog: OnceLock::new() },
     // Russian; every `ru-*` locale (`ru-RU`, `ru-BY`, `ru-KZ` ...) resolves here.
-    LangInfo { code: "ru", name: "Русский", source: include_str!("ru.tsv"), plural: plural_russian, catalog: OnceLock::new() },
+    LangInfo { code: "ru", name: "Русский", source: include_str!("ru.tsv"), plural: plural_russian, rtl: false, catalog: OnceLock::new() },
     // Bulgarian; every `bg-*` locale (`bg-BG`) resolves here.
-    LangInfo { code: "bg", name: "Български", source: include_str!("bg.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
+    LangInfo {
+        code: "bg", name: "Български", source: include_str!("bg.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new()
+    },
     // Telugu; every `te-*` locale (`te-IN`) resolves here.
-    LangInfo { code: "te", name: "తెలుగు", source: include_str!("te.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
+    LangInfo {
+        code: "te", name: "తెలుగు", source: include_str!("te.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new()
+    },
     // Hungarian; every `hu-*` locale (`hu-HU`) resolves here.
-    LangInfo { code: "hu", name: "Magyar", source: include_str!("hu.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
+    LangInfo { code: "hu", name: "Magyar", source: include_str!("hu.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
     // Ukrainian; every `uk-*` locale (`uk-UA`, `uk_UA.UTF-8`) resolves here.
-    LangInfo { code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_ukrainian, catalog: OnceLock::new() },
+    LangInfo {
+        code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_ukrainian, rtl: false, catalog: OnceLock::new()
+    },
     // Italian; every `it-*` locale (`it-IT`) resolves here.
-    LangInfo { code: "it", name: "Italiano", source: include_str!("it.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
+    LangInfo { code: "it", name: "Italiano", source: include_str!("it.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
+    // Arabic (Modern Standard, Western digits); every `ar-*` locale (`ar-MA`, `ar-EG`, `ar-SA` ...)
+    // resolves here. Right to left: see `LangInfo::rtl`.
+    LangInfo { code: "ar", name: "العربية", source: include_str!("ar.tsv"), plural: plural_arabic, rtl: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -139,9 +175,12 @@ impl LangInfo {
 
     fn catalog(&self) -> &Catalog {
         self.catalog.get_or_init(|| {
-            let (catalog, errors) = Catalog::parse(self.source, self.plural_forms());
+            let (mut catalog, errors) = Catalog::parse(self.source, self.plural_forms());
             for error in errors {
                 log::warn!("{} interface catalog: {error}; that entry shows in English", self.code);
+            }
+            if self.rtl {
+                catalog.map_translations(crate::bidi::display_rtl);
             }
             catalog
         })
@@ -191,6 +230,12 @@ impl Lang {
 
     pub fn name(self) -> &'static str {
         self.0.name
+    }
+
+    /// Whether the language is written right to left. Its translations come back from the
+    /// lookups in display order (see [`LangInfo::rtl`]).
+    pub fn rtl(self) -> bool {
+        self.0.rtl
     }
 
     fn catalog(self) -> &'static Catalog {
@@ -602,8 +647,14 @@ mod tests {
 
     #[test]
     fn broken_catalog_falls_back_to_english() {
-        static BROKEN: LangInfo =
-            LangInfo { code: "broken", name: "Broken test catalog", source: "malformed\n\\", plural: plural_none, catalog: OnceLock::new() };
+        static BROKEN: LangInfo = LangInfo {
+            code: "broken",
+            name: "Broken test catalog",
+            source: "malformed\n\\",
+            plural: plural_none,
+            rtl: false,
+            catalog: OnceLock::new(),
+        };
         assert_eq!(tr(Lang(&BROKEN), "File"), "File");
         assert_eq!(trn(Lang(&BROKEN), 2, "{n} page", "{n} pages"), "2 pages");
     }
@@ -615,6 +666,7 @@ mod tests {
             name: "Test catalog",
             source: "\tLight\tPlain light\nweight\tLight\tThin\n@id\tfile.open\tOpen dialog…\n@plural\t{n} page|{n} pages\tOne page: {n}|Many pages: {n}\n",
             plural: plural_one_other,
+            rtl: false,
             catalog: OnceLock::new(),
         };
         let l = Lang(&TEST);
@@ -2045,6 +2097,132 @@ mod tests {
         );
         assert_eq!(contributor.name(crate::credits::NameMode::DisplayName), "Save");
         set_current(Lang::EN);
+    }
+
+    fn arabic() -> Lang {
+        Lang::from_code("ar").expect("ar registered")
+    }
+
+    #[test]
+    fn arabic_is_registered_and_persists() {
+        let ar = arabic();
+        assert_eq!(ar.name(), "العربية");
+        assert!(ar.rtl());
+        assert!(Lang::all().filter(|l| l.rtl()).eq([ar]), "Arabic is the only right-to-left language");
+        assert_eq!(normalize_pref("AR"), Some("ar"));
+        for tag in ["ar", "ar-MA", "ar_EG.UTF-8", "AR-sa", "ar_DZ@variant"] {
+            assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
+        }
+        assert_eq!(first_supported("ar-MA\r\nen-US"), Some(ar));
+        assert_eq!(tr(ar, "File"), "ملف");
+        assert_eq!(tr(ar, "Bookmarks"), "المرجعية الإشارات");
+        assert_eq!(tr_ctx(ar, "comment menu", "Edit"), "تحرير");
+        assert_eq!(tr_ctx(ar, "certificate", "Subject"), "الشهادة صاحب");
+        // Unknown strings and user text are never reordered by a lookup.
+        assert_eq!(tr(ar, "تقرير نهائي {n}.pdf"), "تقرير نهائي {n}.pdf");
+        let mut app = crate::PdfCraftApp::default();
+        app.set_option("language", "AR").unwrap();
+        assert_eq!(app.language, "ar");
+        let mut restored = crate::PdfCraftApp::default();
+        restored.restore(&app.persist());
+        assert_eq!(restored.language, "ar");
+        assert!(restored.set_option("language", "xx").is_err());
+        assert_eq!(restored.language, "ar");
+    }
+
+    /// Lookups return Arabic in display order: egui draws the words left to right as given, and
+    /// joins the letters of each word itself.
+    #[test]
+    fn arabic_lookups_are_in_display_order() {
+        let ar = arabic();
+        // "حفظ باسم…" as typed; the ellipsis ends the phrase on the left.
+        assert_eq!(tr(ar, "Save as…"), "…باسم حفظ");
+        // Latin names keep their own direction inside the phrase.
+        assert_eq!(tr(ar, "About PdfCraft"), "PdfCraft حول");
+        // A caption's colon stays beside the widget on its right.
+        assert_eq!(tr(ar, "Name:"), "الاسم:");
+        assert_eq!(tr(ar, "Issued by: "), "عن صادرة: ");
+        // Placeholders survive and are filled in place.
+        assert_eq!(tr(ar, "Couldn't open {name}: {e}"), "{name}: {e} فتح تعذّر");
+        assert_eq!(fmt(tr(ar, "Couldn't open {name}: {e}"), &[("name", "a {e}.pdf"), ("e", "x")]), "a {e}.pdf: x فتح تعذّر");
+        assert_eq!(fmt(tr(ar, "Page {p} of {n}"), &[("p", "3"), ("n", "12")]), "12 من 3 الصفحة");
+        set_current(ar);
+        assert_eq!(command_label("Undo Insert pages from a.pdf"), "a.pdf من صفحات إدراج عن التراجع");
+        assert_eq!(menu_label("file.saveAs", "Save as…"), "…باسم حفظ");
+        set_current(Lang::EN);
+    }
+
+    #[test]
+    fn arabic_plurals_follow_the_six_cldr_forms() {
+        let ar = arabic();
+        assert_eq!(ar.0.plural_forms(), 6);
+        let form = |n| (ar.0.plural)(n);
+        assert_eq!([0, 1, 2].map(form), [0, 1, 2]);
+        assert_eq!([3, 10, 103, 110, 1003].map(form), [3; 5]);
+        assert_eq!([11, 99, 111, 199, 1011].map(form), [4; 5]);
+        assert_eq!([100, 101, 102, 200, 1000, u64::MAX - 13].map(form), [5; 6]);
+        assert_eq!(trn(ar, 1, "{n} page", "{n} pages"), "صفحة 1");
+        assert_eq!(trn(ar, 2, "{n} page", "{n} pages"), "صفحتان 2");
+        assert_eq!(trn(ar, 5, "{n} page", "{n} pages"), "صفحات 5");
+        assert_eq!(trn(ar, 11, "{n} field", "{n} fields"), "حقلًا 11");
+        assert_eq!(trn(ar, 100, "{n} field", "{n} fields"), "حقل 100");
+    }
+
+    /// Arabic translates every registered command, menu and All tools label.
+    #[test]
+    fn arabic_covers_commands_and_catalogue() {
+        let ar = arabic();
+        for command in pdfcraft_engine::commands::COMMANDS {
+            assert!(has(ar, command.label), "missing command: {}", command.label);
+            if let Some(menu) = command.menu {
+                assert!(has(ar, menu), "missing menu: {menu}");
+            }
+        }
+        for group in pdfcraft_engine::catalog::TOOL_GROUPS {
+            assert!(has(ar, group.label), "missing group: {}", group.label);
+            for section in group.sections {
+                assert!(has(ar, section.title), "missing section: {}", section.title);
+                for item in section.items {
+                    assert!(has(ar, item.label), "missing item: {}", item.label);
+                }
+            }
+        }
+    }
+
+    /// Arabic translates every `tl!("…")` literal in the UI source.
+    #[test]
+    fn arabic_covers_ui_literals() {
+        let literals = ui_literals();
+        assert!(literals.len() > 900, "source scan found only {} literals", literals.len());
+        let missing: Vec<_> = literals.iter().filter(|label| !has(arabic(), label)).collect();
+        assert!(missing.is_empty(), "untranslated Arabic UI literals: {missing:#?}");
+    }
+
+    /// With a craft-fonts Arabic face, every Arabic translation has glyphs: with all interface
+    /// faces (desktop) and with the Arabic face as the only craft-fonts face (the web build keeps
+    /// it; Arabic labels must not need a Japanese face).
+    #[test]
+    fn arabic_labels_have_glyphs() {
+        let faces: Vec<String> = pdfcraft_fonts::ui_arabic_fonts().iter().map(|f| f.name()).collect();
+        if faces.is_empty() {
+            eprintln!("skipping Arabic glyph checks: build with CRAFT_FONTS_DIR and an Arabic face to run them");
+            return;
+        }
+        let ar = arabic();
+        let (entries, _) = parse_entries(ar.0.source, ar.0.plural_forms());
+        let labels: String = entries.iter().flat_map(|e| e.translation.chars()).chain(ar.name().chars()).filter(|c| !c.is_control()).collect();
+        let mut arabic_only = crate::theme::font_definitions();
+        for family in arabic_only.families.values_mut() {
+            family.retain(|name| !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.name() == *name) || faces.contains(name));
+        }
+        use egui::epaint::text::{Fonts, TextOptions};
+        for (build, defs) in [("all faces", crate::theme::font_definitions()), ("Arabic face only", arabic_only)] {
+            let mut fonts = Fonts::new(TextOptions::default(), defs);
+            for id in [egui::FontId::proportional(13.0), egui::FontId::monospace(13.0), crate::theme::medium(13.0), crate::theme::semibold(17.0)] {
+                let missing: std::collections::BTreeSet<char> = labels.chars().filter(|c| !fonts.has_glyphs(&id, &c.to_string())).collect();
+                assert!(missing.is_empty(), "{build}: {id:?} lacks Arabic label glyphs {missing:?}");
+            }
+        }
     }
 
     /// Every bundled catalog is well-formed and consistent with its sources.

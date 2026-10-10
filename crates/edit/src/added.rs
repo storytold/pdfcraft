@@ -4,8 +4,9 @@
 //! parameters (text, font, size, colour, alignment, box; or image and box) kept in the stream
 //! dictionary under `/PCAdded`. That keeps the item editable later (move, resize, retype,
 //! reformat, delete) without content-stream surgery, while every viewer sees ordinary page
-//! content. Boxes are in display space (origin at the bottom-left of the page as shown, after
-//! `/Rotate`), so items stay upright on rotated pages.
+//! content. Boxes are in display space (points, origin at the bottom-left of the page as shown,
+//! after `/UserUnit` and `/Rotate`), so items stay upright on rotated pages; an item records the
+//! `/UserUnit` it was written for.
 
 use std::collections::HashMap;
 
@@ -167,6 +168,15 @@ impl Content {
         match self {
             Content::Text(t) => t.rect,
             Content::Image(i) => i.rect,
+        }
+    }
+
+    /// The same item with its box and text size scaled by `factor`.
+    fn scaled(self, factor: f64) -> Content {
+        match self {
+            _ if factor == 1.0 => self,
+            Content::Text(t) => Content::Text(AddedText { rect: t.rect.map(|v| v * factor), size: t.size * factor, ..t }),
+            Content::Image(i) => Content::Image(AddedImage { rect: i.rect.map(|v| v * factor), ..i }),
         }
     }
 
@@ -762,6 +772,7 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
     check(&[page], all.len())?;
     let p = &all[page];
     let view = p.view_matrix(doc);
+    let user_unit = p.user_unit(doc);
     // The page gets its own copy of its resources with the item's fonts and images added, and
     // without the Arabic fonts of the version it replaces.
     let mut pres = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
@@ -780,7 +791,11 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
     doc.update_dict(p.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(pres)))?;
     let mut sd = Dict::new();
     sd.set(b"PCMark".to_vec(), Object::name(TAG));
-    sd.set(b"PCAdded".to_vec(), Object::Dict(params(c)));
+    let mut added = params(c);
+    if user_unit != 1.0 {
+        added.set(b"UserUnit".to_vec(), Object::Real(user_unit));
+    }
+    sd.set(b"PCAdded".to_vec(), Object::Dict(added));
     let stream = Stream::flate(sd, &content);
     match obj {
         Some(r) => {
@@ -817,8 +832,17 @@ pub fn list_added(doc: &Document) -> Vec<Added> {
             if d.name(b"PCMark") != Some(TAG.as_bytes()) {
                 continue;
             }
-            if let Some(c) = d.get(b"PCAdded").and_then(|p| doc.resolve(p).as_dict().cloned()).and_then(|p| parse(doc, &p)) {
-                out.push(Added { page: pi, obj: r, content: c });
+            let Some(params) = d.get(b"PCAdded").and_then(|o| doc.resolve(o).as_dict().cloned()) else { continue };
+            if let Some(c) = parse(doc, &params) {
+                // Display points depend on the page's /UserUnit. An item records the one it was
+                // written for; none means 1, as for items written before display space followed
+                // /UserUnit.
+                let written = params
+                    .get(b"UserUnit")
+                    .and_then(Object::as_f64)
+                    .filter(|u| u.is_finite() && *u >= 1.0)
+                    .map_or(1.0, |u| u.min(pdfcraft_model::MAX_USER_UNIT));
+                out.push(Added { page: pi, obj: r, content: c.scaled(p.user_unit(doc) / written) });
             }
         }
     }

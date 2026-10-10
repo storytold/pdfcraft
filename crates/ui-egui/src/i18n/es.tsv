@@ -89,7 +89,7 @@
 	Double-click	Doble clic
 	Select a word	Seleccionar una palabra
 	Clear selection / close find	Borrar la selección / cerrar la búsqueda
-	Zoom in / out (also pinch or ⌘-scroll)	Acercar / alejar (también con pellizco o ⌘ + desplazamiento)
+	Zoom in / out (also pinch or {key}-scroll)	Acercar / alejar (también con pellizco o {key} + desplazamiento)
 	Rotate view	Girar la vista
 	First / last page	Primera / última página
 	Previous / next page	Página anterior / siguiente
@@ -97,16 +97,16 @@
 	Select all pages (Organize)	Seleccionar todas las páginas (Organizar)
 	Home	Inicio
 	Open	Abrir
-	Open a PDF (⌘O)	Abrir un PDF (⌘O)
+	Open a PDF ({key})	Abrir un PDF ({key})
 	Dark gray theme	Tema gris oscuro
 	Light theme	Tema claro
 	All tools	Todas las herramientas
 	Read	Leer
 	Convert	Convertir
 	E-Sign	Firma electrónica
-	Print (⌘P)	Imprimir (⌘P)
+	Print ({key})	Imprimir ({key})
 	Save (M4)	Guardar (M4)
-	Document properties (⌘D)	Propiedades del documento (⌘D)
+	Document properties ({key})	Propiedades del documento ({key})
 	Find tools and commands	Buscar herramientas y comandos
 	Fit to height	Ajustar al alto
 	Zoom in	Acercar
@@ -135,9 +135,9 @@
 	Compare	Comparar
 	Page thumbnails	Miniaturas de página
 	Form fields	Campos de formulario
-	Zoom out (⌘−)	Alejar (⌘−)
-	Zoom in (⌘+)	Acercar (⌘+)
-	Rotate view clockwise (⇧⌘+)	Girar la vista a la derecha (⇧⌘+)
+	Zoom out ({key})	Alejar ({key})
+	Zoom in ({key})	Acercar ({key})
+	Rotate view clockwise ({key})	Girar la vista a la derecha ({key})
 	Toggle fit page / fit width	Alternar entre ajustar a la página y al ancho
 	Next page	Página siguiente
 	Previous page	Página anterior
@@ -1092,6 +1092,7 @@
 	Redacted area fill colour:	Color de relleno del área censurada:
 	Use overlay text	Usar texto superpuesto
 	Custom text:	Texto personalizado:
+	Redaction code:	Código de censura:
 	Font:	Fuente:
 	Font size:	Tamaño de fuente:
 	Auto-size text to fit redaction region	Ajustar automáticamente el tamaño del texto a la zona censurada
@@ -1261,7 +1262,7 @@
 	Expand all bookmarks	Expandir todos los marcadores
 	Expand top-level bookmarks	Expandir los marcadores de primer nivel
 	Collapse all bookmarks	Contraer todos los marcadores
-	New bookmark (⌘B)	Nuevo marcador (⌘B)
+	New bookmark ({key})	Nuevo marcador ({key})
 	This document has no bookmarks.	Este documento no tiene marcadores.
 	This document has no layers.	Este documento no tiene capas.
 	This document has no attachments.	Este documento no tiene archivos adjuntos.
@@ -1276,8 +1277,8 @@
 	No matches	Sin coincidencias
 	Searching… {s}/{p}	Buscando… {s}/{p}
 	{c} of {n}{more}	{c} de {n}{more}
-	Previous (⇧⌘G)	Anterior (⇧⌘G)
-	Next (⌘G)	Siguiente (⌘G)
+	Previous ({key})	Anterior ({key})
+	Next ({key})	Siguiente ({key})
 	Find options	Opciones de búsqueda
 	Whole words only	Solo palabras completas
 	Case-sensitive	Distinguir mayúsculas y minúsculas

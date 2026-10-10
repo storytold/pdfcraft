@@ -36,6 +36,10 @@ pollster = "1.0"
 # Which GPU drives which display (EnumDisplayDevices), so the window is drawn on the GPU that
 # shows it (issue #378). Safe wrappers over Win32; only the `user` feature (which brings `kernel` with it).
 winsafe = { version = "0.0.29", default-features = false, features = ["user"] }
+# Single instance (#282): later launches hand their files to the running app over a Unix domain
+# socket. `std` has no Unix sockets on Windows, and calling Winsock directly needs unsafe, which
+# our workspace forbids. Already in the lockfile through zbus; pinned exactly, review before bumping.
+uds_windows = "=1.2.1"
 
 [build-dependencies]
 # Icon + VERSIONINFO for pdfcraft.exe; build.rs only uses it when targeting Windows.

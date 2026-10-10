@@ -675,6 +675,13 @@ fn finish_validation(
         }
         problems = true;
     }
+    if let Some(why) = cert.signing_problem() {
+        info.details.push(why);
+        if !problems && !revoked {
+            info.status = Status::Unknown;
+        }
+        problems = true;
+    }
     if !trusted {
         info.details.push(
             "The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates."

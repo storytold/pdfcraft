@@ -1090,31 +1090,40 @@ fn windows_store_enumeration_and_missing_identity() {
     assert!(pdfcraft_sign::windows::find("windows:no such signer").is_err());
 }
 
+#[cfg(windows)]
+fn powershell(script: &str) -> std::process::Output {
+    // Load the certificate provider explicitly in a profile-free Windows PowerShell child.
+    let script = format!(
+        r#"$ErrorActionPreference='Stop'; Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1"; {script}"#
+    );
+    std::process::Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &script]).output().unwrap()
+}
+
+/// Thumbprints of temporary Current User Personal certificates, removed with their keys on drop.
+#[cfg(windows)]
+struct Certificates(Vec<String>);
+
+#[cfg(windows)]
+impl Drop for Certificates {
+    fn drop(&mut self) {
+        for thumbprint in &self.0 {
+            // New-SelfSignedCertificate also leaves a public copy of a self-signed or CA
+            // certificate in Intermediate Certification Authorities (CA).
+            let out = powershell(&format!(
+                "Remove-Item -LiteralPath 'Cert:\\CurrentUser\\My\\{thumbprint}' -DeleteKey; $copy='Cert:\\CurrentUser\\CA\\{thumbprint}'; if (Test-Path -LiteralPath $copy) {{ Remove-Item -LiteralPath $copy }}"
+            ));
+            if !out.status.success() {
+                eprintln!("test certificate cleanup failed: {}", String::from_utf8_lossy(&out.stderr));
+            }
+        }
+    }
+}
+
 /// Uses only newly created software-backed CNG keys, removed even when signing fails.
 #[cfg(windows)]
 #[test]
 #[ignore = "creates temporary certificates in the Windows Current User Personal store"]
 fn signing_with_windows_store_identities() {
-    use std::process::Command;
-    fn powershell(script: &str) -> std::process::Output {
-        // Load the certificate provider explicitly in a profile-free Windows PowerShell child.
-        let script = format!(
-            r#"$ErrorActionPreference='Stop'; Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1"; {script}"#
-        );
-        Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &script]).output().unwrap()
-    }
-    struct Certificates(Vec<String>);
-    impl Drop for Certificates {
-        fn drop(&mut self) {
-            for thumbprint in &self.0 {
-                let out =
-                    powershell(&format!("$ErrorActionPreference='Stop'; Remove-Item -LiteralPath 'Cert:\\CurrentUser\\My\\{thumbprint}' -DeleteKey"));
-                if !out.status.success() {
-                    eprintln!("test certificate cleanup failed: {}", String::from_utf8_lossy(&out.stderr));
-                }
-            }
-        }
-    }
     let mut created = Certificates(Vec::new());
     let mut random = [0u8; 16];
     getrandom::fill(&mut random).unwrap();
@@ -1150,9 +1159,57 @@ fn signing_with_windows_store_identities() {
     let thumbprints = created.0.clone();
     drop(created);
     for thumbprint in thumbprints {
-        let out = powershell(&format!("if (Test-Path -LiteralPath 'Cert:\\CurrentUser\\My\\{thumbprint}') {{ exit 1 }}"));
-        assert!(out.status.success(), "test certificate remains: {thumbprint}");
+        for store in ["My", "CA"] {
+            let out = powershell(&format!("if (Test-Path -LiteralPath 'Cert:\\CurrentUser\\{store}\\{thumbprint}') {{ exit 1 }}"));
+            assert!(out.status.success(), "test certificate remains in {store}: {thumbprint}");
+        }
     }
+}
+
+/// An identity found for signing brings the issuers Windows chains it to (not the root), so the
+/// signature validates against the root alone. Uses only temporary software-backed CNG keys.
+#[cfg(windows)]
+#[test]
+#[ignore = "creates temporary certificates in the Windows Current User Personal store"]
+fn a_windows_store_identity_signs_with_its_issuers() {
+    let mut created = Certificates(Vec::new());
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).unwrap();
+    let unique: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    let [root, issuer, signer] = ["Root", "Issuer", "Signer"].map(|role| format!("PdfCraft Test {unique} {role}"));
+    let mut create = |name: &str, signed_by: Option<&str>, extra: &str| {
+        let by = signed_by.map(|t| format!("-Signer (Get-Item -LiteralPath 'Cert:\\CurrentUser\\My\\{t}')")).unwrap_or_default();
+        let out = powershell(&format!(
+            "$c=New-SelfSignedCertificate -Subject 'CN={name}' -CertStoreLocation 'Cert:\\CurrentUser\\My' -Provider 'Microsoft Software Key Storage Provider' -KeyAlgorithm RSA -KeyLength 2048 -KeyExportPolicy NonExportable {by} {extra}; $c.Thumbprint"
+        ));
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let thumbprint = String::from_utf8(out.stdout).unwrap().trim().to_string();
+        assert_eq!(thumbprint.len(), 40);
+        created.0.push(thumbprint.clone());
+        thumbprint
+    };
+    let ca = "-KeyUsage CertSign -TextExtension @('2.5.29.19={text}CA=true')";
+    let root_thumbprint = create(&root, None, ca);
+    let issuer_thumbprint = create(&issuer, Some(&root_thumbprint), ca);
+    create(&signer, Some(&issuer_thumbprint), "-KeyUsage DigitalSignature");
+
+    let listed = pdfcraft_sign::windows::identities().unwrap();
+    let anchor = listed.iter().find(|id| id.certificate.subject.common_name() == Some(root.as_str())).expect("root listed").certificate.clone();
+    // Listing builds no chains; finding the identity to sign with does.
+    assert!(listed.iter().all(|id| id.chain.is_empty()));
+    let id = pdfcraft_sign::windows::find(&format!("windows:{signer}")).unwrap();
+    let chain: Vec<_> = id.chain.iter().map(|c| c.subject.common_name()).collect();
+    assert_eq!(chain, [Some(issuer.as_str())], "the issuer, without the signer's own certificate or the root");
+
+    let mut options = opts();
+    let now = powershell("(Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')");
+    assert!(now.status.success());
+    options.date = format!("D:{}Z", String::from_utf8(now.stdout).unwrap().trim());
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &options).unwrap();
+    let validated = signatures(&open(&signed), &signed, &TrustStore { certs: vec![anchor] });
+    let signature = validated.iter().find(|s| s.signed).unwrap();
+    assert_eq!(signature.status, Status::Valid, "{:?}", signature.details);
+    assert_eq!(signature.signer.as_deref(), Some(signer.as_str()));
 }
 
 /// Documenso-style: an AcroForm signature field `Timestamp_1` whose `/V` is the document

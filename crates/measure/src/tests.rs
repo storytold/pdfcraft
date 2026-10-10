@@ -319,3 +319,16 @@ fn indirect_viewport_array_stays_indirect() {
     assert_eq!(d.get(r).as_array().map(Vec::len), Some(1));
     close(scale_at(&d, 0, [50.0, 50.0]).unwrap().x, 1.0);
 }
+
+#[test]
+fn user_unit_is_read_as_acrobat_reads_it() {
+    // Values below 1 and values that aren't numbers count as 1, values over 75,000 as 75,000.
+    for (attrs, unit) in [("/UserUnit 0", 1.0), ("/UserUnit 0.5", 1.0), ("/UserUnit (2)", 1.0), ("/UserUnit 100000", 75_000.0)] {
+        let d = fixture("", attrs, &[]);
+        close(scale_at(&d, 0, [50.0, 50.0]).unwrap().x, unit / 72.0);
+        let user = view_to_user(&d, 0, [36.0, 72.0]).unwrap();
+        let view = user_to_view(&d, 0, user).unwrap();
+        close(view[0], 36.0);
+        close(view[1], 72.0);
+    }
+}
