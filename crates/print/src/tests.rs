@@ -219,6 +219,22 @@ fn lpstat_output_is_untranslated() {
     assert!(envs.iter().any(|(k, v)| k == "SOFTWARE" && v.as_deref().is_some_and(|v| !v.is_empty())), "SOFTWARE missing: {envs:?}");
 }
 
+#[test]
+fn driverless_printers_join_the_list_without_a_queue() {
+    // A driverless network printer (IPP, discovered on the LAN) has no queue, so `lpstat -p`
+    // never lists it — yet GTK's print dialog shows it and `lp` prints to it through a temporary
+    // queue. Only `lpstat -e` names it, and the Print dialog used to show Save as PDF alone.
+    let queues = "printer Office_Laser is idle.  enabled since Thu Oct  1 09:00:00 2026\nsystem default destination: Office_Laser\n";
+    assert_eq!(
+        spool::printers_parsed(queues, Some("Basement_Color\nOffice_Laser\n")),
+        [spool::Printer { name: "Office_Laser".into(), default: true }, spool::Printer { name: "Basement_Color".into(), default: false },],
+        "queues first, then the driverless destination; the queue listed twice is not doubled"
+    );
+    // An old spooler without `-e` (CUPS < 1.7) keeps its queues; only the driverless names are lost.
+    assert_eq!(spool::printers_parsed(queues, None), [spool::Printer { name: "Office_Laser".into(), default: true }]);
+    assert!(spool::parse_lpstat_e("\n \n").is_empty(), "no destinations is empty, not [\"\"]");
+}
+
 fn cut_stack(cols: usize, rows: usize) -> Layout {
     Layout::Multiple { cols, rows, order: PageOrder::CutStack, border: false, auto_rotate: false }
 }
