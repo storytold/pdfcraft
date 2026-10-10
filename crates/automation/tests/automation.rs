@@ -989,6 +989,15 @@ fn comments_through_tools() {
     let undo = ok(&mut a, "edit_undo", json!({ "doc": doc }));
     assert_eq!(undo["undone"], "Edit comment");
     ok(&mut a, "edit_redo", json!({ "doc": doc }));
+    // Rectangles, ovals and polygons take a fill (#686); "none" removes it. Lines have none.
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": page, "index": index, "fill": "yellow" }));
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": page, "index": index, "fill": "none" }));
+    assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": page, "index": index, "fill": "mauve" })), Err(ToolError::InvalidArgs(_))));
+    let arrow = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 3 }))["comments"][0].clone();
+    assert!(matches!(
+        a.call("comment_edit", &json!({ "doc": doc, "page": arrow["page"], "index": arrow["index"], "fill": "red" })),
+        Err(ToolError::Failed(_))
+    ));
 
     // Editing a text box re-fits its rectangle to the new text: the wrap width and top edge
     // stay, the height follows the wrapped lines.
@@ -1791,8 +1800,11 @@ fn creating_and_reducing_through_tools() {
     let t = ok(&mut a, "doc_create", json!({ "from": "text", "path": "notes.txt" }))["doc"].as_u64().unwrap();
     assert_eq!(page_text(&mut a, t), ["Meeting notes\nAction items"]);
     ok(&mut a, "doc_save", json!({ "doc": t, "path": "notes.pdf" }));
+    // A new text PDF is already compact: Reduce writes nothing rather than a copy no smaller.
     let r = ok(&mut a, "doc_reduce", json!({ "doc": t, "path": "notes-small.pdf" }));
-    assert!(r["bytes_after"].as_u64().unwrap() > 0 && dir.join("notes-small.pdf").exists());
+    assert!(r["bytes_after"].as_u64().unwrap() >= r["bytes_before"].as_u64().unwrap(), "{r}");
+    assert_eq!(r["written"], false);
+    assert!(!dir.join("notes-small.pdf").exists());
     assert!(matches!(a.call("doc_create", &json!({ "from": "images", "paths": ["notes.txt"] })), Err(ToolError::Failed(_))));
 }
 
@@ -2752,8 +2764,11 @@ fn digital_ids_signing_and_validation_through_tools() {
     let ids = store["ids"].as_array().unwrap();
     assert_eq!(store["count"].as_u64().unwrap(), ids.len() as u64);
     assert!(ids.iter().all(|id| id["id"].as_str().unwrap().starts_with("windows:")));
+    // Store certificates that can't sign are explained, not dropped (issue #179).
+    let unusable = store["unusable"].as_array().unwrap();
+    assert!(unusable.iter().all(|u| u["subject"].is_string() && !u["reason"].as_str().unwrap().is_empty() && u["no_private_key"].is_boolean()));
     #[cfg(not(windows))]
-    assert!(ids.is_empty());
+    assert!(ids.is_empty() && unusable.is_empty());
     assert!(matches!(
         a.call("sign_document", &json!({ "doc": doc, "id": "ada.p12", "password": "wrong!", "out": "signed.pdf" })),
         Err(ToolError::InvalidArgs(_))
@@ -2824,6 +2839,8 @@ fn optimizing_through_tools() {
     assert_eq!(small["pages"], 1);
     let reduced = ok(&mut a, "doc_reduce", json!({ "doc": doc, "path": "reduced.pdf" }));
     assert!(reduced["bytes_after"].as_u64().unwrap() < reduced["bytes_before"].as_u64().unwrap());
+    assert_eq!(reduced["written"], true);
+    assert_eq!(std::fs::metadata(dir.join("reduced.pdf")).unwrap().len(), reduced["bytes_after"].as_u64().unwrap());
     assert!(matches!(
         a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "color": { "compression": "gif" } })),
         Err(ToolError::InvalidArgs(_))
@@ -3678,4 +3695,96 @@ fn command_batch_refuses_more_than_a_thousand_steps() {
     let steps: Vec<Value> = (0..1001).map(|_| json!({"id":"no.such.command"})).collect();
     let err = a.call("command_batch", &json!({"steps": steps})).unwrap_err();
     assert!(err.to_string().contains("at most 1000 steps"), "{err}");
+}
+
+#[test]
+fn a_deleted_image_is_not_kept_by_reduce_or_optimize() {
+    let dir = workdir("deleted-image");
+    let (w, h) = (600u32, 400u32);
+    let px: Vec<u8> = (0..w * h).flat_map(|i| [(i % w * 255 / w) as u8 ^ (i & 7) as u8, (i / w * 255 / h) as u8, 128]).collect();
+    let mut photo = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut photo, w, h);
+        enc.set_color(png::ColorType::Rgb);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.write_header().unwrap().write_image_data(&px).unwrap();
+    }
+    std::fs::write(dir.join("photo.png"), photo).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["photo.png"] }))["doc"].as_u64().unwrap();
+    ok(&mut a, "image_edit", json!({ "doc": doc, "page": 1, "image": 1, "action": "delete" }));
+    assert_eq!(ok(&mut a, "page_images", json!({ "doc": doc, "page": 1 }))["count"], 0);
+    // The page is blank, so the copies are tiny: the picture's data is not carried along.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "optimized.pdf" }));
+    assert_eq!(r["unused_xobjects"], 1, "{r}");
+    assert!(r["bytes_after"].as_u64().unwrap() < 4_000, "{r}");
+    let r = ok(&mut a, "doc_reduce", json!({ "doc": doc, "path": "reduced.pdf" }));
+    assert!(r["bytes_after"].as_u64().unwrap() < 4_000, "{r}");
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "reduced.pdf" }));
+    assert_eq!(reopened["pages"], 1);
+}
+
+/// A two-page PDF with the same three-row table ("Name Qty / Apple 12 / Pear 7"); the second
+/// page is turned with /Rotate 90.
+fn table_pdf() -> Vec<u8> {
+    let body = "BT /F1 12 Tf 20 250 Td (Name) Tj 130 0 Td (Qty) Tj -130 -20 Td (Apple) Tj 130 0 Td (12) Tj -130 -20 Td (Pear) Tj 130 0 Td (7) Tj ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [4 0 R 5 0 R] /Count 2 /MediaBox [0 0 300 300] >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Rotate 90 /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// Issue #740: `text_extract` with `rect` takes what Column select takes, in the displayed-page
+/// coordinates `text_find` reports, on upright and turned pages alike.
+#[test]
+fn text_extract_with_a_rect_takes_one_column() {
+    let dir = workdir("column");
+    std::fs::write(dir.join("table.pdf"), table_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "table.pdf" }))["doc"].as_u64().unwrap();
+    let reading = ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1] }));
+    assert_eq!(reading["pages"][0]["text"], "Name\nApple\nPear\nQty\n12\n7", "reading order is column by column");
+
+    for page in [1u64, 2] {
+        // The box around "Qty" and "7", as text_find reports them on this page.
+        let rect_of = |a: &mut Automation, q: &str| -> [f64; 4] {
+            let found = ok(a, "text_find", json!({ "doc": doc, "query": q }));
+            let m = found["matches"].as_array().unwrap().iter().find(|m| m["page"] == page).unwrap().clone();
+            let r: Vec<f64> = m["rects"][0].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+            [r[0], r[1], r[2], r[3]]
+        };
+        let (qty, seven) = (rect_of(&mut a, "Qty"), rect_of(&mut a, "7"));
+        let rect = [qty[0].min(seven[0]) - 2.0, qty[1].min(seven[1]) - 2.0, qty[2].max(seven[2]) + 2.0, qty[3].max(seven[3]) + 2.0];
+        let column = ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [page], "rect": rect }));
+        assert_eq!(column["pages"][0]["text"], "Qty\n12\n7", "page {page}, rect {rect:?}");
+    }
+
+    // The whole table, row by row with tab-separated cells (upright page).
+    let all = ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1], "rect": [0, 0, 300, 300] }));
+    assert_eq!(all["pages"][0]["text"], "Name\tQty\nApple\t12\nPear\t7");
+    // Nothing inside: empty text, not an error.
+    let none = ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1], "rect": [0, 0, 5, 5] }));
+    assert_eq!(none["pages"][0]["text"], "");
+    // A rect that is not four numbers is refused.
+    for bad in [json!([1, 2, 3]), json!("0 0 1 1"), json!([0, 0, "a", 1])] {
+        let e = a.call("text_extract", &json!({ "doc": doc, "rect": bad })).unwrap_err();
+        assert!(matches!(e, ToolError::InvalidArgs(_)), "{bad}: {e}");
+    }
 }
