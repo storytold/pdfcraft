@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with SHA-256 hashes, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (258)
+## In this repository (259)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -16,6 +16,7 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `crates/ui-egui/src/i18n/fr.tsv` | French interface translation catalog | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources | French UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs |
 | `crates/ui-egui/src/i18n/de.tsv` | German interface translation catalog | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources | German UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs |
 | `crates/ui-egui/src/i18n/te.tsv` | Telugu interface translation catalog | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources | Telugu UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs |
+| `crates/ui-egui/src/i18n/it.tsv` | Italian interface translation catalog | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources | Italian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs |
 | `crates/ui-egui/src/i18n/ru.tsv` | Russian interface translation catalog | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources | Russian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs |
 | `crates/ui-egui/src/i18n/hu.tsv` | Hungarian interface translation catalog | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources | Hungarian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs |
 | `crates/ui-egui/src/i18n/bg.tsv` | Bulgarian interface translation catalog | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources | Bulgarian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs |
