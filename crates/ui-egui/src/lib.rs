@@ -56,6 +56,7 @@ pub mod marks {
 }
 mod content_ui;
 mod link_ui;
+mod object_ui;
 pub use create_ui::Clip;
 pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};

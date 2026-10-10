@@ -2127,11 +2127,11 @@ title = "Edit object tool for any page object"
 area = "C"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["edit.edit_text"]
+tools = ["object_list", "object_move"]
+evidence = ["crates/ui-egui/tests/object_selection.rs::marquee_and_mixed_group_drag_move_once_and_undo_together", "crates/automation/tests/automation.rs::mixed_objects_move_through_tools_with_generation_and_one_undo", "crates/edit/src/tests.rs::group_moves_preserve_glyph_bytes_and_unselected_text_state", "crates/engine/src/tests.rs::mixed_object_moves_are_one_undo_step_and_survive_save_reopen"]
+notes = "Same-page mixed selection (#844): Shift/Ctrl/Command-click toggles, empty-space marquee (additive with modifiers), drag previews and one atomic undo step for existing paragraphs, Image/Form XObjects and added text/images. Source glyph bytes, fonts and kerning retained; unselected text and shared Form resources stay put. Generation-scoped references with optional automation guard; count and geometry bounded; unsupported vertical/clipping text refused without partial changes. Still missing: arbitrary paths, inline images, cross-page movement, group resizing, arrange/align and a general object editor. See docs/editing-multiple-objects.md."
 
 [[feature]]
 id = "edit.object-properties"

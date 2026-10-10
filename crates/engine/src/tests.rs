@@ -2678,3 +2678,140 @@ fn oversized_exports_clamp_and_report_their_dpi_unless_strict() {
     let err = export::Exporter::from_source(strict).png(0, 600.0).unwrap_err();
     assert!(err.contains("exceeds renderer limits"), "{err}");
 }
+
+#[test]
+fn mixed_object_moves_are_one_undo_step_and_survive_save_reopen() {
+    let (mut s, id) = session_with(1);
+    let text = AddedText { text: "Added label".into(), rect: [20.0, 240.0, 140.0, 265.0], ..Default::default() };
+    s.apply(id, Edit::AddText { page: 0, text }).unwrap();
+    let image = image::RgbImage::from_pixel(12, 8, image::Rgb([240, 20, 20]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([40.0, 40.0, 80.0, 70.0]), name: "red.png".into(), bytes: Arc::new(png.into_inner()) }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    s.mark_saved(id, saved.clone(), None).unwrap();
+    let before = s.get(id).unwrap().editable_objects(0).unwrap();
+    assert_eq!(before.len(), 3, "one native paragraph, one added label and one added image");
+    let generation = s.get(id).unwrap().edit_generation();
+    let targets = before.iter().map(|o| o.target).collect();
+    s.apply(id, Edit::MoveObjects { page: 0, objects: targets, offset: [24.0, -24.0] }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(doc.dirty && doc.edit_generation() > generation);
+    assert_eq!(doc.can_undo(), Some("Move objects"));
+    let after = doc.editable_objects(0).unwrap();
+    for (a, b) in before.iter().zip(&after) {
+        assert_eq!(a.text, b.text);
+        for (i, (x, y)) in a.rect.iter().zip(b.rect).enumerate() {
+            assert!((y - x - if i % 2 == 0 { 24.0 } else { -24.0 }).abs() < 0.001);
+        }
+    }
+    let moved = s.save_bytes(id).unwrap();
+    assert!(moved.starts_with(saved.as_ref()), "an incremental update preserves the original revision");
+    let mut again = Session::new();
+    let other = again.open("moved.pdf", None, moved.clone(), None).unwrap();
+    assert_eq!(again.get(other).unwrap().editable_objects(0).unwrap(), after);
+    assert_eq!(s.undo(id).unwrap(), "Move objects");
+    assert_eq!(s.get(id).unwrap().editable_objects(0).unwrap(), before);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Add image"), "one undo restores all three objects");
+    s.redo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().editable_objects(0).unwrap(), after);
+    let mut renderer = pdfcraft_render::PageRenderer::new(moved, Default::default());
+    let rendered = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    let pixel = |x: usize, y: usize| &rendered.rgba[(y * rendered.width as usize + x) * 4..][..3];
+    assert!(pixel(84, 269)[0] > 200 && pixel(84, 269)[1] < 50, "the added image renders at its new position");
+    assert!(pixel(45, 240).iter().all(|v| *v > 240), "the old image position is clear");
+}
+
+#[test]
+fn failed_group_moves_preserve_generation_dirty_state_and_redo_history() {
+    let (mut s, id) = session_with(1);
+    let objects: Vec<_> = s.get(id).unwrap().editable_objects(0).unwrap().iter().map(|o| o.target).collect();
+    s.apply(id, Edit::MoveObjects { page: 0, objects: objects.clone(), offset: [10.0, 0.0] }).unwrap();
+    s.undo(id).unwrap();
+    let before = s.save_bytes(id).unwrap();
+    let generation = s.get(id).unwrap().edit_generation();
+    let dirty = s.get(id).unwrap().dirty;
+    let mut bad = objects;
+    bad.push(ObjectTarget { kind: ObjectKind::Image, index: 999 });
+    assert!(s.apply(id, Edit::MoveObjects { page: 0, objects: bad, offset: [10.0, 0.0] }).is_err());
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.edit_generation(), generation);
+    assert_eq!(doc.dirty, dirty);
+    assert!(doc.can_undo().is_none());
+    assert_eq!(doc.can_redo(), Some("Move object"));
+    assert_eq!(s.save_bytes(id).unwrap(), before);
+    s.redo(id).unwrap();
+    assert!(s.get(id).unwrap().dirty);
+}
+
+#[test]
+fn group_move_respects_modify_permission_and_display_coordinate_rotation() {
+    for rotation in [0, 90, 180, 270] {
+        let (mut s, id) = session_with(1);
+        s.apply(id, Edit::RotatePages { pages: vec![0], degrees: rotation }).unwrap();
+        let doc = s.get(id).unwrap();
+        let delta = doc.object_move_offset(0, [17.0, 23.0]).unwrap();
+        let info = &doc.info.pages[0];
+        let a = info.user_to_view(30.0, 70.0);
+        let b = info.user_to_view(30.0 + delta[0] as f32, 70.0 + delta[1] as f32);
+        assert!((b[0] - a[0] - 17.0).abs() < 0.001 && (b[1] - a[1] - 23.0).abs() < 0.001);
+    }
+    let (mut s, id) = session_with(1);
+    let mut p = protection(None, Some("owner"));
+    p.changes = Changes::None;
+    s.apply(id, Edit::Protect(p)).unwrap();
+    let bytes = s.save_bytes(id).unwrap();
+    let mut reader = Session::new();
+    let id = reader.open("restricted.pdf", None, bytes, None).unwrap();
+    let objects = reader.get(id).unwrap().editable_objects(0).unwrap().iter().map(|o| o.target).collect();
+    let generation = reader.get(id).unwrap().edit_generation();
+    assert!(reader.apply(id, Edit::MoveObjects { page: 0, objects, offset: [10.0, 0.0] }).is_err());
+    let doc = reader.get(id).unwrap();
+    assert!(!doc.dirty && doc.can_undo().is_none() && doc.edit_generation() == generation);
+}
+
+#[test]
+fn group_moves_preserve_rotated_added_content_raster_geometry() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddText { page: 0, text: AddedText { text: "Added label".into(), rect: [20.0, 240.0, 140.0, 265.0], ..Default::default() } })
+        .unwrap();
+    let image = image::RgbImage::from_fn(20, 10, |x, _| image::Rgb(if x < 10 { [240, 20, 20] } else { [20, 20, 240] }));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([40.0, 40.0, 80.0, 70.0]), name: "quadrants.png".into(), bytes: Arc::new(png.into_inner()) })
+        .unwrap();
+    let AddedContent::Image(mut image) = s.get(id).unwrap().added[1].content.clone() else { panic!() };
+    image.flip_h = true;
+    image.crop = [0.1, 0.0, 0.2, 0.0];
+    s.apply(id, Edit::UpdateContent { page: 0, index: 1, content: AddedContent::Image(image) }).unwrap();
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let render = |bytes| {
+        let mut r = pdfcraft_render::PageRenderer::new(bytes, Default::default());
+        r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() })
+    };
+    let before = render(s.get(id).unwrap().bytes.clone());
+    let doc = s.get(id).unwrap();
+    let offset = doc.object_move_offset(0, [24.0, 36.0]).unwrap();
+    let objects = doc.editable_objects(0).unwrap().iter().map(|o| o.target).collect();
+    s.apply(id, Edit::MoveObjects { page: 0, objects, offset }).unwrap();
+    let after = render(s.get(id).unwrap().bytes.clone());
+    assert_eq!((before.width, before.height), (after.width, after.height));
+    let mut painted = 0;
+    for y in 0..before.height as usize {
+        for x in 0..before.width as usize {
+            let pos = (y * before.width as usize + x) * 4;
+            let expected = if x >= 24 && y >= 36 {
+                let old = ((y - 36) * before.width as usize + x - 24) * 4;
+                &before.rgba[old..old + 4]
+            } else {
+                &[255, 255, 255, 255]
+            };
+            // Raster coverage can round by one intensity level when equivalent placements
+            // reach the renderer through different text operators. Geometry and image colours
+            // must still agree across every pixel of the translated page.
+            assert!(after.rgba[pos..pos + 4].iter().zip(expected).all(|(a, b)| a.abs_diff(*b) <= 2), "pixel {x},{y}");
+            painted += usize::from(expected[..3].iter().any(|c| *c < 240));
+        }
+    }
+    assert!(painted > 500, "the comparison contains real rendered text and image pixels");
+}

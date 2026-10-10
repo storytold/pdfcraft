@@ -153,6 +153,16 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
     }
     // Edit a PDF shows Format text at the top while text is selected or being added.
     if g.id == "edit" {
+        if app.quick_tool == crate::QuickTool::EditText {
+            let count = app.active_ids().map_or(0, |(i, _)| app.views[i].objects.count());
+            if count > 0 {
+                ui.label(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} object selected", "{n} objects selected"));
+                ui.label(tl!("Drag the selection to move it. Esc clears the selection."));
+            } else {
+                ui.label(tl!("Shift-click to select several objects. Drag empty space to select an area."));
+            }
+            ui.add_space(6.0);
+        }
         format_section(app, ui, t);
     }
     let mut run = None;

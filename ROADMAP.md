@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~26% (ready for real work 49% → 75%) and ~400–700 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (readiness table with hours per audience; full number as weighted sum 49%; earlier: second look: ready 40% → 47%, mainstream 55% added; core-workflow gate applied → alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (same-page multi-selection/movement, #844; readiness table with hours per audience; full number as weighted sum 49%; earlier: second look: ready 40% → 47%, mainstream 55% added; core-workflow gate applied → alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 PdfCraft's one-page summary: how close it is to Adobe Acrobat Pro's offline feature set, and what
 comes next. Adobe's cloud services (Document Cloud, Acrobat Sign requests, shared review, the AI
@@ -29,8 +29,8 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **≈ 67%** tier-weighted (56.9% unweighted: 423 shipped + 74 partial of 808; P0 94.2%) | measured, `parity/acrobat-features.toml` |
-| Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.2% unweighted; P0 95.3%) | measured ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
+| **Feature breadth** | **≈ 67%** tier-weighted (57.0% unweighted: 423 shipped + 75 partial of 808; P0 94.2%) | measured, `parity/acrobat-features.toml` |
+| Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.3% unweighted; P0 95.3%) | measured ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 49%** (45–53%) | estimated, weighted sum over [dimensions](#by-dimension) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, essentials user | **≈ 66%** (60–70%) | estimated ([method](docs/target-app-parity.md#essentials-user)) |
@@ -77,7 +77,7 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 |---|---|---|---|
 | A Core model and fidelity | 76.8% | 70% | 25–45 |
 | B View and navigation | 62.5% | 55% | 110–190 |
-| C Content editing | 53.3% | 30% | 100–180 |
+| C Content editing | 54.1% | 30% | 100–180 |
 | D Organize pages | 61.2% | 70% | 12–25 |
 | E Comments and review | 77.7% | 70% | 12–25 |
 | F Forms and JavaScript | 78.5% | 65% | 40–75 |
@@ -134,6 +134,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 ## Progress log
 
 Newest first: the date, what moved, and the new overall estimate.
+
+- **2026-10-11 (#844, mixed selection and movement):** Edit a PDF supports Shift/Ctrl/Command-click and empty-space marquee selection of same-page paragraphs, Image/Form artwork and added text/images. Group drag previews commit as one atomic undo step; glyph bytes/fonts/kerning and neighbouring content stay intact. CLI/MCP `object_list` and `object_move` share the engine edit and optional generation guard. Counts and geometry are bounded; drafts survive selection requests, Escape cancels, and unsupported vertical/clipping text refuses the whole move. General object editing remains partial; arbitrary paths, inline images, cross-page transfer and arrange/align remain. M7 estimates unchanged.
 
 - **2026-10-10 (progress docs, hours per audience):** Each readiness number gets its own hours to ≈ 95%: full ≈ 49% / 780–1,400 h, mainstream ≈ 55% / 500–900 h, essentials ≈ 66% / 180–330 h. The full number is now the standard's additive weighted sum over the dimensions (written weights), 47% → 49%: method aligned with the standard, no new evidence. Beta ≈ 26 points, ≈ 400–700 h.
 - **2026-10-10 (progress docs, gate consistency check):** Re-judged the convert-and-share row with the rule applied across all Crafting Apps (a workflow blocks only when it can't be completed at all; lossy exchange and missing sub-cases are beta items, as for FilmCraft's .prproj or VectorCraft's .ai). Unencrypted sharing works, encryption interop (#774) and Office→PDF are sub-cases, Word export is lossy rather than absent: partial, not blocking. **Stage pre-alpha → alpha**; numbers unchanged (47%, mainstream 55%; beta ≈ 400–700 h). Added an essentials-user score: ≈ 66% for someone who only opens, reads, comments, fills, signs, prints and rearranges pages.

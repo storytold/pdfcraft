@@ -81,6 +81,10 @@ pub(crate) fn extras_panel(ui: &mut egui::Ui, e: &mut Extras) -> bool {
 }
 
 impl LineEditor {
+    pub(crate) fn has_changes(&self) -> bool {
+        self.text != self.original || self.look != self.look0 || self.extras != self.extras0
+    }
+
     /// How far the box may grow to the right, when the paragraph is a single line (a multi-line
     /// paragraph rewraps to its own width and the box doesn't grow).
     pub fn growth(&self) -> Option<f32> {
@@ -501,7 +505,11 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     let page = view.line_editor.as_ref()?.page;
     let xf = view.page_xform(page)?;
     let viewport_right = view.viewport_rect().right();
+    let hold = view.objects.hold_editor;
     let ed = view.line_editor.as_mut()?;
+    if hold {
+        ed.focus = true;
+    }
     // Reproject the source box every frame. The page may have been zoomed, scrolled or rotated
     // while the format panel was open.
     ed.rect = xf.user_rect(info, ed.page, ed.source_rect).expand(2.0);
@@ -544,7 +552,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 let apply = ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
                 if esc {
                     done = Some(false);
-                } else if apply || (r.lost_focus() && !outside) {
+                } else if apply || (r.lost_focus() && !outside && !hold) {
                     done = Some(true);
                 }
             });
