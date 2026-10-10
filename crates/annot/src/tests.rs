@@ -538,6 +538,31 @@ fn urls_are_found_in_text() {
 }
 
 #[test]
+fn urls_are_found_after_length_changing_lowercase() {
+    // U+0130 (İ) lowercases to "i" plus a combining dot above, so a case-folded copy is longer
+    // than the source. The old matcher took the address offset from that copy and sliced the
+    // source with it, panicking at `chars[i..j]` (#816).
+    let mut text = "\u{130}".repeat(20);
+    text.push_str(" http://example.com");
+    let chars: Vec<char> = text.chars().collect();
+    let found = crate::links::find_urls(&chars);
+    assert_eq!(found.len(), 1, "{found:?}");
+    let (range, uri) = found.into_iter().next().unwrap();
+    assert_eq!(uri, "http://example.com");
+    assert_eq!(range, 21..39, "range is in source-character indices");
+}
+
+#[test]
+fn url_scheme_and_www_match_case_insensitively() {
+    let t: Vec<char> = "HTTP://Example.COM".chars().collect();
+    let found: Vec<String> = crate::links::find_urls(&t).into_iter().map(|(_, u)| u).collect();
+    assert_eq!(found, ["HTTP://Example.COM"]);
+    let t: Vec<char> = "\u{130} www.Example.org".chars().collect();
+    let found: Vec<String> = crate::links::find_urls(&t).into_iter().map(|(_, u)| u).collect();
+    assert_eq!(found, ["http://www.Example.org"]);
+}
+
+#[test]
 fn polygons_clouds_connected_lines_callouts_and_carets_are_drawn() {
     let mut doc = fixture();
     let tri = vec![[100.0, 100.0], [200.0, 100.0], [150.0, 180.0]];
