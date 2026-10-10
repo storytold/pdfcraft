@@ -65,8 +65,10 @@ date in the AppStream metadata. The binaries don't embed the commit yet.
 
 **Fonts:** every job checks out [craft-fonts](https://github.com/storytold/craft-fonts) at the commit
 pinned in `release.yml` and builds with `CRAFT_FONTS_DIR` and `CRAFT_FONTS_REQUIRED=1`, so releases
-embed its Japanese fonts and fail rather than ship without them (`AGENTS.md` §1.4). Bump the pin
-deliberately.
+embed its Japanese, Chinese and Arabic fonts and fail rather than ship without them (`AGENTS.md`
+§1.4). Bump the pin deliberately, in `ci.yml` too: CI's craft-fonts tests fail if the revision has
+no allowed Chinese face. Packages carry each embedded font's licence file (the manifest's `licence
+file` field: `OFL-<family>.txt`, and `NOTICE-droid-sans-fallback.txt` for the Apache-2.0 face).
 
 **OCR models:** every desktop package ships the Scan & OCR models (#103). The packaging scripts call
 `stage_models` (`packaging/env.sh`; `package.ps1` on Windows), which runs `cargo xtask models` to
@@ -124,8 +126,8 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
   child process before signing, so the MSI isn't held open when signtool runs. The ARM64 install
   smoke test checks that both all-users shortcuts point at the installed `pdfcraft.exe` and are
   removed on uninstall, and that `INSTALLDESKTOPSHORTCUT=0` skips the desktop one.
-- The portable zip holds both executables, the README, the licences, the OFL licence of each
-  embedded craft-fonts family, and `portable.txt`. That marker beside `pdfcraft.exe` keeps the
+- The portable zip holds both executables, the README, the licences, `NOTICE`, the licence file
+  of each craft-fonts font (OFL or Apache-2.0 `NOTICE`), and `portable.txt`. That marker beside `pdfcraft.exe` keeps the
   settings, logs, crash recovery and new digital IDs in `PdfCraftData\` next to the exe instead of
   `%APPDATA%` and `%LOCALAPPDATA%` (`crates/ui-egui/src/portable.rs`).
 - **Signing:** `packaging/windows/sign.ps1` signs both executables and the MSI with `signtool`

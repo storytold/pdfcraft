@@ -123,16 +123,31 @@ Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe') $Portable
 Copy-Item -Recurse $Models (Join-Path $Portable 'models')
-foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE') {
+foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }
 }
 # Builds made with craft-fonts (CRAFT_FONTS_DIR, set for every release) embed its fonts: ship their
-# licences, fonts\<family>\OFL.txt -> OFL-<family>.txt.
+# licences, the `licence file` field (6th) of each fonts\manifest.txt line, named after its
+# directory (OFL.txt -> OFL-<dir>.txt; Droid Sans Fallback's Apache-2.0 NOTICE ->
+# NOTICE-droid-sans-fallback.txt). Same rule as copy_font_licences in packaging/env.sh.
 if ($env:CRAFT_FONTS_DIR) {
-  Get-ChildItem -Path (Join-Path $env:CRAFT_FONTS_DIR 'fonts') -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-    $ofl = Join-Path $_.FullName 'OFL.txt'
-    if (Test-Path $ofl) { Copy-Item $ofl (Join-Path $Portable "OFL-$($_.Name).txt") }
+  $FontManifest = Join-Path $env:CRAFT_FONTS_DIR 'fonts\manifest.txt'
+  if (-not (Test-Path $FontManifest)) {
+    Write-Warning "CRAFT_FONTS_DIR=$env:CRAFT_FONTS_DIR has no fonts\manifest.txt; no font licences copied"
+  } else {
+    $Licences = Get-Content $FontManifest | ForEach-Object { $_.Trim() } |
+      Where-Object { $_ -and -not $_.StartsWith('#') } |
+      ForEach-Object { $fields = $_ -split ' \| '; if ($fields.Count -ge 6) { $fields[5].Trim() } } |
+      Sort-Object -Unique
+    foreach ($rel in $Licences) {
+      if ([IO.Path]::IsPathRooted($rel) -or $rel.Contains('..')) { Write-Warning "font licence path $rel leaves the checkout; skipped"; continue }
+      $src = Join-Path $env:CRAFT_FONTS_DIR $rel
+      if (-not (Test-Path $src -PathType Leaf)) { Write-Warning "font licence $rel is listed in the craft-fonts manifest but missing"; continue }
+      $dir = Split-Path (Split-Path $rel -Parent) -Leaf
+      $stem = [IO.Path]::GetFileNameWithoutExtension($rel)
+      Copy-Item $src (Join-Path $Portable "$stem-$dir.txt")
+    }
   }
 }
 # portable.txt beside pdfcraft.exe switches on portable mode: settings, logs, recovery files and new
