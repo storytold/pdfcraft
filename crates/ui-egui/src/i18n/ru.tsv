@@ -17,6 +17,9 @@
 	Preferences	Настройки
 	Preferences…	Настройки…
 	Interface language	Язык интерфейса
+	Interface size	Размер интерфейса
+	Auto ({percent}%)	Авто ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	В режиме «Авто» используется размер текста из настроек системы. Страницы всегда отображаются в полном разрешении экрана.
 	Identity	Идентификация
 	Name on new comments	Имя в новых комментариях
 	Open…	Открыть…

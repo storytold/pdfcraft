@@ -17,6 +17,9 @@
 	Preferences	偏好設定
 	Preferences…	偏好設定…
 	Interface language	介面語言
+	Interface size	介面大小
+	Auto ({percent}%)	自動 ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	「自動」會跟隨系統的文字大小。頁面一律以螢幕的完整解析度呈現。
 	Identity	個人資訊
 	Name on new comments	新註解的作者名稱
 	Open…	開啟…

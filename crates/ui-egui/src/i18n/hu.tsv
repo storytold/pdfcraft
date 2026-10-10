@@ -18,6 +18,9 @@
 	Preferences	Beállítások
 	Preferences…	Beállítások…
 	Interface language	Felület nyelve
+	Interface size	Felület mérete
+	Auto ({percent}%)	Automatikus ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Az Automatikus beállítás a rendszer szövegméretét követi. Az oldalak mindig a kijelző teljes felbontásában jelennek meg.
 	Identity	Személyazonosság
 	Name on new comments	Név az új megjegyzéseken
 	Open…	Megnyitás…

@@ -24,6 +24,9 @@
 	Preferences	Předvolby
 	Preferences…	Předvolby…
 	Interface language	Jazyk rozhraní
+	Interface size	Velikost rozhraní
+	Auto ({percent}%)	Automaticky ({percent} %)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Automaticky se řídí velikostí textu v systému. Stránky se vždy vykreslují v plném rozlišení displeje.
 	Identity	Identita
 	Name on new comments	Jméno autora nových komentářů
 	Enable Acrobat JavaScript	Povolit Acrobat JavaScript

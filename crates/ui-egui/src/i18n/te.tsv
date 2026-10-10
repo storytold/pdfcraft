@@ -22,6 +22,9 @@ comment menu	Edit	సవరించు
 	Preferences	ప్రాధాన్యతలు
 	Preferences…	ప్రాధాన్యతలు…
 	Interface language	ఇంటర్‌ఫేస్ భాష
+	Interface size	ఇంటర్‌ఫేస్ పరిమాణం
+	Auto ({percent}%)	ఆటో ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	ఆటో సిస్టమ్ టెక్స్ట్ పరిమాణాన్ని అనుసరిస్తుంది. పేజీలు ఎల్లప్పుడూ డిస్‌ప్లే పూర్తి రిజల్యూషన్‌లో చూపబడతాయి.
 	Identity	గుర్తింపు
 	Name on new comments	కొత్త వ్యాఖ్యలపై చూపే పేరు
 	Open…	తెరువు…

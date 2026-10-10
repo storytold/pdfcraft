@@ -18,6 +18,9 @@
 	Preferences	Preferências
 	Preferences…	Preferências…
 	Interface language	Idioma da interface
+	Interface size	Tamanho da interface
+	Auto ({percent}%)	Automático ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Automático segue o tamanho do texto do sistema. As páginas sempre são exibidas na resolução total da tela.
 	Identity	Identidade
 	Name on new comments	Nome nos novos comentários
 	Open…	Abrir…

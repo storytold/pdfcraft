@@ -58,6 +58,9 @@
 	Preferences	首选项
 	Preferences…	首选项…
 	Interface language	界面语言
+	Interface size	界面大小
+	Auto ({percent}%)	自动 ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	“自动”会跟随系统的文字大小。页面始终以显示器的完整分辨率渲染。
 	Identity	身份
 	Name on new comments	新注释的作者姓名
 	Open…	打开…

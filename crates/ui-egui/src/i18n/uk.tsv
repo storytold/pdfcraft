@@ -27,6 +27,9 @@
 	Preferences	Налаштування
 	Preferences…	Налаштування…
 	Interface language	Мова інтерфейсу
+	Interface size	Розмір інтерфейсу
+	Auto ({percent}%)	Автоматично ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Автоматичний режим використовує розмір тексту із системних налаштувань. Сторінки завжди відображаються в повній роздільній здатності екрана.
 	Identity	Особисті дані
 	Name on new comments	Ім’я в нових коментарях
 	Open…	Відкрити…

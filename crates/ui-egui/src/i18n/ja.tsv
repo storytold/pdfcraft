@@ -24,6 +24,9 @@
 	Preferences	環境設定
 	Preferences…	環境設定…
 	Interface language	表示言語
+	Interface size	表示サイズ
+	Auto ({percent}%)	自動 ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	自動にすると、システムの文字サイズに合わせます。ページは常にディスプレイの最大解像度で描画されます。
 	Identity	個人情報
 	Name on new comments	新しい注釈の作成者名
 	Open…	開く…

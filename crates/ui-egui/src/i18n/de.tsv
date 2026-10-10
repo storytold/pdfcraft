@@ -18,6 +18,9 @@
 	Preferences	Einstellungen
 	Preferences…	Einstellungen…
 	Interface language	Sprache der Oberfläche
+	Interface size	Größe der Oberfläche
+	Auto ({percent}%)	Automatisch ({percent} %)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Automatisch folgt der Textgröße des Systems. Seiten werden immer in der vollen Auflösung des Bildschirms dargestellt.
 	Identity	Identität
 	Name on new comments	Name für neue Kommentare
 	Open…	Öffnen…

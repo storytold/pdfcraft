@@ -29,6 +29,9 @@
 	Preferences	التفضيلات
 	Preferences…	التفضيلات…
 	Interface language	لغة الواجهة
+	Interface size	حجم الواجهة
+	Auto ({percent}%)	تلقائي ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	يتبع الوضع التلقائي حجم النص في النظام. تُعرض الصفحات دائمًا بالدقة الكاملة للشاشة.
 	Identity	الهوية
 	Name on new comments	الاسم على التعليقات الجديدة
 	Open…	فتح…
