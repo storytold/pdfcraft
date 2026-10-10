@@ -153,6 +153,35 @@ fn qpdf_accepts_object_stream_output() {
 }
 
 #[test]
+fn the_catalog_of_an_encrypted_document_stays_outside_object_streams() {
+    // Acrobat reports an encrypted file as damaged when its catalog is in an object stream,
+    // before asking for the password (#774). Unencrypted output still packs the catalog.
+    fn root_is_packed(bytes: &[u8], password: Option<&str>) -> bool {
+        let doc = Document::open_with_password(Arc::new(bytes.to_vec()), password).unwrap();
+        let root = doc.trailer().reference(b"Root").unwrap();
+        let direct = format!("\n{} 0 obj", root.num);
+        !bytes.windows(direct.len()).any(|w| w == direct.as_bytes())
+    }
+    let plain = Document::open(Arc::new(fixture())).unwrap();
+    assert!(root_is_packed(&write_full(&plain, &SaveOptions::default()).unwrap(), None), "unencrypted: catalog in an object stream");
+    let mut enc = plain.clone();
+    enc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -4,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let packed = write_full(&enc, &SaveOptions::default()).unwrap();
+    assert!(!root_is_packed(&packed, Some("user")), "encrypted: catalog must be a standalone object");
+    let back = Document::open_with_password(Arc::new(packed.clone()), Some("user")).expect("reopens");
+    assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
+    assert_eq!(title(&back), b"Caf\xe9 (draft)");
+}
+
+#[test]
 fn objects_referenced_by_the_encrypt_dictionary_stay_outside_object_streams() {
     // Encrypt a document, then move its crypt filters into indirect objects, as some producers
     // do (pdf.js issue7665). A full save must keep them readable before decryption.

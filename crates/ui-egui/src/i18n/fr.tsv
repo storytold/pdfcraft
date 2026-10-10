@@ -44,6 +44,7 @@
 	Fit visible	Ajuster au contenu visible
 	Marquee zoom	Zoom par sélection
 	Take a snapshot	Prendre un instantané
+	Column select	Sélection de colonne
 	Full screen mode	Mode plein écran
 	Read mode	Mode lecture
 	Switch light / dark theme	Basculer entre les thèmes clair et sombre
@@ -1475,6 +1476,8 @@
 	Right Edge	Bord droit
 	Language	Langue
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Enregistré {place} : {before} → {after} ({pct} % plus petit){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	Ce fichier est déjà aussi petit que possible ({size}). Aucune copie n'a été enregistrée.
+	Saved {place}: {before} → {after} (not smaller){detail}	Enregistré {place} : {before} → {after} (pas plus petit){detail}
 	Couldn't save the image: {e}	Impossible d'enregistrer l'image : {e}
 	Adding images arrives on the web with file pickers for images	L'ajout d'images arrivera sur le web avec les sélecteurs de fichiers d'images
 	Replacing images on page {p} arrives on the web with image pickers ({i})	Le remplacement d'images à la page {p} arrivera sur le web avec les sélecteurs d'images ({i})
@@ -2141,3 +2144,26 @@ signature pad	Type	Saisir
 	The field {name} no longer exists.	Le champ {name} n'existe plus.
 	A selected field has no widget on any page, so the fields can't be edited together.	Un champ sélectionné n'a de widget sur aucune page : les champs ne peuvent pas être modifiés ensemble.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} à {dpi} ppp, la plus grande taille possible pour les dessiner)
+	Fill colour	Couleur de fond
+	No fill	Sans fond
+	Fill colour: none	Couleur de fond : aucune
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Maj
+key	Delete	Suppr
+key	Esc	Échap
+key	Home	Début
+key	End	Fin
+key	Space	Espace
+	Grid view	Vue en grille
+	List view	Vue en liste
+	Files are combined in the order shown. Drag them to change it.	Les fichiers sont combinés dans l'ordre affiché. Faites-les glisser pour le modifier.
+	Preview unavailable: {e}	Aperçu indisponible : {e}
+	Pages: {k} of {n}	Pages : {k} sur {n}
+	Check the pages	Vérifiez les pages
+	Switch to List view to change the pages it takes.	Passez à la vue en liste pour modifier les pages prises.
+	Expand all	Tout développer
+	Collapse all	Tout réduire
+	Remove page	Retirer la page
+	Remove {n} pages	Retirer {n} pages
