@@ -2,7 +2,7 @@
 <!--
   Linkco PDF Editor MSI (WiX Toolset v5: `dotnet tool install -g wix`). Built by package.ps1:
 
-    wix build pdfcraft.wxs installer-ui.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
+    wix build pdfcraft.wxs installer-ui.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d ModelsDir=... -d IconPath=... -o out.msi
 
   Per-machine install into Program Files\Linkco\Linkco PDF Editor, a Start Menu shortcut, a desktop
   shortcut (on by default, optional), an App Paths entry, and Linkco PDF Editor registered as a PDF
@@ -19,6 +19,10 @@
       Compressed="yes"
       Language="1033">
     <SummaryInformation Description="Linkco PDF Editor — Professional PDF tools for everyday document work" Manufacturer="Al Rawabet Commercial Services &amp; Contracting Company W.L.L." />
+    <!-- HKLM registrations must never point into a per-user installation (#305). Allow removal
+         of an existing installation even if an older MSI let it install per-user. -->
+    <Launch Condition="ALLUSERS = 1 OR (Installed AND REMOVE = &quot;ALL&quot;)"
+        Message="Linkco PDF Editor must be installed for all users. Run setup with administrator privileges and ALLUSERS=1; per-user installation is not supported." />
     <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
          (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
     <MajorUpgrade AllowSameVersionUpgrades="yes"
@@ -41,7 +45,9 @@
 
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="CompanyFolder" Name="Linkco">
-        <Directory Id="INSTALLFOLDER" Name="Linkco PDF Editor" />
+        <Directory Id="INSTALLFOLDER" Name="Linkco PDF Editor">
+          <Directory Id="ModelsFolder" Name="models" />
+        </Directory>
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
@@ -49,6 +55,7 @@
 
     <Feature Id="Main" Title="Linkco PDF Editor" Level="1">
       <ComponentGroupRef Id="PdfcraftFiles" />
+      <ComponentGroupRef Id="PdfcraftModels" />
     </Feature>
   </Package>
 
@@ -152,6 +159,13 @@
         <RegistryValue Root="HKLM" Key="Software\Classes\.pdf\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}" Value="{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}" Value="{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}" Type="string" />
       </Component>
+    </ComponentGroup>
+
+    <!-- OCR models (#103), with their licences and ATTRIBUTION.txt, in models\ beside pdfcraft.exe
+         where the app looks for them: every file `cargo xtask models` fetched (package.ps1), one
+         component each, so new models ship without naming them here. -->
+    <ComponentGroup Id="PdfcraftModels" Directory="ModelsFolder">
+      <Files Include="$(var.ModelsDir)\*" />
     </ComponentGroup>
   </Fragment>
 </Wix>

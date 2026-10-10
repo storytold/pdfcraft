@@ -70,6 +70,8 @@ pub fn run(args: &[String]) -> Result<()> {
             .arg(PDF)
             .args(["--size", "1440x900", "--scale", "2", "--width", "1600"])
             .args(*scene)
+            // Published images show only the embedded, openly licensed fonts (AGENTS.md §1.2).
+            .env("PDFCRAFT_SYSTEM_FONTS", "0")
             .current_dir(&root)
             .status()
             .with_context(|| format!("running shot for {name}"))?;

@@ -40,10 +40,14 @@ impl RecoveryStore {
         Self { dir: dir.into() }
     }
 
-    /// The platform's per-user data folder: `~/Library/Application Support/Linkco PDF Editor/Recovery`
+    /// `Recovery` in the portable data folder in portable mode ([`crate::portable`]), otherwise
+    /// the platform's per-user data folder: `~/Library/Application Support/Linkco PDF Editor/Recovery`
     /// (macOS), `%LOCALAPPDATA%\Linkco PDF Editor\Recovery` (Windows), or
     /// `$XDG_DATA_HOME/linkco-pdf-editor/recovery` / `~/.local/share/linkco-pdf-editor/recovery` (others).
     pub fn default_dir() -> Option<PathBuf> {
+        if let Some(dir) = crate::portable::data_dir() {
+            return Some(dir.join("Recovery"));
+        }
         let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
         if cfg!(target_os = "macos") {
             env("HOME").map(|h| h.join("Library/Application Support/Linkco PDF Editor/Recovery"))

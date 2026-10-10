@@ -42,9 +42,8 @@
 
       <Dialog Id="InstallProgress" Width="370" Height="180" Title="[ProductName] Setup" Modeless="yes">
         <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Setting up [ProductName]" />
-        <Control Id="Status" Type="Text" X="20" Y="60" Width="330" Height="40" Text="Please wait while setup completes.">
-          <Subscribe Event="ActionText" Attribute="Text" />
-        </Control>
+        <!-- No ActionText table is authored: subscribing would blank this message (#305). -->
+        <Control Id="Status" Type="Text" X="20" Y="60" Width="330" Height="40" Text="Please wait while setup completes." />
         <Control Id="Progress" Type="ProgressBar" X="20" Y="110" Width="330" Height="15" ProgressBlocks="yes">
           <Subscribe Event="SetProgress" Attribute="Progress" />
         </Control>

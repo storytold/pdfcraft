@@ -1094,6 +1094,13 @@ pub enum ButtonAction {
         fields: Vec<String>,
         hide: bool,
     },
+    /// A set-layer-visibility action (`SetOCGState`, §12.6.4.13): each change in order, naming
+    /// the layer by its optional content group (object number, generation). With `preserve_rb`,
+    /// a layer turned on turns off the other layers of its radio-button groups.
+    SetLayers {
+        changes: Vec<(LayerOp, (u32, u16))>,
+        preserve_rb: bool,
+    },
     /// `app.alert("…")`.
     Alert(String),
     /// Submit the form to a URL (not sent: PdfCraft never posts form data on its own).
@@ -1102,6 +1109,14 @@ pub enum ButtonAction {
     ImportIcon,
     /// A script PdfCraft can't run yet.
     Script(String),
+}
+
+/// What a set-layer-visibility action does to a layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerOp {
+    On,
+    Off,
+    Toggle,
 }
 
 /// Recognise the common one-line button scripts.

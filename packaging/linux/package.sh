@@ -2,15 +2,18 @@
 # Build and package PdfCraft for Linux (<arch> is x86_64 or aarch64):
 #
 #   $DIST/pdfcraft-<version>-linux-<arch>.AppImage  any distro with glibc >= the build host's
+#   $DIST/pdfcraft-<version>-linux-<arch>.AppImage.zsync  delta updates (needs zsyncmake)
 #   $DIST/pdfcraft-<version>-linux-<arch>.deb       Debian, Ubuntu, Mint, Pop!_OS, ...
 #   $DIST/pdfcraft-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
 #   $DIST/pdfcraft-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
+#   $DIST/pdfcraft-cli-<version>-linux-<arch>.tar.gz  the headless CLI alone (servers, CI, agents)
 #
-# Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar"]
+# Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar cli"]
 #
-# Needs: cargo; nfpm for deb/rpm (https://nfpm.goreleaser.com); appimagetool for the AppImage
+# Needs: cargo, curl and the network (the OCR models: cargo xtask models); nfpm for deb/rpm (https://nfpm.goreleaser.com); appimagetool for the AppImage
 # (downloaded into $CARGO_TARGET_DIR if missing). Build on an old distro (CI: Ubuntu 22.04,
-# glibc 2.35) so the binaries run on newer ones. Optional: desktop-file-validate, appstreamcli.
+# glibc 2.35) so the binaries run on newer ones. Optional: desktop-file-validate, appstreamcli,
+# zsyncmake (the zsync package) for the AppImage's .zsync.
 set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
@@ -18,12 +21,12 @@ HERE="$ROOT/packaging/linux"
 APP_ID=ai.storyteller.pdfcraft
 
 SKIP_BUILD=0
-FORMATS="appimage deb rpm tar"
+FORMATS="appimage deb rpm tar cli"
 while [ $# -gt 0 ]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     --formats) FORMATS="$2"; shift 2 ;;
-    -h | --help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -60,6 +63,8 @@ mkdir -p "$STAGE/usr/share/icons"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/usr/share/icons/"
 mkdir -p "$STAGE/usr/share/doc/pdfcraft"
 copy_docs "$STAGE/usr/share/doc/pdfcraft"
+# OCR models: the app finds them at <bin>/../share/pdfcraft/models, so in every format below.
+stage_models "$STAGE/usr/share/pdfcraft/models"
 
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$STAGE/usr/share/applications/$APP_ID.desktop"
@@ -76,6 +81,19 @@ if has tar; then
   cp -R "$STAGE/usr" "$WORK/tar/$BASENAME"
   tar -C "$WORK/tar" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
   echo "wrote $DIST/$BASENAME.tar.gz"
+fi
+
+# ---- CLI-only .tar.gz ---------------------------------------------------------------------------
+# The stripped pdfcraft-cli (and its opt-in MCP server) with the licences, for machines that never
+# open a window. Like the other formats it needs glibc >= the build host's.
+if has cli; then
+  CLI_NAME="pdfcraft-cli-$VERSION-linux-$ARCH"
+  CLI_DIR="$WORK/cli/$CLI_NAME"
+  mkdir -p "$CLI_DIR"
+  cp "$STAGE/usr/bin/pdfcraft-cli" "$CLI_DIR/"
+  copy_docs "$CLI_DIR"
+  tar -C "$WORK/cli" -czf "$DIST/$CLI_NAME.tar.gz" "$CLI_NAME"
+  echo "wrote $DIST/$CLI_NAME.tar.gz"
 fi
 
 # ---- .deb / .rpm --------------------------------------------------------------------------------
@@ -108,11 +126,29 @@ if has appimage; then
       chmod +x "$TOOL"
     fi
   fi
-  OUT="$DIST/$BASENAME.AppImage"
+  # Absolute, because appimagetool runs in $DIST below (CARGO_TARGET_DIR or APPIMAGETOOL may be
+  # relative, e.g. target/agent-<name>).
+  OUT="$(cd "$DIST" && pwd)/$BASENAME.AppImage"
+  APPDIR="$(cd "$APPDIR" && pwd)"
+  TOOL="$(cd "$(dirname "$TOOL")" && pwd)/$(basename "$TOOL")"
+  # A .zsync left by an earlier run would hide a missing zsyncmake and describe another file.
+  rm -f "$OUT.zsync"
+  # Update information: AppImageUpdate, AppImageLauncher and the like read it from the file and
+  # fetch only the blocks that changed in a newer release, through the .zsync published next to
+  # each AppImage on GitHub Releases. `latest` is the newest published release that is not a
+  # pre-release. A fork's builds point at its own releases through GITHUB_REPOSITORY.
+  REPO="${GITHUB_REPOSITORY:-storytold/pdfcraft}"
+  UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|pdfcraft-*-linux-$ARCH.AppImage.zsync"
   # Extract-and-run: works without FUSE (containers, CI). The output embeds the static runtime,
-  # so users don't need libfuse2 either.
-  ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream "$APPDIR" "$OUT"
+  # so users don't need libfuse2 either. With zsyncmake on the host (CI installs the zsync
+  # package) appimagetool also writes the .zsync, into its working directory, hence the cd.
+  (cd "$DIST" && ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream -u "$UPDATE_INFO" "$APPDIR" "$OUT")
   echo "wrote $OUT"
+  if [ -s "$OUT.zsync" ]; then
+    echo "wrote $OUT.zsync"
+  else
+    warn "zsyncmake not found, so $OUT.zsync was not written; AppImage delta updates need it"
+  fi
 fi
 
 "$STAGE/usr/bin/pdfcraft-cli" --version

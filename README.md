@@ -21,18 +21,18 @@ All document rendering and editing operations execute locally on your workstatio
 
 ## Features
 
-- **Document Viewing & Navigation** — Continuous, single-page, two-up, and cover-page layouts; smooth zoom and pan; page thumbnails; hierarchical bookmarks; Optional Content Group (OCG) layer controls; file attachments; article threads; and side-by-side synchronous document comparison.
-- **Page Organization** — Interactive thumbnail grid for rotating, reordering, deleting, extracting, duplicating, inserting, replacing, cropping, and splitting pages (by page count, file size, or top-level bookmarks), plus multi-file PDF combining.
-- **Direct Content Editing** — Reflow-aware paragraph and line text editing, new text blocks, image insertion and replacement, headers and footers, watermarks, backgrounds, Bates numbering, link editing, and vector object inspection.
+- **Document Viewing & Navigation** — Continuous, single-page, two-up, and cover-page layouts; zero-copy memory-mapped PDF stream decoding; 1:1 texel high-DPI rendering with seamless tile retention during zoom; automatic OpenGL (`glow`) fallback on GPU initialization failure; Windows primary-display adapter selection; page thumbnails; searchable hierarchical bookmarks; Optional Content Group (OCG) layer controls; file attachments; article threads; session tab reopening (`Reopen last session`); `File ▸ Open Recent`; pinned Home folders; and side-by-side synchronous document comparison.
+- **Page Organization** — Interactive zoomable thumbnail grid (`crates/organize`) and Pages side panel for rotating, drag-reordering, deleting, extracting, duplicating, inserting (before any page or at the end), replacing, cropping, and splitting pages (by page count, file size, or top-level bookmarks), plus a dedicated **Combine Files** tab (`page.combine`).
+- **Direct Content Editing** — Multi-stream reflow-aware paragraph and line text editing (`crates/edit`), Arabic shaping (`harfrust`) and bidirectional (`unicode-bidi`) Type 3 text rendering, Cyrillic/Greek/WinAnsi and Japanese CID/katakana editing, grouped Form XObject figure selection and editing, new text blocks, image insertion and replacement, headers and footers, watermarks, backgrounds, Bates numbering, link editing, and vector object inspection.
 - **Annotations & Markup** — Sticky notes, highlights, underlines, strikethroughs, squiggly lines, free-text callouts, ink drawings, stamps, polygons, polylines, rectangles, ellipses, lines, arrows, carets, redaction marks, and XFDF comment import/export.
-- **Interactive Forms & E-Sign** — Full AcroForm field filling and authoring (text, checkbox, radio button, combo box, list box, push button, signature field, barcode), sandboxed `AF*` calculation/validation scripts, and **Fill & Sign** tools (text, checkmarks, crosses, dots, lines, dates, drawn/typed/image signatures, and initials).
-- **Digital Signatures & Certificates** — PKCS#7 / CMS and PAdES (`B-B`, `B-T`, `B-LT`, `B-LTA`) digital signature verification and signing, X.509 chain validation, RFC 3161 timestamping, and DocMDP modification detection.
+- **Interactive Forms, XFA & E-Sign** — Full AcroForm field filling and authoring (text, checkbox, radio button, combo box, list box, push button, signature field, barcode), bulk multi-field property editing, rotated `/MK /R` widget rendering, `/Opt` export values, sandboxed `AF*` JavaScript and XFA FormCalc interpreter (`crates/xfa`), and **Fill & Sign** tools (text, checkmarks, crosses, dots, lines, localized dates, drawn/typed/image signatures with automatic white-background removal and live resize, initials, and optional flatten-on-save).
+- **Digital Signatures & Certificates** — PKCS#7 / CMS and PAdES (`B-B`, `B-T`, `B-LT`, `B-LTA`) digital signature verification and signing (`crates/sign`), native Windows Certificate Store (`CNG` via `rustls-cng`) and macOS Keychain integration, BER `.p12`/PKCS#7 support, RSA/PSS/ECDSA/Ed25519 algorithms, strict X.509 chain validation, RFC 3161 `/DocTimeStamp` verification and timestamping, and DocMDP modification detection.
 - **Security & True Redaction** — Password encryption (AES-256, AES-128, RC4) and permission enforcement, content-stream glyph and image redaction with verifiable byte removal, metadata scrubbing, and hidden-data sanitization.
-- **Export & Conversion** — Export PDFs to Microsoft Word (`.docx`), PNG images, extracted embedded images, HTML web pages, Rich Text Format (`.rtf`), and plain text (`.txt`), or create PDFs from images, plain text, HTML, or blank page templates.
-- **High-Resolution Printing & Windows Print Spooler Integration** — Full imposition engine (Fit, Actual Size, Shrink, Custom Scale, Multiple pages per sheet with Cut & Stack, Saddle-Stitch Booklet, and Tiled Poster with cut marks), live high-DPI sheet preview, 150 / 300 / 600 DPI print rendering, and native Windows Print Spooler (`Win32_Printer` / `.NET` `System.Drawing.Printing`) and CUPS printer detection with default-printer and offline-status awareness.
+- **Export & Conversion** — Export PDFs to Microsoft Word (`.docx` with Form XObject content, text color preservation, and 63-column table caps), PNG images, extracted embedded images, HTML web pages, Rich Text Format (`.rtf`), and plain text (`.txt`), or create PDFs from multiple files, images, plain text, HTML, or blank page templates.
+- **High-Resolution Printing & Windows Print Spooler Integration** — Full imposition engine (Fit, Actual Size, Shrink, Custom Scale, Multiple pages per sheet with Cut & Stack, Saddle-Stitch Booklet, and Tiled Poster with cut marks), live high-DPI sheet preview, 150 / 300 / 600 DPI print rendering, native printer driver `Properties…` (`rundll32 printui.dll` on Windows / `lpoptions` PPD options on Unix), and 3-tier Windows Print Spooler (`Win32_Printer` / `.NET` `System.Drawing.Printing` / Registry) and CUPS (`lpstat -p`/`-e`) printer detection with default-printer and offline-status awareness.
 - **Windows File Explorer PDF Preview Handler** — Out-of-process `IPreviewHandler` shell extension (`LinkcoPdfPreviewHandler.dll`) hosted by `prevhost.exe` that renders PDF pages directly inside the Windows 10/11 File Explorer Preview Pane with page navigation and zoom without launching the full editor.
-- **Scan & OCR** — Optical Character Recognition (`crates/ocr`) for single or multiple files with deskew, image preprocessing, and invisible searchable text layer (`Tr 3`) generation (requires OCR models via `cargo xtask models` or `PDFCRAFT_MODELS`).
-- **Measurement, Standards, Accessibility & Guided Actions** — Distance, perimeter, and area measurement tools (`crates/measure`) with vector snapping, calibration, and CSV export; PDF/A-2b and PDF/A-3b verification and conversion (`crates/preflight`); 32-rule accessibility checker, alternate-text editor, and HTML accessibility reports (`crates/a11y`); page box (`CropBox`, `BleedBox`, `TrimBox`, `ArtBox`) editing; and multi-file batch automation via the Action Wizard (`crates/engine/src/actions.rs`).
+- **Scan & OCR** — Optical Character Recognition (`crates/ocr`) for single or multiple files with deskew, image preprocessing, and invisible searchable text layer (`Tr 3`) generation (OCR models bundled by `cargo xtask models` during release packaging or via `PDFCRAFT_MODELS`).
+- **Measurement, Standards, Accessibility & Guided Actions** — Distance, perimeter, and area measurement tools (`crates/measure`) with vector snapping, calibration, and CSV export; PDF/A-2b and PDF/A-3b verification and conversion (`crates/preflight`); 32-rule accessibility checker, alternate-text editor, and HTML accessibility reports (`crates/a11y`); page box (`CropBox`, `BleedBox`, `TrimBox`, `ArtBox`) editing; multi-file batch automation via the Action Wizard (`crates/engine/src/actions.rs`); and 15 interface languages (English, Japanese, Brazilian Portuguese, Spanish, Telugu, Czech, Simplified Chinese, Traditional Chinese, French, German, Italian, Russian, Ukrainian, Bulgarian, and Hungarian).
 
 ---
 
@@ -44,7 +44,7 @@ The Home dashboard provides one-click access to the core tools implemented in th
 | :--- | :--- | :--- |
 | **Organize pages** | Page grid · Rotate · Delete | Opens the interactive page-organization grid (`organize`) |
 | **Edit a PDF** | Edit text & images · Add text | Activates direct PDF content editing (`edit`) |
-| **Combine files** | Merge PDFs · Reorder · Insert | Combines multiple PDF documents into a single file (`page.combine`) |
+| **Combine files** | Merge PDFs · Reorder · Insert | Opens the Combine Files workspace (`page.combine`) |
 | **Compress a PDF** | Reduce file size · Optimize PDF | Deduplicates streams, subsets fonts, and optimizes file size (`file.reduce_size`) |
 | **Export a PDF** | Word · Image · HTML · Text | Exports the active document to `.docx`, `.png`, `.html`, `.rtf`, or `.txt` (`export`) |
 | **Scan & OCR** | Recognize text · Searchable PDF | Runs optical character recognition to generate a searchable text layer (`ocr.recognize`) |
@@ -70,11 +70,11 @@ The Home dashboard provides one-click access to the core tools implemented in th
 
 | Platform | Minimum Requirements |
 | :--- | :--- |
-| **Operating System** | Windows 10 / 11 (x64 or ARM64), macOS 12+ (Apple Silicon or Intel), or Linux (x86_64 / aarch64 with X11 or Wayland) |
+| **Operating System** | Windows 10 / 11 (x64, x86, or ARM64), macOS 12+ (Apple Silicon or Intel), or Linux (x86_64 / aarch64 with X11 or Wayland) |
 | **Processor** | 64-bit dual-core CPU (quad-core recommended for concurrent rendering and OCR) |
 | **Memory** | 4 GB RAM minimum (8 GB RAM recommended for large multi-hundred-page documents) |
-| **Graphics** | OpenGL 3.3+, Direct3D 11/12, Metal, or Vulkan compatible GPU / software rasterizer |
-| **Disk Space** | 100 MB for installed application binaries |
+| **Graphics** | Direct3D 11/12, Metal, Vulkan, or OpenGL 3.3+ (automatic `wgpu` → `glow` OpenGL fallback included) |
+| **Disk Space** | 120 MB for installed application binaries and bundled OCR models |
 | **Build Toolchain** | Rust 1.85+ (`edition = "2024"`, validated on Rust 1.92) |
 
 ---
@@ -84,8 +84,9 @@ The Home dashboard provides one-click access to the core tools implemented in th
 ### From a Packaged Installer
 
 1. Build or obtain the native installer for your platform from `dist/release/`:
-   - **Windows (NSIS Setup EXE):** `LinkcoPDFEditorSetup.exe`
+   - **Windows (NSIS / Self-Extracting Setup EXE):** `LinkcoPDFEditorSetup.exe`
    - **Windows (MSI Package):** `LinkcoPDFEditorSetup-<version>-windows-<arch>.msi`
+   - **Windows (Portable ZIP):** `LinkcoPDFEditor-<version>-windows-<arch>-portable.zip` (extract anywhere; `portable.txt` or `LinkcoPDFEditor.portable` beside the executable stores settings, logs, recovery files, and digital IDs in `PdfCraftData\` next to the executable instead of `%APPDATA%`)
 2. Run the installer and follow the on-screen prompts.
 3. Launch **Linkco PDF Editor** from the Windows Start Menu, Desktop shortcut, or by opening any `.pdf` file.
 
@@ -115,6 +116,7 @@ The Windows packaging pipeline lives in `packaging/windows/` and embeds full Lin
   - Start Menu: `Linkco PDF Editor`
   - Desktop: `Linkco PDF Editor`
 - **Windows File Explorer Preview Pane (`IPreviewHandler`):** Installs and registers `LinkcoPdfPreviewHandler.dll` (`CLSID {D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}`) for `.pdf` files, backing up any previously registered preview handler and restoring it cleanly on uninstall.
+- **Image Context Menu Integration:** Adds `Create PDF with Linkco PDF Editor…` to `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.gif`, `.bmp`, `.jp2`, `.j2k`, and `.jpx` context menus without altering default image file associations.
 - **Installed Apps Registration:** Registers **Linkco PDF Editor** in Windows *Installed Apps / Add or Remove Programs* with version, icon, publisher, and clean uninstaller support, and registers `.pdf` under *Open With* without overriding the user's default PDF handler.
 
 ### Building the Windows Installer
@@ -131,10 +133,10 @@ Or from PowerShell using WiX Toolset v5 (`wix`) and optionally NSIS (`makensis`)
 pwsh -File packaging/windows/package.ps1
 ```
 
-This builds the Windows release binaries and produces in `dist/release/`:
-- `dist/release/LinkcoPDFEditorSetup.exe` (standalone Windows GUI installer — built via NSIS `makensis` when installed, or automatically via Windows' built-in `.NET` `csc.exe` compiler)
+This builds the Windows release binaries, fetches the OCR models (`cargo xtask models`), and produces in `dist/release/`:
+- `dist/release/LinkcoPDFEditorSetup.exe` (standalone Windows GUI installer — built via NSIS `makensis` when installed, or automatically via Windows' built-in `.NET` `csc.exe` compiler, supporting both Administrator per-machine and standard per-user installations)
 - `dist/release/LinkcoPDFEditorSetup-<version>-windows-<arch>.msi` (when WiX v5 is installed; validated by `packaging/windows/test-msi.ps1`)
-- `dist/release/LinkcoPDFEditor-<version>-windows-<arch>-portable.zip` (portable ZIP containing `LinkcoPDFEditor.exe`, `pdfcraft.exe`, and `pdfcraft-cli.exe`)
+- `dist/release/LinkcoPDFEditor-<version>-windows-<arch>-portable.zip` (portable ZIP containing `pdfcraft.exe`, `pdfcraft-cli.exe`, `models\`, and `portable.txt`)
 
 ---
 
@@ -150,11 +152,14 @@ cargo run --release -p pdfcraft
 
 # Open specific PDF files at a target page
 cargo run --release -p pdfcraft -- --page 1 document.pdf
+
+# Force the OpenGL (glow) renderer instead of wgpu
+cargo run --release -p pdfcraft -- --renderer glow
 ```
 
 ### Command-Line Interface (`pdfcraft-cli`)
 
-The companion CLI binary supports headless inspection, text extraction, page rendering, encryption, optimization, and batch processing:
+The companion CLI binary supports headless inspection, text extraction, page rendering, encryption, optimization, batch processing, and MCP server execution:
 
 ```bash
 # Inspect document metadata, page count, and PDF version
@@ -168,6 +173,9 @@ cargo run --release -p pdfcraft-cli -- preview document.pdf --page 1 --dpi 150 -
 
 # Extract plain text from a PDF
 cargo run --release -p pdfcraft-cli -- text document.pdf
+
+# Start the opt-in Model Context Protocol (MCP) server over stdio
+cargo run --release -p pdfcraft-cli -- mcp --compact
 ```
 
 ---
@@ -184,6 +192,9 @@ cargo run --release -p pdfcraft-cli -- text document.pdf
 ```bash
 # Verify asset attribution and regenerate ATTRIBUTION.md
 cargo xtask assets
+
+# Fetch OCR models into assets/models/
+cargo xtask models
 
 # Run repository engineering gates (no unsafe, no panics, licence & metadata checks)
 cargo xtask gates
@@ -222,7 +233,7 @@ Run the workspace unit and integration test suites:
 # Run all workspace library and integration tests
 cargo test --workspace
 
-# Run UI integration tests (home dashboard, links, pickers, keyboard shortcuts)
+# Run UI integration tests (home dashboard, links, pickers, signing, keyboard shortcuts)
 cargo test -p pdfcraft-ui-egui
 
 # Run engine unit tests (catalog, commands, links, redaction, editing)
@@ -243,24 +254,24 @@ linkco-pdf/
 │   ├── pdfcraft-cli/      # Headless CLI, single-page preview renderer, batch runner, and MCP host
 │   └── pdfcraft-web/      # WebAssembly browser application target
 ├── crates/
-│   ├── cos/               # PDF 1.7 / 2.0 object model, parser, cross-reference table, and incremental writer
+│   ├── cos/               # PDF 1.7 / 2.0 object model, zero-copy file-backed streams, and incremental writer
 │   ├── filters/           # Stream compression and decompression filters (Flate, LZW, RunLength, ASCII85/Hex)
 │   ├── crypt/             # PDF standard security handler (RC4, AES-128, AES-256) and permission flags
 │   ├── geom/              # 2D geometry primitives (points, rectangles, affine matrices)
 │   ├── model/             # High-level document tree (pages, outlines/bookmarks, page labels, layers, attachments)
-│   ├── fonts/             # Standard 14 PDF font metrics and optional embedded Japanese fonts
+│   ├── fonts/             # Standard 14 PDF font metrics, Arabic/BiDi shaping, and embedded CJK/Indic/Cyrillic fonts
 │   ├── content/           # PDF content stream tokenizer, text extraction, and full-text search
 │   ├── render/            # PDF page renderer (backed by hayro) and document inspector
 │   ├── organize/          # Page rotation, deletion, insertion, extraction, splitting, combining, and page boxes
 │   ├── annot/             # PDF annotations, appearance stream generation, and link editing
 │   ├── xfdf/              # ISO 19444-1 XFDF and FDF comment/form data import and export
-│   ├── forms/             # AcroForm field reading, filling, authoring, and appearance streams
+│   ├── forms/             # AcroForm field reading, filling, authoring, and rotated appearance streams
 │   ├── js/                # Sandboxed Acrobat form JavaScript runtime (backed by boa_engine)
 │   ├── xfa/               # XFA template layout, FormCalc/JavaScript execution, and datasets sync
-│   ├── edit/              # Direct page text reflow/editing, images, headers/footers, watermarks, Bates numbering
-│   ├── create/            # PDF creation from images, plain text, HTML, and blank templates; image extraction
+│   ├── edit/              # Multi-stream text reflow/editing, Form XObject figures, images, headers/footers, watermarks
+│   ├── create/            # PDF creation from multiple files, images, plain text, HTML, and blank templates
 │   ├── export/            # PDF export to Word (.docx), HTML, Rich Text (.rtf), PNG images, and plain text
-│   ├── sign/              # PKCS#7 / CMS and PAdES digital signature validation, signing, and X.509 certificates
+│   ├── sign/              # PKCS#7 / CMS and PAdES digital signatures, Windows CNG store, and X.509 certificates
 │   ├── redact/            # True content-stream text/image redaction and hidden-information sanitization
 │   ├── optimize/          # File size reduction, image resampling, stream compression, and space audit
 │   ├── ocr/               # Optical character recognition pipeline and searchable PDF text layer generation
@@ -271,7 +282,7 @@ linkco-pdf/
 │   ├── a11y/              # 32-rule PDF accessibility checker, fixes, alternate text, and HTML reporting
 │   ├── engine/            # Unified document session facade, command registry, tool catalog, and Action Wizard
 │   ├── automation/        # Headless automation tool table and opt-in Model Context Protocol (MCP) server
-│   └── ui-egui/           # Immediate-mode desktop/web UI shell, Home dashboard, dialogs, and i18n catalogs
+│   └── ui-egui/           # Immediate-mode desktop/web UI shell, Home dashboard, dialogs, and 14 i18n catalogs
 ├── assets/
 │   ├── app-icon/          # Linkco PDF Editor application icons (.svg, .ico, .icns, .png)
 │   ├── fonts/             # Bundled UI and PDF fonts
@@ -294,7 +305,7 @@ linkco-pdf/
 
 - **Local Document Processing & Network Policy:** Linkco PDF Editor processes all PDF files locally on your workstation and includes no analytics, telemetry, crash-reporting beacons, or advertisements. The application performs no background network requests; the only network activity is the optional, user-initiated `Help ▸ Check for updates…` action (`apps/pdfcraft/src/updates.rs`), which queries the GitHub Releases API (`https://api.github.com/repos/b-lincko/linkco-pdf/releases/latest`) when clicked and never downloads or installs updates automatically.
 - **Memory-Safe Architecture:** `unsafe_code = "forbid"` is enforced across all workspace crates (`crates/`, `apps/`, `xtask/`), preventing buffer overflows and memory corruption in workspace code when parsing untrusted PDF files.
-- **External Link Protection:** Clicking a link inside a PDF document never opens a browser or executes a local file path silently; only `https://`, `http://`, and `mailto:` schemes are permitted, and every external URL requires explicit user confirmation in a modal dialog showing the full destination address.
+- **External Link Protection:** Clicking a link inside a PDF document never opens a browser or executes a local file path silently; only `https://`, `http://`, and `mailto:` schemes are permitted, and every external URL requires explicit user confirmation in a modal dialog showing the full destination address (with homograph/mixed-script warnings).
 - **Sandboxed Scripting:** Document JavaScript (`crates/js`) and XFA scripts (`crates/xfa`) execute inside an isolated `boa_engine` sandbox with strict loop-iteration, recursion, and execution-time limits and zero filesystem or network access.
 - **Corporate Certifications Note:** References to ISO 9001, ISO 14001, and ISO 45001 refer to the corporate quality, environmental, and occupational health & safety management certifications of **Al Rawabet Commercial Services and Contracting Company W.L.L. (Linkco)**, not third-party cryptographic or software security certifications of the binary.
 

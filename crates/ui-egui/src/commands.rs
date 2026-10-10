@@ -17,6 +17,10 @@ impl PdfCraftApp {
     /// Whether a registered command can run now. The engine judges the document (security,
     /// contents, undo history); view state it can't see is checked here.
     pub(crate) fn command_enabled(&self, spec: &CommandSpec) -> bool {
+        // Undo and Redo act on the Combine files list while its tab shows.
+        if self.combine_showing() && matches!(spec.needs, commands::Needs::Undo | commands::Needs::Redo) {
+            return self.combine_can_undo(spec.needs == commands::Needs::Undo);
+        }
         commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
     }
@@ -76,7 +80,15 @@ impl PdfCraftApp {
         let targets = active.map(|i| self.views[i].target_pages()).unwrap_or_default();
         match id {
             "file.open" => self.open_dialog(),
-            "page.combine" => self.combine_dialog(),
+            "file.open_recent" => match self.recent.first().map(|r| r.path.clone()) {
+                // The palette runs commands without a submenu: open the most recent file.
+                Some(p) => self.open_recent(&p),
+                None => self.notify_tr("No recent files"),
+            },
+            "file.clear_recent" if self.recent.is_empty() => self.notify_tr("No recent files"),
+            "file.clear_recent" => self.recent.clear(),
+            "file.pin_folder" => self.pin_folder_dialog(),
+            "page.combine" => self.open_combine_tab(),
             "file.save" => {
                 self.save_active(SaveTarget::InPlace);
             }
@@ -123,6 +135,17 @@ impl PdfCraftApp {
                     self.views[i].open_find();
                 }
             }
+            "view.focus_page_input" => {
+                if let (Some(ctx), Some(view)) = (self.ctx.clone(), active.and_then(|i| self.views.get(i))) {
+                    // The page box in the toolbar (chrome.rs); select its number so typing replaces it.
+                    let id = egui::Id::new("page-input");
+                    ctx.memory_mut(|m| m.request_focus(id));
+                    let mut state = egui::TextEdit::load_state(&ctx, id).unwrap_or_default();
+                    let len = view.page_input.chars().count();
+                    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(len))));
+                    state.store(&ctx, id);
+                }
+            }
             "view.palette" => self.palette_open = !self.palette_open,
             layout if crate::canvas::PageLayout::from_command(layout).is_some() => {
                 if let (Some(i), Some(layout)) = (active, crate::canvas::PageLayout::from_command(layout)) {
@@ -159,13 +182,13 @@ impl PdfCraftApp {
             "view.theme.system" => self.set_theme_preference(ThemePreference::System),
             "view.theme.light" => self.set_theme_preference(ThemePreference::Light),
             "view.theme.dark" => self.set_theme_preference(ThemePreference::Dark),
-            "comment.list" => self.right = Some(RightPanel::Comments),
+            "comment.list" => self.choose_right_panel(Some(RightPanel::Comments)),
             tool if crate::comments::CommentTool::from_command(tool).is_some() => {
                 let Some(tool) = crate::comments::CommentTool::from_command(tool) else { return false };
                 self.comment_prefs.group_tool[tool.group()] = tool;
                 self.quick_tool = crate::QuickTool::Comment(tool);
-                // Acrobat opens the Comments panel with the commenting tools.
-                if self.right.is_none() {
+                // Acrobat opens the Comments panel with the commenting tools, unless the user closed it.
+                if self.right.is_none() && !self.comments_panel_closed {
                     self.right = Some(RightPanel::Comments);
                 }
                 // A text selection made before picking a markup tool is marked right away.
@@ -187,10 +210,10 @@ impl PdfCraftApp {
                 self.apply_edit(Edit::Flatten { comments: true, fields: false });
             }
             "form.flatten" => {
-                if let Some(i) = active {
-                    self.views[i].forms.focus = None;
+                // Flatten what's typed in a field too (#166); a refused value flattens nothing.
+                if self.commit_form_typing() {
+                    self.apply_edit(Edit::Flatten { comments: false, fields: true });
                 }
-                self.apply_edit(Edit::Flatten { comments: false, fields: true });
             }
             "form.clear" => {
                 if let Some(i) = active {
@@ -443,7 +466,10 @@ impl PdfCraftApp {
                 if let Some(i) = active {
                     self.views[i].forms.focus = None;
                 }
-                self.notify_fmt("Click on the page to add a {tool}, or drag to set its size", &[("tool", &tl!(tool.label()).to_lowercase())]);
+                self.notify_fmt(
+                    "Click on the page to add a {tool}, or drag to set its size",
+                    &[("tool", &crate::i18n::in_sentence(tl!(tool.label())))],
+                );
             }
             "sign.fill.signature.remove" => self.signature = None,
             "sign.fill.initials.remove" => self.initials = None,
@@ -467,6 +493,7 @@ impl PdfCraftApp {
             }
             "create.blank" => self.create_blank(),
             "create.file" => self.open_dialog(),
+            "create.multiple" => self.create_multiple_dialog(),
             "create.images" => self.create_from_images_dialog(),
             "create.clipboard" => self.create_from_clipboard(),
             "optimize.reduce" => self.reduce_file_size(),
@@ -503,6 +530,11 @@ impl PdfCraftApp {
     pub(crate) fn registry_shortcuts(&mut self, ctx: &egui::Context) {
         use egui::{Key, KeyboardShortcut, Modifiers};
         let typing = ctx.egui_wants_keyboard_input();
+        // A form field's editor is open on the page: its text isn't in the document until
+        // committed. (Not egui's keyboard focus: an Escape in this frame has already cleared that,
+        // while the field has yet to see the Escape and discard its draft.)
+        let active = self.active_ids();
+        let form_typing = active.and_then(|(i, _)| self.views.get(i)).is_some_and(|v| v.forms.focus.is_some());
         let mut specs: Vec<&CommandSpec> = COMMANDS.iter().filter(|c| c.shortcut.is_some()).collect();
         specs.sort_by_key(|c| std::cmp::Reverse(c.shortcut.map(|s| s.modifier_count()).unwrap_or(0)));
         for spec in specs {
@@ -522,7 +554,15 @@ impl PdfCraftApp {
                 m |= Modifiers::CTRL;
             }
             if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, key))) {
-                self.execute(spec.id);
+                if form_typing {
+                    // A form field has the keyboard: let it take this frame's typing (and
+                    // Escape) first, so ⌘S saves what's on screen (#166). Runs next frame, for
+                    // this document only.
+                    self.deferred_commands.push((spec.id, active.map(|(_, id)| id)));
+                    ctx.request_repaint();
+                } else {
+                    self.execute(spec.id);
+                }
             }
         }
     }
@@ -534,6 +574,39 @@ pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str
     for spec in commands::menu(menu) {
         let label = commands::current_label(spec, &app.session, app.active_ids().map(|(_, id)| id));
         let label = crate::i18n::menu_label(spec.id, &label);
+        // Open Recent is a submenu of the live recent list, not one action: disabled while the
+        // list is empty, otherwise each entry opens its file (or focuses the tab showing it), and
+        // Clear Recent Files at the foot empties the list (#430).
+        if spec.id == "file.open_recent" {
+            if app.recent.is_empty() {
+                ui.add_enabled(false, egui::Button::new(label));
+                continue;
+            }
+            let mut open: Option<String> = None;
+            let mut clear = false;
+            ui.menu_button(label, |ui| {
+                for r in &app.recent {
+                    if ui.button(&r.name).on_hover_text(&r.path).clicked() {
+                        open = Some(r.path.clone());
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui.button(tl!("Clear Recent Files")).clicked() {
+                    clear = true;
+                    ui.close();
+                }
+            });
+            if let Some(p) = open {
+                app.open_recent(&p);
+                ui.close();
+            }
+            if clear {
+                app.execute("file.clear_recent");
+                ui.close();
+            }
+            continue;
+        }
         let shortcut = spec.shortcut.map(|s| s.label(mac)).unwrap_or_default();
         let enabled = app.command_enabled(spec);
         let resp = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut));

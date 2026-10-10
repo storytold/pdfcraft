@@ -10,6 +10,8 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use base64::Engine;
+
 use crate::XfaError;
 use crate::data::{DataNode, is_on, iso_to_pattern, som_to_path};
 use crate::model::*;
@@ -26,6 +28,8 @@ const MAX_DEPTH: usize = 64;
 const MAX_MEASURES: usize = 2_000_000;
 /// Most initial instances of one repeating subform.
 const MAX_INSTANCES: usize = 50;
+/// Largest picture taken from the data (decoded bytes), as for template pictures.
+const MAX_DATA_IMAGE: usize = 32 << 20;
 /// Placeholder for the page count in text laid out before the count is known.
 const PAGE_COUNT_MARK: char = '\u{E000}';
 
@@ -41,6 +45,17 @@ pub enum Item {
 #[derive(Clone, Debug, PartialEq)]
 pub enum WidgetKind {
     Text,
+    /// A text field whose characters are shown as asterisks.
+    Password,
+    /// A drop-down (`list_box` false) or list box: `options` are (saved value, shown text).
+    Choice {
+        options: Vec<(String, String)>,
+        list_box: bool,
+        multi: bool,
+        editable: bool,
+    },
+    /// A signature field, to be signed in the app.
+    Signature,
     /// A date field with its Acrobat format pattern (`yyyy-mm-dd`).
     Date(String),
     CheckBox {
@@ -98,6 +113,7 @@ pub struct Widget {
     pub max_chars: Option<usize>,
     pub read_only: bool,
     pub border: WidgetBorder,
+    /// The field's value: saved (bound) values for choice lists, newline-separated when several.
     pub value: Option<String>,
     /// The template's default value (what a reset restores); data values are not defaults.
     pub default: Option<String>,
@@ -727,7 +743,7 @@ impl Layouter<'_> {
         match v {
             Value::Text(t) => text::measure_height(&text::plain(t), w, &ctx.para, &Face::of(&ctx.font), &|id| self.embed(id)),
             Value::Rich(r) => text::measure_height(r, w, &ctx.para, &Face::of(&ctx.font), &|id| self.embed(id)),
-            Value::Image { data, .. } => crate::pdf::jpeg_size(data).map_or(w, |(iw, ih)| if iw > 0 { w * ih as f64 / iw as f64 } else { w }),
+            Value::Image { data, .. } => crate::image::size(data).map_or(w, |(iw, ih)| if iw > 0 { w * ih as f64 / iw as f64 } else { w }),
             Value::Line { .. } | Value::Rectangle(_) | Value::Empty => 0.0,
         }
     }
@@ -1021,16 +1037,7 @@ impl Layouter<'_> {
         let inner = rect.inset(&d.common.margin);
         match &d.value {
             Value::Text(_) | Value::Rich(_) => self.draw_value_text(&d.value, inner, &ctx.font, &ctx.para),
-            Value::Image { content_type, data } => {
-                let fitted = match crate::pdf::jpeg_size(data) {
-                    Some((iw, ih)) if iw > 0 && ih > 0 && inner.w > 0.0 && inner.h > 0.0 => {
-                        let k = (inner.w / iw as f64).min(inner.h / ih as f64);
-                        Rect::new(inner.x, inner.y, iw as f64 * k, ih as f64 * k)
-                    }
-                    _ => inner,
-                };
-                self.push(Item::Image { rect: fitted, data: Arc::new(data.clone()), content_type: content_type.clone() })
-            }
+            Value::Image { content_type, data } => self.draw_image(data, content_type, inner),
             Value::Line { slope_up, edge } => {
                 if !edge.visible() {
                     return Ok(());
@@ -1095,6 +1102,18 @@ impl Layouter<'_> {
         Ok(())
     }
 
+    /// A picture scaled to fit `inner`, keeping its shape, from its top left.
+    fn draw_image(&mut self, data: &[u8], content_type: &str, inner: Rect) -> Result<(), XfaError> {
+        let fitted = match crate::image::size(data) {
+            Some((iw, ih)) if iw > 0 && ih > 0 && inner.w > 0.0 && inner.h > 0.0 => {
+                let k = (inner.w / iw as f64).min(inner.h / ih as f64);
+                Rect::new(inner.x, inner.y, iw as f64 * k, ih as f64 * k)
+            }
+            _ => inner,
+        };
+        self.push(Item::Image { rect: fitted, data: Arc::new(data.to_vec()), content_type: content_type.to_string() })
+    }
+
     fn unique_name(&mut self, base: &str) -> String {
         let base = clean_name(base);
         let n = self.names.entry(base.clone()).or_insert(0);
@@ -1146,9 +1165,63 @@ impl Layouter<'_> {
             let para = ctx.para.apply(&cap.para);
             self.draw_value_text(&cap.value, cr, &font, &para)?;
         }
+        let som_path = || {
+            if fctx.som.is_empty() {
+                format!("{}[{sib}]", f.common.name.as_deref().unwrap_or("field"))
+            } else {
+                format!("{}.{}[{sib}]", fctx.som, f.common.name.as_deref().unwrap_or("field"))
+            }
+        };
         match f.ui {
-            Ui::Signature | Ui::ImageEdit | Ui::Barcode | Ui::Unknown => {
-                self.warn_once(format!("{:?} fields are not supported yet and are left blank", f.ui));
+            Ui::Unknown => {
+                self.warn_once("a field of an unknown kind is left blank");
+                return Ok(());
+            }
+            Ui::ImageEdit => {
+                // The picture the data holds (base64, as Designer saves it) or the template's.
+                let field_name = f.common.name.clone().unwrap_or_else(|| "an image field".into());
+                let text: Vec<u8> = self
+                    .data
+                    .and_then(|d| d.text_at(&som_to_path(&som_path())))
+                    .map(|t| t.bytes().filter(|b| !b.is_ascii_whitespace()).collect())
+                    .unwrap_or_default();
+                let from_data = if text.is_empty() {
+                    None
+                } else if text.len() > MAX_DATA_IMAGE / 3 * 4 + 4 {
+                    self.warn_once(format!("{field_name}: the picture in the data is larger than 32 MB and is left out"));
+                    None
+                } else {
+                    match base64::engine::general_purpose::STANDARD.decode(&text) {
+                        Ok(d) if crate::image::kind(&d).is_some() => Some(d),
+                        Ok(_) => {
+                            self.warn_once(format!("{field_name}: the picture in the data is not a JPEG, PNG or GIF and is left out"));
+                            None
+                        }
+                        Err(_) => {
+                            self.warn_once(format!("{field_name}: the data holds no readable picture (not base64) and is left out"));
+                            None
+                        }
+                    }
+                };
+                let box_ = ui.inset(&f.ui_margin);
+                match (&from_data, &f.value) {
+                    (Some(d), _) => self.draw_image(d, "", box_)?,
+                    (None, Value::Image { content_type, data }) => self.draw_image(data, content_type, box_)?,
+                    _ => {}
+                }
+                self.warn_once("image fields show their picture; a new picture can't be chosen yet");
+                return Ok(());
+            }
+            Ui::Barcode => {
+                // The value as text, where the bars would be.
+                self.warn_once("barcode fields show their value as text, not as bars");
+                let value =
+                    self.data.and_then(|d| d.text_at(&som_to_path(&som_path()))).map(str::to_string).or_else(|| f.value.plain()).unwrap_or_default();
+                if !value.trim().is_empty() {
+                    let mut para = fctx.para.clone();
+                    para.h_align = HAlign::Center;
+                    self.draw_value_text(&Value::Text(value), ui.inset(&f.ui_margin), &fctx.font, &para)?;
+                }
                 return Ok(());
             }
             _ => {}
@@ -1167,16 +1240,13 @@ impl Layouter<'_> {
             _ => fctx.para.h_align,
         };
         let name = self.unique_name(f.common.name.as_deref().unwrap_or("field"));
-        let som = if fctx.som.is_empty() {
-            format!("{}[{sib}]", f.common.name.as_deref().unwrap_or("field"))
-        } else {
-            format!("{}.{}[{sib}]", fctx.som, f.common.name.as_deref().unwrap_or("field"))
-        };
+        let som = som_path();
         let read_only = matches!(f.access, Access::ReadOnly | Access::Protected);
         // The data's value wins over the template's default.
         let data_value: Option<String> =
-            self.data.and_then(|d| d.text_at(&som_to_path(&som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
-        let template_default = f.value.plain().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+            self.data.and_then(|d| d.value_at(&som_to_path(&som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        // A choice list's default is a saved value too.
+        let template_default = f.value.plain().map(|v| f.saved_value(v.trim())).filter(|v| !v.is_empty());
         let plain_value = data_value.clone().or_else(|| template_default.clone());
         let (kind, rect, border, value, tooltip) = match f.ui {
             Ui::CheckButton => {
@@ -1219,12 +1289,22 @@ impl Layouter<'_> {
                 let shown = plain_value.as_ref().map(|v| if data_value.is_some() { iso_to_pattern(v, &pattern) } else { v.clone() });
                 (WidgetKind::Date(pattern), ui, widget_border(f.ui_border.as_ref(), false), shown, f.tooltip.clone())
             }
-            _ => {
-                if f.ui == Ui::ChoiceList {
-                    self.warn_once("drop-down lists are shown as text fields");
-                }
-                (WidgetKind::Text, ui, widget_border(f.ui_border.as_ref(), false), plain_value, f.tooltip.clone())
+            Ui::ChoiceList => {
+                let options: Vec<(String, String)> = f
+                    .items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, shown)| (f.item_values.get(i).cloned().unwrap_or_else(|| shown.clone()), shown.clone()))
+                    .collect();
+                // The data holds saved values (several on separate lines); shown text is taken
+                // too, as a user typing into an editable list leaves it.
+                let value = plain_value.as_ref().map(|v| f.saved_value(v));
+                let kind = WidgetKind::Choice { options, list_box: f.choice.list_box, multi: f.choice.multi, editable: f.choice.editable };
+                (kind, ui, widget_border(f.ui_border.as_ref(), false), value, f.tooltip.clone())
             }
+            Ui::Signature => (WidgetKind::Signature, ui, widget_border(f.ui_border.as_ref(), false), None, f.tooltip.clone()),
+            Ui::PasswordEdit => (WidgetKind::Password, ui, widget_border(f.ui_border.as_ref(), false), plain_value, f.tooltip.clone()),
+            _ => (WidgetKind::Text, ui, widget_border(f.ui_border.as_ref(), false), plain_value, f.tooltip.clone()),
         };
         if rect.w < 1.0 || rect.h < 1.0 {
             return Ok(());

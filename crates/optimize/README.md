@@ -5,6 +5,8 @@ Advanced optimization).
 
 ```rust
 let report = optimize(&mut doc, &Settings::default())?;   // Reduce File Size's choices
+// Or with progress: called before each image and the clean-up; `false` cancels.
+let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going)?;
 ```
 
 - **Images:** the effective resolution of each image is measured where pages draw it (the CTM
@@ -17,5 +19,7 @@ let report = optimize(&mut doc, &Settings::default())?;   // Reduce File Size's 
 - **Clean up:** Flate for streams with no filter.
 
 The engine runs Remove Hidden Information (`pdfcraft-redact`) for the user-data categories,
-then this, then merges identical objects and writes a full, compressed save. JPEG decoding and
+then this, then merges identical objects and writes a full, compressed save
+(`pdfcraft_engine::optimizer::OptimizeJob`, which the UI runs on a worker thread with a
+progress bar). JPEG decoding and
 encoding and resampling come from the `image` crate.

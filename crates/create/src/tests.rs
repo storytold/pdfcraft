@@ -258,3 +258,18 @@ fn jpeg_2000_images_are_embedded_as_is() {
     let doc = reopen(&from_images(&[("raw.j2k".into(), siz)]).unwrap());
     assert_eq!(media(&pages(&doc)[0])[2], 64.0);
 }
+
+#[test]
+fn source_kind_tells_pdfs_images_and_text_apart() {
+    assert_eq!(source_kind("a.bin", b"%PDF-1.7\n"), Some(SourceKind::Pdf));
+    assert_eq!(source_kind("a.txt", b"junk before\n%PDF-1.4"), Some(SourceKind::Pdf), "a header after leading junk");
+    assert_eq!(source_kind("a", &png_bytes(false)), Some(SourceKind::Image));
+    assert_eq!(source_kind("a.txt", &jpeg_bytes()), Some(SourceKind::Image), "bytes win over the name");
+    assert_eq!(source_kind("notes.TXT", b"hello"), Some(SourceKind::Text));
+    assert_eq!(source_kind("notes.text", b""), Some(SourceKind::Text));
+    // Text that merely starts like a BMP stays text; a truncated BMP header is not an image.
+    assert_eq!(source_kind("b.txt", b"BMW drivers"), Some(SourceKind::Text));
+    assert_eq!(source_kind("b.bmp", b"BM"), None);
+    assert_eq!(source_kind("a.docx", b"PK\x03\x04"), None);
+    assert_eq!(source_kind("", b""), None);
+}

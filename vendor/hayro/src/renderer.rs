@@ -11,6 +11,7 @@ use pic_scale::{
     ImageSize, ImageStore, ImageStoreMut, PicScaleError, Resampling, ResamplingFunction, Scaler,
 };
 use std::collections::HashMap;
+use std::mem::size_of;
 use std::rc::Rc;
 use std::sync::Arc;
 use vello_cpu::color::palette::css::BLACK;
@@ -20,9 +21,303 @@ use vello_cpu::{
     Image, ImageSource, Mask, PaintType, Pixmap, RenderContext, RenderSettings, peniko,
 };
 
-
 /// PdfCraft patch: largest image drawn, in pixels (2^28 ≈ 268 MP, well above real page images).
 const MAX_IMAGE_PIXELS: u64 = 1 << 28;
+
+/// PdfCraft patch: source axes allowed into CatmullRom planning. Unlike the final pixmap,
+/// sources need not fit u16: a 65536-pixel strip can safely shrink to a 16-pixel image.
+/// This resource cap follows the existing CCITT column limit; the filter-work estimate below
+/// additionally bounds tables/scratch before entering the opaque PicScale planner.
+const MAX_RESAMPLING_SOURCE_SIDE: u32 = 1 << 20;
+const MAX_RESAMPLING_PLAN_BYTES: usize = 128 << 20;
+
+/// PdfCraft patch: source, intermediate and RGBA byte lengths, independent of backend sides.
+fn source_byte_len(width: u32, height: u32, channels: usize, max_pixels: u64) -> Option<usize> {
+    if width == 0 || height == 0 || !matches!(channels, 1 | 3 | 4) {
+        return None;
+    }
+    let pixels = u64::from(width).checked_mul(u64::from(height))?;
+    if pixels > max_pixels {
+        return None;
+    }
+    let pixels = usize::try_from(pixels).ok()?;
+    let rgba_len = pixels.checked_mul(4)?;
+    if rgba_len > isize::MAX as usize {
+        return None;
+    }
+    pixels.checked_mul(channels)
+}
+
+/// PdfCraft patch: only final pixmaps/padded glyphs need to fit the backend's u16 sides.
+fn image_byte_len(width: u32, height: u32, channels: usize, max_pixels: u64) -> Option<usize> {
+    if width > u32::from(u16::MAX) || height > u32::from(u16::MAX) {
+        return None;
+    }
+    source_byte_len(width, height, channels, max_pixels)
+}
+
+/// PdfCraft patch: conservative CatmullRom planning work for one axis in PicScale 0.7.12.
+/// Its four-tap kernel grows on downscaling. Include float/32-aligned i16 weights, temporary
+/// float/f64/usize tap arrays and two copies of the bounds. This is a size estimate, not a
+/// fallible reserve inside PicScale or a bound on total renderer memory.
+fn filter_plan_bytes(source: u32, target: u32) -> Option<usize> {
+    if source == target {
+        return Some(0);
+    }
+    let (source, target) = (usize::try_from(source).ok()?, usize::try_from(target).ok()?);
+    if target == 0 {
+        return None;
+    }
+    let taps = source.checked_mul(4)?.div_ceil(target).max(4);
+    let aligned_taps = taps.div_ceil(32).checked_mul(32)?;
+    let float_weights = taps.checked_mul(target)?.checked_mul(size_of::<f32>())?;
+    let fixed_weights = aligned_taps
+        .checked_mul(target)?
+        .checked_mul(size_of::<i16>())?;
+    let tap_scratch = taps.checked_mul(size_of::<f32>() + size_of::<f64>() + size_of::<usize>())?;
+    let bounds = target.checked_mul(4)?.checked_mul(size_of::<usize>())?;
+    float_weights
+        .checked_add(fixed_weights)?
+        .checked_add(tap_scratch)?
+        .checked_add(bounds)
+}
+
+/// PdfCraft patch: alpha-aware RGBA plans also need source-sized premultiplication scratch.
+/// Bound the combined scratch before planning, including a conservative crossed intermediate
+/// (or four rows for a short target) when both convolution axes change.
+fn resampling_scratch_byte_len(
+    source: (u32, u32),
+    target: (u32, u32),
+    channels: usize,
+    max_pixels: u64,
+) -> Option<usize> {
+    if source == target {
+        return Some(0);
+    }
+    let alpha = if channels == 4 {
+        source_byte_len(source.0, source.1, channels, max_pixels)?
+    } else {
+        0
+    };
+    let filter = if source.0 != target.0 && source.1 != target.1 {
+        source_byte_len(source.0, target.1.max(4), channels, max_pixels)?
+    } else {
+        0
+    };
+    let len = alpha.checked_add(filter)?;
+    let limit = max_pixels.saturating_mul(4).min(isize::MAX as u64);
+    if u64::try_from(len).ok()? > limit {
+        return None;
+    }
+    Some(len)
+}
+
+/// PdfCraft patch: validate output, crossed intermediate and filter-work bounds before planning.
+/// Source width × target height also bounds PicScale's smaller single-threaded four-row scratch.
+fn resampling_byte_len(
+    source: (u32, u32),
+    target: (u32, u32),
+    channels: usize,
+    data_len: usize,
+    max_pixels: u64,
+) -> Option<usize> {
+    if source_byte_len(source.0, source.1, channels, max_pixels)? != data_len {
+        return None;
+    }
+    let target_len = image_byte_len(target.0, target.1, channels, max_pixels)?;
+    resampling_scratch_byte_len(source, target, channels, max_pixels)?;
+    source_byte_len(source.0, target.1, channels, max_pixels)?;
+    if source.0 > MAX_RESAMPLING_SOURCE_SIDE || source.1 > MAX_RESAMPLING_SOURCE_SIDE {
+        return None;
+    }
+    let plan_bytes = filter_plan_bytes(source.0, target.0)?
+        .checked_add(filter_plan_bytes(source.1, target.1)?)?;
+    if plan_bytes > MAX_RESAMPLING_PLAN_BYTES {
+        return None;
+    }
+    Some(target_len)
+}
+
+/// PdfCraft patch: image dimensions selected before allocating resampling buffers.
+/// Exported for PdfCraft's small, metadata-only regression tests. `None` rejects invalid
+/// sources/scales or an over-budget target/intermediate; the caller may retain a valid source.
+#[doc(hidden)]
+pub fn image_resampling_size(
+    width: u32,
+    height: u32,
+    channels: usize,
+    data_len: usize,
+    x_scale: f32,
+    y_scale: f32,
+    max_pixels: u64,
+) -> Option<(u32, u32)> {
+    if !x_scale.is_finite() || !y_scale.is_finite() || x_scale <= 0.0 || y_scale <= 0.0 {
+        return None;
+    }
+    let target = if x_scale < 1.0 || y_scale < 1.0 {
+        let side = |size: u32, scale: f32| {
+            (size as f32 * scale)
+                .ceil()
+                .max(1.0)
+                .min((u16::MAX / 2) as f32) as u32
+        };
+        (side(width, x_scale), side(height, y_scale))
+    } else {
+        (width, height)
+    };
+    resampling_byte_len((width, height), target, channels, data_len, max_pixels)?;
+    Some(target)
+}
+
+/// PdfCraft patch: allocation failures in image conversion/resampling keep the renderer alive.
+fn image_buffer(len: usize) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).ok()?;
+    Some(out)
+}
+
+/// PdfCraft patch: most pieces one dashed stroke may be cut into. Stroke expansion keeps every
+/// dash, so a pattern that is tiny next to its path asks for billions: a fuzzed `/D [[11] 0]` on
+/// a line from x = 92234775807 allocated over 5 GB, and `[0.000001] 0 d` on a 20 pt line over
+/// 10 GB. Measured in release builds: a stroke cut into 250,000 pieces renders in about 16 ms and
+/// 75 MB at its peak (a million took 80 ms and 290 MB). Dotted and dashed lines in real documents
+/// stay far below this.
+const MAX_DASHES_PER_STROKE: f64 = 250_000.0;
+
+/// PdfCraft patch: the dash pattern to stroke `path` with. Empty (a solid line) when the pattern
+/// is invalid, or when it could cut the path into more than [`MAX_DASHES_PER_STROKE`] pieces.
+/// ISO 32000-2 §8.4.3.6 requires nonnegative entries that are not all zero; a pattern whose
+/// period isn't positive (`[-1 -1] 0 d`) made kurbo's search for the starting dash loop for ever.
+fn usable_dash_pattern(path: &BezPath, dashes: &[f32]) -> Vec<f64> {
+    if dashes.iter().any(|d| !d.is_finite() || *d < 0.0) {
+        return Vec::new();
+    }
+    let sum: f64 = dashes.iter().map(|d| f64::from(*d)).sum();
+    // kurbo repeats an odd-length pattern once, as SVG does, so a period covers it twice.
+    let (period, per_period) = if dashes.len() % 2 == 1 {
+        (2.0 * sum, dashes.len().saturating_mul(2))
+    } else {
+        (sum, dashes.len())
+    };
+    if !period.is_finite() || period <= 0.0 {
+        return Vec::new();
+    }
+    let (length, restarts) = control_polygon_length(path);
+    // kurbo restarts the pattern at every subpath and after every `ClosePath`, so each restart
+    // can begin up to a whole period of pieces however short its segment is.
+    let pieces = (length / period + restarts as f64) * per_period as f64;
+    if !pieces.is_finite() || pieces > MAX_DASHES_PER_STROKE {
+        return Vec::new();
+    }
+    dashes.iter().map(|d| f64::from(*d)).collect()
+}
+
+/// PdfCraft patch: the length of `path`'s control polygon, which a curve never exceeds, and how
+/// many times kurbo restarts a dash pattern along it (each `MoveTo` and `ClosePath`).
+fn control_polygon_length(path: &BezPath) -> (f64, usize) {
+    let (mut length, mut restarts) = (0.0, 0usize);
+    let (mut start, mut last) = (Point::ORIGIN, Point::ORIGIN);
+    for el in path.elements() {
+        match *el {
+            kurbo::PathEl::MoveTo(p) => {
+                (start, last) = (p, p);
+                restarts = restarts.saturating_add(1);
+            }
+            kurbo::PathEl::LineTo(p) => {
+                length += last.distance(p);
+                last = p;
+            }
+            kurbo::PathEl::QuadTo(c, p) => {
+                length += last.distance(c) + c.distance(p);
+                last = p;
+            }
+            kurbo::PathEl::CurveTo(c1, c2, p) => {
+                length += last.distance(c1) + c1.distance(c2) + c2.distance(p);
+                last = p;
+            }
+            kurbo::PathEl::ClosePath => {
+                length += last.distance(start);
+                last = start;
+                restarts = restarts.saturating_add(1);
+            }
+        }
+    }
+    (length, restarts)
+}
+
+/// PdfCraft patch: how far, in user space, drawing may place geometry outside a path's exact
+/// outline. vello expands strokes to a tolerance of at most 0.25 user units (`TOL / max(|a|, |d|,
+/// 1)` in vello_common's `flatten::stroke`), and kurbo approximates round joins and caps to 1e-3.
+/// Fills are flattened into chords, which stay inside the outline's bounds.
+const DRAW_SLACK: f64 = 0.5;
+
+thread_local! {
+    /// PdfCraft patch: whether [`may_paint_canvas`] may skip paths on this thread. Turned off
+    /// only by PdfCraft's regression test, which renders each tile with and without skipping.
+    static SKIP_OFFSCREEN_PATHS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// PdfCraft patch: exported for its regression test (see [`SKIP_OFFSCREEN_PATHS`]).
+#[doc(hidden)]
+pub fn set_skip_offscreen_paths(skip: bool) {
+    SKIP_OFFSCREEN_PATHS.with(|s| s.set(skip));
+}
+
+/// PdfCraft patch: whether a path drawn with `transform` can paint a pixel of a `width` ×
+/// `height` canvas. `reach` is how far its paint extends beyond the path, in user space: 0 for a
+/// fill; for a stroke, half its width times the larger of its miter limit (kurbo draws a miter
+/// only when its tip is within `limit × width / 2` of the vertex) and √2 (square caps). The box
+/// of the path's points and control points (a curve stays inside their hull) grown by that and
+/// [`DRAW_SLACK`], mapped to the device and grown by 2 pixels for antialiasing, contains
+/// everything it paints: a path whose box misses the canvas is skipped without changing a pixel,
+/// so a tile of a large page no longer strokes and fills every path on the page. Bounds that
+/// aren't finite (an empty path) are drawn as before.
+fn may_paint_canvas(
+    path: &BezPath,
+    transform: Affine,
+    reach: f64,
+    width: u16,
+    height: u16,
+) -> bool {
+    if !SKIP_OFFSCREEN_PATHS.with(std::cell::Cell::get) {
+        return true;
+    }
+    let mut points = Rect::new(
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    );
+    let mut add = |p: Point| points = points.union_pt(p);
+    for el in path.elements() {
+        match *el {
+            kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => add(p),
+            kurbo::PathEl::QuadTo(c, p) => {
+                add(c);
+                add(p);
+            }
+            kurbo::PathEl::CurveTo(c1, c2, p) => {
+                add(c1);
+                add(c2);
+                add(p);
+            }
+            kurbo::PathEl::ClosePath => {}
+        }
+    }
+    let grow = reach + DRAW_SLACK;
+    let device = transform
+        .transform_rect_bbox(points.inflate(grow, grow))
+        .inflate(2.0, 2.0);
+    let finite = [device.x0, device.y0, device.x1, device.y1]
+        .iter()
+        .all(|v| v.is_finite());
+    !finite
+        || (device.x0 < f64::from(width)
+            && device.x1 > 0.0
+            && device.y0 < f64::from(height)
+            && device.y1 > 0.0)
+}
+
 pub(crate) struct Renderer {
     pub(crate) ctx: RenderContext,
     pub(crate) inside_pattern: bool,
@@ -61,7 +356,13 @@ impl Renderer {
         }
     }
 
-    fn set_stroke_properties(&mut self, stroke_props: &StrokeProps, is_text: bool) {
+    /// PdfCraft patch: returns the stroke's reach for [`may_paint_canvas`].
+    fn set_stroke_properties(
+        &mut self,
+        stroke_props: &StrokeProps,
+        is_text: bool,
+        path: &BezPath,
+    ) -> f64 {
         let threshold = if is_text { 0.25 } else { 1.0 };
 
         // Best-effort attempt to ensure a line width of at least 1.0, as required by the PDF
@@ -91,14 +392,42 @@ impl Renderer {
             miter_limit: stroke_props.miter_limit as f64,
             start_cap: stroke_props.line_cap,
             end_cap: stroke_props.line_cap,
-            dash_pattern: stroke_props.dash_array.iter().map(|n| *n as f64).collect(),
-            dash_offset: stroke_props.dash_offset as f64,
+            // PdfCraft patch: see `usable_dash_pattern`.
+            dash_pattern: usable_dash_pattern(path, &stroke_props.dash_array).into(),
+            dash_offset: if stroke_props.dash_offset.is_finite() {
+                stroke_props.dash_offset as f64
+            } else {
+                0.0
+            },
         };
 
+        // A miter limit that isn't finite leaves miters unbounded: never skipped.
+        let miter = stroke.miter_limit.abs();
+        let reach = stroke.width / 2.0
+            * if miter.is_finite() {
+                miter.max(std::f64::consts::SQRT_2)
+            } else {
+                f64::INFINITY
+            };
         self.ctx.set_stroke(stroke);
+        reach
     }
 
     fn draw_image_with_alpha_mask(&mut self, image_data: ImageData, alpha_data: LumaData) {
+        // PdfCraft patch: mismatched masks need a dummy RGB staging image. Validate and
+        // reserve it before creating/pushing any mask, so failure skips the whole image.
+        let Some(len) = source_byte_len(alpha_data.width, alpha_data.height, 3, MAX_IMAGE_PIXELS)
+        else {
+            log::warn!(
+                "Image alpha-mask staging dimensions exceeded the buffer limit; image skipped"
+            );
+            return;
+        };
+        let Some(mut dummy_rgb) = image_buffer(len) else {
+            log::warn!("Image alpha-mask staging buffer could not be allocated; image skipped");
+            return;
+        };
+        dummy_rgb.resize(len, 0);
         let mask = {
             let transform = *self.ctx.transform()
                 * Affine::scale_non_uniform(
@@ -121,7 +450,7 @@ impl Renderer {
             };
             let mut mask_pix = Pixmap::new(self.ctx.width(), self.ctx.height());
             let rgb_data = ImageData::Rgb(RgbData {
-                data: vec![0; alpha_data.width as usize * alpha_data.height as usize * 3],
+                data: dummy_rgb,
                 width: alpha_data.width,
                 height: alpha_data.height,
                 interpolate: alpha_data.interpolate,
@@ -153,8 +482,8 @@ impl Renderer {
         new_width: u32,
         new_height: u32,
         pixel_format: ImagePixelFormat,
-    ) -> Vec<u8> {
-        match pixel_format {
+    ) -> (Vec<u8>, u32, u32) {
+        let resized = match pixel_format {
             ImagePixelFormat::Luma => self.resize_image_data_impl::<1>(
                 data,
                 src_width,
@@ -185,6 +514,15 @@ impl Renderer {
                     scaler.plan_rgba_resampling(source_size, target_size, true)
                 },
             ),
+        };
+        match resized {
+            Ok(out) => (out, new_width, new_height),
+            Err(original) => {
+                log::warn!(
+                    "Image resampling failed or exceeded its buffer limit; falling back to source data"
+                );
+                (original, src_width, src_height)
+            }
         }
     }
 
@@ -200,213 +538,259 @@ impl Renderer {
             ImageSize,
             ImageSize,
         ) -> Result<Arc<Resampling<u8, N>>, PicScaleError>,
-    ) -> Vec<u8> {
-        let source_size = ImageSize::new(src_width as usize, src_height as usize);
-        let target_size = ImageSize::new(new_width as usize, new_height as usize);
-        let src = ImageStore::<u8, N>::from_slice(&data, src_width as usize, src_height as usize)
-            .unwrap();
-        let mut out = vec![0; new_width as usize * new_height as usize * N];
-        let mut dst =
-            ImageStoreMut::<u8, N>::from_slice(&mut out, new_width as usize, new_height as usize)
-                .unwrap();
-        let plan = plan(&self.scaler, source_size, target_size).unwrap();
-        plan.resample(&src, &mut dst).unwrap();
-        out
+    ) -> Result<Vec<u8>, Vec<u8>> {
+        // PdfCraft patch: validate before constructing a plan or allocating its output/scratch.
+        // Returning the owned input preserves both its pixels and dimensions on any failure.
+        let resized = (|| {
+            let len = resampling_byte_len(
+                (src_width, src_height),
+                (new_width, new_height),
+                N,
+                data.len(),
+                MAX_IMAGE_PIXELS,
+            )?;
+            let source_size = ImageSize::new(src_width as usize, src_height as usize);
+            let target_size = ImageSize::new(new_width as usize, new_height as usize);
+            let src = ImageStore::<u8, N>::from_slice(&data, source_size.width, source_size.height)
+                .ok()?;
+            let plan = plan(&self.scaler, source_size, target_size).ok()?;
+            let scratch_len = plan.scratch_size();
+            let scratch_bound = resampling_scratch_byte_len(
+                (src_width, src_height),
+                (new_width, new_height),
+                N,
+                MAX_IMAGE_PIXELS,
+            )?;
+            if scratch_len > scratch_bound {
+                return None;
+            }
+            let mut out = image_buffer(len)?;
+            out.resize(len, 0);
+            let mut dst =
+                ImageStoreMut::<u8, N>::from_slice(&mut out, target_size.width, target_size.height)
+                    .ok()?;
+            let mut scratch = image_buffer(scratch_len)?;
+            scratch.resize(scratch_len, 0);
+            plan.resample_with_scratch(&src, &mut dst, &mut scratch)
+                .ok()?;
+            Some(out)
+        })();
+        match resized {
+            Some(out) => Ok(out),
+            None => Err(data),
+        }
     }
 
     fn draw_image(&mut self, image_data: ImageData, alpha_data: Option<LumaData>) {
         let cur_transform = *self.ctx.transform();
-        let mut additional_transform = Affine::IDENTITY;
-
         let (x_scale, y_scale) = {
             let (x, y) = x_y_advances(&cur_transform);
             (x.length() as f32, y.length() as f32)
         };
-        let mut img_width = image_data.width();
-        let mut img_height = image_data.height();
-        // PdfCraft patch: skip images with absurd dimensions (a fuzzed inline image claimed
-        // /W 4294967295 over four bytes of data; resampling it never finished).
-        if img_width == 0 || img_height == 0 || u64::from(img_width) * u64::from(img_height) > MAX_IMAGE_PIXELS {
+        // PdfCraft patch: do not send non-finite or collapsed geometry to the rasterizer.
+        if !cur_transform.as_coeffs().iter().all(|v| v.is_finite())
+            || !x_scale.is_finite()
+            || !y_scale.is_finite()
+            || x_scale <= 0.0
+            || y_scale <= 0.0
+        {
+            log::warn!("Image has an invalid transform and was skipped");
+            return;
+        }
+        let (source_width, source_height) = (image_data.width(), image_data.height());
+        let channels = match &image_data {
+            ImageData::Luma(_) => 1,
+            ImageData::Rgb(_) => 3,
+        };
+        let data_len = match &image_data {
+            ImageData::Luma(a) => a.data.len(),
+            ImageData::Rgb(a) => a.data.len(),
+        };
+        if source_byte_len(source_width, source_height, channels, MAX_IMAGE_PIXELS)
+            != Some(data_len)
+        {
+            log::warn!("Image has invalid or over-limit source dimensions/data and was skipped");
             return;
         }
         let interpolate = image_data.interpolate();
-
-        if let Some(a) = &alpha_data
-            && (a.width != img_width || a.height != img_height || a.interpolate != interpolate)
-        {
-            return self.draw_image_with_alpha_mask(image_data, alpha_data.unwrap());
+        if let Some(a) = &alpha_data {
+            if source_byte_len(a.width, a.height, 1, MAX_IMAGE_PIXELS) != Some(a.data.len()) {
+                log::warn!("Image has invalid or over-limit alpha dimensions/data and was skipped");
+                return;
+            }
+            if a.width != source_width || a.height != source_height || a.interpolate != interpolate
+            {
+                if let Some(alpha) = alpha_data {
+                    self.draw_image_with_alpha_mask(image_data, alpha);
+                }
+                return;
+            }
         }
-
         let mut quality = if interpolate {
             ImageQuality::Medium
         } else {
             ImageQuality::Low
         };
-
         let has_alpha = alpha_data.is_some();
         let mut may_have_transparency = has_alpha || self.force_images_may_have_transparency();
-        let needs_resize = x_scale < 1.0 || y_scale < 1.0;
-        let (new_width, new_height) = if needs_resize {
-            let w = (img_width as f32 * x_scale)
-                .ceil()
-                .max(1.0)
-                .min((u16::MAX / 2) as f32) as u32;
-            let h = (img_height as f32 * y_scale)
-                .ceil()
-                .max(1.0)
-                .min((u16::MAX / 2) as f32) as u32;
-            if self.in_type3_glyph {
-                quality = ImageQuality::High;
+        let requested_resize = x_scale < 1.0 || y_scale < 1.0;
+        let (new_width, new_height) = match image_resampling_size(
+            source_width,
+            source_height,
+            channels,
+            data_len,
+            x_scale,
+            y_scale,
+            MAX_IMAGE_PIXELS,
+        ) {
+            Some(target) => target,
+            None => {
+                if image_byte_len(source_width, source_height, 4, MAX_IMAGE_PIXELS).is_none() {
+                    log::warn!(
+                        "Image resampling exceeded its buffer limit and the original resolution cannot fit the backend; image skipped"
+                    );
+                    return;
+                }
+                log::warn!(
+                    "Image resampling exceeded its buffer limit; retaining the original resolution"
+                );
+                (source_width, source_height)
             }
-            (w, h)
-        } else {
-            (img_width, img_height)
         };
+        if requested_resize && self.in_type3_glyph {
+            quality = ImageQuality::High;
+        }
+        let needs_resize = (new_width, new_height) != (source_width, source_height);
 
-        // For luma images without alpha, we can resize as single-channel and
-        // expand to RGBA afterwards, which is ~4x faster.
-        let mut rgba_data = if matches!(&image_data, ImageData::Luma(_)) && !has_alpha {
-            // We cannot lift this up due to borrowing issues.
-            let ImageData::Luma(luma) = image_data else {
-                unreachable!()
-            };
-
-            let luma_data = if !needs_resize {
-                luma.data
-            } else {
-                let resized = self.resize_image_data(
-                    luma.data,
-                    img_width,
-                    img_height,
-                    new_width,
-                    new_height,
-                    ImagePixelFormat::Luma,
-                );
-                additional_transform = Affine::scale_non_uniform(
-                    img_width as f64 / new_width as f64,
-                    img_height as f64 / new_height as f64,
-                );
-                img_width = new_width;
-                img_height = new_height;
-                resized
-            };
-
-            luma_data
-                .iter()
-                .flat_map(|g| [*g, *g, *g, 255])
-                .collect::<Vec<_>>()
-        } else if matches!(&image_data, ImageData::Rgb(_)) && !has_alpha && needs_resize {
-            let ImageData::Rgb(rgb) = image_data else {
-                unreachable!()
-            };
-
-            let resized = self.resize_image_data(
-                rgb.data,
-                img_width,
-                img_height,
+        // Preserve the single-channel/RGB fast paths. With alpha, expand directly to RGBA;
+        // every source and alpha length was validated before zipping or allocating.
+        let (data, format) = match (image_data, alpha_data) {
+            (ImageData::Luma(luma), None) => (luma.data, ImagePixelFormat::Luma),
+            (ImageData::Rgb(rgb), None) => (rgb.data, ImagePixelFormat::Rgb),
+            (image, Some(alpha)) => {
+                let Some(len) = source_byte_len(source_width, source_height, 4, MAX_IMAGE_PIXELS)
+                else {
+                    return;
+                };
+                let Some(mut rgba) = image_buffer(len) else {
+                    log::warn!(
+                        "Image RGBA buffer could not be allocated and the image was skipped"
+                    );
+                    return;
+                };
+                match image {
+                    ImageData::Luma(luma) => {
+                        rgba.extend(
+                            luma.data
+                                .iter()
+                                .zip(alpha.data)
+                                .flat_map(|(g, a)| [*g, *g, *g, a]),
+                        );
+                    }
+                    ImageData::Rgb(rgb) => {
+                        rgba.extend(
+                            rgb.data
+                                .as_chunks::<3>()
+                                .0
+                                .iter()
+                                .zip(alpha.data)
+                                .flat_map(|([r, g, b], a)| [*r, *g, *b, a]),
+                        );
+                    }
+                }
+                (rgba, ImagePixelFormat::Rgba)
+            }
+        };
+        let (data, mut img_width, mut img_height) = if needs_resize {
+            self.resize_image_data(
+                data,
+                source_width,
+                source_height,
                 new_width,
                 new_height,
-                ImagePixelFormat::Rgb,
-            );
-            additional_transform = Affine::scale_non_uniform(
-                img_width as f64 / new_width as f64,
-                img_height as f64 / new_height as f64,
-            );
-            img_width = new_width;
-            img_height = new_height;
-
-            let mut out = Vec::with_capacity((img_width * img_height) as usize * 4);
-            for px in resized.chunks_exact(3) {
-                out.extend_from_slice(&[px[0], px[1], px[2], 255]);
-            }
-            out
+                format,
+            )
         } else {
-            let (rgb_data, alpha_data) = match image_data {
-                ImageData::Rgb(rgb) => (rgb.data, alpha_data.map(|a| a.data)),
-                ImageData::Luma(luma) => {
-                    let rgb = luma
-                        .data
-                        .iter()
-                        .flat_map(|g| [*g, *g, *g])
-                        .collect::<Vec<_>>();
-                    (rgb, alpha_data.map(|a| a.data))
-                }
-            };
-
-            let rgba_data = match alpha_data {
-                None => rgb_data
-                    .chunks_exact(3)
-                    .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
-                    .collect::<Vec<_>>(),
-                Some(alpha) => rgb_data
-                    .chunks_exact(3)
-                    .zip(alpha)
-                    .flat_map(|(rgb, a)| [rgb[0], rgb[1], rgb[2], a])
-                    .collect::<Vec<_>>(),
-            };
-
-            if !needs_resize {
-                rgba_data
-            } else {
-                let resized = self.resize_image_data(
-                    rgba_data,
-                    img_width,
-                    img_height,
-                    new_width,
-                    new_height,
-                    ImagePixelFormat::Rgba,
-                );
-                additional_transform = Affine::scale_non_uniform(
-                    img_width as f64 / new_width as f64,
-                    img_height as f64 / new_height as f64,
-                );
-                img_width = new_width;
-                img_height = new_height;
-                resized
-            }
+            (data, source_width, source_height)
         };
-
+        if image_byte_len(img_width, img_height, 4, MAX_IMAGE_PIXELS).is_none() {
+            log::warn!(
+                "Image resampling failed and the original resolution cannot fit the backend; image skipped"
+            );
+            return;
+        }
+        let mut additional_transform = Affine::scale_non_uniform(
+            source_width as f64 / img_width as f64,
+            source_height as f64 / img_height as f64,
+        );
+        let mut rgba_data = if matches!(format, ImagePixelFormat::Rgba) {
+            data
+        } else {
+            let Some(len) = image_byte_len(img_width, img_height, 4, MAX_IMAGE_PIXELS) else {
+                return;
+            };
+            let Some(mut rgba) = image_buffer(len) else {
+                log::warn!("Image RGBA buffer could not be allocated and the image was skipped");
+                return;
+            };
+            match format {
+                ImagePixelFormat::Luma => rgba.extend(data.iter().flat_map(|g| [*g, *g, *g, 255])),
+                ImagePixelFormat::Rgb => rgba.extend(
+                    data.as_chunks::<3>()
+                        .0
+                        .iter()
+                        .flat_map(|[r, g, b]| [*r, *g, *b, 255]),
+                ),
+                ImagePixelFormat::Rgba => {} // Handled above.
+            }
+            rgba
+        };
         if has_alpha {
             let (chunks, _) = rgba_data.as_chunks_mut::<4>();
             for chunk in chunks {
-                *chunk = AlphaColor::from_rgba8(chunk[0], chunk[1], chunk[2], chunk[3])
+                let [r, g, b, a] = *chunk;
+                *chunk = AlphaColor::from_rgba8(r, g, b, a)
                     .premultiply()
                     .to_rgba8()
                     .to_u8_array();
             }
         }
-
-        // The problem is that by default, when applying a bilinear or bicubic scaling, we will
-        // sample pixels using an extend (pad/reflect/repeat). For glyphs, this is undesirable
-        // as the glyphs will look very bold. Therefore, for glyphs it is more desirable to sample
-        // a transparent pixel when reaching the border. Thus, we wrap glyphs in a transparent frame
-        // of pixel width 2.
+        // Type 3 glyphs get a transparent two-pixel frame for interpolation. Check the padded
+        // RGBA allocation and u16 dimensions too, before narrowing or growing either side.
         if self.in_type3_glyph {
-            let mut padded_image = vec![];
-            padded_image.extend(vec![0; (4 * img_width as usize + 16) * 2]);
-
+            let (Some(width), Some(height)) = (img_width.checked_add(4), img_height.checked_add(4))
+            else {
+                return;
+            };
+            let Some(len) = image_byte_len(width, height, 4, MAX_IMAGE_PIXELS) else {
+                log::warn!(
+                    "Image glyph padding exceeded its buffer limit and the image was skipped"
+                );
+                return;
+            };
+            let Some(mut padded) = image_buffer(len) else {
+                log::warn!("Image glyph padding could not be allocated and the image was skipped");
+                return;
+            };
+            let row_len = width as usize * 4; // Checked RGBA length above bounds every row.
+            padded.resize(row_len * 2, 0);
             for row in rgba_data.chunks_exact(img_width as usize * 4) {
-                padded_image.extend([0; 8]);
-                padded_image.extend(row);
-                padded_image.extend([0; 8]);
+                padded.extend([0; 8]);
+                padded.extend_from_slice(row);
+                padded.extend([0; 8]);
             }
-
-            padded_image.extend(vec![0; (4 * img_width as usize + 16) * 2]);
-            img_width += 4;
-            img_height += 4;
+            padded.resize(len, 0);
+            (img_width, img_height) = (width, height);
             additional_transform *= Affine::translate((-2.0, -2.0));
             may_have_transparency = true;
-
-            rgba_data = padded_image;
+            rgba_data = padded;
         }
-
         let pixmap = Pixmap::from_parts_with_opacity(
             bytemuck::cast_vec(rgba_data),
             img_width as u16,
             img_height as u16,
             may_have_transparency,
         );
-
         self.draw_pixmap(
             Arc::new(pixmap),
             quality,
@@ -474,7 +858,9 @@ impl Renderer {
                             self.ctx.height() as f64,
                         ));
 
-                        let encoded = s.encode();
+                        // PdfCraft patch: mesh shadings are sampled only inside `bbox` (and a
+                        // pixel around it: texels at a fractional edge look one pixel further).
+                        let encoded = s.encode_within(Some(bbox.inflate(1.0, 1.0)));
                         let (image, width, height, transform, may_have_transparency) =
                             render_shading_texture(bbox, &encoded);
                         let may_have_transparency =
@@ -598,7 +984,11 @@ impl Renderer {
         is_text: bool,
     ) {
         self.ctx.set_transform(transform);
-        self.set_stroke_properties(stroke_props, is_text);
+        let reach = self.set_stroke_properties(stroke_props, is_text, path);
+        // PdfCraft patch: see `may_paint_canvas`.
+        if !may_paint_canvas(path, transform, reach, self.ctx.width(), self.ctx.height()) {
+            return;
+        }
 
         let clip_path = self.set_paint(paint, path, true);
         if let Some(clip_path) = clip_path.as_ref() {
@@ -619,6 +1009,10 @@ impl Renderer {
     ) {
         self.ctx.set_fill_rule(convert_fill_rule(fill_rule));
         self.ctx.set_transform(transform);
+        // PdfCraft patch: see `may_paint_canvas`.
+        if !may_paint_canvas(path, transform, 0.0, self.ctx.width(), self.ctx.height()) {
+            return;
+        }
 
         let clip_path = self.set_paint(paint, path, false);
         if let Some(clip_path) = clip_path.as_ref() {
@@ -955,6 +1349,10 @@ impl<'a> Device<'a> for Renderer {
             PathDrawMode::Fill(fill_rule) => {
                 self.ctx.set_fill_rule(convert_fill_rule(*fill_rule));
                 self.ctx.set_transform(transform);
+                // PdfCraft patch: see `may_paint_canvas`.
+                if !may_paint_canvas(&path, transform, 0.0, self.ctx.width(), self.ctx.height()) {
+                    return;
+                }
 
                 let clip_path = self.set_paint(paint, &path, false);
                 if let Some(clip_path) = clip_path.as_ref() {

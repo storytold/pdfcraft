@@ -30,6 +30,7 @@ fn dir() -> std::path::PathBuf {
 fn harness(dir: std::path::PathBuf) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("contract.pdf", None, FIXTURE.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.export_dir_override = Some(dir.to_string_lossy().into_owned());
@@ -155,6 +156,7 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     // Trusted certificates and the ID list persist.
     let saved = s.persist();
     let mut fresh = PdfCraftApp::new();
+    fresh.set_option("language", "en").unwrap();
     fresh.restore(&saved);
     assert_eq!((fresh.digital_ids.len(), fresh.session.trusted_certificates().len()), (1, 1));
 }
@@ -243,4 +245,55 @@ fn clicking_an_empty_signature_field_signs_it() {
     let s = h.state();
     let sig = s.session.get(s.views[1].id).unwrap().signatures.iter().find(|x| x.field == "Approver").cloned().unwrap();
     assert!(sig.signed && sig.visible);
+}
+
+#[test]
+fn os_store_identities_are_not_persisted() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    for path in ["windows:Store signer", "keychain:Store signer", "file-id.p12"] {
+        app.digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
+            path: path.into(),
+            name: "Signer".into(),
+            issuer: "Test issuer".into(),
+            email: String::new(),
+            expires: "2030.01.01".into(),
+        });
+    }
+    let saved = app.persist();
+    let settings: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(settings["digital_ids"].as_array().unwrap().len(), 1);
+    assert_eq!(settings["digital_ids"][0]["path"], "file-id.p12");
+    let mut restored = PdfCraftApp::new();
+    restored.set_option("language", "en").unwrap();
+    restored.restore(&saved);
+    assert_eq!(restored.digital_ids.len(), 1);
+    assert_eq!(restored.digital_ids[0].path, "file-id.p12");
+}
+
+#[test]
+fn windows_store_identity_does_not_ask_for_a_file_password() {
+    let mut h = harness(dir());
+    h.state_mut().start_signing(0, None, None, None);
+    // A synthetic picker entry exercises the dialog without a real Windows identity.
+    h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
+        path: "windows:No Such Signer".into(),
+        name: "Store signer".into(),
+        issuer: "Test issuer".into(),
+        email: String::new(),
+        expires: "2030.01.01".into(),
+    });
+    let draft = h.state_mut().sign_draft.as_mut().unwrap();
+    draft.step = SignStep::Choose;
+    draft.selected = Some(0);
+    h.run_steps(3);
+    h.get_by_label("Continue").click();
+    h.run_steps(3);
+    h.get_by_label("Sign as \"Store signer\"");
+    assert_eq!(h.query_all_by_label("Digital ID password").count(), 0);
+    h.get_by_label("The key is in the Windows certificate store, which may ask to allow Linkco PDF Editor to use it.");
+    h.get_by_label("Sign").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Sign));
+    assert!(h.state().sign_draft.as_ref().unwrap().error.as_ref().unwrap().contains("Windows certificate store"));
 }

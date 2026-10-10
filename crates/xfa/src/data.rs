@@ -47,6 +47,16 @@ impl DataNode {
     pub fn text_at(&self, path: &[(String, usize)]) -> Option<&str> {
         self.get(path).map(|n| n.text.as_str())
     }
+
+    /// The value at `path`: its text, or, for a container whose children are all `value`
+    /// elements (one way a multi-select list's picks are stored), those on separate lines.
+    pub fn value_at(&self, path: &[(String, usize)]) -> Option<String> {
+        let n = self.get(path)?;
+        if n.children.is_empty() || !n.children.iter().all(|c| c.name == "value") {
+            return Some(n.text.clone());
+        }
+        Some(n.children.iter().map(|c| c.text.trim()).filter(|t| !t.is_empty()).take(1000).collect::<Vec<_>>().join("\n"))
+    }
 }
 
 fn to_node(n: roxmltree::Node, depth: usize) -> DataNode {

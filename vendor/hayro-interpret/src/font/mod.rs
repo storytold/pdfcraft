@@ -165,6 +165,12 @@ impl OutlineGlyph {
         self.id
     }
 
+    /// PdfCraft patch: whether this glyph belongs to a vertical-writing Type0 font.
+    /// The glyph outline stays upright; text extraction must follow the font's advance axis.
+    pub fn is_vertical(&self) -> bool {
+        matches!(&self.font, OutlineFont::Type0(font) if !font.is_horizontal())
+    }
+
     /// Get the advance width for this glyph.
     ///
     /// The advance width is how far to move horizontally after drawing

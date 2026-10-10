@@ -241,15 +241,15 @@ impl Walker<'_> {
 
     fn field(&mut self, f: &Field, parent_som: &str, index: usize, radio: Option<&str>) -> FormNode {
         let som = child_som(parent_som, f.common.name.as_deref().or(Some("field")), index);
-        let data_value = self.data.and_then(|d| d.text_at(&som_to_path(&som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        let data_value = self.data.and_then(|d| d.value_at(&som_to_path(&som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         let value = match (radio, data_value) {
             // A radio button's value is its on value when the group picked it.
             (Some(selected), _) => {
                 let on = f.items.first().cloned().unwrap_or_default();
                 if selected == on { on } else { String::new() }
             }
-            (None, Some(v)) => v,
-            (None, None) => f.value.plain().map(|v| v.trim().to_string()).unwrap_or_default(),
+            (None, Some(v)) => f.saved_value(&v),
+            (None, None) => f.value.plain().map(|v| f.saved_value(v.trim())).unwrap_or_default(),
         };
         self.push_events(&som, &f.scripts, f.calculate.as_ref(), f.validate.as_ref(), f.validate_message.as_deref());
         FormNode {

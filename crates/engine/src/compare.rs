@@ -150,7 +150,8 @@ impl OfficeFormat {
 }
 
 impl crate::Document {
-    /// The pages as paragraphs and images (for Word, HTML and RTF export).
+    /// The pages as paragraphs and images (for Word, HTML and RTF export), including what
+    /// form XObjects draw.
     pub fn export_pages(&self) -> Vec<pdfcraft_export::Page> {
         let Some(cos) = self.editor.as_ref().map(|e| &e.cos) else { return Vec::new() };
         self.info
@@ -158,7 +159,7 @@ impl crate::Document {
             .iter()
             .enumerate()
             .map(|(i, info)| {
-                let blocks = pdfcraft_edit::text_blocks(cos, i)
+                let blocks = pdfcraft_edit::reading_blocks(cos, i)
                     .unwrap_or_default()
                     .into_iter()
                     .filter(|b| !b.text.trim().is_empty())
@@ -170,15 +171,15 @@ impl crate::Document {
                             size: b.size,
                             bold: f.contains("bold") || f.contains("black") || f.contains("heavy"),
                             italic: f.contains("italic") || f.contains("oblique"),
+                            color: b.color,
                         }
                     })
                     .collect();
-                let images = self
-                    .page_images(i)
+                let images = pdfcraft_edit::reading_images(cos, i)
+                    .unwrap_or_default()
                     .iter()
-                    .enumerate()
-                    .filter_map(|(k, im)| {
-                        let (ext, bytes) = self.page_image_file(i, k).ok()?;
+                    .filter_map(|im| {
+                        let (ext, bytes) = pdfcraft_create::image_file(cos, im.object?).ok()?;
                         Some(pdfcraft_export::Image { ext: if ext == "jpg" { "jpg" } else { "png" }, bytes, rect: im.rect })
                     })
                     .collect();

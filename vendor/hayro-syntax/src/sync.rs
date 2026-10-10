@@ -60,7 +60,9 @@ pub(crate) trait MutexExt<T> {
 #[cfg(feature = "std")]
 impl<T> MutexExt<T> for Mutex<T> {
     fn get(&self) -> MutexGuard<'_, T> {
-        self.lock().unwrap()
+        // PdfCraft patch: (#307) cached values remain owned after an unwinding caller; do not cascade a
+        // worker panic into unrelated readers. Initialization has its own failure state.
+        self.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -73,22 +75,20 @@ impl<T> MutexExt<T> for Mutex<T> {
 
 pub(crate) trait RwLockExt<T> {
     fn get(&self) -> RwLockReadGuard<'_, T>;
-    fn try_get(&self) -> Option<RwLockReadGuard<'_, T>>;
-    fn try_put(&self) -> Option<RwLockWriteGuard<'_, T>>;
+    fn put(&self) -> RwLockWriteGuard<'_, T>;
 }
 
 #[cfg(feature = "std")]
 impl<T> RwLockExt<T> for RwLock<T> {
+    // PdfCraft patch: (#307) poisoned locks are recovered rather than unwrapped, and the
+    // non-blocking try_get/try_put (which repair asserted could not fail) become blocking.
     fn get(&self) -> RwLockReadGuard<'_, T> {
-        self.read().unwrap()
+        self.read().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn try_get(&self) -> Option<RwLockReadGuard<'_, T>> {
-        self.try_read().ok()
-    }
-
-    fn try_put(&self) -> Option<RwLockWriteGuard<'_, T>> {
-        self.try_write().ok()
+    fn put(&self) -> RwLockWriteGuard<'_, T> {
+        self.write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -98,11 +98,7 @@ impl<T> RwLockExt<T> for RwLock<T> {
         self.borrow()
     }
 
-    fn try_get(&self) -> Option<RwLockReadGuard<'_, T>> {
-        Some(self.borrow())
-    }
-
-    fn try_put(&self) -> Option<RwLockWriteGuard<'_, T>> {
-        Some(self.borrow_mut())
+    fn put(&self) -> RwLockWriteGuard<'_, T> {
+        self.borrow_mut()
     }
 }

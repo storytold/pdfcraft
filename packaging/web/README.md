@@ -19,6 +19,11 @@ so the site works at a domain root (`https://example.com/`), under a prefix
 (`https://example.com/tools/pdfcraft/`) and from a CDN bucket. The asset names carry a content
 hash, so they can be cached forever. Only `index.html` needs revalidation.
 
+Add `?file=<URL-encoded document URL>` to open a PDF on startup. The document must be served
+from the same origin or allow the app's origin through CORS. If the user starts working before
+the download finishes, the downloaded file opens in a background tab; the current document,
+workspace and Save target stay selected. Click the downloaded file's tab to switch to it.
+
 ## Required server settings
 
 - **MIME type:** serve `.wasm` as `application/wasm`. Browsers refuse to stream-compile it under

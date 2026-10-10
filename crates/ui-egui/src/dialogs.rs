@@ -43,6 +43,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut export_now = false;
     let mut props_now = false;
     let mut field_props_now = false;
+    let mut bulk_field_props_now = false;
     let mut redact_now: Option<Dialog> = None;
     let mut print_go = false;
     let mut revert_now = false;
@@ -54,7 +55,6 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut a11y_now = false;
     let mut ocr_now = false;
     let mut compare_now = false;
-    let mut combine_now = false;
     let mut images_now = false;
     let mut stamp_now = false;
     let mut alt_now = false;
@@ -65,7 +65,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
-            Dialog::FieldProps => 600.0,
+            Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::About => 780.0,
             _ => 520.0,
         });
@@ -113,7 +113,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 egui::ScrollArea::vertical().max_height(460.0).auto_shrink([false, true]).show(ui, |ui| {
                     egui::Grid::new("props").num_columns(2).spacing([18.0, 8.0]).min_col_width(140.0).show(ui, |ui| match tab {
                         PropsTab::Description => {
-                            row(ui, "File", doc.name.clone());
+                            row(ui, "File", crate::bidi::visual(&doc.name).into_owned());
                             match app.props_draft.as_mut() {
                                 Some((_, draft)) if doc.allows_modification() => {
                                     for (k, v) in INFO_KEYS.iter().zip(draft.iter_mut()) {
@@ -322,7 +322,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                         }
                         PropsTab::Advanced => {
                             row(ui, "PDF version", i.pdf_version.clone());
-                            row(ui, "Location", doc.path.clone().unwrap_or_default());
+                            row(ui, "Location", crate::bidi::visual(doc.path.as_deref().unwrap_or_default()).into_owned());
                             row(ui, "File size", format!("{} ({} bytes)", human_size(i.file_size), i.file_size));
                             let p = &i.pages[0];
                             row(ui, "Page size", format!("{:.2} × {:.2} in", p.width / 72.0, p.height / 72.0));
@@ -775,9 +775,19 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 let Some(doc) = app.session.get(id) else { return };
                 let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
                 let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-                let thumbs: std::collections::HashMap<usize, egui::TextureId> =
-                    (0..sizes.len()).filter_map(|p| app.views[i].thumb_id(p).map(|t| (p, t))).collect();
-                let (go, cancel) = crate::print_ui::body(ui, &mut app.print_draft, &t, &sizes, &labels, &|p| thumbs.get(&p).copied());
+                let rasters = crate::print_ui::preview_rasters(
+                    &app.print_draft,
+                    &sizes,
+                    &labels,
+                    ui.ctx().pixels_per_point(),
+                    ui.ctx().input(|i| i.max_texture_side) as f32,
+                );
+                let view = &mut app.views[i];
+                view.queue_print_previews(&rasters);
+                let (go, cancel) = crate::print_ui::body(ui, &mut app.print_draft, &t, &sizes, &labels, &mut |p| {
+                    view.need_thumbnail(p, true);
+                    view.page_preview(p)
+                });
                 print_go = go;
                 close = go || cancel;
                 return;
@@ -808,6 +818,16 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 close = apply || cancel;
                 return;
             }
+            Dialog::BulkFieldProps => {
+                let Some(d) = app.bulk_field_props.as_mut() else {
+                    close = true;
+                    return;
+                };
+                let (apply, cancel) = crate::bulk_fields::body(ui, d, &t);
+                bulk_field_props_now = apply;
+                close = cancel;
+                return;
+            }
             Dialog::CommentProps => {
                 let (apply, cancel) = crate::comment_props::body(ui, app, &t);
                 props_now = apply;
@@ -815,14 +835,17 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 return;
             }
             Dialog::Signature => {
-                let (apply, cancel) = crate::fill_sign::signature_pad(ui, &t, &mut app.signature_draft, &mut app.signature_preview);
+                let (apply, cancel, browse) = crate::fill_sign::signature_pad(ui, &t, &mut app.signature_draft, &mut app.signature_preview);
+                if browse {
+                    app.pick_signature_image();
+                }
                 if apply {
                     let d = std::mem::take(&mut app.signature_draft);
                     let tool = if d.initials {
-                        app.initials = Some(d.saved());
+                        app.initials = d.saved();
                         crate::fill_sign::FillTool::Initials
                     } else {
-                        app.signature = Some(d.saved());
+                        app.signature = d.saved();
                         crate::fill_sign::FillTool::Signature
                     };
                     app.quick_tool = crate::QuickTool::Fill(tool);
@@ -841,16 +864,6 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 let (save, cancel) = crate::stamps_ui::create_body(ui, app, &t);
                 stamp_now = save;
                 close = save || cancel;
-                return;
-            }
-            Dialog::Combine => {
-                ui.set_width(620.0);
-                let (go, cancel) = crate::combine_ui::body(ui, app, &t);
-                combine_now = go;
-                if cancel {
-                    app.combine_draft.clear();
-                }
-                close = go || cancel;
                 return;
             }
             Dialog::PdfA => {
@@ -1031,6 +1044,8 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     ("⇧⌘+ / ⇧⌘−", tl!("Rotate view")),
                     ("Home / End", tl!("First / last page")),
                     ("← / →, ⌘← / ⌘→", tl!("Previous / next page")),
+                    ("V", tl!("Select (V)")),
+                    ("H / Space (hold)", tl!("Hand (H)")),
                     ("Delete", tl!("Delete selected pages (Organize)")),
                     ("⌘A", tl!("Select all pages (Organize)")),
                 ] {
@@ -1198,10 +1213,8 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 }
             }
         }
-        Some(Dialog::Sanitize) => {
-            if app.apply_edit(Edit::Sanitize) {
-                app.notify_tr("Document sanitized. Save to finish: saving rewrites the whole file.");
-            }
+        Some(Dialog::Sanitize) if app.apply_edit(Edit::Sanitize) => {
+            app.notify_tr("Document sanitized. Save to finish: saving rewrites the whole file.");
         }
         Some(Dialog::RedactApply) => {
             let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
@@ -1214,6 +1227,9 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
             }
         }
         _ => {}
+    }
+    if bulk_field_props_now {
+        close = app.apply_bulk_field_props();
     }
     if field_props_now
         && let Some(d) = app.field_props.take()
@@ -1270,6 +1286,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.dialog = None;
         app.props_draft = None;
         app.view_draft = None;
+        app.bulk_field_props = None;
     } else {
         app.dialog = Some(next);
     }
@@ -1284,9 +1301,6 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     if stamp_now {
         app.save_custom_stamp();
-    }
-    if combine_now {
-        app.combine_staged();
     }
     if images_now {
         app.finish_image_import();
@@ -1355,18 +1369,24 @@ fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
         return;
     };
     let t = Tokens::get(ctx);
+    // Wrapping alone (#161) still let a long enough name (a web `?file=` URL has no limit) grow
+    // the prompt taller than the window (#236); 80 characters wrap to a few lines.
+    let shown = shorten_middle(&name, 80);
     let mut choice: Option<Option<bool>> = None;
     let modal = egui::Modal::new(egui::Id::new("save_prompt")).show(ctx, |ui| {
         ui.set_width(420.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("save", 22.0, t.accent));
-            ui.add(
+            let title = ui.add(
                 egui::Label::new(
-                    egui::RichText::new(crate::i18n::fmt(tl!("Save changes to “{name}” before closing?"), &[("name", &name)]))
+                    egui::RichText::new(crate::i18n::fmt(tl!("Save changes to “{name}” before closing?"), &[("name", &shown)]))
                         .font(theme::semibold(16.0)),
                 )
                 .wrap(),
             );
+            if shown != name {
+                title.on_hover_text(&name);
+            }
         });
         ui.add_space(6.0);
         ui.label(egui::RichText::new(tl!("Your changes will be lost if you don't save them.")).color(t.text_muted));
@@ -1392,6 +1412,19 @@ fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
 }
 
+/// `name` cut to at most `max` characters by replacing its middle with "…", keeping the start and
+/// the end, where the extension and version suffixes sit. Counts `char`s, so it never splits one.
+fn shorten_middle(name: &str, max: usize) -> String {
+    let count = name.chars().count();
+    if count <= max {
+        return name.to_string();
+    }
+    let tail = max / 4;
+    let head: String = name.chars().take(max.saturating_sub(tail + 1)).collect();
+    let end: String = name.chars().skip(count.saturating_sub(tail)).collect();
+    format!("{head}…{end}")
+}
+
 /// "Open this web page?" when a document's link, button or script asks to open an address
 /// (#90, #91). Shows where the address really goes and the whole address; Cancel is the default,
 /// and Escape or clicking outside cancels.
@@ -1415,8 +1448,18 @@ fn link_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
         };
         ui.label(crate::i18n::fmt(template, &[("who", tl!(pending.origin.noun()))]));
         ui.add_space(6.0);
-        if let Some(host) = pdfcraft_engine::links::host(&pending.url) {
-            ui.label(egui::RichText::new(host).font(theme::semibold(14.0)));
+        // The host as the browser will connect to it, in punycode when it is international, so a
+        // lookalike such as `pаypal.com` (Cyrillic `а`) reads as `xn--pypal-4ve.com`. Its Unicode
+        // form isn't repeated here: a whole-script lookalike would read as the real site.
+        if let Some(host) = pdfcraft_engine::links::display_host(&pending.url) {
+            ui.label(egui::RichText::new(&host.ascii).font(theme::semibold(14.0)));
+            if host.mixed_scripts {
+                let warning = tl!("This web address mixes letters from different alphabets, a common way to imitate another site's name.");
+                ui.add(egui::Label::new(egui::RichText::new(warning).color(egui::Color32::from_rgb(0xD1, 0x3B, 0x3B))).wrap());
+            } else if host.international {
+                let note = tl!("This web address uses letters from another alphabet, which can look like familiar ones.");
+                ui.add(egui::Label::new(egui::RichText::new(note).color(t.text)).wrap());
+            }
         }
         egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
             ui.add(egui::Label::new(egui::RichText::new(&pending.url).monospace().small()).wrap().selectable(true));

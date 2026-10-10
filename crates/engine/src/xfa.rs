@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use pdfcraft_js::formcalc::run_formcalc_within;
 use pdfcraft_js::xfa::{XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, run_xfa_within};
 use pdfcraft_xfa::model::Template;
 use pdfcraft_xfa::{FormNode, LiveForm, NodeKind, ScriptEvent};
@@ -207,6 +208,8 @@ struct FieldInfo {
     kind: pdfcraft_forms::FieldKind,
     value: Vec<String>,
     on_state: String,
+    /// List boxes that take several values (one per line in the data).
+    multi: bool,
 }
 
 fn field_infos(doc: &pdfcraft_cos::Document) -> HashMap<String, FieldInfo> {
@@ -214,7 +217,8 @@ fn field_infos(doc: &pdfcraft_cos::Document) -> HashMap<String, FieldInfo> {
         .into_iter()
         .map(|f| {
             let on_state = f.widgets.first().and_then(|w| w.on_state.clone()).unwrap_or_else(|| "1".into());
-            (f.name, FieldInfo { kind: f.kind, value: f.value, on_state })
+            let multi = f.kind == pdfcraft_forms::FieldKind::List && f.has(pdfcraft_forms::flags::MULTI_SELECT);
+            (f.name, FieldInfo { kind: f.kind, value: f.value, on_state, multi })
         })
         .collect()
 }
@@ -241,7 +245,6 @@ struct Runner<'a, 'b> {
     tpl: &'a Template,
     run: &'a mut XfaRun<'b>,
     clock: Clock,
-    formcalc_warned: bool,
     runs: usize,
     skipped: usize,
     relayouts: usize,
@@ -270,7 +273,6 @@ impl<'a, 'b> Runner<'a, 'b> {
             tpl,
             run,
             clock: Clock::start(budget_ms),
-            formcalc_warned: false,
             runs: 0,
             skipped: 0,
             relayouts: 0,
@@ -381,11 +383,13 @@ impl<'a, 'b> Runner<'a, 'b> {
             }
             // Read-only fields still take values from scripts (calculated totals are read-only).
             K::PushButton | K::Signature => return false,
+            K::List if info.multi => value.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect(),
             _ => vec![value.to_string()],
         };
         let same = match info.kind {
             K::CheckBox => info.value.is_empty() == new_value.is_empty(),
             K::Radio => info.value.first() == new_value.first(),
+            K::List if info.multi => info.value == new_value,
             _ => info.value.first().map_or(value.is_empty(), |v| v == value),
         };
         if same {
@@ -581,17 +585,15 @@ impl<'a, 'b> Runner<'a, 'b> {
             return Ok(None);
         }
         self.runs += 1;
-        if ev.formcalc {
-            if !self.formcalc_warned {
-                self.error(format!("{}: FormCalc scripts don't run yet (only JavaScript ones)", ev.som));
-                self.formcalc_warned = true;
-            }
-            return Ok(Some(Default::default()));
-        }
         let event = XfaEvent { activity: ev.activity.clone(), target: ev.som.clone(), new_text: new_text.to_string(), prev_text: String::new() };
         let doc_info = XfaDoc { file_name: String::new(), page: 0, page_count: self.run.page_count };
         let root_js = to_js(&self.live().root);
-        let o = run_xfa_within(&ev.script, &event, &doc_info, root_js, limits_for(&ev.activity), timeout_for(&ev.activity));
+        let (limits, timeout) = (limits_for(&ev.activity), timeout_for(&ev.activity));
+        let o = if ev.formcalc {
+            run_formcalc_within(&ev.script, &event, &doc_info, root_js, limits, timeout)
+        } else {
+            run_xfa_within(&ev.script, &event, &doc_info, root_js, limits, timeout)
+        };
         if o.abandoned {
             self.run.ran_away = true;
         }

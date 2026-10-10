@@ -181,6 +181,13 @@ impl Copier<'_> {
     }
 }
 
+/// Copy `o` from `src` into `dst`, reusing the copies listed in `map` (source → destination), so
+/// an object the copied pages already brought along (an ICC profile) is not stored twice.
+pub(crate) fn copy_object(dst: &mut Document, src: &Document, o: &Object, map: HashMap<ObjRef, ObjRef>) -> Object {
+    let mut c = Copier { src, map, pages: HashMap::new(), annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() };
+    c.copy_value(dst, o, None)
+}
+
 /// Copy pages `src_pages` (0-based, in the given order) of `src` into `dst`, inserting them at
 /// position `at`. Returns the new page references in order.
 ///
@@ -188,19 +195,24 @@ impl Copier<'_> {
 /// shared rather than stored twice (see `dedupe`).
 pub fn import_pages(dst: &mut Document, src: &Document, src_pages: &[usize], at: usize) -> Result<Vec<ObjRef>, OrganizeError> {
     let first_new = dst.object_numbers().last().map_or(1, |n| n + 1);
-    let pages = import_pages_mapped(dst, src, src_pages, at)?.0;
+    let pages = import_pages_mapped(dst, src, src_pages, at)?.pages;
     let created: Vec<ObjRef> = dst.object_numbers().into_iter().filter(|n| *n >= first_new).map(|n| ObjRef::new(n, dst.generation(n))).collect();
     crate::dedupe::dedupe_resources(dst, &created, true);
     Ok(pages)
 }
 
-/// `import_pages`, also returning the source-page → destination-page map.
-fn import_pages_mapped(
-    dst: &mut Document,
-    src: &Document,
-    src_pages: &[usize],
-    at: usize,
-) -> Result<(Vec<ObjRef>, HashMap<ObjRef, ObjRef>), OrganizeError> {
+/// What `import_pages_mapped` copied.
+struct Imported {
+    /// The new pages, in order.
+    pages: Vec<ObjRef>,
+    /// Source page → destination page.
+    page_map: HashMap<ObjRef, ObjRef>,
+    /// Every source object copied → its copy.
+    objects: HashMap<ObjRef, ObjRef>,
+}
+
+/// `import_pages`, also returning what was copied from where.
+fn import_pages_mapped(dst: &mut Document, src: &Document, src_pages: &[usize], at: usize) -> Result<Imported, OrganizeError> {
     let source = walk(src)?;
     if let Some(bad) = src_pages.iter().find(|i| **i >= source.len()) {
         return Err(OrganizeError::NoSuchPage(*bad));
@@ -278,7 +290,7 @@ fn import_pages_mapped(
     let inserted: Vec<(ObjRef, Dict)> = new_pages.iter().map(|r| (*r, Dict::new())).collect();
     existing.splice(at..at, inserted);
     rebuild(dst, &existing)?;
-    Ok((new_pages, copier.pages))
+    Ok(Imported { pages: new_pages, page_map: copier.pages, objects: copier.map })
 }
 
 /// Look up a named destination in the source (`/Dests` dictionary or `/Names /Dests` tree).
@@ -410,16 +422,19 @@ fn register_fields(dst: &mut Document, fields: &[ObjRef]) -> Result<(), Organize
 }
 
 /// A new document containing copies of `pages` from `src` (Extract Pages / Split).
-/// Document information (title, author…) is carried over.
+/// Document information (title, author…) is carried over, and so is the print standard the
+/// source declares (PDF/X: its output intents and identification, #263).
 pub fn extract_pages(src: &Document, pages: &[usize]) -> Result<Document, OrganizeError> {
     let mut out = Document::new_empty();
     // One source: nothing to deduplicate.
-    import_pages_mapped(&mut out, src, pages, 0)?;
+    let imported = import_pages_mapped(&mut out, src, pages, 0)?;
     for key in crate::INFO_KEYS {
         if let Some(v) = crate::info(src, key) {
             crate::set_info(&mut out, key, &v)?;
         }
     }
+    // After the title: the XMP packet repeats it.
+    crate::pdfx::carry(&mut out, src, &crate::pdfx::PrintStandard::of(src), imported.objects)?;
     // The pages share their source's resource dictionary, so the part would otherwise carry every
     // XObject the source lists — images and all (#204). Keep only what these pages draw.
     crate::prune::prune_unused_xobjects(&mut out)?;
@@ -463,7 +478,8 @@ pub fn split(src: &Document, by: &SplitBy) -> Result<Vec<Document>, OrganizeErro
 /// Combine whole documents, in order, into a new document. Each source gets a top-level
 /// bookmark (its `title`) pointing to its first page, like Acrobat's Combine Files.
 /// The source's own bookmarks are nested (collapsed) under its entry, and its document-level
-/// attachments are carried over.
+/// attachments are carried over. When every source declares the same print standard (PDF/X
+/// with the same output intent), so does the result.
 pub fn combine(sources: &[(&str, &Document)]) -> Result<Document, OrganizeError> {
     let all: Vec<(&str, &Document, Option<&[usize]>)> = sources.iter().map(|(t, d)| (*t, *d, None)).collect();
     combine_selected(&all)
@@ -475,6 +491,10 @@ pub fn combine_selected(sources: &[(&str, &Document, Option<&[usize]>)]) -> Resu
     let mut out = Document::new_empty();
     let mut marks = Vec::new();
     let mut attachments = Vec::new();
+    // The first source's print standard, and what its pages brought along; it carries over
+    // only when every source declares the same one.
+    let mut standard: Option<(crate::pdfx::PrintStandard, &Document, HashMap<ObjRef, ObjRef>)> = None;
+    let mut agreed = true;
     for (title, src, chosen) in sources {
         let n = crate::page_count(src)?;
         let pages: Vec<usize> = match chosen {
@@ -487,11 +507,19 @@ pub fn combine_selected(sources: &[(&str, &Document, Option<&[usize]>)]) -> Resu
             None => (0..n).collect(),
         };
         let at = crate::page_count(&out)?;
-        let (new, page_map) = import_pages_mapped(&mut out, src, &pages, at)?;
-        if let Some(first) = new.first() {
-            marks.push((title.to_string(), *first, *src, page_map));
+        let imported = import_pages_mapped(&mut out, src, &pages, at)?;
+        if let Some(first) = imported.pages.first() {
+            marks.push((title.to_string(), *first, *src, imported.page_map));
         }
         collect_attachments(&mut out, src, &mut attachments);
+        let declared = crate::pdfx::PrintStandard::of(src);
+        match &standard {
+            None => standard = Some((declared, *src, imported.objects)),
+            Some((first, _, _)) => agreed &= first.same_as(&declared),
+        }
+    }
+    if let Some((declared, src, objects)) = standard.filter(|_| agreed) {
+        crate::pdfx::carry(&mut out, src, &declared, objects)?;
     }
     // Sources often share fonts, images and profiles (or are the same file): store them once.
     let all: Vec<ObjRef> = out.object_numbers().into_iter().map(|n| ObjRef::new(n, out.generation(n))).collect();

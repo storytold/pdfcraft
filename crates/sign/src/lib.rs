@@ -10,13 +10,17 @@
 pub mod cms;
 pub mod der;
 pub mod dss;
+mod ec512;
 #[cfg(target_os = "macos")]
 pub mod keychain;
 pub mod keys;
 pub mod pdf;
 pub mod pkcs12;
 pub mod revocation;
+mod rsa_pad;
 pub mod timestamp;
+#[cfg(target_os = "windows")]
+pub mod windows;
 pub mod x509;
 
 pub use der::Time;

@@ -386,12 +386,13 @@ impl PdfCraftApp {
                         let edit = self.session.get(id).map(|d| d.accessibility_fix(rule, None));
                         match edit {
                             Some(Ok(e)) => {
-                                if self.apply_edit(e) {
-                                    self.run_accessibility_check();
-                                    // The title can then be edited.
-                                    if rule == Rule::Title {
-                                        self.dialog = Some(Dialog::Properties(PropsTab::Description));
-                                    }
+                                if !self.apply_edit(e) {
+                                    return;
+                                }
+                                self.run_accessibility_check();
+                                // The title can then be edited.
+                                if rule == Rule::Title {
+                                    self.dialog = Some(Dialog::Properties(PropsTab::Description));
                                 }
                             }
                             Some(Err(e)) => self.notify_error(e),
@@ -422,14 +423,15 @@ impl std::fmt::Debug for AltDraft {
     }
 }
 
-/// Render a figure's area for the dialog (at most 360 × 220 px).
+/// Render a figure's area for the dialog, at the preview pane's device resolution.
 fn figure_picture(ctx: &egui::Context, doc: &pdfcraft_engine::Document, f: &pdfcraft_engine::a11y::Figure) -> Option<egui::TextureHandle> {
     let (page, b) = (f.page?, f.bbox?);
     let info = doc.info.pages.get(page)?;
     let (u, v) = (info.user_to_view(b[0] as f32, b[1] as f32), info.user_to_view(b[2] as f32, b[3] as f32));
     let (x0, y0, x1, y1) = (u[0].min(v[0]), u[1].min(v[1]), u[0].max(v[0]), u[1].max(v[1]));
     let (w, h) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
-    let scale = (360.0 / w).min(220.0 / h).clamp(0.05, 8.0);
+    let ppp = ctx.pixels_per_point().max(1.0);
+    let scale = ((380.0 * ppp) / w).min((220.0 * ppp) / h).clamp(0.05, 32.0);
     let tile = pdfcraft_render::Tile {
         x: (x0 * scale).floor().max(0.0) as u32,
         y: (y0 * scale).floor().max(0.0) as u32,

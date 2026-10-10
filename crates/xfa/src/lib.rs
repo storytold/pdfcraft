@@ -9,6 +9,7 @@
 
 pub mod data;
 pub mod fixtures;
+pub mod image;
 pub mod layout;
 pub mod model;
 pub mod packets;

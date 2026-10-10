@@ -8,6 +8,47 @@
 # Product and technology names (Linkco PDF Editor, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept.
 
+# About, contributor/model credits, and multiline interface guidance.
+	About	关于
+	Contributors	贡献者
+	Models	模型
+	Show	显示
+	Username	用户名
+	Display name	显示名称
+	Real name	真实姓名
+	Sort	排序
+	Name (A–Z)	名称（A–Z）
+	Merged PRs	已合并的 PR
+	PRs	PR 数
+	Commits	提交数
+	Lines added	新增行数
+	Lines deleted	删除行数
+	Line delta	净增行数
+	Binary assets added	新增二进制资源
+	Binary assets removed	删除二进制资源
+	First commit	首次提交
+	Last commit	最近提交
+	+LOC	新增行
+	−LOC	删除行
+	ΔLOC	净增行
+	+Bin	新增资源
+	−Bin	删除资源
+	First	首次提交
+	Last	最近提交
+	Reverse the order	反转排序
+	Grab bag	名称列表
+	Table	表格
+	{n} contributors · {c} commits	{n} 位贡献者 · {c} 次提交
+	No contributor data was built into this copy.	此版本未包含贡献者数据。
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}：{prs} 个 PR，{commits} 次提交，新增 {added} 行 / 删除 {deleted} 行（净增 {delta} 行），新增 {bin_added} 个 / 删除 {bin_deleted} 个二进制资源，{first} – {last}
+	No model credits were built into this copy.	此版本未包含模型贡献记录。
+	Company	公司
+	Model	模型
+	% of all commits	占全部提交的比例
+	Lines +/−	新增 / 删除行数
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	仅在您信任此文档时继续。链接地址可能携带文档中的信息，例如您在表单中输入的内容。
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	请使用单面打印。保持纸张顺序，沿裁切标记切开，然后按从左到右、从上到下的顺序叠放各摞纸张。
+
 	Menu	菜单
 	File	文件
 	Edit	编辑
@@ -20,12 +61,36 @@
 	Identity	身份
 	Name on new comments	新注释的作者姓名
 	Open…	打开…
+	Open Recent	打开最近的文件
+	Clear Recent Files	清除最近的文件
+	Remove from Recent	从最近的文件中移除
+	Remove {name} from Recent	从最近的文件中移除{name}
+	Pin folder to Home…	将文件夹固定到主页…
+	Folders	文件夹
+	Pin a folder…	固定文件夹…
+	Pin a folder to Home	将文件夹固定到主页
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	固定一个文件夹，即可在此列出其中最新的 PDF，例如扫描仪或同步云盘保存文件的位置。
+	Unpin	取消固定
+	Unpin {folder}	取消固定 {folder}
+	Looking for PDFs…	正在查找 PDF…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	此文件夹当前不可用。它可能已被移动，或其所在驱动器或云同步处于离线状态。
+	No PDFs in this folder yet	此文件夹中还没有 PDF
+	Show less	收起
+	Show {n} more	再显示 {n} 个
+	The newest {n} of {total} PDFs	共 {total} 个 PDF 中最新的 {n} 个
+	Pinned folders need the desktop app	固定文件夹需要桌面版应用
+	Choose a folder on this computer to pin	请选择此电脑上要固定的文件夹
+	{folder} is already pinned to Home	{folder} 已固定到主页
+	You can pin up to {n} folders. Unpin one first.	最多可固定 {n} 个文件夹。请先取消固定一个。
+	Pinned {folder} to Home	已将 {folder} 固定到主页
+	No recent files	没有最近的文件
 	Open	打开
 	Open file	打开文件
 	Home	主页
 	New blank PDF	新建空白 PDF
 	Create PDF from file…	从文件创建 PDF…
 	Create PDF from images…	从图像创建 PDF…
+	Create PDF from multiple files…	从多个文件创建 PDF…
 	Create PDF from clipboard	从剪贴板创建 PDF
 	Combine files…	合并文件…
 	Save	保存
@@ -66,6 +131,8 @@
 	Display theme	显示主题
 	Side panels	侧边面板
 	Enable Acrobat JavaScript	启用 Acrobat JavaScript
+	Flatten Fill & Sign when saving	保存时拼合填写与签名
+	Text, marks and signatures become part of the page. Other comments stay editable.	文字、标记和签名会成为页面内容。其他注释仍可编辑。
 	OK	确定
 	Cancel	取消
 	Close	关闭
@@ -231,6 +298,7 @@
 	Bottom:	下：
 	Width:	宽：
 	Height:	高：
+	Rotation:	旋转：
 	Points from the page's bottom-left corner.	从页面左下角算起的点数。
 	Alignment:	对齐：
 	Default Value:	默认值：
@@ -364,7 +432,9 @@
 	Check for updates	检查更新
 	No check has run yet.	尚未运行检查。
 	Checking for a newer version…	正在检查新版本…
+	Linkco PDF Editor {v} is available.	Linkco PDF Editor {v} 可用。
 	You have version {c}. Download the new version from its release page.	当前版本为 {c}。请从其发布页面下载新版本。
+	Linkco PDF Editor {c} is up to date.	Linkco PDF Editor {c} 已是最新。
 	Couldn't check for updates: {e}	无法检查更新：{e}
 	You have version {c}. All releases are listed at {page}.	当前版本为 {c}。所有版本列在 {page}。
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	向 GitHub 查询最新版本。不会自动下载或安装任何内容。
@@ -442,6 +512,7 @@
 	Sign with a Digital ID	使用数字 ID 签名
 	Choose the digital ID that you want to use for signing:	选择要用于签名的数字 ID：
 	Keychain  ·  	钥匙串 · 
+	Windows store  ·  	Windows 证书存储 · 
 	Issued by: 	颁发者：
 	, Expires: 	，有效期至：
 	No digital IDs yet.	尚无数字 ID。
@@ -470,6 +541,8 @@
 	No changes allowed	不允许任何更改
 	Annotations, form fill-in, and digital signatures	注释、填写表单和数字签名
 	Form fill-in and digital signatures	填写表单和数字签名
+	The key is in the macOS Keychain, which may ask to allow Linkco PDF Editor to use it.	密钥位于 macOS 钥匙串中，系统可能会询问是否允许 Linkco PDF Editor 使用它。
+	The key is in the Windows certificate store, which may ask to allow Linkco PDF Editor to use it.	密钥位于 Windows 证书存储中，系统可能会询问是否允许 Linkco PDF Editor 使用它。
 	Digital ID password	数字 ID 密码
 	Back	返回
 	Validate all	全部验证
@@ -544,6 +617,13 @@
 	This comment's appearance can't be changed yet.	此注释的外观尚无法更改。
 	Icon	图标
 	Thickness	粗细
+	Line ending	线条端点
+	Open arrow	开口箭头
+	Closed arrow	闭合箭头
+	Butt	平头
+	Reverse open arrow	反向开口箭头
+	Reverse closed arrow	反向闭合箭头
+	Slash	斜线
 	Modified	修改时间
 	No status has been set.	尚未设置状态。
 	Compare Files	比较文件
@@ -826,11 +906,13 @@
 	Light gray	浅灰色
 	Dark gray	深灰色
 	Current page	当前页
+	Selected pages	选定的页面
 	Document language	文档语言
 	Output	输出
 	Searchable Image (Exact)	可搜索图像（精确）
 	Adds invisible text over each word; the page image is not changed	在每个词上添加不可见文本；页面图像保持不变
 	Downsample to	降采样至
+	Text recognition isn't installed: its model files are missing. Reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them.	未安装文本识别：缺少模型文件。请重新安装 Linkco PDF Editor，或将 PDFCRAFT_MODELS 设置为包含这些文件的文件夹。
 	Settings	设置
 	Protect	保护
 	Advanced options	高级选项
@@ -1141,6 +1223,7 @@
 	This document has no attachments.	本文档没有附件。
 	Hide layer	隐藏图层
 	Show layer	显示图层
+	Set layer visibility	设置图层可见性
 	on page {label}	第 {label} 页
 	Save attachment…	保存附件…
 	Open in a new tab	在新选项卡中打开
@@ -1210,6 +1293,7 @@
 	Anyone opening the document will need this password. It's applied when you save.	打开文档的任何人都需要此密码。保存时应用。
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	打开文档无需密码；更改限制需要此密码。保存时应用。
 	Recover unsaved documents?	要恢复未保存的文档吗？
+	Linkco PDF Editor didn't shut down normally. These documents had changes that were autosaved:	Linkco PDF Editor 未正常关闭。以下文档的更改已自动保存：
 	just now	刚刚
 	{n} min ago	{n} 分钟前
 	{n} h ago	{n} 小时前
@@ -1228,6 +1312,7 @@
 	Select all pages (Organize)	选择所有页面（组织页面）
 	Version {v}	版本{v}
 	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	用 Rust 从零编写的开源 PDF 应用。MIT OR Apache-2.0 许可。
+	Part of	隶属于
 	Summarize Options	汇总选项
 	Choose a layout:	选择布局：
 	Comments only	仅注释
@@ -1374,8 +1459,10 @@
 	On the web, open or drop an image to convert it	在 Web 端，打开或拖入图像进行转换
 	Couldn't optimize the file: {e}	无法优化文件：{e}
 	Couldn't write {path}: {e}	无法写入{path}：{e}
+	The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	该表单请求提交到{u}；Linkco PDF Editor 不发送表单数据。请保存文档以保留填写内容。
 	{s} actions run in the JavaScript engine (M6)	{s} 动作在 JavaScript 引擎中运行 (M6)
 	{name}: the {other} action isn't supported yet	{name}：{other} 动作暂不受支持
+	{name} submits the form to {url}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	{name} 将表单提交到{url}；Linkco PDF Editor 不发送表单数据。请保存文档以保留填写内容。
 	Export stopped: {e}	导出中止：{e}
 	Exported 1 image	已导出 1 张图像
 	Exported {n} images	已导出{n}张图像
@@ -1403,6 +1490,15 @@
 	Created 1 link	已创建 1 个链接
 	Created {n} links	已创建{n}个链接
 	Text recognition is already running	文本识别已在运行
+	Optimizing… removing user data	正在优化…删除用户数据
+	Optimizing… image {d} of {t}	正在优化…第{d}张图像，共{t}张
+	Optimizing… cleaning up	正在优化…清理
+	Optimizing… merging identical objects	正在优化…合并相同对象
+	Optimizing… writing the copy	正在优化…写入副本
+	Cancelling…	正在取消…
+	Optimization is already running	优化已在运行
+	Optimization cancelled	已取消优化
+	Couldn't optimize the file	无法优化文件
 	Recognizing text… file {d} of {t}	正在识别文本…第{d}个文件，共{t}个
 	Recognizing text… page {d} of {t}	正在识别文本…第{d}页，共{t}页
 	Recognized 1 word	识别了 1 个单词
@@ -1426,7 +1522,63 @@
 	Sent to {printer}	已发送到{printer}
 	Sent to {printer}: {msg}	已发送到{printer}：{msg}
 	Choose a folder for the searchable files	选择可搜索文件的文件夹
-	Files are combined in this order. Leave Pages empty to take every page.	文件将按此顺序合并。页码留空表示取全部页面。
+	Files are combined from top to bottom. Leave Pages empty to take every page.	文件按从上到下的顺序合并。页码留空表示取全部页面。
+	Unlock…	解锁…
+	Select a password-protected file first	请先选择一个受密码保护的文件
+	Enter the permissions password to allow combining	输入权限密码以允许合并
+	Enter the password that opens it	输入打开该文件的密码
+	Unlock {name}	解锁 {name}
+	Unlock {n} files	解锁 {n} 个文件
+	The same password is tried on each file.	将对每个文件尝试同一密码。
+	Hide password	隐藏密码
+	Show password	显示密码
+	Wrong password	密码错误
+	The password is only used to read the file; it isn't saved.	密码仅用于读取文件，不会被保存。
+	Unlock	解锁
+	Opened, but its security settings don't allow combining. Enter the permissions password.	已打开，但其安全设置不允许合并。请输入权限密码。
+	Unlocked: the combined file won't be password-protected	已解锁：合并后的文件将不受密码保护
+	Unlocked {n} of {m} files	已解锁 {m} 个文件中的 {n} 个
+	Drop PDFs or folders here, or choose them.	将 PDF 或文件夹拖放到此处，或选择它们。
+	Add folder…	添加文件夹…
+	Add folder and subfolders…	添加文件夹及子文件夹…
+	More ways to add files	更多添加文件的方式
+	Every PDF in the folder	文件夹中的所有 PDF
+	Every PDF in the folder and the folders inside it	文件夹及其子文件夹中的所有 PDF
+	Add folder	添加文件夹
+	Add folder and subfolders	添加文件夹及子文件夹
+	No PDFs found in {folder}	在 {folder} 中未找到 PDF
+	Added the first {n} PDFs in {folder}	已添加 {folder} 中的前 {n} 个 PDF
+	Click to sort, drag to move the column. Drag its edge to resize it.	单击以排序，拖动以移动列。拖动列边缘可调整宽度。
+	Reset columns	重置列
+	Remove {n} files	删除 {n} 个文件
+	{n} selected	已选择 {n} 个
+	sorted ascending	升序
+	sorted descending	降序
+	Protected: the combined file won't keep its security settings	受保护：合并后的文件不会保留其安全设置
+	Add open documents	添加已打开的文档
+	All open documents	所有已打开的文档
+	No documents are open	没有打开的文档
+	Select a file first	请先选择一个文件
+	1 file	1 个文件
+	{n} files	{n} 个文件
+	1 file needs attention	1 个文件需要处理
+	{n} files need attention	{n} 个文件需要处理
+	{name} can't be combined: {why}	无法合并 {name}：{why}
+	Check the pages of {name}: {why}	请检查 {name} 的页码：{why}
+	Add the PDFs to combine	添加要合并的 PDF
+	File name	文件名
+	Warnings	警告
+	Drag to reorder	拖动以重新排序
+	{k} of {n}	{k}/{n}
+	? of {n}	?/{n}
+	Added more than once	重复添加
+	yesterday	昨天
+	{n} days ago	{n} 天前
+	No pages selected	未选择任何页面
+	Password-protected	受密码保护
+	Its security settings don't allow copying pages	其安全设置不允许复制页面
+	Can't be read: {e}	无法读取：{e}
+	Includes unsaved changes	包含未保存的更改
 	Pages of {name} to combine, e.g. 1-3, 6	要合并的{name}的页面，例如 1-3、6
 	Remove {name}	删除{name}
 	Add files…	添加文件…
@@ -1465,6 +1617,8 @@
 	Created a comment summary	已创建注释摘要
 	Couldn't open {name}: {e}	无法打开{name}：{e}
 	Couldn't read {name}: {e}	无法读取{name}：{e}
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	便携模式已关闭：无法写入{folder}（{error}）。设置改为保存在你的用户文件夹中。
+	Linkco PDF Editor is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	Linkco PDF Editor 正在不使用图形处理器的情况下绘制，因此可能较慢。更新显卡驱动程序可能会有帮助。
 	Couldn't save: {e}	无法保存：{e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Web 端附件下载将于 M3.10 到来（{n} 字节已就绪）
 	`{command}` {when}	`{command}` {when}
@@ -1532,6 +1686,8 @@
 	Signed and all signatures are valid.	已签名，所有签名均有效。
 	At least one signature has problems.	至少一个签名存在问题。
 	This document is secured. Some changes are restricted by its security settings.	本文档已加密。其安全设置限制了部分更改。
+	This is a dynamic XFA form, which Linkco PDF Editor can't display yet. What you see is the file's placeholder page.	这是动态 XFA 表单，Linkco PDF Editor 暂无法显示。您看到的是文件的占位页面。
+	This form also contains XFA data, which Linkco PDF Editor doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	此表单还包含 XFA 数据，Linkco PDF Editor 暂不读取。您可以填写字段，但 Acrobat 可能显示 XFA 值。
 	This document contains {n} interactive form fields.	本文档包含 {n} 个交互式表单域。
 	This file was damaged and has been repaired. Saving keeps the repaired version.	此文件已损坏并已修复。保存将保留修复后的版本。
 	Dismiss	关闭
@@ -1570,6 +1726,7 @@
 	Read	阅读
 	Convert	转换
 	E-Sign	电子签名
+	Welcome to Linkco PDF Editor	欢迎使用 Linkco PDF Editor
 	An open-source PDF workbench — local, private, and scriptable.	开源 PDF 工作台——本地、私密、可编写脚本。
 	Recommended tools	推荐工具
 	Use now	立即使用
@@ -1602,7 +1759,15 @@
 	Split document…	拆分文档…
 	Number pages…	页面编号…
 	Keyboard shortcuts	键盘快捷键
+	Join the ArtCraft Discord	加入 ArtCraft Discord
+	Join the ArtCraft community	加入 ArtCraft 社区
+	Get help, share feedback and follow development on Discord.	在 Discord 上获取帮助、分享反馈并关注开发动态。
+	Join our Discord	加入我们的 Discord
+	Linkco PDF Editor web page	Linkco PDF Editor 网页
+	Linkco PDF Editor on GitHub	GitHub 上的 Linkco PDF Editor
+	ArtCraft website	ArtCraft 官网
 	Check for updates…	检查更新…
+	About Linkco PDF Editor	关于 Linkco PDF Editor
 	JavaScript console…	JavaScript 控制台…
 	Document JavaScripts…	文档 JavaScript…
 	Recognize text…	识别文本…
@@ -1612,6 +1777,8 @@
 	Add background…	添加背景…
 	Prepare a form	准备表单
 	Digitally sign	数字签名
+	Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.	在 Linkco PDF Editor 中打开的文件会显示在这里。将 PDF 拖放到任意位置即可打开。
+	Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider.	Linkco PDF Editor 可离线工作。无遥测、无账号，除非您自行添加服务商，否则无云端处理。
 
 	Measure distance	测量距离
 	Measure perimeter	测量周长
@@ -1818,6 +1985,7 @@
 	the image is empty	图像为空
 	The operation failed.	操作失败。
 	the password is incorrect	密码不正确
+	the text recognition models are not installed (reinstall Linkco PDF Editor, or set PDFCRAFT_MODELS to the folder that holds them)	尚未安装文本识别模型（请重新安装 Linkco PDF Editor，或将 PDFCRAFT_MODELS 设置为包含这些模型的文件夹）
 	The title in the metadata and the document information differ	元数据与文档信息中的标题不一致
 	the title must not be empty	标题不能为空
 	there are no pages to print	没有可打印的页面
@@ -1848,12 +2016,14 @@
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	脚本在沙盒中运行，无法访问文件或网络。脚本请求打开网页时，需要先获得您的许可。关闭 JavaScript 后，Acrobat 的标准格式、验证和计算函数仍可使用。
 	Sign yourself	自行签名
 	Switch to two-page view first to show the cover page	请先切换到双页视图，才能显示封面页
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	尚未安装文本识别功能：缺少模型（请运行 `cargo xtask models` 或设置 PDFCRAFT_MODELS）。
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	用于打开 PDF 时。如果启动参数或控制通道明确指定了模式，则本次会话优先使用该模式。
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF 未指定布局或缩放时使用。连续滚动时页面不会逐页吸附。
+	Reopen the files that were open when Linkco PDF Editor last closed	重新打开上次关闭 Linkco PDF Editor 时打开的文件
 	Write this email?	是否撰写此邮件？
 	{who} in this document wants to open this address in your browser:	此文档中的{who}请求在浏览器中打开以下地址：
 	{who} in this document wants to open your email app with this address:	此文档中的{who}请求打开邮件应用并使用以下地址：
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	此网址混用了不同字母表的字母，这是仿冒其他网站名称的常见手法。
+	This web address uses letters from another alphabet, which can look like familiar ones.	此网址使用了其他字母表的字母，它们可能看起来像熟悉的字母。
 	CheckBox	复选框
 	Create link	创建链接
 	Duplicate field	复制字段
@@ -1875,18 +2045,60 @@
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA 表单：字段与 XFA 数据保持同步，以便其他阅读器显示您填写的内容。
 @plural	{n} page|{n} pages	{n} 页
 @plural	{n} field|{n} fields	{n} 个字段
-	About Linkco PDF Editor	关于 Linkco PDF Editor
+	Created a PDF from {n} files	已从 {n} 个文件创建 PDF
+	PDF, images and text	PDF、图像和文本
+	Insert a file before page {label}	在第 {label} 页之前插入文件
+	Insert a file at the end	在末尾插入文件
+	Save pages	保存页面
+	Save these pages as one PDF	将这些页面保存为一个 PDF
+	No changes to save	没有要保存的更改
+	Created a PDF from {n} files; left out: {names}	已从 {n} 个文件创建 PDF；已忽略：{names}
+	Created a PDF from the first {n} files	已从前 {n} 个文件创建 PDF
+	None of those files can be made into a PDF; use PDFs, images or .txt files	这些文件都无法转换为 PDF；请使用 PDF、图像或 .txt 文件
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	选择 PNG 或 JPEG 图像（最大 4 MiB）。透明度会保留。
+	Couldn't import the signature image: {e}	无法导入签名图像：{e}
+	Go to page…	转到页面…
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	标准字体无法显示“{c}”（{code}）。目前只能添加西欧字符作为文本。
+	Larger pages	放大页面
+	Smaller pages	缩小页面
+	Reset page size	重置页面大小
+	Date format	日期格式
+	Fill & Sign dates	填写与签名的日期
+	Pattern	模式
+	Today: {date}	今天：{date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy 或 yy 年 · m 或 mm 月 · mmm 或 mmmm 月份名称 · d 或 dd 日 · ddd 或 dddd 星期。H、h、M、s 和 t 是时间字母，不能单独使用：在字母前加 {escape} 可按原样显示。
+	Same as interface ({language})	与界面相同（{language}）
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	暂时无法将 {chars} 写入 PDF：填写与签名的文字仅支持西欧字符。请选择数字格式，例如 dd.mm.yyyy。
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	打开打印机驱动程序的首选项。这些设置会保存并用于此电脑上的所有打印；此处选择的份数、双面、灰度和纸张仍然适用。
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	此次打印的打印机驱动程序专属设置：纸盒、纸张类型、装订整理等。
+	Couldn't open the printer's preferences: {e}	无法打开打印机首选项：{e}
+	Printer properties	打印机属性
+	Reset to printer defaults	恢复打印机默认设置
+	This printer offers no settings of its own.	此打印机没有专属设置。
+	Scroll tabs left	向左滚动选项卡
+	Scroll tabs right	向右滚动选项卡
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	共享字段属性
+	{n} fields selected	已选择 {n} 个字段
+	Mixed	混合
+	Custom font	自定义字体
+	Only checked properties will change. Mixed means the selected fields have different values.	只会更改勾选的属性。“混合”表示所选字段的值不同。
+	Shift- or Ctrl/Command-click to select several fields.	按住 Shift 或 Ctrl/Command 单击可选择多个字段。
+	Font size 0 uses automatic sizing.	字号为 0 时自动调整大小。
+	Character limit:	字符数限制：
+	Character limit 0 means no limit. A comb of characters needs a limit.	字符数限制为 0 表示无限制。分格字符必须设置字符数限制。
+	To change locked fields, also set Locked to No.	要更改锁定的字段，还需将“锁定”设为“否”。
+	Comb of characters	字符梳
+	The document changed while you were editing field properties.	编辑字段属性时文档已更改。
+	The document is no longer open.	文档已不再打开。
+	The field properties dialog is no longer open.	字段属性对话框已不再打开。
+	The field properties could not be changed.	无法更改字段属性。
+	The selected fields could not be found. Select them again.	找不到所选字段。请重新选择。
+	The field {name} no longer exists.	字段 {name} 已不存在。
+	A selected field has no widget on any page, so the fields can't be edited together.	某个所选字段在任何页面上都没有控件，因此无法一起编辑这些字段。
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 张以可绘制的最大尺寸 {dpi} dpi 导出）
 	Linkco PDF Editor	Linkco PDF 编辑器
 	Professional PDF tools for everyday document work.	面向日常文档工作的专业 PDF 工具。
 	Professional PDF document tools by Linkco.	Linkco 出品的专业 PDF 文档工具。
 	View all tools →	查看全部工具 →
-	Files you open in Linkco PDF Editor appear here. Drop a PDF anywhere to open it.	在 Linkco PDF Editor 中打开的文件会显示在这里。将 PDF 拖放到任意位置即可打开。
-	Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider.	Linkco PDF Editor 可离线工作。无遥测、无账号，除非您自行添加服务商，否则无云端处理。
-	Linkco PDF Editor {v} is available.	Linkco PDF Editor {v} 可用。
-	Linkco PDF Editor {c} is up to date.	Linkco PDF Editor {c} 已是最新。
-	The key is in the macOS Keychain, which may ask to allow Linkco PDF Editor to use it.	密钥位于 macOS 钥匙串中，系统可能会询问是否允许 Linkco PDF Editor 使用它。
-	Linkco PDF Editor didn't shut down normally. These documents had changes that were autosaved:	Linkco PDF Editor 未正常关闭。以下文档的更改已自动保存：
-	The form asks to be submitted to {u}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	该表单请求提交到{u}；Linkco PDF Editor 不发送表单数据。请保存文档以保留填写内容。
-	{name} submits the form to {url}; Linkco PDF Editor doesn't send form data. Save the document to keep your entries.	{name} 将表单提交到{url}；Linkco PDF Editor 不发送表单数据。请保存文档以保留填写内容。
-	This is a dynamic XFA form, which Linkco PDF Editor can't display yet. What you see is the file's placeholder page.	这是动态 XFA 表单，Linkco PDF Editor 暂无法显示。您看到的是文件的占位页面。
-	{who} in this document tried to open an address Linkco PDF Editor won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	此文档中的{who}尝试打开 Linkco PDF Editor 不会打开的地址：{e}。仅允许从文档打开网页（http、https）和电子邮件（mailto）链接。

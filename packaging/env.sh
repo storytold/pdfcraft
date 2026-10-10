@@ -47,7 +47,7 @@ warn() {
 # Copy licence and readme files that exist into a package directory.
 copy_docs() {
   local dest="$1" f
-  for f in README.md LICENSE LICENSE-MIT LICENSE-APACHE COPYRIGHT; do
+  for f in README.md LICENSE LICENSE-MIT LICENSE-APACHE COPYRIGHT NOTICE; do
     if [ -f "$ROOT/$f" ]; then cp "$ROOT/$f" "$dest/"; fi
   done
   copy_font_licences "$dest"
@@ -63,6 +63,25 @@ copy_font_licences() {
     family="$(basename "$(dirname "$f")")"
     cp "$f" "$dest/OFL-$family.txt"
   done
+}
+
+# Fetch the OCR models into a package directory (#103): `cargo xtask models DEST` downloads every
+# ATTRIBUTION.toml `kind = "model"` file, verified by SHA-256, with its licence text and an
+# ATTRIBUTION.txt crediting them. DEST must be where pdfcraft_ocr::Models::dirs_beside_exe looks
+# from the installed executable. Nothing here names a model file, so a model added to the manifest
+# later ships without changing the packaging.
+stage_models() {
+  local dest="$1"
+  mkdir -p "$dest"
+  dest="$(cd "$dest" && pwd)"
+  (cd "$ROOT" && cargo xtask models "$dest")
+  rm -f "$dest"/*.part
+  if ! ls "$dest"/*.LICENCE.txt >/dev/null 2>&1 || [ ! -s "$dest/ATTRIBUTION.txt" ]; then
+    echo "error: no OCR models in $dest after cargo xtask models" >&2
+    exit 1
+  fi
+  echo "OCR models in $dest:"
+  ls -l "$dest"
 }
 
 # Portable SHA-256 of a file (prints just the hash).
