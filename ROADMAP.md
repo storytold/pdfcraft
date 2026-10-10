@@ -29,8 +29,8 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **≈ 67%** tier-weighted (57.0% unweighted: 423 shipped + 75 partial of 808; P0 94.2%) | measured, `parity/acrobat-features.toml` |
-| Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.3% unweighted; P0 95.3%) | measured ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
+| **Feature breadth** | **≈ 67.5%** tier-weighted (57.1% unweighted: 425 shipped + 75 partial of 810; P0 94.2%) | measured, `parity/acrobat-features.toml` |
+| Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.4% unweighted; P0 95.3%) | measured ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 49%** (45–53%) | estimated, weighted sum over [dimensions](#by-dimension) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, essentials user | **≈ 66%** (60–70%) | estimated ([method](docs/target-app-parity.md#essentials-user)) |
@@ -58,7 +58,7 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 
 | Dimension | Ready | Weight | Remaining (h) | Doc |
 |---|---|---|---|---|
-| Features (14 areas) | ≈ 49% depth · 67% breadth | 40% | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
+| Features (14 areas) | ≈ 49% depth · 67.5% breadth | 40% | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
 | UI/UX fidelity | ≈ 55% | 10% | 30–60 | [ui-parity.md](docs/ui-parity.md) |
 | File formats and conversion | ≈ 40% | 12% | 120–220 (within features) | [file-format-parity.md](docs/file-format-parity.md) |
 | PDF specification and standards | ≈ 60% | 8% | 150–260 (within features) | [pdf-spec-parity.md](docs/pdf-spec-parity.md) |
@@ -76,9 +76,9 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 | Area | Breadth (measured) | Ready (estimated) | Remaining (h) |
 |---|---|---|---|
 | A Core model and fidelity | 76.8% | 70% | 25–45 |
-| B View and navigation | 62.5% | 55% | 110–190 |
+| B View and navigation | 62.9% | 55% | 110–190 |
 | C Content editing | 54.1% | 30% | 100–180 |
-| D Organize pages | 61.2% | 70% | 12–25 |
+| D Organize pages | 61.7% | 70% | 12–25 |
 | E Comments and review | 77.7% | 70% | 12–25 |
 | F Forms and JavaScript | 78.5% | 65% | 40–75 |
 | G Protect, redact, sanitize | 58.5% | 55% | 15–30 |
@@ -145,6 +145,7 @@ Newest first: the date, what moved, and the new overall estimate.
 - **2026-10-10 (M10.2, JPEG scanning follow-up to #729):** Skip marker fill bytes and keep reading JFIF, APP14 and ICC metadata after the frame header, stopping before scan data or at EOI. Invalid segment lengths return errors; damaged or mismatched ICC profiles retain #729's device-space fallback. Synthetic regression cases added but not run at the contributor's request. Estimates unchanged.
 - **2026-10-10 (M13, desktop action outputs):** Desktop Action Wizard keeps every result when input basenames repeat, or when the destination already has a result from an earlier run. It preserves the original filename and extension for a free name and adds numbered suffixes for occupied names; the bounded search returns an error rather than reusing an occupied path. A real-shell regression drives Start twice and reopens the three-page and one-page results, checking that the original inputs and earlier output remain intact. This covers the desktop writer separately from the CLI/MCP action_run repair in #877. Milestone and effort estimates unchanged.
 
+- **2026-10-10 (M3, #740):** Column select, as in Acrobat: holding Alt (Option on macOS) when a drag starts selects only the text inside the rectangle, with the Select tool, the text markup tools and Redact; Edit ▸ Column select does it with a plain drag, for Linux desktops whose window manager takes Alt-drag (Xfce, Cinnamon, MATE, KDE Plasma 5 by default). Copy gives rows top to bottom with tab-separated cells (right to left in right-to-left rows, reading order for vertical text); `text_extract` takes the same rectangle as `rect`. The new label is in all 15 catalogs. Also repaired `parity/acrobat-features.toml`, which #650 had left unparseable (duplicate keys on `form.field-list`). Still missing: column selection across pages and ⇧-click extension. Estimates unchanged.
 - **2026-10-10 (progress docs, hours per audience):** Each readiness number gets its own hours to ≈ 95%: full ≈ 49% / 780–1,400 h, mainstream ≈ 55% / 500–900 h, essentials ≈ 66% / 180–330 h. The full number is now the standard's additive weighted sum over the dimensions (written weights), 47% → 49%: method aligned with the standard, no new evidence. Beta ≈ 26 points, ≈ 400–700 h.
 - **2026-10-10 (progress docs, gate consistency check):** Re-judged the convert-and-share row with the rule applied across all Crafting Apps (a workflow blocks only when it can't be completed at all; lossy exchange and missing sub-cases are beta items, as for FilmCraft's .prproj or VectorCraft's .ai). Unencrypted sharing works, encryption interop (#774) and Office→PDF are sub-cases, Word export is lossy rather than absent: partial, not blocking. **Stage pre-alpha → alpha**; numbers unchanged (47%, mainstream 55%; beta ≈ 400–700 h). Added an essentials-user score: ≈ 66% for someone who only opens, reads, comments, fills, signs, prints and rearranges pages.
 - **2026-10-10 (progress docs, second look and alpha gate):** At the owner's request, after practitioners praised PdfCraft, re-examined the numbers. User sentiment: 7,595 stars, 177k + 39k downloads of 0.4.0/0.5.0, 23 user issues with explicit praise and switching reports (#179, #232, #273), issue themes concentrated in core paths (launch/GPU, rendering, editing, CJK, signing, printing). The checklist is not niche-dominated (497 mainstream vs 311 specialist rows; P0 95% / 91%). The first pass's 9-point cross-cutting deduction double-counted Windows printing, interop and glyphs: **ready for real work 40% → 47%**, and **≈ 55% for the mainstream practitioner** (new). The new core-workflow gate (craftrules progress-docs) fails on convert and share (#774, no Office import, #773): **stage alpha → pre-alpha**, ≈ 40–70 h from alpha; beta still ≈ 400–700 h.

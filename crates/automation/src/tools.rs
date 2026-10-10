@@ -158,9 +158,16 @@ pub fn tools() -> Vec<ToolDef> {
                     "type":"object","properties":{"kind":{"type":"string","enum":["added","text","image"]},"index":{"type":"integer","minimum":1}},"required":["kind","index"],"additionalProperties":false}},
                 "offset":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},
                 "generation":{"type":"integer","minimum":0,"description":"Use generation returned by object_list to reject a stale selection."}}), &["doc","page","objects","offset"])),
-        t("text_extract", "Extract text", "Extract the text of some or all pages, in reading order.")
+        t("text_extract", "Extract text", "Extract the text of some or all pages, in reading order. With rect, only the text inside that rectangle on each page, as Column select takes it: one row per visual line, side-by-side pieces (table cells) separated by a tab.")
             .ro()
-            .with(schema(json!({ "doc": doc(), "pages": pages("to extract (default: all)") }), &["doc"])),
+            .cmd("edit.column_select")
+            .with(schema(
+                json!({
+                    "doc": doc(), "pages": pages("to extract (default: all)"),
+                    "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "Column select: [x0, y0, x1, y1] in points from the top-left of the displayed page; a glyph counts when its centre is inside." }
+                }),
+                &["doc"],
+            )),
         t("text_find", "Find text", "Find a phrase (case-insensitive, whitespace-normalised) and return each match with its page and line rectangles in points (origin top-left).")
             .ro()
             .cmd("edit.find")
