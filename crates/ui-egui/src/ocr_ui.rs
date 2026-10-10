@@ -113,7 +113,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     });
     if !available {
         ui.label(
-            egui::RichText::new(tl!("Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS)."))
+            egui::RichText::new(tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them."))
                 .small()
                 .color(t.text_muted),
         );

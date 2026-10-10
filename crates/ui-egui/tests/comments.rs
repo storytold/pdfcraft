@@ -271,6 +271,15 @@ fn line_ending_properties_change_and_undo() {
     h.state_mut().open_comment_props(0, 0);
     h.run_steps(2);
     h.get_by_label("Line ending");
+    h.query_all_by_value("None").next().expect("start ending").click();
+    h.run_steps(2);
+    for label in ["Open arrow", "Closed arrow", "Butt", "Reverse open arrow", "Reverse closed arrow", "Slash", "Square", "Circle", "Diamond"] {
+        h.get_by_label(label);
+    }
+    assert_eq!(h.query_all_by_label("ROpenArrow").count(), 0);
+    assert_eq!(h.query_all_by_label("OpenArrow").count(), 0);
+    h.get_by_label("None").click();
+    h.run_steps(1);
     {
         let d = h.state_mut().comment_props.as_mut().expect("open");
         assert_eq!(d.edited.endings.as_deref(), Some(&[pdfcraft_engine::LineEnding::None, pdfcraft_engine::LineEnding::None][..]));
@@ -528,6 +537,13 @@ fn make_current_properties_default() {
     h.run_steps(3);
     let st = h.state().comment_prefs.style(pdfcraft_ui_egui::comments::CommentTool::Rectangle);
     assert_eq!((st.color, st.opacity, st.width), ([0.0, 0.47, 0.84], 0.5, 5.0));
+    // The default survives a restart (#340): a fresh app reads the persisted settings and its
+    // next rectangle still takes the style.
+    let json = h.state().persist();
+    let mut fresh = PdfCraftApp::new();
+    fresh.restore(&json);
+    let st = fresh.comment_prefs.style(pdfcraft_ui_egui::comments::CommentTool::Rectangle);
+    assert_eq!((st.color, st.opacity, st.width), ([0.0, 0.47, 0.84], 0.5, 5.0), "the tool default persisted");
     // The next rectangle takes it.
     h.state_mut().set_option("quick", "square").unwrap();
     drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
@@ -592,6 +608,52 @@ fn attaching_a_file_as_a_comment() {
     let doc = s.session.get(s.views[0].id).unwrap();
     assert!(doc.info.attachments.iter().any(|a| a.name == "notes.txt"), "listed in the Attachments panel");
     assert_eq!(s.quick_tool, QuickTool::Select);
+}
+
+/// Drag with the middle button (the mouse wheel) in small steps.
+fn middle_drag(h: &mut Harness<'static, PdfCraftApp>, from: Pos2, to: Pos2) {
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Middle, pressed, modifiers: egui::Modifiers::NONE };
+    h.event(egui::Event::PointerMoved(from));
+    h.run_steps(1);
+    h.event(button(from, true));
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
+        h.run_steps(1);
+    }
+    h.event(button(to, false));
+    h.run_steps(3);
+}
+
+#[test]
+fn a_middle_drag_with_a_drawing_tool_scrolls_instead_of_drawing() {
+    // egui's drag responses accept any button, so the drawing tools used to draw with the wheel.
+    let mut h = harness(|app| {
+        app.set_option("zoom", "400").unwrap();
+        app.set_option("quick", "ink").unwrap();
+    });
+    let from = at(&h, 150.0, 100.0);
+    let top = h.state().views[0].page_screen_rect(0).expect("page 1 on screen").top();
+    middle_drag(&mut h, from, from - egui::vec2(0.0, 120.0));
+    assert!(comments(&h).is_empty(), "{:?}", comments(&h));
+    let s = h.state();
+    assert!(!s.session.get(s.views[0].id).unwrap().dirty, "scrolling never edits the PDF");
+    assert!(!s.views[0].middle_panning(), "releasing the wheel ends the pan");
+    let moved = s.views[0].page_screen_rect(0).expect("page 1 on screen").top();
+    if cfg!(target_os = "linux") {
+        // Linux latches auto-scroll instead of panning with the drag.
+        assert!(s.views[0].auto_scrolling());
+    } else {
+        assert!((moved - (top - 120.0)).abs() < 1.0, "the page follows the pointer: {top} -> {moved}");
+    }
+    // The tool still draws with the primary button afterwards.
+    if cfg!(target_os = "linux") {
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+    }
+    drag_pt(&mut h, (60.0, 120.0), (200.0, 80.0));
+    let kinds: Vec<String> = comments(&h).into_iter().map(|a| a.subtype).collect();
+    assert_eq!(kinds, ["Ink"]);
 }
 
 #[test]

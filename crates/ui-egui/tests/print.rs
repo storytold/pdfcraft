@@ -153,6 +153,44 @@ fn a_failed_save_as_pdf_keeps_the_dialog_open() {
     assert!(toast.contains("Could not save"), "the user is told why: {toast:?}");
 }
 
+/// Properties… shows the printer driver's own options (CUPS) and sends only those changed.
+#[test]
+fn print_dialog_shows_the_printer_driver_options() {
+    use pdfcraft_engine::print::spool;
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.state_mut().print_draft.printer = None;
+    h.run_steps(1);
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Properties…") && n.is_disabled()).is_some(), "Save as PDF has no driver");
+    let tray = spool::PrinterOption {
+        key: "InputSlot".into(),
+        label: "Paper tray".into(),
+        group: "Media".into(),
+        choices: vec![("AutoSelect".into(), "Auto tray select".into()), ("Tray2".into(), "Tray 2".into())],
+        default: "AutoSelect".into(),
+    };
+    {
+        let d = &mut h.state_mut().print_draft;
+        d.printer = Some("Test_Queue".into());
+        d.driver_options = Some(("Test_Queue".into(), vec![tray]));
+        d.driver_choices.insert("InputSlot".into(), "Tray2".into());
+        d.show_driver_options = true;
+    }
+    h.run_steps(2);
+    h.get_by_label("Printer properties");
+    h.get_by_label("Media");
+    h.get_by_label("Paper tray");
+    assert_eq!(h.state().print_draft.job("form.pdf").options, [("InputSlot".to_string(), "Tray2".to_string())]);
+    h.get_by_label("Reset to printer defaults").click();
+    h.run_steps(2);
+    assert!(h.state().print_draft.job("form.pdf").options.is_empty(), "defaults are not sent");
+    // Options read for another printer never go with this one's job.
+    h.state_mut().print_draft.driver_choices.insert("InputSlot".into(), "Tray2".into());
+    h.state_mut().print_draft.printer = Some("Other_Queue".into());
+    assert!(h.state().print_draft.job("form.pdf").options.is_empty());
+}
+
 #[test]
 fn architectural_page_can_be_matched_at_100_percent() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(|_cc| {

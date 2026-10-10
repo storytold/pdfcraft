@@ -715,6 +715,59 @@ fn annot_dict(doc: &Document, r: ObjRef) -> Dict {
     doc.get(r).as_dict().cloned().unwrap_or_default()
 }
 
+/// A Fill & Sign item: typed text, a check/cross/dot/line, or a typed, drawn or image signature.
+///
+/// New items carry `/PCFillSign`. Older files are recognised from the dictionaries PdfCraft
+/// already writes (`/IT /FreeTextTypeWriter`, stamp `/Name`, drawn ink whose subject is
+/// "Signature").
+pub fn is_fill_sign(doc: &Document, d: &Dict) -> bool {
+    if matches!(d.get(b"PCFillSign").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))) {
+        return true;
+    }
+    let subtype = d.name(b"Subtype").unwrap_or_default();
+    if subtype == b"FreeText" && d.name(b"IT") == Some(b"FreeTextTypeWriter") {
+        return true;
+    }
+    if subtype == b"Stamp" {
+        if matches!(d.name(b"Name"), Some(b"PCCheck" | b"PCCross" | b"PCDot" | b"PCLine" | b"PCTypedSignature")) {
+            return true;
+        }
+        if matches!(d.name(b"Name"), Some(b"PCCustomSignature" | b"PCCustomInitials"))
+            && matches!(d.get(b"PCPictureImage").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true)))
+        {
+            return true;
+        }
+    }
+    subtype == b"Ink" && text_value(doc, d, b"Subj").as_deref() == Some("Signature")
+}
+
+/// Whether any page has a Fill & Sign annotation that flatten would bake in (not hidden).
+pub fn has_visible_fill_sign(doc: &Document) -> bool {
+    let Ok(pages) = page_refs(doc) else { return false };
+    for page in pages {
+        for entry in annots(doc, page) {
+            let obj = doc.resolve(&entry);
+            let Some(d) = obj.as_dict() else { continue };
+            let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+            if flags & (FLAG_HIDDEN | FLAG_NO_VIEW) != 0 {
+                continue;
+            }
+            if is_fill_sign(doc, d) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn fill_sign_shape(shape: &Shape) -> bool {
+    match shape {
+        Shape::Typewriter { .. } | Shape::Mark { .. } | Shape::Signature { .. } | Shape::TypedSignature { .. } => true,
+        Shape::CustomStamp { name, image: true, .. } => name == "Signature" || name == "Initials",
+        _ => false,
+    }
+}
+
 /// The embedded image of a Fill & Sign image signature or initials (0-based target).
 /// Other stamps have appearances that can't be represented by this image alone.
 pub fn signature_image(doc: &Document, page: usize, index: usize) -> Result<Option<ObjRef>, AnnotError> {
@@ -747,6 +800,7 @@ const FLAG_PRINT: i64 = 4;
 const FLAG_NO_ZOOM: i64 = 8;
 const FLAG_NO_ROTATE: i64 = 16;
 const FLAG_HIDDEN: i64 = 2;
+const FLAG_NO_VIEW: i64 = 32;
 const FLAG_LOCKED: i64 = 128;
 
 /// Size of a note icon (points, unscaled by zoom).
@@ -1140,6 +1194,10 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
         }
         _ => {}
     }
+    if fill_sign_shape(&new.shape) {
+        // Survives a later subject edit, so flatten-on-save still finds the mark.
+        d.set(b"PCFillSign".to_vec(), Object::Bool(true));
+    }
     let r = doc.add(Object::Dict(d.clone()));
     set_appearance(doc, r)?;
     let mut list = annots(doc, page);
@@ -1207,7 +1265,11 @@ pub fn set_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
         }
     }
     let ap = doc.add(Object::Stream(stream));
-    let mut apd = Dict::new();
+    // A copy (a shared /AP is left alone) that keeps unknown entries; the old down and rollover
+    // appearances would show the previous look on press or hover, so they go with the old /N.
+    let mut apd = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).unwrap_or_default();
+    apd.remove(b"D");
+    apd.remove(b"R");
     apd.set(b"N".to_vec(), Object::Ref(ap));
     doc.update_dict(r, |d| {
         d.set(b"AP".to_vec(), Object::Dict(apd));
@@ -1731,7 +1793,14 @@ fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
-/// Every comment (not links, form widgets or pop-ups), ordered by page and then top edge.
+/// Whether an annotation subtype is a comment. Links, form widgets, pop-ups and the non-markup
+/// multimedia and print-production annotations (ISO 32000-2 §12.5.6: Screen, Movie, RichMedia,
+/// 3D, PrinterMark, TrapNet, Watermark) are not.
+pub fn is_comment_subtype(subtype: &str) -> bool {
+    !matches!(subtype, "Link" | "Widget" | "Popup" | "Screen" | "Movie" | "RichMedia" | "3D" | "PrinterMark" | "TrapNet" | "Watermark")
+}
+
+/// Every comment (see [`is_comment_subtype`]), ordered by page and then top edge.
 pub fn summaries(doc: &Document) -> Vec<Summary> {
     let mut out = Vec::new();
     let Ok(pages) = page_refs(doc) else { return out };
@@ -1740,7 +1809,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
             let obj = doc.resolve(entry);
             let Some(d) = obj.as_dict() else { continue };
             let Some(subtype) = d.name(b"Subtype").map(|s| String::from_utf8_lossy(s).into_owned()) else { continue };
-            if matches!(subtype.as_str(), "Link" | "Widget" | "Popup") {
+            if !is_comment_subtype(&subtype) {
                 continue;
             }
             let nums = |k: &[u8]| -> Vec<f32> {

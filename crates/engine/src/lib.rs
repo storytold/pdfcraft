@@ -16,6 +16,7 @@ pub mod actions;
 pub mod catalog;
 pub mod commands;
 pub mod compare;
+pub mod dates;
 pub mod export;
 pub mod js;
 pub mod links;
@@ -40,7 +41,8 @@ pub use pdfcraft_edit::{
 };
 pub use pdfcraft_forms::{
     BorderStyle, CheckStyle, Field as FormField, FieldAction, FieldChange, FieldFont, FieldKind as FormFieldKind, FieldProps, FieldValue,
-    Look as FieldLook, NewField, TabOrder, Trigger as FieldTrigger, Widget as FormWidget, af as form_scripts, flags as field_flags,
+    Look as FieldLook, LookPatch as FieldLookPatch, NewField, TabOrder, Trigger as FieldTrigger, Widget as FormWidget, af as form_scripts,
+    flags as field_flags,
 };
 
 pub use pdfcraft_a11y as a11y;
@@ -268,6 +270,9 @@ impl Document {
     pub fn page_image_file(&self, page: usize, index: usize) -> Result<(&'static str, Vec<u8>), String> {
         let editor = self.editor.as_ref().ok_or("the document can't be read")?;
         let img = self.page_images(page).into_iter().nth(index).ok_or_else(|| format!("page {} has no image {}", page + 1, index + 1))?;
+        if img.is_form {
+            return Err("grouped Form artwork is not a bitmap; Save Image As is only available for raster images".into());
+        }
         pdfcraft_create::image_file(&editor.cos, img.object.ok_or("the image has no object")?)
     }
 
@@ -463,14 +468,14 @@ impl Document {
     }
 
     /// The name shown on the tab and window: the document title when the document asks for it
-    /// (Initial View ▸ Show: Document Title) and has one, else the file name.
+    /// (Initial View ▸ Show: Document Title) and has a real one, else the file name.
     pub fn display_name(&self) -> String {
         self.editor
             .as_ref()
             .filter(|e| pdfcraft_organize::displays_doc_title(&e.cos))
             .and_then(|e| pdfcraft_organize::info(&e.cos, "Title"))
             .map(|t| t.trim().to_owned())
-            .filter(|t| !t.is_empty())
+            .filter(|t| !t.is_empty() && !is_placeholder_title(t))
             .unwrap_or_else(|| self.name.clone())
     }
 
@@ -484,6 +489,16 @@ impl Document {
     pub fn repair_log(&self) -> Vec<String> {
         self.editor.as_ref().map(|e| e.cos.repair_log().to_vec()).unwrap_or_default()
     }
+}
+
+/// A title that names no document: what a web browser writes when it saves a blank page or a
+/// pop-up as PDF (`about:blank`), another browser-internal address, or a bare "Untitled". Such a
+/// title says less than the file name, so the file name is shown instead. An address is one
+/// word: "About: our company" is a real title.
+fn is_placeholder_title(title: &str) -> bool {
+    let t = title.trim().to_lowercase();
+    let address = !t.contains(char::is_whitespace) && ["about:", "blob:", "data:"].iter().any(|p| t.starts_with(p));
+    address || t == "untitled"
 }
 
 /// What is displayed: the working file, plus (in memory only, never saved) the appearances
@@ -1081,6 +1096,9 @@ pub enum Edit {
         comments: bool,
         fields: bool,
     },
+    /// Bake Fill & Sign text, marks and signatures into the page. Other comments and fields stay.
+    /// A no-op (no undo step) when the document has none.
+    FlattenFillSign,
     /// Protect with passwords and permissions (written by the next save, which is a full rewrite).
     Protect(Protection),
     /// Remove password security (needs the owner password).
@@ -1182,6 +1200,7 @@ impl Edit {
             Edit::Flatten { comments: true, fields: false } => "Flatten comments".into(),
             Edit::Flatten { comments: false, fields: true } => "Flatten form fields".into(),
             Edit::Flatten { .. } => "Flatten".into(),
+            Edit::FlattenFillSign => "Flatten Fill & Sign".into(),
             Edit::Protect(_) => "Protect with password".into(),
             Edit::RemoveProtection => "Remove security".into(),
             Edit::Batch { label, .. } => label.clone(),
@@ -1323,7 +1342,8 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
         | Edit::EditPageImage { .. }
-        | Edit::Flatten { .. } => {
+        | Edit::Flatten { .. }
+        | Edit::FlattenFillSign => {
             if p.modify() {
                 Ok(())
             } else {
@@ -1576,7 +1596,14 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                 ImageEdit::Flip { horizontal } => {
                     pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(img.rect, 0, *horizontal, !*horizontal))
                 }
-                ImageEdit::Replace { name, bytes } => pdfcraft_edit::ImageChange::Replace(embed_image(doc, name, bytes)?.0),
+                ImageEdit::Replace { name, bytes } => {
+                    if img.is_form {
+                        return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(
+                            "grouped Form artwork cannot be replaced with a bitmap".into(),
+                        )));
+                    }
+                    pdfcraft_edit::ImageChange::Replace(embed_image(doc, name, bytes)?.0)
+                }
                 ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
             };
             pdfcraft_edit::change_image(doc, *page, *index, &c)?;
@@ -1672,6 +1699,10 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::Flatten { comments, fields } => {
             let n = pdfcraft_model::pages(doc).len();
             pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), *comments, *fields)?;
+        }
+        Edit::FlattenFillSign => {
+            let n = pdfcraft_model::pages(doc).len();
+            pdfcraft_edit::flatten_fill_sign(doc, &(0..n).collect::<Vec<_>>())?;
         }
         Edit::Protect(p) => {
             p.validate()?;
@@ -1889,6 +1920,10 @@ pub struct Session {
     trust: Arc<TrustStore>,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
     js_off: bool,
+    /// Preferences ▸ Date format, when not the default (see [`dates`]).
+    date_format: Option<String>,
+    /// Preferences ▸ Date format ▸ Language, when not following the interface language.
+    date_language: Option<String>,
 }
 
 /// Lay a dynamic XFA form out (pages and fields) and give its widgets appearances.
@@ -1955,6 +1990,17 @@ fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Result<Vec<Stri
     for (name, value) in pdfcraft_xfa::read_values(doc, &data) {
         let Some(f) = fields.iter().find(|f| f.name == name) else { continue };
         let new = match value {
+            pdfcraft_xfa::FieldData::Text(t) if matches!(f.kind, pdfcraft_forms::FieldKind::Combo | pdfcraft_forms::FieldKind::List) => {
+                // Saved values, one per line for a multi-select list; shown text stands for
+                // its saved value (an older viewer may have written it).
+                let saved = |v: &str| f.options.iter().find(|(e, s)| e == v || s == v).map_or(v.to_string(), |(e, _)| e.clone());
+                let picked: Vec<String> = if f.has(pdfcraft_forms::flags::MULTI_SELECT) {
+                    t.lines().map(str::trim).filter(|l| !l.is_empty()).map(saved).collect()
+                } else {
+                    vec![saved(t.trim())]
+                };
+                (f.value != picked).then_some(FieldValue::Choice(picked))
+            }
             pdfcraft_xfa::FieldData::Text(t) => (f.value.join("\n") != t).then_some(FieldValue::Text(t)),
             pdfcraft_xfa::FieldData::Check(on) => (f.value.is_empty() == on).then_some(FieldValue::Check(on)),
             pdfcraft_xfa::FieldData::Radio(sel) => (f.value.first() != sel.as_ref()).then_some(FieldValue::Radio(sel)),
@@ -2197,7 +2243,7 @@ impl Session {
         xfa: Option<XfaLayout>,
     ) -> Result<DocId, OpenError> {
         let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
-        let (editor, read_only_reason) = match cos {
+        let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
                 let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };
                 (Some(Editor { cos, undo: Vec::new(), redo: Vec::new(), keys }), None)
@@ -2208,8 +2254,21 @@ impl Session {
         let display = display_bytes(editor.as_ref(), &bytes);
         let renderer = RenderPool::new(display.clone(), render_threads(), config.clone());
         let mut form = editor.as_ref().map(|e| pdfcraft_forms::fields(&e.cos)).unwrap_or_default();
+        let mut adopted = 0;
         if let Some(e) = editor.as_ref() {
             xfa::mark_script_buttons(&e.cos, &mut form);
+            adopted = pdfcraft_forms::adopted_page_fields(&e.cos);
+        }
+        // Fields the file lists only as page widgets are adopted leniently; the file says so.
+        if adopted > 0
+            && let Some(e) = &mut editor
+        {
+            let line = if adopted == 1 {
+                "the form's /Fields list omits 1 field; it was read from the page annotations".to_string()
+            } else {
+                format!("the form's /Fields list omits {adopted} fields; they were read from the page annotations")
+            };
+            e.cos.note_repair(line);
         }
         let marks = editor.as_ref().map(|e| pdfcraft_edit::marks_present(&e.cos)).unwrap_or_default();
         let added = editor.as_ref().map(|e| pdfcraft_edit::list_added(&e.cos)).unwrap_or_default();
@@ -2271,6 +2330,10 @@ impl Session {
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
         if let Some(p) = editor.cos.permissions() {
             check_permission(&edit, &p)?;
+        }
+        // Nothing to bake: leave undo history and the dirty flag alone.
+        if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos) {
+            return Ok(());
         }
         let mut next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {

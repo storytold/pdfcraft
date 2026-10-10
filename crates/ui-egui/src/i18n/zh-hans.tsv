@@ -131,6 +131,8 @@
 	Display theme	显示主题
 	Side panels	侧边面板
 	Enable Acrobat JavaScript	启用 Acrobat JavaScript
+	Flatten Fill & Sign when saving	保存时拼合填写与签名
+	Text, marks and signatures become part of the page. Other comments stay editable.	文字、标记和签名会成为页面内容。其他注释仍可编辑。
 	OK	确定
 	Cancel	取消
 	Close	关闭
@@ -616,6 +618,12 @@
 	Icon	图标
 	Thickness	粗细
 	Line ending	线条端点
+	Open arrow	开口箭头
+	Closed arrow	闭合箭头
+	Butt	平头
+	Reverse open arrow	反向开口箭头
+	Reverse closed arrow	反向闭合箭头
+	Slash	斜线
 	Modified	修改时间
 	No status has been set.	尚未设置状态。
 	Compare Files	比较文件
@@ -904,7 +912,7 @@
 	Searchable Image (Exact)	可搜索图像（精确）
 	Adds invisible text over each word; the page image is not changed	在每个词上添加不可见文本；页面图像保持不变
 	Downsample to	降采样至
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	未安装文本识别：缺少模型（运行 `cargo xtask models`，或设置 PRINTCRAFT_MODELS）。
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	未安装文本识别：缺少模型文件。请重新安装 PdfCraft，或将 PDFCRAFT_MODELS 设置为包含这些文件的文件夹。
 	Settings	设置
 	Protect	保护
 	Advanced options	高级选项
@@ -1610,6 +1618,7 @@
 	Couldn't open {name}: {e}	无法打开{name}：{e}
 	Couldn't read {name}: {e}	无法读取{name}：{e}
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	便携模式已关闭：无法写入{folder}（{error}）。设置改为保存在你的用户文件夹中。
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft 正在不使用图形处理器的情况下绘制，因此可能较慢。更新显卡驱动程序可能会有帮助。
 	Couldn't save: {e}	无法保存：{e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Web 端附件下载将于 M3.10 到来（{n} 字节已就绪）
 	`{command}` {when}	`{command}` {when}
@@ -1976,7 +1985,7 @@
 	the image is empty	图像为空
 	The operation failed.	操作失败。
 	the password is incorrect	密码不正确
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	尚未安装文本识别模型（请运行 `cargo xtask models` 或设置 PRINTCRAFT_MODELS）
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	尚未安装文本识别模型（请重新安装 PdfCraft，或将 PDFCRAFT_MODELS 设置为包含这些模型的文件夹）
 	The title in the metadata and the document information differ	元数据与文档信息中的标题不一致
 	the title must not be empty	标题不能为空
 	there are no pages to print	没有可打印的页面
@@ -2007,7 +2016,6 @@
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	脚本在沙盒中运行，无法访问文件或网络。脚本请求打开网页时，需要先获得您的许可。关闭 JavaScript 后，Acrobat 的标准格式、验证和计算函数仍可使用。
 	Sign yourself	自行签名
 	Switch to two-page view first to show the cover page	请先切换到双页视图，才能显示封面页
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	尚未安装文本识别功能：缺少模型（请运行 `cargo xtask models` 或设置 PDFCRAFT_MODELS）。
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	用于打开 PDF 时。如果启动参数或控制通道明确指定了模式，则本次会话优先使用该模式。
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF 未指定布局或缩放时使用。连续滚动时页面不会逐页吸附。
 	Reopen the files that were open when PdfCraft last closed	重新打开上次关闭 PdfCraft 时打开的文件
@@ -2051,3 +2059,42 @@
 	Couldn't import the signature image: {e}	无法导入签名图像：{e}
 	Go to page…	转到页面…
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	标准字体无法显示“{c}”（{code}）。目前只能添加西欧字符作为文本。
+	Larger pages	放大页面
+	Smaller pages	缩小页面
+	Reset page size	重置页面大小
+	Date format	日期格式
+	Fill & Sign dates	填写与签名的日期
+	Pattern	模式
+	Today: {date}	今天：{date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy 或 yy 年 · m 或 mm 月 · mmm 或 mmmm 月份名称 · d 或 dd 日 · ddd 或 dddd 星期。H、h、M、s 和 t 是时间字母，不能单独使用：在字母前加 {escape} 可按原样显示。
+	Same as interface ({language})	与界面相同（{language}）
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	暂时无法将 {chars} 写入 PDF：填写与签名的文字仅支持西欧字符。请选择数字格式，例如 dd.mm.yyyy。
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	打开打印机驱动程序的首选项。这些设置会保存并用于此电脑上的所有打印；此处选择的份数、双面、灰度和纸张仍然适用。
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	此次打印的打印机驱动程序专属设置：纸盒、纸张类型、装订整理等。
+	Couldn't open the printer's preferences: {e}	无法打开打印机首选项：{e}
+	Printer properties	打印机属性
+	Reset to printer defaults	恢复打印机默认设置
+	This printer offers no settings of its own.	此打印机没有专属设置。
+	Scroll tabs left	向左滚动选项卡
+	Scroll tabs right	向右滚动选项卡
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	共享字段属性
+	{n} fields selected	已选择 {n} 个字段
+	Mixed	混合
+	Custom font	自定义字体
+	Only checked properties will change. Mixed means the selected fields have different values.	只会更改勾选的属性。“混合”表示所选字段的值不同。
+	Shift- or Ctrl/Command-click to select several fields.	按住 Shift 或 Ctrl/Command 单击可选择多个字段。
+	Font size 0 uses automatic sizing.	字号为 0 时自动调整大小。
+	Character limit:	字符数限制：
+	Character limit 0 means no limit. A comb of characters needs a limit.	字符数限制为 0 表示无限制。分格字符必须设置字符数限制。
+	To change locked fields, also set Locked to No.	要更改锁定的字段，还需将“锁定”设为“否”。
+	Comb of characters	字符梳
+	The document changed while you were editing field properties.	编辑字段属性时文档已更改。
+	The document is no longer open.	文档已不再打开。
+	The field properties dialog is no longer open.	字段属性对话框已不再打开。
+	The field properties could not be changed.	无法更改字段属性。
+	The selected fields could not be found. Select them again.	找不到所选字段。请重新选择。
+	The field {name} no longer exists.	字段 {name} 已不存在。
+	A selected field has no widget on any page, so the fields can't be edited together.	某个所选字段在任何页面上都没有控件，因此无法一起编辑这些字段。
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 张以可绘制的最大尺寸 {dpi} dpi 导出）

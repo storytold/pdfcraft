@@ -861,7 +861,7 @@
 	Searchable Image (Exact)	可搜尋圖片（精確）
 	Adds invisible text over each word; the page image is not changed	在每個詞上新增不可見文字；頁面圖片保持不變
 	Downsample to	降取樣至
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	未安裝文字識別：缺少模型（執行 `cargo xtask models`，或設定 PRINTCRAFT_MODELS）。
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	未安裝文字辨識：缺少模型檔案。請重新安裝 PdfCraft，或將 PDFCRAFT_MODELS 設定為包含這些檔案的資料夾。
 	Settings	設定
 	Protect	保護
 	Advanced options	進階選項
@@ -1768,7 +1768,7 @@
 	there are no pages to print	沒有可列印的頁面
 	the document has no tags	此文件沒有標籤
 	{0}: {1}	{0}：{1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	尚未安裝文字辨識模型，請執行 `cargo xtask models` 或設定 PRINTCRAFT_MODELS
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	尚未安裝文字辨識模型（請重新安裝 PdfCraft，或將 PDFCRAFT_MODELS 設定為包含這些模型的資料夾）
 	the image is empty	圖片是空的
 	this file isn't XFDF, FDF, XML or text form data	此檔案不是 XFDF、FDF、XML 或純文字表單資料
 	nothing in the file matches this document	檔案中沒有與此文件相符的資料
@@ -1974,3 +1974,49 @@
 	Go to page…	轉到頁面…
 	Reopen the files that were open when PdfCraft last closed	重新開啟上次關閉 PdfCraft 時開啟的檔案
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	標準字型無法顯示「{c}」（{code}）。目前只能新增西歐字元作為文字。
+	Open arrow	開口箭頭
+	Closed arrow	閉合箭頭
+	Butt	平頭
+	Reverse open arrow	反向開口箭頭
+	Reverse closed arrow	反向閉合箭頭
+	Slash	斜線
+	Larger pages	放大頁面
+	Smaller pages	縮小頁面
+	Reset page size	重設頁面大小
+	Date format	日期格式
+	Fill & Sign dates	填寫與簽署的日期
+	Pattern	模式
+	Today: {date}	今天：{date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy 或 yy 年 · m 或 mm 月 · mmm 或 mmmm 月份名稱 · d 或 dd 日 · ddd 或 dddd 星期。H、h、M、s 和 t 是時間字母，不能單獨使用：在字母前加上 {escape} 即可照原樣顯示。
+	Same as interface ({language})	與介面相同（{language}）
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	暫時無法將 {chars} 寫入 PDF：填寫與簽署的文字僅支援西歐字元。請選擇數字格式，例如 dd.mm.yyyy。
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	開啟印表機驅動程式的喜好設定。這些設定會儲存並用於此電腦的所有列印；此處選擇的份數、雙面、灰階和紙張仍然適用。
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	此次列印的印表機驅動程式專屬設定：紙匣、紙張類型、裝訂整理等。
+	Couldn't open the printer's preferences: {e}	無法開啟印表機喜好設定：{e}
+	Printer properties	印表機內容
+	Reset to printer defaults	還原印表機預設值
+	This printer offers no settings of its own.	此印表機沒有專屬設定。
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft 正在不使用圖形處理器的情況下繪製，因此可能較慢。更新顯示卡驅動程式可能會有幫助。
+	Scroll tabs left	向左捲動索引標籤
+	Scroll tabs right	向右捲動索引標籤
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	共用欄位屬性
+	{n} fields selected	已選取 {n} 個欄位
+	Mixed	混合
+	Custom font	自訂字型
+	Only checked properties will change. Mixed means the selected fields have different values.	只會變更勾選的屬性。「混合」表示所選欄位的值不同。
+	Shift- or Ctrl/Command-click to select several fields.	按住 Shift 或 Ctrl/Command 點按可選取多個欄位。
+	Font size 0 uses automatic sizing.	字型大小為 0 時自動調整大小。
+	Character limit:	字元數限制：
+	Character limit 0 means no limit. A comb of characters needs a limit.	字元數限制為 0 表示無限制。分格字元必須設定字元數限制。
+	To change locked fields, also set Locked to No.	若要變更鎖定的欄位，也須將「鎖定」設為「否」。
+	Comb of characters	字元梳
+	The document changed while you were editing field properties.	編輯欄位屬性時文件已變更。
+	The document is no longer open.	文件已不再開啟。
+	The field properties dialog is no longer open.	欄位屬性對話方塊已不再開啟。
+	The field properties could not be changed.	無法變更欄位屬性。
+	The selected fields could not be found. Select them again.	找不到所選欄位。請重新選取。
+	The field {name} no longer exists.	欄位 {name} 已不存在。
+	A selected field has no widget on any page, so the fields can't be edited together.	某個所選欄位在任何頁面上都沒有控制項，因此無法一起編輯這些欄位。
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 張以可繪製的最大尺寸 {dpi} dpi 匯出）

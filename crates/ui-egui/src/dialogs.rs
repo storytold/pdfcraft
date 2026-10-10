@@ -43,6 +43,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut export_now = false;
     let mut props_now = false;
     let mut field_props_now = false;
+    let mut bulk_field_props_now = false;
     let mut redact_now: Option<Dialog> = None;
     let mut print_go = false;
     let mut revert_now = false;
@@ -64,7 +65,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
-            Dialog::FieldProps => 600.0,
+            Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::About => 780.0,
             _ => 520.0,
         });
@@ -774,9 +775,19 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 let Some(doc) = app.session.get(id) else { return };
                 let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
                 let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-                let thumbs: std::collections::HashMap<usize, egui::TextureId> =
-                    (0..sizes.len()).filter_map(|p| app.views[i].thumb_id(p).map(|t| (p, t))).collect();
-                let (go, cancel) = crate::print_ui::body(ui, &mut app.print_draft, &t, &sizes, &labels, &|p| thumbs.get(&p).copied());
+                let rasters = crate::print_ui::preview_rasters(
+                    &app.print_draft,
+                    &sizes,
+                    &labels,
+                    ui.ctx().pixels_per_point(),
+                    ui.ctx().input(|i| i.max_texture_side) as f32,
+                );
+                let view = &mut app.views[i];
+                view.queue_print_previews(&rasters);
+                let (go, cancel) = crate::print_ui::body(ui, &mut app.print_draft, &t, &sizes, &labels, &mut |p| {
+                    view.need_thumbnail(p, true);
+                    view.page_preview(p)
+                });
                 print_go = go;
                 close = go || cancel;
                 return;
@@ -805,6 +816,16 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 let (apply, cancel) = crate::prepare::body(ui, d, &t);
                 field_props_now = apply;
                 close = apply || cancel;
+                return;
+            }
+            Dialog::BulkFieldProps => {
+                let Some(d) = app.bulk_field_props.as_mut() else {
+                    close = true;
+                    return;
+                };
+                let (apply, cancel) = crate::bulk_fields::body(ui, d, &t);
+                bulk_field_props_now = apply;
+                close = cancel;
                 return;
             }
             Dialog::CommentProps => {
@@ -1208,6 +1229,9 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         }
         _ => {}
     }
+    if bulk_field_props_now {
+        close = app.apply_bulk_field_props();
+    }
     if field_props_now
         && let Some(d) = app.field_props.take()
         && let Some(props) = d.props()
@@ -1263,6 +1287,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.dialog = None;
         app.props_draft = None;
         app.view_draft = None;
+        app.bulk_field_props = None;
     } else {
         app.dialog = Some(next);
     }

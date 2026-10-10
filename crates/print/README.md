@@ -35,15 +35,16 @@ Each source page becomes a Form XObject (its content wrapped in q/Q, plus the pr
 annotations); sheets place them with a clip. The result is a fresh, unencrypted,
 garbage-collected file (callers check the print permission).
 
-`spool` talks to CUPS (`lpstat -p -d`, `lp` with copies, collation, duplex and monochrome
-options). The job is piped to `lp` on stdin and never written to a temp file, where another
-local user could read or swap it. Windows discovers local/connected queues and submits PDFs through Windows.Data.Pdf and
-Direct2D using the safe `winprint` wrapper. The job uses a private temporary directory
-which is removed after submission. Validated PrintTickets carry copies, collation,
-duplex, colour, paper size and orientation. Driver media names are preserved, and
-substituted dimensions, orientation or scaling are rejected before submission.
-One Windows job has one sheet size and orientation; choose a fixed orientation or
-submit differing sheets separately. The print-ready PDF can always be saved.
+`spool` talks to CUPS: printers come from `lpstat -p -d` (the queues) and `lpstat -e` (driverless
+destinations no queue exists for; CUPS builds a temporary one when the job arrives), jobs go to
+`lp` with copies, collation, duplex and monochrome options. The job is piped to `lp` on stdin and
+never written to a temp file, where another local user could read or swap it. Windows discovers
+local/connected queues and submits PDFs through Windows.Data.Pdf and Direct2D using the safe
+`winprint` wrapper. The job uses a private temporary directory which is removed after
+submission. Validated PrintTickets carry copies, collation, duplex, colour, paper size and
+orientation. Driver media names are preserved, and substituted dimensions, orientation or scaling
+are rejected before submission. One Windows job has one sheet size and orientation; choose a fixed
+orientation or submit differing sheets separately. The print-ready PDF can always be saved.
 
 Not yet: web spoolers, native printer-properties UI, print as image, poster labels, PostScript output, colour
 conversion for grayscale.

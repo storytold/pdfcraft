@@ -878,6 +878,65 @@ fn image_import_cancel_clear_and_errors_preserve_saved_signatures() {
     std::fs::remove_file(path).unwrap();
 }
 
+#[test]
+fn flatten_on_save_is_off_by_default_and_round_trips() {
+    let mut app = PdfCraftApp::new();
+    assert!(!app.flatten_fill_sign_on_save);
+    app.set_option("flatten-fill-sign", "true").unwrap();
+    assert!(app.set_option("flatten-fill-sign", "yes").is_err());
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&app.persist());
+    assert!(restored.flatten_fill_sign_on_save);
+    restored.set_option("flatten-fill-sign", "false").unwrap();
+    let mut again = PdfCraftApp::new();
+    again.restore(&restored.persist());
+    assert!(!again.flatten_fill_sign_on_save);
+}
+
+#[test]
+fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
+    use pdfcraft_engine::{Edit, FillMark, NewAnnotation, Shape, Style};
+    use pdfcraft_ui_egui::SaveTarget;
+    use pdfcraft_ui_egui::fill_sign::TypeBox;
+
+    let dir = std::env::temp_dir().join(format!("pdfcraft-fill-flatten-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mark = Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape: Shape::Mark { rect: [40.0, 80.0, 56.0, 96.0], mark: FillMark::Check },
+        style: Style::default_for(&Shape::Mark { rect: [0.0, 0.0, 12.0, 12.0], mark: FillMark::Check }),
+        contents: String::new(),
+        author: "Ada".into(),
+    });
+
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("form.pdf", None, FIXTURE.to_vec()).unwrap();
+    let id = app.views[0].id;
+    app.session.apply(id, mark).unwrap();
+    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 200.0], text: "Typed".into(), focus: false });
+    let kept = dir.join("kept.pdf");
+    app.save_override = Some(kept.to_string_lossy().into_owned());
+    assert!(app.save_active(SaveTarget::InPlace));
+    let mut reopened = PdfCraftApp::new();
+    reopened.open_bytes("kept.pdf", None, std::fs::read(&kept).unwrap()).unwrap();
+    let texts: Vec<String> =
+        reopened.session.get(reopened.views[0].id).unwrap().info.annotations.iter().map(|a| a.contents.clone().unwrap_or_default()).collect();
+    assert!(texts.iter().any(|t| t == "Typed"), "an open type box is saved: {texts:?}");
+    assert_eq!(reopened.session.get(reopened.views[0].id).unwrap().info.annotations.len(), 2, "the check mark stays too");
+
+    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 160.0], text: "More".into(), focus: false });
+    app.flatten_fill_sign_on_save = true;
+    let flat = dir.join("flat.pdf");
+    app.save_override = Some(flat.to_string_lossy().into_owned());
+    assert!(app.save_active(SaveTarget::InPlace));
+    let mut flattened = PdfCraftApp::new();
+    flattened.open_bytes("flat.pdf", None, std::fs::read(&flat).unwrap()).unwrap();
+    let left = &flattened.session.get(flattened.views[0].id).unwrap().info.annotations;
+    assert!(left.is_empty(), "text and the check mark are page content: {left:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Issue #299: drawn and typed signatures and initials are upright as displayed on pages with
 /// `/Rotate` 90, 180 and 270, anchored at the displayed point, exactly as on an unturned page.
 #[test]
