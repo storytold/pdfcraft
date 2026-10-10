@@ -387,7 +387,7 @@
 	Centre	居中
 	Align right	右对齐
 	Justify	两端对齐
-	Standard fonts; text outside Windows-1252 isn't supported yet.	标准字体；尚不支持 Windows-1252 之外的文本。
+	Thai and Arabic use regular fallback fonts when available.	泰语和阿拉伯语使用可用的常规样式备用字体。
 	Edit image	编辑图像
 	Rotate counterclockwise	逆时针旋转
 	Rotate clockwise	顺时针旋转
@@ -2059,7 +2059,7 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	选择 PNG 或 JPEG 图像（最大 4 MiB）。透明度会保留。
 	Couldn't import the signature image: {e}	无法导入签名图像：{e}
 	Go to page…	转到页面…
-	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	标准字体无法显示“{c}”（{code}）。目前只能添加西欧字符作为文本。
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	PDF 文本字体无法显示“{c}”（{code}）。请选择受支持的文本。
 	Larger pages	放大页面
 	Smaller pages	缩小页面
 	Reset page size	重置页面大小

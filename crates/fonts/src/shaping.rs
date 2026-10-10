@@ -1,5 +1,4 @@
-//! Arabic text written into PDFs: shaping (joining forms, lam-alef ligatures, mark placement) with
-//! the craft-fonts `Arab` face, and that face's glyph outlines.
+//! Arabic and Thai text shaping with the matching craft-fonts face and bounded glyph outlines.
 
 use std::sync::OnceLock;
 
@@ -10,10 +9,12 @@ use skrifa::{FontRef, GlyphId, MetadataProvider};
 
 use crate::{GlyphError, GlyphOutline};
 
-/// One cluster of shaped Arabic text: the glyphs that show one character (a letter's body and
+/// One cluster of shaped text: the glyphs that show one character (a letter's body and
 /// dots, say), or several characters for a ligature. Em units.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShapedCluster {
+    /// Face that owns the glyph ids.
+    pub script: ShapedScript,
     /// Glyph ids, each with its offset from the cluster's pen position (marks sit above or below).
     pub glyphs: Vec<(u32, [f64; 2])>,
     pub advance: f64,
@@ -21,34 +22,76 @@ pub struct ShapedCluster {
     pub text: String,
 }
 
-fn face() -> Option<&'static (FontRef<'static>, ShaperData)> {
+/// The face owning a shaped glyph id. IDs from different faces must never share a cache key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ShapedScript {
+    Arabic,
+    Thai,
+}
+
+impl ShapedScript {
+    pub fn font(self) -> Option<&'static crate::CraftFont> {
+        match self {
+            Self::Arabic => crate::document_arabic_font(),
+            Self::Thai => crate::document_thai_font(),
+        }
+    }
+}
+
+fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)> {
     static FACE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
-    FACE.get_or_init(|| {
-        let font = FontRef::new(crate::document_arabic_font()?.bytes).ok()?;
-        let data = ShaperData::new(&font);
-        Some((font, data))
-    })
-    .as_ref()
+    static THAI: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    let cache = match script {
+        ShapedScript::Arabic => &FACE,
+        ShapedScript::Thai => &THAI,
+    };
+    cache
+        .get_or_init(|| {
+            let font = FontRef::new(script.font()?.bytes).ok()?;
+            let data = ShaperData::new(&font);
+            Some((font, data))
+        })
+        .as_ref()
 }
 
 /// Whether the Arabic document face has a glyph for `c` (false without the face).
 pub fn arabic_has(c: char) -> bool {
-    face().is_some_and(|(font, _)| font.charmap().map(c).is_some())
+    face(ShapedScript::Arabic).is_some_and(|(font, _)| font.charmap().map(c).is_some())
 }
 
 /// Shape one directional run of `text` with the Arabic document face. The clusters come in
 /// drawing order, left to right. [`GlyphError::NoFont`] without the face;
 /// [`GlyphError::Missing`] when it lacks a character.
 pub fn shape_arabic(text: &str, rtl: bool) -> Result<Vec<ShapedCluster>, GlyphError> {
-    let (font, data) = face().ok_or(GlyphError::NoFont)?;
+    shape_script(text, rtl, ShapedScript::Arabic)
+}
+
+pub fn thai_has(c: char) -> bool {
+    face(ShapedScript::Thai).is_some_and(|(font, _)| font.charmap().map(c).is_some())
+}
+
+/// Shape Thai with grapheme clusters so Sara Am decomposition and stacked marks keep their
+/// original Unicode text exactly once, including when wrapped or copied from the saved PDF.
+pub fn shape_thai(text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
+    shape_script(text, false, ShapedScript::Thai)
+}
+
+fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedCluster>, GlyphError> {
+    let (font, data) = face(kind).ok_or(GlyphError::NoFont)?;
     let shaper = data.shaper(font).build();
     let scale = 1.0 / f64::from(shaper.units_per_em().max(1));
     let mut buffer = UnicodeBuffer::new();
     buffer.push_str(text);
     buffer.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
-    buffer.set_script(script::ARABIC);
-    // One cluster per character, so marks keep their own text for copy and search.
-    buffer.set_cluster_level(BufferClusterLevel::Characters);
+    buffer.set_script(match kind {
+        ShapedScript::Arabic => script::ARABIC,
+        ShapedScript::Thai => script::THAI,
+    });
+    // Preserve the historical Arabic per-character mapping; Thai marks stay with their base.
+    buffer.set_cluster_level(match kind {
+        ShapedScript::Arabic => BufferClusterLevel::Characters,
+        ShapedScript::Thai => BufferClusterLevel::MonotoneGraphemes,
+    });
     let shaped = shaper.shape(buffer, ShapeOptions::new());
     // Clusters are byte offsets into `text`; a cluster shows the characters up to the next one.
     let mut starts: Vec<usize> = shaped.glyph_infos().iter().map(|g| g.cluster as usize).collect();
@@ -66,7 +109,7 @@ pub fn shape_arabic(text: &str, rtl: bool) -> Result<Vec<ShapedCluster>, GlyphEr
             _ => {
                 let end = starts.get(starts.partition_point(|s| *s <= start)).copied().unwrap_or(text.len());
                 let text = text.get(start..end).unwrap_or_default().to_string();
-                out.push((start, ShapedCluster { glyphs: Vec::new(), advance: 0.0, text }));
+                out.push((start, ShapedCluster { script: kind, glyphs: Vec::new(), advance: 0.0, text }));
                 // Just pushed.
                 let Some((_, c)) = out.last_mut() else { continue };
                 c
@@ -82,7 +125,12 @@ pub fn shape_arabic(text: &str, rtl: bool) -> Result<Vec<ShapedCluster>, GlyphEr
 /// Glyph `id` of the Arabic document face, bounded like [`crate::japanese_glyph`]. Glyphs without
 /// outlines (spaces) come back empty.
 pub fn arabic_glyph(id: u32) -> Result<GlyphOutline, GlyphError> {
-    let (font, _) = face().ok_or(GlyphError::NoFont)?;
+    shaped_glyph(ShapedScript::Arabic, id)
+}
+
+/// A bounded outline from the same face that produced the shaped glyph id.
+pub fn shaped_glyph(script: ShapedScript, id: u32) -> Result<GlyphOutline, GlyphError> {
+    let (font, _) = face(script).ok_or(GlyphError::NoFont)?;
     if font.maxp().map_or(true, |m| id >= u32::from(m.num_glyphs())) {
         return Err(GlyphError::Missing);
     }
@@ -167,5 +215,38 @@ mod tests {
         assert_eq!(shape_arabic("日", true), Err(GlyphError::Missing));
         assert_eq!(arabic_glyph(u32::MAX).map(|_| ()), Err(GlyphError::Missing));
         assert!(shape_arabic("", true).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod thai_tests {
+    use super::*;
+
+    #[test]
+    fn thai_clusters_preserve_sara_am_and_stacked_marks() {
+        if crate::document_thai_font().is_none() {
+            assert_eq!(shape_thai("น้ำ"), Err(GlyphError::NoFont));
+            assert!(!thai_has('ก'));
+            return;
+        }
+        for text in ["น้ำ", "กิ่", "ผู้ใช้", "ปู่", "เก้า", "สวัสดีภาษาไทย", "๑๒๓", ""]
+        {
+            let clusters = shape_thai(text).unwrap();
+            assert_eq!(clusters.iter().map(|c| c.text.as_str()).collect::<String>(), text);
+            for c in clusters {
+                assert_eq!(c.script, ShapedScript::Thai);
+                assert!(c.advance.is_finite() && c.advance >= 0.0);
+                for (id, pos) in c.glyphs {
+                    assert!(pos.iter().all(|v| v.is_finite()));
+                    shaped_glyph(c.script, id).unwrap();
+                }
+            }
+        }
+        let stacked = shape_thai("กิ่").unwrap();
+        assert_eq!(stacked.len(), 1, "base, vowel and tone must wrap together");
+        assert!(stacked[0].glyphs.len() >= 3);
+        assert!(stacked[0].glyphs.iter().any(|(_, p)| p[0] != 0.0 || p[1] != 0.0));
+        assert_eq!(shape_thai("日"), Err(GlyphError::Missing));
+        assert_eq!(shaped_glyph(ShapedScript::Thai, u32::MAX).map(|_| ()), Err(GlyphError::Missing));
     }
 }

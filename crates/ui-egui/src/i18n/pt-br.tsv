@@ -333,7 +333,7 @@
 	Centre	Centralizar
 	Align right	Alinhar à direita
 	Justify	Justificar
-	Standard fonts; text outside Windows-1252 isn't supported yet.	Fontes padrão; texto fora de Windows-1252 ainda não é suportado.
+	Thai and Arabic use regular fallback fonts when available.	O tailandês e o árabe usam fontes alternativas de estilo normal quando disponíveis.
 	Edit image	Editar imagem
 	Rotate counterclockwise	Girar no sentido anti-horário
 	Rotate clockwise	Girar no sentido horário
@@ -1993,7 +1993,7 @@
 	This web address mixes letters from different alphabets, a common way to imitate another site's name.	Este endereço da web mistura letras de alfabetos diferentes, uma forma comum de imitar o nome de outro site.
 	This web address uses letters from another alphabet, which can look like familiar ones.	Este endereço da web usa letras de outro alfabeto, que podem parecer familiares.
 	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	Continue apenas se você confiar neste documento. Um endereço pode carregar informações do documento, como o que você digitou no formulário dele.
-	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	As fontes padrão não conseguem desenhar “{c}” ({code}). Por enquanto, apenas caracteres da Europa Ocidental podem ser adicionados como texto.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	As fontes de texto PDF não podem exibir “{c}” ({code}). Escolha um texto compatível.
 	Line ending	Fim de linha
 	Show	Mostrar
 	Sort	Classificar

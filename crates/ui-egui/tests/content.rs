@@ -211,3 +211,23 @@ fn a_kept_draft_goes_with_its_deleted_page() {
     h.run_steps(2);
     assert!(h.state().views[0].content.draft.is_none());
 }
+
+#[test]
+fn typing_thai_text_keeps_marks_and_commits_to_page() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        return;
+    }
+    let fonts = pdfcraft_ui_egui::theme::font_definitions();
+    let face = pdfcraft_fonts::document_thai_font().unwrap();
+    assert!(fonts.families[&egui::FontFamily::Proportional].contains(&face.name()));
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 100.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("น้ำ กิ่ ผู้ใช้ Hello".into()));
+    h.run_steps(3);
+    let p = at(&h, 40.0, 200.0);
+    click(&mut h, p);
+    assert_eq!(texts(&h), ["น้ำ กิ่ ผู้ใช้ Hello"]);
+}

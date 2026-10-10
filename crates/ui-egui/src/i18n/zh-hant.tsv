@@ -343,7 +343,7 @@
 	Centre	居中
 	Align right	右對齊
 	Justify	兩端對齊
-	Standard fonts; text outside Windows-1252 isn't supported yet.	標準字型；尚不支援 Windows-1252 之外的文字。
+	Thai and Arabic use regular fallback fonts when available.	泰語和阿拉伯語使用可用的一般樣式備用字型。
 	Edit image	編輯圖片
 	Rotate counterclockwise	逆時針旋轉
 	Rotate clockwise	順時針旋轉
@@ -1974,7 +1974,7 @@
 	Couldn't import the signature image: {e}	無法匯入簽名圖像：{e}
 	Go to page…	轉到頁面…
 	Reopen the files that were open when PdfCraft last closed	重新開啟上次關閉 PdfCraft 時開啟的檔案
-	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	標準字型無法顯示「{c}」（{code}）。目前只能新增西歐字元作為文字。
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	PDF 文字字型無法顯示「{c}」（{code}）。請選擇支援的文字。
 	Open arrow	開口箭頭
 	Closed arrow	閉合箭頭
 	Butt	平頭

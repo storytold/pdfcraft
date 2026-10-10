@@ -688,7 +688,7 @@
 	Centre	По центру
 	Align right	Выровнять вправо
 	Justify	По ширине
-	Standard fonts; text outside Windows-1252 isn't supported yet.	Стандартные шрифты; текст вне Windows-1252 пока не поддерживается.
+	Thai and Arabic use regular fallback fonts when available.	Для тайского и арабского текста используются доступные резервные шрифты обычного начертания.
 	Edit image	Редактировать изображение
 	Rotate counterclockwise	Повернуть против часовой стрелки
 	Rotate clockwise	Повернуть по часовой стрелке
@@ -2008,7 +2008,7 @@
 	Created a PDF from {n} files; left out: {names}	PDF создан из файлов: {n}; пропущены: {names}
 	Created a PDF from the first {n} files	PDF создан из первых файлов: {n}
 	Go to page…	Перейти на страницу…
-	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Стандартные шрифты не могут отобразить «{c}» ({code}). Пока в виде текста можно добавлять только западноевропейские символы.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	Шрифты текста PDF не могут отобразить «{c}» ({code}). Выберите поддерживаемый текст.
 	Larger pages	Крупнее страницы
 	Smaller pages	Мельче страницы
 	Reset page size	Сбросить размер страниц

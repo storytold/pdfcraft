@@ -692,7 +692,7 @@
 	Centre	По центру
 	Align right	Вирівняти праворуч
 	Justify	За шириною
-	Standard fonts; text outside Windows-1252 isn't supported yet.	Стандартні шрифти; текст поза Windows-1252 ще не підтримується.
+	Thai and Arabic use regular fallback fonts when available.	Для тайського й арабського тексту використовуються доступні резервні шрифти звичайного накреслення.
 	Edit image	Редагувати зображення
 	Rotate counterclockwise	Повернути проти годинникової стрілки
 	Rotate clockwise	Повернути за годинниковою стрілкою
@@ -2115,7 +2115,7 @@ calendar date	December	грудня
 	Reverse open arrow	Зворотна відкрита стрілка
 	Reverse closed arrow	Зворотна закрита стрілка
 	Slash	Коса риска
-	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Стандартні шрифти не можуть відобразити «{c}» ({code}). Поки що як текст можна додавати лише західноєвропейські символи.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	Шрифти тексту PDF не можуть відобразити «{c}» ({code}). Виберіть підтримуваний текст.
 	Larger pages	Більші сторінки
 	Smaller pages	Менші сторінки
 	Reset page size	Скинути розмір сторінок

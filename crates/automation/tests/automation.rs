@@ -3498,3 +3498,27 @@ fn command_batch_refuses_more_than_a_thousand_steps() {
     let err = a.call("command_batch", &json!({"steps": steps})).unwrap_err();
     assert!(err.to_string().contains("at most 1000 steps"), "{err}");
 }
+
+#[test]
+fn thai_text_through_tools_saves_reopens_extracts_and_renders() {
+    let dir = workdir("thai-content");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    let text = "สวัสดี น้ำ ผู้ใช้ ปู่ ๑๒๓ Hello 123";
+    let args = json!({"doc": doc, "page": 1, "text": text, "at": [10, 20], "size": 9});
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        assert!(a.call("page_add_text", &args).unwrap_err().to_string().contains("Thai"));
+        assert_eq!(ok(&mut a, "content_list", json!({"doc": doc}))["count"], 0);
+        return;
+    }
+    ok(&mut a, "page_add_text", args);
+    assert!(page_text(&mut a, doc)[0].contains(text), "{:?}", page_text(&mut a, doc));
+    ok(&mut a, "doc_save", json!({"doc": doc, "path": "thai.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path": "thai.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "content_list", json!({"doc": reopened}))["items"][0]["text"], text);
+    assert!(page_text(&mut a, reopened)[0].contains(text));
+    let rendered = a.call("page_render", &json!({"doc": reopened, "page": 1, "dpi": 144})).unwrap();
+    assert!(rendered.iter().any(|c| matches!(c, Content::Png { data, width, height } if !data.is_empty() && *width > 0 && *height > 0)));
+    ok(&mut a, "content_update", json!({"doc": reopened, "page": 1, "index": 1, "text": "แก้ไข น้ำ"}));
+    assert!(page_text(&mut a, reopened)[0].contains("แก้ไข น้ำ"));
+}

@@ -664,7 +664,7 @@
 	Centre	Középre
 	Align right	Jobbra igazítás
 	Justify	Sorkizárás
-	Standard fonts; text outside Windows-1252 isn't supported yet.	Szabványos betűtípusok; a Windows-1252-n kívüli szöveg még nem támogatott.
+	Thai and Arabic use regular fallback fonts when available.	A thai és az arab szöveg normál stílusú helyettesítő betűtípusokat használ, ha rendelkezésre állnak.
 	Edit image	Kép szerkesztése
 	Rotate counterclockwise	Forgatás az óramutató járásával ellentétesen
 	Rotate clockwise	Forgatás az óramutató járásával megegyezően
@@ -2091,7 +2091,7 @@ action wizard	Start	Indítás
 	Reverse open arrow	Fordított nyitott nyíl
 	Reverse closed arrow	Fordított zárt nyíl
 	Slash	Perjel
-	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	A szabványos betűtípusok nem tudják megjeleníteni ezt: „{c}” ({code}). Egyelőre csak nyugat-európai karakterek adhatók hozzá szövegként.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	A PDF szövegének betűtípusai nem tudják megjeleníteni ezt: „{c}” ({code}). Válasszon támogatott szöveget.
 	Larger pages	Nagyobb oldalak
 	Smaller pages	Kisebb oldalak
 	Reset page size	Oldalméret visszaállítása
