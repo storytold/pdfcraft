@@ -393,6 +393,10 @@ pub struct PdfCraftApp {
     /// Resolved colours, including the current OS theme when following the system.
     pub theme: ThemeKind,
     pub theme_preference: ThemePreference,
+    /// The desktop's light/dark choice, watched while the app runs (Linux has no winit answer).
+    desktop_theme: pdfcraft_platform::desktop_theme::DesktopTheme,
+    /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
+    desktop_dark: Option<bool>,
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
     /// Preferences: bake Fill & Sign marks into the page when saving. Off, so a normal save stays editable.
@@ -633,6 +637,12 @@ impl Default for PdfCraftApp {
     }
 }
 
+/// What the operating system says about light and dark, as "draw dark". `None` means nobody
+/// answered, not a preference, so the caller keeps what it chose.
+fn system_theme(ctx: &egui::Context, desktop_dark: Option<bool>) -> Option<bool> {
+    ctx.system_theme().map(|theme| theme == egui::Theme::Dark).or(desktop_dark)
+}
+
 /// A restored colour: an `[r, g, b]` array of finite numbers, each clamped to 0–1 (restored
 /// settings are untrusted). Anything else (a string, a wrong length, a null or a non-finite
 /// number) is refused whole, so the caller keeps its default.
@@ -672,6 +682,8 @@ impl PdfCraftApp {
             comment_prefs: Default::default(),
             theme: ThemeKind::Light,
             theme_preference: ThemePreference::Light,
+            desktop_theme: pdfcraft_platform::desktop_theme::DesktopTheme::start(),
+            desktop_dark: None,
             language: i18n::AUTO.to_string(),
             flatten_fill_sign_on_save: false,
             dialog: None,
@@ -1224,7 +1236,9 @@ impl PdfCraftApp {
 
     pub fn set_theme_preference(&mut self, preference: ThemePreference) {
         self.theme_preference = preference;
-        self.theme = preference.resolve(self.ctx.as_ref().and_then(egui::Context::system_theme), self.theme);
+        // Before the first frame there is no context to ask, so the last choice stands.
+        let system = self.ctx.as_ref().and_then(|ctx| system_theme(ctx, self.desktop_dark));
+        self.theme = preference.resolve(system, self.theme);
         if let Some(ctx) = &self.ctx {
             theme::apply(ctx, self.theme);
         }
@@ -1238,7 +1252,10 @@ impl PdfCraftApp {
     }
 
     fn sync_theme(&mut self, ctx: &egui::Context) {
-        let kind = self.theme_preference.resolve(ctx.system_theme(), self.theme);
+        if let Some(dark) = self.desktop_theme.take_change() {
+            self.desktop_dark = Some(dark);
+        }
+        let kind = self.theme_preference.resolve(system_theme(ctx, self.desktop_dark), self.theme);
         if kind != self.theme {
             self.theme = kind;
             theme::apply(ctx, kind);
