@@ -168,6 +168,36 @@ fn bmp_gif_and_multi_page_tiff_images() {
     assert!(matches!(from_images(&[("x.webp".into(), b"RIFF0000WEBP".to_vec())]), Err(CreateError::Image(..))));
 }
 
+/// #665 lifted the tiff crate's 256 MiB decode limit; a few bytes claiming a 60000x60000 page
+/// (3.6 GB of gray pixels) must still be refused, not allocated.
+#[test]
+fn a_tiff_claiming_enormous_dimensions_is_refused() {
+    let entries: [(u16, u16, u32); 9] = [
+        (256, 4, 60_000), // ImageWidth
+        (257, 4, 60_000), // ImageLength
+        (258, 3, 8),      // BitsPerSample
+        (259, 3, 1),      // Compression: none
+        (262, 3, 1),      // BlackIsZero
+        (273, 4, 122),    // StripOffsets: just past the IFD
+        (277, 3, 1),      // SamplesPerPixel
+        (278, 4, 60_000), // RowsPerStrip
+        (279, 4, 1),      // StripByteCounts
+    ];
+    let mut tif = b"II*\0".to_vec();
+    tif.extend_from_slice(&8u32.to_le_bytes());
+    tif.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    for (tag, kind, value) in entries {
+        tif.extend_from_slice(&tag.to_le_bytes());
+        tif.extend_from_slice(&kind.to_le_bytes());
+        tif.extend_from_slice(&1u32.to_le_bytes());
+        tif.extend_from_slice(&value.to_le_bytes());
+    }
+    tif.extend_from_slice(&0u32.to_le_bytes());
+    assert_eq!(tif.len(), 122);
+    tif.push(0);
+    assert!(matches!(from_images(&[("huge.tif".into(), tif)]), Err(CreateError::Image(..))));
+}
+
 #[test]
 fn images_export_as_jpeg_unchanged_and_others_as_png() {
     let doc = reopen(

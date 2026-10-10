@@ -303,15 +303,21 @@ fn decoded(name: &str, bytes: &[u8], format: image::ImageFormat) -> Result<Embed
     Ok(rgba_image(rgba.as_raw(), rgba.dimensions(), (72.0, 72.0)))
 }
 
+/// Most decoded bytes one TIFF page may take: room for the 768 MiB CMYK poster in #665, twice over.
+const MAX_TIFF_DECODED_BYTES: usize = 2 << 30;
+
 /// Every page of a TIFF (multi-page scans become multi-page PDFs).
 fn tiff_pages(name: &str, bytes: &[u8]) -> Result<Vec<Embedded>, CreateError> {
     use tiff::ColorType as C;
     use tiff::decoder::{Decoder, DecodingResult, Limits};
     use tiff::tags::Tag;
     let bad = |m: String| CreateError::Image(name.into(), m);
-    let mut dec = Decoder::new(std::io::Cursor::new(bytes))
-        .map_err(|e| bad(e.to_string()))?
-        .with_limits(Limits::unlimited());
+    // The tiff crate stops at 256 MiB of decoded pixels, below an ordinary poster scan (#665):
+    // 12000x16000 CMYK is 768 MiB. Raise it, but keep a ceiling so a tiny file claiming
+    // enormous dimensions can't ask for unbounded memory.
+    let mut limits = Limits::default();
+    limits.decoding_buffer_size = MAX_TIFF_DECODED_BYTES;
+    let mut dec = Decoder::new(std::io::Cursor::new(bytes)).map_err(|e| bad(e.to_string()))?.with_limits(limits);
     let mut out = Vec::new();
     loop {
         let (w, h) = dec.dimensions().map_err(|e| bad(e.to_string()))?;
