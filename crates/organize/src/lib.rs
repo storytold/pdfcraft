@@ -149,6 +149,9 @@ fn check(indices: &[usize], n: usize) -> Result<(), OrganizeError> {
 
 /// Rotate pages by a multiple of 90° (positive = clockwise), adjusting `/Rotate` (§7.7.3.3).
 pub fn rotate_pages(doc: &mut Document, indices: &[usize], degrees: i64) -> Result<(), OrganizeError> {
+    if degrees % 90 != 0 {
+        return Err(OrganizeError::Invalid("rotation must be a multiple of 90 degrees".into()));
+    }
     let all = walk(doc)?;
     check(indices, all.len())?;
     let delta = (degrees / 90) * 90;
