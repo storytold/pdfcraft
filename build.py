@@ -523,6 +523,13 @@ def build_app(
     if os.name == "nt" and preview_dll_src.is_file():
         csc = _find_windows_csc()
         if csc:
+            # Stop any running prevhost.exe before replacing or re-registering LinkcoPdfPreviewHandler.dll
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "prevhost.exe"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
             bin_preview_dll = bin_dir / "LinkcoPdfPreviewHandler.dll"
             csc_cmd = [
                 str(csc),
@@ -539,6 +546,32 @@ def build_app(
             subprocess.run(csc_cmd, cwd=str(ROOT), check=True)
             shutil.copy2(bin_preview_dll, dist_preview_dll)
             print(f"==> Built Windows File Explorer Preview Handler: {dist_preview_dll}")
+
+            pwsh = shutil.which("powershell") or shutil.which("pwsh")
+            if pwsh:
+                escaped_dll = str(dist_preview_dll.resolve()).replace("'", "''")
+                reg_cmd = (
+                    f"$dll = '{escaped_dll}'; "
+                    "$asm = [System.Reflection.Assembly]::LoadFrom($dll); "
+                    "[LinkcoPdfPreview.LinkcoPdfPreviewHandler]::RegisterPreviewHandler($dll)"
+                )
+                reg_res = subprocess.run(
+                    [
+                        pwsh,
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-Command",
+                        reg_cmd,
+                    ],
+                    cwd=str(ROOT),
+                    check=False,
+                )
+                if reg_res.returncode == 0:
+                    print(
+                        "==> Registered Windows File Explorer PDF Preview Handler in Windows Registry (HKCU/HKCR)"
+                    )
 
     print("\n==> Build complete:")
     for label, p in [
