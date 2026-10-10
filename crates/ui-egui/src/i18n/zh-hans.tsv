@@ -890,7 +890,7 @@
 	Applied 1 redaction mark. Save to remove the content from the file.	已应用 1 个密文标记。保存以从文件中删除内容。
 	Applied {n} redaction marks. Save to remove the content from the file.	已应用 {n} 个密文标记。保存以从文件中删除内容。
 	JavaScript Console	JavaScript 控制台
-	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript 已关闭（首选项 ▸ JavaScript）。
+	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript 已关闭（首选项 → JavaScript）。
 	Output appears here.	输出显示在此处。
 	Document JavaScripts	文档 JavaScript
 	Script Name:	脚本名称：

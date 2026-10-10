@@ -367,13 +367,16 @@ dialogs, panels and keyboard shortcuts. Command search accepts the translated la
 English label and the stable command id; filenames, PDF contents, author names, custom
 action names and error details from the engine or the operating system keep their own text.
 
-Japanese fonts come from [craft-fonts](https://github.com/storytold/craft-fonts), an optional build
-input that every release includes. To build with them (Japanese interface text, and Japanese text in
-edited PDFs):
+Japanese, Chinese and Arabic fonts come from [craft-fonts](https://github.com/storytold/craft-fonts),
+an optional build input that every release includes. To build with them (Japanese, Chinese and
+Arabic interface text, and Japanese and Arabic text in edited PDFs), check out the revision the
+releases pin, so you see what they ship:
 
 ```sh
+rev="$(grep -A1 'repository: storytold/craft-fonts' .github/workflows/release.yml | grep -m1 -oE '[0-9a-f]{40}')"
 git clone https://github.com/storytold/craft-fonts ../craft-fonts
-CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p pdfcraft -- some.pdf
+git -C ../craft-fonts fetch origin "$rev" && git -C ../craft-fonts checkout "$rev"
+CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo run --release -p pdfcraft -- some.pdf
 ```
 
 Each [GitHub release](https://github.com/storytold/pdfcraft/releases) has ready-made builds for macOS,
@@ -520,8 +523,8 @@ Copyright (c) 2026 ArtCraft Team and the PdfCraft contributors. Required notices
 
 Bundled fonts, icons, images and other assets keep their own open licenses; each one is listed
 with its author, source and license in [ATTRIBUTION.md](ATTRIBUTION.md). Release builds also embed
-the Japanese fonts of [craft-fonts](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md)
-(SIL Open Font License 1.1).
+the Japanese, Chinese and Arabic fonts of [craft-fonts](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md)
+(SIL Open Font License 1.1; Droid Sans Fallback under the Apache License 2.0).
 
 The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the
 ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as

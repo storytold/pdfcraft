@@ -1,8 +1,12 @@
 //! Embeds the fonts of the optional craft-fonts build input (`CRAFT_FONTS_DIR`) as `CRAFT_FONTS`.
 //! The recipe is craft-fonts' `docs/integration.md`; unset, `CRAFT_FONTS` is empty. It only reads
-//! the local checkout (no network). On wasm32 it embeds only the UI faces (BIZ UDPGothic Regular
-//! and any `Arab` or `Telu` face), to keep the web build within hosting limits (Cloudflare Pages:
-//! 25 MiB per file).
+//! the local checkout (no network). Which faces it keeps is `src/select.rs`: never an Adobe design
+//! (AGENTS.md §1.1), and on wasm32 only the UI faces (BIZ UDPGothic Regular, Droid Sans Fallback
+//! and any `Arab` or `Telu` face), to keep the web app's single `.wasm` file small.
+
+#[path = "src/select.rs"]
+#[allow(dead_code)]
+mod select;
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -27,10 +31,6 @@ fn main() {
     }
 }
 
-/// Family-name prefixes of the faces AGENTS.md §1.1 forbids: Adobe's Source families and Noto
-/// CJK, which is Source Han under another name. The test in `src/craft.rs` has the same list.
-const BARRED_FAMILIES: [&str; 5] = ["Source Han", "Source Serif", "Source Sans", "Noto Sans CJK", "Noto Serif CJK"];
-
 /// One `CraftFont { .. }` initialiser per manifest line.
 fn craft_fonts(dir: &std::path::Path) -> Result<String, String> {
     let manifest = dir.join("fonts/manifest.txt");
@@ -45,21 +45,17 @@ fn craft_fonts(dir: &std::path::Path) -> Result<String, String> {
         };
         // AGENTS.md §1.1 bars Adobe's type designs whatever their licence, so a checkout that
         // carries one (craft-fonts has Noto Sans CJK, which is Source Han) never embeds it.
-        if BARRED_FAMILIES.iter().any(|barred| family.starts_with(barred)) {
+        if select::barred(family) {
             println!("cargo::warning=craft-fonts: not embedding {family} {style} (AGENTS.md §1.1)");
             continue;
         }
-        // Arabic interface faces are small, so the web build keeps them too.
-        let arabic = scripts.split(',').any(|s| s.trim() == "Arab");
-        // Telugu faces too, for the Telugu interface.
-        let telugu = scripts.split(',').any(|s| s.trim() == "Telu");
-        let web_face = (*family == "BIZ UDPGothic" && *style == "Regular") || arabic || telugu;
-        if wasm && !web_face {
+        let scripts: Vec<&str> = scripts.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+        if wasm && !select::on_web(family, style, &scripts) {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
         println!("cargo::rerun-if-changed={}", path.display());
-        let scripts: Vec<String> = scripts.split(',').map(|s| format!("{:?}", s.trim())).collect();
+        let scripts: Vec<String> = scripts.iter().map(|s| format!("{s:?}")).collect();
         let _ = writeln!(
             out,
             "    CraftFont {{ family: {family:?}, style: {style:?}, scripts: &[{}], bytes: include_bytes!({:?}) }},",

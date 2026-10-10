@@ -54,15 +54,28 @@ copy_docs() {
 }
 
 # Builds made with the optional craft-fonts input (CRAFT_FONTS_DIR, set for every release) embed
-# its fonts, so the package carries their licences: fonts/<family>/OFL.txt -> OFL-<family>.txt.
+# its fonts, so the package carries their licences: the `licence file` field (6th) of each line of
+# fonts/manifest.txt, named after its directory: fonts/<dir>/OFL.txt -> OFL-<dir>.txt (OFL fonts),
+# fonts/droid-sans-fallback/NOTICE -> NOTICE-droid-sans-fallback.txt (Apache-2.0 notice and text).
 copy_font_licences() {
-  local dest="$1" f family
+  local dest="$1" manifest rel src base
   [ -n "${CRAFT_FONTS_DIR:-}" ] || return 0
-  for f in "$CRAFT_FONTS_DIR"/fonts/*/OFL.txt; do
-    [ -f "$f" ] || continue
-    family="$(basename "$(dirname "$f")")"
-    cp "$f" "$dest/OFL-$family.txt"
-  done
+  manifest="$CRAFT_FONTS_DIR/fonts/manifest.txt"
+  if [ ! -f "$manifest" ]; then
+    warn "CRAFT_FONTS_DIR=$CRAFT_FONTS_DIR has no fonts/manifest.txt; no font licences copied"
+    return 0
+  fi
+  awk -F ' [|] ' '$0 !~ /^[[:space:]]*(#|$)/ && NF >= 6 { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $6); print $6 }' "$manifest" \
+    | sort -u | while IFS= read -r rel; do
+      case "$rel" in /* | *..*) warn "font licence path $rel leaves the checkout; skipped"; continue ;; esac
+      src="$CRAFT_FONTS_DIR/$rel"
+      if [ ! -f "$src" ]; then
+        warn "font licence $rel is listed in the craft-fonts manifest but missing"
+        continue
+      fi
+      base="$(basename "$rel")"
+      cp "$src" "$dest/${base%.*}-$(basename "$(dirname "$rel")").txt"
+    done
 }
 
 # Fetch the OCR models into a package directory (#103): `cargo xtask models DEST` downloads every
