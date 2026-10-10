@@ -3,14 +3,15 @@
 
 use std::sync::Arc;
 
-use rustls_cng::key::{AlgorithmGroup, NCryptKey, SignaturePadding};
+use rustls_cng::cert::CertContext;
+use rustls_cng::key::{AlgorithmGroup, SignaturePadding};
 use rustls_cng::store::{CertStore, CertStoreType};
 
 use crate::keys::{DigestAlg, ExternalKey, PrivateKey, PublicKey};
 use crate::{Certificate, DigitalId, SignError};
 
 struct WindowsKey {
-    key: NCryptKey,
+    context: CertContext,
     public: PublicKey,
 }
 
@@ -19,8 +20,15 @@ impl ExternalKey for WindowsKey {
         let digest = alg.digest(&[msg]);
         // CNG adds the DigestInfo for PKCS #1 v1.5 when given PKCS1 padding.
         let padding = if matches!(self.public, PublicKey::Rsa { .. }) { SignaturePadding::Pkcs1 } else { SignaturePadding::None };
-        let raw = self
-            .key
+        // A key handle acquired silently can never prompt: smart cards and tokens then refuse
+        // to sign (NTE_SILENT_CONTEXT, 0x80090022) instead of asking for the PIN. Acquire the
+        // signing handle without the silent flag so the provider can show its own dialog.
+        let key = self.context.acquire_key(false).map_err(|e| {
+            SignError::Crypto(format!(
+                "the Windows certificate store key couldn't be opened for signing (is the smart card or token connected?): {e}"
+            ))
+        })?;
+        let raw = key
             .sign(&digest, padding)
             .map_err(|e| SignError::Crypto(format!("the Windows certificate store didn't sign (key use may have been cancelled): {e}")))?;
         match &self.public {
@@ -64,7 +72,7 @@ pub fn identities() -> Result<Vec<DigitalId>, SignError> {
     for context in contexts {
         let Ok(certificate) = Certificate::parse(context.as_der()) else { continue };
         // Enumeration must not open permission or PIN dialogs. Signing may prompt later.
-        let Ok(mut key) = context.acquire_key(true) else { continue };
+        let Ok(key) = context.acquire_key(true) else { continue };
         let supported = match &certificate.public_key {
             PublicKey::Rsa { .. } => key.algorithm_group().is_ok_and(|a| a == AlgorithmGroup::Rsa),
             PublicKey::P256(_) => key.algorithm_group().is_ok_and(|a| a == AlgorithmGroup::Ecdsa) && key.bits().is_ok_and(|bits| bits == 256),
@@ -74,9 +82,10 @@ pub fn identities() -> Result<Vec<DigitalId>, SignError> {
         if !supported {
             continue;
         }
-        key.set_silent(false);
+        // The silent handle was only for the checks above; `sign` acquires its own.
+        drop(key);
         let public = certificate.public_key.clone();
-        let key = PrivateKey::external(public.clone(), Arc::new(WindowsKey { key, public }));
+        let key = PrivateKey::external(public.clone(), Arc::new(WindowsKey { context, public }));
         let friendly_name = Some(certificate.display_name());
         out.push(DigitalId { key, certificate, chain: Vec::new(), friendly_name });
     }
