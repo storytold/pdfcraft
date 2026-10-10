@@ -683,6 +683,57 @@ fn combine_and_insert_share_identical_resources() {
     assert_eq!(labels(&d), ["A1", "A2", "A3", "A1", "A2"]);
 }
 
+/// A one-page document drawing one image, written the way ImageMagick writes it: the colour
+/// space is an indirect `/DeviceRGB` object of its own (#878).
+fn indirect_colour_space_doc() -> Document {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>".to_vec(),
+        stream(b"q 100 0 0 100 0 0 cm /Im0 Do Q"),
+        [
+            b"<< /Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace 6 0 R /BitsPerComponent 8 /Length 6 >>\nstream\n".as_slice(),
+            &[255, 0, 0, 0, 0, 255],
+            b"\nendstream",
+        ]
+        .concat(),
+        b"/DeviceRGB".to_vec(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    open(out)
+}
+
+#[test]
+fn combine_stores_an_image_once_when_its_colour_space_is_an_indirect_name() {
+    let images = |d: &Document| {
+        d.object_numbers()
+            .into_iter()
+            .filter(|n| matches!(&*d.get(ObjRef::new(*n, d.generation(*n))), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image")))
+            .count()
+    };
+    let src = indirect_colour_space_doc();
+    let out = full_roundtrip(&crate::combine(&[("one", &src), ("two", &src), ("three", &src)]).unwrap());
+    assert_eq!(images(&out), 1);
+    assert_eq!(pages(&out).unwrap().len(), 3);
+    // Inserting the same pages again reuses the image already there.
+    let mut d = indirect_colour_space_doc();
+    crate::import_pages(&mut d, &indirect_colour_space_doc(), &[0], 1).unwrap();
+    assert_eq!(images(&full_roundtrip(&d)), 1);
+}
+
 // ---- bookmarks (M4.6) --------------------------------------------------------------------------
 
 fn titles(b: &[crate::Bookmark]) -> Vec<String> {
