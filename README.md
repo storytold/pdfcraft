@@ -352,6 +352,8 @@ PdfCraft is a clean-room implementation. Its behaviour comes from the ISO 32000 
 
 ## Get started
 
+**Scan & OCR** supports English, Simplified Chinese with mixed English text, and accented European languages (German, French, Czech, Polish, …). Recognition runs locally; install the model files as described in [OCR](docs/ocr.md). Its searchable-image output preserves the original page and adds invisible, selectable Unicode text.
+
 ```sh
 git clone https://github.com/storytold/pdfcraft
 cd pdfcraft
@@ -399,7 +401,7 @@ PdfCraft is young and moving fast. The aim is a workbench where you can view, or
 
 - **Good today:** viewing and search; organizing, combining and splitting; most kinds of comment; filling and authoring forms (with sandboxed JavaScript); passwords, redaction and sanitizing; basic digital signatures; printing; the Accessibility Checker; agent control through the CLI and MCP.
 - **Still borrowed:** pages are drawn by the `hayro` crate while our own renderer is built.
-- **Thin or missing:** reliable editing of existing text (especially CJK), OCR beyond Latin script, Office import/export, signature timestamps and long-term validation, PDF/A/X/UA preflight, XFA forms and localization.
+- **Thin or missing:** reliable editing of existing text (especially CJK), OCR languages beyond English, Chinese and accented Latin, Office import/export, signature timestamps and long-term validation, PDF/A/X/UA preflight, XFA forms and localization.
 - **Hardening:** fuzzing still turns up crashes and hangs on hostile files; each one is fixed with a regression test. Quality has not yet been compared with Acrobat side by side.
 
 **Next, in order:** our own renderer, hardening and a fidelity harness against Acrobat, editing existing content, then the Pro workflows (signatures, OCR, Office, preflight, XFA) and 1.0 polish.

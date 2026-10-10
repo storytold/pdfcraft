@@ -19,7 +19,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Simplified Chinese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "2692f1dfc21b9d7284ba69316085fb9a2f30dcb6d6f336401d7b9aa4b3fcf67a"
+sha256 = "8e05261ee90512f99c4f2de0950396a218ff3d31bb263ded3dbaba1e90ebbcc2"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/zh-hant.tsv"
@@ -30,7 +30,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Traditional Chinese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "242e4c748a66ee6ff18d657ee3e1ef0808be0d5adc005e45723f93c835d142f8"
+sha256 = "b550f94ea38e97e70d3823143492e99b5fd59ffbc5d36e616a1f00e245eac9aa"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/cs.tsv"
@@ -3219,6 +3219,58 @@ licence_sha256 = "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1c
 kind = "model"
 usage = "Scan & OCR: reads the words it finds (cargo xtask models)"
 sha256 = "e484866d4cce403175bd8d00b128feb08ab42e208de30e42cd9889d8f1735a6e"
+
+[[fetched]]
+file = "chinese-recognition.onnx"
+url = "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv4/rec/ch_PP-OCRv4_rec_mobile.onnx"
+title = "PP-OCRv4 mobile Chinese/English recognition model (ONNX)"
+author = "PaddlePaddle Authors; RapidAI contributors (ONNX conversion)"
+source = "https://github.com/RapidAI/RapidOCR/tree/v3.9.2; PaddleOCR PP-OCRv4 recognition model, converted to ONNX by RapidAI"
+licence = "Apache-2.0"
+licence_url = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v2.7.3/LICENSE"
+licence_sha256 = "ff6311c56c1b22c9209c96cc8afc16da91c24ee55a15e14ebc46fe1960dbd856"
+kind = "model"
+usage = "Offline Chinese and mixed English Scan & OCR (cargo xtask models)"
+sha256 = "48fc40f24f6d2a207a2b1091d3437eb3cc3eb6b676dc3ef9c37384005483683b"
+
+[[fetched]]
+file = "chinese-keys.txt"
+url = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v2.7.3/ppocr/utils/ppocr_keys_v1.txt"
+title = "PaddleOCR Chinese character dictionary"
+author = "PaddlePaddle Authors"
+source = "https://github.com/PaddlePaddle/PaddleOCR/blob/v2.7.3/ppocr/utils/ppocr_keys_v1.txt"
+licence = "Apache-2.0"
+licence_url = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v2.7.3/LICENSE"
+licence_sha256 = "ff6311c56c1b22c9209c96cc8afc16da91c24ee55a15e14ebc46fe1960dbd856"
+kind = "model"
+usage = "Offline Chinese and mixed English Scan & OCR (cargo xtask models)"
+sha256 = "28b2362ad4ab2dc38769aa72feb535e3a9ddb3fd2a7585a05920e6393b1dc7f7"
+
+[[fetched]]
+file = "latin-recognition.onnx"
+url = "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv5/rec/latin_PP-OCRv5_rec_mobile.onnx"
+title = "PP-OCRv5 mobile Latin recognition model (ONNX)"
+author = "PaddlePaddle Authors; RapidAI contributors (ONNX conversion)"
+source = "https://github.com/RapidAI/RapidOCR/tree/v3.9.2; PaddleOCR PP-OCRv5 Latin recognition model, converted to ONNX by RapidAI"
+licence = "Apache-2.0"
+licence_url = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v3.1.1/LICENSE"
+licence_sha256 = "3840c5c0c61c294264d2dd77b8777be6ddd90121ef4e0e64abcd22edea581d6e"
+kind = "model"
+usage = "Scan & OCR: accented European languages, German French Czech Polish Nordic (cargo xtask models)"
+sha256 = "b20bd37c168a570f583afbc8cd7925603890efbcdc000a59e22c269d160b5f5a"
+
+[[fetched]]
+file = "latin-keys.txt"
+url = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v3.1.1/ppocr/utils/dict/ppocrv5_latin_dict.txt"
+title = "PaddleOCR PP-OCRv5 Latin character dictionary"
+author = "PaddlePaddle Authors"
+source = "https://github.com/PaddlePaddle/PaddleOCR/blob/v3.1.1/ppocr/utils/dict/ppocrv5_latin_dict.txt"
+licence = "Apache-2.0"
+licence_url = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v3.1.1/LICENSE"
+licence_sha256 = "3840c5c0c61c294264d2dd77b8777be6ddd90121ef4e0e64abcd22edea581d6e"
+kind = "model"
+usage = "Scan & OCR: character classes for the Latin recogniser (cargo xtask models)"
+sha256 = "3c0a8a79b612653c25f765271714f71281e4e955962c153e272b7b8c1d2b13ff"
 
 [[build_input]]
 name = "craft-fonts"

@@ -2027,3 +2027,9 @@
 	The field {name} no longer exists.	欄位 {name} 已不存在。
 	A selected field has no widget on any page, so the fields can't be edited together.	某個所選欄位在任何頁面上都沒有控制項，因此無法一起編輯這些欄位。
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 張以可繪製的最大尺寸 {dpi} dpi 匯出）
+
+	English	英語
+
+	Chinese (Simplified) and English	簡體中文和英語
+
+	Latin (accented)	拉丁字母（含變音符號）

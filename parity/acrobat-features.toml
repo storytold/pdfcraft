@@ -6414,8 +6414,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/ui-egui/tests/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "Language choice exists, but the models read only the Latin alphabet without accents (English)."
+evidence = ["crates/engine/src/tests.rs::chinese_ocr_makes_mixed_scans_searchable", "crates/engine/src/tests.rs::latin_ocr_keeps_german_accents_searchable", "crates/automation/tests/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/ocr.rs::chinese_ocr_language_runs_from_the_dialog"]
+notes = "English, Simplified Chinese/mixed English and accented Latin (German, French, Czech, Polish, Nordic) use separate local recognisers (ocrs and PP-OCR models on RTen). Chinese and Latin require their ONNX model and dictionary from cargo xtask models; other OCR languages remain unsupported."
 
 [[feature]]
 id = "ocr.searchable-image"
@@ -6427,7 +6427,7 @@ status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
 evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable"]
-notes = "Invisible text (Tr 3) fitted to each word box; the image is not deskewed or downsampled (exact mode only)."
+notes = "Invisible text (Tr 3) fitted to word boxes (Chinese: line boxes); Unicode ToUnicode maps preserve Chinese copy/search without embedding a display font. The image is not deskewed or downsampled (exact mode only)."
 
 [[feature]]
 id = "ocr.searchable-image-exact"
