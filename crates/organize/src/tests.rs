@@ -171,6 +171,45 @@ fn deleted_pages_are_not_kept_by_what_points_at_them() {
 }
 
 #[test]
+fn deleting_the_opening_page_drops_the_open_action() {
+    let open_action = |doc: &Document| doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"OpenAction").cloned();
+    let set_open = |doc: &mut Document, value: Object| {
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"OpenAction".to_vec(), value)).unwrap();
+    };
+    let page = |doc: &Document, i: usize| pages(doc).unwrap()[i].obj;
+    for as_action in [false, true] {
+        let target = |doc: &Document, i: usize| {
+            let dest = Object::Array(vec![Object::Ref(page(doc, i)), Object::Name(b"Fit".to_vec())]);
+            if as_action {
+                let mut a = Dict::new();
+                a.set(b"S".to_vec(), Object::Name(b"GoTo".to_vec()));
+                a.set(b"D".to_vec(), dest);
+                Object::Dict(a)
+            } else {
+                dest
+            }
+        };
+        // The opening page goes: no OpenAction is left to point at nothing.
+        let mut doc = doc_a();
+        let open = target(&doc, 0);
+        set_open(&mut doc, open);
+        delete_pages(&mut doc, &[0]).unwrap();
+        let out = full_roundtrip(&doc);
+        assert_eq!(labels(&out), ["A2", "A3"]);
+        assert_eq!(open_action(&out), None);
+        // Another page goes: the opening page keeps its OpenAction.
+        let mut doc = doc_a();
+        let open = target(&doc, 0);
+        set_open(&mut doc, open);
+        delete_pages(&mut doc, &[2]).unwrap();
+        let out = full_roundtrip(&doc);
+        assert_eq!(labels(&out), ["A1", "A2"]);
+        assert!(open_action(&out).is_some());
+    }
+}
+
+#[test]
 fn cannot_delete_every_page_or_missing_pages() {
     let mut doc = open(fixture());
     assert_eq!(delete_pages(&mut doc, &[0, 1, 2]), Err(OrganizeError::WouldRemoveAllPages));
@@ -237,6 +276,42 @@ fn full_save_drops_unreachable_objects() {
     assert!(full.object_numbers().len() < doc.object_numbers().len());
     assert_eq!(info(&full, "Title").as_deref(), Some("Original"));
     assert_eq!(hayro_syntax::Pdf::new(bytes).unwrap().pages().len(), 1);
+}
+
+#[test]
+fn deleting_a_page_drops_the_named_destinations_to_it() {
+    // Four names (two in the /Names tree, two in the legacy /Dests dictionary) go to P1 or P3;
+    // P2 has a link for each. Deleting P1 must drop its names and their links, keep P3's.
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Names << /Dests 6 0 R >> /Dests 7 0 R >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R >>".into(),                                          // 3
+        "<< /Type /Page /Parent 2 0 R /Annots [8 0 R 9 0 R 10 0 R 11 0 R] >>".into(),      // 4
+        "<< /Type /Page /Parent 2 0 R >>".into(),                                          // 5
+        "<< /Names [(treeFirst) [3 0 R /Fit] (treeLast) [5 0 R /Fit]] >>".into(),          // 6
+        "<< /legacyFirst [3 0 R /Fit] /legacyLast << /D [5 0 R /Fit] >> >>".into(),        // 7
+        "<< /Type /Annot /Subtype /Link /Rect [0 0 9 9] /Dest (treeFirst) >>".into(),      // 8
+        "<< /Type /Annot /Subtype /Link /Rect [0 0 9 9] /Dest (treeLast) >>".into(),       // 9
+        "<< /Type /Annot /Subtype /Link /Rect [0 0 9 9] /Dest /legacyFirst >>".into(),     // 10
+        "<< /Type /Annot /Subtype /Link /Rect [0 0 9 9] /A << /S /GoTo /D /legacyLast >> >>".into(), // 11
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    delete_pages(&mut doc, &[0]).unwrap();
+    let out = full_roundtrip(&doc);
+    let cat = out.get(out.root().unwrap()).as_dict().cloned().unwrap();
+    let tree = out.resolve(out.resolve(cat.get(b"Names").unwrap()).as_dict().unwrap().get(b"Dests").unwrap());
+    let pairs = tree.as_dict().unwrap().get(b"Names").and_then(Object::as_array).cloned().unwrap();
+    assert_eq!(pairs.len(), 2, "{pairs:?}");
+    assert_eq!(pairs[0].as_string().map(|s| s.bytes.clone()), Some(b"treeLast".to_vec()));
+    let page3 = pages(&out).unwrap()[1].obj;
+    assert_eq!(out.resolve(&pairs[1]).as_array().and_then(|a| a.first()).and_then(Object::as_ref), Some(page3));
+    let legacy = out.resolve(cat.get(b"Dests").unwrap()).as_dict().cloned().unwrap();
+    assert!(!legacy.contains(b"legacyFirst") && legacy.contains(b"legacyLast"), "{legacy:?}");
+    let links = annots(&out, 0);
+    assert!(!links[0].contains(b"Dest"), "{:?}", links[0]);
+    assert!(links[1].contains(b"Dest"), "{:?}", links[1]);
+    assert!(!links[2].contains(b"Dest"), "{:?}", links[2]);
+    assert!(links[3].contains(b"A"), "{:?}", links[3]);
 }
 
 // ── Combine / extract / split ──────────────────────────────────────────────────────────────────
@@ -366,6 +441,44 @@ fn links_are_rewired_to_copied_pages_or_dropped() {
     let out = full_roundtrip(&extract_pages(&a, &[1]).unwrap());
     let link = annots(&out, 0).into_iter().find(|d| d.name(b"Subtype") == Some(b"Link")).unwrap();
     assert!(!link.contains(b"Dest") && !link.contains(b"A"));
+}
+
+/// A widget annotation that is its own form field (no `/Parent`).
+fn own_field(doc: &Document, r: ObjRef) -> bool {
+    doc.get(r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget") && !d.contains(b"Parent"))
+}
+
+#[test]
+fn repeated_page_gets_independent_annotations() {
+    // A1 has a link, A2 a link and a form field, A3 a note with a popup; each is listed twice.
+    let out = full_roundtrip(&extract_pages(&doc_a(), &[0, 0, 1, 1, 2, 2]).unwrap());
+    let ps = pages(&out).unwrap();
+    let refs: Vec<Vec<ObjRef>> = (0..6)
+        .map(|i| page_dict(&out, i).get(b"Annots").map(|a| out.resolve(a).as_array().cloned().unwrap_or_default()).unwrap_or_default())
+        .map(|list| list.iter().filter_map(|a| a.as_ref()).collect())
+        .collect();
+    for i in (0..6).step_by(2) {
+        assert!(!refs[i].is_empty());
+        assert_eq!(refs[i].len(), refs[i + 1].len());
+        for (a, b) in refs[i].iter().zip(&refs[i + 1]) {
+            // A widget that is its own field stays one object on both pages, so the field stays
+            // one (#790); every other annotation is copied.
+            if !own_field(&out, *a) {
+                assert_ne!(a, b, "each copy of the page has its own annotation objects");
+            }
+        }
+    }
+    for (i, list) in refs.iter().enumerate() {
+        for a in list.iter().filter(|a| !own_field(&out, **a)) {
+            assert_eq!(out.get(*a).as_dict().unwrap().reference(b"P"), Some(ps[i].obj), "/P names the page holding the copy");
+        }
+    }
+    // Each note keeps its own popup, pointing back at that note.
+    let popups: Vec<ObjRef> = [4, 5].iter().map(|&i| out.get(refs[i][0]).as_dict().unwrap().reference(b"Popup").unwrap()).collect();
+    assert_ne!(popups[0], popups[1]);
+    for (k, p) in popups.iter().enumerate() {
+        assert_eq!(out.get(*p).as_dict().unwrap().reference(b"Parent"), Some(refs[4 + k][0]));
+    }
 }
 
 #[test]
@@ -647,6 +760,96 @@ fn layers_are_registered_with_their_default_state() {
     assert!(!catalog(&out).contains(b"OCProperties"));
 }
 
+/// The top-level bookmarks' titles, in order.
+fn top_titles(doc: &Document) -> Vec<String> {
+    let Some(outlines) = catalog(doc).reference(b"Outlines") else { return Vec::new() };
+    let mut item = doc.get(outlines).as_dict().and_then(|o| o.reference(b"First"));
+    let mut titles = Vec::new();
+    while let Some(r) = item {
+        let d = doc.get(r).as_dict().cloned().unwrap();
+        titles.push(d.get(b"Title").and_then(|t| t.as_string()).map(|s| s.to_text()).unwrap());
+        item = d.reference(b"Next");
+    }
+    titles
+}
+
+#[test]
+fn a_file_split_around_another_is_copied_once_with_one_bookmark() {
+    // C's first page, then all of A, then C's second page.
+    let (a, c) = (doc_a(), doc_c());
+    let out = full_roundtrip(&crate::combine_grouped(&[(0, "C", &c, Some(&[0])), (1, "A", &a, None), (0, "C", &c, Some(&[1]))]).unwrap());
+    assert_eq!(labels(&out), ["C1", "A1", "A2", "A3", "C2"]);
+    assert_eq!(top_titles(&out), ["C", "A"], "one bookmark per file, not per run");
+    let ps = pages(&out).unwrap();
+    let outlines = out.get(catalog(&out).reference(b"Outlines").unwrap()).as_dict().cloned().unwrap();
+    let file = out.get(outlines.reference(b"First").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(file.get(b"Dest").and_then(|d| d.as_array()).unwrap()[0].as_ref(), Some(ps[0].obj), "C's bookmark: its first page shown");
+    // Its own bookmarks follow its pages wherever they went: the section is on C2, now last.
+    let chapter = out.get(file.reference(b"First").unwrap()).as_dict().cloned().unwrap();
+    let section = out.get(chapter.reference(b"First").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(section.get(b"Dest").and_then(|d| d.as_array()).unwrap()[0].as_ref(), Some(ps[4].obj));
+    // The link from C1 to C2 still works across A's pages between them.
+    let link = &annots(&out, 0)[0];
+    assert_eq!(link.get(b"Dest").and_then(|d| d.as_array()).expect("kept").first().and_then(|o| o.as_ref()), Some(ps[4].obj));
+    // Its attachment once, not once per run.
+    let names = out.resolve(catalog(&out).get(b"Names").unwrap()).as_dict().cloned().unwrap();
+    let tree = out.resolve(names.get(b"EmbeddedFiles").unwrap()).as_dict().cloned().unwrap();
+    let keys: Vec<String> = tree.get(b"Names").and_then(|n| n.as_array()).unwrap().chunks(2).map(|p| p[0].as_string().unwrap().to_text()).collect();
+    assert_eq!(keys, ["notes.txt"]);
+}
+
+#[test]
+fn a_page_shown_twice_gets_its_own_annotations() {
+    // One page with an indirect comment (and its popup), and a second page.
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),                                                          // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(),                    // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Annots [6 0 R] >>".into(),                            // 3
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>".into(),                                            // 4
+        body("D1"),                                                                                          // 5
+        "<< /Type /Annot /Subtype /Text /Rect [0 0 10 10] /Contents (note) /P 3 0 R /Popup 8 0 R >>".into(), // 6
+        body("D2"),                                                                                          // 7
+        "<< /Type /Annot /Subtype /Popup /Rect [10 10 50 50] /Parent 6 0 R >>".into(),                       // 8
+    ];
+    let d = open(build(&b, "/Root 1 0 R"));
+    // Page 1 twice, from one file split around its page 2 (and the same through combine_selected).
+    for out in [
+        crate::combine_grouped(&[(0, "D", &d, Some(&[0, 1])), (0, "D", &d, Some(&[0]))]).unwrap(),
+        combine_selected(&[("D", &d, Some(&[0, 1, 0]))]).unwrap(),
+    ] {
+        let out = full_roundtrip(&out);
+        assert_eq!(labels(&out), ["D1", "D2", "D1"]);
+        let ps = pages(&out).unwrap();
+        let annot_of = |i: usize| page_dict(&out, i).get(b"Annots").and_then(|a| a.as_array()).and_then(|a| a[0].as_ref()).unwrap();
+        let (first, again) = (annot_of(0), annot_of(2));
+        assert_ne!(first, again, "two pages, two comments");
+        for (annot, page) in [(first, ps[0].obj), (again, ps[2].obj)] {
+            let a = out.get(annot).as_dict().cloned().unwrap();
+            assert_eq!(a.reference(b"P"), Some(page), "each comment belongs to its own page");
+            let popup = out.get(a.reference(b"Popup").unwrap()).as_dict().cloned().unwrap();
+            assert_eq!(popup.reference(b"Parent"), Some(annot), "and its popup to it");
+        }
+    }
+}
+
+#[test]
+fn grouped_runs_keep_their_order_repeats_and_separate_files() {
+    let (a, b) = (doc_a(), doc_b());
+    // B's page 2, A's page 1, B's page 1, A's page 1 again (a repeat is a page of its own).
+    let out = full_roundtrip(
+        &crate::combine_grouped(&[(0, "B", &b, Some(&[1])), (1, "A", &a, Some(&[0])), (0, "B", &b, Some(&[0])), (1, "A", &a, Some(&[0]))]).unwrap(),
+    );
+    assert_eq!(labels(&out), ["B2", "A1", "B1", "A1"]);
+    assert_eq!(top_titles(&out), ["B", "A"]);
+    let ps = pages(&out).unwrap();
+    assert_ne!(ps[1].obj, ps[3].obj, "a page shown twice is two pages");
+    // The same file added twice on purpose (two groups) keeps two bookmarks, as combine does.
+    let twice = full_roundtrip(&crate::combine_grouped(&[(0, "A", &a, None), (1, "A again", &a, None)]).unwrap());
+    assert_eq!(top_titles(&twice), ["A", "A again"]);
+    // A page that isn't there is refused, as combine_selected does.
+    assert!(matches!(crate::combine_grouped(&[(0, "A", &a, Some(&[9]))]), Err(crate::OrganizeError::NoSuchPage(9))));
+}
+
 #[test]
 fn combine_nests_source_bookmarks_and_keeps_attachments() {
     let out = full_roundtrip(&combine(&[("C", &doc_c()), ("C again", &doc_c())]).unwrap());
@@ -693,6 +896,57 @@ fn combine_and_insert_share_identical_resources() {
     assert!(!d.modified_objects().contains(&font_before));
     let d = full_roundtrip(&d);
     assert_eq!(labels(&d), ["A1", "A2", "A3", "A1", "A2"]);
+}
+
+/// A one-page document drawing one image, written the way ImageMagick writes it: the colour
+/// space is an indirect `/DeviceRGB` object of its own (#878).
+fn indirect_colour_space_doc() -> Document {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>".to_vec(),
+        stream(b"q 100 0 0 100 0 0 cm /Im0 Do Q"),
+        [
+            b"<< /Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace 6 0 R /BitsPerComponent 8 /Length 6 >>\nstream\n".as_slice(),
+            &[255, 0, 0, 0, 0, 255],
+            b"\nendstream",
+        ]
+        .concat(),
+        b"/DeviceRGB".to_vec(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    open(out)
+}
+
+#[test]
+fn combine_stores_an_image_once_when_its_colour_space_is_an_indirect_name() {
+    let images = |d: &Document| {
+        d.object_numbers()
+            .into_iter()
+            .filter(|n| matches!(&*d.get(ObjRef::new(*n, d.generation(*n))), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image")))
+            .count()
+    };
+    let src = indirect_colour_space_doc();
+    let out = full_roundtrip(&crate::combine(&[("one", &src), ("two", &src), ("three", &src)]).unwrap());
+    assert_eq!(images(&out), 1);
+    assert_eq!(pages(&out).unwrap().len(), 3);
+    // Inserting the same pages again reuses the image already there.
+    let mut d = indirect_colour_space_doc();
+    crate::import_pages(&mut d, &indirect_colour_space_doc(), &[0], 1).unwrap();
+    assert_eq!(images(&full_roundtrip(&d)), 1);
 }
 
 // ---- bookmarks (M4.6) --------------------------------------------------------------------------
@@ -999,6 +1253,53 @@ fn page_label_too_long_range_falls_back_alone() {
     assert_eq!(labels[1], "2");
 }
 
+/// A document whose page tree is one flat node over `pages` leaves. The label tests below need
+/// more pages than `doc_a` has.
+fn flat_doc(pages: usize) -> Document {
+    let kids = (0..pages).map(|i| format!("{} 0 R", i + 3)).collect::<Vec<_>>().join(" ");
+    let mut objs = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string(), format!("<< /Type /Pages /Kids [{kids}] /Count {pages} >>")];
+    objs.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R >>".to_string()));
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    open(out)
+}
+
+/// Each label is valid (1,004 bytes), but the 5,000 of them total about 5 MB, past the old 4 MiB
+/// limit on the whole sequence. Every label is readable.
+#[test]
+fn page_labels_past_four_mib_in_total_stay_readable() {
+    let mut d = flat_doc(5_000);
+    let mut spec = Dict::new();
+    spec.set(b"P".to_vec(), Object::String(PdfString::text(&"x".repeat(1000))));
+    spec.set(b"S".to_vec(), Object::name("D"));
+    let mut tree = Dict::new();
+    tree.set(b"Nums".to_vec(), Object::Array(vec![Object::Int(0), Object::Dict(spec)]));
+    let tree = d.add(Object::Dict(tree));
+    d.update_dict(d.root().unwrap(), |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree))).unwrap();
+    let labels = crate::page_labels(&d).unwrap();
+    assert_eq!(labels.len(), 5_000);
+    assert_eq!(labels[0], format!("{}1", "x".repeat(1000)));
+    assert_eq!(labels[4_999], format!("{}5000", "x".repeat(1000)));
+}
+
+/// The same 5,000 labels written by an edit: the edit is accepted and reads back.
+#[test]
+fn number_pages_past_four_mib_in_total_is_accepted() {
+    let mut d = flat_doc(5_000);
+    crate::number_pages(&mut d, 0, 4_999, crate::LabelStyle::Decimal, &"x".repeat(1000), 1).unwrap();
+    assert_eq!(crate::page_labels(&d).unwrap()[4_999], format!("{}5000", "x".repeat(1000)));
+}
+
 #[test]
 fn page_boxes_default_inherit_and_set() {
     let mut doc = open(fixture());
@@ -1194,4 +1495,28 @@ fn extract_keeps_images_type3_glyphs_may_draw() {
     let part = full_roundtrip(&extract_pages(&doc_images_with(&raw("/ImB Do"), font), &[0]).unwrap());
     let names = xobject_names(&part, 0);
     assert!(names.iter().any(|n| n.as_slice() == b"ImB"), "pruning must not run through Type 3 resources");
+}
+
+/// A page listed twice whose widget's field keeps `/Kids` as an array object of its own: the
+/// second widget joins that array, and the field keeps every widget it had.
+#[test]
+fn a_repeated_widget_joins_an_indirect_kids_array() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),                   // 3
+        "<< /Type /Page /Parent 2 0 R /Annots [8 0 R] >>".into(),                   // 4
+        "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /Rect [10 10 90 30] /P 3 0 R >>".into(), // 5
+        "<< /FT /Tx /T (name) /V (Ada) /Kids 7 0 R >>".into(),                      // 6
+        "[5 0 R 8 0 R]".into(),                                                     // 7
+        "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /Rect [10 40 90 60] /P 4 0 R >>".into(), // 8
+    ];
+    let src = open(build(&b, "/Root 1 0 R"));
+    let out = full_roundtrip(&extract_pages(&src, &[0, 0, 1]).unwrap());
+    let form = out.resolve(catalog(&out).get(b"AcroForm").unwrap());
+    let fields = form.as_dict().unwrap().get(b"Fields").and_then(Object::as_array).cloned().unwrap();
+    assert_eq!(fields.len(), 1, "one field");
+    let field = out.resolve(&fields[0]).as_dict().cloned().unwrap();
+    let kids = out.resolve(field.get(b"Kids").unwrap()).as_array().cloned().unwrap();
+    assert_eq!(kids.len(), 3, "both original widgets and the repeat's own: {kids:?}");
 }

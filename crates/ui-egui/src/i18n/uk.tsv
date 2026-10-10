@@ -75,6 +75,7 @@
 	Fit visible	За видимою областю
 	Marquee zoom	Масштабувати виділену область
 	Take a snapshot	Зробити знімок
+	Column select	Виділення стовпця
 	Full screen mode	Повноекранний режим
 	Read mode	Режим читання
 	Switch light / dark theme	Перемкнути світлу / темну тему
@@ -1497,6 +1498,8 @@
 	Right Edge	Правий край
 	Language	Мова
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Збережено {place}: {before} → {after} (менше на {pct}%){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	Цей файл уже мінімального розміру ({size}). Копію не збережено.
+	Saved {place}: {before} → {after} (not smaller){detail}	Збережено {place}: {before} → {after} (не менше){detail}
 	Couldn't save the image: {e}	Не вдалося зберегти зображення: {e}
 	Adding images arrives on the web with file pickers for images	Додавання зображень з’явиться у вебверсії разом із вибором файлів зображень
 	Replacing images on page {p} arrives on the web with image pickers ({i})	Заміна зображень на сторінці {p} з’явиться у вебверсії разом із вибором зображень ({i})
@@ -2167,3 +2170,26 @@ certificate	Subject	Власник сертифіката
 	The field {name} no longer exists.	Поле {name} більше не існує.
 	A selected field has no widget on any page, so the fields can't be edited together.	Одне з вибраних полів не має віджета на жодній сторінці, тому поля не можна редагувати разом.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} — з роздільністю {dpi} dpi, найбільшою, з якою їх можна відобразити)
+	Fill colour	Колір заливки
+	No fill	Без заливки
+	Fill colour: none	Колір заливки: немає
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	Пробіл
+	Grid view	Вигляд сіткою
+	List view	Вигляд списком
+	Files are combined in the order shown. Drag them to change it.	Файли об’єднуються в показаному порядку. Перетягніть їх, щоб змінити його.
+	Preview unavailable: {e}	Попередній перегляд недоступний: {e}
+	Pages: {k} of {n}	Сторінки: {k} із {n}
+	Check the pages	Перевірте сторінки
+	Switch to List view to change the pages it takes.	Перейдіть до вигляду списком, щоб змінити, які сторінки взяти.
+	Expand all	Розгорнути всі
+	Collapse all	Згорнути всі
+	Remove page	Видалити сторінку
+	Remove {n} pages	Видалити сторінки: {n}

@@ -35,7 +35,7 @@ pub use pdfcraft_organize::LabelStyle;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
 pub use pdfcraft_cos::Algorithm;
-pub use pdfcraft_create::{CONVERTIBLE, ImageResolution, SourceKind, source_kind};
+pub use pdfcraft_create::{CONVERTIBLE, ImageResolution, SourceKind, decode_text, source_kind};
 pub use pdfcraft_edit::{
     Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, MarkKind, Watermark,
 };
@@ -184,6 +184,7 @@ fn scope_of(edit: &Edit) -> Scope {
         | Edit::MoveAnnotation { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
+        | Edit::FillAnnotation { .. }
         | Edit::SetAnnotationInfo { .. } => Scope::Comments,
         Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::SetFieldImage { .. } | Edit::ApplyScriptChanges { .. } => Scope::Form,
         Edit::Batch { edits, .. } => {
@@ -879,6 +880,12 @@ pub enum Edit {
         /// Line or polyline: two endings. Callout: one. `None` leaves `/LE` unchanged.
         endings: Option<Vec<pdfcraft_annot::LineEnding>>,
     },
+    /// Fill a rectangle, oval or polygon comment, or remove its fill (`None`).
+    FillAnnotation {
+        page: usize,
+        index: usize,
+        fill: Option<Rgb>,
+    },
     /// Comment properties ▸ General / note icon.
     SetAnnotationInfo {
         page: usize,
@@ -1156,7 +1163,7 @@ impl Edit {
             Edit::LockAnnotation { .. } => "Unlock comment".into(),
             Edit::MoveAnnotation { .. } => "Move comment".into(),
             Edit::ResizeAnnotation { .. } => "Resize comment".into(),
-            Edit::StyleAnnotation { .. } | Edit::SetAnnotationInfo { .. } => "Change comment properties".into(),
+            Edit::StyleAnnotation { .. } | Edit::FillAnnotation { .. } | Edit::SetAnnotationInfo { .. } => "Change comment properties".into(),
             Edit::SetFieldValue { name, .. } => format!("Fill in {name}"),
             Edit::SetFieldImage { name, .. } => format!("Set the image of {name}"),
             Edit::ResetForm { .. } => "Clear form".into(),
@@ -1295,6 +1302,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::MoveAnnotation { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
+        | Edit::FillAnnotation { .. }
         | Edit::SetAnnotationInfo { .. }
         | Edit::SetMeasurementScale { .. } => {
             if p.annotate() {
@@ -1537,6 +1545,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::StyleAnnotation { page, index, color, opacity, width, endings } => {
             pdfcraft_annot::set_style(doc, *page, *index, *color, *opacity, *width, endings.as_deref(), &cx.meta())?;
         }
+        Edit::FillAnnotation { page, index, fill } => pdfcraft_annot::set_fill(doc, *page, *index, *fill, &cx.meta())?,
         Edit::SetAnnotationInfo { page, index, author, subject, icon } => {
             pdfcraft_annot::set_info(doc, *page, *index, author.as_deref(), subject.as_deref(), *icon, &cx.meta())?;
         }
@@ -1772,6 +1781,7 @@ fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render::Annotation
             quads: s.quads,
             locked: s.locked,
             intent: s.intent,
+            fill_sign: s.fill_sign,
         })
         .collect()
 }
@@ -1799,6 +1809,17 @@ fn keys_after(edit: &Edit) -> Option<Keys> {
         Edit::RemoveProtection => Some(Keys::default()),
         Edit::Batch { edits, .. } => edits.iter().rev().find_map(keys_after),
         _ => None,
+    }
+}
+
+/// The recovered user password of an R2–R4 file as text for the renderer, which tries a password
+/// as its UTF-8 bytes and then in PDFDocEncoding: UTF-8 bytes (as some writers store passwords
+/// PDFDocEncoding can't hold, such as "şifre") stay UTF-8, and other bytes are read as
+/// PDFDocEncoding, so either way the renderer gets back exactly these bytes.
+fn renderer_password(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => bytes.iter().map(|b| pdfcraft_cos::pdfdoc_char(*b)).collect(),
     }
 }
 
@@ -1974,9 +1995,14 @@ fn xfa_field_data(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_xfa::FieldDatum>
 /// be written.
 /// `datasets`: the stream this edit already wrote, replaced in place rather than added again
 /// (and set to the one written).
-fn xfa_sync_datasets(doc: &mut pdfcraft_cos::Document, datasets: &mut Option<pdfcraft_cos::ObjRef>) -> Result<Vec<String>, String> {
+/// `tpl`: the form's parsed template when the document has one cached (else it is parsed).
+fn xfa_sync_datasets(
+    doc: &mut pdfcraft_cos::Document,
+    tpl: Option<&pdfcraft_xfa::model::Template>,
+    datasets: &mut Option<pdfcraft_cos::ObjRef>,
+) -> Result<Vec<String>, String> {
     let data = xfa_field_data(doc);
-    let r = pdfcraft_xfa::write_datasets_reusing(doc, &data, *datasets).map_err(|e| e.to_string())?;
+    let r = pdfcraft_xfa::write_datasets_with(doc, tpl, &data, *datasets).map_err(|e| e.to_string())?;
     if r.stream.is_some() {
         *datasets = r.stream;
     }
@@ -2114,7 +2140,7 @@ impl Session {
                     Ok(Ok(d)) => d.security().and_then(|s| s.recovered_user_password()),
                     _ => None,
                 };
-                let user: String = user.ok_or(OpenError::WrongPassword)?.iter().map(|b| char::from(*b)).collect();
+                let user = renderer_password(&user.ok_or(OpenError::WrongPassword)?);
                 (inspect(bytes.clone(), Some(&user))?, Some(user))
             }
             Err(e) => return Err(e),
@@ -2366,7 +2392,7 @@ impl Session {
         if let Some(tpl) = cx.xfa.clone() {
             if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full) {
                 let datasets = &mut cx.xfa_datasets;
-                let notes = guard(|| xfa_sync_datasets(&mut next, datasets))
+                let notes = guard(|| xfa_sync_datasets(&mut next, Some(&tpl), datasets))
                     .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
                     .map_err(EditError::Write)?;
                 cx.xfa_out.errors.extend(notes);
@@ -2398,8 +2424,8 @@ impl Session {
         // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
         let mut xfa_notes = Vec::new();
         if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full) {
-            let datasets = &mut cx.xfa_datasets;
-            xfa_notes = guard(|| xfa_sync_datasets(&mut next, datasets))
+            let (tpl, datasets) = (cx.xfa.as_deref(), &mut cx.xfa_datasets);
+            xfa_notes = guard(|| xfa_sync_datasets(&mut next, tpl, datasets))
                 .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
                 .map_err(EditError::Write)?;
         }
@@ -2688,7 +2714,7 @@ impl Session {
         let created = guard(|| match kind {
             SourceKind::Pdf => open_source(name, bytes).map(|_| bytes.clone()),
             SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]),
-            SourceKind::Text => self.create_from_text(title, &String::from_utf8_lossy(bytes)),
+            SourceKind::Text => self.create_from_text(title, &decode_text(bytes)),
         })
         .map_err(|_| EditError::Source(format!("{name}: the file could not be read")))?;
         Ok((kind, created?))
@@ -2781,6 +2807,50 @@ impl Session {
         let named: Vec<(&str, &pdfcraft_cos::Document, Option<&[usize]>)> =
             sources.iter().zip(docs.iter()).zip(&pages).map(|(((n, _, _), d), p)| (n.as_str(), d, p.as_deref())).collect();
         let out = pdfcraft_organize::combine_selected(&named)?;
+        self.write_new(&out)
+    }
+
+    /// [`Self::combine_unlocked`] where sources with the same `groups` key (by position) are one
+    /// file split into several runs placed apart: each file is opened and copied once, so it keeps
+    /// one bookmark, its links between its own pages, its fields and its attachments whole (see
+    /// `pdfcraft_organize::combine_grouped`). A group's later sources use its first source's bytes
+    /// and password; a source without a key is a file of its own.
+    pub fn combine_grouped(&self, sources: &[CombineSource], groups: &[u64], passwords: &[Option<&str>]) -> Result<Arc<Vec<u8>>, EditError> {
+        // Each file opened once: `file[i]` is source i's place in `docs`.
+        let (mut keys, mut docs, mut file): (Vec<Option<u64>>, Vec<pdfcraft_cos::Document>, Vec<usize>) = (Vec::new(), Vec::new(), Vec::new());
+        for (i, (name, bytes, _)) in sources.iter().enumerate() {
+            let key = groups.get(i).copied();
+            let known = key.and_then(|k| keys.iter().position(|g| *g == Some(k)));
+            let at = match known {
+                Some(at) => at,
+                None => {
+                    docs.push(open_source_with(name, bytes, passwords.get(i).copied().flatten())?);
+                    keys.push(key);
+                    docs.len() - 1
+                }
+            };
+            file.push(at);
+        }
+        let mut pages = Vec::with_capacity(sources.len());
+        for ((name, _, range), at) in sources.iter().zip(&file) {
+            let range = range.as_deref().map(str::trim).filter(|r| !r.is_empty());
+            let Some(d) = docs.get(*at) else { return Err(EditError::Write(format!("{name}: not opened"))) };
+            pages.push(match range {
+                Some(r) => {
+                    let n = pdfcraft_organize::page_count(d)?;
+                    let p = pdfcraft_print::select_pages(n, Some(r), &[], pdfcraft_print::Subset::All, false)
+                        .map_err(|e| EditError::Print(format!("{name}: {e}")))?;
+                    Some(p)
+                }
+                None => None,
+            });
+        }
+        let mut runs: Vec<pdfcraft_organize::Run<'_>> = Vec::with_capacity(sources.len());
+        for (((name, _, _), at), p) in sources.iter().zip(&file).zip(&pages) {
+            let Some(d) = docs.get(*at) else { return Err(EditError::Write(format!("{name}: not opened"))) };
+            runs.push((*at, name.as_str(), d, p.as_deref()));
+        }
+        let out = pdfcraft_organize::combine_grouped(&runs)?;
         self.write_new(&out)
     }
 

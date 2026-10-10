@@ -366,7 +366,7 @@ impl PdfCraftApp {
                     self.notify_fmt("{name} is too large for a word list (at most 1 MB).", &[("name", &name)]);
                     return;
                 }
-                self.redact_search.words = pdfcraft_engine::redact_word_list(&String::from_utf8_lossy(&bytes)).join("\n");
+                self.redact_search.words = pdfcraft_engine::redact_word_list(&pdfcraft_engine::decode_text(&bytes)).join("\n");
                 self.redact_search.mode = crate::redact_ui::SearchMode::Words;
             }
         }
@@ -597,6 +597,7 @@ impl PdfCraftApp {
             }
         };
         let safe = |t: &str| t.chars().map(|c| if c.is_alphanumeric() || " -_.,()".contains(c) { c } else { '_' }).collect::<String>();
+        let mut used = std::collections::HashSet::new();
         let named: Vec<(String, Arc<Vec<u8>>)> = parts
             .into_iter()
             .map(|(a, b, bytes)| {
@@ -607,7 +608,14 @@ impl PdfCraftApp {
                     None if a == b => format!("{stem} (page {a}).pdf"),
                     None => format!("{stem} (pages {a}-{b}).pdf"),
                 };
-                (name, bytes)
+                // Equal titles (or titles that sanitize alike) get (2), (3), ... so no part overwrites another; compared case-insensitively.
+                let mut unique = name.clone();
+                let mut n = 1;
+                while !used.insert(unique.to_lowercase()) {
+                    n += 1;
+                    unique = format!("{} ({n}).pdf", name.trim_end_matches(".pdf"));
+                }
+                (unique, bytes)
             })
             .collect();
         self.write_files(&named, "Choose a folder for the split files");
