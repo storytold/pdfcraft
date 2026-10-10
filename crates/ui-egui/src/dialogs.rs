@@ -774,10 +774,18 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 let Some(doc) = app.session.get(id) else { return };
                 let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
                 let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
+                let rasters = crate::print_ui::preview_rasters(
+                    &app.print_draft,
+                    &sizes,
+                    &labels,
+                    ui.ctx().pixels_per_point(),
+                    ui.ctx().input(|i| i.max_texture_side) as f32,
+                );
                 let view = &mut app.views[i];
+                view.queue_print_previews(&rasters);
                 let (go, cancel) = crate::print_ui::body(ui, &mut app.print_draft, &t, &sizes, &labels, &mut |p| {
                     view.need_thumbnail(p, true);
-                    view.thumb_id(p)
+                    view.page_preview(p)
                 });
                 print_go = go;
                 close = go || cancel;

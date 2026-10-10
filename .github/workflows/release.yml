@@ -224,7 +224,8 @@ jobs:
           dpkg-deb --contents dist/release/*.deb | grep -E 'usr/bin/pdfcraft$|metainfo|applications'
           # The OCR models (#103), where the installed app looks: <bin>/../share/pdfcraft/models.
           dpkg-deb --contents dist/release/*.deb | grep -E 'usr/share/pdfcraft/models/.+\.rten$'
-          tar -tzf dist/release/*.tar.gz | grep -E '/share/pdfcraft/models/.+\.rten$'
+          # Named exactly: dist/release also holds the CLI-only tar.gz, and `tar -tzf a b` reads b as a member.
+          tar -tzf "dist/release/pdfcraft-$PDFCRAFT_VERSION-linux-${{ matrix.arch }}.tar.gz" | grep -E '/share/pdfcraft/models/.+\.rten$'
           ldd target/release/pdfcraft
           # The CLI-only archive: the binary and its licences, and it runs.
           cli="dist/release/pdfcraft-cli-$PDFCRAFT_VERSION-linux-${{ matrix.arch }}.tar.gz"

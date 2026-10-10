@@ -101,6 +101,7 @@ pub(crate) fn date_text_for_pdf(session: &Session) -> Result<String, String> {
 
 /// The longest author name kept (Preferences ▸ Identity, restored settings).
 pub(crate) const MAX_AUTHOR_CHARS: usize = 200;
+
 pub mod portable;
 mod protect;
 mod recovery;
@@ -622,6 +623,25 @@ impl Default for PdfCraftApp {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// A restored colour: an `[r, g, b]` array of finite numbers, each clamped to 0–1 (restored
+/// settings are untrusted). Anything else (a string, a wrong length, a null or a non-finite
+/// number) is refused whole, so the caller keeps its default.
+fn rgb_triple(v: &serde_json::Value) -> Option<[f64; 3]> {
+    let a = v.as_array()?;
+    if a.len() != 3 {
+        return None;
+    }
+    let mut out = [0.0f64; 3];
+    for (slot, x) in out.iter_mut().zip(a.iter()) {
+        let n = x.as_f64()?;
+        if !n.is_finite() {
+            return None;
+        }
+        *slot = n.clamp(0.0, 1.0);
+    }
+    Some(out)
 }
 
 impl PdfCraftApp {
@@ -1273,6 +1293,19 @@ impl PdfCraftApp {
             // Null follows the interface language.
             "date_language": self.session.date_language(),
             "author": self.comment_prefs.author,
+            // Per-tool comment defaults (colours, opacity, widths), so Make Current
+            // Properties Default survives a restart (#340).
+            "comment_styles": self
+                .comment_prefs
+                .styles()
+                .map(|(t, s)| serde_json::json!({
+                    "tool": t.command(),
+                    "color": s.color,
+                    "opacity": s.opacity,
+                    "width": s.width,
+                    "fill": s.fill,
+                }))
+                .collect::<Vec<_>>(),
             // Drawn signatures keep their original form (older settings read the same).
             "signature": match &self.signature { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
             "signature_text": match &self.signature { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
@@ -1340,6 +1373,34 @@ impl PdfCraftApp {
         // name is cut to a sane length.
         if let Some(author) = v["author"].as_str().map(str::trim).filter(|a| !a.is_empty()) {
             self.comment_prefs.author = author.chars().take(MAX_AUTHOR_CHARS).collect();
+        }
+        // Per-tool comment styles (#340): each field goes through its clamping setter, so a
+        // malformed or hostile entry is clamped or ignored rather than trusted.
+        if let Some(styles) = v["comment_styles"].as_array() {
+            for e in styles {
+                let Some(tool) = e["tool"].as_str().and_then(crate::comments::CommentTool::from_command) else { continue };
+                if let Some(c) = rgb_triple(&e["color"]) {
+                    self.comment_prefs.set_color(tool, c);
+                }
+                if let Some(o) = e["opacity"].as_f64() {
+                    self.comment_prefs.set_opacity(tool, o);
+                }
+                if let Some(w) = e["width"].as_f64() {
+                    self.comment_prefs.set_width(tool, w);
+                }
+                // `"fill": null` is a saved "no fill", which clears a tool's default fill; a
+                // missing or malformed fill keeps it.
+                let fill = match e.get("fill") {
+                    Some(serde_json::Value::Null) => Some(None),
+                    Some(v) => rgb_triple(v).map(Some),
+                    None => None,
+                };
+                if let Some(fill) = fill {
+                    let mut s = self.comment_prefs.style(tool);
+                    s.fill = fill;
+                    self.comment_prefs.set_style(tool, s);
+                }
+            }
         }
         if let Ok(s) = serde_json::from_value::<Vec<Vec<[f32; 2]>>>(v["signature"].clone())
             && s.iter().all(|st| st.iter().all(|p| p.iter().all(|x| x.is_finite())))

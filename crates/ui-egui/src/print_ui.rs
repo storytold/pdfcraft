@@ -9,6 +9,12 @@ use pdfcraft_engine::print::{self, Binding, BookletSubset, Content, Layout, Orie
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
 
+/// The preview pane, and the paper inside it (12 pt inset on each side).
+const PREVIEW_W: f32 = 320.0;
+const PREVIEW_H: f32 = 380.0;
+const PREVIEW_INSET: f32 = 12.0;
+pub(crate) const PREVIEW_BOX: (f32, f32) = (PREVIEW_W - 2.0 * PREVIEW_INSET, PREVIEW_H - 2.0 * PREVIEW_INSET);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Which {
     All,
@@ -267,6 +273,60 @@ impl PdfCraftApp {
             }
         }
     }
+}
+
+/// The longest side, in pixels, of one page's print-preview raster (also kept within the GPU's
+/// `max_texture_side`): an Actual-size print of a large page would otherwise ask for a raster
+/// bigger than a texture can be.
+pub(crate) const PREVIEW_MAX_SIDE: f32 = 4096.0;
+/// The most bytes of print-preview rasters kept at once. The current sheet comes first, then the
+/// next and the previous one; a neighbour that doesn't fit isn't rendered ahead.
+pub(crate) const PREVIEW_BYTES: f64 = 128.0 * 1024.0 * 1024.0;
+
+/// Pages on the current sheet and its neighbours, each with the device pixels per point that
+/// fill the preview pane (so the picture is not a stretched thumbnail), nearest sheet first and
+/// within [`PREVIEW_MAX_SIDE`] (and `max_side`, the GPU's texture limit) and [`PREVIEW_BYTES`].
+pub(crate) fn preview_rasters(d: &PrintDraft, sizes: &[(f64, f64)], labels: &[String], ppp: f32, max_side: f32) -> Vec<(usize, f32)> {
+    let Ok(settings) = d.settings(sizes.len(), labels) else { return Vec::new() };
+    let Ok(sheets) = print::layout(sizes, &settings) else { return Vec::new() };
+    if sheets.is_empty() {
+        return Vec::new();
+    }
+    let ppp = if ppp.is_finite() { ppp.max(1.0) } else { 1.0 };
+    let side = if max_side.is_finite() && max_side >= 1.0 { max_side.min(PREVIEW_MAX_SIDE) } else { PREVIEW_MAX_SIDE };
+    let i = d.sheet.min(sheets.len() - 1);
+    // Nearest first: the sheet on screen, then the next one, then the previous one.
+    let order = [Some(i), i.checked_add(1).filter(|n| *n < sheets.len()), i.checked_sub(1)];
+    let mut out: Vec<(usize, f32, f64)> = Vec::new();
+    let mut bytes = 0.0f64;
+    for sheet in order.into_iter().flatten().filter_map(|s| sheets.get(s)) {
+        let (sw, sh) = (sheet.size.0 as f32, sheet.size.1 as f32);
+        if !(sw.is_finite() && sh.is_finite()) || sw < 1.0 || sh < 1.0 {
+            continue;
+        }
+        let k = (PREVIEW_BOX.0 / sw).min(PREVIEW_BOX.1 / sh);
+        for pl in &sheet.placed {
+            let [a, b, _, _, _, _] = pl.matrix.0;
+            let placed = (a.hypot(b) as f32) * k * ppp;
+            let Some(&(pw, ph)) = sizes.get(pl.page) else { continue };
+            let long_pt = pw.max(ph) as f32;
+            if !placed.is_finite() || placed < 0.05 || !long_pt.is_finite() || long_pt < 1.0 {
+                continue;
+            }
+            let scale = placed.min(64.0).min(side / long_pt);
+            let cost = (pw * f64::from(scale)).ceil() * (ph * f64::from(scale)).ceil() * 4.0;
+            if let Some(slot) = out.iter_mut().find(|(page, _, _)| *page == pl.page) {
+                if scale > slot.1 && bytes - slot.2 + cost <= PREVIEW_BYTES {
+                    bytes += cost - slot.2;
+                    (slot.1, slot.2) = (scale, cost);
+                }
+            } else if out.len() < 48 && (out.is_empty() || bytes + cost <= PREVIEW_BYTES) {
+                bytes += cost;
+                out.push((pl.page, scale, cost));
+            }
+        }
+    }
+    out.into_iter().map(|(page, scale, _)| (page, scale)).collect()
 }
 
 /// Properties… on CUPS: the driver's options for this print, grouped as the driver groups them.
@@ -567,15 +627,15 @@ pub(crate) fn body(
         ui.add_space(12.0);
         // Preview.
         ui.vertical(|ui| {
-            ui.set_width(320.0);
-            let (area, _) = ui.allocate_exact_size(vec2(320.0, 380.0), egui::Sense::hover());
+            ui.set_width(PREVIEW_W);
+            let (area, _) = ui.allocate_exact_size(vec2(PREVIEW_W, PREVIEW_H), egui::Sense::hover());
             ui.painter().rect_filled(area, 6.0, t.hover);
             match (&settings, sheets.get(d.sheet)) {
                 (Err(e), _) => {
                     ui.put(area.shrink(16.0), egui::Label::new(egui::RichText::new(e).color(t.text_muted)).wrap());
                 }
                 (Ok(_), Some(sheet)) => {
-                    let k = ((area.width() - 24.0) / sheet.size.0 as f32).min((area.height() - 24.0) / sheet.size.1 as f32);
+                    let k = (PREVIEW_BOX.0 / sheet.size.0 as f32).min(PREVIEW_BOX.1 / sheet.size.1 as f32);
                     let paper = Rect::from_center_size(area.center(), vec2(sheet.size.0 as f32 * k, sheet.size.1 as f32 * k));
                     ui.painter().rect_filled(paper, 0.0, Color32::WHITE);
                     ui.painter().rect_stroke(paper, 0.0, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
@@ -667,4 +727,53 @@ pub(crate) fn body(
         }
     });
     (go, cancel)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn print_preview_rasters_stay_within_the_texture_limit() {
+        // Actual size on a 14,400 pt (200 in) page would ask for a raster far past any texture.
+        let d = PrintDraft { size: SizeMode::Actual, ..PrintDraft::default() };
+        let sizes = vec![(14_400.0, 14_400.0); 2];
+        let labels = vec!["1".into(), "2".into()];
+        for max_side in [2048.0, 8192.0, 16384.0, f32::NAN, 0.0] {
+            for (page, scale) in preview_rasters(&d, &sizes, &labels, 4.0, max_side) {
+                let long = 14_400.0 * scale;
+                let cap = if max_side.is_finite() && max_side >= 1.0 { max_side.min(PREVIEW_MAX_SIDE) } else { PREVIEW_MAX_SIDE };
+                assert!(long <= cap + 1.0, "page {page} at {max_side}: {long} px");
+            }
+        }
+    }
+
+    #[test]
+    fn print_preview_rasters_keep_the_current_sheet_within_the_byte_budget() {
+        // Many large pages: the current sheet always gets its raster; neighbours only while the
+        // budget lasts, and the total stays within it.
+        let d = PrintDraft { sheet: 5, ..PrintDraft::default() };
+        let sizes = vec![(2_000.0, 2_000.0); 12];
+        let labels: Vec<String> = (1..=12).map(|n| n.to_string()).collect();
+        let rasters = preview_rasters(&d, &sizes, &labels, 4.0, 16384.0);
+        assert_eq!(rasters.first().map(|r| r.0), Some(5), "the sheet on screen comes first: {rasters:?}");
+        let total: f64 = rasters.iter().map(|(_, s)| (2_000.0 * f64::from(*s)).ceil().powi(2) * 4.0).sum();
+        assert!(total <= PREVIEW_BYTES || rasters.len() == 1, "{total} bytes for {rasters:?}");
+    }
+
+    #[test]
+    fn print_preview_is_sharper_than_a_thumbnail_on_a_high_dpi_screen() {
+        let d = PrintDraft::default();
+        let sizes = vec![(612.0, 792.0); 3];
+        let labels = vec!["1".into(), "2".into(), "3".into()];
+        let rasters = preview_rasters(&d, &sizes, &labels, 2.0, 8192.0);
+        let scale = rasters.iter().find(|(page, _)| *page == 0).map(|(_, s)| *s).unwrap();
+        // A 132 pt thumbnail at 2× is about 0.43 px/pt. The preview pane needs roughly twice that.
+        assert!(scale > 0.7, "letter page in the preview at 2 px/pt: {scale}");
+        assert!(rasters.iter().any(|(page, _)| *page == 1), "the next sheet is ready");
+        let mut later = d.clone();
+        later.sheet = 2;
+        let rasters = preview_rasters(&later, &sizes, &labels, 2.0, 8192.0);
+        assert!(rasters.iter().any(|(page, _)| *page == 2));
+    }
 }
