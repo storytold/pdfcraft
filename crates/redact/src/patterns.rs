@@ -164,26 +164,53 @@ fn ssn(s: &[char], i: usize) -> Option<usize> {
     (area != "000" && area != "666" && !area.starts_with('9')).then_some(11)
 }
 
-const MONTHS: [&str; 12] = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+/// Month names the date pattern knows: English, then the languages whose dates are written
+/// "5 Ekim 2024" / "5. Oktober 2024" (day, month name, year).
+const MONTHS: [[&str; 12]; 5] = [
+    ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"],
+    ["ocak", "şubat", "mart", "nisan", "mayıs", "haziran", "temmuz", "ağustos", "eylül", "ekim", "kasım", "aralık"],
+    ["januar", "februar", "märz", "april", "mai", "juni", "juli", "august", "september", "oktober", "november", "dezember"],
+    ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"],
+    ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"],
+];
 
-/// A month name or its three-letter abbreviation (optionally with a full stop) at `i`.
+/// Abbreviations that may end in a full stop: English and Turkish ("Oca.", "Şub", "Ağu").
+const MONTH_ABBREVIATIONS: [[&str; 12]; 2] = [
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"],
+    ["oca", "şub", "mar", "nis", "may", "haz", "tem", "ağu", "eyl", "eki", "kas", "ara"],
+];
+
+/// One lowercase character for `c`, with Turkish dotted and dotless i the same as i, so
+/// "MAYIS", "Mayıs" and "EKİM" match and every character stays one character.
+fn fold(c: char) -> char {
+    match c {
+        'I' | '\u{130}' | '\u{131}' => 'i',
+        _ => c.to_lowercase().next().unwrap_or(c),
+    }
+}
+
+/// Characters `name` covers at `i`, when it stands there as a whole word (any case).
+fn word_at(s: &[char], i: usize, name: &str) -> Option<usize> {
+    let mut n = 0;
+    for c in name.chars() {
+        if s.get(i + n).copied().map(fold) != Some(fold(c)) {
+            return None;
+        }
+        n += 1;
+    }
+    (!s.get(i + n).is_some_and(|c| c.is_alphabetic())).then_some(n)
+}
+
+/// A month name or its abbreviation (optionally with a full stop) at `i`.
 fn month(s: &[char], i: usize) -> Option<usize> {
     if word(i.checked_sub(1).and_then(|p| s.get(p))) {
         return None;
     }
-    let rest: String = s[i..s.len().min(i + 10)].iter().collect::<String>().to_lowercase();
-    for m in MONTHS {
-        for cand in [m, &m[..3]] {
-            if rest.starts_with(cand) && !rest[cand.len()..].starts_with(|c: char| c.is_alphabetic()) {
-                let mut n = cand.chars().count();
-                if cand.len() == 3 && s.get(i + n) == Some(&'.') {
-                    n += 1;
-                }
-                return Some(n);
-            }
-        }
+    if let Some(n) = MONTHS.iter().flatten().filter_map(|m| word_at(s, i, m)).max() {
+        return Some(n);
     }
-    None
+    let n = MONTH_ABBREVIATIONS.iter().flatten().find_map(|m| word_at(s, i, m))?;
+    Some(if s.get(i + n) == Some(&'.') { n + 1 } else { n })
 }
 
 fn number(s: &[char], i: usize, min: usize, max: usize) -> Option<usize> {
@@ -208,10 +235,11 @@ fn date(s: &[char], i: usize) -> Option<usize> {
         {
             return Some(a + b + c + 2);
         }
-        // "5 January 2024".
+        // "5 January 2024", "5 Ekim 2024", "5. Oktober 2024".
+        let day = i + a + usize::from(s.get(i + a) == Some(&'.'));
         if a <= 2
-            && let k = i + a + spaces(i + a)
-            && k > i + a
+            && let k = day + spaces(day)
+            && k > day
             && let Some(m) = month(s, k)
         {
             let k2 = k + m + spaces(k + m);
@@ -345,5 +373,38 @@ mod tests {
             found(Pattern::Date, "Due 10/01/2026, 2026-10-01, 1.10.26, March 5, 2024, Jan. 7 2025 and 5 June 2023; not 10/2026 or Mayday 12"),
             ["10/01/2026", "2026-10-01", "1.10.26", "March 5, 2024", "Jan. 7 2025", "5 June 2023"]
         );
+    }
+
+    #[test]
+    fn dates_with_turkish_month_names_in_any_case() {
+        assert_eq!(
+            found(Pattern::Date, "Tarih: 10 Ekim 2026, 3 Mayıs 2025, 5 Şubat 2024, 5 ŞUBAT 2024, 3 MAYIS 2025, 1 EKİM 2026 ve 9 kasım 2023."),
+            ["10 Ekim 2026", "3 Mayıs 2025", "5 Şubat 2024", "5 ŞUBAT 2024", "3 MAYIS 2025", "1 EKİM 2026", "9 kasım 2023"]
+        );
+        assert_eq!(
+            found(Pattern::Date, "12 Oca 2024, 7 Şub. 2025, 30 Ağu 2023, 1 ARA. 2022, 2 Haz 2021"),
+            ["12 Oca 2024", "7 Şub. 2025", "30 Ağu 2023", "1 ARA. 2022", "2 Haz 2021"]
+        );
+        // Words that only start like a month, or a month without a day and year, stay.
+        assert_eq!(
+            found(Pattern::Date, "5 Martı 2024, Ekimde 2026, 3 Mayısta 2025, ara 2024, Kasım ayında, 12 Aralık, Aralık 2024"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn dates_with_german_french_and_italian_month_names() {
+        assert_eq!(
+            found(Pattern::Date, "am 10. Oktober 2026, 3 März 2025, le 14 juillet 2024, 1 août 2023, il 25 dicembre 2022"),
+            ["10. Oktober 2026", "3 März 2025", "14 juillet 2024", "1 août 2023", "25 dicembre 2022"]
+        );
+        // "Mai" alone, a dotted day without a month and an unknown word are not dates.
+        assert_eq!(found(Pattern::Date, "Mai 2024, Kapitel 5. Absatz 2024, 5 Oktoberfest 2024"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn case_folding_keeps_one_character_per_character() {
+        let s: Vec<char> = "\u{130}\u{131}I\u{15E}".chars().collect();
+        assert_eq!(s.iter().copied().map(fold).collect::<String>(), "iii\u{15F}");
     }
 }
