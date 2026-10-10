@@ -145,17 +145,24 @@ pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
 pub const SYSTEM_FALLBACK: &str = "system-fallback";
 
 /// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
-/// already installed on this machine as the last fallback of every family. It only draws
-/// characters no embedded face has (an Arabic file name in a build without craft-fonts);
+/// already installed on this machine. Normally it is the last fallback in every family.
+/// On macOS, Simplified Chinese without a bundled Hans
+/// face uses an installed Chinese face before the Japanese faces to keep one baseline.
 /// `PDFCRAFT_SYSTEM_FONTS=0` leaves it out.
 pub fn installed_font_definitions(prefer_hans: bool) -> FontDefinitions {
     #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
     let mut fonts = font_definitions_for(prefer_hans);
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(data) = crate::system_fonts::fallback() {
-        fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
-        for stack in fonts.families.values_mut() {
-            stack.push(SYSTEM_FALLBACK.to_owned());
+    {
+        let system_hans = cfg!(target_os = "macos") && prefer_hans && pdfcraft_fonts::ui_chinese_fonts().is_empty();
+        if let Some(data) = crate::system_fonts::fallback(system_hans) {
+            fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
+            let cjk: Vec<String> = pdfcraft_fonts::ui_cjk_fonts(prefer_hans).iter().map(|face| face.name()).collect();
+            for stack in fonts.families.values_mut() {
+                let position =
+                    if system_hans { stack.iter().position(|name| cjk.contains(name)).unwrap_or(stack.len()) } else { stack.len() };
+                stack.insert(position, SYSTEM_FALLBACK.to_owned());
+            }
         }
     }
     fonts
