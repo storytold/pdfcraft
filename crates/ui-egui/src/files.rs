@@ -115,6 +115,8 @@ pub struct ExtractDraft {
     pub separate: bool,
     /// Delete the pages after extracting them.
     pub delete: bool,
+    /// Target file name when extracting to a single document tab.
+    pub filename: String,
 }
 
 /// Pages ▸ Rotate Pages.
@@ -429,7 +431,15 @@ impl PdfCraftApp {
                     } else {
                         crate::i18n::fmt(tl!("Extracted {n} pages"), &[("n", &pages.len().to_string())])
                     };
-                    self.open_created(&format!("{stem} (extract).pdf"), bytes, &message)
+                    let custom = opts.filename.trim();
+                    let name = if custom.is_empty() {
+                        format!("{stem} (extract).pdf")
+                    } else if custom.to_ascii_lowercase().ends_with(".pdf") {
+                        custom.to_string()
+                    } else {
+                        format!("{custom}.pdf")
+                    };
+                    self.open_created(&name, bytes, &message)
                 }
                 Err(e) => {
                     self.notify_fmt("Couldn't extract pages: {e}", &[("e", &e.to_string())]);
@@ -437,6 +447,7 @@ impl PdfCraftApp {
                 }
             }
         }
+        self.extract_draft.filename.clear();
         if opts.delete {
             // Back on the original document.
             self.active = Some(i);

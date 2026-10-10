@@ -1101,9 +1101,29 @@ fn extract_button_copies_selected_pages_to_a_new_tab() {
     h.run_steps(3);
     let app = h.state();
     assert_eq!(app.views.len(), 2);
+    assert_eq!(app.session.get(app.views[1].id).unwrap().name, "doc (extract).pdf");
     assert_eq!(texts_of(app, 1), ["Page 2", "Page 3"]);
     assert_eq!(texts_of(app, 0).len(), 3, "the original is unchanged");
     assert!(!app.session.get(app.views[0].id).unwrap().dirty);
+}
+
+#[test]
+fn extract_dialog_allows_custom_target_filename() {
+    let mut h = organize(3);
+    h.get_by_label("Page 2").click();
+    h.run_steps(1);
+    h.get_by_label("Page 3").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    h.get_by_label("Extract pages to a new document").click();
+    h.run_steps(3);
+    assert_eq!(h.state().extract_draft.filename, "doc (extract)");
+    h.state_mut().extract_draft.filename = "my_chapter".to_string();
+    h.get_all_by_label("Extract").last().unwrap().click();
+    h.run_steps(3);
+    let app = h.state();
+    assert_eq!(app.views.len(), 2);
+    assert_eq!(app.session.get(app.views[1].id).unwrap().name, "my_chapter.pdf");
+    assert_eq!(texts_of(app, 1), ["Page 2", "Page 3"]);
 }
 
 #[test]
@@ -1503,7 +1523,8 @@ fn extract_options_and_rotate_pages_dialog() {
     h.state_mut().views[0].select_pages(&[1, 2]);
     h.state_mut().run_command("page.extract");
     h.run_steps(2);
-    h.state_mut().extract_draft = pdfcraft_ui_egui::ExtractDraft { separate: true, delete: true };
+    h.state_mut().extract_draft = pdfcraft_ui_egui::ExtractDraft { separate: true, delete: true, ..Default::default() };
+    h.run_steps(1);
     h.get_all_by_label("Extract").last().unwrap().click();
     h.run_steps(3);
     let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();

@@ -27,6 +27,14 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.props_draft = Some((id, INFO_KEYS.map(|k| doc.info_value(k).unwrap_or_default())));
         app.view_draft = Some((id, doc.initial_view()));
     }
+    // Seed default target filename for Extract Pages dialog.
+    if let (Dialog::Extract, Some((_, id))) = (dialog, app.active_ids())
+        && app.extract_draft.filename.is_empty()
+        && let Some(doc) = app.session.get(id)
+    {
+        let stem = crate::files::strip_pdf(&doc.name);
+        app.extract_draft.filename = format!("{stem} (extract)");
+    }
     let mut apply = false;
     let mut split_now: Option<crate::SplitPlan> = None;
     let mut split_ready: Option<crate::SplitPlan> = None;
@@ -563,6 +571,18 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 ui.label(text);
                 ui.checkbox(&mut app.extract_draft.delete, tl!("Delete pages after extracting"));
                 ui.checkbox(&mut app.extract_draft.separate, tl!("Extract pages as separate files"));
+                if !app.extract_draft.separate {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        let label = ui.label(egui::RichText::new(tl!("File Name")).color(t.text_muted));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut app.extract_draft.filename)
+                                .desired_width(260.0)
+                                .id_salt("extract-filename"),
+                        )
+                        .labelled_by(label.id);
+                    });
+                }
                 ui.add_space(12.0);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if widgets::pill_button(ui, tl!("Extract"), true).clicked() {
@@ -1299,6 +1319,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.props_draft = None;
         app.view_draft = None;
         app.bulk_field_props = None;
+        app.extract_draft.filename.clear();
     } else {
         app.dialog = Some(next);
     }
