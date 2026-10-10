@@ -2167,3 +2167,12 @@ calendar date	December	grudnia
 	Previous ({key})	Poprzednie ({key})
 	Next ({key})	Następne ({key})
 	Redaction code:	Kod utajniania:
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	Spacja
