@@ -58,7 +58,7 @@ jobs:
             echo "date=$(date -u +%Y-%m-%d)"
             echo "prerelease=$pre"
           } >>"$GITHUB_OUTPUT"
-          echo "### PdfCraft v$v (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
+          echo "### Linkco PDF Editor v$v (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
 
   macos:
     name: macOS universal
@@ -349,7 +349,7 @@ jobs:
         working-directory: artifacts
         run: |
           tag="v$VERSION"
-          title="PdfCraft v$VERSION"
+          title="Linkco PDF Editor v$VERSION"
           pre=()
           if [ "$PRERELEASE" = true ]; then pre=(--prerelease); fi
           if draft="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)"; then

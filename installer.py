@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import subprocess
@@ -171,6 +172,31 @@ namespace LinkcoSetup
         [System.Runtime.InteropServices.DllImport("shell32.dll")]
         private static extern void SHChangeNotify(int wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
 
+        public static bool ForcePerUser = false;
+
+        public static bool IsMachineInstall()
+        {
+            if (ForcePerUser)
+                return false;
+            try
+            {
+                using (WindowsIdentity id = WindowsIdentity.GetCurrent())
+                {
+                    WindowsPrincipal principal = new WindowsPrincipal(id);
+                    return principal.IsInRole(WindowsBuiltInRole.Administrator);
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static RegistryKey GetRegistryRoot()
+        {
+            return IsMachineInstall() ? Registry.LocalMachine : Registry.CurrentUser;
+        }
+
         [STAThread]
         static int Main(string[] args)
         {
@@ -179,6 +205,7 @@ namespace LinkcoSetup
 
             bool silent = false;
             bool uninstall = false;
+            bool removeData = false;
             foreach (string a in args)
             {
                 string low = a.ToLowerInvariant();
@@ -186,18 +213,20 @@ namespace LinkcoSetup
                     silent = true;
                 if (low == "/uninstall" || low == "--uninstall" || low == "/u")
                     uninstall = true;
+                if (low == "/currentuser" || low == "--current-user" || low == "/peruser")
+                    ForcePerUser = true;
+                if (low == "/remove-data" || low == "--remove-data" || low == "/purge-data")
+                    removeData = true;
             }
 
             if (uninstall)
             {
-                return RunUninstall(silent);
+                return RunUninstall(silent, removeData);
             }
 
-            string defaultDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                "Linkco",
-                "Linkco PDF Editor"
-            );
+            string defaultDir = IsMachineInstall()
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Linkco", "Linkco PDF Editor")
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Linkco", "Linkco PDF Editor");
 
             if (silent)
             {
@@ -258,9 +287,14 @@ namespace LinkcoSetup
                     File.Copy(pdfcraftExe, mainExe, true);
             }
 
+            bool machine = IsMachineInstall();
             if (startMenuShortcut)
             {
-                string programsDir = Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms);
+                string programsDir = Environment.GetFolderPath(
+                    machine ? Environment.SpecialFolder.CommonPrograms : Environment.SpecialFolder.Programs
+                );
+                if (string.IsNullOrEmpty(programsDir))
+                    programsDir = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
                 string groupDir = Path.Combine(programsDir, AppName);
                 Directory.CreateDirectory(groupDir);
                 CreateShortcut(Path.Combine(groupDir, AppName + ".lnk"), mainExe, installDir, AppName);
@@ -268,10 +302,20 @@ namespace LinkcoSetup
 
             if (desktopShortcut)
             {
-                string desktopDir = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
-                if (string.IsNullOrEmpty(desktopDir) || !Directory.Exists(desktopDir))
-                    desktopDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-                CreateShortcut(Path.Combine(desktopDir, AppName + ".lnk"), mainExe, installDir, AppName);
+                string commonDesktop = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
+                string userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                string targetDesktop = (machine && !string.IsNullOrEmpty(commonDesktop) && Directory.Exists(commonDesktop))
+                    ? commonDesktop
+                    : userDesktop;
+                if (targetDesktop == commonDesktop && !string.IsNullOrEmpty(userDesktop) && userDesktop != commonDesktop)
+                {
+                    string dup = Path.Combine(userDesktop, AppName + ".lnk");
+                    if (File.Exists(dup))
+                    {
+                        try { File.Delete(dup); } catch { }
+                    }
+                }
+                CreateShortcut(Path.Combine(targetDesktop, AppName + ".lnk"), mainExe, installDir, AppName);
             }
 
             RegisterApplication(installDir, mainExe, uninstallerPath);
@@ -284,7 +328,8 @@ namespace LinkcoSetup
 
         private static void RegisterApplication(string installDir, string mainExe, string uninstallerPath)
         {
-            using (RegistryKey k = Registry.LocalMachine.CreateSubKey(UninstallKey))
+            RegistryKey root = GetRegistryRoot();
+            using (RegistryKey k = root.CreateSubKey(UninstallKey))
             {
                 if (k != null)
                 {
@@ -303,7 +348,7 @@ namespace LinkcoSetup
                 }
             }
 
-            using (RegistryKey progId = Registry.LocalMachine.CreateSubKey(@"Software\Classes\LinkcoPDFEditor.Document"))
+            using (RegistryKey progId = root.CreateSubKey(@"Software\Classes\LinkcoPDFEditor.Document"))
             {
                 if (progId != null)
                 {
@@ -315,13 +360,13 @@ namespace LinkcoSetup
                 }
             }
 
-            using (RegistryKey openWith = Registry.LocalMachine.CreateSubKey(@"Software\Classes\.pdf\OpenWithProgids"))
+            using (RegistryKey openWith = root.CreateSubKey(@"Software\Classes\.pdf\OpenWithProgids"))
             {
                 if (openWith != null)
                     openWith.SetValue("LinkcoPDFEditor.Document", "");
             }
 
-            using (RegistryKey cfg = Registry.LocalMachine.CreateSubKey(LinkcoConfigKey))
+            using (RegistryKey cfg = root.CreateSubKey(LinkcoConfigKey))
             {
                 if (cfg != null)
                     cfg.SetValue("InstallDir", installDir);
@@ -330,16 +375,16 @@ namespace LinkcoSetup
             string previewDll = Path.Combine(installDir, "LinkcoPdfPreviewHandler.dll");
             if (File.Exists(previewDll))
             {
-                RegisterPreviewHandler(previewDll);
+                RegisterPreviewHandler(root, previewDll);
             }
 
             try { SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero); } catch { }
         }
 
-        private static void RegisterPreviewHandler(string dllPath)
+        private static void RegisterPreviewHandler(RegistryKey root, string dllPath)
         {
             string codeBase = new Uri(dllPath).AbsoluteUri;
-            using (RegistryKey clsidKey = Registry.LocalMachine.CreateSubKey(@"Software\Classes\CLSID\" + PreviewHandlerClsid))
+            using (RegistryKey clsidKey = root.CreateSubKey(@"Software\Classes\CLSID\" + PreviewHandlerClsid))
             {
                 if (clsidKey != null)
                 {
@@ -367,7 +412,7 @@ namespace LinkcoSetup
                 }
             }
 
-            using (RegistryKey handlers = Registry.LocalMachine.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\PreviewHandlers"))
+            using (RegistryKey handlers = root.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\PreviewHandlers"))
             {
                 if (handlers != null)
                     handlers.SetValue(PreviewHandlerClsid, "Linkco PDF Preview Handler");
@@ -375,59 +420,63 @@ namespace LinkcoSetup
 
             foreach (string progId in new string[] { "LinkcoPDFEditor.Document", "PdfCraft.Document" })
             {
-                using (RegistryKey k = Registry.LocalMachine.CreateSubKey(@"Software\Classes\" + progId + @"\ShellEx\" + PreviewHandlerCategoryGuid))
+                using (RegistryKey k = root.CreateSubKey(@"Software\Classes\" + progId + @"\ShellEx\" + PreviewHandlerCategoryGuid))
                 {
                     if (k != null)
                         k.SetValue("", PreviewHandlerClsid);
                 }
             }
 
-            BackupAndSetShellEx(@"Software\Classes\.pdf\ShellEx\" + PreviewHandlerCategoryGuid, "PreviousPdfPreviewHandler");
-            BackupAndSetShellEx(@"Software\Classes\SystemFileAssociations\.pdf\ShellEx\" + PreviewHandlerCategoryGuid, "PreviousSysPdfPreviewHandler");
+            BackupAndSetShellEx(root, @"Software\Classes\.pdf\ShellEx\" + PreviewHandlerCategoryGuid, "PreviousPdfPreviewHandler");
+            BackupAndSetShellEx(root, @"Software\Classes\SystemFileAssociations\.pdf\ShellEx\" + PreviewHandlerCategoryGuid, "PreviousSysPdfPreviewHandler");
         }
 
-        private static void BackupAndSetShellEx(string subKeyPath, string backupValueName)
+        private static void BackupAndSetShellEx(RegistryKey root, string subKeyPath, string backupValueName)
         {
             string existing = null;
-            using (RegistryKey k = Registry.LocalMachine.OpenSubKey(subKeyPath, false))
+            using (RegistryKey k = root.OpenSubKey(subKeyPath, false))
             {
                 if (k != null)
                     existing = k.GetValue("") as string;
             }
             if (!string.IsNullOrEmpty(existing) && !string.Equals(existing, PreviewHandlerClsid, StringComparison.OrdinalIgnoreCase))
             {
-                using (RegistryKey cfg = Registry.LocalMachine.CreateSubKey(LinkcoConfigKey))
+                using (RegistryKey cfg = root.CreateSubKey(LinkcoConfigKey))
                 {
                     if (cfg != null)
                         cfg.SetValue(backupValueName, existing);
                 }
             }
-            using (RegistryKey k = Registry.LocalMachine.CreateSubKey(subKeyPath))
+            using (RegistryKey k = root.CreateSubKey(subKeyPath))
             {
                 if (k != null)
                     k.SetValue("", PreviewHandlerClsid);
             }
         }
 
-        private static void UnregisterPreviewHandler()
+        private static void UnregisterPreviewHandler(RegistryKey root)
         {
-            using (RegistryKey handlers = Registry.LocalMachine.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\PreviewHandlers", true))
+            try
             {
-                if (handlers != null)
-                    handlers.DeleteValue(PreviewHandlerClsid, false);
-            }
-            Registry.LocalMachine.DeleteSubKeyTree(@"Software\Classes\CLSID\" + PreviewHandlerClsid, false);
-            Registry.LocalMachine.DeleteSubKeyTree(@"Software\Classes\LinkcoPDFEditor.Document\ShellEx\" + PreviewHandlerCategoryGuid, false);
-            Registry.LocalMachine.DeleteSubKeyTree(@"Software\Classes\PdfCraft.Document\ShellEx\" + PreviewHandlerCategoryGuid, false);
+                using (RegistryKey handlers = root.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\PreviewHandlers", true))
+                {
+                    if (handlers != null)
+                        handlers.DeleteValue(PreviewHandlerClsid, false);
+                }
+                root.DeleteSubKeyTree(@"Software\Classes\CLSID\" + PreviewHandlerClsid, false);
+                root.DeleteSubKeyTree(@"Software\Classes\LinkcoPDFEditor.Document\ShellEx\" + PreviewHandlerCategoryGuid, false);
+                root.DeleteSubKeyTree(@"Software\Classes\PdfCraft.Document\ShellEx\" + PreviewHandlerCategoryGuid, false);
 
-            RestoreOrRemoveShellEx(@"Software\Classes\.pdf\ShellEx\" + PreviewHandlerCategoryGuid, "PreviousPdfPreviewHandler");
-            RestoreOrRemoveShellEx(@"Software\Classes\SystemFileAssociations\.pdf\ShellEx\" + PreviewHandlerCategoryGuid, "PreviousSysPdfPreviewHandler");
+                RestoreOrRemoveShellEx(root, @"Software\Classes\.pdf\ShellEx\" + PreviewHandlerCategoryGuid, "PreviousPdfPreviewHandler");
+                RestoreOrRemoveShellEx(root, @"Software\Classes\SystemFileAssociations\.pdf\ShellEx\" + PreviewHandlerCategoryGuid, "PreviousSysPdfPreviewHandler");
+            }
+            catch { }
         }
 
-        private static void RestoreOrRemoveShellEx(string subKeyPath, string backupValueName)
+        private static void RestoreOrRemoveShellEx(RegistryKey root, string subKeyPath, string backupValueName)
         {
             string current = null;
-            using (RegistryKey k = Registry.LocalMachine.OpenSubKey(subKeyPath, false))
+            using (RegistryKey k = root.OpenSubKey(subKeyPath, false))
             {
                 if (k != null)
                     current = k.GetValue("") as string;
@@ -436,7 +485,7 @@ namespace LinkcoSetup
                 return;
 
             string backup = null;
-            using (RegistryKey cfg = Registry.LocalMachine.OpenSubKey(LinkcoConfigKey, true))
+            using (RegistryKey cfg = root.OpenSubKey(LinkcoConfigKey, true))
             {
                 if (cfg != null)
                 {
@@ -453,7 +502,7 @@ namespace LinkcoSetup
 
             if (!string.IsNullOrEmpty(candidate))
             {
-                using (RegistryKey k = Registry.LocalMachine.CreateSubKey(subKeyPath))
+                using (RegistryKey k = root.CreateSubKey(subKeyPath))
                 {
                     if (k != null)
                         k.SetValue("", candidate);
@@ -461,7 +510,7 @@ namespace LinkcoSetup
             }
             else
             {
-                Registry.LocalMachine.DeleteSubKeyTree(subKeyPath, false);
+                root.DeleteSubKeyTree(subKeyPath, false);
             }
         }
 
@@ -473,7 +522,7 @@ namespace LinkcoSetup
             }
         }
 
-        private static int RunUninstall(bool silent)
+        private static int RunUninstall(bool silent, bool removeData)
         {
             if (!silent)
             {
@@ -485,37 +534,81 @@ namespace LinkcoSetup
                 );
                 if (confirm != DialogResult.Yes)
                     return 0;
+
+                DialogResult keepData = MessageBox.Show(
+                    "Keep your saved " + AppName + " preferences and recovery data?\n\nSelect 'Yes' (recommended) to preserve your settings and documents, or 'No' to remove application data.",
+                    AppName + " Uninstall",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button1
+                );
+                if (keepData == DialogResult.No)
+                    removeData = true;
             }
 
             try
             {
                 string installDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-                string desktopLnk = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory),
-                    AppName + ".lnk"
-                );
-                if (File.Exists(desktopLnk)) File.Delete(desktopLnk);
-
-                string userDesktopLnk = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
-                    AppName + ".lnk"
-                );
-                if (File.Exists(userDesktopLnk)) File.Delete(userDesktopLnk);
-
-                string startMenuGroup = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms),
-                    AppName
-                );
-                if (Directory.Exists(startMenuGroup)) Directory.Delete(startMenuGroup, true);
-
-                UnregisterPreviewHandler();
-                Registry.LocalMachine.DeleteSubKeyTree(UninstallKey, false);
-                Registry.LocalMachine.DeleteSubKeyTree(@"Software\Classes\LinkcoPDFEditor.Document", false);
-                Registry.LocalMachine.DeleteSubKeyTree(LinkcoConfigKey, false);
-                using (RegistryKey openWith = Registry.LocalMachine.OpenSubKey(@"Software\Classes\.pdf\OpenWithProgids", true))
+                foreach (Environment.SpecialFolder df in new Environment.SpecialFolder[] {
+                    Environment.SpecialFolder.CommonDesktopDirectory,
+                    Environment.SpecialFolder.DesktopDirectory
+                })
                 {
-                    if (openWith != null)
-                        openWith.DeleteValue("LinkcoPDFEditor.Document", false);
+                    string folder = Environment.GetFolderPath(df);
+                    if (!string.IsNullOrEmpty(folder))
+                    {
+                        string lnk = Path.Combine(folder, AppName + ".lnk");
+                        if (File.Exists(lnk)) { try { File.Delete(lnk); } catch { } }
+                    }
+                }
+
+                foreach (Environment.SpecialFolder pf in new Environment.SpecialFolder[] {
+                    Environment.SpecialFolder.CommonPrograms,
+                    Environment.SpecialFolder.Programs
+                })
+                {
+                    string folder = Environment.GetFolderPath(pf);
+                    if (!string.IsNullOrEmpty(folder))
+                    {
+                        string grp = Path.Combine(folder, AppName);
+                        if (Directory.Exists(grp)) { try { Directory.Delete(grp, true); } catch { } }
+                    }
+                }
+
+                foreach (RegistryKey root in new RegistryKey[] { Registry.LocalMachine, Registry.CurrentUser })
+                {
+                    try
+                    {
+                        UnregisterPreviewHandler(root);
+                        root.DeleteSubKeyTree(UninstallKey, false);
+                        root.DeleteSubKeyTree(@"Software\Classes\LinkcoPDFEditor.Document", false);
+                        root.DeleteSubKeyTree(LinkcoConfigKey, false);
+                        using (RegistryKey openWith = root.OpenSubKey(@"Software\Classes\.pdf\OpenWithProgids", true))
+                        {
+                            if (openWith != null)
+                                openWith.DeleteValue("LinkcoPDFEditor.Document", false);
+                        }
+                    }
+                    catch { }
+                }
+
+                if (removeData)
+                {
+                    foreach (Environment.SpecialFolder sf in new Environment.SpecialFolder[] {
+                        Environment.SpecialFolder.ApplicationData,
+                        Environment.SpecialFolder.LocalApplicationData
+                    })
+                    {
+                        string baseDir = Environment.GetFolderPath(sf);
+                        if (!string.IsNullOrEmpty(baseDir))
+                        {
+                            string appDataDir = Path.Combine(baseDir, AppName);
+                            if (Directory.Exists(appDataDir))
+                            {
+                                try { Directory.Delete(appDataDir, true); } catch { }
+                            }
+                        }
+                    }
                 }
 
                 try { SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero); } catch { }
@@ -781,7 +874,7 @@ def build_dotnet_setup_exe(
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
-        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+        <requestedExecutionLevel level="highestAvailable" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>
@@ -992,11 +1085,29 @@ def build_windows_installer(
             f = stage_dir / exe_name
             if f.is_file():
                 zf.write(f, arcname=exe_name)
-        for doc_name in ("README.md", "LICENSE-MIT", "LICENSE-APACHE"):
+        for doc_name in ("README.md", "RELEASE_NOTES.md", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "ATTRIBUTION.md"):
             doc_path = ROOT / doc_name
             if doc_path.is_file():
                 zf.write(doc_path, arcname=doc_name)
     generated.append(portable_zip)
+
+    # 4. Stage release notes, licensing notices, and SHA256SUMS.txt in dist/release/
+    for doc_name in ("RELEASE_NOTES.md", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "ATTRIBUTION.md"):
+        src_doc = ROOT / doc_name
+        if src_doc.is_file():
+            dst_doc = out_dir / doc_name
+            shutil.copy2(src_doc, dst_doc)
+            if dst_doc not in generated:
+                generated.append(dst_doc)
+
+    checksums_path = out_dir / "SHA256SUMS.txt"
+    checksum_lines: list[str] = []
+    for entry in sorted(out_dir.iterdir(), key=lambda p: p.name):
+        if entry.is_file() and entry.name != "SHA256SUMS.txt":
+            digest = hashlib.sha256(entry.read_bytes()).hexdigest()
+            checksum_lines.append(f"{digest}  {entry.name}")
+    checksums_path.write_text("\n".join(checksum_lines) + "\n", encoding="utf-8")
+    generated.append(checksums_path)
 
     print("\n==> Windows installer & package output in dist/release:")
     for artifact in generated:

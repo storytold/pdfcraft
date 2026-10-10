@@ -31,8 +31,8 @@ All document rendering and editing operations execute locally on your workstatio
 - **Export & Conversion** — Export PDFs to Microsoft Word (`.docx`), PNG images, extracted embedded images, HTML web pages, Rich Text Format (`.rtf`), and plain text (`.txt`), or create PDFs from images, plain text, HTML, or blank page templates.
 - **High-Resolution Printing & Windows Print Spooler Integration** — Full imposition engine (Fit, Actual Size, Shrink, Custom Scale, Multiple pages per sheet with Cut & Stack, Saddle-Stitch Booklet, and Tiled Poster with cut marks), live high-DPI sheet preview, 150 / 300 / 600 DPI print rendering, and native Windows Print Spooler (`Win32_Printer` / `.NET` `System.Drawing.Printing`) and CUPS printer detection with default-printer and offline-status awareness.
 - **Windows File Explorer PDF Preview Handler** — Out-of-process `IPreviewHandler` shell extension (`LinkcoPdfPreviewHandler.dll`) hosted by `prevhost.exe` that renders PDF pages directly inside the Windows 10/11 File Explorer Preview Pane with page navigation and zoom without launching the full editor.
-- **Scan & OCR** — Pluggable Optical Character Recognition (OCR) pipeline with page deskew, background cleanup, and invisible searchable text layer (`Tr 3`) generation.
-- **Print Production, Standards & Accessibility** — PDF/A, PDF/X, and PDF/UA validation; color-separation and ink-coverage preview; transparency flattening; hairline fixing; color space conversion; page box (`TrimBox`, `BleedBox`, `ArtBox`, `CropBox`) editing; printer marks; and Matterhorn accessibility checks with reading-order and structure-tag editors.
+- **Scan & OCR** — Optical Character Recognition (`crates/ocr`) for single or multiple files with deskew, image preprocessing, and invisible searchable text layer (`Tr 3`) generation (requires OCR models via `cargo xtask models` or `PDFCRAFT_MODELS`).
+- **Measurement, Standards, Accessibility & Guided Actions** — Distance, perimeter, and area measurement tools (`crates/measure`) with vector snapping, calibration, and CSV export; PDF/A-2b and PDF/A-3b verification and conversion (`crates/preflight`); 32-rule accessibility checker, alternate-text editor, and HTML accessibility reports (`crates/a11y`); page box (`CropBox`, `BleedBox`, `TrimBox`, `ArtBox`) editing; and multi-file batch automation via the Action Wizard (`crates/engine/src/actions.rs`).
 
 ---
 
@@ -240,42 +240,63 @@ cargo clippy --workspace --all-targets -- -D warnings
 linkco-pdf/
 ├── apps/
 │   ├── pdfcraft/          # Desktop GUI binary (Linkco PDF Editor) & Windows resource script
-│   ├── pdfcraft-cli/      # Headless CLI, batch runner, and inspection tool
+│   ├── pdfcraft-cli/      # Headless CLI, single-page preview renderer, batch runner, and MCP host
 │   └── pdfcraft-web/      # WebAssembly browser application target
 ├── crates/
-│   ├── core/              # PDF 1.7 / 2.0 parser, xref/object model, writer, and encryption
-│   ├── render/            # Display list compiler, 2D software rasterizer, fonts, and color
-│   ├── layout/            # Text extraction, reading order, and full-text search
-│   ├── forms/             # AcroForm fields, appearance generation, and XFA support
-│   ├── annot/             # 18 PDF annotation types and XFDF import/export
-│   ├── sign/              # PKCS#7 / CMS, PAdES, X.509 certificates, and RFC 3161 timestamps
-│   ├── ocr/               # Pluggable OCR engine, deskew, and searchable PDF layer builder
-│   ├── compliance/        # PDF/A, PDF/X, PDF/UA validation and Matterhorn accessibility
-│   ├── scripting/         # Sandboxed QuickJS runtime for Acrobat form scripts
-│   ├── engine/            # High-level document session, command dispatcher, and tool catalog
-│   └── ui-egui/           # Immediate-mode desktop UI, Home dashboard, dialogs, and i18n
+│   ├── cos/               # PDF 1.7 / 2.0 object model, parser, cross-reference table, and incremental writer
+│   ├── filters/           # Stream compression and decompression filters (Flate, LZW, RunLength, ASCII85/Hex)
+│   ├── crypt/             # PDF standard security handler (RC4, AES-128, AES-256) and permission flags
+│   ├── geom/              # 2D geometry primitives (points, rectangles, affine matrices)
+│   ├── model/             # High-level document tree (pages, outlines/bookmarks, page labels, layers, attachments)
+│   ├── fonts/             # Standard 14 PDF font metrics and optional embedded Japanese fonts
+│   ├── content/           # PDF content stream tokenizer, text extraction, and full-text search
+│   ├── render/            # PDF page renderer (backed by hayro) and document inspector
+│   ├── organize/          # Page rotation, deletion, insertion, extraction, splitting, combining, and page boxes
+│   ├── annot/             # PDF annotations, appearance stream generation, and link editing
+│   ├── xfdf/              # ISO 19444-1 XFDF and FDF comment/form data import and export
+│   ├── forms/             # AcroForm field reading, filling, authoring, and appearance streams
+│   ├── js/                # Sandboxed Acrobat form JavaScript runtime (backed by boa_engine)
+│   ├── xfa/               # XFA template layout, FormCalc/JavaScript execution, and datasets sync
+│   ├── edit/              # Direct page text reflow/editing, images, headers/footers, watermarks, Bates numbering
+│   ├── create/            # PDF creation from images, plain text, HTML, and blank templates; image extraction
+│   ├── export/            # PDF export to Word (.docx), HTML, Rich Text (.rtf), PNG images, and plain text
+│   ├── sign/              # PKCS#7 / CMS and PAdES digital signature validation, signing, and X.509 certificates
+│   ├── redact/            # True content-stream text/image redaction and hidden-information sanitization
+│   ├── optimize/          # File size reduction, image resampling, stream compression, and space audit
+│   ├── ocr/               # Optical character recognition pipeline and searchable PDF text layer generation
+│   ├── compare/           # Word-by-word and visual document comparison
+│   ├── measure/           # Distance, perimeter, and area measurement tools with vector snapping and CSV export
+│   ├── print/             # Sheet imposition (Size, Multiple, Cut & Stack, Booklet, Poster) and OS print spooler
+│   ├── preflight/         # PDF/A-2b and PDF/A-3b verification and conversion
+│   ├── a11y/              # 32-rule PDF accessibility checker, fixes, alternate text, and HTML reporting
+│   ├── engine/            # Unified document session facade, command registry, tool catalog, and Action Wizard
+│   ├── automation/        # Headless automation tool table and opt-in Model Context Protocol (MCP) server
+│   └── ui-egui/           # Immediate-mode desktop/web UI shell, Home dashboard, dialogs, and i18n catalogs
 ├── assets/
 │   ├── app-icon/          # Linkco PDF Editor application icons (.svg, .ico, .icns, .png)
-│   ├── fonts/             # Bundled UI and PDF base fonts (Inter, Liberation, Noto)
+│   ├── fonts/             # Bundled UI and PDF fonts
 │   └── icons/             # Bundled Lucide UI icons (ISC licence)
 ├── docs/
-│   └── images/            # Application screenshots used in documentation
+│   └── images/            # Local application screenshots used in documentation
 ├── packaging/
-│   ├── windows/           # Windows WiX (.wxs), NSIS (installer.nsi), and PowerShell scripts
+│   ├── windows/           # Windows WiX (.wxs), NSIS (installer.nsi), PreviewHandler.cs, and PowerShell scripts
 │   ├── macos/             # macOS .app / .dmg / .pkg packaging scripts
 │   ├── linux/             # Linux .deb, .rpm, AppImage, Flatpak, and tarball scripts
 │   └── freebsd/           # FreeBSD packaging scripts
-└── xtask/                 # Build verification, asset attribution, and parity tasks
+├── build.py               # Cross-platform Python build script for Linkco PDF Editor binaries
+├── installer.py           # Windows installer build script (produces LinkcoPDFEditorSetup.exe)
+└── xtask/                 # Workspace engineering gates, asset attribution, version, and parity tasks
 ```
 
 ---
 
 ## Security & Privacy
 
-- **100% Offline Operation:** Linkco PDF Editor processes all PDF files locally. It contains no analytics, telemetry, crash-reporting beacons, advertisements, or background network calls.
-- **Memory-Safe Architecture:** `#![forbid(unsafe_code)]` is enforced across the workspace, eliminating buffer overflows and memory corruption vulnerabilities when parsing untrusted PDF files.
+- **Local Document Processing & Network Policy:** Linkco PDF Editor processes all PDF files locally on your workstation and includes no analytics, telemetry, crash-reporting beacons, or advertisements. The application performs no background network requests; the only network activity is the optional, user-initiated `Help ▸ Check for updates…` action (`apps/pdfcraft/src/updates.rs`), which queries the GitHub Releases API (`https://api.github.com/repos/b-lincko/linkco-pdf/releases/latest`) when clicked and never downloads or installs updates automatically.
+- **Memory-Safe Architecture:** `unsafe_code = "forbid"` is enforced across all workspace crates (`crates/`, `apps/`, `xtask/`), preventing buffer overflows and memory corruption in workspace code when parsing untrusted PDF files.
 - **External Link Protection:** Clicking a link inside a PDF document never opens a browser or executes a local file path silently; only `https://`, `http://`, and `mailto:` schemes are permitted, and every external URL requires explicit user confirmation in a modal dialog showing the full destination address.
-- **Sandboxed Scripting:** Document JavaScript (`crates/scripting`) executes inside an isolated, memory- and instruction-capped QuickJS context with zero filesystem or network access.
+- **Sandboxed Scripting:** Document JavaScript (`crates/js`) and XFA scripts (`crates/xfa`) execute inside an isolated `boa_engine` sandbox with strict loop-iteration, recursion, and execution-time limits and zero filesystem or network access.
+- **Corporate Certifications Note:** References to ISO 9001, ISO 14001, and ISO 45001 refer to the corporate quality, environmental, and occupational health & safety management certifications of **Al Rawabet Commercial Services and Contracting Company W.L.L. (Linkco)**, not third-party cryptographic or software security certifications of the binary.
 
 ---
 
