@@ -25,6 +25,14 @@ fn score(hay: &str, needle: &str) -> Option<usize> {
     if let Some(p) = h.find(needle) {
         return Some(p);
     }
+    // A right-to-left language's labels are in display order (their words run the other way)
+    // while the query is in typing order, so several words match one by one.
+    if crate::i18n::current().rtl() && needle.contains(char::is_whitespace) {
+        let first = needle.split_whitespace().map(|word| h.find(word)).try_fold(usize::MAX, |first, p| p.map(|p| first.min(p)));
+        if let Some(first) = first {
+            return Some(first);
+        }
+    }
     // Subsequence match as a fallback.
     let mut it = h.chars();
     needle.chars().all(|c| it.any(|x| x == c)).then_some(100)
