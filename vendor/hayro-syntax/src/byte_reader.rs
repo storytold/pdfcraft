@@ -1,5 +1,6 @@
 //! A byte reader.
 
+use core::cell::Cell;
 use core::ops::Range;
 
 /// A reader for reading bytes and PDF objects.
@@ -9,25 +10,59 @@ pub struct Reader<'a> {
     pub data: &'a [u8],
     /// The current byte-offset.
     pub offset: usize,
+    /// PdfCraft patch: set when a read needed a byte past the end of `data`. A decision made from
+    /// such a read could change if more data followed (see `content::UntypedIter`).
+    past_end: Cell<bool>,
 }
 
 impl<'a> Reader<'a> {
     /// Create a new reader.
     #[inline]
     pub fn new(data: &'a [u8]) -> Self {
-        Self { data, offset: 0 }
+        Self::new_with(data, 0)
     }
 
     /// Create a new reader at the given offset.
     #[inline]
     pub fn new_with(data: &'a [u8], offset: usize) -> Self {
-        Self { data, offset }
+        Self {
+            data,
+            offset,
+            past_end: Cell::new(false),
+        }
+    }
+
+    /// PdfCraft patch: whether a read needed bytes past the end of the data since the flag was
+    /// last cleared.
+    #[inline]
+    pub(crate) fn looked_past_end(&self) -> bool {
+        self.past_end.get()
+    }
+
+    /// PdfCraft patch: clears the flag set by [`Reader::looked_past_end`].
+    #[inline]
+    pub(crate) fn clear_looked_past_end(&self) {
+        self.past_end.set(false);
     }
 
     /// Returns `true` if the reader has reached the end of the data.
     #[inline]
     pub fn at_end(&self) -> bool {
-        self.offset >= self.data.len()
+        let at_end = self.offset >= self.data.len();
+        if at_end {
+            // PdfCraft patch: a parser that stops at the end decides from it (see `past_end`).
+            self.past_end.set(true);
+        }
+
+        at_end
+    }
+
+    /// PdfCraft patch: carries over whether `other`, a clone of this reader, looked past the end.
+    #[inline]
+    pub(crate) fn absorb_past_end(&self, other: &Reader<'_>) {
+        if other.past_end.get() {
+            self.past_end.set(true);
+        }
     }
 
     /// Moves the reader offset to the end of the data.
@@ -99,15 +134,26 @@ impl<'a> Reader<'a> {
     /// Peeks the specified number of bytes.
     #[inline]
     pub fn peek_bytes(&self, len: usize) -> Option<&'a [u8]> {
-        self.offset
+        let bytes = self
+            .offset
             .checked_add(len)
-            .and_then(|end| self.data.get(self.offset..end))
+            .and_then(|end| self.data.get(self.offset..end));
+        if bytes.is_none() {
+            self.past_end.set(true);
+        }
+
+        bytes
     }
 
     /// Peeks a single byte.
     #[inline]
     pub fn peek_byte(&self) -> Option<u8> {
-        self.data.get(self.offset).copied()
+        let byte = self.data.get(self.offset).copied();
+        if byte.is_none() {
+            self.past_end.set(true);
+        }
+
+        byte
     }
 
     /// Eat the next byte if it satisfies the condition.
@@ -178,6 +224,7 @@ impl<'a> Reader<'a> {
             if cloned.peek_byte() == Some(b) {
                 cloned.forward();
             } else {
+                self.past_end.set(cloned.past_end.get());
                 return None;
             }
         }
