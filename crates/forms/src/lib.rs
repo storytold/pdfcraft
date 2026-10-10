@@ -795,26 +795,8 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
         let v = if let Some(js) = &f.actions.scripts.calculate {
             let r = scripts.run(FieldEvent::Calculate, js, &f, &current, &all);
             scripting::apply_changes(doc, &r.changes, &f.name)?;
-            for c in &r.changes {
-                if let Some(target) = all.iter_mut().find(|x| x.name == c.name) {
-                    if let Some(val) = &c.value {
-                        target.value = val.clone();
-                    }
-                    if let Some(ro) = c.read_only {
-                        if ro {
-                            target.flags |= flags::READ_ONLY;
-                        } else {
-                            target.flags &= !flags::READ_ONLY;
-                        }
-                    }
-                    if let Some(req) = c.required {
-                        if req {
-                            target.flags |= flags::REQUIRED;
-                        } else {
-                            target.flags &= !flags::REQUIRED;
-                        }
-                    }
-                }
+            if !r.changes.is_empty() {
+                all = fields(doc);
             }
             if !r.rc {
                 continue;

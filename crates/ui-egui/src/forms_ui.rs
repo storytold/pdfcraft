@@ -129,11 +129,6 @@ pub(crate) fn page_input(
         FormFieldKind::CheckBox => {
             view.forms.focus = None;
             view.pending_edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Check(f.value.is_empty()) });
-            for w in &f.widgets {
-                if let Some(p) = w.page {
-                    view.forms.unbaked.insert((f.name.clone(), p));
-                }
-            }
         }
         FormFieldKind::Radio => {
             view.forms.focus = None;
@@ -142,11 +137,6 @@ pub(crate) fn page_input(
             let value = if f.value.first() == on.as_ref() && !f.has(field_flags::NO_TOGGLE_TO_OFF) { None } else { on };
             if value.as_ref() != f.value.first() {
                 view.pending_edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Radio(value) });
-                for w in &f.widgets {
-                    if let Some(p) = w.page {
-                        view.forms.unbaked.insert((f.name.clone(), p));
-                    }
-                }
             }
         }
         FormFieldKind::Text | FormFieldKind::Combo | FormFieldKind::List => {
@@ -175,13 +165,6 @@ pub(crate) fn draft_edit(focus: &Focus, form: &[FormField]) -> Option<Edit> {
 pub(crate) fn commit(view: &mut DocView, form: &[FormField]) {
     let Some(focus) = view.forms.focus.take() else { return };
     if let Some(edit) = draft_edit(&focus, form) {
-        if let Some(f) = form.iter().find(|f| f.name == focus.name) {
-            for w in &f.widgets {
-                if let Some(p) = w.page {
-                    view.forms.unbaked.insert((focus.name.clone(), p));
-                }
-            }
-        }
         view.pending_edit = Some(edit);
         view.forms.committed = Some(focus);
     }
@@ -286,7 +269,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
                 painter.rect_stroke(r.expand(1.0), CornerRadius::same(2), Stroke::new(2.0, FOCUS_BLUE), egui::StrokeKind::Outside);
             } else {
                 if view.forms.unbaked.contains(&(f.name.clone(), page)) {
-                    paint_unbaked_widget(painter, xf, f, w, r, view.forms.committed.as_ref(), view.pending_edit.as_ref());
+                    paint_unbaked_widget(painter, xf, f, w, r);
                 }
                 if fillable(f) && pointer.is_some_and(|p| r.contains(p)) {
                     painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, FOCUS_BLUE.gamma_multiply(0.8)), egui::StrokeKind::Outside);
@@ -296,31 +279,15 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
     }
 }
 
-fn paint_unbaked_widget(
-    painter: &egui::Painter,
-    xf: &PageXform,
-    f: &FormField,
-    w: &FormWidget,
-    r: Rect,
-    committed: Option<&Focus>,
-    pending: Option<&Edit>,
-) {
+fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, w: &FormWidget, r: Rect) {
     match f.kind {
         FormFieldKind::Text | FormFieldKind::Combo | FormFieldKind::List => {
-            let text = if let Some(c) = committed.filter(|c| c.name == f.name) {
-                c.text.as_str()
-            } else if let Some(Edit::SetFieldValue { name: _, value: FieldValue::Text(t) }) = pending.filter(|e| match e {
-                Edit::SetFieldValue { name, .. } => *name == f.name,
-                _ => false,
-            }) {
-                t.as_str()
-            } else {
-                f.value.first().map(String::as_str).unwrap_or("")
-            };
+            let text = f.value.first().map(String::as_str).unwrap_or("");
             painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
             painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
             if !text.is_empty() {
-                let zoom = xf.rect.width() / xf.pw.max(1.0);
+                let unrotated_w = if xf.rot % 180 == 90 { xf.ph } else { xf.pw };
+                let zoom = xf.rect.width() / unrotated_w.max(1.0);
                 let da = f.da.split_whitespace().collect::<Vec<_>>();
                 let size = da
                     .iter()
@@ -342,14 +309,7 @@ fn paint_unbaked_widget(
         FormFieldKind::CheckBox => {
             painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
             painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
-            let checked = if let Some(Edit::SetFieldValue { name: _, value: FieldValue::Check(on) }) = pending.filter(|e| match e {
-                Edit::SetFieldValue { name, .. } => *name == f.name,
-                _ => false,
-            }) {
-                *on
-            } else {
-                f.value.first().is_some_and(|v| v != "Off" && !v.is_empty())
-            };
+            let checked = f.value.first().is_some_and(|v| v != "Off" && !v.is_empty());
             if checked {
                 let sz = (r.height() * 0.75).clamp(8.0, 32.0);
                 painter.text(r.center(), egui::Align2::CENTER_CENTER, "✔", egui::FontId::proportional(sz), Color32::BLACK);
@@ -358,14 +318,7 @@ fn paint_unbaked_widget(
         FormFieldKind::Radio => {
             painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
             painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
-            let selected = if let Some(Edit::SetFieldValue { name: _, value: FieldValue::Radio(on) }) = pending.filter(|e| match e {
-                Edit::SetFieldValue { name, .. } => *name == f.name,
-                _ => false,
-            }) {
-                on.as_deref() == w.on_state.as_deref()
-            } else {
-                f.value.first().map(String::as_str) == w.on_state.as_deref()
-            };
+            let selected = f.value.first().map(String::as_str) == w.on_state.as_deref();
             if selected {
                 let radius = (r.height().min(r.width()) * 0.25).clamp(2.0, 16.0);
                 painter.circle_filled(r.center(), radius, Color32::BLACK);

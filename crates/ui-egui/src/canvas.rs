@@ -274,6 +274,8 @@ pub struct DocView {
     stale_thumbs: HashSet<usize>,
     /// Tiles that are out of date (still shown until their replacement arrives).
     stale_tiles: HashSet<(usize, u64, u32, u32)>,
+    /// Scale tag of the current zoom level, as last drawn.
+    current_scale_tag: u64,
     /// Sharp tiles of large pages: (page, scale tag, tile x, tile y) → texture. Tiles of an
     /// earlier zoom stay, drawn stretched, until those of the current one cover the page.
     tiles: HashMap<(usize, u64, u32, u32), TextureHandle>,
@@ -471,6 +473,7 @@ impl DocView {
             frame_visible: HashSet::new(),
             stale_thumbs: HashSet::new(),
             stale_tiles: HashSet::new(),
+            current_scale_tag: 0,
             tiles: HashMap::new(),
             texts: HashMap::new(),
             text_failed: HashSet::new(),
@@ -631,8 +634,15 @@ impl DocView {
         if self.thumbs.contains_key(&page) {
             self.stale_thumbs.insert(page);
         }
+        let current_tag = if self.current_scale_tag != 0 {
+            self.current_scale_tag
+        } else {
+            self.tiles.keys().filter(|k| k.0 == page).map(|k| k.1).max().unwrap_or(0)
+        };
+        self.tiles.retain(|key, _| key.0 != page || key.1 == current_tag);
+        self.stale_tiles.retain(|key| key.0 != page || key.1 == current_tag);
         for &key in self.tiles.keys() {
-            if key.0 == page {
+            if key.0 == page && key.1 == current_tag {
                 self.stale_tiles.insert(key);
             }
         }
@@ -1126,8 +1136,6 @@ impl DocView {
         let mut tiles = HashSet::new();
         let mut tile_tags = HashSet::new();
         let mut grid = Vec::new();
-        let mut tile_queue = Vec::new();
-        let mut page_queue = Vec::new();
         let (mut page_bytes, mut tile_bytes) = (0usize, 0usize);
         for req in requests.iter().filter(|r| r.kind == RequestKind::Pixels) {
             let Some(p) = info.pages.get(req.page) else { continue };
@@ -1148,7 +1156,7 @@ impl DocView {
                 tile_bytes = tile_bytes.saturating_add(bytes);
                 tile_tags.insert(req.tag);
                 if !self.tiles.contains_key(&key) || self.stale_tiles.contains(&key) {
-                    tile_queue.push(*req);
+                    queue.push(*req);
                 }
             } else {
                 let bytes = rgba_bytes(device_pixels(p.width, req.scale) as usize, device_pixels(p.height, req.scale) as usize);
@@ -1157,13 +1165,10 @@ impl DocView {
                 }
                 page_bytes = page_bytes.saturating_add(bytes);
                 if self.pages.get(&req.page).is_none_or(|p| p.tag != req.tag) {
-                    page_queue.push(*req);
+                    queue.push(*req);
                 }
             }
         }
-        // Sharp visible tiles come before whole-page backdrops so edits and zooms update immediately.
-        queue.extend(tile_queue);
-        queue.extend(page_queue);
         // Pages no longer demanded stay cached while the allowance has room, nearest to the
         // current page first, so turning back a page shows it at once instead of rendering.
         let mut undemanded: Vec<usize> = self.pages.keys().copied().filter(|p| !pages.contains(p)).collect();
@@ -1794,6 +1799,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let ppp = ui.ctx().pixels_per_point();
     let scale = view.render_scale(ppp);
     let tag = scale_tag(scale);
+    view.current_scale_tag = tag;
     let hand = app.quick_tool == QuickTool::Hand;
     let tool = app.quick_tool;
     // Text selection runs for the Select tool and for the markup tools (highlight…).

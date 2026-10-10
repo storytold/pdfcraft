@@ -1078,11 +1078,21 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
     if let Some(why) = std::iter::once(script).chain(doc_scripts.iter().map(String::as_str)).find_map(refuse) {
         return failed(why);
     }
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_here(script, event, doc, fields, doc_scripts, limits)));
-    match res {
-        Ok(out) => out,
-        Err(_) => failed("the script stopped with an internal error".into()),
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::thread::scope(|scope| {
+            let spawned = std::thread::Builder::new()
+                .name("pdfcraft-js".into())
+                .stack_size(SCRIPT_STACK)
+                .spawn_scoped(scope, || run_here(script, event, doc, fields, doc_scripts, limits));
+            match spawned {
+                Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
+                Err(e) => failed(format!("the script engine could not start: {e}")),
+            }
+        })
     }
+    #[cfg(target_arch = "wasm32")]
+    run_here(script, event, doc, fields, doc_scripts, limits)
 }
 
 fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], doc_scripts: &[String], limits: Limits) -> Outcome {

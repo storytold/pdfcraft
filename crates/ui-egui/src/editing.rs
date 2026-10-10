@@ -32,6 +32,11 @@ impl PdfCraftApp {
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
         let label = edit.label();
+        let (form_before, page_count_before, had_xfa) = if let Some(d) = self.session.get(id) {
+            (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some())
+        } else {
+            (None, 0, false)
+        };
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
                 let Some(doc) = self.session.get(id) else { return true };
@@ -41,28 +46,57 @@ impl PdfCraftApp {
                 if let Some(page) = comment_page(&edit) {
                     // Comment edits change one page: keep every other raster.
                     view.page_changed(page);
-                } else if let Some(pages) = form_edit_pages(&edit, &doc.form) {
-                    // Form field edits: only invalidate pages with the edited or calculated widgets.
-                    for page in &pages {
-                        view.page_changed(*page);
-                    }
-                    if let Edit::SetFieldValue { name, .. } = &edit
-                        && let Some(f) = doc.form.iter().find(|f| f.name == *name)
-                    {
-                        for w in &f.widgets {
-                            if let Some(p) = w.page {
-                                view.forms.unbaked.insert((name.clone(), p));
-                            }
-                        }
-                    }
+                } else if let Some(form_before) = form_before
+                    && doc.info.pages.len() == page_count_before
+                    && doc.xfa.is_some() == had_xfa
+                    && !doc.xfa.is_some()
+                    && is_form_edit(&edit)
+                {
+                    let mut changed_pages = std::collections::BTreeSet::new();
                     for f in doc.form.iter() {
-                        if f.actions.calculate != pdfcraft_engine::form_scripts::Calculate::None || f.actions.scripts.calculate.is_some() {
-                            for w in &f.widgets {
-                                if let Some(p) = w.page {
-                                    view.forms.unbaked.insert((f.name.clone(), p));
+                        match form_before.iter().find(|old| old.name == f.name) {
+                            Some(old) => {
+                                if old != f {
+                                    for w in &f.widgets {
+                                        if let Some(p) = w.page {
+                                            changed_pages.insert(p);
+                                        }
+                                    }
+                                    for w in &old.widgets {
+                                        if let Some(p) = w.page {
+                                            changed_pages.insert(p);
+                                        }
+                                    }
+                                    if old.value != f.value {
+                                        for w in &f.widgets {
+                                            if let Some(p) = w.page {
+                                                view.forms.unbaked.insert((f.name.clone(), p));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            None => {
+                                for w in &f.widgets {
+                                    if let Some(p) = w.page {
+                                        changed_pages.insert(p);
+                                        view.forms.unbaked.insert((f.name.clone(), p));
+                                    }
                                 }
                             }
                         }
+                    }
+                    for old in form_before.iter() {
+                        if !doc.form.iter().any(|f| f.name == old.name) {
+                            for w in &old.widgets {
+                                if let Some(p) = w.page {
+                                    changed_pages.insert(p);
+                                }
+                            }
+                        }
+                    }
+                    for page in changed_pages {
+                        view.page_changed(page);
                     }
                 } else {
                     view.document_changed(info);
@@ -646,31 +680,20 @@ fn comment_page(edit: &Edit) -> Option<usize> {
     }
 }
 
-/// The pages affected by a form field edit (the edited field and any calculated fields).
-fn form_edit_pages(edit: &Edit, form: &[pdfcraft_engine::FormField]) -> Option<Vec<usize>> {
-    match edit {
-        Edit::SetFieldValue { name, .. } => {
-            let mut pages = std::collections::BTreeSet::new();
-            if let Some(f) = form.iter().find(|f| f.name == *name) {
-                for w in &f.widgets {
-                    if let Some(p) = w.page {
-                        pages.insert(p);
-                    }
-                }
-            }
-            for f in form {
-                if f.actions.calculate != pdfcraft_engine::form_scripts::Calculate::None || f.actions.scripts.calculate.is_some() {
-                    for w in &f.widgets {
-                        if let Some(p) = w.page {
-                            pages.insert(p);
-                        }
-                    }
-                }
-            }
-            if pages.is_empty() { None } else { Some(pages.into_iter().collect()) }
-        }
-        _ => None,
-    }
+/// Whether `edit` is a form-related modification.
+fn is_form_edit(edit: &Edit) -> bool {
+    matches!(
+        edit,
+        Edit::SetFieldValue { .. }
+            | Edit::ResetForm { .. }
+            | Edit::AddField { .. }
+            | Edit::DeleteField { .. }
+            | Edit::DuplicateField { .. }
+            | Edit::SetFieldProps { .. }
+            | Edit::SetFieldImage { .. }
+            | Edit::SetFieldScript { .. }
+            | Edit::ApplyScriptChanges { .. }
+    )
 }
 
 /// Write via a temporary file in the same directory and rename over the target, so a crash or
