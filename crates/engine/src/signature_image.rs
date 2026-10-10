@@ -68,6 +68,25 @@ impl Document {
     }
 }
 
+/// The user-space box `width` x `height` points as displayed on a page turned by `rotation` (its
+/// `/Rotate`), with its left edge at `at` (a user-space point) and vertically centred on it. On a
+/// quarter-turned page it is `height` wide and `width` tall in user space. `None` for a non-finite
+/// point.
+pub fn upright_box(rotation: i64, at: [f64; 2], width: f64, height: f64) -> Option<[f64; 4]> {
+    if !at.iter().chain(&[width, height]).all(|v| v.is_finite()) {
+        return None;
+    }
+    // Right and up as displayed, as user-space vectors: the page's view matrix without its offset.
+    let [a, b, c, d, ..] = pdfcraft_model::view_matrix_for(rotation, [0.0; 4]);
+    let (right, up) = ([a * width, b * width], [c * height / 2.0, d * height / 2.0]);
+    Some([
+        at[0] + right[0].min(0.0) - up[0].abs(),
+        at[1] + right[1].min(0.0) - up[1].abs(),
+        at[0] + right[0].max(0.0) + up[0].abs(),
+        at[1] + right[1].max(0.0) + up[1].abs(),
+    ])
+}
+
 /// Saved signatures live in settings, so both source and normalized PNG are bounded.
 pub const MAX_SIGNATURE_IMAGE_BYTES: usize = 4 << 20;
 const MAX_PIXELS: u64 = 4 << 20;
@@ -145,6 +164,23 @@ impl SignatureImage {
         self.size
     }
 
+    /// Make near-white paper transparent, keeping darker ink.
+    pub fn remove_white_background(&self, cutoff: u8, feather: u8) -> Result<Self, SignatureImageError> {
+        let [w, h] = self.size;
+        let mut rgba = image::RgbaImage::from_raw(w as u32, h as u32, self.rgba.as_ref().clone()).ok_or(SignatureImageError::Size)?;
+        let high = f32::from(cutoff);
+        let span = f32::from(feather.max(1));
+        for pixel in rgba.pixels_mut() {
+            let [r, g, b, a] = pixel.0;
+            let whiteness = f32::from(r.min(g).min(b));
+            let keep = ((high - whiteness) / span).clamp(0.0, 1.0);
+            pixel.0[3] = (f32::from(a) * keep).round() as u8;
+        }
+        let mut png = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(rgba).write_to(&mut png, ImageFormat::Png)?;
+        Self::from_bytes(&png.into_inner())
+    }
+
     /// The user-space box for the image with its left edge at `at` (a user-space point on `page`),
     /// vertically centered, with the same 150 pt width cap as typed names. Left and centered are
     /// as displayed: on a page with `/Rotate` the box runs along the turned page's axes.
@@ -154,16 +190,7 @@ impl SignatureImage {
         }
         let [w, h] = self.size;
         let scale = (150.0 / w as f64).min(if initials { 24.0 } else { 32.0 } / h as f64);
-        let (width, height) = (w as f64 * scale, h as f64 * scale);
-        // Right and up as displayed, as user-space vectors: the page's view matrix without its offset.
-        let [a, b, c, d, ..] = pdfcraft_model::view_matrix_for(i64::from(page.rotation), [0.0; 4]);
-        let (right, up) = ([a * width, b * width], [c * height / 2.0, d * height / 2.0]);
-        Some([
-            at[0] + right[0].min(0.0) - up[0].abs(),
-            at[1] + right[1].min(0.0) - up[1].abs(),
-            at[0] + right[0].max(0.0) + up[0].abs(),
-            at[1] + right[1].max(0.0) + up[1].abs(),
-        ])
+        upright_box(i64::from(page.rotation), at, w as f64 * scale, h as f64 * scale)
     }
 
     pub fn edit(&self, page: usize, info: &PageInfo, at: [f64; 2], initials: bool, author: &str) -> Option<Edit> {
@@ -313,5 +340,26 @@ mod tests {
             let rect = image.rect(&page(rotation), at, false).unwrap();
             assert!(rect.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01), "{rotation}: {rect:?}, want {want:?}");
         }
+    }
+
+    #[test]
+    fn white_background_becomes_transparent_and_ink_is_kept() {
+        let mut source = image::RgbaImage::new(4, 1);
+        source.put_pixel(0, 0, image::Rgba([255, 255, 255, 255]));
+        source.put_pixel(1, 0, image::Rgba([20, 20, 20, 255]));
+        source.put_pixel(2, 0, image::Rgba([227, 227, 227, 255]));
+        source.put_pixel(3, 0, image::Rgba([10, 10, 10, 100]));
+        let mut encoded = Cursor::new(Vec::new());
+        source.write_to(&mut encoded, ImageFormat::Png).unwrap();
+
+        let image = SignatureImage::from_bytes(&encoded.into_inner()).unwrap();
+        let cleaned = image.remove_white_background(245, 35).unwrap();
+        let pixels = cleaned.rgba().as_chunks::<4>().0;
+
+        assert_eq!(cleaned.size(), [4, 1]);
+        assert_eq!(pixels[0][3], 0, "white paper must be transparent");
+        assert_eq!(pixels[1], [20, 20, 20, 255], "dark ink must be unchanged");
+        assert!(pixels[2][3] > 0 && pixels[2][3] < 255, "near-white must fade");
+        assert_eq!(pixels[3][3], 100, "existing transparency must be kept");
     }
 }

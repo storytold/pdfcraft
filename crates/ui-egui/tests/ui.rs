@@ -68,6 +68,32 @@ fn long_recent_names_and_paths_are_cut_before_the_page_count() {
 }
 
 #[test]
+fn home_removes_one_recent_file_or_clears_them_all() {
+    // Tall enough that the Recent list is on screen without scrolling.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        for name in ["first.pdf", "second.pdf", "third.pdf"] {
+            app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0 });
+        }
+        app
+    });
+    h.run_steps(4);
+    assert!(h.query_by_label("Remove second.pdf from Recent").is_none(), "the remove button shows only over its row");
+    h.get_by_label("second.pdf").hover();
+    h.run_steps(2);
+    h.get_by_label("Remove second.pdf from Recent").click();
+    h.run_steps(2);
+    let names: Vec<String> = h.state().recent.iter().map(|r| r.name.clone()).collect();
+    assert_eq!(names, ["first.pdf", "third.pdf"], "only that file left the list");
+    h.get_by_label("Clear Recent Files").click();
+    h.run_steps(2);
+    assert!(h.state().recent.is_empty(), "Clear empties the list");
+    h.get_by_label_contains("Files you open in PdfCraft appear here");
+    assert!(h.query_by_label("Clear Recent Files").is_none(), "and goes away with nothing left to clear");
+}
+
+#[test]
 fn every_catalog_tool_is_listed_after_view_more() {
     let mut h = harness(|_| {});
     h.get_by_label("View more").click();
@@ -146,11 +172,65 @@ fn overflowing_tabs_can_be_reached_by_scrolling() {
     }
 }
 
+/// Whether a node labelled `label` is there and enabled (`None`: not there).
+fn enabled(h: &Harness<'static, PdfCraftApp>, label: &str) -> Option<bool> {
+    h.query_by_label(label)?;
+    Some(h.query_by(|n| n.label().as_deref() == Some(label) && n.is_disabled()).is_none())
+}
+
+#[test]
+fn tabs_shrink_to_fit_then_arrows_step_through_them_and_open_stays_in_sight() {
+    // Five long names are wider than the strip: the tabs shrink instead of running under the
+    // buttons on the right, Open sits after them, and no arrows show.
+    let name = |i: usize| format!("Statement {i} for the office records, scanned.pdf");
+    let mut h = harness(move |app| {
+        for i in 0..5 {
+            app.open_bytes(&name(i), None, FIXTURE.to_vec()).unwrap();
+        }
+    });
+    let open = h.get_by_label("Open").rect();
+    let discord = h.get_by_label("Discord").rect();
+    assert!(open.right() <= discord.left(), "Open {open:?} must not run under Discord {discord:?}");
+    let mut previous_right = f32::MIN;
+    for i in 0..5 {
+        let tab = h.get_by_label(&name(i)).rect();
+        assert!(tab.left() >= previous_right - 0.5, "tabs must not overlap: {i} at {tab:?}");
+        assert!(tab.right() <= open.left() + 0.5, "every tab fits before Open: {i} at {tab:?}, Open at {open:?}");
+        assert!(tab.width() >= 179.0, "tabs keep most of their name: {i} is {tab:?}");
+        previous_right = tab.right();
+    }
+    assert_eq!(enabled(&h, "Scroll tabs left"), None, "no arrows while every tab fits");
+    // Seven don't fit even at their narrowest: arrows show. The newest tab is active and in
+    // sight at the end, so only the left arrow can go further.
+    for i in 5..7 {
+        h.state_mut().open_bytes(&name(i), None, FIXTURE.to_vec()).unwrap();
+    }
+    h.run_steps(6);
+    assert_eq!((enabled(&h, "Scroll tabs left"), enabled(&h, "Scroll tabs right")), (Some(true), Some(false)));
+    let first = h.get_by_label(&name(0)).rect();
+    h.get_by_label("Scroll tabs left").click();
+    h.run_steps(4);
+    assert!(h.get_by_label(&name(0)).rect().left() > first.left(), "the left arrow scrolls the tabs back");
+    assert_eq!(enabled(&h, "Scroll tabs right"), Some(true), "and then there is more to the right");
+    let open = h.get_by_label("Open").rect();
+    let right = h.get_by_label("Scroll tabs right").rect();
+    assert!(right.right() <= open.left() + 0.5 && open.right() <= h.get_by_label("Discord").rect().left());
+    // Twenty: Open stays in sight left of Discord.
+    for i in 0..13 {
+        h.state_mut().open_bytes(&format!("more-{i:02}.pdf"), None, FIXTURE.to_vec()).unwrap();
+    }
+    h.run_steps(4);
+    let open = h.get_by_label("Open").rect();
+    let discord = h.get_by_label("Discord").rect();
+    assert!(open.left() > 0.0 && open.right() <= discord.left(), "Open {open:?} stays in sight left of Discord {discord:?}");
+}
+
 #[test]
 fn narrow_tab_strips_accept_vertical_wheel_scrolling() {
     for width in [600.0, 900.0] {
         let mut h = Harness::builder().with_size(egui::vec2(width, 700.0)).build_eframe(|_cc| {
             let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
             for i in 0..12 {
                 app.open_bytes(&format!("narrow-{i:02}.pdf"), None, FIXTURE.to_vec()).unwrap();
             }
@@ -298,6 +378,52 @@ fn persistence_round_trips_and_tolerates_garbage() {
     b.restore("{not json");
     b.restore("{\"recent\": 5, \"theme\": \"Purple\"}");
     assert_eq!(b.theme, pdfcraft_ui_egui::theme::ThemeKind::Dark);
+}
+
+/// A tool's saved "no fill" (`"fill": null`) clears a fill it had as its default; a missing or
+/// malformed fill keeps it (#340).
+#[test]
+fn a_saved_no_fill_clears_a_comment_tool_default_fill() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let filled = |a: &mut PdfCraftApp| {
+        let mut s = a.comment_prefs.style(CommentTool::Rectangle);
+        s.fill = Some([0.2, 0.4, 0.6]);
+        a.comment_prefs.set_style(CommentTool::Rectangle, s);
+    };
+    let mut a = PdfCraftApp::new();
+    filled(&mut a);
+    a.restore(r#"{"comment_styles":[{"tool":"comment.square","fill":null}]}"#);
+    assert_eq!(a.comment_prefs.style(CommentTool::Rectangle).fill, None, "null clears the fill");
+    let mut b = PdfCraftApp::new();
+    filled(&mut b);
+    b.restore(r#"{"comment_styles":[{"tool":"comment.square","color":[0,0,1]},{"tool":"comment.square","fill":"red"}]}"#);
+    assert_eq!(b.comment_prefs.style(CommentTool::Rectangle).fill, Some([0.2, 0.4, 0.6]), "missing or malformed keeps it");
+    // A round trip keeps a cleared fill cleared.
+    let mut c = PdfCraftApp::new();
+    c.restore(&a.persist());
+    assert_eq!(c.comment_prefs.style(CommentTool::Rectangle).fill, None);
+}
+
+/// Persisted per-tool comment styles go through their clamping setters: hostile or malformed
+/// values are clamped or ignored, never trusted (#340).
+#[test]
+fn comment_style_settings_clamp_and_refuse_hostile_values() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut a = PdfCraftApp::new();
+    a.restore(
+        r#"{"comment_styles":[
+            {"tool":"comment.highlight","color":[2,-1,0.5],"opacity":99,"width":-4},
+            {"tool":"comment.note","color":"yellow","opacity":"none"},
+            {"tool":"comment.note","color":[0.1,null,0.3]},
+            {"tool":"bogus.command","color":[0,0,0]}
+        ]}"#,
+    );
+    // Out-of-range numbers are clamped into range.
+    let st = a.comment_prefs.style(CommentTool::Highlight);
+    assert_eq!((st.color, st.opacity, st.width), ([1.0, 0.0, 0.5], 1.0, 0.5));
+    // A malformed colour is refused whole: the tool keeps its default.
+    let note = a.comment_prefs.style(CommentTool::Note);
+    assert_eq!(note.color, [1.0, 0.82, 0.0], "the default colour stays");
 }
 
 #[test]

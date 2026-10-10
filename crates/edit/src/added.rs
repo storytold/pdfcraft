@@ -4,8 +4,9 @@
 //! parameters (text, font, size, colour, alignment, box; or image and box) kept in the stream
 //! dictionary under `/PCAdded`. That keeps the item editable later (move, resize, retype,
 //! reformat, delete) without content-stream surgery, while every viewer sees ordinary page
-//! content. Boxes are in display space (origin at the bottom-left of the page as shown, after
-//! `/Rotate`), so items stay upright on rotated pages.
+//! content. Boxes are in display space (points, origin at the bottom-left of the page as shown,
+//! after `/UserUnit` and `/Rotate`), so items stay upright on rotated pages; an item records the
+//! `/UserUnit` it was written for.
 
 use std::collections::HashMap;
 
@@ -170,6 +171,15 @@ impl Content {
         }
     }
 
+    /// The same item with its box and text size scaled by `factor`.
+    fn scaled(self, factor: f64) -> Content {
+        match self {
+            _ if factor == 1.0 => self,
+            Content::Text(t) => Content::Text(AddedText { rect: t.rect.map(|v| v * factor), size: t.size * factor, ..t }),
+            Content::Image(i) => Content::Image(AddedImage { rect: i.rect.map(|v| v * factor), ..i }),
+        }
+    }
+
     /// The same item moved/resized to `rect` (text keeps its computed height).
     pub fn with_rect(&self, rect: [f64; 4]) -> Content {
         match self {
@@ -237,6 +247,34 @@ fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
 /// craft-fonts Arabic face.
 fn is_arabic(c: char) -> bool {
     matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x0870..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFC)
+}
+
+/// The first character of `t` that would be drawn as `?`: outside WinAnsiEncoding and not drawn
+/// with the craft-fonts Arabic face (#125), or Arabic that the face can't draw (or that has no
+/// face to draw it). Page-content tools refuse such text; the Add-text editor keeps it open.
+pub fn first_undrawable(t: &AddedText) -> Option<char> {
+    // Arabic that nothing can draw: there's no face, or the face lacks it.
+    if let Some(c) = t.text.chars().find(|c| shaped_arabic(*c) && !pdfcraft_fonts::arabic_has(*c)) {
+        return Some(c);
+    }
+    if pdfcraft_fonts::document_arabic_font().is_none() || !t.text.chars().any(is_arabic) {
+        // Drawn line by line in the item's standard font (`\n` splits lines). Without the face
+        // that is also how `draw` redraws an existing item, so it's checked that way.
+        return t.text.split('\n').find_map(pdfcraft_fonts::first_non_win_ansi);
+    }
+    // What `arabic_layout` leaves to the standard font, exactly as `draw_arabic` splits it.
+    wrapped(t).into_iter().find_map(|(line, rtl)| {
+        let (pieces, _) = arabic_layout(t, &line, rtl).ok()?;
+        pieces.iter().find_map(|p| match p {
+            Piece::Latin(s) => pdfcraft_fonts::first_non_win_ansi(s),
+            Piece::Arabic(_) => None,
+        })
+    })
+}
+
+/// An Arabic character the face shapes and draws (U+061C, a direction mark, is dropped).
+fn shaped_arabic(c: char) -> bool {
+    is_arabic(c) && !is_bidi_control(c)
 }
 
 /// Direction marks, embeddings, overrides and isolates: they steer the order and are not drawn.
@@ -706,6 +744,17 @@ fn validate(c: &Content) -> Result<(), EditError> {
             if (r[2] - r[0]).abs() < 1.0 {
                 return Err(EditError::Invalid("the text box is too narrow".into()));
             }
+            // Without the Arabic face, `draw` decides for the Arabic letters themselves (#403): a new
+            // item is refused with what's missing, and one that already holds Arabic stays movable.
+            // Everything else in it is drawn in the standard font, so it still has to fit.
+            let undrawable = if t.text.chars().any(shaped_arabic) && pdfcraft_fonts::document_arabic_font().is_none() {
+                t.text.split('\n').find_map(|line| line.chars().find(|c| !shaped_arabic(*c) && !pdfcraft_fonts::win_ansi_encodable(*c)))
+            } else {
+                first_undrawable(t)
+            };
+            if let Some(c) = undrawable {
+                return Err(crate::undrawable(c));
+            }
         }
         Content::Image(_) => {
             if (r[2] - r[0]).abs() < 1.0 || (r[3] - r[1]).abs() < 1.0 {
@@ -723,6 +772,7 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
     check(&[page], all.len())?;
     let p = &all[page];
     let view = p.view_matrix(doc);
+    let user_unit = p.user_unit(doc);
     // The page gets its own copy of its resources with the item's fonts and images added, and
     // without the Arabic fonts of the version it replaces.
     let mut pres = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
@@ -741,7 +791,11 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
     doc.update_dict(p.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(pres)))?;
     let mut sd = Dict::new();
     sd.set(b"PCMark".to_vec(), Object::name(TAG));
-    sd.set(b"PCAdded".to_vec(), Object::Dict(params(c)));
+    let mut added = params(c);
+    if user_unit != 1.0 {
+        added.set(b"UserUnit".to_vec(), Object::Real(user_unit));
+    }
+    sd.set(b"PCAdded".to_vec(), Object::Dict(added));
     let stream = Stream::flate(sd, &content);
     match obj {
         Some(r) => {
@@ -778,8 +832,17 @@ pub fn list_added(doc: &Document) -> Vec<Added> {
             if d.name(b"PCMark") != Some(TAG.as_bytes()) {
                 continue;
             }
-            if let Some(c) = d.get(b"PCAdded").and_then(|p| doc.resolve(p).as_dict().cloned()).and_then(|p| parse(doc, &p)) {
-                out.push(Added { page: pi, obj: r, content: c });
+            let Some(params) = d.get(b"PCAdded").and_then(|o| doc.resolve(o).as_dict().cloned()) else { continue };
+            if let Some(c) = parse(doc, &params) {
+                // Display points depend on the page's /UserUnit. An item records the one it was
+                // written for; none means 1, as for items written before display space followed
+                // /UserUnit.
+                let written = params
+                    .get(b"UserUnit")
+                    .and_then(Object::as_f64)
+                    .filter(|u| u.is_finite() && *u >= 1.0)
+                    .map_or(1.0, |u| u.min(pdfcraft_model::MAX_USER_UNIT));
+                out.push(Added { page: pi, obj: r, content: c.scaled(p.user_unit(doc) / written) });
             }
         }
     }

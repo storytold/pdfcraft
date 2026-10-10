@@ -336,7 +336,8 @@ fn fetch_verified(url: &str, path: &Path, sha256: &str) -> Result<()> {
 }
 
 /// `cargo xtask models [DIR]`: fetch the OCR models (`kind = "model"`) into `assets/models/` (git-ignored),
-/// where the app and tests look for them.
+/// where the app and tests look for them. Each comes with its licence (`<file>.LICENCE.txt`), and
+/// `ATTRIBUTION.txt` credits them all, so the release packages can ship the directory as it is.
 pub fn models(args: &[String]) -> Result<()> {
     let root = root();
     let m = load(&root)?;
@@ -344,7 +345,21 @@ pub fn models(args: &[String]) -> Result<()> {
     for p in fetch_all(&m, &dir, "model")? {
         println!("models: {}", p.display());
     }
+    std::fs::write(dir.join("ATTRIBUTION.txt"), models_attribution(&m))?;
     Ok(())
+}
+
+/// The credits shipped beside the models (their licences require attribution).
+fn models_attribution(m: &Manifest) -> String {
+    let mut s = String::from("PdfCraft's text recognition (Scan & OCR) uses these models, unmodified.\n");
+    for f in m.fetched.iter().filter(|f| f.kind == "model") {
+        let _ = write!(
+            s,
+            "\n{}\n  {}\n  by {}\n  from {}\n  licence: {} ({}; full text in {}.LICENCE.txt)\n",
+            f.file, f.title, f.author, f.source, f.licence, f.licence_url, f.file
+        );
+    }
+    s
 }
 
 /// ATTRIBUTION.md, generated from the manifest.
@@ -416,6 +431,18 @@ pub fn render_markdown(m: &Manifest) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The release packages ship assets/models as fetched (#103): every model is credited there.
+    #[test]
+    fn models_attribution_credits_every_model() {
+        let m = load(&root()).unwrap();
+        let text = models_attribution(&m);
+        let models: Vec<_> = m.fetched.iter().filter(|f| f.kind == "model").collect();
+        assert!(!models.is_empty());
+        for f in models {
+            assert!(text.contains(&f.file) && text.contains(&f.author) && text.contains(&f.licence), "{}", f.file);
+        }
+    }
 
     fn asset(path: &str, author: &str, kind: &str, licence: &str) -> Asset {
         Asset {

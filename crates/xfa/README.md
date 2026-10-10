@@ -17,7 +17,7 @@ the automation tools) works on it unchanged. The engine does this when it opens 
   page areas, content areas and media; measurements in mm, cm, in, pt and px; fonts, paragraphs,
   margins, borders (edge order rules), captions with reserves, check-button items, pictures,
   rich text (`exData` XHTML: paragraphs, `br`, bold/italic/underline/size spans, embedded fields),
-  inline JPEG images, lines, rectangles, occurrences, `breakBefore`/`breakAfter`, overflow
+  inline JPEG, PNG and GIF images, lines, rectangles, occurrences, `breakBefore`/`breakAfter`, overflow
   leaders, `columnWidths` and `colSpan`.
 - **Layout** (`layout`): positioned, `tb`, `lr-tb`/`rl-tb`, `table` and `row` layouts; a
   container without a width is as wide as its content; flow across content areas and pages with
@@ -112,8 +112,13 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   allocates is not capped (the same holds for AcroForm JavaScript).
 - **Static XFA forms** (`/NeedsRendering` absent, AcroForm fields present) keep their AcroForm;
   only their data is read and written.
-- Choice lists are text fields; signature, image, barcode and password fields are left blank;
-  PNG and GIF images, `keep` constraints, `subformSet` relations, `rl-tb` is mirrored `lr-tb`,
-  font metrics are the approximate Helvetica ones, and line heights are 1.15 × size.
+- **Field kinds.** Choice lists become combo boxes (editable with `textEntry`) or list boxes
+  (`open="always"`, multi-select with `open="multiSelect"`), with the shown items and the saved
+  values of `<items save="1">` as the options; the data holds saved values, several on
+  separate lines. Password fields are password text fields. Signature fields are `/Sig` fields
+  the app can sign. Image fields show the picture the data or template holds (JPEG, PNG, GIF)
+  but a new picture can't be chosen; barcode fields show their value as text, not as bars.
+- Missing: `keep` constraints, `subformSet` relations, `rl-tb` is mirrored `lr-tb`, font
+  metrics are the approximate Helvetica ones, and line heights are 1.15 × size.
 - Acrobat cannot be an oracle here (clean-room rules): layout follows the specification, and
   fidelity has been checked by eye on real government forms, not pixel-compared.

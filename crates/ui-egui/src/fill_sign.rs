@@ -1,7 +1,7 @@
 //! Fill & Sign (Acrobat's Fill & Sign tool, execution plan M5.7): type text onto the page, place
-//! ✓ ✕ ● ─ marks and today's date, and sign with a drawn signature. Everything is an annotation
-//! (typewriter text, PdfCraft-drawn stamps, ink), so it can be moved, deleted and undone like
-//! any comment.
+//! ✓ ✕ ● ─ marks and today's date (in Preferences ▸ Date format), and sign with a drawn
+//! signature. Everything is an annotation (typewriter text, PdfCraft-drawn stamps, ink), so it
+//! can be moved, deleted and undone like any comment.
 
 use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::{Edit, FillMark, NewAnnotation, Shape, SignatureImage, Style};
@@ -190,38 +190,50 @@ pub fn typed(page: usize, at: [f64; 2], text: &str, author: &str) -> Edit {
 }
 
 /// Place a saved signature (strokes normalised to a 0–1 box, y up) with its left edge at `at`,
-/// 150 pt wide.
-pub fn signature_at(page: usize, at: [f64; 2], strokes: &[Vec<[f32; 2]>], author: &str) -> Option<Edit> {
+/// 150 pt wide. Left, centred and upright are as displayed on a page turned by `rotation` (its
+/// `/Rotate`), so the strokes are turned back into user space.
+pub fn signature_at(page: usize, at: [f64; 2], strokes: &[Vec<[f32; 2]>], rotation: i64, author: &str) -> Option<Edit> {
     let w = 150.0;
     let (min_y, max_y) = strokes.iter().flatten().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p[1]), b.max(p[1])));
     if !min_y.is_finite() {
         return None;
     }
     let h = f64::from(max_y - min_y).max(0.05) * w;
+    // Displayed right and up as user-space unit vectors (the identity on an unturned page).
+    let [a, b, c, d, ..] = pdfcraft_model::view_matrix_for(rotation, [0.0; 4]);
     let strokes: Vec<Vec<[f64; 2]>> = strokes
         .iter()
         .filter(|s| !s.is_empty())
-        .map(|s| s.iter().map(|p| [at[0] + f64::from(p[0]) * w, at[1] - h / 2.0 + f64::from(p[1] - min_y) * w]).collect())
+        .map(|s| {
+            s.iter()
+                .map(|p| {
+                    let (dx, dy) = (f64::from(p[0]) * w, f64::from(p[1] - min_y) * w - h / 2.0);
+                    [at[0] + a * dx + c * dy, at[1] + b * dx + d * dy]
+                })
+                .collect()
+        })
         .collect();
     (!strokes.is_empty()).then(|| new(page, Shape::Signature { strokes }, String::new(), author))
 }
 
-/// Place typed text in the script font with its left edge at `at`, `height` points tall.
-pub fn typed_signature_at(page: usize, at: [f64; 2], text: &str, height: f64, author: &str) -> Option<Edit> {
-    pdfcraft_engine::typed_signature_shape(at, text, height).map(|shape| new(page, shape, String::new(), author))
+/// Place typed text in the script font with its left edge at `at`, `height` points tall, upright
+/// as displayed on a page turned by `rotation`.
+pub fn typed_signature_at(page: usize, at: [f64; 2], text: &str, height: f64, rotation: i64, author: &str) -> Option<Edit> {
+    pdfcraft_engine::typed_signature_shape(at, text, height, rotation).map(|shape| new(page, shape, String::new(), author))
 }
 
-/// Place a saved signature or initials.
+/// Place a saved signature or initials, upright as `info`'s page is displayed.
 pub fn place(page: usize, info: &PageInfo, at: [f64; 2], sig: &SavedSig, initials: bool, author: &str) -> Option<Edit> {
+    let rotation = i64::from(info.rotation);
     match sig {
-        SavedSig::Drawn(strokes) => signature_at(page, at, strokes, author),
+        SavedSig::Drawn(strokes) => signature_at(page, at, strokes, rotation, author),
         SavedSig::Image(image) => image.edit(page, info, at, initials, author),
         SavedSig::Typed(text) => {
             let [left, bottom, right, top] = pdfcraft_engine::script_outline(text).bounds();
             let height = if initials { 24.0_f64 } else { 32.0_f64 };
             // Keep long names within the same placement width as drawn signatures.
             let height = height.min(150.0 * (top - bottom).max(0.1) / (right - left).max(0.01));
-            typed_signature_at(page, at, text, height, author)
+            typed_signature_at(page, at, text, height, rotation, author)
         }
     }
 }
@@ -367,7 +379,7 @@ pub(crate) fn page_input(
     initials: Option<&SavedSig>,
     preview: &mut Option<(SavedSig, egui::TextureHandle)>,
     author: &str,
-    today: (i64, u32, u32),
+    date_text: &Result<String, String>,
 ) -> Option<FillAction> {
     let pointer = ui.input(|i| i.pointer.hover_pos())?;
     if !resp.contains_pointer() || !xf.rect.contains(pointer) {
@@ -397,10 +409,10 @@ pub(crate) fn page_input(
             view.fill_text = Some(TypeBox { page, at: [at[0], at[1] + TEXT_SIZE * 0.6], text: String::new(), focus: true });
             None
         }
-        FillTool::Date => {
-            let (y, m, d) = today;
-            Some(FillAction::Edit(Box::new(typed(page, [at[0], at[1] + TEXT_SIZE * 0.6], &format!("{m}/{d}/{y}"), author))))
-        }
+        FillTool::Date => Some(match date_text {
+            Ok(text) => FillAction::Edit(Box::new(typed(page, [at[0], at[1] + TEXT_SIZE * 0.6], text, author))),
+            Err(why) => FillAction::Refused(why.clone()),
+        }),
         FillTool::Signature => match signature {
             Some(s) => place(page, p, at, s, false, author).map(|e| FillAction::Signature(Box::new(e))),
             None => Some(FillAction::CreateSignature),
@@ -428,6 +440,8 @@ pub enum FillAction {
     CreateSignature,
     /// No initials yet.
     CreateInitials,
+    /// Nothing placed, and why (today's date can't be written into the PDF yet).
+    Refused(String),
 }
 
 /// The in-place editor for typed text. Returns the edit once committed.
@@ -692,7 +706,8 @@ impl crate::PdfCraftApp {
     }
 
     fn use_signature_image(&mut self, result: Result<SignatureImage, String>) {
-        match result {
+        let cleaned = result.and_then(|image| image.remove_white_background(245, 35).map_err(|e| e.to_string()));
+        match cleaned {
             Ok(image) => {
                 self.signature_draft.image = Some(image);
                 self.toast = None;

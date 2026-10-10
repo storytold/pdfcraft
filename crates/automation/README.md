@@ -28,11 +28,27 @@ mcp::McpServer::new(a).serve(stdin, stdout)?             // newline-delimited JS
 - `doc_close` refuses to drop unsaved changes unless `discard_changes: true`. `doc_save` writes atomically, incrementally in place, and in full for a new path.
 - With a root set, every read and write path must resolve inside it (symlinks and `..` included). Relative paths resolve inside the root, and `..` is resolved by name before the check. Every path outside the root gets the same refusal (`<path> is outside the allowed directory <root>`), whether or not it exists, so a confined agent can't probe the rest of the disk; on Windows another network share or device path (`\\host\share`, `\\?\UNC\…`, `\\.\…`) is refused without being contacted. "Not found" and other filesystem errors are reported only for paths inside the root. Tools that write several files into a folder name them after the document or input file, with separators, colons and control characters replaced by `_`, so a name can't lead them out of the folder. The root itself must be a folder.
 
+## Shared field properties
+
+`form_set_props` accepts either `field` (one name) or `fields` (1–1000 unique names):
+
+```json
+{"doc": 1, "fields": ["first_name", "last_name"], "required": true,
+ "appearance": {"width": 3, "border": "#1473E6"}}
+```
+
+The batch is atomic and creates one undo step. A missing or locked field, invalid option,
+unknown argument or malformed appearance refuses the whole edit. Set `locked: false` to
+unlock and change fields together. Only supplied properties change: each field/widget keeps
+its other colours, fonts, values and unknown PDF dictionary keys. `"none"` removes a border
+or fill colour. Names, rectangles and rotations require the single-field form. Results keep
+`field` for single edits and return `fields` for batches. CLI and MCP use the same tool.
+
 ## MCP server
 
 **Opt-in only.** Nothing starts it automatically, and it opens no port. It runs while `pdfcraft-cli mcp [--root DIR]` runs, normally launched by an agent from its MCP configuration. It stops when stdin closes. The CLI's `mcp` Cargo feature (on by default) compiles it out entirely when disabled.
 
-`pdfcraft-cli mcp --compact` (or `McpServer::with_compact(true)`) keeps `tools/list` short for agents with small context budgets. It lists only the core tools (`mcp::COMPACT_CORE_TOOLS`: open, info, save, close, render, text extract and find, combine, split, undo) plus two meta tools: `tool_search` (optional `query` and `category`, the name prefix; or `name` for one tool's full `input_schema`) and `tool_call` (`name` and `arguments`, run through the same `Automation::call`). `tools/call` by name keeps working for every tool, and the server instructions mention the meta tools. Without the flag nothing changes.
+`pdfcraft-cli mcp --compact` (or `McpServer::with_compact(true)`) keeps `tools/list` short for agents with small context budgets. It lists only the core tools (`mcp::COMPACT_CORE_TOOLS`: open, info, save, close, render, text extract and find, combine, split, undo) plus the common command/inspection/preview tools and two meta tools: `tool_search` (optional `query` and `category`, the name prefix; or `name` for one tool's full `input_schema`) and `tool_call` (`name` and `arguments`, run through the same `Automation::call`). `tools/call` by name keeps working for every tool, and the server instructions mention the meta tools. Without the flag nothing changes.
 
 Implemented: `initialize` (protocol 2025-06-18, 2025-03-26, 2024-11-05), `ping`, `tools/list` (with `readOnlyHint`/`destructiveHint` annotations), `tools/call` (JSON results also returned as `structuredContent`; images as `image/png`), and `resources/list`, `resources/templates/list` and `resources/read`. The resources expose the open documents read-only: `pdfcraft://doc/{doc}/info` (JSON), `…/text`, `…/page/{page}/text` and `…/page/{page}/image{?dpi}` (PNG, 1–600 dpi). Tool failures come back as `isError: true` results, so the agent can read and recover from them.
 
@@ -42,3 +58,29 @@ Implemented: `initialize` (protocol 2025-06-18, 2025-03-26, 2024-11-05), `ping`,
 2. Add a `ToolDef` in `src/tools.rs`: a precise description, the schema, `ro()`/`destructive()`, and `cmd()` if a registry command exists.
 3. Handle it in `Automation::call`, validating pages and positions with the existing helpers.
 4. Add an end-to-end test in `tests/automation.rs`. `tool_table_is_well_formed` checks names, schemas and command links.
+
+
+## Common command tools
+
+Following FilmCraft's MCP conventions, `command_list {doc?, filter?, enabled_only?}` keeps its
+`{commands: [...]}` result and adds each mapped tool's parameter schema. `command_run {id, params?}`
+runs that command through its existing headless tool: include `doc` and other tool arguments in
+`params`. Commands without a headless mapping return a tool error. Unknown parameter keys are
+ignored with a `warnings` array; required values and paths still go through the original validation.
+
+`command_batch {steps: [{id, params?}], stop_on_error?}` returns `completed`, `failed`, and per-step
+`{ok, result?, error?}` entries. The default is to stop at the first error; earlier edits remain.
+MCP marks a batch with any failed steps as `isError`, including through compact `tool_call`.
+`doc_inspect {doc?}` returns one document's info, or `{documents: [...]}` for all open documents.
+`render_preview {doc?, page?, max_side?}` returns a PNG (page defaults to 1, maximum side defaults
+to 1024, allowed 1–4096). Omit `doc` only when exactly one document is open.
+
+All task tools remain available; compact mode includes the five common tools. Every MCP tool has
+all four annotation hints. Unknown top-level argument keys return JSON-RPC `-32602` with the
+accepted keys; failures in the invoked tool remain `isError` results. An escaped tool panic is
+reported as an internal tool error, and the server continues serving.
+
+Exports complete synchronously. `progressToken` and cancellation notifications are harmlessly
+ignored; no background-job or cancellation behavior is added.
+
+Session resources `pdfcraft://document` and `pdfcraft://commands`, and the refusal of unknown argument keys, are described in [docs/mcp.md](../../docs/mcp.md).

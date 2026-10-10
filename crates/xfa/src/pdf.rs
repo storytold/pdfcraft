@@ -29,11 +29,39 @@ pub fn jpeg_size(data: &[u8]) -> Option<(u32, u32)> {
 }
 
 fn jpeg_frame(data: &[u8]) -> Option<(u32, u32, u8)> {
+    jpeg_info(data).map(|(w, h, c, _)| (w, h, c))
+}
+
+/// The SHA-256 of a picture's bytes, to find its XObject again.
+fn content_hash(data: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(data).into()
+}
+
+fn hex32(h: &[u8; 32]) -> Vec<u8> {
+    h.iter().flat_map(|b| format!("{b:02x}").into_bytes()).collect()
+}
+
+fn parse_hex32(s: &[u8]) -> Option<[u8; 32]> {
+    let mut out = [0u8; 32];
+    if s.len() != 64 {
+        return None;
+    }
+    for (o, pair) in out.iter_mut().zip(s.as_chunks::<2>().0) {
+        *o = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(out)
+}
+
+/// Width, height, components and whether an Adobe APP14 segment is present (such CMYK JPEGs
+/// store inverted values).
+fn jpeg_info(data: &[u8]) -> Option<(u32, u32, u8, bool)> {
     if data.get(0..2)? != [0xFF, 0xD8] {
         return None;
     }
     let mut i = 2usize;
     let mut guard = 0;
+    let mut adobe = false;
     while i + 4 <= data.len() && guard < 10_000 {
         guard += 1;
         if *data.get(i)? != 0xFF {
@@ -50,12 +78,15 @@ fn jpeg_frame(data: &[u8]) -> Option<(u32, u32, u8)> {
             continue;
         }
         let len = u16::from_be_bytes([*data.get(i + 2)?, *data.get(i + 3)?]) as usize;
+        if marker == 0xEE && data.get(i + 4..i + 9) == Some(b"Adobe") {
+            adobe = true;
+        }
         let sof = matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC);
         if sof {
             let h = u16::from_be_bytes([*data.get(i + 5)?, *data.get(i + 6)?]) as u32;
             let w = u16::from_be_bytes([*data.get(i + 7)?, *data.get(i + 8)?]) as u32;
             let comps = *data.get(i + 9)?;
-            return (w > 0 && h > 0).then_some((w, h, comps));
+            return (w > 0 && h > 0).then_some((w, h, comps, adobe));
         }
         i = i.checked_add(2)?.checked_add(len.max(2))?;
     }
@@ -125,8 +156,20 @@ pub struct Written {
     pub warnings: Vec<String>,
 }
 
+/// On an image XObject written for a picture: the SHA-256 (hex) of the picture's bytes. A
+/// re-layout (after every script event) finds the XObjects on the pages it replaces by this,
+/// and reuses them instead of decoding and embedding the same picture again. Nothing is kept
+/// in the catalog, and a match is by the picture's own hash, never by a map read from the file.
+const IMAGE_SHA_KEY: &[u8] = b"PCXfaSHA256";
+/// Most pages searched for earlier pictures.
+const MAX_PAGES_SEARCHED: usize = 10_000;
+/// Most pictures remembered.
+const MAX_REMEMBERED_IMAGES: usize = 1000;
+
 struct Emitter<'a> {
     doc: &'a mut Document,
+    /// Image XObjects by content hash: those from earlier passes, then this one's.
+    images: HashMap<[u8; 32], ObjRef>,
     fields: Vec<ObjRef>,
     radio_groups: HashMap<String, (ObjRef, Vec<ObjRef>)>,
     /// The on state selected in each radio group, from the data.
@@ -173,10 +216,13 @@ impl Emitter<'_> {
         }
         let mut top_level = true;
         match &w.kind {
-            WidgetKind::Text | WidgetKind::Date(_) => {
+            WidgetKind::Text | WidgetKind::Date(_) | WidgetKind::Password => {
                 d.set(b"FT".to_vec(), Object::name("Tx"));
                 if w.multiline {
                     ff |= 1 << 12;
+                }
+                if w.kind == WidgetKind::Password {
+                    ff |= 1 << 13;
                 }
                 if let Some(m) = w.max_chars {
                     d.set(b"MaxLen".to_vec(), Object::Int(m.min(100_000) as i64));
@@ -201,6 +247,63 @@ impl Emitter<'_> {
                     aa.set(b"K".to_vec(), js_action(&format!("AFDate_KeystrokeEx(\"{pattern}\");")));
                     d.set(b"AA".to_vec(), Object::Dict(aa));
                 }
+            }
+            WidgetKind::Choice { options, list_box, multi, editable } => {
+                d.set(b"FT".to_vec(), Object::name("Ch"));
+                if !list_box {
+                    ff |= 1 << 17;
+                    if *editable {
+                        ff |= 1 << 18;
+                    }
+                }
+                if *multi {
+                    ff |= 1 << 21;
+                }
+                let opt: Vec<Object> = options
+                    .iter()
+                    .map(|(saved, shown)| {
+                        if saved == shown {
+                            Object::String(PdfString::text(shown))
+                        } else {
+                            Object::Array(vec![Object::String(PdfString::text(saved)), Object::String(PdfString::text(shown))])
+                        }
+                    })
+                    .collect();
+                d.set(b"Opt".to_vec(), Object::Array(opt));
+                let q = match w.h_align {
+                    crate::model::HAlign::Center => 1,
+                    crate::model::HAlign::Right => 2,
+                    _ => 0,
+                };
+                if q != 0 {
+                    d.set(b"Q".to_vec(), Object::Int(q));
+                }
+                let values = |v: &str| -> Object {
+                    let picked: Vec<&str> = if *multi { v.lines().filter(|l| !l.is_empty()).collect() } else { vec![v] };
+                    match picked.as_slice() {
+                        [one] => Object::String(PdfString::text(one)),
+                        many => Object::Array(many.iter().map(|s| Object::String(PdfString::text(s))).collect()),
+                    }
+                };
+                if let Some(v) = &w.value {
+                    d.set(b"V".to_vec(), values(v));
+                    // The selected indices (ISO 32000-2 Table 231): ascending, each once. Where
+                    // two options save the same value the first is meant; the data can't say.
+                    let picked: Vec<&str> = if *multi { v.lines().filter(|l| !l.is_empty()).collect() } else { vec![v.as_str()] };
+                    let mut idx: Vec<usize> = picked.iter().filter_map(|p| options.iter().position(|(saved, _)| saved == p)).collect();
+                    idx.sort_unstable();
+                    idx.dedup();
+                    if !idx.is_empty() {
+                        d.set(b"I".to_vec(), Object::Array(idx.into_iter().map(|i| Object::Int(i as i64)).collect()));
+                    }
+                }
+                if let Some(v) = &w.default {
+                    // Already a saved value (the layout maps defaults as it maps data).
+                    d.set(b"DV".to_vec(), values(v));
+                }
+            }
+            WidgetKind::Signature => {
+                d.set(b"FT".to_vec(), Object::name("Sig"));
             }
             WidgetKind::CheckBox { on, .. } => {
                 d.set(b"FT".to_vec(), Object::name("Btn"));
@@ -309,6 +412,85 @@ impl Emitter<'_> {
         Ok(Some(r))
     }
 
+    /// An image XObject for a picture: JPEGs as they are (`DCTDecode`), PNGs and GIFs decoded
+    /// to samples (`FlateDecode`, with a soft mask for transparency). `None`, with a warning,
+    /// for anything else.
+    fn image_xobject(&mut self, data: &[u8], content_type: &str) -> Option<ObjRef> {
+        let hash = content_hash(data);
+        if let Some(&r) = self.images.get(&hash)
+            && let Object::Stream(s) = &*self.doc.get(r)
+            && s.dict.name(b"Subtype") == Some(b"Image")
+        {
+            return Some(r);
+        }
+        let r = self.new_image_xobject(data, content_type, &hash)?;
+        if self.images.len() < MAX_REMEMBERED_IMAGES {
+            self.images.insert(hash, r);
+        }
+        Some(r)
+    }
+
+    fn new_image_xobject(&mut self, data: &[u8], content_type: &str, hash: &[u8; 32]) -> Option<ObjRef> {
+        let what = if content_type.is_empty() { "picture" } else { content_type };
+        let mut d = Dict::new();
+        d.set(IMAGE_SHA_KEY.to_vec(), Object::String(PdfString::literal(hex32(hash))));
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        match crate::image::kind(data) {
+            Some(crate::image::Kind::Jpeg) => {
+                let Some((iw, ih, comps, adobe)) = jpeg_info(data) else {
+                    self.warnings.push(format!("a {what} image is not a readable JPEG and is left out"));
+                    return None;
+                };
+                d.set(b"Width".to_vec(), Object::Int(i64::from(iw)));
+                d.set(b"Height".to_vec(), Object::Int(i64::from(ih)));
+                d.set(
+                    b"ColorSpace".to_vec(),
+                    Object::name(match comps {
+                        1 => "DeviceGray",
+                        4 => "DeviceCMYK",
+                        _ => "DeviceRGB",
+                    }),
+                );
+                if comps == 4 && adobe {
+                    // Adobe APP14 JPEGs store inverted CMYK.
+                    d.set(b"Decode".to_vec(), Object::Array([1, 0, 1, 0, 1, 0, 1, 0].iter().map(|v| Object::Int(*v)).collect()));
+                }
+                d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+                Some(self.doc.add(Object::Stream(Stream::from_raw(d, data.to_vec()))))
+            }
+            Some(crate::image::Kind::Png | crate::image::Kind::Gif) => {
+                let img = match crate::image::decode(data) {
+                    Ok(img) => img,
+                    Err(why) => {
+                        self.warnings.push(why);
+                        return None;
+                    }
+                };
+                d.set(b"Width".to_vec(), Object::Int(i64::from(img.width)));
+                d.set(b"Height".to_vec(), Object::Int(i64::from(img.height)));
+                d.set(b"ColorSpace".to_vec(), Object::name(img.color_space));
+                if let Some(alpha) = &img.alpha {
+                    let mut m = Dict::new();
+                    m.set(b"Type".to_vec(), Object::name("XObject"));
+                    m.set(b"Subtype".to_vec(), Object::name("Image"));
+                    m.set(b"Width".to_vec(), Object::Int(i64::from(img.width)));
+                    m.set(b"Height".to_vec(), Object::Int(i64::from(img.height)));
+                    m.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+                    m.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+                    let mr = self.doc.add(Object::Stream(Stream::flate(m, alpha)));
+                    d.set(b"SMask".to_vec(), Object::Ref(mr));
+                }
+                Some(self.doc.add(Object::Stream(Stream::flate(d, &img.samples))))
+            }
+            None => {
+                self.warnings.push(format!("a {what} image is not a JPEG, PNG or GIF and is left out"));
+                None
+            }
+        }
+    }
+
     fn page(&mut self, page: &Page, pages_ref: ObjRef) -> Result<ObjRef, XfaError> {
         let page_ref = self.doc.add(Object::Dict(Dict::new()));
         let mut content: Vec<u8> = Vec::new();
@@ -346,33 +528,7 @@ impl Emitter<'_> {
                     content.extend_from_slice(b" Tj ET\n");
                 }
                 Item::Image { rect, data, content_type } => {
-                    let Some((iw, ih, comps)) = jpeg_frame(data) else {
-                        self.warnings.push(format!(
-                            "a {} image is not a JPEG and is left out",
-                            if content_type.is_empty() { "picture" } else { content_type.as_str() }
-                        ));
-                        continue;
-                    };
-                    let mut d = Dict::new();
-                    d.set(b"Type".to_vec(), Object::name("XObject"));
-                    d.set(b"Subtype".to_vec(), Object::name("Image"));
-                    d.set(b"Width".to_vec(), Object::Int(i64::from(iw)));
-                    d.set(b"Height".to_vec(), Object::Int(i64::from(ih)));
-                    d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
-                    d.set(
-                        b"ColorSpace".to_vec(),
-                        Object::name(match comps {
-                            1 => "DeviceGray",
-                            4 => "DeviceCMYK",
-                            _ => "DeviceRGB",
-                        }),
-                    );
-                    if comps == 4 {
-                        // Adobe APP14 JPEGs store inverted CMYK.
-                        d.set(b"Decode".to_vec(), Object::Array([1, 0, 1, 0, 1, 0, 1, 0].iter().map(|v| Object::Int(*v)).collect()));
-                    }
-                    d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
-                    let r = self.doc.add(Object::Stream(Stream::from_raw(d, data.as_ref().clone())));
+                    let Some(r) = self.image_xobject(data, content_type) else { continue };
                     let name = format!("Im{i}");
                     xobjects.set(name.clone().into_bytes(), Object::Ref(r));
                     content.extend(format!("q {} 0 0 {} {} {} cm /{name} Do Q\n", n(rect.w), n(rect.h), n(rect.x), n(h - rect.bottom())).bytes());
@@ -413,6 +569,30 @@ impl Emitter<'_> {
 
 /// Replace the document's pages with the laid-out form and add its fields to the AcroForm. The
 /// XFA packets and everything else in the catalog stay.
+/// The image XObjects earlier passes wrote for pictures, by the SHA-256 each records: those on
+/// the pages under `pages` (the flat page list [`write_form`] writes).
+fn earlier_images(doc: &Document, pages: ObjRef) -> HashMap<[u8; 32], ObjRef> {
+    let mut out = HashMap::new();
+    let kids = doc.get(pages).as_dict().and_then(|d| d.get(b"Kids").map(|k| doc.resolve(k))).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+    for page in kids.iter().filter_map(Object::as_ref).take(MAX_PAGES_SEARCHED) {
+        let page = doc.get(page);
+        let Some(resources) = page.as_dict().and_then(|p| p.get(b"Resources")).map(|r| doc.resolve(r)) else { continue };
+        let Some(xobjects) = resources.as_dict().and_then(|r| r.get(b"XObject")).map(|x| doc.resolve(x)) else { continue };
+        for r in xobjects.as_dict().into_iter().flat_map(|x| x.iter()).filter_map(|(_, v)| v.as_ref()) {
+            if out.len() >= MAX_REMEMBERED_IMAGES {
+                return out;
+            }
+            if let Object::Stream(s) = &*doc.get(r)
+                && s.dict.name(b"Subtype") == Some(b"Image")
+                && let Some(hash) = s.dict.get(IMAGE_SHA_KEY).and_then(Object::as_string).and_then(|h| parse_hex32(&h.bytes))
+            {
+                out.insert(hash, r);
+            }
+        }
+    }
+    out
+}
+
 pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> {
     let catalog_ref = doc.root().ok_or_else(|| XfaError::Malformed("the document has no catalog".into()))?;
     let mut catalog = doc.get(catalog_ref).as_dict().cloned().ok_or_else(|| XfaError::Malformed("the catalog is not a dictionary".into()))?;
@@ -428,8 +608,17 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
             r
         }
     };
-    let mut em =
-        Emitter { doc, fields: Vec::new(), radio_groups: HashMap::new(), radio_selected: HashMap::new(), field_count: 0, warnings: Vec::new() };
+    // Pictures embedded by earlier passes, from the pages this pass replaces.
+    let images = earlier_images(doc, pages_ref);
+    let mut em = Emitter {
+        doc,
+        images,
+        fields: Vec::new(),
+        radio_groups: HashMap::new(),
+        radio_selected: HashMap::new(),
+        field_count: 0,
+        warnings: Vec::new(),
+    };
     let mut kids = Vec::new();
     for page in &form.pages {
         kids.push(Object::Ref(em.page(page, pages_ref)?));

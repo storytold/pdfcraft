@@ -36,6 +36,8 @@ pub enum OutlineError {
     IntoItself,
     #[error("the title must not be empty")]
     EmptyTitle,
+    #[error("this document has no tagged headings to make bookmarks from")]
+    NoEntries,
     #[error("{0}")]
     Organize(#[from] OrganizeError),
     #[error("{0}")]
@@ -191,9 +193,13 @@ fn recount(doc: &mut Document) -> Result<()> {
 fn destination(doc: &Document, page: usize) -> Result<Object> {
     let pages = walk(doc)?;
     let (p, _) = pages.get(page).ok_or(OrganizeError::NoSuchPage(page))?;
-    // `/XYZ null null null`: go to the page, keeping the reader's zoom (what Acrobat writes for
-    // a new bookmark when the view has no specific position).
-    Ok(Object::Array(vec![Object::Ref(*p), Object::name("XYZ"), Object::Null, Object::Null, Object::Null]))
+    Ok(go_to(*p))
+}
+
+/// `/XYZ null null null`: go to the page, keeping the reader's zoom (what Acrobat writes for a
+/// new bookmark when the view has no specific position).
+fn go_to(page: ObjRef) -> Object {
+    Object::Array(vec![Object::Ref(page), Object::name("XYZ"), Object::Null, Object::Null, Object::Null])
 }
 
 /// Add a bookmark titled `title` that goes to `page` (0-based), as child `index` of
@@ -220,6 +226,67 @@ pub fn add_bookmark(doc: &mut Document, parent_path: &[usize], index: usize, tit
     let mut path = parent_path.to_vec();
     path.push(at);
     Ok(path)
+}
+
+/// One bookmark of a generated tree (New Bookmarks from Structure).
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutlineEntry {
+    /// 1 = directly under the new parent; deeper levels nest under the last shallower entry.
+    pub level: u8,
+    pub title: String,
+    pub page: usize,
+    /// The structure element it stands for (`/SE`).
+    pub element: Option<ObjRef>,
+}
+
+/// Add a new top-level bookmark `parent_title` (first in the list) holding `entries` nested by
+/// level, as Acrobat does for bookmarks made from structure; everything starts expanded.
+/// Returns the parent's path.
+pub fn add_bookmark_tree(doc: &mut Document, parent_title: &str, entries: &[OutlineEntry]) -> Result<Vec<usize>> {
+    if entries.is_empty() {
+        return Err(OutlineError::NoEntries);
+    }
+    let pages = walk(doc)?;
+    let targets = entries
+        .iter()
+        .map(|e| pages.get(e.page).map(|p| p.0).ok_or(OrganizeError::NoSuchPage(e.page)))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut d = Dict::new();
+    d.set(b"Title".to_vec(), Object::String(PdfString::text(parent_title)));
+    let parent = doc.add(Object::Dict(d));
+    // (level, item, its children so far); the bottom is the new parent.
+    let mut stack: Vec<(u8, ObjRef, Vec<ObjRef>)> = vec![(0, parent, Vec::new())];
+    let mut done: Vec<(ObjRef, Vec<ObjRef>)> = Vec::new();
+    for (e, page) in entries.iter().zip(targets) {
+        let mut d = Dict::new();
+        d.set(b"Title".to_vec(), Object::String(PdfString::text(&e.title)));
+        d.set(b"Dest".to_vec(), go_to(page));
+        if let Some(se) = e.element {
+            d.set(b"SE".to_vec(), Object::Ref(se));
+        }
+        let item = doc.add(Object::Dict(d));
+        while stack.len() > 1 && stack.last().is_some_and(|s| s.0 >= e.level) {
+            done.extend(stack.pop().map(|(_, r, kids)| (r, kids)));
+        }
+        if let Some(top) = stack.last_mut() {
+            top.2.push(item);
+        }
+        stack.push((e.level, item, Vec::new()));
+    }
+    done.extend(stack.into_iter().map(|(_, r, kids)| (r, kids)));
+    for (r, kids) in &done {
+        relink(doc, *r, kids)?;
+        if !kids.is_empty() && *r != parent {
+            put(doc, *r, b"Count", Some(Object::Int(1)))?;
+        }
+    }
+    let root = container(doc, &[])?;
+    let mut top = children_of(doc, root, &mut HashSet::from([root]));
+    top.insert(0, parent);
+    relink(doc, root, &top)?;
+    put(doc, parent, b"Count", Some(Object::Int(1)))?;
+    recount(doc)?;
+    Ok(vec![0])
 }
 
 /// Change a bookmark's title.

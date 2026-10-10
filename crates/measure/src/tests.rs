@@ -92,7 +92,7 @@ fn standard_annotations_captions_restyle_move_and_unknown_keys() {
     let (r, dict) = annot(&d, 0, 0).unwrap();
     assert_eq!(dict.name(b"IT"), Some(&b"LineDimension"[..]));
     d.update_dict(r, |d| d.set(b"VendorKey".to_vec(), Object::Int(42))).unwrap();
-    pdfcraft_annot::set_style(&mut d, 0, 0, Some([1.0, 0.0, 0.0]), None, Some(2.0), &meta).unwrap();
+    pdfcraft_annot::set_style(&mut d, 0, 0, Some([1.0, 0.0, 0.0]), None, Some(2.0), None, &meta).unwrap();
     let (_, dict) = annot(&d, 0, 0).unwrap();
     assert_eq!(dict.int(b"VendorKey"), Some(42));
     let ap = d.resolve(dict.get(b"AP").unwrap());
@@ -318,4 +318,17 @@ fn indirect_viewport_array_stays_indirect() {
     let r = page.dict.get(b"VP").and_then(Object::as_ref).expect("VP stays a reference");
     assert_eq!(d.get(r).as_array().map(Vec::len), Some(1));
     close(scale_at(&d, 0, [50.0, 50.0]).unwrap().x, 1.0);
+}
+
+#[test]
+fn user_unit_is_read_as_acrobat_reads_it() {
+    // Values below 1 and values that aren't numbers count as 1, values over 75,000 as 75,000.
+    for (attrs, unit) in [("/UserUnit 0", 1.0), ("/UserUnit 0.5", 1.0), ("/UserUnit (2)", 1.0), ("/UserUnit 100000", 75_000.0)] {
+        let d = fixture("", attrs, &[]);
+        close(scale_at(&d, 0, [50.0, 50.0]).unwrap().x, unit / 72.0);
+        let user = view_to_user(&d, 0, [36.0, 72.0]).unwrap();
+        let view = user_to_view(&d, 0, user).unwrap();
+        close(view[0], 36.0);
+        close(view[1], 72.0);
+    }
 }

@@ -39,15 +39,51 @@ pub fn helvetica_width(s: &str, size: f64) -> f64 {
     units * size / 1000.0
 }
 
+/// Approximate advance of `s` at `size` points in a CJK font: full-width characters take one
+/// em, half-width forms half of one, and everything else is measured as Helvetica.
+pub fn cjk_width(s: &str, size: f64) -> f64 {
+    let mut buf = [0u8; 4];
+    s.chars()
+        .map(|c| match c {
+            '\u{ff61}'..='\u{ffdc}' | '\u{ffe8}'..='\u{ffee}' => size * 0.5,
+            _ if is_wide(c) => size,
+            _ => helvetica_width(c.encode_utf8(&mut buf), size),
+        })
+        .sum()
+}
+
+/// East Asian wide and full-width characters (Unicode UAX #11 W and F, by block).
+fn is_wide(c: char) -> bool {
+    matches!(c,
+        '\u{1100}'..='\u{115f}' // Hangul Jamo initials
+        | '\u{2e80}'..='\u{303e}' // CJK radicals, Kangxi, ideographic description, CJK symbols
+        | '\u{3041}'..='\u{33ff}' // kana, Bopomofo, Hangul compatibility, Kanbun, CJK compatibility
+        | '\u{3400}'..='\u{4dbf}' // CJK extension A
+        | '\u{4e00}'..='\u{9fff}' // CJK unified ideographs
+        | '\u{a000}'..='\u{a4cf}' // Yi
+        | '\u{ac00}'..='\u{d7a3}' // Hangul syllables
+        | '\u{f900}'..='\u{faff}' // CJK compatibility ideographs
+        | '\u{fe30}'..='\u{fe4f}' // CJK compatibility forms
+        | '\u{ff00}'..='\u{ff60}' // full-width forms
+        | '\u{ffe0}'..='\u{ffe6}'
+        | '\u{20000}'..='\u{3fffd}' // supplementary ideographic planes
+    )
+}
+
 /// Greedy line breaking within `width` points (paragraphs split on newlines; words longer
 /// than a line are broken by character).
 pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
+    wrap_with(text, size, width, helvetica_width)
+}
+
+/// [`wrap`], measuring with `measure` (for example [`cjk_width`]).
+pub fn wrap_with(text: &str, size: f64, width: f64, measure: impl Fn(&str, f64) -> f64) -> Vec<String> {
     let mut lines = Vec::new();
     for para in text.split(['\n', '\r']) {
         let mut line = String::new();
         for word in para.split(' ') {
             let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            if helvetica_width(&candidate, size) <= width || line.is_empty() && helvetica_width(word, size) <= width {
+            if measure(&candidate, size) <= width || line.is_empty() && measure(word, size) <= width {
                 line = candidate;
                 continue;
             }
@@ -55,7 +91,7 @@ pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
                 lines.push(std::mem::take(&mut line));
             }
             for ch in word.chars() {
-                if !line.is_empty() && helvetica_width(&format!("{line}{ch}"), size) > width {
+                if !line.is_empty() && measure(&format!("{line}{ch}"), size) > width {
                     lines.push(std::mem::take(&mut line));
                 }
                 line.push(ch);
@@ -87,6 +123,69 @@ pub fn win_ansi(s: &str) -> Vec<u8> {
     s.chars().map(|c| if c == '\t' { b' ' } else { win_ansi_byte(c).unwrap_or(b'?') }).collect()
 }
 
+/// The character encoding of a predefined Unicode CMap (`UniJIS-UTF16-H`, `UniGB-UCS2-H`, …;
+/// ISO 32000-2 §9.7.5.2), which maps Unicode text straight to codes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnicodeCMap {
+    Ucs2,
+    Utf16,
+    Utf8,
+    Utf32,
+}
+
+impl UnicodeCMap {
+    /// The encoding of the predefined CMap `name`, if it is a horizontal Unicode one. Vertical
+    /// (`-V`) CMaps are refused: field appearances are laid out horizontally, so their glyphs
+    /// would be drawn stacked down the field instead of across it.
+    pub fn from_name(name: &[u8]) -> Option<Self> {
+        let name = std::str::from_utf8(name).ok()?;
+        if !name.starts_with("Uni") || !name.ends_with("-H") {
+            return None;
+        }
+        name.split('-').find_map(|part| match part {
+            "UCS2" => Some(Self::Ucs2),
+            "UTF16" => Some(Self::Utf16),
+            "UTF8" => Some(Self::Utf8),
+            "UTF32" => Some(Self::Utf32),
+            _ => None,
+        })
+    }
+
+    /// Encode `s`; tabs become spaces, and characters UCS-2 can't hold become `?`.
+    pub fn encode(self, s: &str) -> Vec<u8> {
+        let mut out = Vec::with_capacity(s.len().saturating_mul(2));
+        let mut units = [0u16; 2];
+        let mut buf = [0u8; 4];
+        for c in s.chars() {
+            let c = if c == '\t' { ' ' } else { c };
+            match self {
+                Self::Ucs2 => {
+                    let unit = u16::try_from(u32::from(c)).unwrap_or(u16::from(b'?'));
+                    out.extend_from_slice(&unit.to_be_bytes());
+                }
+                Self::Utf16 => {
+                    for unit in c.encode_utf16(&mut units) {
+                        out.extend_from_slice(&unit.to_be_bytes());
+                    }
+                }
+                Self::Utf8 => out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes()),
+                Self::Utf32 => out.extend_from_slice(&u32::from(c).to_be_bytes()),
+            }
+        }
+        out
+    }
+}
+
+/// Whether [`win_ansi`] keeps `c` rather than writing `?` (a tab becomes a space).
+pub fn win_ansi_encodable(c: char) -> bool {
+    c == '\t' || win_ansi_byte(c).is_some()
+}
+
+/// The first character of `s` that [`win_ansi`] can't encode and would write as `?`.
+pub fn first_non_win_ansi(s: &str) -> Option<char> {
+    s.chars().find(|c| !win_ansi_encodable(*c))
+}
+
 /// Bytes as a PDF literal string, `(` … `)`, with delimiters escaped.
 pub fn literal(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len() + 2);
@@ -106,6 +205,18 @@ pub fn literal(bytes: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn win_ansi_encodability_matches_the_encoder() {
+        for c in ['a', 'é', 'ÿ', '€', '—', '™', '\t', '?'] {
+            assert!(win_ansi_encodable(c), "{c:?}");
+        }
+        for c in ['中', 'あ', 'Ω', 'č', 'ă', '☃', '😀'] {
+            assert!(!win_ansi_encodable(c), "{c:?}");
+        }
+        assert_eq!(first_non_win_ansi("Café — 5€"), None);
+        assert_eq!(first_non_win_ansi("Dvořák"), Some('ř'));
+    }
 
     #[test]
     fn widths_wrap_and_encode() {
@@ -135,5 +246,27 @@ mod tests {
         // Not in WinAnsi: č ć still need the fallback font; undefined codes are never produced.
         assert_eq!(win_ansi("čć\u{81}\u{8d}\t"), b"???? ");
         assert_eq!(win_ansi_byte('\0'), None);
+    }
+
+    #[test]
+    fn unicode_cmaps_encode_cjk_text() {
+        assert_eq!(UnicodeCMap::from_name(b"UniJIS-UTF16-H"), Some(UnicodeCMap::Utf16));
+        assert_eq!(UnicodeCMap::from_name(b"UniGB-UCS2-V"), None);
+        assert_eq!(UnicodeCMap::from_name(b"UniJIS-UCS2-HW-H"), Some(UnicodeCMap::Ucs2));
+        assert_eq!(UnicodeCMap::from_name(b"UniKS-UTF8-H"), Some(UnicodeCMap::Utf8));
+        assert_eq!(UnicodeCMap::from_name(b"UniJIS2004-UTF32-H"), Some(UnicodeCMap::Utf32));
+        assert_eq!(UnicodeCMap::from_name(b"Identity-H"), None);
+        assert_eq!(UnicodeCMap::from_name(b"90ms-RKSJ-H"), None);
+        assert_eq!(UnicodeCMap::from_name(b"\xff\xfe"), None);
+        assert_eq!(UnicodeCMap::Utf16.encode("令A"), [0x4e, 0xe4, 0x00, 0x41]);
+        assert_eq!(UnicodeCMap::Utf16.encode("𠀋"), [0xd8, 0x40, 0xdc, 0x0b]);
+        assert_eq!(UnicodeCMap::Ucs2.encode("𠀋\t"), [0x00, b'?', 0x00, b' ']);
+        assert_eq!(UnicodeCMap::Utf8.encode("令"), "令".as_bytes());
+        assert_eq!(UnicodeCMap::Utf32.encode("令"), [0, 0, 0x4e, 0xe4]);
+        assert_eq!(cjk_width("令和", 10.0), 20.0);
+        assert_eq!(cjk_width("ｱ", 10.0), 5.0);
+        assert_eq!(cjk_width("A", 10.0), helvetica_width("A", 10.0));
+        let lines = wrap_with("日本語のテキストは文字単位で折り返されます", 10.0, 45.0, cjk_width);
+        assert!(lines.len() > 3 && lines.iter().all(|l| cjk_width(l, 10.0) <= 45.0), "{lines:?}");
     }
 }

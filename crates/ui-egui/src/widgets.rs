@@ -63,10 +63,22 @@ pub fn search_box(ui: &mut egui::Ui, placeholder: &str, width: f32) -> Response 
     let fill = if resp.hovered() { t.hover } else { t.field };
     ui.painter().rect(rect, CornerRadius::same(16), fill, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     icons::paint(ui, Rect::from_min_size(rect.min + vec2(10.0, 8.0), vec2(16.0, 16.0)), "search", 15.0, t.text_muted);
-    ui.painter().text(rect.left_center() + vec2(34.0, 0.0), Align2::LEFT_CENTER, placeholder, theme::regular(13.0), t.text_faint);
     let shortcut = ui.ctx().format_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::K));
-    ui.painter().text(rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, shortcut, theme::regular(11.5), t.text_faint);
-    resp.on_hover_cursor(egui::CursorIcon::Text)
+    let shortcut = ui.painter().layout_no_wrap(shortcut, theme::regular(11.5), t.text_faint);
+    let shortcut_pos = rect.right_center() - vec2(12.0 + shortcut.size().x, shortcut.size().y * 0.5);
+    // Reserve the measured shortcut width in every language; long translations are elided
+    // within the remaining space rather than painted underneath the shortcut.
+    let text_right = (shortcut_pos.x - 10.0).max(rect.left());
+    let text_left = (rect.left() + 34.0).min(text_right);
+    let text_rect = Rect::from_min_max(egui::pos2(text_left, rect.top()), egui::pos2(text_right, rect.bottom()));
+    let mut job = egui::text::LayoutJob::simple_singleline(placeholder.to_owned(), theme::regular(13.0), t.text_faint);
+    job.wrap = egui::text::TextWrapping { max_width: text_rect.width(), max_rows: 1, break_anywhere: true, ..Default::default() };
+    let text = ui.fonts_mut(|f| f.layout_job(job));
+    let elided = text.elided;
+    ui.painter().with_clip_rect(text_rect).galley(egui::pos2(text_left, rect.center().y - text.size().y * 0.5), text, t.text_faint);
+    ui.painter().with_clip_rect(rect).galley(shortcut_pos, shortcut, t.text_faint);
+    let resp = resp.on_hover_cursor(egui::CursorIcon::Text);
+    if elided { resp.on_hover_text(placeholder) } else { resp }
 }
 
 pub fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> Response {
@@ -297,6 +309,29 @@ pub fn icon_pill(ui: &mut egui::Ui, icon: &str, label: &str, primary: bool) -> R
 mod tests {
     use super::*;
     use egui::Pos2;
+
+    #[test]
+    fn search_placeholder_never_overlaps_the_shortcut() {
+        for width in [260.0, 160.0, 90.0] {
+            let ctx = egui::Context::default();
+            ctx.set_fonts(theme::font_definitions());
+            let placeholder = "Werkzeuge und Befehle suchen";
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                search_box(ui, placeholder, width);
+            });
+            let text_shapes: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| if let egui::Shape::Text(text) = &shape.shape { Some((shape.clip_rect, text)) } else { None })
+                .collect();
+            let (clip, hint) = text_shapes.iter().find(|(_, text)| text.galley.job.text == placeholder).unwrap();
+            let (_, shortcut) = text_shapes.iter().find(|(_, text)| text.galley.job.text.contains('K')).unwrap();
+            assert!(clip.right() <= shortcut.pos.x - 9.0, "hint must leave a gap before the shortcut at width {width}");
+            assert!(hint.galley.elided, "the long original German hint must be elided at width {width}");
+            assert_eq!(hint.galley.rows.len(), 1);
+            output.drop_without_applying_deltas();
+        }
+    }
 
     fn toast_rect(app: &mut PdfCraftApp, ctx: &egui::Context, width: f32, now: &mut f64) -> Rect {
         // Let the Area settle after a notice/viewport change, without advancing to
