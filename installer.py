@@ -399,7 +399,7 @@ namespace LinkcoSetup
                             inproc.SetValue("", "mscoree.dll");
                             inproc.SetValue("ThreadingModel", "STA");
                             inproc.SetValue("Class", "LinkcoPdfPreview.LinkcoPdfPreviewHandler");
-                            inproc.SetValue("Assembly", "LinkcoPdfPreviewHandler, Version=0.3.0.0, Culture=neutral, PublicKeyToken=null");
+                            inproc.SetValue("Assembly", "LinkcoPdfPreviewHandler, Version=0.5.0.0, Culture=neutral, PublicKeyToken=null");
                             inproc.SetValue("RuntimeVersion", "v4.0.30319");
                             inproc.SetValue("CodeBase", codeBase);
                         }
@@ -1028,6 +1028,21 @@ def build_windows_installer(
             "skipping LinkcoPDFEditorSetup.exe generation."
         )
 
+    # Fetch OCR models into stage_dir/models (when cargo/network is available) so MSI and portable ZIP bundle them
+    models_dir = stage_dir / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    existing_models = ROOT / "assets" / "models"
+    if existing_models.is_dir() and any(existing_models.glob("*.rten")):
+        for item in existing_models.iterdir():
+            if item.is_file():
+                shutil.copy2(item, models_dir / item.name)
+    else:
+        subprocess.run(
+            ["cargo", "xtask", "models", str(models_dir)],
+            cwd=str(ROOT),
+            check=False,
+        )
+
     # 2. Build LinkcoPDFEditorSetup-<version>-windows-<arch>.msi (when WiX v5 is installed)
     wix = find_wix()
     if wix:
@@ -1047,6 +1062,8 @@ def build_windows_installer(
                 f"Version={msi_version}",
                 "-d",
                 f"BinDir={stage_dir}",
+                "-d",
+                f"ModelsDir={models_dir}",
                 "-d",
                 f"IconPath={icon_path}",
                 "-o",
@@ -1085,6 +1102,13 @@ def build_windows_installer(
             f = stage_dir / exe_name
             if f.is_file():
                 zf.write(f, arcname=exe_name)
+        portable_marker = ROOT / "packaging" / "windows" / "portable.txt"
+        if portable_marker.is_file():
+            zf.write(portable_marker, arcname="portable.txt")
+        if models_dir.is_dir():
+            for mf in sorted(models_dir.iterdir()):
+                if mf.is_file() and not mf.name.endswith(".part"):
+                    zf.write(mf, arcname=f"models/{mf.name}")
         for doc_name in ("README.md", "RELEASE_NOTES.md", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "ATTRIBUTION.md"):
             doc_path = ROOT / doc_name
             if doc_path.is_file():

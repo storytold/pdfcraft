@@ -6,7 +6,7 @@ Unicode true
 !include "x64.nsh"
 
 !ifndef VERSION
-  !define VERSION "0.3.0"
+  !define VERSION "0.5.0"
 !endif
 !ifndef BIN_DIR
   !define BIN_DIR "..\..\target\x86_64-pc-windows-msvc\release"
@@ -96,7 +96,7 @@ Section "${APP_NAME} (required)" SecCore
   WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "" "mscoree.dll"
   WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "ThreadingModel" "STA"
   WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "Class" "LinkcoPdfPreview.LinkcoPdfPreviewHandler"
-  WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "Assembly" "LinkcoPdfPreviewHandler, Version=0.3.0.0, Culture=neutral, PublicKeyToken=null"
+  WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "Assembly" "LinkcoPdfPreviewHandler, Version=0.5.0.0, Culture=neutral, PublicKeyToken=null"
   WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "RuntimeVersion" "v4.0.30319"
   WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "CodeBase" "file:///$INSTDIR\LinkcoPdfPreviewHandler.dll"
   WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\ProgId" "" "LinkcoPDFEditor.PreviewHandler"

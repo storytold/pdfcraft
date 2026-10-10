@@ -1361,7 +1361,7 @@ fn sign_inner(
         }
     }
     let mut app = Dict::new();
-    app.set(b"Name".to_vec(), Object::name("PdfCraft"));
+    app.set(b"Name".to_vec(), Object::name("LinkcoPDFEditor"));
     let mut build = Dict::new();
     build.set(b"App".to_vec(), Object::Dict(app));
     v.set(b"Prop_Build".to_vec(), Object::Dict(build));
@@ -1524,7 +1524,7 @@ pub fn timestamp_document(doc: &Document, tsa: &dyn crate::timestamp::TimestampA
     v.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![0; TOKEN_RESERVE], hex: true }));
     v.set(b"M".to_vec(), PdfString::literal(date.as_bytes().to_vec()));
     let mut app = Dict::new();
-    app.set(b"Name".to_vec(), Object::name("PdfCraft"));
+    app.set(b"Name".to_vec(), Object::name("LinkcoPDFEditor"));
     let mut build = Dict::new();
     build.set(b"App".to_vec(), Object::Dict(app));
     v.set(b"Prop_Build".to_vec(), Object::Dict(build));
