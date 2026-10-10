@@ -88,7 +88,12 @@ impl PageText {
                 chars.push((' ', i));
             }
             for c in fold(&g.text).chars() {
-                chars.push((if c.is_whitespace() { ' ' } else { c }, i));
+                let c = if c.is_whitespace() { ' ' } else { c };
+                // The query collapses a run of whitespace to one space, so collapse the page too.
+                if c == ' ' && chars.last().is_some_and(|k| k.0 == ' ') {
+                    continue;
+                }
+                chars.push((c, i));
             }
         }
         let word = |k: Option<&(char, usize)>| k.is_some_and(|c| c.0.is_alphanumeric());
@@ -930,6 +935,27 @@ mod tests {
         assert_eq!(t.find("o"), vec![4..5, 6..7]);
         assert_eq!(t.line_rects(3..12).len(), 2);
         assert_eq!(t.nearest(52.0, 14.0), Some(5));
+    }
+
+    #[test]
+    fn phrase_search_ignores_repeated_spaces() {
+        // "quick  brown" drawn with two space glyphs in a row. Text extraction keeps both spaces,
+        // but the phrase search has always collapsed runs of whitespace in the query, so the page
+        // text has to be collapsed the same way or the phrase is never found (#814).
+        let mut v = Vec::new();
+        word(&mut v, "quick", 10.0, 10.0, 6.0);
+        v.push(g(" ", 46.0, 10.0, 52.0));
+        v.push(g(" ", 52.0, 10.0, 58.0));
+        word(&mut v, "brown", 58.0, 10.0, 6.0);
+        let n = v.len();
+        let t = PageText { glyphs: v, line_of: vec![0; n], space_before: vec![false; n] };
+        assert_eq!(t.plain_text(), "quick  brown");
+        assert_eq!(t.find("quick brown"), vec![0..12]);
+        assert_eq!(t.find("quick  brown"), vec![0..12], "the query's own run of spaces is collapsed too");
+        assert_eq!(t.find("quick\tbrown"), vec![0..12]);
+        assert_eq!(t.find("quick"), vec![0..5]);
+        assert_eq!(t.find("brown"), vec![7..12]);
+        assert!(t.find("quick absent").is_empty());
     }
 
     fn word(v: &mut Vec<TextGlyph>, s: &str, x: f32, y: f32, advance: f32) {
