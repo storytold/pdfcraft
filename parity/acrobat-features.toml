@@ -9987,7 +9987,7 @@ status = "planned"
 commands = []
 tools = []
 evidence = []
-notes = "Windows MSI creates a Start menu shortcut and an optional (default on) desktop shortcut and confirms full-UI completion with Finish (#143); packaging/windows/test-msi.ps1 checks the compiled MSI and windows-arm64.yml checks installation/removal. Signed installers across platforms remain planned."
+notes = "Windows MSI creates a Start menu shortcut and an optional (default on) desktop shortcut and confirms full-UI completion with Finish (#143); packaging/windows/test-msi.ps1 checks the compiled MSI and windows-arm64.yml checks installation/removal. PDF files use a dedicated embedded document icon when PdfCraft is chosen as the default reader (confirmed in Windows Explorer); first-page thumbnails remain unsupported. Signed installers across platforms remain planned."
 
 [[feature]]
 id = "misc.web-deploy"

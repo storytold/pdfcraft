@@ -2787,6 +2787,28 @@ usage = "Embedded in pdfcraft.exe by apps/pdfcraft/build.rs (Explorer, taskbar, 
 sha256 = "56daaaae9ae5389794909570885809adf5e1d9183bef2d9669ed2f9bba3ed6f5"
 
 [[asset]]
+path = "assets/app-icon/pdfcraft-document.svg"
+title = "PdfCraft PDF document icon (master vector)"
+author = "Lucide Icons and Contributors (document outline); PdfCraft contributors (PDF badge, lettering and composition)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/file-text.svg); contributor-original composition (assets/app-icon/README.md)"
+licence = "ISC AND (MIT OR Apache-2.0)"
+licence_file = "assets/app-icon/LICENSE-document.txt"
+kind = "icon"
+usage = "Master artwork for the Windows PDF file type icon; rendered by packaging/icons.sh, without fonts or external images"
+sha256 = "8da8278c2b89362be0a960879d453ff879d7544d6d58e47d5389574e8dfff77b"
+
+[[asset]]
+path = "assets/app-icon/pdfcraft-document.ico"
+title = "PdfCraft PDF document icon (Windows .ico, 16-256 px)"
+author = "Lucide Icons and Contributors (document outline); PdfCraft contributors (PDF badge, lettering and composition)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/file-text.svg); contributor-original composition (assets/app-icon/README.md)"
+licence = "ISC AND (MIT OR Apache-2.0)"
+licence_file = "assets/app-icon/LICENSE-document.txt"
+kind = "icon"
+usage = "Embedded in pdfcraft.exe as resource 2; the Windows installer uses it for PdfCraft.Document and Applications/pdfcraft.exe PDF file associations"
+sha256 = "ba3f9128b368fc6d17d376cf62dbdbc22455451c5c8c4779210d7a2a7409b9e6"
+
+[[asset]]
 path = "assets/app-icon/hicolor/16x16/apps/ai.storyteller.pdfcraft.png"
 title = "PdfCraft app icon, 16 px"
 author = "PdfCraft contributors (drawn by the project owner in ArtCraft; vectorised with craftrules vectorize_tile.py)"
