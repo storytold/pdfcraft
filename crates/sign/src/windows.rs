@@ -7,7 +7,7 @@ use rustls_cng::cert::CertContext;
 use rustls_cng::key::{AlgorithmGroup, SignaturePadding};
 use rustls_cng::store::{CertStore, CertStoreType};
 
-use crate::keys::{DigestAlg, ExternalKey, PrivateKey, PublicKey};
+use crate::keys::{DigestAlg, ExternalKey, PrivateKey, PublicKey, StoreKey};
 use crate::{Certificate, DigitalId, SignError};
 
 struct WindowsKey {
@@ -31,17 +31,7 @@ impl ExternalKey for WindowsKey {
         let raw = key
             .sign(&digest, padding)
             .map_err(|e| SignError::Crypto(format!("the Windows certificate store didn't sign (key use may have been cancelled): {e}")))?;
-        match &self.public {
-            PublicKey::Rsa { .. } => Ok(raw),
-            PublicKey::P256(_) => p256::ecdsa::Signature::from_slice(&raw)
-                .map(|s| s.to_der().as_bytes().to_vec())
-                .map_err(|e| SignError::Crypto(format!("CNG returned an invalid P-256 signature: {e}"))),
-            PublicKey::P384(_) => p384::ecdsa::Signature::from_slice(&raw)
-                .map(|s| s.to_der().as_bytes().to_vec())
-                .map_err(|e| SignError::Crypto(format!("CNG returned an invalid P-384 signature: {e}"))),
-            // `identities` lists only RSA, P-256 and P-384 store keys; anything else can't sign here.
-            _ => Err(SignError::Unsupported("signing with this key type through the Windows certificate store".into())),
-        }
+        self.public.store_signature_der(&raw)
     }
 }
 
@@ -88,11 +78,13 @@ fn entries() -> Result<Vec<(CertContext, DigitalId)>, SignError> {
         let Ok(certificate) = Certificate::parse(context.as_der()) else { continue };
         // Enumeration must not open permission or PIN dialogs. Signing may prompt later.
         let Ok(key) = context.acquire_key(true) else { continue };
-        let supported = match &certificate.public_key {
-            PublicKey::Rsa { .. } => key.algorithm_group().is_ok_and(|a| a == AlgorithmGroup::Rsa),
-            PublicKey::P256(_) => key.algorithm_group().is_ok_and(|a| a == AlgorithmGroup::Ecdsa) && key.bits().is_ok_and(|bits| bits == 256),
-            PublicKey::P384(_) => key.algorithm_group().is_ok_and(|a| a == AlgorithmGroup::Ecdsa) && key.bits().is_ok_and(|bits| bits == 384),
-            _ => false,
+        // P-521, brainpool and Ed25519 certificates parse (to verify with) but aren't signed with.
+        let supported = match certificate.public_key.store_signing_key() {
+            Some(StoreKey::Rsa) => key.algorithm_group().is_ok_and(|a| a == AlgorithmGroup::Rsa),
+            Some(StoreKey::Ecdsa(want)) => {
+                key.algorithm_group().is_ok_and(|a| a == AlgorithmGroup::Ecdsa) && key.bits().is_ok_and(|bits| bits == want)
+            }
+            None => false,
         };
         if !supported {
             continue;
