@@ -443,6 +443,11 @@ fn links_are_rewired_to_copied_pages_or_dropped() {
     assert!(!link.contains(b"Dest") && !link.contains(b"A"));
 }
 
+/// A widget annotation that is its own form field (no `/Parent`).
+fn own_field(doc: &Document, r: ObjRef) -> bool {
+    doc.get(r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget") && !d.contains(b"Parent"))
+}
+
 #[test]
 fn repeated_page_gets_independent_annotations() {
     // A1 has a link, A2 a link and a form field, A3 a note with a popup; each is listed twice.
@@ -456,11 +461,15 @@ fn repeated_page_gets_independent_annotations() {
         assert!(!refs[i].is_empty());
         assert_eq!(refs[i].len(), refs[i + 1].len());
         for (a, b) in refs[i].iter().zip(&refs[i + 1]) {
-            assert_ne!(a, b, "each copy of the page has its own annotation objects");
+            // A widget that is its own field stays one object on both pages, so the field stays
+            // one (#790); every other annotation is copied.
+            if !own_field(&out, *a) {
+                assert_ne!(a, b, "each copy of the page has its own annotation objects");
+            }
         }
     }
     for (i, list) in refs.iter().enumerate() {
-        for a in list {
+        for a in list.iter().filter(|a| !own_field(&out, **a)) {
             assert_eq!(out.get(*a).as_dict().unwrap().reference(b"P"), Some(ps[i].obj), "/P names the page holding the copy");
         }
     }
