@@ -722,23 +722,15 @@ fn a_middle_drag_with_a_drawing_tool_scrolls_instead_of_drawing() {
     });
     let from = at(&h, 150.0, 100.0);
     let top = h.state().views[0].page_screen_rect(0).expect("page 1 on screen").top();
-    middle_drag(&mut h, from, from - egui::vec2(0.0, 120.0));
+    // Five frames of a quarter second each with the button down: a hold, so it scrolls while held.
+    middle_drag(&mut h, from, from + egui::vec2(0.0, 120.0));
     assert!(comments(&h).is_empty(), "{:?}", comments(&h));
     let s = h.state();
     assert!(!s.session.get(s.views[0].id).unwrap().dirty, "scrolling never edits the PDF");
-    assert!(!s.views[0].middle_panning(), "releasing the wheel ends the pan");
+    assert!(!s.views[0].auto_scrolling(), "releasing a hold stops scrolling");
     let moved = s.views[0].page_screen_rect(0).expect("page 1 on screen").top();
-    if cfg!(target_os = "linux") {
-        // Linux latches auto-scroll instead of panning with the drag.
-        assert!(s.views[0].auto_scrolling());
-    } else {
-        assert!((moved - (top - 120.0)).abs() < 1.0, "the page follows the pointer: {top} -> {moved}");
-    }
+    assert!(moved < top - 30.0, "the held wheel scrolls down: {top} -> {moved}");
     // The tool still draws with the primary button afterwards.
-    if cfg!(target_os = "linux") {
-        h.key_press(egui::Key::Escape);
-        h.run_steps(2);
-    }
     drag_pt(&mut h, (60.0, 120.0), (200.0, 80.0));
     let kinds: Vec<String> = comments(&h).into_iter().map(|a| a.subtype).collect();
     assert_eq!(kinds, ["Ink"]);
