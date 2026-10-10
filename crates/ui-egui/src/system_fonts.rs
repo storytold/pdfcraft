@@ -1,9 +1,9 @@
-//! The last-resort interface font: one face already installed on this machine.
+//! The last-resort interface fonts: faces already installed on this machine.
 //!
-//! The embedded faces (Inter, egui's defaults, craft-fonts) come first in every family; this one
-//! only draws characters none of them has, such as an Arabic file name in a build without
-//! craft-fonts. It is read at runtime and never embedded or shipped (AGENTS.md §1.4), and
-//! `PDFCRAFT_SYSTEM_FONTS=0` turns it off (published screenshots do).
+//! The embedded faces (Inter, egui's defaults, craft-fonts) come first in every family; these
+//! ones only draw characters none of them has: an Arabic file name, or CJK interface text in a
+//! build without craft-fonts. They are read at runtime and never embedded or shipped
+//! (AGENTS.md §1.4), and `PDFCRAFT_SYSTEM_FONTS=0` turns them off (published screenshots do).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -16,6 +16,8 @@ const MAX_BYTES: u64 = 32 << 20;
 const MAX_FACES: u32 = 16;
 /// Arabic letter alef: the face must have it to be worth loading.
 const PROBE: char = '\u{0627}';
+/// Han character U+4E2D 中: the CJK face must have it to be worth loading.
+const HAN_PROBE: char = '中';
 
 /// The installed fallback face, read once. `None` when it is turned off or no candidate fits.
 pub fn fallback() -> Option<Arc<FontData>> {
@@ -23,11 +25,25 @@ pub fn fallback() -> Option<Arc<FontData>> {
     CACHE.get_or_init(load).clone()
 }
 
+/// The installed Han (CJK) fallback face, read once. `None` when it is turned off or no
+/// candidate fits; see [`cjk_candidates`].
+pub fn cjk() -> Option<Arc<FontData>> {
+    static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    CACHE.get_or_init(load_cjk).clone()
+}
+
 fn load() -> Option<Arc<FontData>> {
     if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
         return None;
     }
     candidates().iter().find_map(|path| read(path))
+}
+
+fn load_cjk() -> Option<Arc<FontData>> {
+    if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
+        return None;
+    }
+    cjk_candidates().iter().find_map(|path| read_for(path, HAN_PROBE))
 }
 
 /// Well-known locations of faces with broad script coverage, best first.
@@ -54,13 +70,40 @@ fn candidates() -> Vec<PathBuf> {
     }
 }
 
+/// Well-known locations of faces covering Han scripts (Chinese, Japanese), best first. At most
+/// one is loaded: the first whose file parses and maps [`HAN_PROBE`].
+fn cjk_candidates() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        let dir = std::env::var_os("WINDIR").or_else(|| std::env::var_os("SystemRoot")).map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+        // Microsoft JhengHei (Traditional), Microsoft YaHei (Simplified; still covers most
+        // Traditional), DengXian (SimSun's successor) and SimSun. All ship with Windows.
+        ["msjh.ttc", "msyh.ttc", "Deng.ttf", "simsun.ttc"].iter().map(|f| dir.join("Fonts").join(f)).collect()
+    } else if cfg!(target_os = "macos") {
+        ["/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/STHeiti Medium.ttc", "/System/Library/Fonts/Hiragino Sans GB.ttc"]
+            .iter()
+            .map(PathBuf::from)
+            .collect()
+    } else {
+        let files = [
+            "opentype/noto/NotoSansCJK-Regular.ttc",
+            "truetype/wqy/wqy-microhei.ttc",
+            "truetype/arphic/uming.ttc",
+        ];
+        ["/usr/share/fonts", "/usr/local/share/fonts"].iter().flat_map(|dir| files.iter().map(move |f| Path::new(dir).join(f))).collect()
+    }
+}
+
 fn read(path: &Path) -> Option<Arc<FontData>> {
+    read_for(path, PROBE)
+}
+
+fn read_for(path: &Path, probe: char) -> Option<Arc<FontData>> {
     let meta = std::fs::metadata(path).ok()?;
     if !meta.is_file() || meta.len() > MAX_BYTES {
         return None;
     }
     let bytes = std::fs::read(path).ok()?;
-    let index = face_with(&bytes, PROBE)?;
+    let index = face_with(&bytes, probe)?;
     let mut data = FontData::from_owned(bytes);
     data.index = index;
     log::info!("interface font fallback: {}", path.display());
