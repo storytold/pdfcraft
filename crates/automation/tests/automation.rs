@@ -871,6 +871,29 @@ fn parallel_text_extraction_keeps_page_order_and_follows_edits() {
 }
 
 #[test]
+fn text_clip_spatial_extraction() {
+    let dir = workdir("text-clip");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+
+    // In a.pdf (fixture(3)), page 2 has "Page 2" rendered at (20, 150) in 200x300 box
+    let clip = ok(&mut a, "text_clip", json!({ "doc": doc, "page": 2, "rect": [10.0, 100.0, 150.0, 200.0] }));
+    assert_eq!(clip["page"], 2);
+    assert_eq!(clip["text"], "Page 2");
+    assert_eq!(clip["lines"].as_array().unwrap().len(), 1);
+    assert_eq!(clip["lines"][0]["text"], "Page 2");
+
+    // Outside bounding box: empty string and empty lines
+    let empty = ok(&mut a, "text_clip", json!({ "doc": doc, "page": 2, "rect": [0.0, 0.0, 50.0, 50.0] }));
+    assert_eq!(empty["text"], "");
+    assert!(empty["lines"].as_array().unwrap().is_empty());
+
+    // Invalid arguments: missing rect or out of range page
+    assert!(matches!(a.call("text_clip", &json!({ "doc": doc, "page": 2 })).unwrap_err(), ToolError::InvalidArgs(_)));
+    assert!(matches!(a.call("text_clip", &json!({ "doc": doc, "page": 99, "rect": [0, 0, 10, 10] })).unwrap_err(), ToolError::InvalidArgs(_)));
+}
+
+#[test]
 fn bookmarks_through_tools() {
     let dir = workdir("bookmarks");
     let mut a = auto(&dir);

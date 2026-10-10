@@ -159,6 +159,7 @@ impl Automation {
             "comment_image_preview" => return self.comment_image_preview(&a),
             "text_extract" => self.text_extract(&a)?,
             "text_find" => self.text_find(&a)?,
+            "text_clip" => self.text_clip(&a)?,
             "page_rotate" => {
                 let degrees = a.int("degrees")?;
                 if degrees % 90 != 0 {
@@ -1452,6 +1453,95 @@ impl Automation {
             }
         }
         Ok(json!({ "query": query, "count": matches.len(), "matches": matches }))
+    }
+
+    fn text_clip(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let doc = self.doc(a)?;
+        let id = doc.id;
+        let r = a.nums::<4>("rect")?.ok_or_else(|| Args::missing("rect"))?;
+        let (rx0, ry0) = (r[0].min(r[2]) as f32, r[1].min(r[3]) as f32);
+        let (rx1, ry1) = (r[0].max(r[2]) as f32, r[1].max(r[3]) as f32);
+        let texts = self.page_texts(id, &[page])?;
+        let page_text = texts.first().ok_or_else(|| failed("page has no text"))?;
+
+        let eps = 0.5f32;
+        let mut matching: Vec<usize> = Vec::new();
+        for (i, g) in page_text.glyphs.iter().enumerate() {
+            let cx = (g.rect[0] + g.rect[2]) / 2.0;
+            let cy = (g.rect[1] + g.rect[3]) / 2.0;
+            if cx >= rx0 - eps && cx <= rx1 + eps && cy >= ry0 - eps && cy <= ry1 + eps {
+                matching.push(i);
+            }
+        }
+
+        let mut text = String::new();
+        let mut prev_line: Option<u32> = None;
+        let mut prev_idx: Option<usize> = None;
+        for &i in &matching {
+            let Some(g) = page_text.glyphs.get(i) else { continue };
+            let Some(&line) = page_text.line_of.get(i) else { continue };
+            let space = page_text.space_before.get(i).copied().unwrap_or(false);
+            if let Some(prev_l) = prev_line {
+                if prev_l != line {
+                    text.push('\n');
+                } else if space || prev_idx.is_some_and(|p| i > p + 1) {
+                    text.push(' ');
+                }
+            }
+            text.push_str(&g.text);
+            prev_line = Some(line);
+            prev_idx = Some(i);
+        }
+
+        let round = |x: f32| (x as f64 * 100.0).round() / 100.0;
+        let mut lines: Vec<Value> = Vec::new();
+        let mut line_start = 0;
+        while line_start < matching.len() {
+            let Some(&first_idx) = matching.get(line_start) else { break };
+            let cur_line = page_text.line_of.get(first_idx).copied();
+            let mut line_end = line_start + 1;
+            while line_end < matching.len() && page_text.line_of.get(matching[line_end]).copied() == cur_line {
+                line_end += 1;
+            }
+            let slice = &matching[line_start..line_end];
+            let mut line_str = String::new();
+            let mut l_prev_idx: Option<usize> = None;
+            let mut min_x = f32::INFINITY;
+            let mut min_y = f32::INFINITY;
+            let mut max_x = f32::NEG_INFINITY;
+            let mut max_y = f32::NEG_INFINITY;
+            for &idx in slice {
+                let Some(g) = page_text.glyphs.get(idx) else { continue };
+                let space = page_text.space_before.get(idx).copied().unwrap_or(false);
+                if l_prev_idx.is_some() && (space || l_prev_idx.is_some_and(|p| idx > p + 1)) {
+                    line_str.push(' ');
+                }
+                line_str.push_str(&g.text);
+                min_x = min_x.min(g.rect[0]);
+                min_y = min_y.min(g.rect[1]);
+                max_x = max_x.max(g.rect[2]);
+                max_y = max_y.max(g.rect[3]);
+                l_prev_idx = Some(idx);
+            }
+            let line_rect = if min_x.is_finite() {
+                vec![round(min_x), round(min_y), round(max_x), round(max_y)]
+            } else {
+                vec![0.0, 0.0, 0.0, 0.0]
+            };
+            lines.push(json!({
+                "text": line_str,
+                "rect": line_rect,
+            }));
+            line_start = line_end;
+        }
+
+        Ok(json!({
+            "page": page + 1,
+            "rect": [round(rx0), round(ry0), round(rx1), round(ry1)],
+            "text": text,
+            "lines": lines,
+        }))
     }
 
     fn command_list(&self, a: &Args) -> Result<Value> {
