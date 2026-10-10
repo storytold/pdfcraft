@@ -14,6 +14,7 @@ use hayro_syntax::object::dict::keys::*;
 use hayro_syntax::object::{Array, Object};
 use kurbo::{BezPath, Vec2};
 use skrifa::attribute::Style;
+use skrifa::charmap::MapVariant;
 use skrifa::raw::collections::int_set::Domain;
 use skrifa::{FontRef, GlyphId, MetadataProvider};
 use std::collections::HashMap;
@@ -41,6 +42,9 @@ pub(crate) struct Type0Font {
     /// Whether the `to_unicode` map is a UCS2 `CMap` (CID-indexed) rather than
     /// a `ToUnicode` `CMap` (code-indexed).
     to_unicode_is_cid_indexed: bool,
+    /// PdfCraft patch: whether the CIDs belong to an Adobe character collection (Japan1, GB1,
+    /// CNS1, Korea1), whose glyph numbering no substitute other than a CID-keyed CFF font shares.
+    adobe_collection: bool,
 }
 
 impl Type0Font {
@@ -129,6 +133,10 @@ impl Type0Font {
             }
         }
 
+        let adobe_collection = character_collection
+            .as_ref()
+            .is_some_and(|cc| cc.family.ucs2_cmap().is_some());
+
         let postscript_name = dict
             .get::<Name<'_>>(BASE_FONT)
             .map(|n| strip_subset_prefix(n.as_str()).to_string());
@@ -153,6 +161,7 @@ impl Type0Font {
             font_flags,
             fallback,
             to_unicode_is_cid_indexed,
+            adobe_collection,
         })
     }
 
@@ -174,6 +183,16 @@ impl Type0Font {
         {
             // Yay, Unicode worked!
             return glyph;
+        }
+
+        // PdfCraft patch: a substitute that isn't CID-keyed numbers its glyphs its own way, so
+        // the CID of an Adobe character collection taken as its glyph index draws an unrelated
+        // glyph. Draw .notdef, as for a CID the font has no glyph for.
+        if self.fallback
+            && self.adobe_collection
+            && !matches!(&self.font_type, FontType::Cff(c) if c.is_cid())
+        {
+            return GlyphId::NOTDEF;
         }
 
         // At this point, not much we can do anymore. Just hope that the
@@ -207,7 +226,7 @@ impl Type0Font {
     fn map_via_unicode(&self, key: u32) -> Option<GlyphId> {
         let to_unicode = self.to_unicode.as_ref()?;
 
-        let character = to_unicode
+        let (character, selector) = to_unicode
             .lookup_bf_string(key)
             .or_else(|| {
                 for len in 0..4 {
@@ -221,12 +240,32 @@ impl Type0Font {
                 None
             })
             .and_then(|bf| match bf {
-                BfString::Char(c) => Some(c),
-                BfString::String(_) => None,
+                BfString::Char(c) => Some((c, None)),
+                // PdfCraft patch: a character and a variation selector is that character in a
+                // given form, as Adobe-Japan1 maps the JIS X 0208 forms of the kanji that
+                // JIS X 0213:2004 redrew (噂 is U+5642 U+E0100). Other strings (ligatures) still
+                // have no glyph.
+                BfString::String(s) => {
+                    let mut chars = s.chars();
+                    let character = chars.next()?;
+                    let selector = chars.next().filter(|c| is_variation_selector(*c))?;
+                    chars.next().is_none().then_some((character, Some(selector)))
+                }
             })?;
 
         match &self.font_type {
-            FontType::OpenType(t) => t.font_ref().charmap().map(character),
+            FontType::OpenType(t) => {
+                let charmap = t.font_ref().charmap();
+                // PdfCraft patch: the face's glyph for that form when its `cmap` has one, else its
+                // glyph for the character, as when a form isn't supported (Unicode FAQ on
+                // variation sequences).
+                if let Some(selector) = selector
+                    && let Some(MapVariant::Variant(glyph)) = charmap.map_variant(character, selector)
+                {
+                    return Some(glyph);
+                }
+                charmap.map(character)
+            }
             FontType::Cff(c) => {
                 // Map codepoint to glyph name via AFL, and then look it up.
                 if let Some(name) = glyph_names::get_reverse(character)
@@ -507,6 +546,11 @@ impl CidToGIdMap {
             }
         }
     }
+}
+
+/// PdfCraft patch: Variation Selectors (U+FE00–U+FE0F) and their supplement (U+E0100–U+E01EF).
+fn is_variation_selector(c: char) -> bool {
+    matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
 }
 
 /// PdfCraft patch: the largest CID (ISO 32000-2 §9.7.2; CIDs are at most two bytes).

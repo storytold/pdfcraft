@@ -68,7 +68,7 @@
 	Double-click	Doppelklick
 	Select a word	Wort auswählen
 	Clear selection / close find	Auswahl aufheben / Suche schließen
-	Zoom in / out (also pinch or ⌘-scroll)	Vergrößern / Verkleinern (auch per Pinch-Geste oder ⌘ + Scrollen)
+	Zoom in / out (also pinch or {key}-scroll)	Vergrößern / Verkleinern (auch per Pinch-Geste oder {key} + Scrollen)
 	Rotate view	Ansicht drehen
 	First / last page	Erste / letzte Seite
 	Previous / next page	Vorherige / nächste Seite
@@ -76,16 +76,16 @@
 	Select all pages (Organize)	Alle Seiten auswählen (Organisieren)
 	Home	Start
 	Open	Öffnen
-	Open a PDF (⌘O)	PDF öffnen (⌘O)
+	Open a PDF ({key})	PDF öffnen ({key})
 	Dark gray theme	Dunkelgraues Design
 	Light theme	Helles Design
 	All tools	Alle Werkzeuge
 	Read	Lesen
 	Convert	Konvertieren
 	E-Sign	E-Signatur
-	Print (⌘P)	Drucken (⌘P)
+	Print ({key})	Drucken ({key})
 	Save (M4)	Speichern (M4)
-	Document properties (⌘D)	Dokumenteigenschaften (⌘D)
+	Document properties ({key})	Dokumenteigenschaften ({key})
 	Find tools and commands	Tools und Befehle suchen
 	Fit to height	Seitenhöhe
 	Zoom in	Vergrößern
@@ -114,9 +114,9 @@
 	Compare	Vergleichen
 	Page thumbnails	Seitenminiaturen
 	Form fields	Formularfelder
-	Zoom out (⌘−)	Verkleinern (⌘−)
-	Zoom in (⌘+)	Vergrößern (⌘+)
-	Rotate view clockwise (⇧⌘+)	Ansicht im Uhrzeigersinn drehen (⇧⌘+)
+	Zoom out ({key})	Verkleinern ({key})
+	Zoom in ({key})	Vergrößern ({key})
+	Rotate view clockwise ({key})	Ansicht im Uhrzeigersinn drehen ({key})
 	Toggle fit page / fit width	Ganze Seite / Seitenbreite umschalten
 	Next page	Nächste Seite
 	Previous page	Vorherige Seite
@@ -899,6 +899,12 @@
 	Icon	Symbol
 	Thickness	Stärke
 	Line ending	Linienende
+	Open arrow	Offener Pfeil
+	Closed arrow	Geschlossener Pfeil
+	Butt	Stumpf
+	Reverse open arrow	Offener Pfeil umgekehrt
+	Reverse closed arrow	Geschlossener Pfeil umgekehrt
+	Slash	Schrägstrich
 	Modified	Geändert
 	No status has been set.	Es wurde kein Status festgelegt.
 	Compare Files	Dateien vergleichen
@@ -1073,6 +1079,7 @@
 	Redacted area fill colour:	Füllfarbe geschwärzter Bereiche:
 	Use overlay text	Überlagerungstext verwenden
 	Custom text:	Eigener Text:
+	Redaction code:	Schwärzungscode:
 	Font:	Schrift:
 	Font size:	Schriftgröße:
 	Auto-size text to fit redaction region	Textgröße automatisch an Schwärzungsbereich anpassen
@@ -1174,7 +1181,7 @@
 	Searchable Image (Exact)	Durchsuchbares Bild (exakt)
 	Adds invisible text over each word; the page image is not changed	Legt unsichtbaren Text über jedes Wort; das Seitenbild bleibt unverändert
 	Downsample to	Herunterrechnen auf
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	Die Texterkennung ist nicht installiert, ihre Modelle fehlen (führe `cargo xtask models` aus oder setze PRINTCRAFT_MODELS).
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Die Texterkennung ist nicht installiert: ihre Modelldateien fehlen. Installiere PdfCraft neu oder setze PDFCRAFT_MODELS auf den Ordner, der sie enthält.
 	Settings	Einstellungen
 	Optional	Optional
 	Planned · {m}	Geplant · {m}
@@ -1242,7 +1249,7 @@
 	Expand all bookmarks	Alle Lesezeichen erweitern
 	Expand top-level bookmarks	Lesezeichen der obersten Ebene erweitern
 	Collapse all bookmarks	Alle Lesezeichen reduzieren
-	New bookmark (⌘B)	Neues Lesezeichen (⌘B)
+	New bookmark ({key})	Neues Lesezeichen ({key})
 	This document has no bookmarks.	Dieses Dokument hat keine Lesezeichen.
 	This document has no layers.	Dieses Dokument hat keine Ebenen.
 	This document has no attachments.	Dieses Dokument hat keine Anhänge.
@@ -1256,8 +1263,8 @@
 	No matches	Keine Treffer
 	Searching… {s}/{p}	Suche läuft… {s}/{p}
 	{c} of {n}{more}	{c} von {n}{more}
-	Previous (⇧⌘G)	Vorheriger (⇧⌘G)
-	Next (⌘G)	Nächster (⌘G)
+	Previous ({key})	Vorheriger ({key})
+	Next ({key})	Nächster ({key})
 	Find options	Suchoptionen
 	Whole words only	Nur ganze Wörter
 	Case-sensitive	Groß-/Kleinschreibung beachten
@@ -1576,6 +1583,7 @@
 	Couldn't open {name}: {e}	{name} konnte nicht geöffnet werden: {e}
 	Couldn't read {name}: {e}	{name} konnte nicht gelesen werden: {e}
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Der portable Modus ist aus: In {folder} kann nicht geschrieben werden ({error}). Die Einstellungen werden stattdessen in deinem Benutzerordner gespeichert.
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft zeichnet ohne Grafikprozessor und kann daher langsam sein. Ein aktualisierter Grafiktreiber kann helfen.
 	Couldn't save: {e}	Speichern fehlgeschlagen: {e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Anhänge herunterladen kommt im Web mit M3.10 ({n} Bytes bereit)
 	`{command}` {when}	`{command}` {when}
@@ -1693,7 +1701,7 @@
 	there are no pages to print	keine Seiten zum Drucken vorhanden
 	the document has no tags	das Dokument hat keine Tags
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	die Modelle für die Texterkennung sind nicht installiert (führe `cargo xtask models` aus oder setze PRINTCRAFT_MODELS)
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	die Modelle für die Texterkennung sind nicht installiert (installiere PdfCraft neu oder setze PDFCRAFT_MODELS auf den Ordner, der sie enthält)
 	the image is empty	das Bild ist leer
 	this file isn't XFDF, FDF, XML or text form data	diese Datei enthält keine Formulardaten als XFDF, FDF, XML oder Text
 	nothing in the file matches this document	nichts in der Datei passt zu diesem Dokument
@@ -1888,7 +1896,6 @@
 	Open this web page?	Diese Webseite öffnen?
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Skripte laufen in einer Sandbox ohne Datei- oder Netzwerkzugriff. Ein Skript, das eine Webseite öffnen will, braucht zuerst deine Erlaubnis. Bei deaktiviertem JavaScript funktionieren die Standardfunktionen von Acrobat zum Formatieren, Prüfen und Berechnen weiterhin.
 	Sign yourself	Selbst unterschreiben
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	Die Texterkennung ist nicht installiert, ihre Modelle fehlen (führe `cargo xtask models` aus oder setze PDFCRAFT_MODELS).
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	Wird beim Öffnen von PDFs verwendet. Ein ausdrücklich gewählter Start- oder Steuermodus hat für die Sitzung Vorrang.
 	Write this email?	Diese E-Mail schreiben?
 	{who} in this document wants to open this address in your browser:	{who} in diesem Dokument möchte diese Adresse in deinem Browser öffnen:
@@ -2105,3 +2112,26 @@ action wizard	Start	Starten
 	Printer properties	Druckereigenschaften
 	Reset to printer defaults	Auf Druckerstandard zurücksetzen
 	This printer offers no settings of its own.	Dieser Drucker bietet keine eigenen Einstellungen.
+	Scroll tabs left	Tabs nach links scrollen
+	Scroll tabs right	Tabs nach rechts scrollen
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	Gemeinsame Feldeigenschaften
+	{n} fields selected	{n} Felder ausgewählt
+	Mixed	Gemischt
+	Custom font	Benutzerdefinierte Schrift
+	Only checked properties will change. Mixed means the selected fields have different values.	Nur angehakte Eigenschaften werden geändert. „Gemischt“ bedeutet, dass die ausgewählten Felder unterschiedliche Werte haben.
+	Shift- or Ctrl/Command-click to select several fields.	Mit Umschalt- oder Strg/Befehl-Klick mehrere Felder auswählen.
+	Font size 0 uses automatic sizing.	Schriftgröße 0 passt die Größe automatisch an.
+	Character limit:	Zeichenlimit:
+	Character limit 0 means no limit. A comb of characters needs a limit.	Zeichenlimit 0 bedeutet unbegrenzt. Ein Zeichenraster benötigt ein Limit.
+	To change locked fields, also set Locked to No.	Um gesperrte Felder zu ändern, setze auch „Gesperrt“ auf „Nein“.
+	Comb of characters	Kammfeld
+	The document changed while you were editing field properties.	Das Dokument hat sich geändert, während du die Feldeigenschaften bearbeitet hast.
+	The document is no longer open.	Das Dokument ist nicht mehr geöffnet.
+	The field properties dialog is no longer open.	Der Dialog „Feldeigenschaften“ ist nicht mehr geöffnet.
+	The field properties could not be changed.	Die Feldeigenschaften konnten nicht geändert werden.
+	The selected fields could not be found. Select them again.	Die ausgewählten Felder wurden nicht gefunden. Wähle sie erneut aus.
+	The field {name} no longer exists.	Das Feld {name} existiert nicht mehr.
+	A selected field has no widget on any page, so the fields can't be edited together.	Ein ausgewähltes Feld hat auf keiner Seite ein Widget, daher können die Felder nicht gemeinsam bearbeitet werden.
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} mit {dpi} dpi, der größten Auflösung, in der sie gezeichnet werden können)

@@ -6,10 +6,11 @@
 #   $DIST/pdfcraft-<version>-linux-<arch>.deb       Debian, Ubuntu, Mint, Pop!_OS, ...
 #   $DIST/pdfcraft-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
 #   $DIST/pdfcraft-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
+#   $DIST/pdfcraft-cli-<version>-linux-<arch>.tar.gz  the headless CLI alone (servers, CI, agents)
 #
-# Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar"]
+# Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar cli"]
 #
-# Needs: cargo; nfpm for deb/rpm (https://nfpm.goreleaser.com); appimagetool for the AppImage
+# Needs: cargo, curl and the network (the OCR models: cargo xtask models); nfpm for deb/rpm (https://nfpm.goreleaser.com); appimagetool for the AppImage
 # (downloaded into $CARGO_TARGET_DIR if missing). Build on an old distro (CI: Ubuntu 22.04,
 # glibc 2.35) so the binaries run on newer ones. Optional: desktop-file-validate, appstreamcli,
 # zsyncmake (the zsync package) for the AppImage's .zsync.
@@ -20,12 +21,12 @@ HERE="$ROOT/packaging/linux"
 APP_ID=ai.storyteller.pdfcraft
 
 SKIP_BUILD=0
-FORMATS="appimage deb rpm tar"
+FORMATS="appimage deb rpm tar cli"
 while [ $# -gt 0 ]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     --formats) FORMATS="$2"; shift 2 ;;
-    -h | --help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -62,6 +63,8 @@ mkdir -p "$STAGE/usr/share/icons"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/usr/share/icons/"
 mkdir -p "$STAGE/usr/share/doc/pdfcraft"
 copy_docs "$STAGE/usr/share/doc/pdfcraft"
+# OCR models: the app finds them at <bin>/../share/pdfcraft/models, so in every format below.
+stage_models "$STAGE/usr/share/pdfcraft/models"
 
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$STAGE/usr/share/applications/$APP_ID.desktop"
@@ -78,6 +81,19 @@ if has tar; then
   cp -R "$STAGE/usr" "$WORK/tar/$BASENAME"
   tar -C "$WORK/tar" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
   echo "wrote $DIST/$BASENAME.tar.gz"
+fi
+
+# ---- CLI-only .tar.gz ---------------------------------------------------------------------------
+# The stripped pdfcraft-cli (and its opt-in MCP server) with the licences, for machines that never
+# open a window. Like the other formats it needs glibc >= the build host's.
+if has cli; then
+  CLI_NAME="pdfcraft-cli-$VERSION-linux-$ARCH"
+  CLI_DIR="$WORK/cli/$CLI_NAME"
+  mkdir -p "$CLI_DIR"
+  cp "$STAGE/usr/bin/pdfcraft-cli" "$CLI_DIR/"
+  copy_docs "$CLI_DIR"
+  tar -C "$WORK/cli" -czf "$DIST/$CLI_NAME.tar.gz" "$CLI_NAME"
+  echo "wrote $DIST/$CLI_NAME.tar.gz"
 fi
 
 # ---- .deb / .rpm --------------------------------------------------------------------------------

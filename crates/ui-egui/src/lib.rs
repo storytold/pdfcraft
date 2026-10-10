@@ -62,6 +62,7 @@ pub use optimize_ui::{OptimizeDraft, OptimizeTab};
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignStep};
 mod autoscroll;
 mod bidi;
+pub mod bulk_fields;
 mod dialogs;
 mod edit_text_ui;
 mod editing;
@@ -101,6 +102,7 @@ pub(crate) fn date_text_for_pdf(session: &Session) -> Result<String, String> {
 
 /// The longest author name kept (Preferences ▸ Identity, restored settings).
 pub(crate) const MAX_AUTHOR_CHARS: usize = 200;
+
 pub mod portable;
 mod protect;
 mod recovery;
@@ -238,6 +240,8 @@ pub enum Dialog {
     ReplacePages,
     /// Prepare a form ▸ Field Properties.
     FieldProps,
+    /// Shared properties of several selected form fields.
+    BulkFieldProps,
     /// Redact a PDF ▸ Redact pages, Find text and redact, Set properties, apply confirmation.
     RedactPages,
     RedactSearch,
@@ -343,6 +347,8 @@ pub struct PasswordPrompt {
     pub bytes: std::sync::Arc<Vec<u8>>,
     pub input: String,
     pub error: Option<String>,
+    /// A late startup file must stay in the background even after it is unlocked.
+    activate: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -412,6 +418,10 @@ pub struct PdfCraftApp {
     pub full_screen: bool,
     /// Files delivered asynchronously (web drag-and-drop, web file picker).
     pub inbox: Inbox,
+    /// The browser's startup `?file=` download. Unlike a deliberate Open or drop, a late
+    /// arrival opens in the background once the user has started working (#171).
+    pub startup_inbox: Inbox,
+    startup_superseded: bool,
     /// Asynchronous opens that failed (web `?file=` fetches), shown as a notice.
     pub failed_inbox: FailedInbox,
     /// Requests from the operating system, polled every frame (macOS Apple events).
@@ -558,6 +568,7 @@ pub struct PdfCraftApp {
     /// The Comment Properties dialog's state.
     pub comment_props: Option<comment_props::PropsDraft>,
     pub field_props: Option<prepare::FieldDraft>,
+    pub bulk_field_props: Option<bulk_fields::Draft>,
     pub redact_prefs: RedactPrefs,
     pub redact_pages_draft: RedactPagesDraft,
     pub redact_search: RedactSearchDraft,
@@ -618,6 +629,25 @@ impl Default for PdfCraftApp {
     }
 }
 
+/// A restored colour: an `[r, g, b]` array of finite numbers, each clamped to 0–1 (restored
+/// settings are untrusted). Anything else (a string, a wrong length, a null or a non-finite
+/// number) is refused whole, so the caller keeps its default.
+fn rgb_triple(v: &serde_json::Value) -> Option<[f64; 3]> {
+    let a = v.as_array()?;
+    if a.len() != 3 {
+        return None;
+    }
+    let mut out = [0.0f64; 3];
+    for (slot, x) in out.iter_mut().zip(a.iter()) {
+        let n = x.as_f64()?;
+        if !n.is_finite() {
+            return None;
+        }
+        *slot = n.clamp(0.0, 1.0);
+    }
+    Some(out)
+}
+
 impl PdfCraftApp {
     pub fn new() -> Self {
         Self {
@@ -656,6 +686,8 @@ impl PdfCraftApp {
             password_prompt: None,
             full_screen: false,
             inbox: Default::default(),
+            startup_inbox: Default::default(),
+            startup_superseded: false,
             failed_inbox: Default::default(),
             os_events: None,
             close_request: None,
@@ -743,6 +775,7 @@ impl PdfCraftApp {
             signature_images: Default::default(),
             comment_props: None,
             field_props: None,
+            bulk_field_props: None,
             redact_prefs: RedactPrefs::default(),
             redact_pages_draft: RedactPagesDraft::default(),
             redact_search: RedactSearchDraft::default(),
@@ -766,12 +799,14 @@ impl PdfCraftApp {
     fn apply_initial_view(&mut self, index: usize, v: &pdfcraft_engine::InitialView) {
         use pdfcraft_engine::{InitialLayout as L, Magnification as M, Navigation as N};
         let pages = self.session.get(self.views[index].id).map_or(0, |d| d.info.pages.len());
-        match v.navigation {
-            N::PageOnly => {}
-            N::Bookmarks => self.right = Some(RightPanel::Bookmarks),
-            N::Pages => self.right = Some(RightPanel::Pages),
-            N::Attachments => self.right = Some(RightPanel::Attachments),
-            N::Layers => self.right = Some(RightPanel::Layers),
+        if self.active == Some(index) {
+            match v.navigation {
+                N::PageOnly => {}
+                N::Bookmarks => self.right = Some(RightPanel::Bookmarks),
+                N::Pages => self.right = Some(RightPanel::Pages),
+                N::Attachments => self.right = Some(RightPanel::Attachments),
+                N::Layers => self.right = Some(RightPanel::Layers),
+            }
         }
         let view = &mut self.views[index];
         match v.layout {
@@ -801,21 +836,37 @@ impl PdfCraftApp {
 
     /// Open a document and make it the active tab. Encrypted files raise the password prompt.
     pub fn open_bytes(&mut self, name: &str, path: Option<String>, bytes: Vec<u8>) -> Result<(), String> {
-        // Images and text files become new, unsaved PDFs (Create a PDF).
-        if let Some(r) = self.open_converted(name, &bytes) {
-            return r;
-        }
-        self.try_open(name, path, std::sync::Arc::new(bytes), None)
+        self.startup_superseded = true;
+        self.open_bytes_with_focus(name, path, bytes, true)
     }
 
-    fn try_open(&mut self, name: &str, path: Option<String>, bytes: std::sync::Arc<Vec<u8>>, password: Option<&str>) -> Result<(), String> {
+    fn open_bytes_with_focus(&mut self, name: &str, path: Option<String>, bytes: Vec<u8>, activate: bool) -> Result<(), String> {
+        // Images and text files become new, unsaved PDFs (Create a PDF).
+        let active = self.active;
+        if let Some(r) = self.open_converted(name, &bytes) {
+            if !activate {
+                self.active = active;
+            }
+            return r;
+        }
+        self.try_open(name, path, std::sync::Arc::new(bytes), None, activate)
+    }
+
+    fn try_open(
+        &mut self,
+        name: &str,
+        path: Option<String>,
+        bytes: std::sync::Arc<Vec<u8>>,
+        password: Option<&str>,
+        activate: bool,
+    ) -> Result<(), String> {
         use pdfcraft_render::OpenError;
         let size = bytes.len();
         let id = match self.session.open(name, path.clone(), bytes.clone(), password) {
             Ok(id) => id,
             Err(e @ (OpenError::NeedsPassword | OpenError::WrongPassword)) => {
                 let error = matches!(e, OpenError::WrongPassword).then(|| "Incorrect password. Try again.".to_string());
-                self.password_prompt = Some(PasswordPrompt { name: name.to_string(), path, bytes, input: String::new(), error });
+                self.password_prompt = Some(PasswordPrompt { name: name.to_string(), path, bytes, input: String::new(), error, activate });
                 return Ok(());
             }
             Err(e) => return Err(e.to_string()),
@@ -824,7 +875,7 @@ impl PdfCraftApp {
         let doc = self.session.get(id).ok_or("the document could not be opened")?;
         let pages = doc.info.pages.len();
         // Acrobat opens straight to the Comments panel when a document has comments.
-        if self.right.is_none() {
+        if activate && self.right.is_none() {
             self.right = if !doc.info.annotations.is_empty() {
                 Some(RightPanel::Comments)
             } else if !doc.info.outline.is_empty() {
@@ -835,12 +886,14 @@ impl PdfCraftApp {
         }
         let initial = doc.initial_view();
         self.views.push(DocView::new(id, &doc.info, self.view_defaults));
-        self.active = Some(self.views.len() - 1);
+        if activate {
+            self.active = Some(self.views.len() - 1);
+        }
         self.apply_initial_view(self.views.len() - 1, &initial);
-        if let Some(mode) = self.mode_override {
+        if activate && let Some(mode) = self.mode_override {
             // Explicit mode options do not reset independent --tool / --left choices.
             self.mode = mode;
-        } else if self.mode != self.default_mode {
+        } else if activate && self.mode != self.default_mode {
             // Switch workspace like the mode bar, but a left panel the user (or `--left closed`)
             // closed stays closed, and an unchanged mode keeps the tool panel the user chose.
             let left_open = self.left_open;
@@ -854,8 +907,12 @@ impl PdfCraftApp {
         }
         // What the form's scripts said while it opened (messages, errors) shows now, not with
         // the next edit.
-        let out = self.session.take_js_output(id);
-        self.handle_js(id, out);
+        // Background documents keep their script output until their tab is selected: a print
+        // or save request must never act on the current document instead.
+        if activate {
+            let out = self.session.take_js_output(id);
+            self.handle_js(id, out);
+        }
         Ok(())
     }
 
@@ -930,6 +987,7 @@ impl PdfCraftApp {
     /// Browsers read dropped files asynchronously; the bytes land in `inbox` and open next frame.
     #[cfg(target_arch = "wasm32")]
     fn open_dropped(&mut self, f: egui::DroppedFileHandle, ctx: &egui::Context) {
+        self.startup_superseded = true;
         let inbox = self.inbox.clone();
         let ctx = ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
@@ -990,10 +1048,11 @@ impl PdfCraftApp {
     pub fn submit_password(&mut self, password: Option<String>) {
         let Some(p) = self.password_prompt.take() else { return };
         let Some(pw) = password else { return };
-        match self.try_open(&p.name, p.path, p.bytes, Some(&pw)) {
+        match self.try_open(&p.name, p.path, p.bytes, Some(&pw), p.activate) {
             Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &p.name), ("e", &e.to_string())]),
-            // A recovered encrypted document is open once the prompt is gone.
-            Ok(()) if self.password_prompt.is_none() => {
+            // A recovered encrypted document is open once its foreground prompt is gone.
+            // Unlocking a background startup file must not finish another file's recovery.
+            Ok(()) if p.activate && self.password_prompt.is_none() => {
                 if let Some(meta) = self.pending_recovered.clone() {
                     self.finish_recovery(&meta);
                 }
@@ -1027,6 +1086,7 @@ impl PdfCraftApp {
     }
 
     pub fn open_dialog(&mut self) {
+        self.startup_superseded = true;
         #[cfg(not(target_arch = "wasm32"))]
         self.pick(
             pickers::PickFor::Open,
@@ -1238,6 +1298,19 @@ impl PdfCraftApp {
             // Null follows the interface language.
             "date_language": self.session.date_language(),
             "author": self.comment_prefs.author,
+            // Per-tool comment defaults (colours, opacity, widths), so Make Current
+            // Properties Default survives a restart (#340).
+            "comment_styles": self
+                .comment_prefs
+                .styles()
+                .map(|(t, s)| serde_json::json!({
+                    "tool": t.command(),
+                    "color": s.color,
+                    "opacity": s.opacity,
+                    "width": s.width,
+                    "fill": s.fill,
+                }))
+                .collect::<Vec<_>>(),
             // Drawn signatures keep their original form (older settings read the same).
             "signature": match &self.signature { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
             "signature_text": match &self.signature { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
@@ -1305,6 +1378,34 @@ impl PdfCraftApp {
         // name is cut to a sane length.
         if let Some(author) = v["author"].as_str().map(str::trim).filter(|a| !a.is_empty()) {
             self.comment_prefs.author = author.chars().take(MAX_AUTHOR_CHARS).collect();
+        }
+        // Per-tool comment styles (#340): each field goes through its clamping setter, so a
+        // malformed or hostile entry is clamped or ignored rather than trusted.
+        if let Some(styles) = v["comment_styles"].as_array() {
+            for e in styles {
+                let Some(tool) = e["tool"].as_str().and_then(crate::comments::CommentTool::from_command) else { continue };
+                if let Some(c) = rgb_triple(&e["color"]) {
+                    self.comment_prefs.set_color(tool, c);
+                }
+                if let Some(o) = e["opacity"].as_f64() {
+                    self.comment_prefs.set_opacity(tool, o);
+                }
+                if let Some(w) = e["width"].as_f64() {
+                    self.comment_prefs.set_width(tool, w);
+                }
+                // `"fill": null` is a saved "no fill", which clears a tool's default fill; a
+                // missing or malformed fill keeps it.
+                let fill = match e.get("fill") {
+                    Some(serde_json::Value::Null) => Some(None),
+                    Some(v) => rgb_triple(v).map(Some),
+                    None => None,
+                };
+                if let Some(fill) = fill {
+                    let mut s = self.comment_prefs.style(tool);
+                    s.fill = fill;
+                    self.comment_prefs.set_style(tool, s);
+                }
+            }
         }
         if let Ok(s) = serde_json::from_value::<Vec<Vec<[f32; 2]>>>(v["signature"].clone())
             && s.iter().all(|st| st.iter().all(|p| p.iter().all(|x| x.is_finite())))
@@ -1602,7 +1703,13 @@ impl PdfCraftApp {
                 && !ctx.egui_wants_keyboard_input()
                 && ctx.input_mut(|input| input.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, Key::A)))
             {
-                self.views[i].select_all();
+                if self.is_preparing() {
+                    if let Some(doc) = self.session.get(self.views[i].id) {
+                        prepare::select_all(&mut self.views[i], &doc.form);
+                    }
+                } else {
+                    self.views[i].select_all();
+                }
             }
             self.tool_keys(i, ctx);
             canvas::shortcuts(&mut self.views[i], ctx);
@@ -1685,6 +1792,8 @@ impl eframe::App for PdfCraftApp {
             }
         }
         self.sync_theme(ctx);
+        // Remember user work even if its tab is subsequently closed or Home is selected.
+        self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.dialog.is_some() || self.password_prompt.is_some();
         // Before taking this frame's drop: the grid must be drawn once with the pointer where
         // the files were let go before the gap is read.
         self.finish_grid_drop(ctx);
@@ -1711,6 +1820,22 @@ impl eframe::App for PdfCraftApp {
                 self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
             }
         }
+        // Don't replace a pending prompt or import. A startup file may need its own password
+        // prompt, so its bytes stay queued until the current interaction finishes.
+        if self.password_prompt.is_none()
+            && self.image_import.is_none()
+            && self.dialog.is_none()
+            && self.close_request.is_none()
+            && self.pending_link.is_none()
+        {
+            let startup = self.startup_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+            for (name, bytes) in startup {
+                let activate = !self.startup_superseded;
+                if let Err(e) = self.open_bytes_with_focus(&name, None, bytes, activate) {
+                    self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);
+                }
+            }
+        }
         let failed: Vec<(String, String)> = self.failed_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
         for (name, e) in failed {
             self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);
@@ -1725,6 +1850,10 @@ impl eframe::App for PdfCraftApp {
                 // Like closing the window: `guard_quit` asks about unsaved changes.
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }
+        }
+        if let Some((_, id)) = self.active_ids() {
+            let out = self.session.take_js_output(id);
+            self.handle_js(id, out);
         }
         if let Some(mut control) = self.control.take() {
             control.tick(ctx, self);

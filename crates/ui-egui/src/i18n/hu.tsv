@@ -66,7 +66,7 @@
 	Double-click	Dupla kattintás
 	Select a word	Szó kijelölése
 	Clear selection / close find	Kijelölés törlése / keresés bezárása
-	Zoom in / out (also pinch or ⌘-scroll)	Nagyítás / kicsinyítés (csípéssel vagy ⌘-görgetéssel is)
+	Zoom in / out (also pinch or {key}-scroll)	Nagyítás / kicsinyítés (csípéssel vagy {key}-görgetéssel is)
 	Rotate view	Nézet forgatása
 	First / last page	Első / utolsó oldal
 	Previous / next page	Előző / következő oldal
@@ -74,16 +74,16 @@
 	Select all pages (Organize)	Összes oldal kijelölése (Rendezés)
 	Home	Kezdőlap
 	Open	Megnyitás
-	Open a PDF (⌘O)	PDF megnyitása (⌘O)
+	Open a PDF ({key})	PDF megnyitása ({key})
 	Dark gray theme	Sötétszürke téma
 	Light theme	Világos téma
 	All tools	Minden eszköz
 	Read	Olvasás
 	Convert	Konvertálás
 	E-Sign	E-aláírás
-	Print (⌘P)	Nyomtatás (⌘P)
+	Print ({key})	Nyomtatás ({key})
 	Save (M4)	Mentés (M4)
-	Document properties (⌘D)	Dokumentum tulajdonságai (⌘D)
+	Document properties ({key})	Dokumentum tulajdonságai ({key})
 	Find tools and commands	Eszközök és parancsok keresése
 	Fit to height	Magassághoz igazítás
 	Zoom in	Nagyítás
@@ -112,9 +112,9 @@
 	Compare	Összehasonlítás
 	Page thumbnails	Oldalbélyegképek
 	Form fields	Űrlapmezők
-	Zoom out (⌘−)	Kicsinyítés (⌘−)
-	Zoom in (⌘+)	Nagyítás (⌘+)
-	Rotate view clockwise (⇧⌘+)	Nézet forgatása az óramutató járásával megegyezően (⇧⌘+)
+	Zoom out ({key})	Kicsinyítés ({key})
+	Zoom in ({key})	Nagyítás ({key})
+	Rotate view clockwise ({key})	Nézet forgatása az óramutató járásával megegyezően ({key})
 	Toggle fit page / fit width	Teljes oldal / szélesség váltása
 	Next page	Következő oldal
 	Previous page	Előző oldal
@@ -1068,6 +1068,7 @@
 	Redacted area fill colour:	Kitakart terület kitöltőszíne:
 	Use overlay text	Fedőszöveg használata
 	Custom text:	Saját szöveg:
+	Redaction code:	Kitakarási kód:
 	Font:	Betűtípus:
 	Font size:	Betűméret:
 	Auto-size text to fit redaction region	A szöveg automatikus méretezése a kitakarási területhez
@@ -1169,7 +1170,7 @@
 	Searchable Image (Exact)	Kereshető kép (pontos)
 	Adds invisible text over each word; the page image is not changed	Láthatatlan szöveget helyez minden szóra; az oldalkép nem változik
 	Downsample to	Feloldás csökkentése erre
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	A szövegfelismerés nincs telepítve: hiányoznak a modelljei (futtasd a `cargo xtask models` parancsot, vagy állítsd be a PRINTCRAFT_MODELS változót).
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	A szövegfelismerés nincs telepítve: hiányoznak a modellfájljai. Telepítsd újra a PdfCraftot, vagy állítsd a PDFCRAFT_MODELS változót az őket tartalmazó mappára.
 	Settings	Beállítások
 	Optional	Nem kötelező
 	Planned · {m}	Tervezett · {m}
@@ -1237,7 +1238,7 @@
 	Expand all bookmarks	Összes könyvjelző kibontása
 	Expand top-level bookmarks	A legfelső szintű könyvjelzők kibontása
 	Collapse all bookmarks	Összes könyvjelző összecsukása
-	New bookmark (⌘B)	Új könyvjelző (⌘B)
+	New bookmark ({key})	Új könyvjelző ({key})
 	This document has no bookmarks.	Ebben a dokumentumban nincs könyvjelző.
 	This document has no layers.	Ebben a dokumentumban nincs réteg.
 	This document has no attachments.	Ebben a dokumentumban nincs melléklet.
@@ -1251,8 +1252,8 @@
 	No matches	Nincs találat
 	Searching… {s}/{p}	Keresés… {s}/{p}
 	{c} of {n}{more}	{c} / {n}{more}
-	Previous (⇧⌘G)	Előző (⇧⌘G)
-	Next (⌘G)	Következő (⌘G)
+	Previous ({key})	Előző ({key})
+	Next ({key})	Következő ({key})
 	Find options	Keresés beállításai
 	Whole words only	Csak egész szavak
 	Case-sensitive	Kis- és nagybetű
@@ -1571,6 +1572,7 @@
 	Couldn't open {name}: {e}	{name} megnyitása nem sikerült: {e}
 	Couldn't read {name}: {e}	{name} olvasása nem sikerült: {e}
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	A hordozható mód ki van kapcsolva: {folder} nem írható ({error}). A beállítások helyette a felhasználói mappádban maradnak.
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	A PdfCraft grafikus processzor nélkül rajzol, ezért lassú lehet. A grafikus illesztőprogram frissítése segíthet.
 	Couldn't save: {e}	A mentés nem sikerült: {e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	A mellékletek letöltése a weben az M3.10-zel érkezik ({n} bájt kész)
 	`{command}` {when}	`{command}` {when}
@@ -1688,7 +1690,7 @@
 	there are no pages to print	nincs nyomtatható oldal
 	the document has no tags	a dokumentumnak nincs címkéje
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	a szövegfelismerés modelljei nincsenek telepítve (futtasd a `cargo xtask models` parancsot, vagy állítsd be a PRINTCRAFT_MODELS változót)
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	a szövegfelismerés modelljei nincsenek telepítve (telepítsd újra a PdfCraftot, vagy állítsd a PDFCRAFT_MODELS változót az őket tartalmazó mappára)
 	the image is empty	a kép üres
 	this file isn't XFDF, FDF, XML or text form data	ez a fájl nem XFDF, FDF, XML vagy szöveges űrlapadat
 	nothing in the file matches this document	a fájlban semmi sem illeszkedik ehhez a dokumentumhoz
@@ -1883,7 +1885,6 @@
 	Open this web page?	Megnyitod ezt a weboldalt?
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	A szkriptek homokozóban futnak, fájl- és hálózat-hozzáférés nélkül. Ha egy szkript weboldalt akar nyitni, előbb az engedélyed kell. Kikapcsolt JavaScript mellett az Acrobat szabványos formázó, ellenőrző és számoló függvényei továbbra is működnek.
 	Sign yourself	Saját kezű aláírás
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	A szövegfelismerés nincs telepítve: hiányoznak a modelljei (futtasd a `cargo xtask models` parancsot, vagy állítsd be a PDFCRAFT_MODELS változót).
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	PDF-ek megnyitásakor érvényes. A kifejezetten választott indítási vagy vezérlőmód a munkamenetre felülírja.
 	Write this email?	Megírod ezt az e-mailt?
 	{who} in this document wants to open this address in your browser:	{who} ebben a dokumentumban meg akarja nyitni ezt a címet a böngésződben:
@@ -2052,8 +2053,8 @@ action wizard	Start	Indítás
 # Labels that reach tl!() through a variable (Fill & Sign buttons, link prompts, notices, history labels, checker and certificate rows)
 	Add {what}	{what} hozzáadása
 	Use {what}	{what} használata
-	Place saved {what}	Mentett elem elhelyezése: {what}
-	Remove saved {what}	Mentett elem eltávolítása: {what}
+	Place saved {what}	Mentett {what} elhelyezése
+	Remove saved {what}	Mentett {what} eltávolítása
 	A link	Egy hivatkozás
 	A button	Egy gomb
 	A script	Egy szkript
@@ -2079,11 +2080,17 @@ action wizard	Start	Indítás
 	Basic constraints	Alapvető korlátozások
 	SHA-1 digest	SHA-1 kivonat
 	SHA-256 digest	SHA-256 kivonat
-	Squiggly	Hullámos
+	Squiggly	Hullámos aláhúzás
 	Home / End	Home / End
 	H / Space (hold)	H / szóköz (nyomva tartva)
 	Rotation:	Elforgatás:
 	Line ending	Vonalvég
+	Open arrow	Nyitott nyíl
+	Closed arrow	Zárt nyíl
+	Butt	Tompa
+	Reverse open arrow	Fordított nyitott nyíl
+	Reverse closed arrow	Fordított zárt nyíl
+	Slash	Perjel
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	A szabványos betűtípusok nem tudják megjeleníteni ezt: „{c}” ({code}). Egyelőre csak nyugat-európai karakterek adhatók hozzá szövegként.
 	Larger pages	Nagyobb oldalak
 	Smaller pages	Kisebb oldalak
@@ -2103,3 +2110,26 @@ action wizard	Start	Indítás
 	Printer properties	Nyomtató tulajdonságai
 	Reset to printer defaults	A nyomtató alapértékeinek visszaállítása
 	This printer offers no settings of its own.	Ennek a nyomtatónak nincsenek saját beállításai.
+	Scroll tabs left	Lapok görgetése balra
+	Scroll tabs right	Lapok görgetése jobbra
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	Közös mezőtulajdonságok
+	{n} fields selected	{n} mező kijelölve
+	Mixed	Eltérő értékek
+	Custom font	Egyéni betűtípus
+	Only checked properties will change. Mixed means the selected fields have different values.	Csak a bejelölt tulajdonságok változnak. Az „Eltérő értékek” azt jelenti, hogy a kijelölt mezők értékei különböznek.
+	Shift- or Ctrl/Command-click to select several fields.	Több mező kijelöléséhez kattints a Shift vagy Ctrl/Command nyomva tartásával.
+	Font size 0 uses automatic sizing.	A 0 betűméret automatikus méretezést jelent.
+	Character limit:	Karakterkorlát:
+	Character limit 0 means no limit. A comb of characters needs a limit.	A 0 karakterkorlát korlátlan hosszt jelent. A karaktercellákhoz korlát szükséges.
+	To change locked fields, also set Locked to No.	Zárolt mezők módosításához a „Zárolt” értékét is állítsd „Nem”-re.
+	Comb of characters	Karakterfésű
+	The document changed while you were editing field properties.	A dokumentum megváltozott, miközben a mezőtulajdonságokat szerkesztetted.
+	The document is no longer open.	A dokumentum már nincs megnyitva.
+	The field properties dialog is no longer open.	A mezőtulajdonságok párbeszédablak már nincs megnyitva.
+	The field properties could not be changed.	A mezőtulajdonságokat nem sikerült módosítani.
+	The selected fields could not be found. Select them again.	A kijelölt mezők nem találhatók. Jelöld ki őket újra.
+	The field {name} no longer exists.	A(z) {name} mező már nem létezik.
+	A selected field has no widget on any page, so the fields can't be edited together.	Az egyik kijelölt mezőnek egyik oldalon sincs widgetje, ezért a mezők nem szerkeszthetők együtt.
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} {dpi} dpi felbontással, a legnagyobb méretben, amelyben megjeleníthetők)

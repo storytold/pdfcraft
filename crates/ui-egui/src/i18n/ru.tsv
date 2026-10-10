@@ -89,7 +89,7 @@
 	Double-click	Двойной щелчок
 	Select a word	Выделить слово
 	Clear selection / close find	Снять выделение / закрыть поиск
-	Zoom in / out (also pinch or ⌘-scroll)	Масштаб (также щипок или ⌘-прокрутка)
+	Zoom in / out (also pinch or {key}-scroll)	Масштаб (также щипок или {key}-прокрутка)
 	Rotate view	Повернуть вид
 	First / last page	Первая / последняя страница
 	Previous / next page	Предыдущая / следующая страница
@@ -97,16 +97,16 @@
 	Select all pages (Organize)	Выделить все страницы (Организация)
 	Home	Главная
 	Open	Открыть
-	Open a PDF (⌘O)	Открыть PDF (⌘O)
+	Open a PDF ({key})	Открыть PDF ({key})
 	Dark gray theme	Тёмно-серая тема
 	Light theme	Светлая тема
 	All tools	Все инструменты
 	Read	Чтение
 	Convert	Конвертация
 	E-Sign	Электронная подпись
-	Print (⌘P)	Печать (⌘P)
+	Print ({key})	Печать ({key})
 	Save (M4)	Сохранить (M4)
-	Document properties (⌘D)	Свойства документа (⌘D)
+	Document properties ({key})	Свойства документа ({key})
 	Find tools and commands	Найти инструменты и команды
 	Fit to height	По высоте
 	Zoom in	Увеличить
@@ -135,9 +135,9 @@
 	Compare	Сравнить
 	Page thumbnails	Миниатюры страниц
 	Form fields	Поля формы
-	Zoom out (⌘−)	Уменьшить (⌘−)
-	Zoom in (⌘+)	Увеличить (⌘+)
-	Rotate view clockwise (⇧⌘+)	Повернуть вид по часовой стрелке (⇧⌘+)
+	Zoom out ({key})	Уменьшить ({key})
+	Zoom in ({key})	Увеличить ({key})
+	Rotate view clockwise ({key})	Повернуть вид по часовой стрелке ({key})
 	Toggle fit page / fit width	Переключить по странице / по ширине
 	Next page	Следующая страница
 	Previous page	Предыдущая страница
@@ -919,6 +919,12 @@
 	Icon	Значок
 	Thickness	Толщина
 	Line ending	Окончание линии
+	Open arrow	Открытая стрелка
+	Closed arrow	Закрытая стрелка
+	Butt	Торец
+	Reverse open arrow	Обратная открытая стрелка
+	Reverse closed arrow	Обратная закрытая стрелка
+	Slash	Косая черта
 	Modified	Изменено
 	No status has been set.	Статус не установлен.
 	Compare Files	Сравнить файлы
@@ -1093,6 +1099,7 @@
 	Redacted area fill colour:	Цвет заливки скрытой области:
 	Use overlay text	Использовать текст поверх
 	Custom text:	Свой текст:
+	Redaction code:	Код сокрытия:
 	Font:	Шрифт:
 	Font size:	Размер шрифта:
 	Auto-size text to fit redaction region	Автоподбор размера текста по области сокрытия
@@ -1194,7 +1201,7 @@
 	Searchable Image (Exact)	Доступное для поиска изображение (точное)
 	Adds invisible text over each word; the page image is not changed	Добавляет невидимый текст над каждым словом; изображение страницы не меняется
 	Downsample to	Уменьшить до
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	Распознавание текста не установлено: отсутствуют модели (запустите `cargo xtask models` или задайте PRINTCRAFT_MODELS).
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Распознавание текста не установлено: отсутствуют файлы моделей. Переустановите PdfCraft или задайте в PDFCRAFT_MODELS папку, в которой они лежат.
 	Settings	Настройки
 	Optional	Опционально
 	Planned · {m}	Запланировано · {m}
@@ -1262,7 +1269,7 @@
 	Expand all bookmarks	Развернуть все закладки
 	Expand top-level bookmarks	Развернуть закладки верхнего уровня
 	Collapse all bookmarks	Свернуть все закладки
-	New bookmark (⌘B)	Новая закладка (⌘B)
+	New bookmark ({key})	Новая закладка ({key})
 	This document has no bookmarks.	В этом документе нет закладки.
 	This document has no layers.	В этом документе нет слоёв.
 	This document has no attachments.	В этом документе нет вложений.
@@ -1277,8 +1284,8 @@
 	No matches	Совпадений нет
 	Searching… {s}/{p}	Поиск… {s}/{p}
 	{c} of {n}{more}	{c} из {n}{more}
-	Previous (⇧⌘G)	Предыдущее (⇧⌘G)
-	Next (⌘G)	Следующее (⌘G)
+	Previous ({key})	Предыдущее ({key})
+	Next ({key})	Следующее ({key})
 	Find options	Параметры поиска
 	Whole words only	Только целые слова
 	Case-sensitive	С учётом регистра
@@ -1760,7 +1767,7 @@
 	there are no pages to print	нет страниц для печати
 	the document has no tags	у документа нет тегов
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	модели распознавания текста не установлены (запустите `cargo xtask models` или задайте PRINTCRAFT_MODELS)
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	модели распознавания текста не установлены (переустановите PdfCraft или задайте в PDFCRAFT_MODELS папку, в которой они лежат)
 	the image is empty	изображение пустое
 	this file isn't XFDF, FDF, XML or text form data	этот файл не является XFDF, FDF, XML или текстовыми данными формы
 	nothing in the file matches this document	ничего в файле не соответствует этому документу
@@ -1955,7 +1962,6 @@
 	Open this web page?	Открыть эту веб-страницу?
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Скрипты выполняются в песочнице без доступа к файлам и сети. Скрипт, который просит открыть веб-страницу, сначала нуждается в вашем разрешении. При отключённом JavaScript стандартные функции Acrobat форматирования, проверки и вычислений всё равно работают.
 	Sign yourself	Подписать самим собой
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	Распознавание текста не установлено: отсутствуют модели (запустите `cargo xtask models` или задайте PDFCRAFT_MODELS).
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	Используется при открытии PDF. Явный запуск или режим управления имеет приоритет для сессии.
 	Write this email?	Написать это письмо?
 	{who} in this document wants to open this address in your browser:	{who} в этом документе хочет открыть этот адрес в вашем браузере:
@@ -2019,3 +2025,26 @@
 	Printer properties	Свойства принтера
 	Reset to printer defaults	Вернуть параметры принтера по умолчанию
 	This printer offers no settings of its own.	У этого принтера нет собственных параметров.
+	Scroll tabs left	Прокрутить вкладки влево
+	Scroll tabs right	Прокрутить вкладки вправо
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	Общие свойства полей
+	{n} fields selected	Выбрано полей: {n}
+	Mixed	Разные значения
+	Custom font	Пользовательский шрифт
+	Only checked properties will change. Mixed means the selected fields have different values.	Изменятся только отмеченные свойства. «Разные значения» означает, что значения выбранных полей различаются.
+	Shift- or Ctrl/Command-click to select several fields.	Щёлкните с Shift или Ctrl/Command, чтобы выбрать несколько полей.
+	Font size 0 uses automatic sizing.	Размер шрифта 0 включает автоматический подбор размера.
+	Character limit:	Ограничение символов:
+	Character limit 0 means no limit. A comb of characters needs a limit.	Ограничение 0 означает отсутствие ограничения. Для посимвольных ячеек нужно задать ограничение.
+	To change locked fields, also set Locked to No.	Чтобы изменить заблокированные поля, также установите «Заблокировано» в «Нет».
+	Comb of characters	Гребёнка символов
+	The document changed while you were editing field properties.	Документ изменился, пока вы редактировали свойства полей.
+	The document is no longer open.	Документ больше не открыт.
+	The field properties dialog is no longer open.	Окно свойств полей больше не открыто.
+	The field properties could not be changed.	Не удалось изменить свойства полей.
+	The selected fields could not be found. Select them again.	Выбранные поля не найдены. Выберите их снова.
+	The field {name} no longer exists.	Поле {name} больше не существует.
+	A selected field has no widget on any page, so the fields can't be edited together.	У одного из выбранных полей нет виджета ни на одной странице, поэтому поля нельзя изменить вместе.
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} — с разрешением {dpi} dpi, максимальным, с каким их можно отрисовать)

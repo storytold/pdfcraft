@@ -112,6 +112,10 @@ impl<'a> Deref for Pages<'a> {
 /// PdfCraft patch: maximum page-tree depth (direct dictionaries have no id to track).
 const MAX_PAGE_TREE_DEPTH: usize = 256;
 
+/// PdfCraft patch: the largest `/UserUnit` honoured, as in Acrobat (a larger value counts as
+/// this one).
+const MAX_USER_UNIT: f64 = 75_000.0;
+
 fn resolve_pages<'a>(
     pages_dict: &Dict<'a>,
     entries: &mut Vec<Page<'a>>,
@@ -185,6 +189,7 @@ pub struct Page<'a> {
     media_box: Rect,
     crop_box: Rect,
     rotation: Rotation,
+    user_unit: f32,
     page_streams: OnceLock<Option<Vec<u8>>>,
     resources: Resources<'a>,
     ctx: ReaderContext<'a>,
@@ -223,6 +228,13 @@ impl<'a> Page<'a> {
             _ => Rotation::None,
         };
 
+        // PdfCraft patch: the page's own `/UserUnit` (it isn't inherited), read as Acrobat reads
+        // it: a number from 1 up, at most `MAX_USER_UNIT`; anything else counts as 1.
+        let user_unit = dict
+            .get::<f64>(USER_UNIT)
+            .filter(|u| *u >= 1.0)
+            .map_or(1.0, |u| u.min(MAX_USER_UNIT) as f32);
+
         let ctx = resources.ctx.clone();
         let resources = Resources::from_parent(
             dict.get::<Dict<'_>>(RESOURCES).unwrap_or_default(),
@@ -234,6 +246,7 @@ impl<'a> Page<'a> {
             media_box,
             crop_box,
             rotation,
+            user_unit,
             page_streams: OnceLock::new(),
             resources,
             ctx,
@@ -313,6 +326,11 @@ impl<'a> Page<'a> {
         self.crop_box
     }
 
+    /// PdfCraft patch: the size of the page's user-space unit in points (`/UserUnit`).
+    pub fn user_unit(&self) -> f32 {
+        self.user_unit
+    }
+
     /// Return the intersection of crop box and media box.
     pub fn intersected_crop_box(&self) -> Rect {
         self.crop_box().intersect(self.media_box())
@@ -339,7 +357,10 @@ impl<'a> Page<'a> {
     /// Depending on the document, it is either based on the media box or the crop box
     /// of the page. In addition to that, it also takes the rotation of the page into account.
     pub fn render_dimensions(&self) -> (f32, f32) {
-        let (mut base_width, mut base_height) = self.base_dimensions();
+        let (base_width, base_height) = self.base_dimensions();
+        // PdfCraft patch: in points, after `/UserUnit`.
+        let (mut base_width, mut base_height) =
+            (base_width * self.user_unit, base_height * self.user_unit);
 
         if matches!(
             self.rotation(),
@@ -379,6 +400,8 @@ impl<'a> Page<'a> {
     pub fn initial_transform(&self, invert_y: bool) -> Transform {
         let crop_box = self.intersected_crop_box();
         let (_, base_height) = self.base_dimensions();
+        // PdfCraft patch: the page in points, after `/UserUnit`.
+        let base_height = base_height * self.user_unit;
         let (width, height) = self.render_dimensions();
 
         let horizontal_t = Transform::ROTATE_CW_90 * Transform::translate((0.0, -width as f64));
@@ -412,9 +435,16 @@ impl<'a> Page<'a> {
             Transform::IDENTITY
         };
 
-        rotation_transform
-            * inversion_transform
-            * Transform::translate((-crop_box.x0, -crop_box.y0))
+        let user_space = Transform::translate((-crop_box.x0, -crop_box.y0));
+        // PdfCraft patch: user space in units of `/UserUnit` points. A page without it keeps
+        // exactly the transform it had.
+        let user_space = if self.user_unit == 1.0 {
+            user_space
+        } else {
+            Transform::scale(f64::from(self.user_unit)) * user_space
+        };
+
+        rotation_transform * inversion_transform * user_space
     }
 }
 

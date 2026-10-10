@@ -1127,6 +1127,57 @@ fn forms_through_tools() {
     assert_ne!(v, "Filled by an agent");
 }
 
+/// A form whose fields are only page widgets (the `/Fields` list is empty) still lists, fills and
+/// resets through the tools, and the leniency shows up as a repair note.
+#[test]
+fn orphan_form_fields_through_tools() {
+    /// One page with two text fields that appear only as page widgets: the AcroForm lists none.
+    fn orphan_form() -> Vec<u8> {
+        let objs: Vec<&str> = vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",                                     // 1
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",                     // 2
+            "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>",                                 // 3
+            "<< /Fields [] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 7 0 R >> >> >>",               // 4
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (alpha) /Rect [10 200 90 220] /P 3 0 R >>", // 5
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (beta) /Rect [10 150 90 170] /P 3 0 R >>",  // 6
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",                                // 7
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+    let dir = workdir("orphan-forms");
+    std::fs::write(dir.join("orphan.pdf"), orphan_form()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "orphan.pdf" }))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert_eq!(list["count"], 2, "{list}");
+    let r = ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "alpha": "Filled by an agent" } }));
+    assert_eq!(r["undo"], "Fill in alpha");
+    let after = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let alpha = after["fields"].as_array().unwrap().iter().find(|f| f["name"] == "alpha").unwrap();
+    assert_eq!(alpha["value"], "Filled by an agent");
+    // The page shows it.
+    assert_eq!(ok(&mut a, "text_find", json!({ "doc": doc, "query": "Filled by an agent" }))["count"], 1);
+    // The leniency is not silent: the repair note names the adopted fields.
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert!(info["repairs"].as_array().unwrap().iter().any(|r| r.as_str().unwrap_or("").contains("page annotations")), "{}", info["repairs"]);
+    ok(&mut a, "form_reset", json!({ "doc": doc }));
+    let reset = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let v = reset["fields"].as_array().unwrap().iter().find(|f| f["name"] == "alpha").unwrap()["value"].clone();
+    assert_ne!(v, "Filled by an agent");
+}
+
 #[test]
 fn duplicating_and_cropping_through_tools() {
     let dir = workdir("boxes");
@@ -1286,6 +1337,48 @@ fn editing_existing_text_through_tools() {
     ok(&mut a, "text_edit", json!({ "doc": doc, "page": 3, "paragraph": 1, "width": 50 }));
     let p = &ok(&mut a, "text_paragraphs", json!({ "doc": doc, "page": 3 }))["paragraphs"][0];
     assert_eq!(p["lines"].as_array().map(Vec::len), Some(2), "{p}");
+}
+
+/// One page whose content is one stream in three pieces (#155): a `TJ` array ends the middle
+/// piece and its operator starts the last one.
+fn split_streams_pdf() -> Vec<u8> {
+    let piece = |s: &str| format!("<< /Length {} >>\nstream\n{s}\nendstream", s.len());
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents [4 0 R 5 0 R 6 0 R] /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+        piece("/P << /MCID 0"),
+        piece(">> BDC BT /F1 12 Tf 72 700 Td (Target) Tj 0 -20 Td [(After) -20 (wards)]"),
+        piece("TJ ET EMC"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn a_line_split_across_content_streams_is_listed_and_edited() {
+    let dir = workdir("split-streams");
+    std::fs::write(dir.join("split.pdf"), split_streams_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "split.pdf" }))["doc"].as_u64().unwrap();
+    let lines = ok(&mut a, "text_lines", json!({ "doc": doc, "page": 1 }));
+    let texts: Vec<&str> = lines["lines"].as_array().unwrap().iter().filter_map(|l| l["text"].as_str()).collect();
+    assert_eq!(texts, ["Target", "Afterwards"], "{lines}");
+    let r = ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "line": 2, "text": "Later" }));
+    assert_eq!(r["line"]["text"], "Later");
+    assert_eq!(page_text(&mut a, doc)[0].split_whitespace().collect::<Vec<_>>(), ["Target", "Later"]);
 }
 
 #[test]
@@ -1851,6 +1944,33 @@ fn redacting_through_tools() {
     assert!(matches!(a.call("redact_apply", &json!({ "doc": doc })), Err(ToolError::Failed(_))));
     assert!(matches!(a.call("redact_mark", &json!({ "doc": doc, "find": "nowhere to be found" })), Err(ToolError::Failed(_))));
     assert!(matches!(a.call("redact_mark", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
+}
+
+#[test]
+fn redacting_with_codes_through_tools() {
+    let dir = workdir("redact-codes");
+    std::fs::write(dir.join("memo.txt"), "Informant Jane Roe met the agent\nPublic line").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "memo.txt" }))["doc"].as_u64().unwrap();
+    let bad = |a: &mut Automation, args: Value| matches!(a.call("redact_mark", &args), Err(ToolError::InvalidArgs(_)));
+    assert!(bad(&mut a, json!({ "doc": doc, "find": "Jane Roe", "code_set": "gdpr", "codes": ["(b)(6)"] })));
+    assert!(bad(&mut a, json!({ "doc": doc, "find": "Jane Roe", "code_set": "foia", "codes": ["(k)(1)"] })));
+    assert!(bad(&mut a, json!({ "doc": doc, "find": "Jane Roe", "code_set": "foia", "codes": [] })));
+    assert!(bad(&mut a, json!({ "doc": doc, "find": "Jane Roe", "codes": ["(b)(6)"] })));
+    assert!(bad(&mut a, json!({ "doc": doc, "find": "Jane Roe", "overlay": "X", "code_set": "foia", "codes": ["(b)(6)"] })));
+    let Err(ToolError::InvalidArgs(msg)) =
+        a.call("redact_mark", &json!({ "doc": doc, "find": "Jane Roe", "code_set": "foia", "codes": ["(b)(10)"] }))
+    else {
+        panic!("an unknown code is rejected")
+    };
+    assert!(msg.contains("(b)(7)(C)"), "the error lists the allowed codes: {msg}");
+    assert_eq!(
+        ok(&mut a, "redact_mark", json!({ "doc": doc, "find": "Jane Roe", "code_set": "foia", "codes": ["(b)(7)(C)", "(b)(6)"] }))["marked"],
+        1
+    );
+    ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    let text = page_text(&mut a, doc)[0].clone();
+    assert!(!text.contains("Jane") && text.contains("(b)(6), (b)(7)(C)"), "{text}");
 }
 
 #[test]

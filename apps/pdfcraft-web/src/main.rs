@@ -29,7 +29,7 @@ fn main() {
                     }
                     // `?file=<url>` opens a PDF from a URL (same-origin or CORS-enabled).
                     if let Some(url) = query_param("file") {
-                        let inbox = app.inbox.clone();
+                        let inbox = app.startup_inbox.clone();
                         let failed = app.failed_inbox.clone();
                         let ctx = cc.egui_ctx.clone();
                         wasm_bindgen_futures::spawn_local(async move {

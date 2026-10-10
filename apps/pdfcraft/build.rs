@@ -5,15 +5,20 @@
 //! cross-compile from macOS or Linux still links, unless `PDFCRAFT_REQUIRE_WINRES=1` turns it
 //! into an error (for release builds).
 
+#[path = "src/windows_manifest.rs"]
+mod windows_manifest;
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../../assets/app-icon/pdfcraft.ico");
+    println!("cargo:rerun-if-changed=src/windows_manifest.rs");
     println!("cargo:rerun-if-env-changed=PDFCRAFT_REQUIRE_WINRES");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
     let mut res = winresource::WindowsResource::new();
     res.set_icon("../../assets/app-icon/pdfcraft.ico")
+        .set_manifest(windows_manifest::WINDOWS_MANIFEST)
         .set("ProductName", "PdfCraft")
         .set("FileDescription", "PdfCraft PDF workbench")
         .set("LegalCopyright", "Copyright (c) the PdfCraft contributors. MIT OR Apache-2.0.")

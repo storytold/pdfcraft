@@ -1,6 +1,7 @@
-//! The system print spooler. On macOS and Linux this is CUPS: printers come from `lpstat`, jobs
-//! are piped to `lp` with the job options (copies, collation, duplex, colour). Other platforms
-//! report that printing isn't available yet; the print-ready PDF can still be saved.
+//! The system print spooler. On macOS and Linux this is CUPS: printers come from `lpstat` — its
+//! queues, and the driverless destinations it can print to without one — and jobs are piped to
+//! `lp` with the job options (copies, collation, duplex, colour). Other platforms report that
+//! printing isn't available yet; the print-ready PDF can still be saved.
 
 use crate::PrintError;
 
@@ -38,14 +39,24 @@ impl Default for Job {
     }
 }
 
+/// The `lpstat -d` line's destination name, when the spooler has a default.
+fn default_destination(out: &str) -> Option<&str> {
+    out.lines().find_map(|l| l.strip_prefix("system default destination:")).map(str::trim)
+}
+
 /// Parse `lpstat -p -d` output.
 pub fn parse_lpstat(out: &str) -> Vec<Printer> {
-    let default = out.lines().find_map(|l| l.strip_prefix("system default destination:")).map(|s| s.trim().to_string());
+    let default = default_destination(out);
     out.lines()
         .filter_map(|l| l.strip_prefix("printer "))
         .filter_map(|l| l.split_whitespace().next())
-        .map(|n| Printer { name: n.to_string(), default: default.as_deref() == Some(n) })
+        .map(|n| Printer { name: n.to_string(), default: default == Some(n) })
         .collect()
+}
+
+/// Parse `lpstat -e` output: destination names, one per line.
+pub fn parse_lpstat_e(out: &str) -> Vec<String> {
+    out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()
 }
 
 /// The `lp` arguments for a job. There is no file argument: `lp` reads the job from stdin.
@@ -259,29 +270,67 @@ pub fn open_printer_preferences(printer: &str) -> Result<(), PrintError> {
     }
 }
 
-/// `lpstat -p -d`, forced to print untranslated messages so [`parse_lpstat`] can read them.
+/// `lpstat`, forced to print untranslated messages so [`parse_lpstat`] and [`parse_lpstat_e`] can
+/// read them.
 ///
 /// `LC_ALL`/`LANG=C` is enough on Linux. macOS CUPS ignores them and follows the user's
 /// interface language (`AppleLanguages`) unless `SOFTWARE` is set, in which case it uses `LANG`.
-pub fn lpstat_command() -> std::process::Command {
+fn lpstat_with(args: &[&str]) -> std::process::Command {
     let mut c = std::process::Command::new("lpstat");
-    c.args(["-p", "-d"]).env("LC_ALL", "C").env("LANG", "C").env("SOFTWARE", "PdfCraft");
+    c.args(args).env("LC_ALL", "C").env("LANG", "C").env("SOFTWARE", "PdfCraft");
     c
 }
 
-/// The printers the system knows (empty when there are none or no spooler).
+/// `lpstat -p -d`: the spooler's queues and the default destination.
+pub fn lpstat_command() -> std::process::Command {
+    lpstat_with(&["-p", "-d"])
+}
+
+/// `lpstat -e`: every destination CUPS can print to, including driverless network printers no
+/// permanent queue exists for (a queue is built only when a job needs one). GTK's and macOS's
+/// print dialogs list them the same way. CUPS ≥ 1.7 (2013).
+///
+/// Gated like its only caller, `printers`' unix block: off unix this is dead code, and the
+/// Windows clippy gate builds with `-D warnings`.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn lpstat_e_command() -> std::process::Command {
+    lpstat_with(&["-e"])
+}
+
+/// The printers the system knows (empty when there are none or no spooler): its queues, then the
+/// driverless destinations CUPS can print to without one.
 pub fn printers() -> Vec<Printer> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        match lpstat_command().output() {
-            Ok(o) => parse_lpstat(&String::from_utf8_lossy(&o.stdout)),
-            Err(_) => Vec::new(),
-        }
+        let Some(queues) = lpstat_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()) else {
+            return Vec::new();
+        };
+        // A spooler without `-e`, or one whose discovery times out, only loses the driverless names.
+        let available = lpstat_e_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+        printers_parsed(&queues, available.as_deref())
     }
     #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
     {
         Vec::new()
     }
+}
+
+/// The Print dialog's printers from lpstat's two answers: the spooler's queues (`-p -d`), then
+/// the driverless destinations of `available` (`-e`) that have no queue — CUPS builds a temporary
+/// queue when `lp` sends them a job. Each destination once, queues first; the default still comes
+/// from `-d`, so a driverless default keeps its marker. `None` when the spooler doesn't know `-e`
+/// (CUPS < 1.7, 2013), which loses only the driverless names.
+pub fn printers_parsed(queues: &str, available: Option<&str>) -> Vec<Printer> {
+    let mut printers = parse_lpstat(queues);
+    let default = default_destination(queues);
+    if let Some(names) = available {
+        for name in parse_lpstat_e(names) {
+            if !printers.iter().any(|p| p.name == name) {
+                printers.push(Printer { default: default == Some(name.as_str()), name });
+            }
+        }
+    }
+    printers
 }
 
 /// Send a print-ready PDF to the spooler. Returns the spooler's message (the job id).
