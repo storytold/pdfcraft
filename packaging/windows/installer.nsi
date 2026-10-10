@@ -65,6 +65,7 @@ Section "${APP_NAME} (required)" SecCore
   SetOutPath "$INSTDIR"
   File "${BIN_DIR}\pdfcraft.exe"
   File "${BIN_DIR}\pdfcraft-cli.exe"
+  File /nonfatal "${BIN_DIR}\LinkcoPdfPreviewHandler.dll"
   CreateShortcut "$INSTDIR\LinkcoPDFEditor.exe.lnk" "$INSTDIR\pdfcraft.exe" "" "$INSTDIR\pdfcraft.exe" 0
 
   WriteRegStr HKLM "Software\Linkco\Linkco PDF Editor" "InstallDir" "$INSTDIR"
@@ -80,6 +81,23 @@ Section "${APP_NAME} (required)" SecCore
   WriteRegStr HKLM "Software\Classes\LinkcoPDFEditor.Document\shell\open\command" "" '"$INSTDIR\pdfcraft.exe" "%1"'
   WriteRegStr HKLM "Software\Classes\.pdf\OpenWithProgids" "LinkcoPDFEditor.Document" ""
   WriteRegStr HKLM "Software\Classes\Applications\pdfcraft.exe" "FriendlyAppName" "${APP_NAME}"
+
+  ; Windows File Explorer PDF Preview Handler (IPreviewHandler {8895b1c6-b41f-4c1c-a562-0d564250836f})
+  WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}" "" "Linkco PDF Preview Handler"
+  WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}" "DisplayName" "Linkco PDF Preview Handler"
+  WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}" "AppID" "{6d2b5079-2f0b-48dd-ab7f-97cec514d30b}"
+  WriteRegDWORD HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}" "DisableLowILProcessIsolation" 1
+  WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "" "mscoree.dll"
+  WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "ThreadingModel" "STA"
+  WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "Class" "LinkcoPdfPreview.LinkcoPdfPreviewHandler"
+  WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "Assembly" "LinkcoPdfPreviewHandler, Version=0.3.0.0, Culture=neutral, PublicKeyToken=null"
+  WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "RuntimeVersion" "v4.0.30319"
+  WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "CodeBase" "file:///$INSTDIR\LinkcoPdfPreviewHandler.dll"
+  WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\ProgId" "" "LinkcoPDFEditor.PreviewHandler"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\PreviewHandlers" "{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}" "Linkco PDF Preview Handler"
+  WriteRegStr HKLM "Software\Classes\LinkcoPDFEditor.Document\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}" "" "{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}"
+  WriteRegStr HKLM "Software\Classes\.pdf\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}" "" "{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}"
+  WriteRegStr HKLM "Software\Classes\SystemFileAssociations\.pdf\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}" "" "{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}"
 
   ; Uninstaller & Windows Installed Apps entry
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -113,10 +131,15 @@ Section "Uninstall"
   Delete "$INSTDIR\LinkcoPDFEditor.exe.lnk"
   Delete "$INSTDIR\pdfcraft.exe"
   Delete "$INSTDIR\pdfcraft-cli.exe"
+  Delete "$INSTDIR\LinkcoPdfPreviewHandler.dll"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
   RMDir "$PROGRAMFILES64\Linkco"
 
+  DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\PreviewHandlers" "{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}"
+  DeleteRegKey HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}"
+  DeleteRegKey HKLM "Software\Classes\.pdf\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}"
+  DeleteRegKey HKLM "Software\Classes\SystemFileAssociations\.pdf\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}"
   DeleteRegValue HKLM "Software\Classes\.pdf\OpenWithProgids" "LinkcoPDFEditor.Document"
   DeleteRegKey HKLM "Software\Classes\LinkcoPDFEditor.Document"
   DeleteRegKey HKLM "Software\Classes\Applications\pdfcraft.exe"

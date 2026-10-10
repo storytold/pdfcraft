@@ -88,7 +88,17 @@ Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 Copy-Item (Join-Path $Bin 'pdfcraft.exe'), (Join-Path $Bin 'pdfcraft-cli.exe') $Stage
 
-& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'pdfcraft.exe') (Join-Path $Stage 'pdfcraft-cli.exe')
+# Compile Windows File Explorer PDF Preview Handler (LinkcoPdfPreviewHandler.dll)
+$PreviewCs = Join-Path $PSScriptRoot 'PreviewHandler.cs'
+$PreviewDll = Join-Path $Stage 'LinkcoPdfPreviewHandler.dll'
+$Csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+if (-not (Test-Path $Csc)) { $Csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe' }
+Invoke-Native 'csc LinkcoPdfPreviewHandler.dll' {
+  & $Csc /nologo /target:library /optimize+ /platform:anycpu "/out:$PreviewDll" `
+    /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll $PreviewCs
+}
+
+& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'pdfcraft.exe') (Join-Path $Stage 'pdfcraft-cli.exe') $PreviewDll
 
 # ---- MSI ---------------------------------------------------------------------------------------
 $Msi = Join-Path $Dist "LinkcoPDFEditorSetup-$Version-windows-$Arch.msi"

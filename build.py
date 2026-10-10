@@ -92,6 +92,19 @@ def detect_host_arch() -> str:
     return "x64"
 
 
+def _find_windows_csc() -> Path | None:
+    windir = Path(os.environ.get("WINDIR", r"C:\Windows"))
+    for sub in [
+        r"Microsoft.NET\Framework64\v4.0.30319\csc.exe",
+        r"Microsoft.NET\Framework\v4.0.30319\csc.exe",
+    ]:
+        candidate = windir / sub
+        if candidate.is_file():
+            return candidate
+    found = shutil.which("csc") or shutil.which("csc.exe")
+    return Path(found) if found else None
+
+
 def find_vs_installation() -> Path | None:
     """Return the Visual Studio / BuildTools installation directory if MSVC C++ tools are present."""
     if os.name != "nt":
@@ -504,6 +517,28 @@ def build_app(
 
     bin_linkco_gui = bin_dir / linkco_gui_name
     shutil.copy2(gui_bin, bin_linkco_gui)
+
+    preview_dll_src = ROOT / "packaging" / "windows" / "PreviewHandler.cs"
+    dist_preview_dll = out_dir / "LinkcoPdfPreviewHandler.dll"
+    if os.name == "nt" and preview_dll_src.is_file():
+        csc = _find_windows_csc()
+        if csc:
+            bin_preview_dll = bin_dir / "LinkcoPdfPreviewHandler.dll"
+            csc_cmd = [
+                str(csc),
+                "/nologo",
+                "/target:library",
+                "/optimize+",
+                "/platform:anycpu",
+                f"/out:{bin_preview_dll}",
+                "/r:System.dll",
+                "/r:System.Drawing.dll",
+                "/r:System.Windows.Forms.dll",
+                str(preview_dll_src),
+            ]
+            subprocess.run(csc_cmd, cwd=str(ROOT), check=True)
+            shutil.copy2(bin_preview_dll, dist_preview_dll)
+            print(f"==> Built Windows File Explorer Preview Handler: {dist_preview_dll}")
 
     print("\n==> Build complete:")
     for label, p in [

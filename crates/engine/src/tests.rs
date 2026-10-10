@@ -1772,3 +1772,39 @@ fn runaway_xfa_calculations_at_open_end_quickly_with_a_report() {
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
     assert!(s.take_js_output(id).errors.is_empty());
 }
+
+#[test]
+fn print_sheets_render_at_target_dpi_and_preserve_paper_geometry() {
+    let mut s = Session::new();
+    let pdf = s.create_blank(612.0, 792.0, 2).unwrap();
+    let id = s.open("print-dpi.pdf", None, pdf, None).unwrap();
+
+    // US Letter (612 × 792 pt) at 300 DPI -> 2550 × 3300 px.
+    let letter_settings = print::Settings {
+        pages: vec![0, 1],
+        paper: (612.0, 792.0),
+        orientation: print::Orientation::Portrait,
+        layout: print::Layout::Size(print::SizeMode::Fit),
+        content: print::Content::DocumentAndMarkups,
+    };
+    let imposed_letter = s.print_pdf(id, &letter_settings).unwrap();
+    let sheets_300 = s.render_print_sheets(id, &imposed_letter, 300, false).unwrap();
+    assert_eq!(sheets_300.len(), 2);
+    assert_eq!(sheets_300[0].dpi, 300);
+    assert_eq!((sheets_300[0].width_px, sheets_300[0].height_px), (2550, 3300));
+    assert!(sheets_300[0].png.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+    // A4 (595.28 × 841.89 pt) at 300 DPI -> 2480 × 3508 px, grayscale enabled.
+    let a4_settings = print::Settings {
+        pages: vec![0],
+        paper: (595.28, 841.89),
+        orientation: print::Orientation::Portrait,
+        layout: print::Layout::Size(print::SizeMode::Fit),
+        content: print::Content::DocumentAndMarkups,
+    };
+    let imposed_a4 = s.print_pdf(id, &a4_settings).unwrap();
+    let sheets_a4 = s.render_print_sheets(id, &imposed_a4, 300, true).unwrap();
+    assert_eq!(sheets_a4.len(), 1);
+    assert_eq!((sheets_a4[0].width_px, sheets_a4[0].height_px), (2481, 3508));
+}
+

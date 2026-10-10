@@ -162,6 +162,14 @@ namespace LinkcoSetup
         public const string CompanyName = "Al Rawabet Commercial Services & Contracting Company W.L.L.";
         public const string AppVersion = "__DISPLAY_VERSION__";
         public const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\Linkco PDF Editor";
+        public const string LinkcoConfigKey = @"Software\Linkco\Linkco PDF Editor";
+        public const string PreviewHandlerClsid = "{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}";
+        public const string PreviewHandlerCategoryGuid = "{8895b1c6-b41f-4c1c-a562-0d564250836f}";
+        public const string PrevHostAppId64 = "{6d2b5079-2f0b-48dd-ab7f-97cec514d30b}";
+        public const string EdgePreviewHandlerClsid = "{3A84F9C2-6164-485C-A7D9-4B27F8AC009E}";
+
+        [System.Runtime.InteropServices.DllImport("shell32.dll")]
+        private static extern void SHChangeNotify(int wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
 
         [STAThread]
         static int Main(string[] args)
@@ -312,6 +320,157 @@ namespace LinkcoSetup
                 if (openWith != null)
                     openWith.SetValue("LinkcoPDFEditor.Document", "");
             }
+
+            using (RegistryKey cfg = Registry.LocalMachine.CreateSubKey(LinkcoConfigKey))
+            {
+                if (cfg != null)
+                    cfg.SetValue("InstallDir", installDir);
+            }
+
+            string previewDll = Path.Combine(installDir, "LinkcoPdfPreviewHandler.dll");
+            if (File.Exists(previewDll))
+            {
+                RegisterPreviewHandler(previewDll);
+            }
+
+            try { SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero); } catch { }
+        }
+
+        private static void RegisterPreviewHandler(string dllPath)
+        {
+            string codeBase = new Uri(dllPath).AbsoluteUri;
+            using (RegistryKey clsidKey = Registry.LocalMachine.CreateSubKey(@"Software\Classes\CLSID\" + PreviewHandlerClsid))
+            {
+                if (clsidKey != null)
+                {
+                    clsidKey.SetValue("", "Linkco PDF Preview Handler");
+                    clsidKey.SetValue("DisplayName", "Linkco PDF Preview Handler");
+                    clsidKey.SetValue("AppID", PrevHostAppId64);
+                    clsidKey.SetValue("DisableLowILProcessIsolation", 1, RegistryValueKind.DWord);
+                    using (RegistryKey inproc = clsidKey.CreateSubKey("InprocServer32"))
+                    {
+                        if (inproc != null)
+                        {
+                            inproc.SetValue("", "mscoree.dll");
+                            inproc.SetValue("ThreadingModel", "STA");
+                            inproc.SetValue("Class", "LinkcoPdfPreview.LinkcoPdfPreviewHandler");
+                            inproc.SetValue("Assembly", "LinkcoPdfPreviewHandler, Version=0.3.0.0, Culture=neutral, PublicKeyToken=null");
+                            inproc.SetValue("RuntimeVersion", "v4.0.30319");
+                            inproc.SetValue("CodeBase", codeBase);
+                        }
+                    }
+                    using (RegistryKey progId = clsidKey.CreateSubKey("ProgId"))
+                    {
+                        if (progId != null)
+                            progId.SetValue("", "LinkcoPDFEditor.PreviewHandler");
+                    }
+                }
+            }
+
+            using (RegistryKey handlers = Registry.LocalMachine.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\PreviewHandlers"))
+            {
+                if (handlers != null)
+                    handlers.SetValue(PreviewHandlerClsid, "Linkco PDF Preview Handler");
+            }
+
+            foreach (string progId in new string[] { "LinkcoPDFEditor.Document", "PdfCraft.Document" })
+            {
+                using (RegistryKey k = Registry.LocalMachine.CreateSubKey(@"Software\Classes\" + progId + @"\ShellEx\" + PreviewHandlerCategoryGuid))
+                {
+                    if (k != null)
+                        k.SetValue("", PreviewHandlerClsid);
+                }
+            }
+
+            BackupAndSetShellEx(@"Software\Classes\.pdf\ShellEx\" + PreviewHandlerCategoryGuid, "PreviousPdfPreviewHandler");
+            BackupAndSetShellEx(@"Software\Classes\SystemFileAssociations\.pdf\ShellEx\" + PreviewHandlerCategoryGuid, "PreviousSysPdfPreviewHandler");
+        }
+
+        private static void BackupAndSetShellEx(string subKeyPath, string backupValueName)
+        {
+            string existing = null;
+            using (RegistryKey k = Registry.LocalMachine.OpenSubKey(subKeyPath, false))
+            {
+                if (k != null)
+                    existing = k.GetValue("") as string;
+            }
+            if (!string.IsNullOrEmpty(existing) && !string.Equals(existing, PreviewHandlerClsid, StringComparison.OrdinalIgnoreCase))
+            {
+                using (RegistryKey cfg = Registry.LocalMachine.CreateSubKey(LinkcoConfigKey))
+                {
+                    if (cfg != null)
+                        cfg.SetValue(backupValueName, existing);
+                }
+            }
+            using (RegistryKey k = Registry.LocalMachine.CreateSubKey(subKeyPath))
+            {
+                if (k != null)
+                    k.SetValue("", PreviewHandlerClsid);
+            }
+        }
+
+        private static void UnregisterPreviewHandler()
+        {
+            using (RegistryKey handlers = Registry.LocalMachine.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\PreviewHandlers", true))
+            {
+                if (handlers != null)
+                    handlers.DeleteValue(PreviewHandlerClsid, false);
+            }
+            Registry.LocalMachine.DeleteSubKeyTree(@"Software\Classes\CLSID\" + PreviewHandlerClsid, false);
+            Registry.LocalMachine.DeleteSubKeyTree(@"Software\Classes\LinkcoPDFEditor.Document\ShellEx\" + PreviewHandlerCategoryGuid, false);
+            Registry.LocalMachine.DeleteSubKeyTree(@"Software\Classes\PdfCraft.Document\ShellEx\" + PreviewHandlerCategoryGuid, false);
+
+            RestoreOrRemoveShellEx(@"Software\Classes\.pdf\ShellEx\" + PreviewHandlerCategoryGuid, "PreviousPdfPreviewHandler");
+            RestoreOrRemoveShellEx(@"Software\Classes\SystemFileAssociations\.pdf\ShellEx\" + PreviewHandlerCategoryGuid, "PreviousSysPdfPreviewHandler");
+        }
+
+        private static void RestoreOrRemoveShellEx(string subKeyPath, string backupValueName)
+        {
+            string current = null;
+            using (RegistryKey k = Registry.LocalMachine.OpenSubKey(subKeyPath, false))
+            {
+                if (k != null)
+                    current = k.GetValue("") as string;
+            }
+            if (!string.Equals(current, PreviewHandlerClsid, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            string backup = null;
+            using (RegistryKey cfg = Registry.LocalMachine.OpenSubKey(LinkcoConfigKey, true))
+            {
+                if (cfg != null)
+                {
+                    backup = cfg.GetValue(backupValueName) as string;
+                    cfg.DeleteValue(backupValueName, false);
+                }
+            }
+
+            string candidate = null;
+            if (!string.IsNullOrEmpty(backup) && ClsidExists(backup))
+                candidate = backup;
+            else if (ClsidExists(EdgePreviewHandlerClsid))
+                candidate = EdgePreviewHandlerClsid;
+
+            if (!string.IsNullOrEmpty(candidate))
+            {
+                using (RegistryKey k = Registry.LocalMachine.CreateSubKey(subKeyPath))
+                {
+                    if (k != null)
+                        k.SetValue("", candidate);
+                }
+            }
+            else
+            {
+                Registry.LocalMachine.DeleteSubKeyTree(subKeyPath, false);
+            }
+        }
+
+        private static bool ClsidExists(string clsid)
+        {
+            using (RegistryKey k = Registry.ClassesRoot.OpenSubKey(@"CLSID\" + clsid, false))
+            {
+                return k != null;
+            }
         }
 
         private static int RunUninstall(bool silent)
@@ -349,15 +508,19 @@ namespace LinkcoSetup
                 );
                 if (Directory.Exists(startMenuGroup)) Directory.Delete(startMenuGroup, true);
 
+                UnregisterPreviewHandler();
                 Registry.LocalMachine.DeleteSubKeyTree(UninstallKey, false);
                 Registry.LocalMachine.DeleteSubKeyTree(@"Software\Classes\LinkcoPDFEditor.Document", false);
+                Registry.LocalMachine.DeleteSubKeyTree(LinkcoConfigKey, false);
                 using (RegistryKey openWith = Registry.LocalMachine.OpenSubKey(@"Software\Classes\.pdf\OpenWithProgids", true))
                 {
                     if (openWith != null)
                         openWith.DeleteValue("LinkcoPDFEditor.Document", false);
                 }
 
-                foreach (string f in new string[] { "LinkcoPDFEditor.exe", "pdfcraft.exe", "pdfcraft-cli.exe" })
+                try { SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero); } catch { }
+
+                foreach (string f in new string[] { "LinkcoPDFEditor.exe", "pdfcraft.exe", "pdfcraft-cli.exe", "LinkcoPdfPreviewHandler.dll" })
                 {
                     string p = Path.Combine(installDir, f);
                     if (File.Exists(p)) File.Delete(p);
@@ -597,7 +760,7 @@ def build_dotnet_setup_exe(
         tmp = Path(tmp_str)
         payload_zip = tmp / "payload.zip"
         with zipfile.ZipFile(payload_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for exe_name in ("LinkcoPDFEditor.exe", "pdfcraft.exe", "pdfcraft-cli.exe"):
+            for exe_name in ("LinkcoPDFEditor.exe", "pdfcraft.exe", "pdfcraft-cli.exe", "LinkcoPdfPreviewHandler.dll"):
                 f = stage_dir / exe_name
                 if f.is_file():
                     zf.write(f, arcname=exe_name)
@@ -696,6 +859,30 @@ def build_windows_installer(
     shutil.copy2(gui_exe, stage_dir / "pdfcraft.exe")
     shutil.copy2(gui_exe, stage_dir / "LinkcoPDFEditor.exe")
     shutil.copy2(cli_exe, stage_dir / "pdfcraft-cli.exe")
+
+    preview_dll_src = ROOT / "packaging" / "windows" / "PreviewHandler.cs"
+    preview_dll_bin = bin_dir / "LinkcoPdfPreviewHandler.dll"
+    csc_preview = find_csc()
+    if not preview_dll_bin.is_file() and csc_preview and preview_dll_src.is_file():
+        subprocess.run(
+            [
+                csc_preview,
+                "/nologo",
+                "/target:library",
+                "/optimize+",
+                "/platform:anycpu",
+                f"/out:{preview_dll_bin}",
+                "/r:System.dll",
+                "/r:System.Drawing.dll",
+                "/r:System.Windows.Forms.dll",
+                str(preview_dll_src),
+            ],
+            cwd=str(ROOT),
+            check=True,
+        )
+    if preview_dll_bin.is_file():
+        shutil.copy2(preview_dll_bin, stage_dir / "LinkcoPdfPreviewHandler.dll")
+        shutil.copy2(preview_dll_bin, out_dir / "LinkcoPdfPreviewHandler.dll")
 
     maybe_sign([stage_dir / "pdfcraft.exe", stage_dir / "LinkcoPDFEditor.exe", stage_dir / "pdfcraft-cli.exe"])
 
@@ -801,7 +988,7 @@ def build_windows_installer(
     portable_zip = out_dir / f"LinkcoPDFEditor-{version}-windows-{arch}-portable.zip"
     print(f"==> Creating portable archive: {portable_zip}")
     with zipfile.ZipFile(portable_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for exe_name in ("LinkcoPDFEditor.exe", "pdfcraft.exe", "pdfcraft-cli.exe"):
+        for exe_name in ("LinkcoPDFEditor.exe", "pdfcraft.exe", "pdfcraft-cli.exe", "LinkcoPdfPreviewHandler.dll"):
             f = stage_dir / exe_name
             if f.is_file():
                 zf.write(f, arcname=exe_name)

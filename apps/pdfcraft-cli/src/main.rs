@@ -48,6 +48,7 @@ fn main() -> ExitCode {
         match args.first().map(String::as_str) {
             Some("info") => info(&args[1..]),
             Some("render") => render(&args[1..]),
+            Some("preview") => preview(&args[1..]),
             Some("text") => text(&args[1..]),
             Some("edit") => edit(&args[1..]),
             Some("combine") => combine(&args[1..]),
@@ -61,8 +62,10 @@ fn main() -> ExitCode {
             #[cfg(feature = "mcp")]
             Some("mcp") => mcp(&args[1..]),
             Some("--version") => version(),
-            _ => Err("usage: pdfcraft-cli <info|render|text|edit|combine|extract|split|check|tools|run|mcp|ui> …  (see source header for options)"
-                .into()),
+            _ => Err(
+                "usage: pdfcraft-cli <info|render|preview|text|edit|combine|extract|split|check|tools|run|mcp|ui> …  (see source header for options)"
+                    .into(),
+            ),
         };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -361,6 +364,58 @@ fn render(args: &[String]) -> Result<(), CliError> {
     };
     std::fs::write(out, bytes).map_err(|e| format!("{out}: {e}"))?;
     eprintln!("rendered page {page} at {dpi} dpi: {}×{} px in {} ms", p.width, p.height, p.millis);
+    Ok(())
+}
+
+/// Fast single-page preview helper used by the Windows File Explorer Preview Handler (`IPreviewHandler`).
+/// Emits a single structured `STATUS\t...` line to stdout so the preview host can distinguish
+/// valid PDFs, password-protected PDFs, empty PDFs, and damaged files without opening the main editor.
+fn preview(args: &[String]) -> Result<(), CliError> {
+    let path = *positional(args).first().ok_or("preview: missing file")?;
+    let page: usize = flag(args, "--page").unwrap_or("1").parse().unwrap_or(1).max(1);
+    let dpi: f32 = flag(args, "--dpi").unwrap_or("150").parse().unwrap_or(150.0).clamp(36.0, 300.0);
+    let out = flag(args, "--out").ok_or("preview: missing --out <file.png>")?;
+    let password = flag(args, "--password");
+
+    let bytes = match read(path) {
+        Ok(b) => b,
+        Err(e) => {
+            stdout_line(format_args!("STATUS\tIO_ERROR\t0\t{}", e.replace(['\r', '\n', '\t'], " ")))?;
+            return Ok(());
+        }
+    };
+
+    let info = match inspect(bytes.clone(), password) {
+        Ok(i) => i,
+        Err(pdfcraft_render::OpenError::NeedsPassword | pdfcraft_render::OpenError::WrongPassword) => {
+            stdout_line(format_args!(
+                "STATUS\tPASSWORD_REQUIRED\t0\tThis PDF document is password-protected. Open it in Linkco PDF Editor to enter the password."
+            ))?;
+            return Ok(());
+        }
+        Err(e) => {
+            stdout_line(format_args!("STATUS\tINVALID_PDF\t0\t{}", e.to_string().replace(['\r', '\n', '\t'], " ")))?;
+            return Ok(());
+        }
+    };
+
+    let total_pages = info.pages.len();
+    if total_pages == 0 {
+        stdout_line(format_args!("STATUS\tEMPTY_PDF\t0\tThis PDF document contains no pages."))?;
+        return Ok(());
+    }
+
+    let clamped_page = page.min(total_pages);
+    let mut r = PageRenderer::new(bytes, RenderConfig { password: password.map(Arc::from), ..Default::default() });
+    let p = r.render(RenderRequest { page: clamped_page - 1, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0 });
+    if let Some(e) = p.error {
+        stdout_line(format_args!("STATUS\tRENDER_ERROR\t{total_pages}\t{}", e.replace(['\r', '\n', '\t'], " ")))?;
+        return Ok(());
+    }
+
+    let png_bytes = pdfcraft_engine::export::encode_image(p.width, p.height, &p.rgba, ImageFormat::Png)?;
+    std::fs::write(out, png_bytes).map_err(|e| format!("{out}: {e}"))?;
+    stdout_line(format_args!("STATUS\tOK\t{total_pages}\t{clamped_page}\t{}\t{}", p.width, p.height))?;
     Ok(())
 }
 

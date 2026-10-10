@@ -84,6 +84,14 @@ $title = Read-Row 'SELECT `Text` FROM `Control` WHERE `Dialog_` = ''InstallCompl
 if ($title[0] -notmatch 'completed successfully') { throw 'Success dialog does not confirm completion' }
 $rm = Read-Row 'SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = ''MsiRMFilesInUse''' 1
 Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'
+
+# Windows File Explorer PDF Preview Handler registration check
+$previewKey = 'Software\Classes\.pdf\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}'
+$previewRow = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $previewKey + ''' AND `Name` IS NULL') 3
+Assert-Equal $previewRow[0] '{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}' 'PDF Preview Handler CLSID'
+Assert-Equal $previewRow[1] 'PdfcraftPreviewHandler' 'PDF Preview Handler component'
+Assert-Equal $previewRow[2] '2' 'PDF Preview Handler HKLM root'
+
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
-Write-Output 'ok MSI: Start Menu shortcut, optional desktop shortcut (default on, checkbox), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog'
+Write-Output 'ok MSI: Start Menu shortcut, optional desktop shortcut (default on, checkbox), PDF Preview Handler, icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog'

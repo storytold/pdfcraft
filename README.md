@@ -29,6 +29,8 @@ All document rendering and editing operations execute locally on your workstatio
 - **Digital Signatures & Certificates** — PKCS#7 / CMS and PAdES (`B-B`, `B-T`, `B-LT`, `B-LTA`) digital signature verification and signing, X.509 chain validation, RFC 3161 timestamping, and DocMDP modification detection.
 - **Security & True Redaction** — Password encryption (AES-256, AES-128, RC4) and permission enforcement, content-stream glyph and image redaction with verifiable byte removal, metadata scrubbing, and hidden-data sanitization.
 - **Export & Conversion** — Export PDFs to Microsoft Word (`.docx`), PNG images, extracted embedded images, HTML web pages, Rich Text Format (`.rtf`), and plain text (`.txt`), or create PDFs from images, plain text, HTML, or blank page templates.
+- **High-Resolution Printing & Windows Print Spooler Integration** — Full imposition engine (Fit, Actual Size, Shrink, Custom Scale, Multiple pages per sheet with Cut & Stack, Saddle-Stitch Booklet, and Tiled Poster with cut marks), live high-DPI sheet preview, 150 / 300 / 600 DPI print rendering, and native Windows Print Spooler (`Win32_Printer` / `.NET` `System.Drawing.Printing`) and CUPS printer detection with default-printer and offline-status awareness.
+- **Windows File Explorer PDF Preview Handler** — Out-of-process `IPreviewHandler` shell extension (`LinkcoPdfPreviewHandler.dll`) hosted by `prevhost.exe` that renders PDF pages directly inside the Windows 10/11 File Explorer Preview Pane with page navigation and zoom without launching the full editor.
 - **Scan & OCR** — Pluggable Optical Character Recognition (OCR) pipeline with page deskew, background cleanup, and invisible searchable text layer (`Tr 3`) generation.
 - **Print Production, Standards & Accessibility** — PDF/A, PDF/X, and PDF/UA validation; color-separation and ink-coverage preview; transparency flattening; hairline fixing; color space conversion; page box (`TrimBox`, `BleedBox`, `ArtBox`, `CropBox`) editing; printer marks; and Matterhorn accessibility checks with reading-order and structure-tag editors.
 
@@ -112,6 +114,7 @@ The Windows packaging pipeline lives in `packaging/windows/` and embeds full Lin
 - **Shortcuts Created:**
   - Start Menu: `Linkco PDF Editor`
   - Desktop: `Linkco PDF Editor`
+- **Windows File Explorer Preview Pane (`IPreviewHandler`):** Installs and registers `LinkcoPdfPreviewHandler.dll` (`CLSID {D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}`) for `.pdf` files, backing up any previously registered preview handler and restoring it cleanly on uninstall.
 - **Installed Apps Registration:** Registers **Linkco PDF Editor** in Windows *Installed Apps / Add or Remove Programs* with version, icon, publisher, and clean uninstaller support, and registers `.pdf` under *Open With* without overriding the user's default PDF handler.
 
 ### Building the Windows Installer
@@ -158,7 +161,10 @@ The companion CLI binary supports headless inspection, text extraction, page ren
 cargo run --release -p pdfcraft-cli -- info document.pdf
 
 # Render pages to PNG images at 150 DPI
-cargo run --release -p pdfcraft-cli -- render document.pdf --dpi 150 -o page-%d.png
+cargo run --release -p pdfcraft-cli -- render document.pdf --dpi 150 --out page-1.png
+
+# Generate a single-page preview image with structured status output (used by the Windows Preview Handler)
+cargo run --release -p pdfcraft-cli -- preview document.pdf --page 1 --dpi 150 --out preview.png
 
 # Extract plain text from a PDF
 cargo run --release -p pdfcraft-cli -- text document.pdf

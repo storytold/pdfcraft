@@ -30,7 +30,8 @@ const TILE_THRESHOLD: f32 = 4096.0;
 const TILE: u32 = 1024;
 /// Longest side of the low-resolution backdrop drawn under tiles.
 const BASE_SIDE: f32 = 2048.0;
-const THUMB_W: f32 = 132.0;
+const THUMB_W: f32 = 240.0;
+const PRINT_PREVIEW_W: f32 = 860.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fit {
@@ -210,6 +211,8 @@ pub struct DocView {
     /// When each still-missing page was first shown, to flag unusually slow renders.
     waiting_since: HashMap<usize, f64>,
     thumbs: HashMap<usize, TextureHandle>,
+    /// Scale at which each thumbnail in `thumbs` was rendered.
+    thumb_scales: HashMap<usize, f32>,
     /// Thumbnails that are out of date (still shown until their replacement arrives).
     stale_thumbs: HashSet<usize>,
     /// Sharp tiles of large pages: (page, tile x, tile y) → (scale tag, texture).
@@ -341,6 +344,7 @@ impl DocView {
             errors: HashMap::new(),
             waiting_since: HashMap::new(),
             thumbs: HashMap::new(),
+            thumb_scales: HashMap::new(),
             stale_thumbs: HashSet::new(),
             tiles: HashMap::new(),
             texts: HashMap::new(),
@@ -482,9 +486,17 @@ impl DocView {
         (!quads.is_empty()).then_some((s.page, quads))
     }
 
-    /// A page's thumbnail texture, when rendered (the print preview uses them).
+    /// A page's sharpest available texture for the print preview: prefers a sharp full-page
+    /// viewport texture when its resolution exceeds the thumbnail, otherwise uses the thumbnail.
     pub(crate) fn thumb_id(&self, page: usize) -> Option<egui::TextureId> {
-        self.thumbs.get(&page).map(|t| t.id())
+        let thumb = self.thumbs.get(&page);
+        if let Some(p) = self.pages.get(&page) {
+            let tw = thumb.map_or(0, |t| t.size()[0]);
+            if p.tex.size()[0] > tw && (p.tag != STALE_TAG || thumb.is_none()) {
+                return Some(p.tex.id());
+            }
+        }
+        thumb.map(|t| t.id())
     }
 
     pub(crate) fn page_text(&self, page: usize) -> Option<Arc<PageText>> {
@@ -828,6 +840,7 @@ impl DocView {
             if r.request.tag & THUMB_TAG != 0 {
                 let tex = ctx.load_texture(format!("thumb-{:?}-{page}", self.id), img, TextureOptions::LINEAR);
                 self.thumbs.insert(page, tex);
+                self.thumb_scales.insert(page, r.request.scale);
                 self.stale_thumbs.remove(&page);
             } else {
                 let tex = ctx.load_texture(format!("page-{:?}-{page}", self.id), img, TextureOptions::LINEAR);
@@ -1097,7 +1110,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         ui.centered_and_justified(|ui| ui.label(tl!("This document has no pages.")));
         return;
     }
-    let want_thumbs = app.right == Some(RightPanel::Pages) || app.views[index].organize || app.dialog == Some(crate::Dialog::Print);
+    let print_dialog_open = app.dialog == Some(crate::Dialog::Print);
+    let want_thumbs = app.right == Some(RightPanel::Pages) || app.views[index].organize || print_dialog_open;
+    let print_target_w = if print_dialog_open {
+        let boost = if app.print_draft.handling == crate::PrintHandling::Poster {
+            (app.print_draft.poster_scale as f32 / 100.0).clamp(1.0, 3.0)
+        } else {
+            1.0
+        };
+        PRINT_PREVIEW_W * boost
+    } else {
+        THUMB_W
+    };
     // The Prepare a form panel is open (or a field tool is picked): fields are edited, not filled.
     let preparing = app.is_preparing();
     // Edit a PDF: added text and images can be selected, moved and edited.
@@ -1116,7 +1140,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // No dialog, close prompt or palette over the page: only then does page input count.
     let unobstructed = app.dialog.is_none() && app.close_request.is_none() && !app.palette_open;
     if view.organize {
-        organize_grid(view, info, &doc.renderer, doc.allows_assembly(), unobstructed, ui, &t);
+        organize_grid(view, info, &doc.renderer, doc.allows_assembly(), unobstructed, print_target_w, ui, &t);
         return;
     }
 
@@ -1778,9 +1802,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     queue.extend(text_pages.into_iter().map(|page| RenderRequest { page, kind: RequestKind::Text, tile: None, scale: 1.0, tag: TEXT_TAG }));
     if want_thumbs {
-        let s = THUMB_W * ppp / info.pages.iter().map(|p| p.width).fold(1.0, f32::max);
         for page in 0..info.pages.len() {
-            if (!view.thumbs.contains_key(&page) || view.stale_thumbs.contains(&page)) && !view.errors.contains_key(&page) {
+            let pw = info.pages[page].width.max(1.0);
+            let s = (print_target_w * ppp / pw).clamp(0.15, 6.0);
+            let needs_upgrade = view.thumb_scales.get(&page).copied().unwrap_or(0.0) + 0.05 < s;
+            if (!view.thumbs.contains_key(&page) || view.stale_thumbs.contains(&page) || needs_upgrade) && !view.errors.contains_key(&page) {
                 queue.push(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: s, tag: THUMB_TAG });
             }
         }
@@ -2492,7 +2518,16 @@ fn drop_gap(cells: &[(usize, Rect)], p: Pos2) -> Option<usize> {
     Some(if p.x < r.center().x { *i } else { i + 1 })
 }
 
-fn organize_grid(view: &mut DocView, info: &DocInfo, pool: &RenderPool, editable: bool, auto_scroll_enabled: bool, ui: &mut egui::Ui, t: &Tokens) {
+fn organize_grid(
+    view: &mut DocView,
+    info: &DocInfo,
+    pool: &RenderPool,
+    editable: bool,
+    auto_scroll_enabled: bool,
+    thumb_target_w: f32,
+    ui: &mut egui::Ui,
+    t: &Tokens,
+) {
     let ppp = ui.ctx().pixels_per_point();
     let cell = vec2(190.0, 250.0);
     let mut open_page = None;
@@ -2636,10 +2671,18 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, pool: &RenderPool, editable
         }
     });
     view.auto_scroll.paint(ui, viewport);
-    let s = THUMB_W * ppp / info.pages.iter().map(|p| p.width).fold(1.0, f32::max);
+    let target_w = thumb_target_w.max(THUMB_W);
     let queue: Vec<RenderRequest> = (0..info.pages.len())
-        .filter(|p| (!view.thumbs.contains_key(p) || view.stale_thumbs.contains(p)) && !view.errors.contains_key(p))
-        .map(|page| RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: s, tag: THUMB_TAG })
+        .filter_map(|page| {
+            if view.errors.contains_key(&page) {
+                return None;
+            }
+            let pw = info.pages[page].width.max(1.0);
+            let s = (target_w * ppp / pw).clamp(0.15, 6.0);
+            let needs_upgrade = view.thumb_scales.get(&page).copied().unwrap_or(0.0) + 0.05 < s;
+            (!view.thumbs.contains_key(&page) || view.stale_thumbs.contains(&page) || needs_upgrade)
+                .then_some(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: s, tag: THUMB_TAG })
+        })
         .collect();
     if queue != view.last_queue {
         pool.set_queue(queue.clone());
