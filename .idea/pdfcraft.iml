@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="EMPTY_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/apps/pdfcraft-cli/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/apps/pdfcraft-cli/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/apps/pdfcraft-web/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/apps/pdfcraft/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/apps/pdfcraft/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/a11y/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/annot/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/automation/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/automation/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/compare/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/content/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/cos/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/cos/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/cos/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/create/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/crypt/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/edit/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/engine/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/engine/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/export/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/filters/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/filters/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/fonts/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/forms/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/geom/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/js/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/measure/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/model/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/ocr/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/optimize/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/optimize/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/organize/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/platform/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/preflight/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/print/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/redact/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/render/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/sign/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/sign/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/ui-egui/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/ui-egui/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/ui-egui/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/xfa/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/xfdf/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/xtask/src" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>

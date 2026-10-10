@@ -22,6 +22,11 @@ serde_json = { workspace = true }
 # Records from every crate go to standard error and the log file (src/logging.rs).
 log = { workspace = true }
 
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+# Picks X11 over Wayland for the window (src/main.rs `prefer_x11_for_file_drops`): winit has no
+# file drag and drop on Wayland. Already in the tree through eframe (vendor/winit).
+winit = { version = "0.30", default-features = false, features = ["x11"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Finder double-click / Open With / Dock drops arrive as Apple events (#73); this small audited
 # crate registers the handler (Objective-C interop needs unsafe, which our workspace forbids)

@@ -274,7 +274,28 @@ fn native_options(integrated: bool, renderer: eframe::Renderer) -> eframe::Nativ
     if renderer == eframe::Renderer::Wgpu {
         configure_gpu(&mut native);
     }
+    //For linux support
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    prefer_x11_for_file_drops(&mut native);
     native
+}
+
+/// winit (0.30) delivers dragged files on X11 only, not on Wayland. When both are available, use
+/// X11 (XWayland) so files can be dropped onto the window. `WINIT_UNIX_BACKEND` (`wayland` or
+/// `x11`) overrides the choice, and a session without X11 stays on Wayland.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn prefer_x11_for_file_drops(native: &mut eframe::NativeOptions) {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+    let set = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+    if set("WINIT_UNIX_BACKEND") || !set("WAYLAND_DISPLAY") || !set("DISPLAY") {
+        return;
+    }
+    log::info!(
+        "Wayland session with X11 available: using X11 so files can be dropped onto the window; set WINIT_UNIX_BACKEND=wayland to keep Wayland"
+    );
+    native.event_loop_builder = Some(Box::new(|builder| {
+        builder.with_x11();
+    }));
 }
 
 /// What the command line asked for, kept so a second run (with OpenGL) can start the same way.
