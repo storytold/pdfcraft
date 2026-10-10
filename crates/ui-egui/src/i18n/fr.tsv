@@ -2148,3 +2148,5 @@ signature pad	Type	Saisir
 	Pages: {k} of {n}	Pages : {k} sur {n}
 	Check the pages	Vérifiez les pages
 	Switch to List view to change the pages it takes.	Passez à la vue en liste pour modifier les pages prises.
+	Expand all	Tout développer
+	Collapse all	Tout réduire

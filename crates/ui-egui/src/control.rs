@@ -574,6 +574,7 @@ impl Host for crate::PdfCraftApp {
                 "files": self.combine_draft.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
                 "selected": self.combine_selection(),
                 "thumbnails": self.combine_thumbnails().iter().map(|t| format!("{t:?}")).collect::<Vec<_>>(),
+                "expanded": self.combine_expanded().iter().filter_map(|i| self.combine_draft.get(*i).map(|f| f.name.clone())).collect::<Vec<_>>(),
                 "preview": self.combine_preview().map(|(file, page, render)| json!({ "file": file, "page": page + 1, "render": format!("{render:?}") })),
             },
             "quick_tool": match self.quick_tool {

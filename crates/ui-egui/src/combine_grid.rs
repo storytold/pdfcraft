@@ -61,11 +61,19 @@ pub(crate) fn zoom_step(zoom: f32, larger: bool) -> f32 {
 }
 /// Space above the first row of cards.
 const TOP: f32 = 12.0;
-/// The page shown large (a card's magnifier) is kept beside the thumbnails under this key, so it
+/// A thumbnail's place: the file (by id) and the page (0-based, in the file). A file's card and
+/// the card of its first page when expanded show the same thumbnail.
+type Slot = (u64, usize);
+/// The page shown large (a card's magnifier) is kept beside the thumbnails under this slot, so it
 /// shares their threads, their limits and their checks.
-const PREVIEW: u64 = u64::MAX;
+const PREVIEW: Slot = (u64::MAX, 0);
 /// The longest side of the page shown large, in pixels.
 const PREVIEW_SIDE: f32 = 2048.0;
+/// A file whose render is done keeps its document open this long (seconds), so the next page of
+/// the same file renders without reading the whole file again.
+const KEEP_OPEN: f64 = 2.0;
+/// The most pages one file can be spread out into (each is a card, laid out every frame).
+pub(crate) const MAX_EXPAND: usize = 2000;
 /// The shape drawn for a page whose size is unknown (US Letter); nothing is rendered for it.
 const FALLBACK_PAGE: (f32, f32) = (612.0, 792.0);
 /// Icons drawn on the (always white) paper, in either theme: the light theme's muted text, which
@@ -120,15 +128,25 @@ struct Entry {
 }
 
 struct Job {
-    file: u64,
+    slot: Slot,
     key: Key,
     pool: RenderPool,
     tag: u64,
 }
 
+/// A pool whose render is done, with its document still open: kept a moment for the next page of
+/// the same file, read the same way.
+struct Open {
+    source: usize,
+    auth: u64,
+    pool: RenderPool,
+    /// When its render finished (seconds).
+    since: f64,
+}
+
 /// A thumbnail a card needs this frame.
 struct Want {
-    file: u64,
+    slot: Slot,
     key: Key,
     bytes: Arc<Vec<u8>>,
     password: Option<Arc<str>>,
@@ -139,8 +157,10 @@ struct Want {
 /// The grid's thumbnails and the renders under way.
 #[derive(Default)]
 pub(crate) struct Thumbs {
-    entries: HashMap<u64, Entry>,
+    entries: HashMap<Slot, Entry>,
     jobs: Vec<Job>,
+    /// Pools done rendering, their documents still open (their threads count).
+    open: Vec<Open>,
     /// Threads of pools let go of, until they exit.
     retiring: Vec<Retiring>,
     frame: u64,
@@ -168,20 +188,24 @@ impl Thumbs {
         for job in self.jobs.drain(..) {
             self.retiring.push(job.pool.retire());
         }
+        for open in self.open.drain(..) {
+            self.retiring.push(open.pool.retire());
+        }
     }
 
-    /// Render threads that exist now (real threads, not pools): those of pools at work and of
-    /// pools let go of.
+    /// Render threads that exist now (real threads, not pools): those of pools at work, of pools
+    /// keeping a document open, and of pools let go of.
     fn threads(&mut self) -> usize {
         self.retiring.retain_mut(|r| r.running() > 0);
         let retiring: usize = self.retiring.iter_mut().map(Retiring::running).sum();
         let working: usize = self.jobs.iter().map(|j| j.pool.threads()).sum();
-        working.saturating_add(retiring)
+        let open: usize = self.open.iter().map(|o| o.pool.threads()).sum();
+        working.saturating_add(open).saturating_add(retiring)
     }
 
-    fn look(&mut self, file: u64, key: Key) -> Look {
+    fn look(&mut self, slot: Slot, key: Key) -> Look {
         let frame = self.frame;
-        match self.entries.get_mut(&file) {
+        match self.entries.get_mut(&slot) {
             Some(e) if e.key == key => {
                 e.seen = frame;
                 match (&e.tex, &e.error) {
@@ -203,8 +227,8 @@ impl Thumbs {
         }
     }
 
-    fn state(&self, file: u64) -> ThumbState {
-        if let Some(e) = self.entries.get(&file) {
+    fn state(&self, slot: Slot) -> ThumbState {
+        if let Some(e) = self.entries.get(&slot) {
             if let Some(tex) = &e.tex {
                 let [w, h] = tex.size();
                 return ThumbState::Ready {
@@ -217,19 +241,26 @@ impl Thumbs {
                 return ThumbState::Failed(err.clone());
             }
         }
-        if self.jobs.iter().any(|j| j.file == file) { ThumbState::Pending } else { ThumbState::None }
+        if self.jobs.iter().any(|j| j.slot == slot) { ThumbState::Pending } else { ThumbState::None }
     }
 
     /// Once per frame, whatever shows: drop what no longer matches the list, take finished
-    /// renders, start those the grid asked for and keep the textures within budget.
-    fn finish(&mut self, ctx: &egui::Context, current: &HashMap<u64, Key>) {
+    /// renders, start those the grid asked for and keep the textures within budget. `current`
+    /// says what a thumbnail must match now (looked up, so the cost follows the files and the
+    /// thumbnails kept, not the pages of an expanded file).
+    fn finish(&mut self, ctx: &egui::Context, current: &dyn Fn(Slot) -> Option<Key>) {
+        let now = ctx.input(|i| i.time);
         // Reconcile with the list as it is now (undo, redo, unlock, a new range, removal): a
         // thumbnail of another page, password or file is never shown again.
-        self.entries.retain(|file, e| current.get(file).is_some_and(|k| k.same_page(&e.key)));
+        self.entries.retain(|slot, e| current(*slot).is_some_and(|k| k.same_page(&e.key)));
         // Renders nobody wants any more are let go of now (on the web, before they would render).
-        let (keep, gone): (Vec<Job>, Vec<Job>) = self.jobs.drain(..).partition(|job| current.get(&job.file).is_some_and(|k| k.same_page(&job.key)));
+        let (keep, gone): (Vec<Job>, Vec<Job>) = self.jobs.drain(..).partition(|job| current(job.slot).is_some_and(|k| k.same_page(&job.key)));
         self.jobs = keep;
         self.retiring.extend(gone.into_iter().map(|job| job.pool.retire()));
+        // Documents kept open past their time are closed.
+        let (keep, gone): (Vec<Open>, Vec<Open>) = self.open.drain(..).partition(|o| now - o.since < KEEP_OPEN);
+        self.open = keep;
+        self.retiring.extend(gone.into_iter().map(|o| o.pool.retire()));
 
         // Finished renders, a few per frame. A pool without threads (the web) renders inside
         // `try_recv`: at most one of those per frame.
@@ -259,6 +290,8 @@ impl Thumbs {
             }
             let job = self.jobs.swap_remove(i);
             taken += 1;
+            // A pool that rendered (rather than failed or hung) can keep its document open.
+            let healthy = answer.as_ref().is_some_and(|out| out.error.is_none());
             let failed = |e: String| Entry { key: job.key, tex: None, error: Some(e), seen: self.frame, bytes: 0 };
             let entry = match answer {
                 None => failed("the page wasn't drawn".to_owned()),
@@ -266,10 +299,10 @@ impl Thumbs {
                     Some(e) => failed(e),
                     None => match texture(
                         ctx,
-                        job.file,
+                        job.slot,
                         [out.width, out.height],
                         out.rgba,
-                        if job.file == PREVIEW { gpu_side.min(PREVIEW_SIDE as usize) } else { max_side },
+                        if job.slot == PREVIEW { gpu_side.min(PREVIEW_SIDE as usize) } else { max_side },
                     ) {
                         Ok((tex, bytes)) => {
                             uploaded = uploaded.saturating_add(bytes);
@@ -279,15 +312,20 @@ impl Thumbs {
                     },
                 },
             };
-            self.entries.insert(job.file, entry);
-            // Its thread (idle now, or still finishing a render the watchdog gave up on) counts
-            // until it exits.
-            self.retiring.push(job.pool.retire());
+            self.entries.insert(job.slot, entry);
+            // Its document stays open a moment for the file's next page (its thread, idle, still
+            // counts); otherwise its thread (idle, or finishing a render the watchdog gave up on)
+            // counts until it exits.
+            if healthy && job.pool.threads() <= 1 && self.open.len() < MAX_THREADS {
+                self.open.push(Open { source: job.key.source, auth: job.key.auth, pool: job.pool, since: now });
+            } else {
+                self.retiring.push(job.pool.retire());
+            }
         }
 
-        // New renders: the cards in view first, in grid order; one per file at a time.
+        // New renders: the cards in view first, in grid order; one per thumbnail at a time.
         let mut wants = std::mem::take(&mut self.wants);
-        wants.sort_by_key(|w| (w.file != PREVIEW, !w.visible));
+        wants.sort_by_key(|w| (w.slot != PREVIEW, !w.visible));
         // A pool without threads (the web) parses its document when it is made and keeps it until
         // it renders, one per frame: while one waits, nothing else starts.
         // (Nor in the frame that rendered one: one heavy step per frame on the UI thread.)
@@ -295,14 +333,37 @@ impl Thumbs {
         let mut waiting = false;
         for w in wants {
             // Wanted for the list as it is now (not changed by this frame's action); one render
-            // per file at a time; and a want made earlier this frame may have just been answered.
-            if current.get(&w.file).is_none_or(|k| !k.same_page(&w.key))
-                || self.jobs.iter().any(|j| j.file == w.file)
-                || self.entries.get(&w.file).is_some_and(|e| e.key == w.key)
+            // per thumbnail at a time; and a want made earlier this frame may have just been
+            // answered.
+            if current(w.slot).is_none_or(|k| !k.same_page(&w.key))
+                || self.jobs.iter().any(|j| j.slot == w.slot)
+                || self.entries.get(&w.slot).is_some_and(|e| e.key == w.key)
             {
                 continue;
             }
+            // The same file, read the same way, still open from a render just done: no new read of
+            // the file (and its thread is already counted). On the web, not while another waits.
+            let inline_waiting = self.jobs.iter().any(|j| j.pool.is_inline());
+            if let Some(k) =
+                self.open.iter().position(|o| o.source == w.key.source && o.auth == w.key.auth && !(o.pool.is_inline() && inline_waiting))
+            {
+                let pool = self.open.swap_remove(k).pool;
+                self.next_tag = self.next_tag.wrapping_add(1);
+                let tag = self.next_tag;
+                pool.set_queue(vec![RenderRequest { page: w.key.page, scale: w.scale, tag, ..Default::default() }]);
+                if pool.is_inline() {
+                    threads = MAX_THREADS;
+                }
+                self.jobs.push(Job { slot: w.slot, key: w.key, pool, tag });
+                continue;
+            }
             if threads >= MAX_THREADS {
+                // A document kept open for another file gives its thread up: it exits, and this
+                // starts then.
+                if let Some(k) = self.open.iter().enumerate().min_by(|(_, a), (_, b)| a.since.total_cmp(&b.since)).map(|(k, _)| k) {
+                    let open = self.open.swap_remove(k);
+                    self.retiring.push(open.pool.retire());
+                }
                 waiting = true;
                 break;
             }
@@ -316,25 +377,25 @@ impl Thumbs {
             // The request stays in the pool's queue (it is never replaced) until its answer.
             pool.set_queue(vec![RenderRequest { page: w.key.page, scale: w.scale, tag, ..Default::default() }]);
             threads = if pool.is_inline() { MAX_THREADS } else { threads.saturating_add(1) };
-            self.jobs.push(Job { file: w.file, key: w.key, pool, tag });
+            self.jobs.push(Job { slot: w.slot, key: w.key, pool, tag });
         }
 
         // Within budget: drop the thumbnails out of view longest unseen first.
         // (The page shown large has its own: one texture, gone when it closes.)
         let mut total: usize = self.entries.iter().filter(|(f, _)| **f != PREVIEW).map(|(_, e)| e.bytes).sum();
         if total > TEXTURE_BUDGET {
-            let mut old: Vec<(u64, u64, usize)> = self
+            let mut old: Vec<(u64, Slot, usize)> = self
                 .entries
                 .iter()
                 .filter(|(f, e)| **f != PREVIEW && e.seen != self.frame && e.bytes > 0)
                 .map(|(f, e)| (e.seen, *f, e.bytes))
                 .collect();
             old.sort_unstable();
-            for (_, file, bytes) in old {
+            for (_, slot, bytes) in old {
                 if total <= TEXTURE_BUDGET {
                     break;
                 }
-                self.entries.remove(&file);
+                self.entries.remove(&slot);
                 total = total.saturating_sub(bytes);
             }
         }
@@ -348,6 +409,9 @@ impl Thumbs {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         } else if waiting {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        } else if !self.open.is_empty() {
+            // To close the documents kept open when their time is up.
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(KEEP_OPEN));
         }
         self.frame = self.frame.wrapping_add(1);
     }
@@ -357,7 +421,7 @@ impl Thumbs {
 /// larger than a thumbnail can be (or than the GPU accepts), is refused, never uploaded.
 fn texture(
     ctx: &egui::Context,
-    file: u64,
+    slot: Slot,
     size: [u32; 2],
     pixels: pdfcraft_render::Pixels,
     max_side: usize,
@@ -371,7 +435,7 @@ fn texture(
         return Err("the thumbnail came back incomplete".to_owned());
     }
     let image = crate::canvas::texture_image([w, h], pixels);
-    Ok((ctx.load_texture(format!("combine-thumb-{file}"), image, egui::TextureOptions::LINEAR), bytes))
+    Ok((ctx.load_texture(format!("combine-thumb-{}-{}", slot.0, slot.1), image, egui::TextureOptions::LINEAR), bytes))
 }
 
 /// `name` shortened in the middle to what `fits`, keeping its extension ("Pilot Boat Ad….pdf").
@@ -416,6 +480,79 @@ fn columns_in(width: f32, cell: Vec2) -> usize {
     ((width - 16.0) / cell.x).floor().max(1.0) as usize
 }
 
+/// What one place in the grid shows: a file's card, or (the file expanded) one of the pages it
+/// adds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Cell {
+    /// The file, by its place in the list.
+    pub(crate) file: usize,
+    /// For a page: its place among the pages the file adds, the page (0-based, in the file) and
+    /// how many it adds.
+    pub(crate) page: Option<(usize, usize, usize)>,
+}
+
+/// The pages an expanded file shows: in its range's order, and sorted (to look one up), for the
+/// range and page count they were worked out for.
+#[derive(Clone, Debug)]
+pub(crate) struct PageList {
+    of: (String, usize),
+    pub(crate) order: Arc<[usize]>,
+    sorted: Arc<[usize]>,
+}
+
+/// The pages an expanded file shows, worked out again only when its range or page count
+/// changes; `None` when it can't be expanded (locked, unreadable, a bad range, a single page, or
+/// more than [`MAX_EXPAND`]).
+pub(crate) fn pages_shown(cache: &mut HashMap<u64, PageList>, f: &CombineFile) -> Option<PageList> {
+    if f.lock.is_some() || f.problem.is_some() {
+        return None;
+    }
+    let list = match cache.get(&f.id) {
+        Some(list) if list.of.0 == f.range && list.of.1 == f.pages => list.clone(),
+        _ => {
+            let order = f.pages_taken().ok()?;
+            let mut sorted = order.clone();
+            sorted.sort_unstable();
+            let list = PageList { of: (f.range.clone(), f.pages), order: Arc::from(order), sorted: Arc::from(sorted) };
+            cache.insert(f.id, list.clone());
+            list
+        }
+    };
+    (list.order.len() > 1 && list.order.len() <= MAX_EXPAND).then_some(list)
+}
+
+/// The grid's places, in order: each file's card, or its pages when it is expanded.
+fn layout(app: &mut PdfCraftApp) -> Vec<Cell> {
+    let tab = &mut app.combine_tab;
+    let mut cells = Vec::with_capacity(app.combine_draft.len());
+    for (file, f) in app.combine_draft.iter().enumerate() {
+        match tab.expanded.contains(&f.id).then(|| pages_shown(&mut tab.page_lists, f)).flatten() {
+            Some(list) => {
+                let of = list.order.len();
+                cells.extend(list.order.iter().enumerate().map(|(nth, &page)| Cell { file, page: Some((nth, page, of)) }));
+            }
+            None => cells.push(Cell { file, page: None }),
+        }
+    }
+    cells
+}
+
+/// The file gap (0 = before the first file, n = after the last) a drop before place `at` means: a
+/// drop inside an expanded file's pages goes to the nearer end of that file.
+fn file_gap(cells: &[Cell], at: usize, files: usize) -> usize {
+    match cells.get(at) {
+        None => files,
+        Some(Cell { file, page: Some((nth, _, of)) }) if *nth > 0 => {
+            if nth.saturating_mul(2) < *of {
+                *file
+            } else {
+                file.saturating_add(1)
+            }
+        }
+        Some(c) => c.file,
+    }
+}
+
 /// The grid of files, in the card that holds the list. Returns what the user did.
 pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks: &[Result<usize, String>], selected: &[bool]) -> Option<RowAction> {
     let ctx = ui.ctx().clone();
@@ -432,6 +569,15 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks:
         *copies.entry((f.name.as_str(), f.bytes.len())).or_default() += 1;
     }
     let twice: Vec<bool> = app.combine_draft.iter().map(|f| copies.get(&(f.name.as_str(), f.bytes.len())).is_some_and(|n| *n > 1)).collect();
+    let places = layout(app);
+    // Each file's first place (for the keys and to scroll to it).
+    let mut first_place = vec![0usize; n];
+    for (at, c) in places.iter().enumerate().rev() {
+        if let Some(slot) = first_place.get_mut(c.file) {
+            *slot = at;
+        }
+    }
+    app.combine_tab.grid_places = places.iter().map(|c| c.file).collect();
     let reveal = app.combine_tab.reveal.take();
     let fit = paper_box(app.combine_zoom);
     let cell = fit + AROUND;
@@ -469,7 +615,7 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks:
         width = ui.available_width();
         let cols = columns_in(width, cell);
         *columns = cols;
-        let rows = n.div_ceil(cols);
+        let rows = places.len().div_ceil(cols);
         let left = ((width - cols as f32 * cell.x) / 2.0).max(0.0);
         let (area, _) = ui.allocate_exact_size(vec2(width, rows as f32 * cell.y), Sense::hover());
         let cell_rect = |i: usize| {
@@ -477,44 +623,72 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks:
             Rect::from_min_size(pos2(area.left() + left + col as f32 * cell.x, area.top() + row as f32 * cell.y), cell)
         };
         if let Some(i) = reveal.and_then(|id| files.iter().position(|f| f.id == id)) {
-            ui.scroll_to_rect(cell_rect(i), None);
+            ui.scroll_to_rect(cell_rect(first_place.get(i).copied().unwrap_or(0)), None);
         }
         for row in crate::canvas::thumbnail_rows(clip.top() - TOP, clip.bottom() - TOP, cell.y, rows) {
-            for col in 0..cols {
-                let i = row * cols + col;
-                let Some(f) = files.get_mut(i) else { break };
+            let first = row.saturating_mul(cols);
+            let in_row = places.get(first..first.saturating_add(cols).min(places.len())).unwrap_or_default();
+            // An expanded file's pages on this row share a tinted band, so they read as one file.
+            let mut run = 0;
+            while run < in_row.len() {
+                let Some(start) = in_row.get(run).copied() else { break };
+                let mut end = run;
+                while in_row.get(end.saturating_add(1)).is_some_and(|c| c.file == start.file && c.page.is_some()) {
+                    end = end.saturating_add(1);
+                }
+                if start.page.is_some() {
+                    let band = cell_rect(first.saturating_add(run)).union(cell_rect(first.saturating_add(end))).shrink2(vec2(2.0, 4.0));
+                    ui.painter().rect_filled(band, CornerRadius::same(10), t.accent_soft.gamma_multiply(0.45));
+                }
+                run = end.saturating_add(1);
+            }
+            for (col, place) in in_row.iter().enumerate() {
+                let i = first.saturating_add(col);
+                let Some(f) = files.get_mut(place.file) else { break };
                 let c = cell_rect(i);
                 cells.push((i, c));
                 let card = Card {
-                    i,
+                    i: place.file,
+                    page: place.page,
                     rect: c,
-                    check: checks.get(i).cloned().unwrap_or(Ok(f.pages)),
-                    selected: selected.get(i).copied().unwrap_or(false),
-                    twice: twice.get(i).copied().unwrap_or(false),
+                    check: checks.get(place.file).cloned().unwrap_or(Ok(f.pages)),
+                    selected: selected.get(place.file).copied().unwrap_or(false),
+                    twice: twice.get(place.file).copied().unwrap_or(false),
                     revision,
                     ppp,
                     fit,
                 };
-                let card_id = ui.id().with(("combine-card", f.id));
+                let card_id = card.id(ui, f);
                 if let Some(a) = card.show(ui, t, f, thumbs) {
                     action = Some(a);
                 }
                 if ui.memory(|m| m.has_focus(card_id)) {
-                    focused_card = Some(card_id);
+                    focused_card = Some((card_id, f.id, place.page.map_or(0, |p| p.0)));
                 }
             }
         }
-        // While a card is dragged: the gap it would go to, drawn as a bar, and how many go.
+        // While a card is dragged: the file gap it would go to, drawn as a bar, and how many go.
         if let Some(d) = drag
             && let Some(p) = pointer
         {
-            let gap = crate::canvas::drop_gap(&cells, p);
-            // Drawn at the near edge of the card nearest the pointer (as `drop_gap` decides), so a
-            // gap at the end of a row shows on that row, not at the start of the next.
-            let nearest = cells.iter().min_by(|(_, a), (_, b)| a.distance_sq_to_pos(p).total_cmp(&b.distance_sq_to_pos(p)));
-            if let Some((_, r)) = nearest {
-                let x = if p.x < r.center().x { r.left() + 2.0 } else { r.right() - 2.0 };
-                ui.painter().line_segment([pos2(x, r.top() + 10.0), pos2(x, r.bottom() - 30.0)], Stroke::new(3.0, t.accent));
+            let gap = crate::canvas::drop_gap(&cells, p).map(|at| file_gap(&places, at, n));
+            // Drawn at the end of the file before the gap or the start of the one after (an
+            // expanded file's pages are never split), whichever is nearer the pointer.
+            if let Some(gap) = gap {
+                let before = gap
+                    .checked_sub(1)
+                    .and_then(|f| first_place.get(f.saturating_add(1)).map(|next| next.saturating_sub(1)).or(places.len().checked_sub(1)));
+                let after = first_place.get(gap).copied();
+                let ends = [before.map(|at| cell_rect(at).right() - 2.0).zip(before), after.map(|at| cell_rect(at).left() + 2.0).zip(after)];
+                let nearest = ends.into_iter().flatten().min_by(|(xa, a), (xb, b)| {
+                    let da = pos2(*xa, cell_rect(*a).center().y).distance_sq(p);
+                    let db = pos2(*xb, cell_rect(*b).center().y).distance_sq(p);
+                    da.total_cmp(&db)
+                });
+                if let Some((x, at)) = nearest {
+                    let r = cell_rect(at);
+                    ui.painter().line_segment([pos2(x, r.top() + 10.0), pos2(x, r.bottom() - 30.0)], Stroke::new(3.0, t.accent));
+                }
             }
             let moving = files
                 .iter()
@@ -532,7 +706,8 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks:
         }
     });
 
-    app.combine_tab.card_focus = focused_card;
+    app.combine_tab.card_focus = focused_card.map(|(id, ..)| id);
+    app.combine_tab.card_focus_at = focused_card.map(|(_, file, nth)| (file, nth));
 
     // Pinch, or Ctrl/⌘ with the wheel, over the grid zooms it.
     let pinch = ctx.input(|i| i.zoom_delta());
@@ -549,25 +724,28 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks:
         app.set_combine_zoom(zoom);
         if app.combine_zoom != before {
             // The same card all through one gesture (a slider drag, a turn of the wheel): the
-            // first in view changes as the cards reflow, and following it would drift.
+            // first in view changes as the cards reflow, and following it would drift. A card is
+            // kept by its file and its place among the file's pages.
             let now = ctx.input(|i| i.time);
-            let gesture = app
-                .combine_tab
-                .zoom_anchor
-                .filter(|a| now - a.2 < 0.5)
-                .and_then(|(id, above, _)| app.combine_draft.iter().position(|f| f.id == id).map(|i| (i, above)));
+            let gesture = app.combine_tab.zoom_anchor.filter(|a| now - a.3 < 0.5).and_then(|(id, nth, above, _)| {
+                let file = app.combine_draft.iter().position(|f| f.id == id)?;
+                Some((first_place.get(file)?.saturating_add(nth).min(places.len().saturating_sub(1)), above))
+            });
             // Cards just outside the view are drawn too (under the toolbar, say): the pointer
             // counts only over the grid.
             let under = pointer.filter(|_| over_grid).and_then(|p| cells.iter().find(|(_, r)| r.contains(p)));
             let anchor = gesture
                 .or_else(|| under.or_else(|| cells.iter().find(|(_, r)| r.bottom() > viewport.top())).map(|(i, r)| (*i, r.top() - viewport.top())));
-            app.combine_tab.zoom_anchor = anchor.and_then(|(i, above)| app.combine_draft.get(i).map(|f| (f.id, above, now)));
+            app.combine_tab.zoom_anchor = anchor.and_then(|(i, above)| {
+                let place = places.get(i)?;
+                Some((app.combine_draft.get(place.file)?.id, place.page.map_or(0, |p| p.0), above, now))
+            });
             if let Some((i, above)) = anchor {
                 // Where it will be: its row at the new size, as far below the top as it is now;
                 // within what can be scrolled to, so zooming out at the bottom shows no gap.
                 let cell = paper_box(app.combine_zoom) + AROUND;
                 let cols = columns_in(width, cell);
-                let content = TOP + n.div_ceil(cols) as f32 * cell.y;
+                let content = TOP + places.len().div_ceil(cols) as f32 * cell.y;
                 let y = (TOP + (i / cols) as f32 * cell.y - above).min(content - viewport.height()).max(0.0);
                 // Set as the scroll position itself, before the next frame draws anything: no
                 // jump, and no scroll still animating (to a card revealed by the keys, say) can
@@ -585,7 +763,11 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks:
 
 /// One card's place and what it shows.
 struct Card {
+    /// The file, by its place in the list.
     i: usize,
+    /// A page card (the file expanded): its place among the pages the file adds, the page and how
+    /// many it adds. `None` for the file's own card.
+    page: Option<(usize, usize, usize)>,
     rect: Rect,
     check: Result<usize, String>,
     selected: bool,
@@ -597,16 +779,34 @@ struct Card {
 }
 
 impl Card {
+    fn id(&self, ui: &egui::Ui, f: &CombineFile) -> egui::Id {
+        match self.page {
+            None => ui.id().with(("combine-card", f.id)),
+            Some((nth, ..)) => ui.id().with(("combine-page", f.id, nth)),
+        }
+    }
+
     fn show(&self, ui: &mut egui::Ui, t: &Tokens, f: &mut CombineFile, thumbs: &mut Thumbs) -> Option<RowAction> {
         let mut action = None;
         let c = self.rect;
-        let id = ui.id().with(("combine-card", f.id));
+        let id = self.id(ui, f);
         let resp = ui.interact(c.shrink(4.0), id, Sense::click_and_drag());
         let name = f.name.clone();
+        // A page card: "Page 3", and the file it belongs to.
+        let page_label = self.page.map(|(_, p, _)| crate::i18n::fmt(tl!("Page {label}"), &[("label", &p.saturating_add(1).to_string())]));
+        let label = match &page_label {
+            Some(page) => format!("{page} · {name}"),
+            None => name.clone(),
+        };
         // As the organize grid's pages: a check box that is on when selected; and, for screen
         // readers, selected as items in a list are.
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, self.selected, &name));
-        let pages = if f.pages == 1 { tl!("1 page").to_string() } else { crate::i18n::fmt(tl!("{n} pages"), &[("n", &f.pages.to_string())]) };
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, self.selected, &label));
+        let pages = match self.page {
+            // For screen readers: which page of how many.
+            Some((_, p, _)) => crate::i18n::fmt(tl!("Page {p} of {n}"), &[("p", &p.saturating_add(1).to_string()), ("n", &f.pages.to_string())]),
+            None if f.pages == 1 => tl!("1 page").to_string(),
+            None => crate::i18n::fmt(tl!("{n} pages"), &[("n", &f.pages.to_string())]),
+        };
         let painter = ui.painter_at(c);
 
         // Selected and hovered cards.
@@ -618,16 +818,19 @@ impl Card {
         }
 
         // The page, fitted in the paper box (top-aligned, room above for the stack).
-        let page = f.first_page();
+        let page = match self.page {
+            Some((_, p, _)) => Ok(p),
+            None => f.first_page(),
+        };
         // The page's own size, when it is known and is one.
         let known = page.as_ref().ok().and_then(|p| f.sizes.get(*p).copied()).filter(|(w, h)| paper_size(*w, *h, self.fit).is_some());
         let size_pt = known.unwrap_or(FALLBACK_PAGE);
         let size = paper_size(size_pt.0, size_pt.1, self.fit).unwrap_or(self.fit);
         let top = c.top() + ABOVE;
         let paper = Rect::from_min_size(pos2(c.center().x - size.x / 2.0 - 3.0, top + (self.fit.y - size.y)), size);
-        // More than one page: sheets behind it.
+        // A file's card that adds more than one page: sheets behind it.
         let takes = self.check.as_ref().map_or(f.pages, |k| *k);
-        if takes > 1 {
+        if self.page.is_none() && takes > 1 {
             for d in [6.0, 3.0] {
                 let sheet = paper.translate(vec2(d, -d));
                 painter.rect_filled(sheet, CornerRadius::ZERO, Color32::WHITE);
@@ -661,7 +864,7 @@ impl Card {
                     let scale = (size.x * self.ppp / w).min(size.y * self.ppp / h).min(MAX_SIDE / w.max(h));
                     let px = [w * scale, h * scale].map(|v| (v.max(1.0).ceil() as u32).div_ceil(SIZE_STEP).saturating_mul(SIZE_STEP));
                     let key = Key { source: Arc::as_ptr(&f.bytes) as usize, auth: f.auth, page: p, px };
-                    let look = thumbs.look(f.id, key);
+                    let look = thumbs.look((f.id, p), key);
                     let mut want = false;
                     match look {
                         Look::Ready(tex) => {
@@ -677,7 +880,7 @@ impl Card {
                     }
                     if want && scale.is_finite() && scale > 0.0 {
                         thumbs.wants.push(Want {
-                            file: f.id,
+                            slot: (f.id, p),
                             key,
                             bytes: f.bytes.clone(),
                             password: f.password().map(Arc::from),
@@ -702,22 +905,29 @@ impl Card {
         });
         painter.rect_stroke(paper, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
 
-        // A warning that doesn't stop it being combined: a badge on the corner.
-        let warned = !f.notes.is_empty() || self.twice;
+        // A warning that doesn't stop it being combined: a badge on the file's card.
+        let warned = self.page.is_none() && (!f.notes.is_empty() || self.twice);
         if warned && why.as_ref().is_none_or(|(icon, ..)| *icon == "eye-off") {
             let r = Rect::from_center_size(paper.right_top() + vec2(-2.0, 2.0), Vec2::splat(18.0));
             painter.circle_filled(r.center(), 10.0, t.card);
             icons::paint(ui, r, "triangle-alert", 15.0, WARNING);
         }
 
-        // The name, shortened in the middle to fit, and the pages taken when a range is set.
-        let font = theme::medium(12.5);
-        let max_w = c.width() - 20.0;
-        let fits = |s: &str| painter.layout_no_wrap(crate::bidi::visual(s).into_owned(), font.clone(), t.text).size().x <= max_w;
-        let shown = crate::bidi::visual(&fit_name(&f.name, fits)).into_owned();
+        // The name, shortened in the middle to fit, and the pages taken when a range is set; on a
+        // page card, the page first and the file's name below it, smaller.
         let name_y = top + self.fit.y + 16.0;
-        painter.text(pos2(c.center().x, name_y), Align2::CENTER_CENTER, shown, font, t.text);
-        let note = if !f.range.trim().is_empty() {
+        let max_w = c.width() - 20.0;
+        let (font, colour, y) = match &page_label {
+            Some(page) => {
+                painter.text(pos2(c.center().x, name_y), Align2::CENTER_CENTER, page, theme::semibold(12.5), t.text);
+                (theme::regular(11.5), t.text_muted, name_y + 17.0)
+            }
+            None => (theme::medium(12.5), t.text, name_y),
+        };
+        let fits = |s: &str| painter.layout_no_wrap(crate::bidi::visual(s).into_owned(), font.clone(), colour).size().x <= max_w;
+        let shown = crate::bidi::visual(&fit_name(&f.name, fits)).into_owned();
+        painter.text(pos2(c.center().x, y), Align2::CENTER_CENTER, shown, font, colour);
+        let note = if self.page.is_none() && !f.range.trim().is_empty() {
             match &self.check {
                 Ok(k) => Some((crate::i18n::fmt(tl!("Pages: {k} of {n}"), &[("k", &k.to_string()), ("n", &f.pages.to_string())]), t.text_muted)),
                 Err(_) => Some((tl!("Check the pages").to_owned(), ERROR)),
@@ -733,30 +943,52 @@ impl Card {
         // dragged): remove this file only, and show it large when there is a page to show. Drawn
         // over the card, so a click on one doesn't select or move it.
         let previewable = why.is_none();
+        // A file that adds more pages than one can be spread out into them.
+        let expandable = self.page.is_none() && takes > 1 && takes <= MAX_EXPAND && f.lock.is_none() && f.problem.is_none() && self.check.is_ok();
+        // Shown large: the file from its first page, or a page card's page.
+        let preview = match self.page {
+            Some((nth, ..)) => RowAction::PreviewAt(f.id, nth),
+            None => RowAction::Preview(f.id),
+        };
+        // The card's own actions, in this order: expand (or, on a page, collapse), remove, show
+        // large. Page cards can't be removed one by one (yet): no trash on them.
+        let mut buttons: Vec<(&str, String, RowAction)> = Vec::new();
+        if expandable {
+            buttons.push(("maximize-2", tl!("Expand").to_owned(), RowAction::Expand(f.id, true)));
+        }
+        if self.page.is_some() {
+            buttons.push(("minimize-2", tl!("Collapse").to_owned(), RowAction::Expand(f.id, false)));
+        } else {
+            buttons.push(("trash-2", crate::i18n::fmt(tl!("Remove {name}"), &[("name", &f.name)]), RowAction::RemoveFile(f.id)));
+        }
+        if previewable {
+            buttons.push(("search", tl!("Preview").to_owned(), preview));
+        }
         // Nothing of the card shows over a dialog (the preview, the password box).
         let covered = ui.ctx().memory(|m| m.top_modal_layer().is_some());
         let mut over_bar = false;
         if !covered && ui.rect_contains_pointer(c.shrink(4.0)) && !egui::DragAndDrop::has_any_payload(ui.ctx()) {
-            let count = if previewable { 2.0 } else { 1.0 };
+            let count = buttons.len() as f32;
             // Mostly above the page (a quarter over its top edge), so it hides little of it, and
             // never the name below.
             let y = paper.top() + BAR_H / 4.0 - BAR_H / 2.0;
-            let bar = Rect::from_center_size(pos2(paper.center().x, y), vec2(count * 26.0 + (count - 1.0) * 2.0 + 8.0, BAR_H));
+            let bar = Rect::from_center_size(pos2(paper.center().x, y), vec2(count * 26.0 + (count - 1.0).max(0.0) * 2.0 + 8.0, BAR_H));
             over_bar = ui.rect_contains_pointer(bar);
             painter.rect(bar, CornerRadius::same(8), t.card, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
             let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink(4.0)).layout(egui::Layout::left_to_right(egui::Align::Center)));
             bar_ui.spacing_mut().item_spacing.x = 2.0;
-            let remove = crate::i18n::fmt(tl!("Remove {name}"), &[("name", &f.name)]);
-            if icons::button(&mut bar_ui, "trash-2", 26.0, false, &remove).clicked() {
-                action = Some(RowAction::RemoveFile(f.id));
-            }
-            if previewable && icons::button(&mut bar_ui, "search", 26.0, false, tl!("Preview")).clicked() {
-                action = Some(RowAction::Preview(f.id));
+            for (icon, label, act) in &buttons {
+                if icons::button(&mut bar_ui, icon, 26.0, false, label).clicked() {
+                    action = Some(act.clone());
+                }
             }
         }
 
-        // The full name and everything known about the file, on hover.
-        let mut tip = format!("{}\n{pages} · {}", f.name, crate::panels::human_size(f.bytes.len()));
+        // The full name and everything known about the file, on hover (on a page card, which page).
+        let mut tip = match &page_label {
+            Some(page) => format!("{}\n{page}", f.name),
+            None => format!("{}\n{pages} · {}", f.name, crate::panels::human_size(f.bytes.len())),
+        };
         for line in why.iter().map(|(_, _, s)| s).chain(&f.notes) {
             tip.push('\n');
             tip.push_str(line);
@@ -766,28 +998,26 @@ impl Card {
             tip.push_str(tl!("Added more than once"));
         }
         // Page ranges are typed in the list.
-        if self.check.is_err() {
+        if self.page.is_none() && self.check.is_err() {
             tip.push('\n');
             tip.push_str(tl!("Switch to List view to change the pages it takes."));
         }
         // (Over the bar, its buttons say what they do instead.)
         let resp = if covered || over_bar { resp } else { resp.on_hover_text(tip) };
 
-        // The same actions on a right click (and Unlock… for a locked file).
+        // The same actions on a right click, show large first (and Unlock… for a locked file).
         let at = resp.rect.left_bottom();
-        let (file, locked) = (f.id, f.lock.is_some());
+        let locked = f.lock.is_some();
         resp.context_menu(|ui| {
             let item = |ui: &mut egui::Ui, icon: &str, label: &str| {
                 ui.add(egui::Button::image_and_text(icons::image(icon, 15.0, ui.visuals().text_color()), label)).clicked()
             };
-            if previewable && item(ui, "search", tl!("Preview")) {
-                action = Some(RowAction::Preview(file));
-                ui.close();
-            }
-            // This file only, as its trash button, and named so.
-            if item(ui, "trash-2", &crate::i18n::fmt(tl!("Remove {name}"), &[("name", &name)])) {
-                action = Some(RowAction::RemoveFile(file));
-                ui.close();
+            for (icon, label, act) in buttons.iter().rev() {
+                // (Remove names its file, as the trash button does.)
+                if item(ui, icon, label) {
+                    action = Some(act.clone());
+                    ui.close();
+                }
             }
             if locked && item(ui, "lock-open", tl!("Unlock…")) {
                 action = Some(RowAction::Unlock(Some(self.i), at));
@@ -900,13 +1130,13 @@ pub(crate) fn preview(app: &mut PdfCraftApp, ctx: &egui::Context, t: &Tokens) {
                 }
                 Look::Pending(stand_in) => {
                     // A smaller render of this page stands in: the last size shown, or its card's.
-                    let card = thumbs.entries.get(&f.id).filter(|e| e.key.page == page && e.key.auth == f.auth).and_then(|e| e.tex.as_ref());
+                    let card = thumbs.entries.get(&(f.id, page)).filter(|e| e.key.auth == f.auth).and_then(|e| e.tex.as_ref());
                     if let Some(tex) = stand_in.or(card.map(TextureHandle::id)) {
                         painter.image(tex, paper, uv, Color32::WHITE);
                     }
                     if scale.is_finite() && scale > 0.0 {
                         thumbs.wants.push(Want {
-                            file: PREVIEW,
+                            slot: PREVIEW,
                             key,
                             bytes: f.bytes.clone(),
                             password: f.password().map(Arc::from),
@@ -964,32 +1194,63 @@ impl PdfCraftApp {
     /// while it is drawn), and let go of what no longer matches the list, so renders under way
     /// finish and release their threads in the list view, on Home or in a document tab too.
     pub(crate) fn combine_thumbs_frame(&mut self, ctx: &egui::Context) {
-        // What each file's thumbnail must match now (cards out of view included).
-        let current: HashMap<u64, Key> = self
-            .combine_draft
-            .iter_mut()
-            .filter_map(|f| {
-                let page = f.first_page().ok()?;
-                Some((f.id, Key { source: Arc::as_ptr(&f.bytes) as usize, auth: f.auth, page, px: [0, 0] }))
-            })
-            .collect();
+        // What each thumbnail must match now (cards out of view included): each file's first page,
+        // and an expanded file's pages (looked up in its sorted list, never listed one by one).
+        struct Shown {
+            source: usize,
+            auth: u64,
+            first: usize,
+            sorted: Option<Arc<[usize]>>,
+        }
+        let mut shown: HashMap<u64, Shown> = HashMap::with_capacity(self.combine_draft.len());
+        let tab = &mut self.combine_tab;
+        for f in self.combine_draft.iter_mut() {
+            let Ok(first) = f.first_page() else { continue };
+            let sorted = tab.expanded.contains(&f.id).then(|| pages_shown(&mut tab.page_lists, f)).flatten().map(|l| l.sorted);
+            shown.insert(f.id, Shown { source: Arc::as_ptr(&f.bytes) as usize, auth: f.auth, first, sorted });
+        }
         // The page shown large, while it shows: leaving the tab closes it.
         if !self.combine_showing() {
             self.combine_tab.preview = None;
         }
-        let mut current = current;
-        if let Some(p) = &self.combine_tab.preview
-            && let Some(page) = p.page
-            && let Some(f) = self.combine_draft.iter().find(|f| f.id == p.file)
-        {
-            current.insert(PREVIEW, Key { source: Arc::as_ptr(&f.bytes) as usize, auth: f.auth, page, px: [0, 0] });
-        }
+        let preview = self.combine_tab.preview.as_ref().and_then(|p| {
+            let page = p.page?;
+            let f = self.combine_draft.iter().find(|f| f.id == p.file)?;
+            Some(Key { source: Arc::as_ptr(&f.bytes) as usize, auth: f.auth, page, px: [0, 0] })
+        });
+        let current = |slot: Slot| -> Option<Key> {
+            if slot == PREVIEW {
+                return preview;
+            }
+            let (id, page) = slot;
+            let s = shown.get(&id)?;
+            (page == s.first || s.sorted.as_ref().is_some_and(|p| p.binary_search(&page).is_ok())).then_some(Key {
+                source: s.source,
+                auth: s.auth,
+                page,
+                px: [0, 0],
+            })
+        };
         self.combine_thumbs.finish(ctx, &current);
+    }
+
+    /// The files shown as their pages in the grid, by place in the list (tests and the control
+    /// channel).
+    pub fn combine_expanded(&self) -> Vec<usize> {
+        self.combine_draft.iter().enumerate().filter(|(_, f)| self.combine_tab.expanded.contains(&f.id)).map(|(i, _)| i).collect()
+    }
+
+    /// An expanded file's page cards: each page (0-based, in the file) and its thumbnail; empty
+    /// for a file shown as its card (tests and the control channel).
+    pub fn combine_page_thumbnails(&self, file: usize) -> Vec<(usize, ThumbState)> {
+        let Some(f) = self.combine_draft.get(file).filter(|f| self.combine_tab.expanded.contains(&f.id)) else { return Vec::new() };
+        let pages = f.pages_taken().unwrap_or_default();
+        pages.into_iter().map(|p| (p, self.combine_thumbs.state((f.id, p)))).collect()
     }
 
     /// Each listed file's grid thumbnail, in list order (tests and the control channel).
     pub fn combine_thumbnails(&self) -> Vec<ThumbState> {
-        self.combine_draft.iter().map(|f| self.combine_thumbs.state(f.id)).collect()
+        self.combine_draft.iter().map(|f| f.first_taken().map_or(ThumbState::None, |p| self.combine_thumbs.state((f.id, p)))).collect()
     }
 
     /// Thumbnail renders under way (tests: never more than a few).
@@ -1148,16 +1409,16 @@ mod tests {
     }
 
     fn want(file: u64, bytes: &Arc<Vec<u8>>) -> Want {
-        Want { file, key: key_of(bytes), bytes: bytes.clone(), password: None, scale: 0.15, visible: true }
+        Want { slot: (file, 0), key: key_of(bytes), bytes: bytes.clone(), password: None, scale: 0.15, visible: true }
     }
 
-    fn listing(files: &[(u64, &Arc<Vec<u8>>)]) -> HashMap<u64, Key> {
-        files.iter().map(|(f, b)| (*f, key_of(b))).collect()
+    fn listing(files: &[(u64, &Arc<Vec<u8>>)]) -> HashMap<Slot, Key> {
+        files.iter().map(|(f, b)| ((*f, 0), key_of(b))).collect()
     }
 
     /// One frame of `finish`, as the app runs it; how soon it asks to be drawn again.
-    fn frame(ctx: &egui::Context, thumbs: &mut Thumbs, current: &HashMap<u64, Key>) -> std::time::Duration {
-        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| thumbs.finish(ui.ctx(), current));
+    fn frame(ctx: &egui::Context, thumbs: &mut Thumbs, current: &HashMap<Slot, Key>) -> std::time::Duration {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| thumbs.finish(ui.ctx(), &|slot| current.get(&slot).copied()));
         // No GPU here: the texture uploads are taken as done.
         out.textures_delta.clear();
         out.viewport_output.get(&egui::ViewportId::ROOT).map_or(std::time::Duration::MAX, |v| v.repaint_delay)
@@ -1176,7 +1437,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             let delay = frame(&ctx, &mut thumbs, &current);
-            if thumbs.entries.get(&1).is_some_and(|e| e.tex.is_some()) {
+            if thumbs.entries.get(&(1, 0)).is_some_and(|e| e.tex.is_some()) {
                 assert_eq!(delay, std::time::Duration::ZERO, "the frame that took the result asks for another");
                 break;
             }
@@ -1217,11 +1478,11 @@ mod tests {
         // Seen at frames 1, 5 and 9 (out of view now), and 10 (in view), 20 MB each as counted.
         for (i, seen) in [1u64, 5, 9, 10].into_iter().enumerate() {
             let key = key_of(&files[i]);
-            thumbs.entries.insert(i as u64, Entry { key, tex: Some(tex(&format!("t{i}"))), error: None, seen, bytes: 20 << 20 });
+            thumbs.entries.insert((i as u64, 0), Entry { key, tex: Some(tex(&format!("t{i}"))), error: None, seen, bytes: 20 << 20 });
         }
-        let current: HashMap<u64, Key> = files.iter().enumerate().map(|(i, b)| (i as u64, key_of(b))).collect();
+        let current: HashMap<Slot, Key> = files.iter().enumerate().map(|(i, b)| ((i as u64, 0), key_of(b))).collect();
         frame(&ctx, &mut thumbs, &current);
-        let mut kept: Vec<u64> = thumbs.entries.keys().copied().collect();
+        let mut kept: Vec<u64> = thumbs.entries.keys().map(|k| k.0).collect();
         kept.sort_unstable();
         assert_eq!(kept, [3], "80 MB: the three out of view go, oldest first; the one in view stays even over budget");
     }
@@ -1269,6 +1530,41 @@ mod tests {
     }
 
     #[test]
+    fn the_next_page_of_a_file_reuses_its_open_document_until_it_closes() {
+        // Regression: each page of an expanded file read (parsed) the whole file again.
+        let ctx = egui::Context::default();
+        let mut thumbs = Thumbs::default();
+        let bytes = pdf(3, 200, 300);
+        let first = key_of(&bytes);
+        let second = Key { page: 1, ..first };
+        let current: HashMap<Slot, Key> = [((1, 0), first), ((1, 1), second)].into_iter().collect();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let drawn = |thumbs: &Thumbs, slot: Slot| thumbs.entries.get(&slot).is_some_and(|e| e.tex.is_some());
+        while !drawn(&thumbs, (1, 0)) {
+            assert!(std::time::Instant::now() < deadline, "page 1 is drawn");
+            thumbs.wants.push(want(1, &bytes));
+            frame(&ctx, &mut thumbs, &current);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(thumbs.open.len(), 1, "its document stays open a moment");
+        // Page 2 of the same file, read the same way: that open document renders it.
+        thumbs.wants.push(Want { slot: (1, 1), key: second, ..want(1, &bytes) });
+        frame(&ctx, &mut thumbs, &current);
+        assert!(thumbs.open.is_empty() && thumbs.jobs.len() == 1, "reused, not a new pool: {} open, {} jobs", thumbs.open.len(), thumbs.jobs.len());
+        while !drawn(&thumbs, (1, 1)) {
+            assert!(std::time::Instant::now() < deadline, "page 2 is drawn");
+            frame(&ctx, &mut thumbs, &current);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(thumbs.threads() <= MAX_THREADS);
+        // Unused, it closes after a while, and its thread goes.
+        while thumbs.threads() > 0 || !thumbs.open.is_empty() {
+            assert!(std::time::Instant::now() < deadline, "the open document closes and its thread exits");
+            frame(&ctx, &mut thumbs, &current);
+        }
+    }
+
+    #[test]
     fn a_page_that_failed_is_not_tried_again_at_another_size() {
         // Regression: each zoom step asked for a new render of a page that had failed (or hung
         // for the watchdog's 20 s), filling the render threads.
@@ -1276,12 +1572,12 @@ mod tests {
         let mut thumbs = Thumbs::default();
         let bytes = pdf(1, 200, 300);
         let key = key_of(&bytes);
-        thumbs.entries.insert(1, Entry { key, tex: None, error: Some("broken".into()), seen: 0, bytes: 0 });
+        thumbs.entries.insert((1, 0), Entry { key, tex: None, error: Some("broken".into()), seen: 0, bytes: 0 });
         let larger = Key { px: [key.px[0] + 64, key.px[1] + 64], ..key };
-        assert!(matches!(thumbs.look(1, larger), Look::Failed(e) if e == "broken"), "the failure stands at another size");
+        assert!(matches!(thumbs.look((1, 0), larger), Look::Failed(e) if e == "broken"), "the failure stands at another size");
         // Another read of the file (a new password) is a new page: tried again.
         let reread = Key { auth: 2, ..key };
-        assert!(matches!(thumbs.look(1, reread), Look::Pending(None)));
+        assert!(matches!(thumbs.look((1, 0), reread), Look::Pending(None)));
     }
 
     #[test]
@@ -1293,14 +1589,14 @@ mod tests {
         let (silent, next) = (pdf(1, 200, 300), pdf(1, 200, 300));
         let pool = RenderPool::new_inline(silent.clone(), RenderConfig::default());
         // Nothing queued: this pool has nothing to answer with.
-        thumbs.jobs.push(Job { file: 1, key: key_of(&silent), pool, tag: 7 });
+        thumbs.jobs.push(Job { slot: (1, 0), key: key_of(&silent), pool, tag: 7 });
         let current = listing(&[(1, &silent), (2, &next)]);
         for _ in 0..4 {
             thumbs.wants.push(want(2, &next));
             frame(&ctx, &mut thumbs, &current);
         }
-        assert!(thumbs.entries.get(&1).is_some_and(|e| e.tex.is_none() && e.error.is_some()), "the silent one failed");
-        assert!(thumbs.entries.get(&2).is_some_and(|e| e.tex.is_some()), "the next one was drawn");
+        assert!(thumbs.entries.get(&(1, 0)).is_some_and(|e| e.tex.is_none() && e.error.is_some()), "the silent one failed");
+        assert!(thumbs.entries.get(&(2, 0)).is_some_and(|e| e.tex.is_some()), "the next one was drawn");
         assert!(thumbs.jobs.is_empty());
         assert!(frame(&ctx, &mut thumbs, &current) > std::time::Duration::ZERO, "no more frames asked for at once");
     }
