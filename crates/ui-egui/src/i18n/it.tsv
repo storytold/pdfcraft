@@ -1696,6 +1696,7 @@
 	This document isn't password-protected	Questo documento non è protetto da password
 	Only the document's owner can change its security (open it with the permissions password)	Solo il proprietario del documento può modificarne la protezione (aprilo con la password delle autorizzazioni)
 	The document's security settings don't allow this change	Le impostazioni di sicurezza del documento non consentono questa modifica
+	The document's security settings don't allow copying text and images	Le impostazioni di sicurezza del documento non consentono di copiare testo e immagini
 	Open a document first	Apri prima un documento
 	Security will be removed when you save	La protezione verrà rimossa al salvataggio
 	Click text or an image to edit it	Fai clic su un testo o un'immagine per modificarlo

@@ -1625,6 +1625,7 @@
 	This document isn't password-protected	Ce document n'est pas protégé par mot de passe
 	Only the document's owner can change its security (open it with the permissions password)	Seul le propriétaire du document peut modifier sa protection (ouvrez-le avec le mot de passe d'autorisations)
 	The document's security settings don't allow this change	Les paramètres de protection du document n'autorisent pas cette modification
+	The document's security settings don't allow copying text and images	Les paramètres de protection du document n'autorisent pas la copie de texte et d'images
 	Open a document first	Ouvrez d'abord un document
 	Security will be removed when you save	La protection sera retirée à l'enregistrement
 	Click text or an image to edit it	Cliquez sur un texte ou une image pour le modifier

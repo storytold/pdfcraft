@@ -1072,8 +1072,25 @@ fn protecting_through_tools() {
     assert!(matches!(b.call("page_delete", &json!({ "doc": re, "pages": [1] })), Err(ToolError::Failed(_))));
     assert!(matches!(b.call("doc_unprotect", &json!({ "doc": re })), Err(ToolError::Failed(_))));
     ok(&mut b, "comment_add", json!({ "doc": re, "page": 1, "type": "note", "at": [10, 10], "contents": "allowed" }));
+    // Copying wasn't allowed either (#568): no text or images come out, though search works.
+    for (tool, args) in [
+        ("text_extract", json!({ "doc": re })),
+        ("text_paragraphs", json!({ "doc": re, "page": 1 })),
+        ("doc_export_text", json!({ "doc": re, "path": "out.txt" })),
+        ("doc_export_images", json!({ "doc": re, "folder": "pages" })),
+        ("doc_export_all_images", json!({ "doc": re, "folder": "images" })),
+        ("doc_export_office", json!({ "doc": re, "path": "out.docx" })),
+    ] {
+        match b.call(tool, &args) {
+            Err(ToolError::Failed(m)) => assert!(m.contains("don't allow copying"), "{tool}: {m}"),
+            other => panic!("{tool} is refused: {other:?}"),
+        }
+    }
+    assert!(!dir.join("out.txt").exists() && !dir.join("pages").exists() && !dir.join("out.docx").exists());
+    assert_eq!(ok(&mut b, "text_find", json!({ "doc": re, "query": "Page" }))["count"], 3);
     // With the permissions password everything is possible, including removing security.
     let owner = ok(&mut b, "doc_open", json!({ "path": "locked.pdf", "password": "boss" }))["doc"].as_u64().unwrap();
+    assert!(ok(&mut b, "text_extract", json!({ "doc": owner }))["pages"][0]["text"].as_str().is_some_and(|t| t.contains("Page")));
     assert_eq!(ok(&mut b, "doc_unprotect", json!({ "doc": owner }))["security"]["protected"], false);
     ok(&mut b, "doc_save", json!({ "doc": owner, "path": "open.pdf" }));
     let mut c = auto(&dir);

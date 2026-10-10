@@ -1615,6 +1615,7 @@
 	This document isn't password-protected	Ez a dokumentum nincs jelszóval védve
 	Only the document's owner can change its security (open it with the permissions password)	Csak a dokumentum tulajdonosa módosíthatja a biztonságát (nyisd meg a jogosultsági jelszóval)
 	The document's security settings don't allow this change	A dokumentum biztonsági beállításai nem engedik ezt a módosítást
+	The document's security settings don't allow copying text and images	A dokumentum biztonsági beállításai nem engedik a szöveg és a képek másolását
 	Open a document first	Előbb nyiss meg egy dokumentumot
 	Security will be removed when you save	A védelem mentéskor megszűnik
 	Click text or an image to edit it	Kattints a szövegre vagy egy képre a szerkesztéshez

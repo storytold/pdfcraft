@@ -1702,6 +1702,7 @@
 	This document isn't password-protected	この文書はパスワード保護されていません
 	Only the document's owner can change its security (open it with the permissions password)	文書の所有者のみセキュリティを変更できます（権限パスワードで開いてください）
 	The document's security settings don't allow this change	文書のセキュリティ設定により、この変更は許可されていません
+	The document's security settings don't allow copying text and images	文書のセキュリティ設定により、テキストと画像のコピーは許可されていません
 	Open a document first	先に文書を開いてください
 	Security will be removed when you save	セキュリティは保存時に解除されます
 	Click text or an image to edit it	テキストまたは画像をクリックして編集

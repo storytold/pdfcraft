@@ -1760,11 +1760,42 @@ impl PdfCraftApp {
             }
             self.tool_keys(i, ctx);
             canvas::shortcuts(&mut self.views[i], ctx);
+            self.copy_key(i, ctx);
         }
     }
 }
 
+/// Why nothing can be copied out of the document: its security doesn't allow it (Table 22,
+/// bit 5; #568).
+pub(crate) fn copy_refused() -> &'static str {
+    tl!("The document's security settings don't allow copying text and images")
+}
+
 impl PdfCraftApp {
+    /// Whether text and images may be copied out of document `id`; says why not when they may
+    /// not. Reading aloud and accessibility tools don't ask (assistive technology may read
+    /// anything, §7.6.4.2).
+    pub(crate) fn may_copy(&mut self, id: DocId) -> bool {
+        if self.session.get(id).is_none_or(pdfcraft_engine::Document::allows_copying) {
+            return true;
+        }
+        self.notify(copy_refused().to_string());
+        false
+    }
+
+    /// ⌘C copies the selected text, unless a text field has the keyboard (it copies its own).
+    fn copy_key(&mut self, i: usize, ctx: &egui::Context) {
+        // ⌘C arrives as a Copy event on most platforms.
+        let copy = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Copy)));
+        if !copy || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let Some((id, text)) = self.views.get(i).and_then(|v| Some((v.id, v.selected_text()?))) else { return };
+        if self.may_copy(id) {
+            ctx.copy_text(text);
+        }
+    }
+
     /// The quick tools' keys, as in Acrobat: V selects, H pans, and holding Space pans until it
     /// is released. Plain letters, so not while a text field, a form field, a dialog or the
     /// palette has the keyboard.

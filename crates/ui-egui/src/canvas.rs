@@ -1640,11 +1640,6 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     if pressed(cmd(Key::CloseBracket)) {
         view.view_history(true);
     }
-    // ⌘C arrives as a Copy event on most platforms.
-    let copy = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)));
-    if copy && let Some(text) = view.selected_text() {
-        ctx.copy_text(text);
-    }
     let key = |k| ctx.input(|i| i.key_pressed(k));
     if key(Key::Escape) {
         if view.selection.is_some() {

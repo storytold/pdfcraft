@@ -1528,6 +1528,7 @@
 	This document isn't password-protected	Este documento não está protegido por senha
 	Only the document's owner can change its security (open it with the permissions password)	Somente o proprietário do documento pode alterar sua segurança (abra-o com a senha de permissões)
 	The document's security settings don't allow this change	As configurações de segurança do documento não permitem esta alteração
+	The document's security settings don't allow copying text and images	As configurações de segurança do documento não permitem copiar texto e imagens
 	Open a document first	Abra um documento primeiro
 	Security will be removed when you save	A segurança será removida ao salvar
 	Click text or an image to edit it	Clique no texto ou em uma imagem para editá-lo

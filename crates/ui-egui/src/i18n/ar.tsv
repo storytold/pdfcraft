@@ -1691,6 +1691,7 @@
 	This document isn't password-protected	هذا المستند غير محمي بكلمة مرور
 	Only the document's owner can change its security (open it with the permissions password)	مالك المستند وحده يستطيع تغيير أمانه (افتحه بكلمة مرور الأذونات)
 	The document's security settings don't allow this change	إعدادات أمان المستند لا تسمح بهذا التغيير
+	The document's security settings don't allow copying text and images	إعدادات أمان المستند لا تسمح بنسخ النصوص والصور
 	Open a document first	افتح مستندًا أولًا
 	Security will be removed when you save	سيُزال الأمان عند الحفظ
 	Click text or an image to edit it	انقر على نص أو صورة لتحريرها

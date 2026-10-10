@@ -1619,6 +1619,7 @@ action wizard	Start	ప్రారంభించు
 	This document isn't password-protected	ఈ పత్రం పాస్‌వర్డ్‌తో రక్షించబడలేదు
 	Only the document's owner can change its security (open it with the permissions password)	పత్రం యజమాని మాత్రమే దాని భద్రతను మార్చగలరు (అనుమతుల పాస్‌వర్డ్‌తో దాన్ని తెరవండి)
 	The document's security settings don't allow this change	పత్రం భద్రతా సెట్టింగ్‌లు ఈ మార్పును అనుమతించవు
+	The document's security settings don't allow copying text and images	పత్రం భద్రతా సెట్టింగ్‌లు టెక్స్ట్, చిత్రాలను కాపీ చేయడాన్ని అనుమతించవు
 	Open a document first	ముందుగా ఒక పత్రాన్ని తెరవండి
 	Security will be removed when you save	మీరు సేవ్ చేసినప్పుడు భద్రత తీసివేయబడుతుంది
 	Click text or an image to edit it	సవరించడానికి టెక్స్ట్ లేదా చిత్రంపై క్లిక్ చేయండి
