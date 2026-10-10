@@ -23,6 +23,99 @@ pub struct DocJsDraft {
 }
 
 impl PdfCraftApp {
+    pub(crate) fn dispatch_form_events(&mut self, index: usize, ctx: &egui::Context) {
+        use pdfcraft_engine::{FieldTrigger as T, FormFieldKind as K};
+        if self.is_preparing() || self.dialog.is_some() || self.palette_open {
+            return;
+        }
+        let id = self.views[index].id;
+        let Some(doc) = self.session.get(id) else { return };
+        let (pointer, down, up) = ctx.input(|i| {
+            (i.pointer.hover_pos(), i.pointer.button_pressed(egui::PointerButton::Primary), i.pointer.button_released(egui::PointerButton::Primary))
+        });
+        let hovered = pointer.filter(|p| self.views[index].viewport_rect().contains(*p)).and_then(|p| {
+            doc.form
+                .iter()
+                .find(|f| {
+                    f.widgets.iter().enumerate().any(|(wi, w)| {
+                        !w.hidden && crate::forms_ui::field_screen_rect(&self.views[index], &doc.info, f, wi).is_some_and(|r| r.contains(p))
+                    })
+                })
+                .map(|f| f.name.clone())
+        });
+        let focus = if down {
+            hovered.clone()
+        } else {
+            self.views[index].forms.focus.as_ref().map(|f| f.name.clone()).or_else(|| {
+                self.views[index].forms.event_focus.clone().filter(|name| {
+                    doc.form.iter().find(|f| f.name == *name).is_some_and(|f| matches!(f.kind, K::PushButton | K::CheckBox | K::Radio))
+                })
+            })
+        };
+        let kind = hovered.as_ref().and_then(|name| doc.form.iter().find(|f| f.name == *name)).map(|f| f.kind);
+        let state = &mut self.views[index].forms;
+        let mut events = Vec::new();
+        if state.hovered != hovered {
+            if let Some(old) = state.hovered.take() {
+                events.push((old, T::MouseExit));
+            }
+            if let Some(new) = &hovered {
+                events.push((new.clone(), T::MouseEnter));
+            }
+            state.hovered = hovered.clone();
+        }
+        if state.event_focus != focus {
+            if let Some(old) = state.event_focus.take() {
+                events.push((old, T::OnBlur));
+            }
+            if let Some(new) = &focus {
+                events.push((new.clone(), T::OnFocus));
+            }
+            state.event_focus = focus;
+        }
+        if down {
+            state.pressed = hovered.clone();
+            if let Some(name) = &hovered {
+                events.push((name.clone(), T::MouseDown));
+            }
+        }
+        let released = up && state.pressed.take().is_some_and(|name| hovered.as_ref() == Some(&name));
+        for (field, trigger) in events {
+            self.dispatch_field_js(index, &field, trigger);
+        }
+        let toggle_edit = self.views[index]
+            .pending_edit
+            .as_ref()
+            .is_some_and(|edit| matches!(edit, Edit::SetFieldValue { name, .. } if hovered.as_ref() == Some(name)));
+        // A checkbox's Mouse Up observes its newly stored value; push buttons run below.
+        if !self.process_pending_edits() {
+            return;
+        }
+        if released
+            && !matches!(kind, Some(K::PushButton))
+            && (!matches!(kind, Some(K::CheckBox | K::Radio)) || !toggle_edit)
+            && let Some(name) = hovered
+        {
+            self.dispatch_field_js(index, &name, T::MouseUp);
+        }
+    }
+
+    fn dispatch_field_js(&mut self, index: usize, field: &str, trigger: pdfcraft_engine::FieldTrigger) {
+        let id = self.views[index].id;
+        let generation = self.session.get(id).map(|d| d.edit_generation());
+        match self.session.run_field_event(id, field, trigger) {
+            Ok(output) => {
+                if let Some(doc) = self.session.get(id)
+                    && Some(doc.edit_generation()) != generation
+                {
+                    self.views[index].document_changed(&doc.info);
+                }
+                self.handle_js(id, output);
+            }
+            Err(error) => self.notify_error(error),
+        }
+    }
+
     /// Act on what scripts produced in document `id`: alerts are shown, console output goes to
     /// the console, print and page requests are carried out, links wait for the user's permission
     /// (form submissions are reported, never sent).
@@ -33,6 +126,9 @@ impl PdfCraftApp {
         self.js_console.log.extend(out.console.iter().cloned());
         for e in &out.errors {
             self.js_console.log.push(format!("Error: {e}"));
+        }
+        if let Some(error) = out.errors.first() {
+            self.notify_error(error);
         }
         let view = self.views.iter().position(|v| v.id == id);
         for r in out.requests {

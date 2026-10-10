@@ -283,7 +283,7 @@ fn initial_view_is_edited_and_honoured_on_open() {
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    let s = h.state();
+    let s = h.state_mut();
     let id = s.views[s.active.unwrap()].id;
     let v = s.session.get(id).unwrap().initial_view();
     assert_eq!((v.navigation, v.layout, v.page, v.language.as_deref()), (Navigation::Bookmarks, InitialLayout::TwoUpCoverPage, 1, Some("de-DE")));

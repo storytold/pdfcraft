@@ -13,6 +13,7 @@ use crate::{Field, FieldKind, FieldValue, FormError, fields, flags};
 /// The field events forms run scripts for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldEvent {
+    MouseUp,
     Keystroke,
     Validate,
     Calculate,
@@ -23,6 +24,7 @@ impl FieldEvent {
     /// `event.name`.
     pub fn name(self) -> &'static str {
         match self {
+            FieldEvent::MouseUp => "Mouse Up",
             FieldEvent::Keystroke => "Keystroke",
             FieldEvent::Validate => "Validate",
             FieldEvent::Calculate => "Calculate",
@@ -40,6 +42,9 @@ pub struct FieldChange {
     pub required: Option<bool>,
     /// `display.visible` 0, `hidden` 1, `noPrint` 2, `noView` 3.
     pub display: Option<i32>,
+    pub options: Option<Vec<(String, String)>>,
+    pub stroke_color: Option<Vec<String>>,
+    pub actions: Vec<(String, String)>,
 }
 
 /// What a script did.
@@ -103,6 +108,93 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
     for c in changes {
         let all = fields(doc);
         let Some(f) = all.iter().find(|f| f.name == c.name) else { continue };
+        if let Some(options) = &c.options {
+            let array = Object::Array(
+                options
+                    .iter()
+                    .map(|(export, label)| Object::Array(vec![Object::String(PdfString::text(export)), Object::String(PdfString::text(label))]))
+                    .collect(),
+            );
+            doc.update_dict(f.obj, |d| {
+                d.set(b"Opt".to_vec(), array);
+                d.remove(b"I");
+            })?;
+        }
+        if !c.actions.is_empty() {
+            // Replace only the requested trigger; preserve other actions and /Next chains.
+            for (trigger, script) in &c.actions {
+                let event = match trigger.as_str() {
+                    "Keystroke" => Some("keystroke"),
+                    "Validate" => Some("validate"),
+                    "Calculate" => Some("calculate"),
+                    "Format" => Some("format"),
+                    _ => None,
+                };
+                if let Some(event) = event {
+                    set_field_script(doc, &c.name, event, Some(script))?;
+                    continue;
+                }
+                let key: &[u8] = match trigger.as_str() {
+                    "MouseUp" => b"U",
+                    "MouseDown" => b"D",
+                    "MouseEnter" => b"E",
+                    "MouseExit" => b"X",
+                    "OnFocus" => b"Fo",
+                    "OnBlur" => b"Bl",
+                    _ => continue,
+                };
+                let mut action = pdfcraft_cos::Dict::new();
+                action.set(b"S".to_vec(), Object::name("JavaScript"));
+                action.set(b"JS".to_vec(), PdfString::text(script));
+                for w in &f.widgets {
+                    let mut aa = doc
+                        .get(w.obj)
+                        .as_dict()
+                        .and_then(|d| d.get(b"AA"))
+                        .map(|a| doc.resolve(a))
+                        .and_then(|a| a.as_dict().cloned())
+                        .unwrap_or_default();
+                    aa.set(key.to_vec(), Object::Dict(action.clone()));
+                    doc.update_dict(w.obj, |d| {
+                        if trigger == "MouseUp" {
+                            d.remove(b"A");
+                        }
+                        d.set(b"AA".to_vec(), Object::Dict(aa));
+                    })?;
+                }
+            }
+        }
+        if let Some(color) = &c.stroke_color {
+            let count = match color.first().map(String::as_str) {
+                Some("G") => 1,
+                Some("RGB") => 3,
+                Some("CMYK") => 4,
+                Some("T") => 0,
+                _ => return Err(FormError::Invalid("invalid strokeColor space".into())),
+            };
+            let values: Vec<_> = color
+                .iter()
+                .skip(1)
+                .take(count)
+                .map(|v| v.parse::<f64>().ok().filter(|x| x.is_finite()).map(|x| Object::Real(x.clamp(0.0, 1.0))))
+                .collect::<Option<_>>()
+                .ok_or_else(|| FormError::Invalid("invalid strokeColor component".into()))?;
+            if values.len() != count {
+                return Err(FormError::Invalid("invalid strokeColor components".into()));
+            }
+            for w in &f.widgets {
+                let mut mk = doc
+                    .get(w.obj)
+                    .as_dict()
+                    .and_then(|d| d.get(b"MK"))
+                    .map(|m| doc.resolve(m))
+                    .and_then(|m| m.as_dict().cloned())
+                    .unwrap_or_default();
+                mk.set(b"BC".to_vec(), Object::Array(values.clone()));
+                doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
+            }
+            crate::author::redraw_field(doc, &c.name)?;
+        }
         if let Some(v) = &c.value
             && c.name != except
             && *v != f.value
@@ -114,7 +206,7 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
                 FieldKind::Combo | FieldKind::List => FieldValue::Choice(v.clone()),
                 _ => continue,
             };
-            let mut tmp = f.clone();
+            let mut tmp = fields(doc).into_iter().find(|field| field.name == c.name).unwrap_or_else(|| f.clone());
             tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
             tmp.actions = Default::default();
             crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
@@ -145,6 +237,9 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
                     doc.update_dict(w.obj, |d| d.set(b"F".to_vec(), Object::Int(new)))?;
                 }
             }
+        }
+        if c.options.is_some() {
+            crate::author::redraw_field(doc, &c.name)?;
         }
     }
     Ok(())

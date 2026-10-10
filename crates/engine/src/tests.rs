@@ -36,6 +36,162 @@ fn session_with(n: usize) -> (Session, DocId) {
     (s, id)
 }
 
+/// Contributor-original forms built in memory: the issue #269 stateful form, with
+/// save/print hooks and dynamically installed widget actions. No binary fixture is shipped.
+fn stateful_form() -> Vec<u8> {
+    use pdfcraft_cos::{Dict, Object, PdfString};
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
+    for (name, kind, y) in [
+        ("out", NewField::Text { multiline: false }, 30.0),
+        ("state", NewField::Text { multiline: false }, 60.0),
+        ("next", NewField::Button { caption: "Next".into() }, 90.0),
+        ("choice", NewField::Combo { options: vec!["Old".into()], editable: false }, 120.0),
+        ("check", NewField::CheckBox, 150.0),
+    ] {
+        pdfcraft_forms::add_field(&mut cos, 0, [20.0, y, 180.0, y + 20.0], &kind, Some(name)).unwrap();
+    }
+    pdfcraft_forms::set_value(&mut cos, "out", &FieldValue::Text("initial".into())).unwrap();
+    pdfcraft_forms::set_value(&mut cos, "state", &FieldValue::Text("1".into())).unwrap();
+    pdfcraft_forms::set_document_script(
+        &mut cos,
+        "init",
+        Some("var step; var calls = 0; function next() { step++; getField('out').value = 'step ' + step; }"),
+    )
+    .unwrap();
+    pdfcraft_forms::set_field_actions(&mut cos, "next", &[(FieldTrigger::MouseUp, FieldAction::JavaScript("next();".into()))]).unwrap();
+    pdfcraft_forms::set_field_actions(
+        &mut cos,
+        "check",
+        &[(
+            FieldTrigger::MouseUp,
+            FieldAction::JavaScript("getField('out').display = event.target.isBoxChecked(0) ? display.visible : display.hidden;".into()),
+        )],
+    )
+    .unwrap();
+    let action = |source: &str| {
+        let mut d = Dict::new();
+        d.set(b"S".to_vec(), Object::name("JavaScript"));
+        d.set(b"JS".to_vec(), PdfString::text(source));
+        Object::Dict(d)
+    };
+    let open = action(
+        "step = Number(getField('state').value); getField('state').value = ''; getField('out').value = 'opened'; getField('choice').setItems([['Small','s'], 'Large']); getField('next').strokeColor = color.red; getField('next').setAction('OnFocus', 'calls++; console.println(step);');",
+    );
+    let mut aa = Dict::new();
+    aa.set(b"WS".to_vec(), action("getField('state').value = step; getField('out').value = ({tab:step}).toSource();"));
+    aa.set(b"WP".to_vec(), action("getField('out').value = 'printed ' + step;"));
+    cos.update_dict(cos.root().unwrap(), |d| {
+        d.set(b"OpenAction".to_vec(), open);
+        d.set(b"AA".to_vec(), Object::Dict(aa));
+    })
+    .unwrap();
+    pdfcraft_cos::write_full(&cos, &SaveOptions::default()).unwrap()
+}
+
+#[test]
+fn stateful_form_open_click_save_reopen_and_print() {
+    let mut s = Session::new();
+    let bytes = Arc::new(stateful_form());
+    let id = s.open("state.pdf", None, bytes.clone(), None).unwrap();
+    let value = |s: &Session, id, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
+    assert_eq!(value(&s, id, "out"), ["opened"]);
+    assert!(value(&s, id, "state").is_empty() || value(&s, id, "state") == [""]);
+    assert!(s.take_js_output(id).errors.is_empty());
+    let output = s.run_field_event(id, "next", FieldTrigger::OnFocus).unwrap();
+    assert_eq!(output.console, ["1"]);
+    let other = s.open("other.pdf", None, bytes, None).unwrap();
+    for expected in ["step 2", "step 3"] {
+        assert!(s.run_field_event(id, "next", FieldTrigger::MouseUp).unwrap().errors.is_empty());
+        assert_eq!(value(&s, id, "out"), [expected]);
+    }
+    assert_eq!(value(&s, other, "out"), ["opened"]);
+    let saved = s.save_bytes(id).unwrap();
+    let disk = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    let state = pdfcraft_forms::fields(&disk);
+    assert_eq!(state.iter().find(|f| f.name == "state").unwrap().value, ["3"]);
+    assert_eq!(state.iter().find(|f| f.name == "choice").unwrap().options, [("s".into(), "Small".into()), ("Large".into(), "Large".into())]);
+    assert_eq!(
+        js::field_state(&disk, state.iter().find(|f| f.name == "next").unwrap()).stroke_color,
+        Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()])
+    );
+    s.mark_saved(id, saved.clone(), None).unwrap();
+    assert_eq!(s.run_javascript(id, "calls", None).unwrap().result.as_deref(), Some("1"));
+    let reopened = s.open("saved.pdf", None, saved, None).unwrap();
+    s.run_field_event(reopened, "next", FieldTrigger::MouseUp).unwrap();
+    assert_eq!(value(&s, reopened, "out"), ["step 4"]);
+    let settings = print::Settings { pages: vec![0], ..Default::default() };
+    let printed = s.print_pdf(reopened, &settings).unwrap();
+    assert!(!printed.is_empty());
+    assert_eq!(value(&s, reopened, "out"), ["printed 4"]);
+}
+
+#[test]
+fn checkbox_actions_use_new_value_and_update_all_child_widgets() {
+    let mut s = Session::new();
+    let id = s.open("check.pdf", None, Arc::new(stateful_form()), None).unwrap();
+    s.apply(id, Edit::InsertBlankPage { at: 1, width: 200.0, height: 300.0 }).unwrap();
+    s.apply(id, Edit::DuplicateField { name: "out".into(), pages: vec![1] }).unwrap();
+    for (checked, hidden) in [(false, true), (true, false), (false, true)] {
+        s.apply(id, Edit::SetFieldValue { name: "check".into(), value: FieldValue::Check(checked) }).unwrap();
+        let out = s.get(id).unwrap().form.iter().find(|f| f.name == "out").unwrap();
+        assert!(out.widgets.len() >= 2);
+        assert!(out.widgets.iter().all(|w| w.hidden == hidden));
+    }
+    assert!(s.take_js_output(id).errors.is_empty());
+}
+
+#[test]
+fn disabling_javascript_skips_open_and_save_scripts() {
+    let mut s = Session::new();
+    s.set_javascript(false);
+    let id = s.open("disabled.pdf", None, Arc::new(stateful_form()), None).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(saved).unwrap();
+    assert_eq!(pdfcraft_forms::fields(&cos).iter().find(|f| f.name == "out").unwrap().value, ["initial"]);
+    assert!(s.take_js_output(id).is_empty());
+}
+
+#[test]
+fn failing_will_save_scripts_prevent_serializing_cleared_state() {
+    use pdfcraft_cos::{Dict, Object, PdfString};
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(stateful_form())).unwrap();
+    let mut action = Dict::new();
+    action.set(b"S".to_vec(), Object::name("JavaScript"));
+    action.set(b"JS".to_vec(), PdfString::text("throw new Error('state could not be saved');"));
+    let mut aa = Dict::new();
+    aa.set(b"WS".to_vec(), Object::Dict(action));
+    cos.update_dict(cos.root().unwrap(), |d| d.set(b"AA".to_vec(), Object::Dict(aa))).unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &SaveOptions::default()).unwrap());
+    let mut s = Session::new();
+    let id = s.open("save-error.pdf", None, bytes, None).unwrap();
+    for full in [false, true] {
+        let error = if full { s.save_full_bytes(id) } else { s.save_bytes(id) }.unwrap_err();
+        assert!(error.to_string().contains("state could not be saved"), "{error}");
+    }
+    assert!(s.get(id).unwrap().dirty);
+    assert!(s.take_js_output(id).errors.iter().any(|e| e.contains("state could not be saved")));
+}
+
+#[test]
+fn lifecycle_action_chains_are_bounded_and_document_scripts_run_once() {
+    use pdfcraft_cos::{Dict, Object, PdfString};
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(stateful_form())).unwrap();
+    let mut action = Dict::new();
+    action.set(b"S".to_vec(), Object::name("JavaScript"));
+    action.set(b"JS".to_vec(), PdfString::text("calls++; step = 1;"));
+    let r = cos.add(Object::Dict(action));
+    cos.update_dict(r, |d| d.set(b"Next".to_vec(), Object::Ref(r))).unwrap();
+    cos.update_dict(cos.root().unwrap(), |d| d.set(b"OpenAction".to_vec(), Object::Ref(r))).unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &SaveOptions::default()).unwrap());
+    let mut s = Session::new();
+    let id = s.open("cycle.pdf", None, bytes, None).unwrap();
+    for _ in 0..3 {
+        assert_eq!(s.run_javascript(id, "calls", None).unwrap().result.as_deref(), Some("1"));
+    }
+    s.revert(id).unwrap();
+    assert_eq!(s.run_javascript(id, "calls", None).unwrap().result.as_deref(), Some("1"));
+}
+
 #[test]
 fn custom_image_stamp_keeps_displayed_orientation_on_rotated_pages() {
     let colours = [[240, 20, 20, 255], [20, 180, 20, 255], [20, 20, 240, 255], [230, 180, 20, 255]];
@@ -1174,7 +1330,7 @@ fn redaction_marks_apply_for_good_and_undo() {
 
 #[test]
 fn printing_lays_out_sheets_that_render() {
-    let (s, id) = session_with(5);
+    let (mut s, id) = session_with(5);
     let settings = print::Settings {
         pages: print::select_pages(5, Some("2-5"), &[], print::Subset::All, false).unwrap(),
         layout: print::Layout::multiple(2),

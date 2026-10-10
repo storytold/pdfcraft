@@ -50,7 +50,7 @@ fn protecting_for_viewing_requires_matching_passwords_and_saves_encrypted() {
     assert!(doc.info.encrypted && doc.dirty);
     assert!(doc.security_summary().unwrap().pending);
     // What Save writes needs the password.
-    let bytes = h.state().session.save_bytes(id).unwrap();
+    let bytes = h.state_mut().session.save_bytes(id).unwrap();
     let mut s = pdfcraft_engine::Session::new();
     assert!(s.open("p.pdf", None, bytes.clone(), None).is_err());
     assert!(s.open("p.pdf", None, bytes, Some("Open-Sesame-42")).is_ok());

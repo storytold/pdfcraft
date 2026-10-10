@@ -1124,7 +1124,8 @@ fn fill_and_sign_tools_pick_up_placed_marks_to_move_and_resize_them() {
     h.state_mut().signature = Some(SavedSig::Drawn(vec![vec![[0.05, 0.1], [0.3, 0.2], [0.55, 0.05], [0.95, 0.15]]]));
     h.state_mut().execute("sign.fill.signature");
     click(&mut h, 40.0, 250.0);
-    let saved = h.state().session.save_bytes(h.state().views[0].id).unwrap();
+    let id = h.state().views[0].id;
+    let saved = h.state_mut().session.save_bytes(id).unwrap();
     let mut h = harness_bytes(&saved);
     let [placed] = rects(&h)[..] else { panic!("one signature: {:?}", rects(&h)) };
     h.state_mut().execute("sign.fill.check");
@@ -1189,7 +1190,7 @@ fn drawn_signatures_resize_from_their_corners() {
     assert_rect(rects(&h)[0], placed);
     h.state_mut().session.redo(id).unwrap();
     assert_rect(rects(&h)[0], now);
-    let saved = h.state().session.save_bytes(id).unwrap();
+    let saved = h.state_mut().session.save_bytes(id).unwrap();
     let h = harness_bytes(&saved);
     assert_rect(rects(&h)[0], now);
 }

@@ -24,6 +24,47 @@ fn go(script: &str, event: &Event) -> Outcome {
 }
 
 #[test]
+fn document_runtime_preserves_globals_and_refreshes_host_snapshots() {
+    let runtime = Runtime::new().unwrap();
+    let scripts = vec!["var step = 1; var saved = getField('qty'); function next() { return ++step; }".into()];
+    let event = Event::doc("Console");
+    let first = runtime.run("let local = 7; console.println(next());", &event, &doc(), &fields(), &scripts, Limits::default());
+    assert_eq!(first.console, ["2"]);
+    assert!(first.error.is_none(), "{first:?}");
+    let mut states = fields();
+    states.iter_mut().find(|f| f.name == "qty").unwrap().value = vec!["10".into()];
+    let second = runtime.run("console.println(next() + ':' + local + ':' + saved.value);", &event, &doc(), &states, &scripts, Limits::default());
+    assert_eq!(second.console, ["3:7:10"]);
+    assert!(second.changed.is_empty());
+    assert!(second.error.is_none(), "{second:?}");
+    let separate = Runtime::new().unwrap().run("typeof local", &event, &doc(), &fields(), &[], Limits::default());
+    assert_eq!(separate.result.as_deref(), Some("undefined"));
+    let failed = runtime.run("throw new Error('bad');", &event, &doc(), &states, &scripts, Limits::default());
+    assert!(failed.error.is_some());
+    let after = runtime.run("next()", &event, &doc(), &states, &scripts, Limits::default());
+    assert_eq!(after.result.as_deref(), Some("4"));
+}
+
+#[test]
+fn form_state_sources_and_dynamic_field_methods() {
+    let event = Event::doc("Open");
+    let out = go(
+        "var v = {tab: 2, fields: ['qty', null, undefined]}; var copy = eval(v.toSource()); console.println(copy.tab + ':' + copy.fields.length); var f = getField('size'); f.setItems([['Small', 's'], 'Large']); f.strokeColor = color.red; f.setAction('OnFocus', 'console.println(1)');",
+        &event,
+    );
+    assert!(out.error.is_none(), "{out:?}");
+    assert_eq!(out.console, ["2:3"]);
+    let field = out.changed.iter().find(|f| f.name == "size").unwrap();
+    assert_eq!(field.options, [("s".into(), "Small".into()), ("Large".into(), "Large".into())]);
+    assert_eq!(field.actions, [("OnFocus".into(), "console.println(1)".into())]);
+    assert_eq!(field.stroke_color, Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]));
+    let out = go("var v = {}; v.v = v; v.toSource();", &event);
+    assert!(out.error.as_deref().unwrap().contains("cyclic"));
+    let out = go("var v = []; v.length = 1000000; v.toSource();", &event);
+    assert!(out.error.as_deref().unwrap().contains("large"));
+}
+
+#[test]
 fn calculate_scripts_read_fields_and_set_the_value() {
     let o = go("event.value = this.getField('price').value * getField('qty').value;", &Event::field("Calculate", "total", ""));
     assert_eq!(o.error, None);

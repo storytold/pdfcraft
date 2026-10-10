@@ -113,8 +113,8 @@ fn show_hide_fixture() -> Vec<u8> {
 }
 
 /// Whether the "name" widget (object 4) has the Hidden annotation flag in the saved document.
-fn name_hidden(h: &Harness<'static, PdfCraftApp>) -> bool {
-    let s = h.state();
+fn name_hidden(h: &mut Harness<'static, PdfCraftApp>) -> bool {
+    let s = h.state_mut();
     let bytes = s.session.save_bytes(s.views[0].id).unwrap();
     let doc = pdfcraft_cos::Document::open(bytes).unwrap();
     let f = doc.get(pdfcraft_cos::ObjRef::new(4, 0)).as_dict().and_then(|d| d.int(b"F")).unwrap_or(0);
@@ -131,7 +131,7 @@ fn hide_actions_hide_and_show_fields() {
         app
     });
     h.run_steps(6);
-    assert!(!name_hidden(&h));
+    assert!(!name_hidden(&mut h));
     // A push button with an action shows the pointing hand, not the "not allowed" cursor.
     let hide_at = {
         let s = h.state();
@@ -143,10 +143,10 @@ fn hide_actions_hide_and_show_fields() {
     h.run_steps(2);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand);
     click_field(&mut h, "hide");
-    assert!(name_hidden(&h), "the Hide action hid the field");
+    assert!(name_hidden(&mut h), "the Hide action hid the field");
     // A hidden field takes no clicks: clicking where it was doesn't start editing it.
     click_field(&mut h, "name");
     assert!(h.state().views[0].forms.focus.is_none(), "a hidden field can't be focused");
     click_field(&mut h, "show");
-    assert!(!name_hidden(&h), "the Hide action with /H false showed it again");
+    assert!(!name_hidden(&mut h), "the Hide action with /H false showed it again");
 }

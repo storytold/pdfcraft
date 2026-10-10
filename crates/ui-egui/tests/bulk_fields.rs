@@ -63,8 +63,9 @@ fn doc<'a>(h: &'a Harness<'static, PdfCraftApp>) -> &'a pdfcraft_engine::Documen
     s.session.get(s.views[0].id).unwrap()
 }
 
-fn bytes(h: &Harness<'static, PdfCraftApp>) -> Vec<u8> {
-    h.state().session.save_bytes(h.state().views[0].id).unwrap().as_ref().clone()
+fn bytes(h: &mut Harness<'static, PdfCraftApp>) -> Vec<u8> {
+    let id = h.state().views[0].id;
+    h.state_mut().session.save_bytes(id).unwrap().as_ref().clone()
 }
 
 fn select(h: &mut Harness<'static, PdfCraftApp>, names: &[&str]) {
@@ -78,7 +79,7 @@ fn select(h: &mut Harness<'static, PdfCraftApp>, names: &[&str]) {
 #[test]
 fn shared_properties_preserve_mixed_values_and_undo_the_whole_change() {
     let mut h = harness();
-    let before = bytes(&h);
+    let before = bytes(&mut h);
     let original = [doc(&h).field_look("alpha").unwrap(), doc(&h).field_look("beta").unwrap()];
     select(&mut h, &["alpha", "beta"]);
     h.get_by_label("Shared Field Properties");
@@ -108,13 +109,13 @@ fn shared_properties_preserve_mixed_values_and_undo_the_whole_change() {
     assert_eq!(h.state().views[0].prepare.names(), ["alpha", "beta"]);
     h.state_mut().execute("edit.undo");
     h.run_steps(4);
-    assert_eq!(bytes(&h), before);
+    assert_eq!(bytes(&mut h), before);
     h.state_mut().execute("edit.redo");
     h.run_steps(4);
     assert_eq!(doc(&h).field_look("beta").unwrap().width, 4.0);
     // The regenerated look also survives a real Save/open round trip.
     let mut s = Session::new();
-    let id = s.open("saved.pdf", None, std::sync::Arc::new(bytes(&h)), None).unwrap();
+    let id = s.open("saved.pdf", None, std::sync::Arc::new(bytes(&mut h)), None).unwrap();
     assert_eq!(s.get(id).unwrap().field_look("beta").unwrap().fill, original[1].fill);
     assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "beta").unwrap().value, ["Lovelace"]);
 }
@@ -122,7 +123,7 @@ fn shared_properties_preserve_mixed_values_and_undo_the_whole_change() {
 #[test]
 fn visiting_shared_property_tabs_without_changes_does_not_dirty_the_document() {
     let mut h = harness();
-    let before = bytes(&h);
+    let before = bytes(&mut h);
     select(&mut h, &["alpha", "beta"]);
     for tab in ["Appearance", "Options", "General"] {
         h.get_by_label(tab).click();
@@ -130,7 +131,7 @@ fn visiting_shared_property_tabs_without_changes_does_not_dirty_the_document() {
     }
     h.get_by_label("OK").click();
     h.run_steps(4);
-    assert_eq!(bytes(&h), before);
+    assert_eq!(bytes(&mut h), before);
     assert!(!doc(&h).dirty);
     assert!(doc(&h).can_undo().is_none());
 }
@@ -138,14 +139,14 @@ fn visiting_shared_property_tabs_without_changes_does_not_dirty_the_document() {
 #[test]
 fn cancelling_shared_properties_discards_only_the_draft() {
     let mut h = harness();
-    let before = bytes(&h);
+    let before = bytes(&mut h);
     select(&mut h, &["alpha", "beta", "consent"]);
     let d = h.state_mut().bulk_field_props.as_mut().unwrap();
     d.fill.apply = true;
     d.fill.value = None;
     h.get_by_label("Cancel").click();
     h.run_steps(4);
-    assert_eq!(bytes(&h), before);
+    assert_eq!(bytes(&mut h), before);
     assert!(h.state().bulk_field_props.is_none());
     assert_eq!(h.state().views[0].prepare.names(), ["alpha", "beta", "consent"]);
 }
@@ -154,14 +155,14 @@ fn cancelling_shared_properties_discards_only_the_draft() {
 fn locked_field_refuses_the_entire_batch_and_keeps_the_draft_for_correction() {
     let mut h = harness();
     h.state_mut().apply_edit(Edit::SetFieldProps { name: "beta".into(), props: Box::new(FieldProps { locked: Some(true), ..Default::default() }) });
-    let before = bytes(&h);
+    let before = bytes(&mut h);
     select(&mut h, &["alpha", "beta"]);
     let d = h.state_mut().bulk_field_props.as_mut().unwrap();
     d.tooltip.apply = true;
     d.tooltip.value = "Shared help".into();
     h.get_by_label("OK").click();
     h.run_steps(4);
-    assert_eq!(bytes(&h), before, "alpha must not be committed before beta refuses");
+    assert_eq!(bytes(&mut h), before, "alpha must not be committed before beta refuses");
     assert_eq!(h.state().dialog, Some(Dialog::BulkFieldProps));
     assert!(h.state().bulk_field_props.as_ref().unwrap().error.as_ref().unwrap().contains("locked"));
     let d = h.state_mut().bulk_field_props.as_mut().unwrap();
@@ -179,13 +180,13 @@ fn locked_field_refuses_the_entire_batch_and_keeps_the_draft_for_correction() {
     );
     h.state_mut().execute("edit.undo");
     h.run_steps(4);
-    assert_eq!(bytes(&h), before, "unlock and changes undo together");
+    assert_eq!(bytes(&mut h), before, "unlock and changes undo together");
 }
 
 #[test]
 fn shared_properties_cannot_apply_to_a_different_active_document() {
     let mut h = harness();
-    let before = bytes(&h);
+    let before = bytes(&mut h);
     select(&mut h, &["alpha", "beta"]);
     let d = h.state_mut().bulk_field_props.as_mut().unwrap();
     d.required.apply = true;
@@ -194,7 +195,7 @@ fn shared_properties_cannot_apply_to_a_different_active_document() {
     h.run_steps(4);
     h.get_by_label("OK").click();
     h.run_steps(4);
-    assert_eq!(bytes(&h), before);
+    assert_eq!(bytes(&mut h), before);
     let id = h.state().views[1].id;
     assert!(!h.state().session.get(id).unwrap().dirty);
     assert!(h.state().bulk_field_props.as_ref().unwrap().error.as_ref().unwrap().contains("document changed"));
@@ -208,10 +209,10 @@ fn deleting_a_field_while_properties_are_open_does_not_partly_apply_the_draft() 
     d.tooltip.apply = true;
     d.tooltip.value = "New help".into();
     h.state_mut().apply_edit(Edit::DeleteField { name: "beta".into() });
-    let before = bytes(&h);
+    let before = bytes(&mut h);
     h.get_by_label("OK").click();
     h.run_steps(4);
-    assert_eq!(bytes(&h), before);
+    assert_eq!(bytes(&mut h), before);
     assert!(h.state().bulk_field_props.as_ref().unwrap().error.as_ref().unwrap().contains("no longer exists"));
 }
 
@@ -262,7 +263,7 @@ fn double_clicking_a_field_in_the_panel_opens_its_individual_properties() {
 #[test]
 fn dragging_an_empty_page_area_selects_fields_without_moving_them() {
     let mut h = harness();
-    let before = bytes(&h);
+    let before = bytes(&mut h);
     let r = h.state().views[0].page_screen_rect(0).unwrap();
     let scale = r.width() / 300.0;
     let a = r.min + egui::vec2(30.0, 75.0) * scale;
@@ -278,7 +279,7 @@ fn dragging_an_empty_page_area_selects_fields_without_moving_them() {
     h.drop_at(b);
     h.run_steps(4);
     assert_eq!(h.state().views[0].prepare.names(), ["alpha", "beta"]);
-    assert_eq!(bytes(&h), before);
+    assert_eq!(bytes(&mut h), before);
 }
 
 #[test]
@@ -316,7 +317,7 @@ fn selecting_several_widgets_of_one_radio_group_does_not_duplicate_field_edits()
 fn escape_cancels_a_selection_rectangle_and_restores_the_previous_selection() {
     let mut h = harness();
     h.state_mut().views[0].prepare.selected = Some(("consent".into(), 0));
-    let before = bytes(&h);
+    let before = bytes(&mut h);
     let r = h.state().views[0].page_screen_rect(0).unwrap();
     let scale = r.width() / 300.0;
     let a = r.min + egui::vec2(30.0, 75.0) * scale;
@@ -332,7 +333,7 @@ fn escape_cancels_a_selection_rectangle_and_restores_the_previous_selection() {
     h.drop_at(b);
     h.run_steps(4);
     assert_eq!(h.state().views[0].prepare.names(), ["consent"]);
-    assert_eq!(bytes(&h), before);
+    assert_eq!(bytes(&mut h), before);
 }
 
 #[test]
@@ -349,7 +350,7 @@ fn shared_properties_preserve_unchecked_changes_made_after_the_dialog_opened() {
             ..Default::default()
         }),
     });
-    let before = bytes(&h);
+    let before = bytes(&mut h);
     h.run_steps(4);
     h.get_by_label("OK").click();
     h.run_steps(4);
@@ -357,5 +358,5 @@ fn shared_properties_preserve_unchecked_changes_made_after_the_dialog_opened() {
     assert_eq!(doc(&h).field_look("beta").unwrap().width, 2.0);
     h.state_mut().execute("edit.undo");
     h.run_steps(4);
-    assert_eq!(bytes(&h), before);
+    assert_eq!(bytes(&mut h), before);
 }

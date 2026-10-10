@@ -81,6 +81,52 @@ fn button_scripts_run_and_alert() {
 }
 
 #[test]
+fn widget_triggers_share_state_and_script_errors_are_visible() {
+    let mut h = harness();
+    let id = h.state().active_ids().unwrap().1;
+    let script = "var clicks = 0; getField('hello').setAction('MouseEnter', \"console.println('enter');\"); getField('hello').setAction('MouseExit', \"console.println('exit');\"); getField('hello').setAction('MouseDown', \"console.println('down');\"); getField('hello').setAction('MouseUp', \"clicks++; getField('greeting').value = 'click ' + clicks;\"); getField('greeting').setAction('OnFocus', \"console.println('focus');\"); getField('greeting').setAction('OnBlur', \"console.println('blur');\");";
+    let out = h.state_mut().session.run_javascript(id, script, None).unwrap();
+    assert!(out.error.is_none(), "{out:?}");
+    h.run_steps(3);
+    let position = |h: &Harness<'static, PdfCraftApp>, name: &str| {
+        let app = h.state();
+        let doc = app.session.get(id).unwrap();
+        let field = doc.form.iter().find(|f| f.name == name).unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&app.views[0], &doc.info, field, 0).unwrap().center()
+    };
+    for expected in ["click 1", "click 2"] {
+        let p = position(&h, "hello");
+        h.hover_at(p);
+        h.run_steps(1);
+        h.drag_at(p);
+        h.run_steps(1);
+        h.drop_at(p);
+        h.run_steps(3);
+        assert_eq!(value(&h, "greeting"), [expected]);
+    }
+    let p = position(&h, "greeting");
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+    let p = position(&h, "hello");
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+    let log = &h.state().js_console.log;
+    for expected in ["enter", "exit", "down", "focus", "blur"] {
+        assert!(log.iter().any(|line| line == expected), "missing {expected}: {log:?}");
+    }
+    h.state_mut().run_button_script(id, "hello", "throw new Error('form failed');");
+    assert!(h.state().toast.as_ref().unwrap().0.contains("form failed"));
+}
+
+#[test]
 fn document_scripts_and_preferences() {
     let mut h = harness();
     assert!(h.state_mut().execute("tools.document_js"));

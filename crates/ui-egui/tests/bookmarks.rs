@@ -165,7 +165,7 @@ fn search_finds_collapsed_bookmarks_and_keeps_original_paths() {
     h.run_steps(3);
     assert!(h.query_by_label("Résumé results").is_none());
     let id = h.state().views[0].id;
-    let before = h.state().session.save_full_bytes(id).unwrap();
+    let before = h.state_mut().session.save_full_bytes(id).unwrap();
     h.get_by_label("Search").click();
     h.run_steps(1);
     h.get_by_label("Search").type_text("RÉSUMÉ");
@@ -176,7 +176,7 @@ fn search_finds_collapsed_bookmarks_and_keeps_original_paths() {
     assert_eq!(h.state().views[0].current, 2);
     assert!(h.query_by_label("Unrelated").is_none());
     assert!(h.query_by_label("Other chapter").is_none());
-    assert_eq!(h.state().session.save_full_bytes(id).unwrap(), before, "search doesn't edit the PDF");
+    assert_eq!(h.state_mut().session.save_full_bytes(id).unwrap(), before, "search doesn't edit the PDF");
     if let Ok(dir) = std::env::var("PDFCRAFT_BOOKMARK_SHOTS") {
         h.render().unwrap().save(std::path::Path::new(&dir).join("filtered-bookmarks.png")).unwrap();
     }

@@ -3044,6 +3044,63 @@ fn javascript_through_tools() {
 }
 
 #[test]
+fn stateful_javascript_through_tools() {
+    let dir = workdir("js-state");
+    // Build a synthetic PDF with document scripts, OpenAction and Will Save entirely in
+    // source, so this regression needs no external document or embedded asset.
+    let catalog = "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/Helv 12 Tf 0 g) >> /Names << /JavaScript << /Names [(init) 6 0 R] >> >> /OpenAction << /S /JavaScript /JS (step = Number\\(getField\\('state'\\).value\\); getField\\('state'\\).value = ''; getField\\('out'\\).value = 'opened';) >> /AA << /WS << /S /JavaScript /JS (getField\\('state'\\).value = step;) >> >> >>";
+    let objects = [
+        catalog,
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (out) /V (initial) /F 4 /Rect [20 20 180 40] /P 3 0 R >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (state) /V (1) /F 6 /Rect [20 50 180 70] /P 3 0 R >>",
+        "<< /S /JavaScript /JS (var step;) >>",
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    std::fs::write(dir.join("state.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let opened = ok(&mut a, "doc_open", json!({ "path": "state.pdf" }));
+    let doc = opened["doc"].as_u64().unwrap();
+    assert_eq!(opened["javascript"]["errors"], json!([]));
+    let value = |a: &mut Automation, name: &str| {
+        let fields = ok(a, "form_fields", json!({ "doc": doc }));
+        fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == name).unwrap()["value"].clone()
+    };
+    assert_eq!(value(&mut a, "out"), "opened");
+    for expected in ["step 2", "step 3"] {
+        let result = ok(&mut a, "js_run", json!({ "doc": doc, "script": "step++; getField('out').value = 'step ' + step;" }));
+        assert!(result["error"].is_null(), "{result}");
+        assert_eq!(value(&mut a, "out"), expected);
+    }
+    ok(&mut a, "js_run", json!({ "doc": doc, "script": "var x = 1; getField('out').setAction('OnFocus', 'x++; console.println(x);');" }));
+    let event = ok(&mut a, "js_event", json!({ "doc": doc, "field": "out", "event": "on_focus" }));
+    assert_eq!(event["console"], json!(["2"]));
+    let read = ok(&mut a, "js_run", json!({ "doc": doc, "script": "console.println(typeof x);" }));
+    assert_eq!(read["console"], json!(["number"]));
+    assert!(a.call("js_event", &json!({ "doc": doc, "field": "out", "event": "bad" })).is_err());
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "saved.pdf" }));
+    assert_eq!(value(&mut a, "state"), "3");
+    let opened = ok(&mut a, "doc_open", json!({ "path": "saved.pdf" }));
+    let second = opened["doc"].as_u64().unwrap();
+    let result = ok(&mut a, "js_run", json!({ "doc": second, "script": "step++; console.println(step); console.println(typeof x);" }));
+    assert_eq!(result["console"], json!(["4", "undefined"]));
+    // The engine's render path sees OpenAction field changes too.
+    assert!(page_text(&mut a, second)[0].contains("opened"));
+}
+
+#[test]
 fn merging_form_data_into_a_spreadsheet() {
     let dir = workdir("merge-data");
     let mut a = auto(&dir);

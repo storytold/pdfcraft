@@ -850,6 +850,8 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." } }),
                 &["doc", "script"],
             )),
+        t("js_event", "Dispatch a JavaScript event", "Run stored field actions in the document's persistent JavaScript context. Field events: mouse_up, mouse_down, mouse_enter, mouse_exit, on_focus, on_blur. With no field, dispatch will_save or will_print. Opening and saving dispatch document actions automatically. Returns alerts, console, requests and errors.")
+            .with(schema(json!({ "doc": doc(), "event": { "type": "string" }, "field": { "type": "string" } }), &["doc", "event"])),
         t("js_document_scripts", "Document JavaScripts", "List the document-level JavaScripts (name and source), which define functions field scripts use.")
             .ro()
             .cmd("tools.document_js")

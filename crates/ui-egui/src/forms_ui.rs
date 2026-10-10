@@ -41,6 +41,9 @@ pub struct FormView {
     pub notice: Option<FormNotice>,
     /// A push button was clicked: (its field name, what it does).
     pub button: Option<(String, pdfcraft_engine::form_scripts::ButtonAction)>,
+    pub(crate) hovered: Option<String>,
+    pub(crate) event_focus: Option<String>,
+    pub(crate) pressed: Option<String>,
 }
 
 /// A form message for the app to show, with document data kept separate so the visible

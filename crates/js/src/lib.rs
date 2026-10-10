@@ -82,6 +82,9 @@ pub struct FieldState {
     /// `textColor` / `fillColor` as Acrobat colour arrays (`["RGB", r, g, b]` etc.), when set.
     pub text_color: Option<Vec<String>>,
     pub fill_color: Option<Vec<String>>,
+    pub stroke_color: Option<Vec<String>>,
+    /// Dynamically installed widget actions (Acrobat trigger names).
+    pub actions: Vec<(String, String)>,
 }
 
 impl FieldState {
@@ -98,6 +101,8 @@ impl FieldState {
             char_limit: None,
             text_color: None,
             fill_color: None,
+            stroke_color: None,
+            actions: Vec::new(),
         }
     }
 
@@ -405,6 +410,68 @@ fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
     };
+    let stroke_color_get = getter!(ctx, n, |f, c| colour(&f.stroke_color, c));
+    let stroke_color_set = {
+        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+            let v = strings(&arg(args, 0), c)?;
+            write(c, name, |f| f.stroke_color = Some(v))?;
+            Ok(JsValue::undefined())
+        }
+        function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
+    };
+    fn set_action(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let trigger = text(&arg(args, 0), c)?;
+        if !["MouseUp", "MouseDown", "MouseEnter", "MouseExit", "OnFocus", "OnBlur", "Keystroke", "Validate", "Calculate", "Format"]
+            .contains(&trigger.as_str())
+        {
+            return Err(error("unsupported field action trigger"));
+        }
+        let script = text(&arg(args, 1), c)?;
+        if let Some(why) = refuse(&script) {
+            return Err(error(why));
+        }
+        write(c, name, |f| {
+            f.actions.retain(|(t, _)| *t != trigger);
+            f.actions.push((trigger, script));
+        })?;
+        Ok(JsValue::undefined())
+    }
+    fn set_items(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let f = read(c, name)?;
+        if !matches!(f.kind, FieldType::ComboBox | FieldType::ListBox) {
+            return Err(error("setItems requires a choice field"));
+        }
+        let a = arg(args, 0).as_object().ok_or_else(|| error("setItems requires an array"))?;
+        let a = JsArray::from_object(a)?;
+        let len = a.length(c)?;
+        if len > 10_000 {
+            return Err(error("too many choice items (limit 10000)"));
+        }
+        let mut options = Vec::new();
+        let mut bytes = 0usize;
+        for i in 0..len {
+            let item = a.get(i, c)?;
+            let (label, export) = if let Some(o) = item.as_object()
+                && o.is_array()
+            {
+                let pair = JsArray::from_object(o.clone())?;
+                (text(&pair.get(0, c)?, c)?, text(&pair.get(1, c)?, c)?)
+            } else {
+                let label = text(&item, c)?;
+                (label.clone(), label)
+            };
+            bytes = bytes.saturating_add(export.len()).saturating_add(label.len());
+            if bytes > MAX_SCRIPT_BYTES {
+                return Err(error("choice items are too large"));
+            }
+            options.push((export, label));
+        }
+        write(c, name, |f| {
+            f.value = options.first().map(|o| vec![o.0.clone()]).unwrap_or_default();
+            f.options = options;
+        })?;
+        Ok(JsValue::undefined())
+    }
 
     fn get_item_at(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
         let f = read(c, name)?;
@@ -445,6 +512,8 @@ fn field_object(ctx: &mut Context, name: &str) -> JsObject {
     let is_box_checked = NativeFunction::from_copy_closure_with_captures(is_box_checked, n.clone());
     let check_this_box = NativeFunction::from_copy_closure_with_captures(check_this_box, n.clone());
     let set_focus = NativeFunction::from_copy_closure_with_captures(set_focus, n.clone());
+    let set_action = NativeFunction::from_copy_closure_with_captures(set_action, n.clone());
+    let set_items = NativeFunction::from_copy_closure_with_captures(set_items, n.clone());
     ObjectInitializer::new(ctx)
         .accessor(js_string!("value"), Some(value_get), Some(value_set), rw)
         .accessor(js_string!("valueAsString"), Some(as_string), None, rw)
@@ -461,10 +530,13 @@ fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         .accessor(js_string!("currentValueIndices"), Some(indices), None, rw)
         .accessor(js_string!("textColor"), Some(text_color_get), Some(text_color_set), rw)
         .accessor(js_string!("fillColor"), Some(fill_color_get), Some(fill_color_set), rw)
+        .accessor(js_string!("strokeColor"), Some(stroke_color_get), Some(stroke_color_set), rw)
         .function(get_item_at, js_string!("getItemAt"), 2)
         .function(is_box_checked, js_string!("isBoxChecked"), 1)
         .function(check_this_box, js_string!("checkThisBox"), 2)
         .function(set_focus, js_string!("setFocus"), 0)
+        .function(set_action, js_string!("setAction"), 2)
+        .function(set_items, js_string!("setItems"), 1)
         .build()
 }
 
@@ -908,21 +980,10 @@ fn install(ctx: &mut Context) -> JsResult<()> {
     let nf = function(ctx, NativeFunction::from_fn_ptr(num_fields));
     let pg = function(ctx, NativeFunction::from_fn_ptr(page_num_get));
     let ps = function(ctx, NativeFunction::from_fn_ptr(page_num_set));
-    let (file, pages, info) = {
-        let h = host(ctx)?.borrow();
-        (h.doc.file_name.clone(), h.doc.num_pages, h.doc.info.clone())
-    };
-    let mut io = ObjectInitializer::new(ctx);
-    for (k, v) in &info {
-        io.property(JsString::from(k.as_str()), s(v), Attribute::all());
-    }
-    let info = io.build();
     use boa_engine::property::PropertyDescriptor;
     global.define_property_or_throw(js_string!("numFields"), PropertyDescriptor::builder().get(nf).configurable(true), ctx)?;
     global.define_property_or_throw(js_string!("pageNum"), PropertyDescriptor::builder().get(pg).set(ps).configurable(true), ctx)?;
-    ctx.register_global_property(js_string!("numPages"), JsValue::from(pages as f64), rw)?;
-    ctx.register_global_property(js_string!("documentFileName"), s(&file), rw)?;
-    ctx.register_global_property(js_string!("info"), info, rw)?;
+    update_doc_info(ctx)?;
 
     let app = ObjectInitializer::new(ctx)
         .function(NativeFunction::from_fn_ptr(alert), js_string!("alert"), 1)
@@ -963,7 +1024,113 @@ fn install(ctx: &mut Context) -> JsResult<()> {
     ctx.register_global_property(js_string!("display"), display, rw)?;
     let color = color_object(ctx);
     ctx.register_global_property(js_string!("color"), color, rw)?;
+    let source = function(ctx, NativeFunction::from_fn_ptr(to_source));
+    ctx.intrinsics().constructors().object().prototype().insert_property(
+        js_string!("toSource"),
+        boa_engine::property::PropertyDescriptor::builder().value(source.clone()).writable(true).configurable(true).enumerable(false),
+    );
+    ctx.intrinsics().constructors().array().prototype().insert_property(
+        js_string!("toSource"),
+        boa_engine::property::PropertyDescriptor::builder().value(source).writable(true).configurable(true).enumerable(false),
+    );
     Ok(())
+}
+
+fn update_doc_info(ctx: &mut Context) -> JsResult<()> {
+    let doc = host(ctx)?.borrow().doc.clone();
+    let mut info = ObjectInitializer::new(ctx);
+    for (key, value) in &doc.info {
+        info.property(JsString::from(key.as_str()), s(value), Attribute::all());
+    }
+    let info = info.build();
+    ctx.register_global_property(js_string!("numPages"), JsValue::from(doc.num_pages as f64), Attribute::CONFIGURABLE)?;
+    ctx.register_global_property(js_string!("documentFileName"), s(&doc.file_name), Attribute::CONFIGURABLE)?;
+    ctx.register_global_property(js_string!("info"), info, Attribute::CONFIGURABLE)?;
+    Ok(())
+}
+
+/// Legacy toSource for plain form state. Refuse cycles, functions and oversized graphs
+/// rather than silently serializing a different value or recursing without a bound.
+fn to_source(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    fn quote(text: &str) -> String {
+        let mut out = String::from("\"");
+        for c in text.chars() {
+            match c {
+                '\\' => out.push_str("\\\\"),
+                '"' => out.push_str("\\\""),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    }
+    fn serialize(value: &JsValue, ctx: &mut Context, seen: &mut Vec<JsObject>, budget: &mut usize, bytes: &mut usize) -> JsResult<String> {
+        if *budget == 0 || seen.len() >= 64 {
+            return Err(error("toSource state is too large or deeply nested"));
+        }
+        *budget -= 1;
+        if value.is_callable() {
+            return Err(error("toSource does not support functions"));
+        }
+        let out = if let Some(o) = value.as_object() {
+            if seen.contains(&o) {
+                return Err(error("toSource does not support cyclic state"));
+            }
+            seen.push(o.clone());
+            let out = if o.is_array() {
+                let array = JsArray::from_object(o)?;
+                let len = array.length(ctx)?;
+                if len > *budget as u64 {
+                    return Err(error("toSource state is too large"));
+                }
+                let mut items = Vec::new();
+                for i in 0..len {
+                    items.push(serialize(&array.get(i, ctx)?, ctx, seen, budget, bytes)?);
+                }
+                format!("[{}]", items.join(","))
+            } else {
+                let mut items = Vec::new();
+                for key in o.own_property_keys(ctx)? {
+                    if matches!(key, boa_engine::property::PropertyKey::Symbol(_)) {
+                        continue;
+                    }
+                    if let boa_engine::property::PropertyKey::String(key) = &key
+                        && key.len() > *bytes
+                    {
+                        return Err(error("toSource result is too large"));
+                    }
+                    let label = key.to_string();
+                    *bytes =
+                        bytes.checked_sub(label.len().saturating_mul(6).saturating_add(3)).ok_or_else(|| error("toSource result is too large"))?;
+                    items.push(format!("{}:{}", quote(&label), serialize(&o.get(key, ctx)?, ctx, seen, budget, bytes)?));
+                }
+                format!("({{{}}})", items.join(","))
+            };
+            seen.pop();
+            out
+        } else if let Some(string) = value.as_string() {
+            if string.len() > MAX_SCRIPT_BYTES {
+                return Err(error("toSource result is too large"));
+            }
+            quote(&string.to_std_string_escaped())
+        } else if value.is_null() {
+            "null".into()
+        } else if value.is_undefined() {
+            "undefined".into()
+        } else {
+            text(value, ctx)?
+        };
+        // Charge every intermediate too: repeated large values cannot build a huge Vec
+        // before the joined result is checked. This intentionally errs on the safe side.
+        *bytes = bytes.checked_sub(out.len()).ok_or_else(|| error("toSource result is too large"))?;
+        Ok(out)
+    }
+    let mut bytes = MAX_SCRIPT_BYTES;
+    Ok(s(&serialize(this, ctx, &mut Vec::new(), &mut 10_000, &mut bytes)?))
 }
 
 fn platform() -> &'static str {
@@ -1118,48 +1285,154 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
 }
 
 fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], doc_scripts: &[String], limits: Limits) -> Outcome {
-    let mut ctx = Context::default();
-    ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
-    ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
-    ctx.insert_data(RefCell::new(Host {
-        fields: fields.to_vec(),
-        changed: BTreeSet::new(),
-        alerts: Vec::new(),
-        console: Vec::new(),
-        requests: Vec::new(),
-        doc: doc.clone(),
-    }));
-    let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };
-    let result = (|| -> JsResult<()> {
-        install(&mut ctx)?;
-        let ev = event_object(&mut ctx, event);
-        ctx.register_global_property(js_string!("event"), ev.clone(), Attribute::all())?;
-        for d in doc_scripts {
-            ctx.eval(Source::from_bytes(d))?;
+    let mut runtime = Interpreter::default();
+    runtime.run(script, event, doc, fields, doc_scripts, limits)
+}
+
+#[derive(Default)]
+struct Interpreter {
+    ctx: Context,
+    installed: bool,
+    scripts: Vec<String>,
+}
+
+impl Interpreter {
+    fn run(&mut self, script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], doc_scripts: &[String], limits: Limits) -> Outcome {
+        if let Some(why) = std::iter::once(script).chain(doc_scripts.iter().map(String::as_str)).find_map(refuse) {
+            return Outcome { rc: true, value: event.value.clone(), error: Some(why), ..Default::default() };
         }
-        let r = ctx.eval(Source::from_bytes(script))?;
-        if !r.is_undefined() {
-            out.result = Some(text(&r, &mut ctx)?);
+        let ctx = &mut self.ctx;
+        ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
+        ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
+        ctx.insert_data(RefCell::new(Host {
+            fields: fields.to_vec(),
+            changed: BTreeSet::new(),
+            alerts: Vec::new(),
+            console: Vec::new(),
+            requests: Vec::new(),
+            doc: doc.clone(),
+        }));
+        let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };
+        let result = (|| -> JsResult<()> {
+            if !self.installed {
+                install(ctx)?;
+                self.installed = true;
+            } else {
+                update_doc_info(ctx)?;
+            }
+            let ev = event_object(ctx, event);
+            ctx.register_global_property(js_string!("event"), ev.clone(), Attribute::all())?;
+            if self.scripts != doc_scripts {
+                self.scripts = doc_scripts.to_vec();
+                for d in doc_scripts {
+                    ctx.eval(Source::from_bytes(d))?;
+                }
+            }
+            let r = ctx.eval(Source::from_bytes(script))?;
+            if !r.is_undefined() {
+                out.result = Some(text(&r, ctx)?);
+            }
+            let rc = ev.get(js_string!("rc"), ctx)?;
+            out.rc = rc.to_boolean();
+            let v = ev.get(js_string!("value"), ctx)?;
+            out.value = text(&v, ctx)?;
+            let c = ev.get(js_string!("change"), ctx)?;
+            out.change = text(&c, ctx)?;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            out.error = Some(e.to_string());
         }
-        let rc = ev.get(js_string!("rc"), &mut ctx)?;
-        out.rc = rc.to_boolean();
-        let v = ev.get(js_string!("value"), &mut ctx)?;
-        out.value = text(&v, &mut ctx)?;
-        let c = ev.get(js_string!("change"), &mut ctx)?;
-        out.change = text(&c, &mut ctx)?;
-        Ok(())
-    })();
-    if let Err(e) = result {
-        out.error = Some(e.to_string());
+        if let Some(h) = ctx.remove_data::<Shared>() {
+            let h = h.into_inner();
+            out.changed = h.changed.iter().map(|i| h.fields[*i].clone()).collect();
+            out.alerts = h.alerts;
+            out.console = h.console;
+            out.requests = h.requests;
+        }
+        out
     }
-    if let Some(h) = ctx.remove_data::<Shared>() {
-        let h = h.into_inner();
-        out.changed = h.changed.iter().map(|i| h.fields[*i].clone()).collect();
-        out.alerts = h.alerts;
-        out.console = h.console;
-        out.requests = h.requests;
+}
+
+/// One document's JavaScript realm. Native contexts stay on their own large-stack worker;
+/// only plain host snapshots and outcomes cross threads. Dropping the last handle closes it.
+#[derive(Clone)]
+pub struct Runtime {
+    #[cfg(not(target_arch = "wasm32"))]
+    sender: std::sync::mpsc::Sender<Invocation>,
+    #[cfg(target_arch = "wasm32")]
+    interpreter: std::rc::Rc<RefCell<Interpreter>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct Invocation {
+    script: String,
+    event: Event,
+    doc: DocInfo,
+    fields: Vec<FieldState>,
+    scripts: Vec<String>,
+    limits: Limits,
+    reply: std::sync::mpsc::Sender<Outcome>,
+}
+
+impl Runtime {
+    pub fn new() -> Result<Self, String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (sender, receiver) = std::sync::mpsc::channel::<Invocation>();
+            std::thread::Builder::new()
+                .name("pdfcraft-js-document".into())
+                .stack_size(SCRIPT_STACK)
+                .spawn(move || {
+                    let mut interpreter = Interpreter::default();
+                    while let Ok(call) = receiver.recv() {
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            interpreter.run(&call.script, &call.event, &call.doc, &call.fields, &call.scripts, call.limits)
+                        }));
+                        match result {
+                            Ok(out) => {
+                                let _ = call.reply.send(out);
+                            }
+                            // An interrupted interpreter cannot safely be reused.
+                            Err(_) => break,
+                        }
+                    }
+                })
+                .map_err(|e| format!("the script engine could not start: {e}"))?;
+            Ok(Self { sender })
+        }
+        #[cfg(target_arch = "wasm32")]
+        Ok(Self { interpreter: std::rc::Rc::new(RefCell::new(Interpreter::default())) })
     }
-    out
+
+    pub fn run(&self, script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], doc_scripts: &[String], limits: Limits) -> Outcome {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (reply, receiver) = std::sync::mpsc::channel();
+            let call = Invocation {
+                script: script.into(),
+                event: event.clone(),
+                doc: doc.clone(),
+                fields: fields.to_vec(),
+                scripts: doc_scripts.to_vec(),
+                limits,
+                reply,
+            };
+            if self.sender.send(call).is_ok()
+                && let Ok(out) = receiver.recv()
+            {
+                return out;
+            }
+            Outcome {
+                rc: true,
+                value: event.value.clone(),
+                error: Some("the document's script engine stopped with an internal error".into()),
+                ..Default::default()
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.interpreter.borrow_mut().run(script, event, doc, fields, doc_scripts, limits)
+    }
 }
 
 pub mod formcalc;

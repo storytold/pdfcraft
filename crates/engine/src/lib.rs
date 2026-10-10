@@ -247,6 +247,7 @@ pub struct Document {
     config: RenderConfig,
     /// What field scripts printed or asked for (see [`Session::take_js_output`]).
     js_output: js::JsOutput,
+    js_runtime: Option<pdfcraft_js::Runtime>,
     /// Dynamic XFA forms: what laying the template out produced (pages and fields are
     /// PdfCraft's; Adobe's viewers draw the form from the XFA packets themselves).
     pub xfa: Option<XfaLayout>,
@@ -1631,10 +1632,32 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::SetAnnotationInfo { page, index, author, subject, icon } => {
             pdfcraft_annot::set_info(doc, *page, *index, author.as_deref(), subject.as_deref(), *icon, &cx.meta())?;
         }
-        Edit::SetFieldValue { name, value } => match cx.js.as_mut() {
-            Some(js) => pdfcraft_forms::set_value_with(doc, name, value, js)?,
-            None => pdfcraft_forms::set_value(doc, name, value)?,
-        },
+        Edit::SetFieldValue { name, value } => {
+            match cx.js.as_mut() {
+                Some(js) => pdfcraft_forms::set_value_with(doc, name, value, js)?,
+                None => pdfcraft_forms::set_value(doc, name, value)?,
+            }
+            if let Some(js) = cx.js.as_mut() {
+                let fields = pdfcraft_forms::fields(doc);
+                if let Some(target) = fields.iter().find(|f| f.name == *name && matches!(f.kind, FormFieldKind::CheckBox | FormFieldKind::Radio)) {
+                    for (trigger, action) in pdfcraft_forms::field_actions(doc, name)? {
+                        if trigger == pdfcraft_forms::Trigger::MouseUp
+                            && let pdfcraft_forms::FieldAction::JavaScript(script) = action
+                        {
+                            let result = pdfcraft_forms::Scripts::run(
+                                js,
+                                pdfcraft_forms::FieldEvent::MouseUp,
+                                &script,
+                                target,
+                                &target.value.join(","),
+                                &fields,
+                            );
+                            pdfcraft_forms::apply_script_changes(doc, &result.changes, js)?;
+                        }
+                    }
+                }
+            }
+        }
         Edit::ApplyScriptChanges { changes } => match cx.js.as_mut() {
             Some(js) => pdfcraft_forms::apply_script_changes(doc, changes, js)?,
             None => pdfcraft_forms::apply_script_changes(doc, changes, &mut pdfcraft_forms::NoScripts)?,
@@ -2353,6 +2376,11 @@ impl Session {
             }
             note_warnings(&mut d.xfa_warnings, &xfa_warnings);
         }
+        if let Err(error) = self.run_document_event(id, "Open")
+            && let Some(d) = self.docs.iter_mut().find(|d| d.id == id)
+        {
+            d.js_output.errors.push(format!("The document's open scripts could not be applied: {error}"));
+        }
         Ok(id)
     }
 
@@ -2427,6 +2455,7 @@ impl Session {
             editor,
             config,
             js_output: Default::default(),
+            js_runtime: None,
             xfa,
             xfa_template: None,
             xfa_warnings: Vec::new(),
@@ -2443,6 +2472,7 @@ impl Session {
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
+        let runtime = if !js_off && uses_scripts(&edit) { Some(self.js_runtime(id)?) } else { None };
         let doc = self.doc_mut(id)?;
         let name = doc.name.clone();
         let is_xfa = doc.info.xfa.is_some();
@@ -2463,8 +2493,8 @@ impl Session {
             return Ok(());
         }
         let mut next = editor.cos.clone();
-        if !js_off && uses_scripts(&edit) {
-            cx.js = Some(js::JsRunner::new(&next, &name));
+        if let Some(runtime) = runtime {
+            cx.js = Some(js::JsRunner::new(&next, &name, runtime));
         }
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
         guard(|| run_edit(&mut next, &edit, &mut cx))
@@ -2696,7 +2726,8 @@ impl Session {
 
     /// The bytes to write for Save: an incremental update of the file as opened/last saved,
     /// with `/ModDate` stamped. Call `mark_saved` after writing them successfully.
-    pub fn save_bytes(&self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
+    pub fn save_bytes(&mut self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
+        self.run_document_event(id, "WillSave")?;
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let Some(editor) = doc.editor.as_ref() else { return Ok(doc.bytes.clone()) };
         if !editor.cos.is_modified() {
@@ -2707,11 +2738,13 @@ impl Session {
     }
 
     /// A compact, garbage-collected rewrite (Save As ▸ "Optimized" / Reduce File Size groundwork).
-    pub fn save_full_bytes(&self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
+    pub fn save_full_bytes(&mut self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         if doc.is_signed() {
             return Err(EditError::Signed);
         }
+        self.run_document_event(id, "WillSave")?;
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
         guard(|| write_full(&editor.cos, &opts)).map_err(EditError::Write)?.map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
@@ -2758,7 +2791,10 @@ impl Session {
         Self::adopt_keys(doc);
         doc.dirty = false;
         doc.generation += 1;
-        Self::refresh(doc)
+        doc.js_runtime = None;
+        doc.js_output = Default::default();
+        Self::refresh(doc)?;
+        self.run_document_event(id, "Open")
     }
 
     /// The page count of another PDF (Replace Pages, Insert Pages dialogs).
@@ -2839,11 +2875,13 @@ impl Session {
     }
 
     /// The print-ready PDF for `settings` (sheets laid out for the paper; see `pdfcraft-print`).
-    pub fn print_pdf(&self, id: DocId, settings: &print::Settings) -> Result<Vec<u8>, EditError> {
+    pub fn print_pdf(&mut self, id: DocId, settings: &print::Settings) -> Result<Vec<u8>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         if !doc.allows_printing() {
             return Err(EditError::NotPermitted("printing"));
         }
+        self.run_document_event(id, "WillPrint")?;
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = match doc.editor.as_ref() {
             Some(e) => e.cos.clone(),
             None => {

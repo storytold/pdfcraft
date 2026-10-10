@@ -207,7 +207,7 @@ impl Automation {
     }
 }
 
-fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
+pub(crate) fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
     use pdfcraft_engine::js::Request as R;
     match r {
         R::Reset(n) => json!({ "reset": n }),
@@ -227,6 +227,25 @@ impl Automation {
         let o = self.session.run_javascript(id, a.str("script")?, a.opt_str("field")?).map_err(failed)?;
         let reqs: Vec<Value> = o.requests.iter().map(request_json).collect();
         Ok(json!({ "alerts": o.alerts, "console": o.console, "requests": reqs, "error": o.error, "result": o.result }))
+    }
+
+    pub(crate) fn js_event(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let event = a.str("event")?;
+        let output = if let Some(field) = a.opt_str("field")? {
+            let trigger = pdfcraft_engine::FieldTrigger::from_id(event).ok_or_else(|| ToolError::InvalidArgs("unknown field trigger".into()))?;
+            self.session.run_field_event(id, field, trigger).map_err(failed)?
+        } else {
+            let event = match event {
+                "will_save" => "WillSave",
+                "will_print" => "WillPrint",
+                _ => return Err(ToolError::InvalidArgs("document event must be will_save or will_print".into())),
+            };
+            self.session.run_document_event(id, event).map_err(failed)?;
+            self.session.take_js_output(id)
+        };
+        let requests: Vec<_> = output.requests.iter().map(request_json).collect();
+        Ok(json!({ "alerts": output.alerts, "console": output.console, "requests": requests, "errors": output.errors }))
     }
 
     pub(crate) fn js_document_scripts(&self, a: &Args) -> Result<Value> {

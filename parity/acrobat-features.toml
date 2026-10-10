@@ -5059,7 +5059,7 @@ status = "shipped"
 commands = ["tools.document_js"]
 tools = ["js_document_scripts", "js_set_document_script"]
 evidence = ["crates/ui-egui/tests/javascript.rs::document_scripts_and_preferences", "crates/automation/tests/automation.rs::javascript_through_tools", "crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats"]
-notes = "Names /JavaScript tree: list, add, edit, delete; functions are available to field scripts."
+notes = "Names /JavaScript tree: list, add, edit, delete; scripts initialize once when opened, before JavaScript OpenAction. Functions and globals persist across field events, buttons and console calls in one realm per document (#269). Editing document scripts re-evaluates the script library."
 
 [[feature]]
 id = "form.document-actions"
@@ -5067,11 +5067,11 @@ title = "Document actions (will close, will save, did save, will print, did prin
 area = "F"
 tier = "P1"
 milestone = "M6"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["doc_open", "doc_save", "doc_print", "js_event"]
+evidence = ["crates/engine/src/tests.rs::stateful_form_open_click_save_reopen_and_print", "crates/automation/tests/automation.rs::stateful_javascript_through_tools"]
+notes = "JavaScript OpenAction and document /AA Will Save and Will Print share the document realm; save runs WS before both incremental and full serialization and aborts on script errors. JavaScript-off skips lifecycle scripts. Not yet: authoring document actions, Will Close, Did Save, Did Print, non-JavaScript lifecycle actions."
 
 [[feature]]
 id = "form.js-host"
@@ -5083,7 +5083,7 @@ status = "partial"
 commands = ["tools.js_console"]
 tools = ["js_run"]
 evidence = ["crates/js/src/tests.rs::calculate_scripts_read_fields_and_set_the_value", "crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/automation/tests/automation.rs::javascript_through_tools"]
-notes = "boa (pure Rust) with the forms object model: event, getField/Field (value, readonly, display, colours, items, check boxes), app, util.printf/printd/printx, console, display, color; no annotations, layers or dialogs (app.response returns null) yet."
+notes = "boa (pure Rust), one persistent realm per document; event, getField/Field (value, readonly, display, colours, setAction, setItems, strokeColor, check boxes), app, util.printf/printd/printx, console, display, color. Bounded toSource supports plain arrays/objects and rejects cyclic state and functions. Widget JavaScript hover/focus/down/up events run while filling; checkbox/radio Mouse Up scripts see the new value and update all child widgets (#247). js_event exposes triggers headlessly. Script errors are visible in the UI and console. Missing: annotations, layers, dialogs (app.response returns null), timers, annotation page events (#169), richer toSource types, widget-specific script targets."
 
 [[feature]]
 id = "form.js-console"
