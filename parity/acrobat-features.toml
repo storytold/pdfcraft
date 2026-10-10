@@ -698,8 +698,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = ["page_render"]
-evidence = ["crates/render/src/raster.rs::renders_a_blue_rectangle", "crates/automation/tests/automation.rs::open_inspect_render_and_find"]
-notes = "hayro bootstrap renderer; own DisplayList devices in M2.6"
+evidence = ["crates/render/src/raster.rs::renders_a_blue_rectangle", "crates/automation/tests/automation.rs::open_inspect_render_and_find", "crates/render/src/raster.rs::user_unit_scales_the_page_and_everything_on_it"]
+notes = "hayro bootstrap renderer; own DisplayList devices in M2.6. Pages with /UserUnit are shown at their size in points, as Acrobat reads the value"
 
 [[feature]]
 id = "view.render-shadings-patterns"
@@ -927,7 +927,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/ui.rs::selection_works_in_every_view_rotation"]
-notes = ""
+notes = "PdfCraft draws a percentage on its fixed 96-dpi basis: 96/72 logical pixels per PDF point at 100%. Acrobat draws it at its Page Display resolution, with logical pixels per PDF point = ppi / 72 × zoom (checked black-box with Custom resolutions of 96, 110 and 120 ppi on one display), so the same percentage can differ in size. Acrobat's Use System Setting resolution is not reproduced. Tracked with misc.prefs-page-display"
 
 [[feature]]
 id = "view.zoom-actual-size"
@@ -939,7 +939,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/view.rs::actual_size_fit_width_and_fit_page"]
-notes = ""
+notes = "Actual size is 100% on PdfCraft's fixed 96-dpi basis: 96/72 logical pixels per PDF point. Acrobat's Actual Size uses its Page Display resolution (ppi / 72 logical pixels per PDF point at 100%), which PdfCraft does not offer yet, so the two can draw a page at different sizes. Tracked with misc.prefs-page-display"
 
 [[feature]]
 id = "view.zoom-fit-page"
@@ -4302,10 +4302,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["form.fields"]
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/view.rs::field_list_jumps_to_a_fields_page", "crates/render/src/inspect.rs::fields_listed_only_on_the_pages_are_listed"]
-notes = "read-only list with jump-to-field; filling and editing are separate features (M6); fields a file lists only as page widgets (empty /Fields) are adopted too"
-evidence = ["crates/ui-egui/tests/view.rs::field_list_jumps_to_a_fields_page", "crates/ui-egui/tests/bulk_fields.rs::fields_panel_selects_multiple_fields_and_opens_their_shared_properties", "crates/ui-egui/tests/bulk_fields.rs::double_clicking_a_field_in_the_panel_opens_its_individual_properties"]
-notes = "list with jump-to-field; in Prepare a form, Shift/Ctrl/Command-click selects several fields and Properties edits their shared properties; double-click opens field properties"
+evidence = ["crates/ui-egui/tests/view.rs::field_list_jumps_to_a_fields_page", "crates/render/src/inspect.rs::fields_listed_only_on_the_pages_are_listed", "crates/ui-egui/tests/bulk_fields.rs::fields_panel_selects_multiple_fields_and_opens_their_shared_properties", "crates/ui-egui/tests/bulk_fields.rs::double_clicking_a_field_in_the_panel_opens_its_individual_properties"]
+notes = "list with jump-to-field; in Prepare a form, Shift/Ctrl/Command-click selects several fields and Properties edits their shared properties; double-click opens field properties; fields a file lists only as page widgets (empty /Fields) are adopted too"
 
 [[feature]]
 id = "form.highlight-fields"
@@ -5581,7 +5579,7 @@ status = "partial"
 commands = ["redact.properties"]
 tools = ["redact_mark"]
 evidence = ["crates/ui-egui/tests/redact.rs::marking_applying_and_clearing", "crates/redact/src/tests.rs::overlay_text_takes_its_font_size_colour_alignment_and_repeats"]
-notes = "fill colour or none; overlay text with font, size or auto-size, colour, alignment and repeat; redaction codes pending"
+notes = "fill colour or none; overlay text with font, size or auto-size, colour, alignment and repeat, or redaction codes (protect.redaction-codes)"
 
 [[feature]]
 id = "protect.redaction-codes"
@@ -5589,11 +5587,11 @@ title = "Redaction code sets (e.g. FOIA exemptions)"
 area = "G"
 tier = "P1"
 milestone = "M8"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["redact.properties"]
+tools = ["redact_mark"]
+evidence = ["crates/redact/src/tests.rs::redaction_codes_join_in_set_order_and_reject_strangers", "crates/automation/tests/automation.rs::redacting_with_codes_through_tools", "crates/ui-egui/tests/redact.rs::redaction_codes_become_the_overlay_text"]
+notes = "built-in U.S. FOIA (5 U.S.C. 552(b)) and U.S. Privacy Act (552a) sets; picked codes become the overlay text, in the set's order. Missing: Edit Codes, custom code sets, import/export of code sets"
 
 [[feature]]
 id = "protect.apply-redactions"
@@ -5824,8 +5822,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.digital", "sign.certify"]
 tools = ["sign_windows_ids", "sign_document"]
-evidence = ["crates/sign/tests/pdf.rs::signing_with_windows_store_identities", "crates/sign/tests/pdf.rs::windows_store_enumeration_and_missing_identity", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/ui-egui/tests/signing.rs::windows_store_identity_does_not_ask_for_a_file_password"]
-notes = "Current User Personal (My) CNG identities: RSA PKCS #1 v1.5 and DER-encoded ECDSA P-256/P-384. Keys never leave Windows; windows:<fingerprint|common name> for agents and Windows store labels in the desktop ID picker. Tested with throwaway software-backed RSA-2048, P-256 and P-384 certificates (run with --ignored); smart cards and PKCS #11 still planned."
+evidence = ["crates/sign/tests/pdf.rs::signing_with_windows_store_identities", "crates/sign/tests/pdf.rs::a_windows_store_identity_signs_with_its_issuers", "crates/sign/tests/pdf.rs::windows_store_enumeration_and_missing_identity", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/ui-egui/tests/signing.rs::windows_store_identity_does_not_ask_for_a_file_password"]
+notes = "Current User Personal (My) CNG identities: RSA PKCS #1 v1.5 and DER-encoded ECDSA P-256/P-384. Keys never leave Windows; windows:<fingerprint|common name> for agents and Windows store labels in the desktop ID picker. The signature embeds the issuers Windows chains the certificate to. Tested with throwaway software-backed RSA-2048, P-256 and P-384 certificates (run with --ignored). Smart cards and tokens whose driver registers a CNG key storage provider sign with the provider's own PIN dialog (checked by hand with a SafeNet token only; no hardware in CI); direct PKCS #11 still planned."
 
 [[feature]]
 id = "sign.pkcs11"
@@ -6696,8 +6694,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["create.images"]
 tools = ["doc_create"]
-evidence = ["crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png"]
-notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution)"
+evidence = ["crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::embedded_icc_profiles_tag_the_image_colour_space"]
+notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution). JPEG and PNG ICC profiles are kept as /ICCBased; TIFF profiles are not read yet"
 
 [[feature]]
 id = "create.from-multipage-tiff"
@@ -7660,8 +7658,8 @@ milestone = "M11"
 status = "partial"
 commands = ["standards.pdfa"]
 tools = ["pdfa_verify"]
-evidence = ["crates/preflight/src/tests.rs::verify_reports_what_breaks_pdfa", "crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/automation/tests/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/compare.rs::pdfa_dialog_verifies_and_converts"]
-notes = "PDF/A-2b/3b structural rules: identification, encryption, output intent, fonts embedded, annotations, actions, images, embedded files. Not yet: content-stream operator checks, transparency details, PDF/A-1 and -4, a veraPDF comparison."
+evidence = ["crates/preflight/src/tests.rs::verify_reports_what_breaks_pdfa", "crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::verify_reports_an_output_intent_that_does_not_match_device_colour", "crates/automation/tests/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/compare.rs::pdfa_dialog_verifies_and_converts"]
+notes = "PDF/A-2b/3b structural rules: identification, encryption, output intent (present, and RGB/CMYK to match DeviceRGB/DeviceCMYK use), fonts embedded, annotations, actions, images, embedded files. Not yet: content-stream operator checks, transparency details, PDF/A-1 and -4, a veraPDF comparison."
 
 [[feature]]
 id = "optimize.pdfa-convert"
@@ -7672,8 +7670,8 @@ milestone = "M11"
 status = "partial"
 commands = ["standards.pdfa"]
 tools = ["pdfa_convert"]
-evidence = ["crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/automation/tests/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/compare.rs::pdfa_dialog_verifies_and_converts"]
-notes = "Fixes XMP, output intent (generated sRGB ICC profile), forbidden actions, annotation flags, interpolation, encryption, AFRelationship. Not yet: embedding fonts, converting device CMYK, flattening transparency for PDF/A-1."
+evidence = ["crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::convert_does_not_give_cmyk_documents_an_srgb_output_intent", "crates/automation/tests/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/compare.rs::pdfa_dialog_verifies_and_converts"]
+notes = "Fixes XMP, output intent (generated sRGB ICC profile, only for documents without DeviceCMYK; CMYK documents need a user-chosen CMYK output intent, not yet offered), forbidden actions, annotation flags, interpolation, encryption, AFRelationship. Not yet: embedding fonts, converting device CMYK, flattening transparency for PDF/A-1."
 
 [[feature]]
 id = "optimize.pdfa-accessible-levels"
@@ -9820,8 +9818,8 @@ milestone = "M14"
 status = "partial"
 commands = ["app.preferences"]
 tools = []
-evidence = ["crates/ui-egui/src/i18n/mod.rs::windows_display_language_resolves_chinese_scripts", "crates/ui-egui/src/i18n/mod.rs::neutral_locale_does_not_override_display_language", "crates/ui-egui/src/i18n/mod.rs::windows_display_language_query_returns_a_locale_tag", "crates/ui-egui/src/i18n/mod.rs::language_persists_and_invalid_input_keeps_current_language", "crates/ui-egui/src/i18n/mod.rs::bundled_catalogs_are_consistent", "crates/ui-egui/src/i18n/mod.rs::japanese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_history_and_diagnostics_preserve_user_values", "crates/ui-egui/tests/control.rs::simplified_chinese_signature_prompts_and_errors_keep_document_state", "crates/ui-egui/tests/control.rs::language_switch_preserves_document_and_command_ids", "crates/ui-egui/tests/control.rs::japanese_controls_and_search_keep_command_ids", "crates/ui-egui/tests/control.rs::japanese_dialogs_errors_and_custom_action_names", "crates/ui-egui/src/i18n/mod.rs::french_is_registered", "crates/ui-egui/src/i18n/mod.rs::french_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::french_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::french_history_and_diagnostics_preserve_user_values", "crates/ui-egui/src/i18n/mod.rs::german_certificate_subject_has_a_distinct_context", "crates/ui-egui/src/widgets.rs::search_placeholder_never_overlaps_the_shortcut", "crates/ui-egui/src/home.rs::translated_card_description_leaves_room_for_the_action", "crates/ui-egui/tests/control.rs::german_preferences_and_search_keep_command_ids", "crates/ui-egui/src/i18n/mod.rs::telugu_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::telugu_labels_have_glyphs", "crates/ui-egui/src/i18n/mod.rs::hungarian_is_registered", "crates/ui-egui/src/i18n/mod.rs::hungarian_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::hungarian_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::hungarian_history_and_diagnostics_preserve_user_values", "crates/ui-egui/src/i18n/mod.rs::ukrainian_is_registered_and_persists", "crates/ui-egui/src/i18n/mod.rs::ukrainian_integer_plurals_cover_teens_and_large_counts", "crates/ui-egui/src/i18n/mod.rs::ukrainian_calendar_uses_month_case_for_dates", "crates/ui-egui/src/i18n/mod.rs::ukrainian_catalog_does_not_leave_english_ui_text", "crates/ui-egui/src/i18n/mod.rs::ukrainian_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::ukrainian_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::ukrainian_history_and_diagnostics_preserve_user_values"]
-notes = "Preferences switches Auto (system language)/English/Japanese/Simplified Chinese/Traditional Chinese/Czech/Brazilian Portuguese/German/Spanish/French/Telugu/Hungarian/Ukrainian/Italian and persists; ui.set language auto|en|ja|zh-hans|zh-hant|cs|pt-br|de|es|fr|te|hu|uk|it and ui.state expose it. TSV catalogs per language (same system as PhotoCraft); every dialog, panel and notice goes through tl!. Japanese, Traditional Chinese, Simplified Chinese, German, Spanish, French and Hungarian cover commands, dialogs, panels, shortcuts and history labels; Czech and Brazilian Portuguese the menus. French locales (fr, fr_FR, fr_CA, fr_BE) select the French catalog, German locales (de, de_DE, de_AT, de_CH) the German one, Hungarian locales (hu, hu_HU) the Hungarian one. German search hints reserve shortcut space, Home cards bound translated text, certificate Subject has its own context, and inserted tool names keep their capitalization. Engine/OS error details stay untranslated. Auto detects the Windows display language after explicitly named supported locale overrides; neutral C/POSIX launcher locales are skipped on Windows, with Chinese script/region mapping and English fallback. Missing: Czech and Brazilian Portuguese dialogs, Chinese and Telugu font delivery in releases, a full localization audit."
+evidence = ["crates/ui-egui/src/i18n/mod.rs::windows_display_language_resolves_chinese_scripts", "crates/ui-egui/src/i18n/mod.rs::neutral_locale_does_not_override_display_language", "crates/ui-egui/src/i18n/mod.rs::windows_display_language_query_returns_a_locale_tag", "crates/ui-egui/src/i18n/mod.rs::language_persists_and_invalid_input_keeps_current_language", "crates/ui-egui/src/i18n/mod.rs::bundled_catalogs_are_consistent", "crates/ui-egui/src/i18n/mod.rs::arabic_is_registered_and_persists", "crates/ui-egui/src/i18n/mod.rs::arabic_lookups_are_in_display_order", "crates/ui-egui/src/i18n/mod.rs::arabic_plurals_follow_the_six_cldr_forms", "crates/ui-egui/src/i18n/mod.rs::arabic_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::arabic_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::arabic_labels_have_glyphs", "crates/ui-egui/src/bidi.rs::rtl_labels_keep_placeholders_whole", "crates/ui-egui/src/i18n/mod.rs::japanese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_history_and_diagnostics_preserve_user_values", "crates/ui-egui/tests/control.rs::simplified_chinese_signature_prompts_and_errors_keep_document_state", "crates/ui-egui/tests/control.rs::language_switch_preserves_document_and_command_ids", "crates/ui-egui/tests/control.rs::japanese_controls_and_search_keep_command_ids", "crates/ui-egui/tests/control.rs::japanese_dialogs_errors_and_custom_action_names", "crates/ui-egui/src/i18n/mod.rs::french_is_registered", "crates/ui-egui/src/i18n/mod.rs::french_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::french_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::french_history_and_diagnostics_preserve_user_values", "crates/ui-egui/src/i18n/mod.rs::german_certificate_subject_has_a_distinct_context", "crates/ui-egui/src/widgets.rs::search_placeholder_never_overlaps_the_shortcut", "crates/ui-egui/src/home.rs::translated_card_description_leaves_room_for_the_action", "crates/ui-egui/tests/control.rs::german_preferences_and_search_keep_command_ids", "crates/ui-egui/src/i18n/mod.rs::telugu_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::telugu_labels_have_glyphs", "crates/ui-egui/src/i18n/mod.rs::hungarian_is_registered", "crates/ui-egui/src/i18n/mod.rs::hungarian_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::hungarian_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::hungarian_history_and_diagnostics_preserve_user_values", "crates/ui-egui/src/i18n/mod.rs::ukrainian_is_registered_and_persists", "crates/ui-egui/src/i18n/mod.rs::ukrainian_integer_plurals_cover_teens_and_large_counts", "crates/ui-egui/src/i18n/mod.rs::ukrainian_calendar_uses_month_case_for_dates", "crates/ui-egui/src/i18n/mod.rs::ukrainian_catalog_does_not_leave_english_ui_text", "crates/ui-egui/src/i18n/mod.rs::ukrainian_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::ukrainian_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::ukrainian_history_and_diagnostics_preserve_user_values"]
+notes = "Preferences switches Auto (system language)/English/Japanese/Simplified Chinese/Traditional Chinese/Czech/Brazilian Portuguese/German/Spanish/French/Telugu/Hungarian/Ukrainian/Italian/Arabic and persists; ui.set language auto|en|ja|zh-hans|zh-hant|cs|pt-br|de|es|fr|te|hu|uk|it|ar and ui.state expose it. TSV catalogs per language (same system as PhotoCraft); every dialog, panel and notice goes through tl!. Japanese, Traditional Chinese, Simplified Chinese, German, Spanish, French and Hungarian cover commands, dialogs, panels, shortcuts and history labels; Czech and Brazilian Portuguese the menus. French locales (fr, fr_FR, fr_CA, fr_BE) select the French catalog, German locales (de, de_DE, de_AT, de_CH) the German one, Hungarian locales (hu, hu_HU) the Hungarian one. German search hints reserve shortcut space, Home cards bound translated text, certificate Subject has its own context, and inserted tool names keep their capitalization. Engine/OS error details stay untranslated. Auto detects the Windows display language after explicitly named supported locale overrides; neutral C/POSIX launcher locales are skipped on Windows, with Chinese script/region mapping and English fallback. Arabic (ar and every ar-* locale) covers commands, dialogs and panels with the six CLDR plural forms; its labels are put into display order when the catalog loads, because egui joins Arabic letters but lays words out left to right. Missing: a right-to-left layout (Arabic labels sit in the left-to-right layout, a wrapped Arabic paragraph breaks at the wrong end, and text typed into a field is not reordered), Czech and Brazilian Portuguese dialogs, Chinese and Telugu font delivery in releases (the pinned craft-fonts revision has an Arabic face; its Noto Sans CJK SC is never embedded, AGENTS.md §1.1), a full localization audit."
 
 [[feature]]
 id = "misc.prefs-reading"

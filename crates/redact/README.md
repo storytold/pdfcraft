@@ -49,5 +49,9 @@ and `/PieceInfo` private data. Both make the next save a full rewrite.
 `patterns` finds phone numbers, e-mail addresses, credit card numbers (Luhn-checked), US Social
 Security numbers and dates for Search & Redact.
 
+`codes` holds the redaction code sets (U.S. FOIA and U.S. Privacy Act exemptions):
+`CodeSet::from_id("foia")?.overlay(&["(b)(6)"])` gives the overlay text for the picked codes.
+Custom code sets aren't supported yet.
+
 Not yet: pattern locales, struct-tree/alt-text cleanup, metadata and hidden-information
 sanitising (M8.4), re-encoding of DCT images (they are removed instead).

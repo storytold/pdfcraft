@@ -1,7 +1,7 @@
 //! Redaction tools: mark areas, text, patterns or whole pages for redaction, apply the marks
 //! (removing what they cover for good) or clear them.
 
-use pdfcraft_engine::{Edit, Hidden, NewAnnotation, RedactPattern, Shape, Style, find_pattern, rect_quad};
+use pdfcraft_engine::{Edit, Hidden, NewAnnotation, REDACTION_CODE_SETS, RedactPattern, RedactionCodeSet, Shape, Style, find_pattern, rect_quad};
 use serde_json::{Value, json};
 
 use crate::comments::{DEFAULT_AUTHOR, parse_color};
@@ -15,7 +15,25 @@ impl Automation {
             Some(_) => self.pages(a, "pages")?,
             None => (0..n).collect(),
         };
-        let overlay = a.opt_str("overlay")?.unwrap_or("").to_string();
+        let overlay = match (a.opt_str("overlay")?, a.opt_str("code_set")?) {
+            (Some(_), Some(_)) => return Err(ToolError::InvalidArgs("pass overlay or code_set with codes, not both".into())),
+            (Some(o), None) => o.to_string(),
+            (None, Some(id)) => {
+                let set = RedactionCodeSet::from_id(id).ok_or_else(|| {
+                    let ids: Vec<_> = REDACTION_CODE_SETS.iter().map(|s| s.id).collect();
+                    ToolError::InvalidArgs(format!("unknown code_set {id:?}; allowed: {}", ids.join(", ")))
+                })?;
+                let picked = a.strs("codes")?;
+                let allowed = || format!("allowed in {}: {}", set.id, set.codes.join(", "));
+                match set.overlay(&picked) {
+                    Ok(o) if !o.is_empty() => o,
+                    Ok(_) => return Err(ToolError::InvalidArgs(format!("codes is empty; {}", allowed()))),
+                    Err(bad) => return Err(ToolError::InvalidArgs(format!("unknown code {bad:?}; {}", allowed()))),
+                }
+            }
+            (None, None) if a.get("codes").is_some() => return Err(ToolError::InvalidArgs("codes needs code_set".into())),
+            (None, None) => String::new(),
+        };
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
         let mut style = Style::default_for(&Shape::Redact { quads: Vec::new(), overlay: String::new(), look: Default::default() });
         if let Some(c) = a.opt_str("fill")? {

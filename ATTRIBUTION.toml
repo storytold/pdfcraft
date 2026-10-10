@@ -19,7 +19,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Simplified Chinese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "abb6981d86d4df565c72f2741b931052462c6689eb5415b888991f40af1adcb7"
+sha256 = "b4f5905c404dbc8841391aa9a35dbdf8ad78606df208f64ede3c336654025397"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/zh-hant.tsv"
@@ -30,7 +30,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Traditional Chinese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "9bf3f80e72839e983b9ffb9bc3b44db4e29ebdaf2933852a8a600582b851a3fe"
+sha256 = "d989733686d249c6cb8cddc0a4cafbe2896d0801bf59ad76a684d3b30306154b"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/cs.tsv"
@@ -52,7 +52,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Brazilian Portuguese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "e7bf0d59c35cc0f65139a7fe08e7bb213e79820611e7992392d4af2457759253"
+sha256 = "f4f6d80aa0d213446f686bc6f930ba4a9e988441a659e0e0c623a81b1823ec19"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/es.tsv"
@@ -63,7 +63,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Spanish UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "f0c6fcf6fe391c4e7784b64acfb0c91d53ffbe18d9e7708ad663e2afd29a0760"
+sha256 = "640881c5e7a15603027b26b7f8a23a735d0e9b6cb3697ed5b7d7f2626d3939bd"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/fr.tsv"
@@ -74,7 +74,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "French UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "6f6fd18c652127a3e5dbc3a0a7c2d24e2cb47ec79ec58ac4170632e37f1e7b1c"
+sha256 = "29357d34f7646a81c78c4c3d199757e306592caf352ea57581b36de0bdf0288f"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/de.tsv"
@@ -85,7 +85,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "German UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "180b624986752af06b173a00899ca38d6ba4965b68ba7d3b8a926cf7e5b942de"
+sha256 = "7c06be24f43ba554a5f57d9702602869c0c65b6f630fd66b1d0c5b9994530baf"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/te.tsv"
@@ -96,7 +96,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Telugu UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "5d4fe0c8f680a0ecf72f8d23d4f075e3944f71e2c7594aac8a8e59c6cda29043"
+sha256 = "83588462b7dfd3740e764bc734ddf0d09fd1004c1dca1fd3ca9d191bb3611876"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/it.tsv"
@@ -107,7 +107,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Italian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "7b7edbe92edea1809710c9b89df05a5618fc1cf581b907521351b06eccd5cf3a"
+sha256 = "e558d1b1374c5725b68792446b08ae31c35c7b6fd68c4a54d257b6ca439f0250"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/ru.tsv"
@@ -118,7 +118,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Russian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "362b3c8014cda1fe8c682b75c96bc5f630e8648cb05a431eb1448714cb8bc435"
+sha256 = "f3ee03336b29ec87742aca37930f0ff7182e2e1f7a3672da588eea3334fa4dd7"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/hu.tsv"
@@ -129,7 +129,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Hungarian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "b3fe50274b3117535bb35e935737206417322deb280a643f59855974931b1d9c"
+sha256 = "4254b9bb4d050910f26df82d66740b46e3d7a8e33205edad053a4bdf5316f6f6"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/bg.tsv"
@@ -140,7 +140,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Bulgarian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "002a2ba35999da21d8c2ceb383c38f0bdf0aa43f2fe60015835d2f03bac8d576"
+sha256 = "0fa3e37945099a50d0bf5ad4c3191ab2eb1bc0d5ebe253cc459917395c0a83fa"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/ja.tsv"
@@ -151,7 +151,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Japanese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "b268c077b44635ca346d4a2372bef6eea8c5c891e82df549228e68bf4ec4baa5"
+sha256 = "a3b2a9f3068ab60dab4f1e18fe3d2be36275508772f39122cd26a03bd67527d9"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/uk.tsv"
@@ -162,7 +162,18 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Ukrainian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "7c043ba0237c3cb7cb0107066722dee309c3265ac8c930d3eadb3a9ac9d4d345"
+sha256 = "51c933a8018726368dfaa55a82e8bc99a5684f80825bfdb6b581f03c5015908f"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/ar.tsv"
+title = "Arabic interface translation catalog"
+author = "PdfCraft contributors"
+source = "Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Arabic UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "bb0808c269078ca6b63d7b2f2b8d1e058e12c89dde3ad6f28c848f6467e89671"
 
 [[asset]]
 path = "assets/icons/accessibility.svg"
@@ -3212,13 +3223,13 @@ sha256 = "e484866d4cce403175bd8d00b128feb08ab42e208de30e42cd9889d8f1735a6e"
 [[build_input]]
 name = "craft-fonts"
 option = "CRAFT_FONTS_DIR"
-title = "Japanese fonts: BIZ UDPGothic (Regular, Bold), Shippori Mincho, BIZ UDMincho"
-author = "The BIZ UDGothic and BIZ UDMincho Project Authors (Morisawa Inc.), The Shippori Mincho Project Authors (FONTDASU)"
+title = "Japanese fonts: BIZ UDPGothic (Regular, Bold), Shippori Mincho, BIZ UDMincho; Arabic font: Noto Sans Arabic"
+author = "The BIZ UDGothic and BIZ UDMincho Project Authors (Morisawa Inc.), The Shippori Mincho Project Authors (FONTDASU), The Noto Project Authors (Noto Sans Arabic)"
 source = "https://github.com/storytold/craft-fonts (pinned by commit in .github/workflows/release.yml)"
 licence = "OFL-1.1"
 attribution = "https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md"
 kind = "font"
-usage = "Japanese fallback in the interface (BIZ UDPGothic first) and Japanese glyphs in edited PDF text (Shippori Mincho); the web build embeds only BIZ UDPGothic Regular"
+usage = "Japanese fallback in the interface (BIZ UDPGothic first) and Japanese glyphs in edited PDF text (Shippori Mincho); Arabic interface text, file names and document titles (Noto Sans Arabic); the web build embeds only BIZ UDPGothic Regular and Noto Sans Arabic. The checkout also holds Noto Sans CJK SC, which crates/fonts/build.rs never embeds (AGENTS.md §1.1)"
 
 [[asset]]
 path = "crates/sign/tests/data/x509-rsa-sha1.pdf"

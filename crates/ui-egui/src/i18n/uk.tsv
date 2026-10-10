@@ -94,7 +94,7 @@
 	Double-click	Подвійне клацання
 	Select a word	Виділити слово
 	Clear selection / close find	Зняти виділення / закрити пошук
-	Zoom in / out (also pinch or ⌘-scroll)	Збільшити / зменшити (також жестом зведення або ⌘-прокручуванням)
+	Zoom in / out (also pinch or {key}-scroll)	Збільшити / зменшити (також жестом зведення або {key}-прокручуванням)
 	Rotate view	Повернути вигляд
 	First / last page	Перша / остання сторінка
 	Previous / next page	Попередня / наступна сторінка
@@ -102,16 +102,16 @@
 	Select all pages (Organize)	Вибрати всі сторінки (Упорядкування)
 	Home	Головна
 	Open	Відкрити
-	Open a PDF (⌘O)	Відкрити PDF (⌘O)
+	Open a PDF ({key})	Відкрити PDF ({key})
 	Dark gray theme	Темно-сіра тема
 	Light theme	Світла тема
 	All tools	Усі інструменти
 	Read	Читання
 	Convert	Перетворення
 	E-Sign	Електронний підпис
-	Print (⌘P)	Друк (⌘P)
+	Print ({key})	Друк ({key})
 	Save (M4)	Зберегти (M4)
-	Document properties (⌘D)	Властивості документа (⌘D)
+	Document properties ({key})	Властивості документа ({key})
 	Find tools and commands	Знайти інструменти й команди
 	Fit to height	За висотою
 	Zoom in	Збільшити
@@ -140,9 +140,9 @@
 	Compare	Порівняння
 	Page thumbnails	Мініатюри сторінок
 	Form fields	Поля форми
-	Zoom out (⌘−)	Зменшити (⌘−)
-	Zoom in (⌘+)	Збільшити (⌘+)
-	Rotate view clockwise (⇧⌘+)	Повернути вигляд за годинниковою стрілкою (⇧⌘+)
+	Zoom out ({key})	Зменшити ({key})
+	Zoom in ({key})	Збільшити ({key})
+	Rotate view clockwise ({key})	Повернути вигляд за годинниковою стрілкою ({key})
 	Toggle fit page / fit width	Перемкнути масштаб за сторінкою / за шириною
 	Next page	Наступна сторінка
 	Previous page	Попередня сторінка
@@ -1096,6 +1096,7 @@
 	Redacted area fill colour:	Колір заливки вилученої області:
 	Use overlay text	Використовувати накладений текст
 	Custom text:	Власний текст:
+	Redaction code:	Код вилучення:
 	Font:	Шрифт:
 	Font size:	Розмір шрифту:
 	Auto-size text to fit redaction region	Автоматично добирати розмір тексту до області вилучення
@@ -1265,7 +1266,7 @@
 	Expand all bookmarks	Розгорнути всі закладки
 	Expand top-level bookmarks	Розгорнути закладки верхнього рівня
 	Collapse all bookmarks	Згорнути всі закладки
-	New bookmark (⌘B)	Нова закладка (⌘B)
+	New bookmark ({key})	Нова закладка ({key})
 	This document has no bookmarks.	Цей документ не має закладок.
 	This document has no layers.	Цей документ не має шарів.
 	This document has no attachments.	Цей документ не має вкладень.
@@ -1280,8 +1281,8 @@
 	No matches	Збігів немає
 	Searching… {s}/{p}	Пошук… {s}/{p}
 	{c} of {n}{more}	{c} із {n}{more}
-	Previous (⇧⌘G)	Попередній (⇧⌘G)
-	Next (⌘G)	Наступний (⌘G)
+	Previous ({key})	Попередній ({key})
+	Next ({key})	Наступний ({key})
 	Find options	Параметри пошуку
 	Whole words only	Лише цілі слова
 	Case-sensitive	З урахуванням регістру

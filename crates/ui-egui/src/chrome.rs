@@ -117,7 +117,8 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     ui.ctx().request_repaint();
                 }
                 ui.add_space(4.0);
-                if widgets::ghost_button(ui, "plus", tl!("Open")).on_hover_text(tl!("Open a PDF (⌘O)")).clicked() {
+                let tip = crate::commands::command_tip(ui.ctx(), tl!("Open a PDF ({key})"), "file.open");
+                if widgets::ghost_button(ui, "plus", tl!("Open")).on_hover_text(tip).clicked() {
                     app.open_dialog();
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -291,13 +292,15 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let has_doc = app.active.is_some();
                     ui.add_enabled_ui(has_doc, |ui| {
-                        if icons::button(ui, "printer", 32.0, false, tl!("Print (⌘P)")).clicked() {
+                        let tip = crate::commands::command_tip(ui.ctx(), tl!("Print ({key})"), "print.dialog");
+                        if icons::button(ui, "printer", 32.0, false, &tip).clicked() {
                             app.run_command("print.dialog");
                         }
                         if icons::button(ui, "save", 32.0, false, tl!("Save (M4)")).clicked() {
                             app.run_command("file.save");
                         }
-                        if icons::button(ui, "info", 32.0, false, tl!("Document properties (⌘D)")).clicked() {
+                        let tip = crate::commands::command_tip(ui.ctx(), tl!("Document properties ({key})"), "file.properties");
+                        if icons::button(ui, "info", 32.0, false, &tip).clicked() {
                             app.dialog = Some(Dialog::Properties(PropsTab::Description));
                         }
                     });
@@ -321,43 +324,46 @@ fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         ui.menu_button(tl!("View"), |ui| {
             if let Some(i) = app.active {
                 let v = &mut app.views[i];
+                let ctx = ui.ctx().clone();
+                let key = |s| crate::commands::shortcut_label(&ctx, s);
+                use crate::commands::{ACTUAL_SIZE, FIT_WIDTH, NEXT_VIEW, PAGE_LEVEL, PREV_VIEW, ROTATE_CCW, ROTATE_CW, ZOOM_IN, ZOOM_OUT};
                 ui.label(egui::RichText::new(tl!("Zoom")).color(t.text_faint).small());
-                if widgets::menu_item(ui, tl!("Actual size"), "⌘1").clicked() {
+                if widgets::menu_item(ui, tl!("Actual size"), &key(ACTUAL_SIZE)).clicked() {
                     v.set_zoom(1.0);
                 }
-                if widgets::menu_item(ui, tl!("Zoom to page level"), "⌘0").clicked() {
+                if widgets::menu_item(ui, tl!("Zoom to page level"), &key(PAGE_LEVEL)).clicked() {
                     v.fit = Fit::Page;
                 }
-                if widgets::menu_item(ui, tl!("Fit to width"), "⌘2").clicked() {
+                if widgets::menu_item(ui, tl!("Fit to width"), &key(FIT_WIDTH)).clicked() {
                     v.fit = Fit::Width;
                 }
                 if widgets::menu_item(ui, tl!("Fit to height"), "").clicked() {
                     v.fit = Fit::Height;
                     v.goto = Some((v.current, 0.0));
                 }
-                if widgets::menu_item(ui, tl!("Fit visible"), "⌘3").clicked() {
+                if widgets::menu_item(ui, tl!("Fit visible"), &crate::commands::command_shortcut_label(&ctx, "view.fit_visible")).clicked() {
                     ui.close();
                     app.execute("view.fit_visible");
                     return;
                 }
-                if widgets::menu_item(ui, tl!("Zoom in"), "⌘+").clicked() {
+                if widgets::menu_item(ui, tl!("Zoom in"), &key(ZOOM_IN)).clicked() {
                     v.zoom_step(true);
                 }
-                if widgets::menu_item(ui, tl!("Zoom out"), "⌘−").clicked() {
+                if widgets::menu_item(ui, tl!("Zoom out"), &key(ZOOM_OUT)).clicked() {
                     v.zoom_step(false);
                 }
-                if widgets::menu_item(ui, tl!("Rotate view clockwise"), "⇧⌘+").clicked() {
+                if widgets::menu_item(ui, tl!("Rotate view clockwise"), &key(ROTATE_CW)).clicked() {
                     v.rotate_view(true);
                 }
-                if widgets::menu_item(ui, tl!("Rotate view counterclockwise"), "⇧⌘−").clicked() {
+                if widgets::menu_item(ui, tl!("Rotate view counterclockwise"), &key(ROTATE_CCW)).clicked() {
                     v.rotate_view(false);
                 }
                 ui.separator();
                 ui.label(egui::RichText::new(tl!("Page navigation")).color(t.text_faint).small());
-                if ui.add_enabled(!v.back.is_empty(), egui::Button::new(tl!("Previous view")).shortcut_text("⌘[")).clicked() {
+                if ui.add_enabled(!v.back.is_empty(), egui::Button::new(tl!("Previous view")).shortcut_text(key(PREV_VIEW))).clicked() {
                     v.view_history(false);
                 }
-                if ui.add_enabled(!v.forward.is_empty(), egui::Button::new(tl!("Next view")).shortcut_text("⌘]")).clicked() {
+                if ui.add_enabled(!v.forward.is_empty(), egui::Button::new(tl!("Next view")).shortcut_text(key(NEXT_VIEW))).clicked() {
                     v.view_history(true);
                 }
                 ui.separator();
@@ -439,10 +445,12 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             let mut page_display = None;
             ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
-                if icons::button(ui, "zoom-out", 32.0, false, tl!("Zoom out (⌘−)")).clicked() {
+                let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom out ({key})"), crate::commands::ZOOM_OUT);
+                if icons::button(ui, "zoom-out", 32.0, false, &tip).clicked() {
                     view.zoom_step(false);
                 }
-                if icons::button(ui, "zoom-in", 32.0, false, tl!("Zoom in (⌘+)")).clicked() {
+                let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom in ({key})"), crate::commands::ZOOM_IN);
+                if icons::button(ui, "zoom-in", 32.0, false, &tip).clicked() {
                     view.zoom_step(true);
                 }
                 // Between rotate and zoom, as in Acrobat. Its command runs once `view` is free.
@@ -454,7 +462,8 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         rail_view_menu(ui, view)
                     })
                     .and_then(|r| r.inner);
-                if icons::button(ui, "rotate-cw", 32.0, false, tl!("Rotate view clockwise (⇧⌘+)")).clicked() {
+                let tip = crate::commands::key_tip(ui.ctx(), tl!("Rotate view clockwise ({key})"), crate::commands::ROTATE_CW);
+                if icons::button(ui, "rotate-cw", 32.0, false, &tip).clicked() {
                     view.rotate_view(true);
                 }
                 // Not `columns-2` while fitting the page: that is the two-page view's icon.

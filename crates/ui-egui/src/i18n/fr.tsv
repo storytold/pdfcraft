@@ -68,7 +68,7 @@
 	Double-click	Double-clic
 	Select a word	Sélectionner un mot
 	Clear selection / close find	Effacer la sélection / fermer la recherche
-	Zoom in / out (also pinch or ⌘-scroll)	Zoom avant / arrière (aussi pincer ou ⌘-défilement)
+	Zoom in / out (also pinch or {key}-scroll)	Zoom avant / arrière (aussi pincer ou {key}-défilement)
 	Rotate view	Pivoter l'affichage
 	First / last page	Première / dernière page
 	Previous / next page	Page précédente / suivante
@@ -76,16 +76,16 @@
 	Select all pages (Organize)	Sélectionner toutes les pages (Organiser)
 	Home	Accueil
 	Open	Ouvrir
-	Open a PDF (⌘O)	Ouvrir un PDF (⌘O)
+	Open a PDF ({key})	Ouvrir un PDF ({key})
 	Dark gray theme	Thème gris foncé
 	Light theme	Thème clair
 	All tools	Tous les outils
 	Read	Lire
 	Convert	Convertir
 	E-Sign	Signature électronique
-	Print (⌘P)	Imprimer (⌘P)
+	Print ({key})	Imprimer ({key})
 	Save (M4)	Enregistrer (M4)
-	Document properties (⌘D)	Propriétés du document (⌘D)
+	Document properties ({key})	Propriétés du document ({key})
 	Find tools and commands	Rechercher des outils et des commandes
 	Fit to height	Ajuster à la hauteur
 	Zoom in	Zoom avant
@@ -114,9 +114,9 @@
 	Compare	Comparer
 	Page thumbnails	Vignettes de page
 	Form fields	Champs de formulaire
-	Zoom out (⌘−)	Zoom arrière (⌘−)
-	Zoom in (⌘+)	Zoom avant (⌘+)
-	Rotate view clockwise (⇧⌘+)	Pivoter l'affichage vers la droite (⇧⌘+)
+	Zoom out ({key})	Zoom arrière ({key})
+	Zoom in ({key})	Zoom avant ({key})
+	Rotate view clockwise ({key})	Pivoter l'affichage vers la droite ({key})
 	Toggle fit page / fit width	Basculer entre ajuster à la page et à la largeur
 	Next page	Page suivante
 	Previous page	Page précédente
@@ -1078,6 +1078,7 @@
 	Redacted area fill colour:	Couleur de remplissage de la zone biffée :
 	Use overlay text	Utiliser un texte en superposition
 	Custom text:	Texte personnalisé :
+	Redaction code:	Code de biffure :
 	Font:	Police :
 	Font size:	Corps :
 	Auto-size text to fit redaction region	Ajuster automatiquement le corps du texte à la zone de biffure
@@ -1247,7 +1248,7 @@
 	Expand all bookmarks	Développer tous les signets
 	Expand top-level bookmarks	Développer les signets de premier niveau
 	Collapse all bookmarks	Réduire tous les signets
-	New bookmark (⌘B)	Nouveau signet (⌘B)
+	New bookmark ({key})	Nouveau signet ({key})
 	This document has no bookmarks.	Ce document ne contient aucun signet.
 	This document has no layers.	Ce document ne contient aucun calque.
 	This document has no attachments.	Ce document ne contient aucune pièce jointe.
@@ -1261,8 +1262,8 @@
 	No matches	Aucune correspondance
 	Searching… {s}/{p}	Recherche… {s}/{p}
 	{c} of {n}{more}	{c} sur {n}{more}
-	Previous (⇧⌘G)	Précédent (⇧⌘G)
-	Next (⌘G)	Suivant (⌘G)
+	Previous ({key})	Précédent ({key})
+	Next ({key})	Suivant ({key})
 	Find options	Options de recherche
 	Whole words only	Mots entiers seulement
 	Case-sensitive	Respecter la casse

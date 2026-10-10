@@ -1,6 +1,7 @@
 //! The command registry drives menus, shortcuts and the palette: every registered command must
 //! be implemented, disabled commands must say why, and every surface must reach the same action.
 
+use egui::os::OperatingSystem;
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -290,11 +291,58 @@ fn clear_recent_files_runs_from_the_palette_and_is_saved() {
 #[test]
 fn the_shortcuts_dialog_lists_the_real_bindings() {
     let mut h = harness();
+    h.ctx.set_os(OperatingSystem::Nix);
     h.state_mut().execute("help.shortcuts");
     h.run_steps(3);
-    let mac = cfg!(target_os = "macos");
-    h.get_by_label(if mac { "⇧⌘S" } else { "Ctrl+Shift+S" });
+    h.get_by_label("Ctrl+Shift+S");
     h.get_by_label("Save as");
+    // The keys the document view handles itself are written for the platform too, and Fit
+    // visible (a registered command) is listed once.
+    h.get_by_label("Ctrl+1");
+    h.get_by_label("Ctrl+3");
+    h.get_by_label("Ctrl+G / Ctrl+Shift+G");
+    h.get_by_label("← / →, Ctrl+← / Ctrl+→");
+    h.get_by_label("Zoom in / out (also pinch or Ctrl-scroll)");
+    assert_eq!(h.query_all_by_label_contains("⌘").count(), 0, "no ⌘ outside macOS");
+    h.ctx.set_os(OperatingSystem::Mac);
+    h.run_steps(2);
+    h.get_by_label("⇧⌘S");
+    h.get_by_label("⌘1");
+    h.get_by_label("Zoom in / out (also pinch or ⌘-scroll)");
+}
+
+/// Menu ▸ View open, with egui told the app runs on `os`.
+fn view_menu(os: OperatingSystem) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness();
+    h.ctx.set_os(os);
+    h.get_by_label("Menu").click();
+    h.run_steps(2);
+    h.get_by_label("View ⏵").hover();
+    h.run_steps(3);
+    h
+}
+
+#[test]
+fn view_menu_and_tooltips_write_shortcuts_for_the_platform() {
+    // On Linux, View ▸ Zoom and Page navigation showed ⌘1, ⌘[ … (hard-coded) while the
+    // registered items under them showed Ctrl+K; tooltips showed ⌘ too.
+    let h = view_menu(OperatingSystem::Nix);
+    h.get_by_label("Actual size Ctrl+1");
+    h.get_by_label("Zoom to page level Ctrl+0");
+    h.get_by_label("Rotate view counterclockwise Ctrl+Shift+−");
+    h.get_by_label("Previous view Ctrl+[");
+    h.get_by_label("Find tools and commands… Ctrl+K");
+    h.get_by_label("Zoom in (Ctrl++)");
+    h.get_by_label("Print (Ctrl+P)");
+    assert_eq!(h.query_all_by_label_contains("⌘").count(), 0, "no ⌘ outside macOS");
+    assert_eq!(h.query_all_by_label_contains("Fit visible").count(), 1, "View lists Fit visible once");
+    h.get_by_label("Fit visible Ctrl+3");
+
+    let h = view_menu(OperatingSystem::Mac);
+    h.get_by_label("Actual size ⌘1");
+    h.get_by_label("Fit visible ⌘3");
+    h.get_by_label("Rotate view clockwise (⇧⌘+)");
+    assert_eq!(h.query_all_by_label_contains("Ctrl+").count(), 0, "no Ctrl+ on macOS");
 }
 
 #[test]

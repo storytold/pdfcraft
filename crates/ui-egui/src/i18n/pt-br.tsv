@@ -735,6 +735,7 @@
 	Redacted area fill colour:	Cor de preenchimento da área ocultada:
 	Use overlay text	Usar texto de sobreposição
 	Custom text:	Texto personalizado:
+	Redaction code:	Código de ocultação:
 	Font:	Fonte:
 	Font size:	Tamanho da fonte:
 	Auto-size text to fit redaction region	Ajustar tamanho do texto automaticamente à região de ocultação
@@ -1010,19 +1011,19 @@
 	Attachments	Anexos
 	Signatures	Assinaturas
 	Accessibility Checker	Verificador de acessibilidade
-	Zoom out (⌘−)	Diminuir zoom (⌘−)
-	Zoom in (⌘+)	Aumentar zoom (⌘+)
-	Rotate view clockwise (⇧⌘+)	Girar visualização em sentido horário (⇧⌘+)
+	Zoom out ({key})	Diminuir zoom ({key})
+	Zoom in ({key})	Aumentar zoom ({key})
+	Rotate view clockwise ({key})	Girar visualização em sentido horário ({key})
 	Toggle fit page / fit width	Alternar ajustar à página / ajustar à largura
 	Next page	Próxima página
 	Previous page	Página anterior
 	Current page — type a page number or label (such as iv) and press Enter	Página atual — digite o número da página ou rótulo (como iv) e pressione Enter
-	Open a PDF (⌘O)	Abrir um PDF (⌘O)
+	Open a PDF ({key})	Abrir um PDF ({key})
 	Dark gray theme	Tema cinza escuro
 	Light theme	Tema claro
-	Print (⌘P)	Imprimir (⌘P)
+	Print ({key})	Imprimir ({key})
 	Save (M4)	Salvar (M4)
-	Document properties (⌘D)	Propriedades do documento (⌘D)
+	Document properties ({key})	Propriedades do documento ({key})
 	Action Wizard…	Assistente de ações…
 	Add Bates numbering…	Adicionar numeração Bates…
 	Add a button	Adicionar um botão
@@ -1152,7 +1153,7 @@
 	Expand all bookmarks	Expandir todos os marcadores
 	Expand top-level bookmarks	Expandir marcadores de nível superior
 	Collapse all bookmarks	Recolher todos os marcadores
-	New bookmark (⌘B)	Novo marcador (⌘B)
+	New bookmark ({key})	Novo marcador ({key})
 	This document has no bookmarks.	Este documento não tem marcadores.
 	This document has no layers.	Este documento não tem camadas.
 	This document has no attachments.	Este documento não tem anexos.
@@ -1166,8 +1167,8 @@
 	No matches	Nenhuma correspondência
 	Searching… {s}/{p}	Pesquisando… {s}/{p}
 	{c} of {n}{more}	{c} de {n}{more}
-	Previous (⇧⌘G)	Anterior (⇧⌘G)
-	Next (⌘G)	Próximo (⌘G)
+	Previous ({key})	Anterior ({key})
+	Next ({key})	Próximo ({key})
 	Find options	Opções de localização
 	Whole words only	Apenas palavras inteiras
 	Case-sensitive	Diferenciar maiúsculas de minúsculas
@@ -1238,7 +1239,7 @@
 	Copy selected text	Copiar texto selecionado
 	Select a word	Selecionar uma palavra
 	Clear selection / close find	Limpar seleção / fechar localização
-	Zoom in / out (also pinch or ⌘-scroll)	Aumentar / diminuir zoom (ou pinçar / ⌘-rolagem)
+	Zoom in / out (also pinch or {key}-scroll)	Aumentar / diminuir zoom (ou pinçar / {key}-rolagem)
 	Rotate view	Girar visualização
 	First / last page	Primeira / última página
 	Previous / next page	Página anterior / seguinte

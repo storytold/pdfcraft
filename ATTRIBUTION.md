@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with SHA-256 hashes, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (259)
+## In this repository (260)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -22,6 +22,7 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `crates/ui-egui/src/i18n/bg.tsv` | Bulgarian interface translation catalog | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources | Bulgarian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs |
 | `crates/ui-egui/src/i18n/ja.tsv` | Japanese interface translation catalog | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources | Japanese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs |
 | `crates/ui-egui/src/i18n/uk.tsv` | Ukrainian interface translation catalog | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources | Ukrainian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs |
+| `crates/ui-egui/src/i18n/ar.tsv` | Arabic interface translation catalog | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources | Arabic UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs |
 | `assets/icons/accessibility.svg` | Lucide icon "accessibility" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/accessibility.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/align-left.svg` | Lucide icon "align-left" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/align-left.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/align-center.svg` | Lucide icon "align-center" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/align-center.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
@@ -314,4 +315,4 @@ Not in this repository and never downloaded by it: compiled in only when the bui
 
 | Input | Option | Title | Author | Licence | Source | Attribution | Used for |
 |---|---|---|---|---|---|---|---|
-| `craft-fonts` | `CRAFT_FONTS_DIR` | Japanese fonts: BIZ UDPGothic (Regular, Bold), Shippori Mincho, BIZ UDMincho | The BIZ UDGothic and BIZ UDMincho Project Authors (Morisawa Inc.), The Shippori Mincho Project Authors (FONTDASU) | OFL-1.1 | https://github.com/storytold/craft-fonts (pinned by commit in .github/workflows/release.yml) | https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md | Japanese fallback in the interface (BIZ UDPGothic first) and Japanese glyphs in edited PDF text (Shippori Mincho); the web build embeds only BIZ UDPGothic Regular |
+| `craft-fonts` | `CRAFT_FONTS_DIR` | Japanese fonts: BIZ UDPGothic (Regular, Bold), Shippori Mincho, BIZ UDMincho; Arabic font: Noto Sans Arabic | The BIZ UDGothic and BIZ UDMincho Project Authors (Morisawa Inc.), The Shippori Mincho Project Authors (FONTDASU), The Noto Project Authors (Noto Sans Arabic) | OFL-1.1 | https://github.com/storytold/craft-fonts (pinned by commit in .github/workflows/release.yml) | https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md | Japanese fallback in the interface (BIZ UDPGothic first) and Japanese glyphs in edited PDF text (Shippori Mincho); Arabic interface text, file names and document titles (Noto Sans Arabic); the web build embeds only BIZ UDPGothic Regular and Noto Sans Arabic. The checkout also holds Noto Sans CJK SC, which crates/fonts/build.rs never embeds (AGENTS.md §1.1) |
