@@ -2163,3 +2163,5 @@ key	Space	スペース
 	Pages: {k} of {n}	ページ: {k}/{n}
 	Check the pages	ページ指定を確認してください
 	Switch to List view to change the pages it takes.	使用するページを変更するには、リスト表示に切り替えてください。
+	Expand all	すべて展開
+	Collapse all	すべて折りたたむ

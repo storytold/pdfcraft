@@ -2049,3 +2049,5 @@ key	Space	空格
 	Pages: {k} of {n}	頁面：{k}/{n}
 	Check the pages	請檢查頁碼
 	Switch to List view to change the pages it takes.	切換到清單檢視以變更要使用的頁面。
+	Expand all	全部展開
+	Collapse all	全部摺疊

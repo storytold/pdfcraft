@@ -2163,3 +2163,5 @@ key	Space	Leertaste
 	Pages: {k} of {n}	Seiten: {k} von {n}
 	Check the pages	Prüfe die Seiten
 	Switch to List view to change the pages it takes.	Wechsle zur Listenansicht, um die übernommenen Seiten zu ändern.
+	Expand all	Alle ausklappen
+	Collapse all	Alle einklappen

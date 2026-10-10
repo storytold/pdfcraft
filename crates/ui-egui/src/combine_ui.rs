@@ -5,7 +5,7 @@
 //! column heading; PDFs dropped on the tab join the list. Every change to the list can be undone.
 
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -189,14 +189,25 @@ pub struct CombineTab {
     pub(crate) zoom_request: Option<f32>,
     /// The card size slider, which takes the arrow keys while it has the keyboard.
     pub(crate) zoom_slider: Option<egui::Id>,
-    /// The card kept in place through a zoom gesture: its file, how far below the top of the grid
-    /// it was, and when the grid last zoomed (seconds).
-    pub(crate) zoom_anchor: Option<(u64, f32, f64)>,
+    /// The card kept in place through a zoom gesture: its file, its place among the file's pages
+    /// (0 for the file's own card), how far below the top of the grid it was, and when the grid
+    /// last zoomed (seconds).
+    pub(crate) zoom_anchor: Option<(u64, usize, f32, f64)>,
+    /// Files shown as their pages in the grid (a view, not an edit: no undo step).
+    pub(crate) expanded: BTreeSet<u64>,
+    /// The pages each expanded file shows, worked out again only when its range changes.
+    pub(crate) page_lists: HashMap<u64, crate::combine_grid::PageList>,
+    /// The file (by place in the list) at each place of the grid as last drawn: Up and Down step
+    /// a row of cards, page cards included.
+    pub(crate) grid_places: Vec<usize>,
     /// A file shown large (a card's magnifier), while it shows.
     pub(crate) preview: Option<Preview>,
     /// The card that had the keyboard last frame: Space shows its file large; on any other focused
     /// widget Space is that widget's.
     pub(crate) card_focus: Option<egui::Id>,
+    /// That card's file and its place among the file's pages (0 for the file's own card): Space
+    /// on a page card shows that page.
+    pub(crate) card_focus_at: Option<(u64, usize)>,
 }
 
 /// The pages a range takes, and the range and page count they were worked out for.
@@ -392,6 +403,14 @@ impl CombineFile {
         self.checked_range().map(|(_, first)| first)
     }
 
+    /// The first page the range takes, without updating the cache (read-only callers).
+    pub(crate) fn first_taken(&self) -> Option<usize> {
+        match &self.checked {
+            Some((range, result)) if *range == self.range => result.as_ref().ok().map(|(_, first)| *first),
+            _ => self.pages_taken().ok()?.first().copied(),
+        }
+    }
+
     /// Every page (0-based) the range takes, in its order: what the preview flips through.
     pub(crate) fn pages_taken(&self) -> Result<Vec<usize>, String> {
         if self.range.trim().is_empty() {
@@ -439,6 +458,7 @@ impl CombineFile {
     }
 }
 
+#[derive(Clone)]
 pub(crate) enum RowAction {
     /// A click on row `i` (Ctrl/⌘ toggles it, Shift selects up to it).
     Click(usize, Modifiers),
@@ -459,6 +479,13 @@ pub(crate) enum RowAction {
     Preview(u64),
     /// Space: show the file the keyboard is on (or the first selected) large.
     PreviewSelected,
+    /// A page card's magnifier: show its file large, from that page (its place among the pages
+    /// the file adds).
+    PreviewAt(u64, usize),
+    /// Show one file as its pages in the grid (`true`), or as its card again.
+    Expand(u64, bool),
+    /// Every file that adds more than one page, as its pages (`true`), or all as cards again.
+    ExpandAll(bool),
     /// Row `from` (and the rest of the selection, if it is selected) dropped on row `to`.
     Drop {
         from: usize,
@@ -495,6 +522,16 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let n = app.combine_draft.len();
     let ids: Vec<u64> = app.combine_draft.iter().map(|f| f.id).collect();
     app.combine_tab.selected.retain(|id| ids.contains(id));
+    // A file stays expanded only while it can show as its pages (not locked again by undo, nor
+    // edited down to one page or a bad range): it doesn't come back expanded by itself.
+    {
+        let tab = &mut app.combine_tab;
+        let draft = &app.combine_draft;
+        let lists = &mut tab.page_lists;
+        tab.expanded.retain(|id| draft.iter().find(|f| f.id == *id).is_some_and(|f| crate::combine_grid::pages_shown(lists, f).is_some()));
+        let expanded = &tab.expanded;
+        tab.page_lists.retain(|id, _| expanded.contains(id));
+    }
     let selected: Vec<bool> = ids.iter().map(|id| app.combine_tab.selected.contains(id)).collect();
     let count = selected.iter().filter(|s| **s).count();
     let blocker = blocker(&app.combine_draft, &checks);
@@ -610,6 +647,16 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 ui.label(egui::RichText::new(crate::i18n::fmt(tl!("{n} selected"), &[("n", &count.to_string())])).color(t.text_muted));
             }
             if grid && n > 0 {
+                // Every file as its pages, or all as cards again.
+                group(ui, &t, edge, 2.0 * 30.0 + 6.0);
+                let can_expand = app.combine_draft.iter_mut().any(|f| !app.combine_tab.expanded.contains(&f.id) && expandable(f));
+                if ui.add_enabled_ui(can_expand, |ui| icons::button(ui, "maximize-2", 30.0, false, tl!("Expand all"))).inner.clicked() {
+                    events.action = Some(RowAction::ExpandAll(true));
+                }
+                let can_collapse = !app.combine_tab.expanded.is_empty();
+                if ui.add_enabled_ui(can_collapse, |ui| icons::button(ui, "minimize-2", 30.0, false, tl!("Collapse all"))).inner.clicked() {
+                    events.action = Some(RowAction::ExpandAll(false));
+                }
                 zoom_controls(app, ui, &t, edge);
             }
         });
@@ -793,6 +840,11 @@ fn group(ui: &mut egui::Ui, t: &Tokens, edge: f32, width: f32) {
 /// A toolbar icon button, disabled with a reason.
 fn tool(ui: &mut egui::Ui, enabled: bool, icon: &str, label: &str, disabled_why: &str) -> egui::Response {
     ui.add_enabled_ui(enabled, |ui| icons::button(ui, icon, 30.0, false, label)).inner.on_disabled_hover_text(disabled_why)
+}
+
+/// Whether a file can be shown as its pages: readable, unlocked, and adding more than one.
+fn expandable(f: &mut CombineFile) -> bool {
+    f.lock.is_none() && f.problem.is_none() && f.selection().is_ok_and(|k| k > 1 && k <= crate::combine_grid::MAX_EXPAND)
 }
 
 /// Why Combine can't run yet, if so.
@@ -1574,7 +1626,15 @@ impl PdfCraftApp {
                 tab.selected = ids.iter().copied().collect();
             }
             RowAction::Step { down, by, extend } => {
+                // With files shown as their pages, Up and Down go a row of cards (from the last
+                // of a file's cards down, from its first up) to the file there.
+                let places = &tab.grid_places;
+                let rows_of_cards = by > 1 && places.len() > n;
                 let next = match index_of(tab.cursor) {
+                    Some(c) if rows_of_cards => {
+                        let from = if down { places.iter().rposition(|f| *f == c) } else { places.iter().position(|f| *f == c) };
+                        from.and_then(|at| places.get(step_to(at, places.len(), by, down)).copied()).unwrap_or(c)
+                    }
                     Some(c) => step_to(c, n, by, down),
                     None if down => 0,
                     None => n.saturating_sub(1),
@@ -1647,12 +1707,37 @@ impl PdfCraftApp {
                     self.combine_tab.preview = Some(Preview { file: id, at: 0, page: None, pages: None });
                 }
             }
+            RowAction::PreviewAt(id, at) => {
+                if ids.contains(&id) {
+                    self.combine_tab.preview = Some(Preview { file: id, at, page: None, pages: None });
+                }
+            }
+            RowAction::Expand(id, on) => {
+                if on {
+                    if self.combine_draft.iter_mut().any(|f| f.id == id && expandable(f)) {
+                        self.combine_tab.expanded.insert(id);
+                    }
+                } else {
+                    self.combine_tab.expanded.remove(&id);
+                    // Its card may be far from where its pages were: brought into view.
+                    self.combine_tab.reveal = Some(id);
+                }
+            }
+            RowAction::ExpandAll(on) => {
+                self.combine_tab.expanded =
+                    if on { self.combine_draft.iter_mut().filter_map(|f| expandable(f).then_some(f.id)).collect() } else { BTreeSet::new() };
+                if !on {
+                    self.combine_tab.reveal = self.combine_tab.cursor;
+                }
+            }
             RowAction::PreviewSelected => {
                 let id = tab.cursor.filter(|c| tab.selected.contains(c)).or_else(|| ids.iter().copied().find(|id| tab.selected.contains(id)));
                 // Only what its card would offer a magnifier for (unlocked, readable, measured).
                 let shows = |id: u64| self.combine_draft.iter().any(|f| f.id == id && f.lock.is_none() && f.problem.is_none() && !f.sizes.is_empty());
                 if let Some(id) = id.filter(|id| shows(*id)) {
-                    self.combine_tab.preview = Some(Preview { file: id, at: 0, page: None, pages: None });
+                    // From the page card that has the keyboard, if it's one of this file's.
+                    let at = self.combine_tab.card_focus_at.filter(|(file, _)| *file == id).map_or(0, |(_, nth)| nth);
+                    self.combine_tab.preview = Some(Preview { file: id, at, page: None, pages: None });
                 }
             }
             RowAction::Drop { from, to } => {

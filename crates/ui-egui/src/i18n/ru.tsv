@@ -2076,3 +2076,5 @@ key	Space	Пробел
 	Pages: {k} of {n}	Страницы: {k} из {n}
 	Check the pages	Проверьте страницы
 	Switch to List view to change the pages it takes.	Переключитесь на вид списком, чтобы изменить, какие страницы взять.
+	Expand all	Развернуть все
+	Collapse all	Свернуть все

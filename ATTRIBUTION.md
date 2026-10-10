@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with SHA-256 hashes, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (260)
+## In this repository (261)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `assets/icons/messages-square.svg` | Lucide icon "messages-square" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/messages-square.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/mic.svg` | Lucide icon "mic" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/mic.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/minimize.svg` | Lucide icon "minimize" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/minimize.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
+| `assets/icons/minimize-2.svg` | Lucide icon "minimize-2" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/minimize-2.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/minus.svg` | Lucide icon "minus" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/minus.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/moon.svg` | Lucide icon "moon" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/moon.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/mouse-pointer-2.svg` | Lucide icon "mouse-pointer-2" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/mouse-pointer-2.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
