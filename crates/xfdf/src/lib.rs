@@ -635,13 +635,21 @@ fn place(doc: &mut Document, page_ref: ObjRef, d: Dict) -> Result<ObjRef, DataEr
         .and_then(|a| a.as_array().cloned())
         .unwrap_or_default();
     let mut kept = Vec::new();
+    let mut removed: Vec<ObjRef> = Vec::new();
     for a in annots {
         let same = nm.is_some()
             && a.as_ref().and_then(|r| doc.get(r).as_dict().and_then(|x| x.get(b"NM").and_then(|n| n.as_string().map(|s| s.to_text())))) == nm;
-        if !same {
+        if same {
+            removed.extend(a.as_ref());
+        } else {
             kept.push(a);
         }
     }
+    // The replaced note's pop-up goes with it; otherwise it stays on the page pointing at a note that is no longer there.
+    kept.retain(|a| {
+        let Some(x) = a.as_ref().map(|r| doc.get(r)).and_then(|o| o.as_dict().cloned()) else { return true };
+        x.name(b"Subtype") != Some(b"Popup".as_slice()) || x.reference(b"Parent").is_none_or(|p| !removed.contains(&p))
+    });
     let r = doc.add(Object::Dict(d));
     // Our own appearance where we can draw one; others keep none (viewers draw a default).
     let _ = pdfcraft_annot::set_appearance(doc, r);

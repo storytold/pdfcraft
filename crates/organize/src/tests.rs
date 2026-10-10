@@ -16,6 +16,18 @@ fn page_rotation_resolves_inheritance_overrides_and_missing_pages() {
     assert_eq!(page_rotation(&doc, 3), Err(OrganizeError::NoSuchPage(3)));
 }
 
+#[test]
+fn rotate_rejects_angles_that_are_not_multiples_of_90() {
+    // The page tree only turns in quarter steps, so anything else used to be silently truncated
+    // by the integer division. It has to be an error, and the document must stay as it was.
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    assert_eq!(rotate_pages(&mut doc, &[0], 45), Err(OrganizeError::Invalid("rotation must be a multiple of 90 degrees".into())));
+    assert_eq!(rotate_pages(&mut doc, &[0], 91), Err(OrganizeError::Invalid("rotation must be a multiple of 90 degrees".into())));
+    assert_eq!(page_rotation(&doc, 0).unwrap(), 90);
+    rotate_pages(&mut doc, &[0], -90).unwrap();
+    assert_eq!(page_rotation(&doc, 0).unwrap(), 0);
+}
+
 /// A 3-page document with a nested page tree. MediaBox and Rotate are inherited from the root,
 /// Resources from an intermediate node; each page's content says which page it is.
 fn fixture() -> Vec<u8> {

@@ -331,3 +331,24 @@ fn unicode_annotation_colours_are_ignored_without_panicking() {
         assert_eq!(report.comments, 1);
     }
 }
+
+/// Importing the same note again must not leave the earlier pop-up on the page.
+#[test]
+fn reimporting_a_note_replaces_its_popup() {
+    let xfdf = concat!(
+        r#"<xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><text page="0" name="n1" rect="10,10,30,30"><contents>body</contents>"#,
+        r#"<popup page="0" rect="40,10,140,60" open="no"/></text></annots></xfdf>"#,
+    );
+    let mut doc = blank();
+    for _ in 0..3 {
+        import(&mut doc, xfdf.as_bytes()).unwrap();
+    }
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let annots = doc.get(page).as_dict().and_then(|p| p.get(b"Annots").cloned()).and_then(|a| doc.resolve(&a).as_array().cloned()).unwrap();
+    let refs: Vec<ObjRef> = annots.iter().filter_map(|a| a.as_ref()).collect();
+    let is_popup = |r: &ObjRef| doc.get(*r).as_dict().and_then(|d| d.name(b"Subtype")) == Some(b"Popup".as_slice());
+    let popups: Vec<ObjRef> = refs.iter().copied().filter(is_popup).collect();
+    assert_eq!(popups.len(), 1, "one current pop-up, not one per import");
+    let parent = doc.get(popups[0]).as_dict().and_then(|d| d.reference(b"Parent")).unwrap();
+    assert!(refs.contains(&parent), "the pop-up belongs to a note that is still on the page");
+}
