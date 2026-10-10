@@ -583,6 +583,28 @@ pub fn from_images_with_resolution(images: &[(String, Vec<u8>)], resolution: Ima
 
 // ── text ────────────────────────────────────────────────────────────────────────────────────
 
+/// The text of a plain-text file. A byte order mark picks UTF-8 or UTF-16 (little or big
+/// endian) and is dropped; without one the bytes are UTF-8 when they are valid UTF-8, and
+/// otherwise the Windows code page they most likely are: 1254 (Turkish) or 1252 (Western).
+pub fn decode_text(bytes: &[u8]) -> String {
+    if let Some((encoding, bom)) = encoding_rs::Encoding::for_bom(bytes) {
+        return encoding.decode_without_bom_handling(bytes.get(bom..).unwrap_or_default()).0.into_owned();
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_string();
+    }
+    let encoding = if turkish_code_page(bytes) { encoding_rs::WINDOWS_1254 } else { encoding_rs::WINDOWS_1252 };
+    encoding.decode_without_bom_handling(bytes).0.into_owned()
+}
+
+/// Windows-1254 and 1252 differ only in six bytes: Ğ İ Ş ğ ı ş in 1254 are Ð Ý Þ ð ý þ in 1252.
+/// Of the Western languages only Icelandic and Faroese use those, and both also write á í ó ú,
+/// which Turkish never does.
+fn turkish_code_page(bytes: &[u8]) -> bool {
+    bytes.iter().any(|b| matches!(b, 0xD0 | 0xDD | 0xDE | 0xF0 | 0xFD | 0xFE))
+        && !bytes.iter().any(|b| matches!(b, 0xC1 | 0xCD | 0xD3 | 0xDA | 0xE1 | 0xED | 0xF3 | 0xFA))
+}
+
 /// Plain text set in Helvetica on pages of `page` size with 1-inch margins.
 pub fn from_text(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result<Document, CreateError> {
     let size = if font_size.is_finite() && font_size > 0.0 { font_size.clamp(4.0, 72.0) } else { 11.0 };

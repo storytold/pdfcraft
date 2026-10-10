@@ -466,6 +466,24 @@ fn mixed_files_convert_and_combine_in_order() {
 }
 
 #[test]
+fn utf16_and_code_page_text_files_convert_to_their_text() {
+    let mut s = Session::new();
+    // Notepad's "Unicode": UTF-16 little endian with a byte order mark.
+    let mut utf16 = vec![0xFF, 0xFE];
+    utf16.extend("Grüße aus Köln".encode_utf16().flat_map(u16::to_le_bytes));
+    let (_, pdf) = s.convert_to_pdf("notes.txt", &Arc::new(utf16)).unwrap();
+    let id = s.open_new("notes.pdf", pdf).unwrap();
+    assert_eq!(page_texts(&s, id), ["Grüße aus Köln"]);
+    // A UTF-8 byte order mark is not text; Windows-1252 bytes are not replacement characters.
+    let (_, pdf) = s.convert_to_pdf("menu.txt", &Arc::new(b"\xEF\xBB\xBFCaf\xC3\xA9".to_vec())).unwrap();
+    let id = s.open_new("menu.pdf", pdf).unwrap();
+    assert_eq!(page_texts(&s, id), ["Café"]);
+    let (_, pdf) = s.convert_to_pdf("old.txt", &Arc::new(b"Cr\xE8me br\xFBl\xE9e".to_vec())).unwrap();
+    let id = s.open_new("old.pdf", pdf).unwrap();
+    assert_eq!(page_texts(&s, id), ["Crème brûlée"]);
+}
+
+#[test]
 fn a_file_split_around_another_combines_in_order_with_one_bookmark() {
     let mut s = Session::new();
     let (a, b) = (Arc::new(fixture(3)), Arc::new(fixture(2)));
@@ -2935,4 +2953,40 @@ fn group_moves_preserve_rotated_added_content_raster_geometry() {
         }
     }
     assert!(painted > 500, "the comparison contains real rendered text and image pixels");
+}
+
+#[test]
+fn legacy_passwords_with_turkish_characters_open() {
+    // RC4-128 (R3): user "ılık€" in PDFDocEncoding (ı = 0x9A, € = 0xA0), owner "Çağlar"
+    // (PDFDocEncoding has no ğ: written without it, as pdfcraft-crypt writes R2–R4 passwords).
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
+    let params = pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Rc4_128,
+        user_password: "ılık€",
+        owner_password: "Çağlar",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    };
+    cos.set_encryption(&params).unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap());
+    let mut s = Session::new();
+    // The renderer used to try only the UTF-8 bytes, and the owner fallback handed it the
+    // recovered user password as Latin-1: both came back as a wrong password.
+    for pw in ["ılık€", "Çağlar"] {
+        let id = s.open("x.pdf", None, bytes.clone(), Some(pw)).unwrap_or_else(|e| panic!("{pw}: {e:?}"));
+        assert_eq!(page_texts(&s, id), ["Page 1"], "{pw}");
+        assert!(s.get(id).unwrap().info.encrypted, "{pw}");
+    }
+    assert!(matches!(s.open("x.pdf", None, bytes, Some("ilik€")), Err(OpenError::WrongPassword)));
+}
+
+#[test]
+fn recovered_user_passwords_reach_the_renderer_byte_for_byte() {
+    assert_eq!(crate::renderer_password(b"pw"), "pw");
+    // UTF-8 bytes (qpdf writes "şifre" so; its \xC5\x9F has no PDFDocEncoding reading).
+    assert_eq!(crate::renderer_password("şifre".as_bytes()), "şifre");
+    // PDFDocEncoding bytes: ı = 0x9A, € = 0xA0, Ç = 0xC7.
+    assert_eq!(crate::renderer_password(&[0x9A, b'l', 0x9A, b'k', 0xA0]), "ılık€");
+    assert_eq!(crate::renderer_password(&[0xC7, b'o', b'k']), "Çok");
 }

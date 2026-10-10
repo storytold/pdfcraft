@@ -35,7 +35,7 @@ pub use pdfcraft_organize::LabelStyle;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
 pub use pdfcraft_cos::Algorithm;
-pub use pdfcraft_create::{CONVERTIBLE, ImageResolution, SourceKind, source_kind};
+pub use pdfcraft_create::{CONVERTIBLE, ImageResolution, SourceKind, decode_text, source_kind};
 pub use pdfcraft_edit::{
     Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, MarkKind, Watermark,
 };
@@ -1850,6 +1850,17 @@ fn keys_after(edit: &Edit) -> Option<Keys> {
     }
 }
 
+/// The recovered user password of an R2–R4 file as text for the renderer, which tries a password
+/// as its UTF-8 bytes and then in PDFDocEncoding: UTF-8 bytes (as some writers store passwords
+/// PDFDocEncoding can't hold, such as "şifre") stay UTF-8, and other bytes are read as
+/// PDFDocEncoding, so either way the renderer gets back exactly these bytes.
+fn renderer_password(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => bytes.iter().map(|b| pdfcraft_cos::pdfdoc_char(*b)).collect(),
+    }
+}
+
 /// The last-resort guard (AGENTS.md §4): run `f`, turning a panic that escapes it into an error
 /// message, so one bad file or edit can't take the app and its other documents down. It is a
 /// safety net for bugs, not a substitute for returning errors.
@@ -2167,7 +2178,7 @@ impl Session {
                     Ok(Ok(d)) => d.security().and_then(|s| s.recovered_user_password()),
                     _ => None,
                 };
-                let user: String = user.ok_or(OpenError::WrongPassword)?.iter().map(|b| char::from(*b)).collect();
+                let user = renderer_password(&user.ok_or(OpenError::WrongPassword)?);
                 (inspect(bytes.clone(), Some(&user))?, Some(user))
             }
             Err(e) => return Err(e),
@@ -2741,7 +2752,7 @@ impl Session {
         let created = guard(|| match kind {
             SourceKind::Pdf => open_source(name, bytes).map(|_| bytes.clone()),
             SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]),
-            SourceKind::Text => self.create_from_text(title, &String::from_utf8_lossy(bytes)),
+            SourceKind::Text => self.create_from_text(title, &decode_text(bytes)),
         })
         .map_err(|_| EditError::Source(format!("{name}: the file could not be read")))?;
         Ok((kind, created?))

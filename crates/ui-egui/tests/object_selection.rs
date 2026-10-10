@@ -327,7 +327,7 @@ fn group_drag_respects_document_rotation_and_view_rotation() {
 
 #[test]
 fn group_drags_cancel_on_focus_loss_tab_switch_home_and_modal_dialogs() {
-    for case in 0..4 {
+    for case in 0..5 {
         let mut h = harness();
         let before = objects(&h);
         marquee(&mut h);
@@ -344,7 +344,8 @@ fn group_drags_cancel_on_focus_loss_tab_switch_home_and_modal_dialogs() {
                 h.state_mut().open_bytes("other.pdf", None, fixture(false)).unwrap();
             }
             2 => h.state_mut().active = None,
-            _ => h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::About),
+            3 => h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::About),
+            _ => h.state_mut().request_document_url("https://example.invalid/", pdfcraft_ui_egui::LinkOrigin::Link),
         }
         h.run_steps(2);
         h.drop_at(b);
@@ -352,6 +353,7 @@ fn group_drags_cancel_on_focus_loss_tab_switch_home_and_modal_dialogs() {
         h.input_mut().focused = true;
         h.state_mut().active = Some(0);
         h.state_mut().dialog = None;
+        h.state_mut().pending_link = None;
         h.run_steps(4);
         assert_eq!(objects(&h), before, "cancelled gesture case {case}");
         assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "case {case}");
