@@ -484,9 +484,20 @@ struct Inherited {
     max_len: Option<usize>,
 }
 
-/// Every terminal field, in tree order.
+/// Every terminal field: the `/Fields` tree in order, then the fields reachable only through the
+/// page annotations (see [`adopt_page_fields`]).
 pub fn fields(doc: &Document) -> Vec<Field> {
-    let Some(af) = acroform(doc) else { return Vec::new() };
+    enumerate(doc).0
+}
+
+/// How many of [`fields`] were reachable only through the page annotations: the form's `/Fields`
+/// list names none or only some of them, so the leniency that adopts them is worth recording.
+pub fn adopted_page_fields(doc: &Document) -> usize {
+    enumerate(doc).1
+}
+
+fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
+    let af = acroform(doc);
     let mut page_of = std::collections::HashMap::new();
     let mut annot_index = std::collections::HashMap::new();
     let pages = page_refs(doc);
@@ -500,20 +511,84 @@ pub fn fields(doc: &Document) -> Vec<Field> {
             }
         }
     }
-    let base = Inherited {
-        da: af.get(b"DA").and_then(|o| text_of(&doc.resolve(o))),
-        q: af.get(b"Q").and_then(|o| doc.resolve(o).as_int()),
-        ..Default::default()
+    let base = match &af {
+        Some(af) => Inherited {
+            da: af.get(b"DA").and_then(|o| text_of(&doc.resolve(o))),
+            q: af.get(b"Q").and_then(|o| doc.resolve(o).as_int()),
+            ..Default::default()
+        },
+        None => Inherited::default(),
     };
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for f in af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default() {
-        if let Some(r) = f.as_ref() {
-            walk(doc, r, &base, &page_of, &mut seen, &mut out, 0);
+    if let Some(af) = &af {
+        for f in af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default() {
+            if let Some(r) = f.as_ref() {
+                walk(doc, r, &base, &page_of, &mut seen, &mut out, 0);
+            }
         }
     }
+    let listed = out.len();
+    adopt_page_fields(doc, &pages, &base, &page_of, &mut seen, &mut out);
+    let adopted = out.len() - listed;
     rank_tabs(doc, &pages, &annot_index, &mut out);
-    out
+    (out, adopted)
+}
+
+/// Widget annotations no `/Fields` entry reaches are adopted as fields, as Acrobat and the
+/// browsers do: some writers list only some of the fields, or none at all. Each widget is adopted
+/// through its topmost unlisted `/Parent`, so a field split across several widgets stays one
+/// field. Tree-listed fields keep their order first; the rest follow in page-annotation order.
+fn adopt_page_fields(
+    doc: &Document,
+    pages: &[ObjRef],
+    base: &Inherited,
+    page_of: &std::collections::HashMap<ObjRef, usize>,
+    seen: &mut std::collections::HashSet<ObjRef>,
+    out: &mut Vec<Field>,
+) {
+    for p in pages {
+        let Some(a) = doc.get(*p).as_dict().and_then(|d| d.get(b"Annots").cloned()) else { continue };
+        let annots = doc.resolve(&a);
+        let Some(annots) = annots.as_array() else { continue };
+        for e in annots {
+            let Some(r) = e.as_ref() else { continue };
+            if seen.contains(&r) {
+                continue;
+            }
+            let obj = doc.get(r);
+            let Some(d) = obj.as_dict() else { continue };
+            if d.name(b"Subtype") != Some(b"Widget") {
+                continue;
+            }
+            if !d.contains(b"FT") && !d.contains(b"T") && !d.contains(b"Parent") {
+                continue;
+            }
+            if let Some(root) = unlisted_root(doc, r, seen) {
+                walk(doc, root, base, page_of, seen, out, 0);
+            }
+        }
+    }
+}
+
+/// The topmost field above `r` (itself without a `/Parent`), or `None` when `r` or an ancestor is
+/// already reachable from the `/Fields` tree, or a `/Parent` loop hides the top.
+fn unlisted_root(doc: &Document, r: ObjRef, seen: &std::collections::HashSet<ObjRef>) -> Option<ObjRef> {
+    let mut top = r;
+    let mut visited = std::collections::HashSet::from([r]);
+    loop {
+        let parent = doc.get(top).as_dict().and_then(|d| d.reference(b"Parent"));
+        let Some(p) = parent else {
+            return if seen.contains(&top) { None } else { Some(top) };
+        };
+        if !visited.insert(p) || visited.len() > 64 {
+            return None;
+        }
+        if seen.contains(&p) {
+            return None;
+        }
+        top = p;
+    }
 }
 
 /// A page's tab order (`/Tabs`).

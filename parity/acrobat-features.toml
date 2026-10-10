@@ -4302,8 +4302,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["form.fields"]
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/view.rs::field_list_jumps_to_a_fields_page"]
-notes = "read-only list with jump-to-field; filling and editing are separate features (M6)"
+evidence = ["crates/ui-egui/tests/view.rs::field_list_jumps_to_a_fields_page", "crates/render/src/inspect.rs::fields_listed_only_on_the_pages_are_listed"]
+notes = "read-only list with jump-to-field; filling and editing are separate features (M6); fields a file lists only as page widgets (empty /Fields) are adopted too"
 
 [[feature]]
 id = "form.highlight-fields"
@@ -4338,7 +4338,7 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.fields"]
 tools = ["form_fill", "form_fields"]
-evidence = ["crates/ui-egui/tests/forms.rs::typing_into_a_text_field_and_tabbing_on", "crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/engine/src/tests.rs::filling_a_form_shows_saves_and_undoes"]
+evidence = ["crates/ui-egui/tests/forms.rs::typing_into_a_text_field_and_tabbing_on", "crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/engine/src/tests.rs::filling_a_form_shows_saves_and_undoes", "crates/automation/tests/automation.rs::orphan_form_fields_through_tools"]
 notes = "in-place editor; Enter or clicking away commits, Escape cancels; no format/keystroke JavaScript yet (M6.4)"
 
 [[feature]]
