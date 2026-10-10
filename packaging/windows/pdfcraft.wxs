@@ -29,9 +29,10 @@
          Add/Remove Programs show a blank icon (#57). -->
     <Icon Id="PdfcraftIcon.ico" SourceFile="$(var.IconPath)" />
     <Property Id="ARPPRODUCTICON" Value="PdfcraftIcon.ico" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/b-lincko/linkco-pdf" />
+    <Property Id="ARPURLINFOABOUT" Value="https://www.linkco.com.qa" />
     <Property Id="ARPURLUPDATEINFO" Value="https://github.com/b-lincko/linkco-pdf/releases" />
-    <Property Id="ARPHELPLINK" Value="https://github.com/b-lincko/linkco-pdf/issues" />
+    <Property Id="ARPHELPLINK" Value="https://www.linkco.com.qa/contact-us/" />
+    <Property Id="ARPCONTACT" Value="info@linkco.com.qa (+974 4437 2511)" />
     <!-- Desktop shortcut (#143): on by default, a checkbox in the full-UI welcome dialog, and
          INSTALLDESKTOPSHORTCUT=0 on the msiexec command line for unattended installs. Secure, so the
          choice made in the (unelevated) UI reaches the elevated install. -->

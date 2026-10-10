@@ -1,59 +1,60 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <defs>
     <linearGradient id="bg" x1="100" y1="100" x2="924" y2="924" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#0B192C"/>
-      <stop offset="55%" stop-color="#132A4A"/>
-      <stop offset="100%" stop-color="#1E3E62"/>
+      <stop offset="0%" stop-color="#01131C"/>
+      <stop offset="55%" stop-color="#082032"/>
+      <stop offset="100%" stop-color="#0F2D4A"/>
     </linearGradient>
-    <linearGradient id="page" x1="270" y1="190" x2="730" y2="830" gradientUnits="userSpaceOnUse">
+    <linearGradient id="page" x1="258" y1="184" x2="758" y2="836" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#FFFFFF"/>
-      <stop offset="100%" stop-color="#F1F5F9"/>
+      <stop offset="100%" stop-color="#F4F6F9"/>
     </linearGradient>
-    <linearGradient id="badge" x1="220" y1="560" x2="640" y2="730" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#E11D48"/>
-      <stop offset="100%" stop-color="#BE123C"/>
-    </linearGradient>
-    <linearGradient id="accent" x1="340" y1="280" x2="620" y2="520" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#0284C7"/>
-      <stop offset="100%" stop-color="#0369A1"/>
+    <linearGradient id="linkcoRed" x1="210" y1="240" x2="680" y2="740" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F22424"/>
+      <stop offset="100%" stop-color="#D11616"/>
     </linearGradient>
   </defs>
 
-  <!-- Rounded tile on 1024x1024 grid (100..924 = 824x824) -->
+  <!-- Linkco Deep Navy (#01131C) rounded icon tile -->
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
-  <rect x="104" y="104" width="816" height="816" rx="181" fill="none" stroke="#38BDF8" stroke-opacity="0.22" stroke-width="8"/>
+  <rect x="104" y="104" width="816" height="816" rx="181" fill="none" stroke="#F22424" stroke-opacity="0.38" stroke-width="8"/>
 
-  <!-- Subtle document shadow -->
-  <path d="M310 214 H614 L754 354 V806 A44 44 0 0 1 710 850 H310 A44 44 0 0 1 266 806 V258 A44 44 0 0 1 310 214 Z" fill="#050C16" fill-opacity="0.42"/>
+  <!-- Subtle document drop shadow -->
+  <path d="M312 204 H622 L766 348 V810 A44 44 0 0 1 722 854 H312 A44 44 0 0 1 268 810 V248 A44 44 0 0 1 312 204 Z" fill="#00080D" fill-opacity="0.48"/>
 
   <!-- Main PDF document sheet -->
-  <path d="M302 196 H606 L746 336 V788 A44 44 0 0 1 702 832 H302 A44 44 0 0 1 258 788 V240 A44 44 0 0 1 302 196 Z" fill="url(#page)"/>
+  <path d="M302 188 H612 L756 332 V794 A44 44 0 0 1 712 838 H302 A44 44 0 0 1 258 794 V232 A44 44 0 0 1 302 188 Z" fill="url(#page)"/>
 
-  <!-- Folded corner -->
-  <path d="M606 196 V300 A36 36 0 0 0 642 336 H746 Z" fill="#CBD5E1"/>
+  <!-- Folded top-right corner -->
+  <path d="M612 188 V294 A38 38 0 0 0 650 332 H756 Z" fill="#CBD5E1"/>
 
-  <!-- Linkco interlocking 'L' + chain-link emblem on upper page -->
-  <path d="M354 282 H422 V442 H542 V506 H354 A16 16 0 0 1 338 490 V298 A16 16 0 0 1 354 282 Z" fill="url(#accent)"/>
-  <rect x="456" y="330" width="128" height="40" rx="20" fill="#0EA5E9" fill-opacity="0.25"/>
-  <circle cx="556" cy="350" r="28" fill="#0284C7"/>
-  <circle cx="556" cy="350" r="11" fill="#FFFFFF"/>
+  <!-- Official Linkco (linkco.com.qa / Al Rawabet) 4-Node Connected Network Emblem in #F22424 -->
+  <g stroke="#F22424" stroke-width="22" stroke-linecap="round">
+    <!-- Link from center hub (486, 426) to top-left node (424, 276) -->
+    <line x1="486" y1="426" x2="424" y2="276"/>
+    <!-- Link from center hub (486, 426) to right node (648, 426) -->
+    <line x1="486" y1="426" x2="648" y2="426"/>
+    <!-- Link from center hub (486, 426) to bottom-left node (362, 494) -->
+    <line x1="486" y1="426" x2="362" y2="494"/>
+  </g>
+  <!-- 4 Linkco Emblem Nodes -->
+  <circle cx="486" cy="426" r="64" fill="url(#linkcoRed)"/>
+  <circle cx="424" cy="276" r="46" fill="url(#linkcoRed)"/>
+  <circle cx="648" cy="426" r="38" fill="url(#linkcoRed)"/>
+  <circle cx="362" cy="494" r="28" fill="url(#linkcoRed)"/>
 
-  <!-- Red PDF ribbon banner -->
-  <rect x="218" y="564" width="444" height="148" rx="30" fill="url(#badge)"/>
+  <!-- Linkco Red (#F22424) PDF Ribbon Banner -->
+  <rect x="214" y="576" width="496" height="152" rx="30" fill="url(#linkcoRed)"/>
 
-  <!-- Vector 'PDF' monogram in white inside the red ribbon (no font dependency) -->
+  <!-- Crisp vector 'PDF' monogram in white inside the Linkco Red banner -->
   <!-- P -->
-  <path fill-rule="evenodd" d="M268 594 H322 A34 34 0 0 1 356 628 A34 34 0 0 1 322 662 H294 V686 H268 Z M294 616 V640 H320 A12 12 0 0 0 332 628 A12 12 0 0 0 320 616 Z" fill="#FFFFFF"/>
+  <path fill-rule="evenodd" d="M276 608 H334 A36 36 0 0 1 370 644 A36 36 0 0 1 334 680 H304 V706 H276 Z M304 631 V657 H332 A13 13 0 0 0 345 644 A13 13 0 0 0 332 631 Z" fill="#FFFFFF"/>
   <!-- D -->
-  <path fill-rule="evenodd" d="M380 594 H426 A46 46 0 0 1 472 640 A46 46 0 0 1 426 686 H380 Z M406 616 V664 H424 A24 24 0 0 0 448 640 A24 24 0 0 0 424 616 Z" fill="#FFFFFF"/>
+  <path fill-rule="evenodd" d="M396 608 H446 A49 49 0 0 1 495 657 A49 49 0 0 1 446 706 H396 Z M424 631 V683 H444 A26 26 0 0 0 470 657 A26 26 0 0 0 444 631 Z" fill="#FFFFFF"/>
   <!-- F -->
-  <path d="M498 594 H568 V616 H524 V632 H560 V654 H524 V686 H498 Z" fill="#FFFFFF"/>
+  <path d="M522 608 H598 V631 H550 V649 H590 V672 H550 V706 H522 Z" fill="#FFFFFF"/>
 
-  <!-- Precision edit nib / cursor accent on right of ribbon -->
-  <path d="M694 568 L774 488 A20 20 0 0 1 802 488 L832 518 A20 20 0 0 1 832 546 L752 626 L682 638 Z" fill="#F59E0B"/>
-  <path d="M682 638 L700 584 L736 620 Z" fill="#1E293B"/>
-
-  <!-- Document footer lines -->
-  <rect x="338" y="748" width="260" height="22" rx="11" fill="#94A3B8"/>
-  <rect x="618" y="748" width="68" height="22" rx="11" fill="#E11D48" fill-opacity="0.75"/>
+  <!-- Linkco Navy footer bar on page -->
+  <rect x="334" y="762" width="276" height="22" rx="11" fill="#01131C" fill-opacity="0.82"/>
+  <rect x="630" y="762" width="72" height="22" rx="11" fill="#F22424"/>
 </svg>

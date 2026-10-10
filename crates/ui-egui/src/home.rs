@@ -12,19 +12,53 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 36, right: 36, top: 28, bottom: 28 }).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                widgets::app_mark(ui, 42.0);
-                ui.add_space(6.0);
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new(tl!("Linkco PDF Editor")).font(theme::semibold(24.0)));
-                    ui.label(
-                        egui::RichText::new(tl!("Professional PDF tools for everyday document work."))
-                            .color(t.text_muted)
-                            .font(theme::regular(14.0)),
-                    );
+            // Linkco (linkco.com.qa) branded header banner
+            egui::Frame::NONE
+                .fill(if t.dark() { egui::Color32::from_rgb(0x0B, 0x19, 0x26) } else { egui::Color32::from_rgb(0x01, 0x13, 0x1C) })
+                .stroke(Stroke::new(1.0, egui::Color32::from_rgb(0xF2, 0x24, 0x24)))
+                .corner_radius(CornerRadius::same(12))
+                .inner_margin(egui::Margin { left: 20, right: 20, top: 16, bottom: 16 })
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        widgets::app_mark(ui, 48.0);
+                        ui.add_space(10.0);
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(tl!("Linkco PDF Editor"))
+                                        .color(egui::Color32::WHITE)
+                                        .font(theme::semibold(23.0)),
+                                );
+                                egui::Frame::NONE
+                                    .fill(egui::Color32::from_rgb(0xF2, 0x24, 0x24))
+                                    .corner_radius(CornerRadius::same(4))
+                                    .inner_margin(egui::Margin::symmetric(8, 2))
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            egui::RichText::new("LINKCO")
+                                                .color(egui::Color32::WHITE)
+                                                .font(theme::semibold(10.5)),
+                                        );
+                                    });
+                            });
+                            ui.label(
+                                egui::RichText::new(tl!("Professional PDF tools for everyday document work."))
+                                    .color(egui::Color32::from_rgb(0xCB, 0xD5, 0xE1))
+                                    .font(theme::regular(13.5)),
+                            );
+                            ui.add_space(2.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "Al Rawabet Commercial Services & Contracting Co. W.L.L. (Linkco)  ·  Doha, Qatar  ·  www.linkco.com.qa",
+                                )
+                                .color(egui::Color32::from_rgb(0x94, 0xA3, 0xB8))
+                                .font(theme::regular(11.5)),
+                            );
+                        });
+                    });
                 });
-            });
-            ui.add_space(22.0);
+            ui.add_space(20.0);
 
             egui::Frame::NONE
                 .fill(t.card)
@@ -147,6 +181,14 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     "Linkco PDF Editor works offline. No telemetry, no account, and no cloud processing unless you add a provider."
                 ))
                 .color(t.text_muted),
+            );
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(
+                    "Al Rawabet Commercial Services and Contracting Company W.L.L. (Linkco)  ·  C.R. No. 32942  ·  ISO 9001, 14001 & 45001 Certified  ·  Building 159, Street 220, Zone 24, P.O. Box 32282, Doha – Qatar  ·  +974 4437 2511  ·  info@linkco.com.qa",
+                )
+                .color(t.text_faint)
+                .font(theme::regular(11.5)),
             );
         });
     });

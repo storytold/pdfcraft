@@ -88,6 +88,9 @@ Section "${APP_NAME} (required)" SecCore
   WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\pdfcraft.exe,0"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKLM "${UNINSTALL_KEY}" "URLInfoAbout" "https://www.linkco.com.qa"
+  WriteRegStr HKLM "${UNINSTALL_KEY}" "HelpLink" "https://www.linkco.com.qa/contact-us/"
+  WriteRegStr HKLM "${UNINSTALL_KEY}" "Contact" "info@linkco.com.qa (+974 4437 2511)"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
   WriteRegStr HKLM "${UNINSTALL_KEY}" "QuietUninstallString" '"$INSTDIR\Uninstall.exe" /S'
   WriteRegDWORD HKLM "${UNINSTALL_KEY}" "NoModify" 1

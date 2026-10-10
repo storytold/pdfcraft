@@ -1065,17 +1065,29 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     2 => crate::credits::models_ui(ui),
                     _ => {
                         ui.horizontal(|ui| {
-                            widgets::app_mark(ui, 40.0);
+                            widgets::app_mark(ui, 44.0);
+                            ui.add_space(6.0);
                             ui.vertical(|ui| {
                                 ui.label(egui::RichText::new(tl!("Linkco PDF Editor")).font(theme::semibold(20.0)));
+                                ui.label(
+                                    egui::RichText::new("Al Rawabet Commercial Services and Contracting Company W.L.L. (Linkco)")
+                                        .color(t.text_muted)
+                                        .font(theme::medium(13.0)),
+                                );
                             });
                         });
                         ui.add_space(8.0);
                         ui.label(tl!("Professional PDF document tools by Linkco."));
+                        ui.add_space(4.0);
+                        ui.label(crate::i18n::fmt(tl!("Version {v}"), &[("v", env!("CARGO_PKG_VERSION"))]));
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(6.0);
+                        ui.label("Established 2006  ·  State of Qatar C.R. No.: 32942  ·  ISO 9001, ISO 14001 & ISO 45001 Certified");
+                        ui.label("Office: Building 159, Street 220, Zone 24, P.O. Box 32282, Doha – Qatar");
+                        ui.label("Phone: +974 4437 2511  ·  Fax: +974 4437 1009  ·  Email: info@linkco.com.qa  ·  Web: www.linkco.com.qa");
                         ui.add_space(6.0);
                         ui.label("© Al Rawabet Commercial Services & Contracting Company W.L.L.");
-                        ui.add_space(6.0);
-                        ui.label(crate::i18n::fmt(tl!("Version {v}"), &[("v", env!("CARGO_PKG_VERSION"))]));
                     }
                 }
             }

@@ -285,6 +285,9 @@ namespace LinkcoSetup
                     k.SetValue("DisplayVersion", AppVersion);
                     k.SetValue("DisplayIcon", mainExe + ",0");
                     k.SetValue("InstallLocation", installDir);
+                    k.SetValue("URLInfoAbout", "https://www.linkco.com.qa");
+                    k.SetValue("HelpLink", "https://www.linkco.com.qa/contact-us/");
+                    k.SetValue("Contact", "info@linkco.com.qa (+974 4437 2511)");
                     k.SetValue("UninstallString", "\"" + uninstallerPath + "\" /uninstall");
                     k.SetValue("QuietUninstallString", "\"" + uninstallerPath + "\" /uninstall /S");
                     k.SetValue("NoModify", 1, RegistryValueKind.DWord);
@@ -420,23 +423,42 @@ namespace LinkcoSetup
             StartPosition = FormStartPosition.CenterScreen;
             Icon = Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location);
 
+            Panel headerBanner = new Panel
+            {
+                BackColor = Color.FromArgb(1, 19, 28),
+                Location = new Point(0, 0),
+                Size = new Size(520, 82)
+            };
+            Panel accentStrip = new Panel
+            {
+                BackColor = Color.FromArgb(242, 36, 36),
+                Location = new Point(0, 79),
+                Size = new Size(520, 3)
+            };
+            headerBanner.Controls.Add(accentStrip);
+
             Label title = new Label
             {
-                Text = Program.AppName,
-                Font = new Font("Segoe UI", 15f, FontStyle.Bold),
+                Text = Program.AppName + "  (LINKCO)",
+                ForeColor = Color.White,
+                BackColor = Color.Transparent,
+                Font = new Font("Segoe UI", 14.5f, FontStyle.Bold),
                 AutoSize = true,
-                Location = new Point(22, 18)
+                Location = new Point(22, 14)
             };
-            Controls.Add(title);
+            headerBanner.Controls.Add(title);
 
             Label sub = new Label
             {
-                Text = "Publisher: " + Program.CompanyName + "\nVersion: " + Program.AppVersion,
-                Font = new Font("Segoe UI", 9f, FontStyle.Regular),
+                Text = Program.CompanyName + "\nDoha, State of Qatar  ·  C.R. No. 32942  ·  www.linkco.com.qa  ·  v" + Program.AppVersion,
+                ForeColor = Color.FromArgb(203, 213, 225),
+                BackColor = Color.Transparent,
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
                 AutoSize = true,
-                Location = new Point(24, 50)
+                Location = new Point(24, 42)
             };
-            Controls.Add(sub);
+            headerBanner.Controls.Add(sub);
+            Controls.Add(headerBanner);
 
             Label dirLabel = new Label
             {

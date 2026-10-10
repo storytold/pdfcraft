@@ -5,14 +5,15 @@
 <h1 align="center">Linkco PDF Editor</h1>
 
 <p align="center">
-  <strong>Professional PDF tools for Linkco</strong>
+  <strong>Professional PDF tools for Linkco (Al Rawabet Commercial Services &amp; Contracting Company W.L.L.)</strong><br />
+  <sub>Doha, State of Qatar · C.R. No.: 32942 · ISO 9001, 14001 &amp; 45001 Certified · <code>www.linkco.com.qa</code></sub>
 </p>
 
 ---
 
 ## Overview
 
-**Linkco PDF Editor** is a native desktop PDF reader, editor, and document processing suite developed for **Linkco** (**Al Rawabet Commercial Services & Contracting Company W.L.L.**). Written entirely in safe Rust with zero `unsafe` blocks across the workspace, it provides a fast, offline-first environment for viewing, editing, organizing, converting, signing, redacting, and validating PDF documents.
+**Linkco PDF Editor** is a native desktop PDF reader, editor, and document processing suite developed for **Linkco** (**Al Rawabet Commercial Services and Contracting Company W.L.L.** — `www.linkco.com.qa`, Doha, State of Qatar). Written entirely in safe Rust with zero `unsafe` blocks across the workspace, it provides a fast, offline-first environment for viewing, editing, organizing, converting, signing, redacting, and validating PDF documents across engineering, contracting, facility maintenance, and commercial workflows.
 
 All document rendering and editing operations execute locally on your workstation without requiring an account, cloud upload, or telemetry connection.
 
@@ -281,4 +282,5 @@ Dual-licensed under either of:
 
 at your option. Third-party font and icon attributions are cataloged in [`ATTRIBUTION.md`](ATTRIBUTION.md).
 
-Copyright © Al Rawabet Commercial Services & Contracting Company W.L.L.
+Copyright © Al Rawabet Commercial Services & Contracting Company W.L.L. (Linkco)  
+Building 159, Street 220, Zone 24, P.O. Box 32282, Doha – Qatar · Phone: +974 4437 2511 · Email: `info@linkco.com.qa` · Web: `www.linkco.com.qa`
