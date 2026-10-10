@@ -28,6 +28,22 @@ mcp::McpServer::new(a).serve(stdin, stdout)?             // newline-delimited JS
 - `doc_close` refuses to drop unsaved changes unless `discard_changes: true`. `doc_save` writes atomically, incrementally in place, and in full for a new path.
 - With a root set, every read and write path must resolve inside it (symlinks and `..` included). Relative paths resolve inside the root, and `..` is resolved by name before the check. Every path outside the root gets the same refusal (`<path> is outside the allowed directory <root>`), whether or not it exists, so a confined agent can't probe the rest of the disk; on Windows another network share or device path (`\\host\share`, `\\?\UNC\…`, `\\.\…`) is refused without being contacted. "Not found" and other filesystem errors are reported only for paths inside the root. Tools that write several files into a folder name them after the document or input file, with separators, colons and control characters replaced by `_`, so a name can't lead them out of the folder. The root itself must be a folder.
 
+## Shared field properties
+
+`form_set_props` accepts either `field` (one name) or `fields` (1–1000 unique names):
+
+```json
+{"doc": 1, "fields": ["first_name", "last_name"], "required": true,
+ "appearance": {"width": 3, "border": "#1473E6"}}
+```
+
+The batch is atomic and creates one undo step. A missing or locked field, invalid option,
+unknown argument or malformed appearance refuses the whole edit. Set `locked: false` to
+unlock and change fields together. Only supplied properties change: each field/widget keeps
+its other colours, fonts, values and unknown PDF dictionary keys. `"none"` removes a border
+or fill colour. Names, rectangles and rotations require the single-field form. Results keep
+`field` for single edits and return `fields` for batches. CLI and MCP use the same tool.
+
 ## MCP server
 
 **Opt-in only.** Nothing starts it automatically, and it opens no port. It runs while `pdfcraft-cli mcp [--root DIR]` runs, normally launched by an agent from its MCP configuration. It stops when stdin closes. The CLI's `mcp` Cargo feature (on by default) compiles it out entirely when disabled.
@@ -42,19 +58,16 @@ The release packages ship `pdfcraft-cli` alongside the desktop app, so no build 
 
 | Install | CLI |
 |---|---|
-| Windows (MSI) | `C:\Program Files\PdfCraft\pdfcraft-cli.exe`, not added to `PATH` |
+| Windows (MSI) | `C:\Program Files\PdfCraft\pdfcraft-cli.exe` by default (wherever you installed it otherwise), not on `PATH` |
 | Linux (deb, rpm) | `/usr/bin/pdfcraft-cli` |
-| macOS | the separate `pdfcraft-cli-<version>-macos-universal.zip` release asset (the `.app` holds only the desktop app) |
+| macOS | the separate `pdfcraft-cli-<version>-macos-<arch>.zip` release asset (the `.app` holds only the desktop app) |
 
 ```sh
-# Windows
+# Windows, default install folder
 claude mcp add pdfcraft -- "C:\Program Files\PdfCraft\pdfcraft-cli.exe" mcp --root <dir>
 # Linux, or macOS with the CLI unzipped onto PATH
 claude mcp add pdfcraft -- pdfcraft-cli mcp --root <dir>
 ```
-
-An unofficial community plugin, [artcraft-claude-plugin](https://github.com/sawizzle/artcraft-claude-plugin),
-registers the installed ArtCraft apps in Claude Code in one step and adds usage notes for agents.
 
 ## Adding a tool
 
