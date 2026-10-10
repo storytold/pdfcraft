@@ -2120,3 +2120,15 @@
 	Text used as a clipping path cannot be moved with this selection.	无法随此选区移动用作剪切路径的文本。
 	These objects could not be moved. Select them again and try a smaller move.	无法移动这些对象。请重新选择并尝试较小的移动距离。
 	This page contains objects that cannot be selected together.	此页面包含无法一起选择的对象。
+	Fill colour	填充颜色
+	No fill	无填充
+	Fill colour: none	填充颜色：无
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	空格

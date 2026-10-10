@@ -160,3 +160,11 @@
 	Text used as a clipping path cannot be moved with this selection.	Text použitý jako ořezová cesta nelze přesunout s tímto výběrem.
 	These objects could not be moved. Select them again and try a smaller move.	Tyto objekty se nepodařilo přesunout. Vyberte je znovu a zkuste menší posun.
 	This page contains objects that cannot be selected together.	Tato stránka obsahuje objekty, které nelze vybrat společně.
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	Mezerník

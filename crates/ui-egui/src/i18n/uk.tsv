@@ -2179,3 +2179,15 @@ certificate	Subject	Власник сертифіката
 	Text used as a clipping path cannot be moved with this selection.	Текст, що використовується як контур відсікання, не можна перемістити разом із цим виділенням.
 	These objects could not be moved. Select them again and try a smaller move.	Не вдалося перемістити ці об’єкти. Виберіть їх знову та спробуйте менше зміщення.
 	This page contains objects that cannot be selected together.	На цій сторінці є об’єкти, які не можна виділити разом.
+	Fill colour	Колір заливки
+	No fill	Без заливки
+	Fill colour: none	Колір заливки: немає
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	Пробіл

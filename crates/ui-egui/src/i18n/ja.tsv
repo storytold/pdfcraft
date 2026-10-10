@@ -2156,3 +2156,15 @@ signature pad	Type	入力
 	Text used as a clipping path cannot be moved with this selection.	この選択範囲ではクリッピングパスとして使われているテキストを移動できません。
 	These objects could not be moved. Select them again and try a smaller move.	これらのオブジェクトを移動できませんでした。選択し直し、移動量を小さくして試してください。
 	This page contains objects that cannot be selected together.	このページには一緒に選択できないオブジェクトがあります。
+	Fill colour	塗りつぶし色
+	No fill	塗りつぶしなし
+	Fill colour: none	塗りつぶし色: なし
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	スペース

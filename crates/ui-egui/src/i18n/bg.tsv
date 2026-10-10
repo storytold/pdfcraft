@@ -2118,3 +2118,15 @@ action wizard	Start	Старт
 	Text used as a clipping path cannot be moved with this selection.	Текстът, използван като изрязващ контур, не може да се премести с този избор.
 	These objects could not be moved. Select them again and try a smaller move.	Тези обекти не можаха да бъдат преместени. Изберете ги отново и опитайте по-малко отместване.
 	This page contains objects that cannot be selected together.	Тази страница съдържа обекти, които не могат да се изберат заедно.
+	Fill colour	Цвят на запълване
+	No fill	Без запълване
+	Fill colour: none	Цвят на запълване: няма
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	Интервал

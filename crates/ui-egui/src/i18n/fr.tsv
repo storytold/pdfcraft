@@ -2156,3 +2156,15 @@ signature pad	Type	Saisir
 	Text used as a clipping path cannot be moved with this selection.	Le texte utilisé comme chemin de découpe ne peut pas être déplacé avec cette sélection.
 	These objects could not be moved. Select them again and try a smaller move.	Ces objets n’ont pas pu être déplacés. Sélectionnez-les à nouveau et essayez un déplacement plus petit.
 	This page contains objects that cannot be selected together.	Cette page contient des objets qui ne peuvent pas être sélectionnés ensemble.
+	Fill colour	Couleur de fond
+	No fill	Sans fond
+	Fill colour: none	Couleur de fond : aucune
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Maj
+key	Delete	Suppr
+key	Esc	Échap
+key	Home	Début
+key	End	Fin
+key	Space	Espace

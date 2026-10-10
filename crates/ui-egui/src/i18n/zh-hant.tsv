@@ -2042,3 +2042,15 @@
 	Text used as a clipping path cannot be moved with this selection.	無法隨此選取範圍移動用作裁切路徑的文字。
 	These objects could not be moved. Select them again and try a smaller move.	無法移動這些物件。請重新選取並嘗試較小的移動距離。
 	This page contains objects that cannot be selected together.	此頁面包含無法一起選取的物件。
+	Fill colour	填充顏色
+	No fill	無填充
+	Fill colour: none	填充顏色：無
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	空格

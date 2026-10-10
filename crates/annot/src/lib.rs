@@ -1728,6 +1728,41 @@ pub fn set_style(
     set_appearance(doc, r)
 }
 
+/// Whether a comment of this subtype has an interior that can be filled (`/IC`: rectangles,
+/// ovals, polygons and clouds, §12.5.6.8–9).
+pub fn fillable(subtype: &str) -> bool {
+    matches!(subtype, "Square" | "Circle" | "Polygon")
+}
+
+/// Fill a rectangle, oval or polygon comment with `fill`, or remove its fill (`None`), and
+/// redraw its appearance (Acrobat: Properties ▸ Fill Color).
+pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>, meta: &Meta) -> Result<(), AnnotError> {
+    let (_, r) = annot_ref(doc, page, index)?;
+    unlocked(doc, r)?;
+    let d = annot_dict(doc, r);
+    let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    if !fillable(&subtype) {
+        return Err(AnnotError::Invalid("only rectangles, ovals and polygons can be filled".into()));
+    }
+    // Check before changing anything: a stale appearance would contradict the new fill.
+    if appearance::build(&d).is_none() {
+        return Err(AnnotError::Unsupported(subtype));
+    }
+    if fill.is_some_and(|c| !finite(&c)) {
+        return Err(AnnotError::Invalid("invalid fill colour".into()));
+    }
+    doc.update_dict(r, |d| {
+        match fill {
+            Some(c) => d.set(b"IC".to_vec(), rgb(c)),
+            None => {
+                d.remove(b"IC");
+            }
+        }
+        touch(d, meta);
+    })?;
+    set_appearance(doc, r)
+}
+
 /// Grow a line or polyline's rectangle so a non-`None` ending is not clipped. Idempotent.
 fn ensure_ending_room(d: &mut Dict) {
     let subtype = d.name(b"Subtype").unwrap_or_default();
@@ -1919,6 +1954,10 @@ pub struct Props {
     pub locked: bool,
     /// `/LE`: two names for a line or polyline (`None` when unset), one for a callout.
     pub endings: Option<Vec<LineEnding>>,
+    /// Rectangles, ovals and polygons: their interior can be filled (see [`fillable`]).
+    pub fillable: bool,
+    /// `/IC`, the interior colour (`None`: no fill).
+    pub fill: Option<Rgb>,
 }
 
 /// The current properties of the comment at `(page, index)`.
@@ -1942,9 +1981,23 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         modified: text_value(doc, d, b"M"),
         restylable: appearance::build(d).is_some(),
         locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
+        fillable: fillable(&subtype),
+        fill: fill_of(d),
         subtype,
         endings: line_endings_of(d),
     })
+}
+
+/// `/IC` as an RGB colour. An empty array means no fill; grey and CMYK fills are converted.
+fn fill_of(d: &Dict) -> Option<Rgb> {
+    let c: Vec<f64> = d.get(b"IC")?.as_array()?.iter().filter_map(|x| x.as_f64()).collect();
+    let rgb = match c.as_slice() {
+        [g] => [*g; 3],
+        [r, g, b] => [*r, *g, *b],
+        [c, m, y, k] => [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)],
+        _ => return None,
+    };
+    finite(&rgb).then(|| rgb.map(|x| x.clamp(0.0, 1.0)))
 }
 
 /// `/LE` for a line, polyline or callout. Unknown names yield `None` so the control stays hidden.

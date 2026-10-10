@@ -2156,3 +2156,15 @@ action wizard	Start	Starten
 	Text used as a clipping path cannot be moved with this selection.	Text, der als Beschneidungspfad dient, kann mit dieser Auswahl nicht verschoben werden.
 	These objects could not be moved. Select them again and try a smaller move.	Diese Objekte konnten nicht verschoben werden. Wählen Sie sie erneut aus und versuchen Sie eine kleinere Verschiebung.
 	This page contains objects that cannot be selected together.	Diese Seite enthält Objekte, die nicht gemeinsam ausgewählt werden können.
+	Fill colour	Füllfarbe
+	No fill	Keine Füllung
+	Fill colour: none	Füllfarbe: keine
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Strg
+key	Shift	Umschalt
+key	Delete	Entf
+key	Esc	Esc
+key	Home	Pos1
+key	End	Ende
+key	Space	Leertaste

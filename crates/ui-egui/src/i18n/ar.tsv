@@ -2178,3 +2178,15 @@ certificate	Subject	صاحب الشهادة
 	Text used as a clipping path cannot be moved with this selection.	لا يمكن نقل النص المستخدم كمسار قص مع هذا التحديد.
 	These objects could not be moved. Select them again and try a smaller move.	تعذر نقل هذه العناصر. حددها مجددًا وحاول نقلها بمسافة أقل.
 	This page contains objects that cannot be selected together.	تحتوي هذه الصفحة على عناصر لا يمكن تحديدها معًا.
+	Fill colour	لون التعبئة
+	No fill	بلا تعبئة
+	Fill colour: none	لون التعبئة: بلا
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	مسافة

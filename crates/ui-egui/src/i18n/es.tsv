@@ -2072,3 +2072,15 @@
 	Text used as a clipping path cannot be moved with this selection.	El texto usado como trazado de recorte no se puede mover con esta selección.
 	These objects could not be moved. Select them again and try a smaller move.	No se pudieron mover estos objetos. Vuelve a seleccionarlos e intenta un desplazamiento menor.
 	This page contains objects that cannot be selected together.	Esta página contiene objetos que no se pueden seleccionar juntos.
+	Fill colour	Color de relleno
+	No fill	Sin relleno
+	Fill colour: none	Color de relleno: ninguno
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Mayús
+key	Delete	Supr
+key	Esc	Esc
+key	Home	Inicio
+key	End	Fin
+key	Space	Espacio
