@@ -2992,6 +2992,36 @@ fn actions_through_tools() {
 }
 
 #[test]
+fn action_run_keeps_outputs_with_duplicate_input_basenames() {
+    let dir = workdir("action-duplicate-basenames");
+    std::fs::create_dir_all(dir.join("left")).unwrap();
+    std::fs::create_dir_all(dir.join("right")).unwrap();
+    std::fs::write(dir.join("left/report.pdf"), fixture(1)).unwrap();
+    std::fs::write(dir.join("right/report.pdf"), fixture(2)).unwrap();
+    let mut a = auto(&dir);
+    let args = json!({
+        "steps": [{ "step": "set_title", "arg": "Processed" }],
+        "paths": ["left/report.pdf", "right/report.pdf"],
+        "folder": "results"
+    });
+    let result = ok(&mut a, "action_run", args.clone());
+    let files = result["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    let first_path = files[0]["output"].as_str().unwrap();
+    let second_path = files[1]["output"].as_str().unwrap();
+    assert!(first_path.ends_with("report.pdf"), "{first_path}");
+    assert!(second_path.ends_with("report (2).pdf"), "{second_path}");
+    let first_bytes = std::fs::read(first_path).unwrap();
+    assert_eq!(ok(&mut a, "doc_open", json!({ "path": first_path }))["pages"], 1);
+    assert_eq!(ok(&mut a, "doc_open", json!({ "path": second_path }))["pages"], 2);
+
+    let repeated = ok(&mut a, "action_run", args);
+    assert!(repeated["files"][0]["output"].as_str().unwrap().ends_with("report (3).pdf"));
+    assert!(repeated["files"][1]["output"].as_str().unwrap().ends_with("report (4).pdf"));
+    assert_eq!(std::fs::read(first_path).unwrap(), first_bytes, "an earlier output must not be replaced");
+}
+
+#[test]
 fn pdfa_through_tools() {
     let dir = workdir("pdfa");
     let mut a = auto(&dir);
