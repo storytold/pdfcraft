@@ -1199,7 +1199,7 @@
 	Searchable Image (Exact)	検索可能な画像（元の画像を保持）
 	Adds invisible text over each word; the page image is not changed	各単語に非表示のテキストを重ねます。ページ画像は変更しません
 	Downsample to	ダウンサンプル:
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	テキスト認識がインストールされていません。モデルがありません（`cargo xtask models` を実行するか PRINTCRAFT_MODELS を設定してください）。
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	テキスト認識がインストールされていません。モデルファイルがありません。PdfCraft を再インストールするか、PDFCRAFT_MODELS にモデルファイルのあるフォルダーを設定してください。
 	Settings	設定
 	Optional	任意
 	Planned · {m}	予定 · {m}
@@ -1658,6 +1658,7 @@
 	Couldn't open {name}: {e}	{name} を開けませんでした: {e}
 	Couldn't read {name}: {e}	{name} を読み取れませんでした: {e}
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	ポータブルモードは無効です: {folder} に書き込めません ({error})。設定は代わりにユーザーフォルダーに保存されます。
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft はグラフィックプロセッサーを使わずに描画しているため、動作が遅くなることがあります。グラフィックドライバーを更新すると改善する場合があります。
 	Couldn't save: {e}	保存できませんでした: {e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Web 版の添付ファイルのダウンロードは M3.10 で対応予定です（{n} バイト準備済み）
 	`{command}` {when}	`{command}`: {when}
@@ -1775,7 +1776,7 @@
 	there are no pages to print	印刷するページはありません
 	the document has no tags	文書にタグはありません
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	テキスト認識モデルがインストールされていません（`cargo xtask models` を実行するか PRINTCRAFT_MODELS を設定してください）
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	テキスト認識モデルがインストールされていません（PdfCraft を再インストールするか、PDFCRAFT_MODELS にモデルのあるフォルダーを設定してください）
 	the image is empty	画像が空です
 	this file isn't XFDF, FDF, XML or text form data	このファイルは XFDF、FDF、XML、テキストのフォームデータではありません
 	nothing in the file matches this document	この文書に一致する項目がファイルにありません
@@ -1981,3 +1982,134 @@
 	Go to page…	ページへ移動…
 	Reopen the files that were open when PdfCraft last closed	前回 PdfCraft を閉じたときに開いていたファイルを再度開く
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	標準フォントでは「{c}」（{code}）を表示できません。現在、テキストとして追加できるのは西ヨーロッパの文字のみです。
+	Open arrow	開いた矢印
+	Closed arrow	閉じた矢印
+	Butt	平ら
+	Reverse open arrow	逆向きの開いた矢印
+	Reverse closed arrow	逆向きの閉じた矢印
+	Slash	斜線
+	Larger pages	ページを大きく表示
+	Smaller pages	ページを小さく表示
+	Reset page size	ページサイズをリセット
+	Date format	日付の形式
+	Fill & Sign dates	入力と署名の日付
+	Pattern	パターン
+	Today: {date}	今日: {date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy または yy 年 · m または mm 月 · mmm または mmmm 月名 · d または dd 日 · ddd または dddd 曜日。H、h、M、s、t は時刻の文字なので単独では使えません。文字をそのまま表示するには前に {escape} を付けます。
+	Same as interface ({language})	表示言語と同じ（{language}）
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} はまだ PDF に書き込めません。入力と署名のテキストは西ヨーロッパの文字のみに対応しています。dd.mm.yyyy などの数字の形式を選んでください。
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	プリンタードライバーの基本設定を開きます。設定はこのコンピューターからのすべての印刷に保存されます。ここで選んだ部数、両面、グレースケール、用紙は引き続き適用されます。
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	この印刷に使うプリンタードライバー独自の設定：給紙トレイ、用紙の種類、後処理など。
+	Couldn't open the printer's preferences: {e}	プリンターの基本設定を開けませんでした: {e}
+	Printer properties	プリンターのプロパティ
+	Reset to printer defaults	プリンターの初期設定に戻す
+	This printer offers no settings of its own.	このプリンターには独自の設定がありません。
+	% of all commits	全コミットに占める割合（%）
+	+Bin	+Bin
+	+LOC	+LOC
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}：PR {prs} 件、コミット {commits} 件、行数 +{added} / −{deleted}（Δ {delta}）、バイナリファイル +{bin_added} / −{bin_deleted}、{first} – {last}
+	A button	ボタン
+	A link	リンク
+	A script	スクリプト
+	About	概要
+	Add {what}	{what}を追加
+	Align fields	フィールドを整列
+	Another file dialog is still open. Finish with it first.	別のファイルダイアログがまだ開いています。先にそちらの操作を終えてください。
+	Basic constraints	基本制約
+	Binary assets added	追加したバイナリファイル数
+	Binary assets removed	削除したバイナリファイル数
+	Change document properties	文書のプロパティを変更
+	Change {what}	{what}を変更
+	Commits	コミット
+	Company	企業
+	Contributors	貢献者
+	Couldn't show the file picker. Please try again.	ファイル選択ダイアログを表示できませんでした。もう一度お試しください。
+	Create	作成
+	Create PDF from images	画像から PDF を作成
+	Cut and stack	裁断して重ねる
+	DPI sets the printed page size without resampling the image.	DPI で印刷時のページサイズが決まります。画像は再サンプリングされません。
+	Default page display	既定のページ表示
+	Default workspace mode	既定のワークスペースモード
+	Default zoom	既定のズーム
+	Display name	表示名
+	Distribute fields	フィールドを均等配置
+	Documents and view	文書と表示
+	Dynamic XFA form laid out from its template: {pages}, {fields}.	テンプレートをもとにレイアウトした動的 XFA フォームです（{pages}、{fields}）。
+	Files are combined in this order. Leave Pages empty to take every page.	ファイルはこの順序で結合されます。すべてのページを含めるには、「ページ」を空欄のままにしてください。
+	First	最初
+	First commit	最初のコミット
+	Grab bag	いろいろ
+	H / Space (hold)	H / Space（押したまま）
+	Home / End	Home / End
+	Last	最後
+	Last commit	最後のコミット
+	Line delta	行数の増減
+	Line ending	線端の形状
+	Lines +/−	行数 +/−
+	Lines added	追加した行数
+	Lines deleted	削除した行数
+	Mark differences	相違点をマーク
+	Mark for redaction	墨消し対象としてマーク
+	Mark pages for redaction	ページを墨消し対象としてマーク
+	Match field sizes	フィールドのサイズを揃える
+	Merged PRs	マージ済みの PR
+	Model	モデル
+	Models	モデル
+	Name (A–Z)	名前（A–Z）
+	No contributor data was built into this copy.	このビルドには貢献者のデータが組み込まれていません。
+	No model credits were built into this copy.	このビルドにはモデルのクレジット情報が組み込まれていません。
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	この文書を信頼できる場合にのみ続行してください。アドレスには、フォームに入力した内容など、文書内の情報が含まれていることがあります。
+	Open email app	メールアプリを開く
+	Open link	リンクを開く
+	Open this web page?	このウェブページを開きますか？
+	PRs	PRs
+	Place saved {what}	保存済みの{what}を配置
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	片面印刷してください。用紙の順序を保ったままマークに沿って裁断し、できた束を左から右、上から下の順に重ねてください。
+	Real name	本名
+	Remove saved {what}	保存済みの{what}を削除
+	Reverse the order	並び順を逆にする
+	Run form script	フォームのスクリプトを実行
+	SHA-1 digest	SHA-1 ダイジェスト
+	SHA-256 digest	SHA-256 ダイジェスト
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	スクリプトで動作するコンテンツは、キーボードや支援技術でも操作できる必要があります。文書のスクリプトを確認してください。
+	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	スクリプトは、ファイルやネットワークにアクセスできないサンドボックス内で実行されます。スクリプトがウェブページを開くには、事前にユーザーの許可が必要です。JavaScript がオフでも、Acrobat 標準の書式・検証・計算関数は引き続き動作します。
+	Selected image files: {count}	選択した画像ファイル数：{count}
+	Show	表示
+	Sign yourself	自分で署名
+	Sort	並べ替え
+	Squiggly	波線
+	Table	表
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	表の行は、表、またはそのヘッダー・本体・フッターの直下に置く必要があります。表のタグを修正してください。
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	テキスト認識がインストールされていません。必要なモデルがありません（`cargo xtask models` を実行するか、PDFCRAFT_MODELS を設定してください）。
+	That didn't work: an internal error stopped it ({m}).	内部エラーのため、操作を完了できませんでした（{m}）。
+	The Windows store's digital IDs couldn't be listed: {e}	Windows 証明書ストアのデジタル ID の一覧を取得できませんでした：{e}
+	The document changed while you were choosing a file, so nothing was changed.	ファイルを選択している間に文書が変更されたため、何も変更されていません。
+	The document was closed before it could be saved.	保存する前に文書が閉じられました。
+	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	フォルダーを選択している間に文書が変更されたため、ページは抽出しましたが、削除はしていません。
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	このウェブアドレスには、異なる文字体系の文字が混在しています。これはほかのサイトの名前を装う際によく使われる手口です。
+	This web address uses letters from another alphabet, which can look like familiar ones.	このウェブアドレスには別の文字体系の文字が使われており、見慣れた文字と似て見えることがあります。
+	Use 72 DPI (one point per pixel)	72 DPI を使用（1 ピクセルあたり 1 ポイント）
+	Use custom DPI	カスタム DPI を使用
+	Use each image's embedded DPI; use 72 DPI when it is absent.	各画像に埋め込まれた DPI を使用します。埋め込まれていない場合は 72 DPI を使用します。
+	Use image resolution	画像の解像度を使用
+	Use {what}	{what}を使用
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF にレイアウトやズームの指定がない場合に使用されます。連続スクロールでは、ページの境目にスナップすることはありません。
+	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	PDF を開くときに使用されます。起動モードや制御モードを明示的に指定した場合は、そのセッションではそちらが優先されます。
+	Username	ユーザー名
+	Write this email?	このメールを作成しますか？
+	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA フォームです。フィールドと XFA データは常に同期されるため、入力した内容がほかのビューアーでも表示されます。
+	{n} contributors · {c} commits	貢献者 {n} 人 · コミット {c} 件
+	{who} in this document tried to open an address PdfCraft won't open: {e}.	この文書内の{who}が、PdfCraft では開けないアドレスを開こうとしました：{e}。
+	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	この文書内の{who}が、PdfCraft では開けないアドレスを開こうとしました：{e}。文書から開けるのは、ウェブ（http、https）とメール（mailto）のリンクだけです。
+	{who} in this document wants to open this address in your browser:	この文書内の{who}が、次のアドレスをブラウザーで開こうとしています：
+	{who} in this document wants to open your email app with this address:	この文書内の{who}が、次のアドレスでメールアプリを開こうとしています：
+	ΔLOC	ΔLOC
+	−Bin	−Bin
+	−LOC	−LOC
+@plural	{n} field|{n} fields	{n} 個のフィールド
+@plural	{n} page|{n} pages	{n} ページ
+signature pad	Type	入力
+	Flatten Fill & Sign when saving	保存時に入力と署名を統合する
+	Text, marks and signatures become part of the page. Other comments stay editable.	テキスト、マーク、署名がページの一部になります。その他のコメントは引き続き編集できます。
+	Scroll tabs left	タブを左にスクロール
+	Scroll tabs right	タブを右にスクロール

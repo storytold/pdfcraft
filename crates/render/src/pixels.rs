@@ -24,6 +24,18 @@ impl Pixels {
     pub fn into_words(self) -> Vec<u32> {
         self.0
     }
+
+    /// Bytes the buffer holds allocated (its capacity), for memory budgets.
+    pub(crate) fn byte_capacity(&self) -> usize {
+        self.0.capacity().saturating_mul(4)
+    }
+}
+
+/// Pixels from words, one per pixel, its bytes in R, G, B, A memory order.
+impl From<Vec<u32>> for Pixels {
+    fn from(words: Vec<u32>) -> Self {
+        Self(words)
+    }
 }
 
 impl Deref for Pixels {

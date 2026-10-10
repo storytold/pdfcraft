@@ -15,4 +15,7 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 roxmltree = "0.20"
 base64 = "0.22"
+png = "0.18"
+sha2 = "0.11"
+image = { version = "0.25", default-features = false, features = ["gif"] }
 thiserror = { workspace = true }

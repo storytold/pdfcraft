@@ -1173,7 +1173,7 @@ comment menu	Edit	సవరించు
 	Searchable Image (Exact)	వెతకగలిగే చిత్రం (యథాతథం)
 	Adds invisible text over each word; the page image is not changed	ప్రతి పదంపై కనిపించని టెక్స్ట్‌ను జోడిస్తుంది; పేజీ చిత్రం మారదు
 	Downsample to	ఈ రిజల్యూషన్‌కు తగ్గించు
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	టెక్స్ట్ గుర్తింపు ఇన్‌స్టాల్ చేయబడలేదు: దానికి అవసరమైన మోడల్‌లు లేవు (`cargo xtask models`ను అమలు చేయండి, లేదా PRINTCRAFT_MODELSను సెట్ చేయండి).
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	టెక్స్ట్ గుర్తింపు ఇన్‌స్టాల్ కాలేదు: దాని మోడల్ ఫైల్‌లు లేవు. PdfCraftను మళ్లీ ఇన్‌స్టాల్ చేయండి, లేదా వాటిని కలిగి ఉన్న ఫోల్డర్‌కు PDFCRAFT_MODELSను సెట్ చేయండి.
 	Settings	సెట్టింగ్‌లు
 	Optional	ఐచ్ఛికం
 	Planned · {m}	ప్రణాళికలో ఉంది · {m}
@@ -1693,7 +1693,7 @@ action wizard	Start	ప్రారంభించు
 	there are no pages to print	ముద్రించడానికి పేజీలు ఏవీ లేవు
 	the document has no tags	పత్రంలో ట్యాగ్‌లు లేవు
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	టెక్స్ట్ గుర్తింపు మోడల్‌లు ఇన్‌స్టాల్ చేయబడలేదు (`cargo xtask models` అమలు చేయండి, లేదా PRINTCRAFT_MODELS సెట్ చేయండి)
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	టెక్స్ట్ గుర్తింపు మోడల్‌లు ఇన్‌స్టాల్ చేయబడలేదు (PdfCraftను మళ్లీ ఇన్‌స్టాల్ చేయండి, లేదా వాటిని కలిగి ఉన్న ఫోల్డర్‌కు PDFCRAFT_MODELSను సెట్ చేయండి)
 	the image is empty	చిత్రం ఖాళీగా ఉంది
 	this file isn't XFDF, FDF, XML or text form data	ఈ ఫైల్ XFDF, FDF, XML లేదా టెక్స్ట్ ఫారం డేటా కాదు
 	nothing in the file matches this document	ఫైల్‌లోని ఏదీ ఈ పత్రంతో సరిపోలడం లేదు
@@ -1888,7 +1888,6 @@ action wizard	Start	ప్రారంభించు
 	Open this web page?	ఈ వెబ్ పేజీని తెరవాలా?
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	స్క్రిప్ట్‌లు ఫైల్ లేదా నెట్‌వర్క్ యాక్సెస్ లేని శాండ్‌బాక్స్‌లో అమలవుతాయి. వెబ్ పేజీని తెరవమని అడిగే స్క్రిప్ట్‌కు ముందుగా మీ అనుమతి అవసరం. JavaScript ఆఫ్‌లో ఉన్నా, Acrobat ప్రామాణిక ఫార్మాట్, ధృవీకరణ, గణన ఫంక్షన్‌లు పని చేస్తూనే ఉంటాయి.
 	Sign yourself	స్వయంగా సంతకం చేయడం
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	టెక్స్ట్ గుర్తింపు ఇన్‌స్టాల్ కాలేదు: దాని మోడల్‌లు లేవు (`cargo xtask models` అమలు చేయండి, లేదా PDFCRAFT_MODELS సెట్ చేయండి).
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	PDFలను తెరిచేటప్పుడు ఉపయోగించబడుతుంది. ప్రారంభించేటప్పుడు లేదా కంట్రోల్ ద్వారా స్పష్టంగా ఇచ్చిన మోడ్‌కు ఆ సెషన్‌లో ప్రాధాన్యత ఉంటుంది.
 	Write this email?	ఈ ఇమెయిల్ రాయాలా?
 	{who} in this document wants to open this address in your browser:	ఈ పత్రంలోని {who} ఈ చిరునామాను మీ బ్రౌజర్‌లో తెరవాలనుకుంటోంది:
@@ -2024,3 +2023,24 @@ action wizard	Start	ప్రారంభించు
 	Pin folder to Home…	ఫోల్డర్‌ను హోమ్‌కు పిన్ చేయి…
 	No recent files	ఇటీవలి ఫైళ్లు లేవు
 	Go to page…	పేజీకి వెళ్లు…
+	Open arrow	తెరిచిన బాణం
+	Closed arrow	మూసిన బాణం
+	Butt	మొండి చివర
+	Reverse open arrow	తిరగబెట్టిన తెరిచిన బాణం
+	Reverse closed arrow	తిరగబెట్టిన మూసిన బాణం
+	Slash	వాలు గీత
+	Date format	తేదీ ఫార్మాట్
+	Fill & Sign dates	నింపడం & సంతకం తేదీలు
+	Pattern	నమూనా
+	Today: {date}	ఈరోజు: {date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy లేదా yy సంవత్సరం · m లేదా mm నెల · mmm లేదా mmmm నెల పేరు · d లేదా dd రోజు · ddd లేదా dddd వారం రోజు. H, h, M, s, t సమయ అక్షరాలు, వాటిని ఒంటరిగా ఉపయోగించలేరు: అక్షరాన్ని యథాతథంగా చూపడానికి దాని ముందు {escape} పెట్టండి.
+	Same as interface ({language})	ఇంటర్‌ఫేస్ లాగానే ({language})
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} ను ఇంకా PDF లో రాయలేము: నింపడం & సంతకం టెక్స్ట్ పశ్చిమ యూరోపియన్ అక్షరాలకు మాత్రమే పరిమితం. dd.mm.yyyy వంటి సంఖ్యా ఫార్మాట్‌ను ఎంచుకోండి.
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	ప్రింటర్ డ్రైవర్ ప్రాధాన్యతలను తెరుస్తుంది. అవి ఈ కంప్యూటర్ నుండి ప్రతి ముద్రణ కోసం సేవ్ అవుతాయి; ఇక్కడ ఎంచుకున్న కాపీలు, రెండు వైపులా, గ్రేస్కేల్ మరియు కాగితం ఇప్పటికీ వర్తిస్తాయి.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	ఈ ముద్రణ కోసం ప్రింటర్ డ్రైవర్ స్వంత సెట్టింగ్‌లు: కాగితపు ట్రే, కాగితం రకం, ఫినిషింగ్ మరియు మరిన్ని.
+	Couldn't open the printer's preferences: {e}	ప్రింటర్ ప్రాధాన్యతలను తెరవడం సాధ్యం కాలేదు: {e}
+	Printer properties	ప్రింటర్ లక్షణాలు
+	Reset to printer defaults	ప్రింటర్ డిఫాల్ట్‌లకు రీసెట్ చేయి
+	This printer offers no settings of its own.	ఈ ప్రింటర్‌కు దాని స్వంత సెట్టింగ్‌లు లేవు.
+	Scroll tabs left	ట్యాబ్‌లను ఎడమకు స్క్రోల్ చేయి
+	Scroll tabs right	ట్యాబ్‌లను కుడికి స్క్రోల్ చేయి

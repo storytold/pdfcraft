@@ -14,6 +14,7 @@
 mod a11y;
 mod comments;
 mod content;
+mod conventions;
 mod forms;
 mod links;
 #[cfg(feature = "mcp")]
@@ -215,6 +216,10 @@ impl Automation {
                 json!({ "redone": label, "document": summary(self.doc(&a)?) })
             }
             "command_list" => self.command_list(&a)?,
+            "command_run" => return self.command_run(&a),
+            "command_batch" => self.command_batch(&a)?,
+            "doc_inspect" => self.doc_inspect(&a)?,
+            "render_preview" => return self.render_preview(&a).map(|c| vec![c]),
             "page_number" => {
                 use pdfcraft_organize::LabelStyle as L;
                 let n = self.doc(&a)?.info.pages.len();
@@ -332,7 +337,7 @@ impl Automation {
                     .enumerate()
                     .map(|(i, im)| {
                         let (u, v) = (info.user_to_view(im.rect[0] as f32, im.rect[1] as f32), info.user_to_view(im.rect[2] as f32, im.rect[3] as f32));
-                        json!({ "image": i + 1, "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))], "pixels": [im.width, im.height], "name": im.name })
+                        json!({ "image": i + 1, "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))], "pixels": [im.width, im.height], "name": im.name, "kind": if im.is_form { "form" } else { "image" } })
                     })
                     .collect();
                 json!({ "page": page + 1, "count": list.len(), "images": list })
@@ -516,6 +521,7 @@ impl Automation {
             "redact_clear" => self.redact_clear(&a)?,
             "doc_hidden_info" => self.doc_hidden_info(&a)?,
             "printers" => self.printers()?,
+            "printer_options" => self.printer_options(&a)?,
             "link_list" => self.link_list(&a)?,
             "link_add" => self.link_add(&a)?,
             "link_edit" => self.link_edit(&a)?,
@@ -530,6 +536,7 @@ impl Automation {
             "doc_print" => self.doc_print(&a)?,
             "doc_remove_hidden" => self.doc_remove_hidden(&a)?,
             "fill_sign_add" => self.fill_sign_add(&a)?,
+            "fill_sign_date_format" => self.fill_sign_date_format(&a)?,
             "measure_distance" => self.measurement_add(&a, pdfcraft_engine::measure::Kind::Distance)?,
             "measure_perimeter" => self.measurement_add(&a, pdfcraft_engine::measure::Kind::Perimeter)?,
             "measure_area" => self.measurement_add(&a, pdfcraft_engine::measure::Kind::Area)?,
@@ -645,6 +652,10 @@ impl Automation {
         let same_file = doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
         // Saving to a new file is a full rewrite unless asked otherwise, like Save As.
         let full = a.opt_bool("full")?.unwrap_or(!same_file);
+        let flatten_fill_sign = a.opt_bool("flatten_fill_sign")?.unwrap_or(false);
+        if flatten_fill_sign {
+            self.apply(a, Edit::FlattenFillSign)?;
+        }
         let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) }.map_err(failed)?;
         write_atomic(&target, &bytes)?;
         let path = target.to_string_lossy().into_owned();
@@ -1433,6 +1444,8 @@ impl Automation {
             Some(_) => Some(self.doc(a)?.id),
             None => None,
         };
+        let filter = a.opt_str("filter")?.unwrap_or("").to_lowercase();
+        let enabled_only = a.opt_bool("enabled_only")?.unwrap_or(false);
         let list: Vec<Value> = commands::COMMANDS
             .iter()
             .map(|c| {
@@ -1443,7 +1456,16 @@ impl Automation {
                     "shortcut": c.shortcut.map(|s| s.label(cfg!(target_os = "macos"))),
                     "enabled": commands::is_enabled(c, &self.session, active),
                     "tool": tools::tool_for_command(c.id),
+                    "params": tools::tool_for_command(c.id).and_then(tools::find).map(|t| &t.input_schema),
                 })
+            })
+            .collect();
+        let list: Vec<Value> = list
+            .into_iter()
+            .filter(|c| {
+                (!enabled_only || c.get("enabled").and_then(Value::as_bool) == Some(true))
+                    && (filter.is_empty()
+                        || ["id", "label", "menu"].iter().any(|k| c.get(k).is_some_and(|v| v.to_string().to_lowercase().contains(&filter))))
             })
             .collect();
         Ok(json!({ "commands": list }))

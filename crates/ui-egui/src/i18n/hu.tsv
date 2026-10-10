@@ -1169,7 +1169,7 @@
 	Searchable Image (Exact)	Kereshető kép (pontos)
 	Adds invisible text over each word; the page image is not changed	Láthatatlan szöveget helyez minden szóra; az oldalkép nem változik
 	Downsample to	Feloldás csökkentése erre
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	A szövegfelismerés nincs telepítve: hiányoznak a modelljei (futtasd a `cargo xtask models` parancsot, vagy állítsd be a PRINTCRAFT_MODELS változót).
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	A szövegfelismerés nincs telepítve: hiányoznak a modellfájljai. Telepítsd újra a PdfCraftot, vagy állítsd a PDFCRAFT_MODELS változót az őket tartalmazó mappára.
 	Settings	Beállítások
 	Optional	Nem kötelező
 	Planned · {m}	Tervezett · {m}
@@ -1571,6 +1571,7 @@
 	Couldn't open {name}: {e}	{name} megnyitása nem sikerült: {e}
 	Couldn't read {name}: {e}	{name} olvasása nem sikerült: {e}
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	A hordozható mód ki van kapcsolva: {folder} nem írható ({error}). A beállítások helyette a felhasználói mappádban maradnak.
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	A PdfCraft grafikus processzor nélkül rajzol, ezért lassú lehet. A grafikus illesztőprogram frissítése segíthet.
 	Couldn't save: {e}	A mentés nem sikerült: {e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	A mellékletek letöltése a weben az M3.10-zel érkezik ({n} bájt kész)
 	`{command}` {when}	`{command}` {when}
@@ -1688,7 +1689,7 @@
 	there are no pages to print	nincs nyomtatható oldal
 	the document has no tags	a dokumentumnak nincs címkéje
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	a szövegfelismerés modelljei nincsenek telepítve (futtasd a `cargo xtask models` parancsot, vagy állítsd be a PRINTCRAFT_MODELS változót)
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	a szövegfelismerés modelljei nincsenek telepítve (telepítsd újra a PdfCraftot, vagy állítsd a PDFCRAFT_MODELS változót az őket tartalmazó mappára)
 	the image is empty	a kép üres
 	this file isn't XFDF, FDF, XML or text form data	ez a fájl nem XFDF, FDF, XML vagy szöveges űrlapadat
 	nothing in the file matches this document	a fájlban semmi sem illeszkedik ehhez a dokumentumhoz
@@ -1883,7 +1884,6 @@
 	Open this web page?	Megnyitod ezt a weboldalt?
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	A szkriptek homokozóban futnak, fájl- és hálózat-hozzáférés nélkül. Ha egy szkript weboldalt akar nyitni, előbb az engedélyed kell. Kikapcsolt JavaScript mellett az Acrobat szabványos formázó, ellenőrző és számoló függvényei továbbra is működnek.
 	Sign yourself	Saját kezű aláírás
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	A szövegfelismerés nincs telepítve: hiányoznak a modelljei (futtasd a `cargo xtask models` parancsot, vagy állítsd be a PDFCRAFT_MODELS változót).
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	PDF-ek megnyitásakor érvényes. A kifejezetten választott indítási vagy vezérlőmód a munkamenetre felülírja.
 	Write this email?	Megírod ezt az e-mailt?
 	{who} in this document wants to open this address in your browser:	{who} ebben a dokumentumban meg akarja nyitni ezt a címet a böngésződben:
@@ -2052,8 +2052,8 @@ action wizard	Start	Indítás
 # Labels that reach tl!() through a variable (Fill & Sign buttons, link prompts, notices, history labels, checker and certificate rows)
 	Add {what}	{what} hozzáadása
 	Use {what}	{what} használata
-	Place saved {what}	Mentett elem elhelyezése: {what}
-	Remove saved {what}	Mentett elem eltávolítása: {what}
+	Place saved {what}	Mentett {what} elhelyezése
+	Remove saved {what}	Mentett {what} eltávolítása
 	A link	Egy hivatkozás
 	A button	Egy gomb
 	A script	Egy szkript
@@ -2079,9 +2079,35 @@ action wizard	Start	Indítás
 	Basic constraints	Alapvető korlátozások
 	SHA-1 digest	SHA-1 kivonat
 	SHA-256 digest	SHA-256 kivonat
-	Squiggly	Hullámos
+	Squiggly	Hullámos aláhúzás
 	Home / End	Home / End
 	H / Space (hold)	H / szóköz (nyomva tartva)
 	Rotation:	Elforgatás:
 	Line ending	Vonalvég
+	Open arrow	Nyitott nyíl
+	Closed arrow	Zárt nyíl
+	Butt	Tompa
+	Reverse open arrow	Fordított nyitott nyíl
+	Reverse closed arrow	Fordított zárt nyíl
+	Slash	Perjel
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	A szabványos betűtípusok nem tudják megjeleníteni ezt: „{c}” ({code}). Egyelőre csak nyugat-európai karakterek adhatók hozzá szövegként.
+	Larger pages	Nagyobb oldalak
+	Smaller pages	Kisebb oldalak
+	Reset page size	Oldalméret visszaállítása
+	Flatten Fill & Sign when saving	Kitöltés és aláírás beégetése mentéskor
+	Text, marks and signatures become part of the page. Other comments stay editable.	A szöveg, a jelek és az aláírások az oldal részévé válnak. A többi megjegyzés szerkeszthető marad.
+	Date format	Dátumformátum
+	Fill & Sign dates	Kitöltés és aláírás dátumai
+	Pattern	Minta
+	Today: {date}	Ma: {date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy vagy yy év · m vagy mm hónap · mmm vagy mmmm a hónap neve · d vagy dd nap · ddd vagy dddd a hét napja. A H, h, M, s és t időbetűk, önmagukban nem használhatók: tegyél {escape} jelet a betű elé, hogy változatlanul jelenjen meg.
+	Same as interface ({language})	Mint a felület ({language})
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} még nem írható a PDF-be: a kitöltés és aláírás szövege csak nyugat-európai karaktereket támogat. Válassz számokból álló formátumot, például dd.mm.yyyy.
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Megnyitja a nyomtató-illesztőprogram beállításait. Ezek a számítógépről indított minden nyomtatásra érvényesek; az itt választott példányszám, kétoldalas nyomtatás, szürkeárnyalat és papír továbbra is érvényes.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	A nyomtató-illesztőprogram saját beállításai ehhez a nyomtatáshoz: papírtálca, papírtípus, utófeldolgozás és egyebek.
+	Couldn't open the printer's preferences: {e}	Nem sikerült megnyitni a nyomtató beállításait: {e}
+	Printer properties	Nyomtató tulajdonságai
+	Reset to printer defaults	A nyomtató alapértékeinek visszaállítása
+	This printer offers no settings of its own.	Ennek a nyomtatónak nincsenek saját beállításai.
+	Scroll tabs left	Lapok görgetése balra
+	Scroll tabs right	Lapok görgetése jobbra

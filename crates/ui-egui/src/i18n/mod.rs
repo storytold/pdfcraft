@@ -252,7 +252,7 @@ pub fn system_lang() -> Lang {
 #[cfg(not(target_arch = "wasm32"))]
 fn detect_system_lang() -> Lang {
     for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
-        if let Some(l) = std::env::var(var).ok().filter(|v| !v.is_empty()).and_then(|v| lang_from_tag(&v)) {
+        if let Some(l) = std::env::var(var).ok().and_then(|v| language_override(&v)) {
             return l;
         }
     }
@@ -270,6 +270,17 @@ fn detect_system_lang() -> Lang {
         return l;
     }
     Lang::EN
+}
+
+/// A named locale can override the display language. On Windows, the neutral
+/// C/POSIX locale inherited from a launcher says nothing about the user's UI language.
+#[cfg(not(target_arch = "wasm32"))]
+fn language_override(tag: &str) -> Option<Lang> {
+    let tag = tag.trim();
+    if cfg!(target_os = "windows") && matches!(candidates(tag).first().map(String::as_str), Some("c" | "posix")) {
+        return None;
+    }
+    lang_from_tag(tag)
 }
 
 /// The Windows display languages in preference order, one tag per line, queried once when Auto
@@ -478,6 +489,20 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
+    fn neutral_locale_does_not_override_display_language() {
+        let fr = Lang::from_code("fr").unwrap();
+        for tag in ["C", "C.UTF-8", "POSIX", "posix.UTF-8", "", "  C.UTF-8  ", "unsupported"] {
+            assert_eq!(language_override(tag), None, "{tag}");
+            assert_eq!(language_override(tag).or_else(|| first_supported("unsupported-XY\nfr-FR\nen-US")), Some(fr));
+        }
+        assert_eq!(["C.UTF-8", "POSIX", "fr_FR.UTF-8"].into_iter().find_map(language_override), Some(fr));
+        assert_eq!(language_override("fr_FR.UTF-8"), Some(fr));
+        assert_eq!(language_override("en_US.UTF-8"), Some(Lang::EN));
+        assert_eq!(language_override("ja_JP.UTF-8"), Some(JA()));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
     fn windows_display_language_query_returns_a_locale_tag() {
         // One tag per line, as `first_supported` reads them: a machine with several display
         // languages reports them all, so each line is checked rather than the list as a whole.
@@ -612,6 +637,22 @@ mod tests {
         assert_eq!(fmt("unchanged", &[]), "unchanged");
     }
 
+    /// #103: the missing-OCR-models messages are translated under their current English text
+    /// (catalogs once keyed an older `PRINTCRAFT_MODELS` wording, which never matched).
+    #[test]
+    fn missing_ocr_models_messages_are_translated() {
+        let error = pdfcraft_engine::ocr::OcrError::NoModels.to_string();
+        let notice = "Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.";
+        assert!(include_str!("../ocr_ui.rs").contains(notice), "keep in step with ocr_ui.rs");
+        for code in ["bg", "de", "es", "fr", "hu", "ja", "ru", "te", "uk", "zh-hans", "zh-hant"] {
+            let lang = Lang::from_code(code).expect("registered");
+            assert!(has(lang, notice) && has(lang, &error), "{code}");
+        }
+        for lang in &LANGUAGES {
+            assert!(!lang.source.contains("PRINTCRAFT"), "{}", lang.code);
+        }
+    }
+
     /// Japanese translates every registered command and every All tools group, section and item.
     #[test]
     fn japanese_covers_commands_and_catalogue() {
@@ -627,6 +668,55 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Every `tl!("…")` literal in the UI source (test modules aside), unescaped.
+    fn ui_literals() -> std::collections::BTreeSet<String> {
+        let mut stack = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut literals = std::collections::BTreeSet::new();
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).expect("UI source directory") {
+                let path = entry.expect("UI source entry").path();
+                if path.is_dir() {
+                    if path.file_name().is_some_and(|name| name != "i18n") {
+                        stack.push(path);
+                    }
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let source = std::fs::read_to_string(path).expect("UI source file").replace("\r\n", "\n");
+                    let mut rest = source.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+                    while let Some((_, after)) = rest.split_once("tl!(\"") {
+                        let mut escaped = false;
+                        let end = after
+                            .char_indices()
+                            .find_map(|(i, c)| {
+                                if c == '"' && !escaped {
+                                    return Some(i);
+                                }
+                                escaped = c == '\\' && !escaped;
+                                None
+                            })
+                            .expect("closed tl! literal");
+                        let (raw, tail) = after.split_at(end);
+                        if tail.starts_with("\")") {
+                            let label: String = serde_json::from_str(&format!("\"{raw}\"")).expect("UI literal escapes");
+                            literals.insert(label);
+                        }
+                        rest = tail.strip_prefix('"').expect("closing quote");
+                    }
+                }
+            }
+        }
+        literals
+    }
+
+    /// Japanese translates every `tl!("…")` literal in the UI source, so a new string can't ship in
+    /// English by accident (the same check French, German, Russian and Simplified Chinese have).
+    #[test]
+    fn japanese_covers_ui_literals() {
+        let literals = ui_literals();
+        assert!(literals.len() > 900, "source scan found only {} literals", literals.len());
+        let missing: Vec<_> = literals.iter().filter(|label| !has(JA(), label)).collect();
+        assert!(missing.is_empty(), "untranslated Japanese UI literals: {missing:#?}");
     }
 
     /// With craft-fonts, every Japanese translation has glyphs: with all interface faces (desktop)
@@ -1573,6 +1663,10 @@ mod tests {
         assert_eq!(tr(hu, "Rapport de l'utilisateur.pdf"), "Rapport de l'utilisateur.pdf");
         assert_eq!(tr_ctx(hu, "signature pad", "Type"), "Gépelés");
         assert_eq!(tr_ctx(hu, "action wizard", "Start"), "Indítás");
+        assert_eq!(tr(hu, "Windows store  ·  "), "Windows-tároló  ·  ");
+        assert_eq!(tr(hu, "Place saved {what}"), "Mentett {what} elhelyezése");
+        assert_eq!(tr(hu, "Remove saved {what}"), "Mentett {what} eltávolítása");
+        assert_eq!(tr(hu, "Squiggly"), "Hullámos aláhúzás");
         // one (1), other (0, 2+)
         assert_eq!((0..=3).map(|n| (hu.0.plural)(n)).collect::<Vec<_>>(), [1, 0, 1, 1]);
         assert_eq!(trn(hu, 0, "{n} page", "{n} pages"), "0 oldal");
@@ -1687,6 +1781,8 @@ mod tests {
         assert_eq!(tr_ctx(uk, "comment menu", "Edit"), "Редагувати");
         assert_eq!(tr_ctx(uk, "signature pad", "Type"), "Ввести");
         assert_eq!(tr_ctx(uk, "action wizard", "Start"), "Почати");
+        assert_eq!(tr(uk, "Subject"), "Тема");
+        assert_eq!(tr_ctx(uk, "certificate", "Subject"), "Власник сертифіката");
         let mut app = crate::PdfCraftApp::default();
         app.set_option("language", "UK").unwrap();
         assert_eq!(app.language, "uk");
@@ -1891,5 +1987,13 @@ mod tests {
                 assert_eq!(e.translation.ends_with('…'), command.label.ends_with('…'), "{}: ellipsis mismatch: {}", l.code, e.source);
             }
         }
+    }
+
+    /// Preferences ▸ Date format ▸ Language offers exactly the interface languages, in order.
+    #[test]
+    fn date_languages_are_the_interface_languages() {
+        let interface: Vec<(&str, &str)> = Lang::all().map(|l| (l.code(), l.name())).collect();
+        let dates: Vec<(&str, &str)> = pdfcraft_engine::dates::DATE_LANGUAGES.iter().map(|l| (l.code, l.name)).collect();
+        assert_eq!(dates, interface);
     }
 }

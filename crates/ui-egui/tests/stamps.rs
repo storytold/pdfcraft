@@ -49,6 +49,7 @@ fn natural_image_stamps_keep_displayed_bounds_on_rotated_pages() {
     for degrees in [0, 90, 180, 270] {
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
             let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
             app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
             let id = app.views[0].id;
             app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees }).unwrap();

@@ -419,6 +419,35 @@ impl Automation {
         Ok(out)
     }
 
+    /// Preferences ▸ Date format: set it with `format` and its names' `language` (`auto`
+    /// follows the app's interface language, so English here), or read them.
+    pub(crate) fn fill_sign_date_format(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::dates;
+        let format = a.opt_str("format")?;
+        let language = a.opt_str("language")?.map(|l| Some(l).filter(|l| !l.trim().eq_ignore_ascii_case("auto")));
+        // Check the format before changing anything, so a bad one leaves both settings alone.
+        if let Some(f) = format {
+            dates::check_date_format(f).map_err(ToolError::InvalidArgs)?;
+        }
+        if let Some(l) = language {
+            self.session.set_date_language(l).map_err(ToolError::InvalidArgs)?;
+        }
+        if let Some(f) = format {
+            self.session.set_date_format(f).map_err(ToolError::InvalidArgs)?;
+        }
+        let today = self.session.today_text(None, None).map_err(ToolError::Failed)?;
+        let languages: Vec<Value> = dates::DATE_LANGUAGES.iter().map(|l| json!({ "code": l.code, "name": l.name })).collect();
+        Ok(json!({
+            "format": self.session.date_format(),
+            "language": self.session.date_language().unwrap_or("auto"),
+            // Characters Fill & Sign can't write into a PDF yet; dates with them are refused.
+            "unwritable": dates::unwritable(&today),
+            "today": today,
+            "presets": dates::DATE_FORMATS,
+            "languages": languages,
+        }))
+    }
+
     pub(crate) fn fill_sign_add(&mut self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::FillMark;
         let page = self.page(a)?;
@@ -449,8 +478,11 @@ impl Automation {
                 (text_at(&t), t)
             }
             "date" => {
-                let (yy, m, d) = self.session.today();
-                let t = format!("{m}/{d}/{yy}");
+                let lang = a.opt_str("language")?;
+                if let Some(l) = lang.filter(|l| pdfcraft_engine::dates::date_language(l).is_none()) {
+                    return Err(ToolError::InvalidArgs(format!("unknown date language {l:?} (see fill_sign_date_format)")));
+                }
+                let t = self.session.today_text_for_pdf(a.opt_str("format")?, lang).map_err(ToolError::InvalidArgs)?;
                 (text_at(&t), t)
             }
             // A typed signature or initials in the script font, left edge at `at`, upright as displayed.

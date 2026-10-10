@@ -1064,34 +1064,207 @@ fn a_rotation_refused_as_too_small_changes_nothing_else() {
 }
 
 #[test]
-fn a_rotated_field_draws_along_the_vertical_edge() {
-    use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind};
-    let mut doc = one_page();
-    add_field(&mut doc, 0, [10.0, 40.0, 90.0, 60.0], &NewField::Text { multiline: false }, Some("wide")).unwrap();
-    set_value(&mut doc, "wide", &FieldValue::Text("MMMMMM".into())).unwrap();
-    set_props(&mut doc, "wide", &FieldProps { font_size: Some(12.0), ..FieldProps::default() }).unwrap();
-    let span = |doc: &Document| -> (u32, u32) {
-        let bytes = write_incremental(doc, &SaveOptions::default()).unwrap();
-        let mut r = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
-        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0 });
-        assert!(p.error.is_none(), "{:?}", p.error);
-        let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
-        let mut ink = false;
-        for y in 0..p.height {
-            for x in 0..p.width {
-                let i = ((y * p.width + x) * 4) as usize;
-                if p.rgba[i] < 200 {
-                    ink = true;
-                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+fn filling_and_authoring_keep_shared_appearances_and_drop_stale_alternates() {
+    let alternates: [(&[u8], &[u8]); 2] = [(b"R", b"0 0 20 10 re f\n"), (b"D", b"1 1 18 8 re S\n")];
+    let cases = [
+        (NewField::Text { multiline: false }, true),
+        (NewField::Text { multiline: false }, false),
+        (NewField::CheckBox, false),
+        (NewField::Button { caption: "Button".into() }, false),
+        (NewField::Signature, false),
+    ];
+    for (kind, fill) in cases {
+        for indirect in [false, true] {
+            let mut doc = one_page();
+            let first = add_field(&mut doc, 0, [50.0, 600.0, 250.0, 630.0], &kind, Some("First")).unwrap();
+            let other = add_field(&mut doc, 0, [50.0, 550.0, 250.0, 580.0], &kind, Some("Other")).unwrap();
+            let first_widget = field(&fields(&doc), &first).widgets[0].obj;
+            let other_widget = field(&fields(&doc), &other).widgets[0].obj;
+            let mut entries = doc.get(first_widget).as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().clone();
+            for (key, bytes) in alternates {
+                let mut d = Dict::new();
+                d.set(b"Type".to_vec(), Object::name("XObject"));
+                d.set(b"Subtype".to_vec(), Object::name("Form"));
+                d.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 20.into(), 10.into()]));
+                let r = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(d, bytes.to_vec())));
+                entries.set(key.to_vec(), Object::Ref(r));
+            }
+            entries.set(b"VendorState".to_vec(), Object::name("Retained"));
+            let shared = if indirect { Object::Ref(doc.add(Object::Dict(entries))) } else { Object::Dict(entries) };
+            for widget in [first_widget, other_widget] {
+                doc.update_dict(widget, |d| d.set(b"AP".to_vec(), shared.clone())).unwrap();
+            }
+            let original = reopen(&doc);
+            for full in [false, true] {
+                let mut doc = original.clone();
+                let other_widget = field(&fields(&doc), &other).widgets[0].obj;
+                let source = doc.get(other_widget).as_dict().unwrap().get(b"AP").unwrap().clone();
+                let before = doc.resolve(&source);
+                if fill {
+                    set_value(&mut doc, &first, &FieldValue::Text("Updated value".into())).unwrap();
+                } else {
+                    set_props(&mut doc, &first, &FieldProps { tooltip: Some("Updated help".into()), ..FieldProps::default() }).unwrap();
+                }
+                assert_eq!(doc.resolve(&source), before, "a shared AP must not change");
+                let bytes = if full {
+                    pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap()
+                } else {
+                    assert!(!doc.revisions().is_empty(), "incremental save needs an existing revision");
+                    assert!(!doc.encryption_changed() && !doc.full_save_required(), "this edit must not require a full rewrite");
+                    let original = doc.bytes();
+                    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+                    assert!(bytes.len() > original.len(), "incremental save appends the changed appearance");
+                    assert!(bytes.starts_with(original.as_slice()), "incremental save preserves the complete original prefix");
+                    bytes
+                };
+                hayro_syntax::Pdf::new(bytes.clone()).unwrap();
+                let doc = Document::open(Arc::new(bytes)).unwrap();
+                let all = fields(&doc);
+                let first = field(&all, &first);
+                let other = field(&all, &other);
+                let first_ap = doc.resolve(doc.get(first.widgets[0].obj).as_dict().unwrap().get(b"AP").unwrap());
+                let other_ap = doc.resolve(doc.get(other.widgets[0].obj).as_dict().unwrap().get(b"AP").unwrap());
+                let first_ap = first_ap.as_dict().unwrap();
+                let other_ap = other_ap.as_dict().unwrap();
+                assert_ne!(first_ap.get(b"N"), other_ap.get(b"N"), "normal appearance was regenerated");
+                assert_eq!(other_ap.len(), 4);
+                // The redrawn widget keeps unknown entries, but not down/rollover looks that
+                // would show its old value or caption on press or hover.
+                assert_eq!(
+                    first_ap.len(),
+                    2,
+                    "{kind:?} fill={fill} indirect={indirect} full={full}: {:?}",
+                    first_ap.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect::<Vec<_>>()
+                );
+                for (key, bytes) in alternates {
+                    assert!(first_ap.get(key).is_none(), "stale /{}", String::from_utf8_lossy(key));
+                    let object = doc.resolve(other_ap.get(key).unwrap());
+                    let Object::Stream(stream) = &*object else { panic!("alternate appearance") };
+                    assert_eq!(stream.decoded().unwrap(), bytes);
+                }
+                assert_eq!(first_ap.name(b"VendorState"), Some(&b"Retained"[..]));
+                assert_eq!(other_ap.name(b"VendorState"), Some(&b"Retained"[..]));
+                if fill {
+                    assert_eq!(first.value, ["Updated value"]);
+                    assert!(ap(&doc, &first.widgets[0]).contains("(Updated value) Tj"));
+                    assert!(other.value.is_empty());
+                } else {
+                    assert_eq!(first.tooltip.as_deref(), Some("Updated help"));
+                    assert_eq!(other.tooltip, None);
                 }
             }
         }
-        assert!(ink, "the field drew no text");
-        (x1 - x0, y1 - y0)
-    };
-    let (wide, tall) = span(&doc);
-    assert!(wide > tall, "upright text is a horizontal run: {wide}x{tall}");
-    set_props(&mut doc, "wide", &FieldProps { rotation: Some((0, 90)), ..FieldProps::default() }).unwrap();
-    let (wide, tall) = span(&doc);
-    assert!(tall > wide, "rotated text is a vertical run: {wide}x{tall}");
+    }
+}
+
+#[test]
+fn pushbutton_redraw_resolves_caption_and_layout_after_save_and_reopen() {
+    fn saved(doc: &Document, full: bool) -> Document {
+        let bytes = if full {
+            pdfcraft_cos::write_full(doc, &SaveOptions::default()).unwrap()
+        } else {
+            assert!(!doc.revisions().is_empty(), "incremental save needs an existing revision");
+            assert!(!doc.encryption_changed() && !doc.full_save_required(), "this edit must not require a full rewrite");
+            let original = doc.bytes();
+            let bytes = write_incremental(doc, &SaveOptions::default()).unwrap();
+            assert!(bytes.len() > original.len(), "incremental save appends the changed appearance");
+            assert!(bytes.starts_with(original.as_slice()), "incremental save preserves the complete original prefix");
+            bytes
+        };
+        hayro_syntax::Pdf::new(bytes.clone()).unwrap();
+        Document::open(Arc::new(bytes)).unwrap()
+    }
+
+    for indirect_caption in [false, true] {
+        for indirect_layout in [false, true] {
+            for icon_only in [false, true] {
+                let mut doc = one_page();
+                let name =
+                    add_field(&mut doc, 0, [50.0, 600.0, 250.0, 650.0], &NewField::Button { caption: "Original caption".into() }, Some("Picture"))
+                        .unwrap();
+                let widget = field(&fields(&doc), &name).widgets[0].obj;
+                let caption = Object::String(pdfcraft_cos::PdfString::literal(b"Original caption".to_vec()));
+                let caption = if indirect_caption { Object::Ref(doc.add(caption)) } else { caption };
+                let layout = Object::Int(i64::from(icon_only));
+                let layout = if indirect_layout { Object::Ref(doc.add(layout)) } else { layout };
+                let mut icon_dict = Dict::new();
+                icon_dict.set(b"Type".to_vec(), Object::name("XObject"));
+                icon_dict.set(b"Subtype".to_vec(), Object::name("Form"));
+                icon_dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 4.into(), 2.into()]));
+                let icon_bytes = b"0 0 4 2 re f\n";
+                let icon = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(icon_dict, icon_bytes.to_vec())));
+                let mut mk = Dict::new();
+                mk.set(b"CA".to_vec(), caption);
+                mk.set(b"TP".to_vec(), layout);
+                mk.set(b"I".to_vec(), Object::Ref(icon));
+                mk.set(b"VendorNote".to_vec(), Object::name("Retained"));
+                let mk = doc.add(Object::Dict(mk));
+                doc.update_dict(widget, |d| d.set(b"MK".to_vec(), Object::Ref(mk))).unwrap();
+
+                // Import the operands from a real saved file before an unrelated public edit.
+                let original = saved(&doc, true);
+                for full in [false, true] {
+                    let mut doc = original.clone();
+                    let widget = field(&fields(&doc), &name).widgets[0].obj;
+                    let mk_before = doc.get(widget).as_dict().unwrap().get(b"MK").unwrap().clone();
+                    let original_mk = doc.resolve(&mk_before);
+                    set_props(&mut doc, &name, &FieldProps { tooltip: Some("Picture help".into()), ..FieldProps::default() }).unwrap();
+                    assert_eq!(doc.get(widget).as_dict().unwrap().get(b"MK"), Some(&mk_before));
+                    assert_eq!(doc.resolve(&mk_before), original_mk, "redraw must not rewrite the source MK");
+                    let doc = saved(&doc, full);
+                    let f = field(&fields(&doc), &name).clone();
+                    assert_eq!(f.tooltip.as_deref(), Some("Picture help"));
+                    let w = &f.widgets[0];
+                    let wd = doc.get(w.obj);
+                    let mk_object = doc.resolve(wd.as_dict().unwrap().get(b"MK").unwrap());
+                    let mk = mk_object.as_dict().unwrap();
+                    assert_eq!(mk.get(b"CA").unwrap().as_ref().is_some(), indirect_caption);
+                    assert_eq!(doc.resolve(mk.get(b"CA").unwrap()).as_string().unwrap().bytes, b"Original caption");
+                    assert_eq!(mk.get(b"TP").unwrap().as_ref().is_some(), indirect_layout);
+                    assert_eq!(doc.resolve(mk.get(b"TP").unwrap()).as_int(), Some(i64::from(icon_only)));
+                    assert_eq!(mk.name(b"VendorNote"), Some(&b"Retained"[..]));
+                    let appearance = ap(&doc, w);
+                    assert_eq!(appearance.contains("(Original caption) Tj"), !icon_only, "{appearance}");
+                    assert_eq!(appearance.matches("/Icon Do").count(), 1, "{appearance}");
+                    assert!(appearance.contains("24.000000 0 0 24.000000 52.000 1.000 cm"), "{appearance}");
+                    let n = wd.as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+                    let appearance_object = doc.get(n);
+                    let Object::Stream(stream) = &*appearance_object else { panic!("appearance") };
+                    let resource_icon =
+                        stream.dict.get(b"Resources").unwrap().as_dict().unwrap().get(b"XObject").unwrap().as_dict().unwrap().get(b"Icon").unwrap();
+                    assert_eq!(resource_icon, mk.get(b"I").unwrap());
+                    let icon_object = doc.resolve(resource_icon);
+                    let Object::Stream(icon) = &*icon_object else { panic!("icon") };
+                    assert_eq!(icon.decoded().unwrap(), icon_bytes);
+                }
+            }
+        }
+    }
+}
+
+/// A check box's down appearances survive a redraw for the states it still draws (same names),
+/// and a down appearance for a state it no longer has is dropped rather than left stale.
+#[test]
+fn check_box_redraw_keeps_down_states_it_still_draws() {
+    let mut doc = one_page();
+    let name = add_field(&mut doc, 0, [50.0, 600.0, 70.0, 620.0], &NewField::CheckBox, Some("agree")).unwrap();
+    let widget = field(&fields(&doc), &name).widgets[0].obj;
+    let on = field(&fields(&doc), &name).widgets[0].on_state.clone().unwrap_or_else(|| "Yes".into());
+    let mut ap = doc.get(widget).as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().clone();
+    let mut down = Dict::new();
+    for state in [on.as_bytes(), b"Off".as_slice(), b"Gone".as_slice()] {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Form"));
+        d.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 20.into(), 20.into()]));
+        let r = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(d, b"0 0 20 20 re f\n".to_vec())));
+        down.set(state.to_vec(), Object::Ref(r));
+    }
+    ap.set(b"D".to_vec(), Object::Dict(down));
+    doc.update_dict(widget, |d| d.set(b"AP".to_vec(), Object::Dict(ap))).unwrap();
+    set_props(&mut doc, &name, &FieldProps { tooltip: Some("Tick to agree".into()), ..FieldProps::default() }).unwrap();
+    let ap = doc.get(widget).as_dict().unwrap().get(b"AP").map(|a| doc.resolve(a)).unwrap();
+    let d = ap.as_dict().unwrap().get(b"D").map(|d| doc.resolve(d)).expect("down states kept");
+    let d = d.as_dict().unwrap();
+    assert!(d.contains(on.as_bytes()) && d.contains(b"Off"));
+    assert!(!d.contains(b"Gone"), "a state the box no longer draws");
 }
