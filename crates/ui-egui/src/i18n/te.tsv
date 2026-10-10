@@ -1471,6 +1471,8 @@ action wizard	Start	ప్రారంభించు
 	Right Edge	కుడి అంచు
 	Language	భాష
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	{place} సేవ్ చేయబడింది: {before} → {after} ({pct}% తగ్గింది){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	ఈ ఫైల్ ఇప్పటికే సాధ్యమైనంత చిన్నదిగా ఉంది ({size}). కాపీ ఏదీ సేవ్ చేయబడలేదు.
+	Saved {place}: {before} → {after} (not smaller){detail}	{place} సేవ్ చేయబడింది: {before} → {after} (తగ్గలేదు){detail}
 	Couldn't save the image: {e}	చిత్రాన్ని సేవ్ చేయడం సాధ్యం కాలేదు: {e}
 	Adding images arrives on the web with file pickers for images	చిత్రాలను జోడించడం, చిత్రాల కోసం ఫైల్ పికర్‌లతో పాటు వెబ్‌లో వస్తుంది
 	Replacing images on page {p} arrives on the web with image pickers ({i})	{p}వ పేజీలోని చిత్రాలను భర్తీ చేయడం, చిత్రాల పికర్‌లతో పాటు వెబ్‌లో వస్తుంది ({i})
