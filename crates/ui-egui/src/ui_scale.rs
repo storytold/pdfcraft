@@ -11,7 +11,7 @@ pub const MIN: f32 = 0.5;
 pub const MAX: f32 = 3.0;
 
 /// The sizes the Preferences menu offers, in percent.
-pub const PRESETS: [u16; 9] = [75, 90, 100, 110, 125, 150, 175, 200, 250];
+pub const PRESETS: [u16; 10] = [50, 75, 90, 100, 110, 125, 150, 175, 200, 250];
 
 /// A factor from settings, the control channel or the system: finite and within [`MIN`]..=[`MAX`],
 /// or `None`.
