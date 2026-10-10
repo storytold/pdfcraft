@@ -23,6 +23,7 @@ pub mod links;
 pub mod ocr;
 pub mod optimizer;
 pub mod signature_image;
+pub mod spooler;
 mod upright_image;
 pub mod xfa;
 

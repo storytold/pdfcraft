@@ -1,7 +1,10 @@
 //! The system print spooler. On macOS and Linux this is CUPS: printers come from `lpstat` — its
 //! queues, and the driverless destinations it can print to without one — and jobs are piped to
-//! `lp` with the job options (copies, collation, duplex, colour). Other platforms report that
-//! printing isn't available yet; the print-ready PDF can still be saved.
+//! `lp` with the job options (copies, collation, duplex, colour). On Windows the printers come from
+//! the .NET printing classes through Windows PowerShell, and a job is the print-ready PDF's pages
+//! as images drawn by `System.Drawing.Printing` (see [`submit_images`]), so no PDF viewer has to
+//! be installed. Other platforms report that printing isn't available yet; the print-ready PDF
+//! can still be saved.
 
 use crate::PrintError;
 
@@ -309,10 +312,45 @@ pub fn printers() -> Vec<Printer> {
         let available = lpstat_e_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
         printers_parsed(&queues, available.as_deref())
     }
-    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    #[cfg(windows)]
+    {
+        let Ok(out) = windows_powershell().args(["-Command", WINDOWS_LIST_PRINTERS]).output() else {
+            return Vec::new();
+        };
+        parse_windows_printers(&String::from_utf8_lossy(&out.stdout))
+    }
+    #[cfg(not(any(windows, all(unix, not(target_arch = "wasm32")))))]
     {
         Vec::new()
     }
+}
+
+/// PowerShell that prints one line per installed printer: `1` or `0` (the user's default), a tab,
+/// then the name as `System.Drawing.Printing` knows it, which is the name [`WINDOWS_PRINT_SCRIPT`]
+/// is given. No double quotes: the script travels as one command-line argument.
+pub const WINDOWS_LIST_PRINTERS: &str = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Drawing; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $d=(New-Object System.Drawing.Printing.PrinterSettings).PrinterName; foreach($p in [System.Drawing.Printing.PrinterSettings]::InstalledPrinters){ $f='0'; if($p -eq $d){$f='1'}; $f+[char]9+$p }";
+
+/// Parse [`WINDOWS_LIST_PRINTERS`] output: `1|0`, a tab, the printer's name, one per line.
+pub fn parse_windows_printers(out: &str) -> Vec<Printer> {
+    let mut printers: Vec<Printer> = Vec::new();
+    for line in out.trim_start_matches('\u{feff}').lines() {
+        let line = line.trim_end_matches('\r');
+        let Some((flag, name)) = line.split_once('\t') else { continue };
+        let name = name.trim();
+        if name.is_empty() || printers.iter().any(|p| p.name == name) {
+            continue;
+        }
+        printers.push(Printer { name: name.to_string(), default: flag.trim() == "1" });
+    }
+    // At most one default, the first the spooler named.
+    let mut seen = false;
+    for p in &mut printers {
+        if p.default && seen {
+            p.default = false;
+        }
+        seen |= p.default;
+    }
+    printers
 }
 
 /// The Print dialog's printers from lpstat's two answers: the spooler's queues (`-p -d`), then
@@ -333,6 +371,125 @@ pub fn printers_parsed(queues: &str, available: Option<&str>) -> Vec<Printer> {
     printers
 }
 
+/// Windows PowerShell 5.1 (it ships with every supported Windows), with no console window and no
+/// profile. `-NoProfile` keeps a user's own profile script out of the job.
+#[cfg(windows)]
+fn windows_powershell() -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    let exe = std::path::Path::new(&root).join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
+    let mut c = std::process::Command::new(exe);
+    c.creation_flags(CREATE_NO_WINDOW).args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"]);
+    c
+}
+
+/// The script that prints every `page-*.png` of a folder, in name order, one per sheet: scaled to
+/// fit the sheet and centred, the sheet turned to landscape for a wide page. Run with `-File` and
+/// the arguments [`windows_print_args`] builds.
+pub const WINDOWS_PRINT_SCRIPT: &str = r#"param(
+  [string]$Dir,
+  [string]$Printer = '',
+  [int]$Copies = 1,
+  [string]$Collate = '1',
+  [string]$Duplex = 'off',
+  [string]$Gray = '0',
+  [string]$Title = 'PdfCraft'
+)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Drawing
+$files = @(Get-ChildItem -LiteralPath $Dir -Filter 'page-*.png' | Sort-Object Name)
+if ($files.Count -eq 0) { throw 'There are no pages to print.' }
+$doc = New-Object System.Drawing.Printing.PrintDocument
+$doc.DocumentName = $Title
+if ($Printer -ne '') { $doc.PrinterSettings.PrinterName = $Printer }
+if (-not $doc.PrinterSettings.IsValid) { throw ('The printer was not found: ' + $doc.PrinterSettings.PrinterName) }
+$doc.PrinterSettings.Copies = [int16]$Copies
+$doc.PrinterSettings.Collate = ($Collate -eq '1')
+if ($doc.PrinterSettings.CanDuplex) {
+  if ($Duplex -eq 'long') { $doc.PrinterSettings.Duplex = [System.Drawing.Printing.Duplex]::Vertical }
+  elseif ($Duplex -eq 'short') { $doc.PrinterSettings.Duplex = [System.Drawing.Printing.Duplex]::Horizontal }
+}
+if ($Gray -eq '1') { $doc.DefaultPageSettings.Color = $false }
+$doc.PrintController = New-Object System.Drawing.Printing.StandardPrintController
+$script:page = 0
+$doc.add_QueryPageSettings({
+  param($sender, $e)
+  $img = [System.Drawing.Image]::FromFile($files[$script:page].FullName)
+  try { $e.PageSettings.Landscape = ($img.Width -gt $img.Height) } finally { $img.Dispose() }
+})
+$doc.add_PrintPage({
+  param($sender, $e)
+  $img = [System.Drawing.Image]::FromFile($files[$script:page].FullName)
+  try {
+    $g = $e.Graphics
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $b = $e.PageBounds
+    $scale = [Math]::Min($b.Width / $img.Width, $b.Height / $img.Height)
+    $w = $img.Width * $scale
+    $h = $img.Height * $scale
+    $x = $b.X + ($b.Width - $w) / 2
+    $y = $b.Y + ($b.Height - $h) / 2
+    $g.TranslateTransform(-$e.PageSettings.HardMarginX, -$e.PageSettings.HardMarginY)
+    $g.DrawImage($img, [single]$x, [single]$y, [single]$w, [single]$h)
+  } finally { $img.Dispose() }
+  $script:page++
+  $e.HasMorePages = ($script:page -lt $files.Count)
+})
+$doc.Print()
+"#;
+
+/// The arguments after `-File <script>` for a job whose page images are in `dir`.
+pub fn windows_print_args(dir: &str, job: &Job) -> Vec<String> {
+    let mut args = vec!["-Dir".to_string(), dir.to_string()];
+    if let Some(p) = job.printer.as_deref().filter(|p| !p.is_empty()) {
+        args.extend(["-Printer".to_string(), p.to_string()]);
+    }
+    args.extend([
+        "-Copies".to_string(),
+        job.copies.clamp(1, 999).to_string(),
+        "-Collate".to_string(),
+        if job.collate { "1" } else { "0" }.to_string(),
+        "-Duplex".to_string(),
+        match job.duplex {
+            Duplex::Off => "off",
+            Duplex::LongEdge => "long",
+            Duplex::ShortEdge => "short",
+        }
+        .to_string(),
+        "-Gray".to_string(),
+        if job.grayscale { "1" } else { "0" }.to_string(),
+        "-Title".to_string(),
+        job.title.clone(),
+    ]);
+    args
+}
+
+/// Print the pages in `dir` (`page-0001.png`, `page-0002.png`, … in order) on Windows. The folder
+/// is the caller's: it keeps it private and removes it afterwards. Returns a short message once
+/// Windows has taken the job.
+#[cfg(windows)]
+pub fn submit_images(dir: &std::path::Path, job: &Job) -> Result<String, PrintError> {
+    let script = dir.join("print.ps1");
+    // The BOM makes Windows PowerShell 5.1 read the script as UTF-8.
+    let mut text = String::from("\u{feff}");
+    text.push_str(WINDOWS_PRINT_SCRIPT);
+    std::fs::write(&script, text).map_err(|e| PrintError::Spool(format!("the print job could not be prepared: {e}")))?;
+    let out = windows_powershell()
+        .arg("-File")
+        .arg(&script)
+        .args(windows_print_args(&dir.to_string_lossy(), job))
+        .output()
+        .map_err(|e| PrintError::Spool(format!("Windows PowerShell could not be started: {e}")))?;
+    if out.status.success() {
+        return Ok(String::new());
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    // PowerShell wraps its errors in positional noise; the first line is the message.
+    let msg = err.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("the print job was refused");
+    Err(PrintError::Spool(msg.to_string()))
+}
+
 /// Send a print-ready PDF to the spooler. Returns the spooler's message (the job id).
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, PrintError> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
@@ -342,7 +499,11 @@ pub fn submit(pdf: &[u8], job: &Job) -> Result<String, PrintError> {
     #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
     {
         let _ = (pdf, job);
-        Err(PrintError::Spool("printing to a printer isn't available on this platform yet; save the print-ready PDF instead".into()))
+        Err(PrintError::Spool(if cfg!(windows) {
+            "on Windows a job is sent through the engine's print_to_printer (the pages are drawn as images); save the print-ready PDF instead".into()
+        } else {
+            "printing to a printer isn't available on this platform yet; save the print-ready PDF instead".into()
+        }))
     }
 }
 
