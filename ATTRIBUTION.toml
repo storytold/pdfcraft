@@ -173,7 +173,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Arabic UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "4c047f499ed2640464db26042f2d368980a84fec1230fe96bac3a85d43e84e59"
+sha256 = "bb0808c269078ca6b63d7b2f2b8d1e058e12c89dde3ad6f28c848f6467e89671"
 
 [[asset]]
 path = "assets/icons/accessibility.svg"

@@ -96,7 +96,7 @@
 	Double-click	نقر مزدوج
 	Select a word	تحديد كلمة
 	Clear selection / close find	مسح التحديد / إغلاق البحث
-	Zoom in / out (also pinch or ⌘-scroll)	تكبير / تصغير (أيضًا بالقرص أو التمرير مع ⌘)
+	Zoom in / out (also pinch or {key}-scroll)	تكبير / تصغير (أيضًا بالقرص أو التمرير مع {key})
 	Rotate view	تدوير العرض
 	First / last page	الصفحة الأولى / الأخيرة
 	Previous / next page	الصفحة السابقة / التالية
@@ -104,16 +104,16 @@
 	Select all pages (Organize)	تحديد كل الصفحات (تنظيم)
 	Home	الرئيسية
 	Open	فتح
-	Open a PDF (⌘O)	فتح ملف PDF (⌘O)
+	Open a PDF ({key})	فتح ملف PDF ({key})
 	Dark gray theme	سمة رمادية داكنة
 	Light theme	سمة فاتحة
 	All tools	كل الأدوات
 	Read	قراءة
 	Convert	تحويل
 	E-Sign	توقيع إلكتروني
-	Print (⌘P)	طباعة (⌘P)
+	Print ({key})	طباعة ({key})
 	Save (M4)	حفظ (M4)
-	Document properties (⌘D)	خصائص المستند (⌘D)
+	Document properties ({key})	خصائص المستند ({key})
 	Find tools and commands	البحث عن الأدوات والأوامر
 	Fit to height	ملاءمة الارتفاع
 	Zoom in	تكبير
@@ -142,9 +142,9 @@
 	Compare	مقارنة
 	Page thumbnails	مصغرات الصفحات
 	Form fields	حقول النموذج
-	Zoom out (⌘−)	تصغير (⌘−)
-	Zoom in (⌘+)	تكبير (⌘+)
-	Rotate view clockwise (⇧⌘+)	تدوير العرض مع عقارب الساعة (⇧⌘+)
+	Zoom out ({key})	تصغير ({key})
+	Zoom in ({key})	تكبير ({key})
+	Rotate view clockwise ({key})	تدوير العرض مع عقارب الساعة ({key})
 	Toggle fit page / fit width	التبديل بين ملاءمة الصفحة وملاءمة العرض
 	Next page	الصفحة التالية
 	Previous page	الصفحة السابقة
@@ -1098,6 +1098,7 @@
 	Redacted area fill colour:	لون تعبئة المنطقة المحجوبة:
 	Use overlay text	استخدام نص تراكب
 	Custom text:	نص مخصص:
+	Redaction code:	رمز الحجب:
 	Font:	الخط:
 	Font size:	حجم الخط:
 	Auto-size text to fit redaction region	تحجيم النص تلقائيًا ليلائم منطقة الحجب
@@ -1267,7 +1268,7 @@
 	Expand all bookmarks	توسيع كل الإشارات المرجعية
 	Expand top-level bookmarks	توسيع إشارات المستوى الأعلى
 	Collapse all bookmarks	طي كل الإشارات المرجعية
-	New bookmark (⌘B)	إشارة مرجعية جديدة (⌘B)
+	New bookmark ({key})	إشارة مرجعية جديدة ({key})
 	This document has no bookmarks.	هذا المستند لا يحتوي على إشارات مرجعية.
 	This document has no layers.	هذا المستند لا يحتوي على طبقات.
 	This document has no attachments.	هذا المستند لا يحتوي على مرفقات.
@@ -1282,8 +1283,8 @@
 	No matches	لا توجد تطابقات
 	Searching… {s}/{p}	جارٍ البحث… {s}/{p}
 	{c} of {n}{more}	{c} من {n}{more}
-	Previous (⇧⌘G)	السابق (⇧⌘G)
-	Next (⌘G)	التالي (⌘G)
+	Previous ({key})	السابق ({key})
+	Next ({key})	التالي ({key})
 	Find options	خيارات البحث
 	Whole words only	كلمات كاملة فقط
 	Case-sensitive	مطابقة حالة الأحرف
