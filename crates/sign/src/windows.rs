@@ -31,6 +31,7 @@ impl ExternalKey for WindowsKey {
             PublicKey::P384(_) => p384::ecdsa::Signature::from_slice(&raw)
                 .map(|s| s.to_der().as_bytes().to_vec())
                 .map_err(|e| SignError::Crypto(format!("CNG returned an invalid P-384 signature: {e}"))),
+            _ => Err(SignError::Crypto("Unsupported key type".into())),
         }
     }
 }
@@ -67,6 +68,7 @@ pub fn identities() -> Result<Vec<DigitalId>, SignError> {
             PublicKey::Rsa { .. } => key.algorithm_group().is_ok_and(|a| a == AlgorithmGroup::Rsa),
             PublicKey::P256(_) => key.algorithm_group().is_ok_and(|a| a == AlgorithmGroup::Ecdsa) && key.bits().is_ok_and(|bits| bits == 256),
             PublicKey::P384(_) => key.algorithm_group().is_ok_and(|a| a == AlgorithmGroup::Ecdsa) && key.bits().is_ok_and(|bits| bits == 384),
+            _ => false,
         };
         if !supported {
             continue;
