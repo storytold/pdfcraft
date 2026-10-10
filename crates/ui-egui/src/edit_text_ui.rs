@@ -166,6 +166,30 @@ fn color32(color: [f64; 3]) -> Color32 {
     )
 }
 
+/// The dark box behind text too pale to read on white.
+const DARK_EDITOR_FILL: Color32 = Color32::from_gray(0x26);
+
+/// WCAG relative luminance of an sRGB colour.
+fn luminance(c: Color32) -> f32 {
+    let channel = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
+}
+
+/// WCAG contrast ratio between two colours (1 to 21).
+fn contrast(a: Color32, b: Color32) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// The inline editor's background for text drawn in `text`: white, or a dark box when the text
+/// reads better on that (white or pale text, which would vanish on white).
+pub(crate) fn editor_fill(text: Color32) -> Color32 {
+    if contrast(text, Color32::WHITE) >= contrast(text, DARK_EDITOR_FILL) { Color32::WHITE } else { DARK_EDITOR_FILL }
+}
+
 /// A selected page image, and what the pointer is doing to it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageSelection {
@@ -525,7 +549,11 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 }) + 8.0;
                 width = width.max(needed).min(ed.max_width);
             }
-            egui::Frame::NONE.fill(Color32::WHITE).stroke(Stroke::new(1.5, ACCENT)).inner_margin(egui::Margin::symmetric(2, 0)).show(ui, |ui| {
+            // White, unless the text is too pale to read on white (white text from a coloured
+            // banner, #913): then a dark box, with a caret that shows on it.
+            let fill = editor_fill(text_color);
+            egui::Frame::NONE.fill(fill).stroke(Stroke::new(1.5, ACCENT)).inner_margin(egui::Margin::symmetric(2, 0)).show(ui, |ui| {
+                ui.visuals_mut().text_cursor.stroke.color = if fill == Color32::WHITE { Color32::BLACK } else { Color32::WHITE };
                 let rows = ed.text.lines().count().max(1);
                 let r = ui.add(
                     egui::TextEdit::multiline(&mut ed.text)
@@ -562,5 +590,23 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             })
         }
         None => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pale_text_is_edited_on_a_dark_box() {
+        // #913: white text from a coloured banner was typed onto a white box and vanished.
+        for pale in [Color32::WHITE, Color32::from_rgb(0xFF, 0xFF, 0x00), Color32::from_gray(0xE0), Color32::from_rgb(0xFF, 0xA5, 0x00)] {
+            assert_eq!(editor_fill(pale), DARK_EDITOR_FILL, "{pale:?}");
+            assert!(contrast(pale, editor_fill(pale)) >= 4.5, "{pale:?} is readable");
+        }
+        // Ordinary dark or saturated text keeps the white box.
+        for dark in [Color32::BLACK, Color32::from_rgb(0x1F, 0x2A, 0x6B), Color32::from_rgb(0xC0, 0x00, 0x00), Color32::from_gray(0x60)] {
+            assert_eq!(editor_fill(dark), Color32::WHITE, "{dark:?}");
+        }
     }
 }
