@@ -105,6 +105,112 @@ def _find_windows_csc() -> Path | None:
     return Path(found) if found else None
 
 
+PREVIEW_HANDLER_SRC = ROOT / "packaging" / "windows" / "PreviewHandler.cs"
+PREVIEW_HANDLER_CLSID = "{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}"
+
+
+def compile_preview_handler(csc: Path | str, out_dll: Path, force: bool = True) -> Path:
+    """Compile packaging/windows/PreviewHandler.cs into LinkcoPdfPreviewHandler.dll with the
+    .NET Framework 4.x `csc.exe` that ships with Windows (C# 5). `/codepage:65001` makes csc read the
+    source as UTF-8 regardless of the system code page. With `force=False` an up-to-date DLL is kept."""
+    out_dll = Path(out_dll)
+    if (
+        not force
+        and out_dll.is_file()
+        and out_dll.stat().st_mtime >= PREVIEW_HANDLER_SRC.stat().st_mtime
+    ):
+        return out_dll
+    out_dll.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        str(csc),
+        "/nologo",
+        "/target:library",
+        "/optimize+",
+        "/platform:anycpu",
+        "/codepage:65001",
+        "/warn:4",
+        f"/out:{out_dll}",
+        "/r:System.dll",
+        "/r:System.Drawing.dll",
+        "/r:System.Windows.Forms.dll",
+        str(PREVIEW_HANDLER_SRC),
+    ]
+    subprocess.run(cmd, cwd=str(ROOT), check=True)
+    return out_dll
+
+
+def stop_preview_host() -> None:
+    """Stop Explorer's preview host (prevhost.exe) so a loaded preview handler DLL can be replaced.
+    Explorer starts it again on the next preview."""
+    if os.name != "nt":
+        return
+    subprocess.run(
+        ["taskkill", "/F", "/IM", "prevhost.exe"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+
+def copy_with_retry(src: Path, dst: Path, attempts: int = 20) -> None:
+    """Copy a file, retrying while a just-stopped process still holds the destination open."""
+    import time
+
+    for attempt in range(attempts):
+        try:
+            shutil.copy2(src, dst)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.25)
+
+
+def _windows_powershell() -> str | None:
+    windir = os.environ.get("WINDIR") or os.environ.get("SystemRoot") or r"C:\Windows"
+    candidate = Path(windir) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    if candidate.is_file():
+        return str(candidate)
+    return shutil.which("powershell") or shutil.which("pwsh")
+
+
+def register_preview_handler(dll: Path) -> bool:
+    """Register LinkcoPdfPreviewHandler.dll for the current user (HKCU, no administrator rights
+    needed) so File Explorer previews PDFs with it, and report what Explorer resolves .pdf previews
+    to. Returns True when Explorer now uses the Linkco handler."""
+    pwsh = _windows_powershell()
+    if not pwsh:
+        print("==> Note: PowerShell not found; preview handler not registered.")
+        return False
+    escaped_dll = str(Path(dll).resolve()).replace("'", "''")
+    script = (
+        "$ErrorActionPreference = 'Stop'; "
+        f"$dll = '{escaped_dll}'; "
+        "Unblock-File -LiteralPath $dll -ErrorAction SilentlyContinue; "
+        "$asm = [System.Reflection.Assembly]::Load([System.IO.File]::ReadAllBytes($dll)); "
+        "$t = $asm.GetType('LinkcoPdfPreview.LinkcoPdfPreviewHandler', $true); "
+        "$t.GetMethod('RegisterPreviewHandler', [type[]]@([string], [bool])).Invoke($null, @($dll, $false)) | Out-Null; "
+        "Write-Output ($t.GetMethod('Diagnose').Invoke($null, $null)); "
+        "if (-not $t.GetMethod('IsEffectiveHandler').Invoke($null, $null)) { exit 3 }"
+    )
+    res = subprocess.run(
+        [pwsh, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+        cwd=str(ROOT),
+        check=False,
+    )
+    if res.returncode == 0:
+        print("==> Registered the File Explorer PDF preview handler for the current user (HKCU).")
+        return True
+    if res.returncode == 3:
+        print(
+            "==> Warning: the preview handler is registered, but Windows still resolves .pdf previews "
+            "to another handler (see the report above)."
+        )
+    else:
+        print(f"==> Warning: registering the preview handler failed (exit code {res.returncode}).")
+    return False
+
+
 def find_vs_installation() -> Path | None:
     """Return the Visual Studio / BuildTools installation directory if MSVC C++ tools are present."""
     if os.name != "nt":
@@ -518,60 +624,22 @@ def build_app(
     bin_linkco_gui = bin_dir / linkco_gui_name
     shutil.copy2(gui_bin, bin_linkco_gui)
 
-    preview_dll_src = ROOT / "packaging" / "windows" / "PreviewHandler.cs"
     dist_preview_dll = out_dir / "LinkcoPdfPreviewHandler.dll"
-    if os.name == "nt" and preview_dll_src.is_file():
+    if os.name == "nt" and PREVIEW_HANDLER_SRC.is_file():
         csc = _find_windows_csc()
         if csc:
-            # Stop any running prevhost.exe before replacing or re-registering LinkcoPdfPreviewHandler.dll
-            subprocess.run(
-                ["taskkill", "/F", "/IM", "prevhost.exe"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
+            # The preview host keeps the previous DLL loaded; stop it so the DLL can be replaced.
+            stop_preview_host()
             bin_preview_dll = bin_dir / "LinkcoPdfPreviewHandler.dll"
-            csc_cmd = [
-                str(csc),
-                "/nologo",
-                "/target:library",
-                "/optimize+",
-                "/platform:anycpu",
-                f"/out:{bin_preview_dll}",
-                "/r:System.dll",
-                "/r:System.Drawing.dll",
-                "/r:System.Windows.Forms.dll",
-                str(preview_dll_src),
-            ]
-            subprocess.run(csc_cmd, cwd=str(ROOT), check=True)
-            shutil.copy2(bin_preview_dll, dist_preview_dll)
+            compile_preview_handler(csc, bin_preview_dll)
+            copy_with_retry(bin_preview_dll, dist_preview_dll)
             print(f"==> Built Windows File Explorer Preview Handler: {dist_preview_dll}")
-
-            pwsh = shutil.which("powershell") or shutil.which("pwsh")
-            if pwsh:
-                escaped_dll = str(dist_preview_dll.resolve()).replace("'", "''")
-                reg_cmd = (
-                    f"$dll = '{escaped_dll}'; "
-                    "$asm = [System.Reflection.Assembly]::LoadFrom($dll); "
-                    "[LinkcoPdfPreview.LinkcoPdfPreviewHandler]::RegisterPreviewHandler($dll)"
-                )
-                reg_res = subprocess.run(
-                    [
-                        pwsh,
-                        "-NoProfile",
-                        "-NonInteractive",
-                        "-ExecutionPolicy",
-                        "Bypass",
-                        "-Command",
-                        reg_cmd,
-                    ],
-                    cwd=str(ROOT),
-                    check=False,
-                )
-                if reg_res.returncode == 0:
-                    print(
-                        "==> Registered Windows File Explorer PDF Preview Handler in Windows Registry (HKCU/HKCR)"
-                    )
+            if os.environ.get("LINKCO_SKIP_PREVIEW_REGISTRATION") == "1":
+                print("==> Skipped preview handler registration (LINKCO_SKIP_PREVIEW_REGISTRATION=1)")
+            else:
+                register_preview_handler(dist_preview_dll)
+        else:
+            print("==> Note: csc.exe (.NET Framework 4.x) not found; the File Explorer preview handler was not built.")
 
     print("\n==> Build complete:")
     for label, p in [

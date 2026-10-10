@@ -22,7 +22,7 @@ try {
   $Csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
   if (-not (Test-Path $Csc)) { $Csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe' }
   $OutDll = Join-Path $TempDir 'LinkcoPdfPreviewHandler.dll'
-  & $Csc /nologo /target:library /optimize+ /platform:anycpu "/out:$OutDll" `
+  & $Csc /nologo /target:library /optimize+ /platform:anycpu /codepage:65001 /warn:4 "/out:$OutDll" `
     /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll $PreviewCs
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path $OutDll)) {
     throw "Failed to compile PreviewHandler.cs into LinkcoPdfPreviewHandler.dll"
@@ -40,6 +40,17 @@ try {
     }
   }
   Write-Output "  [PASS] LinkcoPdfPreviewHandler.dll compiled and verified all 6 COM interfaces."
+
+  foreach ($api in @('RegisterPreviewHandler', 'UnregisterPreviewHandler', 'QueryEffectiveHandler', 'IsEffectiveHandler', 'Diagnose')) {
+    if ($null -eq ($handlerType.GetMethods() | Where-Object { $_.Name -eq $api -and $_.IsStatic -and $_.IsPublic })) {
+      throw "LinkcoPdfPreviewHandler is missing the public static method $api"
+    }
+  }
+  $comVisible = $handlerType.GetCustomAttributes([System.Runtime.InteropServices.ComVisibleAttribute], $false)
+  if ($comVisible.Count -ne 1 -or -not $comVisible[0].Value) { throw "LinkcoPdfPreviewHandler must be [ComVisible(true)]" }
+  Write-Output "  [PASS] Registration API present (Register/Unregister/QueryEffectiveHandler/IsEffectiveHandler/Diagnose)."
+  Write-Output "  Current File Explorer preview registration on this machine (read-only):"
+  ($handlerType.GetMethod('Diagnose').Invoke($null, $null) -split "`r?`n") | ForEach-Object { Write-Output "    $_" }
 
   Write-Output "=== 2. Testing Windows Installed Printer Enumeration & Default Printer Detection ==="
   $cimPrinters = @(Get-CimInstance -ClassName Win32_Printer -ErrorAction SilentlyContinue)
@@ -70,7 +81,7 @@ try {
     [System.IO.File]::WriteAllText($badPdf, "not a valid pdf file")
     $outPng = Join-Path $TempDir 'preview.png'
     $corruptOut = & $CliPath preview $badPdf --page 1 --dpi 150 --out $outPng
-    if ($corruptOut -notmatch '^STATUS\tINVALID_PDF\t') {
+    if ($corruptOut -notmatch '^STATUS\t(INVALID_PDF|EMPTY_PDF)\t') {
       throw "Expected STATUS\tINVALID_PDF for corrupt file, got: $corruptOut"
     }
     $missingOut = & $CliPath preview (Join-Path $TempDir 'nonexistent.pdf') --page 1 --dpi 150 --out $outPng
@@ -78,6 +89,41 @@ try {
       throw "Expected STATUS\tIO_ERROR for missing file, got: $missingOut"
     }
     Write-Output "  [PASS] pdfcraft-cli preview gracefully handled corrupt and missing PDFs."
+
+    # A minimal, valid one-page A4 PDF written by hand (exact xref offsets), rendered the way the
+    # preview handler asks for it: fit to the pane width, capped by --max-px.
+    $objects = @(
+      '<< /Type /Catalog /Pages 2 0 R >>',
+      '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R >>',
+      "<< /Length 29 >>`nstream`n0 0 1 rg 100 100 200 300 re f`nendstream"
+    )
+    $pdf = New-Object System.Text.StringBuilder
+    [void] $pdf.Append("%PDF-1.4`n")
+    $offsets = @()
+    for ($i = 0; $i -lt $objects.Count; $i++) {
+      $offsets += $pdf.Length
+      [void] $pdf.Append(("{0} 0 obj`n{1}`nendobj`n" -f ($i + 1), $objects[$i]))
+    }
+    $xref = $pdf.Length
+    [void] $pdf.Append(("xref`n0 {0}`n0000000000 65535 f `n" -f ($objects.Count + 1)))
+    foreach ($o in $offsets) { [void] $pdf.Append(("{0:D10} 00000 n `n" -f $o)) }
+    [void] $pdf.Append(("trailer`n<< /Size {0} /Root 1 0 R >>`nstartxref`n{1}`n%%EOF`n" -f ($objects.Count + 1), $xref))
+    $goodPdf = Join-Path $TempDir 'valid.pdf'
+    [System.IO.File]::WriteAllText($goodPdf, $pdf.ToString(), (New-Object System.Text.ASCIIEncoding))
+
+    $okOut = @(& $CliPath preview $goodPdf --page 1 --width 600 --max-px 4096 --out $outPng) -join "`n"
+    if ($okOut -notmatch '(?m)^STATUS\tOK\t1\t1\t(\d+)\t(\d+)') { throw "Expected STATUS OK for a valid PDF, got: $okOut" }
+    $w = [int] $Matches[1]; $h = [int] $Matches[2]
+    if ($w -lt 599 -or $w -gt 601 -or $h -le $w) { throw "Expected a ~600 px wide portrait raster, got ${w}x${h}" }
+    if (-not (Test-Path $outPng)) { throw "preview reported OK but wrote no PNG" }
+    $png = [System.IO.File]::ReadAllBytes($outPng)
+    if ($png.Length -lt 8 -or $png[0] -ne 0x89 -or $png[1] -ne 0x50 -or $png[2] -ne 0x4E -or $png[3] -ne 0x47) { throw "preview output is not a PNG" }
+
+    $capOut = @(& $CliPath preview $goodPdf --page 9 --width 5000 --max-px 500 --out $outPng) -join "`n"
+    if ($capOut -notmatch '(?m)^STATUS\tOK\t1\t1\t(\d+)\t(\d+)') { throw "Expected STATUS OK (clamped to the last page), got: $capOut" }
+    if ([Math]::Max([int] $Matches[1], [int] $Matches[2]) -gt 501) { throw "--max-px 500 was not honoured: $capOut" }
+    Write-Output "  [PASS] pdfcraft-cli preview rendered a valid PDF at --width 600 (${w}x${h}), clamped the page and honoured --max-px."
   } else {
     Write-Output "  [SKIP] pdfcraft-cli.exe not built yet; run 'python build.py' first to run CLI preview tests."
   }

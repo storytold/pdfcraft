@@ -53,6 +53,23 @@
     <StandardDirectory Id="ProgramMenuFolder" />
     <StandardDirectory Id="DesktopFolder" />
 
+    <!-- Linkco PDF Editor registers the File Explorer preview handler for each user who starts it
+         (HKCU, so it also covers that user's default PDF app). On uninstall, remove the uninstalling
+         user's registration (restoring the previous preview handler) before the DLL is deleted.
+         Runs as an immediate action, i.e. as that user; the HKLM entries are removed by the MSI.
+         The PowerShell script (Base64 UTF-16LE, so MSI's [property] syntax can't touch it) is:
+           $ErrorActionPreference='SilentlyContinue'; $d=Join-Path (Get-Location).Path 'LinkcoPdfPreviewHandler.dll'; if (Test-Path -LiteralPath $d) { $a=[System.Reflection.Assembly]::Load([System.IO.File]::ReadAllBytes($d)); $t=$a.GetType('LinkcoPdfPreview.LinkcoPdfPreviewHandler'); if ($t) { $t.GetMethod('UnregisterPreviewHandler').Invoke($null,$null) | Out-Null } }
+         with the working directory set to INSTALLFOLDER. -->
+    <CustomAction Id="UnregisterPreviewHandlerForUser"
+        Directory="INSTALLFOLDER"
+        ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand JABFAHIAcgBvAHIAQQBjAHQAaQBvAG4AUAByAGUAZgBlAHIAZQBuAGMAZQA9ACcAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQAnADsAIAAkAGQAPQBKAG8AaQBuAC0AUABhAHQAaAAgACgARwBlAHQALQBMAG8AYwBhAHQAaQBvAG4AKQAuAFAAYQB0AGgAIAAnAEwAaQBuAGsAYwBvAFAAZABmAFAAcgBlAHYAaQBlAHcASABhAG4AZABsAGUAcgAuAGQAbABsACcAOwAgAGkAZgAgACgAVABlAHMAdAAtAFAAYQB0AGgAIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACQAZAApACAAewAgACQAYQA9AFsAUwB5AHMAdABlAG0ALgBSAGUAZgBsAGUAYwB0AGkAbwBuAC4AQQBzAHMAZQBtAGIAbAB5AF0AOgA6AEwAbwBhAGQAKABbAFMAeQBzAHQAZQBtAC4ASQBPAC4ARgBpAGwAZQBdADoAOgBSAGUAYQBkAEEAbABsAEIAeQB0AGUAcwAoACQAZAApACkAOwAgACQAdAA9ACQAYQAuAEcAZQB0AFQAeQBwAGUAKAAnAEwAaQBuAGsAYwBvAFAAZABmAFAAcgBlAHYAaQBlAHcALgBMAGkAbgBrAGMAbwBQAGQAZgBQAHIAZQB2AGkAZQB3AEgAYQBuAGQAbABlAHIAJwApADsAIABpAGYAIAAoACQAdAApACAAewAgACQAdAAuAEcAZQB0AE0AZQB0AGgAbwBkACgAJwBVAG4AcgBlAGcAaQBzAHQAZQByAFAAcgBlAHYAaQBlAHcASABhAG4AZABsAGUAcgAnACkALgBJAG4AdgBvAGsAZQAoACQAbgB1AGwAbAAsACQAbgB1AGwAbAApACAAfAAgAE8AdQB0AC0ATgB1AGwAbAAgAH0AIAB9AA=="
+        Execute="immediate"
+        Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="UnregisterPreviewHandlerForUser" Before="RemoveFiles"
+          Condition="REMOVE = &quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+
     <Feature Id="Main" Title="Linkco PDF Editor" Level="1">
       <ComponentGroupRef Id="PdfcraftFiles" />
       <ComponentGroupRef Id="PdfcraftModels" />
@@ -148,7 +165,7 @@
         <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}" Name="AppID" Value="{6d2b5079-2f0b-48dd-ab7f-97cec514d30b}" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}" Name="DisableLowILProcessIsolation" Value="1" Type="integer" />
         <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" Value="mscoree.dll" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" Name="ThreadingModel" Value="STA" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" Name="ThreadingModel" Value="Apartment" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" Name="Class" Value="LinkcoPdfPreview.LinkcoPdfPreviewHandler" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" Name="Assembly" Value="LinkcoPdfPreviewHandler, Version=0.5.0.0, Culture=neutral, PublicKeyToken=null" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" Name="RuntimeVersion" Value="v4.0.30319" Type="string" />

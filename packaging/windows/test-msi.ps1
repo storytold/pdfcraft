@@ -152,6 +152,10 @@ $previewRow = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WH
 Assert-Equal $previewRow[0] '{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}' 'PDF Preview Handler CLSID'
 Assert-Equal $previewRow[1] 'PdfcraftPreviewHandler' 'PDF Preview Handler component'
 Assert-Equal $previewRow[2] '2' 'PDF Preview Handler HKLM root'
+$threadingRow = Read-Row 'SELECT `Value` FROM `Registry` WHERE `Key` = ''Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32'' AND `Name` = ''ThreadingModel''' 1
+Assert-Equal $threadingRow[0] 'Apartment' 'PDF Preview Handler ThreadingModel'
+$cleanupRow = Read-Row 'SELECT `Action`, `Condition` FROM `InstallExecuteSequence` WHERE `Action` = ''UnregisterPreviewHandlerForUser''' 2
+Assert-Equal $cleanupRow[0] 'UnregisterPreviewHandlerForUser' 'per-user preview handler cleanup on uninstall'
 
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)

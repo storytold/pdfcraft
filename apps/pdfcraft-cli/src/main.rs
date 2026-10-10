@@ -48,7 +48,7 @@ const USAGE: &str = concat!(
     "\
 pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
 pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
-pdfcraft-cli preview <file.pdf> [--page N] [--dpi 150] --out x.png [--password PW]
+pdfcraft-cli preview <file.pdf> [--page N] [--dpi 150 | --width PX] [--max-px 4096] --out x.png [--password PW]
 pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
 pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
                       [--insert-blank 1] [--title T] [--author A] [--full]
@@ -496,6 +496,11 @@ fn preview(args: &[String]) -> Result<(), CliError> {
     let path = *positional(args).first().ok_or("preview: missing file")?;
     let page: usize = flag(args, "--page").unwrap_or("1").parse::<usize>().unwrap_or(1).max(1);
     let dpi: f32 = flag(args, "--dpi").unwrap_or("150").parse::<f32>().unwrap_or(150.0).clamp(36.0, 300.0);
+    // `--width PX` asks for a raster exactly as wide as the preview pane needs (the Explorer handler
+    // passes its pane width × zoom), overriding `--dpi`; `--max-px` caps the longer side so a poster-
+    // sized page can't allocate hundreds of megabytes in the preview host.
+    let width_px: Option<f32> = flag(args, "--width").and_then(|w| w.parse::<f32>().ok()).filter(|w| w.is_finite() && *w >= 1.0);
+    let max_px: f32 = flag(args, "--max-px").and_then(|m| m.parse::<f32>().ok()).filter(|m| m.is_finite()).unwrap_or(4096.0).clamp(64.0, 8192.0);
     let out = flag(args, "--out").ok_or("preview: missing --out <file.png>")?;
     let password = flag(args, "--password");
 
@@ -528,8 +533,9 @@ fn preview(args: &[String]) -> Result<(), CliError> {
     }
 
     let clamped_page = page.min(total_pages);
+    let scale = info.pages.get(clamped_page - 1).map_or(dpi / 72.0, |pi| preview_scale(pi.width, pi.height, dpi, width_px, max_px));
     let mut r = PageRenderer::new(bytes, RenderConfig { password: password.map(Arc::from), ..Default::default() });
-    let p = r.render(RenderRequest { page: clamped_page - 1, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0 });
+    let p = r.render(RenderRequest { page: clamped_page - 1, kind: RequestKind::Pixels, tile: None, scale, tag: 0 });
     if let Some(e) = p.error {
         stdout_line(format_args!("STATUS\tRENDER_ERROR\t{total_pages}\t{}", e.replace(['\r', '\n', '\t'], " ")))?;
         return Ok(());
@@ -539,6 +545,18 @@ fn preview(args: &[String]) -> Result<(), CliError> {
     std::fs::write(out, png_bytes).map_err(|e| format!("{out}: {e}"))?;
     stdout_line(format_args!("STATUS\tOK\t{total_pages}\t{clamped_page}\t{}\t{}", p.width, p.height))?;
     Ok(())
+}
+
+/// Render scale (pixels per point) for `preview`: `--width` wins over `--dpi`, and the longer side
+/// of the raster never exceeds `max_px`. Degenerate page sizes fall back to the `--dpi` scale.
+fn preview_scale(page_w: f32, page_h: f32, dpi: f32, width_px: Option<f32>, max_px: f32) -> f32 {
+    let base = dpi / 72.0;
+    if !(page_w.is_finite() && page_h.is_finite()) || page_w <= 0.0 || page_h <= 0.0 {
+        return base;
+    }
+    let wanted = width_px.map_or(base, |w| w / page_w);
+    let cap = max_px / page_w.max(page_h);
+    wanted.min(cap).clamp(0.05, 300.0 / 72.0 * 4.0)
 }
 
 /// Child-process body for `check`: prints one JSON line.
@@ -878,7 +896,24 @@ fn current_uid() -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::control_file_problem;
+    use super::{control_file_problem, preview_scale};
+
+    #[test]
+    fn preview_scale_honours_width_dpi_and_the_pixel_cap() {
+        // Letter page, 612×792 pt.
+        assert!((preview_scale(612.0, 792.0, 144.0, None, 4096.0) - 2.0).abs() < 1e-4);
+        // `--width` overrides `--dpi`: 1224 px wide ⇒ 2 px per point.
+        assert!((preview_scale(612.0, 792.0, 72.0, Some(1224.0), 4096.0) - 2.0).abs() < 1e-4);
+        // The longer side is capped: 792 pt × scale ≤ 1000 px.
+        let capped = preview_scale(612.0, 792.0, 300.0, Some(10_000.0), 1000.0);
+        assert!(792.0 * capped <= 1000.0 + 1e-3, "{capped}");
+        // A poster-sized page (A0) at 150 dpi stays within the cap.
+        let a0 = preview_scale(2384.0, 3370.0, 150.0, None, 4096.0);
+        assert!(3370.0 * a0 <= 4096.0 + 1e-3, "{a0}");
+        // Degenerate sizes fall back to the dpi scale.
+        assert!((preview_scale(0.0, 792.0, 72.0, Some(500.0), 4096.0) - 1.0).abs() < 1e-4);
+        assert!((preview_scale(f32::NAN, 792.0, 72.0, None, 4096.0) - 1.0).abs() < 1e-4);
+    }
 
     #[test]
     fn a_control_file_must_be_yours_and_private() {

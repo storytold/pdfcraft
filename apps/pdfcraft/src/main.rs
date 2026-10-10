@@ -29,6 +29,7 @@ use pdfcraft_ui_egui::PdfCraftApp;
 mod apple_events;
 mod logging;
 mod updates;
+mod windows_preview;
 
 /// Freedesktop app id: the `.desktop` file name and the hicolor icon name.
 const APP_ID: &str = "ai.storyteller.pdfcraft";
@@ -92,38 +93,6 @@ fn migrate_legacy_folders() {
             Err(e) => log::warn!("moving {} to {}: {e}", old.display(), new.display()),
         }
     }
-}
-
-/// Ensure `LinkcoPdfPreviewHandler.dll` (when present beside the running executable on Windows)
-/// is registered in the current user's Registry so Windows File Explorer's Preview Pane works
-/// even when the user launches `LinkcoPDFEditor.exe` directly without running the installer first.
-#[cfg(target_os = "windows")]
-fn ensure_windows_preview_handler() {
-    if pdfcraft_ui_egui::portable::data_dir().is_some() {
-        return;
-    }
-    let Ok(exe) = std::env::current_exe() else { return };
-    let Some(dir) = exe.parent() else { return };
-    let dll = dir.join("LinkcoPdfPreviewHandler.dll");
-    let cli = dir.join("pdfcraft-cli.exe");
-    if !dll.is_file() || !cli.is_file() {
-        return;
-    }
-    let dll_str = dll.to_string_lossy().replace('\'', "''");
-    let _ = std::thread::Builder::new().name("linkco-preview-reg".into()).spawn(move || {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let cmd = format!(
-            "$dll = '{dll_str}'; $asm = [System.Reflection.Assembly]::LoadFrom($dll); [LinkcoPdfPreview.LinkcoPdfPreviewHandler]::RegisterPreviewHandler($dll)"
-        );
-        let _ = std::process::Command::new("powershell.exe")
-            .creation_flags(CREATE_NO_WINDOW)
-            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &cmd])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-    });
 }
 
 /// Desktop launchers (GNOME Files, KDE Dolphin…) only recognise an app as the default handler for a
@@ -199,8 +168,9 @@ fn main() -> eframe::Result {
     }
     let integrated = cfg!(target_os = "macos");
     migrate_legacy_folders();
-    #[cfg(target_os = "windows")]
-    ensure_windows_preview_handler();
+    // Keep File Explorer's PDF preview pane on Linkco PDF Editor's handler for this user (in the background).
+    #[cfg(windows)]
+    windows_preview::ensure_registered();
     // The log file lives in the settings folder; opened after the arguments (so `--version` leaves
     // no file behind) and after the legacy folder migration (which a fresh folder would block).
     // Records logged until now are written to it first.

@@ -94,7 +94,7 @@ $PreviewDll = Join-Path $Stage 'LinkcoPdfPreviewHandler.dll'
 $Csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path $Csc)) { $Csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe' }
 Invoke-Native 'csc LinkcoPdfPreviewHandler.dll' {
-  & $Csc /nologo /target:library /optimize+ /platform:anycpu "/out:$PreviewDll" `
+  & $Csc /nologo /target:library /optimize+ /platform:anycpu /codepage:65001 /warn:4 "/out:$PreviewDll" `
     /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll $PreviewCs
 }
 

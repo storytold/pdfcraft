@@ -170,6 +170,8 @@ cargo run --release -p pdfcraft-cli -- render document.pdf --dpi 150 --out page-
 
 # Generate a single-page preview image with structured status output (used by the Windows Preview Handler)
 cargo run --release -p pdfcraft-cli -- preview document.pdf --page 1 --dpi 150 --out preview.png
+# …or fit a given pixel width (what the Explorer preview pane asks for), capping the longer side
+cargo run --release -p pdfcraft-cli -- preview document.pdf --page 1 --width 800 --max-px 4096 --out preview.png
 
 # Extract plain text from a PDF
 cargo run --release -p pdfcraft-cli -- text document.pdf

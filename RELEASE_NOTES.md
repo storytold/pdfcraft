@@ -19,6 +19,20 @@
 - Added `LinkcoPdfPreviewHandler.dll` (`packaging/windows/PreviewHandler.cs`, CLSID `{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}`), an out-of-process Windows Shell `IPreviewHandler` COM server hosted by `prevhost.exe` (`{6d2b5079-2f0b-48dd-ab7f-97cec514d30b}`).
 - Added `pdfcraft-cli preview` (`apps/pdfcraft-cli/src/main.rs`) for fast single-page preview rendering with structured status reporting (`OK`, `PASSWORD_REQUIRED`, `EMPTY_PDF`, `INVALID_PDF`, `RENDER_ERROR`, `IO_ERROR`).
 - Supports multi-page navigation (`Prev` / `Next`, `PgUp` / `PgDn`, `Home` / `End`), zoom (`−` / `+` / `Fit`, `Ctrl`+Wheel, click-drag pan), Windows Explorer Light/Dark theme adaptation, and non-destructive registration that backs up and restores any previously registered PDF preview handler on uninstall.
+- **Production hardening:**
+  - Pages are rendered at the Preview Pane's actual width × zoom (`pdfcraft-cli preview --width PX --max-px 4096`), DPI-aware, re-rendered when the pane grows, and capped so poster-sized pages can't exhaust memory in `prevhost.exe`.
+  - Registration is per user (`HKCU`, no administrator rights) and covers `.pdf`, `SystemFileAssociations\.pdf`, Linkco's own ProgIDs and the user's current default PDF app (`UserChoice` / `UserChoiceLatest`), but never browser ProgIDs that also open web pages (`MSEdgeHTM`, `ChromeHTML`, …). Every value it replaces is backed up and restored on uninstall.
+  - Linkco PDF Editor checks the registration in the background at every start and registers again only when the DLL was updated or moved or the default PDF app changed. Portable mode never writes to the registry. Set `LINKCO_NO_PREVIEW_REGISTRATION=1` to opt out.
+  - The MSI and NSIS uninstallers remove the uninstalling user's registration before deleting the DLL. The Setup EXE removes both the per-user and the machine-wide registration and retries file deletes while Explorer releases the DLL.
+  - `ThreadingModel=Apartment` (the handler hosts WinForms), `DisableLowILProcessIsolation=1` (the handler starts `pdfcraft-cli.exe` and reads the PDF by path), and Mark-of-the-Web is removed from the DLL and CLI, so downloaded builds load.
+  - The handler logs to `%USERPROFILE%\AppData\LocalLow\LinkcoPdfPreview\preview.log` and cleans up its temporary PNGs.
+- **Troubleshooting:** run this in PowerShell to see which handler Explorer resolves for `.pdf`, the user's default PDF app, and both registrations:
+  ```powershell
+  $dll = "$env:ProgramFiles\Linkco\Linkco PDF Editor\LinkcoPdfPreviewHandler.dll"   # or dist\release\… for a dev build
+  $t = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes($dll)).GetType('LinkcoPdfPreview.LinkcoPdfPreviewHandler')
+  $t::Diagnose()
+  $t::RegisterPreviewHandler($dll)    # re-register for the current user if it reports [NOT Linkco]
+  ```
 
 ### 3. Windows Printer Detection, Native Driver Properties & High-Resolution Printing (150 / 300 / 600 DPI)
 - Implemented 3-tier Windows printer enumeration in `crates/print/src/spool.rs`:

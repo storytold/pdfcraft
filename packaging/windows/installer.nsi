@@ -94,7 +94,7 @@ Section "${APP_NAME} (required)" SecCore
   WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}" "AppID" "{6d2b5079-2f0b-48dd-ab7f-97cec514d30b}"
   WriteRegDWORD HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}" "DisableLowILProcessIsolation" 1
   WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "" "mscoree.dll"
-  WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "ThreadingModel" "STA"
+  WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "ThreadingModel" "Apartment"
   WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "Class" "LinkcoPdfPreview.LinkcoPdfPreviewHandler"
   WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "Assembly" "LinkcoPdfPreviewHandler, Version=0.5.0.0, Culture=neutral, PublicKeyToken=null"
   WriteRegStr HKLM "Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32" "RuntimeVersion" "v4.0.30319"
@@ -129,6 +129,17 @@ SectionEnd
 Section "Uninstall"
   SetRegView 64
   SetShellVarContext all
+
+  ; Remove the per-user File Explorer preview handler registration that Linkco PDF Editor made
+  ; for this user (restoring the previous handler) while the DLL still exists. The script (Base64
+  ; UTF-16LE so NSIS doesn't expand its $variables) loads LinkcoPdfPreviewHandler.dll from the
+  ; working directory and calls UnregisterPreviewHandler().
+  SetOutPath "$INSTDIR"
+  ${DisableX64FSRedirection}
+  nsExec::Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand JABFAHIAcgBvAHIAQQBjAHQAaQBvAG4AUAByAGUAZgBlAHIAZQBuAGMAZQA9ACcAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQAnADsAIAAkAGQAPQBKAG8AaQBuAC0AUABhAHQAaAAgACgARwBlAHQALQBMAG8AYwBhAHQAaQBvAG4AKQAuAFAAYQB0AGgAIAAnAEwAaQBuAGsAYwBvAFAAZABmAFAAcgBlAHYAaQBlAHcASABhAG4AZABsAGUAcgAuAGQAbABsACcAOwAgAGkAZgAgACgAVABlAHMAdAAtAFAAYQB0AGgAIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACQAZAApACAAewAgACQAYQA9AFsAUwB5AHMAdABlAG0ALgBSAGUAZgBsAGUAYwB0AGkAbwBuAC4AQQBzAHMAZQBtAGIAbAB5AF0AOgA6AEwAbwBhAGQAKABbAFMAeQBzAHQAZQBtAC4ASQBPAC4ARgBpAGwAZQBdADoAOgBSAGUAYQBkAEEAbABsAEIAeQB0AGUAcwAoACQAZAApACkAOwAgACQAdAA9ACQAYQAuAEcAZQB0AFQAeQBwAGUAKAAnAEwAaQBuAGsAYwBvAFAAZABmAFAAcgBlAHYAaQBlAHcALgBMAGkAbgBrAGMAbwBQAGQAZgBQAHIAZQB2AGkAZQB3AEgAYQBuAGQAbABlAHIAJwApADsAIABpAGYAIAAoACQAdAApACAAewAgACQAdAAuAEcAZQB0AE0AZQB0AGgAbwBkACgAJwBVAG4AcgBlAGcAaQBzAHQAZQByAFAAcgBlAHYAaQBlAHcASABhAG4AZABsAGUAcgAnACkALgBJAG4AdgBvAGsAZQAoACQAbgB1AGwAbAAsACQAbgB1AGwAbAApACAAfAAgAE8AdQB0AC0ATgB1AGwAbAAgAH0AIAB9AA=='
+  Pop $0
+  ${EnableX64FSRedirection}
+  SetOutPath "$TEMP"
 
   Delete "$DESKTOP\${APP_NAME}.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
