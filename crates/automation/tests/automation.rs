@@ -3593,3 +3593,30 @@ fn command_batch_refuses_more_than_a_thousand_steps() {
     let err = a.call("command_batch", &json!({"steps": steps})).unwrap_err();
     assert!(err.to_string().contains("at most 1000 steps"), "{err}");
 }
+
+#[test]
+fn a_deleted_image_is_not_kept_by_reduce_or_optimize() {
+    let dir = workdir("deleted-image");
+    let (w, h) = (600u32, 400u32);
+    let px: Vec<u8> = (0..w * h).flat_map(|i| [(i % w * 255 / w) as u8 ^ (i & 7) as u8, (i / w * 255 / h) as u8, 128]).collect();
+    let mut photo = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut photo, w, h);
+        enc.set_color(png::ColorType::Rgb);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.write_header().unwrap().write_image_data(&px).unwrap();
+    }
+    std::fs::write(dir.join("photo.png"), photo).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["photo.png"] }))["doc"].as_u64().unwrap();
+    ok(&mut a, "image_edit", json!({ "doc": doc, "page": 1, "image": 1, "action": "delete" }));
+    assert_eq!(ok(&mut a, "page_images", json!({ "doc": doc, "page": 1 }))["count"], 0);
+    // The page is blank, so the copies are tiny: the picture's data is not carried along.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "optimized.pdf" }));
+    assert_eq!(r["unused_xobjects"], 1, "{r}");
+    assert!(r["bytes_after"].as_u64().unwrap() < 4_000, "{r}");
+    let r = ok(&mut a, "doc_reduce", json!({ "doc": doc, "path": "reduced.pdf" }));
+    assert!(r["bytes_after"].as_u64().unwrap() < 4_000, "{r}");
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "reduced.pdf" }));
+    assert_eq!(reopened["pages"], 1);
+}

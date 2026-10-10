@@ -7154,8 +7154,8 @@ milestone = "M11"
 status = "partial"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/ui-egui/tests/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy", "crates/automation/tests/automation.rs::optimizing_through_tools", "crates/ui-egui/src/optimize_ui.rs::the_progress_card_shows_the_stage_and_cancels", "crates/engine/src/tests.rs::an_optimize_job_reports_its_stages_and_can_be_cancelled"]
-notes = "Images, Discard Objects, Discard User Data, Clean Up; runs in the background with a progress bar (per image) and Cancel; no Fonts or Transparency panels, no space audit"
+evidence = ["crates/ui-egui/tests/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy", "crates/automation/tests/automation.rs::optimizing_through_tools", "crates/ui-egui/src/optimize_ui.rs::the_progress_card_shows_the_stage_and_cancels", "crates/engine/src/tests.rs::an_optimize_job_reports_its_stages_and_can_be_cancelled", "crates/optimize/tests/optimize.rs::images_and_forms_nothing_draws_are_dropped", "crates/automation/tests/automation.rs::a_deleted_image_is_not_kept_by_reduce_or_optimize"]
+notes = "Images, Discard Objects, Discard User Data, Clean Up (also drops images and forms the pages list but never draw, such as deleted images); runs in the background with a progress bar (per image) and Cancel; no Fonts or Transparency panels, no space audit"
 
 [[feature]]
 id = "optimize.downsample-images"

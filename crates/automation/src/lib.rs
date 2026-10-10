@@ -851,6 +851,7 @@ impl Automation {
             "invalid_links": o.invalid_links,
             "invalid_bookmarks": o.invalid_bookmarks,
             "unreferenced_dests": o.unreferenced_dests,
+            "unused_xobjects": o.unused_xobjects,
             "merged_objects": r.merged,
             "discarded": r.discarded.iter().map(|(h, n)| json!({ "category": h.id(), "count": n })).collect::<Vec<_>>(),
         }))
