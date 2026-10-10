@@ -277,6 +277,10 @@ pub struct DocView {
     frame_visible: HashSet<usize>,
     /// Thumbnails that are out of date (still shown until their replacement arrives).
     stale_thumbs: HashSet<usize>,
+    /// Tiles that are out of date (still shown until their replacement arrives).
+    stale_tiles: HashSet<(usize, u64, u32, u32)>,
+    /// Scale tag of the current zoom level, as last drawn.
+    current_scale_tag: u64,
     /// Print dialog: the current sheet's pages at the preview pane's device resolution.
     print_pages: HashMap<usize, (u64, TextureHandle)>,
     /// Sharp tiles of large pages: (page, scale tag, tile x, tile y) → texture. Tiles of an
@@ -475,6 +479,8 @@ impl DocView {
             frame_queue: Vec::new(),
             frame_visible: HashSet::new(),
             stale_thumbs: HashSet::new(),
+            stale_tiles: HashSet::new(),
+            current_scale_tag: 0,
             print_pages: HashMap::new(),
             tiles: HashMap::new(),
             texts: HashMap::new(),
@@ -616,6 +622,8 @@ impl DocView {
         // Pages may have moved: a sharp render of another page would be worse than a soft one.
         self.grid_pages.clear();
         self.tiles.clear();
+        self.stale_tiles.clear();
+        self.forms.unbaked.clear();
         self.texts.clear();
         self.text_failed.clear();
         self.errors.clear();
@@ -629,7 +637,7 @@ impl DocView {
     }
 
     /// Only `page` changed (a comment was added, edited or removed): re-render that page and
-    /// re-read its text, keep everything else.
+    /// re-read its text, keep everything else. Out-of-date tiles stay on screen until replacements arrive.
     pub fn page_changed(&mut self, page: usize) {
         if let Some(p) = self.pages.get_mut(&page) {
             p.tag = STALE_TAG;
@@ -640,7 +648,18 @@ impl DocView {
         if let Some(slot) = self.print_pages.get_mut(&page) {
             slot.0 = STALE_TAG;
         }
-        self.tiles.retain(|(p, _, _, _), _| *p != page);
+        let current_tag = if self.current_scale_tag != 0 {
+            self.current_scale_tag
+        } else {
+            self.tiles.keys().filter(|k| k.0 == page).map(|k| k.1).max().unwrap_or(0)
+        };
+        self.tiles.retain(|key, _| key.0 != page || key.1 == current_tag);
+        self.stale_tiles.retain(|key| key.0 != page || key.1 == current_tag);
+        for &key in self.tiles.keys() {
+            if key.0 == page && key.1 == current_tag {
+                self.stale_tiles.insert(key);
+            }
+        }
         self.texts.remove(&page);
         self.text_failed.remove(&page);
         self.errors.remove(&page);
@@ -1095,6 +1114,7 @@ impl DocView {
         self.grid_pages.clear();
         self.print_pages.clear();
         self.stale_thumbs.clear();
+        self.stale_tiles.clear();
         self.waiting_since.clear();
         // Signature previews own a separate renderer and image/background textures.
         self.signature_drag = Default::default();
@@ -1163,7 +1183,7 @@ impl DocView {
                 }
                 tile_bytes = tile_bytes.saturating_add(bytes);
                 tile_tags.insert(req.tag);
-                if !self.tiles.contains_key(&key) {
+                if !self.tiles.contains_key(&key) || self.stale_tiles.contains(&key) {
                     queue.push(*req);
                 }
             } else {
@@ -1194,6 +1214,7 @@ impl DocView {
         // Tiles of an earlier zoom (not a demanded scale) stay while the canvas keeps them, a
         // bounded few under a page whose current tiles are still missing (OLD_TILES).
         self.tiles.retain(|key, _| tiles.contains(key) || !tile_tags.contains(&key.1));
+        self.stale_tiles.retain(|key| self.tiles.contains_key(key));
         queue.extend(grid);
         let thumbs = self.thumbnail_requests(info, ppp);
         let mut thumb_bytes = 0usize;
@@ -1281,8 +1302,13 @@ impl DocView {
         // The length was checked above, so the renderer's buffer becomes the texture data as is.
         let img = texture_image([r.width as usize, r.height as usize], r.rgba);
         if let Some(t) = r.request.tile {
+            let key = (page, r.request.tag, t.x / TILE, t.y / TILE);
             let tex = ctx.load_texture(format!("tile-{:?}-{page}-{}-{}", self.id, t.x, t.y), img, TextureOptions::LINEAR);
-            self.tiles.insert((page, r.request.tag, t.x / TILE, t.y / TILE), tex);
+            self.tiles.insert(key, tex);
+            self.stale_tiles.remove(&key);
+            if !self.stale_tiles.iter().any(|k| k.0 == page) {
+                self.forms.unbaked.retain(|(_, p)| *p != page);
+            }
         } else if r.request.tag & PRINT_TAG != 0 {
             let tex = ctx.load_texture(format!("print-{:?}-{page}", self.id), img, TextureOptions::LINEAR);
             self.print_pages.insert(page, (r.request.tag, tex));
@@ -1298,6 +1324,9 @@ impl DocView {
             self.pages.insert(page, PageTex { tag: r.request.tag, tex });
             self.signature_drag.page_received(page);
             self.waiting_since.remove(&page);
+            if !self.stale_tiles.iter().any(|k| k.0 == page) {
+                self.forms.unbaked.retain(|(_, p)| *p != page);
+            }
         }
         bytes
     }
@@ -1821,6 +1850,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let ppp = ui.ctx().pixels_per_point();
     let scale = view.render_scale(ppp);
     let tag = scale_tag(scale);
+    view.current_scale_tag = tag;
     let hand = app.quick_tool == QuickTool::Hand;
     let tool = app.quick_tool;
     // Text selection runs for the Select tool and for the markup tools (highlight…).

@@ -475,3 +475,104 @@ mod revert_tests {
         assert!(output.text.unwrap().plain_text().contains("Saved original"), "saved AP still draws the original value");
     }
 }
+
+#[test]
+fn calculated_field_and_script_side_effect_on_another_page_re_render() {
+    let mut h = harness();
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 300.0, height: 400.0 }));
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
+        page: 1,
+        rect: [20.0, 20.0, 100.0, 40.0],
+        kind: pdfcraft_engine::NewField::Text { multiline: false },
+        name: Some("page2_field".into()),
+    }));
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldScript {
+        name: "page2_field".into(),
+        event: "calculate".into(),
+        script: Some("event.value = 'from_' + getField('name').value;".into()),
+    }));
+    for _ in 0..60 {
+        h.run_steps(2);
+        if !h.state().render_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    click_field(&mut h, "name", 0);
+    h.event(egui::Event::Text("hello".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(value(&h, "page2_field"), ["from_hello"]);
+    // Wait for all re-renders to complete.
+    for _ in 0..60 {
+        h.run_steps(2);
+        if !h.state().render_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(value(&h, "name"), ["hello"]);
+    assert_eq!(value(&h, "page2_field"), ["from_hello"]);
+}
+
+#[test]
+fn overlay_clears_after_fresh_tiles_zoom_then_edit_and_rejected_edit() {
+    let mut h = harness();
+    // 1. Fresh tiles: edit puts field in unbaked, and after tiles arrive, unbaked clears.
+    click_field(&mut h, "name", 0);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("GoodVal".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(value(&h, "name"), ["GoodVal"]);
+    for _ in 0..60 {
+        h.run_steps(2);
+        if !h.state().render_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)));
+
+    // 2. Rejected edit: typing rejected by validate script leaves unbaked clean.
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldScript {
+        name: "city".into(),
+        event: "validate".into(),
+        script: Some("event.rc = false;".into()),
+    }));
+    click_field(&mut h, "city", 0);
+    h.event(egui::Event::Text("BadVal".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert!(!h.state().views[0].forms.unbaked.contains(&("city".to_string(), 0)));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+
+    // 3. Zoom then edit: zoom to another scale, let tiles settle, then edit.
+    h.state_mut().views[0].zoom_step(true);
+    for _ in 0..60 {
+        h.run_steps(2);
+        if !h.state().render_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    click_field(&mut h, "name", 0);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("ZoomedVal".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(value(&h, "name"), ["ZoomedVal"]);
+    for _ in 0..60 {
+        h.run_steps(2);
+        if !h.state().render_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)));
+}

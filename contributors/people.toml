@@ -71,3 +71,7 @@ sync_github_name = true
 [people.Hathor875]
 real_name = "Krzysztof Cieślik"
 sync_github_name = true
+
+[people.Piohrun]
+real_name = "Grzegorz Martens"
+sync_github_name = true

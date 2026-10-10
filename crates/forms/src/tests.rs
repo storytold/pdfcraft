@@ -1338,6 +1338,49 @@ fn check_box_redraw_keeps_down_states_it_still_draws() {
 }
 
 #[test]
+fn recalc_chain_where_script_changes_checkbox() {
+    struct TestScripts;
+    impl Scripts for TestScripts {
+        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, fields: &[Field]) -> ScriptResult {
+            if script == "set_box" {
+                ScriptResult {
+                    rc: true,
+                    value: "calc1".into(),
+                    changes: vec![FieldChange {
+                        name: "agree".into(),
+                        value: Some(vec!["Yes".into()]),
+                        read_only: None,
+                        required: None,
+                        display: None,
+                    }],
+                    message: None,
+                }
+            } else if script == "read_box" {
+                let box_val = fields.iter().find(|f| f.name == "agree").and_then(|f| f.value.first()).cloned().unwrap_or_default();
+                ScriptResult { rc: true, value: format!("box_was_{box_val}"), changes: Vec::new(), message: None }
+            } else {
+                ScriptResult { rc: true, value: String::new(), changes: Vec::new(), message: None }
+            }
+        }
+    }
+
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [10.0, 10.0, 100.0, 30.0], &NewField::Text { multiline: false }, Some("trigger")).unwrap();
+    add_field(&mut doc, 0, [10.0, 40.0, 30.0, 60.0], &NewField::CheckBox, Some("agree")).unwrap();
+    add_field(&mut doc, 0, [10.0, 70.0, 100.0, 90.0], &NewField::Text { multiline: false }, Some("result")).unwrap();
+
+    set_field_script(&mut doc, "trigger", "calculate", Some("set_box")).unwrap();
+    set_field_script(&mut doc, "result", "calculate", Some("read_box")).unwrap();
+
+    let changed = recalculate_with(&mut doc, &mut TestScripts).unwrap();
+    assert!(changed >= 2);
+
+    let all = fields(&doc);
+    assert_eq!(field(&all, "agree").value, ["Yes"], "checkbox was set by script in recalc chain");
+    assert_eq!(field(&all, "result").value, ["box_was_Yes"], "second recalc saw the normalized checkbox value");
+}
+
+#[test]
 fn partial_appearance_keeps_custom_default_appearance_and_font_resources() {
     let mut doc = fixture();
     let obj = field(&fields(&doc), "name").obj;
