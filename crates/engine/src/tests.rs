@@ -938,6 +938,26 @@ fn redaction_marks_apply_for_good_and_undo() {
 }
 
 #[test]
+fn print_pages_are_drawn_as_images_for_windows() {
+    // Windows prints the print-ready PDF as page images: one numbered PNG per sheet, in order.
+    let (s, id) = session_with(3);
+    let settings = print::Settings { pages: vec![0, 1, 2], ..Default::default() };
+    let bytes = s.print_pdf(id, &settings).unwrap();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-engine-print-images-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let files = crate::spooler::rasterize_pages(&bytes, &dir).unwrap();
+    let names: Vec<String> = files.iter().map(|f| f.file_name().unwrap().to_string_lossy().into_owned()).collect();
+    assert_eq!(names, ["page-0001.png", "page-0002.png", "page-0003.png"]);
+    for f in &files {
+        let png = std::fs::read(f).unwrap();
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "{f:?} is a PNG");
+        assert!(png.len() > 1000, "{f:?} has page content");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn printing_lays_out_sheets_that_render() {
     let (s, id) = session_with(5);
     let settings = print::Settings {

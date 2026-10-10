@@ -211,7 +211,7 @@ impl PdfCraftApp {
             }
         };
         match self.print_draft.printer.clone() {
-            Some(printer) => match spool::submit(&bytes, &self.print_draft.job(&name)) {
+            Some(printer) => match pdfcraft_engine::spooler::print_to_printer(&bytes, &self.print_draft.job(&name)) {
                 Ok(msg) => {
                     self.notify(if msg.is_empty() {
                         crate::i18n::fmt(tl!("Sent to {printer}"), &[("printer", &printer)])

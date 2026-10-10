@@ -146,7 +146,7 @@ impl Automation {
                         Some(_) => return Err(bad("options must be an object of option keys and choices from printer_options")),
                     },
                 };
-                out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
+                out["job"] = json!(pdfcraft_engine::spooler::print_to_printer(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
         }

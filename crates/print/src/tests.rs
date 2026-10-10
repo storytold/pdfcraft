@@ -469,3 +469,46 @@ fn printer_option_defaults_and_job_arguments() {
     assert!(args.ends_with("-o fit-to-page=false -o InputSlot=Tray2 -o EFMediaType=Heavy1"), "{args}");
     assert!(spool::printer_options("../../etc/passwd").is_empty(), "not a queue name");
 }
+
+#[test]
+fn windows_printers_come_from_the_powershell_listing() {
+    // One line per printer: 1 for the user's default, a tab, the name (Windows names hold spaces,
+    // and Arabic or other scripts); a UTF-8 byte-order mark and CRLF line ends are what PowerShell
+    // writes.
+    let out = "\u{feff}0\tMicrosoft Print to PDF\r\n1\tHP LaserJet Pro M404\r\n0\tطابعة المكتب\r\n\r\n";
+    assert_eq!(
+        spool::parse_windows_printers(out),
+        [
+            spool::Printer { name: "Microsoft Print to PDF".into(), default: false },
+            spool::Printer { name: "HP LaserJet Pro M404".into(), default: true },
+            spool::Printer { name: "طابعة المكتب".into(), default: false },
+        ]
+    );
+    // Noise (an error line, a blank line) and a repeated name are skipped; one default at most.
+    assert_eq!(
+        spool::parse_windows_printers("warning: something\n1\tA\n1\tA\n1\tB\n"),
+        [spool::Printer { name: "A".into(), default: true }, spool::Printer { name: "B".into(), default: false }]
+    );
+    assert!(spool::parse_windows_printers("").is_empty());
+    assert!(!spool::WINDOWS_LIST_PRINTERS.contains('"'), "the listing travels as one command-line argument");
+}
+
+#[test]
+fn windows_print_job_arguments() {
+    let job = Job {
+        printer: Some("HP LaserJet".into()),
+        copies: 3,
+        collate: false,
+        duplex: Duplex::ShortEdge,
+        grayscale: true,
+        title: "memo.pdf".into(),
+        options: Vec::new(),
+    };
+    assert_eq!(
+        spool::windows_print_args("C:\\Temp\\job", &job).join("|"),
+        "-Dir|C:\\Temp\\job|-Printer|HP LaserJet|-Copies|3|-Collate|0|-Duplex|short|-Gray|1|-Title|memo.pdf"
+    );
+    // No printer named: the user's default printer, so no -Printer at all.
+    assert!(!spool::windows_print_args("d", &Job::default()).contains(&"-Printer".to_string()));
+    assert!(spool::WINDOWS_PRINT_SCRIPT.contains("PrintDocument") && spool::WINDOWS_PRINT_SCRIPT.contains("$doc.Print()"));
+}
