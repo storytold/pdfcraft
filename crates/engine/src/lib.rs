@@ -104,7 +104,9 @@ pub use pdfcraft_optimize as optimize;
 pub use pdfcraft_preflight as pdfa;
 pub use pdfcraft_print as print;
 pub use pdfcraft_redact::codes::{CODE_SETS as REDACTION_CODE_SETS, CodeSet as RedactionCodeSet};
-pub use pdfcraft_redact::patterns::{PATTERNS as REDACT_PATTERNS, Pattern as RedactPattern, find as find_pattern};
+pub use pdfcraft_redact::patterns::{
+    MAX_WORDS as REDACT_MAX_WORDS, PATTERNS as REDACT_PATTERNS, Pattern as RedactPattern, find as find_pattern, word_list as redact_word_list,
+};
 pub use pdfcraft_redact::sanitize::{HIDDEN, Hidden};
 pub use pdfcraft_sign as sign;
 pub use pdfcraft_sign::{SignOptions, SignatureInfo, Status as SignatureStatus, TrustStore};
@@ -146,6 +148,8 @@ struct Keys {
 enum Scope {
     /// Anything: re-inspect the whole document.
     Full,
+    /// Document-information entries; page content and appearances are unchanged.
+    Metadata,
     /// Only comments: re-read the comment list from the object graph.
     Comments,
     /// Only form field values (and their widget appearances).
@@ -163,6 +167,7 @@ fn uses_scripts(edit: &Edit) -> bool {
 
 fn scope_of(edit: &Edit) -> Scope {
     match edit {
+        Edit::SetInfo { .. } => Scope::Metadata,
         // A file attachment also changes the Attachments list.
         Edit::AddAnnotation(a) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
         Edit::AddMeasurement(_)
@@ -179,6 +184,7 @@ fn scope_of(edit: &Edit) -> Scope {
         | Edit::MoveAnnotation { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
+        | Edit::FillAnnotation { .. }
         | Edit::SetAnnotationInfo { .. } => Scope::Comments,
         Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::SetFieldImage { .. } | Edit::ApplyScriptChanges { .. } => Scope::Form,
         Edit::Batch { edits, .. } => {
@@ -770,6 +776,9 @@ pub enum Edit {
         path: Vec<usize>,
         page: usize,
     },
+    /// Bookmarks for the tagged headings (H, H1–H6), nested by level under a new first
+    /// "Untitled" bookmark (New Bookmarks from Structure).
+    BookmarksFromStructure,
     /// Label pages `from..=to` (0-based) as Acrobat's "Number pages" does; later pages keep their labels.
     NumberPages {
         from: usize,
@@ -870,6 +879,12 @@ pub enum Edit {
         width: Option<f64>,
         /// Line or polyline: two endings. Callout: one. `None` leaves `/LE` unchanged.
         endings: Option<Vec<pdfcraft_annot::LineEnding>>,
+    },
+    /// Fill a rectangle, oval or polygon comment, or remove its fill (`None`).
+    FillAnnotation {
+        page: usize,
+        index: usize,
+        fill: Option<Rgb>,
     },
     /// Comment properties ▸ General / note icon.
     SetAnnotationInfo {
@@ -1130,6 +1145,7 @@ impl Edit {
             Edit::DeleteBookmark { .. } => "Delete bookmark".into(),
             Edit::MoveBookmark { .. } => "Move bookmark".into(),
             Edit::SetBookmarkPage { .. } => "Set bookmark destination".into(),
+            Edit::BookmarksFromStructure => "New bookmarks from structure".into(),
             Edit::NumberPages { .. } => "Number pages".into(),
             Edit::AddMeasurement(m) => format!("Measure {}", m.kind.name()),
             Edit::SetMeasurementScale { .. } => "Set measurement scale".into(),
@@ -1147,7 +1163,7 @@ impl Edit {
             Edit::LockAnnotation { .. } => "Unlock comment".into(),
             Edit::MoveAnnotation { .. } => "Move comment".into(),
             Edit::ResizeAnnotation { .. } => "Resize comment".into(),
-            Edit::StyleAnnotation { .. } | Edit::SetAnnotationInfo { .. } => "Change comment properties".into(),
+            Edit::StyleAnnotation { .. } | Edit::FillAnnotation { .. } | Edit::SetAnnotationInfo { .. } => "Change comment properties".into(),
             Edit::SetFieldValue { name, .. } => format!("Fill in {name}"),
             Edit::SetFieldImage { name, .. } => format!("Set the image of {name}"),
             Edit::ResetForm { .. } => "Clear form".into(),
@@ -1264,6 +1280,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::DeleteBookmark { .. }
         | Edit::MoveBookmark { .. }
         | Edit::SetBookmarkPage { .. }
+        | Edit::BookmarksFromStructure
         | Edit::NumberPages { .. } => {
             if p.assemble() {
                 Ok(())
@@ -1285,6 +1302,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::MoveAnnotation { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
+        | Edit::FillAnnotation { .. }
         | Edit::SetAnnotationInfo { .. }
         | Edit::SetMeasurementScale { .. } => {
             if p.annotate() {
@@ -1471,6 +1489,13 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             pdfcraft_organize::move_bookmark(doc, from, to_parent, *index)?;
         }
         Edit::SetBookmarkPage { path, page } => pdfcraft_organize::set_bookmark_page(doc, path, *page)?,
+        Edit::BookmarksFromStructure => {
+            let entries: Vec<_> = pdfcraft_a11y::headings(doc)
+                .into_iter()
+                .map(|h| pdfcraft_organize::OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj })
+                .collect();
+            pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
+        }
         Edit::NumberPages { from, to, style, prefix, first } => pdfcraft_organize::number_pages(doc, *from, *to, *style, prefix, *first)?,
         Edit::AddMeasurement(m) => {
             measure::add(doc, m, &cx.meta())?;
@@ -1520,6 +1545,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::StyleAnnotation { page, index, color, opacity, width, endings } => {
             pdfcraft_annot::set_style(doc, *page, *index, *color, *opacity, *width, endings.as_deref(), &cx.meta())?;
         }
+        Edit::FillAnnotation { page, index, fill } => pdfcraft_annot::set_fill(doc, *page, *index, *fill, &cx.meta())?,
         Edit::SetAnnotationInfo { page, index, author, subject, icon } => {
             pdfcraft_annot::set_info(doc, *page, *index, author.as_deref(), subject.as_deref(), *icon, &cx.meta())?;
         }
@@ -1755,6 +1781,7 @@ fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render::Annotation
             quads: s.quads,
             locked: s.locked,
             intent: s.intent,
+            fill_sign: s.fill_sign,
         })
         .collect()
 }
@@ -1957,9 +1984,14 @@ fn xfa_field_data(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_xfa::FieldDatum>
 /// be written.
 /// `datasets`: the stream this edit already wrote, replaced in place rather than added again
 /// (and set to the one written).
-fn xfa_sync_datasets(doc: &mut pdfcraft_cos::Document, datasets: &mut Option<pdfcraft_cos::ObjRef>) -> Result<Vec<String>, String> {
+/// `tpl`: the form's parsed template when the document has one cached (else it is parsed).
+fn xfa_sync_datasets(
+    doc: &mut pdfcraft_cos::Document,
+    tpl: Option<&pdfcraft_xfa::model::Template>,
+    datasets: &mut Option<pdfcraft_cos::ObjRef>,
+) -> Result<Vec<String>, String> {
     let data = xfa_field_data(doc);
-    let r = pdfcraft_xfa::write_datasets_reusing(doc, &data, *datasets).map_err(|e| e.to_string())?;
+    let r = pdfcraft_xfa::write_datasets_with(doc, tpl, &data, *datasets).map_err(|e| e.to_string())?;
     if r.stream.is_some() {
         *datasets = r.stream;
     }
@@ -2349,7 +2381,7 @@ impl Session {
         if let Some(tpl) = cx.xfa.clone() {
             if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full) {
                 let datasets = &mut cx.xfa_datasets;
-                let notes = guard(|| xfa_sync_datasets(&mut next, datasets))
+                let notes = guard(|| xfa_sync_datasets(&mut next, Some(&tpl), datasets))
                     .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
                     .map_err(EditError::Write)?;
                 cx.xfa_out.errors.extend(notes);
@@ -2381,8 +2413,8 @@ impl Session {
         // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
         let mut xfa_notes = Vec::new();
         if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full) {
-            let datasets = &mut cx.xfa_datasets;
-            xfa_notes = guard(|| xfa_sync_datasets(&mut next, datasets))
+            let (tpl, datasets) = (cx.xfa.as_deref(), &mut cx.xfa_datasets);
+            xfa_notes = guard(|| xfa_sync_datasets(&mut next, tpl, datasets))
                 .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
                 .map_err(EditError::Write)?;
         }
@@ -2467,7 +2499,8 @@ impl Session {
         }
     }
 
-    /// Rebuild the working bytes and renderer, and the view data that `scope` may have changed.
+    /// Rebuild the working bytes and the view data that `scope` may have changed. Metadata edits
+    /// keep the renderer; other scopes also replace it.
     /// Comment and form edits skip the full re-inspection (seconds on very large files): the
     /// comment list and field values are re-read from the object graph instead.
     fn refresh_scoped(doc: &mut Document, scope: Scope) -> Result<(), EditError> {
@@ -2480,10 +2513,28 @@ impl Session {
         } else {
             editor.cos.bytes().clone()
         };
+        if scope == Scope::Metadata {
+            // Read the way the full inspection reads them (NULs and spaces trimmed, empty is
+            // none), so editing one entry doesn't change how the others display.
+            let info = |key| pdfcraft_organize::info(&editor.cos, key).map(|v| v.trim_matches('\0').trim().to_string()).filter(|v| !v.is_empty());
+            doc.info.title = info("Title");
+            doc.info.author = info("Author");
+            doc.info.subject = info("Subject");
+            doc.info.keywords = info("Keywords");
+            doc.info.creator = info("Creator");
+            doc.info.producer = info("Producer");
+            doc.info.file_size = bytes.len();
+            if !doc.signatures.is_empty() {
+                doc.signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+            }
+            doc.bytes = bytes;
+            return Ok(());
+        }
         let mut form = pdfcraft_forms::fields(&editor.cos);
         xfa::mark_script_buttons(&editor.cos, &mut form);
         let form = Arc::new(form);
         match scope {
+            Scope::Metadata => return Ok(()),
             Scope::Comments => doc.info.annotations = comment_list(&editor.cos),
             Scope::Form => {
                 for f in &mut doc.info.fields {
@@ -2748,6 +2799,50 @@ impl Session {
         self.write_new(&out)
     }
 
+    /// [`Self::combine_unlocked`] where sources with the same `groups` key (by position) are one
+    /// file split into several runs placed apart: each file is opened and copied once, so it keeps
+    /// one bookmark, its links between its own pages, its fields and its attachments whole (see
+    /// `pdfcraft_organize::combine_grouped`). A group's later sources use its first source's bytes
+    /// and password; a source without a key is a file of its own.
+    pub fn combine_grouped(&self, sources: &[CombineSource], groups: &[u64], passwords: &[Option<&str>]) -> Result<Arc<Vec<u8>>, EditError> {
+        // Each file opened once: `file[i]` is source i's place in `docs`.
+        let (mut keys, mut docs, mut file): (Vec<Option<u64>>, Vec<pdfcraft_cos::Document>, Vec<usize>) = (Vec::new(), Vec::new(), Vec::new());
+        for (i, (name, bytes, _)) in sources.iter().enumerate() {
+            let key = groups.get(i).copied();
+            let known = key.and_then(|k| keys.iter().position(|g| *g == Some(k)));
+            let at = match known {
+                Some(at) => at,
+                None => {
+                    docs.push(open_source_with(name, bytes, passwords.get(i).copied().flatten())?);
+                    keys.push(key);
+                    docs.len() - 1
+                }
+            };
+            file.push(at);
+        }
+        let mut pages = Vec::with_capacity(sources.len());
+        for ((name, _, range), at) in sources.iter().zip(&file) {
+            let range = range.as_deref().map(str::trim).filter(|r| !r.is_empty());
+            let Some(d) = docs.get(*at) else { return Err(EditError::Write(format!("{name}: not opened"))) };
+            pages.push(match range {
+                Some(r) => {
+                    let n = pdfcraft_organize::page_count(d)?;
+                    let p = pdfcraft_print::select_pages(n, Some(r), &[], pdfcraft_print::Subset::All, false)
+                        .map_err(|e| EditError::Print(format!("{name}: {e}")))?;
+                    Some(p)
+                }
+                None => None,
+            });
+        }
+        let mut runs: Vec<pdfcraft_organize::Run<'_>> = Vec::with_capacity(sources.len());
+        for (((name, _, _), at), p) in sources.iter().zip(&file).zip(&pages) {
+            let Some(d) = docs.get(*at) else { return Err(EditError::Write(format!("{name}: not opened"))) };
+            runs.push((*at, name.as_str(), d, p.as_deref()));
+        }
+        let out = pdfcraft_organize::combine_grouped(&runs)?;
+        self.write_new(&out)
+    }
+
     /// New PDF bytes containing copies of `pages` of the document (Extract Pages).
     pub fn extract(&self, id: DocId, pages: &[usize]) -> Result<Arc<Vec<u8>>, EditError> {
         let src = self.cos(id)?;
@@ -2854,6 +2949,8 @@ impl Session {
         let id = self.open(name, None, bytes, None)?;
         if let Some(d) = self.docs.iter_mut().find(|d| d.id == id) {
             d.dirty = true;
+            // Unsaved work with no edit yet still needs its first recovery snapshot.
+            d.generation += 1;
         }
         Ok(id)
     }
@@ -2979,7 +3076,7 @@ impl Session {
     /// `opts.date` takes the session clock.
     pub fn sign(&self, doc: DocId, id: &pdfcraft_sign::DigitalId, mut opts: SignOptions) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
-        // (Encrypted documents are refused by the signer for now.)
+        // Encrypted documents are signed under their permissions (the signer checks them).
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
             opts.date = self.signing_date();
@@ -3152,9 +3249,25 @@ pub fn comment_kind(a: &pdfcraft_render::Annotation) -> &str {
 pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: SummarySort) -> String {
     use std::fmt::Write;
     let top: Vec<&pdfcraft_render::Annotation> = all.iter().filter(|a| a.in_reply_to.is_none() && a.state.is_none()).collect();
-    let replies_of = |a: &pdfcraft_render::Annotation| -> Vec<&pdfcraft_render::Annotation> {
-        all.iter().filter(|r| r.state.is_none() && r.in_reply_to.is_some() && r.in_reply_to == a.name && a.name.is_some()).collect()
-    };
+    // Write a comment's replies, indenting each level. A reply to a reply keeps its `/IRT` on the
+    // direct parent, so following one level would leave the deeper replies out of the summary.
+    fn write_replies(out: &mut String, all: &[pdfcraft_render::Annotation], parent: &str, depth: usize) {
+        use std::fmt::Write;
+        if depth > 64 {
+            return;
+        }
+        for r in all.iter().filter(|r| r.state.is_none() && r.in_reply_to.as_deref() == Some(parent)) {
+            let indent = "    ".repeat(depth + 1);
+            let _ =
+                writeln!(out, "{indent}Author: {}  Subject: Reply  Date: {}", r.author.as_deref().unwrap_or(""), r.modified.as_deref().unwrap_or(""));
+            for line in r.contents.as_deref().unwrap_or("").lines() {
+                let _ = writeln!(out, "{indent}{line}");
+            }
+            if let Some(nm) = r.name.as_deref() {
+                write_replies(out, all, nm, depth + 1);
+            }
+        }
+    }
     let mut numbered: Vec<(usize, &pdfcraft_render::Annotation)> = Vec::new();
     let mut last = usize::MAX;
     let mut n = 0;
@@ -3191,11 +3304,8 @@ pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: Su
         if let Some(c) = a.contents.as_deref().filter(|c| !c.is_empty()) {
             let _ = writeln!(out, "{c}");
         }
-        for r in replies_of(a) {
-            let _ = writeln!(out, "    Author: {}  Subject: Reply  Date: {}", r.author.as_deref().unwrap_or(""), r.modified.as_deref().unwrap_or(""));
-            for line in r.contents.as_deref().unwrap_or("").lines() {
-                let _ = writeln!(out, "    {line}");
-            }
+        if let Some(nm) = a.name.as_deref() {
+            write_replies(&mut out, all, nm, 0);
         }
         out.push('\n');
     }

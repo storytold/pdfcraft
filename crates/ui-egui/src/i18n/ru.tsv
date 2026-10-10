@@ -65,6 +65,7 @@
 	Fit visible	По видимой области
 	Marquee zoom	Масштаб выделением
 	Take a snapshot	Сделать снимок
+	Column select	Выделение столбца
 	Full screen mode	Полноэкранный режим
 	Read mode	Режим чтения
 	Switch light / dark theme	Переключить светлую / тёмную тему
@@ -271,6 +272,7 @@
 	Security properties…	Свойства безопасности…
 	Organize pages	Организовать страницы
 	New bookmark	Новая закладка
+	New bookmarks from structure	Новые закладки из структуры
 	Rotate pages clockwise	Повернуть страницы по часовой стрелке
 	Rotate pages counterclockwise	Повернуть страницы против часовой стрелки
 	Delete pages	Удалить страницы
@@ -1095,6 +1097,11 @@
 	Text in images isn't found; recognise text (OCR) first.	Текст в изображениях не находится; сначала распознайте текст (OCR).
 	No matches.	Совпадений нет.
 	{n} match(es) marked for redaction.	Отмечено для сокрытия: {n} совпад.
+	Multiple words or phrases	Несколько слов или фраз
+	One word or phrase per line	По одному слову или фразе в строке
+	Import list…	Импортировать список…
+	{n} word(s) or phrase(s)	Слов или фраз: {n}
+	{name} is too large for a word list (at most 1 MB).	Файл {name} слишком велик для списка слов (не более 1 МБ).
 	Redaction Tool Properties	Свойства инструмента сокрытия
 	Redacted area fill colour:	Цвет заливки скрытой области:
 	Use overlay text	Использовать текст поверх
@@ -1491,6 +1498,8 @@
 	Right Edge	Правый край
 	Language	Язык
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Сохранено {place}: {before} → {after} (на {pct}% меньше){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	Этот файл уже минимального размера ({size}). Копия не сохранена.
+	Saved {place}: {before} → {after} (not smaller){detail}	Сохранено {place}: {before} → {after} (не меньше){detail}
 	Couldn't save the image: {e}	Не удалось сохранить изображение: {e}
 	Adding images arrives on the web with file pickers for images	Добавление изображений появится в веб-версии с выбором файлов изображений
 	Replacing images on page {p} arrives on the web with image pickers ({i})	Замена изображений на стр. {p} появится в веб-версии с выбором изображений ({i})
@@ -2048,3 +2057,26 @@
 	The field {name} no longer exists.	Поле {name} больше не существует.
 	A selected field has no widget on any page, so the fields can't be edited together.	У одного из выбранных полей нет виджета ни на одной странице, поэтому поля нельзя изменить вместе.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} — с разрешением {dpi} dpi, максимальным, с каким их можно отрисовать)
+	Fill colour	Цвет заливки
+	No fill	Без заливки
+	Fill colour: none	Цвет заливки: нет
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	Пробел
+	Grid view	Вид сеткой
+	List view	Вид списком
+	Files are combined in the order shown. Drag them to change it.	Файлы объединяются в показанном порядке. Перетащите их, чтобы изменить его.
+	Preview unavailable: {e}	Предпросмотр недоступен: {e}
+	Pages: {k} of {n}	Страницы: {k} из {n}
+	Check the pages	Проверьте страницы
+	Switch to List view to change the pages it takes.	Переключитесь на вид списком, чтобы изменить, какие страницы взять.
+	Expand all	Развернуть все
+	Collapse all	Свернуть все
+	Remove page	Удалить страницу
+	Remove {n} pages	Удалить страницы: {n}

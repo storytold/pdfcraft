@@ -170,13 +170,16 @@ impl PdfCraftApp {
                     continue;
                 }
             };
-            if meta.encrypted {
-                // The password prompt opens it; mark it recovered once it is open.
-                self.pending_recovered = Some(meta.clone());
-            }
             match self.open_bytes(&meta.name, None, bytes) {
                 Ok(()) if self.password_prompt.is_none() => self.finish_recovery(&meta),
-                Ok(()) => {}
+                // Encrypted: the password prompt opens it, and finishes its recovery once it
+                // does. The association travels with the prompt, so cancelling it cannot hand
+                // this snapshot's path to the next document that is unlocked (#813).
+                Ok(()) => {
+                    if let Some(prompt) = self.password_prompt.as_mut() {
+                        prompt.recovered = Some(meta.clone());
+                    }
+                }
                 Err(e) => self.notify_fmt("Couldn't recover {name}: {e}", &[("name", &meta.name), ("e", &e.to_string())]),
             }
         }
@@ -185,10 +188,9 @@ impl PdfCraftApp {
 
     /// The most recently opened tab came from `meta`: keep its recovery entry and path.
     pub(crate) fn finish_recovery(&mut self, meta: &RecoveryMeta) {
-        let Some((_, id)) = self.active_ids() else { return };
+        let Some(id) = self.views.last().map(|v| v.id) else { return };
         self.session.mark_recovered(id, meta.path.clone());
         self.recovery_keys.insert(id, meta.key.clone());
-        self.pending_recovered = None;
     }
 
     /// Delete recovery entries the user chose not to recover.

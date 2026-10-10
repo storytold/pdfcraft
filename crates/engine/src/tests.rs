@@ -134,6 +134,84 @@ fn edits_update_view_data_and_mark_dirty() {
 }
 
 #[test]
+fn metadata_edit_keeps_the_renderer_without_changing_page_content() {
+    let (mut s, id) = session_with(1);
+    let request = pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Pixels, scale: 1.0, ..Default::default() };
+    let render = |session: &Session| {
+        let doc = session.get(id).unwrap();
+        doc.renderer.set_queue(vec![request]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if let Some(page) = doc.renderer.try_recv() {
+                assert!(page.error.is_none(), "{:?}", page.error);
+                return (doc.renderer.stats(), page.rgba);
+            }
+            assert!(std::time::Instant::now() < deadline, "page render did not finish");
+            std::thread::yield_now();
+        }
+    };
+
+    let (before, before_pixels) = render(&s);
+    assert_eq!(before.page_interpretations, 1);
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Report".into() }).unwrap();
+    assert_eq!(s.get(id).unwrap().info_value("Title").as_deref(), Some("Report"));
+    assert_eq!(s.get(id).unwrap().renderer.stats().page_interpretations, 1, "a metadata edit keeps the renderer and its page interpretation");
+    let (after, after_pixels) = render(&s);
+    assert_eq!(after.page_interpretations, 2, "the same renderer serves the second request, so its count continues");
+    assert_eq!(before_pixels, after_pixels, "document properties do not change page pixels");
+}
+
+#[test]
+fn metadata_edits_and_history_reuse_the_render_pool() {
+    let (mut s, id) = session_with(1);
+    let pixels = shown(&s, id, 0).rgba;
+    let doc = s.get(id).unwrap();
+    let stats = doc.renderer.stats();
+    let display = doc.display.clone();
+    assert_eq!(stats.page_interpretations, 1);
+
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Report".into() }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.title.as_deref(), Some("Report"));
+    assert_eq!(doc.renderer.stats(), stats);
+    assert!(Arc::ptr_eq(&doc.display, &display));
+    assert_eq!(pixels.as_ref().len(), 200 * 300 * 4);
+
+    s.undo(id).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.title, None);
+    assert_eq!(doc.renderer.stats(), stats);
+    assert!(Arc::ptr_eq(&doc.display, &display));
+
+    s.redo(id).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.title.as_deref(), Some("Report"));
+    assert_eq!(doc.renderer.stats(), stats);
+    assert!(Arc::ptr_eq(&doc.display, &display));
+}
+
+#[test]
+fn field_and_comment_edits_still_rebuild_the_render_pool() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let _ = shown(&s, id, 0);
+    assert_eq!(s.get(id).unwrap().renderer.stats().page_interpretations, 1);
+
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();
+    assert_eq!(s.get(id).unwrap().renderer.stats().page_interpretations, 0);
+    let _ = shown(&s, id, 0);
+    assert_eq!(s.get(id).unwrap().renderer.stats().page_interpretations, 1);
+
+    let shape = Shape::Rectangle { rect: [20.0, 20.0, 60.0, 60.0] };
+    s.apply(
+        id,
+        Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Test".into() }),
+    )
+    .unwrap();
+    assert_eq!(s.get(id).unwrap().renderer.stats().page_interpretations, 0);
+}
+
+#[test]
 fn undo_and_redo_restore_exact_states() {
     let (mut s, id) = session_with(3);
     let original = s.get(id).unwrap().bytes.clone();
@@ -388,6 +466,87 @@ fn mixed_files_convert_and_combine_in_order() {
 }
 
 #[test]
+fn a_file_split_around_another_combines_in_order_with_one_bookmark() {
+    let mut s = Session::new();
+    let (a, b) = (Arc::new(fixture(3)), Arc::new(fixture(2)));
+    // a's pages 1–2, then b, then a's page 3: one file (group 7) split around another.
+    let sources: Vec<CombineSource> = vec![("a".into(), a.clone(), Some("1-2".into())), ("b".into(), b, None), ("a".into(), a, Some("3".into()))];
+    let combined = s.combine_grouped(&sources, &[7, 9, 7], &[]).unwrap();
+    let id = s.open_new("Combined.pdf", combined).unwrap();
+    assert_eq!(page_texts(&s, id), ["Page 1", "Page 2", "Page 1", "Page 2", "Page 3"]);
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["a→1", "b→3"], "one bookmark for a, at its first page");
+    // Without groups each source is a file of its own, as combine_ranges.
+    let (a, b) = (Arc::new(fixture(3)), Arc::new(fixture(2)));
+    let sources: Vec<CombineSource> = vec![("a".into(), a.clone(), Some("1".into())), ("b".into(), b, None), ("a".into(), a, Some("3".into()))];
+    let combined = s.combine_grouped(&sources, &[], &[]).unwrap();
+    let id = s.open_new("Combined 2.pdf", combined).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["a→1", "b→2", "a→4"]);
+    // A bad range is refused with the file's name.
+    let bad: Vec<CombineSource> = vec![("a".into(), Arc::new(fixture(1)), Some("9".into()))];
+    assert!(matches!(s.combine_grouped(&bad, &[1], &[]), Err(EditError::Print(e)) if e.starts_with("a:")));
+}
+
+#[test]
+fn a_page_with_a_form_field_shown_twice_keeps_one_field() {
+    // Regression (found by review): the repeated page copied the whole field again, so the
+    // result had two fields named "shared", filled in separately.
+    use pdfcraft_cos::{Dict, Document, Object, PdfString};
+    let mut doc = Document::open(Arc::new(fixture(2))).unwrap();
+    let pages: Vec<_> = pdfcraft_organize::pages(&doc).unwrap().into_iter().map(|p| p.obj).collect();
+    let field = doc.add(Object::Null);
+    let widgets: Vec<_> = pages
+        .iter()
+        .map(|p| {
+            let mut w = Dict::new();
+            w.set(b"Type".to_vec(), Object::name("Annot"));
+            w.set(b"Subtype".to_vec(), Object::name("Widget"));
+            w.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(100), Object::Int(20)]));
+            w.set(b"Parent".to_vec(), Object::Ref(field));
+            w.set(b"P".to_vec(), Object::Ref(*p));
+            doc.add(w)
+        })
+        .collect();
+    let mut f = Dict::new();
+    f.set(b"FT".to_vec(), Object::name("Tx"));
+    f.set(b"T".to_vec(), Object::String(PdfString::text("shared")));
+    f.set(b"V".to_vec(), Object::String(PdfString::text("Ada")));
+    f.set(b"Kids".to_vec(), Object::Array(widgets.iter().copied().map(Object::Ref).collect()));
+    doc.set(field, Object::Dict(f));
+    for (p, w) in pages.iter().zip(&widgets) {
+        doc.update_dict(*p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(*w)]))).unwrap();
+    }
+    let mut form = Dict::new();
+    form.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(field)]));
+    doc.update_dict(doc.root().unwrap(), |d| d.set(b"AcroForm".to_vec(), Object::Dict(form))).unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
+    // Pages 1, 2, then page 1 again: one file split around nothing but itself.
+    let s = Session::new();
+    let sources: Vec<CombineSource> = vec![("form".into(), bytes.clone(), Some("1-2".into())), ("form".into(), bytes, Some("1".into()))];
+    let out = s.combine_grouped(&sources, &[1, 1], &[]).unwrap();
+    let mut out = Document::open(out).unwrap();
+    pdfcraft_forms::set_value(&mut out, "shared", &pdfcraft_forms::FieldValue::Text("Grace".into())).unwrap();
+    let fields = pdfcraft_forms::fields(&out);
+    assert!(
+        !fields.is_empty() && fields.iter().all(|f| f.name == "shared" && f.value == ["Grace"]),
+        "one field, one value: {:?}",
+        fields.iter().map(|f| (&f.name, &f.value)).collect::<Vec<_>>()
+    );
+    let catalog = out.get(out.root().unwrap()).as_dict().cloned().unwrap();
+    let form = out.resolve(catalog.get(b"AcroForm").unwrap()).as_dict().cloned().unwrap();
+    let listed = form.get(b"Fields").and_then(|f| f.as_array()).cloned().unwrap();
+    assert_eq!(listed.len(), 1, "the field isn't copied again for the repeated page");
+    // Its widgets: one on each of the three pages, each belonging to its own page.
+    let out_pages: Vec<_> = pdfcraft_organize::pages(&out).unwrap().into_iter().map(|p| p.obj).collect();
+    let kids = out.resolve(&listed[0]).as_dict().and_then(|f| f.get(b"Kids").and_then(|k| k.as_array()).cloned()).unwrap();
+    assert_eq!(kids.len(), 3);
+    let mut on: Vec<_> = kids.iter().map(|k| out.resolve(k).as_dict().and_then(|w| w.reference(b"P")).unwrap()).collect();
+    on.sort();
+    let mut expected = out_pages.clone();
+    expected.sort();
+    assert_eq!(on, expected, "a widget per page, on its own page");
+}
+
+#[test]
 fn files_that_cannot_be_converted_are_refused_clearly() {
     let s = Session::new();
     let err = s.convert_to_pdf("report.docx", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();
@@ -500,6 +659,19 @@ fn autosave_snapshots_only_changed_documents() {
 }
 
 #[test]
+fn autosave_snapshots_a_new_unsaved_document_once() {
+    let (mut s, clean) = session_with(1);
+    let id = s.open_new("Untitled.pdf", Arc::new(fixture(1))).unwrap();
+    let snaps = s.autosave_snapshots();
+    assert_eq!(snaps.len(), 1, "the new document is unsaved work");
+    assert_eq!(snaps[0].doc, id);
+    assert!(snaps.iter().all(|x| x.doc != clean), "the clean document stays out");
+    assert!(s.autosave_snapshots().is_empty(), "nothing new since the last snapshot");
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    assert_eq!(s.autosave_snapshots().len(), 1, "a later edit is snapshotted again");
+}
+
+#[test]
 fn recovered_documents_reopen_unsaved_at_their_original_path() {
     let (mut s, id) = session_with(2);
     s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
@@ -551,6 +723,51 @@ fn bookmark_edits_show_in_the_viewer_undo_and_save() {
     let mut again = Session::new();
     let id2 = again.open("again.pdf", None, saved, None).unwrap();
     assert_eq!(outline_titles(&again.get(id2).unwrap().info.outline), ["Start→1", "Finish→3"]);
+}
+
+/// Two pages tagged with an H1 on the first and an H2 on the second.
+fn tagged_headings_fixture() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] /Resources << /Font << /F1 6 0 R >> >> >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Length 52 >>\nstream\n/H1 << /MCID 0 >> BDC BT /F1 12 Tf (Intro) Tj ET EMC\nendstream",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /StructTreeRoot /K [8 0 R 9 0 R] >>",
+        "<< /S /H1 /Pg 3 0 R /K 0 >>",
+        "<< /S /H2 /Pg 4 0 R /ActualText (Details) >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn bookmarks_from_structure_nest_the_headings_and_undo() {
+    let mut s = Session::new();
+    let id = s.open("tagged.pdf", None, Arc::new(tagged_headings_fixture()), None).unwrap();
+    s.apply(id, Edit::BookmarksFromStructure).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Untitled→0[Intro→1[Details→2]]"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("New bookmarks from structure"));
+    s.undo(id).unwrap();
+    assert!(s.get(id).unwrap().info.outline.is_empty());
+
+    // Untagged: a clear error and nothing changes.
+    let (mut s, id) = session_with(2);
+    let err = s.apply(id, Edit::BookmarksFromStructure).unwrap_err();
+    assert_eq!(err.to_string(), "this document has no tagged headings to make bookmarks from");
+    assert!(s.get(id).unwrap().info.outline.is_empty());
 }
 
 #[test]
@@ -1417,6 +1634,19 @@ fn comments_lock_take_checkmarks_hide_and_summarize() {
     assert_eq!(comment_summary("x", &[], SummarySort::Page), "Summary of Comments on x\n\nThis document has no comments.\n");
 }
 
+/// #820: the generated summary includes replies to replies, indented one level deeper.
+#[test]
+fn comment_summary_includes_replies_to_replies() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, rect_comment(0, [40.0, 40.0, 90.0, 90.0])).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "FIRST_REPLY".into(), author: "A".into() }).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 1, text: "NESTED_REPLY".into(), author: "B".into() }).unwrap();
+    let text = comment_summary("doc.pdf", &s.get(id).unwrap().info.annotations, SummarySort::Page);
+    assert!(text.contains("FIRST_REPLY"), "{text}");
+    assert!(text.contains("NESTED_REPLY"), "replies to replies are summarized: {text}");
+    assert!(text.contains("        NESTED_REPLY"), "the nested reply is indented under its parent: {text}");
+}
+
 #[test]
 fn signing_saving_trusting_and_commenting_afterwards() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
@@ -1561,6 +1791,24 @@ fn backgrounds_and_watermarks_from_files() {
 
 /// Scan & OCR ▸ Recognize text on a page that is only a picture of text (needs the models:
 /// `cargo xtask models`; skipped without them).
+#[test]
+fn recognize_text_reads_the_euro_sign() {
+    if !ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = s.create_from_text("t", "Total amount due: €250 by Friday").unwrap();
+    let id = s.open("text.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(id).unwrap()).png(0, 150.0).unwrap();
+    let scan = s.create_from_images(&[("scan.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    s.recognize_text(id, &[], ocr::OcrSettings::default()).unwrap();
+    let text = page_texts(&s, id)[0].clone();
+    // The model was trained with € where the ocrs crate's alphabet has a second E.
+    assert!(text.contains("€250"), "{text}");
+}
+
 #[test]
 fn recognize_text_makes_a_scanned_page_searchable() {
     if !ocr::available() {
@@ -2156,6 +2404,46 @@ fn xfa_scripts_initialize_calculate_validate_toggle_and_add_rows() {
     assert_eq!(d2.form.iter().find(|f| f.name == "grand").unwrap().value, vec!["10".to_string()]);
     assert_eq!(d2.form.iter().find(|f| f.name == "qty").unwrap().value, vec!["500".to_string()]);
     assert!(!d2.dirty);
+}
+
+/// A repeating table inside an area of a positioned page (as in real Designer forms): every
+/// row is laid out, the values Adobe wrote (under the area's parent: areas are
+/// not data scopes) are read, a FormCalc total over all rows computes, and what is filled here
+/// is written back where Adobe's viewers read it, with no element for the area.
+#[test]
+fn xfa_rows_in_areas_are_laid_out_read_calculated_and_written_where_adobe_binds_them() {
+    let data = "<form><page><table><row><reason>Regular</reason><days>4</days></row><row><reason/><days/></row><row><reason/><days/></row></table><carried>5</carried></page></form>";
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::leave_template(data)));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("leave.pdf", None, bytes, None).expect("opens");
+    let value = |s: &Session, n: &str| {
+        s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap_or_else(|| panic!("no field {n}")).value.first().cloned().unwrap_or_default()
+    };
+    let names = |s: &Session| s.get(id).unwrap().form.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+    // Three rows (occur min="3"), not one.
+    assert_eq!(names(&s).iter().filter(|n| n.starts_with("reason")).count(), 3, "{:?}", names(&s));
+    // Adobe's data, bound past the area.
+    assert_eq!((value(&s, "reason"), value(&s, "days"), value(&s, "carried")), ("Regular".into(), "4".into(), "5".into()));
+    // The total walks rows 0 to 2: 5 + 30 - 4.
+    assert_eq!(value(&s, "rest"), "31", "{:?}", s.take_js_output(id));
+    // A second regular row recalculates it.
+    s.apply(id, Edit::SetFieldValue { name: "reason_2".into(), value: FieldValue::Text("Regular".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "days_2".into(), value: FieldValue::Text("2".into()) }).unwrap();
+    assert_eq!(value(&s, "rest"), "29", "{:?}", s.take_js_output(id));
+    assert!(s.take_js_output(id).errors.is_empty());
+    // Written where Adobe reads it: no element for the area, the rows under the table.
+    let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    let d = pdfcraft_xfa::data_of(&cos).unwrap();
+    let path = |som: &str| pdfcraft_xfa::som_to_path(som);
+    assert_eq!(d.count(&path("form[0].page[0]"), "box"), 0, "an element for the area was written");
+    assert_eq!(d.count(&path("form[0].page[0].table[0]"), "row"), 3);
+    assert_eq!(d.text_at(&path("form[0].page[0].table[0].row[1].days[0]")), Some("2"));
+    assert_eq!(d.text_at(&path("form[0].page[0].rest[0]")), Some("29"));
+    // Reopened, the values come back from that data.
+    let mut s2 = Session::new().with_clock(|| 1_700_000_000);
+    let id2 = s2.open("again.pdf", None, s.get(id).unwrap().bytes.clone(), None).expect("reopens");
+    let v2 = |n: &str| s2.get(id2).unwrap().form.iter().find(|f| f.name == n).unwrap().value.first().cloned().unwrap_or_default();
+    assert_eq!((v2("days_2"), v2("rest")), ("2".into(), "29".into()));
 }
 
 #[test]

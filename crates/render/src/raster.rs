@@ -467,6 +467,24 @@ struct BusyPublishGate {
     release: Arc<Mutex<Receiver<()>>>,
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[derive(Clone)]
+struct RenderGate {
+    page: usize,
+    shared_generation: bool,
+    claimed: Arc<std::sync::atomic::AtomicBool>,
+    entered: Arc<std::sync::Barrier>,
+    release: Arc<std::sync::Barrier>,
+    finished: Arc<std::sync::Barrier>,
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[derive(Clone)]
+struct ParseGate {
+    entered: Arc<std::sync::Barrier>,
+    release: Arc<std::sync::Barrier>,
+}
+
 /// State shared by the pool and its workers.
 #[derive(Default)]
 struct Shared {
@@ -483,9 +501,18 @@ struct Shared {
     /// can receive its answer (the pool was dropped, or the watchdog gave up on the render).
     /// Lock `busy` first when holding both.
     stop: Mutex<Vec<Arc<std::sync::atomic::AtomicBool>>>,
-    /// Test hook: make one page slow.
-    #[cfg(test)]
+    /// Test hook: hold one worker at the render boundary until the test releases it.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    render_gates: Mutex<Vec<RenderGate>>,
+    /// Test hook: hold parser initialization until the test releases it.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    parse_gate: Mutex<Option<ParseGate>>,
+    /// Test hook: make rendering this page take this long (cancellable).
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     slow_page: Mutex<Option<(usize, std::time::Duration)>>,
+    /// Test hook: make parser initialization take this long.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    slow_parse: Mutex<Option<std::time::Duration>>,
     /// Test hook: count parser initializations, including failed parses.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     parses: std::sync::atomic::AtomicUsize,
@@ -493,8 +520,6 @@ struct Shared {
     parser: PoolParser,
     #[cfg(all(test, not(target_arch = "wasm32")))]
     panic_page: Mutex<Option<usize>>,
-    #[cfg(all(test, not(target_arch = "wasm32")))]
-    slow_parse: Mutex<Option<std::time::Duration>>,
     #[cfg(all(test, not(target_arch = "wasm32")))]
     render_started: std::sync::atomic::AtomicUsize,
     #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -858,6 +883,48 @@ impl RenderPool {
     }
 }
 
+/// A pool's threads after [`RenderPool::retire`]. Idle ones exit at once; one still rendering is
+/// told to stop at its next drawing operator and exits when its render returns, which a single
+/// long operator (such as decoding a huge image) can delay.
+pub struct Retiring(Vec<JoinHandle<()>>);
+
+impl Retiring {
+    /// The threads that haven't exited yet.
+    pub fn running(&mut self) -> usize {
+        self.0.retain(|h| !h.is_finished());
+        self.0.len()
+    }
+
+    /// Whether every thread has exited.
+    pub fn exited(&self) -> bool {
+        self.0.iter().all(JoinHandle::is_finished)
+    }
+}
+
+impl RenderPool {
+    /// No replacement threads: when the watchdog gives up on a render, the request (and any
+    /// later one) is answered with an error instead of starting another thread. For a caller that
+    /// bounds how many render threads exist at once: the stuck thread keeps running until its
+    /// operator returns, and a replacement would run beside it.
+    pub fn without_replacements(self) -> Self {
+        *lock(&self.replacements_left) = 0;
+        self
+    }
+
+    /// This pool's threads that haven't exited (workers and replacements; 0 when rendering inline).
+    pub fn threads(&self) -> usize {
+        lock(&self._workers).iter().filter(|h| !h.is_finished()).count()
+    }
+
+    /// Drop the pool but keep its threads' handles, for a caller that bounds how many render
+    /// threads run at once: a render the watchdog gave up on can outlive its pool.
+    pub fn retire(self) -> Retiring {
+        let handles = std::mem::take(&mut *lock(&self._workers));
+        drop(self);
+        Retiring(handles)
+    }
+}
+
 impl Drop for RenderPool {
     fn drop(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -965,6 +1032,10 @@ fn worker(
                             #[cfg(test)]
                             {
                                 shared.parses.fetch_add(1, Ordering::Relaxed);
+                                if let Some(gate) = lock(&shared.parse_gate).clone() {
+                                    gate.entered.wait();
+                                    gate.release.wait();
+                                }
                                 let delay = *lock(&shared.slow_parse);
                                 if let Some(delay) = delay {
                                     std::thread::sleep(delay);
@@ -1050,6 +1121,20 @@ fn worker(
                         }
                     }
                 }
+                #[cfg(all(test, not(target_arch = "wasm32")))]
+                let render_gate = lock(&shared.render_gates)
+                    .iter()
+                    .find(|gate| {
+                        gate.page == req.page
+                            && gate.shared_generation == *shared_generation
+                            && gate.claimed.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
+                    })
+                    .cloned();
+                #[cfg(all(test, not(target_arch = "wasm32")))]
+                if let Some(gate) = &render_gate {
+                    gate.entered.wait();
+                    gate.release.wait();
+                }
                 let settings = warning_settings(&worker_settings(&config, &request_cancelled), warnings.clone());
                 lock(&warnings).clear();
                 let r = catch_unwind(AssertUnwindSafe(|| {
@@ -1068,6 +1153,10 @@ fn worker(
                 // and started a replacement: drop the late result and retire.
                 let abandoned = lock(&shared.busy).get_mut(id).is_none_or(|slot| slot.take().is_none());
                 if abandoned {
+                    #[cfg(all(test, not(target_arch = "wasm32")))]
+                    if let Some(gate) = render_gate {
+                        gate.finished.wait();
+                    }
                     return;
                 }
                 let panicked = matches!(r, Err((_, true)));
@@ -1098,6 +1187,25 @@ fn worker(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_gate(page: usize, shared_generation: bool) -> super::RenderGate {
+        let barrier = || std::sync::Arc::new(std::sync::Barrier::new(2));
+        super::RenderGate {
+            page,
+            shared_generation,
+            claimed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            entered: barrier(),
+            release: barrier(),
+            finished: barrier(),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn parse_gate() -> super::ParseGate {
+        let barrier = || std::sync::Arc::new(std::sync::Barrier::new(2));
+        super::ParseGate { entered: barrier(), release: barrier() }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn receive_before_deadline(pool: &RenderPool) -> RenderedPage {
         // Generous: a loaded CI machine runs many render tests at once.
@@ -1230,15 +1338,75 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn a_retired_pool_counts_its_threads_until_they_exit() {
+        // Idle: its thread leaves as soon as the pool is gone.
+        let mut idle = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default()).retire();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while idle.running() > 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(idle.running(), 0);
+        // Busy in a step that can't be interrupted: still counted after the pool is dropped.
+        let pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
+        *lock(&pool.shared.slow_page) = Some((0, std::time::Duration::from_secs(2)));
+        pool.set_queue(vec![RenderRequest { page: 0, scale: 1.0, ..Default::default() }]);
+        while pool.shared.render_started.load(Ordering::Relaxed) == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let mut busy = pool.retire();
+        assert_eq!(busy.running(), 1, "the render is still under way");
+        while busy.running() > 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(busy.running(), 0, "and the thread exits when it returns");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_pool_without_replacements_never_runs_a_second_thread() {
+        // The watchdog gives up on a render stuck in one long step; with no replacement, the
+        // request is answered with an error and the stuck thread is the only one.
+        let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default()).without_replacements();
+        pool.set_stuck_after(std::time::Duration::from_millis(50));
+        *lock(&pool.shared.slow_page) = Some((0, std::time::Duration::from_secs(2)));
+        pool.set_queue(vec![RenderRequest { page: 0, scale: 1.0, ..Default::default() }]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let answer = loop {
+            assert!(pool.threads() <= 1, "{} render threads", pool.threads());
+            if let Some(page) = pool.try_recv() {
+                break page;
+            }
+            assert!(std::time::Instant::now() < deadline, "the stuck render is answered");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert!(answer.error.is_some(), "answered with an error, not a second attempt");
+        assert!(pool.threads() <= 1);
+        let mut retired = pool.retire();
+        while retired.running() > 0 {
+            assert!(std::time::Instant::now() < deadline, "the stuck thread exits when its step ends");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn page_panic_retires_shared_generation_and_healthy_pages_use_private_parsers() {
         let pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 3, RenderConfig::default());
         *lock(&pool.shared.panic_page) = Some(0);
-        *lock(&pool.shared.slow_page) = Some((1, std::time::Duration::from_millis(50)));
+        // Hold page 1 at the shared render boundary until page 0 has crashed, so it can't finish
+        // in the shared generation first (then only one parse would happen).
+        let gate = render_gate(1, true);
+        *lock(&pool.shared.render_gates) = vec![gate.clone()];
         pool.set_queue(vec![
             RenderRequest { page: 0, scale: 1.0, ..Default::default() },
             RenderRequest { page: 1, scale: 1.0, ..Default::default() },
         ]);
-        let mut pages = [receive_before_deadline(&pool), receive_before_deadline(&pool)];
+        let crashed = receive_before_deadline(&pool);
+        if gate.claimed.load(Ordering::Acquire) {
+            gate.entered.wait();
+            gate.release.wait();
+        }
+        let mut pages = [crashed, receive_before_deadline(&pool)];
         pages.sort_by_key(|page| page.request.page);
         assert!(pages[0].error.as_deref().is_some_and(|message| message.contains("crashed")));
         assert!(pages[1].error.is_none(), "{:?}", pages[1].error);
@@ -1271,7 +1439,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_slow_parse_is_not_a_timeout_and_its_pages_render() {
-        use std::time::{Duration, Instant};
+        use std::time::Duration;
         // Shared, then the private parsers used after a shared failure.
         for private in [false, true] {
             let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 2, RenderConfig::default());
@@ -1279,33 +1447,31 @@ mod tests {
                 *lock(&pool.shared.parser.state) = ParserState::Private;
                 pool.shared.parser.valid.store(false, Ordering::Release);
             }
-            // The parse takes 2 s against a 10 ms limit: the watchdog must leave it alone.
-            *lock(&pool.shared.slow_parse) = Some(Duration::from_secs(2));
-            pool.set_stuck_after(Duration::from_millis(10));
-            pool.set_queue(vec![
-                RenderRequest { page: 0, scale: 1.0, tag: 60, ..Default::default() },
-                RenderRequest { page: 1, scale: 1.0, tag: 61, ..Default::default() },
-            ]);
-            let started = Instant::now();
-            while pool.shared.parses.load(Ordering::Relaxed) == 0 {
-                assert!(started.elapsed() < Duration::from_secs(5), "parsing did not start");
-                std::thread::sleep(Duration::from_millis(2));
-            }
-            // Run the watchdog well past its limit while the parse is still sleeping.
-            for _ in 0..20 {
-                assert!(pool.try_recv().is_none(), "nothing may be given up on while parsing");
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            let gate = parse_gate();
+            *lock(&pool.shared.parse_gate) = Some(gate.clone());
+            pool.set_stuck_after(Duration::ZERO);
+            let requests = if private {
+                vec![RenderRequest { page: 0, scale: 1.0, tag: 60, ..Default::default() }]
+            } else {
+                vec![
+                    RenderRequest { page: 0, scale: 1.0, tag: 60, ..Default::default() },
+                    RenderRequest { page: 1, scale: 1.0, tag: 61, ..Default::default() },
+                ]
+            };
+            pool.set_queue(requests.clone());
+            gate.entered.wait();
+            assert!(pool.try_recv().is_none(), "the watchdog must leave parsing alone");
             assert!(lock(&pool.shared.stuck).is_empty());
             assert_eq!(*lock(&pool.retired_workers), 0);
             assert!(!matches!(*lock(&pool.shared.parser.state), ParserState::Failed));
-            // Rendering is timed from the end of parsing: give it a limit it can't miss.
+            // Rendering gets its own deadline after initialization completes.
             pool.set_stuck_after(Duration::from_secs(60));
-            let mut pages = [receive_before_deadline(&pool), receive_before_deadline(&pool)];
+            gate.release.wait();
+            let mut pages: Vec<_> = (0..requests.len()).map(|_| receive_before_deadline(&pool)).collect();
             pages.sort_by_key(|page| page.request.page);
-            for (page, tag) in pages.iter().zip([60, 61]) {
+            for (page, request) in pages.iter().zip(&requests) {
                 assert!(page.error.is_none(), "{:?}", page.error);
-                assert_eq!((page.width, page.height, page.request.tag), (100, 50, tag));
+                assert_eq!((page.width, page.height, page.request.tag), (100, 50, request.tag));
             }
             if !private {
                 assert_eq!(pool.shared.parses.load(Ordering::Relaxed), 1, "one shared parse");
@@ -1319,22 +1485,32 @@ mod tests {
     fn shared_timeouts_retry_healthy_pages_privately_before_blacklisting() {
         use std::time::Duration;
         let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 2, RenderConfig::default());
-        // Limits and delays far apart, so a loaded machine can't flip the outcome: a healthy
-        // page renders privately well within 1 s, the injected delays are 3 s and 6 s.
-        pool.set_stuck_after(Duration::from_secs(1));
-        // Both shared workers wait as if behind the same cold decode. Only page0
-        // remains pathological in an independent parser; page1 must recover.
-        *lock(&pool.shared.shared_render_delay) = Some(Duration::from_secs(3));
-        *lock(&pool.shared.slow_page) = Some((0, Duration::from_secs(6)));
+        pool.set_stuck_after(Duration::ZERO);
+        let shared_bad = render_gate(0, true);
+        let shared_healthy = render_gate(1, true);
+        let private_bad = render_gate(0, false);
+        *lock(&pool.shared.render_gates) = vec![shared_bad.clone(), shared_healthy.clone(), private_bad.clone()];
         pool.set_queue(vec![
             RenderRequest { page: 0, scale: 1.0, tag: 40, ..Default::default() },
             RenderRequest { page: 1, scale: 1.0, tag: 41, ..Default::default() },
         ]);
-        let mut pages = [receive_before_deadline(&pool), receive_before_deadline(&pool)];
-        pages.sort_by_key(|page| page.request.page);
-        assert!(pages[0].error.as_deref().is_some_and(|message| message.contains("took longer")));
-        assert!(pages[1].error.is_none(), "{:?}", pages[1].error);
-        assert_eq!((pages[1].width, pages[1].height, pages[1].request.tag), (100, 50, 41));
+        shared_bad.entered.wait();
+        shared_healthy.entered.wait();
+        assert!(pool.try_recv().is_none(), "shared timeouts retry instead of answering yet");
+        shared_bad.release.wait();
+        shared_healthy.release.wait();
+        shared_bad.finished.wait();
+        shared_healthy.finished.wait();
+        private_bad.entered.wait();
+        let healthy = pool.results.recv_timeout(Duration::from_secs(30)).expect("healthy private retry");
+        assert!(healthy.error.is_none(), "{:?}", healthy.error);
+        assert_eq!((healthy.request.page, healthy.width, healthy.height, healthy.request.tag), (1, 100, 50, 41));
+        pool.watchdog();
+        let bad = pool.results.recv_timeout(Duration::from_secs(30)).expect("the held private retry times out");
+        assert!(bad.error.as_deref().is_some_and(|message| message.contains("took longer")));
+        assert_eq!(bad.request.page, 0);
+        private_bad.release.wait();
+        private_bad.finished.wait();
         assert!(lock(&pool.shared.stuck).contains(&RequestFailureKey::from(RenderRequest { page: 0, scale: 1.0, tag: 40, ..Default::default() })));
         assert!(!lock(&pool.shared.stuck).contains(&RequestFailureKey::from(RenderRequest { page: 1, scale: 1.0, tag: 41, ..Default::default() })));
         assert!((2..=3).contains(&pool.shared.parses.load(Ordering::Relaxed)), "one shared parser and one or two reusable private parsers");
@@ -1346,10 +1522,18 @@ mod tests {
     fn exhausted_private_retry_budget_reports_pending_and_future_requests() {
         use std::time::Duration;
         let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
-        pool.set_stuck_after(Duration::from_millis(300));
-        *lock(&pool.shared.slow_page) = Some((0, Duration::from_secs(3)));
+        pool.set_stuck_after(Duration::ZERO);
+        let shared = render_gate(0, true);
+        let private = render_gate(0, false);
+        *lock(&pool.shared.render_gates) = vec![shared.clone(), private.clone()];
         let bad = RenderRequest { page: 0, scale: 1.0, tag: 50, ..Default::default() };
         let healthy = RenderRequest { page: 1, scale: 1.0, tag: 51, ..Default::default() };
+        pool.set_queue(vec![bad]);
+        shared.entered.wait();
+        assert!(pool.try_recv().is_none(), "shared timeout schedules the private retry");
+        shared.release.wait();
+        shared.finished.wait();
+        private.entered.wait();
         pool.set_queue(vec![bad, healthy]);
         let bad_result = receive_before_deadline(&pool);
         assert_eq!(bad_result.request, bad);
@@ -1367,6 +1551,8 @@ mod tests {
         assert!(result.error.as_deref().is_some_and(|message| message.contains("all render workers")));
         assert_eq!(pool.shared.parses.load(Ordering::Relaxed), 2, "exhaustion performs no parser work on the consumer");
         let workers = std::mem::take(&mut *lock(&pool._workers));
+        private.release.wait();
+        private.finished.wait();
         for worker in workers {
             worker.join().unwrap();
         }
@@ -1396,24 +1582,23 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn replacing_a_request_during_initialization_skips_its_obsolete_render() {
-        use std::time::{Duration, Instant};
-        let pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
-        *lock(&pool.shared.slow_parse) = Some(Duration::from_millis(200));
-        *lock(&pool.shared.slow_page) = Some((0, Duration::from_secs(10)));
+        use std::time::Duration;
+        let mut pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
+        let gate = parse_gate();
+        *lock(&pool.shared.parse_gate) = Some(gate.clone());
+        pool.set_stuck_after(Duration::ZERO);
         pool.set_queue(vec![RenderRequest { page: 0, scale: 1.0, tag: 10, ..Default::default() }]);
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while pool.shared.parses.load(Ordering::Relaxed) == 0 {
-            assert!(Instant::now() < deadline, "first request did not start parsing");
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        let replaced = Instant::now();
+        gate.entered.wait();
         pool.set_queue(vec![RenderRequest { page: 1, scale: 1.0, tag: 11, ..Default::default() }]);
+        assert!(pool.try_recv().is_none(), "parsing is still held");
+        pool.set_stuck_after(Duration::from_secs(60));
+        gate.release.wait();
         let page = receive_before_deadline(&pool);
         assert_eq!((page.request.page, page.request.tag), (1, 11));
         assert!(page.error.is_none(), "{:?}", page.error);
         assert_eq!((page.width, page.height), (100, 50));
-        assert!(replaced.elapsed() < Duration::from_secs(8), "obsolete page (10 s) delayed the replacement request");
         assert_eq!(pool.shared.parses.load(Ordering::Relaxed), 1, "the useful parser is retained");
+        assert_eq!(pool.shared.render_started.load(Ordering::Relaxed), 1, "obsolete page was skipped before rendering");
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1570,7 +1755,11 @@ mod tests {
         let object = Object::from_bytes(data.as_bytes()).unwrap();
         assert_eq!(Function::new(&object).unwrap().eval([0.5].into_iter().collect()).unwrap().as_slice(), &[0.5]);
         let over = format!("<< /FunctionType 3 /Domain [0 1] /Functions [{data}] /Bounds [] /Encode [0 1] >>");
-        assert!(Function::new(&Object::from_bytes(over.as_bytes()).unwrap()).is_none());
+        // The 64 functions above nest exactly 128 levels (each dictionary and its /Functions
+        // array, then the leaf's /Domain array), the parser's nesting cap. 65 nest 130, so the
+        // parser refuses them before the function-depth guard sees them (a refusal either way).
+        // `function_limits_depth_guard_refuses_a_chain_of_references` tests the guard itself.
+        assert!(Object::from_bytes(over.as_bytes()).is_none(), "the parser refuses direct nesting past its cap");
 
         // One root plus 10,000 leaves is one node past the common budget. This input remains
         // below a megabyte and does not attempt excessive recursion or an allocation failure.
@@ -1584,6 +1773,43 @@ mod tests {
             );
             let object = Object::from_bytes(data.as_bytes()).unwrap();
             assert_eq!(Function::new(&object).is_some(), children == 9999);
+        }
+    }
+    /// Stitching functions that each name the next through `N 0 R` nest no direct objects, so
+    /// the parser's nesting cap doesn't stop them and the function-depth guard does.
+    #[test]
+    fn function_limits_depth_guard_refuses_a_chain_of_references() {
+        use hayro::hayro_interpret::Function;
+        use hayro_syntax::object::{Object, ObjectIdentifier};
+        for functions in [64, 65] {
+            // Objects 4 onwards: each stitching function names the next one; the last is a leaf.
+            let objects: String = (4..4 + functions)
+                .map(|number| {
+                    let body = if number < 3 + functions {
+                        format!("<< /FunctionType 3 /Domain [0 1] /Functions [{} 0 R] /Bounds [] /Encode [0 1] >>", number + 1)
+                    } else {
+                        "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>".to_owned()
+                    };
+                    format!("{number} 0 obj {body} endobj\n")
+                })
+                .collect();
+            let parsed = hayro_syntax::Pdf::new(
+                format!(
+                    "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                     2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                     3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] >> endobj\n\
+                     {objects}trailer << /Root 1 0 R >>\n%%EOF"
+                )
+                .into_bytes(),
+            )
+            .unwrap();
+            let object = parsed.xref().get::<Object<'_>>(ObjectIdentifier::new(4, 0)).unwrap();
+            let function = Function::new(&object);
+            if functions == 64 {
+                assert_eq!(function.unwrap().eval([0.5].into_iter().collect()).unwrap().as_slice(), &[0.5]);
+            } else {
+                assert!(function.is_none(), "65 functions are one past the function-depth guard");
+            }
         }
     }
     #[test]
@@ -1678,34 +1904,27 @@ mod tests {
         // contention gets one isolated attempt, covered by the tests above.
         *lock(&pool.shared.parser.state) = ParserState::Private;
         pool.shared.parser.valid.store(false, Ordering::Release);
-        pool.set_stuck_after(std::time::Duration::from_millis(1000));
-        *lock(&pool.shared.slow_page) = Some((0, std::time::Duration::from_secs(4)));
+        pool.set_stuck_after(std::time::Duration::ZERO);
+        let gate = render_gate(0, false);
+        *lock(&pool.shared.render_gates) = vec![gate.clone()];
         let req = |page| RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0 };
         pool.set_queue(vec![req(0)]);
-        let recv = |pool: &RenderPool| {
-            let t = std::time::Instant::now();
-            loop {
-                if let Some(p) = pool.try_recv() {
-                    return p;
-                }
-                assert!(t.elapsed() < std::time::Duration::from_secs(8), "no result");
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-        };
-        let started = std::time::Instant::now();
-        let first = recv(&pool);
-        assert!(started.elapsed() < std::time::Duration::from_millis(3000), "the watchdog answers before the render ends");
+        gate.entered.wait();
+        let first = pool.try_recv().expect("the watchdog answers while the render is held");
         assert!(first.error.as_deref().is_some_and(|e| e.contains("took longer")), "{:?}", first.error);
+        // A zero allowance would give up on the healthy page 2 as well.
+        pool.set_stuck_after(std::time::Duration::from_secs(60));
         // The single worker is stuck, yet page 2 still renders (on the replacement worker).
         pool.set_queue(vec![req(1)]);
-        let second = recv(&pool);
+        let second = receive_before_deadline(&pool);
         assert!(second.error.is_none() && second.request.page == 1, "{:?}", second.error);
         // Asking for the stuck page again fails fast instead of trapping another worker.
         pool.set_queue(vec![req(0)]);
-        let again = recv(&pool);
+        let again = receive_before_deadline(&pool);
         assert!(again.error.as_deref().is_some_and(|e| e.contains("skipped earlier")), "{:?}", again.error);
-        // The stuck worker's late result is dropped, not delivered twice.
-        std::thread::sleep(std::time::Duration::from_millis(4200));
+        // The released worker notices its slot was cleared; its late result is dropped.
+        gate.release.wait();
+        gate.finished.wait();
         assert!(pool.try_recv().is_none());
     }
 
@@ -1713,32 +1932,22 @@ mod tests {
     fn a_request_being_rendered_is_not_rendered_again() {
         use super::*;
         let pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 2, RenderConfig::default());
-        *lock(&pool.shared.slow_page) = Some((0, std::time::Duration::from_millis(1000)));
+        let gate = render_gate(0, true);
+        *lock(&pool.shared.render_gates) = vec![gate.clone()];
         let req = |page| RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0 };
         pool.set_queue(vec![req(0)]);
-        let t = std::time::Instant::now();
-        while !lock(&pool.shared.busy).iter().flatten().any(|busy| busy.request.page == 0) {
-            assert!(t.elapsed() < std::time::Duration::from_secs(8), "page 1 never started");
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+        gate.entered.wait();
         // What the canvas sends next: the page it is still waiting for, then another one.
         pool.set_queue(vec![req(0), req(1)]);
-        assert!(lock(&pool.shared.busy).iter().flatten().any(|busy| { busy.request == req(0) && !busy.cancelled.load(Ordering::Acquire) }));
-        let mut answers = Vec::new();
-        let t = std::time::Instant::now();
-        while answers.len() < 2 || lock(&pool.shared.busy).iter().any(Option::is_some) {
-            assert!(t.elapsed() < std::time::Duration::from_secs(8), "answers so far: {answers:?}");
-            if let Some(p) = pool.try_recv() {
-                assert!(p.error.is_none(), "{:?}", p.error);
-                answers.push(p.request.page);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        while let Some(p) = pool.try_recv() {
-            answers.push(p.request.page);
-        }
+        let other = receive_before_deadline(&pool);
+        assert!(other.error.is_none(), "{:?}", other.error);
+        assert_eq!(other.request.page, 1);
         // Page 2 went to the idle worker instead of waiting behind a second copy of page 1.
-        assert_eq!(answers, vec![1, 0]);
+        assert_eq!(pool.shared.render_started.load(Ordering::Relaxed), 2, "each page rendered once");
+        gate.release.wait();
+        let first = receive_before_deadline(&pool);
+        assert!(first.error.is_none(), "{:?}", first.error);
+        assert_eq!(first.request.page, 0);
         assert_eq!(pool.shared.render_started.load(Ordering::Relaxed), 2, "each page rendered once");
     }
 
@@ -2758,21 +2967,19 @@ trailer << /Root 1 0 R >>
         // give up on (and stop) a second worker too.
         *lock(&pool.shared.parser.state) = ParserState::Private;
         pool.shared.parser.valid.store(false, Ordering::Release);
-        pool.set_stuck_after(std::time::Duration::from_millis(100));
-        *lock(&pool.shared.slow_page) = Some((0, std::time::Duration::from_millis(1500)));
+        pool.set_stuck_after(std::time::Duration::ZERO);
+        let gate = render_gate(0, false);
+        *lock(&pool.shared.render_gates) = vec![gate.clone()];
         pool.set_queue(vec![RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0 }]);
-        let t = std::time::Instant::now();
-        let first = loop {
-            if let Some(p) = pool.try_recv() {
-                break p;
-            }
-            assert!(t.elapsed() < std::time::Duration::from_secs(30), "no answer");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        };
+        gate.entered.wait();
+        let first = pool.try_recv().expect("the watchdog answers for the held render");
         assert!(first.error.as_deref().is_some_and(|e| e.contains("took longer")), "{:?}", first.error);
         // The abandoned worker is told to stop at its next operator; its replacement isn't.
         let stop: Vec<bool> = lock(&pool.shared.stop).iter().map(|s| s.load(std::sync::atomic::Ordering::Relaxed)).collect();
         assert_eq!(stop, vec![true, false]);
+        gate.release.wait();
+        gate.finished.wait();
+        assert!(pool.try_recv().is_none(), "the abandoned render must not publish a late result");
     }
 
     #[test]
@@ -3279,6 +3486,222 @@ trailer << /Root 1 0 R >>
         let page = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("a self-multiplying Type 3 glyph must not stall the renderer");
         assert!(page.error.is_none(), "{:?}", page.error);
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
+    }
+
+    /// `depth` direct arrays (`array`), dictionaries with a key (`dict`) or both in turn (`mixed`)
+    /// around `null`.
+    fn nested(depth: usize, kind: &str) -> String {
+        let is_dict = |level| kind == "dict" || (kind == "mixed" && level % 2 == 0);
+        let mut value = String::new();
+        for level in 0..depth {
+            value.push_str(if is_dict(level) { "<< /N " } else { "[" });
+        }
+        value.push_str("null");
+        for level in (0..depth).rev() {
+            value.push_str(if is_dict(level) { " >>" } else { "]" });
+        }
+        value
+    }
+
+    /// `depth` dictionaries nested without keys (`<< << >> >>`), closed or not.
+    fn keyless(depth: usize, closed: bool) -> String {
+        let mut value = "<< ".repeat(depth);
+        if closed {
+            value.push_str(&">> ".repeat(depth));
+        }
+        value
+    }
+
+    /// A 40 × 40 page that runs `content`, with a correct xref table and `trailer` at the end
+    /// of a trailer that also points at an `/Info` title.
+    fn nesting_pdf(trailer: &str, content: &str) -> Vec<u8> {
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut offsets = vec![0];
+        for (index, body) in [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << >> >>".to_string(),
+            format!("<< /Length {} >> stream\n{content}\nendstream", content.len()),
+            "<< /Title (Nested) >>".to_string(),
+        ]
+        .iter()
+        .enumerate()
+        {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", index + 1).as_bytes());
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+        for offset in &offsets[1..] {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer << /Size 6 /Root 1 0 R /Info 5 0 R {trailer} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+        bytes
+    }
+
+    /// Opens `bytes` and renders its one page, which must render without an error.
+    fn nesting_render(bytes: Vec<u8>) -> RenderedPage {
+        let parsed = Pdf::new(bytes.clone()).expect("xref repair can recover the catalog when the trailer is malformed");
+        assert_eq!(parsed.pages().len(), 1);
+        let mut renderer = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (40, 40));
+        page
+    }
+
+    /// Direct arrays and dictionaries used to recurse without a bound while skipping even
+    /// unused trailer values and content operands. Exercise the vendored patch in workspace CI.
+    #[test]
+    fn deeply_nested_direct_objects_do_not_overflow_the_stack() {
+        use hayro_syntax::object::Object;
+        use hayro_syntax::reader::{Reader, ReaderExt};
+        let pdf = |unused: &str, content: &str| nesting_pdf(&format!("/Unused {unused}"), content);
+        let paint = "1 0 0 rg 0 0 4 4 re f";
+        for kind in ["array", "dict", "mixed"] {
+            // Run the crash reproducer first, so the unpatched red state is a stack overflow.
+            let page = nesting_render(pdf(&nested(100_000, kind), paint));
+            assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "{kind}: repaired trailer");
+            for depth in [20, 128, 129] {
+                let value = nested(depth, kind);
+                let siblings = format!("{value} [] []");
+                let mut reader = Reader::new(siblings.as_bytes());
+                assert_eq!(reader.skip::<Object<'_>>(false).is_some(), depth <= 128, "{kind}: depth {depth}");
+                if depth > 128 {
+                    assert_eq!(reader.offset(), 0, "failed skips restore the offset");
+                    reader.jump(value.len());
+                }
+                // A failed skip must unwind its depth; successful siblings must not accumulate it.
+                for _ in 0..2 {
+                    reader.skip_white_spaces();
+                    assert!(reader.skip::<Object<'_>>(false).is_some());
+                }
+                let page = nesting_render(pdf(&value, paint));
+                assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "{kind}: depth {depth}");
+            }
+            // Many siblings exercise the offset constructor and ensure depth is per nesting.
+            let siblings = "[] ".repeat(256);
+            let mut reader = Reader::new_with(siblings.as_bytes(), 0);
+            for _ in 0..256 {
+                assert!(reader.skip::<Object<'_>>(false).is_some());
+                reader.skip_white_spaces();
+            }
+        }
+        // Content-stream arrays take the Object path, rather than MaybeRef<Object>.
+        for depth in [100_000, 20, 128, 129] {
+            let value = nested(depth, "array");
+            let mut reader = Reader::new(value.as_bytes());
+            assert_eq!(reader.skip::<Object<'_>>(true).is_some(), depth <= 128, "content: depth {depth}");
+            let content = format!("{value} discard {paint}");
+            let page = nesting_render(pdf("null", &content));
+            if depth <= 128 {
+                assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "content: depth {depth}");
+            }
+        }
+    }
+
+    /// A dictionary with an object where a key belongs is repaired by reading that object, not
+    /// skipping it, and that read recursed without a bound when the object was another such
+    /// dictionary: `<<` 100,000 times aborted the process. Here as a content-stream operand.
+    #[test]
+    fn dictionaries_nested_without_keys_in_content_do_not_overflow_the_stack() {
+        for closed in [true, false] {
+            let content = format!("1 0 0 rg 0 0 4 4 re f {} discard", keyless(100_000, closed));
+            let page = nesting_render(nesting_pdf("", &content));
+            assert_eq!(px40(&page, 1, 38), &[255, 0, 0, 255], "closed: {closed}");
+        }
+    }
+
+    /// The same, where a key of the trailer belongs: the xref table can't be used, and repair
+    /// finds the catalog.
+    #[test]
+    fn dictionaries_nested_without_keys_in_the_trailer_do_not_overflow_the_stack() {
+        for closed in [true, false] {
+            let page = nesting_render(nesting_pdf(&keyless(100_000, closed), "1 0 0 rg 0 0 4 4 re f"));
+            assert_eq!(px40(&page, 1, 38), &[255, 0, 0, 255], "closed: {closed}");
+        }
+    }
+
+    /// The same as the properties of marked content (`/Tag <<<<<< … BDC`).
+    #[test]
+    fn dictionaries_nested_without_keys_as_marked_content_properties_do_not_overflow_the_stack() {
+        for closed in [true, false] {
+            let properties = if closed { "<<".repeat(100_000) + &">>".repeat(100_000) } else { "<<".repeat(100_000) };
+            let content = format!("1 0 0 rg 0 0 4 4 re f /Tag {properties} BDC 0 0 1 rg 36 36 4 4 re f EMC");
+            let page = nesting_render(nesting_pdf("", &content));
+            assert_eq!(px40(&page, 1, 38), &[255, 0, 0, 255], "closed: {closed}");
+        }
+    }
+
+    /// Through the same three paths, dictionaries without keys are read up to the nesting cap
+    /// (128 dictionaries in all) and refused one past it.
+    #[test]
+    fn dictionaries_nested_without_keys_are_read_up_to_the_nesting_cap() {
+        use hayro_syntax::object::{FromBytes, Object};
+        use hayro_syntax::reader::{Reader, ReaderExt};
+        let (red, blue, white) = ([255, 0, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]);
+        for depth in [128, 129] {
+            let within = depth <= 128;
+            let value = keyless(depth, true);
+            assert_eq!(Object::from_bytes(value.as_bytes()).is_some(), within, "object: {depth}");
+            assert_eq!(Reader::new(value.as_bytes()).read_without_context::<Object<'_>>().is_some(), within, "operand: {depth}");
+            // Content reading stops at an operand it can't read, so the blue square is drawn
+            // only when the dictionaries were read.
+            let properties = "<<".repeat(depth) + &">>".repeat(depth);
+            for (path, operand) in [("operand", format!("{value} discard")), ("BDC", format!("/Tag {properties} BDC"))] {
+                let content = format!("1 0 0 rg 0 0 4 4 re f {operand} 0 0 1 rg 36 36 4 4 re f");
+                let page = nesting_render(nesting_pdf("", &content));
+                assert_eq!(px40(&page, 1, 38), &red, "{path}: {depth}");
+                assert_eq!(px40(&page, 38, 1), if within { &blue } else { &white }, "{path}: {depth}");
+            }
+            // The trailer is the outermost dictionary. Within the cap it is read (with its
+            // /Info); past it, repair recovers the catalog but not the trailer.
+            let bytes = nesting_pdf(&keyless(depth - 1, true), "1 0 0 rg 0 0 4 4 re f");
+            let parsed = Pdf::new(bytes.clone()).expect("the trailer or repair finds the catalog");
+            assert_eq!(parsed.metadata().title, within.then(|| b"Nested".to_vec()), "trailer: {depth}");
+            assert_eq!(px40(&nesting_render(bytes), 1, 38), &red, "trailer: {depth}");
+        }
+    }
+
+    /// The cap must also fit small stacks: skip, read, iterate down with the array iterators and
+    /// format (`{:?}`) the deepest nesting it admits, of arrays, dictionaries, both and
+    /// dictionaries without keys, on a 512 KiB thread in a debug build. Measured when this was
+    /// written (macOS arm64, dev profile): at most about 100 KiB, for `{:?}` of 128 dictionaries.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn nesting_at_the_cap_fits_a_512_kib_stack() {
+        use hayro_syntax::object::{FromBytes, Object};
+        use hayro_syntax::reader::{Reader, ReaderExt};
+        let worker = std::thread::Builder::new().stack_size(512 * 1024).spawn(|| {
+            // (kind, arrays and dictionaries `{:?}` shows, levels walked down to the end)
+            for (kind, arrays, dicts, levels) in [("array", 128, 0, 129), ("dict", 0, 128, 129), ("mixed", 64, 64, 129), ("keyless", 0, 1, 1)] {
+                let value = if kind == "keyless" { keyless(128, true) } else { nested(128, kind) };
+                assert!(Reader::new(value.as_bytes()).skip::<Object<'_>>(false).is_some(), "{kind}: skip");
+                assert!(Reader::new(value.as_bytes()).skip::<Object<'_>>(true).is_some(), "{kind}: skip in content");
+                assert!(Reader::new(value.as_bytes()).read_without_context::<Object<'_>>().is_some(), "{kind}: operand");
+                let object = Object::from_bytes(value.as_bytes()).expect("the cap admits 128 levels");
+                let shown = format!("{object:?}");
+                assert_eq!((shown.matches("Array(").count(), shown.matches("Dict(").count()), (arrays, dicts), "{kind}: {{:?}}");
+                let (mut walked, mut next) = (0, Some(object));
+                while let Some(object) = next.take() {
+                    walked += 1;
+                    next = match object {
+                        Object::Array(array) => {
+                            assert_eq!(array.raw_iter().count(), 1, "{kind}: raw_iter");
+                            assert!(array.flex_iter().next::<Object<'_>>().is_some(), "{kind}: flex_iter");
+                            array.iter::<Object<'_>>().next()
+                        }
+                        Object::Dict(dict) => dict.get::<Object<'_>>("N"),
+                        _ => None,
+                    };
+                }
+                assert_eq!(walked, levels, "{kind}: iterate");
+            }
+        });
+        // A stack overflow aborts the process; a failed check is a panic, shown as it is.
+        if let Err(panic) = worker.expect("spawn a 512 KiB thread").join() {
+            std::panic::resume_unwind(panic);
+        }
     }
 
     /// From the nightly `cargo xtask fuzz`: many small inline images, each with "EI" (followed

@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use pdfcraft_engine::{DocId, Document, Edit, Session, commands};
+use pdfcraft_engine::{CombineSource, DocId, Document, Edit, Session, commands};
 use pdfcraft_platform::staging::{StagingName, create_staging, staging_suffixes};
 use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
 use serde_json::{Value, json};
@@ -268,6 +268,11 @@ impl Automation {
                 let (path, page) = (a.path("path")?, self.page(&a)?);
                 self.apply(&a, Edit::SetBookmarkPage { path, page })?
             }
+            "bookmark_from_structure" => {
+                let mut out = self.apply(&a, Edit::BookmarksFromStructure)?;
+                out["bookmarks"] = json!(bookmark_tree(&self.doc(&a)?.info.outline, &[]));
+                out
+            }
             "doc_protect" => self.doc_protect(&a)?,
             "page_replace" => {
                 let pages = self.pages(&a, "pages")?;
@@ -298,8 +303,12 @@ impl Automation {
                 let before = self.doc(&a)?.bytes.len();
                 let path = self.resolve(a.str("path")?, true)?;
                 let (bytes, merged) = self.session.reduced_bytes(id).map_err(failed)?;
-                write_atomic(&path, &bytes)?;
-                json!({ "path": path.to_string_lossy(), "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged })
+                // As in the app, a copy that isn't smaller is not written (#490).
+                let written = bytes.len() < before;
+                if written {
+                    write_atomic(&path, &bytes)?;
+                }
+                json!({ "path": path.to_string_lossy(), "written": written, "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged })
             }
             "doc_optimize" => self.doc_optimize(&a)?,
             "doc_initial_view" => self.doc_initial_view(&a)?,
@@ -591,14 +600,23 @@ impl Automation {
             }
             "sign_windows_ids" => {
                 #[cfg(target_os = "windows")]
-                let ids: Vec<Value> = pdfcraft_engine::sign::windows::identities()
-                    .map_err(failed)?
-                    .iter()
-                    .map(|id| json!({ "id": pdfcraft_engine::sign::windows::reference(&id.certificate), "certificate": signing::cert_json(&id.certificate) }))
-                    .collect();
+                let (ids, unusable): (Vec<Value>, Vec<Value>) = {
+                    let listing = pdfcraft_engine::sign::windows::list().map_err(failed)?;
+                    let ids = listing
+                        .ids
+                        .iter()
+                        .map(|id| json!({ "id": pdfcraft_engine::sign::windows::reference(&id.certificate), "certificate": signing::cert_json(&id.certificate) }))
+                        .collect();
+                    let unusable = listing
+                        .unusable
+                        .iter()
+                        .map(|u| json!({ "subject": u.subject, "sha256": u.fingerprint, "reason": u.reason, "no_private_key": u.no_private_key }))
+                        .collect();
+                    (ids, unusable)
+                };
                 #[cfg(not(target_os = "windows"))]
-                let ids: Vec<Value> = Vec::new();
-                json!({ "count": ids.len(), "ids": ids })
+                let (ids, unusable): (Vec<Value>, Vec<Value>) = (Vec::new(), Vec::new());
+                json!({ "count": ids.len(), "ids": ids, "unusable": unusable })
             }
             "sign_trust" => self.sign_trust(&a)?,
             "comment_mark" => self.comment_mark(&a)?,
@@ -846,6 +864,7 @@ impl Automation {
             "invalid_links": o.invalid_links,
             "invalid_bookmarks": o.invalid_bookmarks,
             "unreferenced_dests": o.unreferenced_dests,
+            "unused_xobjects": o.unused_xobjects,
             "merged_objects": r.merged,
             "discarded": r.discarded.iter().map(|(h, n)| json!({ "category": h.id(), "count": n })).collect::<Vec<_>>(),
         }))
@@ -1275,15 +1294,58 @@ impl Automation {
             }
             Some(_) => return Err(ToolError::InvalidArgs("passwords must list a password (or null) for each path".into())),
         };
-        let mut sources = Vec::new();
-        for (p, range) in paths.into_iter().zip(ranges) {
+        // Entries sharing a group number are one file split into parts placed apart.
+        let groups: Option<Vec<Option<u64>>> = match a.get("groups") {
+            None | Some(Value::Null) => None,
+            Some(Value::Array(v)) if v.len() == paths.len() && v.iter().all(|x| x.is_u64() || x.is_null()) => {
+                Some(v.iter().map(Value::as_u64).collect())
+            }
+            Some(_) => return Err(ToolError::InvalidArgs("groups must list a number (or null) for each path".into())),
+        };
+        let mut sources: Vec<CombineSource> = Vec::new();
+        let mut firsts: Vec<(u64, PathBuf, usize)> = Vec::new();
+        for (i, (p, range)) in paths.into_iter().zip(ranges).enumerate() {
             let path = self.resolve(p, false)?;
-            let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+            let group = groups.as_ref().and_then(|g| g.get(i).copied().flatten());
+            let first = group.and_then(|g| firsts.iter().find(|f| f.0 == g));
+            let bytes = match first {
+                Some((g, first_path, at)) => {
+                    if *first_path != path {
+                        return Err(ToolError::InvalidArgs(format!("groups[{i}]: group {g} is {}, not {}", first_path.display(), path.display())));
+                    }
+                    sources.get(*at).map(|s| s.1.clone()).ok_or_else(|| failed("group source missing"))?
+                }
+                None => {
+                    if let Some(g) = group {
+                        firsts.push((g, path.clone(), sources.len()));
+                    }
+                    Arc::new(std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?)
+                }
+            };
             let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            sources.push((name, Arc::new(bytes), range));
+            sources.push((name, bytes, range));
         }
         let passwords: Vec<Option<&str>> = passwords.iter().map(Option::as_deref).collect();
-        let bytes = self.session.combine_unlocked(&sources, &passwords).map_err(failed)?;
+        let bytes = match groups {
+            None => self.session.combine_unlocked(&sources, &passwords),
+            Some(groups) => {
+                // A path without a group is a file of its own: give it a key no group uses.
+                let mut next = groups.iter().flatten().max().map_or(Some(0), |m| m.checked_add(1));
+                let mut keys = Vec::with_capacity(groups.len());
+                for g in &groups {
+                    keys.push(match g {
+                        Some(g) => *g,
+                        None => {
+                            let own = next.ok_or_else(|| ToolError::InvalidArgs("group numbers are too large".into()))?;
+                            next = own.checked_add(1);
+                            own
+                        }
+                    });
+                }
+                self.session.combine_grouped(&sources, &keys, &passwords)
+            }
+        }
+        .map_err(failed)?;
         self.deliver(a, "Combined", bytes)
     }
 
@@ -1323,13 +1385,21 @@ impl Automation {
         let dir = self.resolve(a.str("out_dir")?, true)?;
         std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
         let mut files = Vec::new();
+        let mut used = std::collections::HashSet::new();
         for (i, (first, last, bytes)) in parts.iter().enumerate() {
             let safe = |t: &str| t.chars().map(|c| if c.is_alphanumeric() || " -_.,()".contains(c) { c } else { '_' }).collect::<String>();
             let file = match titles.iter().find(|t| t.0 + 1 == *first) {
                 Some((_, t)) => format!("{stem}-{}.pdf", safe(t)),
                 None => format!("{stem}-part{}.pdf", i + 1),
             };
-            let path = child(&dir, &file);
+            // Equal titles (or titles that sanitize alike) get -2, -3, ... so no part overwrites another; compared case-insensitively.
+            let mut unique = file.clone();
+            let mut n = 1;
+            while !used.insert(unique.to_lowercase()) {
+                n += 1;
+                unique = format!("{}-{n}.pdf", file.trim_end_matches(".pdf"));
+            }
+            let path = child(&dir, &unique);
             write_atomic(&path, bytes)?;
             files.push(json!({ "path": path.to_string_lossy(), "first_page": first, "last_page": last }));
         }
@@ -1426,8 +1496,14 @@ impl Automation {
             Some(_) => self.pages(a, "pages")?,
             None => (0..doc.info.pages.len()).collect(),
         };
+        // Column select (#740): only the text inside the rectangle, row by row.
+        let rect = a.nums::<4>("rect")?.map(|r| r.map(|v| v as f32));
         let texts = self.page_texts(id, &pages)?;
-        let out: Vec<Value> = pages.iter().zip(texts).map(|(p, t)| json!({ "page": p + 1, "text": t.plain_text() })).collect();
+        let text = |t: &PageText| match rect {
+            Some(r) => t.column_text(&t.glyphs_in(r)),
+            None => t.plain_text(),
+        };
+        let out: Vec<Value> = pages.iter().zip(texts).map(|(p, t)| json!({ "page": p + 1, "text": text(&t) })).collect();
         Ok(json!({ "pages": out }))
     }
 

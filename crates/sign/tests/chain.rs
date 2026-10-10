@@ -222,6 +222,63 @@ fn a_v3_self_signed_certificate_without_constraints_is_not_a_root_that_issues() 
     assert_eq!(names(&build_chain(&l.cert, std::slice::from_ref(&id.cert), None)), ["Leaf"]);
 }
 
+const KEY_ENCIPHERMENT: u8 = 0x20;
+const SERVER_AUTH: &str = "1.3.6.1.5.5.7.3.1";
+
+fn extended_key_usage(oids: &[&str]) -> Vec<u8> {
+    let encoded: Vec<Vec<u8>> = oids.iter().map(|o| der::oid(o)).collect();
+    let refs: Vec<&[u8]> = encoded.iter().map(Vec::as_slice).collect();
+    der::seq(&[&der::oid("2.5.29.37"), &der::octets(&der::seq(&refs))])
+}
+
+fn signer_with(cn: &str, under: &Party, extensions: &[Vec<u8>]) -> Party {
+    let mut all = vec![basic_constraints(false, None)];
+    all.extend_from_slice(extensions);
+    issue(cn, Some(under), FOREVER, &all)
+}
+
+#[test]
+fn the_signer_certificate_must_allow_document_signing() {
+    let r = root();
+    let problem = |exts: &[Vec<u8>]| signer_with("Signer", &r, exts).cert.signing_problem();
+    // Key usage without digitalSignature or nonRepudiation.
+    assert!(problem(&[key_usage(KEY_CERT_SIGN)]).is_some_and(|w| w.contains("key usage")));
+    assert!(problem(&[key_usage(KEY_ENCIPHERMENT)]).is_some());
+    assert!(problem(&[key_usage(DIGITAL_SIGNATURE)]).is_none());
+    // nonRepudiation alone is enough.
+    assert!(problem(&[key_usage(0x40)]).is_none());
+    // Extended key usage without a document-signing purpose.
+    assert!(problem(&[extended_key_usage(&[SERVER_AUTH])]).is_some_and(|w| w.contains("extended key usage")));
+    for ok in ["2.5.29.37.0", "1.3.6.1.5.5.7.3.4", "1.3.6.1.5.5.7.3.36", "1.2.840.113583.1.1.5", "1.3.6.1.4.1.311.10.3.12"] {
+        assert!(problem(&[extended_key_usage(&[SERVER_AUTH, ok])]).is_none(), "{ok}");
+    }
+    // An unknown critical extension refuses; the same extension non-critical does not.
+    let unknown = "1.2.3.4.5.6";
+    assert!(problem(&[ext(unknown, &der::octets(&[0]))]).is_some_and(|w| w.contains(unknown)));
+    assert!(problem(&[der::seq(&[&der::oid(unknown), &der::octets(&der::octets(&[0]))])]).is_none());
+    // Critical extensions PdfCraft knows, or may accept as they are, don't refuse.
+    assert!(problem(&[ext("2.5.29.32", &der::seq(&[]))]).is_none());
+    // No extensions at all, and the digital IDs PdfCraft creates, may sign.
+    assert!(issue("Plain", Some(&r), FOREVER, &[]).cert.signing_problem().is_none());
+    let key = PrivateKey::generate_p256().unwrap();
+    let name = Name::build("Own ID", "", "", "", "US");
+    assert!(Certificate::self_signed(&name, &key, time(2026), 5, &[1]).unwrap().signing_problem().is_none());
+}
+
+#[test]
+fn a_trusted_signer_whose_certificate_may_not_sign_is_not_valid() {
+    let r = root();
+    let (status, details) =
+        verdict(signer_with("TLS Server", &r, &[key_usage(DIGITAL_SIGNATURE), extended_key_usage(&[SERVER_AUTH])]), vec![], &r.cert);
+    assert_eq!(status, Status::Unknown, "{details:?}");
+    assert!(details.iter().any(|d| d.contains("not issued for signing documents")), "{details:?}");
+    let (status, details) = verdict(signer_with("Encryption Only", &r, &[key_usage(KEY_ENCIPHERMENT)]), vec![], &r.cert);
+    assert_eq!(status, Status::Unknown, "{details:?}");
+    assert!(details.iter().any(|d| d.contains("does not allow digital signatures")), "{details:?}");
+    let (status, details) = verdict(signer_with("Document Signer", &r, &[key_usage(DIGITAL_SIGNATURE)]), vec![], &r.cert);
+    assert_eq!(status, Status::Valid, "{details:?}");
+}
+
 #[test]
 fn unreadable_constraint_extensions_fail_closed() {
     // keyUsage present but not a BIT STRING: no usage at all, so no keyCertSign.
