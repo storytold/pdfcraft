@@ -1780,6 +1780,8 @@ pub struct Summary {
     pub quads: Vec<[f32; 8]>,
     pub locked: bool,
     pub intent: Option<String>,
+    /// Stamp `/Name` (`PCCheck`, …).
+    pub stamp: Option<String>,
 }
 
 fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
@@ -1835,6 +1837,9 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
             }
             let quads = nums(b"QuadPoints").as_chunks::<8>().0.to_vec();
             let in_reply_to = d.get(b"IRT").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
+            let stamp = (subtype == "Stamp")
+                .then(|| d.get(b"Name").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())))
+                .flatten();
             out.push(Summary {
                 page,
                 index,
@@ -1850,6 +1855,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 quads,
                 locked: d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0) & FLAG_LOCKED != 0,
                 intent: d.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
+                stamp,
             });
         }
     }

@@ -848,6 +848,7 @@ fn comment_edits_refresh_the_list_exactly_as_a_full_inspection_would() {
         })
     };
     s.apply(id, add(0, Shape::Rectangle { rect: [10.0, 10.0, 60.0, 60.0] }, "box")).unwrap();
+    s.apply(id, add(0, Shape::Mark { rect: [70.0, 10.0, 88.0, 28.0], mark: FillMark::Check }, "")).unwrap();
     s.apply(id, add(1, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![[20.0, 170.0, 90.0, 170.0, 20.0, 150.0, 90.0, 150.0]] }, ""))
         .unwrap();
     s.apply(id, add(1, Shape::TextBox { rect: [10.0, 200.0, 150.0, 240.0], font_size: 11.0 }, "Text box")).unwrap();
@@ -863,7 +864,8 @@ fn comment_edits_refresh_the_list_exactly_as_a_full_inspection_would() {
     let full = pdfcraft_render::inspect(d.bytes.clone(), None).unwrap();
     assert_eq!(format!("{:?}", d.info.annotations), format!("{:?}", full.annotations));
     assert_eq!(d.info.file_size, full.file_size);
-    assert_eq!(d.info.annotations.len(), 7);
+    assert_eq!(d.info.annotations.len(), 8);
+    assert!(d.info.annotations.iter().any(|a| a.stamp.as_deref() == Some("PCCheck")));
     assert!(d.info.annotations.iter().any(|a| a.locked));
 }
 

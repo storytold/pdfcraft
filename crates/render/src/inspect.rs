@@ -264,6 +264,8 @@ pub struct Annotation {
     pub locked: bool,
     /// `/IT`, the intent: `FreeTextCallout`, `PolygonCloud`, `FreeTextTypeWriter`…
     pub intent: Option<String>,
+    /// Stamp `/Name` (`PCCheck`, `Approved`, …).
+    pub stamp: Option<String>,
 }
 
 impl Annotation {
@@ -871,6 +873,7 @@ impl<'a> Inspector<'a> {
                     _ => Vec::new(),
                 };
                 let in_reply_to = d.get(b"IRT").ok().and_then(|o| self.dict(o)).and_then(|p| self.text(p, b"NM"));
+                let stamp = (subtype == "Stamp").then(|| self.name(d, b"Name")).flatten();
                 info.annotations.push(Annotation {
                     page,
                     subtype,
@@ -886,6 +889,7 @@ impl<'a> Inspector<'a> {
                     quads,
                     locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
                     intent: self.name(d, b"IT"),
+                    stamp,
                 });
             }
         }

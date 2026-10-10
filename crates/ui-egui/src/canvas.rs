@@ -2165,6 +2165,19 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             } else {
                 tool == QuickTool::Select && crate::forms_ui::page_input(ui, &resp, &xf, i, info, &form, can_fill, view)
             };
+            // Flat forms: printed squares take a check on direct click (no Prepare step).
+            let vid = view.id;
+            let on_flat = tool == QuickTool::Select
+                && !preparing
+                && !editing_content
+                && crate::forms_ui::flat_page_input(ui, &resp, &xf, i, info, &form, view, allowed, &author, doc.edit_generation(), &|page| {
+                    app.session
+                        .detect_fields(vid, &[page])
+                        .into_iter()
+                        .filter(|(_, c)| matches!(c.kind, pdfcraft_engine::detect::Kind::CheckBox))
+                        .map(|(_, c)| c.rect)
+                        .collect()
+                });
             // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat).
             let area_tool = tool == QuickTool::Redact && can_modify || tool == QuickTool::Comment(comments::CommentTool::Highlight) && allowed;
             let boxing = area_tool && {
@@ -2202,7 +2215,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     || crate::edit_text_ui::page_input(ui, &resp, &xf, i, info, &lines, view)
             };
             let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(ui, &resp, &xf, i, info, &doc_links, view);
-            let consumed = on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, &resp, &pcx, view);
+            let consumed = on_edit_text || on_link || on_content || boxing || on_field || on_flat || comments::page_input(ui, &resp, &pcx, view);
 
             let preview_target = (tool == QuickTool::Select && !comments_hidden).then_some(view.comments.selected).flatten();
             view.signature_drag.prepare(ui.ctx(), doc, preview_target, scale);
@@ -2362,9 +2375,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 for a in info.annotations.iter().filter(|a| a.page == i && a.in_reply_to.is_none() && !gesturing) {
                     let sr = xf.user_rect(info, i, a.rect);
                     if sr.contains(p) && hover_text.is_none() {
-                        let who = a.author.clone().unwrap_or_else(|| a.subtype.clone());
                         let body = a.contents.clone().unwrap_or_default();
-                        hover_text = Some((p, if body.is_empty() { who } else { format!("{who}\n{body}") }));
+                        if !body.is_empty() || a.subtype != "Stamp" {
+                            let who = a.author.clone().unwrap_or_else(|| a.subtype.clone());
+                            hover_text = Some((p, if body.is_empty() { who } else { format!("{who}\n{body}") }));
+                        }
                     }
                 }
             }
@@ -2518,6 +2533,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
         view.pending_edit = Some(e);
     }
+    if tool == QuickTool::Select
+        && !preparing
+        && !editing_content
+        && let Some(e) = crate::forms_ui::hover_offer(ui.ctx(), view, info, &form, can_fill)
+    {
+        view.pending_edit = Some(e);
+    }
     if let Some(e) = crate::forms_ui::overlay(ui.ctx(), view, info, &form, today) {
         view.pending_edit = Some(e);
     }
@@ -2527,6 +2549,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let (typed, text_done) = crate::content_ui::editor(ui.ctx(), view, info, &added);
     if typed.is_some() {
         view.pending_edit = typed;
+    }
+    // A flat click made while a text draft was open queues behind the draft's commit.
+    if view.pending_edit.is_none() {
+        view.pending_edit = view.forms.queued.take();
     }
     let form_notice = view.forms.notice.take();
     // One crop, then back to selecting (as Acrobat does).

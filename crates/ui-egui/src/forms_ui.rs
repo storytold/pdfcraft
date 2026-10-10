@@ -4,8 +4,10 @@
 //! cancels, Tab moves to the next field). Check boxes and radio buttons toggle on click. Combo
 //! and list boxes open a list of their options. Every change is one undoable engine edit.
 
+use std::collections::HashMap;
+
 use egui::{Color32, CornerRadius, Rect, Stroke, vec2};
-use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, field_flags};
+use pdfcraft_engine::{Edit, FieldValue, FillMark, FormField, FormFieldKind, NewAnnotation, Shape, Style, field_flags};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
@@ -41,6 +43,15 @@ pub struct FormView {
     pub notice: Option<FormNotice>,
     /// A push button was clicked: (its field name, what it does).
     pub button: Option<(String, pdfcraft_engine::form_scripts::ButtonAction)>,
+    /// Toggle-field popup target (name, widget) and its last rect (gap stickiness).
+    pub offer: Option<(String, usize)>,
+    pub offer_rect: Option<Rect>,
+    /// Printed squares per page (user space), detected lazily.
+    pub flat: HashMap<usize, Vec<[f64; 4]>>,
+    /// Document generation `flat` was detected at.
+    pub flat_gen: u64,
+    /// Toggle waiting behind a committing text draft.
+    pub queued: Option<Edit>,
 }
 
 /// A form message for the app to show, with document data kept separate so the visible
@@ -269,6 +280,212 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
     }
 }
 
+/// Hovering a toggle field offers Check/Uncheck (Select/Deselect) in a popup.
+pub(crate) fn hover_offer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, form: &[FormField], allowed: bool) -> Option<Edit> {
+    widget_offer(ctx, view, info, form, allowed).flatten()
+}
+
+/// The toggle-field popup; `Some(None)` means visible but unclicked.
+fn widget_offer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, form: &[FormField], can_fill: bool) -> Option<Option<Edit>> {
+    let pointer = ctx.input(|i| i.pointer.hover_pos());
+    // The widget under the cursor, when it is a toggle field we can fill.
+    let hovered: Option<(String, usize)> = pointer.and_then(|p| {
+        form.iter().find_map(|f| {
+            if !matches!(f.kind, FormFieldKind::CheckBox | FormFieldKind::Radio) || !fillable(f) {
+                return None;
+            }
+            f.widgets.iter().enumerate().find_map(|(wi, w)| {
+                let page = w.page?;
+                let xf = view.page_xform(page)?;
+                widget_rect(&xf, info, page, w.rect).contains(p).then(|| (f.name.clone(), wi))
+            })
+        })
+    });
+    if let Some(h) = hovered {
+        view.forms.offer = Some(h);
+    } else {
+        // Keep the popup alive over the field, the popup, and the gap between them.
+        let over_offer = pointer.is_some_and(|p| view.forms.offer_rect.is_some_and(|r| r.contains(p)));
+        let over_field = view.forms.offer.clone().and_then(|(ref name, wi)| {
+            let f = form.iter().find(|f| &f.name == name)?;
+            let w = f.widgets.get(wi)?;
+            let page = w.page?;
+            let xf = view.page_xform(page)?;
+            let field = widget_rect(&xf, info, page, w.rect);
+            let corridor = view.forms.offer_rect.map_or(field, |popup| field.union(popup));
+            pointer.map(|p| corridor.contains(p))
+        });
+        if !over_offer && !over_field.unwrap_or(false) {
+            view.forms.offer = None;
+            view.forms.offer_rect = None;
+            return None;
+        }
+        if !can_fill {
+            view.forms.offer = None;
+            view.forms.offer_rect = None;
+            return None;
+        }
+    }
+    if !can_fill {
+        return None;
+    }
+    let (name, wi) = view.forms.offer.clone()?;
+    let f = form.iter().find(|f| f.name == name)?;
+    if !matches!(f.kind, FormFieldKind::CheckBox | FormFieldKind::Radio) || !fillable(f) {
+        view.forms.offer = None;
+        return None;
+    }
+    let w = f.widgets.get(wi)?;
+    let page = w.page?;
+    let xf = view.page_xform(page)?;
+    let rect = widget_rect(&xf, info, page, w.rect);
+    let (label, edit, enabled) = match f.kind {
+        FormFieldKind::CheckBox if f.value.is_empty() => ("Check", Some(FieldValue::Check(true)), true),
+        FormFieldKind::CheckBox => ("Uncheck", Some(FieldValue::Check(false)), true),
+        FormFieldKind::Radio => {
+            let on = w.on_state.clone();
+            if f.value.first() == on.as_ref() {
+                if f.has(field_flags::NO_TOGGLE_TO_OFF) { ("Selected", None, false) } else { ("Deselect", Some(FieldValue::Radio(None)), true) }
+            } else {
+                ("Select", Some(FieldValue::Radio(on)), true)
+            }
+        }
+        _ => return None,
+    };
+    let mut out = None;
+    let area = egui::Area::new(egui::Id::new(("form-hover-offer", view.id.0, &name, wi)))
+        .order(egui::Order::Foreground)
+        .fixed_pos(rect.right_top() + vec2(6.0, -4.0))
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_min_width(120.0);
+                ui.label(egui::RichText::new(&name).small().color(Tokens::get(ui.ctx()).text_faint));
+                if ui.add_enabled(enabled, egui::Button::new(tl!(label))).clicked() {
+                    out = edit.map(|value| Edit::SetFieldValue { name: name.clone(), value });
+                }
+            });
+        });
+    view.forms.offer_rect = Some(area.response.rect);
+    if let Some(edit) = out.take() {
+        commit(view, form);
+        if view.pending_edit.is_some() {
+            view.forms.queued = Some(edit);
+        } else {
+            out = Some(edit);
+        }
+        view.forms.offer = None;
+        view.forms.offer_rect = None;
+    }
+    Some(out)
+}
+
+/// Whether a printed square contains the pointer (user space, 2 pt pad).
+fn square_at(squares: &[[f64; 4]], at: [f64; 2]) -> Option<usize> {
+    squares.iter().position(|s| at[0] >= s[0] - 2.0 && at[0] <= s[2] + 2.0 && at[1] >= s[1] - 2.0 && at[1] <= s[3] + 2.0)
+}
+
+/// A placed check on the square (position in `/Annots`); only `PCCheck` counts.
+fn square_mark(info: &DocInfo, page: usize, square: [f64; 4]) -> Option<usize> {
+    info.annotations
+        .iter()
+        .filter(|a| a.page == page && a.subtype == "Stamp" && a.stamp.as_deref() == Some(FillMark::Check.name()))
+        .find(|a| {
+            let r = [f64::from(a.rect[0]), f64::from(a.rect[1]), f64::from(a.rect[2]), f64::from(a.rect[3])];
+            r[0] >= square[0] - 3.0 && r[1] >= square[1] - 3.0 && r[2] <= square[2] + 3.0 && r[3] <= square[3] + 3.0
+        })
+        .map(|a| a.index)
+}
+
+/// Hovering a printed square shows a hand and a check chip; clicking toggles a
+/// Fill & Sign check on it. Works with no Prepare-a-form step.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn flat_page_input(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    xf: &PageXform,
+    page: usize,
+    info: &DocInfo,
+    form: &[FormField],
+    view: &mut DocView,
+    allowed: bool,
+    author: &str,
+    generation: u64,
+    detect: &dyn Fn(usize) -> Vec<[f64; 4]>,
+) -> bool {
+    // A printed square must not take over a drag or swallow its release.
+    if view.comments.gesture.is_some() || resp.dragged() || resp.drag_stopped() {
+        return false;
+    }
+    if generation != view.forms.flat_gen {
+        view.forms.flat.clear();
+        view.forms.flat_gen = generation;
+    }
+    let pointer = ui.input(|i| i.pointer.hover_pos());
+    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
+    // AcroForm widgets own their clicks.
+    let on_widget = form.iter().flat_map(|f| &f.widgets).any(|w| w.page == Some(page) && widget_rect(xf, info, page, w.rect).contains(p));
+    if on_widget {
+        return false;
+    }
+    view.forms.flat.entry(page).or_insert_with(|| detect(page));
+    let (vx, vy) = xf.screen_to_view(p);
+    let at = info.pages.get(page).map(|pi| {
+        let u = pi.view_to_user(vx, vy);
+        [f64::from(u[0]), f64::from(u[1])]
+    });
+    let hit = at.and_then(|at| view.forms.flat.get(&page).and_then(|squares| square_at(squares, at).map(|i| squares[i])));
+    let Some(sq) = hit else { return false };
+    // A placed check toggles off again; real comments sitting on a square are left alone.
+    let placed = square_mark(info, page, sq);
+    if !allowed {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
+        if resp.clicked() {
+            view.forms.notice = Some(FormNotice::Security);
+            return true;
+        }
+        return true;
+    }
+    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    // Claim the gesture so the ballot glyph underneath can't force an I-beam.
+    if !resp.clicked() {
+        // Check chip following the pointer (the OS cursor set has no check).
+        if placed.is_none() {
+            egui::Area::new(egui::Id::new(("form-check-cursor", view.id.0))).order(egui::Order::Foreground).fixed_pos(p + vec2(14.0, 18.0)).show(
+                ui.ctx(),
+                |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        let (rect, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
+                        crate::icons::paint(ui, rect, "check", 16.0, crate::theme::Tokens::get(ui.ctx()).accent);
+                    });
+                },
+            );
+        }
+        return true;
+    }
+    // Preserve a draft open elsewhere before placing or removing the check.
+    // Queue the annotation edit so it cannot overwrite the draft's commit.
+    commit(view, form);
+    let queued = view.pending_edit.is_some();
+    if let Some(index) = placed {
+        let delete = Edit::DeleteAnnotation { page, index };
+        if queued {
+            view.forms.queued = Some(delete);
+        } else {
+            view.pending_edit = Some(delete);
+        }
+        return true;
+    }
+    let shape = Shape::Mark { rect: sq, mark: FillMark::Check };
+    let style = Style::default_for(&shape);
+    let check = Edit::AddAnnotation(NewAnnotation { page, shape, style, contents: String::new(), author: author.to_string() });
+    if queued {
+        view.forms.queued = Some(check);
+    } else {
+        view.pending_edit = Some(check);
+    }
+    true
+}
+
 /// The in-place editor or option list for the focused field. Returns an edit to apply.
 pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, form: &[FormField], today: (i64, u32, u32)) -> Option<Edit> {
     let focus = view.forms.focus.clone()?;
@@ -433,4 +650,10 @@ pub fn field_screen_rect(view: &DocView, info: &DocInfo, f: &FormField, widget: 
     let page = w.page?;
     let xf = view.page_xform(page)?;
     Some(widget_rect(&xf, info, page, w.rect))
+}
+
+/// Where a printed square is on screen (tests).
+pub fn square_screen_rect(view: &DocView, info: &DocInfo, page: usize, sq: [f64; 4]) -> Option<Rect> {
+    let xf = view.page_xform(page)?;
+    Some(xf.user_rect(info, page, [sq[0] as f32, sq[1] as f32, sq[2] as f32, sq[3] as f32]))
 }

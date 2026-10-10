@@ -1,6 +1,6 @@
 //! Prepare a form ▸ automatic field detection: find where a printed form expects answers —
-//! underscore runs, rules (horizontal lines), empty boxes and small squares — and name each new
-//! field from the label next to it (Acrobat's auto-naming).
+//! underscore runs, rules (horizontal lines), empty boxes, small squares and ballot-box
+//! glyphs — and name each new field from the label next to it (Acrobat's auto-naming).
 //!
 //! [`detect`] is a pure function over the page's words and drawn shapes; [`page_shapes`] reads
 //! the shapes from a page's content.
@@ -205,6 +205,20 @@ pub fn detect(words: &[Word], shapes: &Shapes, existing: &[[f64; 4]], taken: &[S
         if (5.0..=20.0).contains(&w) && (5.0..=20.0).contains(&h) && (w / h - 1.0).abs() < 0.25 {
             let l = label_for(&labels, *r, true);
             push(Kind::CheckBox, *r, l, &mut out);
+        }
+    }
+    // Ballot-box glyphs are printed check boxes set as text; ☑ is already ticked.
+    for w in &labels {
+        if !matches!(w.text.as_str(), "☐" | "□") {
+            continue;
+        }
+        let (bw, bh) = (w.rect[2] - w.rect[0], w.rect[3] - w.rect[1]);
+        if (6.0..=25.0).contains(&bw) && (6.0..=25.0).contains(&bh) && (bw / bh - 1.0).abs() < 0.25 {
+            let mut l = label_for(&labels, w.rect, true);
+            if l.is_empty() {
+                l = label_for(&labels, w.rect, false);
+            }
+            push(Kind::CheckBox, w.rect, l, &mut out);
         }
     }
     // Empty boxes big enough to write in: text fields inside them.
