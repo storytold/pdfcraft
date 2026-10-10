@@ -100,9 +100,24 @@ fn phone(s: &[char], i: usize) -> Option<usize> {
     ok.then_some(end - i)
 }
 
+/// Scripts written without spaces between words (Chinese, Japanese, Korean, Thai, …): text in
+/// them often runs straight into an address, so their letters never count as part of one.
+fn spaceless(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x0E00..=0x0EFF | 0x1000..=0x109F | 0x1100..=0x11FF | 0x1780..=0x17FF | 0x2E80..=0x9FFF | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF | 0x20000..=0x3FFFF
+    )
+}
+
+/// A letter or digit of an address: ASCII, or of any script written with spaces, so
+/// internationalized addresses (RFC 6531, IDN) such as "ayşe@örnek.com.tr" match.
+fn address_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c.is_alphanumeric() && !spaceless(c)
+}
+
 fn email(s: &[char], i: usize) -> Option<usize> {
-    let local = |c: &char| c.is_ascii_alphanumeric() || "._%+-".contains(*c);
-    if !s[i].is_ascii_alphanumeric() || i.checked_sub(1).and_then(|p| s.get(p)).is_some_and(local) {
+    let local = |c: &char| address_char(*c) || "._%+-".contains(*c);
+    if !address_char(s[i]) || i.checked_sub(1).and_then(|p| s.get(p)).is_some_and(local) {
         return None;
     }
     let mut j = i;
@@ -114,12 +129,12 @@ fn email(s: &[char], i: usize) -> Option<usize> {
     }
     let d0 = j + 1;
     let mut k = d0;
-    while k < s.len() && (s[k].is_ascii_alphanumeric() || s[k] == '-' || s[k] == '.' && s.get(k + 1).is_some_and(char::is_ascii_alphanumeric)) {
+    while k < s.len() && (address_char(s[k]) || s[k] == '-' || s[k] == '.' && s.get(k + 1).is_some_and(|c| address_char(*c))) {
         k += 1;
     }
     let domain: String = s[d0..k].iter().collect();
     let tld = domain.rsplit('.').next().unwrap_or("");
-    (domain.contains('.') && tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic())).then_some(k - i)
+    (domain.contains('.') && tld.chars().count() >= 2 && tld.chars().all(char::is_alphabetic)).then_some(k - i)
 }
 
 fn luhn(digits: &[u32]) -> bool {
@@ -321,6 +336,18 @@ mod tests {
             found(Pattern::Email, "Write to ada.lovelace+pdf@example.co.uk, or bob@host (no TLD) or x@y.z."),
             ["ada.lovelace+pdf@example.co.uk"]
         );
+    }
+
+    #[test]
+    fn internationalized_emails() {
+        assert_eq!(
+            found(Pattern::Email, "Yazın: ayşe.yılmaz@örnek.com.tr, ÇAĞLAR@ŞİRKET.COM.TR; müller@bücher.de, иван@пример.рф, josé@correo.es."),
+            ["ayşe.yılmaz@örnek.com.tr", "ÇAĞLAR@ŞİRKET.COM.TR", "müller@bücher.de", "иван@пример.рф", "josé@correo.es"]
+        );
+        // Text in scripts without spaces stays out of the address around it.
+        assert_eq!(found(Pattern::Email, "メールはtaro@example.jpまで、联系support@example.cn谢谢"), ["taro@example.jp", "support@example.cn"]);
+        // Still no address without a dot in the domain or with a one-letter or numeric TLD.
+        assert_eq!(found(Pattern::Email, "ayşe@örnek, ş@ğ.ü, kişi@alan.123, a@b.c"), Vec::<String>::new());
     }
 
     #[test]
