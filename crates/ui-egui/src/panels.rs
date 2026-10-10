@@ -493,16 +493,19 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let mut bookmark_query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
                 if panel == RightPanel::Bookmarks && !info.outline.is_empty() {
                     ui.horizontal(|ui| {
+                        const CLEAR: f32 = 26.0;
                         let label = ui.label(tl!("Search"));
                         let previous = bookmark_query.clone();
-                        let response =
-                            ui.add(egui::TextEdit::singleline(&mut bookmark_query).desired_width(ui.available_width() - 32.0)).labelled_by(label.id);
+                        // The panel keeps whatever width its content used, so this row must fit
+                        // exactly: any overflow would widen the panel again on every repaint.
+                        let width = ui.available_width() - CLEAR - ui.spacing().item_spacing.x;
+                        let response = ui.add(egui::TextEdit::singleline(&mut bookmark_query).desired_width(width)).labelled_by(label.id);
                         response.widget_info(|| {
                             let mut info = egui::WidgetInfo::text_edit(ui.is_enabled(), &previous, &bookmark_query, "");
                             info.label = Some(tl!("Search").to_string());
                             info
                         });
-                        if icons::button(ui, "x", 26.0, false, tl!("Clear")).clicked() {
+                        if icons::button(ui, "x", CLEAR, false, tl!("Clear")).clicked() {
                             bookmark_query.clear();
                         }
                     });
