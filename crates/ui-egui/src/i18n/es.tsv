@@ -2057,3 +2057,12 @@
 	The field {name} no longer exists.	El campo {name} ya no existe.
 	A selected field has no widget on any page, so the fields can't be edited together.	Un campo seleccionado no tiene ningún widget en ninguna página, así que los campos no se pueden editar juntos.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} ppp, el mayor tamaño al que se pueden dibujar)
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Mayús
+key	Delete	Supr
+key	Esc	Esc
+key	Home	Inicio
+key	End	Fin
+key	Space	Espacio

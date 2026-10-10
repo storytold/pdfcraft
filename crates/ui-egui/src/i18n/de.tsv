@@ -2141,3 +2141,12 @@ action wizard	Start	Starten
 	The field {name} no longer exists.	Das Feld {name} existiert nicht mehr.
 	A selected field has no widget on any page, so the fields can't be edited together.	Ein ausgewähltes Feld hat auf keiner Seite ein Widget, daher können die Felder nicht gemeinsam bearbeitet werden.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} mit {dpi} dpi, der größten Auflösung, in der sie gezeichnet werden können)
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Strg
+key	Shift	Umschalt
+key	Delete	Entf
+key	Esc	Esc
+key	Home	Pos1
+key	End	Ende
+key	Space	Leertaste

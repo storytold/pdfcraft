@@ -2150,3 +2150,12 @@ signature pad	Type	Digita
 	The field {name} no longer exists.	Il campo {name} non esiste più.
 	A selected field has no widget on any page, so the fields can't be edited together.	Un campo selezionato non ha widget in nessuna pagina, quindi i campi non possono essere modificati insieme.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} dpi, la dimensione massima a cui si possono disegnare)
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Maiusc
+key	Delete	Canc
+key	Esc	Esc
+key	Home	Home
+key	End	Fine
+key	Space	Spazio
