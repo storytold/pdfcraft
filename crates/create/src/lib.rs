@@ -306,10 +306,12 @@ fn decoded(name: &str, bytes: &[u8], format: image::ImageFormat) -> Result<Embed
 /// Every page of a TIFF (multi-page scans become multi-page PDFs).
 fn tiff_pages(name: &str, bytes: &[u8]) -> Result<Vec<Embedded>, CreateError> {
     use tiff::ColorType as C;
-    use tiff::decoder::{Decoder, DecodingResult};
+    use tiff::decoder::{Decoder, DecodingResult, Limits};
     use tiff::tags::Tag;
     let bad = |m: String| CreateError::Image(name.into(), m);
-    let mut dec = Decoder::new(std::io::Cursor::new(bytes)).map_err(|e| bad(e.to_string()))?;
+    let mut dec = Decoder::new(std::io::Cursor::new(bytes))
+        .map_err(|e| bad(e.to_string()))?
+        .with_limits(Limits::unlimited());
     let mut out = Vec::new();
     loop {
         let (w, h) = dec.dimensions().map_err(|e| bad(e.to_string()))?;
