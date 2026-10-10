@@ -1866,6 +1866,7 @@ impl eframe::App for PdfCraftApp {
             theme::install_fonts_for(ctx, hans);
             self.fonts_hans = hans;
             theme::apply(ctx, self.theme);
+            ctx.options_mut(|o| o.zoom_with_keyboard = false);
             self.styled = true;
         } else {
             self.fonts_ready = true;

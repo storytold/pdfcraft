@@ -920,3 +920,21 @@ trailer << /Root 1 0 R >>
     let first = detail(&mut h);
     assert!(first * 10 > sharp * 7, "the first frame after zooming lost its detail: {first} against {sharp}");
 }
+
+#[test]
+fn zoom_shortcuts_size_canvas_and_leave_window_zoom_factor_alone() {
+    let mut h = form_harness();
+    assert_eq!(h.ctx.zoom_factor(), 1.0);
+    let initial_zoom = h.state().views[0].zoom;
+
+    // Cmd+= zooms the document canvas in, without scaling the egui UI window
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Equals);
+    h.run_steps(3);
+    assert!(h.state().views[0].zoom > initial_zoom, "canvas zoom should increase");
+    assert_eq!(h.ctx.zoom_factor(), 1.0, "egui window zoom factor must remain unchanged");
+
+    // Cmd+- zooms the document canvas out
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Minus);
+    h.run_steps(3);
+    assert_eq!(h.ctx.zoom_factor(), 1.0, "egui window zoom factor must remain unchanged");
+}
