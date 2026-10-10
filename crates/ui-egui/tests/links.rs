@@ -70,14 +70,17 @@ fn help_commands_open_each_link() {
 fn about_dialog_has_contributors_and_models_tabs() {
     let mut h = harness(|app| app.dialog = Some(Dialog::About));
     h.get_by_label("Contributors").click();
-    h.run_steps(2);
+    // The modal sizes to its content and re-centres over the next frames (the grab bag of 70+
+    // names wraps, the table grid has a sizing pass) without asking for a repaint, so `run()`
+    // stops early; run enough frames that the next click lands where the widget now is.
+    h.run_steps(6);
     // The owner is always in the compiled-in credits (contributors/contributors.json), shown by username.
     h.get_by_label("@echelon");
     h.get_by_label("Table").click();
-    h.run_steps(2);
+    h.run_steps(6);
     h.get_by_label("PRs");
     h.get_by_label("Display name").click();
-    h.run_steps(2);
+    h.run_steps(6);
     h.get_by_label("Brandon Thomas");
     h.get_by_label("Models").click();
     h.run_steps(2);
