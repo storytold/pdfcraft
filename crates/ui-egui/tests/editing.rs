@@ -2077,3 +2077,61 @@ fn a_thumbnail_drag_that_ends_off_the_panel_or_outlives_the_pages_is_dropped() {
     h.state_mut().views[0].document_changed(&info);
     assert!(h.state().views[0].panel_drag.is_none());
 }
+
+/// A Pages panel thumbnail (the rightmost node with that label).
+fn panel_thumb(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Pos2 {
+    h.get_all_by_label(label).map(|n| n.rect()).max_by(|a, b| a.left().total_cmp(&b.left())).expect("the thumbnail").center()
+}
+
+fn right_click_at(h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2) {
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+}
+
+#[test]
+fn deleting_pages_from_the_pages_panel_menu() {
+    let mut h = pages_panel(4);
+    let at = panel_thumb(&h, "Page 2");
+    right_click_at(&mut h, at);
+    h.get_by_label("Delete pages").click();
+    h.run_steps(4);
+    assert_eq!(page_texts(h.state()), ["Page 1", "Page 3", "Page 4"]);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Delete page"));
+    assert!(h.state().views[0].selected.is_empty(), "the deleted pages leave the selection");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3", "Page 4"]);
+}
+
+#[test]
+fn the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page() {
+    let mut h = pages_panel(3);
+    // ⌘-click picks pages 2 and 3 (and the current page, 1: the first ⌘-click keeps it).
+    h.get_by_label("Page 2").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    h.get_by_label("Page 3").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    let (p1, p3) = (panel_thumb(&h, "Page 1"), panel_thumb(&h, "Page 3"));
+    h.hover_at(p3);
+    h.run_steps(1);
+    assert_eq!(h.state().views[0].selected.iter().copied().collect::<Vec<_>>(), vec![0, 1, 2]);
+    // Every page picked: Delete does nothing, and the menu item is off.
+    h.key_press(Key::Delete);
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()).len(), 3, "a document keeps at least one page");
+    right_click_at(&mut h, p3);
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Delete pages") && n.is_disabled()).is_some());
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    // Pages 2 and 3 picked (page 2 current): Delete deletes them, and page 1 becomes current.
+    h.state_mut().views[0].select_pages(&[1, 2]);
+    h.hover_at(p1);
+    h.run_steps(1);
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    assert_eq!(page_texts(h.state()), ["Page 1"]);
+    assert_eq!(h.state().views[0].current, 0);
+}
