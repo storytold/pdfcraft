@@ -39,8 +39,8 @@ COMPANY_NAME = "Al Rawabet Commercial Services & Contracting Company W.L.L."
 COPYRIGHT = "© Al Rawabet Commercial Services & Contracting Company W.L.L."
 
 
-def find_makensis() -> str | None:
-    """Locate NSIS `makensis` in PATH or standard Windows installation directories."""
+def find_makensis(auto_install: bool = True) -> str | None:
+    """Locate NSIS `makensis` in PATH or standard Windows directories, auto-installing via winget if possible."""
     found = shutil.which("makensis")
     if found:
         return found
@@ -50,19 +50,56 @@ def find_makensis() -> str | None:
             if base:
                 candidate = Path(base) / "NSIS" / "makensis.exe"
                 if candidate.is_file():
+                    build.prepend_to_path(candidate.parent)
                     return str(candidate)
-    return None
+        if auto_install and shutil.which("winget"):
+            print("==> Installing NSIS (`makensis`) via winget...")
+            subprocess.run(
+                [
+                    "winget",
+                    "install",
+                    "--id",
+                    "NSIS.NSIS",
+                    "-e",
+                    "--accept-source-agreements",
+                    "--accept-package-agreements",
+                    "--silent",
+                ],
+                check=False,
+            )
+            for prog_env in ("ProgramFiles(x86)", "ProgramFiles"):
+                base = os.environ.get(prog_env)
+                if base:
+                    candidate = Path(base) / "NSIS" / "makensis.exe"
+                    if candidate.is_file():
+                        build.prepend_to_path(candidate.parent)
+                        return str(candidate)
+    return shutil.which("makensis")
 
 
-def find_wix() -> str | None:
-    """Locate WiX v5 (`wix`) in PATH or ~/.dotnet/tools."""
+def find_wix(auto_install: bool = True) -> str | None:
+    """Locate WiX v5 (`wix`) in PATH or ~/.dotnet/tools, auto-installing via `dotnet tool` if `dotnet` is available."""
+    dotnet_tools = Path.home() / ".dotnet" / "tools"
+    build.prepend_to_path(dotnet_tools)
+
     found = shutil.which("wix")
     if found:
         return found
     exe_name = "wix.exe" if os.name == "nt" else "wix"
-    candidate = Path.home() / ".dotnet" / "tools" / exe_name
+    candidate = dotnet_tools / exe_name
     if candidate.is_file():
         return str(candidate)
+
+    if auto_install and shutil.which("dotnet"):
+        print("==> Installing WiX Toolset v5 (`wix`) via `dotnet tool install`...")
+        subprocess.run(
+            ["dotnet", "tool", "install", "--global", "wix", "--version", "5.0.2"],
+            check=False,
+        )
+        build.prepend_to_path(dotnet_tools)
+        if candidate.is_file():
+            return str(candidate)
+        return shutil.which("wix")
     return None
 
 
