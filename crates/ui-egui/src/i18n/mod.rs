@@ -721,6 +721,37 @@ mod tests {
         assert!(missing.is_empty(), "untranslated Japanese UI literals: {missing:#?}");
     }
 
+    /// Italian translates every registered command and every All tools group, section and item.
+    #[test]
+    fn italian_covers_commands_and_catalogue() {
+        let it = Lang::from_code("it").expect("it registered");
+        for command in pdfcraft_engine::commands::COMMANDS {
+            assert!(has(it, command.label), "missing command: {}", command.label);
+            if let Some(menu) = command.menu {
+                assert!(has(it, menu), "missing menu: {menu}");
+            }
+        }
+        for group in pdfcraft_engine::catalog::TOOL_GROUPS {
+            assert!(has(it, group.label), "missing group: {}", group.label);
+            for section in group.sections {
+                assert!(has(it, section.title), "missing section: {}", section.title);
+                for item in section.items {
+                    assert!(has(it, item.label), "missing item: {}", item.label);
+                }
+            }
+        }
+    }
+
+    /// New tl!("literal") labels must not silently fall back to English in Italian.
+    #[test]
+    fn italian_covers_ui_literals() {
+        let it = Lang::from_code("it").expect("it registered");
+        let literals = ui_literals();
+        assert!(literals.len() > 900, "source scan found only {} literals", literals.len());
+        let missing: Vec<_> = literals.iter().filter(|label| !has(it, label)).collect();
+        assert!(missing.is_empty(), "untranslated Italian UI literals: {missing:#?}");
+    }
+
     /// With craft-fonts, every Japanese translation has glyphs: with all interface faces (desktop)
     /// and with BIZ UDPGothic Regular alone (the web build's only Japanese face).
     #[test]

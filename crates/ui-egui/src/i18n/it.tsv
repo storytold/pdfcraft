@@ -1195,7 +1195,6 @@
 	Searchable Image (Exact)	Immagine ricercabile (esatta)
 	Adds invisible text over each word; the page image is not changed	Aggiunge testo invisibile sopra ogni parola; l'immagine della pagina non viene modificata
 	Downsample to	Sottocampiona a
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	Il riconoscimento del testo non è installato: mancano i modelli (esegui `cargo xtask models` o imposta PRINTCRAFT_MODELS).
 	Settings	Impostazioni
 	Optional	Facoltativo
 	Planned · {m}	Pianificato · {m}
@@ -1771,7 +1770,6 @@
 	there are no pages to print	non ci sono pagine da stampare
 	the document has no tags	il documento non ha tag
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	i modelli di riconoscimento del testo non sono installati (esegui `cargo xtask models` o imposta PRINTCRAFT_MODELS)
 	the image is empty	l'immagine è vuota
 	this file isn't XFDF, FDF, XML or text form data	questo file non contiene dati modulo XFDF, FDF, XML o di testo
 	nothing in the file matches this document	nulla nel file corrisponde a questo documento
@@ -1984,7 +1982,6 @@
 	Open this web page?	Aprire questa pagina web?
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Gli script vengono eseguiti in una sandbox senza accesso a file o rete. Uno script che chiede di aprire una pagina web ha prima bisogno della tua autorizzazione. Con JavaScript disattivato, le funzioni standard di formato, convalida e calcolo di Acrobat continuano a funzionare.
 	Sign yourself	Firma tu stesso
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	Il riconoscimento del testo non è installato: mancano i modelli (esegui `cargo xtask models` o imposta PDFCRAFT_MODELS).
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	Usata all'apertura dei PDF. Una modalità di avvio o di controllo esplicita ha la precedenza per la sessione.
 	Write this email?	Scrivere questa email?
 	{who} in this document wants to open this address in your browser:	{who} in questo documento vuole aprire questo indirizzo nel browser:
@@ -2038,6 +2035,90 @@
 	% of all commits	% di tutti i commit
 	Lines +/−	Righe +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commit, +{added} / −{deleted} righe (Δ {delta}), +{bin_added} / −{bin_deleted} risorse binarie, {first} – {last}
-	the text recognition models are not installed (run `cargo xtask models`, or set PDFCRAFT_MODELS)	i modelli di riconoscimento del testo non sono installati (esegui `cargo xtask models` o imposta PDFCRAFT_MODELS)
 @plural	{n} page|{n} pages	{n} pagina|{n} pagine
 @plural	{n} field|{n} fields	{n} campo|{n} campi
+
+# Labels added on main after this catalog was written (merged 2026-10-09)
+	A button	Un pulsante
+	A link	Un collegamento
+	A script	Uno script
+	About	Informazioni
+	Add {what}	Aggiungi {what}
+	Align fields	Allinea campi
+	Another file dialog is still open. Finish with it first.	Un'altra finestra di selezione file è ancora aperta. Completala prima.
+	Basic constraints	Vincoli di base
+	Butt	Piatta
+	Change document properties	Modifica le proprietà del documento
+	Clear Recent Files	Cancella file recenti
+	Closed arrow	Freccia chiusa
+	Contributors	Collaboratori
+	Couldn't open the printer's preferences: {e}	Impossibile aprire le preferenze della stampante: {e}
+	Couldn't show the file picker. Please try again.	Impossibile mostrare la selezione file. Riprova.
+	Date format	Formato data
+	Distribute fields	Distribuisci campi
+	Files are combined in this order. Leave Pages empty to take every page.	I file vengono uniti in quest'ordine. Lascia vuoto Pagine per prendere tutte le pagine.
+	Fill & Sign dates	Date di Compila e firma
+	Flatten Fill & Sign when saving	Appiattisci Compila e firma al salvataggio
+	H / Space (hold)	H / Spazio (tieni premuto)
+	Home / End	Home / Fine
+	Inserted text	Testo inserito
+	Larger pages	Pagine più grandi
+	Line ending	Estremità della linea
+	Mark differences	Contrassegna le differenze
+	Mark for redaction	Contrassegna per l'oscuramento
+	Mark pages for redaction	Contrassegna pagine per l'oscuramento
+	Match field sizes	Uniforma dimensioni dei campi
+	Models	Modelli
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	Continua solo se ti fidi di questo documento. Un indirizzo può trasmettere informazioni del documento, come ciò che hai digitato nel modulo.
+	Open arrow	Freccia aperta
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Apre le preferenze del driver della stampante. Vengono salvate per ogni stampa da questo computer; copie, fronte-retro, scala di grigi e carta scelti qui restano validi.
+	Pattern	Schema
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft sta disegnando senza un processore grafico, quindi potrebbe essere lento. Aggiornare il driver grafico può aiutare.
+	Place saved {what}	Posiziona l'elemento salvato: {what}
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	Stampa solo fronte. Tieni i fogli in ordine, taglia sui segni, poi impila le pile da sinistra a destra, dall'alto in basso.
+	Printer properties	Proprietà della stampante
+	Redo {action}	Ripeti {action}
+	Remove from Recent	Rimuovi dai recenti
+	Remove saved {what}	Rimuovi l'elemento salvato: {what}
+	Remove {name} from Recent	Rimuovi {name} dai recenti
+	Reopen the files that were open when PdfCraft last closed	Riapri i file aperti alla chiusura precedente di PdfCraft
+	Reset page size	Ripristina dimensione pagine
+	Reset to printer defaults	Ripristina le impostazioni predefinite della stampante
+	Reverse closed arrow	Freccia chiusa inversa
+	Reverse open arrow	Freccia aperta inversa
+	Rotation:	Rotazione:
+	Run form script	Esegui script del modulo
+	SHA-1 digest	Impronta SHA-1
+	SHA-256 digest	Impronta SHA-256
+	Same as interface ({language})	Come l'interfaccia ({language})
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	Il contenuto con script deve essere utilizzabile con tastiera e tecnologie assistive. Controlla gli script del documento.
+	Scroll tabs left	Scorri le schede a sinistra
+	Scroll tabs right	Scorri le schede a destra
+	Slash	Barra
+	Smaller pages	Pagine più piccole
+	Squiggly	Ondulata
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Le righe di tabella devono stare direttamente in una tabella o nella sua intestazione, corpo o piè. Correggi i tag della tabella.
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Il riconoscimento del testo non è installato: mancano i file dei modelli. Reinstalla PdfCraft o imposta PDFCRAFT_MODELS sulla cartella che li contiene.
+	Text, marks and signatures become part of the page. Other comments stay editable.	Testo, segni e firme diventano parte della pagina. Gli altri commenti restano modificabili.
+	That didn't work: an internal error stopped it ({m}).	Non ha funzionato: un errore interno l'ha interrotto ({m}).
+	The Windows store's digital IDs couldn't be listed: {e}	Impossibile elencare gli ID digitali dell'archivio di Windows: {e}
+	The document changed while you were choosing a file, so nothing was changed.	Il documento è cambiato mentre sceglievi un file, quindi non è stato modificato nulla.
+	The document was closed before it could be saved.	Il documento è stato chiuso prima che potesse essere salvato.
+	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	Le pagine sono state estratte ma non eliminate, perché il documento è cambiato mentre sceglievi una cartella.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	Le impostazioni proprie del driver della stampante per questa stampa: vassoio, tipo di carta, finitura e altro.
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	I font standard non possono disegnare «{c}» ({code}). Per ora si possono aggiungere come testo solo caratteri dell'Europa occidentale.
+	This printer offers no settings of its own.	Questa stampante non offre impostazioni proprie.
+	Today: {date}	Oggi: {date}
+	Undo {action}	Annulla {action}
+	Use {what}	Usa {what}
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	i modelli di riconoscimento del testo non sono installati (reinstalla PdfCraft o imposta PDFCRAFT_MODELS sulla cartella che li contiene)
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy o yy anno · m o mm mese · mmm o mmmm nome del mese · d o dd giorno · ddd o dddd giorno della settimana. H, h, M, s e t sono lettere dell'ora e non si possono usare da sole: metti {escape} prima di una lettera per mostrarla così com'è.
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} non si può ancora scrivere nel PDF: il testo di Compila e firma è solo dell'Europa occidentale. Scegli un formato numerico come dd.mm.yyyy.
+	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} in questo documento ha provato ad aprire un indirizzo che PdfCraft non apre: {e}.
+	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} in questo documento ha provato ad aprire un indirizzo che PdfCraft non apre: {e}. Dai documenti si aprono solo collegamenti web (http, https) ed e-mail (mailto).
+	Certificate authority	Autorità di certificazione
+	End entity	Entità finale
+action wizard	Start	Avvia
+certificate	Subject	Titolare
+comment menu	Edit	Modifica
+signature pad	Type	Digita
