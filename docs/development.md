@@ -36,6 +36,12 @@ at a correspondingly lower scale instead of panicking in `Surface::configure` (v
 stretched over the window: softer, but complete and lined up with the pointer. wgpu's GL backend
 copies it unscaled into a corner of the window instead.
 
+For blurry or incorrectly scaled UI reports, attach `pdfcraft.log`. Look for the successful
+startup `renderer:` line, which records the wgpu adapter, device type, backend and enabled texture
+limit, or the OpenGL renderer. Also look for the `drawing it at … and scaling it up` warning: it
+means PdfCraft hit the surface-size safety fallback and rendered below the physical window size, so
+softness is expected.
+
 ## Renderer fallback
 
 PdfCraft draws with wgpu, and starts again with eframe's own OpenGL renderer (glow) when wgpu fails

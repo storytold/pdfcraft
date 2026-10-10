@@ -31,6 +31,7 @@ fn score(hay: &str, needle: &str) -> Option<usize> {
 }
 
 pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    let palette_rect_id = egui::Id::new("palette_rect");
     if !app.palette_open {
         return;
     }
@@ -99,8 +100,21 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     hits.truncate(12);
 
     let screen = ctx.content_rect();
+
+    let previous_rect = ctx.data(|data| data.get_temp::<Rect>(palette_rect_id));
+
+    let outside_click = ctx.input(|input| {
+        input.pointer.button_pressed(egui::PointerButton::Primary)
+            && input.pointer.interact_pos().is_some_and(|pos| previous_rect.is_some_and(|rect| !rect.contains(pos)))
+    });
+
+    if outside_click {
+        app.palette_open = false;
+        app.palette_query.clear();
+        return;
+    }
     let mut chosen: Option<(Option<&'static str>, Option<&'static str>)> = None;
-    egui::Area::new(egui::Id::new("palette"))
+    let area_response = egui::Area::new(egui::Id::new("palette"))
         .order(egui::Order::Foreground)
         .pivot(Align2::CENTER_TOP)
         .fixed_pos(egui::pos2(screen.center().x, screen.top() + 96.0))
@@ -151,6 +165,11 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 let _ = Stroke::NONE;
             });
         });
+
+    ctx.data_mut(|data| {
+        data.insert_temp(palette_rect_id, area_response.response.rect);
+    });
+
     if let Some((command, group)) = chosen {
         app.palette_open = false;
         app.palette_query.clear();

@@ -48,6 +48,7 @@ impl TransferFunction {
 }
 
 struct Repr<'a> {
+    cache_key: u128,
     obj_id: ObjectIdentifier,
     group: FormXObject<'a>,
     mask_type: MaskType,
@@ -65,7 +66,6 @@ struct Repr<'a> {
 impl Hash for Repr<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.obj_id.hash(state);
-        self.root_transform.cache_key().hash(state);
     }
 }
 
@@ -89,7 +89,7 @@ impl Eq for SoftMask<'_> {}
 
 impl CacheKey for SoftMask<'_> {
     fn cache_key(&self) -> u128 {
-        hash128(self)
+        self.0.cache_key
     }
 }
 
@@ -134,12 +134,23 @@ impl<'a> SoftMask<'a> {
             _ => return None,
         };
         let nesting_depth = context.nesting_depth() + 1;
+        let root_transform = context.get().ctm;
+        let bbox = context.bbox();
+        let resources_key = resources_cache_key(&parent_resources);
+        let cache_key = hash128(&(
+            dict.cache_key(),
+            root_transform.cache_key(),
+            [bbox.x0.to_bits(), bbox.y0.to_bits(), bbox.x1.to_bits(), bbox.y1.to_bits()],
+            resources_key,
+            nesting_depth,
+        ));
 
         Some(Self(Rc::new(Repr {
+            cache_key,
             obj_id,
             group,
             mask_type,
-            root_transform: context.get().ctm,
+            root_transform,
             transfer_function,
             bbox: context.bbox(),
             interpreter_cache: context.interpreter_cache.clone(),
@@ -187,4 +198,17 @@ impl<'a> SoftMask<'a> {
     pub fn transfer_function(&self) -> Option<&TransferFunction> {
         self.0.transfer_function.as_ref()
     }
+}
+
+fn resources_cache_key(resources: &Resources<'_>) -> u128 {
+    let local = (
+        resources.ext_g_states.obj_id(),
+        resources.fonts.obj_id(),
+        resources.properties.obj_id(),
+        resources.color_spaces.obj_id(),
+        resources.x_objects.obj_id(),
+        resources.patterns.obj_id(),
+        resources.shadings.obj_id(),
+    );
+    hash128(&(local, resources.parent().map(resources_cache_key)))
 }

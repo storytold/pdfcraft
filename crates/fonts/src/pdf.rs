@@ -68,6 +68,11 @@ fn dict(doc: &Document, o: Option<&Object>) -> Option<Dict> {
     o.and_then(|o| doc.resolve(o).as_dict().cloned())
 }
 
+fn descriptor_flags(doc: &Document, descriptor: &Dict) -> u32 {
+    let value = descriptor.get(b"Flags").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(0.0) as i64;
+    u32::try_from(value).unwrap_or(0)
+}
+
 /// Most entries a CMap may add, so a small stream of overlapping `bfrange`s can't take minutes
 /// or gigabytes; a full 2-byte code space is 65 536. Entries past it are ignored.
 const MAX_CMAP_ENTRIES: usize = 1 << 20;
@@ -397,7 +402,7 @@ impl Metrics {
             }
         }
         if let Some(d) = descriptor {
-            let flags = d.get(b"Flags").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(0.0).max(0.0) as u32;
+            let flags = descriptor_flags(doc, &d);
             let angle = d.get(b"ItalicAngle").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(0.0);
             let weight = d.get(b"FontWeight").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(0.0);
             m.italic |= flags & 64 != 0 || angle.abs() > 0.1;
@@ -656,6 +661,27 @@ mod tests {
         }
         let _ = doc;
         d
+    }
+
+    fn metrics_with_flags(flags: Option<Object>) -> Metrics {
+        let mut doc = Document::new_empty();
+        let mut descriptor = Dict::new();
+        if let Some(flags) = flags {
+            descriptor.set(b"Flags".to_vec(), flags);
+        }
+        let font = font(&mut doc, vec![("Subtype", Object::name("TrueType")), ("FontDescriptor", Object::Dict(descriptor))]);
+        Metrics::from_dict(&doc, &font)
+    }
+
+    #[test]
+    fn font_descriptor_flags_stay_within_the_u32_domain() {
+        let valid = metrics_with_flags(Some(Object::Int(64 | 262_144)));
+        assert!(valid.italic && valid.bold);
+
+        for flags in [Some(Object::Int(-1)), Some(Object::Int(4_294_967_296)), Some(Object::Bool(true)), None] {
+            let metrics = metrics_with_flags(flags);
+            assert!(!metrics.italic && !metrics.bold);
+        }
     }
 
     #[test]

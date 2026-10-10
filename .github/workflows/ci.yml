@@ -51,6 +51,11 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Require Windows executable resources
+        if: runner.os == 'Windows'
+        run: Add-Content -Path $env:GITHUB_ENV -Value 'PDFCRAFT_REQUIRE_WINRES=1'
+        shell: pwsh
+
       - uses: Swatinem/rust-cache@v2
 
       - name: Format

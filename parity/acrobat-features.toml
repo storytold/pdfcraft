@@ -927,7 +927,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/ui.rs::selection_works_in_every_view_rotation"]
-notes = ""
+notes = "PdfCraft draws a percentage on its fixed 96-dpi basis: 96/72 logical pixels per PDF point at 100%. Acrobat draws it at its Page Display resolution, with logical pixels per PDF point = ppi / 72 × zoom (checked black-box with Custom resolutions of 96, 110 and 120 ppi on one display), so the same percentage can differ in size. Acrobat's Use System Setting resolution is not reproduced. Tracked with misc.prefs-page-display"
 
 [[feature]]
 id = "view.zoom-actual-size"
@@ -939,7 +939,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/view.rs::actual_size_fit_width_and_fit_page"]
-notes = ""
+notes = "Actual size is 100% on PdfCraft's fixed 96-dpi basis: 96/72 logical pixels per PDF point. Acrobat's Actual Size uses its Page Display resolution (ppi / 72 logical pixels per PDF point at 100%), which PdfCraft does not offer yet, so the two can draw a page at different sizes. Tracked with misc.prefs-page-display"
 
 [[feature]]
 id = "view.zoom-fit-page"
@@ -6696,8 +6696,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["create.images"]
 tools = ["doc_create"]
-evidence = ["crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png"]
-notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution)"
+evidence = ["crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::embedded_icc_profiles_tag_the_image_colour_space"]
+notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution). JPEG and PNG ICC profiles are kept as /ICCBased; TIFF profiles are not read yet"
 
 [[feature]]
 id = "create.from-multipage-tiff"
