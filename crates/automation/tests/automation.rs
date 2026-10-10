@@ -2830,6 +2830,18 @@ fn ocr_tools_make_a_scan_searchable() {
 }
 
 #[test]
+fn ocr_recognize_files_refuses_paths_outside_the_root() {
+    let dir = workdir("ocr-files-root");
+    let mut a = auto(&dir);
+    // Refused before anything else, with or without the OCR models installed.
+    for path in ["../outside.pdf", "sub/../../outside.pdf", "/outside.pdf"] {
+        let r = a.call("ocr_recognize_files", &json!({ "paths": ["a.pdf", path], "folder": "out" }));
+        assert!(matches!(&r, Err(e) if e.to_string().contains("outside the allowed directory")), "{path}: {r:?}");
+    }
+    assert!(!dir.join("out").exists(), "nothing was started");
+}
+
+#[test]
 fn ocr_recognize_files_writes_searchable_copies() {
     let dir = workdir("ocr-files");
     let mut a = auto(&dir);
