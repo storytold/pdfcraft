@@ -23,6 +23,7 @@ Approved Trust List) are out of scope: 23 such features are tracked as `na` in
 | Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.2% unweighted: 292 + 44 partial of 497; P0 95.3%) | measured ([split below](#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 47%** (range 44–50%) | estimated (area table below) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (range 50–60%) | estimated ([split below](#mainstream-practitioner-vs-full-acrobat-pro)) |
+| **Ready for real work**, essentials user | **≈ 66%** (range 60–70%) | estimated ([below](#essentials-user)) |
 | **Stage** | **alpha** (passes the core-workflow gate) | see [Stage](#stage) |
 | Remaining to beta | ≈ 400–700 Opus 5.5 agent-hours | estimated |
 | Remaining to full parity | ≈ 780–1,400 Opus 5.5 agent-hours | estimated |
@@ -97,6 +98,34 @@ scoring only their mainstream features: view 20% × 60, comment 15% × 70, edit 
 organize 12% × 75, fill and sign 12% × 70, convert 10% × 30, protect and redact 6% × 55,
 OCR 4% × 20, compress 3% × 60, print 3% × 50 = 55.6%. Read-only, review, form-filling and page
 workflows are close to Acrobat; editing existing content, conversion and OCR are not.
+
+### Essentials user
+
+Someone who uses Acrobat for the everyday basics and never opens the rest. Scored on those features
+only, by depth, then discounted for what such a user actually runs into. Advanced options, Pro
+workflows, exchange edge cases and everything outside the mainstream slice are excluded.
+
+| Core feature | Weight | Depth | Evidence |
+|---|---|---|---|
+| Open the PDFs people send and read them (render, zoom, scroll, page through) | 20% | 80% | Repair of damaged files, 958-file corpus; rendering borrowed but broadly right (#794 is a TikZ pattern) |
+| Find, select and copy text | 8% | 85% | Find, options, results list; word-F1 0.98 |
+| Print | 8% | 55% | Good on macOS and Linux; nothing on Windows, where most such users are (#756) |
+| Highlight, sticky notes, text comments | 12% | 85% | All markup types, replies, properties |
+| Fill in forms | 10% | 85% | Every AcroForm field type, Acrobat's formatting and calculations |
+| Fill & Sign: typed, drawn or image signature | 10% | 85% | Fill & Sign tools; flatten on save |
+| Rotate, delete, reorder and extract pages | 8% | 85% | Organize grid, drag reorder, thumbnails |
+| Combine files | 6% | 85% | Combine tab with bookmarks per file |
+| Fix a typo in existing text | 5% | 40% | Latin paragraphs only; font may be substituted |
+| Export to Word or images | 5% | 45% | Images good; Word loses layout (#773) |
+| Reduce file size | 3% | 75% | Reduce File Size, Optimizer |
+| Protect with a password | 3% | 30% | Works in PdfCraft; Acrobat and Reader reject the file (#774) |
+| Undo, save, autosave | 2% | 90% | Undo after save, atomic saves, crash recovery |
+
+Weighted depth: **≈ 75%**. Discounts an essentials user hits: launch and stability (54 issues about
+installing, launching, GPU and windows; OpenGL fallback) −5 points; discoverability and clarity
+(an Acrobat-like shell with Home and All tools, but tool-mode friction such as #825 and #721) −2;
+opening what people send (Chinese UI glyph boxes #826, CJK documents #758) −2.
+**Essentials user ≈ 66%** (60–70%).
 
 ### User sentiment (second look, 2026-10-10)
 
@@ -245,6 +274,7 @@ licensed OCR or AI model.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Added the essentials-user score (≈ 66%): weighted depth of 13 everyday features, discounted for launch, discoverability and opening others' files |
 | 2026-10-10 | minor | Consistency check across apps: re-judged the convert-and-share gate row with the shared rule (blocking only when the workflow can't be completed at all; lossy exchange and missing sub-cases are beta items). Encrypted output (#774) and Office→PDF are sub-cases, Word export is lossy not absent → partial, not blocking; stage pre-alpha → **alpha**. Numbers unchanged |
 | 2026-10-10 | minor | Second look requested by the owner after practitioners praised PdfCraft: user sentiment gathered (stars, downloads, 23 praising issues, switching reports, issue themes); checklist split into mainstream (497) and specialist (311) features; the 9-point cross-cutting deduction removed as a double count (Windows printing, interop and glyphs were already scored in their areas). Ready for real work 40% → 47%; mainstream practitioner ≈ 55% added. Core-workflow alpha gate applied: convert and share fails → stage alpha → **pre-alpha**, ≈ 40–70 h from alpha |
 | 2026-10-10 | major | Created from ROADMAP.md §Estimate summary and §Honest assessment (2026-10-05/07). Full re-measure against Acrobat Pro 26.002.21931: checklist recomputed (56.9% unweighted, ≈ 67% tier-weighted), ready for real work ≈ 40%, stage alpha, hours re-calibrated (780–1,400 h to parity, 400–700 h to beta), dimension and area tables |
