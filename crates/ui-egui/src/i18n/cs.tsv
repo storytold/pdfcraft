@@ -51,6 +51,8 @@
 	Document properties…	Vlastnosti dokumentu…
 	Export to image…	Exportovat jako obrázek…
 	Reduce file size…	Zmenšit velikost souboru…
+	This file is already as small as it can be made ({size}). No copy was saved.	Soubor je už tak malý, jak to jde ({size}). Žádná kopie nebyla uložena.
+	Saved {place}: {before} → {after} (not smaller){detail}	Uloženo {place}: {before} → {after} (není menší){detail}
 	Optimize PDF…	Optimalizovat PDF…
 	Export to text…	Exportovat jako text…
 	Export to Word…	Exportovat do formátu Word…
@@ -65,6 +67,7 @@
 	Find…	Najít…
 	Advanced search…	Rozšířené hledání…
 	Take a snapshot	Pořídit snímek
+	Column select	Výběr sloupce
 	Clear form	Vymazat formulář
 	Copy pages	Kopírovat stránky
 	Cut pages	Vyjmout stránky
@@ -145,3 +148,12 @@
 	Import list…	Importovat seznam…
 	{n} word(s) or phrase(s)	Slova nebo fráze: {n}
 	{name} is too large for a word list (at most 1 MB).	{name} je pro seznam slov příliš velký (nejvýše 1 MB).
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	Mezerník

@@ -70,6 +70,7 @@
 	Fit visible	Adatta al visibile
 	Marquee zoom	Ingrandimento selettivo
 	Take a snapshot	Acquisisci istantanea
+	Column select	Selezione colonna
 	Full screen mode	Modalità schermo intero
 	Read mode	Modalità lettura
 	Switch light / dark theme	Alterna tema chiaro/scuro
@@ -1491,6 +1492,8 @@
 	Right Edge	Bordo destro
 	Language	Lingua
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Salvato {place}: {before} → {after} ({pct}% in meno){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	Questo file è già il più piccolo possibile ({size}). Nessuna copia salvata.
+	Saved {place}: {before} → {after} (not smaller){detail}	Salvato {place}: {before} → {after} (non più piccolo){detail}
 	Couldn't save the image: {e}	Impossibile salvare l'immagine: {e}
 	Adding images arrives on the web with file pickers for images	Sul web, l'aggiunta di immagini arriverà con i selettori di file per immagini
 	Replacing images on page {p} arrives on the web with image pickers ({i})	Sul web, la sostituzione di immagini a pagina {p} arriverà con i selettori di immagini ({i})
@@ -2150,6 +2153,18 @@ signature pad	Type	Digita
 	The field {name} no longer exists.	Il campo {name} non esiste più.
 	A selected field has no widget on any page, so the fields can't be edited together.	Un campo selezionato non ha widget in nessuna pagina, quindi i campi non possono essere modificati insieme.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} dpi, la dimensione massima a cui si possono disegnare)
+	Fill colour	Colore riempimento
+	No fill	Nessun riempimento
+	Fill colour: none	Colore riempimento: nessuno
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Maiusc
+key	Delete	Canc
+key	Esc	Esc
+key	Home	Home
+key	End	Fine
+key	Space	Spazio
 	Grid view	Vista griglia
 	List view	Vista elenco
 	Files are combined in the order shown. Drag them to change it.	I file vengono combinati nell'ordine mostrato. Trascinali per cambiarlo.

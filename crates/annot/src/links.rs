@@ -299,27 +299,29 @@ pub fn remove_all(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize, 
 /// Find web addresses in text: `http(s)://…`, `www.…` and bare e-mail addresses become
 /// `mailto:`. Returns character ranges and the URI for each.
 pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
-    let text: String = chars.iter().collect();
-    let lower = text.to_lowercase();
-    let lc: Vec<char> = lower.chars().collect();
-    let mut out = Vec::new();
     let url_char = |c: char| !c.is_whitespace() && !"<>\"'()[]{}".contains(c);
+    // Case-insensitive prefix test that never steps past the end. Comparing against the original
+    // characters keeps every offset in `chars`'s own index space: case-folding a copy can change
+    // its length (U+0130 becomes "i" plus a combining dot), so a folded copy must never supply
+    // offsets into the source (that mismatch panicked; #816).
+    let starts_with =
+        |start: usize, pat: &str| pat.chars().enumerate().all(|(k, p)| chars.get(start + k).is_some_and(|c| c.eq_ignore_ascii_case(&p)));
+    let mut out = Vec::new();
     let mut i = 0;
-    while i < lc.len() {
-        let at = |s: &str| lc[i..].iter().take(s.chars().count()).copied().eq(s.chars());
-        let boundary = i == 0 || !lc[i - 1].is_alphanumeric();
-        if boundary && (at("http://") || at("https://") || at("www.")) {
+    while i < chars.len() {
+        let boundary = i == 0 || chars.get(i - 1).is_some_and(|c| !c.is_alphanumeric());
+        if boundary && (starts_with(i, "http://") || starts_with(i, "https://") || starts_with(i, "www.")) {
             let mut j = i;
-            while j < chars.len() && url_char(chars[j]) {
+            while chars.get(j).is_some_and(|c| url_char(*c)) {
                 j += 1;
             }
             // Trailing punctuation belongs to the sentence.
-            while j > i && ".,;:!?".contains(chars[j - 1]) {
+            while j > i && chars.get(j - 1).is_some_and(|c| ".,;:!?".contains(*c)) {
                 j -= 1;
             }
-            let s: String = chars[i..j].iter().collect();
+            let s: String = chars.get(i..j).map(|c| c.iter().collect()).unwrap_or_default();
             if s.len() > 6 && s.contains('.') {
-                let uri = if s.to_lowercase().starts_with("www.") { format!("http://{s}") } else { s };
+                let uri = if s.get(..4).is_some_and(|p| p.eq_ignore_ascii_case("www.")) { format!("http://{s}") } else { s };
                 out.push((i..j, uri));
                 i = j;
                 continue;
