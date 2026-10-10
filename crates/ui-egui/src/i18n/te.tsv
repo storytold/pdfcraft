@@ -2044,3 +2044,24 @@ action wizard	Start	ప్రారంభించు
 	This printer offers no settings of its own.	ఈ ప్రింటర్‌కు దాని స్వంత సెట్టింగ్‌లు లేవు.
 	Scroll tabs left	ట్యాబ్‌లను ఎడమకు స్క్రోల్ చేయి
 	Scroll tabs right	ట్యాబ్‌లను కుడికి స్క్రోల్ చేయి
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	ఉమ్మడి ఫీల్డ్ లక్షణాలు
+	{n} fields selected	ఎంచుకున్న ఫీల్డ్‌లు: {n}
+	Mixed	వేర్వేరు విలువలు
+	Custom font	అనుకూల ఫాంట్
+	Only checked properties will change. Mixed means the selected fields have different values.	టిక్ చేసిన లక్షణాలు మాత్రమే మారుతాయి. “వేర్వేరు విలువలు” అంటే ఎంచుకున్న ఫీల్డ్‌లలో విలువలు భిన్నంగా ఉన్నాయి.
+	Shift- or Ctrl/Command-click to select several fields.	అనేక ఫీల్డ్‌లను ఎంచుకోవడానికి Shift లేదా Ctrl/Command నొక్కి క్లిక్ చేయండి.
+	Font size 0 uses automatic sizing.	ఫాంట్ పరిమాణం 0 అయితే పరిమాణం స్వయంచాలకంగా సర్దుబాటు అవుతుంది.
+	Character limit:	అక్షరాల పరిమితి:
+	Character limit 0 means no limit. A comb of characters needs a limit.	అక్షరాల పరిమితి 0 అంటే పరిమితి లేదు. అక్షరాల గడులకు పరిమితి అవసరం.
+	To change locked fields, also set Locked to No.	లాక్ చేసిన ఫీల్డ్‌లను మార్చడానికి “లాక్ చేయబడింది” విలువను కూడా “కాదు”గా పెట్టండి.
+	Comb of characters	అక్షరాల దువ్వెన
+	The document changed while you were editing field properties.	మీరు ఫీల్డ్ లక్షణాలను సవరిస్తున్నప్పుడు పత్రం మారింది.
+	The document is no longer open.	పత్రం ఇకపై తెరిచి లేదు.
+	The field properties dialog is no longer open.	ఫీల్డ్ లక్షణాల డైలాగ్ ఇకపై తెరిచి లేదు.
+	The field properties could not be changed.	ఫీల్డ్ లక్షణాలను మార్చలేకపోయాము.
+	The selected fields could not be found. Select them again.	ఎంచుకున్న ఫీల్డ్‌లు కనుగొనబడలేదు. వాటిని మళ్ళీ ఎంచుకోండి.
+	The field {name} no longer exists.	{name} ఫీల్డ్ ఇకపై లేదు.
+	A selected field has no widget on any page, so the fields can't be edited together.	ఎంచుకున్న ఒక ఫీల్డ్‌కు ఏ పేజీలోనూ విడ్జెట్ లేదు, కాబట్టి ఫీల్డ్‌లను కలిపి సవరించలేము.
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} {dpi} dpi వద్ద, అవి గీయగల అతిపెద్ద పరిమాణం)

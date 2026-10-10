@@ -296,7 +296,16 @@ mod tests {
     }
 
     fn page(req: RenderRequest, bytes: usize) -> RenderedPage {
-        RenderedPage { request: req, width: 1, height: 1, rgba: Pixels::from(vec![0u32; bytes / 4]), error: None, text: None, millis: 0 }
+        RenderedPage {
+            request: req,
+            width: 1,
+            height: 1,
+            rgba: Pixels::from(vec![0u32; bytes / 4]),
+            error: None,
+            text: None,
+            warnings: Vec::new(),
+            millis: 0,
+        }
     }
 
     #[test]

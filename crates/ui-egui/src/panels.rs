@@ -394,6 +394,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut bm_action: Option<BmAction> = None;
     let mut bm_expand: Option<usize> = None;
     let mut panel_edit: Option<pdfcraft_engine::Edit> = None;
+    let mut field_properties = None;
     let mut panel_command: Option<&'static str> = None;
     let mut sig_action: Option<crate::sign_ui::PanelAction> = None;
     let mut a11y_action: Option<crate::a11y_ui::PanelAction> = None;
@@ -547,7 +548,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         }
                     }
                     RightPanel::Pages => pages(ui, &t, info, view, modal, bm_editable, &mut nav),
-                    RightPanel::Fields => fields(ui, &t, info, &doc.form, preparing, &mut nav, &mut panel_edit),
+                    RightPanel::Fields => field_properties = fields(ui, &t, info, &doc.form, preparing, &mut view.prepare, &mut nav, &mut panel_edit),
                     RightPanel::Layers => {
                         if info.layers.is_empty() {
                             empty(ui, &t, "layers", "This document has no layers.");
@@ -626,6 +627,9 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     if let Some(e) = panel_edit {
         app.apply_edit(e);
+    }
+    if let Some((name, widget)) = field_properties {
+        app.open_field_props(&name, widget);
     }
     if let Some(c) = panel_command {
         app.run_command(c);
@@ -1095,24 +1099,37 @@ fn page_drag(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, rows: &[R
 
 /// The Fields panel: fields by page, in tab order. While preparing a form, each field can move
 /// earlier or later in its page's tab order (Acrobat: Order Tabs Manually).
+#[allow(clippy::too_many_arguments)]
 fn fields(
     ui: &mut egui::Ui,
     t: &Tokens,
     info: &DocInfo,
     form: &[pdfcraft_engine::FormField],
     preparing: bool,
+    selection: &mut crate::prepare::PrepareView,
     nav: &mut Option<Nav>,
     edit: &mut Option<pdfcraft_engine::Edit>,
-) {
+) -> Option<(String, usize)> {
+    let mut properties = None;
     if info.fields.is_empty() {
         empty(ui, t, "text-cursor-input", "This document has no form fields.");
-        return;
+        return None;
     }
     let rank = |name: &str| form.iter().find(|f| f.name == name).and_then(|f| f.widgets.iter().map(|w| w.tab).min()).unwrap_or(usize::MAX);
     let mut ordered: Vec<_> = info.fields.iter().collect();
     ordered.sort_by_key(|f| (f.page, rank(&f.name)));
     if preparing {
         ui.label(egui::RichText::new(tl!("Tab order: move a field with its arrows.")).small().color(t.text_muted));
+        ui.label(egui::RichText::new(tl!("Shift- or Ctrl/Command-click to select several fields.")).small().color(t.text_muted));
+        let names = selection.names();
+        // Keep the field rows in place when the first click selects a field, so the
+        // second click of a double-click still lands on the same row.
+        ui.horizontal(|ui| {
+            ui.label(crate::i18n::fmt(tl!("{n} selected"), &[("n", &names.len().to_string())]));
+            if ui.add_enabled(!names.is_empty(), egui::Button::new(tl!("Properties…"))).clicked() {
+                properties = selection.selected.clone();
+            }
+        });
     }
     let mut pages: Vec<Option<usize>> = info.fields.iter().map(|f| f.page).collect();
     pages.sort();
@@ -1123,6 +1140,11 @@ fn fields(
         ui.add_space(4.0);
         ui.label(egui::RichText::new(label).font(theme::semibold(12.5)).color(t.text_muted));
         for f in ordered.iter().copied().filter(|f| f.page == p) {
+            let key = form
+                .iter()
+                .find(|field| field.name == f.name)
+                .and_then(|field| field.widgets.iter().position(|w| w.page == f.page).map(|wi| (field.name.clone(), wi)));
+            let selected = key.as_ref().is_some_and(|key| selection.selected.as_ref() == Some(key) || selection.also.contains(key));
             let icon = match f.kind {
                 FieldKind::Text => "text-cursor-input",
                 FieldKind::CheckBox => "check-circle-2",
@@ -1134,9 +1156,9 @@ fn fields(
                 FieldKind::Unknown => "square",
             };
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &f.name));
-            if resp.hovered() {
-                ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, &f.name));
+            if selected || resp.hovered() {
+                ui.painter().rect_filled(rect, CornerRadius::same(6), if selected { t.pressed } else { t.hover });
             }
             icons::paint(ui, Rect::from_min_size(rect.min + vec2(8.0, 7.0), vec2(16.0, 16.0)), icon, 15.0, Color32::from_rgb(0x8E, 0x4E, 0xE6));
             ui.painter().text(rect.left_center() + vec2(32.0, 0.0), Align2::LEFT_CENTER, &f.name, theme::regular(13.0), t.text);
@@ -1169,6 +1191,19 @@ fn fields(
                     }
                 }
             }
+            if preparing && resp.double_clicked() && !ui.input(|i| i.modifiers.shift || i.modifiers.command) {
+                if let Some(key) = key {
+                    if !selected {
+                        selection.select(key.clone(), false);
+                    }
+                    properties = Some(key);
+                }
+            } else if preparing
+                && resp.clicked()
+                && let Some(key) = key
+            {
+                selection.select(key, ui.input(|i| i.modifiers.shift || i.modifiers.command));
+            }
             if resp.on_hover_text(tip).clicked()
                 && let (Some(p), Some(r)) = (f.page, f.rect)
             {
@@ -1176,6 +1211,7 @@ fn fields(
             }
         }
     }
+    properties
 }
 
 pub fn human_size(n: usize) -> String {

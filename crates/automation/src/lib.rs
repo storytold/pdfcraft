@@ -980,13 +980,23 @@ impl Automation {
             f => return Err(ToolError::InvalidArgs(format!("unknown format {f:?} (png, jpeg, tiff)"))),
         };
         let mut files = Vec::new();
+        let mut lowered = Vec::new();
         for p in pages {
             let img = ex.image(p, dpi, format).map_err(failed)?;
             let path = child(&folder, &format!("{stem}_page_{}.{}", p + 1, format.extension()));
             write_atomic(&path, &img)?;
             files.push(path.to_string_lossy().into_owned());
+            // A page too large for the renderer at `dpi` is drawn at the most it allows.
+            let used = ex.dpi_used(p, dpi);
+            if used < dpi.clamp(18.0, 1200.0) - 0.5 {
+                lowered.push(json!({ "page": p + 1, "dpi": used.floor() }));
+            }
         }
-        Ok(json!({ "count": files.len(), "files": files }))
+        if lowered.is_empty() {
+            Ok(json!({ "count": files.len(), "files": files }))
+        } else {
+            Ok(json!({ "count": files.len(), "files": files, "lower_dpi": lowered }))
+        }
     }
 
     fn doc_create(&mut self, a: &Args) -> Result<Value> {

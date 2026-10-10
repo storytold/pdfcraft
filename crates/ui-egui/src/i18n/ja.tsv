@@ -2113,3 +2113,24 @@ signature pad	Type	入力
 	Text, marks and signatures become part of the page. Other comments stay editable.	テキスト、マーク、署名がページの一部になります。その他のコメントは引き続き編集できます。
 	Scroll tabs left	タブを左にスクロール
 	Scroll tabs right	タブを右にスクロール
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	共通のフィールドプロパティ
+	{n} fields selected	{n} 個のフィールドを選択中
+	Mixed	混在
+	Custom font	カスタムフォント
+	Only checked properties will change. Mixed means the selected fields have different values.	チェックしたプロパティのみ変更します。「混在」は選択したフィールドの値が異なることを示します。
+	Shift- or Ctrl/Command-click to select several fields.	Shift または Ctrl/Command を押しながらクリックすると複数のフィールドを選択できます。
+	Font size 0 uses automatic sizing.	フォントサイズが 0 の場合は自動調整します。
+	Character limit:	文字数の上限:
+	Character limit 0 means no limit. A comb of characters needs a limit.	文字数の上限が 0 の場合は無制限です。文字の分割には上限が必要です。
+	To change locked fields, also set Locked to No.	ロックされたフィールドを変更するには「ロック」を「いいえ」に設定してください。
+	Comb of characters	文字のマス目
+	The document changed while you were editing field properties.	フィールドのプロパティを編集中に文書が変更されました。
+	The document is no longer open.	文書はもう開かれていません。
+	The field properties dialog is no longer open.	フィールドのプロパティのダイアログはもう開かれていません。
+	The field properties could not be changed.	フィールドのプロパティを変更できませんでした。
+	The selected fields could not be found. Select them again.	選択したフィールドが見つかりません。もう一度選択してください。
+	The field {name} no longer exists.	フィールド {name} はもう存在しません。
+	A selected field has no widget on any page, so the fields can't be edited together.	選択したフィールドの一つがどのページにもウィジェットを持たないため、まとめて編集できません。
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 件は描画できる最大サイズの {dpi} dpi で書き出しました）

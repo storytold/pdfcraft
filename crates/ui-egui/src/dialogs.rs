@@ -43,6 +43,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut export_now = false;
     let mut props_now = false;
     let mut field_props_now = false;
+    let mut bulk_field_props_now = false;
     let mut redact_now: Option<Dialog> = None;
     let mut print_go = false;
     let mut revert_now = false;
@@ -64,7 +65,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
-            Dialog::FieldProps => 600.0,
+            Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::About => 780.0,
             _ => 520.0,
         });
@@ -817,6 +818,16 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 close = apply || cancel;
                 return;
             }
+            Dialog::BulkFieldProps => {
+                let Some(d) = app.bulk_field_props.as_mut() else {
+                    close = true;
+                    return;
+                };
+                let (apply, cancel) = crate::bulk_fields::body(ui, d, &t);
+                bulk_field_props_now = apply;
+                close = cancel;
+                return;
+            }
             Dialog::CommentProps => {
                 let (apply, cancel) = crate::comment_props::body(ui, app, &t);
                 props_now = apply;
@@ -1218,6 +1229,9 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         }
         _ => {}
     }
+    if bulk_field_props_now {
+        close = app.apply_bulk_field_props();
+    }
     if field_props_now
         && let Some(d) = app.field_props.take()
         && let Some(props) = d.props()
@@ -1273,6 +1287,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.dialog = None;
         app.props_draft = None;
         app.view_draft = None;
+        app.bulk_field_props = None;
     } else {
         app.dialog = Some(next);
     }

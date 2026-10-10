@@ -41,7 +41,8 @@ pub use pdfcraft_edit::{
 };
 pub use pdfcraft_forms::{
     BorderStyle, CheckStyle, Field as FormField, FieldAction, FieldChange, FieldFont, FieldKind as FormFieldKind, FieldProps, FieldValue,
-    Look as FieldLook, NewField, TabOrder, Trigger as FieldTrigger, Widget as FormWidget, af as form_scripts, flags as field_flags,
+    Look as FieldLook, LookPatch as FieldLookPatch, NewField, TabOrder, Trigger as FieldTrigger, Widget as FormWidget, af as form_scripts,
+    flags as field_flags,
 };
 
 pub use pdfcraft_a11y as a11y;
@@ -2242,7 +2243,7 @@ impl Session {
         xfa: Option<XfaLayout>,
     ) -> Result<DocId, OpenError> {
         let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
-        let (editor, read_only_reason) = match cos {
+        let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
                 let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };
                 (Some(Editor { cos, undo: Vec::new(), redo: Vec::new(), keys }), None)
@@ -2253,8 +2254,21 @@ impl Session {
         let display = display_bytes(editor.as_ref(), &bytes);
         let renderer = RenderPool::new(display.clone(), render_threads(), config.clone());
         let mut form = editor.as_ref().map(|e| pdfcraft_forms::fields(&e.cos)).unwrap_or_default();
+        let mut adopted = 0;
         if let Some(e) = editor.as_ref() {
             xfa::mark_script_buttons(&e.cos, &mut form);
+            adopted = pdfcraft_forms::adopted_page_fields(&e.cos);
+        }
+        // Fields the file lists only as page widgets are adopted leniently; the file says so.
+        if adopted > 0
+            && let Some(e) = &mut editor
+        {
+            let line = if adopted == 1 {
+                "the form's /Fields list omits 1 field; it was read from the page annotations".to_string()
+            } else {
+                format!("the form's /Fields list omits {adopted} fields; they were read from the page annotations")
+            };
+            e.cos.note_repair(line);
         }
         let marks = editor.as_ref().map(|e| pdfcraft_edit::marks_present(&e.cos)).unwrap_or_default();
         let added = editor.as_ref().map(|e| pdfcraft_edit::list_added(&e.cos)).unwrap_or_default();

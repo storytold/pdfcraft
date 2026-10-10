@@ -3645,6 +3645,7 @@ trailer << /Root 1 0 R >>
             rgba: pdfcraft_render::Pixels::from(vec![u32::MAX; rgba_bytes(w as usize, h as usize) / 4]),
             text: None,
             error: None,
+            warnings: Vec::new(),
             millis: 0,
         }
     }

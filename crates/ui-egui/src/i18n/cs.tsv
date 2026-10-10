@@ -127,3 +127,15 @@
 	Slash	Lomítko
 	Scroll tabs left	Posunout karty doleva
 	Scroll tabs right	Posunout karty doprava
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	Společné vlastnosti polí
+	{n} fields selected	Vybráno polí: {n}
+	Mixed	Různé hodnoty
+	Custom font	Vlastní písmo
+	Only checked properties will change. Mixed means the selected fields have different values.	Změní se pouze zaškrtnuté vlastnosti. „Různé hodnoty“ znamená, že vybraná pole mají odlišné hodnoty.
+	Shift- or Ctrl/Command-click to select several fields.	Kliknutím se Shift nebo Ctrl/Command vyberete více polí.
+	Font size 0 uses automatic sizing.	Velikost písma 0 zapne automatickou velikost.
+	Character limit:	Limit znaků:
+	Character limit 0 means no limit. A comb of characters needs a limit.	Limit znaků 0 znamená bez omezení. Rozdělení na znaky vyžaduje limit.
+	To change locked fields, also set Locked to No.	Chcete-li změnit zamčená pole, nastavte také „Zamčeno“ na „Ne“.

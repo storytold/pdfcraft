@@ -2075,3 +2075,24 @@ action wizard	Start	Старт
 	This printer offers no settings of its own.	Този принтер няма собствени настройки.
 	Scroll tabs left	Превърти разделите наляво
 	Scroll tabs right	Превърти разделите надясно
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	Общи свойства на полетата
+	{n} fields selected	Избрани полета: {n}
+	Mixed	Различни стойности
+	Custom font	Потребителски шрифт
+	Only checked properties will change. Mixed means the selected fields have different values.	Ще се променят само отметнатите свойства. „Различни стойности“ означава, че избраните полета имат различни стойности.
+	Shift- or Ctrl/Command-click to select several fields.	Щракнете с Shift или Ctrl/Command, за да изберете няколко полета.
+	Font size 0 uses automatic sizing.	Размер на шрифта 0 включва автоматично оразмеряване.
+	Character limit:	Ограничение на знаците:
+	Character limit 0 means no limit. A comb of characters needs a limit.	Ограничение 0 означава без ограничение. Клетките за знаци изискват ограничение.
+	To change locked fields, also set Locked to No.	За да промените заключени полета, задайте и „Заключено“ на „Не“.
+	Comb of characters	Гребен от знаци
+	The document changed while you were editing field properties.	Документът се промени, докато редактирахте свойствата на полетата.
+	The document is no longer open.	Документът вече не е отворен.
+	The field properties dialog is no longer open.	Прозорецът със свойства на полетата вече не е отворен.
+	The field properties could not be changed.	Свойствата на полетата не можаха да бъдат променени.
+	The selected fields could not be found. Select them again.	Избраните полета не бяха намерени. Изберете ги отново.
+	The field {name} no longer exists.	Полето {name} вече не съществува.
+	A selected field has no widget on any page, so the fields can't be edited together.	Едно от избраните полета няма елемент на нито една страница, затова полетата не могат да се редактират заедно.
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} с {dpi} dpi, най-голямата резолюция, с която могат да бъдат изобразени)

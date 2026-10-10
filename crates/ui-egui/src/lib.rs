@@ -62,6 +62,7 @@ pub use optimize_ui::{OptimizeDraft, OptimizeTab};
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignStep};
 mod autoscroll;
 mod bidi;
+pub mod bulk_fields;
 mod dialogs;
 mod edit_text_ui;
 mod editing;
@@ -239,6 +240,8 @@ pub enum Dialog {
     ReplacePages,
     /// Prepare a form ▸ Field Properties.
     FieldProps,
+    /// Shared properties of several selected form fields.
+    BulkFieldProps,
     /// Redact a PDF ▸ Redact pages, Find text and redact, Set properties, apply confirmation.
     RedactPages,
     RedactSearch,
@@ -565,6 +568,7 @@ pub struct PdfCraftApp {
     /// The Comment Properties dialog's state.
     pub comment_props: Option<comment_props::PropsDraft>,
     pub field_props: Option<prepare::FieldDraft>,
+    pub bulk_field_props: Option<bulk_fields::Draft>,
     pub redact_prefs: RedactPrefs,
     pub redact_pages_draft: RedactPagesDraft,
     pub redact_search: RedactSearchDraft,
@@ -771,6 +775,7 @@ impl PdfCraftApp {
             signature_images: Default::default(),
             comment_props: None,
             field_props: None,
+            bulk_field_props: None,
             redact_prefs: RedactPrefs::default(),
             redact_pages_draft: RedactPagesDraft::default(),
             redact_search: RedactSearchDraft::default(),
@@ -1698,7 +1703,13 @@ impl PdfCraftApp {
                 && !ctx.egui_wants_keyboard_input()
                 && ctx.input_mut(|input| input.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, Key::A)))
             {
-                self.views[i].select_all();
+                if self.is_preparing() {
+                    if let Some(doc) = self.session.get(self.views[i].id) {
+                        prepare::select_all(&mut self.views[i], &doc.form);
+                    }
+                } else {
+                    self.views[i].select_all();
+                }
             }
             self.tool_keys(i, ctx);
             canvas::shortcuts(&mut self.views[i], ctx);

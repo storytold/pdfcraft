@@ -2136,3 +2136,24 @@ calendar date	December	грудня
 certificate	Subject	Власник сертифіката
 	Scroll tabs left	Прокрутити вкладки ліворуч
 	Scroll tabs right	Прокрутити вкладки праворуч
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	Спільні властивості полів
+	{n} fields selected	Вибрано полів: {n}
+	Mixed	Різні значення
+	Custom font	Власний шрифт
+	Only checked properties will change. Mixed means the selected fields have different values.	Зміняться лише позначені властивості. «Різні значення» означає, що значення вибраних полів відрізняються.
+	Shift- or Ctrl/Command-click to select several fields.	Клацніть із Shift або Ctrl/Command, щоб вибрати кілька полів.
+	Font size 0 uses automatic sizing.	Розмір шрифту 0 вмикає автоматичний добір розміру.
+	Character limit:	Обмеження символів:
+	Character limit 0 means no limit. A comb of characters needs a limit.	Обмеження 0 означає відсутність обмеження. Для посимвольних комірок потрібно задати обмеження.
+	To change locked fields, also set Locked to No.	Щоб змінити заблоковані поля, також установіть «Заблоковано» в «Ні».
+	Comb of characters	Гребінка символів
+	The document changed while you were editing field properties.	Документ змінився, поки ви редагували властивості полів.
+	The document is no longer open.	Документ більше не відкритий.
+	The field properties dialog is no longer open.	Вікно властивостей полів більше не відкрите.
+	The field properties could not be changed.	Не вдалося змінити властивості полів.
+	The selected fields could not be found. Select them again.	Вибрані поля не знайдено. Виберіть їх знову.
+	The field {name} no longer exists.	Поле {name} більше не існує.
+	A selected field has no widget on any page, so the fields can't be edited together.	Одне з вибраних полів не має віджета на жодній сторінці, тому поля не можна редагувати разом.
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} — з роздільністю {dpi} dpi, найбільшою, з якою їх можна відобразити)

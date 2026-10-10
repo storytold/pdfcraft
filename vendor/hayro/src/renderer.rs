@@ -245,6 +245,79 @@ fn control_polygon_length(path: &BezPath) -> (f64, usize) {
     (length, restarts)
 }
 
+/// PdfCraft patch: how far, in user space, drawing may place geometry outside a path's exact
+/// outline. vello expands strokes to a tolerance of at most 0.25 user units (`TOL / max(|a|, |d|,
+/// 1)` in vello_common's `flatten::stroke`), and kurbo approximates round joins and caps to 1e-3.
+/// Fills are flattened into chords, which stay inside the outline's bounds.
+const DRAW_SLACK: f64 = 0.5;
+
+thread_local! {
+    /// PdfCraft patch: whether [`may_paint_canvas`] may skip paths on this thread. Turned off
+    /// only by PdfCraft's regression test, which renders each tile with and without skipping.
+    static SKIP_OFFSCREEN_PATHS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// PdfCraft patch: exported for its regression test (see [`SKIP_OFFSCREEN_PATHS`]).
+#[doc(hidden)]
+pub fn set_skip_offscreen_paths(skip: bool) {
+    SKIP_OFFSCREEN_PATHS.with(|s| s.set(skip));
+}
+
+/// PdfCraft patch: whether a path drawn with `transform` can paint a pixel of a `width` ×
+/// `height` canvas. `reach` is how far its paint extends beyond the path, in user space: 0 for a
+/// fill; for a stroke, half its width times the larger of its miter limit (kurbo draws a miter
+/// only when its tip is within `limit × width / 2` of the vertex) and √2 (square caps). The box
+/// of the path's points and control points (a curve stays inside their hull) grown by that and
+/// [`DRAW_SLACK`], mapped to the device and grown by 2 pixels for antialiasing, contains
+/// everything it paints: a path whose box misses the canvas is skipped without changing a pixel,
+/// so a tile of a large page no longer strokes and fills every path on the page. Bounds that
+/// aren't finite (an empty path) are drawn as before.
+fn may_paint_canvas(
+    path: &BezPath,
+    transform: Affine,
+    reach: f64,
+    width: u16,
+    height: u16,
+) -> bool {
+    if !SKIP_OFFSCREEN_PATHS.with(std::cell::Cell::get) {
+        return true;
+    }
+    let mut points = Rect::new(
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    );
+    let mut add = |p: Point| points = points.union_pt(p);
+    for el in path.elements() {
+        match *el {
+            kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => add(p),
+            kurbo::PathEl::QuadTo(c, p) => {
+                add(c);
+                add(p);
+            }
+            kurbo::PathEl::CurveTo(c1, c2, p) => {
+                add(c1);
+                add(c2);
+                add(p);
+            }
+            kurbo::PathEl::ClosePath => {}
+        }
+    }
+    let grow = reach + DRAW_SLACK;
+    let device = transform
+        .transform_rect_bbox(points.inflate(grow, grow))
+        .inflate(2.0, 2.0);
+    let finite = [device.x0, device.y0, device.x1, device.y1]
+        .iter()
+        .all(|v| v.is_finite());
+    !finite
+        || (device.x0 < f64::from(width)
+            && device.x1 > 0.0
+            && device.y0 < f64::from(height)
+            && device.y1 > 0.0)
+}
+
 pub(crate) struct Renderer {
     pub(crate) ctx: RenderContext,
     pub(crate) inside_pattern: bool,
@@ -283,7 +356,13 @@ impl Renderer {
         }
     }
 
-    fn set_stroke_properties(&mut self, stroke_props: &StrokeProps, is_text: bool, path: &BezPath) {
+    /// PdfCraft patch: returns the stroke's reach for [`may_paint_canvas`].
+    fn set_stroke_properties(
+        &mut self,
+        stroke_props: &StrokeProps,
+        is_text: bool,
+        path: &BezPath,
+    ) -> f64 {
         let threshold = if is_text { 0.25 } else { 1.0 };
 
         // Best-effort attempt to ensure a line width of at least 1.0, as required by the PDF
@@ -322,7 +401,16 @@ impl Renderer {
             },
         };
 
+        // A miter limit that isn't finite leaves miters unbounded: never skipped.
+        let miter = stroke.miter_limit.abs();
+        let reach = stroke.width / 2.0
+            * if miter.is_finite() {
+                miter.max(std::f64::consts::SQRT_2)
+            } else {
+                f64::INFINITY
+            };
         self.ctx.set_stroke(stroke);
+        reach
     }
 
     fn draw_image_with_alpha_mask(&mut self, image_data: ImageData, alpha_data: LumaData) {
@@ -896,7 +984,11 @@ impl Renderer {
         is_text: bool,
     ) {
         self.ctx.set_transform(transform);
-        self.set_stroke_properties(stroke_props, is_text, path);
+        let reach = self.set_stroke_properties(stroke_props, is_text, path);
+        // PdfCraft patch: see `may_paint_canvas`.
+        if !may_paint_canvas(path, transform, reach, self.ctx.width(), self.ctx.height()) {
+            return;
+        }
 
         let clip_path = self.set_paint(paint, path, true);
         if let Some(clip_path) = clip_path.as_ref() {
@@ -917,6 +1009,10 @@ impl Renderer {
     ) {
         self.ctx.set_fill_rule(convert_fill_rule(fill_rule));
         self.ctx.set_transform(transform);
+        // PdfCraft patch: see `may_paint_canvas`.
+        if !may_paint_canvas(path, transform, 0.0, self.ctx.width(), self.ctx.height()) {
+            return;
+        }
 
         let clip_path = self.set_paint(paint, path, false);
         if let Some(clip_path) = clip_path.as_ref() {
@@ -1253,6 +1349,10 @@ impl<'a> Device<'a> for Renderer {
             PathDrawMode::Fill(fill_rule) => {
                 self.ctx.set_fill_rule(convert_fill_rule(*fill_rule));
                 self.ctx.set_transform(transform);
+                // PdfCraft patch: see `may_paint_canvas`.
+                if !may_paint_canvas(&path, transform, 0.0, self.ctx.width(), self.ctx.height()) {
+                    return;
+                }
 
                 let clip_path = self.set_paint(paint, &path, false);
                 if let Some(clip_path) = clip_path.as_ref() {
