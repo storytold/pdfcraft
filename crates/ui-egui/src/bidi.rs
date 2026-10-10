@@ -183,7 +183,7 @@ fn push_rtl_run(out: &mut String, run: &str) {
 
 /// Characters of the right-to-left scripts' blocks: letters, marks and the scripts' own
 /// punctuation, all drawn by the script's face.
-fn is_rtl_script(c: char) -> bool {
+pub(crate) fn is_rtl_script(c: char) -> bool {
     matches!(u32::from(c), 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFC | 0x1_0800..=0x1_0FFF | 0x1_E800..=0x1_EFFF)
 }
 
@@ -192,7 +192,7 @@ fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
-fn mirrored(c: char) -> char {
+pub(crate) fn mirrored(c: char) -> char {
     match c {
         '(' => ')',
         ')' => '(',

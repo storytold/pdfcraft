@@ -10,12 +10,14 @@ mod craft;
 mod encodings;
 pub mod pdf;
 mod script;
-pub use arabic::{ShapedCluster, arabic_glyph, arabic_has, shape_arabic};
+mod system;
+pub use arabic::{ArabicFace, FaceShaper, ShapedCluster, arabic_glyph, arabic_has, program_glyph_count, shape_arabic};
 pub use craft::{
     CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_arabic_font, document_japanese_font, document_japanese_font_for_style,
     document_japanese_fonts_for_style, ui_arabic_fonts, ui_chinese_fonts, ui_cjk_fonts, ui_japanese_fonts, ui_telugu_fonts,
 };
 pub use script::{GlyphError, GlyphOutline, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_outline};
+pub use system::{InstalledFont, arabic_candidates, arabic_font_families, arabic_font_family, installed_arabic_fonts};
 
 /// Approximate advance of `s` in Helvetica (or Arial) at `size` points.
 pub fn helvetica_width(s: &str, size: f64) -> f64 {

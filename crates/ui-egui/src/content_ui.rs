@@ -340,16 +340,30 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
         let [cr, cg, cb] = t.style.color.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            let resp = ui.add(
-                egui::TextEdit::multiline(&mut t.text)
-                    .font(egui::FontId::proportional((t.style.size as f32 * zoom).max(8.0)))
-                    .desired_width(r.width().max(60.0))
-                    .desired_rows(1)
-                    .background_color(Color32::from_rgba_unmultiplied(255, 255, 255, 235))
-                    .text_color(Color32::from_rgb(cr, cg, cb))
-                    .hint_text(tl!("Type text"))
-                    .id_salt("added-text-edit"),
-            );
+            let font = egui::FontId::proportional((t.style.size as f32 * zoom).max(8.0));
+            let color = Color32::from_rgb(cr, cg, cb);
+            // Right-to-left text is shown, and clicked into, in display order.
+            // As the text will be placed: a justified right-to-left paragraph ends at the right edge.
+            let align = match t.style.align {
+                TextAlign::Left => egui::Align::Min,
+                TextAlign::Center => egui::Align::Center,
+                TextAlign::Right | TextAlign::Justify => egui::Align::Max,
+            };
+            let mut layouter =
+                |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap: f32| crate::rtl_text::layout(ui, text.as_str(), &font, color, wrap, Some(align));
+            let selection = crate::rtl_text::hide_selection(ui, &t.text, color);
+            let output = egui::TextEdit::multiline(&mut t.text)
+                .font(font.clone())
+                .desired_width(r.width().max(60.0))
+                .desired_rows(1)
+                .background_color(Color32::from_rgba_unmultiplied(255, 255, 255, 235))
+                .text_color(color)
+                .hint_text(tl!("Type text"))
+                .id_salt("added-text-edit")
+                .layouter(&mut layouter)
+                .show(ui);
+            crate::rtl_text::pointer(ui, &output, &t.text, selection);
+            let resp = output.response.response;
             if t.focus {
                 resp.request_focus();
                 t.focus = false;
@@ -416,9 +430,22 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
     let mut s = style.clone();
     widgets::section_title(ui, tl!("Format text"));
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("font-family").selected_text(s.family.label()).width(110.0).show_ui(ui, |ui| {
+        let shown = s.arabic_font.clone().unwrap_or_else(|| s.family.label().to_string());
+        egui::ComboBox::from_id_salt("font-family").selected_text(shown).width(110.0).show_ui(ui, |ui| {
             for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
-                ui.selectable_value(&mut s.family, f, f.label());
+                if ui.selectable_label(s.arabic_font.is_none() && s.family == f, f.label()).clicked() {
+                    s.family = f;
+                    s.arabic_font = None;
+                }
+            }
+            // Installed fonts with Arabic, drawn from their outlines (Arabic in a standard font
+            // takes the document's own Arabic font, else the closest installed one).
+            let installed = pdfcraft_fonts::arabic_font_families();
+            if !installed.is_empty() {
+                ui.separator();
+            }
+            for family in installed {
+                ui.selectable_value(&mut s.arabic_font, Some(family.clone()), family);
             }
         });
         // A list rather than a drag value: every change is an undo step.

@@ -17,6 +17,8 @@ pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
 # Display order of right-to-left lines in added text; already in the tree via the interface.
 unicode-bidi = "0.3"
+# Arabic presentation forms read from PDFs back to letters (NFKC); already in the tree via stringprep.
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 hayro-syntax = { workspace = true }

@@ -84,6 +84,7 @@ mod print_ui;
 mod signature_drag;
 pub use print_ui::{Handling as PrintHandling, PrintDraft, Which as PrintWhich};
 mod redact_ui;
+mod rtl_text;
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
 

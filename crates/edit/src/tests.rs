@@ -265,7 +265,7 @@ fn added_arabic_text_is_shaped_in_display_order_and_stays_searchable() {
     let mut doc = fixture();
     let text =
         AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "مرحبا World".into(), size: 14.0, align: Align::Right, ..AddedText::default() };
-    if pdfcraft_fonts::document_arabic_font().is_none() {
+    if no_arabic_face() {
         eprintln!("skipping the Arabic drawing checks: built without a craft-fonts Arab face (set CRAFT_FONTS_DIR)");
         let err = add_content(&mut doc, 0, &Content::Text(text)).unwrap_err();
         assert!(matches!(&err, EditError::Invalid(m) if m.contains("CRAFT_FONTS_DIR")), "{err:?}");
@@ -306,6 +306,11 @@ fn added_arabic_text_is_shaped_in_display_order_and_stays_searchable() {
     }
 }
 
+/// No Arabic face at all: no installed Arabic font and no craft-fonts face.
+fn no_arabic_face() -> bool {
+    crate::added::arabic_face(&AddedText { text: "ب".into(), ..AddedText::default() }).is_none()
+}
+
 /// The `PCAr` font names in page `page`'s resources.
 fn arabic_font_names(doc: &Document, page: usize) -> Vec<String> {
     let p = &pdfcraft_model::pages(doc)[page];
@@ -318,7 +323,7 @@ fn arabic_font_names(doc: &Document, page: usize) -> Vec<String> {
 fn arabic_items_keep_their_own_fonts_through_saves_updates_and_deletes() {
     let mut doc = fixture();
     let text = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "مرحبا".into(), size: 14.0, ..AddedText::default() };
-    if pdfcraft_fonts::document_arabic_font().is_none() {
+    if no_arabic_face() {
         // An item that already holds Arabic (stored by an older version, drawn as "?") can still
         // be moved and retyped without the face.
         add_content(&mut doc, 0, &Content::Text(AddedText { text: "x".into(), ..text.clone() })).unwrap();
@@ -371,7 +376,7 @@ fn odd_arabic_text_never_panics() {
     let long = "بسم الله ".repeat(2_000);
     for s in ["\u{202E}ب\u{064B}\u{064B} (]", "\u{064B}", "ا\u{200F}\u{2067}b\u{2069}", "ا\n\nب\tc", "ﷺ ١٢٣ 456", long.as_str()] {
         let r = add_content(&mut doc, 0, &Content::Text(AddedText { rect: [0.0, 800.0, 300.0, 780.0], text: s.into(), ..AddedText::default() }));
-        assert_eq!(r.is_ok(), pdfcraft_fonts::document_arabic_font().is_some(), "{:?}: {r:?}", s.chars().take(12).collect::<String>());
+        assert_eq!(r.is_ok(), !no_arabic_face(), "{:?}: {r:?}", s.chars().take(12).collect::<String>());
     }
     // U+2029 and U+0085 (paragraph and line separators) have no WinAnsi code, so the standard font
     // would draw them as `?`: refused, by name, rather than written (#125). Laying it out still
@@ -382,17 +387,28 @@ fn odd_arabic_text_never_panics() {
         &Content::Text(AddedText { rect: [0.0, 800.0, 300.0, 780.0], text: "ا\u{2029}ب\rc\u{85}د\n".into(), ..AddedText::default() }),
     );
     assert!(r.is_err(), "{r:?}");
-    if pdfcraft_fonts::document_arabic_font().is_some() {
+    if !no_arabic_face() {
         assert!(matches!(&r, Err(EditError::Invalid(m)) if m.contains("U+2029") || m.contains("U+0085")), "{r:?}");
     }
-    // A character the face lacks is an error that names it, not a box or a crash.
-    if pdfcraft_fonts::document_arabic_font().is_some() && !pdfcraft_fonts::arabic_has('\u{FDFD}') {
-        let r = add_content(
-            &mut doc,
-            0,
-            &Content::Text(AddedText { rect: [0.0, 800.0, 300.0, 780.0], text: "ب \u{FDFD}".into(), ..AddedText::default() }),
+    // A character no face has is an error that names it, not a box or a crash; one that only some
+    // face has is drawn with that face.
+    let fdfd = AddedText { rect: [0.0, 800.0, 300.0, 780.0], text: "ب \u{FDFD}".into(), ..AddedText::default() };
+    if let Some(face) = crate::added::arabic_face(&fdfd) {
+        let r = add_content(&mut doc, 0, &Content::Text(fdfd));
+        if face.covers(&['\u{FDFD}']) {
+            assert!(r.is_ok(), "{face:?}: {r:?}");
+        } else {
+            assert!(matches!(&r, Err(EditError::Invalid(m)) if m.contains('\u{FDFD}')), "{r:?}");
+        }
+    }
+    // A character no installed or built-in Arabic face has at all.
+    let pua = AddedText { rect: [0.0, 800.0, 300.0, 780.0], text: "ب \u{08FF}\u{0870}".into(), ..AddedText::default() };
+    if let Some(face) = crate::added::arabic_face(&pua).filter(|f| !f.covers(&['\u{08FF}', '\u{0870}'])) {
+        let r = add_content(&mut doc, 0, &Content::Text(pua));
+        assert!(
+            matches!(&r, Err(EditError::Invalid(m)) if m.contains("U+08FF") || m.contains("U+0870") || m.contains('\u{0870}')),
+            "{face:?}: {r:?}"
         );
-        assert!(matches!(&r, Err(EditError::Invalid(m)) if m.contains('\u{FDFD}')), "{r:?}");
     }
 }
 
@@ -1378,7 +1394,7 @@ fn page_text_the_standard_fonts_cant_draw_is_refused() {
     // U+061C is in the Arabic block but is a direction mark that's dropped, not shaped: it never
     // makes text drawable, nor (with the face) undrawable.
     assert!(add_content(&mut doc, 0, &Content::Text(arabic("\u{061C}中"))).is_err());
-    if pdfcraft_fonts::arabic_has('م') {
+    if !no_arabic_face() {
         add_content(&mut doc, 0, &Content::Text(arabic("مرحبا Hello"))).unwrap();
         add_content(&mut doc, 0, &Content::Text(arabic("\u{061C}Hello"))).unwrap();
         for text in ["مرحبا 中", "\u{061C}中"] {
@@ -1478,6 +1494,30 @@ fn build(objs: &[&str]) -> Document {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
     Document::open(Arc::new(out)).unwrap()
+}
+
+/// One page with "مرحبا 2026" drawn the way word processors draw it: left to right in display order
+/// (the number, a space, then the word from its last letter), in a TrueType font named `base` that
+/// isn't embedded, its codes mapped to presentation forms by its ToUnicode map.
+fn arabic_page(base: &str) -> Document {
+    arabic_page_with(base, "BT /F1 20 Tf 300 700 Td (2026 ABCDE) Tj ET")
+}
+
+/// [`arabic_page`] drawing `content`.
+fn arabic_page_with(base: &str, content: &str) -> Document {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n\
+                10 beginbfchar\n<20> <0020>\n<30> <0030>\n<32> <0032>\n<36> <0036>\n<41> <FE8E>\n<42> <FE92>\n<43> <FEA3>\n<44> <FEAE>\n<45> <FEE3>\n<46> <0020>\nendbfchar\n\
+                endcmap\nCMapName currentdict /CMap defineresource pop end end";
+    let widths = vec!["500"; 39].join(" ");
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        format!("<< /Type /Font /Subtype /TrueType /BaseFont /{base} /FirstChar 32 /LastChar 70 /Widths [{widths}] /ToUnicode 6 0 R >>"),
+        format!("<< /Length {} >>\nstream\n{cmap}\nendstream", cmap.len()),
+    ];
+    build(&objs.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
 fn stream(dict: &str, data: &str) -> String {
@@ -1606,4 +1646,165 @@ fn hostile_form_xobjects_are_read_once() {
     let texts: Vec<String> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
     assert_eq!(texts, ["once", "from b", "from a", "inherited", "bad matrix"]);
     assert!(images::reading_images(&doc, 0).unwrap().is_empty());
+}
+
+/// The `/FontName`s of the Type 3 fonts in page 0's resources whose names start with `prefix`.
+fn type3_font_names(doc: &Document, prefix: &str) -> Vec<String> {
+    let p = &pdfcraft_model::pages(doc)[0];
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().unwrap().clone();
+    fonts
+        .iter()
+        .filter(|(k, _)| k.starts_with(prefix.as_bytes()))
+        .filter_map(|(_, v)| {
+            let f = doc.resolve(v).as_dict().cloned()?;
+            let d = doc.resolve(f.get(b"FontDescriptor")?).as_dict().cloned()?;
+            d.name(b"FontName").map(|n| String::from_utf8_lossy(n).into_owned())
+        })
+        .collect()
+}
+
+#[test]
+fn existing_arabic_text_reads_in_reading_order_and_is_retyped_shaped() {
+    let mut doc = arabic_page("ABCDEF+Arial");
+    let lines = text_lines(&doc, 0).unwrap();
+    assert_eq!(lines[0].text, "مرحبا 2026", "display order and presentation forms are undone");
+    assert_eq!(text_blocks(&doc, 0).unwrap()[0].text, "مرحبا 2026");
+    if no_arabic_face() {
+        let err = replace_line(&mut doc, 0, 0, "أهلا 2027").unwrap_err();
+        assert!(err.to_string().contains("Arabic font"), "{err}");
+        return;
+    }
+    let right = lines[0].rect[2];
+    let edit = replace_line(&mut doc, 0, 0, "أهلا وسهلا 2027").unwrap();
+    assert!(edit.substituted.is_some());
+    let doc = reopen(&doc);
+    let line = &text_lines(&doc, 0).unwrap()[0];
+    assert_eq!(line.text, "أهلا وسهلا 2027", "the new text reads back in reading order");
+    // A right-to-left line keeps its right edge.
+    assert!((line.rect[2] - right).abs() < 1.0, "{} vs {right}", line.rect[2]);
+    // Drawn with a Type 3 font from an installed Arabic face, preferably the line's own (Arial).
+    let names = type3_font_names(&doc, "PCEdAr");
+    assert!(!names.is_empty());
+    if pdfcraft_fonts::arabic_font_families().iter().any(|f| f == "Arial") {
+        assert!(names.iter().all(|n| n.starts_with("Arial")), "{names:?}");
+    }
+}
+
+#[test]
+fn arabic_paragraphs_take_a_new_size_and_weight() {
+    let mut doc = arabic_page("TraditionalArabic");
+    if no_arabic_face() {
+        return;
+    }
+    let style = BlockStyle { size: Some(28.0), bold: Some(true), ..BlockStyle::default() };
+    rewrite_block(&mut doc, 0, 0, Some("نص أطول قليلا (تجربة) 15"), &style).unwrap();
+    let doc = reopen(&doc);
+    let b = &text_blocks(&doc, 0).unwrap()[0];
+    assert_eq!(b.text, "نص أطول قليلا (تجربة) 15");
+    assert!((b.size - 28.0).abs() < 0.5, "{}", b.size);
+    let families = pdfcraft_fonts::arabic_font_families();
+    if families.iter().any(|f| f == "Traditional Arabic") {
+        let names = type3_font_names(&doc, "PCEdAr");
+        assert!(names.iter().all(|n| n.starts_with("TraditionalArabic")), "{names:?}");
+        assert!(names.iter().any(|n| n.contains("Bold")), "bold asked for: {names:?}");
+    }
+    // Its own text again, at a smaller size.
+    let mut doc = doc;
+    rewrite_block(&mut doc, 0, 0, None, &BlockStyle { size: Some(10.0), ..BlockStyle::default() }).unwrap();
+    assert_eq!(text_blocks(&reopen(&doc), 0).unwrap()[0].text, "نص أطول قليلا (تجربة) 15");
+}
+
+#[test]
+fn added_arabic_text_uses_the_requested_or_the_pages_arabic_font() {
+    if no_arabic_face() {
+        return;
+    }
+    let families = pdfcraft_fonts::arabic_font_families();
+    // The page shows Arabic in Tahoma: added Arabic text takes Tahoma too.
+    if families.iter().any(|f| f == "Tahoma") {
+        let mut doc = arabic_page("ABCDEF+Tahoma");
+        let t = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "مرحبا".into(), size: 14.0, ..AddedText::default() };
+        add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+        assert_eq!(type3_font_names(&doc, "PCAr"), vec!["Tahoma".to_string()]);
+    }
+    // A requested family wins, is kept with the item, and bold picks its bold face.
+    if let Some(family) = families.iter().find(|f| f.as_str() == "Arial").or(families.first()) {
+        let mut doc = fixture();
+        let t = AddedText {
+            rect: [72.0, 600.0, 400.0, 700.0],
+            text: "مرحبا".into(),
+            bold: true,
+            arabic_font: Some(family.clone()),
+            ..AddedText::default()
+        };
+        add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+        let doc = reopen(&doc);
+        let Content::Text(back) = &list_added(&doc)[0].content else { panic!() };
+        assert_eq!(back.arabic_font.as_deref(), Some(family.as_str()));
+        let names = type3_font_names(&doc, "PCAr");
+        assert!(names.iter().all(|n| n.starts_with(&family.replace(' ', ""))), "{names:?}");
+    }
+    // A family that isn't installed falls back to an installed one rather than failing.
+    let mut doc = fixture();
+    let t =
+        AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "مرحبا".into(), arabic_font: Some("No Such Font".into()), ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+}
+
+#[test]
+fn generated_type3_fonts_never_use_code_32() {
+    // Word spacing applies to code 32 in every simple font; an Arabic glyph there would open a gap.
+    let codes: Vec<u8> = (0..crate::added::GLYPHS_PER_FONT).map(crate::added::glyph_code).collect();
+    assert!(!codes.contains(&32));
+    assert_eq!(codes.first(), Some(&1));
+    assert_eq!(codes.last(), Some(&240));
+    let mut unique = codes.clone();
+    unique.dedup();
+    assert_eq!(unique.len(), codes.len(), "codes are distinct and increasing");
+    // The next font starts again at 1.
+    assert_eq!(crate::added::glyph_code(crate::added::GLYPHS_PER_FONT), 1);
+}
+
+#[test]
+fn a_left_aligned_right_to_left_line_stays_on_the_page() {
+    let mut doc = arabic_page("TraditionalArabic");
+    if no_arabic_face() {
+        return;
+    }
+    let style = BlockStyle { align: Some(Align::Left), ..BlockStyle::default() };
+    rewrite_block(&mut doc, 0, 0, Some("هذا نص عربي أطول بكثير من النص الأصلي الذي كان في هذا السطر من قبل"), &style).unwrap();
+    let doc = reopen(&doc);
+    for l in text_lines(&doc, 0).unwrap() {
+        assert!(l.rect[2] <= 600.0 && l.rect[0] >= 0.0, "{:?}", l.rect);
+    }
+}
+
+#[test]
+fn arabic_lines_drawn_as_runs_from_the_right_are_one_line() {
+    // As Word draws "مرحبا 2026": the Arabic word's run first, at the right, then the number's run
+    // to its left, each in its own text object.
+    let doc = arabic_page_with("ABCDEF+Arial", "BT /F1 20 Tf 300 700 Td (ABCDE) Tj ET BT /F1 20 Tf 250 700 Td (2026 ) Tj ET");
+    let lines = text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0].text, "مرحبا 2026");
+    // Runs apart from each other stay apart.
+    let doc = arabic_page_with("ABCDEF+Arial", "BT /F1 20 Tf 300 700 Td (ABCDE) Tj ET BT /F1 20 Tf 100 700 Td (2026) Tj ET");
+    assert_eq!(text_lines(&doc, 0).unwrap().len(), 2);
+}
+
+#[test]
+fn arabic_lines_set_one_by_one_are_separate_paragraphs() {
+    // Two centred lines (a heading over a subject line): two paragraphs.
+    let doc = arabic_page_with("ABCDEF+Arial", "BT /F1 20 Tf 300 700 Td (ABCDE) Tj ET BT /F1 20 Tf 315 670 Td (AB) Tj ET");
+    assert_eq!(text_blocks(&doc, 0).unwrap().len(), 2);
+    // A wrapped paragraph: the first line runs the full width to the same right edge.
+    let doc = arabic_page_with("ABCDEF+Arial", "BT /F1 20 Tf 300 700 Td (ABCDE) Tj ET BT /F1 20 Tf 330 676 Td (AB) Tj ET");
+    assert_eq!(text_blocks(&doc, 0).unwrap().len(), 1);
+    // A ragged wrap (a long first word moved down, as after narrowing the box): one paragraph.
+    let doc = arabic_page_with("ABCDEF+Arial", "BT /F1 20 Tf 330 700 Td (ABC) Tj ET BT /F1 20 Tf 290 676 Td (AB CDEF) Tj ET");
+    assert_eq!(text_blocks(&doc, 0).unwrap().len(), 1);
+    // A short line over one whose first word would have fitted beside it: two paragraphs.
+    let doc = arabic_page_with("ABCDEF+Arial", "BT /F1 20 Tf 340 700 Td (AB) Tj ET BT /F1 20 Tf 300 676 Td (ABCD E) Tj ET");
+    assert_eq!(text_blocks(&doc, 0).unwrap().len(), 2);
 }

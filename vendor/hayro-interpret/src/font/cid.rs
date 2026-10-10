@@ -75,8 +75,13 @@ impl Type0Font {
         let (font_type, fallback, _is_standard_fallback) = match FontType::new(&font_descriptor) {
             Some(ft) => (ft, false, false),
             None => {
+                // PdfCraft patch: an Identity font's CIDs are glyph ids of the font it names, which
+                // a standard font can't draw (an `ArialMT` Arabic font drew unrelated Latin
+                // glyphs), so it is asked for by name; the resolver may have that font, and its
+                // default answer is still a standard font.
+                let identity = character_collection.as_ref().is_none_or(|cc| cc.family == CidFamily::AdobeIdentity);
                 let (query, is_standard) =
-                    if let Some((standard, _)) = select_standard_font(dict, &font_descriptor) {
+                    if let Some((standard, _)) = select_standard_font(dict, &font_descriptor).filter(|_| !identity) {
                         (FontQuery::Standard(standard), true)
                     } else {
                         let mut query = FallbackFontQuery::new(dict);

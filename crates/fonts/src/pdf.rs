@@ -484,6 +484,13 @@ impl Metrics {
         self.codes(s).into_iter().filter_map(|(c, _)| self.unicode.get(&c).cloned()).collect()
     }
 
+    /// Whether any code maps to Arabic-script text (the font shows Arabic).
+    pub fn maps_arabic(&self) -> bool {
+        self.unicode.values().any(|t| {
+            t.chars().any(|c| matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x0870..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFC))
+        })
+    }
+
     /// The Unicode text of one code, if known.
     pub fn text_of(&self, code: u32) -> Option<&str> {
         self.unicode.get(&code).map(String::as_str)

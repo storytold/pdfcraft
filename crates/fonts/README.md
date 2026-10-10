@@ -37,6 +37,17 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
   harfrust (joining forms, ligatures, mark positions) into clusters for Arabic text written into
   PDFs; the editor draws each cluster as one Type 3 glyph with a ToUnicode entry. Without the face
   they return `GlyphError::NoFont` and the editor reports a clear error.
+- `ArabicFace` / `FaceShaper`: any face with Arabic (the craft-fonts face, an installed font or a
+  program embedded in a PDF), shaped with harfrust and drawn from its outlines. `covers` checks a
+  face's `cmap` cheaply; `can_join` says whether it has the shaping rules (embedded subsets often
+  don't). In a right-to-left run a mirrored bracket's text is the bracket it shows.
+- `installed_arabic_fonts` / `arabic_font_families` / `arabic_font_family` / `arabic_candidates` (`system.rs`): the
+  Arabic fonts installed on this machine (system and per-user font folders), found by reading
+  only each file's table directory and its `name`, `OS/2`, `cmap`, `head`, `post`, `hhea` and
+  `maxp` tables. Fonts whose `fsType` forbids embedding are left out. `arabic_candidates` ranks
+  them for a requested family, the document's font names (`ABCDEF+TraditionalArabic-Bold` →
+  Traditional Arabic Bold) and serif/sans and bold defaults. Fonts are read at runtime and never
+  shipped; `PDFCRAFT_SYSTEM_FONTS=0` turns this off, and the web build has none.
 - `document_japanese_fonts_for_style`: every `Jpan` face in that order of preference, so the
   editor can use the first one that has all of the replacement's glyphs (the faces differ in
   coverage, e.g. of Cyrillic).

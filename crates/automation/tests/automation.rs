@@ -2155,6 +2155,34 @@ fn adding_content_through_tools() {
     assert!(matches!(a.call("content_delete", &json!({ "doc": doc, "page": 1, "index": 5 })), Err(ToolError::Failed(_))));
 }
 
+/// Arabic added text in an installed font picked by name (`arabic_font`): listed, kept through a
+/// save, and cleared with "auto". Skipped where no installed font has Arabic.
+#[test]
+fn arabic_added_text_through_tools() {
+    let Some(family) = pdfcraft_fonts::arabic_font_families().first().cloned() else {
+        eprintln!("skipping: no installed font with Arabic");
+        return;
+    };
+    let dir = workdir("arabic");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "مرحبا بالعالم", "at": [20, 20], "size": 14, "arabic_font": family }));
+    let list = ok(&mut a, "content_list", json!({ "doc": doc }));
+    assert_eq!(
+        (list["items"][0]["text"].as_str(), list["items"][0]["arabic_font"].as_str()),
+        (Some("مرحبا بالعالم"), Some(family.as_str())),
+        "{list}"
+    );
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "arabic.pdf" }));
+    let again = ok(&mut a, "doc_open", json!({ "path": "arabic.pdf" }))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "content_list", json!({ "doc": again }));
+    assert_eq!(list["items"][0]["arabic_font"].as_str(), Some(family.as_str()), "kept through a save: {list}");
+    ok(&mut a, "content_update", json!({ "doc": again, "page": 1, "index": 1, "text": "سلام", "arabic_font": "auto" }));
+    let list = ok(&mut a, "content_list", json!({ "doc": again }));
+    assert_eq!(list["items"][0]["text"].as_str(), Some("سلام"));
+    assert!(list["items"][0].get("arabic_font").is_none(), "auto clears the pick: {list}");
+}
+
 #[test]
 fn form_formats_and_calculations_through_tools() {
     let dir = workdir("formcalc");

@@ -43,6 +43,10 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
             other => return Err(bad(format!("unknown font {other:?} (helvetica, times, courier)"))),
         };
     }
+    if let Some(f) = a.opt_str("arabic_font")? {
+        // "" or "auto" goes back to the automatic choice (the document's own Arabic font).
+        t.arabic_font = Some(f.trim()).filter(|f| !f.is_empty() && !f.eq_ignore_ascii_case("auto")).map(str::to_string);
+    }
     if let Some(b) = a.opt_bool("bold")? {
         t.bold = b;
     }
@@ -85,6 +89,9 @@ impl Automation {
                         v["size"] = json!(t.size);
                         v["bold"] = json!(t.bold);
                         v["italic"] = json!(t.italic);
+                        if let Some(f) = &t.arabic_font {
+                            v["arabic_font"] = json!(f);
+                        }
                     }
                     AddedContent::Image(_) => v["type"] = json!("image"),
                 }
