@@ -7,12 +7,18 @@
 //! base64 body (#159).
 //! Writing uses PBES2 AES-256-CBC with PBKDF2-HMAC-SHA-256 and an HMAC-SHA-256 MAC, OpenSSL 3's
 //! defaults.
+//!
+//! The envelope is read as BER, not DER: Windows writes `.p12` files with indefinite lengths and
+//! the AuthenticatedSafe split into OCTET STRING segments, and nothing in the envelope is signed
+//! over its own bytes. The certificates inside it are still read as strict DER, which is how they
+//! were signed.
+
+use std::borrow::Cow;
 
 use base64::Engine as _;
 use cbc::cipher::block_padding::Pkcs7;
 use cbc::cipher::{BlockModeDecrypt, BlockModeEncrypt, InnerIvInit, KeyIvInit};
 use hmac::Mac;
-use std::borrow::Cow;
 
 use crate::SignError;
 use crate::der::{self, Tlv, tag};
@@ -65,11 +71,14 @@ fn bmp(password: &str) -> Vec<u8> {
 
 /// The PKCS #12 key derivation function (RFC 7292 Appendix B.2).
 fn pkcs12_kdf(alg: DigestAlg, password: &[u8], salt: &[u8], id: u8, iterations: u32, n: usize) -> Vec<u8> {
+    // Callers only pass the SHA-1/SHA-2 digests PKCS #12 files use (`open` restricts the MAC digest).
     let (u, v) = match alg {
         DigestAlg::Sha1 => (20, 64),
+        DigestAlg::Sha224 => (28, 64),
         DigestAlg::Sha256 => (32, 64),
         DigestAlg::Sha384 => (48, 128),
         DigestAlg::Sha512 => (64, 128),
+        _ => return Vec::new(),
     };
     let _ = u;
     let fill = |s: &[u8]| -> Vec<u8> {
@@ -151,21 +160,25 @@ fn hmac(alg: DigestAlg, key: &[u8], data: &[u8]) -> Result<Vec<u8>, SignError> {
     }
     match alg {
         DigestAlg::Sha1 => run::<sha1::Sha1>(key, data),
+        DigestAlg::Sha224 => run::<sha2::Sha224>(key, data),
         DigestAlg::Sha256 => run::<sha2::Sha256>(key, data),
         DigestAlg::Sha384 => run::<sha2::Sha384>(key, data),
         DigestAlg::Sha512 => run::<sha2::Sha512>(key, data),
+        other => Err(SignError::Unsupported(format!("{} in a PKCS #12 MAC", other.name()))),
     }
 }
 
-fn pbkdf2(prf: DigestAlg, password: &[u8], salt: &[u8], rounds: u32, len: usize) -> Vec<u8> {
+fn pbkdf2(prf: DigestAlg, password: &[u8], salt: &[u8], rounds: u32, len: usize) -> Result<Vec<u8>, SignError> {
     let mut out = vec![0u8; len];
     match prf {
         DigestAlg::Sha1 => pbkdf2::pbkdf2_hmac::<sha1::Sha1>(password, salt, rounds, &mut out),
+        DigestAlg::Sha224 => pbkdf2::pbkdf2_hmac::<sha2::Sha224>(password, salt, rounds, &mut out),
         DigestAlg::Sha256 => pbkdf2::pbkdf2_hmac::<sha2::Sha256>(password, salt, rounds, &mut out),
         DigestAlg::Sha384 => pbkdf2::pbkdf2_hmac::<sha2::Sha384>(password, salt, rounds, &mut out),
         DigestAlg::Sha512 => pbkdf2::pbkdf2_hmac::<sha2::Sha512>(password, salt, rounds, &mut out),
+        other => return Err(SignError::Unsupported(format!("PBKDF2 with {}", other.name()))),
     }
-    out
+    Ok(out)
 }
 
 /// Decrypt `ct` with the password-based scheme `alg` (an AlgorithmIdentifier).
@@ -182,7 +195,7 @@ fn pbe_decrypt(alg: &Tlv<'_>, password: &str, ct: &[u8]) -> Result<Vec<u8>, Sign
                 return Err(SignError::Unsupported("PBES2 key derivation other than PBKDF2".into()));
             }
             let kp = kdf.get(1).ok_or_else(|| bad("PBKDF2 parameters"))?.children()?;
-            let salt = kp.first().ok_or_else(|| bad("salt"))?.expect(tag::OCTET_STRING, "salt")?.value;
+            let salt = kp.first().ok_or_else(|| bad("salt"))?.octets("salt")?;
             let rounds = kp.get(1).ok_or_else(|| bad("iterations"))?.u64()? as u32;
             let prf = match kp
                 .iter()
@@ -208,13 +221,13 @@ fn pbe_decrypt(alg: &Tlv<'_>, password: &str, ct: &[u8]) -> Result<Vec<u8>, Sign
                 Some(DES_EDE3_CBC) => Cipher::TripleDes,
                 other => return Err(SignError::Unsupported(format!("PBES2 cipher {}", other.unwrap_or("?")))),
             };
-            let iv = sc.get(1).ok_or_else(|| bad("IV"))?.expect(tag::OCTET_STRING, "IV")?.value;
-            let key = pbkdf2(prf, password.as_bytes(), salt, rounds, cipher.key_len());
-            cipher.decrypt(&key, iv, ct)
+            let iv = sc.get(1).ok_or_else(|| bad("IV"))?.octets("IV")?;
+            let key = pbkdf2(prf, password.as_bytes(), &salt, rounds, cipher.key_len())?;
+            cipher.decrypt(&key, &iv, ct)
         }
         PBE_SHA_3DES | PBE_SHA_2DES | PBE_SHA_RC2_128 | PBE_SHA_RC2_40 => {
             let p = params.children()?;
-            let salt = p.first().ok_or_else(|| bad("salt"))?.expect(tag::OCTET_STRING, "salt")?.value;
+            let salt = p.first().ok_or_else(|| bad("salt"))?.octets("salt")?;
             let rounds = p.get(1).ok_or_else(|| bad("iterations"))?.u64()? as u32;
             let (cipher, key_len, iv_len) = match o.as_str() {
                 PBE_SHA_3DES => (Cipher::TripleDes, 24, 8),
@@ -223,13 +236,13 @@ fn pbe_decrypt(alg: &Tlv<'_>, password: &str, ct: &[u8]) -> Result<Vec<u8>, Sign
                 _ => (Cipher::Rc2(40), 5, 8),
             };
             let pw = bmp(password);
-            let mut key = pkcs12_kdf(DigestAlg::Sha1, &pw, salt, 1, rounds, key_len);
+            let mut key = pkcs12_kdf(DigestAlg::Sha1, &pw, &salt, 1, rounds, key_len);
             if key.len() == 16 && matches!(cipher, Cipher::TripleDes) {
                 // Two-key 3DES: K1 K2 K1.
                 let k1 = key[..8].to_vec();
                 key.extend(k1);
             }
-            let iv = pkcs12_kdf(DigestAlg::Sha1, &pw, salt, 2, rounds, iv_len);
+            let iv = pkcs12_kdf(DigestAlg::Sha1, &pw, &salt, 2, rounds, iv_len);
             cipher.decrypt(&key, &iv, ct)
         }
         other => Err(SignError::Unsupported(format!("PKCS #12 encryption {other}"))),
@@ -248,7 +261,7 @@ enum BagKind {
 }
 
 fn bags(safe_contents: &[u8], password: &str, out: &mut Vec<Bag>) -> Result<(), SignError> {
-    for bag in Tlv::parse_all(safe_contents)?.children()? {
+    for bag in Tlv::parse_all_ber(safe_contents)?.children()? {
         let f = bag.children()?;
         let Some(id) = f.first().and_then(|o| o.oid().ok()) else { continue };
         let Some(value) = f.get(1).filter(|v| v.tag == tag::ctx(0)).and_then(|v| v.inner().ok()) else { continue };
@@ -258,7 +271,7 @@ fn bags(safe_contents: &[u8], password: &str, out: &mut Vec<Bag>) -> Result<(), 
                 let p = a.children()?;
                 let v = p.get(1).and_then(|s| s.children().ok()).and_then(|s| s.into_iter().next());
                 match (p.first().and_then(|o| o.oid().ok()).as_deref(), v) {
-                    (Some(LOCAL_KEY_ID), Some(v)) => local_key_id = Some(v.value.to_vec()),
+                    (Some(LOCAL_KEY_ID), Some(v)) => local_key_id = v.octets("local key id").ok().map(Cow::into_owned),
                     (Some(FRIENDLY_NAME), Some(v)) => friendly_name = v.text(),
                     _ => {}
                 }
@@ -269,15 +282,15 @@ fn bags(safe_contents: &[u8], password: &str, out: &mut Vec<Bag>) -> Result<(), 
             SHROUDED_KEY_BAG => {
                 let p = value.children()?;
                 let [alg, data] = p.as_slice() else { return Err(bad("EncryptedPrivateKeyInfo")) };
-                BagKind::Key(pbe_decrypt(alg, password, data.value)?)
+                BagKind::Key(pbe_decrypt(alg, password, &data.octets("encrypted private key")?)?)
             }
             CERT_BAG => {
                 let p = value.children()?;
                 if p.first().and_then(|o| o.oid().ok()).as_deref() != Some(X509_CERT) {
                     continue;
                 }
-                let Some(c) = p.get(1).and_then(|c| c.inner().ok()) else { continue };
-                BagKind::Cert(c.value.to_vec())
+                let Some(c) = p.get(1).and_then(|c| c.inner().ok()).and_then(|c| c.octets("certificate").ok()) else { continue };
+                BagKind::Cert(c.into_owned())
             }
             _ => continue,
         };
@@ -330,7 +343,7 @@ fn pem_body(pem: &[u8]) -> Result<&[u8], SignError> {
 /// Open a `.p12` / `.pfx` file. A wrong password is [`SignError::WrongPassword`].
 pub fn open(bytes: &[u8], password: &str) -> Result<DigitalId, SignError> {
     let der = normalize(bytes)?;
-    let pfx = Tlv::parse_all(&der)
+    let pfx = Tlv::parse_all_ber(&der)
         .map_err(|e| match e {
             // Keep "not a PKCS #12 file" but carry the exact reason through.
             SignError::Malformed(why) => bad(&format!("not a PKCS #12 file: {why}")),
@@ -341,38 +354,47 @@ pub fn open(bytes: &[u8], password: &str) -> Result<DigitalId, SignError> {
     if auth_safe.first().map(|o| o.oid()).transpose()?.as_deref() != Some(DATA) {
         return Err(SignError::Unsupported("public-key protected PKCS #12 files".into()));
     }
-    let content = auth_safe.get(1).ok_or_else(|| bad("authSafe content"))?.inner()?.expect(tag::OCTET_STRING, "authSafe")?.value;
-    // The MAC proves the password before anything is decrypted.
+    let content = auth_safe.get(1).ok_or_else(|| bad("authSafe content"))?.inner()?.octets("authSafe")?;
+    // The MAC proves the password before anything is decrypted. It covers the contents of that
+    // OCTET STRING — the segments joined, if the file is segmented, which is what wrote them.
     if let Some(mac) = pfx.get(2) {
         let m = mac.children()?;
         let digest_info = m.first().ok_or_else(|| bad("MacData"))?.children()?;
         let alg = digest_info.first().ok_or_else(|| bad("MAC algorithm"))?.children()?;
         let alg_oid = alg.first().ok_or_else(|| bad("MAC algorithm"))?.oid()?;
-        let alg = DigestAlg::from_oid(&alg_oid).ok_or_else(|| SignError::Unsupported(format!("MAC digest {alg_oid}")))?;
-        let expected = digest_info.get(1).ok_or_else(|| bad("MAC"))?.value;
-        let salt = m.get(1).ok_or_else(|| bad("MAC salt"))?.value;
+        let alg = DigestAlg::from_oid(&alg_oid)
+            .filter(|d| matches!(d, DigestAlg::Sha1 | DigestAlg::Sha224 | DigestAlg::Sha256 | DigestAlg::Sha384 | DigestAlg::Sha512))
+            .ok_or_else(|| SignError::Unsupported(format!("MAC digest {alg_oid}")))?;
+        let expected = digest_info.get(1).ok_or_else(|| bad("MAC"))?.octets("MAC")?;
+        let salt = m.get(1).ok_or_else(|| bad("MAC salt"))?.octets("MAC salt")?;
         let iterations = m.get(2).map(|i| i.u64()).transpose()?.unwrap_or(1) as u32;
         let key_len = alg.digest(&[]).len();
-        let key = pkcs12_kdf(alg, &bmp(password), salt, 3, iterations, key_len);
-        if hmac(alg, &key, content)? != expected {
+        let key = pkcs12_kdf(alg, &bmp(password), &salt, 3, iterations, key_len);
+        if hmac(alg, &key, &content)? != *expected {
             return Err(SignError::WrongPassword);
         }
     }
     let mut all = Vec::new();
-    for ci in Tlv::parse_all(content)?.children()? {
+    for ci in Tlv::parse_all_ber(&content)?.children()? {
         let p = ci.children()?;
         let kind = p.first().ok_or_else(|| bad("ContentInfo"))?.oid()?;
         let body = p.get(1).ok_or_else(|| bad("ContentInfo content"))?.inner()?;
         match kind.as_str() {
-            DATA => bags(body.expect(tag::OCTET_STRING, "SafeContents")?.value, password, &mut all)?,
+            DATA => bags(&body.octets("SafeContents")?, password, &mut all)?,
             ENCRYPTED_DATA => {
                 let ed = body.children()?;
                 let eci = ed.get(1).ok_or_else(|| bad("EncryptedContentInfo"))?.children()?;
                 let alg = eci.get(1).ok_or_else(|| bad("content encryption algorithm"))?;
-                let ct = match eci.get(2) {
-                    Some(t) if t.tag == tag::ctx_prim(0) => t.value.to_vec(),
-                    // Constructed form: a sequence of OCTET STRING segments.
-                    Some(t) if t.tag == tag::ctx(0) => t.children()?.iter().flat_map(|s| s.value.iter().copied()).collect(),
+                let ct: Cow<'_, [u8]> = match eci.get(2) {
+                    Some(t) if t.tag == tag::ctx_prim(0) => Cow::Borrowed(t.value),
+                    // Constructed form: the OCTET STRING segments, joined.
+                    Some(t) if t.tag == tag::ctx(0) => {
+                        let mut v = Vec::with_capacity(t.value.len());
+                        for s in t.children()? {
+                            v.extend_from_slice(&s.octets("encryptedContent")?);
+                        }
+                        Cow::Owned(v)
+                    }
                     _ => return Err(bad("encryptedContent")),
                 };
                 let plain = pbe_decrypt(alg, password, &ct)?;
@@ -422,7 +444,7 @@ pub fn write(id: &DigitalId, password: &str) -> Result<Vec<u8>, SignError> {
     const ITER: u32 = 2048;
     let encrypt = |plain: &[u8]| -> Result<Vec<u8>, SignError> {
         let (salt, iv) = (random(16)?, random(16)?);
-        let key = pbkdf2(DigestAlg::Sha256, password.as_bytes(), &salt, ITER, 32);
+        let key = pbkdf2(DigestAlg::Sha256, password.as_bytes(), &salt, ITER, 32)?;
         let ct = cbc::Encryptor::<aes::Aes256>::new_from_slices(&key, &iv)
             .map_err(|_| SignError::Crypto("AES".into()))?
             .encrypt_padded_vec::<Pkcs7>(plain);

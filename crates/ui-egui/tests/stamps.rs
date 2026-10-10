@@ -8,6 +8,7 @@ use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 fn choosing_and_placing_stamps() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app.set_option("zoom", "150").unwrap();
         app
@@ -44,9 +45,53 @@ fn choosing_and_placing_stamps() {
 }
 
 #[test]
+fn natural_image_stamps_keep_displayed_bounds_on_rotated_pages() {
+    for degrees in [0, 90, 180, 270] {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
+            let id = app.views[0].id;
+            app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees }).unwrap();
+            app.set_option("zoom", "100").unwrap();
+            app
+        });
+        h.run_steps(6);
+        assert!(h.state_mut().execute("comment.stamp"));
+        let mut png = Vec::new();
+        image::RgbImage::from_pixel(80, 40, image::Rgb([20, 120, 220]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        h.state_mut().start_custom_stamp("rectangle.png".into(), png);
+        h.run_steps(2);
+        h.get_by_label("OK").click();
+        h.run_steps(2);
+        let page = h.state().views[0].page_screen_rect(0).unwrap();
+        let at = page.min + egui::vec2(page.width() * 0.5, page.height() * 0.6);
+        h.hover_at(at);
+        h.run_steps(1);
+        h.drag_at(at);
+        h.run_steps(1);
+        h.drop_at(at);
+        h.run_steps(4);
+        let app = h.state();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        assert_eq!(app.quick_tool, QuickTool::Select);
+        let stamp = doc.info.annotations.iter().find(|a| a.subtype == "Stamp").unwrap();
+        let info = &doc.info.pages[0];
+        let a = info.user_to_view(stamp.rect[0], stamp.rect[1]);
+        let b = info.user_to_view(stamp.rect[2], stamp.rect[3]);
+        assert!(((a[0] - b[0]).abs() - 80.0).abs() < 0.001, "rotation {degrees}: {a:?}, {b:?}");
+        assert!(((a[1] - b[1]).abs() - 40.0).abs() < 0.001, "rotation {degrees}: {a:?}, {b:?}");
+        assert_eq!(doc.can_undo(), Some("Add stamp"));
+    }
+}
+
+#[test]
 fn creating_placing_and_keeping_custom_stamps() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app.set_option("zoom", "150").unwrap();
         app
@@ -88,6 +133,7 @@ fn creating_placing_and_keeping_custom_stamps() {
     // The library is kept with the app's settings.
     let saved = s.persist();
     let mut again = PdfCraftApp::new();
+    again.set_option("language", "en").unwrap();
     again.restore(&saved);
     assert_eq!(again.custom_stamps.len(), 1);
     assert_eq!((again.custom_stamps[0].category.as_str(), again.custom_stamps[0].name.as_str()), ("Company", "logo"));

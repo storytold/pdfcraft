@@ -13,6 +13,16 @@ const FIXTURE: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
+/// Tests that render pixels (`h.render()`) take this first, so only one wgpu device compiles
+/// shaders at a time: WARP's ARM64 pixel-shader JIT crashes when two do (see `tests/view.rs`).
+/// Declared before the harness, so it is released after the device is dropped.
+static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn gpu() -> std::sync::MutexGuard<'static, ()> {
+    // A test that panicked while holding it leaves nothing to clean up.
+    GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn harness() -> Harness<'static, PdfCraftApp> {
     harness_bytes(FIXTURE)
 }
@@ -21,6 +31,7 @@ fn harness_bytes(fixture: &[u8]) -> Harness<'static, PdfCraftApp> {
     let fixture = fixture.to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, fixture.clone()).unwrap();
         app.set_option("left", "closed").unwrap();
         app.set_option("zoom", "150").unwrap();
@@ -42,6 +53,21 @@ fn at(h: &Harness<'static, PdfCraftApp>, x: f32, y: f32) -> Pos2 {
     };
     let p = page.user_to_view(x, y);
     xf.norm_to_screen(p[0] / xf.pw, p[1] / xf.ph)
+}
+
+/// The screen point `dx` points right and `dy` points up, as displayed, from the user-space point
+/// (`x`, `y`): unlike `at`, offsets don't turn with the page's /Rotate.
+fn shown(h: &Harness<'static, PdfCraftApp>, x: f32, y: f32, dx: f32, dy: f32) -> Pos2 {
+    let s = h.state();
+    let page = &s.session.get(s.views[0].id).unwrap().info.pages[0];
+    let xf = pdfcraft_ui_egui::canvas::PageXform {
+        rect: s.views[0].page_screen_rect(0).expect("on screen"),
+        rot: s.views[0].rotation,
+        pw: page.width,
+        ph: page.height,
+    };
+    let p = page.user_to_view(x, y);
+    xf.norm_to_screen((p[0] + dx) / xf.pw, (p[1] - dy) / xf.ph)
 }
 
 fn click(h: &mut Harness<'static, PdfCraftApp>, x: f32, y: f32) {
@@ -129,6 +155,7 @@ fn signing_draws_a_signature_once_and_places_it() {
     // The signature is remembered (persisted with the app's settings).
     let saved = h.state().persist();
     let mut again = PdfCraftApp::new();
+    again.set_option("language", "en").unwrap();
     again.restore(&saved);
     assert!(again.signature.is_some());
 }
@@ -160,6 +187,7 @@ fn typed_signatures_and_initials() {
     // Both are remembered.
     let saved = h.state().persist();
     let mut again = PdfCraftApp::new();
+    again.set_option("language", "en").unwrap();
     again.restore(&saved);
     assert_eq!(again.signature, h.state().signature);
     assert_eq!(again.initials, Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("GH".into())));
@@ -214,6 +242,7 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     click(&mut h, 40.0, 100.0);
     assert_eq!(items(&h).len(), 3);
     let mut again = PdfCraftApp::new();
+    again.set_option("language", "en").unwrap();
     again.restore(&h.state().persist());
     assert_eq!(again.signature, Some(SavedSig::Typed("Grace Hopper".into())));
     assert_eq!(again.initials, Some(SavedSig::Typed("GH".into())));
@@ -269,6 +298,7 @@ fn saved_signature_cards_remove_and_add_without_changing_the_document() {
     assert_eq!(h.state().signature, None);
     assert_eq!(h.state().initials, Some(SavedSig::Typed("AL".into())));
     let mut again = PdfCraftApp::new();
+    again.set_option("language", "en").unwrap();
     again.restore(&h.state().persist());
     assert_eq!(again.signature, None, "removal survives restart");
     h.get_by_label("Add signature").click();
@@ -292,7 +322,8 @@ fn saved_signature_cards_remove_and_add_without_changing_the_document() {
 fn long_typed_names_fit_the_placed_signature_and_keep_every_outline() {
     let text = "Alexandria Catherine Elizabeth Montgomery-Wellington";
     let sig = SavedSig::Typed(text.into());
-    let pdfcraft_engine::Edit::AddAnnotation(a) = pdfcraft_ui_egui::fill_sign::place(0, [40.0, 200.0], &sig, false, "").unwrap() else {
+    let page = pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let pdfcraft_engine::Edit::AddAnnotation(a) = pdfcraft_ui_egui::fill_sign::place(0, &page, [40.0, 200.0], &sig, false, "").unwrap() else {
         panic!("expected annotation");
     };
     let pdfcraft_engine::Shape::TypedSignature { rect, contours } = a.shape else { panic!("expected typed signature") };
@@ -314,9 +345,15 @@ fn long_typed_names_fit_the_placed_signature_and_keep_every_outline() {
 }
 
 fn signature_file(test: &str) -> std::path::PathBuf {
+    signature_file_with_mark(test, 10..20)
+}
+
+/// A 120 x 40 signature: a stroke across the middle and a block above it at the columns `mark`
+/// (the rest is transparent), so a turned or flipped picture shows.
+fn signature_file_with_mark(test: &str, mark: std::ops::Range<u32>) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("pdfcraft-signature-{test}-{}.png", std::process::id()));
     let image = image::RgbaImage::from_fn(120, 40, |x, y| {
-        if (10..110).contains(&x) && (15..25).contains(&y) || (10..20).contains(&x) && (5..15).contains(&y) {
+        if (10..110).contains(&x) && (15..25).contains(&y) || mark.contains(&x) && (5..15).contains(&y) {
             image::Rgba([20, 30, 40, 255])
         } else {
             image::Rgba([0, 0, 0, 0])
@@ -334,6 +371,7 @@ fn browse_image(h: &mut Harness<'static, PdfCraftApp>, path: &std::path::Path) {
 
 #[test]
 fn image_signatures_and_initials_can_be_imported_placed_and_remembered() {
+    let _gpu = gpu();
     let path = signature_file("import");
     let mut h = harness();
     for (command, y, initials) in [("sign.fill.signature", 250.0, false), ("sign.fill.initials", 150.0, true)] {
@@ -366,6 +404,7 @@ fn image_signatures_and_initials_can_be_imported_placed_and_remembered() {
     let settings = state.persist();
     assert!(!settings.contains(&path.to_string_lossy().to_string()), "only the image is saved, never its source path");
     let mut again = PdfCraftApp::new();
+    again.set_option("language", "en").unwrap();
     again.restore(&settings);
     assert_eq!(again.signature, state.signature);
     assert_eq!(again.initials, state.initials);
@@ -398,7 +437,9 @@ fn image_signatures_and_initials_can_be_imported_placed_and_remembered() {
 
 #[test]
 fn image_signature_preview_follows_pointer_at_page_size_with_zoom_and_rotation() {
-    let path = signature_file("pointer");
+    let _gpu = gpu();
+    // The block above the stroke is at its right end, away from the pointer's own cursor.
+    let path = signature_file_with_mark("pointer", 100..110);
     let image = pdfcraft_engine::SignatureImage::read(std::fs::File::open(&path).unwrap()).unwrap();
     let mut h = harness();
     // A link under the placement point must not replace the image with a hand cursor.
@@ -410,7 +451,8 @@ fn image_signature_preview_follows_pointer_at_page_size_with_zoom_and_rotation()
     });
     h.state_mut().signature = Some(SavedSig::Image(image));
     h.state_mut().execute("sign.fill.signature");
-    // Exercise document rotation and view rotation separately and together.
+    // Exercise document rotation and view rotation separately and together. The image is upright
+    // as displayed, whatever the page's /Rotate; the view rotation turns the whole screen.
     let mut previous_document_rotation = 0;
     for (document_rotation, view_rotation, zoom) in [(0, 0, "150"), (90, 0, "100"), (0, 90, "100"), (90, 90, "75"), (0, 180, "75"), (0, 270, "100")] {
         let delta = document_rotation - previous_document_rotation;
@@ -427,20 +469,23 @@ fn image_signature_preview_follows_pointer_at_page_size_with_zoom_and_rotation()
             h.hover_at(at(&h, 40.0, y));
             h.run_steps(2);
             assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "the image replaces the crosshair");
-            let ink = at(&h, 90.0, y);
-            let margin = at(&h, 42.0, y);
-            let upper_stroke = at(&h, 52.0, y + 8.0);
-            let lower_margin = at(&h, 52.0, y - 8.0);
+            // The picture is 96 x 32 pt with its left edge at the pointer: the stroke spans 8..88
+            // and the block above it 80..88. egui_kittest paints a mouse cursor, a 16 px triangle
+            // down and right of the pointer, over the render, so only probe far from the pointer.
+            let ink = shown(&h, 40.0, y, 50.0, 0.0);
+            let margin = shown(&h, 40.0, y, 92.0, 0.0);
+            let upper_stroke = shown(&h, 40.0, y, 84.0, 8.0);
+            let lower_margin = shown(&h, 40.0, y, 84.0, -8.0);
             let pixels = h.render().unwrap();
             assert!(pixels.get_pixel(ink.x as u32, ink.y as u32).0[..3].iter().all(|v| *v < 60), "ink follows the pointer at the placed size");
             assert!(pixels.get_pixel(margin.x as u32, margin.y as u32).0[..3].iter().all(|v| *v > 240), "alpha exposes the page");
             assert!(
                 pixels.get_pixel(upper_stroke.x as u32, upper_stroke.y as u32).0[..3].iter().all(|v| *v < 60),
-                "the asymmetric image rotates with the page"
+                "the asymmetric image stays upright as displayed"
             );
             assert!(pixels.get_pixel(lower_margin.x as u32, lower_margin.y as u32).0[..3].iter().all(|v| *v > 240), "the image isn't flipped");
             if y == 150.0 {
-                let old = at(&h, 90.0, 250.0);
+                let old = shown(&h, 40.0, 250.0, 50.0, 0.0);
                 assert!(pixels.get_pixel(old.x as u32, old.y as u32).0[..3].iter().all(|v| *v > 240), "moving the pointer removes the old preview");
             }
             if document_rotation == 0
@@ -462,6 +507,7 @@ fn image_signature_preview_follows_pointer_at_page_size_with_zoom_and_rotation()
 
 #[test]
 fn image_signature_placement_selects_resize_handles_and_requires_reselecting_to_repeat() {
+    let _gpu = gpu();
     let path = signature_file("resize");
     let image = pdfcraft_engine::SignatureImage::read(std::fs::File::open(&path).unwrap()).unwrap();
     let mut h = harness();
@@ -535,6 +581,7 @@ fn has_blue_near(pixels: &image::RgbaImage, p: Pos2) -> bool {
 
 #[test]
 fn image_signature_live_resize_and_move_preserve_background_and_hide_moving_handles() {
+    let _gpu = gpu();
     // Original synthetic page content; a white patch over the old image would fail this test.
     const GREEN_PAGE: &[u8] = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R >> endobj\n4 0 obj << /Length 36 >> stream\n0.8 1 0.7 rg 0 0 300 400 re f\nendstream\nendobj\ntrailer << /Root 1 0 R >>\n%%EOF";
     let mut h = harness_bytes(GREEN_PAGE);
@@ -647,6 +694,7 @@ fn image_signature_live_resize_and_move_preserve_background_and_hide_moving_hand
 
 #[test]
 fn embedded_image_signature_live_gestures_follow_document_and_view_rotation() {
+    let _gpu = gpu();
     let path = signature_file("live-rotations");
     let image = pdfcraft_engine::SignatureImage::read(std::fs::File::open(&path).unwrap()).unwrap();
     for (document_rotation, view_rotation) in [(90, 0), (0, 90), (90, 270)] {
@@ -659,37 +707,60 @@ fn embedded_image_signature_live_gestures_follow_document_and_view_rotation() {
         h.state_mut().signature = Some(SavedSig::Image(image.clone()));
         h.state_mut().execute("sign.fill.signature");
         h.run_steps(3);
-        click(&mut h, 40.0, 250.0);
-        rendered_ink(&mut h, 90.0, 250.0);
+        // Points as displayed (from the shown page's bottom-left, y up). The signature is upright
+        // as displayed, so the same points apply whatever the page's /Rotate.
+        let page = h.state().session.get(h.state().views[0].id).unwrap().info.pages[0].clone();
+        let u = |x: f32, y: f32| page.view_to_user(x, page.height - y);
+        let [x, y] = u(40.0, 250.0);
+        click(&mut h, x, y);
+        let [x, y] = u(90.0, 250.0);
+        rendered_ink(&mut h, x, y);
         // Future placements may use a different signature: drag the PDF's embedded image.
         h.state_mut().signature = None;
-        h.drag_at(at(&h, 136.0, 234.0));
+        let [x, y] = u(136.0, 234.0);
+        h.drag_at(at(&h, x, y));
         h.run_steps(1);
-        let end = at(&h, 184.0, 228.0);
+        let [x, y] = u(184.0, 228.0);
+        let end = at(&h, x, y);
         h.hover_at(end);
-        rendered_ink(&mut h, 160.0, 242.0);
+        let [x, y] = u(160.0, 242.0);
+        rendered_ink(&mut h, x, y);
         let pixels = h.render().unwrap();
-        assert!(pixel_at(&h, &pixels, 58.0, 254.0)[..3].iter().all(|v| *v < 60), "asymmetric ink rotates during resize");
-        assert!(pixel_at(&h, &pixels, 58.0, 230.0)[..3].iter().all(|v| *v > 240), "alpha isn't flipped");
+        let [x, y] = u(58.0, 254.0);
+        assert!(pixel_at(&h, &pixels, x, y)[..3].iter().all(|v| *v < 60), "asymmetric ink stays upright during resize");
+        let [x, y] = u(58.0, 230.0);
+        assert!(pixel_at(&h, &pixels, x, y)[..3].iter().all(|v| *v > 240), "alpha isn't flipped");
         h.drop_at(end);
         h.run_steps(3);
-        h.drag_at(at(&h, 112.0, 242.0));
+        // The corner keeps the image's 3:1 as displayed: 144 x 48 from the top-left corner.
+        let ([x0, y0], [x1, y1]) = (u(40.0, 218.0), u(184.0, 266.0));
+        let rect = h.state().session.get(h.state().views[0].id).unwrap().info.annotations[0].rect;
+        let want = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
+        assert!(rect.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01), "{rect:?} != {want:?}");
+        let [x, y] = u(112.0, 242.0);
+        h.drag_at(at(&h, x, y));
         h.run_steps(1);
-        h.hover_at(at(&h, 132.0, 142.0));
+        let [x, y] = u(132.0, 142.0);
+        let target = at(&h, x, y);
+        h.hover_at(target);
         h.run_steps(2);
         let pixels = h.render().unwrap();
-        assert!(pixel_at(&h, &pixels, 132.0, 142.0)[..3].iter().all(|v| *v < 60), "image moves before release");
-        assert!(pixel_at(&h, &pixels, 160.0, 242.0)[..3].iter().all(|v| *v > 240), "old ink is removed during movement");
-        assert!(!has_blue_near(&pixels, at(&h, 204.0, 166.0)));
-        h.drop_at(at(&h, 132.0, 142.0));
+        assert!(pixel_at(&h, &pixels, x, y)[..3].iter().all(|v| *v < 60), "image moves before release");
+        let [x, y] = u(160.0, 242.0);
+        assert!(pixel_at(&h, &pixels, x, y)[..3].iter().all(|v| *v > 240), "old ink is removed during movement");
+        let [x, y] = u(204.0, 166.0);
+        let corner = at(&h, x, y);
+        assert!(!has_blue_near(&pixels, corner));
+        h.drop_at(target);
         h.run_steps(2);
-        assert!(has_blue_near(&h.render().unwrap(), at(&h, 204.0, 166.0)));
+        assert!(has_blue_near(&h.render().unwrap(), corner));
     }
     std::fs::remove_file(path).unwrap();
 }
 
 #[test]
 fn image_signature_corners_restore_original_aspect_after_edge_resize_and_reopen() {
+    let _gpu = gpu();
     let path = signature_file("aspect");
     let image = pdfcraft_engine::SignatureImage::read(std::fs::File::open(&path).unwrap()).unwrap();
     let mut h = harness();
@@ -800,8 +871,148 @@ fn image_import_cancel_clear_and_errors_preserve_saved_signatures() {
     assert!(h.state().signature_draft.image.is_none());
     // Malformed settings are ignored while legacy typed/drawn values still restore.
     let mut again = PdfCraftApp::new();
+    again.set_option("language", "en").unwrap();
     again.restore(r#"{"signature_text":"Ada","signature_image":{"Image":"bm90IGFuIGltYWdl"},"initials":{"Image":"%%%"}}"#);
     assert_eq!(again.signature, Some(SavedSig::Typed("Ada".into())));
     assert!(again.initials.is_none());
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn flatten_on_save_is_off_by_default_and_round_trips() {
+    let mut app = PdfCraftApp::new();
+    assert!(!app.flatten_fill_sign_on_save);
+    app.set_option("flatten-fill-sign", "true").unwrap();
+    assert!(app.set_option("flatten-fill-sign", "yes").is_err());
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&app.persist());
+    assert!(restored.flatten_fill_sign_on_save);
+    restored.set_option("flatten-fill-sign", "false").unwrap();
+    let mut again = PdfCraftApp::new();
+    again.restore(&restored.persist());
+    assert!(!again.flatten_fill_sign_on_save);
+}
+
+#[test]
+fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
+    use pdfcraft_engine::{Edit, FillMark, NewAnnotation, Shape, Style};
+    use pdfcraft_ui_egui::SaveTarget;
+    use pdfcraft_ui_egui::fill_sign::TypeBox;
+
+    let dir = std::env::temp_dir().join(format!("pdfcraft-fill-flatten-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mark = Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape: Shape::Mark { rect: [40.0, 80.0, 56.0, 96.0], mark: FillMark::Check },
+        style: Style::default_for(&Shape::Mark { rect: [0.0, 0.0, 12.0, 12.0], mark: FillMark::Check }),
+        contents: String::new(),
+        author: "Ada".into(),
+    });
+
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("form.pdf", None, FIXTURE.to_vec()).unwrap();
+    let id = app.views[0].id;
+    app.session.apply(id, mark).unwrap();
+    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 200.0], text: "Typed".into(), focus: false });
+    let kept = dir.join("kept.pdf");
+    app.save_override = Some(kept.to_string_lossy().into_owned());
+    assert!(app.save_active(SaveTarget::InPlace));
+    let mut reopened = PdfCraftApp::new();
+    reopened.open_bytes("kept.pdf", None, std::fs::read(&kept).unwrap()).unwrap();
+    let texts: Vec<String> =
+        reopened.session.get(reopened.views[0].id).unwrap().info.annotations.iter().map(|a| a.contents.clone().unwrap_or_default()).collect();
+    assert!(texts.iter().any(|t| t == "Typed"), "an open type box is saved: {texts:?}");
+    assert_eq!(reopened.session.get(reopened.views[0].id).unwrap().info.annotations.len(), 2, "the check mark stays too");
+
+    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 160.0], text: "More".into(), focus: false });
+    app.flatten_fill_sign_on_save = true;
+    let flat = dir.join("flat.pdf");
+    app.save_override = Some(flat.to_string_lossy().into_owned());
+    assert!(app.save_active(SaveTarget::InPlace));
+    let mut flattened = PdfCraftApp::new();
+    flattened.open_bytes("flat.pdf", None, std::fs::read(&flat).unwrap()).unwrap();
+    let left = &flattened.session.get(flattened.views[0].id).unwrap().info.annotations;
+    assert!(left.is_empty(), "text and the check mark are page content: {left:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Issue #299: drawn and typed signatures and initials are upright as displayed on pages with
+/// `/Rotate` 90, 180 and 270, anchored at the displayed point, exactly as on an unturned page.
+#[test]
+fn drawn_and_typed_signatures_stay_upright_on_rotated_pages() {
+    // An "L": a long stroke along the bottom and a tick up at its left end, so a turned or
+    // mirrored signature shows.
+    let drawn = SavedSig::Drawn(vec![vec![[0.0, 0.0], [1.0, 0.0]], vec![[0.0, 0.0], [0.0, 0.2]]]);
+    let typed = SavedSig::Typed("Ada Lovelace".into());
+    // (signature, initials, displayed left-centre point)
+    let cases = [(&drawn, false, [40.0_f32, 60.0]), (&typed, false, [40.0, 140.0]), (&typed, true, [40.0, 230.0])];
+    let ink_mask = |rotation: i64| {
+        let mut session = pdfcraft_engine::Session::new();
+        let blank = session.create_blank(300.0, 400.0, 1).unwrap();
+        let id = session.open_new("form.pdf", blank).unwrap();
+        if rotation != 0 {
+            session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: rotation }).unwrap();
+        }
+        let page = session.get(id).unwrap().info.pages[0].clone();
+        assert_eq!(i64::from(page.rotation), rotation);
+        for (sig, initials, shown) in cases {
+            let at = page.view_to_user(shown[0], shown[1]);
+            let edit = pdfcraft_ui_egui::fill_sign::place(0, &page, [f64::from(at[0]), f64::from(at[1])], sig, initials, "Ada").unwrap();
+            session.apply(id, edit).unwrap();
+        }
+        let annotations = &session.get(id).unwrap().info.annotations;
+        assert_eq!(annotations.len(), cases.len());
+        let bytes = session.get(id).unwrap().bytes.clone();
+        let mut renderer = pdfcraft_render::PageRenderer::new(bytes, Default::default());
+        let out = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(out.error.is_none(), "{:?}", out.error);
+        let shown_size = if rotation % 180 == 0 { (300, 400) } else { (400, 300) };
+        assert_eq!((out.width, out.height), shown_size, "rendered as displayed");
+        let dark: Vec<bool> = out.rgba.as_chunks::<4>().0.iter().map(|p| p[..3].iter().all(|v| *v < 128)).collect();
+        // The displayed ink box of each signature, in the band around its point.
+        let boxes: Vec<[u32; 4]> = cases
+            .iter()
+            .map(|(_, _, shown)| {
+                let (top, bottom) = ((shown[1] - 35.0) as u32, (shown[1] + 35.0) as u32);
+                let mut b = [u32::MAX, u32::MAX, 0, 0];
+                for y in top..bottom {
+                    for x in 0..out.width {
+                        if dark[(y * out.width + x) as usize] {
+                            b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+                        }
+                    }
+                }
+                assert!(b[0] <= b[2], "rotation {rotation}: no ink near {shown:?}");
+                b
+            })
+            .collect();
+        (dark, out.width, boxes)
+    };
+    let (upright, _, upright_boxes) = ink_mask(0);
+    for (b, (sig, _, shown)) in upright_boxes.iter().zip(cases) {
+        assert!(b[2] - b[0] > b[3] - b[1], "{sig:?} reads across: {b:?}");
+        assert!(b[0].abs_diff(shown[0] as u32) <= 2, "{sig:?} starts at the point: {b:?}");
+        assert!(b[1] < shown[1] as u32 && b[3] > shown[1] as u32, "{sig:?} is centred on the point: {b:?}");
+    }
+    // The drawn "L" has its tick at the top left, not mirrored or upside down.
+    let at = |x: u32, y: u32| upright[(y * 300 + x) as usize];
+    let b = upright_boxes[0];
+    assert!(at(b[0] + 1, b[1] + 2) && !at(b[2] - 2, b[1] + 2) && at(b[2] - 2, b[3] - 1), "the drawn L is upright: {b:?}");
+    for rotation in [90, 180, 270] {
+        let (dark, width, boxes) = ink_mask(rotation);
+        for (got, want) in boxes.iter().zip(&upright_boxes) {
+            assert!(got.iter().zip(want).all(|(g, w)| g.abs_diff(*w) <= 1), "rotation {rotation}: displayed box {got:?}, upright {want:?}");
+        }
+        // Compare where both pages are shown (the turned ones are 400 x 300).
+        let (mut differ, mut ink) = (0, 0);
+        for y in 0..300 {
+            for x in 0..300 {
+                let (want, got) = (upright[(y * 300 + x) as usize], dark[(y * width + x) as usize]);
+                ink += usize::from(want);
+                differ += usize::from(want != got);
+            }
+        }
+        assert!(differ * 10 < ink, "rotation {rotation}: {differ} of {ink} ink pixels differ from the unturned page");
+    }
 }

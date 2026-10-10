@@ -45,6 +45,7 @@ fn harness(docs: &[usize]) -> Harness<'static, PdfCraftApp> {
     let docs = docs.to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         for (i, n) in docs.iter().enumerate() {
             app.open_bytes(&format!("doc{i}.pdf"), None, fixture(*n)).unwrap();
         }
@@ -422,4 +423,230 @@ fn a_failed_startup_url_is_reported_in_the_app() {
     assert!(toast.contains("missing.pdf") && toast.contains("HTTP 404"), "{toast:?}");
     assert!(h.state().views.is_empty(), "no document was opened");
     assert!(failed.lock().unwrap().is_empty(), "each failure is reported once");
+}
+
+fn deliver_startup(h: &Harness<'static, PdfCraftApp>, name: &str, bytes: Vec<u8>) {
+    h.state().startup_inbox.lock().unwrap().push((name.into(), bytes));
+}
+
+#[test]
+fn a_startup_url_opens_in_front_when_the_user_has_not_started_working() {
+    let mut h = harness(&[]);
+    deliver_startup(&h, "startup.pdf", fixture(2));
+    h.run_steps(2);
+    assert_eq!(h.state().active, Some(0));
+    assert_eq!(pages(h.state(), 0), 2);
+    assert!(h.state().startup_inbox.lock().unwrap().is_empty());
+    h.run_steps(2);
+    assert_eq!(h.state().views.len(), 1, "the arrival opens once");
+}
+
+#[test]
+fn a_late_startup_url_preserves_the_current_edit_workspace_and_save_target() {
+    use pdfcraft_engine::{Edit, InitialView, Magnification, Navigation, Session};
+    use pdfcraft_ui_egui::{LeftPanel, Mode, QuickTool, RightPanel};
+
+    // A downloaded PDF can ask to show a different panel and magnification. Its own view
+    // should honour those settings without taking the user's workspace away.
+    let mut s = Session::new();
+    let id = s.open("late.pdf", None, std::sync::Arc::new(fixture(1)), None).unwrap();
+    let initial = InitialView { navigation: Navigation::Bookmarks, magnification: Magnification::Percent(175.0), ..Default::default() };
+    s.apply(id, Edit::SetInitialView(Box::new(initial))).unwrap();
+    let late = s.save_bytes(id).unwrap().as_ref().clone();
+
+    let mut h = harness(&[3]);
+    let active = h.state().active_ids().unwrap().1;
+    h.state_mut().apply_edit(Edit::DeletePages { pages: vec![1] });
+    h.state_mut().mode = Mode::Edit;
+    h.state_mut().right = Some(RightPanel::Pages);
+    h.state_mut().left = LeftPanel::AllTools;
+    h.state_mut().left_open = false;
+    h.state_mut().quick_tool = QuickTool::Hand;
+    deliver_startup(&h, "late.pdf", late);
+    h.run_steps(2);
+
+    assert_eq!(h.state().active_ids().unwrap().1, active, "Save still targets the user's document");
+    assert_eq!(h.state().mode, Mode::Edit);
+    assert_eq!(h.state().right, Some(RightPanel::Pages));
+    assert_eq!(h.state().left, LeftPanel::AllTools);
+    assert!(!h.state().left_open);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+    assert!(dirty(h.state(), 0));
+    assert_eq!(h.state().views.len(), 2, "the startup file remains available in its own tab");
+    assert_eq!(h.state().views[1].zoom, 1.75);
+
+    let dir = scratch("startup-save");
+    let path = dir.join("saved.pdf");
+    h.state_mut().save_override = Some(path.to_string_lossy().into_owned());
+    assert!(h.state_mut().execute("file.save"));
+    h.run_steps(2);
+    let saved = PageRenderer::new(std::sync::Arc::new(std::fs::read(&path).unwrap()), Default::default());
+    assert_eq!(saved.page_count(), 2, "the saved file contains the local deletion");
+    assert!(!dirty(h.state(), 0), "the local document was saved, not the startup document");
+
+    h.get_by_label("late.pdf").click();
+    h.run_steps(2);
+    assert_eq!(h.state().active, Some(1), "the user can choose the downloaded tab");
+    h.get_by_label("saved.pdf").click();
+    h.run_steps(2);
+    assert_eq!(pages(h.state(), 0), 2, "the edit survives switching back");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_late_startup_url_preserves_home_even_after_all_other_tabs_are_closed() {
+    for close in [false, true] {
+        let mut h = harness(&[3]);
+        if close {
+            h.state_mut().close_tab(0);
+        } else {
+            h.get_by_label("Home").click();
+            h.run_steps(2);
+        }
+        assert_eq!(h.state().active, None);
+        deliver_startup(&h, "late.pdf", fixture(1));
+        h.run_steps(2);
+        assert_eq!(h.state().active, None, "Home stays selected (closed tabs: {close})");
+        h.get_by_label_contains("Welcome to PdfCraft");
+        h.get_by_label("late.pdf").click();
+        h.run_steps(2);
+        assert!(h.state().active.is_some());
+    }
+}
+
+#[test]
+fn deliberate_browser_file_opens_still_activate_the_new_tab() {
+    let mut h = harness(&[3]);
+    h.state().inbox.lock().unwrap().push(("picked.pdf".into(), fixture(2)));
+    deliver_startup(&h, "late.pdf", fixture(1));
+    h.run_steps(2);
+    assert_eq!(h.state().active, Some(1), "a deliberate Open wins even on the same frame");
+    assert_eq!(pages(h.state(), 1), 2);
+    assert_eq!(h.state().views.len(), 3);
+}
+
+#[test]
+fn opening_a_file_picker_supersedes_the_startup_url_even_if_the_picker_is_cancelled() {
+    let mut h = harness(&[]);
+    h.state_mut().pick_override = Some(vec![]);
+    h.state_mut().execute("file.open");
+    deliver_startup(&h, "late.pdf", fixture(1));
+    h.run_steps(2);
+    assert_eq!(h.state().active, None, "the startup file doesn't replace the user's newer Open action");
+    assert_eq!(h.state().views.len(), 1, "it is still available as a background tab");
+}
+
+#[test]
+fn a_broken_late_startup_file_reports_its_error_without_changing_the_active_document() {
+    let mut h = harness(&[3]);
+    deliver_startup(&h, "broken.pdf", b"not a PDF".to_vec());
+    h.run_steps(2);
+    assert_eq!(h.state().active, Some(0));
+    assert_eq!(h.state().views.len(), 1);
+    let toast = &h.state().toast.as_ref().unwrap().0;
+    assert!(toast.contains("broken.pdf"), "{toast}");
+    assert!(h.state().startup_inbox.lock().unwrap().is_empty());
+}
+
+fn encrypted_fixture() -> Vec<u8> {
+    use pdfcraft_engine::{Edit, Protection, Session};
+    let mut s = Session::new();
+    let id = s.open("encrypted.pdf", None, std::sync::Arc::new(fixture(1)), None).unwrap();
+    s.apply(id, Edit::Protect(Protection { open_password: Some("test-password".into()), ..Default::default() })).unwrap();
+    s.save_bytes(id).unwrap().as_ref().clone()
+}
+
+#[test]
+fn a_startup_url_does_not_replace_another_documents_password_prompt() {
+    for cancel in [false, true] {
+        let mut h = harness(&[]);
+        h.state_mut().open_bytes("local-encrypted.pdf", None, encrypted_fixture()).unwrap();
+        deliver_startup(&h, "late.pdf", fixture(2));
+        h.run_steps(2);
+        assert_eq!(h.state().password_prompt.as_ref().unwrap().name, "local-encrypted.pdf");
+        assert!(h.state().views.is_empty());
+        assert_eq!(h.state().startup_inbox.lock().unwrap().len(), 1, "startup bytes wait for the prompt");
+        h.state_mut().submit_password((!cancel).then(|| "test-password".into()));
+        h.run_steps(2);
+        assert!(h.state().password_prompt.is_none());
+        assert!(h.state().startup_inbox.lock().unwrap().is_empty());
+        assert_eq!(h.state().active, if cancel { None } else { Some(0) });
+        assert_eq!(h.state().views.len(), if cancel { 1 } else { 2 });
+    }
+}
+
+#[test]
+fn unlocking_a_late_startup_url_keeps_it_in_the_background() {
+    let mut h = harness(&[3]);
+    deliver_startup(&h, "late-encrypted.pdf", encrypted_fixture());
+    h.run_steps(2);
+    assert_eq!(h.state().active, Some(0));
+    assert_eq!(h.state().password_prompt.as_ref().unwrap().name, "late-encrypted.pdf");
+    h.state_mut().submit_password(Some("wrong-password".into()));
+    h.run_steps(2);
+    assert!(h.state().password_prompt.as_ref().unwrap().error.is_some());
+    assert_eq!(h.state().active, Some(0));
+    h.state_mut().submit_password(Some("test-password".into()));
+    h.run_steps(2);
+    assert!(h.state().password_prompt.is_none());
+    assert_eq!(h.state().active, Some(0));
+    assert_eq!(h.state().views.len(), 2);
+    h.get_by_label("late-encrypted.pdf").click();
+    h.run_steps(2);
+    assert_eq!(h.state().active, Some(1));
+}
+
+#[test]
+fn a_late_startup_url_preserves_the_combine_files_tab() {
+    let mut h = harness(&[]);
+    h.state_mut().open_combine_tab();
+    h.run_steps(2);
+    deliver_startup(&h, "late.pdf", fixture(1));
+    h.run_steps(2);
+    assert!(h.state().combine_showing());
+    assert_eq!(h.state().active, None);
+    assert_eq!(h.state().views.len(), 1);
+}
+
+#[test]
+fn a_late_startup_url_waits_for_an_existing_dialog_to_close() {
+    let mut h = harness(&[3]);
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::Preferences);
+    deliver_startup(&h, "late.pdf", fixture(1));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Preferences));
+    assert_eq!(h.state().views.len(), 1);
+    assert_eq!(h.state().startup_inbox.lock().unwrap().len(), 1);
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+    assert_eq!(h.state().active, Some(0));
+    assert_eq!(h.state().views.len(), 2);
+    assert!(h.state().startup_inbox.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_late_startup_text_file_is_still_converted_without_stealing_focus() {
+    let mut h = harness(&[3]);
+    deliver_startup(&h, "late.txt", b"A downloaded text file".to_vec());
+    h.run_steps(2);
+    assert_eq!(h.state().active, Some(0));
+    assert_eq!(h.state().views.len(), 2);
+    assert_eq!(pages(h.state(), 1), 1);
+}
+
+#[test]
+fn a_background_startup_forms_script_notice_waits_until_its_tab_is_selected() {
+    let template = pdfcraft_xfa::fixtures::scripted_template()
+        .replace("if (qty.rawValue === null) qty.rawValue = 2;", r#"xfa.host.messageBox("Late form opened");"#);
+    let mut h = harness(&[3]);
+    deliver_startup(&h, "late-form.pdf", pdfcraft_xfa::fixtures::shell(&template));
+    h.run_steps(2);
+    assert_eq!(h.state().active, Some(0));
+    assert!(h.state().toast.is_none(), "the background form must not interrupt the current document");
+    h.get_by_label("late-form.pdf").click();
+    h.run_steps(2);
+    assert_eq!(h.state().toast.as_ref().unwrap().0, "Late form opened");
+    h.state_mut().toast = None;
+    h.run_steps(2);
+    assert!(h.state().toast.is_none(), "the notice is delivered once");
 }

@@ -1277,7 +1277,12 @@ impl Stream {
                 }
             }
             1 | 2 | 4 => {
-                let stride = (columns * colors * bits).div_ceil(8);
+                // PdfCraft patch: reject overflowing packed row widths (lopdf#589).
+                let stride = columns
+                    .checked_mul(colors)
+                    .and_then(|samples| samples.checked_mul(bits))
+                    .ok_or(DecompressError::Predictor("predictor row size overflows"))?
+                    .div_ceil(8);
                 if stride > 0 {
                     for row in data.chunks_mut(stride) {
                         Self::reverse_tiff_predictor2_subbyte(row, columns, colors, bits);
@@ -1299,8 +1304,9 @@ impl Stream {
     /// `2^bits`, then repacked MSB-first; the row's trailing padding bits are kept.
     fn reverse_tiff_predictor2_subbyte(row: &mut [u8], columns: usize, colors: usize, bits: usize) {
         let mask = (1u16 << bits) - 1;
-        let samples = columns.saturating_mul(colors).min(row.len() * 8 / bits); // PdfCraft patch: saturating
-        let mut acc = vec![0u16; colors];
+        // PdfCraft patch: bound scratch to the samples present in the input (lopdf#589).
+        let samples = columns.saturating_mul(colors).min(row.len().saturating_mul(8 / bits));
+        let mut acc = vec![0u16; colors.min(samples)];
         let mut out = vec![0u8; row.len()];
         let mut in_bit = 0usize;
         let mut out_buf = 0u32;

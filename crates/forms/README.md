@@ -39,5 +39,6 @@ delete_field(&mut doc, "email")?;
 ## Not yet
 
 JavaScript actions (format, keystroke, validate, calculate; M6.4/M6.5), rich-text values,
-`/MK /R` rotation, the Appearance (colours, fonts), Actions, Format, Validate and Calculate
-property tabs, FDF/XFDF import and export (M6.7).
+the Appearance (colours, fonts), Actions, Format, Validate and Calculate property tabs,
+FDF/XFDF import and export (M6.7). `/MK /R` rotation (0, 90, 180, 270) is drawn into the
+appearance.

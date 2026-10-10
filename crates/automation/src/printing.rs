@@ -16,6 +16,18 @@ impl Automation {
         Ok(json!({ "count": list.len(), "printers": list }))
     }
 
+    pub(crate) fn printer_options(&self, a: &Args) -> Result<Value> {
+        let printer = a.str("printer")?;
+        let list: Vec<Value> = spool::printer_options(printer)
+            .into_iter()
+            .map(|o| {
+                let choices: Vec<Value> = o.choices.iter().map(|(value, label)| json!({ "value": value, "label": label })).collect();
+                json!({ "key": o.key, "label": o.label, "group": o.group, "default": o.default, "choices": choices })
+            })
+            .collect();
+        Ok(json!({ "printer": printer, "count": list.len(), "options": list }))
+    }
+
     pub(crate) fn doc_print(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, count) = (doc.id, doc.info.pages.len());
@@ -122,6 +134,17 @@ impl Automation {
                     },
                     grayscale: a.opt_bool("grayscale")?.unwrap_or(false),
                     title: name,
+                    options: match a.get("options") {
+                        None => Vec::new(),
+                        Some(Value::Object(m)) => m
+                            .iter()
+                            .map(|(k, v)| match v.as_str() {
+                                Some(v) => Ok((k.clone(), v.to_string())),
+                                None => Err(bad(format!("options.{k} must be a string (a choice from printer_options)"))),
+                            })
+                            .collect::<Result<Vec<_>>>()?,
+                        Some(_) => return Err(bad("options must be an object of option keys and choices from printer_options")),
+                    },
                 };
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }

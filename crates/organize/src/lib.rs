@@ -100,6 +100,13 @@ pub fn pages(doc: &Document) -> Result<Vec<PageRef>, OrganizeError> {
     Ok(walk(doc)?.into_iter().map(|(obj, _)| PageRef { obj }).collect())
 }
 
+/// Effective inherited page rotation, clockwise in degrees.
+pub fn page_rotation(doc: &Document, index: usize) -> Result<i64, OrganizeError> {
+    let pages = walk(doc)?;
+    let (_, attrs) = pages.get(index).ok_or(OrganizeError::NoSuchPage(index))?;
+    Ok(attrs.int(b"Rotate").unwrap_or(0).rem_euclid(360))
+}
+
 pub fn page_count(doc: &Document) -> Result<usize, OrganizeError> {
     Ok(walk(doc)?.len())
 }

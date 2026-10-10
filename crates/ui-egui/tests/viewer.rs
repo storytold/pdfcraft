@@ -34,6 +34,7 @@ fn fixture(n: usize) -> Vec<u8> {
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("a.pdf", None, fixture(5)).unwrap();
         app.open_bytes("b.pdf", None, fixture(2)).unwrap();
         app
@@ -213,6 +214,7 @@ trailer << /Root 1 0 R >>
         .to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("damaged.pdf", None, damaged.clone()).unwrap();
         app
     });
@@ -250,6 +252,7 @@ fn initial_view_is_edited_and_honoured_on_open() {
     // Opening the saved file follows it.
     let bytes = s.session.save_bytes(id).unwrap();
     let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
     app.open_bytes("again.pdf", None, bytes.to_vec()).unwrap();
     let view = &app.views[0];
     assert_eq!((view.current, view.cover, app.right), (1, true, Some(pdfcraft_ui_egui::RightPanel::Bookmarks)));
@@ -326,6 +329,25 @@ fn tab_and_window_show_the_document_title_when_asked() {
     h.run_steps(2);
     assert_eq!(h.state().window_title, "Quarterly report — PdfCraft");
     h.get_by_label_contains("Quarterly report");
+}
+
+#[test]
+fn a_placeholder_title_leaves_the_file_name_on_the_tab_and_window() {
+    // A browser's "Save as PDF" of a blank page or pop-up titles the document "about:blank"
+    // and asks viewers to show the title: the file name says more.
+    use pdfcraft_engine::Edit;
+    let mut h = harness();
+    {
+        let s = h.state_mut();
+        let id = s.views[s.active.unwrap()].id;
+        s.session.apply(id, Edit::SetInfo { key: "Title".into(), value: "about:blank".into() }).unwrap();
+        let mut v = s.session.get(id).unwrap().initial_view();
+        v.display_title = true;
+        s.session.apply(id, Edit::SetInitialView(Box::new(v))).unwrap();
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().window_title, "b.pdf — PdfCraft");
+    assert!(h.query_by_label_contains("about:blank").is_none());
 }
 
 #[test]
@@ -425,6 +447,59 @@ fn each_document_keeps_its_own_scroll_position() {
 }
 
 #[test]
+fn a_new_document_opens_at_the_top_after_a_relaunch() {
+    // eframe saves egui's memory, scroll offsets included, with the settings and restores it at
+    // the next launch, where document ids start again at 1: the first document opened then
+    // started at the offset the previous session's first document was left at.
+    use pdfcraft_ui_egui::canvas::Fit;
+    let mut h = harness();
+    for v in &mut h.state_mut().views {
+        v.fit = Fit::Width;
+    }
+    h.state_mut().active = Some(0);
+    h.run_steps(4);
+    h.state_mut().views[0].goto = Some((3, 0.0));
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 3, "a.pdf scrolled to page 4");
+    // Quit: eframe writes egui's memory to app.ron, as below, and reads it back at the next launch.
+    #[derive(Default)]
+    struct Settings(std::collections::HashMap<String, String>);
+    impl eframe::Storage for Settings {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.into(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+    let mut settings = Settings::default();
+    h.ctx.memory(|m| eframe::set_value(&mut settings, "egui", m));
+    let memory: egui::Memory = eframe::get_value(&settings, "egui").expect("egui's memory round-trips");
+    // Next launch: a document never seen before, which gets a.pdf's old id.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        cc.egui_ctx.memory_mut(|m| *m = memory);
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("c.pdf", None, fixture(5)).unwrap();
+        app.views[0].fit = Fit::Width;
+        app
+    });
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].id, pdfcraft_engine::DocId(1));
+    assert_eq!(h.state().views[0].current, 0, "c.pdf opens on page 1");
+    // It is still a scroll position of its own from then on.
+    h.state_mut().views[0].goto = Some((2, 0.0));
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 2);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 2, "c.pdf stays on page 3");
+}
+
+#[test]
 fn arrow_and_page_keys_move_through_a_scrolling_document() {
     // #185: in the continuous (default) and two-page views the arrow keys and Page Down / Up did
     // nothing without ⌘.
@@ -470,6 +545,47 @@ fn arrow_and_page_keys_move_through_a_scrolling_document() {
     h.state_mut().views[0].layout = PageLayout::Single;
     h.run_steps(4);
     assert_eq!(press(&mut h, Key::PageDown, 1), 3);
+}
+
+#[test]
+fn up_and_down_turn_pages_in_single_page_view() {
+    // #273: in single-page view ↓ / ↑ only scrolled, so on a page that fits (or once scrolled to
+    // the end) they did nothing, while the wheel turned the page there.
+    use egui::Key;
+    use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].layout = PageLayout::Single;
+    h.state_mut().views[0].fit = Fit::Page;
+    h.run_steps(4);
+    let press = |h: &mut Harness<'static, PdfCraftApp>, key, times: usize| {
+        for _ in 0..times {
+            h.key_press(key);
+            h.run_steps(2);
+        }
+        h.run_steps(2);
+        h.state().views[0].current
+    };
+    // A page that fits: each press turns one page.
+    assert_eq!(press(&mut h, Key::ArrowDown, 1), 1);
+    assert_eq!(press(&mut h, Key::ArrowDown, 1), 2);
+    assert_eq!(press(&mut h, Key::ArrowUp, 1), 1);
+    assert_eq!(press(&mut h, Key::ArrowUp, 1), 0);
+    assert_eq!(press(&mut h, Key::ArrowUp, 1), 0, "nothing before the first page");
+    // A page taller than the window scrolls first, then turns at its bottom.
+    h.state_mut().views[0].fit = Fit::Width;
+    h.run_steps(4);
+    let mut lines = 0;
+    while press(&mut h, Key::ArrowDown, 1) == 0 {
+        lines += 1;
+        assert!(lines < 500, "↓ never reached page 2");
+    }
+    assert!(lines > 2, "↓ scrolled through page 1 before turning ({lines} lines)");
+    // ↑ at the top of page 2 goes back to the bottom of page 1, then scrolls up it.
+    assert_eq!(press(&mut h, Key::ArrowUp, 1), 0);
+    assert_eq!(press(&mut h, Key::ArrowDown, 1), 1, "back at the bottom of page 1");
+    assert_eq!(press(&mut h, Key::ArrowUp, 2), 0);
+    assert_eq!(press(&mut h, Key::ArrowDown, 1), 0, "scrolled up from the bottom of page 1");
 }
 
 #[test]
@@ -559,6 +675,7 @@ fn page_down_steps_every_spread_when_several_fit_on_screen() {
         let bytes = sized_fixture(&sizes);
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
             let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
             app.open_bytes("book.pdf", None, bytes).unwrap();
             app
         });
@@ -577,4 +694,64 @@ fn page_down_steps_every_spread_when_several_fit_on_screen() {
         let up: Vec<usize> = (0..6).map(|_| step(Key::PageUp)).collect();
         assert_eq!(up, [9, 7, 5, 3, 1, 0], "{fit:?}");
     }
+}
+
+/// Open `sizes` in Fit width, continuous, with the Pages panel showing.
+fn pages_panel_harness(sizes: &[(u32, u32)]) -> Harness<'static, PdfCraftApp> {
+    let bytes = sized_fixture(sizes);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("cheques.pdf", None, bytes).unwrap();
+        app.right = Some(pdfcraft_ui_egui::RightPanel::Pages);
+        app
+    });
+    h.run_steps(6);
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
+    h.run_steps(6);
+    h
+}
+
+/// A thumbnail in the Pages panel (the panel lists pages as "Page n" buttons).
+fn thumbnail(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Pos2 {
+    h.get_all_by_label(label).find(|n| n.rect().left() > 1000.0).expect("the Pages panel thumbnail").rect().center()
+}
+
+/// Press and release `button` at `at`.
+fn press(h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2, button: egui::PointerButton) {
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers: Default::default() });
+}
+
+#[test]
+fn a_short_page_gone_to_from_the_pages_panel_stays_current() {
+    // A short page (a cheque) above a tall one: going to it scrolls it to the top, where the tall
+    // page below shows more of itself. The current page, and the Pages panel's highlight, moved
+    // to the tall page.
+    let mut h = pages_panel_harness(&[(600, 250), (600, 1800), (600, 250), (600, 1800)]);
+    for page in [1, 0, 2] {
+        let at = thumbnail(&h, &format!("Page {}", page + 1));
+        press(&mut h, at, egui::PointerButton::Primary);
+        h.run_steps(6);
+        assert_eq!(h.state().views[0].current, page, "clicked page {}", page + 1);
+    }
+}
+
+#[test]
+fn pages_panel_thumbnails_have_a_context_menu() {
+    let mut h = pages_panel_harness(&[(200, 300); 4]);
+    let at = thumbnail(&h, "Page 3");
+    press(&mut h, at, egui::PointerButton::Secondary);
+    h.run_steps(2);
+    // The page right-clicked becomes the selection the menu acts on.
+    assert_eq!(h.state().views[0].target_pages(), vec![2]);
+    for item in ["Extract pages", "Cut", "Paste after"] {
+        h.get_by_label(item);
+    }
+    h.get_by_label("Copy").click();
+    h.run_steps(3);
+    assert_eq!(h.state().page_clipboard.as_ref().map(|c| c.pages.clone()), Some(vec![2]));
 }

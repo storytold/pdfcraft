@@ -112,7 +112,7 @@ fn hash_obj(o: &Object, map: &HashMap<ObjRef, ObjRef>, h: &mut impl Hasher) {
         Object::Stream(s) => {
             8u8.hash(h);
             hash_obj(&Object::Dict(s.dict.clone()), map, h);
-            s.raw.as_slice().hash(h);
+            s.raw[..].hash(h);
         }
         Object::Ref(r) => {
             let c = canon(map, *r);
@@ -125,9 +125,7 @@ fn eq_obj(a: &Object, b: &Object, map: &HashMap<ObjRef, ObjRef>) -> bool {
     match (a, b) {
         (Object::Array(x), Object::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| eq_obj(p, q, map)),
         (Object::Dict(x), Object::Dict(y)) => x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| eq_obj(v, w, map))),
-        (Object::Stream(x), Object::Stream(y)) => {
-            (std::sync::Arc::ptr_eq(&x.raw, &y.raw) || x.raw == y.raw) && eq_obj(&Object::Dict(x.dict.clone()), &Object::Dict(y.dict.clone()), map)
-        }
+        (Object::Stream(x), Object::Stream(y)) => x.raw == y.raw && eq_obj(&Object::Dict(x.dict.clone()), &Object::Dict(y.dict.clone()), map),
         (Object::Ref(x), Object::Ref(y)) => canon(map, *x) == canon(map, *y),
         (Object::Real(x), Object::Real(y)) => x.to_bits() == y.to_bits(),
         (Object::String(x), Object::String(y)) => x.bytes == y.bytes,
@@ -241,10 +239,9 @@ pub fn dedupe_resources(doc: &mut Document, candidates: &[ObjRef], index_existin
 mod tests {
     use super::*;
     use pdfcraft_cos::{Dict, Stream};
-    use std::sync::Arc;
 
     fn stream(data: &[u8]) -> Object {
-        Object::Stream(Stream { dict: Dict::new(), raw: Arc::new(data.to_vec()) })
+        Object::Stream(Stream { dict: Dict::new(), raw: data.to_vec().into() })
     }
 
     fn font(doc: &mut Document, file: ObjRef, name: &str) -> ObjRef {
