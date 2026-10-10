@@ -691,7 +691,7 @@
 	Centre	Centra
 	Align right	Allinea a destra
 	Justify	Giustifica
-	Standard fonts; text outside Windows-1252 isn't supported yet.	Caratteri standard; il testo al di fuori di Windows-1252 non è ancora supportato.
+	Thai and Arabic use regular fallback fonts when available.	Il thailandese e l’arabo usano caratteri sostitutivi in stile normale, quando disponibili.
 	Edit image	Modifica immagine
 	Rotate counterclockwise	Ruota in senso antiorario
 	Rotate clockwise	Ruota in senso orario
@@ -2113,7 +2113,7 @@
 	The document was closed before it could be saved.	Il documento è stato chiuso prima che potesse essere salvato.
 	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	Le pagine sono state estratte ma non eliminate, perché il documento è cambiato mentre sceglievi una cartella.
 	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	Le impostazioni proprie del driver della stampante per questa stampa: vassoio, tipo di carta, finitura e altro.
-	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	I font standard non possono disegnare «{c}» ({code}). Per ora si possono aggiungere come testo solo caratteri dell'Europa occidentale.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	I caratteri del testo PDF non possono visualizzare «{c}» ({code}). Scegliere un testo supportato.
 	This printer offers no settings of its own.	Questa stampante non offre impostazioni proprie.
 	Today: {date}	Oggi: {date}
 	Undo {action}	Annulla {action}

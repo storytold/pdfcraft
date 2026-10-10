@@ -668,7 +668,7 @@
 	Centre	Centrer
 	Align right	Aligner à droite
 	Justify	Justifier
-	Standard fonts; text outside Windows-1252 isn't supported yet.	Polices standard ; le texte hors Windows-1252 n'est pas encore pris en charge.
+	Thai and Arabic use regular fallback fonts when available.	Le thaï et l’arabe utilisent des polices de remplacement de style normal lorsqu’elles sont disponibles.
 	Edit image	Modifier l'image
 	Rotate counterclockwise	Pivoter vers la gauche
 	Rotate clockwise	Pivoter vers la droite
@@ -2054,7 +2054,7 @@
 	Pinned {folder} to Home	{folder} épinglé à l'Accueil
 	No recent files	Aucun fichier récent
 	Go to page…	Aller à la page…
-	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Les polices standard ne peuvent pas afficher « {c} » ({code}). Pour l'instant, seuls les caractères d'Europe occidentale peuvent être ajoutés comme texte.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	Les polices de texte PDF ne peuvent pas afficher « {c} » ({code}). Choisissez un texte pris en charge.
 	Larger pages	Pages plus grandes
 	Smaller pages	Pages plus petites
 	Reset page size	Rétablir la taille des pages

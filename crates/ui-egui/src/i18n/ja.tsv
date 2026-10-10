@@ -695,7 +695,7 @@
 	Centre	中央揃え
 	Align right	右揃え
 	Justify	両端揃え
-	Standard fonts; text outside Windows-1252 isn't supported yet.	標準フォントを使用します。Windows-1252 に含まれない文字にはまだ対応していません。
+	Thai and Arabic use regular fallback fonts when available.	タイ語とアラビア語には、利用可能な場合、標準スタイルの代替フォントを使用します。
 	Edit image	画像を編集
 	Rotate counterclockwise	反時計回りに回転
 	Rotate clockwise	時計回りに回転
@@ -1988,7 +1988,7 @@
 	Couldn't import the signature image: {e}	署名画像を読み込めませんでした: {e}
 	Go to page…	ページへ移動…
 	Reopen the files that were open when PdfCraft last closed	前回 PdfCraft を閉じたときに開いていたファイルを再度開く
-	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	標準フォントでは「{c}」（{code}）を表示できません。現在、テキストとして追加できるのは西ヨーロッパの文字のみです。
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	PDF テキスト用フォントでは「{c}」（{code}）を表示できません。対応している文字を使用してください。
 	Open arrow	開いた矢印
 	Closed arrow	閉じた矢印
 	Butt	平ら

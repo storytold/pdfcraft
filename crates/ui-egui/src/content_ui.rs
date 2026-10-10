@@ -37,7 +37,7 @@ pub(crate) type UndrawableMemo = std::cell::RefCell<Option<(AddedText, Option<ch
 /// The warning shown for text with `c` in it.
 pub(crate) fn undrawable_message(c: char) -> String {
     crate::i18n::fmt(
-        tl!("The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now."),
+        tl!("The PDF text fonts can't draw “{c}” ({code}). Choose supported text."),
         &[("c", &c.to_string()), ("code", &format!("U+{:04X}", u32::from(c)))],
     )
 }
@@ -451,7 +451,7 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
     if let Some(picked) = crate::comments::swatch_grid(ui, Some(c)) {
         s.color = picked;
     }
-    ui.label(egui::RichText::new(tl!("Standard fonts; text outside Windows-1252 isn't supported yet.")).small().color(t.text_faint));
+    ui.label(egui::RichText::new(tl!("Thai and Arabic use regular fallback fonts when available.")).small().color(t.text_faint));
     (s != *style).then_some(s)
 }
 

@@ -66,6 +66,15 @@ pub fn ui_telugu_fonts() -> Vec<&'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.covers("Telu")).collect()
 }
 
+/// Thai faces shared by the interface and PDF text writer.
+pub fn ui_thai_fonts() -> Vec<&'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.covers("Thai")).collect()
+}
+
+pub fn document_thai_font() -> Option<&'static CraftFont> {
+    ui_thai_fonts().into_iter().next()
+}
+
 /// Interface CJK faces in fallback order for the UI language: Simplified Chinese first when
 /// `prefer_hans`, otherwise Japanese first (the historical default).
 ///

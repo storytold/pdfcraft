@@ -40,6 +40,10 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
 - `document_japanese_fonts_for_style`: every `Jpan` face in that order of preference, so the
   editor can use the first one that has all of the replacement's glyphs (the faces differ in
   coverage, e.g. of Cyrillic).
+- `ui_thai_fonts` / `document_thai_font` / `shape_thai`: the `Thai` faces for the interface
+  and shaped Thai Add Text content. Harfrust positions stacked vowel/tone marks and decomposes
+  Sara Am; cluster ToUnicode entries preserve the original text. The shared Type 3 writer
+  embeds outlines, so reopening does not depend on installed fonts.
 - `SHIPPORI_MINCHO`: Shippori Mincho's bytes, or `None`.
 
 Generated Japanese Type 3 fonts record the fallback face's family and style in an indirect
@@ -50,7 +54,7 @@ The descriptor does not change glyph programs or replace the Type 3 `FontBBox` m
 only Gothic Regular, so it cannot preserve bold. No new font assets or changes to that input are
 needed.
 
-wasm32 builds embed only BIZ UDPGothic Regular and any `Arab` or `Telu` face, to keep the web build small: the web build
+wasm32 builds embed only BIZ UDPGothic Regular and any `Arab`, `Telu` or `Thai` face, to keep the web build small: the web build
 currently has no Chinese face, so Chinese there still shows the replacement glyph.
 Font files are never
 committed here (`AGENTS.md` §1.4; team members: [craftrules `standards/fonts.md`](https://github.com/storytold/craftrules/blob/main/standards/fonts.md), internal).

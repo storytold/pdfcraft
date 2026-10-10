@@ -668,7 +668,7 @@
 	Centre	Zentriert
 	Align right	Rechtsbündig
 	Justify	Blocksatz
-	Standard fonts; text outside Windows-1252 isn't supported yet.	Standardschriften; Text außerhalb von Windows-1252 wird noch nicht unterstützt.
+	Thai and Arabic use regular fallback fonts when available.	Thai und Arabisch verwenden, falls verfügbar, Ersatzschriften im normalen Schriftschnitt.
 	Edit image	Bild bearbeiten
 	Rotate counterclockwise	Gegen den Uhrzeigersinn drehen
 	Rotate clockwise	Im Uhrzeigersinn drehen
@@ -2101,7 +2101,7 @@ action wizard	Start	Starten
 	Clear Recent Files	Liste „Zuletzt geöffnet“ leeren
 	Remove from Recent	Aus „Zuletzt geöffnet“ entfernen
 	Remove {name} from Recent	{name} aus „Zuletzt geöffnet“ entfernen
-	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Die Standardschriften können „{c}“ ({code}) nicht darstellen. Derzeit lassen sich nur westeuropäische Zeichen als Text hinzufügen.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	Die PDF-Textschriften können „{c}“ ({code}) nicht darstellen. Wählen Sie unterstützten Text.
 	Larger pages	Größere Seiten
 	Smaller pages	Kleinere Seiten
 	Reset page size	Seitengröße zurücksetzen

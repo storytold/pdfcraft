@@ -689,7 +689,7 @@
 	Centre	Centrar
 	Align right	Alinear a la derecha
 	Justify	Justificar
-	Standard fonts; text outside Windows-1252 isn't supported yet.	Fuentes estándar; el texto fuera de Windows-1252 aún no es compatible.
+	Thai and Arabic use regular fallback fonts when available.	El tailandés y el árabe usan fuentes alternativas de estilo normal cuando están disponibles.
 	Edit image	Editar imagen
 	Rotate counterclockwise	Girar a la izquierda
 	Rotate clockwise	Girar a la derecha
@@ -2011,7 +2011,7 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Elija una imagen PNG o JPEG (hasta 4 MiB). Se conserva la transparencia.
 	Couldn't import the signature image: {e}	No se pudo importar la imagen de la firma: {e}
 	Go to page…	Ir a la página…
-	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Las fuentes estándar no pueden mostrar «{c}» ({code}). Por ahora solo se pueden añadir como texto caracteres de Europa occidental.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	Las fuentes de texto PDF no pueden mostrar «{c}» ({code}). Elija texto compatible.
 	Open arrow	Flecha abierta
 	Closed arrow	Flecha cerrada
 	Butt	Extremo recto

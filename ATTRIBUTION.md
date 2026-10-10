@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with SHA-256 hashes, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (260)
+## In this repository (261)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -268,6 +268,7 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `packaging/macos/dmg/background.svg` | PdfCraft macOS DMG window background | @XusBadia | MIT OR Apache-2.0 | Original work for this repository, derived from the PdfCraft app icon (assets/app-icon/pdfcraft.svg, referenced via an SVG image element, not copied) | Finder window of the macOS DMG; rendered to background.tiff by packaging/macos/dmg/generate.py |
 | `packaging/macos/dmg/background.tiff` | PdfCraft macOS DMG window background (rendered) | @XusBadia | MIT OR Apache-2.0 | Rendered from packaging/macos/dmg/background.svg by packaging/macos/dmg/generate.py | 1x + 2x HiDPI 16-colour palette TIFF copied into the macOS DMG by packaging/macos/package.sh; includes the app icon and the free LittleCMS built-in sRGB profile |
 | `crates/sign/tests/data/x509-rsa-sha1.pdf` | One-page PDF with a legacy adbe.x509.rsa_sha1 signature by the RSA test key | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: hand-written PDF objects; signature made with `openssl dgst -sha1 -sign` over its byte ranges (see crates/sign/tests/data/README.md) | Signature validation tests (crates/sign/tests/pdf.rs): the legacy adbe.x509.rsa_sha1 format |
+| `docs/images/pdfcraft-thai-before-after.png` | PdfCraft Thai Add Text: before and after | PuemMTH (PdfCraft UI control captures and comparison layout) | MIT OR Apache-2.0 | this repository; base 1c33e6f851fc4a75805c9d3504c578a7623bbac5 and fix f7d4ced7b60939a1fe4637a320c11b907530c60f | PR comparison of rejected Thai input and saved Thai text: nine lines with stacked marks, both Sara Am encodings, Thai numerals and mixed English; 198 Unicode code points verified by extraction. Synthetic text only; PdfCraft UI, Lucide icons, Inter and OFL Noto Sans Thai from craft-fonts. Both builds use the same font input, 200% zoom and PDFCRAFT_SYSTEM_FONTS=0. |
 
 ## Compiled in through dependencies (6)
 
