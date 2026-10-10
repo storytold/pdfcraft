@@ -1,6 +1,6 @@
 //! Raster pixels in a buffer a GUI can take over as texture data.
 
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 /// A raster's premultiplied RGBA8 bytes, row-major, kept in 4-byte words: one word per pixel,
 /// with the bytes in R, G, B, A order in memory. The words make the buffer aligned to whole
@@ -15,8 +15,8 @@ impl Pixels {
         Some(Self(vec![0; width.checked_mul(height)?]))
     }
 
-    /// The bytes, for the rasterizer to write into.
-    pub(crate) fn bytes_mut(&mut self) -> &mut [u8] {
+    /// The bytes, for the rasterizer or post-processing to write into.
+    pub fn bytes_mut(&mut self) -> &mut [u8] {
         bytemuck::cast_slice_mut(&mut self.0)
     }
 
@@ -46,8 +46,20 @@ impl Deref for Pixels {
     }
 }
 
+impl DerefMut for Pixels {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        bytemuck::cast_slice_mut(&mut self.0)
+    }
+}
+
 impl AsRef<[u8]> for Pixels {
     fn as_ref(&self) -> &[u8] {
+        self
+    }
+}
+
+impl AsMut<[u8]> for Pixels {
+    fn as_mut(&mut self) -> &mut [u8] {
         self
     }
 }

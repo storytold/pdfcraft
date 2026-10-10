@@ -2751,7 +2751,7 @@ impl Session {
                 return Err(EditError::Print(format!("sheet {}: {err}", page_idx + 1)));
             }
             if grayscale {
-                print::spool::apply_grayscale_rgba(&mut rendered.rgba);
+                print::spool::apply_grayscale_rgba(rendered.rgba.bytes_mut());
             }
             let png = export::encode_image(rendered.width, rendered.height, &rendered.rgba, export::ImageFormat::Png)
                 .map_err(EditError::Write)?;
