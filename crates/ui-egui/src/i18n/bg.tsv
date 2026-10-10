@@ -1226,7 +1226,9 @@
 	Searching… {s}/{p}	Търсене… {s}/{p}
 	{c} of {n}{more}	{c} от {n}{more}
 	Previous (⇧⌘G)	Предишно (⇧⌘G)
+	Previous (Ctrl+Shift+G)	Предишно (Ctrl+Shift+G)
 	Next (⌘G)	Следващо (⌘G)
+	Next (Ctrl+G)	Следващо (Ctrl+G)
 	Find options	Опции за търсене
 	Whole words only	Само цели думи
 	Case-sensitive	Чувствително към регистъра

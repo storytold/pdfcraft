@@ -1257,7 +1257,9 @@ signature pad	Type	టైప్ చేయి
 	Searching… {s}/{p}	వెతుకుతోంది… {s}/{p}
 	{c} of {n}{more}	{n}{more}లో {c}
 	Previous (⇧⌘G)	మునుపటి (⇧⌘G)
+	Previous (Ctrl+Shift+G)	మునుపటి (Ctrl+Shift+G)
 	Next (⌘G)	తదుపరి (⌘G)
+	Next (Ctrl+G)	తదుపరి (Ctrl+G)
 	Find options	కనుగొనే ఎంపికలు
 	Whole words only	పూర్తి పదాలు మాత్రమే
 	Case-sensitive	పెద్ద/చిన్న అక్షరాల తేడాతో

@@ -1182,7 +1182,9 @@
 	Searching… {s}/{p}	正在搜尋… {s}/{p}
 	{c} of {n}{more}	{c} / {n}{more}
 	Previous (⇧⌘G)	上一個 (⇧⌘G)
+	Previous (Ctrl+Shift+G)	上一個 (Ctrl+Shift+G)
 	Next (⌘G)	下一個 (⌘G)
+	Next (Ctrl+G)	下一個 (Ctrl+G)
 	Find options	尋找選項
 	Whole words only	僅全字匹配
 	Case-sensitive	區分大小寫

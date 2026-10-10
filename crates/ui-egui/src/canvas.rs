@@ -2821,10 +2821,13 @@ fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: 
                             )
                         };
                         ui.label(egui::RichText::new(status).font(theme::regular(12.0)).color(t.text_muted));
-                        if icons::button(ui, "chevron-up", 26.0, false, tl!("Previous (⇧⌘G)")).clicked() {
+                        let mac = cfg!(target_os = "macos") || cfg!(target_arch = "wasm32");
+                        let prev_tip = if mac { tl!("Previous (⇧⌘G)") } else { tl!("Previous (Ctrl+Shift+G)") };
+                        let next_tip = if mac { tl!("Next (⌘G)") } else { tl!("Next (Ctrl+G)") };
+                        if icons::button(ui, "chevron-up", 26.0, false, prev_tip).clicked() {
                             step = Some(false);
                         }
-                        if icons::button(ui, "chevron-down", 26.0, false, tl!("Next (⌘G)")).clicked() {
+                        if icons::button(ui, "chevron-down", 26.0, false, next_tip).clicked() {
                             step = Some(true);
                         }
                         let opts = icons::button(ui, "settings-2", 26.0, find.case_sensitive || find.whole_words, tl!("Find options"));

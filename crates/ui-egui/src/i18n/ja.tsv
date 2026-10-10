@@ -1283,7 +1283,9 @@
 	Searching… {s}/{p}	検索中… {s}/{p}
 	{c} of {n}{more}	{c} / {n}{more}
 	Previous (⇧⌘G)	前へ（⇧⌘G）
+	Previous (Ctrl+Shift+G)	前へ（Ctrl+Shift+G）
 	Next (⌘G)	次へ（⌘G）
+	Next (Ctrl+G)	次へ（Ctrl+G）
 	Find options	検索オプション
 	Whole words only	単語単位で検索
 	Case-sensitive	大文字と小文字を区別

@@ -295,6 +295,8 @@ fn the_shortcuts_dialog_lists_the_real_bindings() {
     let mac = cfg!(target_os = "macos");
     h.get_by_label(if mac { "⇧⌘S" } else { "Ctrl+Shift+S" });
     h.get_by_label("Save as");
+    h.get_by_label(if mac { "⌘G / ⇧⌘G" } else { "Ctrl+G / Ctrl+Shift+G" });
+    h.get_by_label("Next / previous match");
 }
 
 #[test]

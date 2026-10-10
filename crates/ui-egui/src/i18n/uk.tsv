@@ -1281,7 +1281,9 @@
 	Searching… {s}/{p}	Пошук… {s}/{p}
 	{c} of {n}{more}	{c} із {n}{more}
 	Previous (⇧⌘G)	Попередній (⇧⌘G)
+	Previous (Ctrl+Shift+G)	Попередній (Ctrl+Shift+G)
 	Next (⌘G)	Наступний (⌘G)
+	Next (Ctrl+G)	Наступний (Ctrl+G)
 	Find options	Параметри пошуку
 	Whole words only	Лише цілі слова
 	Case-sensitive	З урахуванням регістру

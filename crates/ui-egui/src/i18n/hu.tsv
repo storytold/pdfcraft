@@ -1252,7 +1252,9 @@
 	Searching… {s}/{p}	Keresés… {s}/{p}
 	{c} of {n}{more}	{c} / {n}{more}
 	Previous (⇧⌘G)	Előző (⇧⌘G)
+	Previous (Ctrl+Shift+G)	Előző (Ctrl+Shift+G)
 	Next (⌘G)	Következő (⌘G)
+	Next (Ctrl+G)	Következő (Ctrl+G)
 	Find options	Keresés beállításai
 	Whole words only	Csak egész szavak
 	Case-sensitive	Kis- és nagybetű

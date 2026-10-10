@@ -1262,7 +1262,9 @@
 	Searching… {s}/{p}	Recherche… {s}/{p}
 	{c} of {n}{more}	{c} sur {n}{more}
 	Previous (⇧⌘G)	Précédent (⇧⌘G)
+	Previous (Ctrl+Shift+G)	Précédent (Ctrl+Shift+G)
 	Next (⌘G)	Suivant (⌘G)
+	Next (Ctrl+G)	Suivant (Ctrl+G)
 	Find options	Options de recherche
 	Whole words only	Mots entiers seulement
 	Case-sensitive	Respecter la casse

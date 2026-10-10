@@ -1278,7 +1278,9 @@
 	Searching… {s}/{p}	Ricerca in corso… {s}/{p}
 	{c} of {n}{more}	{c} di {n}{more}
 	Previous (⇧⌘G)	Precedente (⇧⌘G)
+	Previous (Ctrl+Shift+G)	Precedente (Ctrl+Shift+G)
 	Next (⌘G)	Successivo (⌘G)
+	Next (Ctrl+G)	Successivo (Ctrl+G)
 	Find options	Opzioni di ricerca
 	Whole words only	Solo parole intere
 	Case-sensitive	Maiuscole/minuscole

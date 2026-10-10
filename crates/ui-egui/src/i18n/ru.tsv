@@ -1284,7 +1284,9 @@
 	Searching… {s}/{p}	Поиск… {s}/{p}
 	{c} of {n}{more}	{c} из {n}{more}
 	Previous (⇧⌘G)	Предыдущее (⇧⌘G)
+	Previous (Ctrl+Shift+G)	Предыдущее (Ctrl+Shift+G)
 	Next (⌘G)	Следующее (⌘G)
+	Next (Ctrl+G)	Следующее (Ctrl+G)
 	Find options	Параметры поиска
 	Whole words only	Только целые слова
 	Case-sensitive	С учётом регистра

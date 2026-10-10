@@ -1263,7 +1263,9 @@
 	Searching… {s}/{p}	Suche läuft… {s}/{p}
 	{c} of {n}{more}	{c} von {n}{more}
 	Previous (⇧⌘G)	Vorheriger (⇧⌘G)
+	Previous (Ctrl+Shift+G)	Vorheriger (Ctrl+Shift+G)
 	Next (⌘G)	Nächster (⌘G)
+	Next (Ctrl+G)	Nächster (Ctrl+G)
 	Find options	Suchoptionen
 	Whole words only	Nur ganze Wörter
 	Case-sensitive	Groß-/Kleinschreibung beachten

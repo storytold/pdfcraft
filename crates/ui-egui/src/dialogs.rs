@@ -1031,8 +1031,9 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     .iter()
                     .filter_map(|c| c.shortcut.map(|k| (k.label(mac), tl!(c.label).trim_end_matches('…').to_string())))
                     .collect();
+                let match_shortcut = if mac { "⌘G / ⇧⌘G" } else { "Ctrl+G / Ctrl+Shift+G" };
                 for (k, v) in [
-                    ("⌘G / ⇧⌘G", tl!("Next / previous match")),
+                    (match_shortcut, tl!("Next / previous match")),
                     ("⌘C", tl!("Copy selected text")),
                     ("Double-click", tl!("Select a word")),
                     ("Esc", tl!("Clear selection / close find")),

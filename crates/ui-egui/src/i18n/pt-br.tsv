@@ -1167,7 +1167,9 @@
 	Searching… {s}/{p}	Pesquisando… {s}/{p}
 	{c} of {n}{more}	{c} de {n}{more}
 	Previous (⇧⌘G)	Anterior (⇧⌘G)
+	Previous (Ctrl+Shift+G)	Anterior (Ctrl+Shift+G)
 	Next (⌘G)	Próximo (⌘G)
+	Next (Ctrl+G)	Próximo (Ctrl+G)
 	Find options	Opções de localização
 	Whole words only	Apenas palavras inteiras
 	Case-sensitive	Diferenciar maiúsculas de minúsculas
