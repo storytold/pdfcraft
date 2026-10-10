@@ -2150,3 +2150,5 @@ signature pad	Type	入力
 	Switch to List view to change the pages it takes.	使用するページを変更するには、リスト表示に切り替えてください。
 	Expand all	すべて展開
 	Collapse all	すべて折りたたむ
+	Remove page	ページを削除
+	Remove {n} pages	{n} ページを削除

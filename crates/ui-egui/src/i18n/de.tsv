@@ -2150,3 +2150,5 @@ action wizard	Start	Starten
 	Switch to List view to change the pages it takes.	Wechsle zur Listenansicht, um die übernommenen Seiten zu ändern.
 	Expand all	Alle ausklappen
 	Collapse all	Alle einklappen
+	Remove page	Seite entfernen
+	Remove {n} pages	{n} Seiten entfernen

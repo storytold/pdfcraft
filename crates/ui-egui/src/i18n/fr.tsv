@@ -2150,3 +2150,5 @@ signature pad	Type	Saisir
 	Switch to List view to change the pages it takes.	Passez à la vue en liste pour modifier les pages prises.
 	Expand all	Tout développer
 	Collapse all	Tout réduire
+	Remove page	Retirer la page
+	Remove {n} pages	Retirer {n} pages

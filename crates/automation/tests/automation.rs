@@ -181,6 +181,34 @@ fn combine_extract_and_split() {
     assert!(matches!(a.call("doc_combine", &json!({ "paths": ["a.pdf", "b.pdf"], "pages": ["9", null] })), Err(ToolError::Failed(_))));
     assert!(matches!(a.call("doc_combine", &json!({ "paths": ["a.pdf", "b.pdf"], "pages": ["1"] })), Err(ToolError::InvalidArgs(_))));
 
+    // A file split around another, as the Combine files grid makes it: copied once, one bookmark.
+    let split = ok(
+        &mut a,
+        "doc_combine",
+        json!({ "paths": ["a.pdf", "b.pdf", "a.pdf"], "pages": ["1", null, "3, 2"], "groups": [4, null, 4], "open": true }),
+    );
+    let split_doc = split["document"]["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, split_doc), ["Page 1", "Page 1", "Page 2", "Page 3", "Page 2"]);
+    let marks = ok(&mut a, "bookmark_list", json!({ "doc": split_doc }))["bookmarks"].clone();
+    let marks: Vec<_> = marks.as_array().unwrap().iter().map(|b| (b["title"].as_str().unwrap().to_string(), b["page"].as_u64().unwrap())).collect();
+    assert_eq!(marks, [("a".to_string(), 1), ("b".to_string(), 2)]);
+    // Without groups the same paths are separate files, each with its own bookmark.
+    let apart = ok(&mut a, "doc_combine", json!({ "paths": ["a.pdf", "b.pdf", "a.pdf"], "pages": ["1", null, "3, 2"], "open": true }));
+    let apart = ok(&mut a, "bookmark_list", json!({ "doc": apart["document"]["doc"].as_u64().unwrap() }))["bookmarks"].clone();
+    assert_eq!(apart.as_array().unwrap().len(), 3);
+    // A group names one file; groups must be in step with paths and whole numbers.
+    let not_same = a.call("doc_combine", &json!({ "paths": ["a.pdf", "b.pdf"], "groups": [1, 1] }));
+    assert!(matches!(not_same, Err(ToolError::InvalidArgs(e)) if e.contains("group 1")));
+    for groups in [json!([1]), json!([1, -1]), json!([1, 1.5]), json!(["1", null]), json!(7)] {
+        let bad = a.call("doc_combine", &json!({ "paths": ["a.pdf", "b.pdf"], "groups": groups }));
+        assert!(matches!(bad, Err(ToolError::InvalidArgs(_))), "{groups}");
+    }
+    // The largest group number still leaves a key for a file of its own, or says why not.
+    let max = ok(&mut a, "doc_combine", json!({ "paths": ["a.pdf", "b.pdf"], "groups": [u64::MAX - 1, null], "open": true }));
+    assert_eq!(max["document"]["pages"], 5);
+    let full = a.call("doc_combine", &json!({ "paths": ["a.pdf", "b.pdf"], "groups": [u64::MAX, null] }));
+    assert!(matches!(full, Err(ToolError::InvalidArgs(_))));
+
     let ex = ok(&mut a, "page_extract", json!({ "doc": doc, "pages": [2, 4] }));
     let ex_doc = ex["document"]["doc"].as_u64().unwrap();
     assert_eq!(page_text(&mut a, ex_doc), ["Page 2", "Page 1"]);

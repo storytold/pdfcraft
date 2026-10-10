@@ -2173,3 +2173,5 @@ certificate	Subject	Власник сертифіката
 	Switch to List view to change the pages it takes.	Перейдіть до вигляду списком, щоб змінити, які сторінки взяти.
 	Expand all	Розгорнути всі
 	Collapse all	Згорнути всі
+	Remove page	Видалити сторінку
+	Remove {n} pages	Видалити сторінки: {n}
