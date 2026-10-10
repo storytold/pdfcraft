@@ -1524,6 +1524,78 @@ fn restricted_documents_show_a_notice_and_block_page_changes() {
     assert!(h.query_all_by_label("Not allowed").count() >= 4);
 }
 
+/// Table 22, bit 5 (#568): a document whose security withholds copying keeps its text and images
+/// in. ⌘C, snapshots and exports are refused with a notice; the owner password lifts that.
+#[test]
+fn copying_out_of_a_document_honours_its_security() {
+    fn open(password: &'static str) -> Harness<'static, PdfCraftApp> {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.system_clipboard = false;
+            app.open_bytes("no-copy.pdf", None, protected("pw", "owner", -1 ^ 0b1_0000)).unwrap();
+            app.submit_password(Some(password.into()));
+            app
+        });
+        // Select the page's text once its text layer is loaded.
+        for _ in 0..40 {
+            h.run_steps(2);
+            if h.state_mut().views[0].select_all() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(h.state().views[0].selected_text().as_deref(), Some("Page 1"));
+        h
+    }
+    fn copy(h: &mut Harness<'static, PdfCraftApp>) -> bool {
+        h.state_mut().toast = None;
+        h.event(egui::Event::Copy);
+        let mut copied = false;
+        for _ in 0..4 {
+            h.step();
+            copied |= h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "Page 1"));
+        }
+        copied
+    }
+    fn snapshot(h: &mut Harness<'static, PdfCraftApp>) {
+        // Around "Page 1", at (20, 150) on the 200 × 300 pt page.
+        let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+        let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
+        let (a, b) = (at(15.0, 175.0), at(120.0, 140.0));
+        h.hover_at(a);
+        h.run_steps(1);
+        h.drag_at(a);
+        h.run_steps(1);
+        h.hover_at(b);
+        h.run_steps(1);
+        h.drop_at(b);
+        h.run_steps(3);
+    }
+    let refused = Some("The document's security settings don't allow copying text and images");
+
+    let mut h = open("pw");
+    assert!(!copy(&mut h), "⌘C copies nothing");
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), refused);
+    for command in ["edit.snapshot", "export.image", "export.text", "export.docx", "export.html", "export.rtf", "export.all_images"] {
+        h.state_mut().toast = None;
+        assert!(!h.state_mut().execute(command), "{command} is refused");
+        assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), refused, "{command} says why");
+    }
+    assert_eq!(h.state().dialog, None, "no export dialog");
+    // The snapshot tool, chosen on another tab, takes nothing here either.
+    h.state_mut().set_option("quick", "snapshot").unwrap();
+    snapshot(&mut h);
+    assert!(h.state().last_snapshot.is_none());
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), refused);
+
+    let mut h = open("owner");
+    assert!(copy(&mut h), "the owner may copy");
+    assert!(h.state_mut().execute("edit.snapshot"));
+    snapshot(&mut h);
+    assert!(h.state().last_snapshot.is_some());
+}
+
 #[test]
 fn replace_pages_dialog_swaps_page_content() {
     let mut app = PdfCraftApp::new();

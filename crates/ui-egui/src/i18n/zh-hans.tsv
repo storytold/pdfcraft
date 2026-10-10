@@ -1661,6 +1661,7 @@
 	This document isn't password-protected	本文档未受密码保护
 	Only the document's owner can change its security (open it with the permissions password)	只有文档所有者才能更改安全性（请使用权限密码打开）
 	The document's security settings don't allow this change	文档安全设置不允许此更改
+	The document's security settings don't allow copying text and images	文档安全设置不允许复制文本和图像
 	Open a document first	请先打开文档
 	Security will be removed when you save	保存时将删除安全性设置
 	Click text or an image to edit it	单击文本或图像进行编辑

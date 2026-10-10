@@ -399,7 +399,7 @@ impl Automation {
             }
             "text_paragraphs" => {
                 let page = self.page(&a)?;
-                let doc = self.doc(&a)?;
+                let doc = self.doc_to_copy(&a)?;
                 let info = &doc.info.pages[page];
                 let r = |x: f32| (x as f64 * 100.0).round() / 100.0;
                 let blocks: Vec<Value> = doc
@@ -623,6 +623,13 @@ impl Automation {
         let id = a.int("doc")?;
         let id = u64::try_from(id).map_err(|_| ToolError::InvalidArgs("doc must be positive".into()))?;
         self.session.get(DocId(id)).ok_or_else(|| ToolError::Failed(format!("no open document with id {id} (see doc_list)")))
+    }
+
+    /// The document, if its security allows copying text and images out of it (Table 22, bit 5).
+    fn doc_to_copy(&self, a: &Args) -> Result<&Document> {
+        let doc = self.doc(a)?;
+        doc.check_copying().map_err(failed)?;
+        Ok(doc)
     }
 
     fn doc_open(&mut self, a: &Args) -> Result<Value> {
@@ -949,7 +956,7 @@ impl Automation {
     }
 
     fn export(&mut self, tool: &str, a: &Args) -> Result<Value> {
-        let doc = self.doc(a)?;
+        let doc = self.doc_to_copy(a)?;
         let pages = match a.opt_ints("pages")? {
             Some(_) => self.pages(a, "pages")?,
             None => (0..doc.info.pages.len()).collect(),
@@ -1433,7 +1440,7 @@ impl Automation {
     }
 
     fn text_extract(&mut self, a: &Args) -> Result<Value> {
-        let doc = self.doc(a)?;
+        let doc = self.doc_to_copy(a)?;
         let id = doc.id;
         let pages = match a.opt_ints("pages")? {
             Some(_) => self.pages(a, "pages")?,

@@ -1689,6 +1689,7 @@
 	This document isn't password-protected	Цей документ не захищено паролем
 	Only the document's owner can change its security (open it with the permissions password)	Лише власник документа може змінювати захист (відкрийте з паролем дозволів)
 	The document's security settings don't allow this change	Налаштування захисту документа не дозволяють цю зміну
+	The document's security settings don't allow copying text and images	Налаштування захисту документа не дозволяють копіювати текст і зображення
 	Open a document first	Спочатку відкрийте документ
 	Security will be removed when you save	Захист буде знято під час збереження
 	Click text or an image to edit it	Клацніть текст або зображення для редагування

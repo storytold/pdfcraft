@@ -274,6 +274,7 @@ impl Document {
 
     /// Save image as: image `index` on `page` as a file (extension, bytes).
     pub fn page_image_file(&self, page: usize, index: usize) -> Result<(&'static str, Vec<u8>), String> {
+        self.check_copying().map_err(|e| e.to_string())?;
         let editor = self.editor.as_ref().ok_or("the document can't be read")?;
         let img = self.page_images(page).into_iter().nth(index).ok_or_else(|| format!("page {} has no image {}", page + 1, index + 1))?;
         if img.is_form {
@@ -387,6 +388,18 @@ impl Document {
     /// Printing is allowed (Table 22, bit 3).
     pub fn allows_printing(&self) -> bool {
         self.permissions().is_none_or(|p| p.print())
+    }
+
+    /// Copying or otherwise extracting text and images is allowed (Table 22, bit 5): copying
+    /// selected text, snapshots, Save Image As, exporting. Assistive technology may read the
+    /// content regardless (§7.6.4.2), so reading aloud and accessibility tools don't ask.
+    pub fn allows_copying(&self) -> bool {
+        self.permissions().is_none_or(|p| p.copy())
+    }
+
+    /// [`Self::allows_copying`], as the error to report when it isn't.
+    pub fn check_copying(&self) -> Result<(), EditError> {
+        if self.allows_copying() { Ok(()) } else { Err(EditError::NotPermitted("copying text and images")) }
     }
 
     /// Page changes (insert, delete, rotate, move, extract) are allowed.

@@ -1609,6 +1609,7 @@
 	This document isn't password-protected	本文件未受密碼保護
 	Only the document's owner can change its security (open it with the permissions password)	只有文件所有者才能更改安全性（請使用許可權密碼開啟）
 	The document's security settings don't allow this change	文件安全設定不允許此更改
+	The document's security settings don't allow copying text and images	文件安全設定不允許複製文字和圖片
 	Open a document first	請先開啟文件
 	Security will be removed when you save	儲存時將刪除安全性設定
 	Click text or an image to edit it	按一下文字或圖片進行編輯

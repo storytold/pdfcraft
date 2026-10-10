@@ -63,6 +63,10 @@ impl PdfCraftApp {
                 if view_rect[2] - view_rect[0] < 2.0 || view_rect[3] - view_rect[1] < 2.0 {
                     return;
                 }
+                // The tool outlives the tab it was chosen on.
+                if self.views.get(index).map(|v| v.id).is_some_and(|id| !self.may_copy(id)) {
+                    return;
+                }
                 match self.snapshot(index, page, view_rect) {
                     Ok((w, h)) => {
                         self.notify_fmt("The selected area has been copied ({w} × {h} pixels)", &[("w", &w.to_string()), ("h", &h.to_string())])
