@@ -349,6 +349,9 @@ pub struct PasswordPrompt {
     pub error: Option<String>,
     /// A late startup file must stay in the background even after it is unlocked.
     activate: bool,
+    /// The bytes are a recovery snapshot: once the document is open it takes the snapshot's
+    /// path and recovery entry. Cancelling the prompt drops the association with it (#813).
+    recovered: Option<RecoveryMeta>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -523,7 +526,6 @@ pub struct PdfCraftApp {
     pub recoverable: Vec<RecoveryMeta>,
     recovery_keys: std::collections::HashMap<DocId, String>,
     last_autosave: f64,
-    pending_recovered: Option<RecoveryMeta>,
     allow_quit: bool,
     /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
     /// `registry_shortcuts`).
@@ -748,7 +750,6 @@ impl PdfCraftApp {
             recoverable: Vec::new(),
             recovery_keys: Default::default(),
             last_autosave: 0.0,
-            pending_recovered: None,
             allow_quit: false,
             deferred_commands: Vec::new(),
             dialog_seen: None,
@@ -866,7 +867,8 @@ impl PdfCraftApp {
             Ok(id) => id,
             Err(e @ (OpenError::NeedsPassword | OpenError::WrongPassword)) => {
                 let error = matches!(e, OpenError::WrongPassword).then(|| "Incorrect password. Try again.".to_string());
-                self.password_prompt = Some(PasswordPrompt { name: name.to_string(), path, bytes, input: String::new(), error, activate });
+                self.password_prompt =
+                    Some(PasswordPrompt { name: name.to_string(), path, bytes, input: String::new(), error, activate, recovered: None });
                 return Ok(());
             }
             Err(e) => return Err(e.to_string()),
@@ -1047,17 +1049,28 @@ impl PdfCraftApp {
     /// Answer the password prompt (`None` cancels).
     pub fn submit_password(&mut self, password: Option<String>) {
         let Some(p) = self.password_prompt.take() else { return };
-        let Some(pw) = password else { return };
+        let Some(pw) = password else {
+            // A cancelled recovery goes back on offer; its snapshot stays in the store and must
+            // not attach itself to whatever document is unlocked next (#813).
+            if let Some(meta) = p.recovered {
+                self.recoverable.push(meta);
+            }
+            return;
+        };
         match self.try_open(&p.name, p.path, p.bytes, Some(&pw), p.activate) {
             Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &p.name), ("e", &e.to_string())]),
-            // A recovered encrypted document is open once its foreground prompt is gone.
-            // Unlocking a background startup file must not finish another file's recovery.
-            Ok(()) if p.activate && self.password_prompt.is_none() => {
-                if let Some(meta) = self.pending_recovered.clone() {
-                    self.finish_recovery(&meta);
+            // A recovered encrypted document is open once its prompt is gone.
+            Ok(()) if self.password_prompt.is_none() => {
+                if let Some(meta) = &p.recovered {
+                    self.finish_recovery(meta);
                 }
             }
-            Ok(()) => {}
+            // Wrong password: the new prompt is for the same bytes, so it keeps the snapshot.
+            Ok(()) => {
+                if let Some(prompt) = self.password_prompt.as_mut() {
+                    prompt.recovered = p.recovered;
+                }
+            }
         }
     }
 
