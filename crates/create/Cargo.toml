@@ -14,9 +14,9 @@ pdfcraft-model = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 png = "0.18"
 tiff = "0.11"
-image = { version = "0.25", default-features = false, features = ["bmp", "gif"] }
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg"] }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-image = { version = "0.25", default-features = false, features = ["bmp", "gif"] }
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg"] }
 hayro-syntax = { workspace = true }

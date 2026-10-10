@@ -2,7 +2,7 @@
 //!
 //! - **XFDF** (ISO 19444-1, Acrobat's "Export all to data file" / "Import comments", and form
 //!   data): comments with their geometry, colours, flags, authors, dates, replies, pop-ups,
-//!   ink, quadrilaterals and line ends; field values, nested by name.
+//!   ink, quadrilaterals, line ends and callouts; field values, nested by name.
 //! - **FDF** (ISO 32000-2 §12.7.8): fields and comments in PDF syntax.
 //! - Form data as **XML**, **CSV** and **tab-delimited text** (Acrobat's Export data formats).
 //!
@@ -243,6 +243,21 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
             {
                 let name = |o: &Object| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned()).unwrap_or_else(|| "None".into());
                 let _ = write!(attrs, " head=\"{}\" tail=\"{}\"", name(&le[0]), name(&le[1]));
+            }
+            // A callout: its leader path, text-box inset, intent and (single-name) line ending.
+            let cl = nums_of(doc, d.get(b"CL"));
+            if cl.len() == 4 || cl.len() == 6 {
+                let _ = write!(attrs, " callout=\"{}\"", cl.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
+                let rd = nums_of(doc, d.get(b"RD"));
+                if rd.len() == 4 {
+                    let _ = write!(attrs, " fringe=\"{}\"", rd.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
+                }
+                if let Some(it) = d.get(b"IT").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned())) {
+                    let _ = write!(attrs, " intent=\"{}\"", esc(&it));
+                }
+                if let Some(le) = d.get(b"LE").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned())) {
+                    let _ = write!(attrs, " head=\"{}\"", esc(&le));
+                }
             }
             if let Some(irt) = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| names.get(&r)) {
                 let _ = write!(attrs, " inreplyto=\"{}\"", esc(irt));
@@ -606,6 +621,20 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
             b"LE".to_vec(),
             Object::Array(vec![Object::name(node.attribute("head").unwrap_or("None")), Object::name(node.attribute("tail").unwrap_or("None"))]),
         );
+    }
+    if let Some(cl) = node.attribute("callout").map(csv).filter(|c| c.len() == 4 || c.len() == 6) {
+        d.set(b"CL".to_vec(), arr(&cl));
+        if let Some(rd) = node.attribute("fringe").map(csv).filter(|r| r.len() == 4) {
+            d.set(b"RD".to_vec(), arr(&rd));
+        }
+        d.set(b"IT".to_vec(), Object::name(node.attribute("intent").unwrap_or("FreeTextCallout")));
+        // A callout's /LE is one name, not the head/tail pair of a line.
+        match node.attribute("head") {
+            Some(h) => d.set(b"LE".to_vec(), Object::name(h)),
+            None => {
+                d.remove(b"LE");
+            }
+        }
     }
     for child in node.children().filter(|c| c.is_element()) {
         match child.tag_name().name() {

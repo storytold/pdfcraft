@@ -12,7 +12,8 @@ let report = import(&mut doc, &bytes)?;                 // XFDF, FDF, XML, CSV o
 - **XFDF** (ISO 19444-1): every comment type PdfCraft knows (text, free text, line, square,
   circle, polygon, polyline, markup, stamp, caret, ink, attachments, sound, redact) with rect,
   name, author, subject, dates, flags, colours, opacity, width, icon, quads, line ends, ink,
-  default appearance, pop-ups and reply threads (`inreplyto`); field values nested by name.
+  default appearance, callouts (`callout`, `fringe`, `intent`, `head`), pop-ups and reply threads
+  (`inreplyto`); field values nested by name.
 - **FDF**: fields (with `/Kids` hierarchies) and comments as direct objects.
 - **Form data**: Acrobat's XML (`xfdf:original` keeps names that aren't XML names), CSV and
   tab-delimited text (a row of names, a row of values).

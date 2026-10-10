@@ -1476,6 +1476,8 @@
 	Right Edge	Rechter Rand
 	Language	Sprache
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	{place} gespeichert: {before} → {after} ({pct} % kleiner){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	Diese Datei ist bereits so klein wie möglich ({size}). Es wurde keine Kopie gespeichert.
+	Saved {place}: {before} → {after} (not smaller){detail}	{place} gespeichert: {before} → {after} (nicht kleiner){detail}
 	Couldn't save the image: {e}	Das Bild konnte nicht gespeichert werden: {e}
 	Adding images arrives on the web with file pickers for images	Bilder hinzufügen kommt im Web zusammen mit der Bildauswahl
 	Replacing images on page {p} arrives on the web with image pickers ({i})	Bilder auf Seite {p} ersetzen kommt im Web zusammen mit der Bildauswahl ({i})
@@ -2141,6 +2143,9 @@ action wizard	Start	Starten
 	The field {name} no longer exists.	Das Feld {name} existiert nicht mehr.
 	A selected field has no widget on any page, so the fields can't be edited together.	Ein ausgewähltes Feld hat auf keiner Seite ein Widget, daher können die Felder nicht gemeinsam bearbeitet werden.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} mit {dpi} dpi, der größten Auflösung, in der sie gezeichnet werden können)
+	Fill colour	Füllfarbe
+	No fill	Keine Füllung
+	Fill colour: none	Füllfarbe: keine
 
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Strg

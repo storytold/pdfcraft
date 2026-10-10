@@ -1496,6 +1496,8 @@
 	Right Edge	الحافة اليمنى
 	Language	اللغة
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	تم الحفظ {place}: {before} → {after} (أصغر بنسبة {pct}%){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	هذا الملف صغير بالفعل قدر الإمكان ({size}). لم تُحفظ أي نسخة.
+	Saved {place}: {before} → {after} (not smaller){detail}	تم الحفظ {place}: {before} → {after} (ليس أصغر){detail}
 	Couldn't save the image: {e}	تعذّر حفظ الصورة: {e}
 	Adding images arrives on the web with file pickers for images	إضافة الصور ستتوفر على الويب مع منتقيات ملفات الصور
 	Replacing images on page {p} arrives on the web with image pickers ({i})	استبدال الصور في الصفحة {p} سيتوفر على الويب مع منتقيات الصور ({i})
@@ -2163,6 +2165,9 @@ certificate	Subject	صاحب الشهادة
 	A selected field has no widget on any page, so the fields can't be edited together.	أحد الحقول المحددة ليس له عنصر واجهة في أي صفحة، لذا لا يمكن تحرير الحقول معًا.
 	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	التعرف على النص غير مثبت: نماذجه مفقودة (شغّل `cargo xtask models`، أو اضبط PDFCRAFT_MODELS).
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} بدقة {dpi} dpi، وهي أكبر دقة يمكن رسمها بها)
+	Fill colour	لون التعبئة
+	No fill	بلا تعبئة
+	Fill colour: none	لون التعبئة: بلا
 
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Ctrl

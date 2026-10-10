@@ -408,3 +408,40 @@ fn xfdf_keeps_polygon_and_polyline_vertices() {
     import(&mut dst, odd.as_bytes()).unwrap();
     assert_eq!(vertices(&dst), vec![("Polygon".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])]);
 }
+
+#[test]
+fn xfdf_keeps_callout_leader_inset_and_ending() {
+    let mut src = blank();
+    let shape = Shape::Callout {
+        rect: [40.0, 300.0, 180.0, 360.0],
+        knee: [260.0, 330.0],
+        point: [320.0, 200.0],
+        font_size: 12.0,
+        ending: pdfcraft_annot::LineEnding::ClosedArrow,
+    };
+    let meta = Meta { date: Some("D:20261002120000Z".into()), id: "c1".into() };
+    add_annotation(
+        &mut src,
+        &NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: "leader".into(), author: "Ada".into() },
+        &meta,
+    )
+    .unwrap();
+    let xfdf = export_xfdf(&src, true, false, "form.pdf");
+    let mut dst = blank();
+    import(&mut dst, xfdf.as_bytes()).unwrap();
+    let callout_keys = |doc: &Document| {
+        let page = pdfcraft_model::pages(doc).remove(0);
+        let annots = page.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        let d = annots.iter().filter_map(|a| doc.resolve(a).as_dict().cloned()).find(|d| d.name(b"Subtype") == Some(b"FreeText")).unwrap();
+        (
+            nums_of(doc, d.get(b"Rect")),
+            nums_of(doc, d.get(b"CL")),
+            nums_of(doc, d.get(b"RD")),
+            d.name(b"IT").map(<[u8]>::to_vec),
+            d.get(b"LE").and_then(|o| o.as_name()).map(<[u8]>::to_vec),
+        )
+    };
+    let want = callout_keys(&src);
+    assert_eq!(want.1.len(), 6, "{want:?}");
+    assert_eq!(callout_keys(&dst), want, "{xfdf}");
+}
