@@ -590,7 +590,7 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
         .unwrap_or("print")
         .split(',')
         .filter_map(|f| FLAGS.iter().find(|(_, s)| s.eq_ignore_ascii_case(f.trim())).map(|x| x.0))
-        .sum();
+        .fold(0, |bits, flag| bits | flag);
     d.set(b"F".to_vec(), Object::Int(flags));
     if let Some(c) = node.attribute("color").and_then(parse_hex) {
         d.set(b"C".to_vec(), arr(&c));

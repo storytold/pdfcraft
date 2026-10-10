@@ -445,3 +445,24 @@ fn xfdf_keeps_callout_leader_inset_and_ending() {
     assert_eq!(want.1.len(), 6, "{want:?}");
     assert_eq!(callout_keys(&dst), want, "{xfdf}");
 }
+
+#[test]
+fn duplicate_xfdf_annotation_flags_do_not_turn_on_unrelated_bits() {
+    // Flags are a set of bit masks, not additive integers. A repeated "print" flag
+    // must not carry into "nozoom", nor repeated "readonly" into "locked".
+    for (flags, expected) in [("print, PRINT, nozoom", 12), ("readonly,readonly", 64), ("print,print,print", 4)] {
+        let xfdf = format!(
+            r#"<xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><square page="0" rect="10,10,50,50" name="flags" flags="{flags}" /></annots></xfdf>"#
+        );
+        let mut doc = blank();
+        assert_eq!(import(&mut doc, xfdf.as_bytes()).unwrap().comments, 1);
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        let annotations = doc.get(page).as_dict().and_then(|p| p.get(b"Annots")).map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap();
+        let square = annotations
+            .iter()
+            .filter_map(|a| doc.resolve(a).as_dict().cloned())
+            .find(|d| d.name(b"Subtype") == Some(b"Square"))
+            .unwrap();
+        assert_eq!(square.get(b"F").and_then(Object::as_int), Some(expected), "flags={flags}");
+    }
+}
