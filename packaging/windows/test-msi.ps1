@@ -59,7 +59,7 @@ Assert-Equal $scope[0] '1' 'Per-machine shortcut scope'
 foreach ($ext in @('png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif', 'bmp', 'jp2', 'j2k', 'jpx')) {
   $key = 'Software\Classes\SystemFileAssociations\.' + $ext + '\shell\PdfCraft.CreatePdf'
   $menu = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $key + ''' AND `Name` IS NULL') 3
-  Assert-Equal $menu[0] 'Create PDF with Linkco PDF Editor…' "$ext context menu label"
+  Assert-Equal $menu[0] "Create PDF with Linkco PDF Editor$([char]0x2026)" "$ext context menu label"
   Assert-Equal $menu[1] 'PdfcraftApp' "$ext context menu component"
   Assert-Equal $menu[2] '2' "$ext context menu HKLM root"
   $command = Read-Row ('SELECT `Value` FROM `Registry` WHERE `Key` = ''' + $key + '\command''') 1
