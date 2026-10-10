@@ -132,6 +132,39 @@ fn images_are_measured_where_drawn_and_downsampled() {
 }
 
 #[test]
+fn an_identity_decode_array_does_not_stop_reduce() {
+    // Office scanners write /Decode [0 1 0 1 0 1] (no change) on their page images (#490).
+    let with_decode = |doc: &mut Document, r: ObjRef, decode: Vec<Object>| {
+        let mut s = stream(doc, r);
+        s.dict.set(b"Decode".to_vec(), Object::Array(decode));
+        doc.set(r, Object::Stream(s));
+    };
+    let mut doc = Document::new_empty();
+    // 900 px drawn 216 pt (3 in) wide → 300 ppi, like a scanned page.
+    let scan = image(&mut doc, 900, 900, 3, true, None);
+    with_decode(&mut doc, scan, [0, 1, 0, 1, 0, 1].map(Object::Int).to_vec());
+    let gray = image(&mut doc, 900, 900, 1, false, None);
+    with_decode(&mut doc, gray, vec![Object::Real(0.0), Object::Real(1.0)]);
+    // A decode array that inverts the colours, and one of the wrong length: left alone.
+    let inverted = image(&mut doc, 900, 900, 3, true, None);
+    with_decode(&mut doc, inverted, [1, 0, 1, 0, 1, 0].map(Object::Int).to_vec());
+    let odd = image(&mut doc, 900, 900, 3, true, None);
+    with_decode(&mut doc, odd, [0, 1].map(Object::Int).to_vec());
+    page(
+        &mut doc,
+        &[("S", scan), ("G", gray), ("I", inverted), ("O", odd)],
+        "q 216 0 0 216 0 0 cm /S Do Q q 216 0 0 216 216 0 cm /G Do Q q 216 0 0 216 0 300 cm /I Do Q q 216 0 0 216 216 300 cm /O Do Q",
+    );
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(report.images_resampled, 2, "{report:?}");
+    assert_eq!(stream(&doc, scan).dict.int(b"Width"), Some(450));
+    assert_eq!(stream(&doc, gray).dict.int(b"Width"), Some(450));
+    assert!(!stream(&doc, scan).dict.contains(b"Decode"), "the default decode array isn't carried over");
+    assert_eq!(stream(&doc, inverted).dict.int(b"Width"), Some(900));
+    assert_eq!(stream(&doc, odd).dict.int(b"Width"), Some(900));
+}
+
+#[test]
 fn settings_choose_what_happens() {
     let mut doc = Document::new_empty();
     let big = image(&mut doc, 1200, 600, 1, false, None);

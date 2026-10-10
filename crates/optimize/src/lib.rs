@@ -5,8 +5,8 @@
 //!   smallest over its uses, through form XObjects); colour and grayscale images above a
 //!   threshold are resampled (bicubic) to a target resolution and recompressed as JPEG or Flate.
 //!   A new image replaces the old one only if it is smaller. Images PdfCraft can't decode
-//!   faithfully (CMYK and other colour spaces, masks, decode arrays, JPEG 2000, JBIG2, CCITT,
-//!   more than 8 bits) are left alone.
+//!   faithfully (CMYK and other colour spaces, masks, decode arrays other than the default,
+//!   JPEG 2000, JBIG2, CCITT, other than 8 bits) are left alone.
 //! - **Discard objects:** page thumbnails, alternate images, document tags (structure tree),
 //!   print settings.
 //! - **Clean up:** Flate-compress streams that have no filter.
