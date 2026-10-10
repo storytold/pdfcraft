@@ -385,6 +385,93 @@ fn popup_cycles_copy_once_and_structure_links_are_removed() {
 }
 
 #[test]
+fn repeated_page_extraction_creates_independent_annotations() {
+    let a = doc_a();
+
+    // 1. Repeated page with note and popup annotation ([2, 2]).
+    let out = full_roundtrip(&extract_pages(&a, &[2, 2]).unwrap());
+    assert_eq!(labels(&out), ["A3", "A3"]);
+    let p0 = pages(&out).unwrap()[0].obj;
+    let p1 = pages(&out).unwrap()[1].obj;
+    assert_ne!(p0, p1);
+
+    let annots0 = page_dict(&out, 0).get(b"Annots").unwrap().as_array().cloned().unwrap();
+    let annots1 = page_dict(&out, 1).get(b"Annots").unwrap().as_array().cloned().unwrap();
+    assert_eq!(annots0.len(), 1);
+    assert_eq!(annots1.len(), 1);
+    let r0 = annots0[0].as_ref().unwrap();
+    let r1 = annots1[0].as_ref().unwrap();
+    assert_ne!(r0, r1, "each page copy gets distinct annotation object");
+
+    let note0 = out.get(r0).as_dict().cloned().unwrap();
+    let note1 = out.get(r1).as_dict().cloned().unwrap();
+    assert_eq!(note0.reference(b"P"), Some(p0));
+    assert_eq!(note1.reference(b"P"), Some(p1));
+
+    // Popups must also be distinct and point to their respective notes and pages.
+    let pop0 = note0.reference(b"Popup").unwrap();
+    let pop1 = note1.reference(b"Popup").unwrap();
+    assert_ne!(pop0, pop1, "each page copy gets distinct popup annotation");
+    let popup0 = out.get(pop0).as_dict().cloned().unwrap();
+    let popup1 = out.get(pop1).as_dict().cloned().unwrap();
+    assert_eq!(popup0.reference(b"Parent"), Some(r0));
+    assert_eq!(popup1.reference(b"Parent"), Some(r1));
+
+    // Editing only page 0's note leaves page 1's note untouched.
+    let mut edited = out.clone();
+    edited
+        .update_dict(r0, |d| {
+            d.set(b"Contents".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"changed")));
+        })
+        .unwrap();
+    let reopened = full_roundtrip(&edited);
+    let note0_reopened = reopened.get(r0).as_dict().cloned().unwrap();
+    let note1_reopened = reopened.get(r1).as_dict().cloned().unwrap();
+    assert_eq!(note0_reopened.get(b"Contents").and_then(|c| c.as_string()).map(|s| s.to_text()).as_deref(), Some("changed"));
+    assert_eq!(note1_reopened.get(b"Contents").and_then(|c| c.as_string()).map(|s| s.to_text()).as_deref(), Some("note"));
+
+    // 2. [0, 0, 2] -> A1, A1, A3. Both links in A1 must point to A3 (output page 2).
+    let out_links = full_roundtrip(&extract_pages(&a, &[0, 0, 2]).unwrap());
+    let lp0 = pages(&out_links).unwrap()[0].obj;
+    let lp1 = pages(&out_links).unwrap()[1].obj;
+    let lp2 = pages(&out_links).unwrap()[2].obj;
+    let l0_ref = page_dict(&out_links, 0).get(b"Annots").unwrap().as_array().unwrap()[0].as_ref().unwrap();
+    let l1_ref = page_dict(&out_links, 1).get(b"Annots").unwrap().as_array().unwrap()[0].as_ref().unwrap();
+    assert_ne!(l0_ref, l1_ref, "each page copy gets distinct link annotation");
+    let l0 = out_links.get(l0_ref).as_dict().cloned().unwrap();
+    let l1 = out_links.get(l1_ref).as_dict().cloned().unwrap();
+    assert_eq!(l0.reference(b"P"), Some(lp0));
+    assert_eq!(l1.reference(b"P"), Some(lp1));
+    let act0 = out_links.resolve(l0.get(b"A").unwrap()).as_dict().unwrap().get(b"D").and_then(|d| d.as_array()).and_then(|a| a[0].as_ref()).unwrap();
+    let act1 = out_links.resolve(l1.get(b"A").unwrap()).as_dict().unwrap().get(b"D").and_then(|d| d.as_array()).and_then(|a| a[0].as_ref()).unwrap();
+    assert_eq!(act0, lp2);
+    assert_eq!(act1, lp2);
+
+    // 3. [0, 0] -> A1, A1 (A3 omitted). Links lose their GoTo / Dest.
+    let out_no_dest = full_roundtrip(&extract_pages(&a, &[0, 0]).unwrap());
+    let l0_ref = page_dict(&out_no_dest, 0).get(b"Annots").unwrap().as_array().unwrap()[0].as_ref().unwrap();
+    let l1_ref = page_dict(&out_no_dest, 1).get(b"Annots").unwrap().as_array().unwrap()[0].as_ref().unwrap();
+    assert_ne!(l0_ref, l1_ref);
+    let l0 = out_no_dest.get(l0_ref).as_dict().cloned().unwrap();
+    let l1 = out_no_dest.get(l1_ref).as_dict().cloned().unwrap();
+    assert!(!l0.contains(b"A") && !l0.contains(b"Dest"));
+    assert!(!l1.contains(b"A") && !l1.contains(b"Dest"));
+
+    // 4. Combine files with repeated page ranges.
+    let out_comb = full_roundtrip(&combine_selected(&[("Report", &a, Some(&[2, 2]))]).unwrap());
+    let cp0 = pages(&out_comb).unwrap()[0].obj;
+    let cp1 = pages(&out_comb).unwrap()[1].obj;
+    assert_ne!(cp0, cp1);
+    let cr0 = page_dict(&out_comb, 0).get(b"Annots").unwrap().as_array().unwrap()[0].as_ref().unwrap();
+    let cr1 = page_dict(&out_comb, 1).get(b"Annots").unwrap().as_array().unwrap()[0].as_ref().unwrap();
+    assert_ne!(cr0, cr1);
+    let cnote0 = out_comb.get(cr0).as_dict().cloned().unwrap();
+    let cnote1 = out_comb.get(cr1).as_dict().cloned().unwrap();
+    assert_eq!(cnote0.reference(b"P"), Some(cp0));
+    assert_eq!(cnote1.reference(b"P"), Some(cp1));
+}
+
+#[test]
 fn inserting_pages_from_another_file_is_an_incremental_edit() {
     let mut a = doc_a();
     import_pages(&mut a, &doc_b(), &[1, 0], 1).unwrap();

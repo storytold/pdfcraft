@@ -28,6 +28,14 @@ use crate::{INHERITABLE, OrganizeError, pages_root, rebuild, walk};
 const SKIP_ON_PAGE: &[&[u8]] = &[b"Parent", b"B", b"StructParents", b"Thumb", b"PieceInfo"];
 const SKIP_ON_ANNOT: &[&[u8]] = &[b"StructParent", b"P"];
 
+fn is_annotation_dict(d: &Dict) -> bool {
+    d.name(b"Type") == Some(b"Annot") || (d.contains(b"Subtype") && d.contains(b"Rect") && !d.contains(b"Type"))
+}
+
+fn is_annotation(src: &Document, r: ObjRef) -> bool {
+    src.get(r).as_dict().is_some_and(is_annotation_dict)
+}
+
 struct Copier<'a> {
     src: &'a Document,
     map: HashMap<ObjRef, ObjRef>,
@@ -39,17 +47,49 @@ struct Copier<'a> {
     fields: Vec<ObjRef>,
     /// Optional content groups copied: (source, destination).
     ocgs: Vec<(ObjRef, ObjRef)>,
+    /// Annotations copied for the current page: source annot -> destination annot.
+    annot_map: HashMap<ObjRef, ObjRef>,
+    /// Destination annotation -> destination page, for rewriting `/P`.
+    annot_pages: HashMap<ObjRef, ObjRef>,
+    /// The destination page currently being copied.
+    current_page: Option<ObjRef>,
 }
 
-impl Copier<'_> {
+impl<'a> Copier<'a> {
+    fn new(src: &'a Document) -> Self {
+        Self {
+            src,
+            map: HashMap::new(),
+            pages: HashMap::new(),
+            annots: Vec::new(),
+            fields: Vec::new(),
+            ocgs: Vec::new(),
+            annot_map: HashMap::new(),
+            annot_pages: HashMap::new(),
+            current_page: None,
+        }
+    }
+
     /// Copy an indirect object (once), returning its destination reference.
     fn copy_ref(&mut self, dst: &mut Document, r: ObjRef) -> ObjRef {
-        if let Some(d) = self.map.get(&r) {
+        let is_annot = is_annotation(self.src, r);
+        if is_annot {
+            if let Some(d) = self.annot_map.get(&r) {
+                return *d;
+            }
+        } else if let Some(d) = self.map.get(&r) {
             return *d;
         }
-        // Reserve the number first so cycles (field ↔ widget) terminate.
+        // Reserve the number first so cycles (field ↔ widget, note ↔ popup) terminate.
         let new = dst.add(Object::Null);
-        self.map.insert(r, new);
+        if is_annot {
+            self.annot_map.insert(r, new);
+            if let Some(p) = self.current_page {
+                self.annot_pages.insert(new, p);
+            }
+        } else {
+            self.map.insert(r, new);
+        }
         let obj = self.src.get(r);
         if obj.as_dict().is_some_and(|d| d.name(b"Type") == Some(b"OCG")) {
             self.ocgs.push((r, new));
@@ -74,7 +114,7 @@ impl Copier<'_> {
     }
 
     fn copy_dict(&mut self, dst: &mut Document, d: &Dict, this: Option<ObjRef>) -> Dict {
-        let is_annot = d.name(b"Type") == Some(b"Annot") || (d.contains(b"Subtype") && d.contains(b"Rect") && !d.contains(b"Type"));
+        let is_annot = is_annotation_dict(d);
         let is_field = d.contains(b"FT") || (d.contains(b"T") && d.contains(b"Kids"));
         let mut out = Dict::new();
         for (k, v) in d.iter() {
@@ -127,12 +167,12 @@ impl Copier<'_> {
     }
 
     /// Rewrite `/P`, `/Dest` and GoTo actions on copied annotations.
-    fn fix_annotations(&self, dst: &mut Document, annot_pages: &HashMap<ObjRef, ObjRef>) -> Result<(), OrganizeError> {
+    fn fix_annotations(&self, dst: &mut Document) -> Result<(), OrganizeError> {
         for &a in &self.annots {
             let src_dict = dst.get(a).as_dict().cloned();
             let Some(d) = src_dict else { continue };
             let mut d = d;
-            if let Some(p) = annot_pages.get(&a) {
+            if let Some(p) = self.annot_pages.get(&a) {
                 d.set(b"P".to_vec(), Object::Ref(*p));
             }
             if let Some(dest) = d.get(b"Dest").cloned() {
@@ -162,14 +202,7 @@ impl Copier<'_> {
                         }
                     } else {
                         // Other actions (URI, Launch, JavaScript…) carry no page references.
-                        let mut c = Copier {
-                            src: self.src,
-                            map: self.map.clone(),
-                            pages: HashMap::new(),
-                            annots: Vec::new(),
-                            fields: Vec::new(),
-                            ocgs: Vec::new(),
-                        };
+                        let mut c = Copier { map: self.map.clone(), ..Copier::new(self.src) };
                         let copied = c.copy_value(dst, &Object::Dict(ad.clone()), None);
                         d.set(b"A".to_vec(), copied);
                     }
@@ -184,7 +217,7 @@ impl Copier<'_> {
 /// Copy `o` from `src` into `dst`, reusing the copies listed in `map` (source → destination), so
 /// an object the copied pages already brought along (an ICC profile) is not stored twice.
 pub(crate) fn copy_object(dst: &mut Document, src: &Document, o: &Object, map: HashMap<ObjRef, ObjRef>) -> Object {
-    let mut c = Copier { src, map, pages: HashMap::new(), annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() };
+    let mut c = Copier { map, ..Copier::new(src) };
     c.copy_value(dst, o, None)
 }
 
@@ -219,7 +252,7 @@ fn import_pages_mapped(dst: &mut Document, src: &Document, src_pages: &[usize], 
     }
     let mut existing = walk(dst)?;
     let root = pages_root(dst)?;
-    let mut copier = Copier { src, map: HashMap::new(), pages: HashMap::new(), annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() };
+    let mut copier = Copier::new(src);
     // Allocate every destination page first, so destinations between copied pages resolve.
     let targets: Vec<(ObjRef, ObjRef, Dict)> = src_pages
         .iter()
@@ -233,12 +266,13 @@ fn import_pages_mapped(dst: &mut Document, src: &Document, src_pages: &[usize], 
             (*page, new, inherited.clone())
         })
         .collect();
-    let mut annot_pages = HashMap::new();
     let mut new_pages = Vec::new();
     let mut done: HashMap<ObjRef, ObjRef> = HashMap::new();
     for (page, new, inherited) in targets {
         // A page listed twice: make a second, independent page object sharing resources.
         let new = if done.contains_key(&page) { dst.add(Object::Null) } else { new };
+        copier.annot_map.clear();
+        copier.current_page = Some(new);
         let src_dict = src.get(page).as_dict().cloned().unwrap_or_default();
         let mut d = Dict::new();
         for (k, v) in src_dict.iter() {
@@ -255,13 +289,13 @@ fn import_pages_mapped(dst: &mut Document, src: &Document, src_pages: &[usize], 
                         Object::Ref(r) => copier.copy_ref(dst, r),
                         Object::Dict(_) => {
                             let r = dst.add(Object::Null);
+                            copier.annot_pages.insert(r, new);
                             let c = copier.copy_value(dst, &a, Some(r));
                             dst.set(r, c);
                             r
                         }
                         _ => continue,
                     };
-                    annot_pages.insert(r, new);
                     out.push(Object::Ref(r));
                 }
                 d.set(b"Annots".to_vec(), Object::Array(out));
@@ -283,7 +317,7 @@ fn import_pages_mapped(dst: &mut Document, src: &Document, src_pages: &[usize], 
         done.insert(page, new);
         new_pages.push(new);
     }
-    copier.fix_annotations(dst, &annot_pages)?;
+    copier.fix_annotations(dst)?;
     register_fields(dst, &copier.fields)?;
     register_layers(dst, src, &copier.ocgs)?;
     let at = at.min(existing.len());
@@ -541,7 +575,7 @@ fn collect_attachments(dst: &mut Document, src: &Document, out: &mut Vec<(Vec<u8
     };
     let mut entries = Vec::new();
     name_tree_entries(src, &tree, 0, &mut entries);
-    let mut copier = Copier { src, map: HashMap::new(), pages: HashMap::new(), annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() };
+    let mut copier = Copier::new(src);
     for (k, v) in entries {
         let v = copier.copy_value(dst, &v, None);
         out.push((k, v));
@@ -610,7 +644,7 @@ fn add_outline(doc: &mut Document, marks: &[Mark<'_>]) -> Result<(), OrganizeErr
             .and_then(|r| src.get(r).as_dict().cloned())
             .and_then(|c| c.get(b"Outlines").map(|o| src.resolve(o)))
             .and_then(|o| o.as_dict().and_then(|d| d.reference(b"First")));
-        let mapper = Copier { src, map: HashMap::new(), pages: page_map.clone(), annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() };
+        let mapper = Copier { pages: page_map.clone(), ..Copier::new(src) };
         let mut budget = 10_000usize;
         if let Some((f, l, n)) = copy_outline_level(doc, &mapper, first, *r, 0, &mut budget) {
             d.set(b"First".to_vec(), Object::Ref(f));
@@ -727,7 +761,7 @@ pub fn page_as_form(dst: &mut Document, src: &Document, page: usize) -> Result<(
             }
         }
     }
-    let mut copier = Copier { src, map: HashMap::new(), pages: HashMap::new(), annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() };
+    let mut copier = Copier::new(src);
     let resources = d.get(b"Resources").map(|r| copier.copy_value(dst, r, None)).unwrap_or(Object::Dict(Dict::new()));
     register_layers(dst, src, &copier.ocgs)?;
     let mut fd = Dict::new();
