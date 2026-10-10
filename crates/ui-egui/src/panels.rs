@@ -181,17 +181,25 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                     17.0,
                     if ready { hue(g) } else { t.text_faint },
                 );
-                ui.painter().text(rect.left_center() + vec2(34.0, 0.0), Align2::LEFT_CENTER, tl!(item.label), theme::regular(13.0), fg);
                 let (chip, fill, cfg) = match item.availability {
                     Availability::Ready => (tl!("Ready"), Color32::from_rgb(0xDD, 0xF3, 0xE4), Color32::from_rgb(0x1E, 0x7B, 0x43)),
                     Availability::Planned(m) => (m, t.pressed, t.text_muted),
                     Availability::Provider => ("AI", t.pressed, t.text_muted),
                 };
                 let font = theme::semibold(9.5);
-                let w = ui.fonts_mut(|f| f.layout_no_wrap(tl!(chip).to_string(), font.clone(), cfg).size().x);
+                let chip_label = tl!(chip).to_string();
+                let w = crate::widgets::text_width(ui, &chip_label, &font);
                 let r = Rect::from_center_size(rect.right_center() - vec2(w / 2.0 + 10.0, 0.0), vec2(w + 10.0, 16.0));
+                crate::widgets::paint_left(
+                    ui,
+                    rect.left_center() + vec2(34.0, 0.0),
+                    tl!(item.label),
+                    theme::regular(13.0),
+                    fg,
+                    (r.left() - rect.left() - 42.0).max(0.0),
+                );
                 ui.painter().rect_filled(r, CornerRadius::same(4), fill);
-                ui.painter().text(r.center(), Align2::CENTER_CENTER, tl!(chip), font, cfg);
+                ui.painter().text(r.center(), Align2::CENTER_CENTER, chip_label, font, cfg);
                 if resp.on_hover_text(item.command).clicked() {
                     run = Some(item.command);
                 }
@@ -266,23 +274,31 @@ fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                         chip.left_bottom() + vec2(tip, 0.0),
                     ];
                     ui.painter().add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
-                    ui.painter().text(
+                    let label = kind.label();
+                    let font = theme::semibold(11.0);
+                    let shown = crate::widgets::fit_line(label, (chip.width() - 10.0).max(0.0), |s| crate::widgets::text_width(ui, s, &font));
+                    ui.painter().with_clip_rect(chip.shrink(3.0)).text(
                         chip.center() + vec2(tip / 2.0, 0.0),
                         Align2::CENTER_CENTER,
-                        kind.label(),
-                        theme::semibold(11.0),
+                        shown,
+                        font,
                         Color32::WHITE,
                     );
                 } else {
                     ui.painter().rect(chip, CornerRadius::same(5), col.gamma_multiply(0.1), Stroke::new(1.5, col), egui::StrokeKind::Inside);
                     let y = if group == StampGroup::Dynamic { chip.center().y - 4.0 } else { chip.center().y };
-                    ui.painter().text(egui::pos2(chip.center().x, y), Align2::CENTER_CENTER, kind.label(), theme::semibold(11.0), col);
+                    let font = theme::semibold(11.0);
+                    let shown = crate::widgets::fit_line(kind.label(), (chip.width() - 10.0).max(0.0), |s| crate::widgets::text_width(ui, s, &font));
+                    ui.painter().with_clip_rect(chip.shrink(3.0)).text(egui::pos2(chip.center().x, y), Align2::CENTER_CENTER, shown, font, col);
                     if group == StampGroup::Dynamic {
-                        ui.painter().text(
+                        let by = "By name at time, date";
+                        let by_font = theme::regular(7.5);
+                        let by_shown = crate::widgets::fit_line(by, (chip.width() - 8.0).max(0.0), |s| crate::widgets::text_width(ui, s, &by_font));
+                        ui.painter().with_clip_rect(chip.shrink(2.0)).text(
                             egui::pos2(chip.center().x, chip.bottom() - 6.0),
                             Align2::CENTER_CENTER,
-                            "By name at time, date",
-                            theme::regular(7.5),
+                            by_shown,
+                            by_font,
                             col,
                         );
                     }
@@ -567,7 +583,14 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 t.icon,
                             );
                             let fg = if l.visible { t.text } else { t.text_faint };
-                            ui.painter().text(rect.left_center() + vec2(32.0, 0.0), Align2::LEFT_CENTER, &l.name, theme::regular(13.0), fg);
+                            crate::widgets::paint_left(
+                                ui,
+                                rect.left_center() + vec2(32.0, 0.0),
+                                &l.name,
+                                theme::regular(13.0),
+                                fg,
+                                (rect.width() - 40.0).max(0.0),
+                            );
                             if resp.on_hover_text(if l.visible { tl!("Hide layer") } else { tl!("Show layer") }).clicked() {
                                 toggle_layer = Some((li, !l.visible));
                             }
@@ -800,7 +823,8 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
         let mut cancel = false;
         ui.horizontal(|ui| {
             ui.add_space(x_text);
-            let edit = egui::TextEdit::singleline(text).desired_width(ui.available_width() - 8.0).id(id.with("rename"));
+            crate::widgets::begin_dialog(ui);
+            let edit = crate::widgets::line(text).desired_width(ui.available_width() - 8.0).id(id.with("rename"));
             let resp = ui.add(edit);
             if !resp.has_focus() && !resp.lost_focus() {
                 resp.request_focus();
@@ -1161,10 +1185,16 @@ fn fields(
                 ui.painter().rect_filled(rect, CornerRadius::same(6), if selected { t.pressed } else { t.hover });
             }
             icons::paint(ui, Rect::from_min_size(rect.min + vec2(8.0, 7.0), vec2(16.0, 16.0)), icon, 15.0, Color32::from_rgb(0x8E, 0x4E, 0xE6));
-            ui.painter().text(rect.left_center() + vec2(32.0, 0.0), Align2::LEFT_CENTER, &f.name, theme::regular(13.0), t.text);
-            if let Some(v) = &f.value {
-                let v: String = if v.chars().count() > 18 { format!("{}…", v.chars().take(17).collect::<String>()) } else { v.clone() };
-                ui.painter().text(rect.right_center() - vec2(8.0, 0.0), Align2::RIGHT_CENTER, v, theme::regular(11.5), t.text_faint);
+            let value =
+                f.value.as_ref().map(|v| if v.chars().count() > 18 { format!("{}…", v.chars().take(17).collect::<String>()) } else { v.clone() });
+            let value_font = theme::regular(11.5);
+            let value_w = value.as_ref().map(|v| crate::widgets::text_width(ui, v, &value_font)).unwrap_or(0.0);
+            let arrows = if preparing && f.page.is_some() { 56.0 } else { 0.0 };
+            let max_w = (rect.width() - 32.0 - value_w - arrows - 16.0).max(0.0);
+            crate::widgets::paint_left(ui, rect.left_center() + vec2(32.0, 0.0), &f.name, theme::regular(13.0), t.text, max_w);
+            if let Some(v) = value {
+                let x = if arrows > 0.0 { 64.0 } else { 8.0 };
+                ui.painter().text(rect.right_center() - vec2(x, 0.0), Align2::RIGHT_CENTER, v, value_font, t.text_faint);
             }
             let kind = format!("{:?}", f.kind);
             let mut tip = crate::i18n::fmt(tl!("{kind} field"), &[("kind", tl!(&kind))]);

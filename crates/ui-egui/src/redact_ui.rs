@@ -224,7 +224,7 @@ pub(crate) fn search_body(ui: &mut egui::Ui, d: &mut SearchDraft, t: &Tokens) ->
     ui.radio_value(&mut d.patterns, false, tl!("Single word or phrase"));
     let mut enter = false;
     ui.add_enabled_ui(!d.patterns, |ui| {
-        let r = ui.add(egui::TextEdit::singleline(&mut d.text).hint_text(tl!("Text to find")).desired_width(380.0));
+        let r = ui.add(crate::widgets::line(&mut d.text).hint_text(tl!("Text to find")).desired_width(380.0));
         enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     });
     ui.add_space(6.0);
@@ -276,7 +276,7 @@ pub(crate) fn props_body(ui: &mut egui::Ui, d: &mut RedactPrefs, _t: &Tokens) ->
         ui.checkbox(&mut d.use_overlay, tl!("Use overlay text"));
         ui.end_row();
         let l = ui.label(tl!("Custom text:"));
-        ui.add_enabled(d.use_overlay, egui::TextEdit::singleline(&mut d.overlay).desired_width(220.0)).labelled_by(l.id);
+        ui.add_enabled(d.use_overlay, crate::widgets::line(&mut d.overlay).desired_width(220.0)).labelled_by(l.id);
         ui.end_row();
         let on = d.use_overlay;
         let look = &mut d.look;

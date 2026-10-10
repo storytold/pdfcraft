@@ -242,6 +242,8 @@ fn initial_view_is_edited_and_honoured_on_open() {
         v.language = Some("de-DE".into());
     }
     h.run_steps(2);
+    // The dialog's height settles a frame after it opens; egui centers from the previous size.
+    h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
     let s = h.state();
@@ -364,6 +366,8 @@ fn an_earlier_revision_opens_from_document_properties() {
     h.run_steps(2);
     h.state_mut().dialog = Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::Advanced));
     h.run_steps(2);
+    h.run_steps(2);
+    // Let the dialog finish centering before the revision button is clicked.
     h.run_steps(2);
     h.get_by_label("View revision 1").click();
     h.run_steps(3);

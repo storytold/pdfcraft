@@ -107,17 +107,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         d.viewing = false;
     }
     ui.add_space(10.0);
-    // Bordered fields (Acrobat: 1 pt #B1B1B1, radius 4).
     let field = |ui: &mut egui::Ui, label: &str, text: &mut String, id: &str| {
         let l = ui.label(tl!(label));
-        egui::Frame::new()
-            .stroke(egui::Stroke::new(1.0, t.border))
-            .corner_radius(egui::CornerRadius::same(4))
-            .inner_margin(egui::Margin::symmetric(8, 6))
-            .show(ui, |ui| {
-                ui.add(egui::TextEdit::singleline(text).password(true).desired_width(290.0).frame(egui::Frame::NONE).id_salt(id)).labelled_by(l.id)
-            })
-            .inner
+        ui.add(crate::widgets::line(text).password(true).desired_width(290.0).id_salt(id)).labelled_by(l.id)
     };
     let r = field(ui, "Type Password", &mut d.password, "protect-pw");
     if r.changed() || !d.password.is_empty() {

@@ -492,7 +492,7 @@ pub(crate) fn body(
                 ui.radio_value(&mut d.which, Which::Range, tl!("Pages"));
                 let r = ui.add_enabled(
                     d.which == Which::Range,
-                    egui::TextEdit::singleline(&mut d.range).hint_text(format!("1-{}", sizes.len())).desired_width(110.0),
+                    crate::widgets::line(&mut d.range).hint_text(format!("1-{}", sizes.len())).desired_width(110.0),
                 );
                 if r.gained_focus() {
                     d.which = Which::Range;
@@ -516,7 +516,7 @@ pub(crate) fn body(
             });
             ui.add_space(6.0);
             widgets::section_title(ui, tl!("Page Sizing & Handling"));
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 for (h, label) in [
                     (Handling::Size, tl!("Size")),
                     (Handling::Poster, tl!("Poster")),

@@ -278,6 +278,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     egui::ScrollArea::vertical().id_salt("measure-panel").show(ui, |ui| panel_body(app, ui, t));
 }
 fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
+    crate::widgets::begin_dialog(ui);
     let Some((index, id)) = app.active_ids() else {
         ui.label(tl!("Open a PDF to measure it."));
         return;
@@ -325,7 +326,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     }
     ui.horizontal(|ui| {
         ui.label(tl!("Label"));
-        ui.add(egui::TextEdit::singleline(&mut state.label).desired_width(130.0).char_limit(128));
+        ui.add(crate::widgets::line(&mut state.label).desired_width(130.0).char_limit(128));
     });
     ui.separator();
     ui.checkbox(&mut state.snap_enabled, tl!("Snap to drawing"));
@@ -349,7 +350,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     });
     ui.horizontal(|ui| {
         ui.label(tl!("Unit"));
-        ui.add(egui::TextEdit::singleline(&mut state.unit).desired_width(64.0).char_limit(12));
+        ui.add(crate::widgets::line(&mut state.unit).desired_width(64.0).char_limit(12));
         ui.add(egui::DragValue::new(&mut state.precision).range(0..=6).prefix(format!("{} ", tl!("Decimals"))));
     });
     if ui.button(tl!("Calibrate from two points")).clicked() {
@@ -366,7 +367,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     }
     ui.horizontal(|ui| {
         ui.label(tl!("Viewport"));
-        ui.add(egui::TextEdit::singleline(&mut state.name).desired_width(130.0).char_limit(128));
+        ui.add(crate::widgets::line(&mut state.name).desired_width(130.0).char_limit(128));
     });
     let apply = ui.add_enabled(doc.allows_annotation(), egui::Button::new(tl!("Apply scale"))).clicked();
     if let Some(error) = &state.error {

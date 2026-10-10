@@ -546,8 +546,8 @@ fn unlock_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                let field =
-                    ui.add(egui::TextEdit::singleline(&mut prompt.input.0).password(!prompt.show).hint_text(tl!("Password")).desired_width(290.0));
+                crate::widgets::begin_dialog(ui);
+                let field = ui.add(crate::widgets::line(&mut prompt.input.0).password(!prompt.show).hint_text(tl!("Password")).desired_width(290.0));
                 if !prompt.focused {
                     field.request_focus();
                     prompt.focused = true;
@@ -914,9 +914,10 @@ fn table_body(
                             }
                             // The range field and how many pages it takes.
                             SortKey::Pages => {
+                                crate::widgets::begin_dialog(ui);
                                 let edit = ui.add_enabled(
                                     f.problem.is_none(),
-                                    egui::TextEdit::singleline(&mut f.range).hint_text(tl!("All pages")).desired_width(88.0),
+                                    crate::widgets::line(&mut f.range).frame(egui::Frame::NONE).hint_text(tl!("All pages")).desired_width(88.0),
                                 );
                                 // A visible field on plain and striped rows alike; red when the range is wrong.
                                 let border = if check.is_err() { Stroke::new(1.5, ERROR) } else { Stroke::new(1.0, t.border) };

@@ -493,8 +493,7 @@ pub(crate) fn alt_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> 
     ui.add_space(8.0);
     ui.add_enabled_ui(!d.decorative[i], |ui| {
         let l = ui.label(tl!("Alternate text"));
-        ui.add(egui::TextEdit::multiline(&mut d.texts[i]).desired_rows(3).desired_width(380.0).hint_text(tl!("Describe the figure")))
-            .labelled_by(l.id);
+        ui.add(crate::widgets::block(&mut d.texts[i]).desired_rows(3).desired_width(380.0).hint_text(tl!("Describe the figure"))).labelled_by(l.id);
     });
     ui.checkbox(&mut d.decorative[i], tl!("Decorative figure"));
     ui.add_space(10.0);

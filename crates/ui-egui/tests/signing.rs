@@ -181,6 +181,9 @@ fn certifying_without_a_visible_signature() {
     h.get_by_label("Continue").click();
     h.run_steps(2);
     assert_eq!(h.state().digital_ids.len(), 1);
+    // The dialog shrinks onto this step. egui centers an area from the previous frame's size,
+    // so give the buttons a frame to land before clicking.
+    h.run_steps(2);
     h.get_by_label("Continue").click();
     h.run_steps(2);
     h.get_by_label("Certify as \"Test Signer EC\"");

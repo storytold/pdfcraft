@@ -161,7 +161,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     let kind = tl!(crate::comments_panel::subtype_label(&d.edited.subtype)).to_string();
     ui.label(egui::RichText::new(crate::i18n::fmt(tl!("{kind} Properties"), &[("kind", &kind)])).font(theme::semibold(18.0)));
     ui.add_space(6.0);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         for (tab, label) in
             [(PropsTab::Appearance, tl!("Appearance")), (PropsTab::General, tl!("General")), (PropsTab::ReviewHistory, tl!("Review History"))]
         {
@@ -227,10 +227,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         PropsTab::General => {
             egui::Grid::new("comment-general").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
                 let l = ui.label(tl!("Author"));
-                ui.add(egui::TextEdit::singleline(&mut e.author).desired_width(280.0)).labelled_by(l.id);
+                ui.add(crate::widgets::line(&mut e.author).desired_width(280.0)).labelled_by(l.id);
                 ui.end_row();
                 let l = ui.label(tl!("Subject"));
-                ui.add(egui::TextEdit::singleline(&mut e.subject).desired_width(280.0)).labelled_by(l.id);
+                ui.add(crate::widgets::line(&mut e.subject).desired_width(280.0)).labelled_by(l.id);
                 ui.end_row();
                 ui.label(tl!("Modified"));
                 ui.label(e.modified.as_deref().map(pdfcraft_render::pretty_date).unwrap_or_else(|| "—".into()));

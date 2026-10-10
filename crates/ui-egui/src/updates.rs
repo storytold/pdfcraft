@@ -116,7 +116,7 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let current = env!("CARGO_PKG_VERSION");
     let mut close = false;
     let mut download: Option<String> = None;
-    let modal = egui::Modal::new(egui::Id::new("updates")).show(ctx, |ui| {
+    let modal = crate::widgets::show_modal(ctx, "updates", |ui| {
         ui.set_width(420.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("cloud", 22.0, t.accent));

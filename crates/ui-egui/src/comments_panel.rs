@@ -104,10 +104,11 @@ pub(crate) fn show(
     allowed: bool,
     nav: &mut Option<Nav>,
 ) -> Option<Edit> {
+    crate::widgets::begin_dialog(ui);
     let mut edit = None;
     // Search (the header's magnifier toggles it).
     if let Some(q) = view.comments.search.as_mut() {
-        let r = ui.add(egui::TextEdit::singleline(q).hint_text(tl!("Search comments")).desired_width(f32::INFINITY).id_salt("comment-search"));
+        let r = ui.add(crate::widgets::line(q).hint_text(tl!("Search comments")).desired_width(f32::INFINITY).id_salt("comment-search"));
         if view.comments.search_focus {
             r.request_focus();
             view.comments.search_focus = false;
@@ -117,11 +118,7 @@ pub(crate) fn show(
     // "Add a comment": a sticky note on the current page, near its top-right corner.
     if allowed {
         let r = ui.add(
-            egui::TextEdit::singleline(&mut view.comments.add_box)
-                .hint_text(tl!("Add a comment"))
-                .desired_width(f32::INFINITY)
-                .margin(egui::Margin::symmetric(8, 6))
-                .id_salt("comment-add-box"),
+            crate::widgets::line(&mut view.comments.add_box).hint_text(tl!("Add a comment")).desired_width(f32::INFINITY).id_salt("comment-add-box"),
         );
         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !view.comments.add_box.trim().is_empty() {
             let page = view.current.min(info.pages.len().saturating_sub(1));
@@ -291,7 +288,7 @@ fn card(
             egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 4, bottom: 0 }).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 if editing && let Some((_, _, text)) = view.comments.editing.as_mut() {
-                    let r = ui.add(egui::TextEdit::multiline(text).desired_rows(2).desired_width(f32::INFINITY).id_salt(("comment-edit", key)));
+                    let r = ui.add(crate::widgets::block(text).desired_rows(2).desired_width(f32::INFINITY).id_salt(("comment-edit", key)));
                     if !r.has_focus() && !ui.memory(|m| m.focused().is_some()) {
                         r.request_focus();
                     }
@@ -355,7 +352,7 @@ fn card(
                 egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 0, bottom: 0 }).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         let r = ui.add(
-                            egui::TextEdit::singleline(&mut view.comments.reply)
+                            crate::widgets::line(&mut view.comments.reply)
                                 .hint_text(tl!("Add a reply"))
                                 .desired_width(ui.available_width() - 56.0)
                                 .id_salt(("comment-reply", key)),

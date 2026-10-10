@@ -478,7 +478,6 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             };
             ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
             icons::paint(ui, Rect::from_min_size(rect.min + vec2(10.0, 15.0), vec2(20.0, 20.0)), "badge-check", 18.0, t.accent);
-            ui.painter().text(rect.min + vec2(40.0, 9.0), egui::Align2::LEFT_TOP, &e.name, theme::semibold(13.0), t.text);
             let sub = format!(
                 "{keychain}{email}{issued}{issuer}{expires}{date}",
                 keychain = if e.path.starts_with("keychain:") {
@@ -494,7 +493,20 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 expires = tl!(", Expires: "),
                 date = e.expires,
             );
-            ui.painter().text(rect.min + vec2(40.0, 28.0), egui::Align2::LEFT_TOP, sub, theme::regular(11.5), t.text_muted);
+            // Painted text does not wrap, and a long common name or issuer would draw past the card.
+            let max_w = (rect.width() - 50.0).max(0.0);
+            let name_font = theme::semibold(13.0);
+            let sub_font = theme::regular(11.5);
+            let width_of = |font: &egui::FontId, s: &str| ui.fonts_mut(|f| f.layout_no_wrap(s.to_owned(), font.clone(), t.text).size().x);
+            let name = crate::widgets::fit_line(&e.name, max_w, |s| width_of(&name_font, s));
+            let detail = crate::widgets::fit_line(&sub, max_w, |s| width_of(&sub_font, s));
+            let clip = Rect::from_min_max(rect.min + vec2(40.0, 0.0), rect.right_bottom() - vec2(8.0, 0.0));
+            let painter = ui.painter().with_clip_rect(clip);
+            painter.text(rect.min + vec2(40.0, 9.0), egui::Align2::LEFT_TOP, &name, name_font, t.text);
+            painter.text(rect.min + vec2(40.0, 28.0), egui::Align2::LEFT_TOP, &detail, sub_font, t.text_muted);
+            if name != e.name || detail != sub {
+                resp.clone().on_hover_text(format!("{}\n{sub}", e.name));
+            }
             if resp.clicked() {
                 d.selected = Some(i);
             }
@@ -546,11 +558,11 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 (tl!("Email Address"), &mut n.email),
             ] {
                 let l = ui.label(label);
-                ui.add(egui::TextEdit::singleline(value).desired_width(260.0)).labelled_by(l.id);
+                ui.add(crate::widgets::line(value).desired_width(260.0)).labelled_by(l.id);
                 ui.end_row();
             }
             let l = ui.label(tl!("Country/Region"));
-            ui.add(egui::TextEdit::singleline(&mut n.country).hint_text("US").char_limit(2).desired_width(60.0)).labelled_by(l.id);
+            ui.add(crate::widgets::line(&mut n.country).hint_text("US").char_limit(2).desired_width(60.0)).labelled_by(l.id);
             ui.end_row();
             ui.label(tl!("Key Algorithm"));
             egui::ComboBox::from_id_salt("key-alg").selected_text(KEY_ALGORITHMS[n.key].0).show_ui(ui, |ui| {
@@ -560,10 +572,10 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             });
             ui.end_row();
             let l = ui.label(tl!("Password"));
-            ui.add(egui::TextEdit::singleline(&mut n.password).password(true).desired_width(200.0)).labelled_by(l.id);
+            ui.add(crate::widgets::line(&mut n.password).password(true).desired_width(200.0)).labelled_by(l.id);
             ui.end_row();
             let l = ui.label(tl!("Confirm Password"));
-            ui.add(egui::TextEdit::singleline(&mut n.confirm).password(true).desired_width(200.0)).labelled_by(l.id);
+            ui.add(crate::widgets::line(&mut n.confirm).password(true).desired_width(200.0)).labelled_by(l.id);
             ui.end_row();
         });
         ui.label(
@@ -575,7 +587,7 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         egui::Grid::new("id-file").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             let l = ui.label(tl!("File (.p12, .pfx)"));
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut n.file).desired_width(220.0)).labelled_by(l.id);
+                ui.add(crate::widgets::line(&mut n.file).desired_width(220.0)).labelled_by(l.id);
                 #[cfg(not(target_arch = "wasm32"))]
                 if ui.button(tl!("Browse…")).clicked() {
                     browse = true;
@@ -583,7 +595,7 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             });
             ui.end_row();
             let l = ui.label(tl!("Password"));
-            ui.add(egui::TextEdit::singleline(&mut n.file_password).password(true).desired_width(200.0)).labelled_by(l.id);
+            ui.add(crate::widgets::line(&mut n.file_password).password(true).desired_width(200.0)).labelled_by(l.id);
             ui.end_row();
         });
     }
@@ -717,10 +729,10 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             ui.end_row();
         }
         let l = ui.label(tl!("Reason"));
-        ui.add(egui::TextEdit::singleline(&mut d.reason).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
+        ui.add(crate::widgets::line(&mut d.reason).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
         ui.end_row();
         let l = ui.label(tl!("Location"));
-        ui.add(egui::TextEdit::singleline(&mut d.location).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
+        ui.add(crate::widgets::line(&mut d.location).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
         ui.end_row();
         if in_os_key_store {
             ui.label("");
@@ -735,7 +747,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             );
         } else {
             let l = ui.label(tl!("Digital ID password"));
-            let r = ui.add(egui::TextEdit::singleline(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);
+            let r = ui.add(crate::widgets::line(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 go = true;
             }

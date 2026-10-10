@@ -1866,6 +1866,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     };
     let mut open_signature = false;
     let mut hover_text: Option<(Pos2, String)> = None;
+    // A dialog, save prompt or palette covers the page. Hover tips are drawn above those
+    // windows, so a comment under the pointer would otherwise float over the dialog.
+    let page_covered = app.dialog.is_some()
+        || app.close_request.is_some()
+        || app.palette_open
+        || app.password_prompt.is_some()
+        || app.pending_link.is_some()
+        || app.updates.open;
     let mut clicked_link: Option<LinkTarget> = None;
     let mut canvas_action: Option<comments::CanvasAction> = None;
     let mut field_menu: Option<FieldMenu> = None;
@@ -2334,7 +2342,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
             }
             // Fill & Sign keeps its placement cursor clear of link/comment hover feedback.
-            if !matches!(tool, QuickTool::Fill(_))
+            if !page_covered
+                && !matches!(tool, QuickTool::Fill(_))
                 && let Some(p) = pointer
             {
                 for l in info.links.iter().filter(|l| l.page == i) {
@@ -3020,12 +3029,14 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                         ui.painter().rect_filled(row, CornerRadius::same(4), t.hover);
                                     }
                                     icons::paint(ui, Rect::from_min_size(row.min + vec2(8.0, 6.0), vec2(16.0, 16.0)), tool.icon(), 16.0, t.text);
-                                    ui.painter().text(
+                                    let reserve = if on { 28.0 } else { 8.0 };
+                                    crate::widgets::paint_left(
+                                        ui,
                                         row.left_center() + vec2(34.0, 0.0),
-                                        Align2::LEFT_CENTER,
                                         tl!(tool.label()),
                                         theme::regular(13.0),
                                         t.text,
+                                        (row.width() - 34.0 - reserve).max(0.0),
                                     );
                                     if on {
                                         icons::paint(
@@ -3085,12 +3096,14 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                     ui.painter().rect_filled(row, CornerRadius::same(4), t.hover);
                                 }
                                 icons::paint(ui, Rect::from_min_size(row.min + vec2(8.0, 6.0), vec2(16.0, 16.0)), tool.icon(), 16.0, t.text);
-                                ui.painter().text(
+                                let reserve = if on { 28.0 } else { 8.0 };
+                                crate::widgets::paint_left(
+                                    ui,
                                     row.left_center() + vec2(34.0, 0.0),
-                                    Align2::LEFT_CENTER,
                                     tl!(tool.label()),
                                     theme::regular(13.0),
                                     t.text,
+                                    (row.width() - 34.0 - reserve).max(0.0),
                                 );
                                 if on {
                                     icons::paint(
@@ -3374,7 +3387,17 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
                     ui.painter().image(tex.id(), pr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                 }
                 ui.painter().rect_stroke(pr, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
-                ui.painter().text(pos2(c.center().x, pr.bottom() + 16.0), Align2::CENTER_CENTER, &p.label, theme::medium(12.0), t.text_muted);
+                let label_font = theme::medium(12.0);
+                let label_w = (c.width() - 12.0).max(0.0);
+                let page_label = crate::widgets::fit_line(&p.label, label_w, |s| crate::widgets::text_width(ui, s, &label_font));
+                let label_pos = pos2(c.center().x, pr.bottom() + 16.0);
+                ui.painter().with_clip_rect(Rect::from_center_size(label_pos, vec2(label_w, 18.0))).text(
+                    label_pos,
+                    Align2::CENTER_CENTER,
+                    page_label,
+                    label_font,
+                    t.text_muted,
+                );
                 if resp.clicked() {
                     let m = ui.input(|i| i.modifiers);
                     view.click_page(i, m, false);

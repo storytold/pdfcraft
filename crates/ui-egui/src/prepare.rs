@@ -933,7 +933,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
     ui.set_width(600.0);
     ui.label(egui::RichText::new(tl!(d.title())).font(theme::semibold(18.0)));
     ui.add_space(6.0);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         for (tab, label) in d.tabs() {
             if widgets::mode_tab(ui, tl!(label), d.tab == tab).clicked() {
                 d.tab = tab;
@@ -956,11 +956,11 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
             FieldTab::General => {
                 egui::Grid::new("field-general").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
                     let l = ui.label(tl!("Name:"));
-                    let r = ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(340.0)).labelled_by(l.id);
+                    let r = ui.add(crate::widgets::line(&mut d.name).desired_width(340.0)).labelled_by(l.id);
                     enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.end_row();
                     let l = ui.label(tl!("Tooltip:"));
-                    ui.add(egui::TextEdit::singleline(&mut d.tooltip).desired_width(340.0)).labelled_by(l.id);
+                    ui.add(crate::widgets::line(&mut d.tooltip).desired_width(340.0)).labelled_by(l.id);
                     ui.end_row();
                 });
                 ui.add_space(12.0);
@@ -1086,7 +1086,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                             });
                         ui.end_row();
                         let l = ui.label(tl!("Default Value:"));
-                        ui.add(egui::TextEdit::singleline(&mut d.default).desired_width(260.0)).labelled_by(l.id);
+                        ui.add(crate::widgets::line(&mut d.default).desired_width(260.0)).labelled_by(l.id);
                         ui.end_row();
                     });
                     ui.add_space(6.0);
@@ -1146,7 +1146,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                 _ => {
                     ui.horizontal(|ui| {
                         let l = ui.label(tl!("Item:"));
-                        let r = ui.add(egui::TextEdit::singleline(&mut d.new_option).desired_width(240.0)).labelled_by(l.id);
+                        let r = ui.add(crate::widgets::line(&mut d.new_option).desired_width(240.0)).labelled_by(l.id);
                         let typed = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         if (widgets::pill_button(ui, tl!("Add"), false).clicked() || typed) && !d.new_option.trim().is_empty() {
                             d.options.push(d.new_option.trim().to_string());
@@ -1359,7 +1359,7 @@ fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
                     }
                 });
                 ui.label(tl!("Custom:"));
-                ui.add(egui::TextEdit::singleline(p).desired_width(120.0));
+                ui.add(crate::widgets::line(p).desired_width(120.0));
             });
         }
         Format::Special(n) => {
@@ -1384,7 +1384,7 @@ fn format_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
             });
             ui.horizontal(|ui| {
                 ui.label(tl!("Mask:"));
-                ui.add(egui::TextEdit::singleline(m).desired_width(160.0));
+                ui.add(crate::widgets::line(m).desired_width(160.0));
             });
             ui.label(egui::RichText::new(tl!("9 digit, A letter, O letter or digit, X any character")).small().color(t.text_faint));
             if idx < 4 {
@@ -1457,9 +1457,9 @@ fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) 
         };
         ui.label(if a.kind == 0 { tl!("Script:") } else { tl!("Value:") });
         if a.kind == 0 {
-            ui.add(egui::TextEdit::multiline(&mut a.text).code_editor().desired_rows(3).desired_width(340.0).hint_text(hint).id_salt("action-text"));
+            ui.add(crate::widgets::block(&mut a.text).code_editor().desired_rows(3).desired_width(340.0).hint_text(hint).id_salt("action-text"));
         } else {
-            ui.add(egui::TextEdit::singleline(&mut a.text).desired_width(340.0).hint_text(hint).id_salt("action-text"));
+            ui.add(crate::widgets::line(&mut a.text).desired_width(340.0).hint_text(hint).id_salt("action-text"));
         }
         ui.end_row();
     });
@@ -1557,7 +1557,7 @@ fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens
         d.calculate = Calculate::Notation(String::new());
     }
     if let Calculate::Notation(expr) = &mut d.calculate {
-        ui.add(egui::TextEdit::multiline(expr).hint_text("Price * Quantity").desired_rows(2).desired_width(420.0));
+        ui.add(crate::widgets::block(expr).hint_text("Price * Quantity").desired_rows(2).desired_width(420.0));
         ui.label(egui::RichText::new(tl!("Field names with + - * / and parentheses; put \\ before spaces in names.")).small().color(t.text_faint));
     }
 }

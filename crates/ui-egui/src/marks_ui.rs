@@ -181,7 +181,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     ui.end_row();
                     for col in 0..3 {
                         let k = row * 3 + col;
-                        let r = ui.add_sized([220.0, 40.0], egui::TextEdit::multiline(&mut d.hf.text[k]).desired_rows(2).id_salt(("hf-box", k)));
+                        let r = ui.add_sized([220.0, 40.0], crate::widgets::block(&mut d.hf.text[k]).desired_rows(2).id_salt(("hf-box", k)));
                         if r.gained_focus() || r.has_focus() {
                             d.focused_box = k;
                         }
@@ -232,11 +232,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     ui.add_enabled_ui(!d.use_file, |ui| {
                         ui.label(tl!("Text"));
                         ui.add(
-                            egui::TextEdit::multiline(&mut d.wm.text)
-                                .desired_rows(2)
-                                .desired_width(320.0)
-                                .hint_text("CONFIDENTIAL")
-                                .id_salt("wm-text"),
+                            crate::widgets::block(&mut d.wm.text).desired_rows(2).desired_width(320.0).hint_text("CONFIDENTIAL").id_salt("wm-text"),
                         );
                     });
                     ui.horizontal(|ui| {
