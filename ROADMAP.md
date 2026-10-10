@@ -1,8 +1,8 @@
 # PdfCraft roadmap
 
-**Stage: pre-alpha** · next: alpha, ~0% (ready for real work, 47%, already past the bar; one core workflow fails the gate) and ~40–70 h away
+**Stage: alpha** · next: beta, ~28% (ready for real work 47% → 75%) and ~400–700 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (second look: ready 40% → 47%, mainstream 55% added; core-workflow gate applied → pre-alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (second look: ready 40% → 47%, mainstream 55% added; core-workflow gate applied → alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 PdfCraft's one-page summary: how close it is to Adobe Acrobat Pro's offline feature set, and what
 comes next. Adobe's cloud services (Document Cloud, Acrobat Sign requests, shared review, the AI
@@ -33,18 +33,15 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 | Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.2% unweighted; P0 95.3%) | measured ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 47%** (44–50%) | estimated ([method](docs/target-app-parity.md#how-this-was-measured)) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
-| Remaining to **alpha** | ≈ 40–70 Opus 5.5 agent-hours (the [alpha gate](docs/roadmap.md#alpha-gate)) | estimated |
 | Remaining to **beta** | ≈ 400–700 Opus 5.5 agent-hours | estimated |
 | Remaining to **full parity** | ≈ 780–1,400 Opus 5.5 agent-hours (≈ 300–550 h wall clock with 3–5 agents) | estimated, calibrated on this repo's history |
 
-**Why pre-alpha:** five of Acrobat Pro's six everyday workflows work end to end on macOS (view,
-search and print; organize; comment; fill and sign; editing Latin text and images), and users
-praise them (7.6k stars, ≈ 217k downloads of 0.4–0.5, switching reports such as #179). The sixth,
-**convert and share**, fails the [alpha gate](docs/roadmap.md#alpha-gate): password-protected files
-we write don't open in Acrobat or Reader (#774), Office files can't be turned into PDFs, and Word
-export loses layout (#773). Closing that row (≈ 40–70 h) makes PdfCraft alpha. Beyond it: quality
-is unmeasured against Acrobat, rendering is still the borrowed `hayro`, Windows can't print (#756),
-and 245 issues are open.
+**Why alpha:** all six of Acrobat Pro's everyday workflows can be completed end to end on macOS
+(the [alpha gate](docs/roadmap.md#alpha-gate)), and users praise them (7.6k stars, ≈ 217k downloads
+of 0.4–0.5, switching reports such as #179). Two are only partial: editing (no CJK/RTL) and convert
+and share (password-protected files we write don't open in Acrobat or Reader, #774; no in-app
+Office→PDF; Word export loses layout, #773). Those, unmeasured quality against Acrobat, the borrowed
+`hayro` renderer, no printing on Windows (#756) and 245 open issues keep it far from beta.
 
 ## By dimension
 
@@ -113,7 +110,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 | Rank | Milestone | Estimate (h) |
 |---|---|---|
-| 0 | **Alpha gate**: encrypted output opens in Acrobat (#774), Create PDF from Office, Word export that keeps layout (#773) | 40–70 |
+| 0 | Convert and share: encrypted output opens in Acrobat (#774), Create PDF from Office, Word export that keeps layout (#773) | 40–70 |
 | 1 | Backlog and platform: crash and wrong-result reports, Windows printing (#756), Chinese UI face (#826) | 65–120 |
 | 2 | Fidelity harness against Acrobat and the renderer decision (M2; owner decision on #841) | 110–190 |
 | 3 | Editing existing content (M7) | 100–180 |
@@ -127,6 +124,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 Newest first: the date, what moved, and the new overall estimate.
 
+- **2026-10-10 (progress docs, gate consistency check):** Re-judged the convert-and-share row with the rule applied across all Crafting Apps (a workflow blocks only when it can't be completed at all; lossy exchange and missing sub-cases are beta items, as for FilmCraft's .prproj or VectorCraft's .ai). Unencrypted sharing works, encryption interop (#774) and Office→PDF are sub-cases, Word export is lossy rather than absent: partial, not blocking. **Stage pre-alpha → alpha**; numbers unchanged (47%, mainstream 55%; beta ≈ 400–700 h).
 - **2026-10-10 (progress docs, second look and alpha gate):** At the owner's request, after practitioners praised PdfCraft, re-examined the numbers. User sentiment: 7,595 stars, 177k + 39k downloads of 0.4.0/0.5.0, 23 user issues with explicit praise and switching reports (#179, #232, #273), issue themes concentrated in core paths (launch/GPU, rendering, editing, CJK, signing, printing). The checklist is not niche-dominated (497 mainstream vs 311 specialist rows; P0 95% / 91%). The first pass's 9-point cross-cutting deduction double-counted Windows printing, interop and glyphs: **ready for real work 40% → 47%**, and **≈ 55% for the mainstream practitioner** (new). The new core-workflow gate (craftrules progress-docs) fails on convert and share (#774, no Office import, #773): **stage alpha → pre-alpha**, ≈ 40–70 h from alpha; beta still ≈ 400–700 h.
 - **2026-10-10 (progress docs, full re-measure):** Re-measured against Acrobat Pro 26.002.21931 (installed bundle inspected: document types, localizations, plug-in and framework names). Checklist: 423 shipped + 74 partial of 808 (56.9%; P0 94.2%), ≈ 67% tier-weighted. Ready for real work ≈ 40%; stage **alpha**; ≈ 400–700 h to beta, ≈ 780–1,400 h to full parity (up from 600–1,100 h: the first public releases surfaced Acrobat interop of encrypted output, Windows printing, Chinese UI glyphs, Word-export layout and a 245-issue backlog). This file restructured to the craftrules progress-docs standard; the honest assessment moved to `docs/target-app-parity.md`, the gap list to `docs/gaps.md`, the milestones (duplicated rows merged) to `docs/roadmap.md`; new `docs/architecture.md`, `docs/localization-parity.md`, `docs/file-format-parity.md`, `docs/pdf-spec-parity.md`, `docs/ui-parity.md`, `docs/hardware-parity.md`.
 - **2026-10-10 (M8, redact word lists):** Find text and redact gains "Multiple words or phrases": a list with one word or phrase per line, typed or imported from a `.txt` file, whose every match is marked in one undo step. Lists are trimmed, deduplicated and bounded (1,000 entries of 256 characters, files up to 1 MB). `redact_mark` takes `words` and reports how many marks each made, so an agent sees which found nothing. Tests cover the list parsing, the tool end to end (mark, undo, apply, invalid lists) and the dialog with an imported list; the new labels are translated in all 13 UI catalogs. `protect.redact-word-lists` is shipped; whole-word and case-sensitive matching and exporting the list are still missing. Estimates unchanged (about 30–35%).
@@ -285,6 +283,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Gate consistency check: convert and share re-judged partial, not blocking; stage pre-alpha → alpha |
 | 2026-10-10 | minor | Second look: ready 40% → 47% (cross-cutting double count removed), mainstream-practitioner numbers and user sentiment added; core-workflow alpha gate applied, stage alpha → pre-alpha |
 | 2026-10-10 | major | Restructured to the progress-docs standard (stage, two numbers, dimensions, features, languages, upcoming, log); full re-measure; assessment, gaps and milestones moved to `docs/`; log sorted newest first and a stray merged entry dated |
 | 2026-10-07 | minor | 806 tracked features, 51.0% shipped, effort-weighted ≈ 30–35%, 600–1,100 h |

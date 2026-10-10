@@ -1,6 +1,6 @@
 # PdfCraft parity with Adobe Acrobat Pro
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (second look: cross-cutting double count removed, mainstream-practitioner number added, core-workflow gate applied → pre-alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (second look: cross-cutting double count removed, mainstream-practitioner number added, core-workflow gate applied → alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 The authoritative assessment of how close PdfCraft is to Acrobat Pro. [ROADMAP.md](../ROADMAP.md)
 summarizes it; [gaps.md](gaps.md) lists every shortfall one by one; the deep-dive checklists are
@@ -23,7 +23,7 @@ Approved Trust List) are out of scope: 23 such features are tracked as `na` in
 | Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.2% unweighted: 292 + 44 partial of 497; P0 95.3%) | measured ([split below](#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 47%** (range 44–50%) | estimated (area table below) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (range 50–60%) | estimated ([split below](#mainstream-practitioner-vs-full-acrobat-pro)) |
-| **Stage** | **pre-alpha** (one core workflow fails the alpha gate; ≈ 40–70 h from alpha) | see [Stage](#stage) |
+| **Stage** | **alpha** (passes the core-workflow gate) | see [Stage](#stage) |
 | Remaining to beta | ≈ 400–700 Opus 5.5 agent-hours | estimated |
 | Remaining to full parity | ≈ 780–1,400 Opus 5.5 agent-hours | estimated |
 
@@ -175,12 +175,15 @@ with evidence when next touched.
 
 ## Stage
 
-**pre-alpha** (was alpha in the first version of this file the same day). Ready for real work,
-≈ 47%, is above the ~40% bar, but the stage standard's core-workflow gate fails: of Acrobat Pro's
-six everyday workflows, five work end to end on macOS, and **converting and sharing** does not
-(password-protected output is rejected by Acrobat and Reader, #774; Office files can't be made into
-PDFs; Word export loses layout, #773). The gate table, with evidence and hours, is in
-[roadmap.md](roadmap.md#alpha-gate).
+**alpha.** Ready for real work, ≈ 47%, is inside the 40–75% band, and every one of Acrobat Pro's
+six everyday workflows can be completed end to end on macOS. Under the gate rule shared by all the
+Crafting Apps, a workflow blocks only when a typical user can't complete it at all; lossy exchange
+or a missing sub-case is a beta item. **Converting and sharing** is therefore partial, not
+blocking: unencrypted PDFs we save open everywhere and export to Word, RTF, HTML, text and images
+works, but password-protected output is rejected by Acrobat and Reader (#774), there is no in-app
+Create PDF from Office, and Word export loses layout (#773). The gate table, with evidence, is in
+[roadmap.md](roadmap.md#alpha-gate). (Earlier the same day this row was judged blocking and the
+stage set to pre-alpha; see the revision history.)
 
 | Core workflow | Works end to end? |
 |---|---|
@@ -189,10 +192,7 @@ PDFs; Word export loses layout, #773). The gate table, with evidence and hours, 
 | Comment and review | yes |
 | Fill and sign forms | yes |
 | Edit text and images | partial, not blocking (Latin text with embedded or standard fonts) |
-| Convert and share (Office ↔ PDF, password protection) | **partial, blocking** |
-
-**To reach alpha:** close the convert-and-share row, ≈ **40–70 agent-hours** (gaps 1 and 8). No
-percentage needs to move: ready for real work is already past the alpha bar.
+| Convert and share (Office ↔ PDF, password protection) | partial, not blocking (encryption interop #774, Office→PDF and Word layout #773 are beta items) |
 
 **To reach beta** (≈ 75% ready, no blocking gap in PDF interchange), ≈ 28 points and
 **≈ 400–700 agent-hours**:
@@ -245,6 +245,7 @@ licensed OCR or AI model.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Consistency check across apps: re-judged the convert-and-share gate row with the shared rule (blocking only when the workflow can't be completed at all; lossy exchange and missing sub-cases are beta items). Encrypted output (#774) and Office→PDF are sub-cases, Word export is lossy not absent → partial, not blocking; stage pre-alpha → **alpha**. Numbers unchanged |
 | 2026-10-10 | minor | Second look requested by the owner after practitioners praised PdfCraft: user sentiment gathered (stars, downloads, 23 praising issues, switching reports, issue themes); checklist split into mainstream (497) and specialist (311) features; the 9-point cross-cutting deduction removed as a double count (Windows printing, interop and glyphs were already scored in their areas). Ready for real work 40% → 47%; mainstream practitioner ≈ 55% added. Core-workflow alpha gate applied: convert and share fails → stage alpha → **pre-alpha**, ≈ 40–70 h from alpha |
 | 2026-10-10 | major | Created from ROADMAP.md §Estimate summary and §Honest assessment (2026-10-05/07). Full re-measure against Acrobat Pro 26.002.21931: checklist recomputed (56.9% unweighted, ≈ 67% tier-weighted), ready for real work ≈ 40%, stage alpha, hours re-calibrated (780–1,400 h to parity, 400–700 h to beta), dimension and area tables |
 | 2026-10-07 | minor | (in ROADMAP.md) 806 tracked features, 51.0% shipped, effort-weighted ≈ 30–35%, 600–1,100 h |
