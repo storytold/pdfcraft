@@ -741,6 +741,10 @@ pub fn is_fill_sign(doc: &Document, d: &Dict) -> bool {
     subtype == b"Ink" && text_value(doc, d, b"Subj").as_deref() == Some("Signature")
 }
 
+fn annotation_flags(doc: &Document, d: &Dict) -> i64 {
+    d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0)
+}
+
 /// Whether any page has a Fill & Sign annotation that flatten would bake in (not hidden).
 pub fn has_visible_fill_sign(doc: &Document) -> bool {
     let Ok(pages) = page_refs(doc) else { return false };
@@ -748,7 +752,7 @@ pub fn has_visible_fill_sign(doc: &Document) -> bool {
         for entry in annots(doc, page) {
             let obj = doc.resolve(&entry);
             let Some(d) = obj.as_dict() else { continue };
-            let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+            let flags = annotation_flags(doc, d);
             if flags & (FLAG_HIDDEN | FLAG_NO_VIEW) != 0 {
                 continue;
             }
@@ -1504,7 +1508,7 @@ fn reply(
 }
 
 fn flags(doc: &Document, r: ObjRef) -> i64 {
-    doc.get(r).as_dict().and_then(|d| d.get(b"F").and_then(|f| doc.resolve(f).as_f64())).unwrap_or(0.0) as i64
+    doc.get(r).as_dict().map(|d| annotation_flags(doc, d)).unwrap_or(0)
 }
 
 /// Refuse to change a locked comment (Acrobat: Properties ▸ Locked).
@@ -1793,7 +1797,14 @@ fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
-/// Every comment (not links, form widgets or pop-ups), ordered by page and then top edge.
+/// Whether an annotation subtype is a comment. Links, form widgets, pop-ups and the non-markup
+/// multimedia and print-production annotations (ISO 32000-2 §12.5.6: Screen, Movie, RichMedia,
+/// 3D, PrinterMark, TrapNet, Watermark) are not.
+pub fn is_comment_subtype(subtype: &str) -> bool {
+    !matches!(subtype, "Link" | "Widget" | "Popup" | "Screen" | "Movie" | "RichMedia" | "3D" | "PrinterMark" | "TrapNet" | "Watermark")
+}
+
+/// Every comment (see [`is_comment_subtype`]), ordered by page and then top edge.
 pub fn summaries(doc: &Document) -> Vec<Summary> {
     let mut out = Vec::new();
     let Ok(pages) = page_refs(doc) else { return out };
@@ -1802,7 +1813,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
             let obj = doc.resolve(entry);
             let Some(d) = obj.as_dict() else { continue };
             let Some(subtype) = d.name(b"Subtype").map(|s| String::from_utf8_lossy(s).into_owned()) else { continue };
-            if matches!(subtype.as_str(), "Link" | "Widget" | "Popup") {
+            if !is_comment_subtype(&subtype) {
                 continue;
             }
             let nums = |k: &[u8]| -> Vec<f32> {
@@ -1841,7 +1852,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 color,
                 state: text_value(doc, d, b"State"),
                 quads,
-                locked: d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0) & FLAG_LOCKED != 0,
+                locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
                 intent: d.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
             });
         }
@@ -1927,7 +1938,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         icon: (subtype == "Text").then(|| d.name(b"Name").and_then(|n| NoteIcon::from_name(&String::from_utf8_lossy(n))).unwrap_or(NoteIcon::Note)),
         modified: text_value(doc, d, b"M"),
         restylable: appearance::build(d).is_some(),
-        locked: d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0) & FLAG_LOCKED != 0,
+        locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
         subtype,
         endings: line_endings_of(d),
     })

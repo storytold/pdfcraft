@@ -94,7 +94,7 @@
 	Double-click	Подвійне клацання
 	Select a word	Виділити слово
 	Clear selection / close find	Зняти виділення / закрити пошук
-	Zoom in / out (also pinch or ⌘-scroll)	Збільшити / зменшити (також жестом зведення або ⌘-прокручуванням)
+	Zoom in / out (also pinch or {key}-scroll)	Збільшити / зменшити (також жестом зведення або {key}-прокручуванням)
 	Rotate view	Повернути вигляд
 	First / last page	Перша / остання сторінка
 	Previous / next page	Попередня / наступна сторінка
@@ -102,16 +102,16 @@
 	Select all pages (Organize)	Вибрати всі сторінки (Упорядкування)
 	Home	Головна
 	Open	Відкрити
-	Open a PDF (⌘O)	Відкрити PDF (⌘O)
+	Open a PDF ({key})	Відкрити PDF ({key})
 	Dark gray theme	Темно-сіра тема
 	Light theme	Світла тема
 	All tools	Усі інструменти
 	Read	Читання
 	Convert	Перетворення
 	E-Sign	Електронний підпис
-	Print (⌘P)	Друк (⌘P)
+	Print ({key})	Друк ({key})
 	Save (M4)	Зберегти (M4)
-	Document properties (⌘D)	Властивості документа (⌘D)
+	Document properties ({key})	Властивості документа ({key})
 	Find tools and commands	Знайти інструменти й команди
 	Fit to height	За висотою
 	Zoom in	Збільшити
@@ -140,9 +140,9 @@
 	Compare	Порівняння
 	Page thumbnails	Мініатюри сторінок
 	Form fields	Поля форми
-	Zoom out (⌘−)	Зменшити (⌘−)
-	Zoom in (⌘+)	Збільшити (⌘+)
-	Rotate view clockwise (⇧⌘+)	Повернути вигляд за годинниковою стрілкою (⇧⌘+)
+	Zoom out ({key})	Зменшити ({key})
+	Zoom in ({key})	Збільшити ({key})
+	Rotate view clockwise ({key})	Повернути вигляд за годинниковою стрілкою ({key})
 	Toggle fit page / fit width	Перемкнути масштаб за сторінкою / за шириною
 	Next page	Наступна сторінка
 	Previous page	Попередня сторінка
@@ -276,6 +276,7 @@
 	Security properties…	Властивості захисту…
 	Organize pages	Упорядкувати сторінки
 	New bookmark	Нова закладка
+	New bookmarks from structure	Нові закладки зі структури
 	Rotate pages clockwise	Повернути сторінки за годинниковою стрілкою
 	Rotate pages counterclockwise	Повернути сторінки проти годинникової стрілки
 	Delete pages	Видалити сторінки
@@ -1092,10 +1093,16 @@
 	Text in images isn't found; recognise text (OCR) first.	Текст у зображеннях не знаходиться; спочатку розпізнайте текст (OCR).
 	No matches.	Збігів немає.
 	{n} match(es) marked for redaction.	Збігів, позначених для вилучення: {n}.
+	Multiple words or phrases	Кілька слів або фраз
+	One word or phrase per line	По одному слову або фразі в рядку
+	Import list…	Імпортувати список…
+	{n} word(s) or phrase(s)	Слів або фраз: {n}
+	{name} is too large for a word list (at most 1 MB).	Файл {name} завеликий для списку слів (не більше 1 МБ).
 	Redaction Tool Properties	Властивості інструмента вилучення вмісту
 	Redacted area fill colour:	Колір заливки вилученої області:
 	Use overlay text	Використовувати накладений текст
 	Custom text:	Власний текст:
+	Redaction code:	Код вилучення:
 	Font:	Шрифт:
 	Font size:	Розмір шрифту:
 	Auto-size text to fit redaction region	Автоматично добирати розмір тексту до області вилучення
@@ -1197,7 +1204,7 @@
 	Searchable Image (Exact)	Зображення з пошуком (точне)
 	Adds invisible text over each word; the page image is not changed	Додає невидимий текст поверх кожного слова; зображення сторінки не змінюється
 	Downsample to	Знизити роздільну здатність до
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	Розпізнавання тексту не встановлено: бракує моделей (виконайте `cargo xtask models` або задайте PRINTCRAFT_MODELS).
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Розпізнавання тексту не встановлено: бракує файлів моделей. Перевстановіть PdfCraft або задайте в PDFCRAFT_MODELS теку, у якій вони лежать.
 	Settings	Налаштування
 	Optional	Необов’язково
 	Planned · {m}	Заплановано · {m}
@@ -1265,7 +1272,7 @@
 	Expand all bookmarks	Розгорнути всі закладки
 	Expand top-level bookmarks	Розгорнути закладки верхнього рівня
 	Collapse all bookmarks	Згорнути всі закладки
-	New bookmark (⌘B)	Нова закладка (⌘B)
+	New bookmark ({key})	Нова закладка ({key})
 	This document has no bookmarks.	Цей документ не має закладок.
 	This document has no layers.	Цей документ не має шарів.
 	This document has no attachments.	Цей документ не має вкладень.
@@ -1280,8 +1287,8 @@
 	No matches	Збігів немає
 	Searching… {s}/{p}	Пошук… {s}/{p}
 	{c} of {n}{more}	{c} із {n}{more}
-	Previous (⇧⌘G)	Попередній (⇧⌘G)
-	Next (⌘G)	Наступний (⌘G)
+	Previous ({key})	Попередній ({key})
+	Next ({key})	Наступний ({key})
 	Find options	Параметри пошуку
 	Whole words only	Лише цілі слова
 	Case-sensitive	З урахуванням регістру
@@ -1763,7 +1770,7 @@
 	there are no pages to print	немає сторінок для друку
 	the document has no tags	документ не має тегів
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	моделі розпізнавання тексту не встановлено (виконайте `cargo xtask models` або задайте PRINTCRAFT_MODELS)
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	моделі розпізнавання тексту не встановлено (перевстановіть PdfCraft або задайте в PDFCRAFT_MODELS теку, у якій вони лежать)
 	the image is empty	зображення порожнє
 	this file isn't XFDF, FDF, XML or text form data	цей файл не містить даних форми XFDF, FDF, XML чи текстових даних
 	nothing in the file matches this document	ніщо у файлі не відповідає цьому документу
@@ -1958,7 +1965,6 @@
 	Open this web page?	Відкрити цю вебсторінку?
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Сценарії виконуються в ізольованому середовищі без доступу до файлів і мережі. Сценарій, що просить відкрити вебсторінку, спочатку потребує вашого дозволу. Коли JavaScript вимкнено, стандартні функції форматування, перевірки й обчислення Acrobat усе одно працюють.
 	Sign yourself	Підписати самостійно
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	Розпізнавання тексту не встановлено: бракує моделей (виконайте `cargo xtask models` або задайте PDFCRAFT_MODELS).
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	Використовується під час відкриття PDF. Явно заданий режим запуску або керування має пріоритет для сеансу.
 	Write this email?	Написати цього листа?
 	{who} in this document wants to open this address in your browser:	{who} у цьому документі хоче відкрити цю адресу у вашому браузері:
@@ -2008,6 +2014,7 @@
 	Couldn't optimize the file	Не вдалося оптимізувати файл
 	Files are combined in this order. Leave Pages empty to take every page.	Файли об’єднуються в цьому порядку. Залиште «Сторінки» порожнім, щоб узяти всі сторінки.
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Портативний режим вимкнено: неможливо записати в {folder} ({error}). Налаштування зберігаються у вашій користувацькій теці.
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft малює без графічного процесора, тому може працювати повільно. Оновлення графічного драйвера може допомогти.
 	Show	Показувати
 	Sort	Сортувати
 	Reverse the order	Зворотний порядок
@@ -2090,22 +2097,30 @@ calendar date	December	грудня
 	The Windows store's digital IDs couldn't be listed: {e}	Не вдалося отримати список цифрових посвідчень зі сховища Windows: {e}
 	Align fields	Вирівняти поля
 	Distribute fields	Розподілити поля
-	Match field sizes	Вирівняти розміри полів
+	Match field sizes	Задати однакові розміри полів
 	Mark for redaction	Позначити для вилучення вмісту
 	Mark pages for redaction	Позначити сторінки для вилучення вмісту
 	Change document properties	Змінити властивості документа
 	Mark differences	Позначити відмінності
 	Run form script	Виконати сценарій форми
-	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	Вміст зі сценаріями має бути доступним із клавіатури та допоміжних технологій. Перевірте сценарії документа.
-	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Рядки таблиці мають бути безпосередньо в таблиці або в її заголовку, тілі чи підсумку. Виправте теги таблиці.
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	Вміст зі сценаріями має бути доступним для керування за допомогою клавіатури й допоміжних технологій. Перевірте сценарії документа.
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Рядки таблиці мають належати безпосередньо таблиці або її заголовній, основній чи нижній частині. Виправте теги таблиці.
 	Basic constraints	Основні обмеження
-	SHA-1 digest	Дайджест SHA-1
-	SHA-256 digest	Дайджест SHA-256
+	Certificate authority	Центр сертифікації
+	End entity	Кінцевий суб’єкт
+	SHA-1 digest	Відбиток SHA-1
+	SHA-256 digest	Відбиток SHA-256
 	Squiggly	Хвилясте
 	Home / End	Home / End
 	H / Space (hold)	H / Пробіл (утримувати)
 	Rotation:	Поворот:
 	Line ending	Закінчення лінії
+	Open arrow	Відкрита стрілка
+	Closed arrow	Закрита стрілка
+	Butt	Торець
+	Reverse open arrow	Зворотна відкрита стрілка
+	Reverse closed arrow	Зворотна закрита стрілка
+	Slash	Коса риска
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Стандартні шрифти не можуть відобразити «{c}» ({code}). Поки що як текст можна додавати лише західноєвропейські символи.
 	Larger pages	Більші сторінки
 	Smaller pages	Менші сторінки
@@ -2127,3 +2142,27 @@ calendar date	December	грудня
 	This printer offers no settings of its own.	Цей принтер не має власних налаштувань.
 	Margins	Поля
 	For page sizes and margins.	Для розмірів сторінок і полів.
+certificate	Subject	Власник сертифіката
+	Scroll tabs left	Прокрутити вкладки ліворуч
+	Scroll tabs right	Прокрутити вкладки праворуч
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	Спільні властивості полів
+	{n} fields selected	Вибрано полів: {n}
+	Mixed	Різні значення
+	Custom font	Власний шрифт
+	Only checked properties will change. Mixed means the selected fields have different values.	Зміняться лише позначені властивості. «Різні значення» означає, що значення вибраних полів відрізняються.
+	Shift- or Ctrl/Command-click to select several fields.	Клацніть із Shift або Ctrl/Command, щоб вибрати кілька полів.
+	Font size 0 uses automatic sizing.	Розмір шрифту 0 вмикає автоматичний добір розміру.
+	Character limit:	Обмеження символів:
+	Character limit 0 means no limit. A comb of characters needs a limit.	Обмеження 0 означає відсутність обмеження. Для посимвольних комірок потрібно задати обмеження.
+	To change locked fields, also set Locked to No.	Щоб змінити заблоковані поля, також установіть «Заблоковано» в «Ні».
+	Comb of characters	Гребінка символів
+	The document changed while you were editing field properties.	Документ змінився, поки ви редагували властивості полів.
+	The document is no longer open.	Документ більше не відкритий.
+	The field properties dialog is no longer open.	Вікно властивостей полів більше не відкрите.
+	The field properties could not be changed.	Не вдалося змінити властивості полів.
+	The selected fields could not be found. Select them again.	Вибрані поля не знайдено. Виберіть їх знову.
+	The field {name} no longer exists.	Поле {name} більше не існує.
+	A selected field has no widget on any page, so the fields can't be edited together.	Одне з вибраних полів не має віджета на жодній сторінці, тому поля не можна редагувати разом.
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} — з роздільністю {dpi} dpi, найбільшою, з якою їх можна відобразити)

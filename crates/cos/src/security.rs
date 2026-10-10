@@ -2,9 +2,10 @@
 //! decrypting / encrypting the strings and streams of an object (§7.6.2).
 //!
 //! Not encrypted, per the spec: the `/Encrypt` dictionary itself, cross-reference streams, the
-//! trailer `/ID`, objects inside object streams (the object stream is encrypted as a whole), and
-//! metadata streams when `/EncryptMetadata` is false. Streams naming a crypt filter (`/Crypt` in
-//! `/Filter`) use that filter; embedded files use `/EFF`.
+//! trailer `/ID`, objects inside object streams (the object stream is encrypted as a whole),
+//! the `/Contents` of signature dictionaries, and metadata streams when `/EncryptMetadata` is
+//! false. Streams naming a crypt filter (`/Crypt` in `/Filter`) use that filter; embedded files
+//! use `/EFF`.
 
 use pdfcraft_crypt::{EncryptDict, Method, SecurityHandler, StreamKind};
 
@@ -81,7 +82,18 @@ fn named_crypt_filter(dict: &Dict) -> Option<Vec<u8>> {
     Some(parms.and_then(|p| p.name(b"Name").map(|n| n.to_vec())).unwrap_or_else(|| b"Identity".to_vec()))
 }
 
-/// Decrypt (`decrypt = true`) or encrypt every string and stream in an indirect object.
+/// A signature dictionary (field signature, document timestamp or usage-rights signature),
+/// whose `/Contents` is never encrypted (ISO 32000-2 §7.6.2, §12.8.1): the signer writes a
+/// placeholder, hashes the file around it and patches the value in place, so encrypting it
+/// would make signing impossible. Identified as other readers do: by `/Type`, or by a string
+/// `/Contents` alongside an array `/ByteRange` (`/Type` is optional).
+fn is_signature_dict(d: &Dict) -> bool {
+    matches!(d.name(b"Type"), Some(b"Sig" | b"DocTimeStamp"))
+        || (matches!(d.get(b"Contents"), Some(Object::String(_))) && matches!(d.get(b"ByteRange"), Some(Object::Array(_))))
+}
+
+/// Decrypt (`decrypt = true`) or encrypt every string and stream in an indirect object,
+/// except a signature dictionary's `/Contents` (see [`is_signature_dict`]).
 pub(crate) fn transform(h: &SecurityHandler, o: &Object, num: u32, generation: u16, decrypt: bool) -> Object {
     let strings = |s: &PdfString| {
         let bytes = if decrypt { h.decrypt_string(num, generation, &s.bytes) } else { h.encrypt_string(num, generation, &s.bytes) };
@@ -94,6 +106,14 @@ fn walk(o: &Object, strings: &dyn Fn(&PdfString) -> PdfString, h: &SecurityHandl
     match o {
         Object::String(s) => Object::String(strings(s)),
         Object::Array(a) => Object::Array(a.iter().map(|x| walk(x, strings, h, num, generation, decrypt)).collect()),
+        Object::Dict(d) if is_signature_dict(d) => Object::Dict(
+            d.iter()
+                .map(|(k, v)| match (k.as_slice(), v) {
+                    (b"Contents", Object::String(_)) => (k.clone(), v.clone()),
+                    _ => (k.clone(), walk(v, strings, h, num, generation, decrypt)),
+                })
+                .collect(),
+        ),
         Object::Dict(d) => Object::Dict(d.iter().map(|(k, v)| (k.clone(), walk(v, strings, h, num, generation, decrypt))).collect()),
         Object::Stream(s) => {
             let dict: Dict = s.dict.iter().map(|(k, v)| (k.clone(), walk(v, strings, h, num, generation, decrypt))).collect();

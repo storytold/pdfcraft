@@ -706,7 +706,8 @@ impl crate::PdfCraftApp {
     }
 
     fn use_signature_image(&mut self, result: Result<SignatureImage, String>) {
-        match result {
+        let cleaned = result.and_then(|image| image.remove_white_background(245, 35).map_err(|e| e.to_string()));
+        match cleaned {
             Ok(image) => {
                 self.signature_draft.image = Some(image);
                 self.toast = None;

@@ -137,34 +137,21 @@ fn run_args(args: &[&str]) -> anyhow::Result<()> {
     run(c, &format!("cargo {}", args.join(" ")))
 }
 
-pub fn corpus(_: &[String]) -> anyhow::Result<()> {
-    let dir = root().join("corpus");
-    std::fs::create_dir_all(&dir)?;
-    let pdfjs = dir.join("pdfjs");
-    if pdfjs.join("test/pdfs").is_dir() {
-        println!("corpus/pdfjs already present");
-    } else {
-        let mut c = Command::new("git");
-        c.current_dir(&dir).args(["clone", "-q", "--depth", "1", "--filter=blob:none", "--sparse", "https://github.com/mozilla/pdf.js.git", "pdfjs"]);
-        run(c, "git clone --sparse mozilla/pdf.js")?;
-        let mut c = Command::new("git");
-        c.current_dir(&pdfjs).args(["sparse-checkout", "set", "test/pdfs"]);
-        run(c, "git sparse-checkout set test/pdfs")?;
-    }
-    println!(
-        "Corpora (git-ignored, never committed; tests skip when absent):\n  corpus/pdfjs/test/pdfs   pdf.js test files committed in-repo (Apache-2.0 repository; individual files keep their own terms)"
-    );
-    Ok(())
+pub fn corpus(args: &[String]) -> anyhow::Result<()> {
+    crate::corpus::run_cmd(args)
 }
 
-/// `cargo xtask check [--update-baseline]`: run `pdfcraft-cli check` over the corpus and compare
-/// with `xtask/baselines/<corpus>.json` (the list of files known not to open/render cleanly).
-/// Fails on any crash, and on any file that regressed from `ok`.
 pub fn check(args: &[String]) -> anyhow::Result<()> {
     let update = args.iter().any(|a| a == "--update-baseline");
-    let corpus = root().join("corpus/pdfjs/test/pdfs");
-    if !corpus.is_dir() {
-        bail!("corpus missing: run `cargo xtask corpus` first");
+    let corpus = crate::corpus::pdfs();
+    // The baseline in xtask/baselines/pdfjs.json describes one exact tree. Sweeping a different
+    // one silently moves the numbers it is compared against, so verify the pin first.
+    match crate::corpus::state()? {
+        crate::corpus::State::Absent => bail!("corpus missing: run `cargo xtask corpus` first"),
+        crate::corpus::State::Mismatch { detail } => {
+            bail!("corpus does not match the pin ({detail}); run `cargo xtask corpus` to repair it")
+        }
+        crate::corpus::State::Verified { files } => println!("corpus verified: {files} files at {}", crate::corpus::PDFJS_COMMIT),
     }
     run_args(&["build", "--release", "-p", "pdfcraft-cli"])?;
     let report = target_dir().join("check-pdfjs.json");

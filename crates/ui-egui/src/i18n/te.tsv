@@ -72,7 +72,7 @@ comment menu	Edit	సవరించు
 	Double-click	డబుల్-క్లిక్
 	Select a word	ఒక పదాన్ని ఎంచుకో
 	Clear selection / close find	ఎంపికను క్లియర్ చేయి / శోధనను మూసివేయి
-	Zoom in / out (also pinch or ⌘-scroll)	జూమ్ పెంచు / తగ్గించు (పించ్ లేదా ⌘-స్క్రోల్‌తో కూడా)
+	Zoom in / out (also pinch or {key}-scroll)	జూమ్ పెంచు / తగ్గించు (పించ్ లేదా {key}-స్క్రోల్‌తో కూడా)
 	Rotate view	వీక్షణను తిప్పు
 	First / last page	మొదటి / చివరి పేజీ
 	Previous / next page	మునుపటి / తదుపరి పేజీ
@@ -80,16 +80,16 @@ comment menu	Edit	సవరించు
 	Select all pages (Organize)	అన్ని పేజీలను ఎంచుకో (పేజీల నిర్వహణలో)
 	Home	హోమ్
 	Open	తెరువు
-	Open a PDF (⌘O)	PDFను తెరువు (⌘O)
+	Open a PDF ({key})	PDFను తెరువు ({key})
 	Dark gray theme	ముదురు బూడిద రంగు థీమ్
 	Light theme	లేత థీమ్
 	All tools	అన్ని సాధనాలు
 	Read	చదవడం
 	Convert	మార్పిడి
 	E-Sign	ఇ-సంతకం
-	Print (⌘P)	ముద్రించు (⌘P)
+	Print ({key})	ముద్రించు ({key})
 	Save (M4)	సేవ్ చేయి (M4)
-	Document properties (⌘D)	పత్ర లక్షణాలు (⌘D)
+	Document properties ({key})	పత్ర లక్షణాలు ({key})
 	Find tools and commands	సాధనాలను, కమాండ్‌లను కనుగొను
 	Fit to height	ఎత్తుకు సరిపోయేలా
 	Zoom in	జూమ్ పెంచు
@@ -118,9 +118,9 @@ comment menu	Edit	సవరించు
 	Compare	పోల్చు
 	Page thumbnails	పేజీ థంబ్‌నెయిల్‌లు
 	Form fields	ఫారం ఫీల్డ్‌లు
-	Zoom out (⌘−)	జూమ్ తగ్గించు (⌘−)
-	Zoom in (⌘+)	జూమ్ పెంచు (⌘+)
-	Rotate view clockwise (⇧⌘+)	వీక్షణను సవ్యదిశలో తిప్పు (⇧⌘+)
+	Zoom out ({key})	జూమ్ తగ్గించు ({key})
+	Zoom in ({key})	జూమ్ పెంచు ({key})
+	Rotate view clockwise ({key})	వీక్షణను సవ్యదిశలో తిప్పు ({key})
 	Toggle fit page / fit width	పేజీకి సరిపోయేలా / వెడల్పుకు సరిపోయేలా మధ్య మారు
 	Next page	తదుపరి పేజీ
 	Previous page	మునుపటి పేజీ
@@ -254,6 +254,7 @@ comment menu	Edit	సవరించు
 	Security properties…	భద్రతా లక్షణాలు…
 	Organize pages	పేజీలను నిర్వహించు
 	New bookmark	కొత్త బుక్‌మార్క్
+	New bookmarks from structure	నిర్మాణం నుండి కొత్త బుక్‌మార్క్‌లు
 	Rotate pages clockwise	పేజీలను సవ్యదిశలో తిప్పు
 	Rotate pages counterclockwise	పేజీలను అపసవ్యదిశలో తిప్పు
 	Delete pages	పేజీలను తొలగించు
@@ -1069,10 +1070,16 @@ comment menu	Edit	సవరించు
 	Text in images isn't found; recognise text (OCR) first.	చిత్రాలలోని టెక్స్ట్ కనుగొనబడదు; ముందుగా టెక్స్ట్‌ను గుర్తించండి (OCR).
 	No matches.	సరిపోలికలు ఏవీ లేవు.
 	{n} match(es) marked for redaction.	రెడాక్షన్ కోసం గుర్తించిన సరిపోలికలు: {n}.
+	Multiple words or phrases	బహుళ పదాలు లేదా పదబంధాలు
+	One word or phrase per line	ఒక్కో పంక్తికి ఒక పదం లేదా పదబంధం
+	Import list…	జాబితాను దిగుమతి చేయండి…
+	{n} word(s) or phrase(s)	పదాలు లేదా పదబంధాలు: {n}
+	{name} is too large for a word list (at most 1 MB).	పద జాబితాకు {name} చాలా పెద్దది (గరిష్ఠంగా 1 MB).
 	Redaction Tool Properties	రెడాక్షన్ సాధనం లక్షణాలు
 	Redacted area fill colour:	రెడాక్ట్ చేసిన ప్రాంతం నింపు రంగు:
 	Use overlay text	ఓవర్‌లే టెక్స్ట్‌ను ఉపయోగించు
 	Custom text:	అనుకూల టెక్స్ట్:
+	Redaction code:	రెడాక్షన్ కోడ్:
 	Font:	ఫాంట్:
 	Font size:	ఫాంట్ పరిమాణం:
 	Auto-size text to fit redaction region	రెడాక్షన్ ప్రాంతానికి సరిపోయేలా టెక్స్ట్ పరిమాణాన్ని స్వయంచాలకంగా మార్చు
@@ -1173,7 +1180,7 @@ comment menu	Edit	సవరించు
 	Searchable Image (Exact)	వెతకగలిగే చిత్రం (యథాతథం)
 	Adds invisible text over each word; the page image is not changed	ప్రతి పదంపై కనిపించని టెక్స్ట్‌ను జోడిస్తుంది; పేజీ చిత్రం మారదు
 	Downsample to	ఈ రిజల్యూషన్‌కు తగ్గించు
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	టెక్స్ట్ గుర్తింపు ఇన్‌స్టాల్ చేయబడలేదు: దానికి అవసరమైన మోడల్‌లు లేవు (`cargo xtask models`ను అమలు చేయండి, లేదా PRINTCRAFT_MODELSను సెట్ చేయండి).
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	టెక్స్ట్ గుర్తింపు ఇన్‌స్టాల్ కాలేదు: దాని మోడల్ ఫైల్‌లు లేవు. PdfCraftను మళ్లీ ఇన్‌స్టాల్ చేయండి, లేదా వాటిని కలిగి ఉన్న ఫోల్డర్‌కు PDFCRAFT_MODELSను సెట్ చేయండి.
 	Settings	సెట్టింగ్‌లు
 	Optional	ఐచ్ఛికం
 	Planned · {m}	ప్రణాళికలో ఉంది · {m}
@@ -1242,7 +1249,7 @@ signature pad	Type	టైప్ చేయి
 	Expand all bookmarks	అన్ని బుక్‌మార్క్‌లను విస్తరించు
 	Expand top-level bookmarks	పై స్థాయి బుక్‌మార్క్‌లను విస్తరించు
 	Collapse all bookmarks	అన్ని బుక్‌మార్క్‌లను ముడుచు
-	New bookmark (⌘B)	కొత్త బుక్‌మార్క్ (⌘B)
+	New bookmark ({key})	కొత్త బుక్‌మార్క్ ({key})
 	This document has no bookmarks.	ఈ పత్రంలో బుక్‌మార్క్‌లు లేవు.
 	This document has no layers.	ఈ పత్రంలో లేయర్‌లు లేవు.
 	This document has no attachments.	ఈ పత్రంలో జోడింపులు లేవు.
@@ -1256,8 +1263,8 @@ signature pad	Type	టైప్ చేయి
 	No matches	సరిపోలికలు లేవు
 	Searching… {s}/{p}	వెతుకుతోంది… {s}/{p}
 	{c} of {n}{more}	{n}{more}లో {c}
-	Previous (⇧⌘G)	మునుపటి (⇧⌘G)
-	Next (⌘G)	తదుపరి (⌘G)
+	Previous ({key})	మునుపటి ({key})
+	Next ({key})	తదుపరి ({key})
 	Find options	కనుగొనే ఎంపికలు
 	Whole words only	పూర్తి పదాలు మాత్రమే
 	Case-sensitive	పెద్ద/చిన్న అక్షరాల తేడాతో
@@ -1693,7 +1700,7 @@ action wizard	Start	ప్రారంభించు
 	there are no pages to print	ముద్రించడానికి పేజీలు ఏవీ లేవు
 	the document has no tags	పత్రంలో ట్యాగ్‌లు లేవు
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	టెక్స్ట్ గుర్తింపు మోడల్‌లు ఇన్‌స్టాల్ చేయబడలేదు (`cargo xtask models` అమలు చేయండి, లేదా PRINTCRAFT_MODELS సెట్ చేయండి)
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	టెక్స్ట్ గుర్తింపు మోడల్‌లు ఇన్‌స్టాల్ చేయబడలేదు (PdfCraftను మళ్లీ ఇన్‌స్టాల్ చేయండి, లేదా వాటిని కలిగి ఉన్న ఫోల్డర్‌కు PDFCRAFT_MODELSను సెట్ చేయండి)
 	the image is empty	చిత్రం ఖాళీగా ఉంది
 	this file isn't XFDF, FDF, XML or text form data	ఈ ఫైల్ XFDF, FDF, XML లేదా టెక్స్ట్ ఫారం డేటా కాదు
 	nothing in the file matches this document	ఫైల్‌లోని ఏదీ ఈ పత్రంతో సరిపోలడం లేదు
@@ -1888,7 +1895,6 @@ action wizard	Start	ప్రారంభించు
 	Open this web page?	ఈ వెబ్ పేజీని తెరవాలా?
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	స్క్రిప్ట్‌లు ఫైల్ లేదా నెట్‌వర్క్ యాక్సెస్ లేని శాండ్‌బాక్స్‌లో అమలవుతాయి. వెబ్ పేజీని తెరవమని అడిగే స్క్రిప్ట్‌కు ముందుగా మీ అనుమతి అవసరం. JavaScript ఆఫ్‌లో ఉన్నా, Acrobat ప్రామాణిక ఫార్మాట్, ధృవీకరణ, గణన ఫంక్షన్‌లు పని చేస్తూనే ఉంటాయి.
 	Sign yourself	స్వయంగా సంతకం చేయడం
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	టెక్స్ట్ గుర్తింపు ఇన్‌స్టాల్ కాలేదు: దాని మోడల్‌లు లేవు (`cargo xtask models` అమలు చేయండి, లేదా PDFCRAFT_MODELS సెట్ చేయండి).
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	PDFలను తెరిచేటప్పుడు ఉపయోగించబడుతుంది. ప్రారంభించేటప్పుడు లేదా కంట్రోల్ ద్వారా స్పష్టంగా ఇచ్చిన మోడ్‌కు ఆ సెషన్‌లో ప్రాధాన్యత ఉంటుంది.
 	Write this email?	ఈ ఇమెయిల్ రాయాలా?
 	{who} in this document wants to open this address in your browser:	ఈ పత్రంలోని {who} ఈ చిరునామాను మీ బ్రౌజర్‌లో తెరవాలనుకుంటోంది:
@@ -2025,6 +2031,12 @@ action wizard	Start	ప్రారంభించు
 	No recent files	ఇటీవలి ఫైళ్లు లేవు
 	Go to page…	పేజీకి వెళ్లు…
 	For page sizes and margins.	పేజీ పరిమాణాలు మరియు మార్జిన్‌ల కోసం.
+	Open arrow	తెరిచిన బాణం
+	Closed arrow	మూసిన బాణం
+	Butt	మొండి చివర
+	Reverse open arrow	తిరగబెట్టిన తెరిచిన బాణం
+	Reverse closed arrow	తిరగబెట్టిన మూసిన బాణం
+	Slash	వాలు గీత
 	Date format	తేదీ ఫార్మాట్
 	Fill & Sign dates	నింపడం & సంతకం తేదీలు
 	Pattern	నమూనా
@@ -2038,3 +2050,26 @@ action wizard	Start	ప్రారంభించు
 	Printer properties	ప్రింటర్ లక్షణాలు
 	Reset to printer defaults	ప్రింటర్ డిఫాల్ట్‌లకు రీసెట్ చేయి
 	This printer offers no settings of its own.	ఈ ప్రింటర్‌కు దాని స్వంత సెట్టింగ్‌లు లేవు.
+	Scroll tabs left	ట్యాబ్‌లను ఎడమకు స్క్రోల్ చేయి
+	Scroll tabs right	ట్యాబ్‌లను కుడికి స్క్రోల్ చేయి
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	ఉమ్మడి ఫీల్డ్ లక్షణాలు
+	{n} fields selected	ఎంచుకున్న ఫీల్డ్‌లు: {n}
+	Mixed	వేర్వేరు విలువలు
+	Custom font	అనుకూల ఫాంట్
+	Only checked properties will change. Mixed means the selected fields have different values.	టిక్ చేసిన లక్షణాలు మాత్రమే మారుతాయి. “వేర్వేరు విలువలు” అంటే ఎంచుకున్న ఫీల్డ్‌లలో విలువలు భిన్నంగా ఉన్నాయి.
+	Shift- or Ctrl/Command-click to select several fields.	అనేక ఫీల్డ్‌లను ఎంచుకోవడానికి Shift లేదా Ctrl/Command నొక్కి క్లిక్ చేయండి.
+	Font size 0 uses automatic sizing.	ఫాంట్ పరిమాణం 0 అయితే పరిమాణం స్వయంచాలకంగా సర్దుబాటు అవుతుంది.
+	Character limit:	అక్షరాల పరిమితి:
+	Character limit 0 means no limit. A comb of characters needs a limit.	అక్షరాల పరిమితి 0 అంటే పరిమితి లేదు. అక్షరాల గడులకు పరిమితి అవసరం.
+	To change locked fields, also set Locked to No.	లాక్ చేసిన ఫీల్డ్‌లను మార్చడానికి “లాక్ చేయబడింది” విలువను కూడా “కాదు”గా పెట్టండి.
+	Comb of characters	అక్షరాల దువ్వెన
+	The document changed while you were editing field properties.	మీరు ఫీల్డ్ లక్షణాలను సవరిస్తున్నప్పుడు పత్రం మారింది.
+	The document is no longer open.	పత్రం ఇకపై తెరిచి లేదు.
+	The field properties dialog is no longer open.	ఫీల్డ్ లక్షణాల డైలాగ్ ఇకపై తెరిచి లేదు.
+	The field properties could not be changed.	ఫీల్డ్ లక్షణాలను మార్చలేకపోయాము.
+	The selected fields could not be found. Select them again.	ఎంచుకున్న ఫీల్డ్‌లు కనుగొనబడలేదు. వాటిని మళ్ళీ ఎంచుకోండి.
+	The field {name} no longer exists.	{name} ఫీల్డ్ ఇకపై లేదు.
+	A selected field has no widget on any page, so the fields can't be edited together.	ఎంచుకున్న ఒక ఫీల్డ్‌కు ఏ పేజీలోనూ విడ్జెట్ లేదు, కాబట్టి ఫీల్డ్‌లను కలిపి సవరించలేము.
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} {dpi} dpi వద్ద, అవి గీయగల అతిపెద్ద పరిమాణం)

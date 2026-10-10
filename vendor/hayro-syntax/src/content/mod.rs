@@ -45,6 +45,7 @@ use crate::util::find_needle;
 use core::array;
 use core::fmt::{Debug, Formatter};
 use core::ops::Deref;
+use core::marker::PhantomData;
 use smallvec::SmallVec;
 
 // 6 operands are used for example for ctm or cubic curves,
@@ -98,7 +99,19 @@ impl<'a> Readable<'a> for Operator<'a> {
 const MAX_EI_CANDIDATES: u32 = 256;
 const MAX_EI_LOOKAHEAD_STEPS: u32 = 256;
 
-/// An iterator over operators in the PDF content streams, providing raw access to the instructions.
+/// A source of PDF content instructions.
+///
+/// The tokenizer owns any state needed to assemble one instruction and may choose how bytes are
+/// backed. The current production implementation is [`UntypedIter`], which reads one complete
+/// byte slice; a streaming implementation can use the same interface without changing typed
+/// operator dispatch.
+pub trait ContentTokenizer<'a> {
+    /// Return the next instruction, or `None` after the content stream ends or becomes invalid.
+    fn next_instruction<'b>(&'b mut self) -> Option<Instruction<'b, 'a>>;
+}
+
+/// An iterator over operators in the PDF content streams, providing raw access to the
+/// instructions. This is the slice-backed [`ContentTokenizer`] implementation.
 #[derive(Clone)]
 pub struct UntypedIter<'a> {
     reader: Reader<'a>,
@@ -326,29 +339,47 @@ impl<'a> UntypedIter<'a> {
     }
 }
 
+impl<'a> ContentTokenizer<'a> for UntypedIter<'a> {
+    fn next_instruction<'b>(&'b mut self) -> Option<Instruction<'b, 'a>> {
+        self.next()
+    }
+}
+
 /// An iterator over PDF content streams that provide access to the instructions
 /// in a typed fashion.
 #[derive(Clone)]
-pub struct TypedIter<'a> {
-    untyped: UntypedIter<'a>,
+pub struct TypedIter<'a, T = UntypedIter<'a>> {
+    untyped: T,
+    marker: PhantomData<&'a ()>,
 }
 
-impl<'a> TypedIter<'a> {
+impl<'a> TypedIter<'a, UntypedIter<'a>> {
     /// Create a new typed iterator.
     pub fn new(data: &'a [u8]) -> Self {
         Self {
             untyped: UntypedIter::new(data),
+            marker: PhantomData,
         }
     }
 
     pub(crate) fn from_untyped(untyped: UntypedIter<'a>) -> Self {
-        Self { untyped }
+        Self { untyped, marker: PhantomData }
+    }
+}
+
+impl<'a, T> TypedIter<'a, T>
+where
+    T: ContentTokenizer<'a>,
+{
+    /// Adapt a content tokenizer to the typed operator interface.
+    pub fn from_tokenizer(tokenizer: T) -> Self {
+        Self { untyped: tokenizer, marker: PhantomData }
     }
 
     /// Return the next typed instruction.
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<TypedInstruction<'_, 'a>> {
-        let op = self.untyped.next()?;
+        let op = self.untyped.next_instruction()?;
         // TODO: Explore whether dispatching can be made more efficient.
         match TypedInstruction::dispatch(&op) {
             Some(op) => Some(op),
@@ -684,4 +715,38 @@ mod macros {
     pub(crate) use op3;
     pub(crate) use op4;
     pub(crate) use op6;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ContentTokenizer, UntypedIter};
+
+    fn operators(data: &[u8]) -> Vec<Vec<u8>> {
+        let mut tokenizer = UntypedIter::new(data);
+        let mut result = Vec::new();
+        while let Some(instruction) = tokenizer.next_instruction() {
+            result.push(instruction.operator.as_ref().to_vec());
+        }
+        result
+    }
+
+    #[test]
+    fn slice_tokenizer_keeps_the_existing_operator_sequence() {
+        let data = b"% comment\n1 -2.5 /Name /A#20B (a\\(b\\) \\101) <4869> [1 2] << /Key (value) >> [(a) 1] TJ BI /W 1 /H 1 /BPC 8 /CS /DeviceGray ID \x00 EI q Q";
+
+        assert_eq!(operators(data), [b"TJ".to_vec(), b"BI".to_vec(), b"q".to_vec(), b"Q".to_vec()]);
+    }
+
+    #[test]
+    fn tokenizer_interface_preserves_every_byte_boundary() {
+        let data = b"% comment\n1 -2.5 /Name /A#20B (a\\(b\\) \\101) <4869> [1 2] << /Key (value) >> [(a) 1] TJ BI /W 1 /H 1 /BPC 8 /CS /DeviceGray ID \x00 EI q Q";
+        let expected = operators(data);
+
+        for split in 1..data.len() {
+            let mut joined = Vec::with_capacity(data.len());
+            joined.extend_from_slice(&data[..split]);
+            joined.extend_from_slice(&data[split..]);
+            assert_eq!(operators(&joined), expected, "split at byte {split}");
+        }
+    }
 }

@@ -28,6 +28,22 @@ pub struct PropsDraft {
 const ICONS: [NoteIcon; 7] =
     [NoteIcon::Comment, NoteIcon::Note, NoteIcon::Help, NoteIcon::Insert, NoteIcon::Key, NoteIcon::NewParagraph, NoteIcon::Paragraph];
 
+/// The name shown in the line-ending combo. [`LineEnding::name`] stays the PDF `/LE` token.
+fn ending_label(ending: LineEnding) -> &'static str {
+    match ending {
+        LineEnding::None => tl!("None"),
+        LineEnding::Square => tl!("Square"),
+        LineEnding::Circle => tl!("Circle"),
+        LineEnding::Diamond => tl!("Diamond"),
+        LineEnding::OpenArrow => tl!("Open arrow"),
+        LineEnding::ClosedArrow => tl!("Closed arrow"),
+        LineEnding::Butt => tl!("Butt"),
+        LineEnding::ROpenArrow => tl!("Reverse open arrow"),
+        LineEnding::RClosedArrow => tl!("Reverse closed arrow"),
+        LineEnding::Slash => tl!("Slash"),
+    }
+}
+
 impl PdfCraftApp {
     /// Attach file: ask for a file (or take `attach_override`) and attach it at `at`.
     pub fn attach_file_comment(&mut self, page: usize, at: [f64; 2]) {
@@ -193,11 +209,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                         ui.label(tl!("Line ending"));
                         ui.horizontal(|ui| {
                             for (i, ending) in ends.iter_mut().enumerate() {
-                                egui::ComboBox::from_id_salt(("line-ending", i)).selected_text(ending.name()).width(130.0).show_ui(ui, |ui| {
-                                    for style in LineEnding::ALL {
-                                        ui.selectable_value(ending, style, style.name());
-                                    }
-                                });
+                                egui::ComboBox::from_id_salt(("line-ending", i)).selected_text(ending_label(*ending)).width(188.0).show_ui(
+                                    ui,
+                                    |ui| {
+                                        for style in LineEnding::ALL {
+                                            ui.selectable_value(ending, style, ending_label(style));
+                                        }
+                                    },
+                                );
                             }
                         });
                         ui.end_row();
