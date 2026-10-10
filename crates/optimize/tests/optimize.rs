@@ -265,3 +265,42 @@ fn invalid_links_and_unreferenced_destinations_go() {
     let off = Settings { remove_invalid_links: false, remove_unreferenced_dests: false, ..Settings::default() };
     assert_eq!(optimize(&mut again, &off).unwrap().invalid_links, 0);
 }
+
+#[test]
+fn progress_is_reported_per_image_and_a_refusal_cancels() {
+    use pdfcraft_optimize::{OptimizeError, Stage, optimize_with_progress};
+    let build = || {
+        let mut doc = Document::new_empty();
+        let a = image(&mut doc, 300, 300, 3, false, None);
+        let b = image(&mut doc, 300, 300, 1, false, None);
+        let c = image(&mut doc, 300, 300, 3, true, None);
+        page(&mut doc, &[("A", a), ("B", b), ("C", c)], "q 72 0 0 72 0 0 cm /A Do Q q 72 0 0 72 100 0 cm /B Do Q q 72 0 0 72 200 0 cm /C Do Q");
+        doc
+    };
+    let mut seen = Vec::new();
+    let report = optimize_with_progress(&mut build(), &Settings::default(), &mut |s| {
+        seen.push(s);
+        true
+    })
+    .unwrap();
+    assert_eq!(report.images, 3);
+    assert_eq!(
+        seen,
+        [
+            Stage::Images { done: 0, total: 3 },
+            Stage::Images { done: 1, total: 3 },
+            Stage::Images { done: 2, total: 3 },
+            Stage::Images { done: 3, total: 3 },
+            Stage::CleanUp
+        ]
+    );
+
+    // Stopping after the first image.
+    let mut calls = 0;
+    let r = optimize_with_progress(&mut build(), &Settings::default(), &mut |_| {
+        calls += 1;
+        calls < 2
+    });
+    assert!(matches!(r, Err(OptimizeError::Cancelled)), "{r:?}");
+    assert_eq!(calls, 2, "nothing runs after the refusal");
+}

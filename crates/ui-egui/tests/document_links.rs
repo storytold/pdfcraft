@@ -44,6 +44,7 @@ fn fixture() -> Vec<u8> {
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("links.pdf", None, fixture()).unwrap();
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "none").unwrap();
@@ -156,7 +157,17 @@ fn a_script_asks_first_and_only_once() {
 #[test]
 fn a_script_cannot_open_other_kinds_of_address() {
     let _gpu = gpu();
-    for url in ["file:///etc/passwd", "javascript:alert(1)", "ms-settings:privacy", "smb://server/share", "https://exa\u{202E}gro.elpmaxe"] {
+    // `mailto://a^b/x` and `https://a^b/` don't parse as URLs, so the browser would be handed them
+    // as local file paths.
+    for url in [
+        "file:///etc/passwd",
+        "javascript:alert(1)",
+        "ms-settings:privacy",
+        "smb://server/share",
+        "https://exa\u{202E}gro.elpmaxe",
+        "mailto://a^b/x",
+        "https://a^b/",
+    ] {
         let mut h = harness();
         let id = h.state().views[0].id;
         let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
@@ -166,4 +177,59 @@ fn a_script_cannot_open_other_kinds_of_address() {
         assert_eq!(h.state().last_opened_url, None, "{url}");
         assert!(h.state().toast.clone().is_some_and(|t| t.0.contains("won't open")), "{url}: {:?}", h.state().toast);
     }
+}
+
+#[test]
+fn an_email_link_cannot_attach_a_local_file() {
+    let _gpu = gpu();
+    for url in ["mailto:a@example.org?attach=/home/me/.ssh/id_ed25519", "mailto:a@example.org?subject=Hi&%61ttachment=C:/Users/me/x.txt"] {
+        let mut h = harness();
+        let id = h.state().views[0].id;
+        let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
+        h.state_mut().run_button_script(id, "web", &script);
+        h.run_steps(3);
+        assert_eq!(h.state().pending_link, None, "{url}");
+        assert_eq!(h.state().last_opened_url, None, "{url}");
+        let toast = h.state().toast.clone().expect("the user is told").0;
+        assert!(toast.contains("attach or insert a file"), "{url}: {toast}");
+    }
+}
+
+/// Ask to open `url` from a script and return the harness with the prompt showing.
+fn prompt_for(url: &str) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness();
+    let id = h.state().views[0].id;
+    let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
+    h.state_mut().run_button_script(id, "web", &script);
+    h.run_steps(3);
+    assert_eq!(h.state().pending_link, pending(url, LinkOrigin::Script));
+    h
+}
+
+#[test]
+fn a_lookalike_host_is_shown_in_punycode_and_flagged() {
+    let _gpu = gpu();
+    // `pаypal.com` with a Cyrillic `а` (U+0430).
+    let h = prompt_for("https://p\u{0430}ypal.com/login");
+    h.get_by_label("xn--pypal-4ve.com");
+    assert_eq!(h.query_all_by_label_contains("p\u{0430}ypal.com").count(), 1, "only the full address shows the lookalike form");
+    h.get_by_label_contains("mixes letters from different alphabets");
+}
+
+#[test]
+fn an_international_host_is_shown_in_punycode_and_marked() {
+    let _gpu = gpu();
+    let h = prompt_for("https://bücher.example/");
+    h.get_by_label("xn--bcher-kva.example");
+    assert_eq!(h.query_all_by_label_contains("bücher.example").count(), 1, "only the full address shows the Unicode form");
+    h.get_by_label_contains("letters from another alphabet");
+    assert!(h.query_by_label_contains("mixes letters").is_none());
+}
+
+#[test]
+fn a_numeric_host_is_shown_as_the_address_it_goes_to() {
+    let _gpu = gpu();
+    let h = prompt_for("http://3232235777/admin");
+    h.get_by_label("192.168.1.1");
+    assert!(h.query_by_label_contains("alphabet").is_none());
 }

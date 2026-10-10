@@ -2,6 +2,7 @@
 //! "save changes?" prompt when closing a tab or quitting with unsaved edits.
 
 use pdfcraft_engine::Edit;
+use pdfcraft_platform::staging::{StagingName, create_staging, staging_suffixes};
 
 use crate::PdfCraftApp;
 
@@ -36,6 +37,7 @@ impl PdfCraftApp {
                 let Some(doc) = self.session.get(id) else { return true };
                 let info = &doc.info;
                 let view = &mut self.views[i];
+                view.signature_drag.committed(&edit, doc.edit_generation());
                 match comment_page(&edit) {
                     // Comment edits change one page: keep every other raster.
                     Some(page) => view.page_changed(page),
@@ -50,11 +52,27 @@ impl PdfCraftApp {
                     }
                     Edit::InsertBlankPage { at, .. } => view.select_pages(&[at.min(info.pages.len() - 1)]),
                     Edit::DeletePages { .. } => view.select_pages(&[]),
+                    // A stroke drawn with the pen stays unselected, so the selection box and
+                    // author popup don't sit over the next stroke (#429).
+                    Edit::AddAnnotation(a)
+                        if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. })
+                            && self.quick_tool == crate::QuickTool::Comment(crate::comments::CommentTool::Ink) =>
+                    {
+                        view.comments.selected = None;
+                    }
                     Edit::AddAnnotation(a) => {
                         // Select the new comment (appended last among the page's comments).
                         let newest = info.annotations.iter().filter(|x| x.page == a.page && x.in_reply_to.is_none()).map(|x| x.index).max();
                         view.comments.selected = newest.map(|n| (a.page, n));
                         view.comments.reveal = true;
+                        // A new highlight opens its note for typing straight away, as in Acrobat,
+                        // unless a note typed into another card is still unsaved.
+                        if let (pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, .. }, Some(n)) = (&a.shape, newest)
+                            && a.contents.is_empty()
+                            && view.comments.editing.as_ref().is_none_or(|(_, _, text)| text.is_empty())
+                        {
+                            view.comments.editing = Some((a.page, n, String::new()));
+                        }
                     }
                     Edit::DeleteAnnotation { .. } => view.comments.selected = None,
                     _ => {}
@@ -73,12 +91,21 @@ impl PdfCraftApp {
         }
     }
 
+    /// Undo the last change: to the Combine files list while its tab shows, else the document.
     pub fn undo(&mut self) {
-        self.history_step(true);
+        if self.combine_showing() {
+            self.combine_history_step(true);
+        } else {
+            self.history_step(true);
+        }
     }
 
     pub fn redo(&mut self) {
-        self.history_step(false);
+        if self.combine_showing() {
+            self.combine_history_step(false);
+        } else {
+            self.history_step(false);
+        }
     }
 
     fn history_step(&mut self, undo: bool) {
@@ -112,6 +139,10 @@ impl PdfCraftApp {
         }
         match self.views.get_mut(i).and_then(|v| v.pending_action.take()) {
             Some(crate::canvas::ViewAction::InsertFromFile) => self.insert_from_file_dialog(),
+            Some(crate::canvas::ViewAction::InsertFromFileAt(at)) => self.insert_from_file_at(Some(at)),
+            Some(crate::canvas::ViewAction::Save) => {
+                self.save_active(SaveTarget::InPlace);
+            }
             Some(crate::canvas::ViewAction::Extract) => self.dialog = Some(crate::Dialog::Extract),
             Some(crate::canvas::ViewAction::Split) => self.dialog = Some(crate::Dialog::Split),
             Some(crate::canvas::ViewAction::CopyPages { cut }) => self.copy_pages(cut),
@@ -199,12 +230,29 @@ impl PdfCraftApp {
     /// user has been told why, so the typing isn't lost and the caller can stop.
     fn apply_queued_edit(&mut self, i: usize) -> bool {
         let Some(edit) = self.views.get_mut(i).and_then(|v| v.pending_edit.take()) else { return true };
+        let signature_page = self.views.get_mut(i).and_then(|v| v.fill_signature_page.take());
         let committed = self.views.get_mut(i).and_then(|v| v.forms.committed.take());
         let typed = match (&edit, &committed) {
             (Edit::SetFieldValue { name, .. }, Some(draft)) => *name == draft.name,
             _ => false,
         };
-        if self.apply_edit(edit) || !typed {
+        if self.apply_edit(edit) {
+            if let Some(page) = signature_page
+                && let Some(view) = self.views.get_mut(i)
+            {
+                // Signature imports are a labeled batch; select their appended stamp just
+                // as AddAnnotation selects a typed or drawn signature.
+                let newest = self
+                    .session
+                    .get(view.id)
+                    .and_then(|d| d.info.annotations.iter().filter(|a| a.page == page && a.in_reply_to.is_none()).map(|a| a.index).max());
+                view.comments.selected = newest.map(|index| (page, index));
+                view.comments.reveal = true;
+                self.quick_tool = crate::QuickTool::Select;
+            }
+            return true;
+        }
+        if !typed {
             return true;
         }
         if let (Some(mut draft), Some(view)) = (committed, self.views.get_mut(i)) {
@@ -219,21 +267,88 @@ impl PdfCraftApp {
     /// brought forward first, so the commit and any field scripts act on that document.
     pub(crate) fn commit_typing_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
         let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        // Added text the standard fonts can't draw can't be saved: show it rather than drop it.
+        // Its page is brought into view, so the text, the warning and Discard are on screen.
+        let blocked = self.views.get_mut(i).and_then(|v| {
+            let c = v.content.blocked()?;
+            v.content.hold_blocked();
+            if let Some(page) = v.content.draft.as_ref().map(|d| d.page) {
+                v.go_to_page(page);
+            }
+            Some(c)
+        });
+        if let Some(c) = blocked {
+            self.active = Some(i);
+            self.notify(crate::content_ui::undrawable_message(c));
+            return false;
+        }
+        let typing = self
+            .views
+            .get(i)
+            .is_some_and(|v| v.pending_edit.is_some() || v.forms.focus.is_some() || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty()));
         if self.active != Some(i) {
-            let typing = self.views.get(i).is_some_and(|v| v.pending_edit.is_some() || v.forms.focus.is_some());
             if !typing {
                 return true;
             }
             self.active = Some(i);
         }
-        self.commit_form_typing()
+        self.commit_form_typing() && self.commit_open_fill_text(id)
+    }
+
+    /// The Fill & Sign type box commits on click-away. Save does that first, so the text is in
+    /// the file (and can be flattened) instead of being left on the screen.
+    fn commit_open_fill_text(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let Some(i) = self.views.iter().position(|v| v.id == id) else { return true };
+        let Some(tb) = self.views[i].fill_text.clone() else { return true };
+        let text = tb.text.trim().to_string();
+        if text.is_empty() {
+            if let Some(view) = self.views.get_mut(i) {
+                view.fill_text = None;
+            }
+            return true;
+        }
+        let author = self.comment_prefs.author.clone();
+        let edit = crate::fill_sign::typed(tb.page, tb.at, &text, &author);
+        if self.apply_edit(edit) {
+            if let Some(view) = self.views.get_mut(i) {
+                view.fill_text = None;
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// When the preference is on, bake Fill & Sign marks before the bytes are written.
+    /// Returns false when the document is not allowed to change (nothing is written).
+    fn flatten_fill_sign_for_save(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        if !self.flatten_fill_sign_on_save {
+            return true;
+        }
+        let before = self.session.get(id).map(|d| d.edit_generation());
+        if let Err(e) = self.session.apply(id, Edit::FlattenFillSign) {
+            self.notify_error(e);
+            return false;
+        }
+        let after = self.session.get(id).map(|d| d.edit_generation());
+        if before != after
+            && let Some(doc) = self.session.get(id)
+            && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+        {
+            view.document_changed(&doc.info);
+        }
+        true
     }
 
     /// Whether tab `index` has work that isn't saved: edits, or form typing not committed yet.
     pub(crate) fn has_unsaved_work(&self, index: usize) -> bool {
         let Some(v) = self.views.get(index) else { return false };
         let Some(doc) = self.session.get(v.id) else { return false };
-        doc.dirty || v.pending_edit.is_some() || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
+        doc.dirty
+            || v.pending_edit.is_some()
+            || v.content.blocked().is_some()
+            || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
+            || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
     }
 
     /// Save the active document. Returns `true` if it was written.
@@ -289,6 +404,9 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (target, path);
+            if !self.flatten_fill_sign_for_save(id) {
+                return false;
+            }
             let bytes = match self.session.save_bytes(id) {
                 Ok(b) => b,
                 Err(e) => {
@@ -319,7 +437,7 @@ impl PdfCraftApp {
     fn save_doc_to(&mut self, id: pdfcraft_engine::DocId, dest: &str) -> bool {
         // Save As answers on a later frame: commit what was typed meanwhile, too (#166), even
         // if another tab is active by then.
-        if !self.commit_typing_in(id) {
+        if !self.commit_typing_in(id) || !self.flatten_fill_sign_for_save(id) {
             return false;
         }
         let Some(name) = self.session.get(id).map(|d| d.name.clone()) else {
@@ -387,7 +505,13 @@ impl PdfCraftApp {
                 if let Some(i) = self.active
                     && let Some(d) = self.session.get(id)
                 {
-                    self.views[i].document_changed(&d.info);
+                    let view = &mut self.views[i];
+                    view.document_changed(&d.info);
+                    // Revert discards this source's uncommitted typing as well as model edits.
+                    // Otherwise a later Save could write a rejected draft back into the file.
+                    view.forms.focus = None;
+                    view.forms.committed = None;
+                    view.pending_edit = None;
                 }
                 self.notify_tr("Reverted to the last saved version");
             }
@@ -418,6 +542,14 @@ impl PdfCraftApp {
                 }
             },
         };
+        // Quitting closes the unsaved tabs one by one (and brings each forward to save it):
+        // remember what was open, and which tab was active, before the first one goes (#442).
+        if req == CloseRequest::Quit {
+            match choice {
+                Some(_) => self.note_quit_session(),
+                None => self.forget_quit_session(),
+            }
+        }
         match choice {
             None => {} // cancelled: nothing closes
             Some(false) => self.close_and_continue(ctx, index, req),
@@ -492,14 +624,23 @@ fn comment_page(edit: &Edit) -> Option<usize> {
 /// Write via a temporary file in the same directory and rename over the target, so a crash or
 /// full disk never leaves a half-written PDF where the original was.
 pub fn write_atomically(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    write_atomically_with(path, bytes, staging_suffixes())
+}
+
+/// [`write_atomically`], trying the staging names that `suffixes` give.
+fn write_atomically_with(path: &str, bytes: &[u8], suffixes: impl IntoIterator<Item = u64>) -> std::io::Result<()> {
     use std::io::Write;
     let target = std::path::Path::new(path);
     let dir = target.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
-    let tmp = dir.join(format!(".{}.pdfcraft-{}.tmp", target.file_name().and_then(|n| n.to_str()).unwrap_or("save"), std::process::id()));
+    let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("save");
+    let (tmp, f) = create_staging(dir, name, StagingName::TagThenSuffix, suffixes)?;
     let result = (|| {
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
+        // Closed at the end of the block, before the rename.
+        {
+            let mut f = f;
+            f.write_all(bytes)?;
+            f.sync_all()?;
+        }
         std::fs::rename(&tmp, target)
     })();
     if result.is_err() {
@@ -585,4 +726,257 @@ fn bookmark_at<'a>(items: &'a [pdfcraft_render::OutlineItem], path: &[usize]) ->
     let (first, rest) = path.split_first()?;
     let item = items.get(*first)?;
     if rest.is_empty() { Some(item) } else { bookmark_at(&item.children, rest) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{write_atomically, write_atomically_with};
+    use pdfcraft_platform::staging::{STAGING_ATTEMPTS, staging_suffixes};
+    use std::path::{Path, PathBuf};
+
+    /// A fresh, empty folder for one staging test.
+    fn staging_dir(test: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-ui-staging-{}-{test}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn staged(dir: &Path, suffix: u64) -> PathBuf {
+        dir.join(format!(".out.pdf.pdfcraft-{suffix:016x}.tmp"))
+    }
+
+    fn read(p: &Path) -> String {
+        std::fs::read_to_string(p).unwrap()
+    }
+
+    /// A symbolic link to a file, where the system allows one (Windows needs Developer Mode or an
+    /// administrator for it).
+    fn file_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link)
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(target, link)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            Err(std::io::Error::other(format!("no symbolic links here: {} {}", target.display(), link.display())))
+        }
+    }
+
+    #[test]
+    fn saving_never_writes_through_a_file_planted_at_the_staging_name() {
+        let dir = staging_dir("planted");
+        let outside = dir.join("outside.txt");
+        std::fs::write(&outside, "PRECIOUS").unwrap();
+        let target = dir.join("out.pdf");
+        let path = target.to_string_lossy().into_owned();
+        // A hard link needs no privileges on any system, and writing to it writes to `outside`.
+        std::fs::hard_link(&outside, staged(&dir, 1)).unwrap();
+        std::fs::write(staged(&dir, 2), "PLANTED").unwrap();
+        write_atomically_with(&path, b"NEW", [1, 2, 3]).unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert_eq!(read(&outside), "PRECIOUS");
+        assert_eq!(read(&staged(&dir, 1)), "PRECIOUS");
+        assert_eq!(read(&staged(&dir, 2)), "PLANTED");
+        assert!(!staged(&dir, 3).exists(), "the staging file was renamed into place");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saving_never_writes_through_a_symbolic_link_at_the_staging_name() {
+        let dir = staging_dir("symlink");
+        let outside = dir.join("outside.txt");
+        std::fs::write(&outside, "PRECIOUS").unwrap();
+        let target = dir.join("out.pdf");
+        if let Err(e) = file_symlink(&outside, &staged(&dir, 1)) {
+            eprintln!("symbolic links not checked: {e}");
+            return;
+        }
+        write_atomically_with(&target.to_string_lossy(), b"NEW", [1, 2]).unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert_eq!(read(&outside), "PRECIOUS");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saving_never_creates_a_file_through_a_dangling_link_at_the_staging_name() {
+        let dir = staging_dir("dangling");
+        let unborn = dir.join("created-through-a-link.txt");
+        let target = dir.join("out.pdf");
+        if let Err(e) = file_symlink(&unborn, &staged(&dir, 1)) {
+            eprintln!("symbolic links not checked: {e}");
+            return;
+        }
+        write_atomically_with(&target.to_string_lossy(), b"NEW", [1, 2]).unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert!(!unborn.exists(), "nothing was created through the dangling link");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_folder_at_the_staging_name_is_left_alone() {
+        let dir = staging_dir("folder");
+        std::fs::create_dir(staged(&dir, 1)).unwrap();
+        std::fs::write(staged(&dir, 1).join("inside.txt"), "PLANTED").unwrap();
+        let target = dir.join("out.pdf");
+        write_atomically_with(&target.to_string_lossy(), b"NEW", [1, 2]).unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert_eq!(read(&staged(&dir, 1).join("inside.txt")), "PLANTED");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saving_gives_up_rather_than_reuse_a_taken_name() {
+        let dir = staging_dir("taken");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, "OLD").unwrap();
+        for s in 1..=STAGING_ATTEMPTS as u64 {
+            std::fs::write(staged(&dir, s), "PLANTED").unwrap();
+        }
+        assert!(write_atomically_with(&target.to_string_lossy(), b"NEW", 1..).is_err());
+        assert_eq!(read(&target), "OLD");
+        for s in 1..=STAGING_ATTEMPTS as u64 {
+            assert_eq!(read(&staged(&dir, s)), "PLANTED");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The names in a folder: what a test can see was left behind.
+    fn listing(dir: &Path) -> Vec<String> {
+        let mut names: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn saving_a_long_name_leaves_only_the_saved_file() {
+        assert_ne!(staging_suffixes().next(), staging_suffixes().next(), "each save draws new names");
+        // 60 four-byte characters: a 244-byte name, within every system's limit. Its staging name
+        // must be too (on Linux the whole name in it would be 275 bytes).
+        let dir = staging_dir("clean");
+        let name = format!("{}.pdf", "\u{1F600}".repeat(60));
+        let path = dir.join(&name).to_string_lossy().into_owned();
+        write_atomically(&path, b"NEW").unwrap();
+        write_atomically(&path, b"NEWER").unwrap();
+        assert_eq!(read(&dir.join(&name)), "NEWER");
+        assert_eq!(listing(&dir), [name], "no staging file is left behind");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Windows refuses to replace a read-only file, so the rename fails: the staging file must not
+    /// be left behind.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_save_removes_the_staging_file() {
+        let dir = staging_dir("readonly");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, "OLD").unwrap();
+        let mut perms = std::fs::metadata(&target).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&target, perms.clone()).unwrap();
+        let e = write_atomically_with(&target.to_string_lossy(), b"NEW", [7]).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied, "the rename failed: {e}");
+        assert_eq!(read(&target), "OLD");
+        assert_eq!(listing(&dir), ["out.pdf"], "the staging file was removed");
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&target, perms).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod revert_draft_tests {
+    use super::*;
+    use crate::forms_ui::Focus;
+    use pdfcraft_engine::FieldValue;
+
+    fn focus(text: &str) -> Focus {
+        Focus {
+            name: "name".into(),
+            widget: 0,
+            text: text.into(),
+            picked: Vec::new(),
+            request_focus: false,
+            select_all: false,
+            calendar: None,
+            calendar_rect: None,
+        }
+    }
+
+    fn app() -> PdfCraftApp {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("source.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+        app
+    }
+
+    fn queue_draft(app: &mut PdfCraftApp, index: usize, text: &str) {
+        app.views[index].forms.focus = Some(focus(text));
+        let form = app.session.get(app.views[index].id).unwrap().form.clone();
+        crate::forms_ui::commit(&mut app.views[index], &form);
+        assert!(app.views[index].forms.committed.is_some() && app.views[index].pending_edit.is_some());
+    }
+
+    #[test]
+    fn successful_revert_clears_focused_or_queued_drafts_only_on_its_document() {
+        for queued in [false, true] {
+            let mut app = app();
+            let source = app.views[0].id;
+            assert!(app.apply_edit(Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text("Committed change".into()) }));
+            if queued {
+                queue_draft(&mut app, 0, "Queued source draft");
+            } else {
+                app.views[0].forms.focus = Some(focus("Focused source draft"));
+            }
+            app.open_bytes("other.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+            let other = app.views[1].id;
+            assert!(app.apply_edit(Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text("Other committed value".into()) }));
+            queue_draft(&mut app, 1, "Other queued draft");
+            app.views[1].forms.focus = Some(focus("Other focused draft"));
+            let other_bytes = app.session.get(other).unwrap().bytes.clone();
+            let other_generation = app.session.get(other).unwrap().edit_generation();
+            let source_generation = app.session.get(source).unwrap().edit_generation();
+            app.active = Some(0);
+            app.revert_active();
+            let reverted = app.session.get(source).unwrap();
+            assert!(!reverted.dirty);
+            assert_eq!(reverted.edit_generation(), source_generation + 1);
+            assert!(reverted.form.iter().find(|field| field.name == "name").unwrap().value.is_empty());
+            assert!(app.views[0].forms.focus.is_none() && app.views[0].forms.committed.is_none() && app.views[0].pending_edit.is_none());
+            assert!(!app.has_unsaved_work(0));
+            assert_eq!(app.views[1].forms.focus.as_ref().unwrap().text, "Other focused draft");
+            assert_eq!(app.views[1].forms.committed.as_ref().unwrap().text, "Other queued draft");
+            assert!(
+                matches!(&app.views[1].pending_edit, Some(Edit::SetFieldValue { name, value: FieldValue::Text(text) }) if name == "name" && text == "Other queued draft")
+            );
+            let untouched = app.session.get(other).unwrap();
+            assert_eq!(untouched.bytes, other_bytes);
+            assert_eq!(untouched.edit_generation(), other_generation);
+            assert!(untouched.dirty && app.has_unsaved_work(1));
+            assert_eq!(app.active_ids(), Some((0, source)));
+        }
+    }
+
+    #[test]
+    fn failed_revert_preserves_focused_and_queued_drafts() {
+        let mut app = app();
+        let source = app.views[0].id;
+        queue_draft(&mut app, 0, "Queued draft");
+        app.views[0].forms.focus = Some(focus("Focused draft"));
+        // Exercise the ordinary NoDocument error boundary without a corrupt fixture.
+        // This verifies UI failure preservation, not other engine refresh failures.
+        app.session.close(source);
+        app.revert_active();
+        assert_eq!(app.views[0].forms.focus.as_ref().unwrap().text, "Focused draft");
+        assert_eq!(app.views[0].forms.committed.as_ref().unwrap().text, "Queued draft");
+        assert!(
+            matches!(&app.views[0].pending_edit, Some(Edit::SetFieldValue { name, value: FieldValue::Text(text) }) if name == "name" && text == "Queued draft")
+        );
+        assert_eq!(app.active_ids(), Some((0, source)));
+        assert_eq!(app.toast.as_ref().unwrap().0, pdfcraft_engine::EditError::NoDocument.to_string());
+    }
 }

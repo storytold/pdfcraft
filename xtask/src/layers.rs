@@ -202,11 +202,10 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
                 }
                 match classify(&d.name) {
                     None => {}
-                    Some(Class::Testkit) => {
-                        if d.kind != DepKind::Dev && class != Class::Testkit {
-                            out.push(Violation::TestkitAsNormalDep { krate: c.name.clone(), dep: d.name.clone() });
-                        }
+                    Some(Class::Testkit) if d.kind != DepKind::Dev && class != Class::Testkit => {
+                        out.push(Violation::TestkitAsNormalDep { krate: c.name.clone(), dep: d.name.clone() });
                     }
+                    Some(Class::Testkit) => {}
                     Some(dc) => {
                         let to = dc.layer().unwrap_or(u8::MAX);
                         let ok = to < layer || (to == layer && sideways_allowed(&c.name, &d.name));

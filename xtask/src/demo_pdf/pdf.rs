@@ -351,20 +351,41 @@ pub fn pdf_string(s: &str) -> String {
 }
 
 /// Map text to WinAnsiEncoding bytes (unmappable characters become `?`).
+///
+/// Mirrors `pdfcraft_fonts::win_ansi` (ISO 32000-2 Annex D), which xtask doesn't depend on;
+/// keep the 0x80–0x9F rows in step with `crates/fonts/src/encodings.rs`.
 pub fn winansi(s: &str) -> Vec<u8> {
     s.chars()
         .map(|c| match c {
             '\u{20}'..='\u{7e}' => c as u8,
             '\u{a0}'..='\u{ff}' => c as u32 as u8,
-            '\u{2022}' => 0x95,
-            '\u{2013}' => 0x96,
-            '\u{2014}' => 0x97,
+            '\u{20ac}' => 0x80,
+            '\u{201a}' => 0x82,
+            '\u{0192}' => 0x83,
+            '\u{201e}' => 0x84,
+            '\u{2026}' => 0x85,
+            '\u{2020}' => 0x86,
+            '\u{2021}' => 0x87,
+            '\u{02c6}' => 0x88,
+            '\u{2030}' => 0x89,
+            '\u{0160}' => 0x8a,
+            '\u{2039}' => 0x8b,
+            '\u{0152}' => 0x8c,
+            '\u{017d}' => 0x8e,
             '\u{2018}' => 0x91,
             '\u{2019}' => 0x92,
             '\u{201c}' => 0x93,
             '\u{201d}' => 0x94,
-            '\u{2026}' => 0x85,
-            '\u{20ac}' => 0x80,
+            '\u{2022}' => 0x95,
+            '\u{2013}' => 0x96,
+            '\u{2014}' => 0x97,
+            '\u{02dc}' => 0x98,
+            '\u{2122}' => 0x99,
+            '\u{0161}' => 0x9a,
+            '\u{203a}' => 0x9b,
+            '\u{0153}' => 0x9c,
+            '\u{017e}' => 0x9e,
+            '\u{0178}' => 0x9f,
             _ => b'?',
         })
         .collect()
@@ -414,5 +435,14 @@ mod tests {
     fn strings_are_escaped() {
         assert_eq!(pdf_string("a(b)\\"), "(a\\(b\\)\\\\)");
         assert_eq!(pdf_string("—"), "(\\227)");
+    }
+
+    #[test]
+    fn winansi_covers_the_0x80_to_0x9f_glyphs() {
+        // The 27 defined codes of ISO 32000-2 Annex D WinAnsiEncoding between 0x80 and 0x9F.
+        let high = "€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ";
+        let want: Vec<u8> = (0x80..=0x9f).filter(|b| ![0x81, 0x8d, 0x8f, 0x90, 0x9d].contains(b)).collect();
+        assert_eq!(winansi(high), want);
+        assert_eq!(winansi("č"), b"?");
     }
 }

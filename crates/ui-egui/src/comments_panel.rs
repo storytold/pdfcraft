@@ -411,7 +411,7 @@ fn card(
         .layout(Layout::top_down_justified(Align::Min))
         .show(|ui| {
             ui.set_min_width(160.0);
-            if ui.button(tl!("Edit")).clicked() {
+            if ui.button(tl_ctx!("comment menu", "Edit")).clicked() {
                 view.comments.editing = Some((a.page, a.index, a.contents.clone().unwrap_or_default()));
                 ui.close();
             }

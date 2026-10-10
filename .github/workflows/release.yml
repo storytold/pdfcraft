@@ -213,7 +213,7 @@ jobs:
       - name: Apply version override
         if: inputs.version != ''
         run: cargo xtask version set "$PDFCRAFT_VERSION"
-      - name: Build and package (AppImage, deb, rpm, tar.gz)
+      - name: Build and package (AppImage, deb, rpm, tar.gz, CLI tar.gz)
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
@@ -222,7 +222,16 @@ jobs:
         run: |
           dpkg-deb --info dist/release/*.deb
           dpkg-deb --contents dist/release/*.deb | grep -E 'usr/bin/pdfcraft$|metainfo|applications'
+          # The OCR models (#103), where the installed app looks: <bin>/../share/pdfcraft/models.
+          dpkg-deb --contents dist/release/*.deb | grep -E 'usr/share/pdfcraft/models/.+\.rten$'
+          tar -tzf dist/release/*.tar.gz | grep -E '/share/pdfcraft/models/.+\.rten$'
           ldd target/release/pdfcraft
+          # The CLI-only archive: the binary and its licences, and it runs.
+          cli="dist/release/pdfcraft-cli-$PDFCRAFT_VERSION-linux-${{ matrix.arch }}.tar.gz"
+          tar -tzf "$cli" | grep -E '/pdfcraft-cli$'
+          tar -tzf "$cli" | grep -E '/LICENSE-APACHE$'
+          mkdir -p "$RUNNER_TEMP/cli" && tar -xzf "$cli" -C "$RUNNER_TEMP/cli"
+          "$RUNNER_TEMP/cli/pdfcraft-cli-$PDFCRAFT_VERSION-linux-${{ matrix.arch }}/pdfcraft-cli" --version
           python3 -c "import yaml; m = yaml.safe_load(open('packaging/linux/flatpak/ai.storyteller.pdfcraft.yml')); assert m['id'] == 'ai.storyteller.pdfcraft'"
           for appimage in dist/release/*.AppImage; do
             chmod +x "$appimage"

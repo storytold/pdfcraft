@@ -18,6 +18,7 @@ mod dedupe;
 mod import;
 mod labels;
 mod outline;
+mod pdfx;
 mod prune;
 pub mod view;
 
@@ -97,6 +98,13 @@ fn walk(doc: &Document) -> Result<Vec<(ObjRef, Dict)>, OrganizeError> {
 /// Leaf pages in document order.
 pub fn pages(doc: &Document) -> Result<Vec<PageRef>, OrganizeError> {
     Ok(walk(doc)?.into_iter().map(|(obj, _)| PageRef { obj }).collect())
+}
+
+/// Effective inherited page rotation, clockwise in degrees.
+pub fn page_rotation(doc: &Document, index: usize) -> Result<i64, OrganizeError> {
+    let pages = walk(doc)?;
+    let (_, attrs) = pages.get(index).ok_or(OrganizeError::NoSuchPage(index))?;
+    Ok(attrs.int(b"Rotate").unwrap_or(0).rem_euclid(360))
 }
 
 pub fn page_count(doc: &Document) -> Result<usize, OrganizeError> {
@@ -347,12 +355,17 @@ pub fn info(doc: &Document, key: &str) -> Option<String> {
 pub fn set_info(doc: &mut Document, key: &str, value: &str) -> Result<(), OrganizeError> {
     let value = value.trim();
     let entry = (!value.is_empty()).then(|| Object::String(PdfString::text(value)));
+    set_info_entry(doc, key.as_bytes(), entry)
+}
+
+/// Set (or remove, with `None`) a document-information entry of any type.
+fn set_info_entry(doc: &mut Document, key: &[u8], entry: Option<Object>) -> Result<(), OrganizeError> {
     match doc.trailer().get(b"Info").cloned() {
         Some(Object::Ref(r)) if doc.get(r).as_dict().is_some() => {
             doc.update_dict(r, |d| match entry {
-                Some(v) => d.set(key.as_bytes().to_vec(), v),
+                Some(v) => d.set(key.to_vec(), v),
                 None => {
-                    d.remove(key.as_bytes());
+                    d.remove(key);
                 }
             })?;
         }
@@ -362,7 +375,7 @@ pub fn set_info(doc: &mut Document, key: &str, value: &str) -> Result<(), Organi
                 Some(Object::Dict(d)) => d.clone(),
                 _ => Dict::new(),
             };
-            d.set(key.as_bytes().to_vec(), v);
+            d.set(key.to_vec(), v);
             let r = doc.add(d);
             doc.trailer_mut().set(b"Info".to_vec(), Object::Ref(r));
         }

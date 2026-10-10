@@ -17,6 +17,18 @@ pub enum FilePurpose {
     ReplacePages,
     /// Scan & OCR ▸ Recognize text in multiple files.
     Ocr,
+    /// Create a PDF ▸ Multiple files (PDFs, images and text).
+    CreateMultiple,
+}
+
+/// The picker for `purpose`: PDFs, and for Create and Insert also what they convert.
+fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
+    let dialog = rfd::AsyncFileDialog::new();
+    if !matches!(purpose, FilePurpose::CreateMultiple | FilePurpose::InsertPages) {
+        return dialog.add_filter("PDF", &["pdf"]);
+    }
+    let all: Vec<&str> = std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).collect();
+    dialog.add_filter(tl!("PDF, images and text"), &all).add_filter("PDF", &["pdf"])
 }
 
 /// The Replace Pages dialog: the chosen file and the ranges (1-based, inclusive).
@@ -125,9 +137,14 @@ impl Default for RotateDraft {
 }
 
 impl PdfCraftApp {
-    /// Ask for files to combine (File ▸ Combine files…).
+    /// Ask for files to add to the Combine files list (its Add files… button).
     pub fn combine_dialog(&mut self) {
         self.pick_files(FilePurpose::Combine, true);
+    }
+
+    /// Create a PDF ▸ Multiple files: ask for the files to convert.
+    pub fn create_multiple_dialog(&mut self) {
+        self.pick_files(FilePurpose::CreateMultiple, true);
     }
 
     /// Scan & OCR ▸ Recognize text ▸ In multiple files: ask for the PDFs.
@@ -135,18 +152,27 @@ impl PdfCraftApp {
         self.pick_files(FilePurpose::Ocr, true);
     }
 
-    /// Ask for a PDF whose pages to insert after the selection (Organize ▸ Insert from file).
+    /// Ask for files whose pages to insert after the selection (Organize ▸ Insert from file).
     pub fn insert_from_file_dialog(&mut self) {
-        if self.active.is_none() {
+        self.insert_from_file_at(None);
+    }
+
+    /// Ask for files to insert at grid gap `at` (0 = before the first page), or after the
+    /// selection.
+    pub(crate) fn insert_from_file_at(&mut self, at: Option<usize>) {
+        let Some(i) = self.active else {
             self.notify_tr("Open a document first");
             return;
+        };
+        if let Some(v) = self.views.get_mut(i) {
+            v.insert_at = at;
         }
-        self.pick_files(FilePurpose::InsertPages, false);
+        self.pick_files(FilePurpose::InsertPages, true);
     }
 
     fn pick_files(&mut self, purpose: FilePurpose, multiple: bool) {
         #[cfg(not(target_arch = "wasm32"))]
-        self.pick(crate::pickers::PickFor::Files(purpose), rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]), multiple);
+        self.pick(crate::pickers::PickFor::Files(purpose), files_picker(purpose), multiple);
         #[cfg(target_arch = "wasm32")]
         {
             let requests = self.requests.clone();
@@ -155,7 +181,7 @@ impl PdfCraftApp {
             // the browser has finished reading the file (#167).
             let request = self.file_request(purpose, Vec::new());
             wasm_bindgen_futures::spawn_local(async move {
-                let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]);
+                let dialog = files_picker(purpose);
                 let handles = if multiple { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect() };
                 let mut files = Vec::new();
                 for h in handles {
@@ -178,6 +204,7 @@ impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn use_paths(&mut self, purpose: FilePurpose, paths: &[std::path::PathBuf]) {
         let mut files = Vec::new();
+        let mut modified = Vec::new();
         for p in paths {
             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file.pdf".into());
             match std::fs::read(p) {
@@ -187,10 +214,58 @@ impl PdfCraftApp {
                     return;
                 }
             }
+            modified.push(std::fs::metadata(p).and_then(|m| m.modified()).ok());
         }
-        if !files.is_empty() {
+        if files.is_empty() {
+            return;
+        }
+        // Combine files lists when each file was last modified.
+        if purpose == FilePurpose::Combine {
+            let incoming = files
+                .into_iter()
+                .zip(modified)
+                .map(|((name, bytes), modified)| crate::combine_ui::Incoming { name, bytes: Arc::new(bytes), modified, note: None })
+                .collect();
+            self.stage_combine_with(incoming);
+        } else {
             self.use_files(purpose, files);
         }
+    }
+
+    /// A file dropped on the Combine files tab: added to its list.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn drop_into_combine(&mut self, f: egui::DroppedFileHandle, _ctx: &egui::Context) {
+        // A folder: the PDFs in it and in the folders inside it.
+        if f.path().is_absolute() && f.path().is_dir() {
+            self.add_folder_to_combine(f.path(), true);
+            return;
+        }
+        if f.path().is_absolute() {
+            self.use_paths(FilePurpose::Combine, &[f.path().to_path_buf()]);
+            return;
+        }
+        let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+        match f.bytes() {
+            Ok(bytes) => self.use_files(FilePurpose::Combine, vec![(name, bytes)]),
+            Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+        }
+    }
+
+    /// Browsers read dropped files asynchronously; they join the Combine files list next frame.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn drop_into_combine(&mut self, f: egui::DroppedFileHandle, ctx: &egui::Context) {
+        let requests = self.requests.clone();
+        let request = self.file_request(FilePurpose::Combine, Vec::new());
+        let ctx = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+            if let Ok(bytes) = f.bytes_async().await
+                && let Ok(mut q) = requests.lock()
+            {
+                q.push(FileRequest { files: vec![(name, bytes)], ..request });
+                ctx.request_repaint();
+            }
+        });
     }
 
     /// A request to use `files` for `purpose`, bound to the document it will edit: the active
@@ -237,17 +312,14 @@ impl PdfCraftApp {
     pub fn use_files(&mut self, purpose: FilePurpose, files: Vec<(String, Vec<u8>)>) {
         match purpose {
             FilePurpose::Combine => self.stage_combine(files),
-            FilePurpose::InsertPages => {
-                for (name, bytes) in files {
-                    self.insert_pages_from(&name, bytes);
-                }
-            }
+            FilePurpose::InsertPages => self.insert_files(files),
             FilePurpose::ReplacePages => {
                 if let Some((name, bytes)) = files.into_iter().next() {
                     self.start_replace(name, bytes);
                 }
             }
             FilePurpose::Ocr => self.ocr_files(files),
+            FilePurpose::CreateMultiple => self.stage_create_multiple(files),
         }
     }
 
@@ -277,11 +349,37 @@ impl PdfCraftApp {
         self.dialog = Some(crate::Dialog::ReplacePages);
     }
 
-    /// Insert all pages of a PDF after the organize selection (or the current page).
+    /// Insert all pages of a file after the organize selection (or the current page).
     pub fn insert_pages_from(&mut self, name: &str, bytes: Vec<u8>) {
-        let Some(i) = self.active else { return };
-        let at = self.views[i].target_pages().last().map(|p| p + 1).unwrap_or(0);
-        self.apply_edit(Edit::InsertPagesFrom { name: name.to_string(), bytes: Arc::new(bytes), pages: None, at });
+        self.insert_files(vec![(name.to_string(), bytes)]);
+    }
+
+    /// Insert the pages of `files` (PDFs, images, text), in order, at the gap a "+" in the page
+    /// grid chose, or else after the selection (or the current page); then select them.
+    pub fn insert_files(&mut self, files: Vec<(String, Vec<u8>)>) {
+        let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) else { return };
+        let (id, chosen) = (view.id, view.insert_at.take());
+        let after = view.target_pages().last().map_or(0, |p| p + 1);
+        let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
+        let start = chosen.unwrap_or(after).min(count);
+        let mut at = start;
+        for (name, bytes) in files {
+            let converted =
+                self.session.convert_to_pdf(&name, &Arc::new(bytes)).and_then(|(_, pdf)| Ok((self.session.page_count_of(&name, &pdf)?, pdf)));
+            match converted {
+                Ok((pages, bytes)) => {
+                    if self.apply_edit(Edit::InsertPagesFrom { name, bytes, pages: None, at }) {
+                        at = at.saturating_add(pages);
+                    }
+                }
+                Err(e) => self.notify_error(e),
+            }
+        }
+        if at > start
+            && let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
+        {
+            view.select_pages(&(start..at).collect::<Vec<_>>());
+        }
     }
 
     /// Copy the selected pages (or the current page) into a new unsaved document tab.
