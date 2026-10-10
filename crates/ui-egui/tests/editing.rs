@@ -1467,6 +1467,35 @@ fn password_prompt_opens_and_security_tab_reports_the_details() {
     h.get_by_label("User password");
 }
 
+/// #785: the notice's message used to be laid out before its buttons, so in a narrow document
+/// area (a side panel open) it ran under "Security settings" and on into the panel, and it sat
+/// off the buttons' centre line.
+#[test]
+fn the_security_notice_wraps_beside_its_buttons_and_lines_up_with_them() {
+    // Wide: one line. Narrower: wrapped. Narrowest: cut short (the full text is on hover).
+    for (width, wraps) in [(1700.0, false), (1250.0, true), (900.0, false)] {
+        let mut h = Harness::builder().with_size(egui::vec2(width, 800.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
+            app.set_option("panel", "bookmarks").unwrap();
+            app
+        });
+        h.run_steps(4);
+        let msg = h.get_by_label_contains("This document is secured").rect();
+        let button = h.get_by_label("Security settings").rect();
+        let dismiss = h.get_by_label("Dismiss").rect();
+        assert!(msg.right() <= button.left() + 0.5, "{width}: the message stops before the buttons: {msg:?} vs {button:?}");
+        assert!(button.right() <= dismiss.left() + 0.5, "{width}: {button:?} vs {dismiss:?}");
+        assert!((button.center().y - dismiss.center().y).abs() <= 0.5, "{width}: the buttons share a centre line");
+        assert!(msg.top() >= button.top(), "{width}: the message stays inside the bar: {msg:?} vs {button:?}");
+        let lines = (msg.height() / 14.0).floor().max(1.0);
+        let first_line = msg.top() + msg.height() / lines / 2.0;
+        assert!((first_line - button.center().y).abs() <= 1.5, "{width}: first line centred on the buttons: {msg:?} vs {button:?}");
+        assert_eq!(msg.height() > button.height(), wraps, "{width}: {msg:?}");
+    }
+}
+
 #[test]
 fn restricted_documents_show_a_notice_and_block_page_changes() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
@@ -2156,4 +2185,25 @@ fn the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page()
     h.run_steps(4);
     assert_eq!(page_texts(h.state()), ["Page 1"]);
     assert_eq!(h.state().views[0].current, 0);
+}
+
+#[test]
+fn host_dirty_hears_when_unsaved_work_appears_and_goes() {
+    let reports = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = reports.clone();
+    let mut h = harness(2, move |app| {
+        app.set_option("organize", "on").unwrap();
+        app.host_dirty = Some(Box::new(move |dirty| sink.lock().unwrap().push(dirty)));
+    });
+    assert_eq!(reports.lock().unwrap().last(), Some(&false), "a freshly opened document has nothing unsaved");
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(3);
+    assert_eq!(reports.lock().unwrap().last(), Some(&true), "an edit is unsaved work");
+
+    let out = temp_path("host-dirty.pdf");
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run_steps(3);
+    assert_eq!(reports.lock().unwrap().last(), Some(&false), "saving clears it");
+    let _ = std::fs::remove_file(out);
 }

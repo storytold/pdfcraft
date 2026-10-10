@@ -404,7 +404,7 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = (target, path);
+            let _ = path;
             if !self.flatten_fill_sign_for_save(id) {
                 return false;
             }
@@ -415,15 +415,31 @@ impl PdfCraftApp {
                     return false;
                 }
             };
-            match download(&name, &bytes) {
+            // An embedding page that asked for saves (`?host=parent`) gets the bytes; otherwise
+            // the browser downloads them.
+            let to_host = self.host_save.is_some();
+            let delivered = match &self.host_save {
+                Some(save) => save(&name, &bytes, matches!(target, SaveTarget::As)),
+                None => download(&name, &bytes),
+            };
+            match delivered {
                 Ok(()) => {
                     let _ = self.session.mark_saved(id, bytes, None);
-                    if let Some(doc) = self.session.get(id) {
-                        self.views[index].document_changed(&doc.info);
+                    if let Some(doc) = self.session.get(id)
+                        && let Some(view) = self.views.get_mut(index)
+                    {
+                        view.document_changed(&doc.info);
                     }
-                    self.notify_fmt("Downloaded {name}", &[("name", &name)]);
+                    // The host reports where the file went (and any failure) itself.
+                    if !to_host {
+                        self.notify_fmt("Downloaded {name}", &[("name", &name)]);
+                    }
                     after(self);
                     true
+                }
+                Err(e) if to_host => {
+                    self.notify_fmt("Couldn't save {name}: {e}", &[("name", &name), ("e", &e)]);
+                    false
                 }
                 Err(e) => {
                     self.notify_fmt("Couldn't download {name}: {e}", &[("name", &name), ("e", &e.to_string())]);

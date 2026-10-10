@@ -576,6 +576,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     let page_rect = cx.xf.rect;
     let pressed_here = origin.is_some_and(|o| page_rect.contains(o));
     let over_page = pointer.is_some_and(|p| page_rect.contains(p));
+    let fill_grab = fill_grabs(ui, cx, view);
     let cv = &mut view.comments;
     if cv.gesture.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         cv.gesture = None;
@@ -768,8 +769,33 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             true
         }
         QuickTool::Select => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
+        QuickTool::Fill(_) if fill_grab => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
         _ => false,
     }
+}
+
+/// With a Fill & Sign tool, the Fill & Sign marks already on the page are picked up as with the
+/// Select tool, as in Acrobat: hovering one shows the move cursor, a click selects it, a drag
+/// moves it and the selected one's handles resize it. Elsewhere the tool places its mark. While
+/// the button is down the press decides; otherwise the pointer (egui clears the press origin on
+/// release, so a click is located by the pointer).
+pub(crate) fn fill_grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView) -> bool {
+    if !matches!(cx.tool, QuickTool::Fill(_)) || cx.hidden {
+        return false;
+    }
+    let cv = &view.comments;
+    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. }) if page == cx.page) {
+        return true;
+    }
+    let (pointer, origin, down) = ui.input(|i| (i.pointer.hover_pos(), i.pointer.press_origin(), i.pointer.any_down()));
+    let Some(p) = (if down { origin } else { pointer }).filter(|p| cx.xf.rect.contains(*p)) else { return false };
+    let on_handle = cv
+        .selected
+        .filter(|(page, _)| *page == cx.page)
+        .and_then(|(_, i)| cx.get(i))
+        .filter(|a| a.fill_sign && cx.allowed && resizable(a))
+        .is_some_and(|a| HANDLES.into_iter().any(|h| handle_pos(cx.screen_rect(a), h).distance(p) <= 7.0));
+    on_handle || cx.hit(p).is_some_and(|a| a.fill_sign)
 }
 
 fn clamp_to(r: Rect, p: Pos2) -> Pos2 {
@@ -917,9 +943,9 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
     let cv = &view.comments;
     let pointer = ui.input(|i| i.pointer.hover_pos());
-    if cx.tool == QuickTool::Select
-        && cv.gesture.is_none()
+    if cv.gesture.is_none()
         && let Some(a) = pointer.and_then(|p| cx.hit(p))
+        && (cx.tool == QuickTool::Select || matches!(cx.tool, QuickTool::Fill(_)) && a.fill_sign)
         && cv.selected != Some((cx.page, a.index))
     {
         for r in cx.screen_rects(a) {

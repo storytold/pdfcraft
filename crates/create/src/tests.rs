@@ -346,6 +346,64 @@ fn icc_of(doc: &Document, image: &Dict) -> Option<(i64, Vec<u8>, Vec<u8>, Object
     Some((s.dict.int(b"N")?, s.dict.name(b"Alternate")?.to_vec(), s.decoded().unwrap(), r))
 }
 
+/// Move the synthetic fixture's frame before its application segments.
+fn jpeg_frame_first(mut bytes: Vec<u8>) -> Vec<u8> {
+    let at = bytes.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+    let len = usize::from(u16::from_be_bytes([bytes[at + 2], bytes[at + 3]]));
+    let frame: Vec<_> = bytes.drain(at..at + 2 + len).collect();
+    bytes.splice(2..2, frame);
+    bytes
+}
+
+#[test]
+fn jpeg_fill_bytes_and_metadata_after_frame_are_preserved() {
+    let profile = icc_profile(b"CMYK");
+    let mut bytes = jpeg_frame_first(cmyk_jpeg_bytes(&profile));
+    // Fill before SOF and APP14, including multiple consecutive fill bytes.
+    bytes.splice(24..24, [0xFF, 0xFF]);
+    bytes.insert(2, 0xFF);
+    let doc = reopen(&from_images(&[("filled.jpg".into(), bytes.clone())]).unwrap());
+    let image = image_of(&doc, 0);
+    let (n, alt, data, _) = icc_of(&doc, &image).unwrap();
+    assert_eq!((n, alt.as_slice(), data), (4, &b"DeviceCMYK"[..], profile));
+    assert!(image.contains(b"Decode"), "APP14 after SOF still inverts CMYK");
+    assert_eq!(extract_images(&doc, &[0], 0).images[0].data, bytes);
+
+    let embedded = jpeg("density.jpg", &jpeg_frame_first(jpeg_bytes())).unwrap();
+    assert_eq!(embedded.px, (3, 2));
+    assert_eq!(embedded.dpi, (300.0, 300.0), "JFIF after SOF is read");
+
+    // A mismatched profile found after SOF still falls back leniently, as in #729.
+    let bytes = jpeg_frame_first(cmyk_jpeg_bytes(&icc_profile(b"RGB ")));
+    let doc = reopen(&from_images(&[("mismatch.jpg".into(), bytes)]).unwrap());
+    assert_eq!(image_of(&doc, 0).name(b"ColorSpace"), Some(&b"DeviceCMYK"[..]));
+}
+
+#[test]
+fn jpeg_segment_scan_stops_at_sos_or_eoi() {
+    let profile = icc_profile(b"CMYK");
+    for marker in [0xDA, 0xD9] {
+        let mut bytes = jpeg_frame_first(cmyk_jpeg_bytes(&profile));
+        bytes.truncate(bytes.len() - 2);
+        // Neither marker needs a segment length to stop metadata scanning. The trailing
+        // invalid APP2 would fail if entropy data or bytes after EOI were walked.
+        bytes.extend_from_slice(&[0xFF, 0xFF, marker, 0xFF, 0xE2, 0, 1]);
+        let embedded = jpeg("boundary.jpg", &bytes).unwrap();
+        assert_eq!(embedded.icc, Some(profile.clone()));
+        assert_eq!(embedded.px, (3, 2));
+    }
+}
+
+#[test]
+fn jpeg_segment_scan_rejects_truncated_or_invalid_lengths() {
+    for tail in [&[0xFF][..], &[0xFF, 0xFF], &[0xFF, 0xE2], &[0xFF, 0xE2, 0], &[0xFF, 0xE2, 0, 0], &[0xFF, 0xE2, 0, 1], &[0xFF, 0xE2, 0, 3]] {
+        let mut bytes = jpeg_bytes();
+        bytes.truncate(bytes.len() - 2);
+        bytes.extend_from_slice(tail);
+        assert!(jpeg("truncated.jpg", &bytes).is_err(), "tail: {tail:?}");
+    }
+}
+
 #[test]
 fn embedded_icc_profiles_tag_the_image_colour_space() {
     // A CMYK JPEG keeps its profile as /ICCBased (N 4), its data byte for byte and its Decode.

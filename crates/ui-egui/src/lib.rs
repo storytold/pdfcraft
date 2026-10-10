@@ -341,6 +341,14 @@ pub enum OsEvent {
 /// Returns the [`OsEvent`]s that arrived since it was last called (set by the desktop app).
 pub type OsEventsFn = Box<dyn FnMut() -> Vec<OsEvent>>;
 
+/// Hands a saved PDF to the page embedding PdfCraft (web): `(name, bytes, save_as)`. `save_as`
+/// is `true` for Save As. Set by the web app when a host page (such as a Nextcloud app) asked
+/// for saves; without it the browser downloads the file.
+pub type HostSaveFn = Box<dyn Fn(&str, &[u8], bool) -> Result<(), String>>;
+
+/// Told every frame whether any tab has unsaved work, so a host page can warn before leaving.
+pub type HostDirtyFn = Box<dyn FnMut(bool)>;
+
 pub struct PasswordPrompt {
     pub name: String,
     pub path: Option<String>,
@@ -393,6 +401,10 @@ pub struct PdfCraftApp {
     /// Resolved colours, including the current OS theme when following the system.
     pub theme: ThemeKind,
     pub theme_preference: ThemePreference,
+    /// The desktop's light/dark choice, watched while the app runs (Linux has no winit answer).
+    desktop_theme: pdfcraft_platform::desktop_theme::DesktopTheme,
+    /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
+    desktop_dark: Option<bool>,
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
     /// Preferences: bake Fill & Sign marks into the page when saving. Off, so a normal save stays editable.
@@ -431,6 +443,10 @@ pub struct PdfCraftApp {
     pub unsaved_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Requests from the operating system, polled every frame (macOS Apple events).
     pub os_events: Option<OsEventsFn>,
+    /// Save delivers to the embedding page instead of downloading (web, see [`HostSaveFn`]).
+    pub host_save: Option<HostSaveFn>,
+    /// Reports unsaved work to the embedding page (web, see [`HostDirtyFn`]).
+    pub host_dirty: Option<HostDirtyFn>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
     /// Save to this path instead of asking (tests and automation).
@@ -633,6 +649,12 @@ impl Default for PdfCraftApp {
     }
 }
 
+/// What the operating system says about light and dark, as "draw dark". `None` means nobody
+/// answered, not a preference, so the caller keeps what it chose.
+fn system_theme(ctx: &egui::Context, desktop_dark: Option<bool>) -> Option<bool> {
+    ctx.system_theme().map(|theme| theme == egui::Theme::Dark).or(desktop_dark)
+}
+
 /// A restored colour: an `[r, g, b]` array of finite numbers, each clamped to 0–1 (restored
 /// settings are untrusted). Anything else (a string, a wrong length, a null or a non-finite
 /// number) is refused whole, so the caller keeps its default.
@@ -672,6 +694,8 @@ impl PdfCraftApp {
             comment_prefs: Default::default(),
             theme: ThemeKind::Light,
             theme_preference: ThemePreference::Light,
+            desktop_theme: pdfcraft_platform::desktop_theme::DesktopTheme::start(),
+            desktop_dark: None,
             language: i18n::AUTO.to_string(),
             flatten_fill_sign_on_save: false,
             dialog: None,
@@ -695,6 +719,8 @@ impl PdfCraftApp {
             failed_inbox: Default::default(),
             unsaved_flag: Default::default(),
             os_events: None,
+            host_save: None,
+            host_dirty: None,
             close_request: None,
             save_override: None,
             props_draft: None,
@@ -1224,7 +1250,9 @@ impl PdfCraftApp {
 
     pub fn set_theme_preference(&mut self, preference: ThemePreference) {
         self.theme_preference = preference;
-        self.theme = preference.resolve(self.ctx.as_ref().and_then(egui::Context::system_theme), self.theme);
+        // Before the first frame there is no context to ask, so the last choice stands.
+        let system = self.ctx.as_ref().and_then(|ctx| system_theme(ctx, self.desktop_dark));
+        self.theme = preference.resolve(system, self.theme);
         if let Some(ctx) = &self.ctx {
             theme::apply(ctx, self.theme);
         }
@@ -1238,7 +1266,10 @@ impl PdfCraftApp {
     }
 
     fn sync_theme(&mut self, ctx: &egui::Context) {
-        let kind = self.theme_preference.resolve(ctx.system_theme(), self.theme);
+        if let Some(dark) = self.desktop_theme.take_change() {
+            self.desktop_dark = Some(dark);
+        }
+        let kind = self.theme_preference.resolve(system_theme(ctx, self.desktop_dark), self.theme);
         if kind != self.theme {
             self.theme = kind;
             theme::apply(ctx, kind);
@@ -1878,6 +1909,12 @@ impl eframe::App for PdfCraftApp {
         self.guard_quit(ctx);
         let now = ctx.input(|i| i.time);
         self.autosave_tick(now);
+        if self.host_dirty.is_some() {
+            let dirty = self.first_dirty().is_some();
+            if let Some(report) = self.host_dirty.as_mut() {
+                report(dirty);
+            }
+        }
         self.poll_updates();
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
