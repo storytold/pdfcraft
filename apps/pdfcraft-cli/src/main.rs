@@ -494,8 +494,8 @@ fn render(args: &[String]) -> Result<(), CliError> {
 /// valid PDFs, password-protected PDFs, empty PDFs, and damaged files without opening the main editor.
 fn preview(args: &[String]) -> Result<(), CliError> {
     let path = *positional(args).first().ok_or("preview: missing file")?;
-    let page: usize = flag(args, "--page").unwrap_or("1").parse().unwrap_or(1).max(1);
-    let dpi: f32 = flag(args, "--dpi").unwrap_or("150").parse().unwrap_or(150.0).clamp(36.0, 300.0);
+    let page: usize = flag(args, "--page").unwrap_or("1").parse::<usize>().unwrap_or(1).max(1);
+    let dpi: f32 = flag(args, "--dpi").unwrap_or("150").parse::<f32>().unwrap_or(150.0).clamp(36.0, 300.0);
     let out = flag(args, "--out").ok_or("preview: missing --out <file.png>")?;
     let password = flag(args, "--password");
 
