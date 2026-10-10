@@ -1096,6 +1096,7 @@
 	Redacted area fill colour:	Колір заливки вилученої області:
 	Use overlay text	Використовувати накладений текст
 	Custom text:	Власний текст:
+	Redaction code:	Код вилучення:
 	Font:	Шрифт:
 	Font size:	Розмір шрифту:
 	Auto-size text to fit redaction region	Автоматично добирати розмір тексту до області вилучення

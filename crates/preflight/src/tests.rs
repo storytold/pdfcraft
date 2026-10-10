@@ -100,3 +100,84 @@ fn embedded_files_differ_between_parts() {
     let r = convert(&mut d3, Level::A3b).unwrap();
     assert!(r.remaining.is_empty(), "{:#?}", r.remaining);
 }
+
+/// A page that paints a DeviceCMYK image (as `doc_create` makes from a CMYK JPEG), with
+/// `intent` as the catalog's extra entries and `extra` as more objects (from object 6 on).
+fn cmyk_page(intent: &str, content: &str, extra: &[&str]) -> Document {
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R {intent} >>");
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let mut objs = vec![
+        catalog.as_str(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>",
+        stream.as_str(),
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Length 4 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\nendstream",
+    ];
+    objs.extend_from_slice(extra);
+    build(&objs, "")
+}
+
+fn messages(issues: &[Issue]) -> Vec<&str> {
+    issues.iter().map(|i| i.message.as_str()).collect()
+}
+
+/// Issue #667: converting a CMYK-only document doesn't add an sRGB output intent (it would
+/// describe a colour space the document doesn't use); the CMYK output intent it needs is
+/// reported as not fixable instead.
+#[test]
+fn convert_does_not_give_cmyk_documents_an_srgb_output_intent() {
+    let mut doc = cmyk_page("", "q 200 0 0 200 0 0 cm /Im0 Do Q", &[]);
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(!r.fixed.iter().any(|f| f.contains("output intent")), "{:?}", r.fixed);
+    assert!(declared(&doc).output_intents.is_empty());
+    let left = messages(&r.remaining);
+    assert!(left.contains(&"Device colour is used, but there is no PDF/A output intent"), "{left:#?}");
+    assert!(left.contains(&"DeviceCMYK is used: it needs a CMYK output intent (not added automatically)"), "{left:#?}");
+    assert!(r.remaining.iter().all(|i| !i.fixable));
+}
+
+/// Issue #667: verify checks the output intent's colour space against the device colour the
+/// pages use, not only that an output intent exists.
+#[test]
+fn verify_reports_an_output_intent_that_does_not_match_device_colour() {
+    let intent = "/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (X) /DestOutputProfile 6 0 R >>]";
+    let profile = |n: u8| format!("<< /N {n} /Length 0 >>\nstream\n\nendstream");
+    let (rgb, cmyk) = (profile(3), profile(4));
+    let cmyk_msg = "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile";
+    let rgb_msg = "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile";
+
+    // CMYK content under an sRGB output intent (what convert used to write).
+    let issues = verify(&cmyk_page(intent, "/Im0 Do", &[&rgb]), Level::A2b);
+    assert!(messages(&issues).contains(&cmyk_msg), "{issues:#?}");
+    assert!(issues.iter().find(|i| i.message == cmyk_msg).is_some_and(|i| i.clause == "6.2.4.3" && !i.fixable));
+
+    // CMYK content under a CMYK output intent is fine; RGB and gray content beside it is not
+    // and is, respectively.
+    assert!(!messages(&verify(&cmyk_page(intent, "/Im0 Do 0 g", &[&cmyk]), Level::A2b)).iter().any(|m| m.contains("output intent")));
+    let issues = verify(&cmyk_page(intent, "/Im0 Do 1 0 0 rg", &[&cmyk]), Level::A2b);
+    assert!(messages(&issues).contains(&rgb_msg) && !messages(&issues).contains(&cmyk_msg), "{issues:#?}");
+
+    // DefaultCMYK in the page's resources draws DeviceCMYK in that space, which PDF/A accepts
+    // under any output intent.
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R {intent} >>");
+    let doc = build(
+        &[
+            catalog.as_str(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ColorSpace << /DefaultCMYK [/ICCBased 7 0 R] >> /XObject << /Im0 5 0 R >> >> >>",
+            "<< /Length 7 >>\nstream\n/Im0 Do\nendstream",
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Length 4 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\nendstream",
+            rgb.as_str(),
+            cmyk.as_str(),
+        ],
+        "",
+    );
+    assert!(!messages(&verify(&doc, Level::A2b)).contains(&cmyk_msg), "DefaultCMYK covers DeviceCMYK");
+
+    // Without /N, the ICC header's colour space decides.
+    let mut header = vec![b' '; 128];
+    header[16..20].copy_from_slice(b"CMYK");
+    let header = String::from_utf8(header).unwrap();
+    let headed = format!("<< /Length 128 >>\nstream\n{header}\nendstream");
+    assert!(!messages(&verify(&cmyk_page(intent, "/Im0 Do", &[&headed]), Level::A2b)).contains(&cmyk_msg));
+}

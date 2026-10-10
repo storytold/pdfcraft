@@ -1659,6 +1659,47 @@ fn form_javascript_validates_calculates_and_formats() {
 }
 
 #[test]
+fn edit_history_does_not_replay_field_script_side_effects() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let value = |s: &Session, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
+    let initial_qty = value(&s, "qty");
+    let initial_total = value(&s, "total");
+    assert!(s.take_js_output(id).is_empty());
+
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();
+    assert_eq!(value(&s, "qty"), ["4"]);
+    assert_eq!(value(&s, "total"), ["10"]);
+    let output = s.take_js_output(id);
+    assert!(output.console.contains(&"times".to_string()), "{output:?}");
+    assert_eq!(output.console.iter().filter(|line| *line == "times").count(), 1, "{output:?}");
+
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Report".into() }).unwrap();
+    assert!(s.take_js_output(id).is_empty(), "a metadata edit does not rerun field scripts");
+
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.title, None);
+    assert_eq!(value(&s, "qty"), ["4"]);
+    assert!(s.take_js_output(id).is_empty(), "undoing metadata does not rerun field scripts");
+
+    s.redo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.title.as_deref(), Some("Report"));
+    assert_eq!(value(&s, "qty"), ["4"]);
+    assert!(s.take_js_output(id).is_empty(), "redoing metadata does not rerun field scripts");
+
+    s.undo(id).unwrap();
+    s.undo(id).unwrap();
+    assert_eq!(value(&s, "qty"), initial_qty);
+    assert_eq!(value(&s, "total"), initial_total);
+    assert!(s.take_js_output(id).is_empty(), "undoing the scripted edit does not replay its side effect");
+
+    s.redo(id).unwrap();
+    assert_eq!(value(&s, "qty"), ["4"]);
+    assert_eq!(value(&s, "total"), ["10"]);
+    assert!(s.take_js_output(id).is_empty(), "redoing the scripted edit restores its snapshot without replay");
+}
+
+#[test]
 fn detecting_fields_on_a_printed_form() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let text = s.create_from_text("t", "Name: ______________________\n\nEmail address: ____________________\n\nPlain text without blanks.").unwrap();
