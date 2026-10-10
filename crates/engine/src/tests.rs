@@ -1685,6 +1685,24 @@ fn backgrounds_and_watermarks_from_files() {
 /// Scan & OCR ▸ Recognize text on a page that is only a picture of text (needs the models:
 /// `cargo xtask models`; skipped without them).
 #[test]
+fn recognize_text_reads_the_euro_sign() {
+    if !ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = s.create_from_text("t", "Total amount due: €250 by Friday").unwrap();
+    let id = s.open("text.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(id).unwrap()).png(0, 150.0).unwrap();
+    let scan = s.create_from_images(&[("scan.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    s.recognize_text(id, &[], ocr::OcrSettings::default()).unwrap();
+    let text = page_texts(&s, id)[0].clone();
+    // The model was trained with € where the ocrs crate's alphabet has a second E.
+    assert!(text.contains("€250"), "{text}");
+}
+
+#[test]
 fn recognize_text_makes_a_scanned_page_searchable() {
     if !ocr::available() {
         eprintln!("skipped: OCR models not installed");
