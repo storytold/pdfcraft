@@ -1,8 +1,8 @@
 //! Runtime interface fallbacks, read from fonts already installed on this machine.
 //!
-//! The existing Arabic-script face remains the last fallback. Windows can additionally
-//! load one Chinese face for its catalog and file names, without losing Arabic coverage.
-//! These faces are UI-only: never embedded, copied or shipped (AGENTS.md §1.4).
+//! The Arabic-script face is the last fallback in every family. The Chinese face comes from
+//! [`pdfcraft_fonts::han`], the same installed face the page renderer falls back to, so one search
+//! answers for both. These faces are UI-only: never embedded, copied or shipped (AGENTS.md §1.4).
 //! `PDFCRAFT_SYSTEM_FONTS=0` disables both (published screenshots do).
 
 use std::io::Read as _;
@@ -15,22 +15,35 @@ use egui::FontData;
 const MAX_BYTES: u64 = 32 << 20;
 /// Faces tried in a collection (`.ttc`).
 const MAX_FACES: u32 = 16;
-/// Arabic letter alef: preserve the existing fallback selection.
+/// Arabic letter alef: the face must have it to be worth loading.
 const PROBE: &str = "\u{0627}";
-/// Shared and Simplified-only Han characters, not just a glyph a Japanese face may have.
-const CHINESE_PROBES: &str = "中文欢迎编辑导出";
 
-/// The existing installed fallback, read once. None when disabled or no candidate fits.
+/// The installed Arabic-script fallback, read once. `None` when it is turned off or no candidate
+/// fits.
 pub fn fallback() -> Option<Arc<FontData>> {
     static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
     CACHE.get_or_init(|| load(&candidates(), PROBE)).clone()
 }
 
-/// One installed Chinese face on Windows, independent of the UI language.
+/// One installed Chinese face, independent of the interface language: a Chinese file name in an
+/// English interface needs it too. `None` in a web build and when the machine has no Chinese face.
 pub fn chinese_fallback() -> Option<Arc<FontData>> {
     static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
-    CACHE.get_or_init(|| load(&chinese_candidates(), CHINESE_PROBES)).clone()
+    CACHE
+        .get_or_init(|| {
+            let face = pdfcraft_fonts::han()?;
+            let mut data = FontData::from_owned((*face.bytes).clone());
+            data.index = face.index;
+            data.tweak.y_offset_factor = pdfcraft_fonts::ui_y_offset_factor(PRIMARY_UI_FONT);
+            Some(Arc::new(data))
+        })
+        .clone()
 }
+
+/// The face Chinese text shares a line with: every family starts with an Inter, and Inter's three
+/// weights have the same vertical metrics. Its tall row makes egui lift a Chinese face's glyphs
+/// above it, which [`pdfcraft_fonts::ui_y_offset_factor`] cancels.
+const PRIMARY_UI_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 
 fn load(paths: &[PathBuf], probes: &str) -> Option<Arc<FontData>> {
     if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
@@ -40,17 +53,13 @@ fn load(paths: &[PathBuf], probes: &str) -> Option<Arc<FontData>> {
 }
 
 fn windows_font_dir() -> PathBuf {
-    std::env::var_os("WINDIR").or_else(|| std::env::var_os("SystemRoot")).map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from).join("Fonts")
+    std::env::var_os("WINDIR").or_else(|| std::env::var_os("SystemRoot")).map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
 }
 
-fn chinese_candidates() -> Vec<PathBuf> {
-    if cfg!(windows) { ["msyh.ttc", "simhei.ttf", "simsun.ttc"].iter().map(|f| windows_font_dir().join(f)).collect() } else { Vec::new() }
-}
-
-/// Existing Arabic-script locations, best first; unchanged on every platform.
+/// Well-known locations of faces with broad script coverage, best first.
 fn candidates() -> Vec<PathBuf> {
     if cfg!(windows) {
-        ["segoeui.ttf", "tahoma.ttf", "arial.ttf"].iter().map(|f| windows_font_dir().join(f)).collect()
+        ["segoeui.ttf", "tahoma.ttf", "arial.ttf"].iter().map(|f| windows_font_dir().join("Fonts").join(f)).collect()
     } else if cfg!(target_os = "macos") {
         ["/System/Library/Fonts/SFArabic.ttf", "/System/Library/Fonts/GeezaPro.ttc", "/System/Library/Fonts/Supplemental/Arial.ttf"]
             .iter()
@@ -89,7 +98,8 @@ fn read(path: &Path, probes: &str) -> Option<Arc<FontData>> {
     Some(Arc::new(data))
 }
 
-/// All probes must map in the same collection face; egui uses the same skrifa parser.
+/// All probes must map in the same collection face; egui parses fonts with the same skrifa, so a
+/// face accepted here is one it can load.
 fn face_with(bytes: &[u8], probes: &str) -> Option<u32> {
     use skrifa::MetadataProvider as _;
     (0..MAX_FACES).find(|&index| skrifa::FontRef::from_index(bytes, index).is_ok_and(|font| probes.chars().all(|c| font.charmap().map(c).is_some())))
@@ -99,42 +109,41 @@ fn face_with(bytes: &[u8], probes: &str) -> Option<u32> {
 mod tests {
     use super::*;
 
+    /// A Chinese face is found by `pdfcraft_fonts::han`, not by this module's Arabic list, so it is
+    /// not empty on any desktop platform — and empty in a web build.
+    #[test]
+    fn arabic_candidates_are_absolute_font_files() {
+        let list = candidates();
+        assert!(!list.is_empty());
+        assert!(list.iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")));
+    }
+
     #[test]
     fn broken_and_missing_files_are_skipped() {
-        for probes in [PROBE, CHINESE_PROBES] {
-            assert_eq!(face_with(b"", probes), None);
-            assert_eq!(face_with(b"not a font at all", probes), None);
-            assert_eq!(face_with(&[0u8; 4096], probes), None);
-            assert!(read(Path::new("definitely/not/here.ttf"), probes).is_none());
-            assert!(read(&std::env::temp_dir(), probes).is_none());
-        }
+        assert_eq!(face_with(b"", PROBE), None);
+        assert_eq!(face_with(b"not a font at all", PROBE), None);
+        assert_eq!(face_with(&[0u8; 4096], PROBE), None);
+        assert!(read(Path::new("definitely/not/here.ttf"), PROBE).is_none());
+        // A directory is not a font.
+        assert!(read(&std::env::temp_dir(), PROBE).is_none());
     }
 
     #[test]
     fn a_face_must_cover_every_probe() {
+        // Inter is Latin, Greek and Cyrillic only.
         let inter = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
         assert_eq!(face_with(inter, PROBE), None);
-        assert_eq!(face_with(inter, CHINESE_PROBES), None);
         assert_eq!(face_with(inter, "AB"), Some(0));
-        assert_eq!(face_with(inter, "A欢"), None);
     }
 
     #[test]
     fn oversized_font_files_are_skipped() {
         let path = std::env::temp_dir().join(format!("pdfcraft-oversized-font-{}.ttf", std::process::id()));
-        let file = std::fs::OpenOptions::new().create_new(true).write(true).open(&path).unwrap();
-        file.set_len(MAX_BYTES + 1).unwrap();
+        let file = std::fs::OpenOptions::new().create_new(true).write(true).open(&path).expect("a temp file");
+        file.set_len(MAX_BYTES + 1).expect("a sparse temp file");
         drop(file);
-        let result = read(&path, CHINESE_PROBES);
-        std::fs::remove_file(&path).unwrap();
+        let result = read(&path, PROBE);
+        std::fs::remove_file(&path).expect("the temp file is removed");
         assert!(result.is_none());
-    }
-
-    #[test]
-    fn candidates_are_font_files() {
-        let list = candidates();
-        assert!(!list.is_empty());
-        assert!(list.iter().chain(chinese_candidates().iter()).all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")));
-        assert_eq!(chinese_candidates().is_empty(), !cfg!(windows));
     }
 }

@@ -140,12 +140,12 @@ pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
 
 /// The existing installed Arabic-script fallback, last in every interface family.
 pub const SYSTEM_FALLBACK: &str = "system-fallback";
-/// An installed Windows Chinese face; never part of the embedded-only definitions.
+/// An installed Chinese face; never part of the embedded-only definitions.
 pub const SYSTEM_CHINESE_FALLBACK: &str = "system-chinese-fallback";
 
 /// What [`install_fonts_for`] installs: the embedded faces plus at most two installed UI
 /// fallbacks. In Chinese mode the Chinese face precedes Japanese faces to keep shared and
-/// Simplified-only characters on the same baseline, but follows any embedded Chinese face.
+/// script-specific characters on the same baseline, but follows any embedded Chinese face.
 /// In other languages it follows all embedded faces (including Japanese). The existing
 /// Arabic fallback stays last. `PDFCRAFT_SYSTEM_FONTS=0` leaves both installed faces out.
 pub fn installed_font_definitions(prefer_hans: bool) -> FontDefinitions {
