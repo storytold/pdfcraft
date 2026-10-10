@@ -26,7 +26,8 @@
   - The MSI and NSIS uninstallers remove the uninstalling user's registration before deleting the DLL. The Setup EXE removes both the per-user and the machine-wide registration and retries file deletes while Explorer releases the DLL.
   - `ThreadingModel=Apartment` (the handler hosts WinForms), `DisableLowILProcessIsolation=1` (the handler starts `pdfcraft-cli.exe` and reads the PDF by path), and Mark-of-the-Web is removed from the DLL and CLI, so downloaded builds load.
   - The handler logs to `%USERPROFILE%\AppData\LocalLow\LinkcoPdfPreview\preview.log` and cleans up its temporary PNGs.
-- **Troubleshooting:** run this in PowerShell to see which handler Explorer resolves for `.pdf`, the user's default PDF app, and both registrations:
+- **PDF thumbnails in File Explorer:** the same DLL adds an `IThumbnailProvider` (CLSID `{3D8CDE4B-E969-481F-BEB0-5E3B98287416}`), so PDFs show their first page in Medium/Large/Extra large icon, Tiles and Content views — Windows has no built-in PDF thumbnails. It is registered on `SystemFileAssociations\.pdf` and Linkco's own ProgIDs only, which Explorer consults after the default app's ProgID and `.pdf`, so a thumbnail provider from Acrobat or another PDF app keeps priority. Windows runs it in its isolated thumbnail process; rendering happens in a short-lived `pdfcraft-cli.exe` (8 s timeout), and password-protected or damaged PDFs simply keep the normal icon. To turn thumbnails off, use Explorer's *Folder Options ▸ View ▸ Always show icons, never thumbnails*.
+- **Troubleshooting:** run this in PowerShell to see which preview handler and thumbnail provider Explorer resolves for `.pdf`, the user's default PDF app, and both registrations:
   ```powershell
   $dll = "$env:ProgramFiles\Linkco\Linkco PDF Editor\LinkcoPdfPreviewHandler.dll"   # or dist\release\… for a dev build
   $t = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes($dll)).GetType('LinkcoPdfPreview.LinkcoPdfPreviewHandler')

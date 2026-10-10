@@ -175,6 +175,21 @@
         <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraft.Document\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}" Value="{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.pdf\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}" Value="{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\ShellEx\{8895b1c6-b41f-4c1c-a562-0d564250836f}" Value="{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}" Type="string" />
+
+        <!-- File Explorer PDF thumbnails (IThumbnailProvider {e357fccd-a995-4576-b01f-234630154e96}), same DLL. Registered on
+             SystemFileAssociations\.pdf, which Explorer consults last, so another PDF app's
+             thumbnails (on its ProgID or .pdf) keep priority. -->
+        <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{3D8CDE4B-E969-481F-BEB0-5E3B98287416}" Value="Linkco PDF Thumbnail Provider" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{3D8CDE4B-E969-481F-BEB0-5E3B98287416}" Name="DisplayName" Value="Linkco PDF Thumbnail Provider" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{3D8CDE4B-E969-481F-BEB0-5E3B98287416}\InprocServer32" Value="mscoree.dll" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{3D8CDE4B-E969-481F-BEB0-5E3B98287416}\InprocServer32" Name="ThreadingModel" Value="Apartment" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{3D8CDE4B-E969-481F-BEB0-5E3B98287416}\InprocServer32" Name="Class" Value="LinkcoPdfPreview.LinkcoPdfThumbnailProvider" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{3D8CDE4B-E969-481F-BEB0-5E3B98287416}\InprocServer32" Name="Assembly" Value="LinkcoPdfPreviewHandler, Version=0.5.0.0, Culture=neutral, PublicKeyToken=null" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{3D8CDE4B-E969-481F-BEB0-5E3B98287416}\InprocServer32" Name="RuntimeVersion" Value="v4.0.30319" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{3D8CDE4B-E969-481F-BEB0-5E3B98287416}\InprocServer32" Name="CodeBase" Value="file:///[#LinkcoPreviewHandlerDll]" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{3D8CDE4B-E969-481F-BEB0-5E3B98287416}\ProgId" Value="LinkcoPDFEditor.ThumbnailProvider" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraft.Document\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Value="{3D8CDE4B-E969-481F-BEB0-5E3B98287416}" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Value="{3D8CDE4B-E969-481F-BEB0-5E3B98287416}" Type="string" />
       </Component>
     </ComponentGroup>
 

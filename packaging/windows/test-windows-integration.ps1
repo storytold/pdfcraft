@@ -41,6 +41,16 @@ try {
   }
   Write-Output "  [PASS] LinkcoPdfPreviewHandler.dll compiled and verified all 6 COM interfaces."
 
+  $thumbType = $asm.GetType('LinkcoPdfPreview.LinkcoPdfThumbnailProvider')
+  if ($null -eq $thumbType) { throw "LinkcoPdfPreview.LinkcoPdfThumbnailProvider type not found in assembly" }
+  if ($thumbType.GUID.ToString().ToUpperInvariant() -ne '3D8CDE4B-E969-481F-BEB0-5E3B98287416') {
+    throw "Unexpected thumbnail provider GUID: $($thumbType.GUID)"
+  }
+  foreach ($iface in @('IThumbnailProvider', 'IInitializeWithStream', 'IInitializeWithFile')) {
+    if ($null -eq $thumbType.GetInterface($iface)) { throw "LinkcoPdfThumbnailProvider does not implement $iface" }
+  }
+  Write-Output "  [PASS] LinkcoPdfThumbnailProvider present with IThumbnailProvider/IInitializeWithStream/IInitializeWithFile."
+
   foreach ($api in @('RegisterPreviewHandler', 'UnregisterPreviewHandler', 'QueryEffectiveHandler', 'IsEffectiveHandler', 'Diagnose')) {
     if ($null -eq ($handlerType.GetMethods() | Where-Object { $_.Name -eq $api -and $_.IsStatic -and $_.IsPublic })) {
       throw "LinkcoPdfPreviewHandler is missing the public static method $api"
@@ -124,6 +134,26 @@ try {
     if ($capOut -notmatch '(?m)^STATUS\tOK\t1\t1\t(\d+)\t(\d+)') { throw "Expected STATUS OK (clamped to the last page), got: $capOut" }
     if ([Math]::Max([int] $Matches[1], [int] $Matches[2]) -gt 501) { throw "--max-px 500 was not honoured: $capOut" }
     Write-Output "  [PASS] pdfcraft-cli preview rendered a valid PDF at --width 600 (${w}x${h}), clamped the page and honoured --max-px."
+
+    # The thumbnail provider, end to end: it finds pdfcraft-cli.exe beside its DLL, renders page 1
+    # and returns an HBITMAP that fits the requested square.
+    Copy-Item -LiteralPath $CliPath -Destination (Join-Path $TempDir 'pdfcraft-cli.exe')
+    $thumb = [Activator]::CreateInstance($thumbType)
+    $thumb.Initialize([string] $goodPdf, [uint32] 0)
+    $hbmp = [IntPtr]::Zero; $alpha = [uint32] 0
+    $hr = $thumb.GetThumbnail([uint32] 256, [ref] $hbmp, [ref] $alpha)
+    if ($hr -ne 0 -or $hbmp -eq [IntPtr]::Zero) { throw ("GetThumbnail failed: HRESULT 0x{0:X8}" -f $hr) }
+    $img = [System.Drawing.Image]::FromHbitmap($hbmp)
+    try {
+      if ($img.Height -ne 256 -or $img.Width -ge 256 -or $img.Width -lt 150) { throw "Expected a 256 px tall portrait thumbnail, got $($img.Width)x$($img.Height)" }
+      $center = $img.GetPixel([int]($img.Width * 0.4), [int]($img.Height * 0.75))
+      if ($center.B -lt 200 -or $center.R -gt 80) { throw "Thumbnail does not show the page content (pixel $center)" }
+    } finally { $img.Dispose() }
+    $thumb2 = [Activator]::CreateInstance($thumbType)
+    $thumb2.Initialize([string] $badPdf, [uint32] 0)
+    $hbmp2 = [IntPtr]::Zero
+    if ($thumb2.GetThumbnail([uint32] 256, [ref] $hbmp2, [ref] $alpha) -eq 0) { throw "GetThumbnail should fail for a damaged PDF" }
+    Write-Output "  [PASS] Thumbnail provider rendered a 256 px thumbnail and declined a damaged PDF."
   } else {
     Write-Output "  [SKIP] pdfcraft-cli.exe not built yet; run 'python build.py' first to run CLI preview tests."
   }

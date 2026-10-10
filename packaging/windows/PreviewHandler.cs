@@ -1,10 +1,11 @@
-// Linkco PDF Editor — Windows File Explorer PDF Preview Handler (IPreviewHandler)
+// Linkco PDF Editor — Windows File Explorer PDF Preview Handler (IPreviewHandler) and
+// PDF thumbnail provider (IThumbnailProvider, CLSID {3D8CDE4B-E969-481F-BEB0-5E3B98287416})
 // Publisher: Al Rawabet Commercial Services & Contracting Company W.L.L. (Linkco — www.linkco.com.qa)
 //
 // Compiled into LinkcoPdfPreviewHandler.dll during the Windows build/packaging with the OS-included
 // .NET Framework 4.x compiler (C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe, C# 5):
 //
-//   csc /nologo /target:library /optimize+ /platform:anycpu /out:LinkcoPdfPreviewHandler.dll
+//   csc /nologo /target:library /optimize+ /platform:anycpu /codepage:65001 /out:LinkcoPdfPreviewHandler.dll
 //       /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll PreviewHandler.cs
 //
 // Hosted out-of-process by Windows' standard Preview Host (prevhost.exe, AppID
@@ -25,6 +26,10 @@
 //    previewed file is never kept locked (rename/delete/move keep working while it is previewed).
 //  * Registration is per-user (HKCU, no administrator rights needed) and optionally machine-wide
 //    (HKLM); it never touches ProgIDs shared with non-PDF file types (e.g. browsers' HTML ProgIDs).
+//  * Thumbnails: LinkcoPdfThumbnailProvider renders page 1 the same way for Explorer's icon views.
+//    It is registered on SystemFileAssociations\.pdf (consulted last) and Linkco's own ProgIDs, so
+//    another PDF app's thumbnail provider keeps priority. Windows runs it in its isolated thumbnail
+//    process (dllhost.exe).
 //  * Diagnostics: %USERPROFILE%\AppData\LocalLow\LinkcoPdfPreview\preview.log (size-capped), and
 //    [LinkcoPdfPreview.LinkcoPdfPreviewHandler]::Diagnose() from PowerShell.
 
@@ -174,6 +179,16 @@ namespace LinkcoPdfPreview
     {
         void SetSite([MarshalAs(UnmanagedType.IUnknown)] object pUnkSite);
         void GetSite(ref Guid riid, [MarshalAs(UnmanagedType.IUnknown)] out object ppvSite);
+    }
+
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("e357fccd-a995-4576-b01f-234630154e96")]
+    public interface IThumbnailProvider
+    {
+        /// <summary>pdwAlpha is a WTS_ALPHATYPE: 0 unknown, 1 RGB, 2 ARGB.</summary>
+        [PreserveSig]
+        int GetThumbnail(uint cx, out IntPtr phbmp, out uint pdwAlpha);
     }
 
     internal static class NativeMethods
@@ -436,6 +451,64 @@ namespace LinkcoPdfPreview
             });
         }
 
+        /// <summary>
+        /// Copies an Explorer-provided stream to a private temp file (named prefix + GUID + ".pdf") and
+        /// releases the stream right away, so the previewed file is never kept locked. Throws on failure
+        /// (after deleting the partial copy).
+        /// </summary>
+        public static string CopyStreamToTempFile(IStream pstream, string prefix, out string displayName)
+        {
+            displayName = null;
+            if (pstream == null)
+                throw new ArgumentNullException("pstream");
+            string tempFile = Path.Combine(TempDir, prefix + Guid.NewGuid().ToString("N") + ".pdf");
+            try
+            {
+                try
+                {
+                    System.Runtime.InteropServices.ComTypes.STATSTG stat;
+                    pstream.Stat(out stat, 0);
+                    if (!string.IsNullOrEmpty(stat.pwcsName))
+                        displayName = Path.GetFileName(stat.pwcsName);
+                }
+                catch { }
+
+                try { pstream.Seek(0, 0, IntPtr.Zero); } catch { }
+
+                IntPtr bytesReadPtr = Marshal.AllocCoTaskMem(8);
+                try
+                {
+                    using (FileStream fs = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.Read, 1 << 16))
+                    {
+                        byte[] buffer = new byte[1 << 20];
+                        while (true)
+                        {
+                            Marshal.WriteInt64(bytesReadPtr, 0);
+                            pstream.Read(buffer, buffer.Length, bytesReadPtr);
+                            int read = Marshal.ReadInt32(bytesReadPtr);
+                            if (read <= 0)
+                                break;
+                            fs.Write(buffer, 0, read);
+                        }
+                    }
+                }
+                finally
+                {
+                    Marshal.FreeCoTaskMem(bytesReadPtr);
+                }
+                return tempFile;
+            }
+            catch
+            {
+                DeleteFileSoon(tempFile);
+                throw;
+            }
+            finally
+            {
+                try { Marshal.ReleaseComObject(pstream); } catch { }
+            }
+        }
+
         public static RegistryKey OpenHive(RegistryHive hive)
         {
             RegistryView view = Environment.Is64BitOperatingSystem ? RegistryView.Registry64 : RegistryView.Default;
@@ -592,7 +665,7 @@ namespace LinkcoPdfPreview
         /// Bumped whenever the registry layout changes, so LinkcoPDFEditor.exe re-registers (repairs)
         /// existing installs on its next start. Keep in sync with apps/pdfcraft/src/windows_preview.rs.
         /// </summary>
-        public const int RegistrationSchema = 3;
+        public const int RegistrationSchema = 4;
 
         /// <summary>ProgIDs owned by Linkco PDF Editor (or its upstream PdfCraft).</summary>
         private static readonly string[] OwnProgIds = new string[]
@@ -681,57 +754,17 @@ namespace LinkcoPdfPreview
                     _initError = "Windows did not provide the PDF document to preview.";
                     return;
                 }
-
-                try
-                {
-                    System.Runtime.InteropServices.ComTypes.STATSTG stat;
-                    pstream.Stat(out stat, 0);
-                    if (!string.IsNullOrEmpty(stat.pwcsName))
-                        _displayName = Path.GetFileName(stat.pwcsName);
-                }
-                catch { }
-
-                string tempFile = Path.Combine(PreviewEnvironment.TempDir, "stream-" + Guid.NewGuid().ToString("N") + ".pdf");
-                try { pstream.Seek(0, 0, IntPtr.Zero); } catch { }
-
-                IntPtr bytesReadPtr = Marshal.AllocCoTaskMem(8);
-                try
-                {
-                    using (FileStream fs = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.Read, 1 << 16))
-                    {
-                        byte[] buffer = new byte[1 << 20];
-                        while (true)
-                        {
-                            Marshal.WriteInt64(bytesReadPtr, 0);
-                            pstream.Read(buffer, buffer.Length, bytesReadPtr);
-                            int read = Marshal.ReadInt32(bytesReadPtr);
-                            if (read <= 0)
-                                break;
-                            fs.Write(buffer, 0, read);
-                        }
-                    }
-                }
-                finally
-                {
-                    Marshal.FreeCoTaskMem(bytesReadPtr);
-                }
-
-                _tempStreamPath = tempFile;
-                _filePath = tempFile;
+                string displayName;
+                _tempStreamPath = PreviewEnvironment.CopyStreamToTempFile(pstream, "stream-", out displayName);
+                _filePath = _tempStreamPath;
+                if (displayName != null)
+                    _displayName = displayName;
             }
             catch (Exception ex)
             {
                 PreviewLog.Error("IInitializeWithStream.Initialize", ex);
                 _initError = "This PDF document could not be read for preview.";
                 CleanupTempStreamFile();
-            }
-            finally
-            {
-                // Release Explorer's stream right away so the file isn't kept locked while previewed.
-                if (pstream != null)
-                {
-                    try { Marshal.ReleaseComObject(pstream); } catch { }
-                }
             }
         }
 
@@ -1114,6 +1147,10 @@ namespace LinkcoPdfPreview
             string effective = QueryEffectiveHandler();
             sb.AppendLine("  Explorer .pdf handler: " + (effective ?? "(none)") +
                 (string.Equals(effective, ClsidBraced, StringComparison.OrdinalIgnoreCase) ? "  [Linkco - OK]" : "  [NOT Linkco]"));
+            string thumbs = NativeMethods.QueryShellExtension(".pdf", LinkcoPdfThumbnailProvider.ThumbnailCategoryGuid);
+            sb.AppendLine("  Explorer .pdf thumbs:  " + (thumbs ?? "(none)") +
+                (string.Equals(thumbs, LinkcoPdfThumbnailProvider.ClsidBraced, StringComparison.OrdinalIgnoreCase) ? "  [Linkco - OK]" :
+                 thumbs == null ? "  [none]" : "  [another app's thumbnails take precedence]"));
             sb.AppendLine("  UserChoice ProgId:     " + (ReadUserChoiceProgId(".pdf") ?? "(none)"));
             string cli = PreviewEnvironment.LocateCliExecutable();
             sb.AppendLine("  pdfcraft-cli.exe:      " + (cli ?? "(not found)"));
@@ -1125,8 +1162,10 @@ namespace LinkcoPdfPreview
                 try
                 {
                     using (RegistryKey root = PreviewEnvironment.OpenHive(hive))
+                    using (RegistryKey thumbInproc = root.OpenSubKey(@"Software\Classes\CLSID\" + LinkcoPdfThumbnailProvider.ClsidBraced + @"\InprocServer32", false))
                     using (RegistryKey inproc = root.OpenSubKey(@"Software\Classes\CLSID\" + ClsidBraced + @"\InprocServer32", false))
                     {
+                        sb.AppendLine("  " + label + " thumbnails:       " + (thumbInproc == null ? "(not registered)" : thumbInproc.GetValue("CodeBase") as string ?? "(missing CodeBase)"));
                         if (inproc == null)
                         {
                             sb.AppendLine("  " + label + " COM server:       (not registered)");
@@ -1199,62 +1238,13 @@ namespace LinkcoPdfPreview
             string dllDir = Path.GetDirectoryName(fullDllPath) ?? "";
             string cliPath = Path.Combine(dllDir, "pdfcraft-cli.exe");
             string codeBase = new Uri(fullDllPath).AbsoluteUri;
-            Assembly asm = typeof(LinkcoPdfPreviewHandler).Assembly;
-            string asmFullName = asm.FullName;
-            string asmVersion = asm.GetName().Version.ToString();
-            string className = typeof(LinkcoPdfPreviewHandler).FullName;
 
-            using (RegistryKey clsidKey = root.CreateSubKey(@"Software\Classes\CLSID\" + ClsidBraced))
+            using (RegistryKey clsidKey = WriteComServer(root, ClsidBraced, HandlerName, typeof(LinkcoPdfPreviewHandler), HandlerProgId, codeBase))
             {
-                clsidKey.SetValue("", HandlerName);
-                clsidKey.SetValue("DisplayName", HandlerName);
                 clsidKey.SetValue("AppID", PrevHostAppId);
                 // The handler starts pdfcraft-cli.exe and reads the PDF by path; the Low-IL sandbox
                 // of prevhost.exe would block both.
                 clsidKey.SetValue("DisableLowILProcessIsolation", 1, RegistryValueKind.DWord);
-
-                using (RegistryKey inproc = clsidKey.CreateSubKey("InprocServer32"))
-                {
-                    inproc.SetValue("", "mscoree.dll");
-                    // COM only understands Apartment/Both/Free/Neutral; the handler hosts WinForms, so Apartment.
-                    inproc.SetValue("ThreadingModel", "Apartment");
-                    inproc.SetValue("Class", className);
-                    inproc.SetValue("Assembly", asmFullName);
-                    inproc.SetValue("RuntimeVersion", "v4.0.30319");
-                    inproc.SetValue("CodeBase", codeBase);
-
-                    foreach (string sub in inproc.GetSubKeyNames())
-                    {
-                        if (!string.Equals(sub, asmVersion, StringComparison.OrdinalIgnoreCase))
-                        {
-                            try { inproc.DeleteSubKeyTree(sub, false); } catch { }
-                        }
-                    }
-                    using (RegistryKey ver = inproc.CreateSubKey(asmVersion))
-                    {
-                        ver.SetValue("Class", className);
-                        ver.SetValue("Assembly", asmFullName);
-                        ver.SetValue("RuntimeVersion", "v4.0.30319");
-                        ver.SetValue("CodeBase", codeBase);
-                    }
-                }
-
-                using (RegistryKey progId = clsidKey.CreateSubKey("ProgId"))
-                {
-                    progId.SetValue("", HandlerProgId);
-                }
-                using (RegistryKey cat = clsidKey.CreateSubKey(@"Implemented Categories\" + DotNetComCategory))
-                {
-                }
-            }
-
-            using (RegistryKey handlerProgId = root.CreateSubKey(@"Software\Classes\" + HandlerProgId))
-            {
-                handlerProgId.SetValue("", HandlerName);
-                using (RegistryKey clsid = handlerProgId.CreateSubKey("CLSID"))
-                {
-                    clsid.SetValue("", ClsidBraced);
-                }
             }
 
             using (RegistryKey handlers = root.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\PreviewHandlers"))
@@ -1289,6 +1279,17 @@ namespace LinkcoPdfPreview
                 }
             }
 
+            // File Explorer thumbnails (icon views) for PDFs. Users who want none turn thumbnails off in
+            // Explorer (Folder Options > "Always show icons, never thumbnails").
+            try
+            {
+                RegisterThumbnailProvider(root, codeBase);
+            }
+            catch (Exception ex)
+            {
+                PreviewLog.Error("Register thumbnail provider", ex);
+            }
+
             using (RegistryKey cfg = root.CreateSubKey(LinkcoConfigKey))
             {
                 if (cfg.GetValue("InstallDir") == null && !string.IsNullOrEmpty(dllDir))
@@ -1321,9 +1322,124 @@ namespace LinkcoPdfPreview
             }
         }
 
+        /// <summary>
+        /// Writes a .NET COM server registration (mscoree.dll + assembly/class/CodeBase, Apartment
+        /// threading) for <paramref name="type"/> and its ProgID, and returns the open CLSID key for
+        /// class-specific values. The caller disposes it.
+        /// </summary>
+        private static RegistryKey WriteComServer(RegistryKey root, string clsid, string name, Type type, string progId, string codeBase)
+        {
+            Assembly asm = type.Assembly;
+            string asmFullName = asm.FullName;
+            string asmVersion = asm.GetName().Version.ToString();
+            string className = type.FullName;
+
+            using (RegistryKey handlerProgId = root.CreateSubKey(@"Software\Classes\" + progId))
+            {
+                handlerProgId.SetValue("", name);
+                using (RegistryKey c = handlerProgId.CreateSubKey("CLSID"))
+                {
+                    c.SetValue("", clsid);
+                }
+            }
+
+            RegistryKey clsidKey = root.CreateSubKey(@"Software\Classes\CLSID\" + clsid);
+            try
+            {
+                clsidKey.SetValue("", name);
+                clsidKey.SetValue("DisplayName", name);
+                using (RegistryKey inproc = clsidKey.CreateSubKey("InprocServer32"))
+                {
+                    inproc.SetValue("", "mscoree.dll");
+                    // COM only understands Apartment/Both/Free/Neutral; the handlers use WinForms/GDI+, so Apartment.
+                    inproc.SetValue("ThreadingModel", "Apartment");
+                    inproc.SetValue("Class", className);
+                    inproc.SetValue("Assembly", asmFullName);
+                    inproc.SetValue("RuntimeVersion", "v4.0.30319");
+                    inproc.SetValue("CodeBase", codeBase);
+
+                    foreach (string sub in inproc.GetSubKeyNames())
+                    {
+                        if (!string.Equals(sub, asmVersion, StringComparison.OrdinalIgnoreCase))
+                        {
+                            try { inproc.DeleteSubKeyTree(sub, false); } catch { }
+                        }
+                    }
+                    using (RegistryKey ver = inproc.CreateSubKey(asmVersion))
+                    {
+                        ver.SetValue("Class", className);
+                        ver.SetValue("Assembly", asmFullName);
+                        ver.SetValue("RuntimeVersion", "v4.0.30319");
+                        ver.SetValue("CodeBase", codeBase);
+                    }
+                }
+                using (RegistryKey p = clsidKey.CreateSubKey("ProgId"))
+                {
+                    p.SetValue("", progId);
+                }
+                using (RegistryKey cat = clsidKey.CreateSubKey(@"Implemented Categories\" + DotNetComCategory))
+                {
+                }
+                return clsidKey;
+            }
+            catch
+            {
+                clsidKey.Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Registers the thumbnail provider on SystemFileAssociations\.pdf and Linkco's own ProgIDs
+        /// only. Explorer consults the default app's ProgID and .pdf before SystemFileAssociations, so
+        /// a thumbnail provider another PDF app registered there keeps working.
+        /// </summary>
+        private static void RegisterThumbnailProvider(RegistryKey root, string codeBase)
+        {
+            string clsid = LinkcoPdfThumbnailProvider.ClsidBraced;
+            using (WriteComServer(root, clsid, LinkcoPdfThumbnailProvider.ProviderName, typeof(LinkcoPdfThumbnailProvider), LinkcoPdfThumbnailProvider.ProgIdName, codeBase))
+            {
+            }
+            BackupAndSetShellEx(root, SysPdfThumbnailPath, "PreviousSysPdfThumbnailProvider", clsid);
+            foreach (string own in OwnProgIds)
+            {
+                if (ProgIdExists(own))
+                    BackupAndSetShellEx(root, ProgIdShellExPath(own, LinkcoPdfThumbnailProvider.ThumbnailCategoryGuid), "PrevThumbProgId_" + own, clsid);
+            }
+        }
+
+        private static void UnregisterThumbnailProvider(RegistryKey root, bool perUser)
+        {
+            string clsid = LinkcoPdfThumbnailProvider.ClsidBraced;
+            foreach (string own in OwnProgIds)
+            {
+                try
+                {
+                    if (RestoreOrRemove(root, ProgIdShellExPath(own, LinkcoPdfThumbnailProvider.ThumbnailCategoryGuid), "PrevThumbProgId_" + own, false, clsid))
+                    {
+                        DeleteIfEmpty(root, @"Software\Classes\" + own + @"\ShellEx");
+                        if (perUser)
+                            DeleteIfEmpty(root, @"Software\Classes\" + own);
+                    }
+                }
+                catch { }
+            }
+            try { RestoreOrRemove(root, SysPdfThumbnailPath, "PreviousSysPdfThumbnailProvider", false, clsid); } catch { }
+            DeleteIfEmpty(root, @"Software\Classes\SystemFileAssociations\.pdf\ShellEx");
+            try { root.DeleteSubKeyTree(@"Software\Classes\CLSID\" + clsid, false); } catch { }
+            try { root.DeleteSubKeyTree(@"Software\Classes\" + LinkcoPdfThumbnailProvider.ProgIdName, false); } catch { }
+        }
+
+        private const string SysPdfThumbnailPath = @"Software\Classes\SystemFileAssociations\.pdf\ShellEx\" + LinkcoPdfThumbnailProvider.ThumbnailCategoryGuid;
+
         private static string ProgIdShellExPath(string progId)
         {
-            return @"Software\Classes\" + progId + @"\ShellEx\" + PreviewHandlerCategoryGuid;
+            return ProgIdShellExPath(progId, PreviewHandlerCategoryGuid);
+        }
+
+        private static string ProgIdShellExPath(string progId, string category)
+        {
+            return @"Software\Classes\" + progId + @"\ShellEx\" + category;
         }
 
         private static List<string> CandidatePdfProgIds(bool perUser)
@@ -1507,13 +1623,19 @@ namespace LinkcoPdfPreview
 
         private static void BackupAndSetShellEx(RegistryKey root, string subKeyPath, string backupValueName)
         {
+            BackupAndSetShellEx(root, subKeyPath, backupValueName, ClsidBraced);
+        }
+
+        /// <summary>Points a ShellEx handler key at <paramref name="ourClsid"/>, backing up the previous handler once.</summary>
+        private static void BackupAndSetShellEx(RegistryKey root, string subKeyPath, string backupValueName, string ourClsid)
+        {
             string existing = null;
             using (RegistryKey k = root.OpenSubKey(subKeyPath, false))
             {
                 if (k != null)
                     existing = k.GetValue("") as string;
             }
-            if (!string.IsNullOrEmpty(existing) && !string.Equals(existing, ClsidBraced, StringComparison.OrdinalIgnoreCase))
+            if (!string.IsNullOrEmpty(existing) && !string.Equals(existing, ourClsid, StringComparison.OrdinalIgnoreCase))
             {
                 using (RegistryKey cfg = root.CreateSubKey(LinkcoConfigKey))
                 {
@@ -1523,7 +1645,7 @@ namespace LinkcoPdfPreview
             }
             using (RegistryKey k = root.CreateSubKey(subKeyPath))
             {
-                k.SetValue("", ClsidBraced);
+                k.SetValue("", ourClsid);
             }
         }
 
@@ -1550,6 +1672,8 @@ namespace LinkcoPdfPreview
             {
                 try { RestoreOrRemoveShellEx(root, progId, perUser); } catch { }
             }
+
+            UnregisterThumbnailProvider(root, perUser);
 
             RestoreOrRemove(root, @"Software\Classes\.pdf\ShellEx\" + PreviewHandlerCategoryGuid, "PreviousPdfPreviewHandler", true);
             RestoreOrRemove(root, @"Software\Classes\SystemFileAssociations\.pdf\ShellEx\" + PreviewHandlerCategoryGuid, "PreviousSysPdfPreviewHandler", false);
@@ -1586,6 +1710,11 @@ namespace LinkcoPdfPreview
         /// <summary>Restores the previous handler (or removes ours). Returns true when the key was deleted.</summary>
         private static bool RestoreOrRemove(RegistryKey root, string subKeyPath, string backupValueName, bool edgeFallback)
         {
+            return RestoreOrRemove(root, subKeyPath, backupValueName, edgeFallback, ClsidBraced);
+        }
+
+        private static bool RestoreOrRemove(RegistryKey root, string subKeyPath, string backupValueName, bool edgeFallback, string ourClsid)
+        {
             string current = null;
             using (RegistryKey k = root.OpenSubKey(subKeyPath, false))
             {
@@ -1599,12 +1728,12 @@ namespace LinkcoPdfPreview
                 if (cfg != null)
                 {
                     backup = cfg.GetValue(backupValueName) as string;
-                    if (string.Equals(current, ClsidBraced, StringComparison.OrdinalIgnoreCase) || current == null)
+                    if (string.Equals(current, ourClsid, StringComparison.OrdinalIgnoreCase) || current == null)
                         cfg.DeleteValue(backupValueName, false);
                 }
             }
 
-            if (!string.Equals(current, ClsidBraced, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(current, ourClsid, StringComparison.OrdinalIgnoreCase))
                 return false;
 
             string restore = null;
@@ -1683,6 +1812,228 @@ namespace LinkcoPdfPreview
                 }
             }
             catch { }
+        }
+    }
+
+    /// <summary>
+    /// File Explorer thumbnails (Medium/Large/Extra large icons, Tiles, Content views) for PDF files:
+    /// the first page, rendered by pdfcraft-cli.exe exactly like the preview pane. Windows runs
+    /// thumbnail providers in its isolated thumbnail process (dllhost.exe) and hands them a stream;
+    /// it is copied to a private temp file so the PDF is never kept locked. A damaged or hostile PDF
+    /// can only crash or hang the short-lived child process, which is killed after a timeout.
+    /// </summary>
+    [ComVisible(true)]
+    [ClassInterface(ClassInterfaceType.None)]
+    [ProgId(LinkcoPdfThumbnailProvider.ProgIdName)]
+    [Guid(LinkcoPdfThumbnailProvider.ClsidString)]
+    public sealed class LinkcoPdfThumbnailProvider : IThumbnailProvider, IInitializeWithStream, IInitializeWithFile
+    {
+        public const string ClsidString = "3D8CDE4B-E969-481F-BEB0-5E3B98287416";
+        public const string ClsidBraced = "{3D8CDE4B-E969-481F-BEB0-5E3B98287416}";
+        public const string ProgIdName = "LinkcoPDFEditor.ThumbnailProvider";
+        public const string ProviderName = "Linkco PDF Thumbnail Provider";
+        public const string ThumbnailCategoryGuid = "{e357fccd-a995-4576-b01f-234630154e96}";
+
+        /// <summary>Explorer asks for at most 2560 px (Windows 11 "Extra large icons" at high DPI).</summary>
+        private const int MaxThumbnailPx = 2560;
+        private const int TimeoutMs = 8000;
+        private const int S_OK = 0;
+        private const int E_FAIL = unchecked((int)0x80004005);
+        private const int E_UNEXPECTED = unchecked((int)0x8000FFFF);
+        private const uint WTSAT_RGB = 1;
+
+        private string _pdfPath;
+        private string _tempPath;
+
+        public LinkcoPdfThumbnailProvider()
+        {
+            PreviewEnvironment.SweepStaleFilesOnce();
+        }
+
+        public void Initialize(string pszFilePath, uint grfMode)
+        {
+            ReleaseTemp();
+            _pdfPath = pszFilePath;
+        }
+
+        public void Initialize(IStream pstream, uint grfMode)
+        {
+            ReleaseTemp();
+            try
+            {
+                string displayName;
+                _tempPath = PreviewEnvironment.CopyStreamToTempFile(pstream, "thumb-", out displayName);
+                _pdfPath = _tempPath;
+            }
+            catch (Exception ex)
+            {
+                PreviewLog.Error("Thumbnail IInitializeWithStream.Initialize", ex);
+                throw;
+            }
+        }
+
+        public int GetThumbnail(uint cx, out IntPtr phbmp, out uint pdwAlpha)
+        {
+            phbmp = IntPtr.Zero;
+            pdwAlpha = WTSAT_RGB;
+            try
+            {
+                if (string.IsNullOrEmpty(_pdfPath) || cx == 0)
+                    return E_UNEXPECTED;
+                string cli = PreviewEnvironment.LocateCliExecutable();
+                if (cli == null)
+                {
+                    PreviewLog.Write("thumbnail: pdfcraft-cli.exe was not found");
+                    return E_FAIL;
+                }
+
+                int size = (int)Math.Min(cx, (uint)MaxThumbnailPx);
+                using (Bitmap page = RenderFirstPage(cli, _pdfPath, size))
+                {
+                    if (page == null)
+                        return E_FAIL;
+                    Bitmap fitted = FitWithin(page, size);
+                    try
+                    {
+                        phbmp = (fitted ?? page).GetHbitmap(Color.White);
+                    }
+                    finally
+                    {
+                        if (fitted != null)
+                            fitted.Dispose();
+                    }
+                }
+                return phbmp == IntPtr.Zero ? E_FAIL : S_OK;
+            }
+            catch (Exception ex)
+            {
+                PreviewLog.Error("GetThumbnail", ex);
+                return E_FAIL;
+            }
+            finally
+            {
+                ReleaseTemp();
+            }
+        }
+
+        private void ReleaseTemp()
+        {
+            if (_tempPath != null)
+            {
+                PreviewEnvironment.DeleteFileSoon(_tempPath);
+                if (string.Equals(_pdfPath, _tempPath, StringComparison.OrdinalIgnoreCase))
+                    _pdfPath = null;
+                _tempPath = null;
+            }
+        }
+
+        /// <summary>Page 1 fitted into a size x size box, or null (password-protected, damaged, timeout...).</summary>
+        private static Bitmap RenderFirstPage(string cli, string pdf, int size)
+        {
+            string px = Math.Max(1, size).ToString(CultureInfo.InvariantCulture);
+            string outPng = Path.Combine(
+                PreviewEnvironment.TempDir,
+                "thumb-" + Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N") + ".png");
+            StringBuilder stdout = new StringBuilder();
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo(cli)
+                {
+                    Arguments = "preview " + PreviewPaneControl.QuoteArg(pdf) + " --page 1 --width " + px + " --max-px " + px +
+                        " --out " + PreviewPaneControl.QuoteArg(outPng),
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8,
+                    WorkingDirectory = Path.GetDirectoryName(cli) ?? ""
+                };
+                using (Process proc = new Process())
+                {
+                    proc.StartInfo = psi;
+                    proc.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e)
+                    {
+                        if (e.Data != null)
+                            lock (stdout) stdout.AppendLine(e.Data);
+                    };
+                    // Drained (and discarded) so a chatty engine can never block on a full pipe.
+                    proc.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { };
+                    proc.Start();
+                    try { proc.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
+                    proc.BeginOutputReadLine();
+                    proc.BeginErrorReadLine();
+                    if (!proc.WaitForExit(TimeoutMs))
+                    {
+                        try { proc.Kill(); } catch { }
+                        try { proc.WaitForExit(2000); } catch { }
+                        PreviewLog.Write("thumbnail timed out after " + TimeoutMs.ToString(CultureInfo.InvariantCulture) + " ms");
+                        return null;
+                    }
+                    proc.WaitForExit(); // drain the asynchronous output readers
+                }
+
+                string status;
+                lock (stdout) status = FindStatusLine(stdout.ToString());
+                if (status == null || !status.StartsWith("STATUS\tOK\t", StringComparison.Ordinal))
+                {
+                    PreviewLog.Write("thumbnail not rendered: " + (status ?? "(no status)").Replace('\t', ' '));
+                    return null;
+                }
+                if (!File.Exists(outPng))
+                    return null;
+                return PreviewPaneControl.LoadPremultiplied(outPng);
+            }
+            finally
+            {
+                PreviewEnvironment.DeleteFileSoon(outPng);
+            }
+        }
+
+        internal static string FindStatusLine(string stdout)
+        {
+            using (StringReader sr = new StringReader(stdout ?? ""))
+            {
+                string line;
+                while ((line = sr.ReadLine()) != null)
+                {
+                    if (line.StartsWith("STATUS\t", StringComparison.Ordinal))
+                        return line;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>A copy scaled down to fit a size x size box, or null when it already fits.</summary>
+        internal static Bitmap FitWithin(Bitmap source, int size)
+        {
+            int w = source.Width;
+            int h = source.Height;
+            if (w <= size && h <= size)
+                return null;
+            double scale = Math.Min((double)size / w, (double)size / h);
+            int nw = Math.Max(1, Math.Min(size, (int)Math.Round(w * scale)));
+            int nh = Math.Max(1, Math.Min(size, (int)Math.Round(h * scale)));
+            Bitmap dst = new Bitmap(nw, nh, PixelFormat.Format32bppPArgb);
+            try
+            {
+                using (Graphics g = Graphics.FromImage(dst))
+                using (ImageAttributes attrs = new ImageAttributes())
+                {
+                    g.Clear(Color.White);
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    g.CompositingQuality = CompositingQuality.HighQuality;
+                    attrs.SetWrapMode(WrapMode.TileFlipXY); // no dark fringe at the edges
+                    g.DrawImage(source, new Rectangle(0, 0, nw, nh), 0, 0, w, h, GraphicsUnit.Pixel, attrs);
+                }
+                return dst;
+            }
+            catch
+            {
+                dst.Dispose();
+                throw;
+            }
         }
     }
 
@@ -2232,7 +2583,7 @@ namespace LinkcoPdfPreview
             }
         }
 
-        private static Bitmap LoadPremultiplied(string path)
+        internal static Bitmap LoadPremultiplied(string path)
         {
             byte[] bytes = File.ReadAllBytes(path);
             using (MemoryStream ms = new MemoryStream(bytes))

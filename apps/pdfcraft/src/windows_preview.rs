@@ -1,5 +1,6 @@
-//! Keeps the Windows File Explorer PDF preview handler (`LinkcoPdfPreviewHandler.dll`, built from
-//! `packaging/windows/PreviewHandler.cs`) registered for the current user.
+//! Keeps the Windows File Explorer PDF preview handler and thumbnail provider (both in
+//! `LinkcoPdfPreviewHandler.dll`, built from `packaging/windows/PreviewHandler.cs`) registered for
+//! the current user.
 //!
 //! The installers register the handler machine-wide, but Explorer resolves a preview handler
 //! through the user's default PDF app (`UserChoice`) first, and that choice is per user and can
@@ -21,7 +22,7 @@
 
 /// `RegistrationSchema` in PreviewHandler.cs; bump both together.
 #[cfg(any(windows, test))]
-const SCHEMA: u32 = 3;
+const SCHEMA: u32 = 4;
 
 /// One value line of `reg query` output, with the key it was listed under.
 #[cfg(any(windows, test))]
@@ -38,7 +39,7 @@ struct RegValue {
 /// ```text
 /// HKEY_CURRENT_USER\Software\Linkco\Linkco PDF Editor
 ///     PreviewHandlerDll    REG_SZ    C:\Program Files\Linkco\LinkcoPdfPreviewHandler.dll
-///     PreviewHandlerSchema    REG_DWORD    0x3
+///     PreviewHandlerSchema    REG_DWORD    0x4
 /// ```
 #[cfg(any(windows, test))]
 fn parse_reg_query(output: &str) -> Vec<RegValue> {
@@ -211,7 +212,7 @@ fn register(dll: &std::path::Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    const CONFIG: &str = "\r\nHKEY_CURRENT_USER\\Software\\Linkco\\Linkco PDF Editor\r\n    InstallDir    REG_SZ    C:\\Program Files\\Linkco\\Linkco PDF Editor\r\n    PreviewHandlerDll    REG_SZ    C:\\Program Files\\Linkco\\Linkco PDF Editor\\LinkcoPdfPreviewHandler.dll\r\n    PreviewHandlerSchema    REG_DWORD    0x3\r\n    PreviewHandlerDllStamp    REG_SZ    123:456\r\n    PreviewHandlerUserChoice    REG_SZ    LinkcoPDFEditor.Document\r\n\r\n";
+    const CONFIG: &str = "\r\nHKEY_CURRENT_USER\\Software\\Linkco\\Linkco PDF Editor\r\n    InstallDir    REG_SZ    C:\\Program Files\\Linkco\\Linkco PDF Editor\r\n    PreviewHandlerDll    REG_SZ    C:\\Program Files\\Linkco\\Linkco PDF Editor\\LinkcoPdfPreviewHandler.dll\r\n    PreviewHandlerSchema    REG_DWORD    0x4\r\n    PreviewHandlerDllStamp    REG_SZ    123:456\r\n    PreviewHandlerUserChoice    REG_SZ    LinkcoPDFEditor.Document\r\n\r\n";
     const DLL: &str = "C:\\Program Files\\Linkco\\Linkco PDF Editor\\LinkcoPdfPreviewHandler.dll";
 
     #[test]
@@ -223,7 +224,7 @@ mod tests {
         assert_eq!(v[1].kind, "REG_SZ");
         assert_eq!(v[1].data, DLL);
         assert_eq!(v[2].kind, "REG_DWORD");
-        assert_eq!(v[2].data, "0x3");
+        assert_eq!(v[2].data, "0x4");
     }
 
     #[test]
@@ -249,7 +250,7 @@ mod tests {
         assert!(!registry_values_match(&v, DLL, "124:456", "LinkcoPDFEditor.Document", true), "updated DLL");
         assert!(!registry_values_match(&v, DLL, "123:456", "AcroExch.Document.DC", true), "new default PDF app");
         assert!(!registry_values_match(&v, DLL, "123:456", "LinkcoPDFEditor.Document", false), "COM server removed");
-        let old_schema = parse_reg_query(&CONFIG.replace("0x3", "0x2"));
+        let old_schema = parse_reg_query(&CONFIG.replace("0x4", "0x3"));
         assert!(!registry_values_match(&old_schema, DLL, "123:456", "LinkcoPDFEditor.Document", true), "older schema");
         assert!(!registry_values_match(&[], DLL, "123:456", "", true), "never registered");
     }

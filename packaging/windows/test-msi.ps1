@@ -154,9 +154,13 @@ Assert-Equal $previewRow[1] 'PdfcraftPreviewHandler' 'PDF Preview Handler compon
 Assert-Equal $previewRow[2] '2' 'PDF Preview Handler HKLM root'
 $threadingRow = Read-Row 'SELECT `Value` FROM `Registry` WHERE `Key` = ''Software\Classes\CLSID\{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}\InprocServer32'' AND `Name` = ''ThreadingModel''' 1
 Assert-Equal $threadingRow[0] 'Apartment' 'PDF Preview Handler ThreadingModel'
+$thumbRow = Read-Row ('SELECT `Value`, `Component_` FROM `Registry` WHERE `Key` = ''Software\Classes\SystemFileAssociations\.pdf\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}'' AND `Name` IS NULL') 2
+Assert-Equal $thumbRow[0] '{3D8CDE4B-E969-481F-BEB0-5E3B98287416}' 'PDF thumbnail provider CLSID'
+$thumbClass = Read-Row ('SELECT `Value` FROM `Registry` WHERE `Key` = ''Software\Classes\CLSID\{3D8CDE4B-E969-481F-BEB0-5E3B98287416}\InprocServer32'' AND `Name` = ''Class''') 1
+Assert-Equal $thumbClass[0] 'LinkcoPdfPreview.LinkcoPdfThumbnailProvider' 'PDF thumbnail provider class'
 $cleanupRow = Read-Row 'SELECT `Action`, `Condition` FROM `InstallExecuteSequence` WHERE `Action` = ''UnregisterPreviewHandlerForUser''' 2
 Assert-Equal $cleanupRow[0] 'UnregisterPreviewHandlerForUser' 'per-user preview handler cleanup on uninstall'
 
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
-Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut (default on, checkbox), PDF Preview Handler, icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'
+Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut (default on, checkbox), PDF Preview Handler and thumbnails, icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'

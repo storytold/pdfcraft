@@ -166,6 +166,8 @@ namespace LinkcoSetup
         public const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\Linkco PDF Editor";
         public const string LinkcoConfigKey = @"Software\Linkco\Linkco PDF Editor";
         public const string PreviewHandlerClsid = "{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}";
+        public const string ThumbnailProviderClsid = "{3D8CDE4B-E969-481F-BEB0-5E3B98287416}";
+        public const string ThumbnailCategoryGuid = "{e357fccd-a995-4576-b01f-234630154e96}";
         public const string PreviewHandlerCategoryGuid = "{8895b1c6-b41f-4c1c-a562-0d564250836f}";
         public const string PrevHostAppId64 = "{6d2b5079-2f0b-48dd-ab7f-97cec514d30b}";
         public const string EdgePreviewHandlerClsid = "{3A84F9C2-6164-485C-A7D9-4B27F8AC009E}";
@@ -617,9 +619,23 @@ namespace LinkcoSetup
             RestoreOrRemoveShellEx(root, @"Software\Classes\SystemFileAssociations\.pdf\ShellEx\" + PreviewHandlerCategoryGuid, "PreviousSysPdfPreviewHandler", false);
             root.DeleteSubKeyTree(@"Software\Classes\CLSID\" + PreviewHandlerClsid, false);
             root.DeleteSubKeyTree(@"Software\Classes\LinkcoPDFEditor.PreviewHandler", false);
+
+            // File Explorer thumbnail provider (schema 4+).
+            foreach (string own in new string[] { "LinkcoPDFEditor.Document", "PdfCraft.Document" })
+            {
+                try { RestoreOrRemoveShellEx(root, @"Software\Classes\" + own + @"\ShellEx\" + ThumbnailCategoryGuid, "PrevThumbProgId_" + own, false, ThumbnailProviderClsid); } catch { }
+            }
+            try { RestoreOrRemoveShellEx(root, @"Software\Classes\SystemFileAssociations\.pdf\ShellEx\" + ThumbnailCategoryGuid, "PreviousSysPdfThumbnailProvider", false, ThumbnailProviderClsid); } catch { }
+            root.DeleteSubKeyTree(@"Software\Classes\CLSID\" + ThumbnailProviderClsid, false);
+            root.DeleteSubKeyTree(@"Software\Classes\LinkcoPDFEditor.ThumbnailProvider", false);
         }
 
         private static void RestoreOrRemoveShellEx(RegistryKey root, string subKeyPath, string backupValueName, bool edgeFallback)
+        {
+            RestoreOrRemoveShellEx(root, subKeyPath, backupValueName, edgeFallback, PreviewHandlerClsid);
+        }
+
+        private static void RestoreOrRemoveShellEx(RegistryKey root, string subKeyPath, string backupValueName, bool edgeFallback, string ourClsid)
         {
             string current = null;
             using (RegistryKey k = root.OpenSubKey(subKeyPath, false))
@@ -627,7 +643,7 @@ namespace LinkcoSetup
                 if (k != null)
                     current = k.GetValue("") as string;
             }
-            if (!string.Equals(current, PreviewHandlerClsid, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(current, ourClsid, StringComparison.OrdinalIgnoreCase))
                 return;
 
             string backup = null;
