@@ -135,7 +135,35 @@ pub struct Certificate {
     pub crl_urls: Vec<String>,
     /// The `version` field: 0 for v1, 1 for v2, 2 for v3.
     pub version: u64,
+    /// OIDs of extensions marked critical that PdfCraft does not process (RFC 5280 §4.2).
+    pub unknown_critical: Vec<String>,
 }
+
+/// Extensions PdfCraft reads or may safely ignore when they are critical: the ones
+/// `Extensions::read` handles, subject/issuer alternative names, and certificate policies
+/// (accepted as any policy).
+/// qcStatements (1.3.6.1.5.5.7.1.3) is included: RFC 3739 lets qualified (eIDAS and other national)
+/// certificates mark it critical, and it declares the certificate's status rather than limiting
+/// what the key may sign.
+const PROCESSED_EXTENSIONS: [&str; 11] = [
+    "2.5.29.19",
+    "2.5.29.15",
+    "2.5.29.14",
+    "2.5.29.35",
+    "2.5.29.37",
+    "1.3.6.1.5.5.7.1.1",
+    "2.5.29.31",
+    "2.5.29.17",
+    "2.5.29.18",
+    "2.5.29.32",
+    "1.3.6.1.5.5.7.1.3",
+];
+
+/// Extended key usages that allow signing documents: anyExtendedKeyUsage, emailProtection,
+/// codeSigning, documentSigning (RFC 9336), Adobe Authentic Documents and Microsoft document
+/// signing.
+const DOCUMENT_SIGNING_EKUS: [&str; 6] =
+    ["2.5.29.37.0", "1.3.6.1.5.5.7.3.4", "1.3.6.1.5.5.7.3.3", "1.3.6.1.5.5.7.3.36", "1.2.840.113583.1.1.5", "1.3.6.1.4.1.311.10.3.12"];
 
 /// The certificate extensions `Certificate::parse` reads, gathered tolerantly: an
 /// extension that does not parse leaves its field at the default instead of failing the
@@ -265,6 +293,7 @@ impl Certificate {
         let subject = Name::parse(&f.next().ok_or_else(|| SignError::Malformed("subject".into()))?)?;
         let public_key = PublicKey::from_spki(&f.next().ok_or_else(|| SignError::Malformed("public key".into()))?)?;
         let mut ext = Extensions::default();
+        let mut unknown_critical = Vec::new();
         for t in f {
             if t.tag != tag::ctx(3) {
                 continue;
@@ -273,6 +302,10 @@ impl Certificate {
                 let e = ext_tlv.children()?;
                 let Some(o) = e.first().and_then(|o| o.oid().ok()) else { continue };
                 let Some(value) = e.last().filter(|v| v.tag == tag::OCTET_STRING) else { continue };
+                let critical = e.len() == 3 && e.get(1).is_some_and(|b| b.tag == tag::BOOLEAN && b.value != [0]);
+                if critical && !PROCESSED_EXTENSIONS.contains(&o.as_str()) {
+                    unknown_critical.push(o.clone());
+                }
                 // A malformed or unreadable extension must never reject the whole certificate:
                 // unreadable ones are skipped and the fields they carry keep their defaults.
                 ext.read(o.as_str(), value);
@@ -310,7 +343,28 @@ impl Certificate {
             ocsp_urls,
             crl_urls,
             version,
+            unknown_critical,
         })
+    }
+
+    /// Why this certificate may not sign documents, if it may not (RFC 5280 §4.2.1.3,
+    /// §4.2.1.12, §4.2): a key usage without digitalSignature or nonRepudiation, an extended key
+    /// usage without a document-signing purpose, or a critical extension PdfCraft doesn't process.
+    pub fn signing_problem(&self) -> Option<String> {
+        /// keyUsage bits 0 (digitalSignature) and 1 (nonRepudiation).
+        const SIGNING_BITS: u16 = 0b11;
+        if self.key_usage.is_some_and(|u| u & SIGNING_BITS == 0) {
+            Some(
+                "The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation)."
+                    .into(),
+            )
+        } else if self.extended_key_usage.as_ref().is_some_and(|e| !e.iter().any(|o| DOCUMENT_SIGNING_EKUS.contains(&o.as_str()))) {
+            Some("The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).".into())
+        } else if !self.unknown_critical.is_empty() {
+            Some(format!("The signer's certificate has critical extensions PdfCraft does not recognize ({}).", self.unknown_critical.join(", ")))
+        } else {
+            None
+        }
     }
 
     /// Issued by itself (subject = issuer and its own key verifies it).

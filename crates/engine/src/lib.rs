@@ -104,7 +104,9 @@ pub use pdfcraft_optimize as optimize;
 pub use pdfcraft_preflight as pdfa;
 pub use pdfcraft_print as print;
 pub use pdfcraft_redact::codes::{CODE_SETS as REDACTION_CODE_SETS, CodeSet as RedactionCodeSet};
-pub use pdfcraft_redact::patterns::{PATTERNS as REDACT_PATTERNS, Pattern as RedactPattern, find as find_pattern};
+pub use pdfcraft_redact::patterns::{
+    MAX_WORDS as REDACT_MAX_WORDS, PATTERNS as REDACT_PATTERNS, Pattern as RedactPattern, find as find_pattern, word_list as redact_word_list,
+};
 pub use pdfcraft_redact::sanitize::{HIDDEN, Hidden};
 pub use pdfcraft_sign as sign;
 pub use pdfcraft_sign::{SignOptions, SignatureInfo, Status as SignatureStatus, TrustStore};
@@ -146,6 +148,8 @@ struct Keys {
 enum Scope {
     /// Anything: re-inspect the whole document.
     Full,
+    /// Document-information entries; page content and appearances are unchanged.
+    Metadata,
     /// Only comments: re-read the comment list from the object graph.
     Comments,
     /// Only form field values (and their widget appearances).
@@ -163,6 +167,7 @@ fn uses_scripts(edit: &Edit) -> bool {
 
 fn scope_of(edit: &Edit) -> Scope {
     match edit {
+        Edit::SetInfo { .. } => Scope::Metadata,
         // A file attachment also changes the Attachments list.
         Edit::AddAnnotation(a) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
         Edit::AddMeasurement(_)
@@ -770,6 +775,9 @@ pub enum Edit {
         path: Vec<usize>,
         page: usize,
     },
+    /// Bookmarks for the tagged headings (H, H1–H6), nested by level under a new first
+    /// "Untitled" bookmark (New Bookmarks from Structure).
+    BookmarksFromStructure,
     /// Label pages `from..=to` (0-based) as Acrobat's "Number pages" does; later pages keep their labels.
     NumberPages {
         from: usize,
@@ -1130,6 +1138,7 @@ impl Edit {
             Edit::DeleteBookmark { .. } => "Delete bookmark".into(),
             Edit::MoveBookmark { .. } => "Move bookmark".into(),
             Edit::SetBookmarkPage { .. } => "Set bookmark destination".into(),
+            Edit::BookmarksFromStructure => "New bookmarks from structure".into(),
             Edit::NumberPages { .. } => "Number pages".into(),
             Edit::AddMeasurement(m) => format!("Measure {}", m.kind.name()),
             Edit::SetMeasurementScale { .. } => "Set measurement scale".into(),
@@ -1264,6 +1273,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::DeleteBookmark { .. }
         | Edit::MoveBookmark { .. }
         | Edit::SetBookmarkPage { .. }
+        | Edit::BookmarksFromStructure
         | Edit::NumberPages { .. } => {
             if p.assemble() {
                 Ok(())
@@ -1471,6 +1481,13 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             pdfcraft_organize::move_bookmark(doc, from, to_parent, *index)?;
         }
         Edit::SetBookmarkPage { path, page } => pdfcraft_organize::set_bookmark_page(doc, path, *page)?,
+        Edit::BookmarksFromStructure => {
+            let entries: Vec<_> = pdfcraft_a11y::headings(doc)
+                .into_iter()
+                .map(|h| pdfcraft_organize::OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj })
+                .collect();
+            pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
+        }
         Edit::NumberPages { from, to, style, prefix, first } => pdfcraft_organize::number_pages(doc, *from, *to, *style, prefix, *first)?,
         Edit::AddMeasurement(m) => {
             measure::add(doc, m, &cx.meta())?;
@@ -2467,7 +2484,8 @@ impl Session {
         }
     }
 
-    /// Rebuild the working bytes and renderer, and the view data that `scope` may have changed.
+    /// Rebuild the working bytes and the view data that `scope` may have changed. Metadata edits
+    /// keep the renderer; other scopes also replace it.
     /// Comment and form edits skip the full re-inspection (seconds on very large files): the
     /// comment list and field values are re-read from the object graph instead.
     fn refresh_scoped(doc: &mut Document, scope: Scope) -> Result<(), EditError> {
@@ -2480,10 +2498,28 @@ impl Session {
         } else {
             editor.cos.bytes().clone()
         };
+        if scope == Scope::Metadata {
+            // Read the way the full inspection reads them (NULs and spaces trimmed, empty is
+            // none), so editing one entry doesn't change how the others display.
+            let info = |key| pdfcraft_organize::info(&editor.cos, key).map(|v| v.trim_matches('\0').trim().to_string()).filter(|v| !v.is_empty());
+            doc.info.title = info("Title");
+            doc.info.author = info("Author");
+            doc.info.subject = info("Subject");
+            doc.info.keywords = info("Keywords");
+            doc.info.creator = info("Creator");
+            doc.info.producer = info("Producer");
+            doc.info.file_size = bytes.len();
+            if !doc.signatures.is_empty() {
+                doc.signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+            }
+            doc.bytes = bytes;
+            return Ok(());
+        }
         let mut form = pdfcraft_forms::fields(&editor.cos);
         xfa::mark_script_buttons(&editor.cos, &mut form);
         let form = Arc::new(form);
         match scope {
+            Scope::Metadata => return Ok(()),
             Scope::Comments => doc.info.annotations = comment_list(&editor.cos),
             Scope::Form => {
                 for f in &mut doc.info.fields {
@@ -2979,7 +3015,7 @@ impl Session {
     /// `opts.date` takes the session clock.
     pub fn sign(&self, doc: DocId, id: &pdfcraft_sign::DigitalId, mut opts: SignOptions) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
-        // (Encrypted documents are refused by the signer for now.)
+        // Encrypted documents are signed under their permissions (the signer checks them).
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
             opts.date = self.signing_date();

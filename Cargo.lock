@@ -3565,6 +3565,7 @@ version = "0.5.0"
 dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
+ "pdfcraft-fonts",
  "pdfcraft-model",
  "thiserror 2.0.21",
 ]

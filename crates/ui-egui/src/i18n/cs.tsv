@@ -80,6 +80,7 @@
 	Signatures panel	Panel podpisů
 	Organize pages	Uspořádat stránky
 	New bookmark	Nová záložka
+	New bookmarks from structure	Nové záložky ze struktury
 	Rotate pages clockwise	Otočit stránky po směru hodinových ručiček
 	Rotate pages counterclockwise	Otočit stránky proti směru hodinových ručiček
 	Delete pages	Odstranit stránky
@@ -139,3 +140,8 @@
 	Character limit:	Limit znaků:
 	Character limit 0 means no limit. A comb of characters needs a limit.	Limit znaků 0 znamená bez omezení. Rozdělení na znaky vyžaduje limit.
 	To change locked fields, also set Locked to No.	Chcete-li změnit zamčená pole, nastavte také „Zamčeno“ na „Ne“.
+	Multiple words or phrases	Více slov nebo frází
+	One word or phrase per line	Jedno slovo nebo fráze na řádek
+	Import list…	Importovat seznam…
+	{n} word(s) or phrase(s)	Slova nebo fráze: {n}
+	{name} is too large for a word list (at most 1 MB).	{name} je pro seznam slov příliš velký (nejvýše 1 MB).

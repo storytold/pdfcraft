@@ -794,6 +794,11 @@
 	Text in images isn't found; recognise text (OCR) first.	图像中的文本无法找到；请先识别文本（OCR）。
 	No matches.	无匹配。
 	{n} match(es) marked for redaction.	已标记 {n} 个匹配以待密文。
+	Multiple words or phrases	多个单词或短语
+	One word or phrase per line	每行一个单词或短语
+	Import list…	导入列表…
+	{n} word(s) or phrase(s)	{n} 个单词或短语
+	{name} is too large for a word list (at most 1 MB).	{name} 太大，无法用作单词列表（最大 1 MB）。
 	Redaction Tool Properties	密文工具属性
 	Redacted area fill colour:	密文区域填充颜色：
 	Use overlay text	使用覆盖文本
@@ -1746,6 +1751,7 @@
 	Security properties…	安全性属性…
 	Organize pages	组织页面
 	New bookmark	新建书签
+	New bookmarks from structure	从结构新建书签
 	Rotate pages clockwise	顺时针旋转页面
 	Rotate pages counterclockwise	逆时针旋转页面
 	Delete pages	删除页面

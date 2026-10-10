@@ -899,6 +899,41 @@ fn bookmarks_through_tools() {
 }
 
 #[test]
+fn bookmarks_from_structure_through_tools() {
+    let dir = workdir("bookmarks-structure");
+    std::fs::write(
+        dir.join("tagged.pdf"),
+        b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+5 0 obj << /Type /StructTreeRoot /K 6 0 R /RoleMap << /Heading /H1 >> >> endobj
+6 0 obj << /S /Document /K [7 0 R << /S /Sect /K 8 0 R >>] >> endobj
+7 0 obj << /S /Heading /Pg 3 0 R /ActualText (Report) >> endobj
+8 0 obj << /S /H2 /Pg 4 0 R /Alt (Findings) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+            .as_slice(),
+    )
+    .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "tagged.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "bookmark_from_structure", json!({ "doc": doc }));
+    let top = &r["bookmarks"][0];
+    assert_eq!(
+        (top["title"].as_str(), top["children"][0]["title"].as_str(), top["children"][0]["page"].as_u64()),
+        (Some("Untitled"), Some("Report"), Some(1))
+    );
+    assert_eq!(top["children"][0]["children"][0]["title"], "Findings");
+    assert_eq!(top["children"][0]["children"][0]["path"], json!([1, 1, 1]));
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "New bookmarks from structure");
+    // An untagged document: an error that says why.
+    let plain = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    assert!(matches!(a.call("bookmark_from_structure", &json!({ "doc": plain })), Err(ToolError::Failed(m)) if m.contains("no tagged headings")));
+}
+
+#[test]
 fn numbering_pages_through_tools() {
     let dir = workdir("labels");
     let mut a = auto(&dir);
@@ -1020,6 +1055,45 @@ fn protecting_through_tools() {
     ok(&mut b, "doc_save", json!({ "doc": owner, "path": "open.pdf" }));
     let mut c = auto(&dir);
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
+}
+
+/// A form secured with "fill-sign" changes and no open password (how secured forms are usually
+/// distributed): its existing signature field can be signed without the permissions password,
+/// the update keeps the encryption, and the signature validates after reopening. A new field
+/// needs the permissions password.
+#[test]
+fn signing_an_encrypted_form_through_tools() {
+    let dir = workdir("sign-encrypted");
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret1", "path": "ada.p12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let field = ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "signature", "rect": [20, 200, 180, 250] }))["field"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(&mut a, "doc_protect", json!({ "doc": doc, "permissions_password": "boss", "changes": "fill-sign" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "form.pdf" }));
+    let mut b = auto(&dir);
+    let form = ok(&mut b, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut b, "doc_info", json!({ "doc": form }))["security"]["protected"], true);
+    match b.call(
+        "sign_document",
+        &json!({ "doc": form, "id": "ada.p12", "password": "secret1", "page": 1, "rect": [200, 200, 380, 250], "out": "new.pdf" }),
+    ) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("adding new signature fields"), "{m}"),
+        other => panic!("a new field needs the permissions password: {other:?}"),
+    }
+    let r = ok(&mut b, "sign_document", json!({ "doc": form, "id": "ada.p12", "password": "secret1", "field": field, "out": "signed.pdf" }));
+    assert_eq!((r["signature"]["signer"].as_str(), r["signature"]["status"].as_str()), (Some("Ada Lovelace"), Some("unknown")));
+    let original = std::fs::read(dir.join("form.pdf")).unwrap();
+    let signed = std::fs::read(dir.join("signed.pdf")).unwrap();
+    assert!(signed.starts_with(&original), "an incremental update");
+    let mut c = auto(&dir);
+    let re = ok(&mut c, "doc_open", json!({ "path": "signed.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut c, "doc_info", json!({ "doc": re }))["security"]["protected"], true, "still encrypted");
+    ok(&mut c, "sign_trust", json!({ "paths": ["ada.p12"], "password": "secret1" }));
+    let list = ok(&mut c, "sign_list", json!({ "doc": re }));
+    assert_eq!((list["all_valid"].as_bool(), list["signatures"][0]["status"].as_str()), (Some(true), Some("valid")), "{list}");
 }
 
 #[test]
@@ -1971,6 +2045,27 @@ fn redacting_with_codes_through_tools() {
     ok(&mut a, "redact_apply", json!({ "doc": doc }));
     let text = page_text(&mut a, doc)[0].clone();
     assert!(!text.contains("Jane") && text.contains("(b)(6), (b)(7)(C)"), "{text}");
+}
+
+#[test]
+fn redacting_word_lists_through_tools() {
+    let dir = workdir("redact-words");
+    std::fs::write(dir.join("memo.txt"), "Call Ada today\nAda is private\nPublic line").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "memo.txt" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "redact_mark", json!({ "doc": doc, "words": ["Ada", " private ", "absent", "Ada"] }));
+    assert_eq!(r["marked"].as_u64(), Some(3), "{r}");
+    assert_eq!(r["matched_words"], json!([{ "word": "Ada", "marked": 2 }, { "word": "private", "marked": 1 }, { "word": "absent", "marked": 0 }]));
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Mark for redaction");
+    assert_eq!(ok(&mut a, "redact_mark", json!({ "doc": doc, "words": ["Ada", "private"] }))["marks_pending"].as_u64(), Some(3));
+    ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    let text = page_text(&mut a, doc)[0].clone();
+    assert!(!text.contains("Ada") && !text.contains("private"), "{text}");
+    assert!(text.contains("Call") && text.contains("Public line"), "{text}");
+    for bad in [json!({ "doc": doc, "words": [] }), json!({ "doc": doc, "words": ["  "] }), json!({ "doc": doc, "words": ["x"], "find": "x" })] {
+        assert!(matches!(a.call("redact_mark", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert!(matches!(a.call("redact_mark", &json!({ "doc": doc, "words": ["absent", "nowhere"] })), Err(ToolError::Failed(_))));
 }
 
 #[test]

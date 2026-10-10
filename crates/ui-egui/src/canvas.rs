@@ -385,6 +385,16 @@ fn sharp_enough(have: u32, want: f32) -> bool {
     want > 0.0 && GRID_SHARP.contains(&(have as f32 / want))
 }
 
+/// Thumbnail device-pixel density when `demand` pages share the thumbnail allowance.
+fn thumbnail_density(demand: usize, ppp: f32) -> f32 {
+    let per_thumb = THUMB_BYTES / demand.max(1).next_power_of_two();
+    ppp.clamp(0.25, 4.0).min((per_thumb as f32 / (4.0 * THUMB_W * THUMB_H)).sqrt() * 0.98)
+}
+
+fn thumbnail_scale(width: f32, height: f32, density: f32) -> f32 {
+    (THUMB_W / width.max(1.0)).min(THUMB_H / height.max(1.0)) * density
+}
+
 /// Organize-toolbar actions that need the app (file pickers, new tabs, dialogs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewAction {
@@ -1116,13 +1126,12 @@ impl DocView {
         // byte allowance. Both dimensions are capped, including tall/wide page boxes.
         // The count is rounded up to a power of two: the scale is part of each request's tag,
         // so a density that followed every row scrolling in or out would re-render them all.
-        let per_thumb = THUMB_BYTES / pages.len().max(1).next_power_of_two();
-        let density = ppp.clamp(0.25, 4.0).min((per_thumb as f32 / (4.0 * THUMB_W * THUMB_H)).sqrt() * 0.98);
+        let density = thumbnail_density(pages.len(), ppp);
         pages
             .into_iter()
             .filter_map(|(page, _)| {
                 let p = info.pages.get(page)?;
-                let scale = (THUMB_W / p.width.max(1.0)).min(THUMB_H / p.height.max(1.0)) * density;
+                let scale = thumbnail_scale(p.width, p.height, density);
                 Some(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag: THUMB_TAG | u64::from(scale.to_bits()) })
             })
             .collect()
@@ -3303,8 +3312,8 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
     let middle_gesture = view.auto_scroll.blocks_input();
     let mut cells: Vec<(usize, Rect)> = Vec::new();
     // The pages in view that are drawn larger than their thumbnails, and those of them that
-    // need a sharper render than they have.
-    let (mut in_view, mut sharper): (Vec<usize>, Vec<RenderRequest>) = (Vec::new(), Vec::new());
+    // need a sharper render than they have. The width is the size drawn, in device pixels.
+    let (mut in_view, mut sharper): (Vec<(usize, f32)>, Vec<RenderRequest>) = (Vec::new(), Vec::new());
     // The source cell can scroll out of the virtualized rows during a drag.
     let mut drop = view.org_drag.is_some() && ui.input(|i| i.pointer.primary_released());
     egui::ScrollArea::vertical().auto_shrink([false, false]).show_viewport(ui, |ui, clip| {
@@ -3367,7 +3376,7 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
                 let thumb_ok = thumb.is_some_and(|t| t.size()[0] as f32 >= want * GRID_SHARP.start());
                 let sharp = view.grid_pages.get(&i).filter(|_| !thumb_ok);
                 if !thumb_ok && ui.is_rect_visible(c) {
-                    in_view.push(i);
+                    in_view.push((i, want));
                     if !sharp.is_some_and(|(w, _)| sharp_enough(*w, want)) && !view.errors.contains_key(&i) {
                         sharper.push(RenderRequest { page: i, kind: RequestKind::Pixels, tile: None, scale: want / p.width.max(1.0), tag: GRID_TAG });
                     }
@@ -3498,9 +3507,14 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
             ui.ctx().request_repaint();
         }
     }
-    // Sharp renders are kept only for the pages in view, so their memory stays small however
-    // long the document is. They come first; the thumbnails of the other pages follow.
-    view.grid_pages.retain(|page, _| in_view.contains(page));
+    // When this frame's thumbnail will cover the cell, drop the sharp render without waiting
+    // for that texture to arrive.
+    let density = thumbnail_density(view.thumb_demand.len(), ppp);
+    in_view.retain(|&(page, want)| {
+        info.pages.get(page).is_none_or(|p| (device_pixels(p.width, thumbnail_scale(p.width, p.height, density)) as f32) < want * GRID_SHARP.start())
+    });
+    sharper.retain(|req| in_view.iter().any(|(page, _)| *page == req.page));
+    view.grid_pages.retain(|page, _| in_view.iter().any(|(kept, _)| kept == page));
     // Sharp renders of the pages in view join this frame's demand ahead of the thumbnails.
     view.frame_queue.extend(sharper);
     if let Some(p) = open_page {

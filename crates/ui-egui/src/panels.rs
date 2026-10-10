@@ -464,18 +464,24 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             };
                             view.comments.search_focus = true;
                         }
-                        if panel == RightPanel::Bookmarks && !info.outline.is_empty() {
+                        if panel == RightPanel::Bookmarks && (bm_editable || !info.outline.is_empty()) {
                             let more = icons::button(ui, "ellipsis", 26.0, false, tl!("Bookmark options"));
                             egui::Popup::menu(&more).show(|ui| {
                                 ui.set_min_width(200.0);
-                                for (levels, label) in [
-                                    (usize::MAX, tl!("Expand all bookmarks")),
-                                    (1, tl!("Expand top-level bookmarks")),
-                                    (0, tl!("Collapse all bookmarks")),
-                                ] {
-                                    if ui.button(label).clicked() {
-                                        bm_expand = Some(levels);
-                                        ui.close();
+                                if bm_editable && ui.button(tl!("New bookmarks from structure")).clicked() {
+                                    bm_action = Some(BmAction::FromStructure);
+                                    ui.close();
+                                }
+                                if !info.outline.is_empty() {
+                                    for (levels, label) in [
+                                        (usize::MAX, tl!("Expand all bookmarks")),
+                                        (1, tl!("Expand top-level bookmarks")),
+                                        (0, tl!("Collapse all bookmarks")),
+                                    ] {
+                                        if ui.button(label).clicked() {
+                                            bm_expand = Some(levels);
+                                            ui.close();
+                                        }
                                     }
                                 }
                             });
@@ -718,6 +724,8 @@ pub enum BmAction {
     Indent(Vec<usize>),
     /// Move it out to follow its parent.
     Outdent(Vec<usize>),
+    /// Bookmarks from the tagged headings, under a new first "Untitled" bookmark.
+    FromStructure,
 }
 
 /// Matching titles plus their ancestors, keeping document paths rather than filtered indexes.

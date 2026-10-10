@@ -278,6 +278,7 @@
 	Security properties…	خصائص الأمان…
 	Organize pages	تنظيم الصفحات
 	New bookmark	إشارة مرجعية جديدة
+	New bookmarks from structure	إشارات مرجعية جديدة من البنية
 	Rotate pages clockwise	تدوير الصفحات مع عقارب الساعة
 	Rotate pages counterclockwise	تدوير الصفحات عكس عقارب الساعة
 	Delete pages	حذف الصفحات
@@ -1094,6 +1095,11 @@
 	Text in images isn't found; recognise text (OCR) first.	النص داخل الصور لا يُعثر عليه؛ استخدم التعرف على النص (OCR) أولًا.
 	No matches.	لا توجد تطابقات.
 	{n} match(es) marked for redaction.	عُلِّم {n} تطابق للحجب.
+	Multiple words or phrases	كلمات أو عبارات متعددة
+	One word or phrase per line	كلمة أو عبارة واحدة في كل سطر
+	Import list…	استيراد قائمة…
+	{n} word(s) or phrase(s)	{n} كلمة أو عبارة
+	{name} is too large for a word list (at most 1 MB).	{name} أكبر من أن يكون قائمة كلمات (1 ميغابايت على الأكثر).
 	Redaction Tool Properties	خصائص أداة الحجب
 	Redacted area fill colour:	لون تعبئة المنطقة المحجوبة:
 	Use overlay text	استخدام نص تراكب

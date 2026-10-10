@@ -731,6 +731,11 @@
 	Text in images isn't found; recognise text (OCR) first.	Texto em imagens não é encontrado; reconheça o texto (OCR) primeiro.
 	No matches.	Nenhuma correspondência.
 	{n} match(es) marked for redaction.	{n} correspondência(s) marcada(s) para ocultação.
+	Multiple words or phrases	Várias palavras ou frases
+	One word or phrase per line	Uma palavra ou frase por linha
+	Import list…	Importar lista…
+	{n} word(s) or phrase(s)	{n} palavra(s) ou frase(s)
+	{name} is too large for a word list (at most 1 MB).	{name} é grande demais para uma lista de palavras (no máximo 1 MB).
 	Redaction Tool Properties	Propriedades da ferramenta de ocultação
 	Redacted area fill colour:	Cor de preenchimento da área ocultada:
 	Use overlay text	Usar texto de sobreposição
@@ -1613,6 +1618,7 @@
 	Security properties…	Propriedades de segurança…
 	Organize pages	Organizar páginas
 	New bookmark	Novo marcador
+	New bookmarks from structure	Novos marcadores a partir da estrutura
 	Rotate pages clockwise	Girar páginas em sentido horário
 	Rotate pages counterclockwise	Girar páginas em sentido anti-horário
 	Delete pages	Excluir páginas

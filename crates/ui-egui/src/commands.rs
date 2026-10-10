@@ -173,6 +173,7 @@ impl PdfCraftApp {
                 }
             }
             "bookmark.add" => self.bookmark_action(crate::panels::BmAction::New),
+            "bookmark.from_structure" => self.bookmark_action(crate::panels::BmAction::FromStructure),
             "edit.undo" => self.undo(),
             "edit.redo" => self.redo(),
             "edit.find" => {
@@ -553,7 +554,7 @@ impl PdfCraftApp {
                 self.boxes_draft.seeded = None;
                 self.dialog = Some(Dialog::PageBoxes);
             }
-            "page.extract" => self.dialog = Some(Dialog::Extract),
+            "page.extract" => self.open_extract_dialog(),
             "page.rotate_dialog" => {
                 if let Some(i) = active {
                     let n = self.session.get(self.views[i].id).map_or(1, |d| d.info.pages.len());

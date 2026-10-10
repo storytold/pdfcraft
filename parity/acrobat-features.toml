@@ -2722,8 +2722,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.extract"]
 tools = ["page_extract"]
-evidence = ["crates/ui-egui/tests/editing.rs::extract_options_and_rotate_pages_dialog", "crates/automation/tests/automation.rs::organizing_with_filters_bookmark_splits_and_extract_options"]
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::extract_options_and_rotate_pages_dialog", "crates/automation/tests/automation.rs::organizing_with_filters_bookmark_splits_and_extract_options", "crates/ui-egui/tests/pickers.rs::extract_pages_saves_under_the_file_name_typed_in_the_dialog"]
+notes = "The dialog has a File name field (#737), filled in with the document's name: pages are written as `<name> (page N).pdf` into the chosen folder, and one renamed page as `<name>.pdf`. Extracting into a new tab names the tab (and so Save As) after it."
 
 [[feature]]
 id = "organize.extract-and-delete"
@@ -3259,11 +3259,11 @@ title = "Generate bookmarks from headings or tags"
 area = "D"
 tier = "P1"
 milestone = "M4"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["bookmark.from_structure"]
+tools = ["bookmark_from_structure"]
+evidence = ["crates/a11y/src/tests.rs::headings_are_found_with_their_levels_titles_and_pages", "crates/organize/src/tests.rs::a_bookmark_tree_nests_entries_by_level_under_a_new_first_bookmark", "crates/engine/src/tests.rs::bookmarks_from_structure_nest_the_headings_and_undo", "crates/automation/tests/automation.rs::bookmarks_from_structure_through_tools", "crates/ui-egui/tests/bookmarks.rs::new_bookmarks_from_structure_nest_the_tagged_headings"]
+notes = "Bookmark options ▸ New bookmarks from structure: tagged headings (H1–H6 through the role map; a plain H takes its Sect/Part/Art nesting) become bookmarks nested by level under a new first \"Untitled\" bookmark, each linked to its element (/SE). Titles come from /ActualText, the marked text drawn directly on the page (not inside Form XObjects), /Alt or /T. Not yet: Acrobat's choice of element types (only headings), and destinations go to the heading's page rather than its position on it"
 
 [[feature]]
 id = "organize.attachments-add"
@@ -5515,11 +5515,11 @@ title = "Redact lists of words or phrases"
 area = "G"
 tier = "P1"
 milestone = "M8"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["redact.search"]
+tools = ["redact_mark"]
+evidence = ["crates/redact/src/patterns.rs::word_lists_are_trimmed_unique_and_bounded", "crates/automation/tests/automation.rs::redacting_word_lists_through_tools", "crates/ui-egui/tests/redact.rs::redacting_an_imported_word_list"]
+notes = "Find text and redact ▸ Multiple words or phrases: one per line, typed or imported from a .txt file (at most 1 MB, 1,000 entries of 256 characters); every match of each is marked in one undo step; redact_mark words reports marks per word. Not yet: whole-words-only and case-sensitive options, exporting the list"
 
 [[feature]]
 id = "protect.redact-patterns"
@@ -5826,6 +5826,18 @@ evidence = ["crates/sign/tests/pdf.rs::signing_with_windows_store_identities", "
 notes = "Current User Personal (My) CNG identities: RSA PKCS #1 v1.5 and DER-encoded ECDSA P-256/P-384. Keys never leave Windows; windows:<fingerprint|common name> for agents and Windows store labels in the desktop ID picker. The signature embeds the issuers Windows chains the certificate to. Tested with throwaway software-backed RSA-2048, P-256 and P-384 certificates (run with --ignored). Smart cards and tokens whose driver registers a CNG key storage provider sign with the provider's own PIN dialog (checked by hand with a SafeNet token only; no hardware in CI); direct PKCS #11 still planned."
 
 [[feature]]
+id = "sign.encrypted-documents"
+title = "Sign and timestamp password-protected (encrypted) documents"
+area = "H"
+tier = "P0"
+milestone = "M9"
+status = "shipped"
+commands = ["sign.digital", "sign.certify"]
+tools = ["sign_document"]
+evidence = ["crates/sign/tests/pdf.rs::encrypted_documents_are_signed_with_an_unencrypted_contents", "crates/sign/tests/pdf.rs::encrypted_documents_are_signed_only_as_their_permissions_allow", "crates/sign/tests/pdf.rs::encrypted_documents_take_a_document_timestamp", "crates/cos/tests/encryption.rs::signature_contents_stay_unencrypted", "crates/automation/tests/automation.rs::signing_an_encrypted_form_through_tools"]
+notes = "RC4-40/128, AES-128 and AES-256 Standard security; the incremental update keeps /Encrypt and /ID, encrypts the new strings and streams, and leaves the signature /Contents unencrypted (§7.6.2), which reading also honours. Opened with the user password, permissions (Table 22) apply: existing signature fields need fill-forms, new fields need annotate + modify, certifying needs modify, a document timestamp needs fill-forms; the owner may do anything. Not yet: certificate (public-key) security, which PdfCraft can't open; checked only against PdfCraft's own validator, not yet against an external one (pyHanko) or Acrobat"
+
+[[feature]]
 id = "sign.pkcs11"
 title = "Sign with PKCS#11 tokens and smart cards"
 area = "H"
@@ -6086,8 +6098,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.validate"]
 tools = ["sign_list"]
-evidence = ["crates/sign/tests/pdf.rs::signing_then_validating_with_and_without_trust", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools"]
-notes = ""
+evidence = ["crates/sign/tests/pdf.rs::signing_then_validating_with_and_without_trust", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/chain.rs::a_trusted_signer_whose_certificate_may_not_sign_is_not_valid"]
+notes = "The signer's key usage, extended key usage and critical extensions are checked; name constraints are not"
 
 [[feature]]
 id = "sign.signatures-panel"

@@ -1309,7 +1309,7 @@ fn zoomed_pages_in_view_are_rendered_at_the_size_drawn() {
     // Zoomed out again, thumbnails are enough and the sharp renders are dropped.
     h.state_mut().set_option("grid-zoom", "50").unwrap();
     h.run_steps(3);
-    assert!(sharp(&h, 0).is_none());
+    assert!(sharp(&h, 0).is_none(), "page 0 still has a sharp render: {:?}", sharp(&h, 0));
 }
 
 #[test]
@@ -1503,7 +1503,7 @@ fn extract_options_and_rotate_pages_dialog() {
     h.state_mut().views[0].select_pages(&[1, 2]);
     h.state_mut().run_command("page.extract");
     h.run_steps(2);
-    h.state_mut().extract_draft = pdfcraft_ui_egui::ExtractDraft { separate: true, delete: true };
+    h.state_mut().extract_draft = pdfcraft_ui_egui::ExtractDraft { separate: true, delete: true, ..Default::default() };
     h.get_all_by_label("Extract").last().unwrap().click();
     h.run_steps(3);
     let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();

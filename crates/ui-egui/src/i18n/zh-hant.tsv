@@ -743,6 +743,11 @@
 	Text in images isn't found; recognise text (OCR) first.	圖片中的文字無法找到；請先識別文字（OCR）。
 	No matches.	無匹配。
 	{n} match(es) marked for redaction.	已標記 {n} 個匹配以待遮蔽內容。
+	Multiple words or phrases	多個單字或片語
+	One word or phrase per line	每行一個單字或片語
+	Import list…	匯入清單…
+	{n} word(s) or phrase(s)	{n} 個單字或片語
+	{name} is too large for a word list (at most 1 MB).	{name} 太大，無法用作單字清單（最多 1 MB）。
 	Redaction Tool Properties	遮蔽內容工具屬性
 	Redacted area fill colour:	遮蔽內容區域填充顏色：
 	Use overlay text	使用覆蓋文字
@@ -1694,6 +1699,7 @@
 	Security properties…	安全性內容…
 	Organize pages	整理頁面
 	New bookmark	新增書籤
+	New bookmarks from structure	從結構新增書籤
 	Rotate pages clockwise	順時針旋轉頁面
 	Rotate pages counterclockwise	逆時針旋轉頁面
 	Delete pages	刪除頁面

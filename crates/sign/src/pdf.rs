@@ -675,6 +675,13 @@ fn finish_validation(
         }
         problems = true;
     }
+    if let Some(why) = cert.signing_problem() {
+        info.details.push(why);
+        if !problems && !revoked {
+            info.status = Status::Unknown;
+        }
+        problems = true;
+    }
     if !trusted {
         info.details.push(
             "The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates."
@@ -1307,6 +1314,33 @@ pub struct SignOptions {
     pub appearance: Appearance,
 }
 
+/// What an encrypted document's permissions (ISO 32000-2 §7.6.4.2, Table 22) allow when it was
+/// opened with the user password (the owner may do anything): signing an existing, empty
+/// signature field is filling in a form field (bit 9, or bit 6); creating a new signature
+/// field needs bits 6 and 4; certifying sets the catalog's `/Perms`, a document change (bit 4).
+/// The signature's `/Contents` stays unencrypted (`pdfcraft-cos` exempts it, §7.6.2), so the
+/// placeholder can be patched after hashing exactly as in an unencrypted file.
+fn check_signing_permissions(doc: &Document, opts: &SignOptions) -> Result<(), SignError> {
+    let Some(p) = doc.permissions() else { return Ok(()) };
+    let refuse = |what: &str| {
+        Err(SignError::Pdf(format!(
+            "the document's security settings don't allow {what}; open it with the permissions password, or sign an existing signature field"
+        )))
+    };
+    if opts.field.is_some() && !p.fill_forms() {
+        return Err(SignError::Pdf(
+            "the document's security settings don't allow filling in form fields or signing; open it with the permissions password to sign it".into(),
+        ));
+    }
+    if opts.field.is_none() && !(p.annotate() && p.modify()) {
+        return refuse("adding new signature fields");
+    }
+    if opts.certify.is_some() && !p.modify() {
+        return refuse("certifying it");
+    }
+    Ok(())
+}
+
 /// Placeholder `/ByteRange` values: fixed width, patched after writing.
 const BR_MARK: [i64; 3] = [1_111_111_111, 2_222_222_222, 3_333_333_333];
 
@@ -1337,9 +1371,12 @@ fn sign_inner(
     opts: &SignOptions,
     tsa: Option<&dyn crate::timestamp::TimestampAuthority>,
 ) -> Result<Vec<u8>, SignError> {
-    if doc.security().is_some() || doc.output_handler().is_some() {
-        return Err(SignError::Unsupported("signing encrypted documents".into()));
+    // A pending security change would make the incremental save a full rewrite that applies
+    // or removes protection as it signs (and breaks existing signatures): save it first.
+    if doc.encryption_changed() {
+        return Err(SignError::Pdf("save the document's new security settings before signing it".into()));
     }
+    check_signing_permissions(doc, opts)?;
     let mut doc = doc.clone();
     let root = doc.root().ok_or_else(|| SignError::Pdf("the document has no catalog".into()))?;
     let alg = id.key.preferred_digest();
@@ -1512,8 +1549,15 @@ fn sign_inner(
 /// whose `/Contents` is an RFC 3161 token covering the whole current file (`/ETSI.RFC3161`).
 /// The transport is the caller's; a rejected or malformed token produces no file.
 pub fn timestamp_document(doc: &Document, tsa: &dyn crate::timestamp::TimestampAuthority, date: &str) -> Result<Vec<u8>, SignError> {
-    if doc.security().is_some() || doc.output_handler().is_some() {
-        return Err(SignError::Unsupported("timestamping encrypted documents".into()));
+    // A pending security change would make the incremental save a full rewrite that applies
+    // or removes protection as it signs (and breaks existing signatures): save it first.
+    if doc.encryption_changed() {
+        return Err(SignError::Pdf("save the document's new security settings before signing it".into()));
+    }
+    if doc.permissions().is_some_and(|p| !p.fill_forms()) {
+        return Err(SignError::Pdf(
+            "the document's security settings don't allow signing; open it with the permissions password to timestamp it".into(),
+        ));
     }
     let mut doc = doc.clone();
     let mut v = Dict::new();

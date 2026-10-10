@@ -274,6 +274,7 @@
 	Security properties…	Proprietà di sicurezza…
 	Organize pages	Organizza pagine
 	New bookmark	Nuovo segnalibro
+	New bookmarks from structure	Nuovi segnalibri dalla struttura
 	Rotate pages clockwise	Ruota pagine in senso orario
 	Rotate pages counterclockwise	Ruota pagine in senso antiorario
 	Delete pages	Elimina pagine
@@ -1090,6 +1091,11 @@
 	Text in images isn't found; recognise text (OCR) first.	Il testo nelle immagini non viene trovato; esegui prima il riconoscimento del testo (OCR).
 	No matches.	Nessuna corrispondenza.
 	{n} match(es) marked for redaction.	Corrispondenze contrassegnate per l'oscuramento: {n}.
+	Multiple words or phrases	Più parole o frasi
+	One word or phrase per line	Una parola o frase per riga
+	Import list…	Importa elenco…
+	{n} word(s) or phrase(s)	Parole o frasi: {n}
+	{name} is too large for a word list (at most 1 MB).	{name} è troppo grande per un elenco di parole (al massimo 1 MB).
 	Redaction Tool Properties	Proprietà strumento di oscuramento
 	Redacted area fill colour:	Colore di riempimento dell'area oscurata:
 	Use overlay text	Usa testo sovrapposto

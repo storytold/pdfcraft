@@ -254,6 +254,7 @@ comment menu	Edit	సవరించు
 	Security properties…	భద్రతా లక్షణాలు…
 	Organize pages	పేజీలను నిర్వహించు
 	New bookmark	కొత్త బుక్‌మార్క్
+	New bookmarks from structure	నిర్మాణం నుండి కొత్త బుక్‌మార్క్‌లు
 	Rotate pages clockwise	పేజీలను సవ్యదిశలో తిప్పు
 	Rotate pages counterclockwise	పేజీలను అపసవ్యదిశలో తిప్పు
 	Delete pages	పేజీలను తొలగించు
@@ -1069,6 +1070,11 @@ comment menu	Edit	సవరించు
 	Text in images isn't found; recognise text (OCR) first.	చిత్రాలలోని టెక్స్ట్ కనుగొనబడదు; ముందుగా టెక్స్ట్‌ను గుర్తించండి (OCR).
 	No matches.	సరిపోలికలు ఏవీ లేవు.
 	{n} match(es) marked for redaction.	రెడాక్షన్ కోసం గుర్తించిన సరిపోలికలు: {n}.
+	Multiple words or phrases	బహుళ పదాలు లేదా పదబంధాలు
+	One word or phrase per line	ఒక్కో పంక్తికి ఒక పదం లేదా పదబంధం
+	Import list…	జాబితాను దిగుమతి చేయండి…
+	{n} word(s) or phrase(s)	పదాలు లేదా పదబంధాలు: {n}
+	{name} is too large for a word list (at most 1 MB).	పద జాబితాకు {name} చాలా పెద్దది (గరిష్ఠంగా 1 MB).
 	Redaction Tool Properties	రెడాక్షన్ సాధనం లక్షణాలు
 	Redacted area fill colour:	రెడాక్ట్ చేసిన ప్రాంతం నింపు రంగు:
 	Use overlay text	ఓవర్‌లే టెక్స్ట్‌ను ఉపయోగించు
