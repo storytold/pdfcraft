@@ -155,8 +155,14 @@ try {
 foreach ($name in 'NOTICE', 'LICENSE-MIT', 'LICENSE-APACHE') {
   if ($licenceFiles -notcontains $name) { throw "Missing packaged licence: $name" }
 }
-if ($env:CRAFT_FONTS_DIR -and (Test-Path (Join-Path $env:CRAFT_FONTS_DIR 'fonts\droid-sans-fallback\NOTICE.txt'))) {
-  if ($licenceFiles -notcontains 'NOTICE-droid-sans-fallback.txt') { throw 'Missing Droid Sans Fallback Apache notice in the MSI' }
+if ($env:CRAFT_FONTS_DIR) {
+  foreach ($line in Get-Content (Join-Path $env:CRAFT_FONTS_DIR 'fonts/manifest.txt')) {
+    if (-not $line.Trim() -or $line.Trim().StartsWith('#')) { continue }
+    $file = ($line -split '\s+\|\s+')[5].Trim()
+    $family = Split-Path (Split-Path $file) -Leaf
+    $name = [IO.Path]::GetFileNameWithoutExtension($file)
+    if ($licenceFiles -notcontains "$name-$family.txt") { throw "Missing font licence in the MSI: $file" }
+  }
 }
 $rm = Read-Row 'SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = ''MsiRMFilesInUse''' 1
 Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'

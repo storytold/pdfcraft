@@ -109,11 +109,14 @@ foreach ($f in 'NOTICE', 'LICENSE-MIT', 'LICENSE-APACHE') {
   Copy-Item (Join-Path $Root $f) $Licences
 }
 if ($env:CRAFT_FONTS_DIR) {
-  Get-ChildItem -Path (Join-Path $env:CRAFT_FONTS_DIR 'fonts') -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-    foreach ($name in 'OFL', 'NOTICE') {
-      $licence = Join-Path $_.FullName "$name.txt"
-      if (Test-Path $licence) { Copy-Item $licence (Join-Path $Licences "$name-$($_.Name).txt") }
-    }
+  foreach ($line in Get-Content (Join-Path $env:CRAFT_FONTS_DIR 'fonts/manifest.txt')) {
+    if (-not $line.Trim() -or $line.Trim().StartsWith('#')) { continue }
+    $fields = $line -split '\s+\|\s+'
+    if ($fields.Count -ne 8 -or [string]::IsNullOrWhiteSpace($fields[5])) { throw 'invalid font licence manifest entry' }
+    $file = $fields[5].Trim()
+    $family = Split-Path (Split-Path $file) -Leaf
+    $name = [IO.Path]::GetFileNameWithoutExtension($file)
+    Copy-Item -LiteralPath (Join-Path $env:CRAFT_FONTS_DIR $file) -Destination (Join-Path $Licences "$name-$family.txt")
   }
 }
 

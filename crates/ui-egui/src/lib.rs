@@ -536,8 +536,8 @@ pub struct PdfCraftApp {
     ctx: Option<egui::Context>,
     styled: bool,
     fonts_ready: bool,
-    /// The installed fonts put the Simplified Chinese faces first (see `theme::font_definitions_for`).
-    fonts_hans: bool,
+    /// The CJK script whose faces lead the installed fallback stack.
+    fonts_cjk: pdfcraft_fonts::CjkPreference,
     /// The window title last sent to the platform.
     pub window_title: String,
     /// The UI control channel, when enabled (`--control`; off by default).
@@ -756,7 +756,7 @@ impl PdfCraftApp {
             ctx: None,
             styled: false,
             fonts_ready: false,
-            fonts_hans: false,
+            fonts_cjk: pdfcraft_fonts::CjkPreference::Japanese,
             control: None,
             bookmark_rename: None,
             last_opened_url: None,
@@ -1775,20 +1775,20 @@ impl eframe::App for PdfCraftApp {
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
         i18n::set_current(lang);
-        // Simplified Chinese wants its own faces before the Japanese ones (one baseline per line).
-        let hans = lang.code() == "zh-hans";
+        // Keep each Chinese script in its own face with one baseline per line.
+        let cjk = lang.cjk_preference();
         if !self.styled {
             egui_extras::install_image_loaders(ctx);
-            theme::install_fonts_for(ctx, hans);
-            self.fonts_hans = hans;
+            theme::install_fonts_for(ctx, cjk);
+            self.fonts_cjk = cjk;
             theme::apply(ctx, self.theme);
             self.styled = true;
         } else {
             self.fonts_ready = true;
-            if hans != self.fonts_hans {
+            if cjk != self.fonts_cjk {
                 // Same family names as before, so named fonts stay valid while the new set loads.
-                theme::install_fonts_for(ctx, hans);
-                self.fonts_hans = hans;
+                theme::install_fonts_for(ctx, cjk);
+                self.fonts_cjk = cjk;
             }
         }
         self.sync_theme(ctx);

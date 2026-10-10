@@ -19,7 +19,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Simplified Chinese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "2692f1dfc21b9d7284ba69316085fb9a2f30dcb6d6f336401d7b9aa4b3fcf67a"
+sha256 = "6805929add78c778940f4b2d76f589276aad9f7d085fd650fceb2b7f63432b87"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/zh-hant.tsv"
@@ -3225,11 +3225,11 @@ name = "craft-fonts"
 option = "CRAFT_FONTS_DIR"
 title = "Japanese fonts: BIZ UDPGothic (Regular, Bold), Shippori Mincho, BIZ UDMincho; Chinese UI font: Droid Sans Fallback; Arabic font: Noto Sans Arabic"
 author = "The BIZ UDGothic and BIZ UDMincho Project Authors (Morisawa Inc.), The Shippori Mincho Project Authors (FONTDASU), The Noto Project Authors (Noto Sans Arabic), The Android Open Source Project (Droid Sans Fallback)"
-source = "https://github.com/storytold/craft-fonts/commit/3800d02c5166237f5f71bf708b7106e76f5d31d5"
+source = "https://github.com/storytold/craft-fonts/commit/1e39ddaf4c468a059c69ce11b5e5849fd54a39fa"
 licence = "OFL-1.1 AND Apache-2.0"
-attribution = "https://github.com/storytold/craft-fonts/blob/3800d02c5166237f5f71bf708b7106e76f5d31d5/ATTRIBUTION.md"
+attribution = "https://github.com/storytold/craft-fonts/blob/1e39ddaf4c468a059c69ce11b5e5849fd54a39fa/ATTRIBUTION.md"
 kind = "font"
-usage = "Japanese fallback in the interface (BIZ UDPGothic first) and Japanese glyphs in edited PDF text (Shippori Mincho); Chinese desktop interface fallback (Droid Sans Fallback, Apache-2.0); Arabic interface text, file names and document titles (Noto Sans Arabic); the web build embeds only BIZ UDPGothic Regular and Noto Sans Arabic. The checkout also holds Noto Sans CJK SC, which crates/fonts/build.rs never embeds (AGENTS.md §1.1)"
+usage = "Japanese fallback in the interface (BIZ UDPGothic first) and Japanese glyphs in edited PDF text (Shippori Mincho); Simplified and Traditional Chinese desktop/web interface fallback (Droid Sans Fallback, Apache-2.0); Arabic interface text, file names and document titles (Noto Sans Arabic); the web build embeds BIZ UDPGothic Regular, Droid Sans Fallback and Noto Sans Arabic. The checkout also holds Noto Sans CJK SC, which crates/fonts/build.rs never embeds (AGENTS.md §1.1)"
 
 [[asset]]
 path = "crates/sign/tests/data/x509-rsa-sha1.pdf"

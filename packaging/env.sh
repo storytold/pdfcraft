@@ -53,16 +53,23 @@ copy_docs() {
   copy_font_licences "$dest"
 }
 
-# Builds made with the optional craft-fonts input (CRAFT_FONTS_DIR, set for every release) embed
-# its fonts, so the package carries their licences: fonts/<family>/{OFL,NOTICE}.txt -> <licence>-<family>.txt.
+# Copy the manifest's licence files; upstream NOTICE files need not have a .txt extension.
 copy_font_licences() {
-  local dest="$1" f family
+  local dest="$1" f family licences
   [ -n "${CRAFT_FONTS_DIR:-}" ] || return 0
-  for f in "$CRAFT_FONTS_DIR"/fonts/*/{OFL,NOTICE}.txt; do
-    [ -f "$f" ] || continue
+  licences="$(awk -F ' \| ' '
+    /^[[:space:]]*(#|$)/ { next }
+    {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $6)
+      if (NF != 8 || $6 == "") { print "invalid font licence manifest entry" > "/dev/stderr"; exit 1 }
+      print $6
+    }
+  ' "$CRAFT_FONTS_DIR/fonts/manifest.txt")" || return 1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
     family="$(basename "$(dirname "$f")")"
-    cp "$f" "$dest/$(basename "$f" .txt)-$family.txt"
-  done
+    cp "$CRAFT_FONTS_DIR/$f" "$dest/$(basename "$f" .txt)-$family.txt" || return 1
+  done <<< "$licences"
 }
 
 # Fetch the OCR models into a package directory (#103): `cargo xtask models DEST` downloads every

@@ -212,6 +212,15 @@ impl Lang {
         self.0.code
     }
 
+    /// Chinese interfaces prefer their own script's faces; other languages keep Japanese first.
+    pub fn cjk_preference(self) -> pdfcraft_fonts::CjkPreference {
+        match self.code() {
+            "zh-hans" => pdfcraft_fonts::CjkPreference::Simplified,
+            "zh-hant" => pdfcraft_fonts::CjkPreference::Traditional,
+            _ => pdfcraft_fonts::CjkPreference::Japanese,
+        }
+    }
+
     /// A language by its exact code.
     pub fn from_code(code: &str) -> Option<Lang> {
         LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code)).map(Lang)
@@ -845,6 +854,52 @@ mod tests {
         assert!(literals.len() > 900, "source scan found only {} literals", literals.len());
         let missing: Vec<_> = literals.iter().filter(|label| !has(it, label)).collect();
         assert!(missing.is_empty(), "untranslated Italian UI literals: {missing:#?}");
+    }
+
+    /// Check complete translations and the actual web subset, without any host font fallback.
+    #[test]
+    fn chinese_labels_have_glyphs() {
+        use egui::epaint::text::{Fonts, TextOptions};
+        use skrifa::MetadataProvider as _;
+        if pdfcraft_fonts::CRAFT_FONTS.is_empty() {
+            assert!(std::env::var_os("CRAFT_FONTS_REQUIRED").is_none(), "required craft-fonts input is missing");
+            return;
+        }
+        for code in ["zh-hans", "zh-hant"] {
+            let lang = Lang::from_code(code).unwrap();
+            let preference = lang.cjk_preference();
+            let (entries, _) = parse_entries(lang.0.source, 1);
+            let labels: std::collections::BTreeSet<char> =
+                entries.iter().flat_map(|e| e.translation.chars()).chain(lang.name().chars()).filter(|c| !c.is_control()).collect();
+            assert!(labels.len() > 700, "{code}: incomplete catalog scan");
+            for web in [false, true] {
+                let faces: Vec<_> =
+                    pdfcraft_fonts::ui_cjk_fonts(preference).into_iter().filter(|f| f.covers(preference.script()) && (!web || f.on_web())).collect();
+                assert!(!faces.is_empty(), "{code}, web={web}: no allowed {} face; update craft-fonts", preference.script());
+                let chinese: Vec<_> = faces.iter().map(|f| skrifa::FontRef::new(f.bytes).unwrap()).collect();
+                let mut defs = crate::theme::font_definitions_for(preference);
+                if web {
+                    for stack in defs.families.values_mut() {
+                        stack.retain(|name| !pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.name() == *name && !f.on_web()));
+                    }
+                }
+                for name in ["Inter", "Inter-Medium", "Inter-SemiBold", "JetBrainsMono"] {
+                    let data = &defs.font_data[name];
+                    let primary = skrifa::FontRef::from_index(&data.font, data.index).unwrap();
+                    let missing: String = labels
+                        .iter()
+                        .filter(|c| primary.charmap().map(**c).is_none() && !chinese.iter().any(|f| f.charmap().map(**c).is_some()))
+                        .collect();
+                    assert!(missing.is_empty(), "{code}, web={web}, {name}: characters would fall through to Japanese or tofu: {missing:?}");
+                }
+                let mut fonts = Fonts::new(TextOptions::default(), defs);
+                let text: String = labels.iter().collect();
+                for id in [egui::FontId::proportional(13.0), egui::FontId::monospace(13.0), crate::theme::medium(13.0), crate::theme::semibold(17.0)]
+                {
+                    assert!(fonts.has_glyphs(&id, &text), "{code}, web={web}: {id:?} lacks catalog glyphs");
+                }
+            }
+        }
     }
 
     /// With craft-fonts, every Japanese translation has glyphs: with all interface faces (desktop)

@@ -65,10 +65,12 @@ date in the AppStream metadata. The binaries don't embed the commit yet.
 
 **Fonts:** every job checks out [craft-fonts](https://github.com/storytold/craft-fonts) at the commit
 pinned in `release.yml` and builds with `CRAFT_FONTS_DIR` and `CRAFT_FONTS_REQUIRED=1`, so releases
-embed its Japanese and Arabic fonts, and desktop releases also embed Droid Sans Fallback for
-Chinese UI text (`AGENTS.md` §1.4). CI requires the Chinese face and checks all Han characters in
-the Simplified Chinese catalog. Packages retain its Apache-2.0 notice as well as the OFL licences
-for the other fonts. The web build still omits Chinese fonts. Bump the pin deliberately.
+embed its Japanese, Arabic and Chinese UI faces (`AGENTS.md` §1.4). Both desktop and web builds
+include Droid Sans Fallback for Simplified and Traditional Chinese. CI checks every translated
+character in both Chinese catalogs against the desktop and web font sets. Packages copy the
+manifest's licence files, including the upstream Apache-2.0 `NOTICE`, into Unix/macOS packages,
+Windows portable archives and MSI installers. Bump the pin deliberately; check web asset size
+against the chosen host's limits when adding fonts.
 
 **OCR models:** every desktop package ships the Scan & OCR models (#103). The packaging scripts call
 `stage_models` (`packaging/env.sh`; `package.ps1` on Windows), which runs `cargo xtask models` to

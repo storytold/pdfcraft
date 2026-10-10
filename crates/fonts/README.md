@@ -17,10 +17,10 @@ build input. `build.rs` embeds them as `CRAFT_FONTS` when the build sets
 set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
 
 - `ui_japanese_fonts`: the `Jpan` faces for the interface, BIZ UDPGothic first.
-- `ui_chinese_fonts`: the `Hans` faces for the interface, in manifest order (desktop releases
+- `ui_chinese_fonts`: the `Hans` and `Hant` faces for the interface, in manifest order (desktop and web releases
   bundle Droid Sans Fallback, a sans face under Apache-2.0; without one,
   Chinese characters the Japanese faces lack show the replacement glyph).
-- `ui_cjk_fonts(prefer_hans)`: both in fallback order for the UI language (Chinese group first
+- `ui_cjk_fonts(CjkPreference)`: both in fallback order for the UI language (the selected Chinese script first
   in Chinese mode, so one line never mixes faces with different vertical metrics).
 - `ui_arabic_fonts`: the `Arab` faces for Arabic-script interface text (file names, document
   titles), in manifest order.
@@ -51,8 +51,9 @@ The descriptor does not change glyph programs or replace the Type 3 `FontBBox` m
 only Gothic Regular, so it cannot preserve bold. No new font assets or changes to that input are
 needed.
 
-wasm32 builds embed only BIZ UDPGothic Regular and any `Arab` or `Telu` face, to keep the web build small: the web build
-currently has no Chinese face, so Chinese there still shows the replacement glyph.
+wasm32 builds embed BIZ UDPGothic Regular and allowed `Hans`, `Hant`, `Arab` and `Telu` faces.
+Droid Sans Fallback adds about 4 MB to the uncompressed web font input. The selection rules in
+`src/select.rs` are shared by `build.rs` and the desktop/web catalog glyph tests.
 Font files are never
 committed here (`AGENTS.md` §1.4; team members: [craftrules `standards/fonts.md`](https://github.com/storytold/craftrules/blob/main/standards/fonts.md), internal).
 
