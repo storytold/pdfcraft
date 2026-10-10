@@ -115,8 +115,18 @@ fn plural_arabic(n: u64) -> usize {
     }
 }
 
+/// Polish integer counts: 1 is one; endings 2–4 except 12–14 are few; the rest are many.
+fn plural_polish(n: u64) -> usize {
+    match (n, n % 100, n % 10) {
+        (1, _, _) => 0,
+        (_, 12..=14, _) => 2,
+        (_, _, 2..=4) => 1,
+        _ => 2,
+    }
+}
+
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 16] = [
+pub static LANGUAGES: [LangInfo; 17] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -165,6 +175,8 @@ pub static LANGUAGES: [LangInfo; 16] = [
     // Arabic (Modern Standard, Western digits); every `ar-*` locale (`ar-MA`, `ar-EG`, `ar-SA` ...)
     // resolves here. Right to left: see `LangInfo::rtl`.
     LangInfo { code: "ar", name: "العربية", source: include_str!("ar.tsv"), plural: plural_arabic, rtl: true, catalog: OnceLock::new() },
+    // Polish; every `pl-*` locale (`pl-pl`, `pl_pl.UTF-8`) resolves here.
+    LangInfo { code: "pl", name: "Polski", source: include_str!("pl.tsv"), plural: plural_polish, rtl: false, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
